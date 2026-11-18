@@ -1,4 +1,4 @@
-# Contraction tier ORDER (ess-runtime-contraction × ess-affine).
+# Contraction tier ORDER (contraction loop × affine tier).
 #
 # `_compile_faq_equation!` offers a constant-bound array reduction to two
 # tiers, and their build costs scale with different things:
@@ -30,10 +30,10 @@
 # every equation the loop would have. The out-of-place build keeps the loop,
 # because its emitters compile it (test/reactant_direct_emit_test.jl).
 #
-# And in the in-place build the affine tier no longer unrolls: it keeps the
+# And in the in-place build the affine tier does not unroll: it keeps the
 # contracted index as a loop dim and folds it at run time (`_AffineReduce`), an
-# O(#groups) build at every reduction length, so the preemption's premise is
-# gone and the affine tier is offered even the narrow-output shape first. The
+# O(#groups) build at every reduction length, so the preemption's premise does
+# not hold there and the affine tier is offered even the narrow-output shape first. The
 # nest is what an affine decline leaves.
 #
 # Numerically nothing may move, whichever tier takes the equation: every case is
@@ -116,10 +116,10 @@ end
 function _cto_ics(NI, NJ, NK)
     d = Dict{String, Any}()
     for i in 1:NI, j in 1:NJ
-        d["out[$i,$j]"] = 0.0
+        d["R.out[$i,$j]"] = 0.0
     end
     for i in 1:NI, j in 1:NJ, k in 1:NK
-        d["c[$i,$j,$k]"] = _cto_cv(i, j, k)
+        d["R.c[$i,$j,$k]"] = _cto_cv(i, j, k)
     end
     return d
 end
@@ -142,28 +142,20 @@ function _cto_build(NI, NJ, NK; compiler = :native, env = Dict{String, String}()
     ]
     dp = [ _cto_dpv(i, j, k) for i in 1:NI, j in 1:NJ, k in 1:NK ]
     return withenv(pairs...) do
-        _CTO_ESS._reset_cascade_tally!()
-        _CTO_ESS._bench_reset!()
-        _CTO_ESS._BENCH_ON[] = true
-        local f, u0, p, vm
-        try
-            f, u0, p, _, vm = EarthSciAST._build_evaluator(
-                doc; initial_conditions = ics,
-                compiler = compiler,
-                const_arrays = Dict("dp" => dp)
-            )
-        finally
-            _CTO_ESS._BENCH_ON[] = false
-        end
-        tally = copy(_CTO_ESS._CASCADE_TALLY)
-        nodes = _CTO_ESS._BENCH_COMPILE_CALLS[]
+        f, u0, p, _, vm, rep = EarthSciAST.Internal.build(
+            doc; initial_conditions = ics,
+            compiler = compiler,
+            const_arrays = Dict("R.dp" => dp)
+        )
+        tally = rep.counts
+        nodes = get(rep.counts, :compile_calls, 0)
         du = (d = similar(u0); f(d, u0, p, 0.0); d)
         (du, vm, tally, nodes)
     end
 end
 
 _cto_get(tally, k) = get(tally, k, 0)
-_cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
+_cto_outs(du, vm, NI, NJ) = [ du[vm["R.out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
 
 @testset "contraction tier order (loop vs affine)" begin
 

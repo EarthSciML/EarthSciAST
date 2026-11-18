@@ -10,9 +10,11 @@ using JSON3
     _emit_stoich(x::Real)
 
 Emit a stoichiometric coefficient as an integer when the value is exact, else as
-its Float64 form. Integer exactness keeps existing integer-only fixtures
-byte-identical across a parse/re-emit cycle, while fractional values (e.g.
-`0.87 CH2O`, `1.86 CH3O2`) survive untouched.
+its Float64 form, so an integer coefficient re-emits as written, while
+fractional values (e.g.
+`0.87 CH2O`, `1.86 CH3O2`) survive untouched. The bound is 2^53, not the
+`Int64` range of [`_as_int64`](@ref): above it a binary64 coefficient need not
+be the integer the author wrote.
 """
 function _emit_stoich(x::Real)
     if isinteger(x) && isfinite(x) && abs(x) < 2.0^53
@@ -45,11 +47,11 @@ end
 #   map.
 # - `:ranges`: dense integer/expression tuples or index-set reference objects
 #   (`_serialize_range_value`, RFC §5.2).
-# - `:join` (M2, RFC §5.3 / §7.2): round-trips back to the wire clause form
+# - `:join` (RFC §5.3 / §7.2): round-trips back to the wire clause form
 #   `[{ "on": [[left, right], …] }, …]`.
 # - `:scalar`: identity-encoded JSON scalars/arrays.
 # One join clause → its wire form. A bin-equality clause is a list of key-column
-# pairs → `{ "on": [[l,r], …] }`; an overlap clause (Phase 2a) → `{ "overlap":
+# pairs → `{ "on": [[l,r], …] }`; an overlap clause → `{ "overlap":
 # { "src_env": […], "tgt_env": […], "eps": … } }`.
 # `eps` is emitted only when the clause spelled it (absent ⇒ the schema default 0).
 function _serialize_join_clause(clause::_OverlapJoinSpec)
@@ -73,8 +75,7 @@ end
 # `100`); a `const` built in memory can hold `Float64`s and would otherwise
 # write `100.0`, unlike a reload of the same document and unlike every other
 # binding.
-_canonical_value_numbers(x::AbstractFloat) =
-    (isfinite(x) && isinteger(x) && _int64_exactly_representable(Float64(x))) ? Int64(x) : x
+_canonical_value_numbers(x::AbstractFloat) = something(_as_int64(x), x)
 _canonical_value_numbers(x::AbstractVector) = Any[_canonical_value_numbers(e) for e in x]
 _canonical_value_numbers(x::AbstractDict) =
     Dict{String, Any}(string(k) => _canonical_value_numbers(e) for (k, e) in pairs(x))
@@ -177,9 +178,7 @@ function serialize_trigger(trigger::DiscreteEventTrigger)::Dict{String, Any}
         return Dict("type" => "condition", "expression" => serialize_expression(trigger.expression))
     elseif isa(trigger, PeriodicTrigger)
         result = Dict("type" => "periodic", "interval" => trigger.period)
-        if trigger.phase != 0.0
-            result["initial_offset"] = trigger.phase
-        end
+        trigger.phase === nothing || (result["initial_offset"] = trigger.phase)
         return result
     elseif isa(trigger, PresetTimesTrigger)
         return Dict("type" => "preset_times", "times" => trigger.times)
@@ -189,33 +188,10 @@ function serialize_trigger(trigger::DiscreteEventTrigger)::Dict{String, Any}
 end
 
 """
-    serialize_event(event::EventType) -> Dict{String,Any}
-
-Serialize EventType to JSON-compatible format.
-"""
-function serialize_event(event::EventType)::Dict{String, Any}
-    if isa(event, ContinuousEvent)
-        result = Dict{String, Any}(
-            "conditions" => [serialize_expression(c) for c in event.conditions],
-            "affects" => [serialize_affect_equation(a) for a in event.affects]
-        )
-        if event.description !== nothing
-            result["description"] = event.description
-        end
-        return result
-    elseif isa(event, DiscreteEvent)
-        return serialize_discrete_event(event)
-    else
-        throw(ArgumentError("Unknown EventType: $(typeof(event))"))
-    end
-end
-
-
-"""
     _serialize_subsystem(v) -> Dict{String,Any}
 
 Serialize a single model subsystem value: a child `Model`, or an unresolved
-`SubsystemRef` (which round-trips back to `{"ref": ...}`). From esm 1.0.0 a
+`SubsystemRef` (which round-trips back to `{"ref": ...}`). A
 data source is a registry entry, not a component, so it never appears here.
 """
 function _serialize_subsystem(v)::Dict{String, Any}
@@ -317,8 +293,7 @@ function serialize_reaction_system(rs::ReactionSystem)::Dict{String, Any}
     if !isempty(rs.continuous_events)
         result["continuous_events"] = [serialize_continuous_event(e) for e in rs.continuous_events]
     end
-    # Hierarchy. `coerce_reaction_system` recurses, so this must too — emitting
-    # only the root is how the hierarchy used to disappear.
+    # Hierarchy: `coerce_reaction_system` recurses, so this does too.
     if !isempty(rs.subsystems)
         result["subsystems"] = Dict{String, Any}(
             k => serialize_reaction_system(v) for (k, v) in rs.subsystems
@@ -342,12 +317,6 @@ function serialize_reaction_system(rs::ReactionSystem)::Dict{String, Any}
     return result
 end
 
-
-# NOTE: `serialize_operator` / `serialize_registered_function` were removed
-# along with the `operators` / `registered_functions` emit path (esm-spec
-# v0.3.0 §9 closure): `serialize_esm_file` now refuses to write those blocks,
-# so the per-entry serializers had no remaining callers. The `Operator` /
-# `RegisteredFunction` types themselves remain exported for in-memory use.
 
 """
     serialize_coupling_entry(entry::CouplingEntry) -> Dict{String,Any}
@@ -554,7 +523,7 @@ function to_json(file::EsmFile)::String
         # references / materialized registries emits in the canonical
         # reference-preserving byte form — keys sorted except the ordered
         # `expression_templates` blocks — byte-identical to the raw
-        # `emit_document` path. Other documents keep the historical JSON3 form.
+        # `emit_document` path. Other documents are written by JSON3.
         return emit_esm_string(serialized)
     else
         return JSON3.write(serialized)
@@ -651,7 +620,7 @@ end
 # omission policies the table names by symbol; `nothing` skips the key) ──────
 
 # DataSource.determinism: emitted only when present AND its serialized dict is
-# non-empty (the historical `isempty(det_dict) ||` guard).
+# non-empty.
 function _emit_data_source_determinism(src::DataSource)
     src.determinism === nothing && return nothing
     det = serialize_data_source_determinism(src.determinism)
@@ -719,7 +688,7 @@ _emit_index_set_members(is::IndexSet) =
 _emit_model_subsystems(m::Model) = isempty(m.subsystems) ? nothing :
     Dict{String, Any}(k => _serialize_subsystem(v) for (k, v) in m.subsystems)
 
-# Model `guesses`: number-or-Expression map (gt-ebuq).
+# Model `guesses`: number-or-Expression map.
 function _emit_model_guesses(m::Model)
     isempty(m.guesses) && return nothing
     out = Dict{String, Any}()
@@ -810,26 +779,8 @@ for spec in RECORD_FIELD_TABLES
     ) $sname
 end
 
-"""
-    _contains_faq(node) -> Bool
-
-Does `node` contain an `"op" => "faq"` anywhere?
-"""
-function _contains_faq(node)::Bool
-    if node isa AbstractDict
-        for key in (:op, "op")
-            haskey(node, key) && get(node, key, nothing) == "faq" && return true
-        end
-        for v in values(node)
-            _contains_faq(v) && return true
-        end
-    elseif node isa AbstractVector
-        for v in node
-            _contains_faq(v) && return true
-        end
-    end
-    return false
-end
+# The load gates whose `since` is a save-time floor (`_raise_esm_floors!`).
+const _SAVE_FLOOR_GATES = (:faq, :const_units, :variable_bounds)
 
 """
     _raise_esm_floors!(doc)
@@ -846,22 +797,22 @@ inlined at load, and emitting that as 1.0.0 writes a document the
 `const_units_version_too_old` gate refuses to read back. The load gates cannot
 catch it, since the mounting file's authored bytes are legal. Like the §9.6.4
 rule-8 template stamp ([`_esm_stamp_floor`](@ref)) it only ever raises.
+Each floor is the `since` of a load gate in [`_VERSION_GATES`](@ref), detected
+by that gate's own offence finder, so a save floor and the gate that would
+refuse the saved bytes cannot disagree.
 """
 function _raise_esm_floors!(doc)
     doc isa AbstractDict || return doc
-    declared = _declared_minor(doc)
+    declared = _esm_version(doc)
     declared === nothing && return doc
-    floors = (
-        ((1, 1), _contains_faq),
-        ((1, 2), d -> _find_units_bearing_node(d, "") !== nothing),
-        ((2, 1), _has_variable_bound),
-    )
     raised = nothing
-    for (floor, present) in floors
-        if floor > declared && (raised === nothing || floor > raised) && present(doc)
+    for gate in _SAVE_FLOOR_GATES
+        floor = getfield(_VERSION_GATES, gate).since
+        if floor > declared && (raised === nothing || floor > raised) &&
+                !isempty(getfield(_VERSION_GATES, gate).offences(doc))
             raised = floor
         end
     end
-    raised === nothing || (doc["esm"] = "$(raised[1]).$(raised[2]).0")
+    raised === nothing || (doc["esm"] = join(raised, "."))
     return doc
 end

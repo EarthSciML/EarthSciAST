@@ -1,4 +1,4 @@
-# Whole-array contraction loop nest (ess-array-contraction).
+# Whole-array contraction loop nest.
 #
 # An array-producing aggregate `out[i…] = ⊕_{k…} body(i…, k…)` above the tier's
 # contracted-length floor compiles to ONE body node plus a flat output-slot
@@ -71,7 +71,12 @@ _ac_zero(idx, n) = Dict(
 # three ⊕ the tier admits. `coef`/`e` swap in data with no exact zero and no
 # integer value, so a ×-fold cannot collapse to 0̄ and a fold ORDER difference
 # shows up in the last bit.
-function _ac_doc(NS::Int, NR::Int; coef = _ac_sr, red = nothing, asc::Bool = false)
+# With `sr_data`, the coefficients are read from the caller's const array `SRd`
+# (`_ac_sr_data`) rather than an inline `const`.
+function _ac_doc(
+        NS::Int, NR::Int; coef = _ac_sr, red = nothing, asc::Bool = false,
+        sr_data::Bool = false
+    )
     SR = [[coef(s, r) for r in 1:NR] for s in 1:NS]
     agg = Dict{String, Any}(
         "op" => "faq",
@@ -81,7 +86,9 @@ function _ac_doc(NS::Int, NR::Int; coef = _ac_sr, red = nothing, asc::Bool = fal
             "op" => "*", "args" => Any[
                 Dict(
                     "op" => "index", "args" => Any[
-                        Dict("op" => "const", "args" => Any[], "value" => SR), "s", "rcv",
+                        sr_data ? "SRd" :
+                            Dict("op" => "const", "args" => Any[], "value" => SR),
+                        "s", "rcv",
                     ]
                 ),
                 Dict("op" => "index", "args" => Any["E", "s"]),
@@ -108,9 +115,10 @@ function _ac_doc(NS::Int, NR::Int; coef = _ac_sr, red = nothing, asc::Bool = fal
     )
 end
 _ac_ics(NS, NR; e = _ac_e0) = merge(
-    Dict{String, Any}("E[$s]" => e(s) for s in 1:NS),
-    Dict{String, Any}("conc[$r]" => 0.0 for r in 1:NR)
+    Dict{String, Any}("R.E[$s]" => e(s) for s in 1:NS),
+    Dict{String, Any}("R.conc[$r]" => 0.0 for r in 1:NR)
 )
+_ac_sr_data(NS, NR, coef) = [coef(s, r) for s in 1:NS, r in 1:NR]
 _ac_sr_frac(s, r) = _ac_sr(s, r) / 4 + 0.5      # never 0, never an integer
 _ac_e0_frac(s) = _ac_e0(s) + 0.25            # never 0
 _ac_exact(NS, NR) = [sum(_ac_sr(s, r) * _ac_e0(s) for s in 1:NS) for r in 1:NR]
@@ -129,16 +137,18 @@ function _ac_build(
         const_arrays = Dict{String, Vector{Float64}}()
     )
     return withenv((k => v for (k, v) in _ac_env(env))...) do
-        _AC_ESS._reset_cascade_tally!()
-        r = EarthSciAST._build_evaluator(
-            doc; initial_conditions = ics, compiler = compiler,
-            const_arrays = const_arrays
+        # Coerced, not loaded: some documents here carry in-memory-only
+        # constructs (a per-cell range bound) and `-0.0` constants, which the
+        # schema-validating load does not keep.
+        r = EarthSciAST.Internal.build(
+            EarthSciAST.coerce_esm_file(doc); initial_conditions = ics,
+            compiler = compiler, const_arrays = const_arrays
         )
-        (r, copy(_AC_ESS._CASCADE_TALLY))
+        (r, r.report.counts)
     end
 end
 
-# `du` at the model's own initial condition, plus the build's cascade tally.
+# `du` at the model's own initial condition, plus the build's counts.
 function _ac_du(
         doc, ics; compiler = :native, env = Dict{String, String}(),
         const_arrays = Dict{String, Vector{Float64}}()
@@ -150,14 +160,14 @@ function _ac_du(
     du = similar(u0); f!(du, u0, p, 0.0)
     return (du, vm, tally)
 end
-_ac_outs(du, vm, NR) = [du[vm["conc[$r]"]] for r in 1:NR]
+_ac_outs(du, vm, NR) = [du[vm["R.conc[$r]"]] for r in 1:NR]
 _ac_tally(t, k) = get(t, k, 0)
 
 # The tier fired. It has ONE form — the emitted nest — so this is also the whole
 # question of whether it fired at all.
 _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
 
-@testset "whole-array contraction nest (ess-array-contraction)" begin
+@testset "whole-array contraction nest" begin
 
     # The strict default TAKES this equation, because the nest it accepts is
     # emitted rather than walked, and the build's report says so by name. This is
@@ -165,14 +175,11 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     # the cascade tally.
     @testset "the strict default compiles an equation this tier accepts" begin
         doc, ics = _ac_doc(16, 16), _ac_ics(16, 16)
-        insp = _AC_ESS.BuildInspection()
-        withenv((k => v for (k, v) in _ac_env(Dict{String, String}()))...) do
-            EarthSciAST._build_evaluator(
-                doc; initial_conditions = ics, compiler = :native,
-                inspect = insp
-            )
+        rep = withenv((k => v for (k, v) in _ac_env(Dict{String, String}()))...) do
+            EarthSciAST.Internal.build(
+                doc; initial_conditions = ics, compiler = :native
+            ).report.compiler_report
         end
-        rep = insp.compiler_report
         @test rep.compiler === :native
         rows = [r for r in rep.rules if r.tier === :array_contraction_codegen]
         @test length(rows) == 1
@@ -294,8 +301,8 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
             )
         )
         ics = merge(
-            Dict{String, Any}("E[$a,$b]" => e2(a, b) for a in 1:NS1, b in 1:NS2),
-            Dict{String, Any}("conc[$r,$q]" => 0.0 for r in R1LO:R1HI, q in 1:NR2)
+            Dict{String, Any}("R.E[$a,$b]" => e2(a, b) for a in 1:NS1, b in 1:NS2),
+            Dict{String, Any}("R.conc[$r,$q]" => 0.0 for r in R1LO:R1HI, q in 1:NR2)
         )
         dn, vn, tn = _ac_du(doc, ics)
         do_, vo, to = _ac_du(doc, ics; compiler = :interpreter)
@@ -303,12 +310,12 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         @test _ac_fired(to) == 0
         cells = [(r, q) for r in R1LO:R1HI, q in 1:NR2]
         @test all(
-            dn[vn["conc[$r,$q]"]] === do_[vo["conc[$r,$q]"]]
+            dn[vn["R.conc[$r,$q]"]] === do_[vo["R.conc[$r,$q]"]]
                 for (r, q) in cells
         )
         # Integer-valued data again, so the closed form is exactly representable.
         @test all(
-            dn[vn["conc[$r,$q]"]] ==
+            dn[vn["R.conc[$r,$q]"]] ==
                 sum(
                 c1(a, r) * c2(b, q) * e2(a, b)
                     for a in 1:NS1, b in 1:NS2
@@ -333,9 +340,9 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         # it gathers, so the whole Jacobian row is known in closed form.
         NS, NR = 12, 6
         (f!, u0, p, _, vm), _ = _ac_build(_ac_doc(NS, NR), _ac_ics(NS, NR))
-        g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vm["conc[3]"]])
+        g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vm["R.conc[3]"]])
         J = ForwardDiff.gradient(g, u0)
-        @test all(J[vm["E[$s]"]] == _ac_sr(s, 3) for s in 1:NS)
+        @test all(J[vm["R.E[$s]"]] == _ac_sr(s, 3) for s in 1:NS)
     end
 
     # ── The property the tier exists for: build IR does not grow with EITHER
@@ -343,22 +350,16 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     # tier that compiles per output cell (or unrolls per contracted index)
     # cannot hold either half of this.
     @testset "node lowerings are FLAT in both extents" begin
-        # `_BENCH_COMPILE_CALLS` counts `_compile` lowerings for the build, the
-        # same instrument `contraction_tier_order_test.jl` uses for the affine
-        # tier's grid-independence claim.
+        # The `:compile_calls` count is the `_compile` lowerings of the build,
+        # the same instrument `contraction_tier_order_test.jl` uses for the
+        # affine tier's grid-independence claim.
         function nodes(NS, NR)
             withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-                _AC_ESS._bench_reset!()
-                _AC_ESS._BENCH_ON[] = true
-                try
-                    EarthSciAST._build_evaluator(
-                        _ac_doc(NS, NR);
-                        initial_conditions = _ac_ics(NS, NR)
-                    )
-                finally
-                    _AC_ESS._BENCH_ON[] = false
-                end
-                _AC_ESS._BENCH_COMPILE_CALLS[]
+                b = EarthSciAST.Internal.build(
+                    _ac_doc(NS, NR);
+                    initial_conditions = _ac_ics(NS, NR)
+                )
+                get(b.report.counts, :compile_calls, 0)
             end
         end
         # Contracted extent ×64, output extent fixed.
@@ -432,39 +433,43 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     @testset "the fold's 0̄ seed keeps a -0.0 partial ($(asc ? "affine fold" : "nest"))" for
         asc in (false, true)
         NS, NR = 12, 4
-        doc = _ac_doc(NS, NR; coef = (s, r) -> -0.0, asc = asc)
+        # The -0.0 coefficients are caller data: the document route turns an
+        # integral inline constant into an integer, which has no sign.
+        doc = _ac_doc(NS, NR; asc = asc, sr_data = true)
+        ca = Dict("SRd" => _ac_sr_data(NS, NR, (s, r) -> -0.0))
         ics = _ac_ics(NS, NR; e = s -> 1.0 + s)
-        (fn!, un, pn, _, vn), tn = _ac_build(doc, ics)
-        (fi!, ui, pi_, _, vi), _ = _ac_build(doc, ics; compiler = :interpreter)
+        (fn!, un, pn, _, vn), tn = _ac_build(doc, ics; const_arrays = ca)
+        (fi!, ui, pi_, _, vi), _ = _ac_build(doc, ics; compiler = :interpreter, const_arrays = ca)
         @test (asc ? _ac_tally(tn, :affine_reduce) : _ac_fired(tn)) == 1
-        gn(u) = (d = similar(u, eltype(u)); fn!(d, u, pn, 0.0); d[vn["conc[2]"]])
-        gi(u) = (d = similar(u, eltype(u)); fi!(d, u, pi_, 0.0); d[vi["conc[2]"]])
+        gn(u) = (d = similar(u, eltype(u)); fn!(d, u, pn, 0.0); d[vn["R.conc[2]"]])
+        gi(u) = (d = similar(u, eltype(u)); fi!(d, u, pi_, 0.0); d[vi["R.conc[2]"]])
         @test isequal(gn(un), gi(ui))
         Jn = ForwardDiff.gradient(gn, un)
         Ji = ForwardDiff.gradient(gi, ui)
-        @test all(signbit(Jn[vn["E[$s]"]]) for s in 1:NS)
-        @test all(isequal(Jn[vn["E[$s]"]], Ji[vi["E[$s]"]]) for s in 1:NS)
+        @test all(signbit(Jn[vn["R.E[$s]"]]) for s in 1:NS)
+        @test all(isequal(Jn[vn["R.E[$s]"]], Ji[vi["R.E[$s]"]]) for s in 1:NS)
     end
 
-    # bool_and_or's ⊕ is `or`, folded from 0̄ = false on the evaluator's 1.0/0.0
-    # encoding. A long one is the nest's (the affine tier has no run-time fold
-    # for `or` and unrolls only a short one, which it does here); both agree
-    # with the per-cell fold and with the closed form, `any` over the terms.
-    @testset "a bool_and_or contraction of $NS terms folds as the per-cell build" for
-        (NS, nest, thr) in ((16, true, 36.0), (4, false, 20.0))
+    # bool_and_or's ⊕ is `or`, which is index-set-producing: an array-valued
+    # bool_and_or reduction (an output index contracting another) is refused by
+    # every numeric evaluator (CONFORMANCE_SPEC §5.6.1), at any length and under
+    # every compiler. Only a scalar (rank-0) one runs.
+    @testset "an array-valued bool_and_or contraction of $NS terms is refused" for NS in (16, 4)
         NR = 6
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
         agg = doc["models"]["R"]["equations"][2]["rhs"]
         agg["semiring"] = "bool_and_or"
-        agg["expr"] = Dict("op" => ">", "args" => Any[agg["expr"], thr])
-        dn, vn, tn = _ac_du(doc, ics)
-        do_, vo, _ = _ac_du(doc, ics; compiler = :interpreter)
-        @test _ac_fired(tn) == (nest ? 1 : 0)
-        A = _ac_outs(dn, vn, NR)
-        @test all(A[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
-        ex = [any(_ac_sr(s, r) * _ac_e0(s) > thr for s in 1:NS) ? 1.0 : 0.0 for r in 1:NR]
-        @test A == ex
-        @test 0.0 < sum(ex) < NR    # both answers occur
+        agg["expr"] = Dict("op" => ">", "args" => Any[agg["expr"], 20.0])
+        for c in (:native, :interpreter)
+            err = try
+                _ac_build(doc, ics; compiler = c)
+                nothing
+            catch e
+                e
+            end
+            @test err isa _AC_ESS.TreeWalkError
+            @test err.code == "E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING"
+        end
     end
 
     # An output range with no cell (an extent a metaparameter can set to 0)
@@ -518,33 +523,30 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
             weq, _AC_ESS.Equation(_v("z"), nest),
             _AC_ESS.Equation(ag1(_Didx("u", _v("i"))), ag1(_idx("z", _v("i")))),
         ]
-        u0v = Dict("u[$i]" => Float64(i % 7) for i in 1:N)
+        u0v = Dict("M.u[$i]" => Float64(i % 7) for i in 1:N)
         bld(compiler) = withenv((k => v for (k, v) in _ac_env(Dict{String, String}()))...) do
-            _AC_ESS._reset_cascade_tally!()
-            (
-                _AC_ESS._build_evaluator_impl(
-                    _AC_ESS.Model(vars, eqs);
-                    compiler = compiler,
-                    index_sets = Dict("x" => _AC_ESS.IndexSet("interval"; size = N)),
-                    initial_conditions = u0v
-                ),
-                copy(_AC_ESS._CASCADE_TALLY),
+            r = _AC_ESS.Internal.build(
+                _AC_ESS.Model(vars, eqs);
+                compiler = compiler,
+                index_sets = Dict("x" => _AC_ESS.IndexSet("interval"; size = N)),
+                initial_conditions = u0v
             )
+            (r, r.report.counts)
         end
         run_ip(compiler) = begin
             (r, t) = bld(compiler)
-            (f!, u0, p) = (r[1], r[2], r[3])
+            (f!, u0, p) = (r.f!, r.u0, r.p)
             du = similar(u0); f!(du, u0, p, 0.0)
-            (du, r[5], t)
+            (du, r.var_map, t)
         end
         dn, vn, tn = run_ip(:native)
         do_, vo, to = run_ip(:interpreter)
         @test _ac_fired(tn) == 1
         @test _ac_fired(to) == 0
-        @test all(dn[vn["u[$i]"]] === do_[vo["u[$i]"]] for i in 1:N)
+        @test all(dn[vn["M.u[$i]"]] === do_[vo["M.u[$i]"]] for i in 1:N)
         # The closed form: u̇[i] = z[i] = Σ_j C[j,i]·2·u[j].
         @test all(
-            dn[vn["u[$i]"]] ==
+            dn[vn["M.u[$i]"]] ==
                 sum(_ac_sr(j, i) * 2.0 * Float64(j % 7) for j in 1:N)
                 for i in 1:N
         )
@@ -597,8 +599,8 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
             )
         )
         ics = merge(
-            Dict{String, Any}("q[$i]" => Float64(i) for i in 1:NI),
-            Dict{String, Any}("out[$i]" => 0.0 for i in 1:NI)
+            Dict{String, Any}("R.q[$i]" => Float64(i) for i in 1:NI),
+            Dict{String, Any}("R.out[$i]" => 0.0 for i in 1:NI)
         )
         du, vm, tally = _ac_du(
             doc, ics;
@@ -611,9 +613,9 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         @test _ac_fired(tally) == 1
         @test _ac_tally(tally, :percell_acc) == 0
         @test _ac_fired(ti) == 0
-        @test all(du[vm["out[$i]"]] === di[vi["out[$i]"]] for i in 1:NI)
+        @test all(du[vm["R.out[$i]"]] === di[vi["R.out[$i]"]] for i in 1:NI)
         @test all(
-            du[vm["out[$i]"]] ==
+            du[vm["R.out[$i]"]] ==
                 sum(Float64((i + 2k) % 7) for k in 1:Int(valence[i])) * Float64(i)
                 for i in 1:NI
         )

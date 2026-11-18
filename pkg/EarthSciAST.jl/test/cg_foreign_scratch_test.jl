@@ -1,11 +1,9 @@
-# Shared-prelude (xcse) cache reads in the codegen tier (ess-cgfsc,
-# codegen_kernel.jl).
+# Shared-prelude (xcse) cache reads in the codegen tier (codegen_kernel.jl).
 #
 # The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel
 # invariant-tier defs into bare `_NK_CACHED` reads of the build's SCALAR
 # prelude `_CSECache` — a payload that is no kernel's scratch. The codegen
-# emitter used to decline every such kernel (`:foreign_scratch`), dropping it
-# to the interpreter; it now emits the interpreter's exact read
+# emitter emits the interpreter's exact read
 # (`_cse_read(cache, idx, T)` — eltype-generic, Float64 `f64` buffer or the
 # Dual `alt` buffer), sound because `_make_rhs` fills every prelude tier into
 # that exact cache, at the same `T`, before the kernel section runs.
@@ -21,7 +19,7 @@
 #      and `compiler=:interpreter`, on several (u, t) probes.
 #   3. DUAL BIT-IDENTITY — the ForwardDiff state Jacobian and a direct
 #      Dual-seeded in-place call agree bit-for-bit with the interpreter
-#      oracle (the emitted read serves the Dual-typed overflow RGF too).
+#      oracle (the emitted read serves the Dual specialization too).
 #   4. ALLOCATIONS — a warmed Float64 f! call allocates 0 bytes (the
 #      surrounding tier's zero-alloc pin, kept through the new read).
 using Test
@@ -30,13 +28,13 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
+# `(f!, u0, p, var_map, stats, counts)` of one build, from the build report.
 function _cfs_build(model, ics; compiler::Symbol = :native)
-    ESM._reset_cascade_tally!()
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+    f!, u0, p, _t, vm, rep = ESM.Internal.build(
         model;
         initial_conditions = ics, compiler = compiler
     )
-    return (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
+    return (f!, u0, p, vm, rep.stats, rep.counts)
 end
 
 _cfs_du(f!, u, p, t) = (d = similar(u); fill!(d, zero(eltype(u))); f!(d, u, p, t); d)
@@ -72,12 +70,13 @@ function _cfs_model(N)
     return ESM.Model(vars, [eq("a", abody), eq("b", bbody)])
 end
 
+# By flattened name: the build makes the model component `M`.
 _cfs_ics(N) = Dict{String, Float64}(
-    "$x[$k]" => 0.2j + 0.01k
+    "M.$x[$k]" => 0.2j + 0.01k
         for (j, x) in enumerate(("a", "b")), k in 1:N
 )
 
-@testset "codegen shared-prelude reads (ess-cgfsc)" begin
+@testset "codegen shared-prelude reads" begin
     N = 8
     model, ics = _cfs_model(N), _cfs_ics(N)
 
@@ -92,8 +91,7 @@ _cfs_ics(N) = Dict{String, Float64}(
         @test dON.n_xcse_slots >= 1
         # … the default build compiles the kernels carrying the foreign read …
         @test get(tON, :cg_foreign_scratch_emit, 0) >= 2
-        @test get(tON, :codegen_decline_foreign_scratch, 0) +
-            get(tON, :dual_codegen_decline_foreign_scratch, 0) == 0
+        @test get(tON, :codegen_decline_foreign_scratch, 0) == 0
         @test get(tON, :codegen_kernel, 0) >= 2
         # … and the interpreter compiles nothing at all, so the comparison
         # below is against a build with no emitted read anywhere.

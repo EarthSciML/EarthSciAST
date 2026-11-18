@@ -10,24 +10,17 @@ using JSON3
 using EarthSciAST
 import OrdinaryDiffEqTsit5
 
-include("testutils.jl")  # TESTUTILS_REPO_ROOT
-
-const _VIM_DIR = joinpath(
-    TESTUTILS_REPO_ROOT, "tests", "conformance",
-    "value_invention_materialize"
-)
+include("testutils.jl")  # conformance_manifest
 
 @testset "value_invention_materialize conformance" begin
-    manifest = JSON3.read(read(joinpath(_VIM_DIR, "manifest.json"), String))
-    @test manifest.category == "value_invention_materialize"
-    @test "julia" in manifest.bindings_required
+    dir, manifest = conformance_manifest("value_invention_materialize"; bindings = ("julia",))
     @test Set(String(c.outcome) for fx in manifest.fixtures for c in fx.cases) ==
         Set(["value", "refused"])
 
     for fx in manifest.fixtures
         @testset "$(fx.id)" begin
             results = run_inline_tests(
-                joinpath(_VIM_DIR, String(fx.path));
+                joinpath(dir, String(fx.path));
                 model_name = String(fx.model),
                 alg = OrdinaryDiffEqTsit5.Tsit5()
             )

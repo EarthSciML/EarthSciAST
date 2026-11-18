@@ -1,4 +1,4 @@
-# Per-cell CSE on the affine access-kernel spine (ess-affine). The spine is walked
+# Per-cell CSE on the affine access-kernel spine. The spine is walked
 # as a TREE once per cell (`_build_branch_template` compiles with no memo), so a
 # subexpression that appears k times is evaluated k times per cell. `_build_acc_cse`
 # value-numbers the spine, slices each shared OP subtree into an ordered recipe, and
@@ -15,13 +15,14 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _cse_build(model, ics; affine::Bool, const_arrays = Dict())
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+    f!, u0, p, _t, vm, rep = ESM.Internal.build(
         model;
-        initial_conditions = ics, const_arrays = const_arrays,
+        initial_conditions = Dict("M.$k" => v for (k, v) in ics),
+        const_arrays = const_arrays,
         compiler = affine ? :native : :interpreter
     )
     du = zero(u0); f!(du, u0, p, 0.0)
-    return (du, u0, vm, diag)
+    return (du, u0, vm, rep.stats)
 end
 
 # D(u[i]) = s*s + s,  s = (u[i-1] − 2u[i] + u[i+1]).  `s` occurs 3× → shared.
@@ -80,7 +81,7 @@ function _cse_nosharing_model(N)
     )
 end
 
-@testset "affine per-cell CSE ≡ per-cell (differential, ess-affine)" begin
+@testset "affine per-cell CSE ≡ per-cell (differential)" begin
     @testset "shared subexpr s*s + s (N=$N)" for N in (8, 32, 64)
         ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
         du_a, _, _, d = _cse_build(_cse_shared_model(N), ics; affine = true)

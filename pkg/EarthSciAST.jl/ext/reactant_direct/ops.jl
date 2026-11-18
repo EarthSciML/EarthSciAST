@@ -50,8 +50,7 @@ _de_nonzero(ctx::_DECtx, a::_DEVal) = _de_pred(ctx, "NE", a, _de_const(ctx, 0.0)
 const _DE_UNARY = Dict{Symbol, Any}(
     :cos => _hlo.cosine, :sin => _hlo.sine, :exp => _hlo.exponential, :log => _hlo.log,
     :sqrt => _hlo.sqrt, :abs => _hlo.abs, :tanh => _hlo.tanh, :tan => _hlo.tan,
-    :expm1 => _hlo.exponential_minus_one, :log1p => _hlo.log_plus_one,
-    :floor => _hlo.floor, :ceil => _hlo.ceil, :sign => _hlo.sign, :cbrt => _hlo.cbrt,
+    :floor => _hlo.floor, :ceil => _hlo.ceil, :sign => _hlo.sign,
 )
 # `log10` is the one registry op with neither a StableHLO nor a CHLO opcode.
 # `log(x) / ln(10)` is what the Rust lane emits for it (`UnCode::Log10`,
@@ -77,7 +76,7 @@ end
 const _DE_UNARY_CHLO = Dict{Symbol, Any}(
     :asin => _chlo.asin, :acos => _chlo.acos, :atan => _chlo.atan,
     :asinh => _chlo.asinh, :acosh => _chlo.acosh, :atanh => _chlo.atanh,
-    :sinh => _chlo.sinh, :cosh => _chlo.cosh, :erf => _chlo.erf,
+    :sinh => _chlo.sinh, :cosh => _chlo.cosh,
 )
 const _DE_COMPARE = Dict{Symbol, String}(
     :< => "LT", :<= => "LE", :> => "GT", :>= => "GE", :(==) => "EQ", :!= => "NE",
@@ -91,24 +90,24 @@ const _DE_COMPARE = Dict{Symbol, String}(
 # can differ in the last bits. That is inside every tolerance class the
 # `compiled_rhs` tier defines (`reduction` is the class such a fold belongs to),
 # and it is the ONLY place this emitter deliberately leaves the interpreter's
-# association order. The cut is `ESM_DIRECT_EMIT_REDUCE_MIN` (default 32): below
+# association order. The cut is `DirectEmitOptions.reduce_min` (default 32): below
 # it the chain, at or above it one reduce, so short folds — every scalar
 # contraction in a small model — stay bit-identical.
 
-function _de_semiring_fn(op::Symbol)
+function _de_semiring_fn(ctx::_DECtx, op::Symbol)
     op === :+ && return _hlo.add
     op === :* && return _hlo.multiply
     op === :max && return _hlo.maximum
     op === :min && return _hlo.minimum
     return _de_refuse(
+        ctx,
         "the semiring operator `$op`",
         "only `+`, `*`, `max` and `min` have a StableHLO reduction form here."
     )
 end
 
-_de_semiring_jl(op::Symbol) =
-    op === :+ ? (+) : op === :* ? (*) : op === :max ? max :
-    op === :min ? min : _de_semiring_fn(op)
+_de_semiring_jl(ctx::_DECtx, op::Symbol) =
+    _E._is_numeric_reducer(op) ? _E._REDUCER_INDEX[op].fn : _de_semiring_fn(ctx, op)
 
 # One `stablehlo.reduce` over `terms`, seeded from `zbar`. The terms are
 # concatenated into a `tensor<(L*n)xf64>`, reshaped to `(L, n)` — column `j` is
@@ -122,7 +121,7 @@ function _de_reduce_terms(
     flat = _de_concat(ctx, _DEVal[_de_bcast(ctx, x, L) for x in terms])
     x2 = Reactant.Ops.reshape(_de_traced(flat), L, n)
     init = Reactant.promote_to(TracedRNumber{Float64}, zbar)
-    r = Reactant.Ops.reduce(x2, init, Int[2], _de_semiring_jl(op))
+    r = Reactant.Ops.reduce(x2, init, Int[2], _de_semiring_jl(ctx, op))
     _de_tally!(ctx, :reduce)
     return _de_untraced(r)
 end
@@ -146,10 +145,10 @@ function _de_fold_terms(
     )::_DEVal
     isempty(terms) && return _de_const(ctx, zbar)
     L = maximum(x.len for x in terms)
-    if length(terms) >= ctx.reduce_min
+    if length(terms) >= ctx.opts.reduce_min
         return _de_reduce_terms(ctx, op, zbar, terms, L)
     end
-    f = _de_semiring_fn(op)
+    f = _de_semiring_fn(ctx, op)
     s = _de_const(ctx, zbar)
     for x in terms
         s = _de_bin(ctx, f, s, x)
@@ -157,15 +156,23 @@ function _de_fold_terms(
     return s
 end
 
-# ---- the op ladder -----------------------------------------------------------
+# ---- the operator table ------------------------------------------------------
 #
-# Left-folds n-ary `+`/`*` in the interpreter's association order
+# `_DE_OPS` maps every operator a `_Node` can carry to its emitter
+# `(ctx, op, c) -> _DEVal`, `c` being the already-emitted operands. Its keys are
+# checked at load against the operator registry's shaped rows
+# (`EarthSciAST._SHAPED_OP_SYMS`, the set `_compile_op` admits), so an operator
+# the interpreter evaluates and this table was not taught fails at package load
+# rather than at emission. The same keys are the host const-fold's operator set
+# (`_de_static`). `_de_op` checks the registry arity before an entry runs, so no
+# entry restates it.
+#
+# n-ary `+`/`*`/`max`/`min` left-fold in the interpreter's association order
 # (`_eval_node_op`), so every intermediate has broadcast's shape and the same
 # grouping.
 #
 # TWO PLACES THIS IS NOT BIT-IDENTICAL TO THE INTERPRETER, both accepted inside
-# the `compiled_rhs` tolerance classes and both recorded here rather than in a
-# commit message:
+# the `compiled_rhs` tolerance classes:
 #
 #   * `max` / `min`. Julia's `max(x, NaN)` returns NaN and propagates a NaN from
 #     either side; `stablehlo.maximum`'s NaN behaviour is implementation-defined
@@ -177,107 +184,90 @@ end
 #     agree to within an ulp or two on ordinary arguments, which is inside
 #     `transcendental` (rtol 1e-12), not inside `algebraic`. A literal INTEGER
 #     exponent is the common case and both lower it by repeated multiplication.
-_de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal = _de_op(ctx, nd.op, c)
+const _DE_OPS = Dict{Symbol, Function}()
 
-function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
-    n = length(c)
-    if op === :+
-        return _de_chain(ctx, _hlo.add, c)
-    elseif op === :*
-        return _de_chain(ctx, _hlo.multiply, c)
-    elseif op === :-
-        n == 1 && return _de_un(ctx, _hlo.negate, c[1])
-        n == 2 && return _de_bin(ctx, _hlo.subtract, c[1], c[2])
-        _de_refuse("`-` with $n arguments", "the IR's `-` is unary or binary.")
-    elseif op === :neg
-        return _de_un(ctx, _hlo.negate, c[1])
-    elseif op === :/
-        n == 2 || _de_refuse("`/` with $n arguments", "division is binary.")
-        return _de_bin(ctx, _hlo.divide, c[1], c[2])
-    elseif op === :^ || op === :pow
-        n == 2 || _de_refuse("`^` with $n arguments", "exponentiation is binary.")
-        return _de_bin(ctx, _hlo.power, c[1], c[2])
-    elseif op === :max
-        return _de_chain(ctx, _hlo.maximum, c)
-    elseif op === :min
-        return _de_chain(ctx, _hlo.minimum, c)
-    elseif op === :atan2
-        n == 2 || _de_refuse("`atan2` with $n arguments", "`atan2` is binary.")
-        return _de_bin(ctx, _hlo.atan2, c[1], c[2])
-    elseif op === :atan && n == 2
-        # The registry spells the two-argument form both ways.
-        return _de_bin(ctx, _hlo.atan2, c[1], c[2])
-    elseif op === :log10
-        n == 1 || _de_refuse(
-            "unary `log10` with $n arguments",
-            "`log10` takes exactly one argument."
-        )
-        return _de_log10(ctx, c[1])
-    elseif haskey(_DE_UNARY, op)
-        n == 1 || _de_refuse(
-            "unary `$op` with $n arguments",
-            "`$op` takes exactly one argument."
-        )
-        return _de_un(ctx, _DE_UNARY[op], c[1])
-    elseif haskey(_DE_UNARY_CHLO, op)
-        n == 1 || _de_refuse(
-            "unary `$op` with $n arguments",
-            "`$op` takes exactly one argument."
-        )
-        return _de_un(ctx, _DE_UNARY_CHLO[op], c[1])
-    elseif haskey(_DE_COMPARE, op)
-        n == 2 || _de_refuse(
-            "comparison `$op` with $n arguments",
-            "a comparison is binary."
-        )
-        return _de_cmp(ctx, _DE_COMPARE[op], c[1], c[2])
-    elseif op === :ifelse
-        n == 3 || _de_refuse("`ifelse` with $n arguments", "`ifelse` takes three.")
+let T = _DE_OPS
+    for (op, f) in ((:+, _hlo.add), (:*, _hlo.multiply), (:max, _hlo.maximum), (:min, _hlo.minimum))
+        T[op] = (ctx, _, c) -> _de_chain(ctx, f, c)
+    end
+    T[:-] = (ctx, _, c) -> length(c) == 1 ? _de_un(ctx, _hlo.negate, c[1]) :
+        _de_bin(ctx, _hlo.subtract, c[1], c[2])
+    T[:neg] = (ctx, _, c) -> _de_un(ctx, _hlo.negate, c[1])
+    T[:/] = (ctx, op, c) -> _de_bin(ctx, _hlo.divide, c[1], c[2])
+    for op in (:^, :pow)
+        T[op] = (ctx, op, c) -> _de_bin(ctx, _hlo.power, c[1], c[2])
+    end
+    T[:atan2] = (ctx, op, c) -> _de_bin(ctx, _hlo.atan2, c[1], c[2])
+    T[:log10] = (ctx, op, c) -> _de_log10(ctx, c[1])
+    for tbl in (_DE_UNARY, _DE_UNARY_CHLO), (op, f) in tbl
+        T[op] = (ctx, op, c) -> _de_un(ctx, f, c[1])
+    end
+    # The registry spells the two-argument arctangent both ways.
+    T[:atan] = (ctx, _, c) -> length(c) == 2 ? _de_bin(ctx, _hlo.atan2, c[1], c[2]) :
+        _de_un(ctx, _chlo.atan, c[1])
+    for (op, dir) in _DE_COMPARE
+        T[op] = (ctx, op, c) -> _de_cmp(ctx, dir, c[1], c[2])
+    end
+    T[:ifelse] = function (ctx, op, c)
         pred, L = _de_nonzero(ctx, c[1])
         L2 = max(L, c[2].len, c[3].len)
         if L2 != L
             pred, L = _de_nonzero(ctx, _de_bcast(ctx, c[1], L2))
         end
         return _de_select(ctx, pred, L, c[2], c[3])
-    elseif op === :not
-        return _de_cmp(ctx, "EQ", c[1], _de_const(ctx, 0.0))
-    elseif op === :and
-        # eager fold of 0/1 indicators — the vectorized ladders' semantics
-        r = _de_cmp(ctx, "NE", c[1], _de_const(ctx, 0.0))
-        for i in 2:n
-            r = _de_bin(ctx, _hlo.multiply, r, _de_cmp(ctx, "NE", c[i], _de_const(ctx, 0.0)))
-        end
-        return r
-    elseif op === :or
-        r = _de_cmp(ctx, "NE", c[1], _de_const(ctx, 0.0))
-        for i in 2:n
-            r = _de_bin(ctx, _hlo.maximum, r, _de_cmp(ctx, "NE", c[i], _de_const(ctx, 0.0)))
-        end
-        return r
-    elseif op === :pi || op === :π
-        return _de_const(ctx, Float64(pi))
-    elseif op === :e
-        return _de_const(ctx, Float64(ℯ))
-    elseif op === :Pre
-        return c[1]
     end
-    # NOT `unevaluable_operator` (esm-spec §9.6.6), deliberately. That code is
-    # for an op in the §4.2 EVALUABLE CORE that the tree-walk evaluator has no
-    # rule for, and `_compile_op` (src/tree_walk/compile.jl) refuses one while
-    # the evaluator is BUILT — so no such op can reach here: the emitter only
-    # ever walks a `_CompiledIR` that already passed that gate. What this tail
-    # catches is the other thing: an op the interpreter CAN evaluate but that
-    # this StableHLO ladder has not been taught. That is a backend-coverage gap,
-    # not a document-level refusal, so it reports the emitter's own
-    # `DirectEmitError` (`E_DIRECT_EMIT_UNSUPPORTED`) with the rule breadcrumb.
+    T[:not] = (ctx, _, c) -> _de_cmp(ctx, "EQ", c[1], _de_const(ctx, 0.0))
+    # Eager folds of 0/1 indicators, the vectorized ladders' semantics.
+    for (op, f) in ((:and, _hlo.multiply), (:or, _hlo.maximum))
+        T[op] = function (ctx, _, c)
+            r = _de_cmp(ctx, "NE", c[1], _de_const(ctx, 0.0))
+            for i in 2:length(c)
+                r = _de_bin(ctx, f, r, _de_cmp(ctx, "NE", c[i], _de_const(ctx, 0.0)))
+            end
+            return r
+        end
+    end
+    for r in _E._SHAPED_OPS
+        r.spec.shape === :constant || continue
+        v = r.spec.value::Float64
+        T[r.sym] = (ctx, _, c) -> _de_const(ctx, v)
+    end
+    T[:Pre] = (ctx, _, c) -> c[1]
+end
+
+Set(keys(_DE_OPS)) == _E._SHAPED_OP_SYMS || error(
+    "the direct emitter's operator table and the operator registry " *
+        "disagree: the emitter lacks $(sort!(collect(setdiff(_E._SHAPED_OP_SYMS, keys(_DE_OPS))))) " *
+        "and has no registry row for $(sort!(collect(setdiff(keys(_DE_OPS), _E._SHAPED_OP_SYMS))))"
+)
+
+_de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal = _de_op(ctx, nd.op, c)
+
+function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
+    f = get(_DE_OPS, op, nothing)
+    if f !== nothing
+        ar = _E._OP_SYM_INDEX[op].arity::UnitRange{Int}
+        length(c) in ar || return _de_refuse(
+            ctx, "`$op` with $(length(c)) arguments",
+            "`$op` takes $(_E._arity_words(ar)) (esm-spec §4.2)."
+        )
+        return f(ctx, op, c)::_DEVal
+    end
+    # Not `unevaluable_operator` (esm-spec §9.6.6): `_compile_op` refuses an op
+    # outside the evaluable core while the evaluator is BUILT, and the load-time
+    # check above keeps this table equal to what it admits. What reaches here is
+    # an IR invariant break (an operator the build should have refused).
     return _de_refuse(
-        "the operator `$op`",
-        "it is not in the direct-emission op ladder. Add it to `_de_op` " *
-            "(ext/reactant_direct/ops.jl) with the StableHLO op that matches the " *
-            "interpreter's arm for it (`_eval_node_op`), or lower it away before " *
-            "the backend."
+        ctx, "the operator `$op`",
+        "it is not in the direct emitter's operator table (`_DE_OPS`, " *
+            "ext/reactant_direct/ops.jl), which matches the operators the " *
+            "tree walk admits."
     )
 end
+
+# The host const-fold evaluates an operator through `_scalar_op` exactly when
+# the emitter has an arm for it.
+_de_foldable_op(op::Symbol) = haskey(_DE_OPS, op)
 
 # ---- host const-fold ---------------------------------------------------------
 #
@@ -289,9 +279,9 @@ end
 # to `range` host multiply-adds and, after interning, a handful of constants.
 #
 # It is also strictly MORE faithful than emitting the ops would be: the value is
-# computed in Float64 by `_scalar_op`, whose arm order is pinned against
-# `_eval_node_op` by test/scalar_ops_test.jl, so a folded subtree agrees with the
-# interpreter bit for bit, where `stablehlo.power` and friends would not.
+# computed in Float64 by `_scalar_op`, which the same generator as `_eval_node_op`
+# builds (`_op_ladder`), so a folded subtree agrees with the interpreter bit for
+# bit, where `stablehlo.power` and friends would not.
 #
 # `_de_static` is memoized per node (structural, so a loop body asked once per
 # `k` pays the walk once); `_de_hostval` is re-evaluated per `k`, because a
@@ -324,14 +314,7 @@ function _de_static_uncached(ctx::_DECtx, nd::_E._Node)::Bool
     elseif k === _E._NK_CONTRACTION_LOOP
         return _de_static(ctx, nd.children[1])
     elseif k === _E._NK_OP
-        (
-            haskey(_DE_UNARY, nd.op) || haskey(_DE_COMPARE, nd.op) ||
-                haskey(_DE_UNARY_CHLO, nd.op) ||
-                nd.op in (
-                :+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
-                :and, :or, :pi, :π, :e, :Pre, :atan, :atan2, :log10,
-            )
-        ) || return false
+        _de_foldable_op(nd.op) || return false
         return all(ch -> _de_static(ctx, ch), nd.children)
     end
     return false
@@ -347,15 +330,13 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
         return Float64(getfield(ctx.p, nd.sym)::Real)
     elseif k === _E._NK_CONST_GATHER
         cg = nd.payload::_E._ConstGatherArray
-        off = 1
-        for d in eachindex(nd.children)
-            sub = _E._const_gather_sub(cg, d, _de_index_int(nd.children[d]))
-            off += (sub - 1) * cg.strides[d]
-        end
+        off = _E._const_gather_offset(
+            cg, length(nd.children), d -> _de_index_int(nd.children[d])
+        )
         return Float64(cg.flat[off])
     elseif k === _E._NK_CONTRACTION
         s = nd.literal
-        f = _de_semiring_jl(nd.op)
+        f = _de_semiring_jl(ctx, nd.op)
         for ch in nd.children
             s = f(s, _de_hostval(ctx, ch))
         end
@@ -363,7 +344,7 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
     elseif k === _E._NK_CONTRACTION_LOOP
         spec = nd.payload::_E._ContractLoop
         s = nd.literal
-        f = _de_semiring_jl(nd.op)
+        f = _de_semiring_jl(ctx, nd.op)
         body = nd.children[1]
         for kk in spec.lo:spec.step:spec.hi
             spec.ref[] = kk
@@ -371,11 +352,10 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
         end
         return s
     end
-    # `_NK_OP`: the shared ladder, at Float64. Its arms are pinned against the
-    # interpreter's (`_eval_node_op`) by test/scalar_ops_test.jl, so a folded
-    # subtree is bit-identical to what `f!` computes for it.
+    # `_NK_OP`: the host ladder, generated as the interpreter's (`_op_ladder`),
+    # so a folded subtree is bit-identical to what `f!` computes for it.
     c = Any[_de_hostval(ctx, ch) for ch in nd.children]
-    return Float64(_E._scalar_op(nd.op, c, Float64))
+    return _E._scalar_op(nd.op, c)
 end
 
 # Fold if we can; `nothing` if the subtree is not host data.

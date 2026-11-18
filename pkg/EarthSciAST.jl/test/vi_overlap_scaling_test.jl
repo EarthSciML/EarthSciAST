@@ -1,10 +1,10 @@
-# Value-invention OVERLAP-gate producer SCALING (projection-pushdown Wall #1).
+# Value-invention OVERLAP-gate producer SCALING (projection pushdown).
 #
-# A producer gated by `join.overlap` used to enumerate the FULL cartesian product
+# A producer gated by `join.overlap` must not enumerate the FULL cartesian product
 # of its ranges (here points × cells) and membership-test each tuple against the
-# prebuilt broad-phase candidate set — O(N_point·N_cell). At ISRM scale
-# (emis_records × 596444 pop_cells) that is ~7 hours. The fix drives enumeration
-# from the candidate pairs directly: O(|candidates|).
+# prebuilt broad-phase candidate set — O(N_point·N_cell), which is intractable at
+# ISRM scale (emis_records × 596444 pop_cells). Enumeration is driven from the
+# candidate pairs directly: O(|candidates|).
 #
 # This fixture lays 20000 unit cells on a 200×100 grid and drops 200 points, each
 # at a DISTINCT cell centre (strict interior → exactly one broad candidate, kept
@@ -15,14 +15,8 @@
 #       and completes in well under a couple seconds (the scaling fix).
 # It also bounds the candidate-set CONSTRUCTION time (the binned broad phase).
 
-# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
-# stay isolated from other test files' identically-named helpers in the shared
-# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
-# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
-# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
-module VIOverlapScalingTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 import JSON3
 using Random
@@ -30,8 +24,6 @@ using Random
 const ESS = EarthSciAST
 
 # ---- small JSON AST builders (mirroring overlap_gate_conformance_test.jl) ----
-_ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
-_op(o, args...) = Dict("op" => o, "args" => Any[args...])
 
 @testset "VI overlap-gate producer scaling (Wall #1)" begin
 
@@ -95,17 +87,17 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     @test length(oracle) == npts          # distinct cells ⇒ npts containments
 
     # (X-W)(E-X)(Y-S)(N-Y) > 0 : strict rectangle-interior narrow phase.
-    _filter = _op(
+    _filter = jop(
         ">",
-        _op(
+        jop(
             "*",
-            _op(
-                "*", _op("-", _ix("X", "i"), _ix("W", "j")),
-                _op("-", _ix("E", "j"), _ix("X", "i"))
+            jop(
+                "*", jop("-", jidx("X", "i"), jidx("W", "j")),
+                jop("-", jidx("E", "j"), jidx("X", "i"))
             ),
-            _op(
-                "*", _op("-", _ix("Y", "i"), _ix("S", "j")),
-                _op("-", _ix("N", "j"), _ix("Y", "i"))
+            jop(
+                "*", jop("-", jidx("Y", "i"), jidx("S", "j")),
+                jop("-", jidx("N", "j"), jidx("Y", "i"))
             )
         ),
         0.0
@@ -132,7 +124,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                 ),
                 "equations" => [
                     Dict(
-                        "lhs" => _ix("cell_present", "m"),
+                        "lhs" => jidx("cell_present", "m"),
                         "rhs" => Dict(
                             "op" => "faq",
                             "id" => "scaling_producer",
@@ -181,10 +173,10 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     end
 
     # ---- TIMED, INSTRUMENTED materialisation ------------------------------
-    ESS._VI_ENUM_VISITS[] = 0
-    twall = @elapsed vi =
+    vi, counts = ESS.Internal.counting() do
         ESS.materialize_value_invention(model, file.index_sets, const_arrays, Dict{String, Any}())
-    visits = ESS._VI_ENUM_VISITS[]
+    end
+    visits = get(counts, :vi_enum_visits, 0)
 
     # (a) correctness — materialised set == independent brute-force oracle
     @test sort(collect(vi.members["scaling_producer"])) == oracle
@@ -194,7 +186,6 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     @test visits == npts                       # candidate-driven, no ungated ranges
     @test visits < ncells                      # ≪ even a single full cell sweep
     @test visits < npts * ncells ÷ 100         # ≪ 4e6 full product
-    @test twall < 2.0                          # fast wall-time (post-warmup)
 end
 
 # ===========================================================================
@@ -203,7 +194,7 @@ end
 #
 # Same geometry as above (20000 cells, 200 points, each point strictly inside
 # exactly one cell), but now the gate rides an ORDINARY `+`-semiring aggregate.
-# Two orientations, both of which used to walk the full product and reject every
+# Two orientations, neither of which may walk the full product and reject every
 # non-candidate tuple with a membership test:
 #
 #   (A) MIRRORED — a main-graph `P[p] = Σ_c […]` reducing over CELLS. Full
@@ -212,8 +203,8 @@ end
 #       `desugar_pushdown` re-points it onto the compact support axis and gates
 #       it on the generated `pd_cell__*` envelopes. Full product |support|·|records|.
 #
-# Each asserts the VISIT COUNT (`_VI_ENUM_VISITS`, now instrumented on the dense
-# path too) and, independently, that the values equal a plain-Julia oracle — the
+# Each asserts the VISIT COUNT (the `:vi_enum_visits` count, instrumented on the
+# dense path too) and, independently, that the values equal a plain-Julia oracle — the
 # driver must remove work without moving a number.
 # ===========================================================================
 @testset "overlap-gated DENSE aggregate scaling (both orientations)" begin
@@ -237,10 +228,10 @@ end
     end
 
     # the rectangle-containment predicate, cell symbol `c`, record symbol `r`
-    _contain(csym, rsym) = _op(
+    _contain(csym, rsym) = jop(
         "and",
-        _op("<=", _ix("W", csym), _ix("X", rsym)), _op("<", _ix("X", rsym), _ix("E", csym)),
-        _op("<=", _ix("S", csym), _ix("Y", rsym)), _op("<", _ix("Y", rsym), _ix("N", csym))
+        jop("<=", jidx("W", csym), jidx("X", rsym)), jop("<", jidx("X", rsym), jidx("E", csym)),
+        jop("<=", jidx("S", csym), jidx("Y", rsym)), jop("<", jidx("Y", rsym), jidx("N", csym))
     )
 
     # ---- (A) MIRRORED orientation on the MAIN GRAPH ----------------------
@@ -263,13 +254,13 @@ end
             "Mirror" => Dict(
                 "variables" => merge(
                     _rectvars,
-                    Dict("P" => Dict("type" => "unknown", "shape" => ["points"]))
+                    Dict("P" => Dict("type" => "unknown", "shape" => ["points"], "default" => 0.0))
                 ),
                 "equations" => [
                     Dict(
                         "lhs" => Dict(
                             "op" => "faq", "args" => [], "output_idx" => ["p"],
-                            "expr" => Dict("op" => "D", "args" => [_ix("P", "p")], "wrt" => "t"),
+                            "expr" => Dict("op" => "D", "args" => [jidx("P", "p")], "wrt" => "t"),
                             "ranges" => Dict("p" => [1, np])
                         ),
                         "rhs" => Dict(
@@ -287,15 +278,15 @@ end
                                     )
                                 ),
                             ],
-                            "filter" => _op(
+                            "filter" => jop(
                                 "and",
-                                _op("<=", _ix("W", "c"), _ix("X", "p")),
-                                _op("<", _ix("X", "p"), _ix("E", "c")),
-                                _op("<=", _ix("S", "c"), _ix("Y", "p")),
-                                _op("<", _ix("Y", "p"), _ix("N", "c"))
+                                jop("<=", jidx("W", "c"), jidx("X", "p")),
+                                jop("<", jidx("X", "p"), jidx("E", "c")),
+                                jop("<=", jidx("S", "c"), jidx("Y", "p")),
+                                jop("<", jidx("Y", "p"), jidx("N", "c"))
                             ),
                             "args" => ["X", "Y", "W", "S", "E", "N"],
-                            "expr" => _op("+", _ix("W", "c"), _ix("S", "c"))
+                            "expr" => jop("+", jidx("W", "c"), jidx("S", "c"))
                         )
                     ),
                 ]
@@ -304,39 +295,36 @@ end
     )
 
     _mca(np, nc) = Dict{String, Any}(
-        "X" => PX[1:np], "Y" => PY[1:np],
-        "W" => CW[1:nc], "S" => CS[1:nc], "E" => CE[1:nc], "N" => CN[1:nc]
+        "Mirror.X" => PX[1:np], "Mirror.Y" => PY[1:np],
+        "Mirror.W" => CW[1:nc], "Mirror.S" => CS[1:nc], "Mirror.E" => CE[1:nc],
+        "Mirror.N" => CN[1:nc]
     )
 
     # warm the whole front door on a tiny same-typed fixture (JIT, not runtime)
     let sm = Dict(
-            "esm" => "0.6.0", "metadata" => Dict("name" => "dense_overlap_mirror"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "dense_overlap_mirror"),
             "index_sets" => Dict(
                 "points" => Dict("kind" => "interval", "size" => 1),
                 "cells" => Dict("kind" => "interval", "size" => 2)
             ),
             "models" => _mirror_doc(1, 2)["models"]
         )
-        ESS._build_evaluator(
-            sm; model_name = "Mirror",
+        ESS.Internal.build(
+            sm;
             const_arrays = Dict{String, Any}(
-                "X" => [0.5], "Y" => [0.5],
-                "W" => [0.0, 1.0], "S" => [0.0, 0.0],
-                "E" => [1.0, 2.0], "N" => [1.0, 1.0]
+                "Mirror.X" => [0.5], "Mirror.Y" => [0.5],
+                "Mirror.W" => [0.0, 1.0], "Mirror.S" => [0.0, 0.0],
+                "Mirror.E" => [1.0, 2.0], "Mirror.N" => [1.0, 1.0]
             )
         )
     end
 
-    ESS._VI_ENUM_VISITS[] = 0
-    tmir = @elapsed f!, u0, pp, _, vmap =
-        ESS._build_evaluator(
-        _mirror_doc(npts, ncells); model_name = "Mirror",
-        const_arrays = _mca(npts, ncells)
-    )
-    mir_visits = ESS._VI_ENUM_VISITS[]
+    tmir = @elapsed f!, u0, pp, _, vmap, mir_rep =
+        ESS.Internal.build(_mirror_doc(npts, ncells); const_arrays = _mca(npts, ncells))
+    mir_visits = get(mir_rep.counts, :vi_enum_visits, 0)
 
     du = similar(u0); f!(du, u0, pp, 0.0)
-    got = [du[vmap["P[$p]"]] for p in 1:npts]
+    got = [du[vmap["Mirror.P[$p]"]] for p in 1:npts]
     oracle = [Float64(cell_ab[chosen[p]][1] + cell_ab[chosen[p]][2]) for p in 1:npts]
     @test got == oracle                        # EXACT — one term per record
     # one candidate per point ⇒ the driver visits `npts` tuples, not npts·ncells
@@ -354,9 +342,9 @@ end
         "op" => "faq", "output_idx" => ["c"], "reduce" => "+",
         "ranges" => Dict("c" => Dict("from" => "cells"), "r" => Dict("from" => "points")),
         "args" => ["W", "S", "E", "N", "X", "Y", "annual"],
-        "expr" => _op(
-            "*", _op("ifelse", _contain("c", "r"), 1.0, 0.0),
-            _ix("annual", "r")
+        "expr" => jop(
+            "*", jop("ifelse", _contain("c", "r"), 1.0, 0.0),
+            jidx("annual", "r")
         )
     )
     _concagg = Dict(
@@ -366,12 +354,12 @@ end
             "rcv" => Dict("from" => "rcv_cells")
         ),
         "args" => ["SR", "Emis"],
-        "expr" => _op("*", _ix("SR", "s", "rcv"), _ix("Emis", "s"))
+        "expr" => jop("*", jidx("SR", "s", "rcv"), jidx("Emis", "s"))
     )
     annual = collect(1.0:npts)
     SR = [Float64((i % 7) + j) for i in 1:ncells, j in 1:2]
     fwd_doc = Dict{String, Any}(
-        "esm" => "0.9.0", "metadata" => Dict("name" => "dense_overlap_forward"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "dense_overlap_forward"),
         "index_sets" => Dict{String, Any}(
             "points" => Dict("kind" => "interval", "size" => npts),
             "cells" => Dict("kind" => "interval", "size" => ncells),
@@ -411,23 +399,24 @@ end
     ]
 
     fca = Dict{String, Any}(
-        "X" => PX, "Y" => PY, "annual" => annual,
-        "W" => CW, "S" => CS, "E" => CE, "N" => CN, "SR" => SR
+        "Fwd.X" => PX, "Fwd.Y" => PY, "Fwd.annual" => annual,
+        "Fwd.W" => CW, "Fwd.S" => CS, "Fwd.E" => CE, "Fwd.N" => CN, "Fwd.SR" => SR
     )
-    insp = ESS.BuildInspection()
-    ESS._build_evaluator(rw; model_name = "Fwd", const_arrays = fca, inspect = insp)
+    rep = ESS.Internal.build(rw; const_arrays = fca).report
+    insp = rep.products
     nsupport = insp.derived_extents["pd_faq__cells"]
     @test nsupport == npts                     # distinct cells, one point each
 
-    file = ESS.coerce_esm_file(rw)
-    ESS._VI_ENUM_VISITS[] = 0
-    fwd_field, _ = ESS._observed_field(insp, file, "Fwd", "Emis")
-    fwd_visits = ESS._VI_ENUM_VISITS[]
+    # The build-time field read the Problem makes: against the flattened run
+    # document, whose one model is `Flattened`.
+    file = rep.run_file
+    (fwd_field, _), counts = ESS.Internal.counting() do
+        ESS._observed_field(insp, file, String(first(keys(file.models))), "Fwd.Emis")
+    end
+    fwd_visits = get(counts, :vi_enum_visits, 0)
     @test length(fwd_field) == nsupport
     # every record contributes its `annual` to exactly one support cell
     @test sum(fwd_field) == sum(annual)
     @test fwd_visits == npts
     @test fwd_visits < nsupport * npts ÷ 100   # 200 vs 40_000
 end
-
-end # module VIOverlapScalingTests

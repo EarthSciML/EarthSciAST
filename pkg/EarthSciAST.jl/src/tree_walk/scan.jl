@@ -1,10 +1,10 @@
 # ========================================================================
-# tree_walk/scan.jl — cumulative (prefix) reductions in O(N)  (ess-scan)
+# tree_walk/scan.jl — cumulative (prefix) reductions in O(N)
 #
 # A cumulative sum is an ordinary `faq` whose `filter` admits the
 # monotone window `j <= i` (esm-spec §4.3.1, "Cumulative (prefix)
 # reductions"). Nothing about that shape is special to the build until you
-# look at what it costs: `_unrolled_contraction_body` (build.jl) expands a
+# look at what it costs: `_unrolled_contraction_body` (build_array_equation.jl) expands a
 # constant-bound contraction into ONE symbolic ⊕-fold shared by every output
 # cell, and with an inequality filter each of the N terms carries a runtime
 # guard, so cell `i` evaluates
@@ -50,13 +50,12 @@
 # from all three tiers (codegen, affine-interpreted, per-cell reference) and
 # from a bare accumulator.
 #
-# FORWARD ONLY. `j >= i` / `j > i` keep the triangular path. The accumulation
-# order the spec fixes is ascending `j` for EVERY variant, so a reverse scan
-# folds its suffix from the low end upward and consecutive reverse cells
-# share no partial result; accumulating one right-to-left would re-associate
-# the fold, which is not a no-op in floating point. The mirrored spellings
-# `i >= j` / `i > j` ARE forward scans and are recognized as such. This
-# matches the Rust and Python ports exactly.
+# BOTH DIRECTIONS. `j <= i` / `j < i` (and their mirrors `i >= j` / `i > j`)
+# are forward scans. `j >= i` / `j > i` are reverse scans, which esm-spec
+# §4.3.1 folds descending: the running accumulator walks the axis from the
+# top, so a reverse scan is the forward fold over the lane's cells in reverse
+# order (`_detect_prefix_scan`, `_build_scan_fold`), with a negative level
+# stride.
 #
 # STAGGERED OUTPUT. The output axis may also be the term axis plus one trailing
 # cell — the shape a cumulative flux takes on a staggered grid, where the
@@ -66,7 +65,7 @@
 # term pass runs over the centres, the last node is left unwritten by the term
 # kernels, and the strict fold below writes every cell before reading it — the
 # slot's entry value reaches only an `acc` the loop discards.
-# `_scan_term_iters` (build.jl) states the admission condition and why the
+# `_scan_term_iters` (build_array_equation.jl) states the admission condition and why the
 # inclusive window is excluded. Pinned by the staggered testsets in
 # test/scan_prefix_test.jl, bitwise against the per-cell reference exactly as
 # the same-range cases are.
@@ -280,5 +279,5 @@ function _scan_strided_run!(
 end
 
 # The plain vector `du`'s slots `lo:hi` live in, and the offset to subtract
-# (the two-buffer view's method is with it, in build.jl).
+# (the two-buffer view's method is with it, in obs_buffers.jl).
 _scan_dense(du, lo::Int, hi::Int) = (du, 0)

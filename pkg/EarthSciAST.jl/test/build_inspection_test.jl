@@ -2,7 +2,8 @@
 #
 # Two capability seams landed together and are pinned here:
 #
-# 1. `EarthSciAST._build_evaluator(...; inspect=BuildInspection())` exposes the materialized
+# 1. A build's products (`EarthSciAST.Internal.build(...).report.products`, and
+#    the public `esm_problem(...; inspect = BuildInspection())`) expose the materialized
 #    SETUP-TIME geometry arrays (RFC §8.1 / esm-spec §8.6.1), the const-array
 #    registry, and the resolved observed map — the official surface the ESD
 #    conformance runner reads the per-pair regrid A_ij / A_j / W_ij from
@@ -159,13 +160,13 @@ end
 
 @testset "BuildInspection — per-pair regrid setup arrays (rational areas)" begin
     doc = _bi_regrid_doc()
-    insp = BuildInspection()
-    f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(doc; inspect = insp)
+    f!, u0, p, tspan, var_map, rep = EarthSciAST.Internal.build(doc)
+    insp = rep.products
 
-    @test issubset(Set(["A_ij", "A_j", "W_ij"]), Set(keys(insp.setup_arrays)))
-    A = insp.setup_arrays["A_ij"]
-    Aj = insp.setup_arrays["A_j"]
-    W = insp.setup_arrays["W_ij"]
+    @test issubset(Set(["Regrid.A_ij", "Regrid.A_j", "Regrid.W_ij"]), Set(keys(insp.setup_arrays)))
+    A = insp.setup_arrays["Regrid.A_ij"]
+    Aj = insp.setup_arrays["Regrid.A_j"]
+    W = insp.setup_arrays["Regrid.W_ij"]
     @test size(A) == (9, 4) && size(W) == (9, 4) && size(Aj) == (4,)
 
     # Hand-derived exact expectation (the ESD manifest reference_weights
@@ -186,16 +187,47 @@ end
     @test all(j -> isapprox(sum(W[:, j]), 1.0; atol = 4eps()), 1:4)
 
     # The registry + observed map are exposed too.
-    @test haskey(insp.const_arrays, "src_poly")
-    @test haskey(insp.const_arrays, "A_ij")     # setup arrays register as const arrays
+    @test haskey(insp.const_arrays, "Regrid.src_poly")
+    @test haskey(insp.const_arrays, "Regrid.A_ij")     # setup arrays register as const arrays
     @test insp.observed_exprs isa Dict{String, EarthSciAST.ASTExpr}
 
-    # Observability is inert: the build without `inspect` is identical.
-    f2!, u02, p2, tspan2, var_map2 = EarthSciAST._build_evaluator(_bi_regrid_doc())
+    # A field `ic` reads a setup array as the right-hand side does (the build's
+    # one storage precedence), not only the caller's arrays.
+    let doc2 = _bi_regrid_doc()
+        m = doc2["models"]["Regrid"]
+        m["variables"]["y"] = Dict("type" => "unknown", "shape" => Any["tgt_cells"])
+        push!(
+            m["equations"],
+            Dict{String, Any}(
+                "lhs" => Dict("op" => "ic", "args" => Any["y"]), "rhs" => "A_j"
+            ),
+            Dict{String, Any}(
+                "lhs" => _bi_agg(
+                    Any["j"], Dict{String, Any}("j" => Dict("from" => "tgt_cells")),
+                    Dict("op" => "D", "args" => Any[_bi_index("y", "j")], "wrt" => "t")
+                ),
+                "rhs" => _bi_agg(
+                    Any["j"], Dict{String, Any}("j" => Dict("from" => "tgt_cells")), 0.0
+                )
+            )
+        )
+        _, uy, _, _, vmy = EarthSciAST.Internal.build(doc2)
+        @test all(j -> isapprox(uy[vmy["Regrid.y[$j]"]], 2.25; atol = 1.0e-12), 1:4)
+    end
+
+    # Observability is inert: a Problem built with a public record has the same
+    # right-hand side and layout.
+    insp_pub = BuildInspection()
+    prob = esm_problem(_bi_regrid_doc(), tspan; inspect = insp_pub)
+    f2!, u02, p2, tspan2, var_map2 = prob.f!, prob.u0, prob.p, prob.tspan, prob.var_map
     @test u02 == u0 && var_map2 == var_map && tspan2 == tspan
     du = similar(u0); du2 = similar(u02)
     f!(du, u0, p, 0.0); f2!(du2, u02, p2, 0.0)
     @test du == du2
+    # The public record is the build's own products, and describes one build.
+    @test insp_pub.setup_arrays["Regrid.A_ij"] == A
+    @test compiler_report(insp_pub) === compiler_report(prob)
+    @test_throws ArgumentError esm_problem(_bi_regrid_doc(), tspan; inspect = insp_pub)
 end
 
 # ---------------------------------------------------------------------------
@@ -238,7 +270,7 @@ function _bi_ragged_doc()
             )
         ),
         # esm 1.0.0: the const factors, the bare-name alias and `div` are all
-        # `unknown`s whose DEFINING equation carries what used to be `expression`.
+        # `unknown`s, each defined by an equation.
         "models" => Dict{String, Any}(
             "Div" => Dict{String, Any}(
                 "variables" => Dict{String, Any}(
@@ -315,19 +347,18 @@ end
     doc = _bi_ragged_doc()
 
     # Direct build: du at the zero IC IS the ragged divergence.
-    f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(doc)
-    @test haskey(var_map, "u[1]") && haskey(var_map, "u[2]")
+    f!, u0, p, tspan, var_map, rep = EarthSciAST.Internal.build(doc)
+    @test haskey(var_map, "Div.u[1]") && haskey(var_map, "Div.u[2]")
     du = similar(u0)
     f!(du, u0, p, 0.0)
-    @test du[var_map["u[1]"]] == -10.0
-    @test du[var_map["u[2]"]] == 20.0
+    @test du[var_map["Div.u[1]"]] == -10.0
+    @test du[var_map["Div.u[2]"]] == 20.0
 
     # Inspection: the const-op factors AND the bare alias are registered.
-    insp = BuildInspection()
-    EarthSciAST._build_evaluator(doc; inspect = insp)
-    @test insp.const_arrays["F"] == [10.0, 20.0, 30.0]
-    @test insp.const_arrays["nEdgesOnCell"] == [2.0, 3.0]
-    @test haskey(insp.observed_exprs, "div")
+    insp = rep.products
+    @test insp.const_arrays["Div.F"] == [10.0, 20.0, 30.0]
+    @test insp.const_arrays["Div.nEdgesOnCell"] == [2.0, 3.0]
+    @test haskey(insp.observed_exprs, "Div.div")
 
     # §6.6.5 end to end (flatten prefixes every name with "Div.", so this also
     # exercises the model-scope suffix resolution of the registry's bare

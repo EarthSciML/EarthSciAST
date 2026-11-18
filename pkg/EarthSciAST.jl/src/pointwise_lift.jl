@@ -50,6 +50,23 @@ function _index_arg_loop(expr::ASTExpr)::Union{String, Nothing}
     return nothing
 end
 
+# The expansion of the template reference `e` against `reg`, for analysis only:
+# the equation tree keeps the reference. Each reference is expanded once
+# (`peek`, `memo`); `nothing` with no registry, or when the expansion fails for
+# a reason other than resources (an unknown template, bad bindings), which the
+# build reports with its own diagnostic.
+function _peek_expansion(peek::IdDict{OpExpr, Any}, e::OpExpr, reg, memo::_ExpandCache)
+    reg === nothing && return nothing
+    return get!(peek, e) do
+        try
+            _expand_expr_refs(e, reg, nothing, memo)
+        catch err
+            _is_resource_error(err) && rethrow()
+            nothing
+        end
+    end
+end
+
 # Determine the ordered spatial loop variables of a lowered spatial operator by
 # reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` whose
 # every position carries a loop variable (the interior stencil). Returns the loop
@@ -59,8 +76,7 @@ end
 # search see THROUGH surviving `apply_expression_template` region values: the
 # interior gather lives inside the referenced template body, so the walk peeks
 # at the body's expansion — ANALYSIS ONLY, the equation tree is never rewritten,
-# and the compile-once build still receives the reference-preserving form. With
-# `reg === nothing` (no surviving references) the walk is exactly the old one.
+# and the compile-once build still receives the reference-preserving form.
 function _detect_lift_loops(
         ma::OpExpr, lifted::Set{String}, rank::Int,
         reg = nothing
@@ -78,17 +94,7 @@ function _detect_lift_loops(
         haskey(seen, e) && return
         seen[e] = nothing
         if e.op == APPLY_EXPRESSION_TEMPLATE_OP
-            reg === nothing && return
-            body = get!(peek, e) do
-                try
-                    _expand_expr_refs(e, reg, nothing, memo)
-                catch err
-                    _is_resource_error(err) && rethrow()
-                    # Unknown template / bad bindings: leave detection to fail
-                    # as before; the build path raises the real diagnostic.
-                    nothing
-                end
-            end
+            body = _peek_expansion(peek, e, reg, memo)
             body === nothing || walk(body)
             return
         end
@@ -144,29 +150,19 @@ end
 # The ops that restructure a WHOLE array (esm-spec §4.3.5). Inside a lifted
 # right-hand side there is no per-cell reading of their operands, so an array
 # operand beneath one is refused rather than gathered per cell.
-const _LIFT_WHOLE_ARRAY_OPS = ("reshape", "transpose", "concat")
+const _LIFT_WHOLE_ARRAY_OPS = Tuple(sort!(collect(_ops_with(:shape_remap))))
 
-# The grid a lifted equation is rewritten over: its loop variables, the index
-# set each loop runs over (positionally parallel to `loops`), every declared
-# array shape, and the species being lifted (for diagnostics).
-struct _LiftGrid
-    loops::Vector{String}
-    axes::Vector{String}
-    var_shapes::Dict{String, Vector{String}}
-    species::String
-end
-
-# Rewrite a scalar (merged reaction + operator) RHS into its per-cell form over
-# the lift grid. Each spatial-operator `makearray` becomes
-# `index(makearray, loops…)` (its region values already index per cell);
-# `index` and `faq` nodes carry their own indexing and are left untouched.
+# Rewrite a scalar (merged reaction + operator) right-hand side into its
+# per-cell form on the lift grid: the loops `loops` run over the index sets
+# `align.axes`. Each spatial-operator `makearray` is tagged with the loop
+# symbols (as every binding does) and read per cell, `index(makearray, loops…)`;
+# `index` and `faq` nodes carry their own indexing and are kept.
 #
-# A bare reference to a lifted species becomes `index(species, loops…)`. A bare
-# reference to a variable with a declared shape is gathered per cell by
-# index-set NAME (esm-spec §4.3.4), never by position
-# (`_lift_gather_shaped`): each of its axes is read at the loop that runs over
-# that index set, so a `[lev]` profile in a `[lon, lat, lev]` lift is
-# `index(p, k)` and a `[lev, lat, lon]` field is `index(m, k, j, i)`.
+# A bare reference to an array operand is read per cell: a lifted state, or a
+# variable with no declared shape, positionally; a variable with a declared
+# shape by index-set NAME (esm-spec §4.3.4, `_lift_gather_shaped`), so a
+# `[lev]` profile in a `[lon, lat, lev]` lift is `index(p, k)` and a
+# `[lev, lat, lon]` field is `index(m, k, j, i)`.
 #
 # Where the variable sits decides what happens when it shares NO index set with
 # the grid. Under an element-wise operator (`_is_elementwise_node`) it must be
@@ -176,59 +172,50 @@ end
 # (`reshape`, `transpose`, `concat`) have no per-cell reading at all, so any
 # array operand beneath one is an error.
 #
-# This is its own walk rather than a `_wrap_bare_array_refs` caller: that
-# rewrite gathers positionally outside element-wise position, where the lift
-# must still align by name (or leave a whole-array argument bare). Like it, the
-# walk is identity-memoized per call and split by the element-wise flag (the
-# rewrite of a shared node depends on it), so a structurally-shared input DAG
-# rewrites to a shared output rather than an exponentially large tree
-# (`_WrapMemo`).
+# A template application counts as its expansion (esm-spec §9.6.4 rule 4): with
+# a template context `ctx`, it is replaced by its expansion read at the cell
+# the way the elementwise lift reads one (`_ew_at_cell`, esm-spec §9.6.11), so
+# an array bound to a parameter the body reads per value is gathered, not left
+# bare inside the lifted `faq`.
 function _lift_rhs_to_cell(
-        expr::ASTExpr, arrayvars::Set{String}, grid::_LiftGrid
+        expr::ASTExpr, arrayvars::Set{String}, loops::Vector{String},
+        align::_AxisAlign, species::String, ctx::Union{Nothing, _ElementwiseContext} = nothing
     )::ASTExpr
-    return _lift_rhs_to_cell(expr, arrayvars, grid, true, _WrapMemo())
-end
-function _lift_rhs_to_cell(
-        expr::ASTExpr, arrayvars::Set{String}, grid::_LiftGrid,
-        elementwise::Bool, memo  # ::_WrapMemo (shape_promotion.jl, included later)
-    )::ASTExpr
-    if expr isa VarExpr
-        expr.name in arrayvars || return expr
-        shape = get(grid.var_shapes, expr.name, nothing)
-        shape === nothing && return _index_wrap(expr, grid.loops)
-        return _lift_gather_shaped(expr, shape, grid, elementwise)
+    foreign(v, shape, axes, s) = throw(
+        DimensionPromotionError(
+            "pointwise lift: '$(v.name)' (shape $(shape)) cannot be read per cell on " *
+                "the grid $(axes) that species '$(species)' is lifted to: the grid is " *
+                "not shaped over index set '$(s)' (esm-spec §4.3.4)"
+        )
+    )
+    function leaf(v::VarExpr, elementwise::Bool)
+        v.name in arrayvars || return v
+        shape = get(align.var_shapes, v.name, nothing)
+        shape === nothing && return _index_wrap(v, loops)
+        return _lift_gather_shaped(v, shape, loops, align.axes, species, elementwise)
     end
-    expr isa OpExpr || return expr
-    tbl = elementwise ? memo.aligned : memo.plain
-    cached = get(tbl, expr, nothing)
-    cached === nothing || return cached
-    result = if expr.op == "makearray"
-        # Tag the makearray with the lift's loop symbols (as every binding
-        # does), then read it per cell.
-        _index_wrap(reconstruct(expr; output_idx = Any[grid.loops...]), grid.loops)
-    elseif expr.op == "index" || expr.op == "faq"
-        expr
-    elseif expr.op in _LIFT_WHOLE_ARRAY_OPS
-        name = _first_array_operand(expr, arrayvars)
-        name === nothing || throw(
-            DimensionPromotionError(
-                "pointwise lift: '$(name)' is an operand of '$(expr.op)' in the " *
-                    "right-hand side of species '$(grid.species)'; '$(expr.op)' " *
-                    "consumes a whole array, so it has no per-cell reading on the " *
-                    "lifted grid"
+    function node(e::OpExpr)
+        if ctx !== nothing && e.op == APPLY_EXPRESSION_TEMPLATE_OP
+            return _ew_at_cell(e, align.var_shapes, ctx, loops, align, foreign)
+        elseif e.op == "makearray"
+            return _index_wrap(reconstruct(e; output_idx = Any[loops...]), loops)
+        elseif e.op == "index" || e.op == "faq"
+            return e
+        elseif e.op in _LIFT_WHOLE_ARRAY_OPS
+            name = _first_array_operand(e, arrayvars)
+            name === nothing || throw(
+                DimensionPromotionError(
+                    "pointwise lift: '$(name)' is an operand of '$(e.op)' in the " *
+                        "right-hand side of species '$(species)'; '$(e.op)' " *
+                        "consumes a whole array, so it has no per-cell reading on the " *
+                        "lifted grid"
+                )
             )
-        )
-        expr
-    else
-        inner = _is_elementwise_node(expr)
-        reconstruct(
-            expr; args = ASTExpr[
-                _lift_rhs_to_cell(a, arrayvars, grid, inner, memo) for a in expr.args
-            ]
-        )
+            return e
+        end
+        return nothing
     end
-    tbl[expr] = result
-    return result
+    return _read_at_cell(leaf, node, expr)
 end
 
 # The first bare variable reference beneath `expr` (through `args`) that names
@@ -243,16 +230,13 @@ function _first_array_operand(expr::ASTExpr, arrayvars::Set{String})::Union{Stri
     return nothing
 end
 
-# Gather the shaped variable `v` at the current cell of the lift grid, by
-# index-set name (esm-spec §4.3.4).
-#
-# Each declared axis is read at the loop whose index set it names, so a SUBSET
-# of the grid's index sets replicates along the others and a permuted shape
-# transposes. A shape identical to the grid's is the positional gather.
+# The shaped variable `v` read at the current cell of the lift grid, by
+# index-set name (`_gather_by_name`, esm-spec §4.3.4): a SUBSET of the grid's
+# index sets replicates along the others and a permuted shape transposes.
 #
 # Refused, because no per-cell read would be right:
-# * an axis the grid is not shaped over, alongside axes it is (a staggered
-#   `[lon, lat, lev_edge]` field), or in element-wise position at all;
+# * an index set the grid is not shaped over, alongside ones it is (a
+#   staggered `[lon, lat, lev_edge]` field), or in element-wise position at all;
 # * a shape that repeats an index set, or a grid that does, where the
 #   variable's shape is not the grid's own: there is then no single loop for
 #   the repeated name.
@@ -260,137 +244,40 @@ end
 # A variable sharing no index set with the grid, outside element-wise position,
 # stays bare: it is a whole-array argument of the enclosing op.
 function _lift_gather_shaped(
-        v::VarExpr, shape::Vector{String}, grid::_LiftGrid, elementwise::Bool
+        v::VarExpr, shape::Vector{String}, loops::Vector{String},
+        axes::Vector{String}, species::String, elementwise::Bool
     )::ASTExpr
-    shape == grid.axes && return _index_wrap(v, grid.loops)
-    foreign = filter(a -> !(a in grid.axes), shape)
-    (length(foreign) == length(shape) && !elementwise) && return v
-    mismatch(why) = DimensionPromotionError(
-        "pointwise lift: '$(v.name)' (shape $(shape)) cannot be read per cell on " *
-            "the grid $(grid.axes) that species '$(grid.species)' is lifted to: " *
-            "$(why) (esm-spec §4.3.4)"
-    )
-    isempty(foreign) ||
-        throw(mismatch("the grid is not shaped over index set '$(first(foreign))'"))
-    subs = Vector{ASTExpr}(undef, length(shape) + 1)
-    subs[1] = v
-    for (d, axis) in enumerate(shape)
-        axis in view(shape, 1:(d - 1)) &&
-            throw(mismatch("index set '$(axis)' appears twice in its shape"))
-        count(isequal(axis), grid.axes) == 1 || throw(
-            mismatch("the grid runs over index set '$(axis)' on more than one axis")
+    r = _gather_by_name(v, shape, axes, loops)
+    r isa OpExpr && return r
+    why, s = r
+    (why == :foreign && !elementwise && !any(in(axes), shape)) && return v
+    reason = why == :foreign ? "the grid is not shaped over index set '$(s)'" :
+        why == :repeated ? "index set '$(s)' appears twice in its shape" :
+        "the grid runs over index set '$(s)' on more than one axis"
+    throw(
+        DimensionPromotionError(
+            "pointwise lift: '$(v.name)' (shape $(shape)) cannot be read per cell on " *
+                "the grid $(axes) that species '$(species)' is lifted to: " *
+                "$(reason) (esm-spec §4.3.4)"
         )
-        subs[d + 1] = VarExpr(grid.loops[findfirst(isequal(axis), grid.axes)])
-    end
-    return OpExpr("index", subs)
+    )
 end
-
-# The top-level component a flattened name belongs to: its first segment.
-_lift_top_component(name::AbstractString)::String = String(first(split(name, '.'; limit = 2)))
 
 # A variable with no `shape`, or `shape: []`, is scalar (esm-spec §6.3).
 _lift_is_scalar(v::ModelVariable)::Bool = v.shape === nothing || isempty(v.shape)
 
 # The lift's shape inference (esm-libraries-spec §4.7.5, "Pointwise lift: which
-# states are lifted"): the ordered index sets an expression's value spans under
-# esm-spec §4.3.4, empty for a scalar, or `nothing` when undecided.
-#
-# Memoized over definitions, so the answer does not depend on the order the
-# equations are visited in; a definition cycle is undecided. `masked` names read
-# as scalars: the sources of the non-pointwise `variable_map` entries into the
-# component being decided.
-struct _LiftShapes
-    variables::Dict{String, ModelVariable}
-    defs::Dict{String, ASTExpr}
-    lifted::Dict{String, Vector{String}}
-    masked::Set{String}
-    memo::Dict{String, Union{Vector{String}, Nothing}}
-end
-_LiftShapes(variables, defs, lifted, masked = Set{String}()) = _LiftShapes(
-    variables, defs, lifted, masked, Dict{String, Union{Vector{String}, Nothing}}()
-)
-
-function _lift_name_axes(s::_LiftShapes, name::String)::Union{Vector{String}, Nothing}
-    (name == "t" || name in s.masked) && return String[]
-    haskey(s.lifted, name) && return copy(s.lifted[name])
-    haskey(s.memo, name) && return s.memo[name]
-    var = get(s.variables, name, nothing)
-    var === nothing && return nothing
-    var.shape === nothing || return String[string(x) for x in var.shape]
-    body = get(s.defs, name, nothing)
-    body === nothing && return String[]
-    s.memo[name] = nothing
-    out = _lift_expr_axes(s, body)
-    s.memo[name] = out
-    return out
-end
-
-function _lift_expr_axes(s::_LiftShapes, e::ASTExpr)::Union{Vector{String}, Nothing}
-    (e isa NumExpr || e isa IntExpr) && return String[]
-    e isa VarExpr && return _lift_name_axes(s, e.name)
-    e isa OpExpr || return nothing
-    if e.op == "index"
-        for k in 2:length(e.args)
-            ax = _lift_expr_axes(s, e.args[k])
-            (ax !== nothing && isempty(ax)) || return nothing
-        end
-        return String[]
-    elseif e.op == "faq"
-        (e.output_idx === nothing || isempty(e.output_idx)) && return String[]
-        axes = String[]
-        for sym in e.output_idx
-            spec = (sym isa AbstractString && e.ranges !== nothing) ?
-                get(e.ranges, sym, nothing) : nothing
-            spec isa IndexSetRef || return nothing
-            push!(axes, spec.from)
-        end
-        return axes
-    elseif e.op == "D" && (e.wrt === nothing || e.wrt == "t") && length(e.args) == 1
-        return _lift_expr_axes(s, e.args[1])
+# states are lifted") is `_expr_axes` (expr_axes.jl) over every declared
+# variable, the bare definitions, the states already lifted at their grids, and
+# `masked` names read as scalars: the sources of the non-pointwise
+# `variable_map` entries into the component being decided.
+function _lift_shape_env(variables, defs, lifted, masked, iv)
+    known = Dict{String, Vector{String}}()
+    for (k, v) in variables
+        v.shape === nothing || (known[k] = String[string(x) for x in v.shape])
     end
-    _is_elementwise_node(e) || return nothing
-    out = String[]
-    for a in e.args
-        ax = _lift_expr_axes(s, a)
-        ax === nothing && return nothing
-        for x in ax
-            x in out || push!(out, x)
-        end
-    end
-    return out
-end
-
-# Every name `exprs` reads or binds: variable references, `ranges` keys and
-# `output_idx` symbols.
-function _lift_used_names!(used::Set{String}, e::ASTExpr)
-    if e isa VarExpr
-        push!(used, e.name)
-    elseif e isa OpExpr
-        e.ranges === nothing || union!(used, keys(e.ranges))
-        if e.output_idx !== nothing
-            for sym in e.output_idx
-                sym isa AbstractString && push!(used, String(sym))
-            end
-        end
-        foreach_child(c -> _lift_used_names!(used, c), e)
-    end
-    return used
-end
-
-# `_p0 … _p<n-1>`, the prefix lengthened by `_` until no name `exprs` reads or
-# binds is one of them (the rule of esm-spec §9.6.11).
-function _fresh_lift_loops(exprs, n::Integer)::Vector{String}
-    used = Set{String}()
-    for e in exprs
-        _lift_used_names!(used, e)
-    end
-    prefix = "_p"
-    while true
-        loops = String["$(prefix)$(d)" for d in 0:(n - 1)]
-        any(in(used), loops) || return loops
-        prefix = "_" * prefix
-    end
-    return
+    merge!(known, lifted)
+    return _ShapeEnv(known; defs = defs, scalar = masked, names = Set{String}(keys(variables)), iv = iv)
 end
 
 # How one lifted state's equation is rewritten: the index set of each grid
@@ -404,7 +291,7 @@ struct _LiftPlan
 end
 
 """
-    _apply_pointwise_lift!(equations, contribs, states, params, observeds, index_sets, coupling;
+    _apply_pointwise_lift!(pool, states, params, observeds, index_sets, coupling; iv,
                            template_registry, lifted_shapes)
 
 Pointwise spatial lift (esm-spec §10.5; esm-libraries-spec §4.7.5, "Pointwise
@@ -412,7 +299,7 @@ lift: which states are lifted").
 
 A scalar state is a lift candidate when its merged equation carries an operator
 `makearray` (the operator route) or its right-hand side is an array under the
-lift's shape inference ([`_LiftShapes`](@ref)). A candidate lifts its whole
+lift's shape inference ([`_expr_axes`](@ref)). A candidate lifts its whole
 top-level component: every scalar state of that model or reaction system goes
 onto the same grid. Lifting can make further right-hand sides arrays, so the
 search repeats until no new component is lifted. Each lifted equation is
@@ -429,15 +316,15 @@ operands by (`_flat_array_shapes`) and the states it gave a grid shape, for
 flatten's elementwise step to reuse.
 """
 function _apply_pointwise_lift!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
+        pool::Vector{_FlatEq},
         states::OrderedDict{String, ModelVariable},
         params::OrderedDict{String, ModelVariable},
         observeds::OrderedDict{String, ModelVariable},
         index_sets::OrderedDict{String, IndexSet},
         coupling;
         template_registry = nothing,
-        lifted_shapes = nothing
+        lifted_shapes = nothing,
+        iv::AbstractString = "t"
     )
     no_operator_route = Set{String}()
     masks = Dict{String, Set{String}}()
@@ -445,18 +332,15 @@ function _apply_pointwise_lift!(
         lifting = hasproperty(c, :lifting) ? c.lifting : nothing
         (lifting === nothing || lifting == "pointwise") && continue
         if c isa CouplingOperatorCompose
-            union!(no_operator_route, (_lift_top_component(s) for s in c.systems))
+            union!(no_operator_route, (_component_root(s) for s in c.systems))
         elseif c isa CouplingVariableMap && !isempty(c.to) && !isempty(c.from)
-            push!(get!(masks, _lift_top_component(c.to), Set{String}()), c.from)
+            push!(get!(masks, _component_root(c.to), Set{String}()), c.from)
         end
     end
 
     is_lift_state(name) = haskey(states, name) && _lift_is_scalar(states[name])
-    defs = Dict{String, ASTExpr}()
-    for eq in equations
-        eq.lhs isa VarExpr || continue
-        get!(defs, (eq.lhs::VarExpr).name, eq.rhs)
-    end
+    equations = _pool_equations(pool)
+    defs = _bare_definitions(equations)
     lift_states = String[
         n for n in keys(states)
             if !haskey(defs, n) && !haskey(observeds, n) && is_lift_state(n)
@@ -531,10 +415,10 @@ function _apply_pointwise_lift!(
     # each read with the component's own states scalar and every other lifted
     # state at its lift index sets.
     function candidates_of(wanted)
-        inference = Dict{String, _LiftShapes}()
+        inference = Dict{String, _ShapeEnv{Nothing}}()
         found = OrderedDict{String, Vector{Tuple{String, Vector{String}}}}()
         for (target, n) in tendencies
-            comp = _lift_top_component(target)
+            comp = _component_root(target)
             wanted(comp) || continue
             if target in operator_plans
                 push!(get!(found, comp, Tuple{String, Vector{String}}[]), (target, plans[target].axes))
@@ -542,11 +426,11 @@ function _apply_pointwise_lift!(
             end
             shapes = get!(inference, comp) do
                 others = Dict{String, Vector{String}}(
-                    s => a for (s, a) in lifted_axes if _lift_top_component(s) != comp
+                    s => a for (s, a) in lifted_axes if _component_root(s) != comp
                 )
-                _LiftShapes(variables, defs, others, get(masks, comp, Set{String}()))
+                _lift_shape_env(variables, defs, others, get(masks, comp, Set{String}()), iv)
             end
-            axes = _lift_expr_axes(shapes, equations[n].rhs)
+            axes = _expr_axes(shapes, equations[n].rhs)
             (axes === nothing || isempty(axes)) && continue
             push!(get!(found, comp, Tuple{String, Vector{String}}[]), (target, axes))
         end
@@ -571,7 +455,7 @@ function _apply_pointwise_lift!(
                 )
             )
             for state in lift_states
-                _lift_top_component(state) == comp || continue
+                _component_root(state) == comp || continue
                 haskey(plans, state) || (
                     plans[state] = _LiftPlan(
                         copy(grid), Int[axis_size(a, state) for a in grid], nothing, nothing
@@ -617,25 +501,27 @@ function _apply_pointwise_lift!(
     # it there (esm-libraries-spec §4.7.5, "Pointwise lift: operands read per
     # cell"). Read after the states above have their shapes, so a definition
     # reading a lifted state is an array too.
-    read_shapes, _ = _flat_array_shapes(
+    read_shapes = _flat_array_shapes(
         states, params, observeds, equations,
         _ElementwiseContext(template_registry === nothing || isempty(template_registry) ? nothing : template_registry)
     )
     arrayvars = union!(_pointwise_lift_operands(promoted, states, params, observeds), keys(read_shapes))
+    ctx = template_registry === nothing || isempty(template_registry) ? nothing :
+        _ElementwiseContext(template_registry)
 
     for (n, eq) in enumerate(equations)
         target = differential_lhs_variable(eq.lhs)
         (target !== nothing && haskey(lifted_axes, target)) || continue
         plan = plans[target]
         loops, ranges = if plan.loops === nothing
-            fresh = _fresh_lift_loops((eq.lhs, eq.rhs), length(plan.axes))
-            fresh, Dict{String, Any}(fresh[d] => IndexSetRef(plan.axes[d]) for d in eachindex(fresh))
+            fresh = _fresh_loops((eq.lhs, eq.rhs), length(plan.axes); ctx = ctx)
+            fresh, _cell_ranges(fresh, plan.axes)
         else
             plan.loops, plan.ranges
         end
-        equations[n], contribs[n] = _pointwise_lift_equation(
-            eq, contribs[n], arrayvars,
-            _LiftGrid(loops, plan.axes, read_shapes, target), ranges
+        pool[n] = _pointwise_lift_equation(
+            pool[n], arrayvars, target, loops,
+            _AxisAlign(plan.axes, read_shapes), ranges, ctx
         )
     end
     return (shapes = read_shapes, stale = promoted)
@@ -669,7 +555,7 @@ function _pointwise_lifted_species(
         species = differential_lhs_variable(eq.lhs)
         species === nothing && continue
         (haskey(states, species) && _lift_is_scalar(states[species])) || continue
-        _lift_top_component(species) in exclude_components && continue
+        _component_root(species) in exclude_components && continue
         isempty(_collect_makearrays!(OpExpr[], eq.rhs)) && continue
         push!(lifted, species)
     end
@@ -695,9 +581,8 @@ function _pointwise_lift_operands(
     return arrayvars
 end
 
-# Grid axis for a makearray dimension is the declared index set whose size
-# matches that dimension's extent (the `index_sets` map is unordered, so this
-# matches by size rather than key order).
+# The declared index sets of each size, for matching a makearray dimension to
+# the index set of its extent.
 function _index_sets_by_size(index_sets::OrderedDict{String, IndexSet})::Dict{Int, Vector{String}}
     size_to_names = Dict{Int, Vector{String}}()
     for (name, iset) in index_sets
@@ -755,9 +640,8 @@ end
 # dimension's cell extent rejects exactly the staggered operands and keeps the
 # cell-centred ones. It also makes this pass a STRICT REFINEMENT of the size
 # match it precedes: when only one declared index set has the dimension's size,
-# any extent-agreeing name IS that index set, so a previously-unambiguous
-# resolution can never change. Only the ambiguous cases — which used to degrade
-# to a synthetic dense axis — can now resolve.
+# any extent-agreeing name IS that index set, so it decides only the dimensions
+# the size match leaves ambiguous.
 #
 # Walks THROUGH surviving `apply_expression_template` references (analysis only,
 # exactly as `_detect_lift_loops` does): with a monotone rule stack the interior
@@ -787,15 +671,7 @@ function _lift_axis_names(
         get!(seen, e, false) && return
         seen[e] = true
         if e.op == APPLY_EXPRESSION_TEMPLATE_OP
-            reg === nothing && return
-            body = get!(peek, e) do
-                try
-                    _expand_expr_refs(e, reg, nothing, memo)
-                catch err
-                    _is_resource_error(err) && rethrow()
-                    nothing   # unknown template: the build path raises the real diagnostic
-                end
-            end
+            body = _peek_expansion(peek, e, reg, memo)
             body === nothing || walk(body)
             return
         end
@@ -827,48 +703,22 @@ function _lift_axis_names(
     ]
 end
 
-# Add the synthetic index set `axname` (`_liftdim<d>_<extent>`) to the flattened
-# registry as an interval of `extent`, so the lifted state's shape and its `faq`
-# ranges name only registered index sets (esm-libraries-spec §4.7.5, "Pointwise
-# lift: index sets"). The extent is part of the name, so a lift never registers
-# one name at two sizes; an existing entry of another size is one the document
-# declared, and is refused rather than shadowed.
-function _register_synthetic_index_set!(
-        registry::AbstractDict{String, IndexSet}, axname::String,
-        extent::Int, d::Int, species::String
-    )
-    if haskey(registry, axname)
-        registry[axname].size == extent && return registry
-        throw(
-            DimensionPromotionError(
-                "pointwise lift: species '$(species)' needs the index set " *
-                    "'$(axname)' of size $(extent) for grid dimension $(d), but " *
-                    "the document declares '$(axname)' with a different size"
-            )
-        )
-    end
-    registry[axname] = IndexSet("interval"; size = extent)
-    return registry
-end
-
 # Map each grid dimension to a declared index set — by NAME propagation from the
 # operand gathers where that is decisive (`_lift_axis_names`), else by matching
 # extents — producing the species' new shape axes (`gaxes`) and the aggregate
 # loop `ranges`, each `{"from": <axis>}`. A synthetic axis is added to
-# `registry` (the flattened `index_sets`) when one is given.
+# `registry` (the flattened `index_sets`). `reg` is the template registry.
 function _pointwise_lift_axes(
         ma::OpExpr, loops::Vector{String},
         size_to_names::Dict{Int, Vector{String}},
         species::String, rank::Int;
-        mas::Union{Vector{OpExpr}, Nothing} = nothing,
-        var_shapes::Union{Dict{String, Vector{String}}, Nothing} = nothing,
-        index_sets = nothing, reg = nothing,
-        registry::Union{AbstractDict{String, IndexSet}, Nothing} = nothing
+        mas::Vector{OpExpr},
+        var_shapes::Dict{String, Vector{String}},
+        index_sets, reg,
+        registry::AbstractDict{String, IndexSet}
     )
     extents = _makearray_extents(ma)
-    named = (mas === nothing || var_shapes === nothing || index_sets === nothing) ?
-        Union{String, Nothing}[nothing for _ in 1:rank] :
-        _lift_axis_names(mas, loops, extents, var_shapes, index_sets, reg)
+    named = _lift_axis_names(mas, loops, extents, var_shapes, index_sets, reg)
     gaxes = String[]
     ranges = Dict{String, Any}()
     for d in 1:rank
@@ -886,20 +736,25 @@ function _pointwise_lift_axes(
             # No unique index set of this size — fall back to a synthetic axis,
             # registered in the flattened `index_sets`.
             if length(cands) > 1
-                @warn "pointwise lift: grid dimension $(d) of species " *
-                    "'$(species)' (extent $(extents[d])) matches multiple " *
-                    "declared index sets $(sort(cands)) by size, and no " *
-                    "declared-shape operand gathered at loop " *
-                    "'$(loops[d])' names one of them unambiguously, so the " *
-                    "synthetic index set '_liftdim$(d)_$(extents[d])' is " *
-                    "registered and used instead."
+                _flatten_warn(
+                    "pointwise_lift_ambiguous_index_set",
+                    "grid dimension $(d) of species " *
+                        "'$(species)' (extent $(extents[d])) matches multiple " *
+                        "declared index sets $(sort(cands)) by size, and no " *
+                        "declared-shape operand gathered at loop " *
+                        "'$(loops[d])' names one of them unambiguously, so the " *
+                        "synthetic index set '_liftdim$(d)_$(extents[d])' is " *
+                        "registered and used instead."
+                )
             end
             # Synthetic-axis naming convention: `_liftdim<dim>_<extent>`, a
             # self-describing name the same in every binding
             # (esm-libraries-spec §4.7.5, "Pointwise lift: index sets").
             axname = "_liftdim$(d)_$(extents[d])"
-            registry === nothing ||
-                _register_synthetic_index_set!(registry, axname, extents[d], d, species)
+            _register_synthetic_index_set!(
+                registry, axname, extents[d],
+                "pointwise lift: species '$(species)'", "grid dimension $(d)"
+            )
             push!(gaxes, axname)
             ranges[loops[d]] = IndexSetRef(axname)
         end
@@ -908,38 +763,20 @@ function _pointwise_lift_axes(
 end
 
 # Rewrite the merged scalar state ODE into per-cell `faq`s over the grid:
-# LHS `D(sp,t)` → `aggregate(D(index(sp, loops…), t))`, RHS per-cell via
-# `_lift_rhs_to_cell`. The per-cell indexing applies inside each contribution,
-# and the `faq` wraps their left-fold sum (esm-libraries-spec §4.7.5), so the
-# lifted equation's body — not its right-hand side — is what the contributions
-# sum to. Returns the equation and its lifted contributions.
+# left-hand side `D(sp)` → `faq(D(index(sp, loops…)))`, each contribution read
+# at the cell by `_lift_rhs_to_cell`, and the right-hand side the `faq` of
+# their left-fold sum (esm-libraries-spec §4.7.5), so the lifted equation's
+# body is what the contributions sum to.
 function _pointwise_lift_equation(
-        eq::Equation, contributions::Vector{Contribution},
-        arrayvars::Set{String},
-        grid::_LiftGrid,
-        ranges::Dict{String, Any}
+        fe::_FlatEq, arrayvars::Set{String}, species::String, loops::Vector{String},
+        align::_AxisAlign, ranges::Dict{String, Any}, ctx = nothing
     )
-    species, loops = grid.species, grid.loops
-    oidx = Any[l for l in loops]
-    idx_species = OpExpr(
-        "index", ASTExpr[
-            VarExpr(species),
-            (VarExpr(l) for l in loops)...,
-        ]
-    )
-    new_lhs = OpExpr(
-        "faq", ASTExpr[];
-        output_idx = oidx, ranges = ranges,
-        expr_body = OpExpr("D", ASTExpr[idx_species], wrt = "t")
-    )
+    idx_species = _index_wrap(VarExpr(species), loops)
+    new_lhs = _cell_faq(OpExpr("D", ASTExpr[idx_species], wrt = "t"), loops, ranges)
     lifted = Contribution[
-        Contribution(_lift_rhs_to_cell(c.expr, arrayvars, grid), c.origins)
-            for c in contributions
+        Contribution(_lift_rhs_to_cell(c.expr, arrayvars, loops, align, species, ctx), c.origins)
+            for c in fe.contribs
     ]
-    new_rhs = OpExpr(
-        "faq", ASTExpr[];
-        output_idx = oidx, ranges = ranges,
-        expr_body = _fold_contributions(lifted)
-    )
-    return Equation(new_lhs, new_rhs; _comment = eq._comment), lifted
+    new_rhs = _cell_faq(_fold_contributions(lifted), loops, ranges)
+    return _FlatEq(Equation(new_lhs, new_rhs; _comment = fe.eq._comment), lifted, fe.owner)
 end

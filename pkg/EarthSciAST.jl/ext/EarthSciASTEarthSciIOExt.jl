@@ -4,11 +4,9 @@
 Wires the EarthSciIO Julia `Provider` into EarthSciAST's data-provider seam
 ([`provider_refresh_times`](@ref) / [`provider_sample`](@ref)), loaded
 automatically whenever `EarthSciIO` is in the session alongside
-EarthSciAST. Before this extension existed the adapter shipped only as
-a doc comment on the seam (`data_refresh.jl`), so every run script had to repeat
-it; now `esm_problem(...; providers = Dict("<ModelPath>.<param>" => provider))`
+EarthSciAST: `esm_problem(...; providers = Dict("<ModelPath>.<param>" => provider))`
 accepts an EarthSciIO provider with no per-script glue. The key is the CONSUMING
-PARAMETER's flattened name: from esm 1.0.0 a data source declares no variables of
+PARAMETER's flattened name: a data source declares no variables of
 its own, so the parameter IS the loaded field (esm-spec §8.5).
 
 DELIBERATELY THIN. EarthSciAST is agnostic to dimension order: the provider sample is
@@ -23,8 +21,7 @@ in a coupling expression), exactly as it would be for any other provider. The
 one exception is the record axis of a two-record parameter (esm-spec §8.5.1),
 which the providers `providers_from_document` builds move to the first axis.
 
-Kept a `weakdep` extension (mirroring `MTKExt` / `DataRefreshExt`) so the base
-package carries no EarthSciIO dependency; without it loaded, the core seam throws
+Kept a weak-dependency extension so the base package carries no EarthSciIO dependency; without it loaded, the core seam throws
 a `RefreshError` naming what to load.
 """
 module EarthSciASTEarthSciIOExt
@@ -78,7 +75,8 @@ function _neutral_selection_to_native(selection::AbstractVector)
         elseif ax isa Integer
             ax >= 1 || throw(
                 RefreshError(
-                    "selection axis $d: index must be 1-based (≥ 1), got $ax"
+                    "selection axis $d: index must be 1-based (≥ 1), got $ax",
+                    EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
                 )
             )
             push!(axes, Dict("indices" => [Int(ax) - 1]))
@@ -86,7 +84,8 @@ function _neutral_selection_to_native(selection::AbstractVector)
             idx = collect(Int, ax)
             all(>=(1), idx) || throw(
                 RefreshError(
-                    "selection axis $d: indices must be 1-based (≥ 1), got $idx"
+                    "selection axis $d: indices must be 1-based (≥ 1), got $idx",
+                    EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
                 )
             )
             push!(axes, Dict("indices" => idx .- 1))
@@ -95,7 +94,8 @@ function _neutral_selection_to_native(selection::AbstractVector)
                 RefreshError(
                     "selection axis $d: unrecognized entry $(ax)::$(typeof(ax)); use " *
                         "Colon() (whole axis), an Integer (1-based single index), or an " *
-                        "AbstractVector{<:Integer} (1-based ordered index list)"
+                        "AbstractVector{<:Integer} (1-based ordered index list)",
+                    EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
                 )
             )
         end
@@ -105,7 +105,8 @@ end
 _neutral_selection_to_native(selection) = throw(
     RefreshError(
         "selection must be an AbstractVector with one entry per native axis " *
-            "(Colon / Integer / integer vector), got $(typeof(selection))"
+            "(Colon / Integer / integer vector), got $(typeof(selection))",
+        EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
     )
 )
 
@@ -116,8 +117,7 @@ _neutral_selection_to_native(selection) = throw(
 # array means). Returns the bare `AbstractArray` that `_write_forcing!` /
 # `forcing_from_sample` expect for a single-variable sample.
 #
-# `selection===nothing` (default) samples the whole array — byte-identical to the
-# pre-pushdown path. A non-nothing `selection` is translated to the native zarr
+# `selection===nothing` (default) samples the whole array. A non-nothing `selection` is translated to the native zarr
 # `select` and pushed down so only the intersecting chunks are fetched; the gated
 # axis is returned in EXACTLY the requested index order (the reader gathers in the
 # order of the index vector — see EarthSciIO `_resolve_axis`/`_assemble`).
@@ -129,7 +129,8 @@ function provider_sample(p::EarthSciIO.Provider, t::Real; selection = nothing)
             RefreshError(
                 "provider does not support selection/pushdown: $(typeof(p)) is not a " *
                     "store-backed reader (provider_supports_selection is false). Sample it " *
-                    "without a `selection`, or bind a pushdown-capable provider (zarr)"
+                    "without a `selection`, or bind a pushdown-capable provider (zarr)",
+                EarthSciAST.ERROR_CODES.PROVIDER_METHOD_MISSING
             )
         )
         native = _neutral_selection_to_native(selection)
@@ -141,26 +142,24 @@ function provider_sample(p::EarthSciIO.Provider, t::Real; selection = nothing)
             "EarthSciIO provider yields $(length(vars)) variables $(vars); bind one " *
                 "provider per consumer variable (providers[\"<ModelPath>.<param>\"] => " *
                 "provider) so " *
-                "each sample is a single field, or slice the provider upstream"
+                "each sample is a single field, or slice the provider upstream",
+            EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
         )
     )
     return nds[vars[1]].data
 end
 
 # --------------------------------------------------------------------------- #
-# providers_from_document — document-declared provider construction (Phase 1
-# clean consolidation). The document's `data_sources` say WHAT to read (source
-# URL, ingest options) and `metadata.esio_format` says HOW (the EarthSciIO
-# format registry name). This closes the loop: the runner no longer
-# hand-constructs providers — it asks the document.
+# providers_from_document — document-declared provider construction. The
+# document's `data_sources` say WHAT to read (source URL, ingest options) and
+# `metadata.esio_format` says HOW (the EarthSciIO format registry name).
 #
-# esm 1.0.0 moved the BINDING from the source to the consumer: a source exposes
-# no variables of its own, and a model reads one by declaring a PARAMETER whose
-# `update` names the source and binds a `file_variable` (esm-spec §8.5). So the
-# walk is over the models' parameters rather than over a loader's variable
-# table, and each provider is keyed by the CONSUMING PARAMETER's flattened name
-# ("<ModelPath>.<param>") — which is exactly the name `prepare`'s providers
-# contract binds ("one provider per consumer variable"), the name the
+# The BINDING lives on the consumer: a source exposes no variables of its own,
+# and a model reads one by declaring a PARAMETER whose `update` names the source
+# and binds a `file_variable` (esm-spec §8.5). So the walk is over the models'
+# parameters, and each provider is keyed by the CONSUMING PARAMETER's flattened
+# name ("<ModelPath>.<param>") — which is exactly the name `esm_problem`'s
+# providers contract binds ("one provider per consumer variable"), the name the
 # single-variable `provider_sample` adapter returns, and the name the
 # record-derived pushdown path attaches its per-key gate to. All the parameters
 # drawing from one source share that source's Cache (a per-source subdir under
@@ -181,7 +180,7 @@ _doc_raw(file) = _doc_raw(serialize_esm_file(file))
 # four document fields — how the format decodes (`reader_options`), how a text
 # column becomes numbers (`codes`), which records are real (`record_filter`),
 # and what the loader delivers (`select`) — plus a fifth, `extent`, by which a
-# loader tells `prepare` its own record count. NONE of them is a caller-side
+# loader tells `esm_problem` its own record count. NONE of them is a caller-side
 # transform any more: a runner that does not know this model can run it.
 # --------------------------------------------------------------------------- #
 
@@ -204,7 +203,8 @@ function _code_lookup(cm::CodeMap, raw::AbstractString, var::AbstractString)
     throw(
         RefreshError(
             "loader variable '$var': value $(repr(String(raw))) is not in its declared " *
-                "`codes` map (set codes.unmapped to \"drop\" or a number to accept it)"
+                "`codes` map (set codes.unmapped to \"drop\" or a number to accept it)",
+            EarthSciAST.ERROR_CODES.PROVIDER_DATA_INVALID
         )
     )
 end
@@ -273,7 +273,8 @@ function _widen_column(name::AbstractString, data)
     throw(
         RefreshError(
             "loader variable '$name' decoded as strings; a model forcing must be " *
-                "numeric (declare a `codes` map for it)"
+                "numeric (declare a `codes` map for it)",
+            EarthSciAST.ERROR_CODES.PROVIDER_DATA_INVALID
         )
     )
 end
@@ -297,7 +298,8 @@ function _table_columns(t::RecordTable, u::Float64)
             RefreshError(
                 "loader '$(t.loader)': the reader returned no column " *
                     "'$(spec.file_variable)' for variable '$(spec.name)' " *
-                    "(present: $(EarthSciIO.variable_names(nds)))"
+                    "(present: $(EarthSciIO.variable_names(nds)))",
+                EarthSciAST.ERROR_CODES.UNDEFINED_VARIABLE
             )
         )
         f = nds.variables[spec.file_variable]
@@ -305,7 +307,8 @@ function _table_columns(t::RecordTable, u::Float64)
             RefreshError(
                 "loader '$(t.loader)' declares a record filter, but variable " *
                     "'$(spec.name)' is rank $(ndims(f.data)) $(size(f.data)); a record " *
-                    "filter needs a single record axis"
+                    "filter needs a single record axis",
+                EarthSciAST.ERROR_CODES.ARRAY_SHAPE_MISMATCH
             )
         )
         n = length(f.data)
@@ -316,7 +319,8 @@ function _table_columns(t::RecordTable, u::Float64)
             throw(
                 RefreshError(
                     "loader '$(t.loader)': column '$(spec.name)' has $n records but an " *
-                        "earlier column has $nrec; the reader did not return one aligned table"
+                        "earlier column has $nrec; the reader did not return one aligned table",
+                    EarthSciAST.ERROR_CODES.PROVIDER_EXTENT_CONFLICT
                 )
             )
         end
@@ -339,14 +343,15 @@ function _table_columns(t::RecordTable, u::Float64)
                 RefreshError(
                     "loader '$(t.loader)' variable '$(spec.name)' declares `codes`, but " *
                         "the column decoded as $(eltype(f.data)); a code map maps a TEXT " *
-                        "column to numbers"
+                        "column to numbers",
+                    EarthSciAST.ERROR_CODES.PROVIDER_DATA_INVALID
                 )
             )
         end
     end
     nrec < 0 && (nrec = 0)
 
-    # `require_finite` names FILE variables (esm-spec §8.9): from 1.0.0 a source
+    # `require_finite` names FILE variables (esm-spec §8.9): a source
     # declares no variables of its own, so the filter is stated in the reader's
     # vocabulary. Resolve it there — through a bound parameter's already-decoded
     # column when one reads it, and straight from the reader otherwise, since a
@@ -367,14 +372,16 @@ function _table_columns(t::RecordTable, u::Float64)
                 RefreshError(
                     "loader '$(t.loader)': record_filter.require_finite names file " *
                         "variable '$name', which the source does not deliver (present: " *
-                        "$(EarthSciIO.variable_names(nds)))"
+                        "$(EarthSciIO.variable_names(nds)))",
+                    EarthSciAST.ERROR_CODES.UNDEFINED_VARIABLE
                 )
             )
         end
         length(col) == nrec || throw(
             RefreshError(
                 "loader '$(t.loader)': record_filter.require_finite column '$name' has " *
-                    "$(length(col)) records but the table has $nrec"
+                    "$(length(col)) records but the table has $nrec",
+                EarthSciAST.ERROR_CODES.PROVIDER_EXTENT_CONFLICT
             )
         )
         for i in 1:nrec
@@ -384,10 +391,8 @@ function _table_columns(t::RecordTable, u::Float64)
 
     kept = count(keep)
     out = Dict{String, Vector{Float64}}(name => col[keep] for (name, col) in raw)
-    kept == nrec || println(
-        "  [esio] loader '$(t.loader)': $nrec records read, ",
-        "$kept kept by its declared record filter"
-    )
+    kept == nrec ||
+        @info "loader '$(t.loader)': $nrec records read, $kept kept by its declared record filter"
     t.anchor = anchor
     t.cache = out
     return out
@@ -397,7 +402,8 @@ function _table_column(t::RecordTable, name::AbstractString, u::Float64)
     cols = _table_columns(t, u)
     haskey(cols, name) || throw(
         RefreshError(
-            "loader '$(t.loader)' has no column '$name' (declared: $(sort!(collect(keys(cols)))))"
+            "loader '$(t.loader)' has no column '$name' (declared: $(sort!(collect(keys(cols)))))",
+            EarthSciAST.ERROR_CODES.UNDEFINED_VARIABLE
         )
     )
     return cols[name]
@@ -413,7 +419,8 @@ function _resolve_bound(doc, ctx::AbstractString, what::AbstractString, v)
     v isa Integer && return Int(v)
     v isa AbstractString || throw(
         RefreshError(
-            "$ctx: range.$what must be an integer or a metaparameter name, got $(repr(v))"
+            "$ctx: range.$what must be an integer or a metaparameter name, got $(repr(v))",
+            EarthSciAST.ERROR_CODES.PROVIDER_GATE_INVALID
         )
     )
     mps = get(doc, "metaparameters", nothing)
@@ -422,68 +429,130 @@ function _resolve_bound(doc, ctx::AbstractString, what::AbstractString, v)
     d isa Integer || throw(
         RefreshError(
             "$ctx: range.$what names $(repr(String(v))), which is not a metaparameter " *
-                "with an integer default"
+                "with an integer default",
+            EarthSciAST.ERROR_CODES.PROVIDER_GATE_INVALID
         )
     )
     return Int(d)
 end
 
-# One axis of a `select.axes`, normalized to the gate vocabulary EarthSciAST's
-# build already speaks ("all" / fixed / range / gated_by) — one spelling,
-# whether an author wrote it or the pushdown rewrite generated it.
-function _parse_select_axis(doc, ctx::AbstractString, i::Int, ax)
-    (ax == "all") && return "all"
+# One axis of a declared `select.axes` (§8.9.2), parsed once. Indices are the
+# document's 0-based ones.
+abstract type _AxisSelect end
+struct _AllAxis <: _AxisSelect end                      # "all"
+struct _FixedAxis <: _AxisSelect                        # {"fixed": i}: one index, axis dropped
+    index::Int
+end
+struct _RangeAxis <: _AxisSelect                        # {"range": {start, stop, step}}, stop exclusive
+    start::Int
+    stop::Int
+    step::Int
+end
+struct _GatedAxis <: _AxisSelect                        # {"gated_by": set}: resolved by value invention
+    set::String
+end
+
+function _parse_select_axis(doc, ctx::AbstractString, i::Int, ax)::_AxisSelect
+    (ax == "all") && return _AllAxis()
     ax isa AbstractDict || throw(
         RefreshError(
-            "$ctx axis $i: expected \"all\" or an object, got $(repr(ax))"
+            "$ctx axis $i: expected \"all\" or an object, got $(repr(ax))",
+            EarthSciAST.ERROR_CODES.PROVIDER_GATE_INVALID
         )
     )
     ks = Set(String(k) for k in keys(ax))
     if ks == Set(["fixed"])
         fx = ax["fixed"]
-        return Dict{String, Any}("fixed" => Int(fx isa AbstractVector ? first(fx) : fx))
+        return _FixedAxis(Int(fx isa AbstractVector ? first(fx) : fx))
     elseif ks == Set(["range"])
         r = ax["range"]
         r isa AbstractDict && haskey(r, "stop") || throw(
             RefreshError(
-                "$ctx axis $i: range needs a \"stop\""
+                "$ctx axis $i: range needs a \"stop\"",
+                EarthSciAST.ERROR_CODES.PROVIDER_GATE_INVALID
             )
         )
         start = haskey(r, "start") ? _resolve_bound(doc, "$ctx axis $i", "start", r["start"]) : 0
         stop = _resolve_bound(doc, "$ctx axis $i", "stop", r["stop"])
         step = haskey(r, "step") ? _resolve_bound(doc, "$ctx axis $i", "step", r["step"]) : 1
-        step >= 1 || throw(RefreshError("$ctx axis $i: range.step must be >= 1, got $step"))
-        return Dict{String, Any}(
-            "range" =>
-                Dict{String, Any}("start" => start, "stop" => stop, "step" => step)
-        )
+        step >= 1 || throw(RefreshError("$ctx axis $i: range.step must be >= 1, got $step", EarthSciAST.ERROR_CODES.PROVIDER_GATE_INVALID))
+        return _RangeAxis(start, stop, step)
     elseif ks == Set(["gated_by"])
-        return Dict{String, Any}("gated_by" => String(ax["gated_by"]))
+        return _GatedAxis(String(ax["gated_by"]))
     end
     throw(
         RefreshError(
             "$ctx axis $i: unrecognised axis selector keys $(sort!(collect(ks))); one axis " *
                 "is \"all\", {\"fixed\": i}, {\"range\": {start, stop, step}} or " *
-                "{\"gated_by\": \"<derived set>\"}"
+                "{\"gated_by\": \"<derived set>\"}",
+            EarthSciAST.ERROR_CODES.PROVIDER_GATE_INVALID
         )
     )
 end
 
+# The axis in the gate vocabulary EarthSciAST's build speaks
+# (`provider_gate_spec`, src/data_refresh.jl).
+_gate_axis(::_AllAxis) = "all"
+_gate_axis(a::_FixedAxis) = Dict{String, Any}("fixed" => a.index)
+_gate_axis(a::_RangeAxis) = Dict{String, Any}(
+    "range" => Dict{String, Any}("start" => a.start, "stop" => a.stop, "step" => a.step)
+)
+_gate_axis(a::_GatedAxis) = Dict{String, Any}("gated_by" => a.set)
+
+# The axis as EarthSciIO's native reader selection. A contiguous range stays a
+# `slice` rather than expanding to a long index list, so a store-backed reader
+# fetches only the intersecting chunks. A gated axis is never pushed to the
+# reader (it is resolved by value invention first).
+_native_axis(::_AllAxis) = "all"
+_native_axis(a::_FixedAxis) = Dict("indices" => [a.index])
+_native_axis(a::_RangeAxis) = Dict("slice" => [a.start, a.stop, a.step])
+
+# The 1-based index this axis takes out of a materialized axis of length `dim`,
+# and whether the axis is dropped afterwards.
+_take_axis(::_AllAxis, key, i, dim) = (Colon(), false)
+function _take_axis(a::_FixedAxis, key, i, dim)
+    0 <= a.index < dim || throw(
+        RefreshError(
+            "provider '$key': the declared select reaches index $(a.index) on axis $i, " *
+                "whose native length is $dim",
+            EarthSciAST.ERROR_CODES.PROVIDER_EXTENT_CONFLICT
+        )
+    )
+    return ((a.index + 1):(a.index + 1), true)
+end
+function _take_axis(a::_RangeAxis, key, i, dim)
+    a.stop <= dim || throw(
+        RefreshError(
+            "provider '$key': the declared select reaches index $(a.stop - 1) on " *
+                "axis $i, whose native length is $dim",
+            EarthSciAST.ERROR_CODES.PROVIDER_EXTENT_CONFLICT
+        )
+    )
+    return ((a.start + 1):a.step:a.stop, false)
+end
+_take_axis(a::_GatedAxis, key, i, dim) = throw(
+    RefreshError(
+        "provider '$key': axis $i gates on '$(a.set)', which is " *
+            "resolved by value-invention inside esm_problem, not by an eager sample",
+        EarthSciAST.ERROR_CODES.DERIVED_INDEX_SET_UNMATERIALIZED
+    )
+)
+
 function _parse_declared_select(doc, ctx::AbstractString, node)
     sel = get(node, "select", nothing)
     sel === nothing && return nothing
-    sel isa AbstractDict || throw(RefreshError("$ctx.select must be an object"))
+    sel isa AbstractDict || throw(RefreshError("$ctx.select must be an object", EarthSciAST.ERROR_CODES.PROVIDER_GATE_INVALID))
     axes = get(sel, "axes", nothing)
-    axes isa AbstractVector || throw(RefreshError("$ctx.select needs an \"axes\" array"))
-    return Any[_parse_select_axis(doc, "$ctx.select", i, ax) for (i, ax) in enumerate(axes)]
+    axes isa AbstractVector || throw(RefreshError("$ctx.select needs an \"axes\" array", EarthSciAST.ERROR_CODES.PROVIDER_GATE_INVALID))
+    return _AxisSelect[_parse_select_axis(doc, "$ctx.select", i, ax) for (i, ax) in enumerate(axes)]
 end
 
 function _parse_codes(ctx::AbstractString, vd)
     codes = get(vd, "codes", nothing)
     codes === nothing && return nothing
-    codes isa AbstractDict || throw(RefreshError("$ctx.codes must be an object"))
+    codes isa AbstractDict || throw(RefreshError("$ctx.codes must be an object", EarthSciAST.ERROR_CODES.SCHEMA_VALIDATION_ERROR))
     m = get(codes, "map", nothing)
-    m isa AbstractDict || throw(RefreshError("$ctx.codes needs a \"map\" object"))
+    m isa AbstractDict || throw(RefreshError("$ctx.codes needs a \"map\" object", EarthSciAST.ERROR_CODES.SCHEMA_VALIDATION_ERROR))
     ci = Bool(get(codes, "case_insensitive", false))
     unmapped = if !haskey(codes, "unmapped")
         :error                                   # fail-closed default
@@ -491,82 +560,37 @@ function _parse_codes(ctx::AbstractString, vd)
         u = codes["unmapped"]
         u == "drop" ? :drop : u == "error" ? :error :
             u isa Real ? Float64(u) :
-            throw(RefreshError("$ctx.codes.unmapped must be \"drop\", \"error\" or a number"))
+            throw(RefreshError("$ctx.codes.unmapped must be \"drop\", \"error\" or a number", EarthSciAST.ERROR_CODES.SCHEMA_VALIDATION_ERROR))
     end
     out = Dict{String, Float64}()
     for (k, v) in m
-        v isa Real || throw(RefreshError("$ctx.codes.map[$(repr(String(k)))] must be a number"))
+        v isa Real || throw(RefreshError("$ctx.codes.map[$(repr(String(k)))] must be a number", EarthSciAST.ERROR_CODES.SCHEMA_VALIDATION_ERROR))
         out[ci ? uppercase(String(k)) : String(k)] = Float64(v)
     end
     return CodeMap(out, ci, unmapped)
 end
 
-# The declared axes as EarthSciIO's native selection. A contiguous `range` stays
-# a `slice` rather than expanding to a 52,411-long index list, so a store-backed
-# reader fetches only the intersecting chunks.
-function _declared_to_native(axes)
-    native = Any[]
-    for ax in axes
-        if ax == "all"
-            push!(native, "all")
-        elseif haskey(ax, "fixed")
-            push!(native, Dict("indices" => [ax["fixed"]]))
-        elseif haskey(ax, "range")
-            r = ax["range"]
-            push!(native, Dict("slice" => [r["start"], r["stop"], r["step"]]))
-        else
-            # Unreachable: a gated axis is deferred, never pushed eagerly.
-            push!(native, "all")
-        end
-    end
-    return Dict("axes" => native)
-end
+_declared_to_native(axes::Vector{_AxisSelect}) = Dict("axes" => Any[_native_axis(ax) for ax in axes])
 
 # Apply the declared axes to an ALREADY-materialized array: take each axis's
 # indices, then DROP the `fixed` axes (a fixed index is a choice, not a
 # dimension). The reader-pushed and engine-applied paths MUST agree exactly;
 # this is the second of the two.
-function _apply_declared_select(key::AbstractString, arr::AbstractArray, axes)
-    all(ax == "all" for ax in axes) && return arr
+function _apply_declared_select(key::AbstractString, arr::AbstractArray, axes::Vector{_AxisSelect})
+    all(ax -> ax isa _AllAxis, axes) && return arr
     length(axes) == ndims(arr) || throw(
         RefreshError(
             "provider '$key': the declared select has $(length(axes)) axes but the array " *
-                "is rank $(ndims(arr)) $(size(arr))"
+                "is rank $(ndims(arr)) $(size(arr))",
+            EarthSciAST.ERROR_CODES.ARRAY_SHAPE_MISMATCH
         )
     )
     idx = Any[]
     drop = Int[]
     for (i, ax) in enumerate(axes)
-        dim = size(arr, i)
-        if ax == "all"
-            push!(idx, Colon())
-        elseif haskey(ax, "fixed")
-            g = ax["fixed"]
-            0 <= g < dim || throw(
-                RefreshError(
-                    "provider '$key': the declared select reaches index $g on axis $i, " *
-                        "whose native length is $dim"
-                )
-            )
-            push!(idx, (g + 1):(g + 1))
-            push!(drop, i)
-        elseif haskey(ax, "range")
-            r = ax["range"]
-            r["stop"] <= dim || throw(
-                RefreshError(
-                    "provider '$key': the declared select reaches index $(r["stop"] - 1) on " *
-                        "axis $i, whose native length is $dim"
-                )
-            )
-            push!(idx, (r["start"] + 1):r["step"]:r["stop"])
-        else
-            throw(
-                RefreshError(
-                    "provider '$key': axis $i gates on '$(ax["gated_by"])', which is " *
-                        "resolved by value-invention inside esm_problem, not by an eager sample"
-                )
-            )
-        end
+        r, dropped = _take_axis(ax, key, i, size(arr, i))
+        push!(idx, r)
+        dropped && push!(drop, i)
     end
     out = arr[idx...]
     isempty(drop) && return out
@@ -594,7 +618,7 @@ struct DeclaredProvider
     column::String
     # The EFFECTIVE axes of the delivered array: the declared select, with a
     # leading "all" for the record axis when the parameter receives two records.
-    select::Union{Nothing, Vector{Any}}
+    select::Union{Nothing, Vector{_AxisSelect}}
     push_to_reader::Bool                          # where `select` is honoured
     extent_mp::Union{Nothing, String}
     unit_conversion::Any                          # the declared §8.5 conversion
@@ -632,15 +656,17 @@ provider_supports_selection(p::DeclaredProvider) =
 
 provider_extent_metaparameter(p::DeclaredProvider) = p.extent_mp
 
-_has_gated_axis(axes) = any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in axes)
+_has_gated_axis(axes::Vector{_AxisSelect}) = any(ax -> ax isa _GatedAxis, axes)
 
 # A declared select carrying a `gated_by` axis IS a provider-declared gate:
-# `prepare` defers it past value-invention and fetches it pre-sliced to the
+# `esm_problem` defers it past value-invention and fetches it pre-sliced to the
 # materialised members, through the machinery the record-derived gate uses.
 function provider_gate_spec(p::DeclaredProvider)
     p.select === nothing && return nothing
     _has_gated_axis(p.select) || return nothing
-    return Dict{String, Any}("axes" => p.select, "applies_to" => Any[p.varname])
+    return Dict{String, Any}(
+        "axes" => Any[_gate_axis(ax) for ax in p.select], "applies_to" => Any[p.varname]
+    )
 end
 
 # Produce the values in the variable's DECLARED `units` (esm-spec §8.5).
@@ -663,7 +689,8 @@ function _only_field(key::AbstractString, nds)
     vars = EarthSciIO.variable_names(nds)
     length(vars) == 1 || throw(
         RefreshError(
-            "provider '$key': the reader returned $(length(vars)) variables $vars"
+            "provider '$key': the reader returned $(length(vars)) variables $vars",
+            EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
         )
     )
     return nds[vars[1]]
@@ -683,7 +710,8 @@ function _sample_inner(p::DeclaredProvider, t::Real; select = nothing)
     select === nothing || throw(
         RefreshError(
             "provider '$(p.key)': a reader-side select on a time-varying source " *
-                "would address the file's record axis"
+                "would address the file's record axis",
+            EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
         )
     )
     f = _only_field(p.key, EarthSciIO.sample_at(p.inner, p.origin + Float64(t)))
@@ -692,7 +720,8 @@ function _sample_inner(p::DeclaredProvider, t::Real; select = nothing)
     pos === nothing && throw(
         RefreshError(
             "provider '$(p.key)': two records per sample are stacked along the time " *
-                "dimension '$(p.time_dim)', which the field does not carry (dims: $(f.dims))"
+                "dimension '$(p.time_dim)', which the field does not carry (dims: $(f.dims))",
+            EarthSciAST.ERROR_CODES.ARRAY_SHAPE_MISMATCH
         )
     )
     pos == 1 && return f.data
@@ -707,7 +736,8 @@ function _apply_neutral_selection(key::AbstractString, arr::AbstractArray, selec
     length(selection) == ndims(arr) || throw(
         RefreshError(
             "provider '$key': the selection has $(length(selection)) axes but the array " *
-                "is rank $(ndims(arr)) $(size(arr))"
+                "is rank $(ndims(arr)) $(size(arr))",
+            EarthSciAST.ERROR_CODES.ARRAY_SHAPE_MISMATCH
         )
     )
     idx = Any[ax isa Colon ? Colon() : ax isa Integer ? (Int(ax):Int(ax)) : collect(Int, ax) for ax in selection]
@@ -716,7 +746,7 @@ end
 
 function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
     if selection !== nothing
-        # The GATED path: `prepare` resolved the members and is asking for that
+        # The GATED path: `esm_problem` resolved the members and is asking for that
         # slab. It supersedes the declared select it was derived from — but NOT
         # the declared unit_conversion, which is a property of the VALUES rather
         # than of which of them were fetched. A provider that cannot push it
@@ -737,10 +767,8 @@ function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
     # Pushed to the reader, only the `fixed` axes still need dropping; applied
     # engine-side, the whole select does. Both produce the same array.
     axes = p.push_to_reader ?
-        Any[
-            ax isa AbstractDict && haskey(ax, "fixed") ?
-            Dict{String, Any}("fixed" => 0) : "all" for ax in p.select
-        ] : p.select
+        _AxisSelect[ax isa _FixedAxis ? _FixedAxis(0) : _AllAxis() for ax in p.select] :
+        p.select
     return _convert_units(p, _apply_declared_select(p.key, arr, axes))
 end
 
@@ -753,21 +781,23 @@ function _record_at(p::DeclaredProvider, t::Real)
     return _sample_inner(p, t)
 end
 
-# Every (flattened-name, variable-dict) pair of a raw model tree, recursing
-# through `subsystems` exactly as `flatten` namespaces them.
-function _walk_model_variables(models, prefix::String, cb)
+# Every (flattened-name, declaration-dict) pair of a raw component tree,
+# recursing through `subsystems` exactly as `flatten` namespaces them. `vars_key`
+# is where the declarations live: `"variables"` on a model, `"parameters"` on a
+# reaction system.
+function _walk_model_variables(models, prefix::String, cb; vars_key::String = "variables")
     models isa AbstractDict || return
     for mname0 in sort!(String[String(k) for k in keys(models)])
         m = models[mname0]
         m isa AbstractDict || continue
         path = isempty(prefix) ? mname0 : "$(prefix).$(mname0)"
-        vars = get(m, "variables", nothing)
+        vars = get(m, vars_key, nothing)
         if vars isa AbstractDict
             for vname0 in sort!(String[String(k) for k in keys(vars)])
                 cb("$(path).$(vname0)", vname0, vars[vname0])
             end
         end
-        _walk_model_variables(get(m, "subsystems", nothing), path, cb)
+        _walk_model_variables(get(m, "subsystems", nothing), path, cb; vars_key)
     end
     return
 end
@@ -854,7 +884,8 @@ function _strict_records_per_sample(key::AbstractString, where::AbstractString, 
     throw(
         RefreshError(
             "parameter '$key': records_per_sample from $where is $(repr(v)); it must " *
-                "be the number 1 or 2"
+                "be the number 1 or 2",
+            EarthSciAST.ERROR_CODES.RECORDS_PER_SAMPLE_INVALID
         )
     )
 end
@@ -935,10 +966,286 @@ function _raw_records_received(raw, key::AbstractString, decl)
             "parameter '$key': record_axis_misplaced: a record axis may only be the " *
                 "first entry of a data-fed parameter's record shape, and every record " *
                 "shape must agree on whether it begins with one; its record shapes " *
-                "are $(shapes) (esm-spec §8.5.1)"
+                "are $(shapes) (esm-spec §8.5.1)",
+            EarthSciAST.ERROR_CODES.RECORD_AXIS_MISPLACED
         )
     )
     return records
+end
+
+# ---- `providers_from_document`, by stage ------------------------------------
+#
+# It works on the RAW document on purpose: `esm_problem` builds providers before
+# the document is flattened, because a provider that discovers its own extent
+# closes a metaparameter flatten needs (`_discover_loader_extents`,
+# src/simulate.jl).
+
+# The data-fed parameters of the raw document grouped by the source they name,
+# so one source's Cache and RecordTable are built once and shared. A data-fed
+# parameter may be declared on a model or on a reaction system
+# (src/reactions.jl).
+function _consumers_by_source(raw)
+    consumers = Dict{String, Vector{NamedTuple}}()
+    collect_consumer = (key, local_name, vd) -> begin
+        rule = _data_update_rule(vd)
+        rule === nothing && return
+        sname = get(rule, "source", nothing)
+        sname isa AbstractString || return
+        from = get(rule, "from", nothing)
+        from isa AbstractDict || return
+        push!(
+            get!(() -> NamedTuple[], consumers, String(sname)),
+            (key = key, local_name = local_name, from = from, decl = vd)
+        )
+    end
+    _walk_model_variables(get(raw, "models", nothing), "", collect_consumer)
+    _walk_model_variables(
+        get(raw, "reaction_systems", nothing), "", collect_consumer;
+        vars_key = "parameters"
+    )
+    for binds in values(consumers)
+        sort!(binds; by = b -> b.key)
+    end
+    return consumers
+end
+
+# One source's declared ingest (esm-spec §8.9), read once.
+struct _SourceIngest
+    name::String
+    decl::AbstractDict
+    cache::EarthSciIO.Cache
+    url_override::Union{Nothing, String}
+    substitutions::Dict{String, String}
+    select::Union{Nothing, Vector{_AxisSelect}}
+    extent_mp::Union{Nothing, String}
+    require_finite::Vector{String}
+    time_varying::Bool
+    time_dim::String
+end
+
+# The ingest of source `lname`, or `nothing` for a source with no
+# `metadata.esio_format` that the caller did not ask for by name (an explicitly
+# requested source MUST be constructible; an unrestricted sweep skips it).
+function _source_ingest(
+        raw, lname::String, ld::AbstractDict, requested::Bool;
+        cache_root, url_overrides, substitutions
+    )
+    md = get(ld, "metadata", nothing)
+    fmt = md isa AbstractDict ? get(md, "esio_format", nothing) : nothing
+    if fmt === nothing
+        requested || return nothing
+        throw(
+            RefreshError(
+                "providers_from_document: data_sources.$lname declares no " *
+                    "metadata.esio_format — cannot construct a provider for it",
+                EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
+            )
+        )
+    end
+    # An override is honoured whatever its value, so an empty one is refused
+    # here rather than silently falling back to the document's URL. A source
+    # with neither is EarthSciIO's to refuse (`esm_source_url`).
+    url_override = nothing
+    if haskey(url_overrides, lname)
+        url_override = url_overrides[lname]
+        (url_override isa AbstractString && !isempty(url_override)) || throw(
+            RefreshError(
+                "providers_from_document: url_overrides[$(repr(lname))] is " *
+                    (url_override isa AbstractString ? "empty" : "not a string: $(repr(url_override))"),
+                EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
+            )
+        )
+        url_override = String(url_override)
+    end
+    ext = get(ld, "extent", nothing)
+    extent_mp = ext isa AbstractDict && get(ext, "metaparameter", nothing) isa AbstractString ?
+        String(ext["metaparameter"]) : nothing
+    rf = get(ld, "record_filter", nothing)
+    require_finite = String[]
+    if rf isa AbstractDict && get(rf, "require_finite", nothing) isa AbstractVector
+        require_finite = String[String(v) for v in rf["require_finite"]]
+    end
+    time_varying = _has_temporal_start(ld)
+    tv = time_varying ? get(ld["temporal"], "time_variable", nothing) : nothing
+    return _SourceIngest(
+        lname, ld, EarthSciIO.Cache(; root = joinpath(String(cache_root), lname)),
+        url_override,
+        Dict{String, String}(
+            String(k) => string(v) for (k, v) in get(substitutions, lname, Dict{String, String}())
+        ),
+        _parse_declared_select(raw, "data_sources.$lname", ld),
+        extent_mp, require_finite, time_varying,
+        (tv isa AbstractString && !isempty(tv)) ? String(tv) : "time"
+    )
+end
+
+# An EarthSciIO provider of the source for `vars`. The source's location and
+# cadence are read by EarthSciIO itself (EarthSciIO spec/esm-sources.md §3):
+# `url_template` and `mirrors` are esm templates expanded at each file anchor
+# (`substitutions` binds the custom placeholders a mount left), and `temporal`
+# is a calendar cadence, so a time-varying source refreshes on its anchors
+# (Unix seconds, UTC) over the run window. `reader_options` reach the reader
+# here, which refuses an unrecognised key at construction (EarthSciIO
+# spec/registries.md §2.1).
+_esio_provider(src::_SourceIngest, vars, run_window; records = nothing) =
+    EarthSciIO.provider_from_esm(
+    src.name, src.decl, src.cache;
+    variables = vars, substitutions = src.substitutions,
+    url_override = src.url_override,
+    records_per_sample = records, window = run_window
+)
+
+# How many records each consuming parameter receives (esm-spec §8.5.1), settled
+# for every parameter of the source before EarthSciIO is asked for any
+# provider, so a refusal names the parameter rather than surfacing as a reader
+# error for another one.
+function _records_per_sample_of(raw, src::_SourceIngest, binds, is_table::Bool, asked_rps)
+    lname = src.name
+    rps_of = Dict{String, Int}()
+    for b in binds
+        key = b.key
+        # A table column is a 1-D record; a bracket of two of them is not
+        # defined, so a two-record sample of one is refused up front.
+        is_table && get(asked_rps, key, 1) == 2 && throw(
+            RefreshError(
+                "providers_from_document: records_per_sample[$(repr(key))] = 2, " *
+                    "but data_sources.$lname is a record table (it declares a " *
+                    "record_filter or codes), whose columns are 1-D records; a " *
+                    "two-record bracket of them is not defined",
+                EarthSciAST.ERROR_CODES.RECORDS_PER_SAMPLE_INVALID
+            )
+        )
+        # From the record shape. The deprecated written value is read strictly
+        # and must agree. Where the document as given cannot show the record
+        # shape (a target behind a coupling_import, which only `flatten`
+        # expands, or behind an unmounted ref), a written value stands in, since
+        # `flatten` checks it against the shape; with none written the count is
+        # unknown and the parameter is refused rather than guessed.
+        written = _written_records_per_sample(b.from, src.decl) do v, origin
+            _strict_records_per_sample(
+                key, origin === :from ? "update.from" : "data_sources.$lname.temporal", v
+            )
+        end
+        shaped = _raw_records_received(raw, key, b.decl)
+        shaped === nothing && written === nothing && throw(
+            RefreshError(
+                "parameter '$key': its record shape (esm-spec §8.5.1) comes from a " *
+                    "param_to_var target this document does not show yet (it arrives " *
+                    "through a coupling_import, or sits in a model behind an unmounted " *
+                    "ref), so providers_from_document cannot tell whether it receives " *
+                    "one record or two. Pass a document whose coupling_import entries " *
+                    "are expanded and refs mounted, or declare the parameter's shape.",
+                EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
+            )
+        )
+        rps = shaped === nothing ? written : shaped
+        written === nothing || written == rps || throw(
+            RefreshError(
+                "parameter '$key': records_per_sample_invalid: records_per_sample " *
+                    "$written is written for it, but its record shape gives it " *
+                    "$rps (two only when the first axis is an interval index set " *
+                    "with \"records\": true, esm-spec §8.5.1)",
+                EarthSciAST.ERROR_CODES.RECORDS_PER_SAMPLE_INVALID
+            )
+        )
+        # A run-time entry may only restate it: any other value changes the
+        # rank of the delivered array away from the shape validation approved.
+        if haskey(asked_rps, key)
+            asked = _strict_records_per_sample(
+                key, "the run-time records_per_sample option", asked_rps[key]
+            )
+            asked == rps || throw(
+                RefreshError(
+                    "parameter '$key': the run-time records_per_sample option asks for " *
+                        "$asked but the document gives $rps; the parameter's record " *
+                        "shape says how many records it receives (two when its first " *
+                        "axis is an interval index set with \"records\": true, " *
+                        "esm-spec §8.5.1), so change the shape in the document instead",
+                    EarthSciAST.ERROR_CODES.RECORDS_PER_SAMPLE_INVALID
+                )
+            )
+        end
+        if rps == 2
+            is_table && throw(
+                RefreshError(
+                    "parameter '$key' asks for two records per sample from " *
+                        "data_sources.$lname, which is served as one filtered or " *
+                        "coded record table; two records per sample is not " *
+                        "supported on a filtered or coded source",
+                    EarthSciAST.ERROR_CODES.RECORDS_PER_SAMPLE_INVALID
+                )
+            )
+            src.time_varying || throw(
+                RefreshError(
+                    "parameter '$key' asks for two records per sample from " *
+                        "data_sources.$lname, which declares no temporal start and " *
+                        "so is time-invariant",
+                    EarthSciAST.ERROR_CODES.RECORD_AXIS_TIME_INVARIANT_SOURCE
+                )
+            )
+        end
+        rps_of[key] = rps
+    end
+    return rps_of
+end
+
+# One `DeclaredProvider` per consuming parameter of the source, into `out`.
+function _source_providers!(
+        out::Dict{String, Any}, raw, src::_SourceIngest, binds, asked_rps,
+        origin::Float64, run_window
+    )
+    columns = ColumnSpec[
+        ColumnSpec(
+            b.key, String(get(b.from, "file_variable", b.local_name)),
+            _parse_codes("$(b.key).update.from", b.from),
+            parse_unit_conversion(
+                get(b.from, "unit_conversion", nothing); variable_name = b.key
+            )
+        ) for b in binds
+    ]
+    # A record filter or a code map makes the source a TABLE: one decode, one
+    # keep mask, columns that stay aligned.
+    is_table = !isempty(src.require_finite) || any(c.codes !== nothing for c in columns)
+    rps_of = _records_per_sample_of(raw, src, binds, is_table, asked_rps)
+
+    table = nothing
+    if is_table
+        # A `require_finite` column no parameter reads is still needed to
+        # compute the mask, so it is fetched alongside the bound ones.
+        file_vars = sort!(unique(vcat(String[c.file_variable for c in columns], src.require_finite)))
+        table = RecordTable(
+            src.name, _esio_provider(src, file_vars, run_window), columns, src.require_finite
+        )
+    end
+
+    for (b, spec) in zip(binds, columns)
+        key = b.key
+        sel = _parse_declared_select(raw, "$(key).update.from", b.from)
+        sel === nothing && (sel = src.select)
+        rps = rps_of[key]
+        inner = _esio_provider(src, [spec.file_variable], run_window; records = rps)
+        # A declared select names the source's native per-record axes (§8.9.2),
+        # never the bracket: a two-record sample carries an extra LEADING record
+        # axis, which it takes whole.
+        sel !== nothing && rps == 2 && (sel = _AxisSelect[_AllAxis(); sel])
+        # A declared select goes to the reader when it can fetch pre-sliced, no
+        # rows are filtered in front of it, and the source is constant: on a
+        # time-varying source the select covers the dims OTHER than time, while
+        # the reader's is positional over all of them, so it is applied
+        # engine-side. Where it is applied is an optimization, never a semantic.
+        push_down = sel !== nothing && table === nothing && !src.time_varying &&
+            EarthSciIO.is_const(inner) && EarthSciIO.supports_selection(inner) &&
+            !_has_gated_axis(sel)
+        # `varname` is the LOCAL name — it is what the gate's `applies_to`
+        # names, i.e. the model array. `column` is the flattened name, which is
+        # how the shared decode indexes this parameter's column.
+        out[key] = DeclaredProvider(
+            key, b.local_name, inner, table, spec.name,
+            sel, push_down, src.extent_mp,
+            spec.unit_conversion, origin, src.time_varying, src.time_dim, rps
+        )
+    end
+    return out
 end
 
 function providers_from_document(
@@ -954,249 +1261,27 @@ function providers_from_document(
     dss = get(raw, "data_sources", nothing)
     dss isa AbstractDict || throw(
         RefreshError(
-            "providers_from_document: the document declares no data_sources"
+            "providers_from_document: the document declares no data_sources",
+            EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
         )
     )
     want = loaders === nothing ? nothing : Set(String(l) for l in loaders)
     origin, run_window = _model_clock(raw, window)
-
-    # Group the consuming parameters by the source they name, so one source's
-    # Cache and RecordTable are built once and shared.
-    consumers = Dict{String, Vector{NamedTuple}}()
-    _walk_model_variables(
-        get(raw, "models", nothing), "", (key, local_name, vd) -> begin
-            rule = _data_update_rule(vd)
-            rule === nothing && return
-            sname = get(rule, "source", nothing)
-            sname isa AbstractString || return
-            from = get(rule, "from", nothing)
-            from isa AbstractDict || return
-            push!(
-                get!(() -> NamedTuple[], consumers, String(sname)),
-                (key = key, local_name = local_name, from = from, decl = vd)
-            )
-        end
-    )
+    consumers = _consumers_by_source(raw)
 
     out = Dict{String, Any}()
-    for lname0 in sort!(String[String(k) for k in keys(dss)])
-        lname = lname0
+    for lname in sort!(String[String(k) for k in keys(dss)])
         want !== nothing && !(lname in want) && continue
         ld = dss[lname]
         ld isa AbstractDict || continue
         binds = get(consumers, lname, NamedTuple[])
         isempty(binds) && continue   # a source nothing reads needs no provider
-        md = get(ld, "metadata", nothing)
-        fmt = md isa AbstractDict ? get(md, "esio_format", nothing) : nothing
-        if fmt === nothing
-            # An explicitly requested source MUST be constructible; an
-            # unrestricted sweep just skips format-less sources.
-            want === nothing && continue
-            throw(
-                RefreshError(
-                    "providers_from_document: data_sources.$lname declares no " *
-                        "metadata.esio_format — cannot construct a provider for it"
-                )
-            )
-        end
-        # An override is honoured whatever its value, so an empty one is
-        # refused here rather than silently falling back to the document's URL.
-        # A source with neither is EarthSciIO's to refuse (`esm_source_url`).
-        url_override = nothing
-        if haskey(url_overrides, lname)
-            url_override = url_overrides[lname]
-            (url_override isa AbstractString && !isempty(url_override)) || throw(
-                RefreshError(
-                    "providers_from_document: url_overrides[$(repr(lname))] is " *
-                        (url_override isa AbstractString ? "empty" : "not a string: $(repr(url_override))")
-                )
-            )
-            url_override = String(url_override)
-        end
-        cache = EarthSciIO.Cache(; root = joinpath(String(cache_root), lname))
-        source_subs = Dict{String, String}(
-            String(k) => string(v) for (k, v) in get(substitutions, lname, Dict{String, String}())
+        src = _source_ingest(
+            raw, lname, ld, want !== nothing;
+            cache_root, url_overrides, substitutions
         )
-        # The source's location and cadence are read by EarthSciIO itself
-        # (EarthSciIO spec/esm-sources.md §3): `url_template` and `mirrors` are
-        # esm templates expanded at each file anchor (`substitutions[lname]`
-        # binds the custom placeholders a mount left), and `temporal` is a
-        # calendar cadence, so a time-varying source refreshes on its anchors
-        # (Unix seconds, UTC) over the run window instead of being read once as
-        # a constant. `DeclaredProvider` puts those on the model clock.
-        make_provider(vars, rps = nothing) = EarthSciIO.provider_from_esm(
-            lname, ld, cache;
-            variables = vars, substitutions = source_subs,
-            url_override = url_override,
-            records_per_sample = rps, window = run_window
-        )
-
-        # ---- the source's DECLARED ingest (esm-spec §8.9) -------------------
-        # `reader_options` reach the reader through `provider_from_esm`, which
-        # refuses an unrecognised key at construction (EarthSciIO
-        # spec/registries.md §2.1) rather than decoding something else silently.
-        loader_select = _parse_declared_select(raw, "data_sources.$lname", ld)
-        ext = get(ld, "extent", nothing)
-        extent_mp = ext isa AbstractDict && get(ext, "metaparameter", nothing) isa AbstractString ?
-            String(ext["metaparameter"]) : nothing
-        rf = get(ld, "record_filter", nothing)
-        require_finite = String[]
-        if rf isa AbstractDict && get(rf, "require_finite", nothing) isa AbstractVector
-            require_finite = String[String(v) for v in rf["require_finite"]]
-        end
-
-        time_varying = _has_temporal_start(ld)
-        tv = time_varying ? get(ld["temporal"], "time_variable", nothing) : nothing
-        time_dim = (tv isa AbstractString && !isempty(tv)) ? String(tv) : "time"
-
-        sort!(binds; by = b -> b.key)
-        columns = ColumnSpec[]
-        for b in binds
-            fv = String(get(b.from, "file_variable", b.local_name))
-            push!(
-                columns, ColumnSpec(
-                    b.key, fv,
-                    _parse_codes("$(b.key).update.from", b.from),
-                    parse_unit_conversion(
-                        get(b.from, "unit_conversion", nothing);
-                        variable_name = b.key
-                    )
-                )
-            )
-        end
-
-        # A record filter or a code map makes the source a TABLE: one decode,
-        # one keep mask, columns that stay aligned.
-        is_table = !isempty(require_finite) || any(c.codes !== nothing for c in columns)
-
-        # Every parameter's records_per_sample is settled before EarthSciIO is
-        # asked for any provider of this source, so a refusal names the
-        # parameter rather than surfacing as a reader error for another one.
-        rps_of = Dict{String, Int}()
-        for b in binds
-            key = b.key
-            # A table column is a 1-D record; a bracket of two of them is not
-            # defined, so a two-record sample of one is refused up front.
-            is_table && get(records_per_sample, key, 1) == 2 && throw(
-                RefreshError(
-                    "providers_from_document: records_per_sample[$(repr(key))] = 2, " *
-                        "but data_sources.$lname is a record table (it declares a " *
-                        "record_filter or codes), whose columns are 1-D records; a " *
-                        "two-record bracket of them is not defined"
-                )
-            )
-            # The number of records the parameter receives, from its record
-            # shape (§8.5.1). The deprecated written value is read strictly and
-            # must agree. Where the document as given cannot show the record
-            # shape (a target behind a coupling_import, which only `flatten`
-            # expands, or behind an unmounted ref), a written value stands in,
-            # since `flatten` checks it against the shape; with none written
-            # the count is unknown and the parameter is refused rather than
-            # guessed.
-            written = _written_records_per_sample(b.from, ld) do v, origin
-                _strict_records_per_sample(
-                    key, origin === :from ? "update.from" : "data_sources.$lname.temporal", v
-                )
-            end
-            shaped = _raw_records_received(raw, key, b.decl)
-            shaped === nothing && written === nothing && throw(
-                RefreshError(
-                    "parameter '$key': its record shape (esm-spec §8.5.1) comes from a " *
-                        "param_to_var target this document does not show yet (it arrives " *
-                        "through a coupling_import, or sits in a model behind an unmounted " *
-                        "ref), so providers_from_document cannot tell whether it receives " *
-                        "one record or two. Pass a document whose coupling_import entries " *
-                        "are expanded and refs mounted, or declare the parameter's shape."
-                )
-            )
-            rps = shaped === nothing ? written : shaped
-            written === nothing || written == rps || throw(
-                RefreshError(
-                    "parameter '$key': records_per_sample_invalid: records_per_sample " *
-                        "$written is written for it, but its record shape gives it " *
-                        "$rps (two only when the first axis is an interval index set " *
-                        "with \"records\": true, esm-spec §8.5.1)"
-                )
-            )
-            # A run-time entry may only restate it: any other value changes the
-            # rank of the delivered array away from the shape validation approved.
-            if haskey(records_per_sample, key)
-                asked = _strict_records_per_sample(
-                    key, "the run-time records_per_sample option",
-                    records_per_sample[key]
-                )
-                asked == rps || throw(
-                    RefreshError(
-                        "parameter '$key': the run-time records_per_sample option asks for " *
-                            "$asked but the document gives $rps; the parameter's record " *
-                            "shape says how many records it receives (two when its first " *
-                            "axis is an interval index set with \"records\": true, " *
-                            "esm-spec §8.5.1), so change the shape in the document instead"
-                    )
-                )
-            end
-            if rps == 2
-                is_table && throw(
-                    RefreshError(
-                        "parameter '$key' asks for two records per sample from " *
-                            "data_sources.$lname, which is served as one filtered or " *
-                            "coded record table; two records per sample is not " *
-                            "supported on a filtered or coded source"
-                    )
-                )
-                time_varying || throw(
-                    RefreshError(
-                        "parameter '$key' asks for two records per sample from " *
-                            "data_sources.$lname, which declares no temporal start and " *
-                            "so is time-invariant"
-                    )
-                )
-            end
-            rps_of[key] = rps
-        end
-
-        table = nothing
-        if is_table
-            # A `require_finite` column no parameter reads is still needed to
-            # compute the mask, so it is fetched alongside the bound ones.
-            file_vars = sort!(
-                unique(
-                    vcat(
-                        String[c.file_variable for c in columns],
-                        require_finite
-                    )
-                )
-            )
-            table = RecordTable(lname, make_provider(file_vars), columns, require_finite)
-        end
-
-        for (b, spec) in zip(binds, columns)
-            key = b.key
-            sel = _parse_declared_select(raw, "$(key).update.from", b.from)
-            sel === nothing && (sel = loader_select)
-            rps = rps_of[key]
-            inner = make_provider([spec.file_variable], rps)
-            # A declared select names the source's native per-record axes
-            # (§8.9.2), never the bracket: a two-record sample carries an extra
-            # LEADING record axis, which it takes whole.
-            sel !== nothing && rps == 2 && (sel = Any["all"; sel])
-            # A declared select goes to the reader when it can fetch pre-sliced,
-            # no rows are filtered in front of it, and the source is constant: on
-            # a time-varying source the select covers the dims OTHER than time,
-            # while the reader's is positional over all of them, so it is applied
-            # engine-side. Where it is applied is an optimization, never a semantic.
-            push_down = sel !== nothing && table === nothing && !time_varying &&
-                EarthSciIO.is_const(inner) && EarthSciIO.supports_selection(inner) &&
-                !_has_gated_axis(sel)
-            # `varname` is the LOCAL name — it is what the gate's `applies_to`
-            # names, i.e. the model array. `column` is the flattened name, which
-            # is how the shared decode indexes this parameter's column.
-            out[key] = DeclaredProvider(
-                key, b.local_name, inner, table, spec.name,
-                sel, push_down, extent_mp,
-                spec.unit_conversion, origin, time_varying, time_dim, rps
-            )
-        end
+        src === nothing && continue
+        _source_providers!(out, raw, src, binds, records_per_sample, origin, run_window)
     end
     return out
 end
@@ -1209,12 +1294,11 @@ end
 # atomically-committed time-shards. The write-side mirror of the read-side
 # `Provider` adapter above.
 #
-# Wave 2: state-only, host-gather, positional dim names, one store.
-# Wave 3: REAL index-set dim names + CF dimension-coordinate emission (values +
-# standard_name/units/axis) from the document's `coordinates` registry, plus
-# per-variable CF attrs (units, …) — all carried in via the `OutputMeta` a
-# `EsmProblem` derives. Observed fields, auxiliary/source coordinates,
-# checkpoint profiles, and object stores are later waves; the protocol is unchanged.
+# It writes the state only, gathered on the host, into one store, with the
+# index-set dim names, CF dimension coordinates (values + standard_name/units/
+# axis) from the document's `coordinates` registry and per-variable CF attrs
+# (units, …) — all carried in via the `OutputMeta` an `EsmProblem` derives.
+# Observed fields and auxiliary/source coordinates are not written.
 # --------------------------------------------------------------------------- #
 
 mutable struct ZarrSink
@@ -1290,7 +1374,7 @@ build_zarr_sink(prep, base_url::AbstractString; kwargs...) =
     build_zarr_sink(prep.var_map, base_url; meta = prep.output_meta, kwargs...)
 
 sink_output_times(s::ZarrSink) = s.output_times
-sink_observed_names(::ZarrSink) = String[]      # Wave 2/3: state only
+sink_observed_names(::ZarrSink) = String[]      # state only
 
 function sink_open!(s::ZarrSink)
     # The growable time axis FIRST (length 0 placeholder — it grows one shard per

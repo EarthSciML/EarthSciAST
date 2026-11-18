@@ -1,18 +1,18 @@
-# Regression tests for two build-time tree-walk limitations the conservative-
-# regridding broad phase hit (ess: julia-treewalk gaps 1 & 2).
+# Tests for two build-time tree-walk shapes the conservative-regridding broad
+# phase uses.
 #
-#  GAP 1 — a TEMPLATE-CONSTRUCTED (aggregate-valued) binning coordinate is now an
-#          admissible build-time bin-key input. Previously only a
-#          const-supplied / reduce-over-const coordinate was admitted, so a
-#          coordinate derived from constructed cell rings (an aggregate over a grid
-#          spec) threw E_TREEWALK_VI_INDEX. Determinism is preserved: only a
+#  GAP 1 — a TEMPLATE-CONSTRUCTED (aggregate-valued) binning coordinate is an
+#          admissible build-time bin-key input, not only a const-supplied /
+#          reduce-over-const coordinate: a coordinate derived from constructed
+#          cell rings (an aggregate over a grid spec) must not throw
+#          E_TREEWALK_VI_INDEX. Determinism is preserved: only a
 #          statically-determinable (state-free) build-time coordinate is admitted.
 #
 #  GAP 2 — a setup-geometry var (an overlap-area `A_ij` aggregate) may reference a
 #          BARE-ALIAS array observed (`src_poly := base_poly`, the MPAS keyed-factor
-#          re-exposure). Previously the geometry-setup backward pass pulled the bare
-#          alias into the setup vars and `_materialize_geom_array` crashed on the
-#          `VarExpr` (`no field output_idx`).
+#          re-exposure). The geometry-setup backward pass must not pull the bare
+#          alias into the setup vars, where `_materialize_geom_array` cannot
+#          handle a `VarExpr` (`no field output_idx`).
 
 using Test
 using EarthSciAST
@@ -231,23 +231,23 @@ end
     # ===================================================================
     @testset "GAP 1: aggregate-constructed coordinate is an admissible bin-key input" begin
         doc = _twb_gap1_doc()
-        insp = _TWB.BuildInspection()
-        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(doc; model_name = "M", inspect = insp)
+        f!, u0, p, tspan, vmap, rep = EarthSciAST.Internal.build(doc)
+        insp = rep.products
         du = similar(u0); f!(du, u0, p, 0.0)
-        F_tgt = [du[vmap["regrid_state[$j]"]] for j in 1:2]
-        pou = [du[vmap["pou_state[$j]"]] for j in 1:2]
+        F_tgt = [du[vmap["M.regrid_state[$j]"]] for j in 1:2]
+        pou = [du[vmap["M.pou_state[$j]"]] for j in 1:2]
 
         # The CONSTRUCTED binning coordinate folded to concrete build-time values and
         # was derived into the value-invention const_arrays (the gap-1 admission).
-        @test insp.const_arrays["tgt_lon"] ≈ [0.0, 10.0]
-        @test insp.const_arrays["tgt_lat"] ≈ [0.0, 0.0]
+        @test insp.const_arrays["M.tgt_lon"] ≈ [0.0, 10.0]
+        @test insp.const_arrays["M.tgt_lat"] ≈ [0.0, 0.0]
         # Gated == dense on the constructed geometry (value identity, admissible bin).
-        @test insp.setup_arrays["A_ij_gated"] == insp.setup_arrays["A_ij"]
-        @test insp.setup_arrays["A_ij_gated"] ≈ [1.0 0.0; 0.0 1.0]
+        @test insp.setup_arrays["M.A_ij_gated"] == insp.setup_arrays["M.A_ij"]
+        @test insp.setup_arrays["M.A_ij_gated"] ≈ [1.0 0.0; 0.0 1.0]
         # End-to-end regrid + the two exact invariants.
         @test F_tgt ≈ [10.0, 20.0]                                   # apply
         @test pou ≈ [1.0, 1.0]                                       # partition of unity
-        @test sum(insp.setup_arrays["A_j_gated"] .* F_tgt) ≈ 30.0    # conservation (== mass_src)
+        @test sum(insp.setup_arrays["M.A_j_gated"] .* F_tgt) ≈ 30.0    # conservation (== mass_src)
     end
 
     # The binning coordinates are derived BEFORE the build proper and handed to it
@@ -279,15 +279,12 @@ end
         @test _TWB._body_needs_general_eval(_TWB.expression_from_json(tgt_lon))
         sweeps = Dict{Symbol, Tuple{Int, Int}}()
         for compiler in (:native, :interpreter)
-            h0 = _TWB._SETUP_MAP_FASTPATH_HITS[]
-            m0 = _TWB._SETUP_MAP_FASTPATH_MISS[]
-            insp = _TWB.BuildInspection()
-            EarthSciAST._build_evaluator(projected_doc(); model_name = "M", compiler = compiler, inspect = insp)
+            rep = EarthSciAST.Internal.build(projected_doc(); compiler = compiler).report
             sweeps[compiler] = (
-                _TWB._SETUP_MAP_FASTPATH_HITS[] - h0,
-                _TWB._SETUP_MAP_FASTPATH_MISS[] - m0,
+                get(rep.counts, :setup_map_fastpath_hit, 0),
+                get(rep.counts, :setup_map_fastpath_miss, 0),
             )
-            @test insp.const_arrays["tgt_lon"] ≈ [0.0, 10.0]
+            @test rep.products.const_arrays["M.tgt_lon"] ≈ [0.0, 10.0]
         end
         # (fast-path sweeps, per-cell reference sweeps)
         @test sweeps[:native][1] > 0 && sweeps[:native][2] == 0
@@ -351,11 +348,10 @@ end
             )
         )
 
-        insp = _TWB.BuildInspection()
-        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(doc; model_name = "M", inspect = insp)
+        f!, u0, p, tspan, vmap, rep = EarthSciAST.Internal.build(doc)
         du = similar(u0); f!(du, u0, p, 0.0)
         # The alias resolved: A_ij over the aliased rings is the full unit overlap.
-        @test du[vmap["s[1]"]] ≈ 1.0
-        @test insp.setup_arrays["A_ij"] ≈ reshape([1.0], 1, 1)
+        @test du[vmap["M.s[1]"]] ≈ 1.0
+        @test rep.products.setup_arrays["M.A_ij"] ≈ reshape([1.0], 1, 1)
     end
 end

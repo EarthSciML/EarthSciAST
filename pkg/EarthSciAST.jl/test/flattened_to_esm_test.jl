@@ -1,10 +1,10 @@
 # Tests for the lossless-flatten + FlattenedSystem→runnable-document path:
 #   - `reconstruct` keeps every OpExpr field across structural rewrites (so
-#     substitute / namespace_expr / simplify are no longer lossy);
+#     substitute / namespace_expr / simplify are not lossy);
 #   - `flatten` carries the document-scoped index-set registry on the
 #     FlattenedSystem;
 #   - `flattened_to_esm` reconstitutes a single runnable document, and a deep
-#     observed chain resolves through `build_evaluator` with no pre-inlining.
+#     observed chain resolves through the build with no pre-inlining.
 # MTK-free: runs under the package test env and the pde_sim_adapter env alike.
 using Test
 import EarthSciAST as ESS
@@ -74,7 +74,7 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
         )
     end
 
-    # Parse via the schema-lenient coercion path build_evaluator itself uses
+    # Parse via the schema-lenient coercion path the build itself uses
     # (`coerce_esm_file`), so the test exercises flatten/bridge, not full schema
     # validation of a hand-built fixture.
     parse_tiny() = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(tiny_doc()))))
@@ -91,13 +91,14 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
         doc = E.flattened_to_esm(flat)
         # index_sets is emitted at the document level (sibling of `models`).
         @test haskey(doc, "index_sets") && haskey(doc["index_sets"], "cells")
-        # build + evaluate: h = code·10 = 20, so D(y) = 20.
-        f!, u0, p, _t, vmap = E._build_evaluator(doc; initial_conditions = Dict("A.y" => 0.0))
+        # build + evaluate: h = code·10 = 20, so D(y) = 20. A FlattenedSystem
+        # is built through this same reconstituted document.
+        f!, u0, p, _t, vmap = E.Internal.build(flat; initial_conditions = Dict("A.y" => 0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["A.y"]] ≈ 20.0
     end
 
-    @testset "deep observed chain resolves through build_evaluator (no pre-inline)" begin
+    @testset "deep observed chain resolves through the build (no pre-inline)" begin
         # esm 1.0.0 §6.3: each link of the chain is an `unknown` whose DEFINING
         # equation is a bare-variable-LHS entry of the model's `equations`.
         U() = Dict{String, Any}("type" => "unknown")
@@ -114,11 +115,70 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
             Dict{String, Any}("lhs" => Dict{String, Any}("op" => "D", "args" => Any["y"], "wrt" => "t"), "rhs" => "e"),
         ]
         doc = Dict{String, Any}(
-            "esm" => "0.5.0", "metadata" => Dict("name" => "Chain"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "Chain"),
             "models" => Dict{String, Any}("M" => Dict{String, Any}("variables" => vars, "equations" => eqs))
         )
-        f!, u0, p, _t, vmap = E._build_evaluator(doc; initial_conditions = Dict("y" => 0.0))
+        f!, u0, p, _t, vmap = E.Internal.build(doc; initial_conditions = Dict("M.y" => 0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vmap["y"]] ≈ 143.0   # x=3: a4 b8 c12 d144 e143
+        @test du[vmap["M.y"]] ≈ 143.0   # x=3: a4 b8 c12 d144 e143
+    end
+
+    # The build compiles a typed run file made from the flattened system, so a
+    # literal's sign survives: a `const` -0.0 times a positive state is -0.0.
+    @testset "a const -0.0 keeps its sign through the build" begin
+        c = Dict("op" => "const", "args" => Any[], "value" => [[-0.0, -0.0], [-0.0, -0.0]])
+        doc = Dict{String, Any}(
+            "esm" => "2.0.0", "metadata" => Dict("name" => "neg0"),
+            "models" => Dict(
+                "R" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "E" => Dict("type" => "unknown", "default" => 1.0),
+                        "y" => Dict("type" => "unknown", "default" => 0.0)
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                            "rhs" => Dict(
+                                "op" => "*",
+                                "args" => Any[Dict("op" => "index", "args" => Any[c, 1, 1]), "E"]
+                            )
+                        ),
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["E"], "wrt" => "t"),
+                            "rhs" => 0.0
+                        ),
+                    ]
+                )
+            )
+        )
+        f!, u0, p, _t, vmap = E.Internal.build(doc)
+        du = fill(NaN, length(u0)); f!(du, u0, p, 0.0)
+        @test du[vmap["R.y"]] == 0.0 && signbit(du[vmap["R.y"]])
+    end
+
+    @testset "flattened_to_esm writes the initialization equations" begin
+        flat = E.flatten(
+            E.load_document(
+                Dict{String, Any}(
+                    "esm" => "2.0.0", "metadata" => Dict("name" => "init"),
+                    "models" => Dict(
+                        "M" => Dict{String, Any}(
+                            "variables" => Dict("x" => Dict("type" => "unknown")),
+                            "equations" => Any[
+                                Dict(
+                                    "lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                                    "rhs" => 0.0
+                                ),
+                            ],
+                            "initialization_equations" => Any[Dict("lhs" => "x", "rhs" => 2.0)]
+                        )
+                    )
+                )
+            )
+        )
+        @test !isempty(flat.initialization_equations)
+        doc = E.flattened_to_esm(flat)
+        @test length(doc["models"]["Flattened"]["initialization_equations"]) ==
+            length(flat.initialization_equations)
     end
 end

@@ -253,8 +253,8 @@ end
         @test _names(root["models"]["B"]["equations"]) == ["B.outer_stencil"]
 
         # The executing path: the typed FlattenedSystem's registry agrees, and
-        # every surviving reference resolves against it — `expand_flattened_refs`
-        # is the call that threw before the fix.
+        # every surviving reference resolves against it, so `expand_flattened_refs`
+        # does not throw.
         flat = EarthSciAST.flatten(EarthSciAST.load_path(conf(dir, "fixture.esm")))
         @test Set(keys(flat.template_registry)) == Set(keys(merged))
         @test EarthSciAST.expand_flattened_refs(flat) isa EarthSciAST.FlattenedSystem
@@ -427,11 +427,11 @@ end
             @test f.component_templates !== nothing               # references survive load
             flat_fast = EarthSciAST.flatten(f)                    # references reach the build
             @test !isempty(flat_fast.template_registry)           # merged registry carried
-            f1!, u01, p1, _t1, vm1 = EarthSciAST._build_evaluator(flat_fast)
+            f1!, u01, p1, _t1, vm1 = EarthSciAST.Internal.build(flat_fast)
             # The shared boundary utility: Expand the FlattenedSystem in place
             # of the build-entry expansion — the consumer-side fallback path.
             flat_exp = EarthSciAST.expand_flattened_refs(flat_fast)
-            f2!, u02, p2, _t2, vm2 = EarthSciAST._build_evaluator(flat_exp)
+            f2!, u02, p2, _t2, vm2 = EarthSciAST.Internal.build(flat_exp)
             @test vm1 == vm2
             n = length(u01)
             # Deterministic, varied probe vectors (no RNG dependency).
@@ -444,7 +444,7 @@ end
                 @test du1 == du2                                  # bit-identical RHS
             end
             # And bit-identical to the per-cell reference evaluator.
-            f3!, u03, p3, _t3, _vm3 = EarthSciAST._build_evaluator(
+            f3!, u03, p3, _t3, _vm3 = EarthSciAST.Internal.build(
                 flat_fast; compiler = :interpreter
             )
             u = _probe(1)
@@ -539,6 +539,22 @@ end
             ),
             equations = EarthSciAST.Equation[
                 EarthSciAST.Equation(base.equations[1].lhs, _apply("m.c")),
+            ],
+            discrete_parameters = OD{String, EarthSciAST.ModelVariable}(
+                "m.p" => _pvar(upd_expr)
+            ),
+            field_ics = Pair{String, EarthSciAST.ASTExpr}["m.c" => _apply("m.c")],
+            continuous_events = EarthSciAST.ContinuousEvent[
+                EarthSciAST.ContinuousEvent(
+                    EarthSciAST.ASTExpr[_apply("m.c")],
+                    EarthSciAST.AffectEquation[EarthSciAST.AffectEquation("m.c", _apply("m.c"))]
+                ),
+            ],
+            discrete_events = EarthSciAST.DiscreteEvent[
+                EarthSciAST.DiscreteEvent(
+                    EarthSciAST.ConditionTrigger(_apply("m.c")),
+                    EarthSciAST.AffectEquation[EarthSciAST.AffectEquation("m.c", _apply("m.c"))]
+                ),
             ]
         )
 
@@ -577,6 +593,14 @@ end
             @test ex.parameters["m.d"].update[1].kind == "condition"
             # A variable with nothing to expand is passed through BY IDENTITY.
             @test ex.state_variables["m.c"] === base.state_variables["m.c"]
+            # Field initial conditions and events are expanded too, and the
+            # subset map holds the same expanded variable as its parent.
+            @test !_hasapply(only(ex.field_ics).second)
+            cev = only(ex.continuous_events)
+            @test !_hasapply(only(cev.conditions)) && !_hasapply(only(cev.affects).rhs)
+            dev = only(ex.discrete_events)
+            @test !_hasapply(dev.trigger.expression) && !_hasapply(only(dev.affects).rhs)
+            @test ex.discrete_parameters["m.p"] === ex.parameters["m.p"]
         end
         _serupd(v) = Any[
             [
@@ -595,5 +619,97 @@ end
         )
         @test _ser(EarthSciAST.expand_flattened_refs(flat; memo = nothing)) ==
             _ser(EarthSciAST.expand_flattened_refs(flat))
+
+        # The model walk reaches every expression site too: events, guesses
+        # and expression bounds as well as equations and update rules.
+        m = EarthSciAST.Model(
+            Dict{String, EarthSciAST.ModelVariable}(
+                "c" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable; ub = _apply("c")),
+            ),
+            EarthSciAST.Equation[EarthSciAST.Equation(EarthSciAST.VarExpr("c"), _apply("c"))];
+            continuous_events = EarthSciAST.ContinuousEvent[
+                EarthSciAST.ContinuousEvent(
+                    EarthSciAST.ASTExpr[_apply("c")],
+                    EarthSciAST.AffectEquation[EarthSciAST.AffectEquation("c", _apply("c"))]
+                ),
+            ],
+            guesses = Dict{String, Union{Float64, EarthSciAST.ASTExpr}}("c" => _apply("c"))
+        )
+        EarthSciAST._expand_model_refs!(m, reg)
+        @test !_hasapply(only(m.equations).rhs)
+        @test !_hasapply(m.variables["c"].ub)
+        @test !_hasapply(m.guesses["c"])
+        mev = only(m.continuous_events)
+        @test !_hasapply(only(mev.conditions)) && !_hasapply(only(mev.affects).rhs)
+        # One memo serves every site: the four identical applications share
+        # one expanded root.
+        @test only(m.equations).rhs === m.guesses["c"] === only(mev.conditions)
+    end
+
+    # -----------------------------------------------------------------------
+    # Expanding an `_expansion_copy` (the units view `validate` builds, and the
+    # copy the tree-walk build expands) leaves the loaded model as it was, at
+    # every site expansion rewrites in place: events, guesses and tests as well
+    # as equations and variables.
+    # -----------------------------------------------------------------------
+    @testset "expanding an expansion copy leaves the caller's model unchanged" begin
+        twice(f) = Dict(
+            "op" => "apply_expression_template", "args" => Any[],
+            "name" => "twice", "bindings" => Dict("f" => f),
+        )
+        doc = Dict(
+            "esm" => "2.0.0",
+            "metadata" => Dict("name" => "expansion_copy"),
+            "models" => Dict(
+                "M" => Dict(
+                    "expression_templates" => Dict(
+                        "twice" => Dict(
+                            "params" => ["f"],
+                            "body" => Dict("op" => "*", "args" => Any[2, "f"]),
+                        ),
+                    ),
+                    "variables" => Dict(
+                        "x" => Dict("type" => "unknown", "units" => "1", "default" => 1.0),
+                        "y" => Dict("type" => "unknown", "units" => "1"),
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => ["x"], "wrt" => "t"),
+                            "rhs" => Dict("op" => "-", "args" => Any["x"]),
+                        ),
+                        Dict("lhs" => "y", "rhs" => twice("x")),
+                    ],
+                    "continuous_events" => Any[
+                        Dict(
+                            "conditions" => Any[
+                                Dict("op" => "-", "args" => Any[twice("x"), 1]),
+                            ],
+                            "affects" => Any[Dict("lhs" => "x", "rhs" => twice("x"))],
+                        ),
+                    ],
+                    "guesses" => Dict("y" => twice("x")),
+                ),
+            ),
+        )
+        f = EarthSciAST.load_string(JSON3.write(doc))
+        @test f.component_templates !== nothing
+        snapshot() = JSON3.write(serialize_esm_file(f))
+        before = snapshot()
+        m = f.models["M"]
+        @test _isapply(EarthSciAST.serialize_expression(only(m.continuous_events).affects[1].rhs))
+        @test _isapply(EarthSciAST.serialize_expression(m.guesses["y"]))
+
+        validate(f)
+        @test snapshot() == before
+
+        view = EarthSciAST._expansion_copy(m)
+        EarthSciAST._expand_model_refs!(view, f.component_templates["models.M"])
+        # The copy is expanded…
+        @test !_isapply(EarthSciAST.serialize_expression(only(view.continuous_events).affects[1].rhs))
+        @test !_isapply(EarthSciAST.serialize_expression(view.guesses["y"]))
+        # …and the loaded model is not.
+        @test snapshot() == before
+        @test _isapply(EarthSciAST.serialize_expression(only(m.continuous_events).affects[1].rhs))
+        @test _isapply(EarthSciAST.serialize_expression(m.guesses["y"]))
     end
 end

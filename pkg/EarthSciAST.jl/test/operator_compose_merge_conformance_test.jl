@@ -26,10 +26,10 @@
 # that is `@warn` (captured with `Test.collect_test_logs`) and the three error
 # types.
 
-# `using Test` MUST precede the testutils include: testutils.jl uses `@test_skip`
+# `using Test` MUST precede the testutils include: testutils.jl uses `@test`
 # at top level, so `Test` has to be in scope in `Main` already. Including it
 # first only works when some earlier file in runtests.jl happened to import Test
-# — running this file standalone then fails with `UndefVarError: @test_skip`.
+# — running this file standalone then fails with `UndefVarError: @test`.
 using Test
 using EarthSciAST
 using JSON3
@@ -151,10 +151,10 @@ end
     end
 
     @testset "flipping the `systems` order changes nothing observable" begin
-        # Issue #195 Symptom 1, in the form that fails under the old rule. Two
-        # pairs of fixtures, each differing ONLY in the `systems` array's order.
-        # The AMBIGUOUS pair used to produce different state names carrying
-        # different initial conditions — an argument order choosing an IC.
+        # Two pairs of fixtures, each differing ONLY in the `systems` array's
+        # order. The AMBIGUOUS pair must not produce different state names
+        # carrying different initial conditions — an argument order choosing
+        # an IC.
         # Compared BETWEEN the two runs rather than against the manifest, so this
         # fails on disagreement even if both were re-recorded.
         by_id = Dict(String(c.id) => c for c in _OCM_MANIFEST.cases)

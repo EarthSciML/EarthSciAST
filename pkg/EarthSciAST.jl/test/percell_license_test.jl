@@ -82,10 +82,8 @@ function _lc_holds_license(x, seen = IdDict{Any, Nothing}(), depth = 0)
     return false
 end
 
-# The kernel section of an evaluator, through the wrapper of a build that
-# fills array observeds into buffers.
-_lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_section) :
-    _lc_section(getfield(f, :f_state!))
+# The kernel section of an evaluator's state stage.
+_lc_section(f) = f.state.kernels
 
 @testset "per-cell evaluation needs a license" begin
 
@@ -179,14 +177,13 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
         path = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench", "transport_3axis_7cubed.esm")
         file = _LC.load_path(path)
         lax = _LC._plan_with(_LC._compiler_plan(:native); strict = false, codegen = false)
-        f_lax = first(_LC._build_evaluator(file; compiler = lax))
-        f_nat = first(_LC._build_evaluator(file; compiler = :native))
+        f_lax = first(_LC.Internal.build(file; compiler = lax))
+        f_nat = first(_LC.Internal.build(file; compiler = :native))
         sec = _lc_section(f_lax)
         @test sec.walk isa _LC._PerCellLicense && !isempty(sec.kernels)
         rebuild(walk) = _LC._KernelSection(
             sec.cgf, sec.cgtabs, sec.n_emitted, sec.kernels,
-            sec.dualf, sec.dualtabs, sec.n_dual_emitted, sec.dual_resid, sec.f64cg,
-            sec.tcache, sec.dual_tcache, sec.ntiles, walk
+            sec.tcache, sec.ntiles, walk
         )
         @test_throws ArgumentError rebuild(nothing)
         @test rebuild(sec.walk) isa _LC._KernelSection
@@ -203,9 +200,9 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
         function build(c)
             dm = _LC.DiscreteMaterializer()
             f! = first(
-                _LC._build_evaluator(
+                _LC.Internal.build(
                     file;
-                    initial_conditions = Dict("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0),
+                    initial_conditions = Dict("M.c[1]" => 0.0, "M.c[2]" => 0.0, "M.c[3]" => 0.0),
                     const_arrays = Dict("W" => [1.0 2.0 3.0; 4.0 5.0 6.0]),
                     param_arrays = Dict("src" => [0.3, 1.7]), materialize_out = dm,
                     compiler = c

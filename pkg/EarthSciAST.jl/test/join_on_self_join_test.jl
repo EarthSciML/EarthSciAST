@@ -15,10 +15,6 @@
 # plausible number — the NEXT row's payload instead of the PREVIOUS row's — so
 # "it built" and "the shape is right" prove nothing. The transposed answer is
 # asserted too, as the thing the default must NOT produce.
-#
-# Wrapped in a module so the local JSON builders stay out of `Main` (see
-# join_on_equality_gate_test.jl's header).
-module JoinOnSelfJoinTests
 
 using Test
 using EarthSciAST
@@ -27,8 +23,6 @@ import JSON3
 const ESS = EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
-
-_ix(f, a...) = Dict("op" => "index", "args" => Any[f, a...])
 
 # `payload[i] = 7i + 4` for i = 1…n, distinct enough that no wrong pairing
 # coincides with the right one.
@@ -72,7 +66,7 @@ function _self_join_doc(
                             "reduce" => "+",
                             "ranges" => Dict(s => Dict("from" => "rows") for s in range_syms),
                             "join" => [clause],
-                            "expr" => _ix("payload", "b" in range_syms ? "b" : range_syms[end])
+                            "expr" => jidx("payload", "b" in range_syms ? "b" : range_syms[end])
                         )
                     ),
                 ]
@@ -87,20 +81,17 @@ const BACK = 3
 function _run(doc, n::Int; disable::Bool = false)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
     ca = Dict{String, Any}(
-        "row_id" => _ids(n), "row_prior" => _shifted(n, 1),
-        "row_back" => _shifted(n, BACK), "payload" => _payload(n)
+        "S.row_id" => _ids(n), "S.row_prior" => _shifted(n, 1),
+        "S.row_back" => _shifted(n, BACK), "S.payload" => _payload(n)
     )
-    let
-        ESS._VI_ENUM_VISITS[] = 0
-        f!, u0, p, _, _ = EarthSciAST._build_evaluator(
-            file; model_name = "S", const_arrays = ca,
-            initial_conditions = Dict("out" => zeros(n)),
-            compiler = disable ? :interpreter : :native
-        )
-        du = similar(u0)
-        f!(du, u0, p, 0.0)
-        return (Float64[du[i] for i in 1:n], ESS._VI_ENUM_VISITS[])
-    end
+    f!, u0, p, _, _, rep = EarthSciAST.Internal.build(
+        file; const_arrays = ca,
+        initial_conditions = Dict("S.out" => zeros(n)),
+        compiler = disable ? :interpreter : :native
+    )
+    du = similar(u0)
+    f!(du, u0, p, 0.0)
+    return (Float64[du[i] for i in 1:n], get(rep.counts, :vi_enum_visits, 0))
 end
 
 # Independent oracles, so a shared mistake cannot pass.
@@ -204,9 +195,9 @@ end
     doc = _self_join_doc(n)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
     function _eval(ca)
-        f!, u0, p, _, _ = EarthSciAST._build_evaluator(
-            file; model_name = "S", const_arrays = ca,
-            initial_conditions = Dict("out" => zeros(n))
+        f!, u0, p, _, _ = EarthSciAST.Internal.build(
+            file; const_arrays = Dict{String, Any}("S.$k" => v for (k, v) in ca),
+            initial_conditions = Dict("S.out" => zeros(n))
         )
         du = similar(u0); f!(du, u0, p, 0.0)
         return Float64[du[i] for i in 1:n]
@@ -286,5 +277,3 @@ end
     pe = JSON3.read(JSON3.write(ESS.serialize_esm_file(plain)))
     @test !haskey(pe[:models][:S][:equations][1][:rhs][:join][1], :syms)
 end
-
-end # module

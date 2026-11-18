@@ -1,6 +1,6 @@
 # `p` AS AN `AbstractVector` — the parameter-vector ABI.
 #
-# `p` used to be a `NamedTuple` and nothing else. That is the right container for
+# A `NamedTuple` `p` is the right container for
 # a HUMAN (parameters have names, and a name is checkable where a position is not)
 # and the right one for the RHS (a compile-time-literal `getfield` is free), but it
 # is the wrong container for every consumer that wants to MOVE the parameters: an
@@ -11,7 +11,7 @@
 # A `ComponentVector` is both at once, and that is why it is the shape this ABI
 # targets: the name → index axis lives in the TYPE, so `getdata` hands out the
 # plain dense `Vector` with no copy and the naming is erased before any arithmetic
-# happens. `ComponentVector(p)` converts `build_evaluator`'s `p` directly, in the
+# happens. `ComponentVector(p)` converts the build's `p` directly, in the
 # order `param_map(p)` reports.
 #
 # WHAT IS ASSERTED.
@@ -35,9 +35,10 @@
 #   5. No allocation regression. The `f!` zero-allocation discipline holds for
 #      every container; measured, an index into a homogeneous vector is strictly
 #      better than the runtime-symbol `getfield` on a heterogeneous NamedTuple
-#      that build.jl warns about (~48 B/call when the union boxes).
+#      that build_pipeline.jl warns about (~48 B/call when the union boxes).
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 using ForwardDiff
 using ComponentArrays
@@ -46,22 +47,20 @@ const _PV_ESM = EarthSciAST
 
 include("zero_alloc_harness.jl")
 
-_pv_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_pv_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
-_pv_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 _pv_ao(e) = Dict{String, Any}(
     "op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
     "args" => Any[], "expr" => e
 )
+# A state starts at 0 unless the caller gives a `default`.
 _pv_state(; kw...) = Dict{String, Any}(
-    "type" => "unknown",
+    "type" => "unknown", "default" => 0.0,
     (String(k) => v for (k, v) in kw)...
 )
 _pv_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)
 _pv_doc(name, vars, eqs; index_sets = nothing) = begin
     d = Dict{String, Any}(
-        "esm" => "0.5.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => name),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
@@ -76,14 +75,14 @@ end
 # 1-D reaction–diffusion: the ARRAY path — access
 # kernels, the lane-invariant `exp(-Ea/T)` hoist, and the codegen tier.
 function _pv_rd(N)
-    stencil = _pv_o(
-        "+", _pv_o(
-            "-", _pv_ix("c", _pv_o("-", "i", 1.0)),
-            _pv_o("*", 2.0, _pv_ix("c", "i"))
+    stencil = jop(
+        "+", jop(
+            "-", jidx("c", jop("-", "i", 1.0)),
+            jop("*", 2.0, jidx("c", "i"))
         ),
-        _pv_ix("c", _pv_o("+", "i", 1.0))
+        jidx("c", jop("+", "i", 1.0))
     )
-    rate = _pv_o("*", "k_rxn", _pv_o("exp", _pv_o("neg", _pv_o("/", "Ea", "T"))))
+    rate = jop("*", "k_rxn", jop("exp", jop("neg", jop("/", "Ea", "T"))))
     return _pv_doc(
         "RD",
         Dict{String, Any}(
@@ -93,13 +92,13 @@ function _pv_rd(N)
         ),
         Any[
             Dict{String, Any}(
-                "lhs" => _pv_ao(_pv_Dt(_pv_ix("c", "i"))),
+                "lhs" => _pv_ao(jD(jidx("c", "i"))),
                 "rhs" => _pv_ao(
-                    _pv_o(
-                        "-", _pv_o("*", "k_diff", stencil),
-                        _pv_o(
+                    jop(
+                        "-", jop("*", "k_diff", stencil),
+                        jop(
                             "*", rate,
-                            _pv_o("^", _pv_ix("c", "i"), 2.0)
+                            jop("^", jidx("c", "i"), 2.0)
                         )
                     )
                 )
@@ -115,9 +114,9 @@ end
 # walker (`_eval_node`) is exercised and not only the array kernels.
 # Between the two models every `_NK_PARAM` arm in the package is reached.
 function _pv_zerod()
-    shared = _pv_o(
-        "*", _pv_o("exp", _pv_o("neg", _pv_o("/", "Ea", "T"))),
-        _pv_o("*", "x", "y")
+    shared = jop(
+        "*", jop("exp", jop("neg", jop("/", "Ea", "T"))),
+        jop("*", "x", "y")
     )
     return _pv_doc(
         "Z",
@@ -129,21 +128,20 @@ function _pv_zerod()
         ),
         Any[
             Dict{String, Any}(
-                "lhs" => _pv_Dt("x"),
-                "rhs" => _pv_o("neg", _pv_o("*", "k", shared))
+                "lhs" => jD("x"),
+                "rhs" => jop("neg", jop("*", "k", shared))
             ),
-            Dict{String, Any}("lhs" => _pv_Dt("y"), "rhs" => shared),
+            Dict{String, Any}("lhs" => jD("y"), "rhs" => shared),
         ]
     )
 end
 
 _pv_seed(n) = [0.5 + 0.1k for k in 1:n]
-_pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 
 @testset "parameter-vector ABI (`p::AbstractVector`)" begin
 
     @testset "param_map is the build's own parameter order" begin
-        _, _, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(8))
+        _, _, p, _, _ = _PV_ESM.Internal.build(_pv_rd(8))
         pm = param_map(p)
         @test pm isa Dict{String, Int}
         # It IS `keys(p)`'s order, and `keys(p)` is `sort!(param_names)`.
@@ -170,16 +168,16 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
                 ("0-D with a CSE prelude", _pv_zerod(), 2),
             ]
             @testset "$name" begin
-                fi, u0, p, _, _ = _PV_ESM._build_evaluator(doc)
+                fi, u0, p, _, _ = _PV_ESM.Internal.build(doc)
                 u = length(u0) == 2 ? [0.7, 0.4] : _pv_seed(N)
                 t = 0.37
 
                 cv = ComponentVector(p)                     # named AND dense
                 pv = collect(Float64, values(p))            # dense only
 
-                ref_ip = _pv_ip(fi, u, p, t)
-                @test _pv_ip(fi, u, cv, t) == ref_ip
-                @test _pv_ip(fi, u, pv, t) == ref_ip
+                ref_ip = rhs_du(fi, u, p, t)
+                @test rhs_du(fi, u, cv, t) == ref_ip
+                @test rhs_du(fi, u, pv, t) == ref_ip
 
                 # The value type is derived from all three arguments for a vector
                 # `p` exactly as it is for a NamedTuple one.
@@ -193,7 +191,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
     @testset "ForwardDiff ∂/∂p over a vector `p`" begin
         N = 16
         doc = _pv_rd(N)
-        fi, _, p, _, _ = _PV_ESM._build_evaluator(doc)
+        fi, _, p, _, _ = _PV_ESM.Internal.build(doc)
         u = _pv_seed(N)
         t = 0.37
         w = [1.0 + 0.05k for k in 1:N]
@@ -223,19 +221,19 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         # The one failure mode a vector `p` has and a NamedTuple `p` does not.
         # `_read_param_data` is deliberately not `@inbounds` so this raises.
         N = 8
-        fi, _, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(N))
+        fi, _, p, _, _ = _PV_ESM.Internal.build(_pv_rd(N))
         u = _pv_seed(N)
         short = collect(Float64, values(p))[1:(end - 1)]
-        @test_throws BoundsError _pv_ip(fi, u, short, 0.0)
+        @test_throws BoundsError rhs_du(fi, u, short, 0.0)
     end
 
     @testset "no allocation regression on the scalar parameter read" begin
-        # build.jl's JL-J0 feasibility note warns that a RUNTIME-SYMBOL `getfield`
+        # build_pipeline.jl's JL-J0 feasibility note warns that a RUNTIME-SYMBOL `getfield`
         # on a heterogeneous NamedTuple boxes the union (~48 B/call). The scalar
         # `_NK_PARAM` path never had that problem (its symbol is on the node), and
         # an index into a homogeneous vector must not introduce one.
         N = 64
-        fi, u0, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(N))
+        fi, u0, p, _, _ = _PV_ESM.Internal.build(_pv_rd(N))
         u = _pv_seed(N)
         du = similar(u)
         for (name, q) in [

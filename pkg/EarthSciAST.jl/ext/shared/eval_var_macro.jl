@@ -1,7 +1,6 @@
 # Shared Core.eval macro-invocation scaffold for programmatic variable
-# creation. Included by BOTH EarthSciASTMTKExt and EarthSciASTCatalystExt,
-# whose seven `_make_*` constructors previously each spelled out the same
-# bindings-block / let-wrap / `Core.eval` / `vars[1]` dance by hand.
+# creation, shared by the `_make_*` constructors of EarthSciASTMTKExt and
+# EarthSciASTCatalystExt.
 
 """
     _eval_var_macro(mod, macro_sym, call_args...; bindings=()) -> variable

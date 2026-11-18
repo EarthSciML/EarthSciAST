@@ -1,9 +1,9 @@
 # The public template-expansion seam (`expanded_model`, esm-spec §9.6.4
-# Option B): the typed model exactly as `build_evaluator` sees it after
+# Option B): the typed model exactly as the build sees it after
 # `apply_expression_template` expansion, WITHOUT compiling. Downstream
 # analyzers (EarthSciASTDiff differentiates the tree) depend on this being
 # (a) the same expansion the evaluator performs, (b) non-mutating, and
-# (c) name-resolved exactly like `build_evaluator`.
+# (c) model selection that matches the build's.
 
 using Test
 using JSON3
@@ -20,7 +20,7 @@ end
 
 @testset "expanded_model public seam" begin
     doc = Dict(
-        "esm" => "0.9.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "expanded_model_seam"),
         "models" => Dict(
             "T" => Dict(
@@ -61,16 +61,16 @@ end
         @test evaluate_expr(rhs, Dict("a" => 1.5, "k" => 0.25)) ≈ -0.375
         # The seam matches the evaluator: build the ORIGINAL file (which
         # expands internally) and confirm the same RHS value.
-        f!, u0, p, _, vm = EarthSciAST._build_evaluator(file)
+        f!, u0, p, _, vm = EarthSciAST.Internal.build(file)
         du = zeros(length(u0)); f!(du, u0, p, 0.0)
-        @test du[vm["a"]] ≈ -0.375
+        @test du[vm["T.a"]] ≈ -0.375
         # Non-mutating: the file's own model still carries the reference.
         @test _has_apply(file.models["T"].equations[1].rhs)
         # A second call returns a fresh copy, not a cached alias.
         @test expanded_model(file) !== m
     end
 
-    @testset "name resolution mirrors build_evaluator" begin
+    @testset "model selection by name" begin
         @test !_has_apply(expanded_model(file, "T").equations[1].rhs)
         err = try
             expanded_model(file, "Nope"); nothing

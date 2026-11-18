@@ -6,19 +6,17 @@
 #
 # and the tree walk lifts it to `index(faq_i(...), _lp0)`: the makearray is
 # gathered at the lifted faq's OWN index `i`, never at the equation's loop
-# `_lp0`. Under `compiler = :native` this used to go wrong two ways:
+# `_lp0`. Under `compiler = :native` this can go wrong two ways:
 #
 #   * SILENTLY WRONG. The affine tier keys each cell by the regions it selects
-#     and builds one template per key. Its region-select walk pruned the faq's
-#     body through a cache filled before `i` was a loop index, so every cell
-#     keyed alike and took the FIRST cell's template: the face region's value
-#     (often 0) everywhere. And the cut harvest that finds mid-domain region
-#     boundaries only knew a makearray gathered at a bare loop index, so a
-#     boundary reached through the faq's index, an offset (`i + 1`), or an
-#     elementwise sum of makearrays was never cut: a box spanning two regions
-#     computed one of them.
-#   * REFUSED. A contracting `faq` (a column sum) in a region value was outside
-#     the affine tier, and the region split did not see through the lifting.
+#     and builds one template per key. If its region-select walk cannot see `i`
+#     as a loop index, every cell keys alike and takes the FIRST cell's
+#     template: the face region's value (often 0) everywhere. And the cut
+#     harvest that finds mid-domain region boundaries must see a boundary
+#     reached through the faq's index, an offset (`i + 1`), or an elementwise
+#     sum of makearrays, or a box spanning two regions computes one of them.
+#   * REFUSED. A contracting `faq` (a column sum) in a region value must be
+#     inside the affine tier, and the region split must see through the lifting.
 #
 # Each document below must agree with `compiler = :interpreter` bit for bit
 # (`===` per element) on the right-hand side and its ForwardDiff Jacobian, on
@@ -31,8 +29,6 @@ include("testutils.jl")
 
 const _NLM = EarthSciAST
 
-_nlm_idx(a, i...) = Dict{String, Any}("op" => "index", "args" => Any[a, i...])
-_nlm_op(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 _nlm_faq(expr, out, ranges) = Dict{String, Any}(
     "op" => "faq", "args" => Any[],
     "output_idx" => Any[out...], "ranges" => Dict{String, Any}(ranges), "expr" => expr
@@ -75,9 +71,7 @@ _nlm_lifted(body, names, sets) =
     _nlm_faq(body, names, [n => Dict("from" => s) for (n, s) in zip(names, sets)])
 
 function _nlm_build(doc, c)
-    _NLM._reset_cascade_tally!()
-    prob = _NLM.esm_problem(doc, (0.0, 1.0); compiler = c)
-    return prob, copy(_NLM._CASCADE_TALLY)
+    return _NLM.Internal.counting(() -> _NLM.esm_problem(doc, (0.0, 1.0); compiler = c))
 end
 
 # A state with no two elements equal, keyed by element name.
@@ -114,14 +108,14 @@ const _NLM_U = "M.u"
 # Upwind stencil over the interior [2,N], a zero inflow face at [1,1].
 _nlm_upwind(N) = _nlm_doc(
     ["x" => N], _nlm_lifted(
-        _nlm_idx(
+        jidx(
             _nlm_ma(
                 [[(2, N)], [(1, 1)]],
                 [
                     _nlm_faq(
-                        _nlm_op(
-                            "*", _nlm_op("-", "M.rate"),
-                            _nlm_op("-", _nlm_idx(_NLM_U, "i"), _nlm_idx(_NLM_U, _nlm_op("-", "i", 1)))
+                        jop(
+                            "*", jop("-", "M.rate"),
+                            jop("-", jidx(_NLM_U, "i"), jidx(_NLM_U, jop("-", "i", 1)))
                         ),
                         ["i"], ["i" => Any[2, N]]
                     ),
@@ -135,16 +129,16 @@ _nlm_upwind(N) = _nlm_doc(
 # Rank 2, with a reduced-rank face value (an faq over `j` alone at i = 1).
 _nlm_face2d() = _nlm_doc(
     ["x" => 4, "y" => 3], _nlm_lifted(
-        _nlm_idx(
+        jidx(
             _nlm_ma(
                 [[(2, 4), (1, 3)], [(1, 1), (1, 3)]],
                 [
                     _nlm_faq(
-                        _nlm_op("-", _nlm_idx(_NLM_U, "i", "j"), _nlm_idx(_NLM_U, _nlm_op("-", "i", 1), "j")),
+                        jop("-", jidx(_NLM_U, "i", "j"), jidx(_NLM_U, jop("-", "i", 1), "j")),
                         ["i", "j"], ["i" => Any[2, 4], "j" => Any[1, 3]]
                     ),
                     _nlm_faq(
-                        _nlm_op("-", _nlm_idx(_NLM_U, 1, "j"), _nlm_idx(_NLM_U, 4, "j")),
+                        jop("-", jidx(_NLM_U, 1, "j"), jidx(_NLM_U, 4, "j")),
                         ["j"], ["j" => Any[1, 3]]
                     ),
                 ]
@@ -159,10 +153,10 @@ const _NLM_N = 40
 _nlm_halves(v1, v2) = _nlm_ma([[(1, 20)], [(21, 40)]], [v1, v2])
 _nlm_mid_faq_values() = _nlm_doc(
     ["x" => _NLM_N], _nlm_lifted(
-        _nlm_idx(
+        jidx(
             _nlm_halves(
-                _nlm_faq(_nlm_op("*", 2, _nlm_idx(_NLM_U, "i")), ["i"], ["i" => Any[1, 20]]),
-                _nlm_faq(_nlm_op("*", 3, _nlm_idx(_NLM_U, "i")), ["i"], ["i" => Any[21, 40]])
+                _nlm_faq(jop("*", 2, jidx(_NLM_U, "i")), ["i"], ["i" => Any[1, 20]]),
+                _nlm_faq(jop("*", 3, jidx(_NLM_U, "i")), ["i"], ["i" => Any[21, 40]])
             ), "i"
         ),
         ["i"], ["x"]
@@ -170,15 +164,15 @@ _nlm_mid_faq_values() = _nlm_doc(
 )
 _nlm_mid_scalar_values() = _nlm_doc(
     ["x" => _NLM_N], _nlm_lifted(
-        _nlm_op("*", _nlm_idx(_NLM_U, "i"), _nlm_idx(_nlm_halves(2, 3), "i")), ["i"], ["x"]
+        jop("*", jidx(_NLM_U, "i"), jidx(_nlm_halves(2, 3), "i")), ["i"], ["x"]
     )
 )
 # Gathered at an offset: the boundary falls at cell 20, not 21.
 _nlm_mid_offset() = _nlm_doc(
     ["x" => _NLM_N], _nlm_lifted(
-        _nlm_op(
-            "*", _nlm_idx(_NLM_U, "i"),
-            _nlm_idx(_nlm_ma([[(1, 21)], [(22, 41)]], [2, 3]), _nlm_op("+", "i", 1))
+        jop(
+            "*", jidx(_NLM_U, "i"),
+            jidx(_nlm_ma([[(1, 21)], [(22, 41)]], [2, 3]), jop("+", "i", 1))
         ),
         ["i"], ["x"]
     )
@@ -186,9 +180,9 @@ _nlm_mid_offset() = _nlm_doc(
 # A clamp: a function of one loop index that is not `i + c`.
 _nlm_mid_clamp() = _nlm_doc(
     ["x" => _NLM_N], _nlm_lifted(
-        _nlm_op(
-            "*", _nlm_idx(_NLM_U, "i"),
-            _nlm_idx(_nlm_halves(2, 3), _nlm_op("min", _nlm_op("+", "i", 1), _NLM_N))
+        jop(
+            "*", jidx(_NLM_U, "i"),
+            jidx(_nlm_halves(2, 3), jop("min", jop("+", "i", 1), _NLM_N))
         ),
         ["i"], ["x"]
     )
@@ -197,10 +191,10 @@ _nlm_mid_clamp() = _nlm_doc(
 # gather into the operands).
 _nlm_mid_sum() = _nlm_doc(
     ["x" => _NLM_N], _nlm_lifted(
-        _nlm_op(
-            "*", _nlm_idx(_NLM_U, "i"),
-            _nlm_idx(
-                _nlm_op("+", _nlm_halves(2, 3), _nlm_ma([[(1, 10)], [(11, 40)]], [1, 0])),
+        jop(
+            "*", jidx(_NLM_U, "i"),
+            jidx(
+                jop("+", _nlm_halves(2, 3), _nlm_ma([[(1, 10)], [(11, 40)]], [1, 0])),
                 "i"
             )
         ),
@@ -210,9 +204,9 @@ _nlm_mid_sum() = _nlm_doc(
 # Chosen by `i + j`: a diagonal no box cut describes.
 _nlm_diagonal() = _nlm_doc(
     ["x" => 20, "y" => 20], _nlm_lifted(
-        _nlm_op(
-            "*", _nlm_idx(_NLM_U, "i", "j"),
-            _nlm_idx(_nlm_halves(2, 3), _nlm_op("+", "i", "j"))
+        jop(
+            "*", jidx(_NLM_U, "i", "j"),
+            jidx(_nlm_halves(2, 3), jop("+", "i", "j"))
         ),
         ["i", "j"], ["x", "y"]
     )
@@ -221,18 +215,18 @@ _nlm_diagonal() = _nlm_doc(
 # The column relaxation c·(Σ_kk u[i,kk]/L − u[i,k]) as a makearray region value.
 _nlm_column_value(NX, L; klo = 1, khi = L) =
     _nlm_faq(
-    _nlm_op(
-        "*", "M.rate", _nlm_op(
+    jop(
+        "*", "M.rate", jop(
             "-",
-            _nlm_op("/", _nlm_faq(_nlm_idx(_NLM_U, "i", "kk"), String[], ["kk" => Any[1, L]]), L),
-            _nlm_idx(_NLM_U, "i", "k")
+            jop("/", _nlm_faq(jidx(_NLM_U, "i", "kk"), String[], ["kk" => Any[1, L]]), L),
+            jidx(_NLM_U, "i", "k")
         )
     ),
     ["i", "k"], ["i" => Any[1, NX], "k" => Any[klo, khi]]
 )
 _nlm_column(NX, L) = _nlm_doc(
     ["x" => NX, "z" => L], _nlm_lifted(
-        _nlm_idx(
+        jidx(
             _nlm_ma([[(1, NX), (1, L)]], [_nlm_column_value(NX, L)]), "i", "k"
         ),
         ["i", "k"], ["x", "z"]
@@ -241,13 +235,13 @@ _nlm_column(NX, L) = _nlm_doc(
 # The column next to a stencil region.
 _nlm_column_beside_stencil() = _nlm_doc(
     ["x" => 3, "z" => 4], _nlm_lifted(
-        _nlm_idx(
+        jidx(
             _nlm_ma(
                 [[(1, 3), (1, 2)], [(1, 3), (3, 4)]],
                 [
                     _nlm_column_value(3, 4; khi = 2),
                     _nlm_faq(
-                        _nlm_op("-", _nlm_idx(_NLM_U, "i", "k"), _nlm_idx(_NLM_U, "i", _nlm_op("-", "k", 1))),
+                        jop("-", jidx(_NLM_U, "i", "k"), jidx(_NLM_U, "i", jop("-", "k", 1))),
                         ["i", "k"], ["i" => Any[1, 3], "k" => Any[3, 4]]
                     ),
                 ]
@@ -260,21 +254,21 @@ _nlm_column_beside_stencil() = _nlm_doc(
 # one lifted equation.
 _nlm_column_plus_stencil() = _nlm_doc(
     ["x" => 6, "z" => 4], _nlm_lifted(
-        _nlm_op(
+        jop(
             "+",
-            _nlm_idx(
+            jidx(
                 _nlm_ma(
                     [[(2, 6), (1, 4)], [(1, 1), (1, 4)]],
                     [
                         _nlm_faq(
-                            _nlm_op("-", _nlm_idx(_NLM_U, "i", "k"), _nlm_idx(_NLM_U, _nlm_op("-", "i", 1), "k")),
+                            jop("-", jidx(_NLM_U, "i", "k"), jidx(_NLM_U, jop("-", "i", 1), "k")),
                             ["i", "k"], ["i" => Any[2, 6], "k" => Any[1, 4]]
                         ),
                         0,
                     ]
                 ), "i", "k"
             ),
-            _nlm_idx(_nlm_ma([[(1, 6), (1, 4)]], [_nlm_column_value(6, 4)]), "i", "k")
+            jidx(_nlm_ma([[(1, 6), (1, 4)]], [_nlm_column_value(6, 4)]), "i", "k")
         ),
         ["i", "k"], ["x", "z"]
     )

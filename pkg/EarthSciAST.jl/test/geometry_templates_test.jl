@@ -23,7 +23,6 @@ const _GT_PAIRS = JSON3.read(
 const _GT_RTOL = Float64(_GT_PAIRS.tolerance.rtol)
 const _GT_ATOL_FACTOR = Float64(_GT_PAIRS.tolerance.atol_factor)
 
-_gt_const(a) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => a)
 _gt_apply(name, bindings) = Dict{String, Any}(
     "op" => "apply_expression_template", "args" => Any[], "name" => name, "bindings" => bindings
 )
@@ -81,7 +80,7 @@ function _gt_document(manifold, rows)
     eqs = Any[]
     for (x, stack) in (("ra", ra), ("rb", rb))
         vars[x] = Dict{String, Any}("type" => "unknown", "units" => "1", "shape" => Any["pairs", "verts", "xy"])
-        push!(eqs, Dict{String, Any}("lhs" => x, "rhs" => _gt_const(stack)))
+        push!(eqs, Dict{String, Any}("lhs" => x, "rhs" => jconst(stack)))
     end
     index_sets["xy"] = Dict{String, Any}("kind" => "interval", "size" => 2)
     a, b, name = "ra", "rb", "overlap_area_planar"
@@ -140,11 +139,11 @@ function _gt_template_values()
         ]
         isempty(rows) && continue
         file = load_string(JSON3.write(_gt_document(manifold, rows)); base_path = dirname(_GT_LIB))
-        f!, u0, p, _, vm = EarthSciAST._build_evaluator(file; compiler = :interpreter)
+        f!, u0, p, _, vm = EarthSciAST.Internal.build(file; compiler = :interpreter)
         du = similar(u0)
         f!(du, u0, p, 0.0)
         for (k, (g, pr)) in enumerate(rows)
-            get!(out, String(g.id), Dict{Tuple{Int, Int}, Float64}())[(pr.i, pr.j)] = du[vm["S[$k]"]]
+            get!(out, String(g.id), Dict{Tuple{Int, Int}, Float64}())[(pr.i, pr.j)] = du[vm["M.S[$k]"]]
         end
     end
     return out
@@ -199,7 +198,7 @@ end
                     "lhs" => Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t"),
                     "rhs" => _gt_apply(
                         "lonlat_to_unit",
-                        Dict{String, Any}("ring" => _gt_const(ring), "cell" => 1, "vert" => k, "comp" => d)
+                        Dict{String, Any}("ring" => jconst(ring), "cell" => 1, "vert" => k, "comp" => d)
                     )
                 )
             )
@@ -215,14 +214,14 @@ end
             )
         )
         file = load_string(JSON3.write(doc); base_path = dirname(_GT_LIB))
-        f!, u0, p, _, vm = EarthSciAST._build_evaluator(file; compiler = :interpreter)
+        f!, u0, p, _, vm = EarthSciAST.Internal.build(file; compiler = :interpreter)
         du = similar(u0)
         f!(du, u0, p, 0.0)
         for (k, (lon, lat)) in enumerate(pts)
             λ = deg2rad(lon); φ = deg2rad(lat)
             want = (cos(φ) * cos(λ), cos(φ) * sin(λ), sin(φ))
             for d in 1:3
-                @test du[vm["u_$(k)_$d"]] === Float64(want[d])
+                @test du[vm["M.u_$(k)_$d"]] === Float64(want[d])
             end
         end
     end

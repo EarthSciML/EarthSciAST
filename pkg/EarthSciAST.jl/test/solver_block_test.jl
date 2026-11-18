@@ -1,6 +1,8 @@
 # The document-scoped `solver` block (esm-spec §2.2).
 
 using EarthSciAST, Test, JSON3
+# `_pick_solver` hands out a loaded solver: both must be in the session.
+import OrdinaryDiffEqRosenbrock, OrdinaryDiffEqTsit5
 include("testutils.jl")
 
 const _SOLVER_FIXTURE = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "solver_block.esm")
@@ -73,26 +75,20 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String, Any})
     end
 
     @testset "the block reaches the RUN DOCUMENT (§2.2.2 is not dead code)" begin
-        # Regression: `_document_solver` reads the problem's run doc, but the run
-        # doc is `flattened_to_esm` output — a fresh dict of
-        # esm/metadata/models/index_sets/domain — so the key was
-        # never there and the whole §2.2.2 chain silently reduced to the binding
-        # defaults. The block is captured pre-flatten and re-attached, exactly
-        # like the `coordinates` registry beside it.
+        # `_document_solver` reads the problem's run document, which is built
+        # from the flattened system; the block rides on the prepared run beside
+        # the `coordinates` registry, so the whole §2.2.2 chain sees it.
         f = EarthSciAST.load_path(_SOLVER_FIXTURE)
-        doc = EarthSciAST._prepare_run_doc(f)
-        @test haskey(doc, "solver")
-        @test doc["solver"]["abstol"] == 1.0e-8
-        @test doc["solver"]["reltol"] == 1.0e-6
-        # And what `_document_solver` coerces back out of it is the same block.
-        recovered = EarthSciAST.coerce_solver(doc["solver"])
-        @test recovered !== nothing
-        @test EarthSciAST.resolve_tolerances(recovered) == (1.0e-8, 1.0e-6)
+        run_file = EarthSciAST._run_file(EarthSciAST._prepare_run(f))
+        @test run_file.solver !== nothing
+        @test run_file.solver.abstol == 1.0e-8
+        @test run_file.solver.reltol == 1.0e-6
+        @test EarthSciAST.resolve_tolerances(run_file.solver) == (1.0e-8, 1.0e-6)
 
-        # A document with no block leaves the key off entirely, which is what
-        # keeps absence distinguishable from a declared default.
+        # A document with no block carries none, which is what keeps absence
+        # distinguishable from a declared default.
         no_block = _solver_load(Dict(k => v for (k, v) in base if k != "solver"))
-        @test !haskey(EarthSciAST._prepare_run_doc(no_block), "solver")
+        @test EarthSciAST._run_file(EarthSciAST._prepare_run(no_block)).solver === nothing
     end
 
     @testset "inline-test integration tolerances come from the document (§2.2.2)" begin
@@ -123,9 +119,9 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String, Any})
         # travel (§2.2.3). `low`/`moderate` are ignored: they say nothing the
         # default does not already handle.
         rb = EarthSciAST._try_require(EarthSciAST._ROSENBROCK_PKGID)
-        if rb === nothing
-            @test_skip "OrdinaryDiffEqRosenbrock not loaded"
-        else
+        # The stiff solver's package is a test dependency: missing, this fails.
+        @test rb !== nothing
+        if rb !== nothing
             @test EarthSciAST._pick_solver(""; stiffness = "high")[2] === :rosenbrock23
             for declared in ("moderate", "low", nothing)
                 @test EarthSciAST._pick_solver(""; stiffness = declared)[2] !== :rosenbrock23

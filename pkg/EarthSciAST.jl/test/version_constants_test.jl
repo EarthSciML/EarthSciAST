@@ -1,12 +1,8 @@
 # The two public version constants, and the fact that they are two.
 #
 # `SCHEMA_VERSION` is the `.esm` FORMAT version; `LIBRARY_VERSION` is this
-# package's own version. They used to be conflated across the bindings: a
-# single `VERSION` meant the schema version in TypeScript and the package
-# version in Rust, Julia exported only `ESM_FORMAT_VERSION` (the schema one,
-# under a name nobody else used), and Python kept the format version private
-# as a `parse._CURRENT_VERSION` TUPLE. Every binding now exposes exactly
-# `SCHEMA_VERSION` and `LIBRARY_VERSION`, both strings.
+# package's own version. Every binding exposes exactly `SCHEMA_VERSION` and
+# `LIBRARY_VERSION`, both strings, so neither is mistaken for the other.
 
 using Test
 using EarthSciAST
@@ -18,7 +14,7 @@ using JSON3
         # The schema's `$id` is
         # https://earthsciml.org/schemas/esm/<version>/esm.schema.json — the
         # single source of truth TypeScript, Go and Rust all pin to. Julia's
-        # constant is a literal (it is needed before validate.jl is included),
+        # constant is a literal (it is needed before src/validation/ is included),
         # so this test is what keeps it from hand-drifting.
         schema_path = joinpath(pkgdir(EarthSciAST), "data", "esm-schema.json")
         @test isfile(schema_path)

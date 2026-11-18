@@ -11,13 +11,13 @@
 # pure PARAMETER ALGEBRA — an Arrhenius factor `A*exp(-Ea/(R*Tref))` whose every leaf
 # is a parameter — and `p` does not change between the stages of a step, or between
 # steps, or (usually) over an entire integration. The `Cadence` lattice (src/cadence.jl)
-# names exactly this class (`const ⊏ discrete ⊏ continuous`) and `build_evaluator`
+# names exactly this class (`const ⊏ discrete ⊏ continuous`) and `_build_evaluator`
 # never consulted it: the `exp` was recomputed on every stage of every step, forever.
 #
 # So the prelude is now THREE tiers. `f!` refills the DYNAMIC slots every call, the
 # CONST slots only when `p` moved, and — the B3 tier this file grew — the TIME
 # slots only when `(p, t, forcing epoch)` moved. This file decides which is which;
-# the validity checks that decide "can have changed" live on `_CSECache` (compile.jl).
+# the validity checks that decide "can have changed" live on `_CSECache` (prelude_cache.jl).
 #
 # THE TIME TIER'S TARGET is the finite-difference Jacobian: a stiff solver's FD fill
 # makes N+1 RHS calls at the LITERALLY SAME `t` with a state perturbed one column at
@@ -71,20 +71,18 @@
 # `_share_kernel_invariants!` rewrites its new defs against the slots below them.
 #
 # WHY `_NK_PARAM_GATHER` IS TIME, NOT CONST:
-# a live forcing buffer (ess-14f.3) or a discrete-cadence cache has its CONTENTS
-# refreshed IN PLACE between calls (a data-refresh callback's `buffer .= …`, a
-# `DiscreteMaterializer.materialize!`) while `p` itself never moves — a `p`-keyed
-# validity stamp cannot see it change, so it must never enter the const tier. The
-# TIME tier's stamp carries the FORCING EPOCH precisely so it can: `_write_forcing!`
-# and `materialize!` bump the build's forcing epoch (cadence_stamp.jl) on every in-place refresh,
-# and `_cse_t_stale` refills on the bump even at an unchanged `t`. Contract note:
-# DIRECT buffer mutation outside those two write paths must call
-# `notify_forcing_refresh!` if the RHS may next run at an already-seen `t`.
+# a live forcing buffer or a discrete-cadence cache has its contents refreshed in
+# place between calls (a data-refresh callback's write, a
+# `DiscreteMaterializer.materialize!`) while `p` itself never moves, so a
+# `p`-keyed stamp cannot see it change and it must never enter the const tier.
+# The time tier's stamp carries the build's forcing epoch (cadence_stamp.jl),
+# which `materialize!` and every write announced with `notify_forcing_refresh!`
+# bump, and `_cse_t_stale` refills on the bump even at an unchanged `t`.
 #
 # ASCENDING SLOT ORDER makes clause (2) a single forward pass. Prelude slot order is
 # topological (a def may only read slots strictly below its own — `_compile_cse`
-# assigns child slots first, and `_share_kernel_invariants!` sorts its new defs by node
-# count for the same reason), so when slot `s` is classified, every slot it can
+# assigns child slots first, and `_share_kernel_invariants!` mints its new defs in
+# first-seen order, dependencies before their parents), so when slot `s` is classified, every slot it can
 # possibly reference is already classified:
 #
 #     tier[s] = max(leaf tiers of def s, tier[r] for r in cached-slots-referenced)
@@ -128,7 +126,7 @@ function _def_tier(n::_Node, tier::Vector{Int8}, slot::Int, cache::_CSECache)::I
         (1 <= r < slot) || return _TIER_DYNAMIC       # not below us: fail closed
         return @inbounds tier[r]
     end
-    # `_NK_LITERAL` / `_NK_PARAM` are childless ⇒ const. `_NK_OP` (`fn` included) and
+    # `_NK_LITERAL` / `_NK_PARAM` are childless ⇒ const. `_NK_OP` and
     # `_NK_CONTRACTION` are pure functions of their children: max over them. A
     # live forcing buffer is refreshed at time boundaries, whatever offset it is
     # read at, so `_NK_LIVE_GATHER` is at least TIME, and its subscripts can

@@ -7,9 +7,9 @@
 # Each refresh that can move those inputs must be seen on the very next call,
 # bit for bit as `compiler=:interpreter` (which memoizes nothing) sees it:
 #   * a new `t`, a new `p` (what `remake(prob; p = …)` hands the RHS);
-#   * a live buffer written through `_write_forcing!` (the refresh callback);
-#   * a direct in-place write followed by `notify_forcing_refresh!()` or
-#     `notify_forcing_refresh!(buffer)`;
+#   * a live buffer written through `_write_forcing!` (the refresh callback)
+#     and announced to the build;
+#   * a direct in-place write followed by `notify_forcing_refresh!(build)`;
 #   * a direct in-place write followed by a call at a `t` not yet evaluated.
 # Both value types are checked: Float64 calls and the ForwardDiff Jacobian's
 # dual-number calls, which run on their own buffers and stamps. The child
@@ -22,18 +22,13 @@
 using Test
 using EarthSciAST
 using ForwardDiff
-using DiffEqCallbacks            # loads EarthSciASTDataRefreshExt
+using DiffEqCallbacks            # loads EarthSciASTCallbacksExt
 using SciMLBase
 import OrdinaryDiffEqRosenbrock as ODERos
 include("testutils.jl")
 const ESM = EarthSciAST
 
 # A discrete provider: one field per refresh time.
-struct _CRProvider
-    fields::Dict{Float64, Dict{String, Vector{Float64}}}
-end
-ESM.provider_refresh_times(p::_CRProvider) = sort!(collect(keys(p.fields)))
-ESM.provider_sample(p::_CRProvider, t::Real) = p.fields[Float64(t)]
 
 #   c[i] = k·sin(i)                         const cadence (p only)
 #   w[i] = t·F[i] + c[i]                    time cadence (t, a live buffer)
@@ -75,27 +70,28 @@ function _cr_model(N)
         ),
         ESM.Equation(_D("z"), _op("+", _op("sin", fk()), _op("cos", fk()))),
     ]
-    ics = merge(Dict("u[$j]" => 0.1j for j in 1:N), Dict("z" => 0.3))
+    # The build flattens the model into component `M`.
+    ics = merge(Dict("M.u[$j]" => 0.1j for j in 1:N), Dict("M.z" => 0.3))
     return ESM.Model(vars, eqs), isets, ics
 end
 
 function _cr_refresh_sequence(N)
     model, isets, ics = _cr_model(N)
     F = [1.0 + 0.5j for j in 1:N]
-    nat = ESM._build_evaluator_impl(
+    nat = ESM.Internal.build(
         model; index_sets = isets, initial_conditions = ics,
         param_arrays = Dict("F" => F)
     )
-    ref = ESM._build_evaluator_impl(
+    ref = ESM.Internal.build(
         model; index_sets = isets, initial_conditions = ics,
         param_arrays = Dict("F" => F), compiler = :interpreter
     )
     # Each memoized tier this file is about is really there.
-    @test nat[6].n_mat_const_levels == 1
-    @test nat[6].n_mat_time_levels == 1
-    @test nat[6].n_time_slots >= 1
-    fn!, u0, p = nat[1], nat[2], nat[3]
-    fr! = ref[1]
+    @test nat.report.stats.n_mat_const_levels == 1
+    @test nat.report.stats.n_mat_time_levels == 1
+    @test nat.report.stats.n_time_slots >= 1
+    fn!, u0, p = nat.f!, nat.u0, nat.p
+    fr! = ref.f!
     du, dr = similar(u0), similar(u0)
     jac(f!, pp, t) = ForwardDiff.jacobian((d, uu) -> f!(d, uu, pp, t), similar(u0), u0)
     function agree(pp, t)
@@ -108,14 +104,13 @@ function _cr_refresh_sequence(N)
     @test agree(p, 0.0)
     @test agree(p, 0.0)                                    # a memo hit
     @test agree(p, 1.5)                                    # new t
+    announce() = (ESM.notify_forcing_refresh!(nat); ESM.notify_forcing_refresh!(ref))
     ESM._write_forcing!(F, "F", Dict("F" => F .* 2.0))
+    announce()
     @test agree(p, 1.5)                                    # the refresh callback's write
-    F .+= 1.0
-    ESM.notify_forcing_refresh!()
-    @test agree(p, 1.5)                                    # direct write + global notice
     F .*= 0.5
-    ESM.notify_forcing_refresh!(F)
-    @test agree(p, 1.5)                                    # direct write + buffer notice
+    announce()
+    @test agree(p, 1.5)                                    # direct write + announcement
     @test agree(p2, 1.5)                                   # new p (remake)
     @test agree(p, 1.5)                                    # and back
     F .-= 0.25
@@ -129,7 +124,7 @@ function _cr_refresh_sequence(N)
     F .+= 7.0
     fn!(du, u0, p, 1.5)
     @test jac(fn!, p, 1.5) == jbefore
-    ESM.notify_forcing_refresh!(F)
+    announce()
     @test agree(p, 1.5)
     @test jac(fn!, p, 1.5) != jbefore
     return nothing
@@ -145,45 +140,47 @@ if get(ENV, "ESS_CR_CHILD", "") == "1"
 else
     @testset "cadence refresh kinds" begin
         @testset "serial" begin
-            withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+            withenv("ESS_THREADS_MIN_WORK" => string(typemax(Int))) do
                 _cr_refresh_sequence(16)
             end
         end
 
-        @testset "a second build of the same buffer is not disturbed" begin
-            # A buffer notice reaches every build that reads the buffer, and
-            # only those: a build over another buffer keeps its memo.
+        @testset "an announcement reaches its own build only" begin
+            # A notice goes to one build: another build over the same buffer,
+            # or over another buffer, keeps its memo until told.
             model, isets, ics = _cr_model(8)
             F = [1.0 + 0.5j for j in 1:8]
             G = copy(F)
-            bF = ESM._build_evaluator_impl(
+            bF = ESM.Internal.build(
                 model; index_sets = isets,
                 initial_conditions = ics,
                 param_arrays = Dict("F" => F)
             )
-            bF2 = ESM._build_evaluator_impl(
+            bF2 = ESM.Internal.build(
                 model; index_sets = isets,
                 initial_conditions = ics,
                 param_arrays = Dict("F" => F)
             )
-            bG = ESM._build_evaluator_impl(
+            bG = ESM.Internal.build(
                 model; index_sets = isets,
                 initial_conditions = ics,
                 param_arrays = Dict("F" => G)
             )
             # The Jacobian reads the buffer only through the memoized `w`.
             call(b) = ForwardDiff.jacobian(
-                (d, uu) -> b[1](d, uu, b[3], 0.5),
-                similar(b[2]), b[2]
+                (d, uu) -> b.f!(d, uu, b.p, 0.5),
+                similar(b.u0), b.u0
             )
             d0 = call(bF)
             @test call(bF2) == d0 && call(bG) == d0
             F .*= 2.0
             G .*= 2.0
-            ESM.notify_forcing_refresh!(F)
+            ESM.notify_forcing_refresh!(bF)
             @test call(bF) != d0
-            @test call(bF2) == call(bF)
+            @test call(bF2) == d0                    # same buffer, not announced
             @test call(bG) == d0                     # G was not announced
+            ESM.notify_forcing_refresh!(bF2)
+            @test call(bF2) == call(bF)
         end
 
         @testset "a stiff solve across refreshes ≡ the interpreter" begin
@@ -200,21 +197,22 @@ else
             )
             function solve_with(compiler, how)
                 F = [0.2j for j in 1:8]
-                f!, u0, p = ESM._build_evaluator_impl(
+                b = ESM.Internal.build(
                     model; index_sets = isets,
                     initial_conditions = ics, param_arrays = Dict("F" => F),
                     compiler = compiler
                 )
+                f!, u0, p = b
                 cb, tstops = if how === :provider
                     ESM.build_refresh_callback(;
-                        providers = Dict("F" => _CRProvider(fields)),
-                        buffers = ESM.RefreshBuffers(Dict("F" => F))
+                        providers = Dict("F" => SeriesProvider(fields)),
+                        buffers = ESM.RefreshBuffers(Dict("F" => F)), owner = b
                     )
                 else
                     DiffEqCallbacks.PresetTimeCallback(
                             [1.0, 2.0], integ -> begin
                                 F .= fields[integ.t]["F"]
-                                ESM.notify_forcing_refresh!(F)
+                                ESM.notify_forcing_refresh!(b)
                             end
                         ), [1.0, 2.0]
                 end
@@ -239,7 +237,7 @@ else
                 startswith(k, "ESS_") && delete!(env, k)
             end
             env["ESS_CR_CHILD"] = "1"
-            env["ESS_THREADS_MIN_CELLS"] = "8"
+            env["ESS_THREADS_MIN_WORK"] = "8"
             env["JULIA_PROJECT"] = Base.active_project()
             cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 2 $(@__FILE__)`, env)
             proc = run(pipeline(ignorestatus(cmd); stdout = stdout, stderr = stderr))

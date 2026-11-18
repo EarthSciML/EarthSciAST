@@ -44,13 +44,6 @@ _extent_load(name; metaparameters = Dict{String, Int}()) =
     metaparameters = metaparameters
 )
 
-_extent_err(f) = try
-    f()
-    nothing
-catch e
-    e
-end
-
 # The OUTCOME of a load, reduced to what a DIFFERENTIAL assertion may compare:
 # the merged axis size on success, and the exception's stable §9.6.6 code on
 # failure. Deliberately NOT the message — two spellings of one assembly mount
@@ -58,7 +51,7 @@ end
 # not. Used where the portable contract is "these two agree with each other"
 # rather than an absolute value.
 function _extent_outcome(name; metaparameters = Dict{String, Int}())
-    e = _extent_err(() -> _extent_load(name; metaparameters = metaparameters))
+    e = caught(() -> _extent_load(name; metaparameters = metaparameters))
     e === nothing || return (:error, e.code)
     return (:ok, _extent_records(_extent_load(name; metaparameters = metaparameters)).size)
 end
@@ -73,20 +66,19 @@ end
         # The thin root owns the `data_sources` entry and declares NO
         # `metaparameters`; the leaf it mounts declares `N_REC` and is sized by
         # it. The discovered extent is a loader-API binding, and the site-4
-        # check used to ask only whether the ROOT declared the name — so every
-        # assembly had to carry a second, identical `metaparameters` block that
-        # configured nothing. The check now accepts a name declared by any
-        # document the root mounts, and the mount edge forwards the value into
+        # check accepts a name declared by any document the root mounts — so an
+        # assembly need not carry a second, identical `metaparameters` block
+        # that configures nothing — and the mount edge forwards the value into
         # the leaf's own close.
         f = _extent_load("extent_root_toplevel.esm"; metaparameters = Dict("N_REC" => 3))
         @test _extent_records(f).size == 3
     end
 
     @testset "a loader-API binding no document declares is still refused" begin
-        # Widening the check must not delete it. A name neither the root nor
+        # Accepting mounted declarations must not delete the check. A name neither the root nor
         # anything it mounts declares is still `template_import_unknown_name` —
         # §9.7.6: bindings never invent metaparameters, a typo fails loudly.
-        err = _extent_err(
+        err = caught(
             () ->
             _extent_load("extent_root_toplevel.esm"; metaparameters = Dict("N_RECS" => 3))
         )
@@ -104,18 +96,17 @@ end
         # the two assemblies differ only in which attachment point mounts the
         # leaf.
         #
-        # Before, only the top-level `models.<k>` form forwarded the loader-API
-        # bindings into the leaf's close. A `subsystems.<k>` mount fell through
-        # to the leaf's own placeholder default, so the axis folded to 0 and the
-        # ingested field was ZERO-LENGTH — with no diagnostic, a clean validate
-        # and a clean exit. §4.7 says a binding MUST NOT make the two forms
+        # Both forms must forward the loader-API bindings into the leaf's
+        # close. A `subsystems.<k>` mount that fell through to the leaf's own
+        # placeholder default would fold the axis to 0 and ingest a ZERO-LENGTH
+        # field — with no diagnostic, a clean validate and a clean exit. §4.7 says a binding MUST NOT make the two forms
         # differ; this is the test that says so out loud.
         top = _extent_load("extent_root_toplevel.esm"; metaparameters = Dict("N_REC" => 3))
         sub = _extent_load("extent_root_subsystem.esm"; metaparameters = Dict("N_REC" => 3))
         @test _extent_records(top).size == 3
-        @test _extent_records(sub).size == 3  # a subsystem-mounted leaf used to
-        # size its axis at the placeholder default while a top-level-mounted one
-        # sized it from the data (esm-spec §4.7).
+        @test _extent_records(sub).size == 3  # a subsystem-mounted leaf sizes
+        # its axis from the data, as a top-level-mounted one does (esm-spec
+        # §4.7).
         @test _extent_records(top).size == _extent_records(sub).size
         @test _extent_records(top).kind == _extent_records(sub).kind
     end
@@ -128,9 +119,9 @@ end
         # Two assemblies differing by ONE import of a library the leaf never
         # calls.
         #
-        # Whether a mounted leaf folded strictly used to be a whole-document
-        # boolean — does it carry ANY §9.7 machinery — so adding that import
-        # flipped the leaf from "axis merges symbolically and the assembler
+        # Whether a mounted leaf folds strictly must not be a whole-document
+        # boolean — does it carry ANY §9.7 machinery — or adding that import
+        # would flip the leaf from "axis merges symbolically and the assembler
         # closes it" to `metaparameter_unbound`. Factoring a shared expression
         # into a library is not supposed to change whether a document's shape
         # resolves (§4.7).
@@ -143,17 +134,16 @@ end
         @test _extent_outcome("assembler_root_with_import.esm") ==
             _extent_outcome("assembler_root_no_import.esm")
 
-        # …and the ABSOLUTE form, which Julia now reaches too.
+        # …and the ABSOLUTE form, which Julia reaches too.
         #
         # These fixtures mount at the `subsystems.<k>` form, where Julia merges
-        # on the TYPED side and `IndexSet.size` is `Union{Int,Nothing}` — so a
-        # still-symbolic axis used to abort the mount before any merge. Settling
-        # RFC `mount-edge-index-set-renaming.md` open question 2 removed the need
-        # for that representation rather than widening it: the leaf closes what
+        # on the TYPED side and `IndexSet.size` is `Union{Int,Nothing}`, which
+        # cannot carry a still-symbolic axis. It does not need to (RFC
+        # `mount-edge-index-set-renaming.md` open question 2): the leaf closes what
         # it can, then the contribution folds against the MOUNTING document's
         # closed environment while still native, so coercion only ever sees an
         # integer. The axis lands at the assembler's own `N_REC` default.
-        @test _extent_err(() -> _extent_load("assembler_root_no_import.esm")) === nothing
+        @test caught(() -> _extent_load("assembler_root_no_import.esm")) === nothing
         @test _extent_records(_extent_load("assembler_root_no_import.esm")).size == 3
         @test _extent_records(_extent_load("assembler_root_with_import.esm")).size == 3
     end
@@ -164,12 +154,10 @@ end
 
     @testset "an extent naming an undeclared metaparameter is refused at load" begin
         # `extent` names `N_RECS`; neither the root nor the leaf declares it.
-        # This used to validate clean and fail only once the source was SAMPLED,
-        # at build — the same validate/build split §9.7.6's own binding sites
-        # had. It is decidable from the documents alone, so it is decided at
-        # load, with the code §9.7.6 already gives an unknown name at a binding
+        # It is decidable from the documents alone, so it is decided at load
+        # rather than when the source is SAMPLED at build, with the code §9.7.6 already gives an unknown name at a binding
         # site (no new diagnostic code).
-        err = _extent_err(() -> _extent_load("extent_undeclared_root.esm"))
+        err = caught(() -> _extent_load("extent_undeclared_root.esm"))
         @test err isa ExpressionTemplateError
         @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
         @test occursin("N_RECS", err.message)
@@ -381,7 +369,7 @@ end
         # integer), and the idempotency exemption then skips the check entirely.
         # Measured both ways; this test is what keeps the check on the authored
         # tree.
-        err = _extent_err(() -> _extent_load("extent_typo_no_mount.esm"))
+        err = caught(() -> _extent_load("extent_typo_no_mount.esm"))
         @test err isa ExpressionTemplateError
         @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
         @test occursin("N_RECS", err.message)

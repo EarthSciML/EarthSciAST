@@ -74,19 +74,7 @@ the template cannot be resolved.
 """
 function resolve_source_url(template::AbstractString, base_dir::AbstractString)
     t = String(template)
-    if occursin("\${", t)
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
-                "url template $(repr(t)) carries an unexpanded '\${...}' variable. " *
-                    "esm-spec §8.2.1 does not expand environment variables into a data " *
-                    "source's location: a document that reads one does not say what it " *
-                    "reads, and the value is spliced into a URL that is then fetched. " *
-                    "Write a path relative to this document instead (it resolves against " *
-                    "the document's own directory), or symlink the data to that path."
-            )
-        )
-    end
+    _refuse_env_in_location(t)
     # Substitution-led: the author's own substitution supplies the location, so
     # there is no literal prefix to classify. §8.2 requires unrecognized
     # substitutions to be passed through, so this is left alone.
@@ -108,6 +96,35 @@ function resolve_source_url(template::AbstractString, base_dir::AbstractString)
     return "file://" * resolved
 end
 
+# §8.2.1 against a typed base. A document fetched over http(s) joins a relative
+# location onto its URL directory by RFC 3986 §5.2, as its own relative refs do.
+_resolve_location(t::AbstractString, base::AbstractString) = resolve_source_url(t, base)
+_resolve_location(t::AbstractString, base::_DirBase) = resolve_source_url(t, base.dir)
+function _resolve_location(template::AbstractString, base::_UrlBase)
+    t = String(template)
+    _refuse_env_in_location(t)
+    (startswith(t, "{") || match(_URL_TEMPLATE_SCHEME_RE, t) !== nothing) && return t
+    return _url_join(base.url, t)
+end
+
+# A `${` in a location is refused (esm-spec §8.2.1).
+function _refuse_env_in_location(t::String)
+    if occursin("\${", t)
+        throw(
+            ExpressionTemplateError(
+                ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+                "url template $(repr(t)) carries an unexpanded '\${...}' variable. " *
+                    "esm-spec §8.2.1 does not expand environment variables into a data " *
+                    "source's location: a document that reads one does not say what it " *
+                    "reads, and the value is spliced into a URL that is then fetched. " *
+                    "Write a path relative to this document instead (it resolves against " *
+                    "the document's own directory), or symlink the data to that path."
+            )
+        )
+    end
+    return nothing
+end
+
 """
     _resolved_source_url(template, base_dir, where) -> String
 
@@ -117,12 +134,9 @@ A resolution failure must name the entry AND the template: "io error at
 /\${MOVES_SNAPSHOTS}/x.parquet" names neither, and a source whose location
 silently fails to resolve is indistinguishable from one that read zeros.
 """
-function _resolved_source_url(
-        template::AbstractString, base_dir::AbstractString,
-        where::AbstractString
-    )
+function _resolved_source_url(template::AbstractString, base, where::AbstractString)
     try
-        return resolve_source_url(template, base_dir)
+        return _resolve_location(template, base)
     catch e
         e isa ExpressionTemplateError || rethrow()
         throw(ExpressionTemplateError(e.code, "$(where): $(e.message)"))
@@ -141,7 +155,7 @@ inliners are: `raw_data` may still be a `JSON3.Object` straight off the wire,
 which is immutable, and the overwhelmingly common document declares no
 `data_sources` at all and must not pay for a deep copy.
 """
-function _resolve_data_source_urls(raw_data, base_path::AbstractString)
+function _resolve_data_source_urls(raw_data, base_path)
     _is_object(raw_data) || return nothing
     sources = _raw_get(raw_data, "data_sources")
     (sources !== nothing && _is_object(sources)) || return nothing

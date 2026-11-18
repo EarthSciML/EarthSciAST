@@ -1,10 +1,10 @@
-# Value-invention evaluator front-door — Julia reference (bead ess-3lj.1, F1).
+# Value-invention evaluator front-door — Julia reference.
 #
 # RFC semiring-faq-unified-ir §6.1 (cadence-partition) / §5.5 (determinism) /
 # §7.3 (edge enumeration); CONFORMANCE_SPEC.md §5.5 / §5.7.
 #
 # The front-door sizes what the resolver would otherwise refuse with
-# `derived_index_set_unmaterialized` (tree_walk/resolve.jl):
+# `derived_index_set_unmaterialized` (tree_walk/index_sets.jl):
 # a `kind:"derived"` index set whose `from_faq` names a `distinct` producer is
 # materialized ONCE at setup through the `Relational` engine and its cardinality
 # handed to the index-set resolver as the dense extent. The value-invention
@@ -16,7 +16,7 @@
 # expanded; there is no raw-JSON walk.
 #
 # The proof case: the §7.3 edge-enumeration .esm runs end-to-end through
-# build_evaluator — `edges` materializes to the five edges of the two-triangle
+# the build — `edges` materializes to the five edges of the two-triangle
 # mesh and the downstream geometric `area_eff` FAQ integrates over it.
 
 using Test
@@ -44,7 +44,7 @@ _vi_typed_fixture(rel, name) = _vi_typed(_vi_raw(rel), name)
 # the model-level `index_sets` block is hoisted to the document scope
 # (esm-spec v0.8.0) and the model mounted as `models.M`.
 function _vi_inline_model(json)
-    m = ESS.Cadence.to_native(JSON3.read(json))
+    m = JSON3.read(json, Dict{String, Any})
     doc = Dict{String, Any}(
         "esm" => "0.9.0",
         "metadata" => Dict{String, Any}("name" => "inline"),
@@ -55,9 +55,9 @@ function _vi_inline_model(json)
 end
 
 
-@testset "value-invention front-door (ess-3lj.1)" begin
+@testset "value-invention front-door" begin
 
-    @testset "edge-enumeration: build_evaluator end-to-end (§7.3)" begin
+    @testset "edge-enumeration: build end-to-end (§7.3)" begin
         rel = "tests/valid/faq/edge_enumeration_area_eff.esm"
         raw = _vi_raw(rel)
         # Canonical mesh connectivity (the ragged face_vertices backing factors)
@@ -81,19 +81,23 @@ end
         @test vi.members["edge_set"] == sort(unique(vi.members["edge_set"]))
         @test "edge_exists" in vi.vi_var_names
 
-        # (2) build_evaluator runs end-to-end: the derived-index-set throw is gone,
+        # (2) the build runs end-to-end: the derived-index-set throw is gone,
         #     only the geometric `area_eff` FAQ remains in the ODE.
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-            raw; model_name = "EdgeEnumerationAreaEff",
-            const_arrays = ca
+        # `area_eff` declares no default, so the build is given its start.
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
+            raw; const_arrays = Dict("EdgeEnumerationAreaEff.$k" => v for (k, v) in ca),
+            initial_conditions = Dict(
+                "EdgeEnumerationAreaEff.area_eff[$i]" => 0.0 for i in 1:2
+            )
         )
-        @test sort(collect(keys(vmap))) == ["area_eff[1]", "area_eff[2]"]
+        @test sort(collect(keys(vmap))) ==
+            ["EdgeEnumerationAreaEff.area_eff[1]", "EdgeEnumerationAreaEff.area_eff[2]"]
         du = similar(u0); fill!(du, NaN); f!(du, u0, p, 0.0)
         # area_eff[i] = 1/4 · Σ_{k∈edges_of_cell(i)} dc[e]·dv[e]
         eoc = [[1, 2, 3], [3, 4, 5]]
         expected = [0.25 * sum(ca["dc"][e] * ca["dv"][e] for e in eoc[i]) for i in 1:2]
-        @test du[vmap["area_eff[1]"]] ≈ expected[1]
-        @test du[vmap["area_eff[2]"]] ≈ expected[2]
+        @test du[vmap["EdgeEnumerationAreaEff.area_eff[1]"]] ≈ expected[1]
+        @test du[vmap["EdgeEnumerationAreaEff.area_eff[2]"]] ≈ expected[2]
         @test expected ≈ [43.0, 143.75]   # the concrete DUO effective areas
     end
 
@@ -215,7 +219,7 @@ end
 
     @testset "no-op: a model with no value-invention is untouched" begin
         # _vi_detect reports has_vi=false and materialization returns empties, so a
-        # plain model flows through build_evaluator byte-identically.
+        # plain model flows through the build byte-identically.
         m, isets = _vi_inline_model(
             """
             {"variables": {"x": {"type": "unknown", "shape": []}},

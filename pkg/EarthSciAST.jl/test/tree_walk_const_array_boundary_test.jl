@@ -1,4 +1,4 @@
-# Tests for generic const_array boundary policy in tree_walk (ess-gj4).
+# Tests for generic const_array boundary policy in tree_walk.
 #
 # A const_array stencil gather at an out-of-range index resolves per a declared
 # per-dimension boundary policy instead of erroring:
@@ -18,7 +18,7 @@ include("testutils.jl")  # _n/_i/_v/_op/_idx builder quartet
 
 const ESM = EarthSciAST
 
-@testset "const_array boundary policy (ess-gj4)" begin
+@testset "const_array boundary policy" begin
 
     # ------------------------------------------------------------------
     # A. Value gather (_resolve_indices): D(y[i]) = index(M, i+1)
@@ -31,36 +31,35 @@ const ESM = EarthSciAST
         lhs = _faq1d(_D_idx("y", _v("i")), "i", 1, N)
         rhs = _faq1d(_idx("M", _op("+", _v("i"), _i(1))), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
-        ics = Dict("y[$k]" => 0.0 for k in 1:N)
+        ics = Dict("M.y[$k]" => 0.0 for k in 1:N)
 
         # clamp: M[5] -> M[4] = 40 (edge-extend)
         # The boundary fold is in the affine per-cell signature (a cut at the
         # clamp transition), so the DEFAULT build lands on the access-kernel
         # path — pinned here so a signature regression can't silently demote
         # these equations to a fallback tier.
-        f!, u0, p, _, vmap, _diag = ESM._build_evaluator_impl(
+        f!, u0, p, _, vmap, rep = ESM.Internal.build(
             model;
             initial_conditions = ics, const_arrays = Dict("M" => M),
             const_array_boundaries = Dict("M" => [:clamp])
         )
-        @test _diag.n_acc_kernels >= 1
-        @test _diag.n_vec_kernels == 0
+        @test rep.stats.n_acc_kernels >= 1
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["y[1]"]], 20.0; rtol = 1.0e-12)   # M[2], in range
-        @test isapprox(du[vmap["y[3]"]], 40.0; rtol = 1.0e-12)   # M[4], in range
-        @test isapprox(du[vmap["y[4]"]], 40.0; rtol = 1.0e-12)   # clamp M[5] -> M[4]
+        @test isapprox(du[vmap["M.y[1]"]], 20.0; rtol = 1.0e-12)   # M[2], in range
+        @test isapprox(du[vmap["M.y[3]"]], 40.0; rtol = 1.0e-12)   # M[4], in range
+        @test isapprox(du[vmap["M.y[4]"]], 40.0; rtol = 1.0e-12)   # clamp M[5] -> M[4]
 
         # periodic: M[5] -> M[1] = 10 (wrap)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
             model; initial_conditions = ics,
             const_arrays = Dict("M" => M), const_array_boundaries = Dict("M" => [:periodic])
         )
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["y[1]"]], 20.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["y[4]"]], 10.0; rtol = 1.0e-12)   # wrap M[5] -> M[1]
+        @test isapprox(du[vmap["M.y[1]"]], 20.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.y[4]"]], 10.0; rtol = 1.0e-12)   # wrap M[5] -> M[1]
 
         # no declared policy -> the OOB gather throws (bug-catching preserved)
-        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(
+        @test_throws ESM.TreeWalkError EarthSciAST.Internal.build(
             model; initial_conditions = ics,
             const_arrays = Dict("M" => M)
         )
@@ -82,34 +81,33 @@ const ESM = EarthSciAST
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
         ics = Dict{String, Float64}()
         for k in 1:N
-            ics["y[$k]"] = 0.0
-            ics["u[$k]"] = 10.0 * k
+            ics["M.y[$k]"] = 0.0
+            ics["M.u[$k]"] = 10.0 * k
         end
 
         # clamp: conn[5] -> conn[4] = 1 -> u[1] = 10
         # The indirect-through-const state gather also lands on the access-kernel
         # path (Δ-keyed cuts / indirect slot table) — pinned like testset A.
-        f!, u0, p, _, vmap, _diag = ESM._build_evaluator_impl(
+        f!, u0, p, _, vmap, rep = ESM.Internal.build(
             model;
             initial_conditions = ics, const_arrays = Dict("conn" => conn),
             const_array_boundaries = Dict("conn" => [:clamp])
         )
-        @test _diag.n_acc_kernels >= 1
-        @test _diag.n_vec_kernels == 0
+        @test rep.stats.n_acc_kernels >= 1
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["y[1]"]], 30.0; rtol = 1.0e-12)   # conn[2]=3 -> u[3]
-        @test isapprox(du[vmap["y[2]"]], 40.0; rtol = 1.0e-12)   # conn[3]=4 -> u[4]
-        @test isapprox(du[vmap["y[4]"]], 10.0; rtol = 1.0e-12)   # clamp conn[5]->conn[4]=1 -> u[1]
+        @test isapprox(du[vmap["M.y[1]"]], 30.0; rtol = 1.0e-12)   # conn[2]=3 -> u[3]
+        @test isapprox(du[vmap["M.y[2]"]], 40.0; rtol = 1.0e-12)   # conn[3]=4 -> u[4]
+        @test isapprox(du[vmap["M.y[4]"]], 10.0; rtol = 1.0e-12)   # clamp conn[5]->conn[4]=1 -> u[1]
 
         # periodic: conn[5] -> conn[1] = 2 -> u[2] = 20
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
             model; initial_conditions = ics,
             const_arrays = Dict("conn" => conn), const_array_boundaries = Dict("conn" => [:periodic])
         )
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["y[4]"]], 20.0; rtol = 1.0e-12)   # wrap conn[5]->conn[1]=2 -> u[2]
+        @test isapprox(du[vmap["M.y[4]"]], 20.0; rtol = 1.0e-12)   # wrap conn[5]->conn[1]=2 -> u[2]
 
-        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(
+        @test_throws ESM.TreeWalkError EarthSciAST.Internal.build(
             model; initial_conditions = ics,
             const_arrays = Dict("conn" => conn)
         )
@@ -160,15 +158,15 @@ const ESM = EarthSciAST
         lhs = _faq1d(_D_idx("y", _v("i")), "i", 1, N)
         rhs = _faq1d(_idx("M", _v("i")), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
-        ics = Dict("y[$k]" => 0.0 for k in 1:N)
+        ics = Dict("M.y[$k]" => 0.0 for k in 1:N)
 
         # wrong rank: 1D array, 2-dim boundary spec
-        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(
+        @test_throws ESM.TreeWalkError EarthSciAST.Internal.build(
             model; initial_conditions = ics,
             const_arrays = Dict("M" => M), const_array_boundaries = Dict("M" => [:clamp, :clamp])
         )
         # unknown policy kind
-        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(
+        @test_throws ESM.TreeWalkError EarthSciAST.Internal.build(
             model; initial_conditions = ics,
             const_arrays = Dict("M" => M), const_array_boundaries = Dict("M" => [:reflect])
         )
@@ -203,6 +201,21 @@ const ESM = EarthSciAST
         taken = _op("ifelse", _op(">", _n(1), _n(0)), oob, _n(0))
         @test oob_code(() -> res(taken, ESM._BuildMemo())) == "E_TREEWALK_CONSTARRAY_OOB"
 
+        # The same rule when another subscript of the read is a run-time one
+        # (a bound output index), and for a live forcing buffer.
+        c2 = reshape(collect(1.0:6.0), 2, 3)
+        cas2 = Dict{String, Any}("c2" => c2)
+        bound = Set{String}(["i"])
+        mixed = _idx("c2", _v("i"), _i(5))
+        resb(e) = ESM._resolve_indices(e, avi, vm, cas2, ESM._EMPTY_PGATHER, nothing, bound)
+        @test oob_code(() -> resb(_op("ifelse", _op(">", _v("p"), _n(0)), mixed, _n(0)))) === nothing
+        @test oob_code(() -> resb(mixed)) == "E_TREEWALK_CONSTARRAY_OOB"
+        pg = Dict{String, Any}("F" => ESM._PGatherArray([1.0, 2.0, 3.0], [3]))
+        fo = _idx("F", _i(5))
+        resf(e) = ESM._resolve_indices(e, avi, vm, Dict{String, Any}(), pg, nothing)
+        @test oob_code(() -> resf(_op("ifelse", _op(">", _v("p"), _n(0)), fo, _n(0)))) === nothing
+        @test oob_code(() -> resf(fo)) == "E_TREEWALK_PGATHER_OOB"
+
         # Through a build: the unguarded read fails the build under both
         # compilers, whichever order the two sites are met in.
         N = 2
@@ -210,7 +223,7 @@ const ESM = EarthSciAST
             "y" => ModelVariable(UnknownVariable),
             "p" => ModelVariable(ParameterVariable; default = 1.0)
         )
-        ics = Dict("y[$k]" => 0.0 for k in 1:N)
+        ics = Dict("M.y[$k]" => 0.0 for k in 1:N)
         for body in (_op("+", guarded, oob), _op("+", oob, guarded))
             model = ESM.Model(
                 vars, [
@@ -222,7 +235,7 @@ const ESM = EarthSciAST
             )
             for comp in (:native, :interpreter)
                 @test oob_code(
-                    () -> EarthSciAST._build_evaluator(
+                    () -> EarthSciAST.Internal.build(
                         model;
                         initial_conditions = ics, const_arrays = Dict("c" => c),
                         compiler = comp

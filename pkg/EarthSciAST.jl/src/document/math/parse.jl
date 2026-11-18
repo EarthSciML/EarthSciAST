@@ -20,7 +20,7 @@ using ..MToken
 using ..MUnits: Factor
 import ..MUnits
 using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, is_formula, is_greek, is_letter, op_ok, pieces, Sym
-using ..MPrint: BMAT_COLS, CALL_OPS, CORE_OPS, FIELD_CALL_OPS, MAT_HEAD, Ctx, call_form_node, FaqForm, MkForm, faq_json,
+using ..MPrint: BMAT_COLS, CALL_OPS, CMP_KW, CORE_OPS, FIELD_CALL_OPS, FN_KW, MAT_HEAD, RED_TABLE, Ctx, call_form_node, FaqForm, MkForm, faq_json,
     formula_raw, ins_kv, mk_json, mk_node, node, simple_tok, tname_ok, tparams, unesc_k,
     unesc_t, spell_unit_factors
 using ..MSurface: neg_num
@@ -37,7 +37,7 @@ const Toks = AbstractVector{<:Tok}
 """The token at `i` is the keyword `k`."""
 @inline kat(ts::Toks, i::Int, k::Kw) = iskw(tk(ts, i), k)
 
-s_of(cs) = String(collect(Char, cs))
+const s_of = str_of
 
 # ## Small pieces
 
@@ -48,22 +48,13 @@ expect(k::Kw, ts::Toks) = kat(ts, 1, k) ? tdrop(ts) : nothing
 node."""
 close_chain(o::AbstractString, xs::Vector{Any}) = length(xs) == 1 ? xs[1] : node(o, xs)
 
-"""`Math.cmpOf`: the comparison a token spells."""
-function cmp_of(k::Kw)
-    k == KLt && return "<"
-    k == KLe && return "<="
-    k == KGt && return ">"
-    k == KGe && return ">="
-    k == KEq && return "=="
-    k == KNe && return "!="
-    return nothing
-end
+const CMP_OF = Dict{Kw, String}(k => o for (o, k) in CMP_KW)
 
-const FN_OF = Dict{Kw, String}(
-    KExp => "exp", KLn => "log", KSin => "sin", KCos => "cos", KTan => "tan",
-    KAsin => "asin", KAcos => "acos", KAtan => "atan", KSinh => "sinh", KCosh => "cosh",
-    KTanh => "tanh",
-)
+"""`Math.cmpOf`: the comparison a token spells (the inverse of `CMP_KW`)."""
+cmp_of(k::Kw) = get(CMP_OF, k, nothing)
+
+# The inverse of `FN_KW`.
+const FN_OF = Dict{Kw, String}(k => n for (n, k) in FN_KW)
 
 """`Math.fnOf`: the unary function a keyword spells."""
 fn_of(k::Kw) = get(FN_OF, k, nothing)
@@ -279,7 +270,6 @@ struct CallArg
     k::String
     v::Any
 end
-Base.:(==)(a::CallArg, b::CallArg) = fieldeq(a, b)
 
 """`Math.allPos`."""
 function all_pos(xs)
@@ -519,17 +509,13 @@ struct Row
     k::String
     v::Any
 end
-Base.:(==)(a::Row, b::Row) = fieldeq(a, b)
 rng(k, v) = Row(:rng, k, v)
 filt(v) = Row(:filt, "", v)
 
-"""`Math.redOf`."""
+"""`Math.redOf` (the inverse of `RED_TABLE`'s keyword column)."""
 function red_of(k::Kw)
-    k == KSum && return :sum
-    k == KProd && return :prod
-    k == KMax && return :max
-    k == KMin && return :min
-    return nothing
+    i = findfirst(x -> x[2] == k, RED_TABLE)
+    return i === nothing ? nothing : RED_TABLE[i][1]
 end
 
 """`Math.pRedHead`: the operator of a reduction, whether it is marked, and the
@@ -1124,7 +1110,8 @@ function p_opn(c::Ctx, f::Int, n::String, ts::Toks)
     return bare_template(c, n, ts)
 end
 
-"""`Math.bareTemplate`: a bare `\\operatorname{n}`: the template `n` applied
+"""Not in Lean: the reader side of `Math.bareOK`. A bare `\\operatorname{n}`:
+the template `n` applied
 with no bindings, as the printer writes it when no parameter list of `n` is
 known or the known one is not empty. A template in scope with no parameters
 prints as `\\operatorname{n}()`, so its bare name is refused."""

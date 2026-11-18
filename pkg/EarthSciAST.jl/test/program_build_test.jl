@@ -3,21 +3,19 @@
 # Its evaluations are the ones a program built the default way gives.
 
 using Test
+include("testutils.jl")
 using Random
 using EarthSciAST
 using DiffEqCallbacks, SciMLBase     # the discrete providers' refresh callback
 
-_pbt_idx(v, ix...) = Dict("op" => "index", "args" => Any[v, ix...])
-_pbt_op(op, args...) = Dict("op" => op, "args" => Any[args...])
-
 # A 2-D diffusion `u` forced by a gridded `F` (a live buffer), and a 0-d `y`
 # driven by one cell of `F` and a parameter.
 function _pbt_doc(nx::Int, ny::Int)
-    u(i, j) = _pbt_idx("u", i, j)
-    lap = _pbt_op(
-        "+", u(_pbt_op("-", "i", 1), "j"), u(_pbt_op("+", "i", 1), "j"),
-        u("i", _pbt_op("-", "j", 1)), u("i", _pbt_op("+", "j", 1)),
-        _pbt_op("*", -4, u("i", "j"))
+    u(i, j) = jidx("u", i, j)
+    lap = jop(
+        "+", u(jop("-", "i", 1), "j"), u(jop("+", "i", 1), "j"),
+        u("i", jop("-", "j", 1)), u("i", jop("+", "j", 1)),
+        jop("*", -4, u("i", "j"))
     )
     faq(e) = Dict(
         "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
@@ -43,15 +41,15 @@ function _pbt_doc(nx::Int, ny::Int)
                     Dict(
                         "lhs" => faq(Dict("op" => "D", "args" => Any[u("i", "j")], "wrt" => "t")),
                         "rhs" => faq(
-                            _pbt_op(
-                                "+", _pbt_op("*", "k", lap),
-                                _pbt_op("*", _pbt_idx("F", "i", "j"), _pbt_op("exp", _pbt_op("*", -1, "t")))
+                            jop(
+                                "+", jop("*", "k", lap),
+                                jop("*", jidx("F", "i", "j"), jop("exp", jop("*", -1, "t")))
                             )
                         )
                     ),
                     Dict(
-                        "lhs" => _pbt_op("D", "y"),
-                        "rhs" => _pbt_op("-", _pbt_op("*", "k", _pbt_idx("F", 2, 3)), "y")
+                        "lhs" => jop("D", "y"),
+                        "rhs" => jop("-", jop("*", "k", jidx("F", 2, 3)), "y")
                     ),
                 ]
             )
@@ -158,8 +156,8 @@ EarthSciAST.provider_sample(p::_PbtConst, ::Real; selection = nothing) = (p.n +=
 
     # A re-lowering of the Problem's program writes into none of the Problem's
     # build sinks: a class it records stays as it was.
-    @test EarthSciAST._relower_kwargs(prog.front)[:_param_classes] === nothing
-    @test EarthSciAST._relower_kwargs(prog.front)[:inspect] === nothing
+    @test EarthSciAST._relower_options(prog.front[3]).param_classes === nothing
+    @test EarthSciAST._relower_options(prog.front[3]).products === nothing
     classes = copy(shared.param_classes)
     shared.param_classes["M.k"] = :pbt_sentinel
     # (`halo`, `restrict` and `lanes` re-lower through `_relower`; this model's
@@ -296,19 +294,19 @@ function _pbt_fed_doc(n::Int)
                 ),
                 "equations" => Any[
                     Dict(
-                        "lhs" => faq(Dict("op" => "D", "args" => Any[_pbt_idx("u", "i")], "wrt" => "t")),
+                        "lhs" => faq(Dict("op" => "D", "args" => Any[jidx("u", "i")], "wrt" => "t")),
                         "rhs" => faq(
-                            _pbt_op(
-                                "-", _pbt_op("*", "s", _pbt_idx("E", "i")),
-                                _pbt_op("*", "k", _pbt_idx("u", "i"))
+                            jop(
+                                "-", jop("*", "s", jidx("E", "i")),
+                                jop("*", "k", jidx("u", "i"))
                             )
                         )
                     ),
-                    Dict("lhs" => _pbt_op("D", "y"), "rhs" => _pbt_op("*", "o", "k")),
-                    Dict("lhs" => "o", "rhs" => _pbt_op("+", _pbt_op("*", "s", "k"), "y")),
+                    Dict("lhs" => jop("D", "y"), "rhs" => jop("*", "o", "k")),
+                    Dict("lhs" => "o", "rhs" => jop("+", jop("*", "s", "k"), "y")),
                     Dict(
-                        "lhs" => faq(_pbt_idx("g", "i")),
-                        "rhs" => faq(_pbt_op("*", "s", _pbt_idx("E", "i")))
+                        "lhs" => faq(jidx("g", "i")),
+                        "rhs" => faq(jop("*", "s", jidx("E", "i")))
                     ),
                 ]
             )
@@ -398,6 +396,10 @@ end
     end
     prog = rhs_program(shared)
     @test forcing_slots(prog) == forcing_slots(rhs_program(base))
+    # A program is built from the prepared run the Problem's build compiled,
+    # so a program built later neither rewrites again nor samples a provider.
+    @test base.build.seed isa EarthSciAST._ProgramSeed
+    @test base.build.seed.prep isa EarthSciAST.PreparedRun
     # Each const provider is sampled once, at construction, and each gated one
     # fetches its selection once: the program is built from those samples.
     @test all(p.n == 1 for p in values(pv) if p isa _PbtConst)

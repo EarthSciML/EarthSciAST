@@ -147,4 +147,49 @@ end
         @test !occursin("\"pow\"", text)
         @test occursin("\"^\"", text)
     end
+
+    @testset "a leaf mounted through the typed walk warns once" begin
+        leaf = Dict{String, Any}(
+            "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "leaf"),
+            "models" => Dict{String, Any}(
+                "L" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "x" => Dict{String, Any}("type" => "unknown", "default" => 1.0)
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}("op" => "neg", "args" => Any["x"]),
+                        ),
+                    ],
+                )
+            ),
+        )
+        parent = Dict{String, Any}(
+            "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "parent"),
+            "models" => Dict{String, Any}(
+                "P" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(),
+                    "equations" => Any[],
+                    "subsystems" => Dict{String, Any}("S" => Dict{String, Any}("ref" => "./leaf.esm")),
+                )
+            ),
+        )
+        mktempdir() do dir
+            write(joinpath(dir, "leaf.esm"), JSON3.write(leaf))
+            # Coerced without the loader's inlining, so the subsystem stays a
+            # `SubsystemRef` for the typed walk to load.
+            file = EarthSciAST.coerce_esm_file(parent)
+            logger = Test.TestLogger(; min_level = Logging.Warn)
+            with_logger(() -> EarthSciAST.resolve_subsystem_refs!(file, dir), logger)
+            deps = [
+                r for r in logger.logs
+                    if startswith(string(r.message), "deprecated_op:")
+            ]
+            @test length(deps) == 1
+            sub = file.models["P"].subsystems["S"]
+            @test sub isa Model
+            @test only(sub.equations).rhs.op == "-"
+        end
+    end
 end

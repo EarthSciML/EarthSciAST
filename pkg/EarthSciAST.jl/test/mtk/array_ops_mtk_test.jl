@@ -1,4 +1,4 @@
-# Native Julia tests for the array-op runtime implementation (gt-vt3), through
+# Native Julia tests for the array-op runtime implementation, through
 # the ModelingToolkit extension. The parse/serialize round trips and
 # `infer_array_shapes`, which need no compiled system, are test/array_ops_test.jl.
 # Each testset builds an ESM `Model` that uses the new array-op nodes
@@ -194,7 +194,7 @@ function _run_fixture(path::AbstractString)
     return
 end
 
-@testset "Array-op runtime (gt-vt3 Phases 1-4)" begin
+@testset "Array-op runtime" begin
 
     # ================================================================
     # Case 1 — Pure ODE on u[i], N=5, analytical u_i(t) = i * exp(-t).
@@ -386,7 +386,7 @@ end
     end
 
     # ================================================================
-    # Schema-driven fixture runner (Phase 5, gt-cc1 integration).
+    # Schema-driven fixture runner.
     # ================================================================
     #
     # Loads `.esm` files from `tests/fixtures/faq/` (repo root), builds the MTK
@@ -397,7 +397,7 @@ end
         fixture_files = sort(filter(f -> endswith(f, ".esm"), readdir(fixtures_dir)))
         @test !isempty(fixture_files)
 
-        # Fixtures that require the tree-walk evaluator (build_evaluator) and cannot
+        # Fixtures that require the tree-walk evaluator and cannot
         # be lowered through the MTK symbolic path. The MTK array indexing system
         # requires each subscript to be a function of a single symbolic variable;
         # generalized-einsum fixtures whose stencil body mixes output and contracted
@@ -429,7 +429,7 @@ end
     # `MethodError` this replaced:
     #
     #   1. DIAGNOSTICS — a range the MTK path cannot resolve must raise a
-    #      descriptive `ArgumentError`. `System(::Model)` in particular cannot
+    #      descriptive `SimulateError`. `System(::Model)` in particular cannot
     #      see the document-scoped index-set registry (`flatten(::Model)`
     #      synthesizes an EsmFile with an empty one), so it must decline
     #      loudly rather than MethodError or guess a bound.
@@ -451,16 +451,16 @@ end
         MTKExt = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
         @test MTKExt !== nothing
 
-        # ---- 1. diagnostics: ArgumentError, never MethodError ----
+        # ---- 1. diagnostics: SimulateError, never MethodError ----
         ref = EarthSciAST.IndexSetRef("x")
         @test MTKExt._range_bounds_int(ref, Dict("x" => 4)) == (1, 4)
         # Unresolvable set, ragged (`of`-parented) set, and a form that is
         # neither a dense array nor an index-set reference.
-        @test_throws ArgumentError MTKExt._range_bounds_int(ref, Dict{String, Int}())
-        @test_throws ArgumentError MTKExt._range_bounds_int(
+        @test_throws SimulateError MTKExt._range_bounds_int(ref, Dict{String, Int}())
+        @test_throws SimulateError MTKExt._range_bounds_int(
             EarthSciAST.IndexSetRef("x"; of = ["p"]), Dict("x" => 4)
         )
-        @test_throws ArgumentError MTKExt._range_bounds_int(:not_a_range)
+        @test_throws SimulateError MTKExt._range_bounds_int(:not_a_range)
 
         mname = "CumulativePrefixReduction"
         path = joinpath(
@@ -470,14 +470,14 @@ end
         file = EarthSciAST.load_path(path)
         model = file.models[mname]
 
-        # No registry reachable from a bare `Model` ⇒ ArgumentError, not MethodError.
-        @test_throws ArgumentError MTK2.System(model; name = Symbol(mname))
+        # No registry reachable from a bare `Model` ⇒ SimulateError, not MethodError.
+        @test_throws SimulateError MTK2.System(model; name = Symbol(mname))
 
         # ---- 2. admitted window: MTK RHS ≡ tree-walk RHS, cell by cell ----
         # Exactly-representable summands (powers of two), no cancellation, so
         # the canonical term order cannot change the result: bit-identity here
         # is a real property of THIS fixture, not a general guarantee.
-        f!, u0, p, _tspan, vm = EarthSciAST._build_evaluator(file)
+        f!, u0, p, _tspan, vm = EarthSciAST.Internal.build(file)
         fill!(u0, 0.0)
         du_tw = zeros(length(u0))
         f!(du_tw, u0, p, 0.0)
@@ -493,8 +493,8 @@ end
                 string(u), "(t)" => "", "$(mname)_" => "",
                 "(" => "", ")" => ""
             )
-            @test haskey(vm, name)
-            @test du_mtk[k] == du_tw[vm[name]]   # bit-identical, not approx
+            @test haskey(vm, "$(mname).$(name)")
+            @test du_mtk[k] == du_tw[vm["$(mname).$(name)"]]   # bit-identical, not approx
         end
 
         # ---- 3. accumulation order: the limitation, pinned as broken ----
@@ -551,13 +551,13 @@ end
             index_sets = Dict("x" => EarthSciAST.IndexSet("interval"; size = 4))
         )
 
-        cf!, cu0, cp, _cts, cvm = EarthSciAST._build_evaluator(cfile)
+        cf!, cu0, cp, _cts, cvm = EarthSciAST.Internal.build(cfile)
         fill!(cu0, 0.0)
         cdu_tw = zeros(length(cu0))
         cf!(cdu_tw, cu0, cp, 0.0)
         # The tree-walk IS the normative left fold — assert that outright.
-        @test cdu_tw[cvm["c[3]"]] == 0.0
-        @test cdu_tw[cvm["c[4]"]] == 1.0
+        @test cdu_tw[cvm["Cancel.c[3]"]] == 0.0
+        @test cdu_tw[cvm["Cancel.c[4]"]] == 1.0
 
         csimp = MTK2.mtkcompile(_fixture_system(cfile, "Cancel", cancel))
         cunk = MTK2.unknowns(csimp)
@@ -572,10 +572,56 @@ end
                 for (k, u) in enumerate(cunk)
         )
         # Cells 1-2: nothing has cancelled, so the orders still coincide.
-        @test cdu_mtk[cell["c[1]"]] == cdu_tw[cvm["c[1]"]]
-        @test cdu_mtk[cell["c[2]"]] == cdu_tw[cvm["c[2]"]]
+        @test cdu_mtk[cell["c[1]"]] == cdu_tw[cvm["Cancel.c[1]"]]
+        @test cdu_mtk[cell["c[2]"]] == cdu_tw[cvm["Cancel.c[2]"]]
         # Cells 3-4: the re-association bites. SHOULD hold per §4.3.1; does not.
-        @test_broken cdu_mtk[cell["c[3]"]] == cdu_tw[cvm["c[3]"]]
-        @test_broken cdu_mtk[cell["c[4]"]] == cdu_tw[cvm["c[4]"]]
+        @test_broken cdu_mtk[cell["c[3]"]] == cdu_tw[cvm["Cancel.c[3]"]]
+        @test_broken cdu_mtk[cell["c[4]"]] == cdu_tw[cvm["Cancel.c[4]"]]
+    end
+
+    @testset "faq honours a stepped range and its semiring" begin
+        MTKExt = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
+        t = Symbolics.variable(:t)
+        u = (Symbolics.@variables u[1:5])[1]
+        L = MTKExt._Lowering(Dict{String, Any}("u" => u), t)
+        lower(e) = MTKExt._esm_to_symbolic(e, L)
+
+        # `[start, step, stop]` (esm-spec §4.3.1) visits 1, 3, 5.
+        @test MTKExt._range_bounds_int([1, 2, 6]) == (1, 5)
+        @test MTKExt._range_int([1, 2, 6]) == 1:2:5
+        @test_throws SimulateError MTKExt._range_int([1, 0, 6])
+        stepped = ESM2.OpExpr(
+            "faq", ESM2.ASTExpr[];
+            output_idx = Any["i"], expr_body = _idx("u", _var("i")),
+            ranges = Dict{String, Vector{Int}}("i" => [1, 2, 5])
+        )
+        cells = collect(Symbolics.scalarize(lower(stepped)))
+        @test length(cells) == 3
+        @test all(isequal.(cells, [u[1], u[3], u[5]]))
+        stepped_sum = ESM2.OpExpr(
+            "faq", ESM2.ASTExpr[];
+            output_idx = Any[], expr_body = _idx("u", _var("i")),
+            ranges = Dict{String, Vector{Int}}("i" => [1, 2, 5])
+        )
+        @test isequal(Symbolics.simplify(lower(stepped_sum) - (u[1] + u[3] + u[5])), 0)
+
+        # `semiring` supersedes `reduce`: max_sum folds with max.
+        scalar_faq(; kw...) = ESM2.OpExpr(
+            "faq", ESM2.ASTExpr[];
+            output_idx = Any[], expr_body = _var("i"),
+            ranges = Dict{String, Vector{Int}}("i" => [1, 3]), kw...
+        )
+        @test lower(scalar_faq()) == 6
+        @test lower(scalar_faq(; semiring = "max_sum", reduce = "+")) == 3
+        @test lower(scalar_faq(; semiring = "min_sum")) == 1
+        err = try
+            lower(scalar_faq(; semiring = "no_such_semiring"))
+            nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.TreeWalkError
+        @test err.code == "E_TREEWALK_UNKNOWN_SEMIRING"
+        @test_throws SimulateError lower(scalar_faq(; semiring = "bool_and_or"))
     end
 end

@@ -320,7 +320,7 @@ function generate_data_source_placeholder(name::String, data_source::DataSource)
     push!(lines, "# Data source: $name")
     push!(lines, "#   Kind: $(data_source.kind)")
     push!(lines, "#   Source: $(data_source.source.url_template)")
-    # A source exposes no variables of its own from esm 1.0.0 — the consuming
+    # A source exposes no variables of its own — the consuming
     # parameters name it through their `update` (esm-spec §8).
     return lines
 end
@@ -428,7 +428,7 @@ function _codegen_needs_parens(
     # re-parses correctly in Julia.
     parent_op == "^" && return !is_right
     # Chained comparisons mean something different in Julia — wrap.
-    parent_op in ("==", "!=", "<", ">", "<=", ">=") && return true
+    _is_comparison_op(parent_op) && return true
     return false
 end
 
@@ -504,7 +504,7 @@ function format_julia_expression_node(node::OpExpr)
         end
     elseif op == "/"
         return fmt_chain(" / ")
-    elseif op in ["<", ">", "<=", ">=", "==", "!="]
+    elseif _is_comparison_op(op)
         return fmt_chain(" $op ")
     elseif op == "and"
         return fmt_chain(" && ")

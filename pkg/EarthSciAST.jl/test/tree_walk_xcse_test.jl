@@ -1,9 +1,9 @@
 # Cross-kernel / kernel↔prelude CSE via shared scalar prelude slots
-# (perf-gap-closure plan B4; src/tree_walk/xcse.jl).
+# (src/tree_walk/xcse.jl).
 #
 # A lane-invariant expensive subtree appearing in several array kernels'
 # invariant tiers — a photolysis-like rate `exp(c_k · cos_zenith(t))` feeding K
-# species balances — used to be evaluated once per kernel per RHS call. The pass shares it as ONE scalar prelude slot; each kernel's inv def
+# species balances — would otherwise be evaluated once per kernel per RHS call. The pass shares it as ONE scalar prelude slot; each kernel's inv def
 # becomes a bare cache read.
 #
 # Pinned here:
@@ -57,12 +57,15 @@ end
 # Build under `compiler`. The pass runs under `:native` and not at all under
 # `:interpreter`, which is the differential oracle: value-identity must hold
 # through xcse and the kernel-class merge composed, since the class merge runs
-# BEFORE xcse on `:inplace` builds too.
-_xc_build(model; ics = Dict{String, Float64}(), compiler = :native, kw...) =
-    ESM._build_evaluator_impl(
-    model; initial_conditions = ics, compiler = compiler,
-    kw...
-)
+# BEFORE xcse on `:inplace` builds too. The model is built as component `M`;
+# returns `(f!, u0, p, tspan, var_map, stats, kernels)`.
+function _xc_build(model; ics = Dict{String, Float64}(), compiler = :native, kw...)
+    b = ESM.Internal.build(
+        model; initial_conditions = Dict("M." * k => v for (k, v) in ics),
+        compiler = compiler, kw...
+    )
+    return (b.f!, b.u0, b.p, b.tspan, b.var_map, b.report.stats, b.report.kernels)
+end
 
 _xc_du(f!, u0, p, t) = (du = zeros(length(u0)); f!(du, u0, p, t); du)
 
@@ -163,11 +166,11 @@ end
             don_du = _xc_du(fon!, u0, p, t)
             @test don_du == _xc_du(foff!, u0f, pf, t)
             J1 = exp(cos(0.1 * t) * _xc_c(1))
-            @test don_du[vm["c1[1]"]] === J1 * u0[vm["c1[1]"]]
+            @test don_du[vm["M.c1[1]"]] === J1 * u0[vm["M.c1[1]"]]
         end
 
         # Composed with the kernel-CLASS merge (the DEFAULT build, since the
-        # merge hoisted before xcse in build.jl): ALL K same-structure band
+        # merge hoisted before xcse in build_pipeline.jl): ALL K same-structure band
         # kernels collapse to ONE class kernel whose per-band coefficients
         # ride a per-lane const table. They VARY across the class, so the
         # merged kernel's formerly invariant defs (query chain + rate) fold
@@ -193,8 +196,8 @@ end
     # ----------------------------------------------------------------
     # EVALUATE-ONCE (the counting test). All K bands share ONE coefficient, so
     # the model contains exactly ONE distinct rate. The per-call rate
-    # evaluation count is read off the closure's own captured containers
-    # (`_make_rhs`'s `f!` captures `cse_prelude` / `acc_kernels`): prelude
+    # evaluation count is read off the right-hand side's own containers
+    # (`f!.state.scalars.cse_prelude` and the kernels): prelude
     # defs run once per call, kernel inv recipes once per call per kernel,
     # and `_xc_percall_fn` asserts the spines/cell tiers are exp-free.
     # ----------------------------------------------------------------
@@ -215,13 +218,11 @@ end
             # keeps their value-identical rate chain as ONE preserved inv
             # tier on the single merged kernel — 1 rate eval per call, no
             # scalar slot minted for xcse to hoist onto.
-            fmg!, _, _, _, _, dmg = _xc_build(_xc_fastjx(K, N; nshared = K)[1]; ics, compiler = lax)
+            fmg!, _, _, _, _, dmg, kernelsm = _xc_build(_xc_fastjx(K, N; nshared = K)[1]; ics, compiler = lax)
             @test dmg.n_acc_kernels == 1
             @test dmg.n_classmerge_in == K
             @test dmg.n_xcse_slots == 0
-            preludem = getfield(fmg!, :cse_prelude)
-            kernelsm = getfield(getfield(fmg!, :kernel_section), :kernels)
-            @test :cse_prelude in fieldnames(typeof(fmg!))
+            preludem = fmg!.state.scalars.cse_prelude
             @test _xc_percall_fn(preludem, kernelsm) == 1
 
             # And where the merge CANNOT group the bands, xcse is what shares
@@ -229,14 +230,13 @@ end
             # rate still evaluated exactly once per call. (The chain itself
             # is `cos(0.1·t)`, no `exp`, so it does not add to this count;
             # what it adds is the slots pinned above.)
-            fu!, _, _, _, _, du = _xc_build(
+            fu!, _, _, _, _, du, kernelsu = _xc_build(
                 _xc_fastjx_unmerged(K, N)[1];
                 ics = _xc_fastjx_unmerged(K, N)[2], compiler = lax
             )
             @test du.n_acc_kernels == K
             @test du.n_xcse_slots == 2
-            preludeu = getfield(fu!, :cse_prelude)
-            kernelsu = getfield(getfield(fu!, :kernel_section), :kernels)
+            preludeu = fu!.state.scalars.cse_prelude
             @test _xc_percall_fn(preludeu, kernelsu) == K
         end
     end
@@ -458,8 +458,8 @@ end
         K, N = 3, 6
         model, ics = _xc_fastjx(K, N)
         fon!, u0, p, _, _, _ = _xc_build(model; ics)
-        fref!, u0r, pr, _, _, dref = ESM._build_evaluator_impl(
-            _xc_fastjx(K, N)[1]; initial_conditions = ics, compiler = :interpreter
+        fref!, u0r, pr, _, _, dref = _xc_build(
+            _xc_fastjx(K, N)[1]; ics, compiler = :interpreter
         )
         @test dref.n_xcse_slots == 0           # no kernels → nothing to share
         for t in (0.0, 0.7, 5.3)

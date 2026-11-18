@@ -38,7 +38,6 @@ function _ts_agrees(actual, expected, tol)
     return d <= a_tol || d <= r_tol * max(1.0, abs(expected))
 end
 
-_ts_const(a) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => a)
 
 # A model importing `ref` with one state per call, `D(s_i) = <name>(bindings_i)`,
 # and each query a parameter; built once per compiler. The returned closure
@@ -72,12 +71,12 @@ function _ts_build(ref, name, calls, params; compiler)
             )
         )
     )
-    f!, u0, p, _, vm = EarthSciAST._build_evaluator(load_string(JSON3.write(doc)); compiler = compiler)
+    f!, u0, p, _, vm = EarthSciAST.Internal.build(load_string(JSON3.write(doc)); compiler = compiler)
     du = similar(u0)
     return function (vals::NamedTuple)
         fill!(du, NaN)
         f!(du, u0, merge(p, vals), 0.0)
-        return [du[vm["s_$i"]] for i in eachindex(calls)]
+        return [du[vm["M.s_$i"]] for i in eachindex(calls)]
     end
 end
 
@@ -87,15 +86,15 @@ function _ts_interp_call(name, inputs, tag)
     qx, qy = "qx_$tag", "qy_$tag"
     if name == "searchsorted"
         x, xs = inputs
-        return Dict{String, Any}("x" => qx, "xs" => _ts_const(xs), "n" => length(xs)), Dict(qx => x)
+        return Dict{String, Any}("x" => qx, "xs" => jconst(xs), "n" => length(xs)), Dict(qx => x)
     elseif name == "linear"
         table, axis, x = inputs
-        b = Dict{String, Any}("table" => _ts_const(table), "axis" => _ts_const(axis), "x" => qx, "n" => length(axis))
+        b = Dict{String, Any}("table" => jconst(table), "axis" => jconst(axis), "x" => qx, "n" => length(axis))
         return b, Dict(qx => x)
     end
     table, ax, ay, x, y = inputs
     b = Dict{String, Any}(
-        "table" => _ts_const(table), "axis_x" => _ts_const(ax), "axis_y" => _ts_const(ay),
+        "table" => jconst(table), "axis_x" => jconst(ax), "axis_y" => jconst(ay),
         "x" => qx, "y" => qy, "nx" => length(ax), "ny" => length(ay)
     )
     return b, Dict(qx => x, qy => y)
@@ -110,7 +109,7 @@ end
         for (_, q) in calls, (k, v) in q
             queries[k] = _ts_decode(v)
         end
-        vals = NamedTuple{Tuple(Symbol.(keys(queries)))}(Tuple(values(queries)))
+        vals = NamedTuple{Tuple(Symbol("M." * k) for k in keys(queries))}(Tuple(values(queries)))
         for compiler in _TS_COMPILERS
             @testset "$(name) ($(compiler))" begin
                 eval_at = _ts_build(
@@ -201,7 +200,7 @@ const _TS_EDGES = (
                     compiler = compiler
                 )
                 for (sname, t, want, tol) in cases
-                    actual = only(eval_at((tu = t,)))
+                    actual = only(eval_at(NamedTuple{(Symbol("M.tu"),)}((t,))))
                     ok = _ts_agrees(actual, want, tol)
                     ok || @info "calendar template mismatch" fdir compiler sname t actual want
                     @test ok

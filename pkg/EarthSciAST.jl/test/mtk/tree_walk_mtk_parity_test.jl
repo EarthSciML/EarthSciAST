@@ -43,7 +43,7 @@ const MTK = ModelingToolkit
     model = ESM.Model(vars, eqs)
 
     # Tree-walk path
-    f_tw!, u0_tw, p_tw, _tspan, var_map = EarthSciAST._build_evaluator(model)
+    f_tw!, u0_tw, p_tw, _tspan, var_map = EarthSciAST.Internal.build(model; model_name = "HeatParity")
 
     # MTK path
     sys = MTK.System(model; name = :HeatParity)
@@ -56,15 +56,16 @@ const MTK = ModelingToolkit
     # The two paths may order states differently. Build a
     # permutation mapping tree-walk index → MTK index by matching
     # variable names (simp's unknown ending in "_u_i" matches our
-    # "u_i" in var_map).
+    # "HeatParity.u_i" in var_map).
     mtk_unknowns = MTK.unknowns(simp)
     mtk_name_to_idx = Dict{String, Int}()
     for (j, u) in enumerate(mtk_unknowns)
         nm = string(MTK.getname(u))
         # MTK sanitizes names as `HeatParity₊u_i` or similar; match suffix
         for (vname, _) in var_map
-            if nm == vname || endswith(nm, "_" * vname) ||
-                    endswith(nm, "₊" * vname)
+            local_name = String(last(split(vname, '.')))
+            if nm == local_name || endswith(nm, "_" * local_name) ||
+                    endswith(nm, "₊" * local_name)
                 mtk_name_to_idx[vname] = j
             end
         end

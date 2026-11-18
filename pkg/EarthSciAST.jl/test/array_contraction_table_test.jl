@@ -1,5 +1,5 @@
 # The whole-array contraction nest's general form (array_contraction.jl,
-# `_ACTable`; build.jl `_try_compile_array_contraction`): the contractions that
+# `_ACTable`; build_array_equation.jl `_try_compile_array_contraction`): the contractions that
 # otherwise took the per-cell build — one resolve and compile per output cell.
 #
 #   * a JOIN-GATED contraction and a RAGGED (per-cell bound) one compile to ONE
@@ -21,11 +21,11 @@ const _ACT = EarthSciAST
 const _ACT_REPO = normpath(joinpath(@__DIR__, "..", "..", ".."))
 
 function _act_problem(path, compiler)
-    _ACT._reset_cascade_tally!()
     # The starting values the documents' ODE states leave to the harness
     # (esm-spec §11.4).
-    prob = _ACT.esm_problem(path, (0.0, 1.0); compiler = compiler, u0 = harness_u0(path))
-    return prob, copy(_ACT._CASCADE_TALLY)
+    return _ACT.Internal.counting() do
+        _ACT.esm_problem(path, (0.0, 1.0); compiler = compiler, u0 = harness_u0(path))
+    end
 end
 
 function _act_du(prob, u)
@@ -146,10 +146,12 @@ end
         @test same
         @test get(tally, :array_contraction_consumer, 0) == 1
         f = pn.f!
-        gens = f.levels[1][4].gens
+        # The observed fill stages the right-hand side runs before its state stage.
+        levels = f.observed.levels
+        gens = levels[1].contractions.gens
         @test length(gens) == 1 && gens[1].mask !== nothing
         # No contraction the right-hand side keeps holds its re-emission closure.
-        @test all(g -> g.remit === nothing, (g for lvl in f.levels for g in lvl[4].gens))
+        @test all(g -> g.remit === nothing, (g for lvl in levels for g in lvl.contractions.gens))
         # Every parameter value takes the interpreter's result bit for bit,
         # through each refill and back: atol past the half-overlaps closes
         # their gates, a negative atol opens the zero-overlap ones too.
@@ -379,7 +381,7 @@ end
         # `mem[i, j]` (a const gather of an output and a contracted counter)
         # and `y[j]` (a state gather that is out of `y`'s range, the zero
         # ghost, at the longest parent's last member). Bit-identical to the
-        # interpreter; the gathers no longer resolve subscripts per term.
+        # interpreter; the gathers do not resolve subscripts per term.
         # `C[j]` past its end is the run's error under both compilers.
         sizes = [1, 3, 2, 0, 4]
         n, mx, nf = length(sizes), maximum(sizes), sum(sizes)
@@ -553,13 +555,13 @@ end
             )
         )
         function pf_du(c)
-            f!, u0, p, _, vm = _ACT._build_evaluator(
+            f!, u0, p, _, vm = _ACT.Internal.build(
                 doc; compiler = c,
-                initial_conditions = Dict("u[$i]" => 0.1i + 0.3 for i in 1:n),
-                param_arrays = Dict("c" => collect(1.0:n))
+                initial_conditions = Dict("M.u[$i]" => 0.1i + 0.3 for i in 1:n),
+                param_arrays = Dict("M.c" => collect(1.0:n))
             )
             d = similar(u0); f!(d, u0, p, 0.0)
-            [d[vm["u[$i]"]] for i in 1:n]
+            [d[vm["M.u[$i]"]] for i in 1:n]
         end
         dn, di = pf_du(:native), pf_du(:interpreter)
         @test all(isequal.(dn, di))

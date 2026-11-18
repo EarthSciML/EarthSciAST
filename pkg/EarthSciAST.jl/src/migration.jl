@@ -1,52 +1,25 @@
-"""
-Version-migration utilities for the ESM format (esm-libraries-spec §8.3).
-
-A migration here is a pure version-MARKER bump: it changes the `esm` field and
-touches nothing else. That is sound in two cases:
-
-- along an ADDITIVE line — a run of schema releases each of which introduced its
-  changes as additive, backward-compatible fields, so an older file already loads
-  under the newer schema. The current additive line is
-  `2.0.0 … <current schema version>` (`SCHEMA_VERSION`);
-- across the 2.0.0 break, for a 1.x document that uses none of what 2.0.0
-  removed. esm 2.0.0 removed the `fn` op (the closed function registry), the
-  `function_tables` block and its `table_lookup` op, the `skolem` and `rank`
-  ops, the `argmin`/`argmax` op forms and the `intersect_polygon` /
-  `polygon_intersection_area` geometry leaves, each replaced by an
-  `esm:std/*.esm` expression template, and the `aggregate` spelling of `faq`. A 1.x document using none of them means
-  the same thing under 2.0.0, so relabeling it is a marker bump. One that uses
-  any of them is refused with the `removed_op` code: rewriting it onto the
-  templates is the job of the offline codemod (`python -m earthsci_ast.migrate`),
-  the one reference implementation of that rewrite.
-
-**There is no migration across the 1.0.0 boundary.** esm 1.0.0 is a clean break
-with no deprecation path: the five declared variable types collapse to two, an
-observed variable's `expression` becomes an equation, `data_loaders` becomes a
-non-component `data_sources` registry, and parameter mutation moves off events
-onto the parameter. None of that is a marker bump — every one of them RESHAPES
-the document, and several need information (which unknowns are ODE states) that
-only the equations carry. A 0.x source therefore yields no supported targets
-rather than a bump that would produce a file claiming a 1.0.0-or-later version
-while still carrying 0.x shapes.
-
-That refusal is the same line the repo-level `scripts/migrate-0x-to-1.0.0.py`
-draws: it rewrites what is mechanical (`type: state`/`observed` → `unknown`, an
-observed's `expression` → a bare-variable-LHS equation, `examples` → `analyses`)
-and REFUSES `data_loaders`, `functional_affect`/`discrete_parameters`, and
-never-valid `type` values, because each needs information the document does not
-carry. Converting a 0.x document is a rewrite a human performs — deliberately
-not offered as an automated one, here or there.
-
-The single supported target for a source is the CURRENT schema version;
-arbitrary intermediate targets are deliberately NOT offered — there is no
-per-minor transform to encode, only "bring this file up to current". Sources
-outside the 1.x line and the additive line (0.x, newer than current, another
-major, or malformed) yield no supported targets.
-
-This mirrors the TypeScript reference implementation
-(`pkg/earthsci-ast-ts/src/migration.ts`) and the canonical fixture spec in
-`tests/version_compatibility/compatibility_matrix.json`.
-"""
+# Version-migration utilities for the ESM format (esm-libraries-spec §8.3).
+#
+# A migration is a pure version-marker bump: it changes the `esm` field and
+# nothing else. That is sound
+#
+# - along the additive line `2.0.0 … SCHEMA_VERSION`, whose releases only added
+#   backward-compatible fields; and
+# - across the 2.0.0 break, for a 1.x document that uses none of what 2.0.0
+#   removed (the `fn` op, the `function_tables` block and `table_lookup`, the
+#   `skolem` and `rank` ops, the `argmin`/`argmax` forms, the
+#   `intersect_polygon` / `polygon_intersection_area` leaves, and the
+#   `aggregate` spelling of `faq`). A document using any of them is refused with
+#   `removed_op`; rewriting it onto the `esm:std/*.esm` templates is the offline
+#   codemod's job (`python -m earthsci_ast.migrate`).
+#
+# Nothing crosses the 1.0.0 boundary: its changes reshape the document and need
+# information only the equations carry, so a 0.x source has no supported
+# targets (scripts/migrate-0x-to-1.0.0.py does the mechanical part and refuses
+# the rest). The only target offered is the current schema version. Sources
+# outside the 1.x and additive lines (0.x, newer than current, another major,
+# malformed) have none. This mirrors pkg/earthsci-ast-ts/src/migration.ts and
+# tests/version_compatibility/compatibility_matrix.json.
 
 """
     MigrationError <: EarthSciASTError
@@ -58,14 +31,12 @@ for an unsupported version pair, `removed_op` for a removed construct, whose
 `path` it names.
 """
 struct MigrationError <: EarthSciASTError
-    message::String
     code::String
+    message::String
     path::String
     MigrationError(message::AbstractString; code::AbstractString = "", path::AbstractString = "") =
-        new(String(message), String(code), String(path))
+        new(String(code), String(message), String(path))
 end
-
-Base.showerror(io::IO, e::MigrationError) = print(io, "MigrationError: ", e.message)
 
 # Parsed semantic-version components, or `nothing` for a malformed string.
 # Strict `major.minor.patch`: a prerelease suffix or a two-component string is
@@ -172,7 +143,7 @@ can_migrate(file::EsmFile, to_version::AbstractString)::Bool =
     can_migrate(file.esm, to_version) && _removed_construct(file) === nothing
 
 function can_migrate(doc::AbstractDict, to_version::AbstractString)::Bool
-    v = _get_field(doc, :esm, nothing)
+    v = _raw_get(doc, "esm", nothing)
     v isa AbstractString || return false
     return can_migrate(v, to_version) && _removed_2_0_0_finding(doc) === nothing
 end
@@ -270,32 +241,11 @@ function migrate(file::EsmFile, target_version::AbstractString)::EsmFile
     found === nothing || throw(_removed_construct_error(found..., source_version))
 
     # Marker-only bump: every other field is carried across by reference.
-    # `EsmFile`'s keyword constructor defaults every optional block, so a field
-    # added to the struct and not listed here would be silently dropped — the
-    # round-trip assertion in test/migration_test.jl walks `fieldnames(EsmFile)`
-    # to catch exactly that.
-    return EsmFile(
-        String(target_version), file.metadata;
-        models = file.models,
-        reaction_systems = file.reaction_systems,
-        data_sources = file.data_sources,
-        coupling = file.coupling,
-        domain = file.domain,
-        enums = file.enums,
-        index_sets = file.index_sets,
-        expression_templates = file.expression_templates,
-        metaparameters = file.metaparameters,
-        component_templates = file.component_templates,
-        coordinates = file.coordinates,
-        # esm-spec §2.2. A migration on the additive line is a no-op MARKER
-        # bump; dropping a field here would make it a lossy rewrite.
-        solver = file.solver,
-        document_base = file.document_base
-    )
+    return reconstruct(file; esm = String(target_version))
 end
 
 function migrate(doc::AbstractDict, target_version::AbstractString)::Dict{String, Any}
-    source_version = _get_field(doc, :esm, nothing)
+    source_version = _raw_get(doc, "esm", nothing)
     if !(source_version isa AbstractString) || isempty(source_version)
         throw(MigrationError("Source document has no 'esm' version field"))
     end

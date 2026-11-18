@@ -17,7 +17,7 @@ using ..MExpr: Sym, is_e, jwf, keys_sorted
 
 export Kind, K_MODEL, K_RS, DKind, D_VAR, D_PARAM, D_SPECIES, D_SUB, Decl, Eqn,
     Role, R_EQN, R_INIT, R_CONS, Term, Rxn, Tm, Mx, MxEq, MxRxn, MxPlot, MxTm, Comp, Doc,
-    Caps
+    Phase, AsRead, AsText, Caps
 
 # ## The canonical form of a document
 
@@ -86,8 +86,10 @@ struct Tm
     attrs::Kvs
 end
 
-"""`Source.Mx`: a list entry of a component. `MC` (as read) holds an `Eqn` and
-JSON math; `MR` (as the container's text) holds strings."""
+"""`Source.Mx`: a list entry of a component. As read ([`AsRead`](@ref)) it
+holds an `Eqn` and JSON math; as the container's text ([`AsText`](@ref)),
+strings. The phase is carried by the [`Comp`](@ref) and [`Doc`](@ref) that
+hold the entries."""
 abstract type Mx end
 struct MxEq <: Mx
     role::Role
@@ -126,8 +128,20 @@ const MATH_FIELDS = (
 """`k ∈ mathFields`."""
 is_math_field(k::AbstractString) = k in MATH_FIELDS
 
-"""`Source.Comp`: one component section."""
-struct Comp
+"""
+The two phases of a skeleton, Lean's `MC` and `MR`: `AsRead`, math as the
+document holds it (an `Eqn`, JSON rates and template bodies), and `AsText`,
+math as the container's text. [`to_doc`](@ref) makes an `AsRead` skeleton and
+`of_doc` takes one; `raw_doc` prints it into an `AsText` one, which `items`
+lists; `unitems` reads an `AsText` one and `cook_doc` reads its math back.
+A step given the other phase is a `MethodError` at the call.
+"""
+abstract type Phase end
+struct AsRead <: Phase end
+struct AsText <: Phase end
+
+"""`Source.Comp`: one component section, in phase `P`."""
+struct Comp{P <: Phase}
     kind::Kind
     name::String
     desc::Union{Nothing, String}
@@ -137,22 +151,18 @@ struct Comp
     blocks::Kvs
 end
 
-"""`Source.Doc`: a document skeleton."""
-struct Doc
+"""`Source.Doc`: a document skeleton, in phase `P`."""
+struct Doc{P <: Phase}
     front::Kvs
     desc::Union{Nothing, String}
     blocks::Kvs
     math::Vector{Any}
-    comps::Vector{Comp}
+    comps::Vector{Comp{P}}
 end
 
-for T in (:Decl, :Eqn, :Term, :Rxn, :Tm, :MxEq, :MxRxn, :MxPlot, :MxTm, :Comp, :Doc)
-    @eval Base.:(==)(a::$T, b::$T) = fieldeq(a, b)
-end
-
-"""`Comp.mapMath`: `f(c, m)` for every math entry."""
-map_math(c::Comp, f) =
-    Comp(c.kind, c.name, c.desc, c.decls, Any[f(c, m) for m in c.math], c.math_blocks, c.blocks)
+"""`Comp.mapMath`: `f(c, m)` for every math entry, the result in phase `Q`."""
+map_math(c::Comp, f, ::Type{Q}) where {Q <: Phase} =
+    Comp{Q}(c.kind, c.name, c.desc, c.decls, Any[f(c, m) for m in c.math], c.math_blocks, c.blocks)
 
 # ## The symbol table of a component
 
@@ -555,7 +565,7 @@ function comp_base(caps::Caps, k::Kind, name::AbstractString, kvs)
         b = comp_block(caps, k, d, kv)
         b === nothing || push!(blocks, b)
     end
-    return Comp(k, name, d, decls, Any[], Kvs(), blocks)
+    return Comp{AsRead}(k, name, d, decls, Any[], Kvs(), blocks)
 end
 
 """`Source.mathPart`: one math field of a component: its entries when every one
@@ -623,14 +633,14 @@ end
 
 """`Source.toDoc`: the skeleton of a document."""
 function to_doc(caps::Caps, d)
-    d isa JObj || return Doc(Kvs(), nothing, Kvs(), Any[], Comp[])
+    d isa JObj || return Doc{AsRead}(Kvs(), nothing, Kvs(), Any[], Comp{AsRead}[])
     kvs = d.kvs
     m = meta_of(caps, look("metadata", kvs))
     tmath = top_math(caps, kvs)
     blocks = root_blocks(caps, tmath !== nothing, kvs)
     rt = templates_of(look("expression_templates", kvs))
     function comps(k::Kind, f)
-        out = Comp[]
+        out = Comp{AsRead}[]
         for (n, ckvs) in split_opt((n, v) -> pick_comp(caps, n, v), look(f, kvs))[1]
             push!(out, comp_of(caps, blocks, rt, k, n, ckvs))
         end
@@ -641,7 +651,7 @@ function to_doc(caps::Caps, d)
     front = at_("esm", kvs)
     dsc = m === nothing ? nothing : m[2]
     m === nothing || append!(front, m[1])
-    return Doc(front, dsc, blocks, tmath === nothing ? Any[] : tmath, cs)
+    return Doc{AsRead}(front, dsc, blocks, tmath === nothing ? Any[] : tmath, cs)
 end
 
 # ## From a skeleton back to the document
@@ -698,7 +708,7 @@ function decl_kvs(k::Kind, c::Comp)
 end
 
 """`Source.ofComp`: a component rebuilt from its section."""
-function of_comp(c::Comp)
+function of_comp(c::Comp{AsRead})
     ds = decl_kvs(c.kind, c)
     ds === nothing && return nothing
     es = math_kvs(c)
@@ -714,14 +724,14 @@ function of_comp(c::Comp)
 end
 
 """`Source.backComp`."""
-function back_comp(c::Comp)
+function back_comp(c::Comp{AsRead})
     v = of_comp(c)
     return v === nothing ? nothing : (c.name => v)
 end
 
 """`Source.ofDoc`: a document rebuilt from its skeleton, checked to be
 canonical."""
-function of_doc(d::Doc)
+function of_doc(d::Doc{AsRead})
     esm_kv = at_("esm", d.front)
     meta_es = Kvs([kv for kv in d.front if kv.first != "esm"])
     append!(meta_es, opt_kv("description", d.desc))

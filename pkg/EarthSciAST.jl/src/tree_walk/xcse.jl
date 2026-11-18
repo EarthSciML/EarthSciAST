@@ -1,38 +1,20 @@
-# ========================================================================
-# tree_walk/xcse.jl — part of the tree-walk evaluator.
-# Included by src/tree_walk.jl; see that file for the full layout and
-# include order. Section 4e: CROSS-KERNEL and KERNEL↔PRELUDE sharing of
-# lane-invariant expensive subtrees via shared scalar prelude slots
-# (perf-gap-closure plan item B4).
-# ========================================================================
+# tree_walk/xcse.jl — cross-kernel and kernel↔prelude sharing of lane-invariant
+# expensive subtrees through shared scalar prelude slots.
 #
-# THE GAP THIS CLOSES
-# -------------------
-# Two independent mechanisms name a repeated LANE-INVARIANT computation, and
-# they have nothing to say to each other:
-#
-#   * `_cse_compile_scalar` (compile.jl) shares subexpressions across SCALAR
-#     equations and observed defs, keyed on `canonical_json`, into a prelude of
-#     `_CSECache` slots refilled at the top of every `f!` call.
-#   * `_build_acc_cse` (access_kernel.jl) hoists every loop-invariant OP subtree
-#     of ONE array kernel into that kernel's `inv_recipes` tier — one scalar
-#     eval per RHS call instead of one per cell, but PER KERNEL, shared with
-#     nothing.
-#
-# So a lane-invariant subtree such as a solar-zenith factor `cos(f(t))`
-# feeding the balances of K species — K array kernels — is evaluated K times per
-# RHS call (once per kernel's `_fill_invariant!`), and a K+1'th time if a scalar
-# equation or observed carries the same expression (which `_cse_count!` sees as
-# a singleton, because array equations never produce the `ASTExpr` entries it
-# counts). This pass makes each such subtree ONE shared scalar prelude slot:
+# The scalar CSE (`_cse_compile_scalar`, scalar_cse.jl) shares subexpressions
+# across scalar equations into the prelude; `_build_acc_cse` (access_kernel.jl)
+# hoists one kernel's loop-invariant subtrees into that kernel's `inv_recipes`.
+# Neither sees the other, so an invariant subtree read by K kernels (a
+# solar-zenith factor feeding K species balances) would be evaluated K times
+# per call. This pass gives each such subtree one prelude slot:
 #
 #   1. every existing scalar prelude def is EXACTLY value-numbered (slot order,
 #      so `_NK_CACHED` refs expand through already-numbered slots);
 #   2. every kernel's `inv_recipes` defs (top-level kernels + their transitive
 #      template-body `subs`) are value-numbered in the same table, with
 #      `_NK_ACCESS` leaves NORMALIZED to their scalar-node equivalents
-#      (`_AK_STATE_FIXED` ≡ `_NK_STATE`, `_AK_ARR_FIXED` ≡ `_NK_PARAM_GATHER`,
-#      `_AK_SCALAR` ≡ `_NK_LITERAL`) so a kernel-side `u[5]` matches a
+#      (`_AK_STATE_FIXED` ≡ `_NK_STATE`, `_AK_ARR_FIXED` ≡ `_NK_PARAM_GATHER`)
+#      so a kernel-side `u[5]` matches a
 #      prelude-side `u[5]`;
 #   3. a value number seen by ≥ 2 kernel defs whose body is at least as
 #      expensive as a transcendental (the `:xcse_expensive` registry gate —
@@ -45,7 +27,7 @@
 #      bare `_NK_CACHED` read of that slot — `_fill_invariant!` then copies one
 #      field load into the kernel's inv scratch instead of re-walking the
 #      subtree, and the kernel's spine / cell recipes are
-#      byte-identical to before (they keep reading the kernel-local inv slot);
+#      unchanged (they keep reading the kernel-local inv slot);
 #   5. scalar `rhs_list` occurrences of a NEWLY slotted value are rewritten to
 #      cache reads too (the kernel↔scalar direction the scalar count pass
 #      cannot see).
@@ -66,10 +48,9 @@
 # prelude introduces no evaluation that was not already happening — no new
 # throw, no new NaN. That also makes the scalar-side rewrite of a GUARDED
 # occurrence safe: the slot is filled every call anyway, because a kernel needs
-# it; the rewrite removes work, it never adds any. (Kernels whose spine carries
-# a lazy guard have no CSE tiers at all — `_acc_from_cell_entries` skips
-# `_build_acc_cse` there — so nothing under a kernel-side guard ever becomes a
-# candidate.)
+# it; the rewrite removes work, it never adds any. (`_build_acc_cse` gives an
+# inv slot only to a value with an occurrence outside every guarded operand, so
+# nothing that occurs only under a kernel-side guard ever becomes a candidate.)
 #
 # BIT-EXACTNESS. A shared slot's value is produced by the SAME arithmetic the
 # per-kernel defs performed — the value number is exact over every field that
@@ -84,7 +65,7 @@
 # `_CSECache` this pass's kernel-side reads would consult, so rewritten kernels
 # would read unfilled slots there. `:oop` kernels are left byte-identical; the
 # traced tier removes its own redundancy at EMISSION instead, by value-numbering
-# emitted SSA values (ess-oop-gvn, tree_walk/oop.jl).
+# emitted SSA values (tree_walk/oop.jl).
 #
 # `compiler=:interpreter` skips the pass entirely. Fixture-level differential
 # oracles (test/tree_walk_xcse_test.jl) compare the two compilers bit for bit.
@@ -252,13 +233,6 @@ function _xnode_vn_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
                     Symbol(""), pay, Int[],
                 ), false
             )
-        elseif ak === _AK_SCALAR
-            return _xintern!(
-                ctx, (
-                    _NK_LITERAL, Symbol(""), reinterpret(UInt64, a.v),
-                    0, Symbol(""), 0, Int[],
-                ), false
-            )
         end
         return _XVN_NONE
     end
@@ -273,7 +247,7 @@ function _xnode_vn_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
         # has drifted from what this key models: decline rather than key past it.
         n.payload === nothing || return _XVN_NONE
     else
-        return _XVN_NONE    # _NK_REDUCE / _NK_SUBCALL / geometry / future kinds
+        return _XVN_NONE    # _NK_SUBCALL / _NK_AREDUCE / geometry / future kinds
     end
     kids = Vector{Int}(undef, length(n.children))
     for i in eachindex(n.children)
@@ -291,8 +265,7 @@ end
 #
 # Kernel-only leaves become their scalar equivalents (the SAME memory read, so
 # the value is bit-identical): `_AK_STATE_FIXED` → `_NK_STATE`, `_AK_ARR_FIXED`
-# → a live `_NK_PARAM_GATHER` over the aliased buffer, `_AK_SCALAR` →
-# `_NK_LITERAL`. A ref to a lower inv slot becomes a ref to that def's SHARED
+# → a live `_NK_PARAM_GATHER` over the aliased buffer. A ref to a lower inv slot becomes a ref to that def's SHARED
 # slot (`slot_of_vn` — the dependency was slotted first; see the sweep).
 # Returns `nothing` when anything is not translatable — the caller then simply
 # declines to hoist this def (fail closed, never a build error).
@@ -309,8 +282,6 @@ function _xcse_translate(
             return _mknode(kind = _NK_STATE, idx = a.idx)
         elseif a.kind === _AK_ARR_FIXED
             return _mknode(kind = _NK_PARAM_GATHER, idx = a.idx, payload = a.arr)
-        elseif a.kind === _AK_SCALAR
-            return _mknode(kind = _NK_LITERAL, literal = a.v)
         end
         return nothing
     elseif k === _NK_CACHED

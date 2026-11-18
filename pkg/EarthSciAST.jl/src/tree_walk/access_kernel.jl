@@ -1,58 +1,42 @@
 # ========================================================================
 # tree_walk/access_kernel.jl — part of the tree-walk evaluator.
 #
-# The UNIFIED array-kernel IR (ess-affine). A vectorized array equation is
-# evaluated as one or more `_AccKernel`s: a parallel loop over an output cell
-# SET, evaluating a spine (an op tree over `_Node`) once per cell, reading every
-# input through an ACCESS DESCRIPTOR that resolves a slot/value AT RUNTIME.
+# The array-kernel IR. A vectorized array equation is evaluated as one or more
+# `_AccKernel`s: a loop over an output cell SET, evaluating a spine (an op tree
+# over `_Node`) once per cell, reading every input through an ACCESS
+# DESCRIPTOR that resolves a slot or value at run time. A gather stores one
+# descriptor, never a per-lane array, so the build is O(#structural groups),
+# not O(#cells).
 #
-# WHY THIS EXISTS. The previous array paths materialised a per-lane slot vector
-# for every gather (and, in the symbolic-stencil path, re-stencilised the whole
-# rule body once per structural "branch"). Both are O(#cells): a 1e6-cell mesh
-# builds 1e6-long vectors, and a monotone-PPM rule — whose lowered body is a
-# large DAG — takes minutes because every branch re-walks it. Here the BUILD is
-# O(#structural groups): a gather stores ONE descriptor, never a per-lane array,
-# and the runtime computes the slot on the fly.
+# A gather is affine in the cell index: the source slot is `out_lin(c) + Δ`
+# for a Δ that is constant within a group (a periodic wrap only shifts Δ by
+# ±N·stride). Groups are the wrap/region boxes (stencil_affine.jl). An array
+# on its own (possibly reduced-rank) grid is read by the cell's multi-index
+# through per-dim strides (the box-addressed kinds); a gather whose slot is
+# not affine in the loop indices reads a per-box slot table.
 #
-# TWO ACCESS FAMILIES, ONE EVALUATOR:
-#   * STRUCTURED (Cartesian) — a gather is affine in the cell index, so the
-#     source slot is `out_lin(c) + Δ` for a Δ that is CONSTANT within a group
-#     (a periodic wrap only shifts Δ by ±N·stride). Groups are the wrap/region
-#     boxes, found polyhedrally (O(stencil width), not O(cells)). A const array
-#     on its OWN (possibly reduced-rank) grid is read by the cell's multi-index
-#     through per-dim strides (`_AccConstBox`).
-#   * UNSTRUCTURED / VARIABLE-VALENCE — a neighbour gather is INDIRECT through a
-#     connectivity array (`u[conn[(c-1)*w + n]]`), and a neighbour reduction runs
-#     over `n in 1:valence[c]` with the bound read at runtime. One kernel covers
-#     every valence — the bound is data, not a structural split. The connectivity
-#     and valence arrays are INPUTS (const arrays), never built here.
-#
-# The spine reuses `_Node` (compile.jl). Two extra node kinds appear ONLY in an
-# access spine and are handled ONLY by `_eval_acc` (the scalar `_eval_node` never
-# sees them): `_NK_ACCESS` (a leaf; `idx` indexes the kernel's access table) and
-# `_NK_REDUCE` (children = [body]; `payload` = the `_Bound`; the ⊕-fold runs over
-# the neighbour index). Everything else is an ordinary `_NK_OP`/`_NK_LITERAL`.
+# The spine reuses `_Node` (node.jl). The kinds below appear only in an access
+# spine and are handled only by `_eval_acc` (the scalar `_eval_node` never
+# sees them): `_NK_ACCESS` (a leaf; `idx` indexes the kernel's access table),
+# `_NK_SUBCALL` and `_NK_AREDUCE`. Everything else is an ordinary
+# `_NK_OP`/`_NK_LITERAL`.
 #
 # CELL COORDINATES. The evaluator threads, per output cell: `oln` the output
 # linear slot (== the state grid's linear index, since state shares the output
-# grid); `c` the cell ordinal (== `oln` for a Cartesian box, the running index
-# for a contiguous/unstructured set) used by per-cell/edge descriptors and the
-# `_VarBound`; `n` the neighbour index inside a reduction (0 outside); and `midx`
-# the cell's loop multi-index (i,j,k,…), used by the box-addressed descriptors
-# and the loop-index leaf. `midx` has one entry per loop dim, padded with 1s to
-# three; inside an affine reduction (`_NK_AREDUCE`) it also carries the
-# reduction indices, at the dims after the output's.
+# grid) and `midx` the cell's loop multi-index (i,j,k,…), used by the
+# box-addressed descriptors and the loop-index leaf. `midx` has one entry per
+# loop dim, padded with 1s to three; inside an affine reduction (`_NK_AREDUCE`)
+# it also carries the reduction indices, at the dims after the output's.
 # ========================================================================
 
-# New spine kinds (disjoint from _NK_LITERAL..._NK_PARAM_GATHER = 1..8).
+# Access-spine kinds (disjoint from the scalar node kinds, node.jl).
 const _NK_ACCESS = UInt8(20)   # gather/const via access descriptor (idx = table slot)
-const _NK_REDUCE = UInt8(21)   # ⊕-reduction over the neighbour index (payload = _Bound)
 # Out-of-line template sub-kernel call (esm-spec §9.6.4 Option B / RFC
 # out-of-line-expression-templates §7.7 "compile references natively"). `payload`
 # is a SHARED `_AccKernel` holding the template body's access spine, descriptor
 # table, and CSE — compiled once per (use site, region class) and referenced from
 # every box/kernel whose lanes lower to the same descriptors. The evaluator arm
-# recurses into it with the SAME (u, p, t, c, n, oln, midx) cell context, so the
+# recurses into it with the SAME (u, p, t, oln, midx) cell context, so the
 # body computes exactly the scalar sequence the fused (expanded) spine would.
 const _NK_SUBCALL = UInt8(22)  # template-body sub-kernel (payload = _AccKernel)
 # Affine reduction: the ⊕-fold of a contraction whose contracted indices are
@@ -72,71 +56,82 @@ struct _AReduceSpec
     ranges::Vector{UnitRange{Int}}   # their ranges, aligned with `dims`
 end
 
-# ---- Access descriptors: how one leaf resolves to a value at (cell c, nbr n) ----
+# ---- Access descriptors: how one leaf resolves to a value at a cell ----
 #
 # ONE CONCRETE TAGGED STRUCT, not an abstract-type hierarchy. A per-kernel
 # descriptor TABLE is a `Vector{_AccDesc}`; if the element type were abstract,
 # every `_fetch(table[i], …)` would be a DYNAMIC DISPATCH on the boxed subtype,
 # which infers as `Any`, boxes each gathered value, and allocates O(#access-nodes
-# × #cells) per RHS call — fatal at large cell counts. A concrete
-# struct dispatched by a `kind::UInt8` tag makes `_fetch` a branch ladder with
-# concrete field reads: no dynamic dispatch, no boxing, zero allocation at
-# `Float64`, and a small `Union{Float64,eltype(u)}` result under AD that the
-# operators promote — exactly `_eval_node`'s discipline.
-#
-# The named constructors below preserve the old per-descriptor call sites verbatim
-# (`_AccStateAffine(Δ)`, `_AccConstBox(arr, s1, s2, s3, off)`, …); only the storage
-# and `_fetch` changed. Fields are shared across kinds (an `Int` slot serves
+# × #cells) per RHS call. A concrete struct dispatched by a `kind::UInt8` tag
+# makes `_fetch` a branch ladder with concrete field reads: no dynamic dispatch,
+# no boxing, zero allocation at `Float64`, and a small `Union{Float64,eltype(u)}`
+# result under AD that the operators promote — exactly `_eval_node`'s
+# discipline. Fields are shared across kinds (an `Int` slot serves
 # `delta`/`idx`/… as the kind dictates), the way `_Node` shares `payload`/`idx`.
-const _AK_STATE_AFFINE = UInt8(1)   # u[oln + delta]              (Cartesian stencil workhorse)
-const _AK_CONST_AFFINE = UInt8(2)   # arr[oln + delta]            (const, full-grid layout)
-const _AK_CONST_BOX = UInt8(3)   # arr[off + Σ(midx_d-1)·s_d]  (const on its own reduced-rank grid)
-const _AK_STATE_FIXED = UInt8(4)   # u[idx]                      (invariant pinned state slot)
-const _AK_LOOP_IDX = UInt8(5)   # Float64(midx[dim])          (loop index as a value)
-const _AK_SCALAR = UInt8(6)   # v                           (hoisted invariant / literal leaf)
-const _AK_CONST_CELL = UInt8(7)   # arr[c]                      (per-cell const)
-const _AK_CONST_EDGE = UInt8(8)   # arr[(c-1)·width + n]        (per-edge, variable valence)
-const _AK_ARR_FIXED = UInt8(9)   # arr[idx]                    (invariant forcing gather)
-const _AK_STATE_INDIRECT = UInt8(10)  # u[conn[(c-1)·width + n]]    (unstructured neighbour gather)
-const _AK_STATE_INDIRECT_COL = UInt8(11)  # u[conn[(c-1)·width + col]]  (unstructured fixed column)
-const _AK_FORCING_BOX = UInt8(12)  # flat[off + Σ(midx_d-1)·s_d] (LIVE forcing on its own grid)
-# Unstructured state gather over a Cartesian box: a per-box SLOT TABLE addressed
-# by the cell multi-index (`conn[off + Σ(midx_d-1)·s_d]`, box-local dense
+const _AK_STATE_AFFINE = UInt8(1)  # u[oln + delta]              (Cartesian stencil workhorse)
+const _AK_CONST_BOX = UInt8(2)     # arr[off + Σ(midx_d-1)·s_d]  (const on its own reduced-rank grid)
+const _AK_STATE_FIXED = UInt8(3)   # u[idx]                      (invariant pinned state slot)
+const _AK_LOOP_IDX = UInt8(4)      # Float64(midx[dim])          (loop index as a value)
+const _AK_ARR_FIXED = UInt8(5)     # arr[idx]                    (invariant forcing gather)
+const _AK_FORCING_BOX = UInt8(6)   # flat[off + Σ(midx_d-1)·s_d] (LIVE forcing on its own grid)
+# State gather over a Cartesian box through a per-box SLOT TABLE addressed by
+# the cell multi-index (`conn[off + Σ(midx_d-1)·s_d]`, box-local dense
 # layout), holding the state slot each cell reads — or 0 for a ghost, which
 # fetches the ghost literal 0.0. Emitted by the box processor when a state
 # lane's slot is NOT an affine function of the loop indices (a gather indirect
 # through a connectivity const, a boundary-fold pattern past the Δ-cut cap):
 # the table entries are `_eval_recipe`'s per-cell outputs, so a fetch is
-# bit-identical to the per-cell resolve. The table is O(box) Ints — the same
-# order as the connectivity input itself, and strictly less than the per-cell
-# fallback's per-lane slot vectors.
-const _AK_STATE_TBL_BOX = UInt8(13)  # u[conn[off + Σ(midx_d-1)·s_d]] (0 ⇒ ghost 0.0)
+# bit-identical to the per-cell resolve.
+const _AK_STATE_TBL_BOX = UInt8(7) # u[conn[off + Σ(midx_d-1)·s_d]] (0 ⇒ ghost 0.0)
 # A Float64 buffer read through an Int index table, box-addressed. The per-cell
 # merge (acc_merge.jl) emits it for a LIVE forcing gather whose linear offset
 # varies per cell (`_NK_PARAM_GATHER` lanes): `arr` is the aliased
 # `_PGatherArray.flat` buffer — refreshed in place, so the read must stay live,
 # which is why the VALUES are never materialized the way a const lane's are.
-const _AK_ARR_TBL_BOX = UInt8(14)  # arr[conn[off + Σ(midx_d-1)·s_d]] (LIVE forcing table)
+const _AK_ARR_TBL_BOX = UInt8(8)   # arr[conn[off + Σ(midx_d-1)·s_d]] (LIVE forcing table)
+
+# What each descriptor kind reads and how it is addressed, indexed by the tag.
+# The kind lists the passes test (which kinds are box-addressed, cell-invariant,
+# lockstep-mergeable, a state / forcing / const family) are derived from these
+# two columns, so a new kind is one row plus the ladders that compute with it.
+#   source: :state (the ODE state), :const (a frozen array), :forcing (a live
+#           buffer, read as it is at the call), :loop (the loop index itself)
+#   addr:   :affine (output slot + delta), :box (strided box address),
+#           :table (an index table read at a box address), :fixed (one slot),
+#           :loop (a loop index)
+const _AK_INFO = (
+    (source = :state, addr = :affine),   # 1 STATE_AFFINE
+    (source = :const, addr = :box),      # 2 CONST_BOX
+    (source = :state, addr = :fixed),    # 3 STATE_FIXED
+    (source = :loop, addr = :loop),      # 4 LOOP_IDX
+    (source = :forcing, addr = :fixed),  # 5 ARR_FIXED
+    (source = :forcing, addr = :box),    # 6 FORCING_BOX
+    (source = :state, addr = :table),    # 7 STATE_TBL_BOX
+    (source = :forcing, addr = :table),  # 8 ARR_TBL_BOX
+)
+length(_AK_INFO) == _AK_ARR_TBL_BOX ||
+    error("access_kernel: _AK_INFO has $(length(_AK_INFO)) rows for $(Int(_AK_ARR_TBL_BOX)) descriptor kinds")
+_ak_source(k::UInt8) = _AK_INFO[k].source
+_ak_addr(k::UInt8) = _AK_INFO[k].addr
+# Addressed through `s1`/`s2`/`s3`/`off` (and `sx` past rank 3).
+_ak_box_addressed(k::UInt8) = (a = _ak_addr(k); a === :box || a === :table)
 
 struct _AccDesc
     kind::UInt8
-    arr::Vector{Float64}   # CONST_*, ARR_FIXED, FORCING_BOX (empty sentinel otherwise)
-    conn::Union{Vector{Int}, UnitRange{Int}}  # STATE_INDIRECT[_COL], *_TBL_BOX (empty sentinel otherwise);
+    arr::Vector{Float64}   # CONST_BOX, ARR_FIXED, FORCING_BOX, ARR_TBL_BOX (empty sentinel otherwise)
+    conn::Union{Vector{Int}, UnitRange{Int}}  # *_TBL_BOX (empty sentinel otherwise);
     # a range is an identity table (`_state_slot_identity`)
-    delta::Int             # STATE_AFFINE, CONST_AFFINE
+    delta::Int             # STATE_AFFINE
     idx::Int               # STATE_FIXED, ARR_FIXED
-    width::Int             # STATE_INDIRECT[_COL], CONST_EDGE
-    col::Int               # STATE_INDIRECT_COL
     dim::Int               # LOOP_IDX
-    s1::Int                # CONST_BOX per-dim strides + offset
+    s1::Int                # box-addressed kinds: per-dim strides + offset
     s2::Int
     s3::Int
     off::Int
-    v::Float64             # SCALAR
     # Box strides of loop dims 4, 5, … (empty for a box of rank ≤ 3, which is
     # every box but a rank-4+ grid or a contraction's reduction dims past the
     # third). Kept apart from s1..s3 so the rank ≤ 3 descriptor, its fetch and
-    # its emitted address are exactly what they were.
+    # its emitted address need no loop.
     sx::Vector{Int}
 end
 
@@ -146,11 +141,11 @@ const _AK_NO_CONN = Int[]
 @inline _mkacc(
     kind::UInt8; arr::Vector{Float64} = _AK_NO_ARR,
     conn::Union{Vector{Int}, UnitRange{Int}} = _AK_NO_CONN,
-    delta::Int = 0, idx::Int = 0, width::Int = 0, col::Int = 0, dim::Int = 0,
-    s1::Int = 0, s2::Int = 0, s3::Int = 0, off::Int = 0, v::Float64 = 0.0,
+    delta::Int = 0, idx::Int = 0, dim::Int = 0,
+    s1::Int = 0, s2::Int = 0, s3::Int = 0, off::Int = 0,
     sx::Vector{Int} = _AK_NO_CONN
 ) =
-    _AccDesc(kind, arr, conn, delta, idx, width, col, dim, s1, s2, s3, off, v, sx)
+    _AccDesc(kind, arr, conn, delta, idx, dim, s1, s2, s3, off, sx)
 
 # A box-addressed descriptor's per-dim strides, any rank: the first three go to
 # s1..s3 (zero-padded) and the rest to `sx`.
@@ -158,13 +153,8 @@ const _AK_NO_CONN = Int[]
 _box_sx(s::AbstractVector{Int}) =
     length(s) > 3 ? _as_type(Vector{Int}, _dynamic(getindex, s, 4:length(s))) : _AK_NO_CONN
 
-# Named constructors — the descriptor call sites (stencil_affine.jl, tests) use
-# these and are unchanged by the tagged-struct storage.
+# Named constructors, one per kind.
 _AccStateAffine(delta::Int) = _mkacc(_AK_STATE_AFFINE; delta = delta)
-_AccStateIndirect(conn::Vector{Int}, width::Int) = _mkacc(_AK_STATE_INDIRECT; conn = conn, width = width)
-_AccStateIndirectCol(conn::Vector{Int}, width::Int, col::Int) =
-    _mkacc(_AK_STATE_INDIRECT_COL; conn = conn, width = width, col = col)
-_AccConstAffine(arr::Vector{Float64}, delta::Int) = _mkacc(_AK_CONST_AFFINE; arr = arr, delta = delta)
 _AccConstBox(arr::Vector{Float64}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_CONST_BOX; arr = arr, s1 = s1, s2 = s2, s3 = s3, off = off)
 _AccConstBox(arr::Vector{Float64}, s::AbstractVector{Int}, off::Int) =
@@ -183,12 +173,9 @@ _AccForcingBox(arr::Vector{Float64}, s::AbstractVector{Int}, off::Int) =
     _AK_FORCING_BOX; arr = arr, s1 = _box_s(s, 1), s2 = _box_s(s, 2), s3 = _box_s(s, 3),
     off = off, sx = _box_sx(s)
 )
-_AccConstCell(arr::Vector{Float64}) = _mkacc(_AK_CONST_CELL; arr = arr)
-_AccConstEdge(arr::Vector{Float64}, width::Int) = _mkacc(_AK_CONST_EDGE; arr = arr, width = width)
 _AccStateFixed(idx::Int) = _mkacc(_AK_STATE_FIXED; idx = idx)
 _AccArrFixed(arr::Vector{Float64}, idx::Int) = _mkacc(_AK_ARR_FIXED; arr = arr, idx = idx)
 _AccLoopIdx(dim::Int) = _mkacc(_AK_LOOP_IDX; dim = dim)
-_AccScalar(v::Float64) = _mkacc(_AK_SCALAR; v = v)
 _AccStateTblBox(conn::Union{Vector{Int}, UnitRange{Int}}, s1::Int, s2::Int, s3::Int, off::Int) =
     _mkacc(_AK_STATE_TBL_BOX; conn = conn, s1 = s1, s2 = s2, s3 = s3, off = off)
 _AccStateTblBox(conn::Union{Vector{Int}, UnitRange{Int}}, s::AbstractVector{Int}, off::Int) =
@@ -203,6 +190,15 @@ _AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s::AbstractVector{Int}, o
     _AK_ARR_TBL_BOX; arr = arr, conn = conn, s1 = _box_s(s, 1), s2 = _box_s(s, 2),
     s3 = _box_s(s, 3), off = off, sx = _box_sx(s)
 )
+
+# A copy of `a` with its box address replaced (strides `s1..s3`/`sx`, offset
+# `off`) and, for a loop-index read, its dim.
+_acc_with_box(
+    a::_AccDesc; dim::Int = a.dim, s1::Int = a.s1, s2::Int = a.s2,
+    s3::Int = a.s3, off::Int = a.off, sx::Vector{Int} = a.sx, idx::Int = a.idx,
+    conn::Union{Vector{Int}, UnitRange{Int}} = a.conn
+) =
+    _AccDesc(a.kind, a.arr, conn, a.delta, idx, dim, s1, s2, s3, off, sx)
 
 # The box address `off + Σ_d (midx_d - 1)·s_d` of a box-addressed descriptor.
 # `midx` carries one entry per loop dim (padded with 1s to three), so the `sx`
@@ -219,34 +215,22 @@ end
 
 # One `_fetch`, dispatched by the kind tag — concrete field reads throughout, so
 # no dynamic dispatch and no boxing. Hot Cartesian cases first. The result is
-# `eltype(u)` for a state read and `Float64` for a const/scalar/loop-index read; a
-# small `Union` the caller's operators promote (identical to `_eval_node`).
-@inline function _fetch(a::_AccDesc, u, c, n, oln, midx)
+# `eltype(u)` for a state read and `Float64` for a const/forcing/loop-index read;
+# a small `Union` the caller's operators promote (identical to `_eval_node`).
+@inline function _fetch(a::_AccDesc, u, oln, midx)
     k = a.kind
     if k === _AK_STATE_AFFINE
         return @inbounds u[oln + a.delta]
-    elseif k === _AK_CONST_AFFINE
-        return @inbounds a.arr[oln + a.delta]
     elseif k === _AK_CONST_BOX
         return @inbounds a.arr[_acc_boxaddr(a, midx)]
     elseif k === _AK_STATE_FIXED
         return @inbounds u[a.idx]
     elseif k === _AK_LOOP_IDX
         return Float64(midx[a.dim])
-    elseif k === _AK_SCALAR
-        return a.v
-    elseif k === _AK_CONST_CELL
-        return @inbounds a.arr[c]
-    elseif k === _AK_CONST_EDGE
-        return @inbounds a.arr[(c - 1) * a.width + n]
     elseif k === _AK_ARR_FIXED
         return @inbounds a.arr[a.idx]
     elseif k === _AK_FORCING_BOX
         return @inbounds a.arr[_acc_boxaddr(a, midx)]
-    elseif k === _AK_STATE_INDIRECT
-        return @inbounds u[a.conn[(c - 1) * a.width + n]]
-    elseif k === _AK_STATE_INDIRECT_COL
-        return @inbounds u[a.conn[(c - 1) * a.width + a.col]]
     elseif k === _AK_STATE_TBL_BOX
         s = @inbounds a.conn[_acc_boxaddr(a, midx)]
         return s == 0 ? 0.0 : @inbounds u[s]     # 0 ⇒ ghost literal, as per cell
@@ -256,33 +240,20 @@ end
     throw(TreeWalkError("E_TREEWALK_ACC_BAD_DESC", "unknown access kind $(Int(k))"))
 end
 
-# ---- Reduction bound (fixed structured count vs runtime per-cell valence) ----
-abstract type _Bound end
-struct _FixedBound <: _Bound
-    k::Int
-end
-struct _VarBound <: _Bound
-    valence::Vector{Int}
-end   # per-cell edge count (an input)
-@inline _nbrcount(b::_FixedBound, c) = b.k
-@inline _nbrcount(b::_VarBound, c) = @inbounds b.valence[c]
-
 # ---- Output cell set ----
-# STRUCTURED (Cartesian box): `strides` are the state grid's per-loop-dim linear
-# slot strides and `ranges[d]` is the box's index range in loop dim d. The output
+# A Cartesian BOX: `strides` are the state grid's per-loop-dim linear slot
+# strides and `ranges[d]` is the box's index range in loop dim d. The output
 # slot of cell (i₁,…,i_d) is the AFFINE map `base + Σ_d i_d·strides[d]`, walked
-# with no stored per-lane out_slots. `base` and the strides are DERIVED from the
-# state layout (var_map) and verified — the state ordering is a lexicographic sort
-# of the index tuples (row-major for a full grid), NOT a fixed convention. A box
-# may restrict ANY subset of dims (longitude wrap in i, poles in j, vertical
-# regions in k), so it is a general strided box, not a slab.
-# UNSTRUCTURED / CONTIGUOUS: `strides` is empty; `ranges[1]` is the cell range
-# 1:ncell, `base` unused, and the out slot == the cell ordinal.
-# INDIRECT (`outs` non-empty): the per-cell merge (acc_merge.jl) hosts a group
-# of arbitrary output slots — cell ordinal c ∈ 1:length(outs) writes `du[outs[c]]`,
-# `midx == (c, 1, 1)`, and the box-addressed descriptors (CONST_BOX /
-# STATE_TBL_BOX / ARR_TBL_BOX with s1=1, off=1) index their per-cell tables by
-# that ordinal.
+# with no stored per-lane out_slots. `base` and the strides come from the state
+# layout. A box may restrict ANY subset of dims (longitude wrap in i, poles in
+# j, vertical regions in k), so it is a general strided box, not a slab.
+# LISTED SLOTS (`outs` non-empty): the per-cell merge (acc_merge.jl) hosts a
+# group of arbitrary output slots — cell ordinal c ∈ 1:length(outs) writes
+# `du[outs[c]]`, `midx == (c, 1, 1)`, and the box-addressed descriptors
+# (CONST_BOX / STATE_TBL_BOX / ARR_TBL_BOX with s1=1, off=1) index their
+# per-cell tables by that ordinal.
+# A template sub-kernel (`_NK_SUBCALL` payload) runs at its caller's cells and
+# holds no cells of its own (`_no_cells()`, neither shape).
 # `slab[d]` (a box, or empty for "none"): the box is one cell thick on dim d AT
 # THE EDGE of the equation's range there — a boundary slab, which is one cell
 # thick at every grid size. The codegen tier keeps that extent a literal (a
@@ -300,17 +271,14 @@ _CellSet(
     outs::Vector{Int} = Int[]
 ) = _CellSet(strides, ranges, base, outs, Bool[])
 @inline _cellset_slab(cs::_CellSet, d::Int) = d <= length(cs.slab) && cs.slab[d]
-_contig_cells(ncell::Int) = _CellSet(Int[], UnitRange{Int}[1:ncell], 0)
+_no_cells() = _CellSet(Int[], UnitRange{Int}[1:0], 0)
 _outs_cells(outs::Vector{Int}) = _CellSet(Int[], UnitRange{Int}[1:length(outs)], 0, outs)
-@inline _is_contig(cs::_CellSet) = isempty(cs.strides) && isempty(cs.outs)
+@inline _is_cellless(cs::_CellSet) = isempty(cs.strides) && isempty(cs.outs)
 @inline _is_outs(cs::_CellSet) = !isempty(cs.outs)
 
 # ---- Per-cell CSE scratch ----
-# The affine spine is walked as a TREE once per cell (`_build_branch_template`
-# compiles with no memo, so structurally-shared subexpressions are distinct
-# nodes). For a big operator — monotone PPM is a 160k-unique-node DAG that expands
-# to ~2M as a tree — that re-walks each shared subtree many times per cell. The CSE
-# pass (`_build_acc_cse`) slices the shared subtrees into ORDERED recipes; the box
+# The spine is a DAG whose shared subtrees a per-cell walk would evaluate once
+# per path. The CSE pass (`_build_acc_cse`) slices the shared subtrees into ORDERED recipes; the box
 # loop evaluates each once per cell into this scratch, and every occurrence becomes
 # an `_NK_CACHED` read. Two buffers (Float64 + a lazily-allocated `alt` for the
 # Dual type ForwardDiff drives `f!` with), exactly like `_CSECache`, so it stays
@@ -354,10 +322,8 @@ const _ACC_NO_CSE = _AccCSE(_Node[], _AccScratch(0), _Node[], _AccScratch(0))
 # ---- One kernel ----
 struct _AccKernel
     cells::_CellSet
-    spine::_Node               # op tree with _NK_ACCESS / _NK_REDUCE / _NK_CACHED leaves
+    spine::_Node               # op tree with _NK_ACCESS / _NK_CACHED leaves
     acc::Vector{_AccDesc}      # descriptor table (spine `_NK_ACCESS.idx` indexes this)
-    bound::_Bound              # reduction bound (for any _NK_REDUCE in the spine)
-    zerobar::Float64           # ⊕ identity seed for the reduction (0.0 for sum)
     cse::_AccCSE               # per-cell common-subexpression recipes + scratch
     # Distinct template-body sub-kernels reachable from `spine`/`cse` (through
     # `_NK_SUBCALL` payloads, transitively, nested-first). The kernel runners fill
@@ -367,63 +333,51 @@ struct _AccKernel
     # value, never a different one. Empty for every reference-free kernel.
     subs::Vector{_AccKernel}
 end
-# 5-/6-arg convenience: a kernel with no CSE / no sub-kernels (tests, direct
-# construction, and every reference-free build).
-_AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound, zerobar::Float64) =
-    _AccKernel(cells, spine, acc, bound, zerobar, _ACC_NO_CSE, _AccKernel[])
-_AccKernel(
-    cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound,
-    zerobar::Float64, cse::_AccCSE
-) =
-    _AccKernel(cells, spine, acc, bound, zerobar, cse, _AccKernel[])
+# A kernel with no CSE / no sub-kernels (tests, direct construction, and every
+# reference-free build).
+_AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}) =
+    _AccKernel(cells, spine, acc, _ACC_NO_CSE, _AccKernel[])
+_AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, cse::_AccCSE) =
+    _AccKernel(cells, spine, acc, cse, _AccKernel[])
 
 # ---- The evaluator ----
 # ELTYPE-GENERIC in the value type `T`, exactly as the scalar `_eval_node`
-# (compile.jl) is, and for the same reason: the in-place `f!` must DIFFERENTIATE
+# (scalar_walk.jl) is, and for the same reason: the in-place `f!` must DIFFERENTIATE
 # through these kernels (ForwardDiff over state OR over parameters), not just
 # integrate them. `T` is threaded and passed down but leaves are NEVER converted
 # to it — the type flows naturally from the leaves (a state read yields
 # `eltype(u)`, a const/literal yields `Float64`) and promotes at the operators.
 # That duck-typing is load-bearing: it is what keeps a LITERAL `^` exponent a
-# `Float64` (see the `:^` arm of `_eval_acc_op`), and it makes the `T === Float64`
-# path bit-identical to the pre-AD walker, instruction for instruction. Matches
-# `_eval_node`'s discipline arm for arm — the differential + AD tests pin it.
+# `Float64` (the power rule under a Dual walk), and it makes the `T === Float64`
+# path the plain Float64 walk. Matches `_eval_node`'s discipline arm for arm —
+# the differential + AD tests pin it.
 #
-# `t` current time, `c` cell ordinal, `n` neighbour index (0 outside a
-# reduction), `oln` output slot, `midx` the cell's (i,j,k) loop multi-index
-# (padded with 1s). The 9-arg form derives `T` from the runtime inputs (the
-# build-time / test entry point), mirroring `_eval_node`'s 4-arg convenience form.
+# `t` current time, `oln` output slot, `midx` the cell's (i,j,k) loop
+# multi-index (padded with 1s). The 7-arg form derives `T` from the runtime
+# inputs (the build-time / test entry point), mirroring `_eval_node`'s 4-arg
+# convenience form.
 @inline _eval_acc(
-    nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-    midx::Tuple{Vararg{Int}}, K::_AccKernel
+    nd::_Node, u, p, t, oln::Int, midx::Tuple{Vararg{Int}}, K::_AccKernel
 ) =
-    _eval_acc(nd, u, p, t, c, n, oln, midx, K, _rhs_value_type(u, p, t))
+    _eval_acc(nd, u, p, t, oln, midx, K, _rhs_value_type(u, p, t))
 
 function _eval_acc(
-        nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+        nd::_Node, u, p, t, oln::Int,
         midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}
     ) where {T}
     k = nd.kind
     if k === _NK_ACCESS
-        return _fetch(K.acc[nd.idx], u, c, n, oln, midx)
+        return _fetch(K.acc[nd.idx], u, oln, midx)
     elseif k === _NK_LITERAL
         return nd.literal
-    elseif k === _NK_REDUCE
-        body = nd.children[1]
-        s = K.zerobar
-        cnt = _nbrcount(K.bound, c)
-        @inbounds for m in 1:cnt
-            s += _eval_acc(body, u, p, t, c, m, oln, midx, K, T)
-        end
-        return s
     elseif k === _NK_AREDUCE
-        return _eval_acc_areduce(nd, u, p, t, c, n, oln, midx, K, T)
+        return _eval_acc_areduce(nd, u, p, t, oln, midx, K, T)
     elseif k === _NK_CONTRACTION
         # Fixed-width runtime ⊕-fold (the per-cell merge hosts einsum groups on
-        # the access spine). MIRRORS `_eval_contraction` (compile.jl) arm for
+        # the access spine). MIRRORS `_eval_contraction` (scalar_walk.jl) arm for
         # arm — seeded from the 0̄ identity on the node, sequential child-order
         # fold — so the value is bit-identical to the per-cell reference.
-        return _eval_acc_contraction(nd, u, p, t, c, n, oln, midx, K, T)
+        return _eval_acc_contraction(nd, u, p, t, oln, midx, K, T)
     elseif k === _NK_PARAM
         return _read_param(p, nd.sym, nd.idx)
     elseif k === _NK_TIME
@@ -432,7 +386,7 @@ function _eval_acc(
         # A CSE reference: the value was computed once for THIS cell by the box
         # loop's `cse.recipes` fill into the per-cell scratch captured in
         # `payload` — or, for an inv-tier def the cross-kernel sharing pass
-        # (xcse.jl, plan B4) rewrote, once per CALL into the SCALAR prelude's
+        # (xcse.jl) rewrote, once per CALL into the SCALAR prelude's
         # `_CSECache` (filled by `_make_rhs` before any kernel runs). The `isa`
         # split keeps both reads monomorphic; kernels a build never rewrites
         # only ever see the `_AccScratch` branch.
@@ -440,31 +394,32 @@ function _eval_acc(
         pl isa _AccScratch && return _acc_scratch_read(pl, nd.idx, T)
         return _cse_read(pl::_CSECache, nd.idx, T)
     elseif k === _NK_SUBCALL
-        # Template-body sub-kernel (RFC out-of-line-expression-templates): fill the
-        # body's per-cell CSE scratch for THIS cell, then evaluate its spine
-        # against its OWN descriptor table. The invariant tier was filled once per
-        # call by the runner prologue (`K.subs`). Evaluation is single-threaded and
-        # the template DAG is acyclic (esm-spec §9.7.3), so a body is never
-        # re-entered mid-evaluation and its scratch buffers are race-free.
+        # Template-body sub-kernel: fill the body's per-cell CSE scratch for THIS
+        # cell, then evaluate its spine against its OWN descriptor table. The
+        # invariant tier was filled once per call by the runner prologue
+        # (`K.subs`). Evaluation is single-threaded and the template DAG is
+        # acyclic (esm-spec §9.7.3), so a body is never re-entered
+        # mid-evaluation and its scratch buffers are race-free.
         S = nd.payload::_AccKernel
         cse = S.cse
         if _has_cse(cse)
             buf = _acc_scratch_buf(cse.scratch, T)
             rs = cse.recipes
             @inbounds for i in eachindex(rs)
-                buf[i] = _eval_acc(rs[i], u, p, t, c, n, oln, midx, S, T)
+                buf[i] = _eval_acc(rs[i], u, p, t, oln, midx, S, T)
             end
         end
-        return _eval_acc(S.spine, u, p, t, c, n, oln, midx, S, T)
-    else # _NK_OP
-        return _eval_acc_op(nd, u, p, t, c, n, oln, midx, K, T)
+        return _eval_acc(S.spine, u, p, t, oln, midx, S, T)
+    elseif k === _NK_OP
+        return _eval_acc_op(nd, u, p, t, oln, midx, K, T)
     end
+    return _unknown_kind(nd, "the access-kernel walker")
 end
 
 # The affine reduction's fold (`_NK_AREDUCE`): `midx` is widened to cover the
 # contracted dims, which the nest below binds, the last dim outermost.
 function _eval_acc_areduce(
-        nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+        nd::_Node, u, p, t, oln::Int,
         midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}
     ) where {T}
     spec = nd.payload::_AReduceSpec
@@ -472,23 +427,23 @@ function _eval_acc_areduce(
     mi = ntuple(i -> i <= length(midx) ? midx[i] : 1, m)
     return _areduce_fold(
         nd.children[1], spec, length(spec.dims), nd.literal, nd.op,
-        u, p, t, c, n, oln, mi, K, T
+        u, p, t, oln, mi, K, T
     )
 end
 
 function _areduce_fold(
         body::_Node, spec::_AReduceSpec, r::Int, s, op::Symbol,
-        u, p, t, c::Int, n::Int, oln::Int, midx::Tuple{Vararg{Int}},
+        u, p, t, oln::Int, midx::Tuple{Vararg{Int}},
         K::_AccKernel, ::Type{T}
     ) where {T}
     d = spec.dims[r]
     for j in spec.ranges[r]
         mi = Base.setindex(midx, j, d)
         if r == 1
-            v = _eval_acc(body, u, p, t, c, n, oln, mi, K, T)
-            s = op === :+ ? s + v : op === :* ? s * v : op === :max ? max(s, v) : min(s, v)
+            v = _eval_acc(body, u, p, t, oln, mi, K, T)
+            s = _oplus_numeric(op, s, v)
         else
-            s = _areduce_fold(body, spec, r - 1, s, op, u, p, t, c, n, oln, mi, K, T)
+            s = _areduce_fold(body, spec, r - 1, s, op, u, p, t, oln, mi, K, T)
         end
     end
     return s
@@ -496,10 +451,10 @@ end
 
 # Runtime ⊕-fold over an access-spine contraction node's children, seeded from
 # `nd.literal` (the 0̄ identity baked on at build time) — byte-for-byte the
-# `_eval_contraction` (compile.jl) fold shape, with `_eval_acc` as the child
+# `_eval_contraction` (scalar_walk.jl) fold shape, with `_eval_acc` as the child
 # walker.
 function _eval_acc_contraction(
-        nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+        nd::_Node, u, p, t, oln::Int,
         midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}
     ) where {T}
     op = nd.op
@@ -507,233 +462,61 @@ function _eval_acc_contraction(
     if op === :+
         s = nd.literal
         @inbounds for k in eachindex(ch)
-            s += _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T)
+            s += _eval_acc(ch[k], u, p, t, oln, midx, K, T)
         end
         return s
     elseif op === :*
         s = nd.literal
         @inbounds for k in eachindex(ch)
-            s *= _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T)
+            s *= _eval_acc(ch[k], u, p, t, oln, midx, K, T)
         end
         return s
     elseif op === :max
         s = nd.literal
         @inbounds for k in eachindex(ch)
-            s = max(s, _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T))
+            s = max(s, _eval_acc(ch[k], u, p, t, oln, midx, K, T))
         end
         return s
     elseif op === :or
         s = nd.literal
         @inbounds for k in eachindex(ch)
-            s = _or_combine(s, _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T))
+            s = _or_combine(s, _eval_acc(ch[k], u, p, t, oln, midx, K, T))
         end
         return s
-    else  # :min
+    elseif op === :min
         s = nd.literal
         @inbounds for k in eachindex(ch)
-            s = min(s, _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T))
+            s = min(s, _eval_acc(ch[k], u, p, t, oln, midx, K, T))
         end
         return s
     end
+    return _throw_unknown_reducer(op)
 end
 
-# ---- Generated mechanical arms (op-registry tables, src/op_registry.jl) ----
-#
-# The MECHANICAL arms of `_eval_acc_op` — unary elementwise, comparisons,
-# fixed-2-ary `/`/`^`/`pow`/`atan2`, and the n-ary `min`/`max` folds — are
-# GENERATED from the same registry tables that grow the other three ladders
-# (`_eval_node_op` / `_eval_acc_op` / `_scalar_op`), so a mechanical op added to
-# `_OP_TABLE` reaches the access spine automatically. Probe protocol as
-# everywhere: `nothing` ⇒ not in the table ⇒ the ladder falls through.
-# DELIBERATELY NO ARITY GUARDS on the unary/comparison/binary arms — the
-# hand-written access arms had none (the spine is compiled from an
-# already-validated tree), and adding them would change the failure mode of a
-# malformed spine. `min`/`max` keep their historical `< 2` guard.
-let arms = :(return nothing)
-    for row in reverse(_UNARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                return $(row.sym)(_eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T))
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_acc_unary_elementwise(
-            op::Symbol, ch::Vector{_Node},
-            u, p, t, c::Int, n::Int, oln::Int,
-            midx::Tuple{Vararg{Int}}, K::_AccKernel,
-            ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-let arms = :(return nothing)
-    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                return $(row.fnsym)(
-                        _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
-                        _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T)
-                    ) ? 1.0 : 0.0
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_acc_comparison(
-            op::Symbol, ch::Vector{_Node},
-            u, p, t, c::Int, n::Int, oln::Int,
-            midx::Tuple{Vararg{Int}}, K::_AccKernel,
-            ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-let arms = :(return nothing)
-    for row in reverse(_BINARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                return $(row.fnsym)(
-                    _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
-                    _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T)
-                )
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_acc_binary_elementwise(
-            op::Symbol, ch::Vector{_Node},
-            u, p, t, c::Int, n::Int, oln::Int,
-            midx::Tuple{Vararg{Int}}, K::_AccKernel,
-            ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-let arms = :(return nothing)
-    for row in reverse(_NARY_MINMAX_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                length(ch) < 2 && throw(
-                    TreeWalkError(
-                        "E_TREEWALK_ARITY",
-                        $(row.name * " needs ≥2 args")
-                    )
-                )
-                s = _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T)
-                @inbounds for i in 2:length(ch)
-                    s = $(row.fnsym)(s, _eval_acc(ch[i], u, p, t, c, n, oln, midx, K, T))
-                end
-                return s
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_acc_minmax(
-            op::Symbol, ch::Vector{_Node},
-            u, p, t, c::Int, n::Int, oln::Int,
-            midx::Tuple{Vararg{Int}}, K::_AccKernel,
-            ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-# Op application over an access spine. MIRRORS `_eval_node_op` (compile.jl) arm for
-# arm — same arities, same n-ary folds, same `^`/comparison/logical/elementary-fn
-# semantics — because the affine path must be bit-identical to the per-cell path,
-# whose spine is the SAME compiled `_Node` tree evaluated by `_eval_node_op`. The
-# only difference is the leaf recursion (`_eval_acc`, which resolves `_NK_ACCESS` /
-# `_NK_REDUCE`). The mechanical arms are generated from the SAME registry tables
-# as `_eval_node_op`'s (see above), so those cannot drift by construction; the
-# hand-written remainder is still caught by the differential test.
-function _eval_acc_op(
-        nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+# Op application over an access spine: the same generated ladder as
+# `_eval_node_op` (`_op_ladder`, tree_walk/op_ladder.jl), so the affine path is
+# bit-identical to the per-cell path, whose spine is the SAME compiled `_Node`
+# tree. The only difference is the operand recursion (`_eval_acc`, which resolves
+# `_NK_ACCESS`).
+@eval function _eval_acc_op(
+        nd::_Node, u, p, t, oln::Int,
         midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}
     ) where {T}
     op = nd.op
     ch = nd.children
-    @inline ev(x) = _eval_acc(x, u, p, t, c, n, oln, midx, K, T)
-    if op === :+
-        length(ch) == 1 && return ev(ch[1])
-        s = ev(ch[1]); @inbounds for i in 2:length(ch)
-            s += ev(ch[i])
-        end
-        return s
-    elseif op === :*
-        length(ch) == 1 && return ev(ch[1])
-        s = ev(ch[1]); @inbounds for i in 2:length(ch)
-            s *= ev(ch[i])
-        end
-        return s
-    elseif op === :-
-        length(ch) == 1 && return -ev(ch[1])
-        length(ch) == 2 && return ev(ch[1]) - ev(ch[2])
-        throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
-    elseif op === :neg
-        return -ev(ch[1])
-
-        # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED (registry).
-    elseif (bin = _eval_acc_binary_elementwise(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
-        return bin
-
-        # Comparisons → 1.0/0.0 — GENERATED (registry).
-    elseif (cmp = _eval_acc_comparison(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
-        return cmp
-
-        # Logical
-    elseif op === :and
-        @inbounds for x in ch
-            ev(x) == 0 && return 0.0
-        end
-        return 1.0
-    elseif op === :or
-        @inbounds for x in ch
-            ev(x) != 0 && return 1.0
-        end
-        return 0.0
-    elseif op === :not
-        return ev(ch[1]) == 0 ? 1.0 : 0.0
-
-    elseif op === :ifelse
-        return ev(ch[1]) != 0 ? ev(ch[2]) : ev(ch[3])
-
-        # Elementary functions — the mechanical unary arms (`sin` … `ceil`) are
-        # GENERATED (registry); `atan` (1-or-2-ary) stays hand-written, `atan2` is
-        # handled by the binary probe above.
-    elseif (unary = _eval_acc_unary_elementwise(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
-        return unary
-    elseif op === :atan
-        length(ch) == 1 && return atan(ev(ch[1]))
-        length(ch) == 2 && return atan(ev(ch[1]), ev(ch[2]))
-        throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-
-        # n-ary min/max (arity ≥ 2) — GENERATED (registry).
-    elseif (mm = _eval_acc_minmax(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
-        return mm
-    elseif op === :pi || op === :π
-        return Float64(pi)
-    elseif op === :e
-        return Float64(ℯ)
-    elseif op === :Pre
-        return ev(ch[1])
-    end
-    throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op)))
+    $(
+        _op_ladder(
+            i -> :(_eval_acc(ch[$i], u, p, t, oln, midx, K, T)), :(length(ch)),
+            :(throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op))))
+        )
+    )
 end
 
 # One cell's output value: fill the per-cell CSE scratch (each shared subtree
 # evaluated ONCE), then evaluate the output spine, whose `_NK_CACHED` leaves read
-# the scratch. With no CSE (`_has_cse` false) this is exactly the bare spine walk —
-# zero extra work, so non-CSE kernels are byte-identical to before. `n = 0`: CSE is
-# only built for reduce-free spines, so the neighbour index never matters here.
+# the scratch. With no CSE (`_has_cse` false) this is exactly the bare spine walk.
 @inline function _eval_cell(
-        K::_AccKernel, u, p, t, c::Int, oln::Int,
+        K::_AccKernel, u, p, t, oln::Int,
         midx::Tuple{Vararg{Int}}, ::Type{T}
     ) where {T}
     cse = K.cse
@@ -741,10 +524,10 @@ end
         buf = _acc_scratch_buf(cse.scratch, T)
         rs = cse.recipes
         @inbounds for i in eachindex(rs)
-            buf[i] = _eval_acc(rs[i], u, p, t, c, 0, oln, midx, K, T)
+            buf[i] = _eval_acc(rs[i], u, p, t, oln, midx, K, T)
         end
     end
-    return _eval_acc(K.spine, u, p, t, c, 0, oln, midx, K, T)
+    return _eval_acc(K.spine, u, p, t, oln, midx, K, T)
 end
 
 # ---- Run one kernel into du (in place) ----
@@ -756,7 +539,7 @@ _run_acc_kernel!(du, u, p, t, K::_AccKernel) =
     _run_acc_kernel!(du, u, p, t, K, _rhs_value_type(u, p, t))
 
 # Fill the loop-invariant scratch ONCE per call (before the cell loop). The recipes
-# have no cell-varying access, so the cell context is irrelevant — dummy `(1,0,1,
+# have no cell-varying access, so the cell context is irrelevant — dummy `(1,
 # (1,1,1))` is passed. A no-op (compiles away) when the kernel has no invariants.
 @inline function _fill_invariant!(K::_AccKernel, u, p, t, ::Type{T}) where {T}
     cse = K.cse
@@ -764,7 +547,7 @@ _run_acc_kernel!(du, u, p, t, K::_AccKernel) =
         buf = _acc_scratch_buf(cse.inv_scratch, T)
         rs = cse.inv_recipes
         @inbounds for i in eachindex(rs)
-            buf[i] = _eval_acc(rs[i], u, p, t, 1, 0, 1, (1, 1, 1), K, T)
+            buf[i] = _eval_acc(rs[i], u, p, t, 1, (1, 1, 1), K, T)
         end
     end
     return nothing
@@ -778,17 +561,13 @@ function _run_acc_kernel!(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     end
     _fill_invariant!(K, u, p, t, T)
     cs = K.cells
-    if _is_outs(cs)                                 # indirect out slots (per-cell merge)
+    if _is_outs(cs)                                 # listed out slots (per-cell merge)
         outs = cs.outs
         @inbounds for c in eachindex(outs)
             oln = outs[c]
-            du[oln] = _eval_cell(K, u, p, t, c, oln, (c, 1, 1), T)
+            du[oln] = _eval_cell(K, u, p, t, oln, (c, 1, 1), T)
         end
-    elseif _is_contig(cs)                           # contiguous / unstructured
-        @inbounds for c in cs.ranges[1]
-            du[c] = _eval_cell(K, u, p, t, c, c, (c, 1, 1), T)
-        end
-    else                                            # structured: strided box walk
+    elseif !_is_cellless(cs)                        # strided box walk
         _run_box_kernel!(du, u, p, t, K, cs, T)
     end
     return du
@@ -806,19 +585,19 @@ function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet, ::Type{T}) w
         s1 = st[1]
         @inbounds for i in rg[1]
             oln = b + i * s1
-            du[oln] = _eval_cell(K, u, p, t, oln, oln, (i, 1, 1), T)
+            du[oln] = _eval_cell(K, u, p, t, oln, (i, 1, 1), T)
         end
     elseif nd == 2
         s1 = st[1]; s2 = st[2]
         @inbounds for j in rg[2], i in rg[1]
             oln = b + i * s1 + j * s2
-            du[oln] = _eval_cell(K, u, p, t, oln, oln, (i, j, 1), T)
+            du[oln] = _eval_cell(K, u, p, t, oln, (i, j, 1), T)
         end
     elseif nd == 3
         s1 = st[1]; s2 = st[2]; s3 = st[3]
         @inbounds for k in rg[3], j in rg[2], i in rg[1]
             oln = b + i * s1 + j * s2 + k * s3
-            du[oln] = _eval_cell(K, u, p, t, oln, oln, (i, j, k), T)
+            du[oln] = _eval_cell(K, u, p, t, oln, (i, j, k), T)
         end
     else
         @inbounds for idxs in Iterators.product(rg...)
@@ -826,40 +605,22 @@ function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet, ::Type{T}) w
             for d in 1:nd
                 oln += idxs[d] * st[d]
             end
-            du[oln] = _eval_cell(K, u, p, t, oln, oln, Tuple(idxs), T)
+            du[oln] = _eval_cell(K, u, p, t, oln, Tuple(idxs), T)
         end
     end
     return du
 end
 
-# ---- Per-cell CSE builder (ess-affine) ----
+# ---- Per-cell CSE builder ----
 # Value-number the access spine structurally; any OP subtree that occurs ≥2 times
 # is sliced into an ordered recipe list and every occurrence replaced by an
 # `_NK_CACHED` read of a per-cell scratch slot. Bit-identity is automatic: the SAME
 # subexpression is computed with the SAME inputs, just once instead of many times.
 # Recipes are emitted in ascending value-number order, and a child's value number
 # is always < its parent's (post-order numbering), so a recipe only ever reads
-# LOWER slots — the box loop fills them front-to-back. Skipped for any spine with a
-# `_NK_REDUCE` (its body reads the neighbour index `n`, which the per-cell prelude —
-# run at n=0 — cannot capture). A spine with an `_NK_AREDUCE` keeps only the
+# LOWER slots — the box loop fills them front-to-back. A spine with an `_NK_AREDUCE` keeps only the
 # loop-invariant tier: its body reads the contracted dims of `midx`, which the
 # per-cell prelude does not bind, but an invariant subtree reads no dim at all.
-# Identity-deduped existence predicate (ESS-0hh): the spine is a DAG (its
-# builders memoize by node identity), and the per-path recursion was
-# exponential on a doubling chain. A predicate is path-multiplicity-
-# insensitive, so a visited set is exactly equivalent.
-_acc_has_reduce(n::_Node) = _acc_has_kind(n, _NK_REDUCE, _NodeIdMap{Nothing}())
-_acc_has_areduce(n::_Node) = _acc_has_kind(n, _NK_AREDUCE, _NodeIdMap{Nothing}())
-function _acc_has_kind(n::_Node, kind::UInt8, seen::_NodeIdMap{Nothing})
-    n.kind === kind && return true
-    haskey(seen, n) && return false
-    seen[n] = nothing
-    for c in n.children
-        _acc_has_kind(c, kind, seen) && return true
-    end
-    return false
-end
-
 # Structural key: two nodes share a value number iff their keys are equal. ACCESS
 # keys on descriptor CONTENT (`_desc_key`); an OP with a payload keys it on
 # identity.
@@ -878,11 +639,9 @@ function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
 end
 
 # A descriptor read is CELL-INVARIANT (same for every cell in the box, though it
-# may vary per call) iff it is a fixed state slot, a fixed forcing read, or a
-# scalar. Everything else (STATE_AFFINE, CONST_BOX/CELL/EDGE, FORCING_BOX, LOOP_IDX,
-# STATE_INDIRECT[_COL]) is addressed by the cell.
-@inline _acc_desc_invariant(k::UInt8) =
-    k === _AK_STATE_FIXED || k === _AK_ARR_FIXED || k === _AK_SCALAR
+# may vary per call) iff it is a fixed state slot or a fixed forcing read.
+# Every other kind is addressed by the cell.
+@inline _acc_desc_invariant(k::UInt8) = _ak_addr(k) === :fixed
 
 # A value-number key (`_acc_vn_key`) with its hash, compared type first. The
 # keys are tuples of several types; in a `Dict{Any}` two keys whose hashes share
@@ -909,22 +668,16 @@ Base.isequal(a::_VNKey, b::_VNKey) =
 
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # Every node reachable from the spine, once each (see the dense-position
-    # note below). The two kind tests ride on that walk rather than walking the
-    # spine twice more with an identity set of their own; they see the same
-    # nodes, so they give the answers of `_acc_has_reduce` / `_acc_has_areduce`.
-    # The walk stops at the first `_NK_REDUCE`, which keeps no CSE at all.
-    order, pos_of, has_reduce = _dag_postorder_until(
-        spine, _dag_children, _dag_every, n -> n.kind === _NK_REDUCE
-    )
-    has_reduce && return (spine, _ACC_NO_CSE)
+    # note below).
+    order, pos_of = _dag_postorder(spine, _dag_children, _dag_every)
     inv_only = _anyof(n -> n.kind === _NK_AREDUCE, order)
     key_to_vn = Dict{_VNKey, Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
     # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
     # exactly what earns a CSE slot — collapsing to distinct-node visits would
     # change slot decisions on shared spines), but the spine is a DAG whose
-    # per-path recursion was exponential (ESS-0hh). Mirror `_cse_count!`
-    # (compile.jl): number each UNIQUE node once in identity-deduped postorder
+    # per-path recursion was exponential. Mirror `_cse_count!`
+    # (scalar_cse.jl): number each UNIQUE node once in identity-deduped postorder
     # (a child's vn stays < its parent's, preserving the dependency-order
     # invariant the recipe tiers rely on), then propagate saturating path
     # multiplicities parent→child in reverse postorder and tally each unique
@@ -947,14 +700,23 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
             inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ? true :
                 k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
                 k === _NK_OP ? all(v -> is_inv[v], childvns) :
-                false                       # _NK_REDUCE excluded upstream; be safe
+                false
             push!(counts, 0); push!(is_op, k === _NK_OP); push!(is_inv, inv); push!(rep, n)
         end
         vn_by_pos[p] = vn
     end
-    mult_by_pos, _ = _dag_path_counts(order, pos_of, _dag_children, _dag_every, _dag_strict)
+    # Both tiers' recipes run unconditionally (the invariant tier once per call,
+    # the cell tier once per cell), while `ifelse`/`and`/`or` evaluate their
+    # guarded operands lazily. So only a value with at least one occurrence
+    # outside a guarded operand (`_cg_lazy_operand`) may take a slot: hoisting
+    # one that occurs only under a guard would evaluate what the lazy walk skips
+    # (a guarded `log` or `sqrt` raising outside its domain).
+    mult_by_pos, uncond_by_pos =
+        _dag_path_counts(order, pos_of, _dag_children, _dag_every, _cg_lazy_operand)
+    uncond = zeros(Int, length(counts))
     for p in 1:P
         counts[vn_by_pos[p]] = _sat_add(counts[vn_by_pos[p]], mult_by_pos[p])
+        uncond[vn_by_pos[p]] = _sat_add(uncond[vn_by_pos[p]], uncond_by_pos[p])
     end
     # Two-tier slot assignment, in value-number order (a child's vn is always below
     # its parent's, so each tier's recipes end up dependency-ordered): every
@@ -962,7 +724,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # cell); every remaining SHARED cell-varying OP gets a per-cell CSE slot.
     inv_slot = Dict{Int, Int}(); cell_slot = Dict{Int, Int}()
     for vn in 1:length(counts)
-        is_op[vn] || continue
+        (is_op[vn] && uncond[vn] >= 1) || continue
         if is_inv[vn]
             inv_slot[vn] = length(inv_slot) + 1
         elseif counts[vn] >= 2 && !inv_only
@@ -975,7 +737,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # Identity-memoized rewrite: `rw`'s output depends only on the node (its vn
     # and rewritten children), so a shared input node maps to ONE shared output
     # node — without the memo the per-path rebuild re-inflated a shared spine
-    # into an exponentially large tree (ESS-0hh). Values are unchanged: the
+    # into an exponentially large tree. Values are unchanged: the
     # runner evaluates the same ops on the same inputs either way.
     rw_cache = Vector{Union{Nothing, _Node}}(nothing, P)
     function rw(n::_Node)
@@ -1021,91 +783,15 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     return (rw(spine), _AccCSE(cell_recipes, cell_scratch, inv_recipes, inv_scratch))
 end
 
-# ---- Small builders (used by tests and, later, the polyhedral build) ----
+# ---- Small builders (used by tests) ----
 _acc(id::Int) = _mknode(kind = _NK_ACCESS, idx = id)
-_areduce(body::_Node) = _mknode(kind = _NK_REDUCE, children = _Node[body])
 _aop(op::Symbol, kids::_Node...) = _mknode(kind = _NK_OP, op = op, children = collect(_Node, kids))
 _alit(v::Real) = _mknode(kind = _NK_LITERAL, literal = Float64(v))
-
-# ---- Threading infrastructure (RFC threaded-eval-tier) ----------------------
-#
-# The consumer of everything below is the CODEGEN tier's chunked cell axis
-# ("Threaded cell axis for the codegen tier", codegen_kernel.jl): the section
-# builder proves at build time that every emitted `du` slot is globally unique,
-# and the runtime then runs the generated function as `nchunks` static
-# contiguous cell-ordinal chunks. The pieces below are tier-agnostic: a
-# verdict tally and the partition arithmetic.
-#
-# WHY THE CELL AXIS IS THE SAFE ONE. Every ⊕-fold a kernel hosts is WITHIN a
-# cell (`_NK_REDUCE` / `_NK_CONTRACTION` loops are per-cell); nothing
-# accumulates across cells or into `du` — each cell's value is computed from
-# `u`/`p`/`t` alone and stored to exactly one `du` slot. So chunk boundaries
-# are not observable (any split of the ordinal axis reproduces the serial
-# values BIT FOR BIT), and chunks race only if two cells target the same `du`
-# slot — which the codegen build's `_cg_covered_outs_disjoint` rules out up
-# front.
-#
-# ON BY DEFAULT. Polyester is a hard dependency and the chunked cell axis runs
-# whenever Julia has more than one thread; with one thread (`julia -t 1`, the
-# default without `JULIA_NUM_THREADS`) every section runs its serial `(1, 1)`
-# instance. Inside an ODE solve a stiff solver calls the RHS in short bursts
-# separated by linear-algebra work, so the pool may sleep between calls and a
-# dispatch pays a wake-up; the per-chunk work floor (`ESS_THREADS_MIN_WORK`)
-# keeps small sections serial for that reason. Raising that floor past a
-# section's work forces a serial run — chunking changes no bit, so it is
-# not a choice of evaluator and has no `compiler` value of its own.
-
-# The dispatch itself is thread_dispatch.jl's: Polyester's worker pool, driven
-# without a per-call allocation.
-
-# One-time threading verdicts, in the `_CASCADE_TALLY` spirit: bumped once per
-# generated SECTION (not per eval) by `_sec_prep_threads!` (codegen_kernel.jl).
-# Read it via `EarthSciAST._THREAD_TALLY`, reset with
-# `EarthSciAST._reset_thread_tally!()`.
-#   :cg_threaded              — the section's cell axes run as static chunks
-#   :cg_serial_small          — fewer than 2 chunks' worth of work (node
-#                               evaluations summed across the section's
-#                               emitted kernels' cells; a contraction counts
-#                               its fold terms too)
-#   :cg_serial_shared_outs    — two emitted cells (same or different kernel)
-#                               target the same `du` slot; the section never
-#                               chunks (see `_cg_covered_outs_disjoint`)
-const _THREAD_TALLY = Dict{Symbol, Int}()
-_tally_thread!(k::Symbol) = (_THREAD_TALLY[k] = get(_THREAD_TALLY, k, 0) + 1; nothing)
-_reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
-
-# The serial work floor: the least work, in node evaluations (the `work` of a
-# section's `_SecTCache`), one chunk of a thread dispatch must carry. A section
-# with less than two chunks' worth runs serially, so turning threads on never
-# makes a small section slower than its serial run. The default is the cost of
-# one empty fork-join of Polyester's pool over the cost of one node evaluation
-# in the cheapest generated loops (array_contraction.jl, codegen_kernel.jl),
-# both measured on a 4-thread run: a chunk below it would spend about as long
-# being dispatched as computing. Override with ESS_THREADS_MIN_WORK
-# (ESS_THREADS_MIN_CELLS, the floor's earlier name, is read when it is unset):
-# a tuning threshold, not a refusal boundary — both sides of it evaluate the
-# same bits, so no compiler refuses a rule for crossing it.
-const _THREAD_MIN_WORK_DEFAULT = 6000
-
-# The least cells per chunk for a section whose loops may read-modify-write
-# each `du` slot once per reduced term (an interchanged affine reduction): the
-# cache line two neighbouring chunks share at their boundary is then written by
-# both threads on every term, so a chunk must hold enough cells to outweigh
-# that traffic. Not read from the environment: ESS_THREADS_MIN_WORK set to 0
-# still leaves it, and set past a section's work still forces it serial.
-const _THREAD_MIN_RMW_CELLS = 512
-function _thread_min_work()
-    v = tryparse(Int, get(ENV, "ESS_THREADS_MIN_WORK", ""))
-    v === nothing && (v = tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")))
-    return something(v, _THREAD_MIN_WORK_DEFAULT)
-end
-
-@inline _threads_available() = Threads.nthreads() > 1
 
 # Total cells in a cell set, in the runners' own enumeration.
 function _cellset_ncells(cs::_CellSet)
     _is_outs(cs) && return length(cs.outs)
-    _is_contig(cs) && return length(cs.ranges[1])
+    _is_cellless(cs) && return 0
     n = 1
     for r in cs.ranges
         n *= length(r)
@@ -1130,9 +816,7 @@ function _cellsets_outs_unique(css)
     for cs in css
         if _is_outs(cs)
             push!(lists, cs.outs)
-        elseif _is_contig(cs)
-            isempty(cs.ranges[1]) || push!(boxes, (0, Int[1], UnitRange{Int}[cs.ranges[1]]))
-        else
+        elseif !_is_cellless(cs)
             any(isempty, cs.ranges) || push!(boxes, (cs.base, cs.strides, cs.ranges))
         end
     end
@@ -1250,18 +934,4 @@ function _mark_list_slots!(seen::BitVector, lo::Int, outs::Vector{Int})
         seen[k] = true
     end
     return true
-end
-
-# The static partition itself: chunk `c` of `nchunks` covers the half-open
-# 0-based ordinal range `[a, b)` of `n` cells, sizes differing by at most one.
-# A pure function of `(n, nchunks, c)` — identical run to run, no dynamic work
-# stealing, nothing that could reorder a fold. Consumed by the codegen tier's
-# chunked loop emission (codegen_kernel.jl, "Threaded cell axis"): every
-# emitted loop nest computes its own `[a, b)` from this exact arithmetic.
-@inline function _chunk_ordinals(n::Int, c::Int, nchunks::Int)
-    base = div(n, nchunks)
-    rem = n - base * nchunks
-    a = (c - 1) * base + min(c - 1, rem)
-    b = c * base + min(c, rem)
-    return a, b
 end

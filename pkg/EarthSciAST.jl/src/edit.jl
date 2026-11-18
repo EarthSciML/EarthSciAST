@@ -11,98 +11,19 @@ throw [`EditError`](@ref) instead of silently returning the input unchanged.
 """
 
 """
-    EditError(msg)
+    EditError(msg, code = "")
 
 Exception thrown when an editing operation cannot be applied — e.g. removing
 a variable, equation, reaction, event, or coupling entry that does not exist,
 or extracting a missing component. Throwing (rather than warning and
 returning the input unchanged) makes failed edits visible programmatically.
+Fields: `code` (`""` for every edit failure today: each is a misuse of the
+editing call, not a finding about the document) and `msg`.
 """
 struct EditError <: EarthSciASTError
+    code::String
     msg::String
-end
-
-Base.showerror(io::IO, e::EditError) = print(io, "EditError: ", e.msg)
-
-# ----------------------------------------------------------------------------
-# Copy-with-changes helpers
-#
-# Editing operations rebuild immutable structs. Routing every rebuild through
-# these helpers (instead of spelling out constructor arguments at each site)
-# means newly added struct fields are carried over automatically instead of
-# being silently dropped/reset. Private to edit.jl.
-# ----------------------------------------------------------------------------
-
-function _rebuild(
-        model::Model;
-        variables = model.variables,
-        equations = model.equations,
-        discrete_events = model.discrete_events,
-        continuous_events = model.continuous_events,
-        subsystems = model.subsystems
-    )
-    return Model(
-        variables, equations, discrete_events, continuous_events, subsystems;
-        tolerance = model.tolerance,
-        tests = model.tests,
-        analyses = model.analyses,
-        initialization_equations = model.initialization_equations,
-        guesses = model.guesses,
-        system_kind = model.system_kind,
-        reference = model.reference,
-    )
-end
-
-function _rebuild(
-        system::ReactionSystem;
-        species = system.species,
-        reactions = system.reactions
-    )
-    return ReactionSystem(
-        species, reactions;
-        parameters = system.parameters,
-        constraint_equations = system.constraint_equations,
-        discrete_events = system.discrete_events,
-        continuous_events = system.continuous_events,
-        subsystems = system.subsystems,
-        tolerance = system.tolerance,
-        tests = system.tests,
-        analyses = system.analyses,
-        reference = system.reference,
-    )
-end
-
-function _rebuild(
-        file::EsmFile;
-        esm = file.esm,
-        metadata = file.metadata,
-        models = file.models,
-        reaction_systems = file.reaction_systems,
-        data_sources = file.data_sources,
-        coupling = file.coupling,
-        domain = file.domain
-    )
-    return EsmFile(
-        esm, metadata;
-        models = models,
-        reaction_systems = reaction_systems,
-        data_sources = data_sources,
-        coupling = coupling,
-        domain = domain,
-        enums = file.enums,
-        index_sets = file.index_sets,
-        # The verbatim top-level declaration blocks. This helper's whole
-        # premise is that a rebuild carries every field it does not replace,
-        # and these five were being reset to `nothing` — so an edit turned a
-        # template library, or a coupling library, into an ordinary document.
-        expression_templates = file.expression_templates,
-        metaparameters = file.metaparameters,
-        component_templates = file.component_templates,
-        coordinates = file.coordinates,
-        coupling_roles = file.coupling_roles,
-        solver = file.solver,
-        document_base = file.document_base,
-    )
+    EditError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
 end
 
 # Variable operations (Section 4.1)
@@ -123,7 +44,7 @@ function add_variable(model::Model, name::String, variable::ModelVariable)::Mode
 
     new_variables[name] = variable
 
-    return _rebuild(model; variables = new_variables)
+    return reconstruct(model; variables = new_variables)
 end
 
 """
@@ -158,7 +79,7 @@ function remove_variable(model::Model, name::String)::Model
 
     delete!(new_variables, name)
 
-    return _rebuild(model; variables = new_variables)
+    return reconstruct(model; variables = new_variables)
 end
 
 """
@@ -166,8 +87,14 @@ end
 
 Rename a variable throughout the model.
 
-Updates the variable definition and all references in equations.
-Throws [`EditError`](@ref) if `old_name` does not exist.
+Renames the declaration and every reference in the model's own scope: each
+expression site ([`EXPRESSION_SITE_KINDS`](@ref): equations, initialization
+equations, guesses, update rules, bounds, events, inline-test references), and
+each place that names the variable as a string: an event affect's target, a
+`guesses` key, a bound written as a name, an update handler's `read_vars` /
+`read_params`, and an inline test's assertion variable, `initial_conditions`
+and `parameter_overrides` keys. Subsystems are separate scopes and are left
+alone. Throws [`EditError`](@ref) if `old_name` does not exist.
 """
 function rename_variable(model::Model, old_name::String, new_name::String)::Model
     if !haskey(model.variables, old_name)
@@ -178,23 +105,53 @@ function rename_variable(model::Model, old_name::String, new_name::String)::Mode
         @warn "Variable '$new_name' already exists, this will replace it"
     end
 
-    # Update variables dictionary
-    new_variables = copy(model.variables)
-    variable = new_variables[old_name]
-    delete!(new_variables, old_name)
-    new_variables[new_name] = variable
-
-    # Update equations
     substitution = Dict{String, ASTExpr}(old_name => VarExpr(new_name))
-    new_equations = [
-        Equation(
-            substitute(eq.lhs, substitution),
-            substitute(eq.rhs, substitution)
-        )
-            for eq in model.equations
-    ]
+    out = map_expressions(e -> substitute(e, substitution), model; subsystems = false)
+    ren(n::String) = n == old_name ? new_name : n
+    renkey(d) = haskey(d, old_name) ? typeof(d)(ren(k) => v for (k, v) in d) : d
 
-    return _rebuild(model; variables = new_variables, equations = new_equations)
+    # The declaration, then the name-valued sites.
+    variable = out.variables[old_name]
+    delete!(out.variables, old_name)
+    out.variables[new_name] = variable
+    for (name, v) in out.variables
+        nv = _rename_handler_reads(v, ren)
+        nv === v || (out.variables[name] = nv)
+    end
+    for events in (out.continuous_events, out.discrete_events)
+        for (i, ev) in enumerate(events)
+            events[i] = _rename_affect_targets(ren, ev)
+        end
+    end
+    haskey(out.guesses, old_name) && (out.guesses[new_name] = pop!(out.guesses, old_name))
+    for (i, t) in enumerate(out.tests)
+        out.tests[i] = _reconstruct_fields(
+            t;
+            assertions = Assertion[
+                a.variable == old_name ? _reconstruct_fields(a; variable = new_name) : a
+                    for a in t.assertions
+            ],
+            initial_conditions = renkey(t.initial_conditions),
+            parameter_overrides = renkey(t.parameter_overrides)
+        )
+    end
+    return out
+end
+
+# `v` with the names its update handlers read passed through `ren`.
+function _rename_handler_reads(v::ModelVariable, ren)
+    v.update === nothing && return v
+    any(r -> r.handler !== nothing, v.update) || return v
+    rules = ParameterUpdate[
+        r.handler === nothing ? r : reconstruct(
+                r; handler = _reconstruct_fields(
+                    r.handler;
+                    read_vars = r.handler.read_vars === nothing ? nothing : map(ren, r.handler.read_vars),
+                    read_params = r.handler.read_params === nothing ? nothing : map(ren, r.handler.read_params)
+                )
+            ) for r in v.update
+    ]
+    return reconstruct(v; update = rules)
 end
 
 # Equation operations (Section 4.2)
@@ -210,7 +167,7 @@ function add_equation(model::Model, equation::Equation)::Model
     new_equations = copy(model.equations)
     push!(new_equations, equation)
 
-    return _rebuild(model; equations = new_equations)
+    return reconstruct(model; equations = new_equations)
 end
 
 """
@@ -231,15 +188,13 @@ function remove_equation(model::Model, index::Int)::Model
     new_equations = copy(model.equations)
     deleteat!(new_equations, index)
 
-    return _rebuild(model; equations = new_equations)
+    return reconstruct(model; equations = new_equations)
 end
 
 function remove_equation(model::Model, lhs_pattern::ASTExpr)::Model
-    # Find equation with matching LHS
+    # The first equation whose LHS is structurally equal to the pattern.
     for (i, eq) in enumerate(model.equations)
-        if eq.lhs == lhs_pattern  # This requires ASTExpr equality to be defined
-            return remove_equation(model, i)
-        end
+        _expr_equal(eq.lhs, lhs_pattern) && return remove_equation(model, i)
     end
 
     throw(EditError("No equation found with LHS matching: $lhs_pattern"))
@@ -256,12 +211,13 @@ function substitute_in_equations(model::Model, bindings::Dict{String, ASTExpr}):
     new_equations = [
         Equation(
             substitute(eq.lhs, bindings),
-            substitute(eq.rhs, bindings)
+            substitute(eq.rhs, bindings);
+            _comment = eq._comment
         )
             for eq in model.equations
     ]
 
-    return _rebuild(model; equations = new_equations)
+    return reconstruct(model; equations = new_equations)
 end
 
 # Reaction operations (Section 4.3)
@@ -275,7 +231,7 @@ function add_reaction(system::ReactionSystem, reaction::Reaction)::ReactionSyste
     new_reactions = copy(system.reactions)
     push!(new_reactions, reaction)
 
-    return _rebuild(system; reactions = new_reactions)
+    return reconstruct(system; reactions = new_reactions)
 end
 
 """
@@ -292,7 +248,7 @@ function remove_reaction(system::ReactionSystem, id::String)::ReactionSystem
         throw(EditError("No reaction found with id: $id"))
     end
 
-    return _rebuild(system; reactions = new_reactions)
+    return reconstruct(system; reactions = new_reactions)
 end
 
 """
@@ -315,7 +271,7 @@ function add_species(system::ReactionSystem, name::String, species::Species)::Re
 
     push!(new_species, species)
 
-    return _rebuild(system; species = new_species)
+    return reconstruct(system; species = new_species)
 end
 
 """
@@ -350,7 +306,7 @@ function remove_species(system::ReactionSystem, name::String)::ReactionSystem
     # Remove species
     new_species = filter(s -> s.name != name, system.species)
 
-    return _rebuild(system; species = new_species)
+    return reconstruct(system; species = new_species)
 end
 
 # Event operations (Section 4.4)
@@ -364,7 +320,7 @@ function add_continuous_event(model::Model, event::ContinuousEvent)::Model
     new_events = copy(model.continuous_events)
     push!(new_events, event)
 
-    return _rebuild(model; continuous_events = new_events)
+    return reconstruct(model; continuous_events = new_events)
 end
 
 """
@@ -376,7 +332,7 @@ function add_discrete_event(model::Model, event::DiscreteEvent)::Model
     new_events = copy(model.discrete_events)
     push!(new_events, event)
 
-    return _rebuild(model; discrete_events = new_events)
+    return reconstruct(model; discrete_events = new_events)
 end
 
 """
@@ -403,7 +359,7 @@ function remove_event(model::Model, description::String)::Model
         throw(EditError("Event with description '$description' not found"))
     end
 
-    return _rebuild(model; discrete_events = new_discrete, continuous_events = new_continuous)
+    return reconstruct(model; discrete_events = new_discrete, continuous_events = new_continuous)
 end
 
 # Coupling operations (Section 4.5)
@@ -417,7 +373,7 @@ function add_coupling(file::EsmFile, entry::CouplingEntry)::EsmFile
     new_coupling = copy(file.coupling)
     push!(new_coupling, entry)
 
-    return _rebuild(file; coupling = new_coupling)
+    return reconstruct(file; coupling = new_coupling)
 end
 
 """
@@ -434,7 +390,7 @@ function remove_coupling(file::EsmFile, index::Int)::EsmFile
     new_coupling = copy(file.coupling)
     deleteat!(new_coupling, index)
 
-    return _rebuild(file; coupling = new_coupling)
+    return reconstruct(file; coupling = new_coupling)
 end
 
 """
@@ -495,7 +451,7 @@ function Base.merge(file_a::EsmFile, file_b::EsmFile)::EsmFile
     # Merge other fields (file_b takes precedence)
     merged_metadata = file_b.metadata
 
-    return _rebuild(
+    return reconstruct(
         file_b;
         esm = file_b.esm,  # Use file_b's version
         metadata = merged_metadata,
@@ -561,7 +517,7 @@ function extract(file::EsmFile, component_name::String)::EsmFile
         end
     end
 
-    return _rebuild(
+    return reconstruct(
         file;
         models = extracted_models,
         reaction_systems = extracted_reaction_systems,

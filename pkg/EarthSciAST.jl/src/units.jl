@@ -16,8 +16,8 @@ using Unitful
 # nonsense (`kmolec`, `nppb`) and make the set of legal unit strings unbounded
 # and un-pinnable across five language bindings.
 #
-# This replaces a `Unitful.uparse` call. `uparse` is the wrong tool for a
-# CROSS-BINDING contract for three reasons, each of which bit us:
+# `Unitful.uparse` is not used: it is the wrong tool for a cross-binding
+# contract for three reasons:
 #
 #   * it has an open SI-prefix mechanism, so the accepted set is not the
 #     spec's set (and cannot be, since Julia's prefix table is Julia's);
@@ -239,7 +239,7 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
 # This is the WHOLE §4.8.2 rewrite table. A degree sign is rewritten only as
 # part of `°C`/`°F`: a bare `°` (or `°K`) stays an unexpected character and the
 # string does not resolve. `%` is NOT rewritten here: it is a one-character
-# symbol token of its own (`_up_atom!`), so `%h` is `%`·`h`.
+# symbol token of its own (`_canon_lex`), so `%h` is `%`·`h`.
 const _UNIT_SPELLINGS = [
     "\u00B0C" => "degC",
     "\u00B0F" => "degF",
@@ -294,19 +294,6 @@ function _normalize_unit_string(s::AbstractString)::String
     return String(take!(io))
 end
 
-# Raised by the recursive-descent parser and caught by `parse_units`, which
-# turns it into `nothing`. Callers distinguish "unresolvable" from "absent" by
-# checking for `nothing`, and the structural validator promotes it to a hard
-# `unit_parse_error` (esm-spec §4.8.4).
-struct _UnitParseError <: EarthSciASTError
-    msg::String
-end
-
-mutable struct _UnitParser
-    src::Vector{Char}
-    pos::Int
-end
-
 # ---------------------------------------------------------------------------
 # AFFINE UNITS INSIDE A COMPOSITION.
 #
@@ -324,208 +311,14 @@ end
 # ---------------------------------------------------------------------------
 _linear(u) = Unitful.absoluteunit(u)
 _u_mul(a, b) = _linear(a) * _linear(b)
-_u_div(a, b) = _linear(a) / _linear(b)
 _u_pow(a, n) = _linear(a)^n
-
-_up_eof(p::_UnitParser) = p.pos > length(p.src)
 
 # §4.8.2 whitespace is ASCII: space, tab, carriage return, line feed.
 _up_space(c::Char) = c == ' ' || c == '\t' || c == '\r' || c == '\n'
 
-function _up_skip_space!(p::_UnitParser)
-    while !_up_eof(p) && _up_space(p.src[p.pos])
-        p.pos += 1
-    end
-    return
-end
-
-# Peek at the next non-space character, or `nothing` at end of input.
-function _up_peek(p::_UnitParser)
-    _up_skip_space!(p)
-    return _up_eof(p) ? nothing : p.src[p.pos]
-end
-
 _up_digit(c::Char) = '0' <= c <= '9'
 # The §4.8.2 identifier characters: a RUN of these is one token.
 _up_ident(c::Char) = ('a' <= c <= 'z') || ('A' <= c <= 'Z') || _up_digit(c) || c == '_'
-# Can `c` BEGIN an atom? This is the lookahead that drives implicit
-# multiplication (`"ppb^-1 s^-1"`, `"%h"`).
-_up_starts_atom(c) = c !== nothing && (_up_ident(c) || c == '(' || c == '%')
-
-# Scan one RUN token starting at `p.pos` (esm-spec §4.8.2): a maximal sequence
-# of identifier characters. A run of digits alone, optionally followed by `.`
-# and a second digit-only run, is a NUMBER; every other run is ONE symbol, so
-# `s1`, `1s`, `kgm` are never split into a table key and a remainder, and `1e3`
-# is a symbol, not exponent notation. Returns `(text, is_number)`.
-function _up_run!(p::_UnitParser)
-    start = p.pos
-    while !_up_eof(p) && _up_ident(p.src[p.pos])
-        p.pos += 1
-    end
-    run = p.src[start:(p.pos - 1)]
-    all(_up_digit, run) || return (String(run), false)
-    if p.pos + 1 <= length(p.src) && p.src[p.pos] == '.' && _up_digit(p.src[p.pos + 1])
-        p.pos += 1
-        frac = p.pos
-        while !_up_eof(p) && _up_ident(p.src[p.pos])
-            p.pos += 1
-        end
-        return (String(p.src[start:(p.pos - 1)]), all(_up_digit, p.src[frac:(p.pos - 1)]))
-    end
-    return (String(run), true)
-end
-
-# unit := term (('*' | '/')? term)*
-#
-# Whitespace between two terms means MULTIPLICATION. Division is LEFT
-# associative: "L/mol/s" is L·mol⁻¹·s⁻¹, not L/(mol/s).
-function _up_unit!(p::_UnitParser)
-    u = _up_term!(p)
-    while true
-        c = _up_peek(p)
-        if c == '*' || c == '/'
-            p.pos += 1
-            rhs = _up_term!(p)
-            u = c == '*' ? _u_mul(u, rhs) : _u_div(u, rhs)
-        elseif _up_starts_atom(c)
-            # Juxtaposition. The scanner is greedy over identifier characters,
-            # so `ms` stays ONE symbol (millisecond) rather than m*s —
-            # juxtaposition can only arise across a real token boundary.
-            u = _u_mul(u, _up_term!(p))
-        else
-            return u
-        end
-    end
-    return
-end
-
-# term := atom (('^' | '**') exponent)?
-function _up_term!(p::_UnitParser)
-    u = _up_atom!(p)
-    c = _up_peek(p)
-    if c == '^'
-        p.pos += 1
-    elseif c == '*' && p.pos + 1 <= length(p.src) && p.src[p.pos + 1] == '*'
-        # `**` is the Python/pint spelling of `^` ("Pa*m**3"). `_up_peek` has
-        # already skipped whitespace, so `p.pos` is on the first `*`.
-        p.pos += 2
-    else
-        return u
-    end
-    return _u_pow(u, _up_exponent!(p))
-end
-
-# atom := '1' | symbol | '(' unit ')'
-function _up_atom!(p::_UnitParser)
-    _up_skip_space!(p)
-    _up_eof(p) && throw(_UnitParseError("unexpected end of input"))
-    c = p.src[p.pos]
-
-    if c == '('
-        p.pos += 1
-        u = _up_unit!(p)
-        _up_peek(p) == ')' || throw(_UnitParseError("missing ')'"))
-        p.pos += 1
-        return u
-    end
-
-    if c == '%'
-        # `%` is a one-character symbol token whatever is adjacent (§4.8.2).
-        p.pos += 1
-        return u"percent"
-    end
-
-    _up_ident(c) || throw(_UnitParseError("unexpected '$c' at position $(p.pos)"))
-    tok, is_number = _up_run!(p)
-    if is_number
-        # A numeric atom is admissible ONLY when it is the LITERAL `1` -- the
-        # leading `1` of `1/s`. Any other number (`1000`, `0.5`, and also `01`
-        # and `1.0`) is a SCALING FACTOR, and a unit string denotes a UNIT, not
-        # a quantity. This is not pedantry: `(m/s)^-1/3` -- an author reaching
-        # for a rational exponent -- parses under this grammar as
-        # `((m/s)^-1)/3`, and the five bindings gave it three different
-        # meanings (magnitude dropped, magnitude retained, whole string
-        # rejected). Rejecting the scaling factor makes `^(-1/3)` the only
-        # spelling of that unit, so the same string cannot silently mean two
-        # things.
-        tok == "1" || throw(
-            _UnitParseError(
-                "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"
-            )
-        )
-        return Unitful.NoUnits
-    end
-    tok == "dimensionless" && return Unitful.NoUnits
-    u = get(_UNIT_REGISTRY, tok, nothing)
-    u === nothing && throw(_UnitParseError("unknown unit '$tok'"))
-    return u
-end
-
-# exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
-#
-# RATIONAL exponents are legitimate, not a curiosity: `1/s^0.5` is the noise
-# intensity of an SDE and is already in the corpus. A grammar restricted to
-# integers cannot express it, and under a hard-error severity that is a FALSE
-# REJECTION of a well-formed file — so the exponent is a Rational and the
-# result is `Unitful`'s rational-power representation.
-function _up_exponent!(p::_UnitParser)
-    _up_skip_space!(p)
-    _up_eof(p) && throw(_UnitParseError("expected an exponent"))
-
-    # Parenthesised rational: `m^(1/2)`.
-    if p.src[p.pos] == '('
-        p.pos += 1
-        num = _up_signed_int!(p)
-        _up_peek(p) == '/' || throw(_UnitParseError("expected '/' in a rational exponent"))
-        p.pos += 1
-        den = _up_signed_int!(p)
-        den == 0 && throw(_UnitParseError("zero denominator in a rational exponent"))
-        _up_peek(p) == ')' || throw(_UnitParseError("missing ')' after a rational exponent"))
-        p.pos += 1
-        return num // den
-    end
-
-    negative = _up_minus!(p)
-    _up_eof(p) && throw(_UnitParseError("expected an exponent"))
-    start = p.pos
-    _up_digit(p.src[p.pos]) || throw(
-        _UnitParseError(
-            "an exponent must be an integer, a decimal, or a rational ^(p/q) at position $start"
-        )
-    )
-    tok, is_number = _up_run!(p)
-    is_number || throw(_UnitParseError("malformed exponent '$tok' at position $start"))
-    # EXACT: a decimal `1.5` is 15//10, never a float rationalised back.
-    ip, fp = occursin('.', tok) ? split(tok, '.') : (tok, "")
-    n = tryparse(Int, ip * fp)
-    (n === nothing || length(fp) > 18) && throw(_UnitParseError("exponent '$tok' out of range"))
-    v = isempty(fp) ? n : n // 10^length(fp)
-    return negative ? -v : v
-end
-
-# An optional exponent sign. Only `-` exists: a positive exponent is unsigned
-# and `m^+2` does not resolve (§4.8.2). Whitespace may follow the sign.
-function _up_minus!(p::_UnitParser)
-    _up_skip_space!(p)
-    neg = !_up_eof(p) && p.src[p.pos] == '-'
-    neg && (p.pos += 1)
-    _up_skip_space!(p)
-    return neg
-end
-
-# A bare signed integer — the components of a parenthesised rational exponent.
-function _up_signed_int!(p::_UnitParser)
-    negative = _up_minus!(p)
-    start = p.pos
-    (!_up_eof(p) && _up_digit(p.src[p.pos])) ||
-        throw(_UnitParseError("expected an integer at position $start"))
-    tok, is_number = _up_run!(p)
-    (is_number && !occursin('.', tok)) ||
-        throw(_UnitParseError("expected an integer at position $start"))
-    v = tryparse(Int, tok)
-    v === nothing && throw(_UnitParseError("integer '$tok' out of range"))
-    return negative ? -v : v
-end
 
 """
     parse_units_reason(unit_str) -> Union{String, Nothing}
@@ -541,17 +334,8 @@ the corpus-pinned `unit_parse_error` message text.
 """
 function parse_units_reason(unit_str::AbstractString)::Union{String, Nothing}
     isempty(unit_str) && return nothing
-    p = _UnitParser(collect(_normalize_unit_string(unit_str)), 1)
-    try
-        _up_unit!(p)
-        _up_skip_space!(p)
-        _up_eof(p) || throw(_UnitParseError("unexpected trailing input"))
-        return nothing
-    catch e
-        e isa _UnitParseError && return e.msg
-        e isa ArgumentError && return sprint(showerror, e)
-        rethrow()
-    end
+    r = _resolve_units(unit_str)
+    return r isa String ? r : nothing
 end
 
 """
@@ -566,54 +350,74 @@ grammar (§4.8.2):
     atom     := '1' | symbol | '(' unit ')'
 
 A symbol is a whole run of `[A-Za-z0-9_]` (or `%`) and must be a table key;
-the only numeric atom is the literal `1`. Whitespace between terms is multiplication (`"ppb^-1 s^-1"`); division is
-LEFT-associative (`"L/mol/s"` is L·mol⁻¹·s⁻¹); parentheses group a compound
-denominator (`"J/(mol*K)"`). An exponent may be RATIONAL — `"1/s^0.5"` is the
-noise intensity of an SDE and is in the corpus.
+the only numeric atom is the literal `1`. Whitespace between terms is
+multiplication (`"ppb^-1 s^-1"`); division is LEFT-associative (`"L/mol/s"` is
+L·mol⁻¹·s⁻¹); parentheses group a compound denominator (`"J/(mol*K)"`). An
+exponent may be RATIONAL — `"1/s^0.5"` is the noise intensity of an SDE.
 
 Normalised before parsing: `µ`/`μ`→`u`, `°C`→`degC`, `°F`→`degF`, `Ω`→`Ohm`,
 `·`/`⋅`→`*`, and superscript runs (`m²`, `cm³`, `m⁻³`) → `^n`. `""`, `"1"` and
 `"dimensionless"` are the dimensionless unit.
 
+The string is parsed once, by the parser the canonical spelling uses
+(`_unit_factors`), and its factor list is resolved through the registry. A
+string that is a single symbol to the first power (`"degC"`, `"(degC)"`) is the
+registry entry itself, so a standalone affine unit keeps its identity; inside a
+composition an affine unit is its absolute counterpart (`_linear`).
+
 Returns `nothing` when the string does not parse or names a symbol outside the
 registry. That is a DEFECT IN THE FILE, not a limit of the checker: the
 structural validator promotes it to a hard `unit_parse_error` (§4.8.4). It is
-therefore silent here — the caller decides the severity, and an incomplete
-registry must be fixed by extending the registry, never by downgrading this to
-a warning.
+silent here — the caller decides the severity.
 """
 function parse_units(unit_str::AbstractString)::Union{Unitful.Units, Nothing}
     # Only "" is the empty unit. A whitespace-only string has no tokens and is
     # rejected by the grammar (§4.8.2), not read as dimensionless.
     isempty(unit_str) && return Unitful.NoUnits
-
-    p = _UnitParser(collect(_normalize_unit_string(unit_str)), 1)
-    try
-        u = _up_unit!(p)
-        _up_skip_space!(p)
-        _up_eof(p) || throw(_UnitParseError("unexpected trailing input"))
-        return u
-    catch e
-        e isa _UnitParseError && return nothing
-        # Unitful can still reject an otherwise well-formed composition (e.g. a
-        # power it cannot represent). Unresolvable is unresolvable.
-        e isa ArgumentError && return nothing
-        rethrow()
-    end
+    r = _resolve_units(unit_str)
+    return r isa String ? nothing : r
 end
 
+# The unit `unit_str` denotes, or the reason it denotes none.
+function _resolve_units(unit_str::AbstractString)
+    fs = _unit_factors(unit_str)
+    fs isa String && return fs
+    units = Any[]
+    for (sym, _) in fs
+        u = sym == "%" ? u"percent" : get(_UNIT_REGISTRY, sym, nothing)
+        u === nothing && return "unknown unit '$sym'"
+        push!(units, u)
+    end
+    length(fs) == 1 && isone(fs[1][2]) && return units[1]
+    out = Unitful.NoUnits
+    try
+        for (u, (_, q)) in zip(units, fs)
+            out = _u_mul(out, _u_pow(u, _unit_exponent(q)))
+        end
+    catch e
+        # Unitful can still reject an otherwise well-formed composition (a
+        # power it cannot represent). Unresolvable is unresolvable.
+        (e isa ArgumentError || e isa OverflowError || e isa InexactError) ||
+            rethrow()
+        return sprint(showerror, e)
+    end
+    return out
+end
+
+# A factor exponent as Unitful takes it: an `Int` when integral.
+_unit_exponent(q::Rational{BigInt}) =
+    isone(denominator(q)) ? Int(numerator(q)) : Rational{Int}(q)
+
 # ---------------------------------------------------------------------------
-# The canonical unit spelling (esm-spec §4.8.2 "Canonical spelling"). The
-# authority is the Lean definition `Esm.Units.canon`
-# (formal/Esm/Units/Canonical.lean); this is a port of it, and the
-# cross-binding fixture tests/conformance/canonical/unit_spelling.json pins
-# the output.
+# The §4.8.2 lexer and parser, ports of the Lean `Esm.Units.lex` and
+# `Esm.Units.parse` (formal/Esm/Units/), and the canonical unit spelling
+# (esm-spec §4.8.2 "Canonical spelling", the Lean `Esm.Units.canon`;
+# tests/conformance/canonical/unit_spelling.json pins its output).
 #
-# It rewrites the PARSED string; it does not resolve it. Symbols are kept as
-# written (`km` stays `km`), no table lookup decides the spelling, and nothing
-# cancels across the fraction bar (`mol/mol` stays `mol/mol`). It has its own
-# lexer and parser, mirroring the Lean ones, because the resolving parser above
-# rejects unknown symbols and the spelling keeps them.
+# The parser builds a factor list and keeps every symbol as written: resolving
+# the symbols through the registry is `parse_units`' step, so the spelling
+# keeps a symbol the registry does not know (`km` stays `km`, and nothing
+# cancels across the fraction bar: `mol/mol` stays `mol/mol`).
 # ---------------------------------------------------------------------------
 
 # One token: `kind` is :sym, :num, :star, :dstar, :slash, :caret, :lp, :rp or
@@ -694,9 +498,11 @@ end
 
 const _CanonFactor = Tuple{String, Rational{BigInt}}
 
-# Thrown inside the spelling parser on input outside the grammar; caught in
-# `_canonical_units`, which then returns the string unchanged.
-struct _CanonFail <: EarthSciASTError end
+# Thrown inside the parser on input outside the grammar, with the reason.
+struct _CanonFail <: EarthSciASTError
+    msg::String
+end
+_CanonFail() = _CanonFail("malformed unit string")
 
 mutable struct _CanonParser
     toks::Vector{_CanonTok}
@@ -774,12 +580,22 @@ end
 function _cp_atom!(p::_CanonParser)::Vector{_CanonFactor}
     k = _cp_kind(p)
     if k == :num
-        # Any number but the literal `1` is a scaling factor.
-        _cp_take!(p).text == "1" || throw(_CanonFail())
+        # Any number but the literal `1` (including `01` and `1.0`) is a
+        # SCALING FACTOR, and a unit string denotes a unit, not a quantity:
+        # `(m/s)^-1/3` reads as `((m/s)^-1)/3`, so `^(-1/3)` must be the only
+        # spelling of that unit.
+        _cp_take!(p).text == "1" || throw(
+            _CanonFail(
+                "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); " *
+                    "a rational exponent is spelled ^(p/q)"
+            )
+        )
         return _CanonFactor[]
     elseif k == :sym
         name = _cp_take!(p).text
         return name == "dimensionless" ? _CanonFactor[] : _CanonFactor[(name, 1 // 1)]
+    elseif k == :eof
+        throw(_CanonFail("unexpected end of input"))
     elseif k == :lp
         _cp_take!(p)
         inner = _cp_unit!(p)
@@ -811,11 +627,64 @@ end
 _canon_symbol_ok(s::String) =
     s == "%" || (!isempty(s) && all(_up_ident, s) && !_canon_digit_run(collect(s)))
 
+# THE §4.8.2 parser's entry: the factor list of `unit` (each symbol with its
+# exponent, `*` and juxtaposition concatenating, `/` negating, in the order
+# written), or the reason the string is outside the grammar.
+function _unit_factors(unit::AbstractString)::Union{Vector{_CanonFactor}, String}
+    cs = collect(_normalize_unit_string(unit))
+    toks = _canon_lex(cs)
+    toks === nothing && return "unexpected character in '$(String(cs))'"
+    p = _CanonParser(toks, 1)
+    try
+        fs = _cp_unit!(p)
+        p.i == length(toks) + 1 || return "unexpected trailing input"
+        return fs
+    catch e
+        e isa _CanonFail && return e.msg
+        rethrow()
+    end
+end
+
+"""
+    _canonical_unit_factors(unit) -> Union{Nothing, Vector{_CanonFactor}}
+
+The factors of the canonical spelling of `unit` (esm-spec §4.8.2): the parse's
+factors normalized per side (`_canon_side`), the numerator side (positive
+exponents) then the denominator side. `nothing` when the string is outside the
+grammar.
+"""
+function _canonical_unit_factors(unit::AbstractString)::Union{Nothing, Vector{_CanonFactor}}
+    fs = _unit_factors(unit)
+    fs isa String && return nothing
+    return vcat(_canon_side(filter(f -> f[2] > 0, fs)), _canon_side(filter(f -> !(f[2] > 0), fs)))
+end
+
+"""
+    _spell_unit_factors(factors) -> String
+
+The canonical spelling of a factor list from [`_canonical_unit_factors`](@ref):
+the positive-exponent factors joined by `*` (`1` when there are none), then
+`/` and the others written with their exponent's absolute value,
+parenthesized when there is more than one.
+"""
+function _spell_unit_factors(l)::String
+    num = [_canon_factor(f) for f in l if f[2] > 0]
+    den = [_canon_factor(f) for f in l if !(f[2] > 0)]
+    out = isempty(num) ? "1" : join(num, "*")
+    if length(den) == 1
+        out *= "/" * den[1]
+    elseif length(den) > 1
+        out *= "/(" * join(den, "*") * ")"
+    end
+    return out
+end
+
 """
     _canonical_units(unit) -> String
 
 The canonical spelling of a unit string (esm-spec §4.8.2), a port of the Lean
-`Esm.Units.canon`.
+`Esm.Units.canon`: [`_spell_unit_factors`](@ref) of
+[`_canonical_unit_factors`](@ref).
 
 The numerator is the factors with a positive exponent, each symbol once with
 its exponents summed, sorted by symbol (codepoint order) and joined by `*`. The
@@ -831,66 +700,43 @@ spelling would have to write a symbol containing `.`, and when it would drop
 """
 function _canonical_units(unit::AbstractString)::String
     isempty(unit) && return "1"
-    toks = _canon_lex(collect(_normalize_unit_string(unit)))
-    toks === nothing && return String(unit)
-    p = _CanonParser(toks, 1)
-    factors = try
-        fs = _cp_unit!(p)
-        p.i == length(toks) + 1 || return String(unit)
-        fs
-    catch e
-        e isa _CanonFail && return String(unit)
-        rethrow()
-    end
-    num = _canon_side(filter(f -> f[2] > 0, factors))
-    den = _canon_side(filter(f -> f[2] <= 0, factors))
-    kept = Set{String}(first.(vcat(num, den)))
+    factors = _unit_factors(unit)
+    factors isa String && return String(unit)
+    l = _canonical_unit_factors(unit)
+    kept = Set{String}(first.(l))
     all(_canon_symbol_ok, kept) || return String(unit)
-    # `%` is a table key in every other binding; here the resolving parser
+    # `%` is a table key in every other binding; here the resolver
     # special-cases it instead of registering it.
     all(f -> f[1] in kept || f[1] == "%" || haskey(_UNIT_REGISTRY, f[1]), factors) ||
         return String(unit)
-    spelled = isempty(num) ? "1" : join(map(_canon_factor, num), "*")
-    if length(den) == 1
-        spelled *= "/" * _canon_factor(den[1])
-    elseif !isempty(den)
-        spelled *= "/(" * join(map(_canon_factor, den), "*") * ")"
-    end
-    return spelled
+    return _spell_unit_factors(l)
 end
 
 # ---------------------------------------------------------------------------
 # The dimensional engine.
 #
-# THE CENTRAL INVARIANT (bug audit 2026-07-14, finding J1): a dimensional rule
+# THE CENTRAL INVARIANT: a dimensional rule
 # has THREE possible outcomes, and the first two must never be conflated:
 #
 #   * a known dimension        → the `Unitful.Units` value
 #   * PROVABLY INCONSISTENT    → push a message onto `findings`, return `nothing`
 #   * UNKNOWN / indeterminate  → return `nothing`, push NOTHING
 #
-# Before this was fixed, every rule signalled a provable inconsistency by
-# `@warn`-ing and returning `nothing` — the *same* value it returns for an
-# undeclared variable or an operator with no rule — so a violation could not be
-# distinguished from ignorance and `validate_equation_dimensions` counted both
-# as consistent. A violation was structurally incapable of becoming an error.
-#
-# Callers therefore learn "this expression is provably wrong" by checking
+# Callers learn "this expression is provably wrong" by checking
 # whether `findings` GREW, never by checking the returned value against
 # `nothing`. `nothing` alone always means "cannot say".
 #
 # Corollary (conservatism): a rule that cannot determine ALL of its operands'
 # dimensions must return `nothing` rather than guess, because a guessed
 # dimension propagates upward and can manufacture a FALSE inconsistency at an
-# enclosing node. `_product_rule` used to skip unknown factors and return the
-# product of the known ones — a wrong dimension, presented as a known one.
+# enclosing node.
 #
 # Each rule is `(expr::OpExpr, var_units, findings::Vector{String}) -> Union{Unitful.Units, Nothing}`,
 # dispatched through the const `_DIMENSION_RULES` table below.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# IMPLICIT UNITS ON NUMERIC LITERALS — FABRICATION #1.
+# IMPLICIT UNITS ON NUMERIC LITERALS.
 #
 # A bare number has an INDETERMINATE dimension, not a dimensionless one. Nothing
 # in the AST says whether `273.15` is a pure number or a temperature offset,
@@ -942,7 +788,8 @@ function _exponent_rational(v)::Union{Rational{Int}, Nothing}
     isfinite(v) || return nothing
     try
         return isinteger(v) ? Rational{Int}(Int(v)) : rationalize(Int, float(v))
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing  # outside Int's range
     end
 end
@@ -1023,70 +870,20 @@ const _ScopedUnits = Dict{String, Union{String, Nothing}}
 _scoped_unit(units) =
     (units === nothing || isempty(units) || parse_units(units) === nothing) ? nothing : units
 
-# Every member of a component — a model's `variables`, a reaction system's
-# `species` and `parameters` — with its declared unit (see `_ScopedUnits`).
-function _component_member_units(c)::Vector{Pair{String, Union{String, Nothing}}}
-    out = Pair{String, Union{String, Nothing}}[]
-    if c isa Model
-        for (name, var) in c.variables
-            push!(out, name => _scoped_unit(var.units))
-        end
-    elseif c isa ReactionSystem
-        for s in c.species
-            push!(out, s.name => _scoped_unit(s.units))
-        end
-        for p in c.parameters
-            push!(out, p.name => _scoped_unit(p.units))
-        end
-    end
-    return out
-end
-
-# Register `<prefix>.<member>` for every member of `c` and, recursively, of
-# every RESOLVED subsystem it carries. An unresolved `SubsystemRef` contributes
-# nothing.
-function _collect_scoped_units!(out::_ScopedUnits, prefix::AbstractString, c)
-    for (name, units) in _component_member_units(c)
-        out["$prefix.$name"] = units
-    end
-    (c isa Model || c isa ReactionSystem) || return out
-    for (sub_name, sub) in c.subsystems
-        (sub isa Model || sub isa ReactionSystem) || continue
-        _collect_scoped_units!(out, "$prefix.$sub_name", sub)
-    end
-    return out
-end
+# The declared unit of every member of the scoped index `ix` (see `_ScopedUnits`).
+_scoped_units(ix::_ScopedIndex)::_ScopedUnits =
+    _ScopedUnits(k => _scoped_unit(d.decl.units) for (k, d) in ix.members)
 
 # The document-wide part of the scoped map: `<System>.<member>` (and deeper)
 # for every top-level model and reaction system of `file`. It does not depend
 # on the component doing the referencing, so a validation pass builds it once.
-function _toplevel_scoped_units(file)::_ScopedUnits
-    out = _ScopedUnits()
-    file === nothing && return out
-    if file.models !== nothing
-        for (name, m) in file.models
-            _collect_scoped_units!(out, name, m)
-        end
-    end
-    if file.reaction_systems !== nothing
-        for (name, rs) in file.reaction_systems
-            _collect_scoped_units!(out, name, rs)
-        end
-    end
-    return out
-end
+_toplevel_scoped_units(file)::_ScopedUnits = _scoped_units(_scoped_index(file))
 
 # The component-relative part: `<sub>.<member>` (and deeper) through
 # `component`'s own subsystems.
-function _relative_scoped_units(component)::_ScopedUnits
-    out = _ScopedUnits()
-    (component isa Model || component isa ReactionSystem) || return out
-    for (sub_name, sub) in component.subsystems
-        (sub isa Model || sub isa ReactionSystem) || continue
-        _collect_scoped_units!(out, sub_name, sub)
-    end
-    return out
-end
+_relative_scoped_units(component)::_ScopedUnits =
+    component isa Union{Model, ReactionSystem} ?
+    _scoped_units(_scoped_index(pairs(component.subsystems))) : _ScopedUnits()
 
 """
     scoped_reference_units(file, component) -> Dict{String, Union{String, Nothing}}
@@ -1112,7 +909,16 @@ struct _UnitEnv <: AbstractDict{String, String}
     own::Dict{String, String}
     relative::_ScopedUnits
     toplevel::_ScopedUnits
+    # The document's independent variable (esm-spec §4.9.1): undeclared, it
+    # has the time dimension in seconds, and a `D` with no `wrt` is taken
+    # with respect to it.
+    indep::String
 end
+_UnitEnv(own, relative, toplevel) = _UnitEnv(own, relative, toplevel, "t")
+
+# The independent variable `var_units` types; `"t"` for a plain dictionary.
+_indep_of(env::_UnitEnv) = env.indep
+_indep_of(::AbstractDict) = "t"
 
 function _lookup(env::_UnitEnv, name)::Union{String, Nothing}
     v = get(env.own, name, nothing)
@@ -1362,8 +1168,8 @@ end
 # `NoDims` (esm-spec §4.8.1 makes it an axis, and the other four bindings carry
 # it as one), so this binding cannot tell an angle from a pure number by
 # DIMENSION and must read the unit's own symbol. `:Steradian` is deliberately
-# absent: `sr` is `rad^2`, and the circular argument is now CONVERTED to radians
-# (issue #409) — multiplying by `scale` where `scale^2` was meant would be
+# absent: `sr` is `rad^2`, and the circular argument is CONVERTED to radians —
+# multiplying by `scale` where `scale^2` was meant would be
 # silently wrong. `sr` is NOT thereby admitted as a pure number either; see
 # `_ANGLE_AXIS_UNIT_NAMES` / `_is_angle_bearing` below, which is the same symbol
 # read widened to the whole axis.
@@ -1435,7 +1241,7 @@ _is_angle_free_number(u)::Bool =
 # Is `u` dimensionless **at scale 1** — a PURE NUMBER?
 #
 # This is what esm-spec §4.8.3's "the argument MUST be dimensionless" means for
-# a strict transcendental (issue #409): `ppm` and `percent` are dimensionless
+# a strict transcendental: `ppm` and `percent` are dimensionless
 # too, and `log(x [ppm])` has two defensible readings — the log of the ppm
 # NUMBER, or the log of the mole fraction — that differ by `ln(1e-6) =
 # 13.8155…`. Dimension alone cannot tell them apart, so the checker refuses
@@ -1487,7 +1293,7 @@ end
     angle_normalization_factor(u) -> Union{Float64, Nothing}
 
 The factor that brings a quantity in `u` to RADIANS, when `u` is a plane angle
-at a scale other than 1 (esm-spec §4.8.3, issue #409).
+at a scale other than 1 (esm-spec §4.8.3).
 
 `nothing` for anything else — a pure number, a `rad`, a dimensional unit — so a
 document that declares no scaled angle is rewritten not at all.
@@ -1577,9 +1383,8 @@ _minmax_rule(expr, var_units, findings) =
 )
 
 # "*": multiply dimensions. A SINGLE indeterminate factor makes the whole
-# product indeterminate — FABRICATION #2. Skipping the unknown factor and
-# returning the product of the known ones silently asserts the unknown one is
-# dimensionless, which is exactly wrong for the implicit-unit constants the
+# product indeterminate. Skipping the unknown factor and returning the product
+# of the known ones would assert the unknown one is dimensionless, which is wrong for the implicit-unit constants the
 # corpus multiplies by: `conc_ppb * 1.23` is a ppb→µg/m³ conversion, and
 # reporting its dimension as "ppb" manufactures a mismatch against the declared
 # µg/m³. See the conservatism corollary above.
@@ -1620,7 +1425,7 @@ end
 # dimensionless — a provable inconsistency when its dimension is known and
 # non-trivial.
 #
-# FABRICATION #4: a SYMBOLIC exponent (`x^alpha` — a fitted reaction order is
+# A SYMBOLIC exponent (`x^alpha` — a fitted reaction order is
 # ordinary chemistry) makes the result's dimension depend on alpha's RUNTIME
 # VALUE, so it is genuinely undeterminable. Assuming the base's dimension
 # manufactures a clean `1/s` for `k2 * x^alpha * z^beta` and then reports a
@@ -1634,7 +1439,7 @@ function _power_rule(expr, var_units, findings)
     base_dim = _expr_dimensions!(findings, expr.args[1], var_units)
 
     # The exponent is read by VALUE off the AST, not through the engine: the
-    # engine reports every literal as indeterminate (fabrication #1), and a
+    # engine reports every literal as indeterminate (esm-spec §4.8.4), and a
     # literal exponent is precisely the case that makes `^` computable. A
     # CONSTANT EXPRESSION over literals (`3/2`, `-(1)`, a unitless `const`)
     # folds to the exact rational it denotes and is used exactly as that
@@ -1671,21 +1476,23 @@ function _power_rule(expr, var_units, findings)
     # cannot represent is unknown, not an inconsistency.
     try
         return isinteger(power) ? base_dim^Int(power) : base_dim^power
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing
     end
 end
 
 # "sqrt": halves the dimension. NOT a transcendental — `sqrt(area)` is a
 # perfectly ordinary dimensional operation, and treating it as requiring a
-# dimensionless argument (as this module used to) manufactures false positives.
+# dimensionless argument manufactures false positives.
 function _sqrt_rule(expr, var_units, findings)
     length(expr.args) == 1 || return nothing
     base_dim = _expr_dimensions!(findings, expr.args[1], var_units)
     base_dim === nothing && return nothing
     try
         return base_dim^(1 // 2)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         # Unitful rejects a half-power that is not representable (odd exponent
         # on a base unit). Unknown, not an inconsistency — the AUTHOR may have a
         # non-SI convention we cannot model.
@@ -1718,7 +1525,7 @@ function _dimensionless_arg_rule(expr, var_units, findings)
         )
         return nothing
     end
-    # "Dimensionless" means dimensionless AT SCALE 1 (issue #409): `ppm` and
+    # "Dimensionless" means dimensionless AT SCALE 1: `ppm` and
     # `percent` pass every dimension-only test, and the two readings of
     # `log(x [ppm])` differ by `ln(1e-6)`.
     if arg_dim !== nothing && !_is_pure_number(arg_dim)
@@ -1766,8 +1573,7 @@ function _circular_arg_rule(expr, var_units, findings)
     # An ANGLE is admitted WHATEVER its scale, because `deg` → `rad` is exact and
     # has no second reading: `_normalize_angle_arguments!` converts it on the
     # flatten path before anything evaluates it. Dimensionless at a scale OTHER
-    # than 1 (`percent`) is REFUSED, for the same reason `log(x [ppm])` is
-    # (issue #409).
+    # than 1 (`percent`) is REFUSED, for the same reason `log(x [ppm])` is.
     if arg_dim !== nothing && !_is_plane_angle(arg_dim) && !_is_pure_number(arg_dim)
         push!(findings, _scaled_argument_message(expr.op, arg_dim))
         return nothing
@@ -1812,7 +1618,7 @@ function _inverse_circular_rule(expr, var_units, findings)
         return nothing
     end
     # A dimensionless RATIO is a PURE NUMBER, not a `percent` whose reading is
-    # unstated (issue #409).
+    # unstated.
     if arg_dim !== nothing && !_is_pure_number(arg_dim)
         push!(findings, _scaled_argument_message(expr.op, arg_dim))
         return nothing
@@ -1904,23 +1710,23 @@ end
 # "D": derivative — the differentiated variable's dimension over the `wrt`
 # variable's dimension.
 #
-# FABRICATION #3: an UNDECLARED independent variable has an unknown dimension,
+# An UNDECLARED independent variable has an unknown dimension,
 # so the derivative's dimension is unknown too. Defaulting `t` to SECONDS is a
 # false-positive factory: in a nondimensionalized model (state and RHS both
 # declared "1", `t` undeclared) it manufactures `1/s` on the left against `1` on
 # the right and reports a mismatch in a perfectly well-formed file.
 #
-# No coverage is lost. The EQUATION-level rule (`equation_unit_findings`) still
+# The EQUATION-level rule (`equation_unit_findings`) still
 # rejects a derivative equation that no choice of time unit could reconcile,
 # which is what the invalid corpus actually pins.
 function _derivative_rule(expr, var_units, findings)
-    wrt = expr.wrt !== nothing ? expr.wrt : "t"
+    wrt = expr.wrt !== nothing ? expr.wrt : _indep_of(var_units)
     # esm-spec §4.2 "Arity of `D`": the STRUCTURAL time derivative is strictly
     # unary, but a REWRITE-TARGET `D` (spatial `wrt`) MAY carry trailing
     # auxiliary operands after `args[1]` — the per-face boundary/halo values a
     # discretization rule binds and consumes. They carry no evaluator semantics,
     # so the dimensional rule reads `args[1]` alone and ignores the rest.
-    max_args = wrt == "t" ? 1 : typemax(Int)
+    max_args = _is_time_derivative(expr) ? 1 : typemax(Int)
     if length(expr.args) < 1 || length(expr.args) > max_args
         @debug "Derivative operator D requires exactly 1 argument"
         return nothing
@@ -1943,7 +1749,7 @@ end
 # than requiring a dimensionless one. The union adds the spec-adjacent
 # spellings this rule has always accepted (`ln`, `log2`, `expm1`) — they have
 # NO registry row on purpose: an op absent from the registry is classified by
-# `_op_in_T` (lower_expression_templates.jl) as an open-namespace rewrite
+# `_op_in_T` (templates/rewrite.jl) as an open-namespace rewrite
 # target, and giving these spellings rows would silently change that.
 const _TRANSCENDENTAL_OPS = union(
     _ops_with_dim_class(:transcendental),
@@ -2040,11 +1846,9 @@ end
 # * `broadcast(fn=F, args)` — the unit of `{op: F, args}`.
 # * `faq` — its `filter`, `expr` and operands are always walked for findings;
 #   its own unit is decided by its ⊕ (`_faq_unit`).
+# The registry's array and aggregate categories.
 const _ARRAY_ELEMENT_OPS = Set(
-    [
-        "faq", "makearray", "index", "reshape",
-        "transpose", "concat", "broadcast",
-    ]
+    s.name for s in _OP_TABLE if s.category === :array || s.category === :aggregate
 )
 
 function _array_element_rule(expr, var_units, findings)
@@ -2135,7 +1939,7 @@ end
 # as it does. OFF (any other environment) is today's behaviour.
 #
 # At this stage the rule only drives the `units_dimensionless_literal_mismatch`
-# WARNING (`dimensionless_literal_findings`); validity is decided by the
+# WARNING (`_dimensionless_literal_findings`); validity is decided by the
 # current, neutral-literal rule alone.
 # ---------------------------------------------------------------------------
 struct _LiteralRuleEnv{K, V, D <: AbstractDict{K, V}} <: AbstractDict{K, V}
@@ -2146,6 +1950,7 @@ Base.getindex(env::_LiteralRuleEnv, name) = env.inner[name]
 Base.haskey(env::_LiteralRuleEnv, name) = haskey(env.inner, name)
 Base.length(env::_LiteralRuleEnv) = length(env.inner)
 Base.iterate(env::_LiteralRuleEnv, state...) = iterate(env.inner, state...)
+_indep_of(env::_LiteralRuleEnv) = _indep_of(env.inner)
 
 # `var_units` with the §4.8.6 literal rule switched on or off.
 _with_literal_rule(var_units::AbstractDict, on::Bool) =
@@ -2170,8 +1975,8 @@ function _expr_dimensions!(
         var_units::AbstractDict
     )::Union{Unitful.Units, Nothing}
     if expr isa NumExpr || expr isa IntExpr
-        # A bare number's dimension is INDETERMINATE, not dimensionless — see
-        # the implicit-units note (fabrication #1). The three positions where a
+        # A bare number's dimension is INDETERMINATE, not dimensionless
+        # (esm-spec §4.8.4). The three positions where a
         # literal's meaning IS determined are handled by their own rules. Under
         # the esm-spec §4.8.6 switch a nonzero one is dimensionless instead.
         return _literal_unit(expr.value, var_units)
@@ -2180,11 +1985,11 @@ function _expr_dimensions!(
         # *unknown* dimensions, not dimensionless ones.
         unit_str = get(var_units, expr.name, nothing)
         if unit_str === nothing
-            # The implicit independent variable `t`, undeclared, has the time
-            # dimension in seconds (esm-spec §4.9.1), as in the other bindings.
-            # A derivative WITH RESPECT TO it stays undeterminable
-            # (`_derivative_rule` reads only declared units).
-            expr.name == "t" && return u"s"
+            # The independent variable, undeclared, has the time dimension in
+            # seconds (esm-spec §4.9.1), as in the other bindings. A derivative
+            # WITH RESPECT TO it stays undeterminable (`_derivative_rule` reads
+            # only declared units).
+            expr.name == _indep_of(var_units) && return u"s"
             return nothing
         end
         return _absolute_unit(parse_units(unit_str))
@@ -2205,8 +2010,7 @@ function _expr_dimensions!(
 end
 
 # Affine units (°C, °F) cannot take part in unit ARITHMETIC — `u"°C" * u"kg"`
-# throws `Unitful.AffineError`, which used to escape `validate()` as an
-# uncaught exception on two valid fixtures. The engine only ever needs a unit's
+# throws `Unitful.AffineError`. The engine only ever needs a unit's
 # DIMENSION, so normalise an affine unit to its absolute counterpart (°C → K)
 # on the way in. Note this is deliberately confined to the engine:
 # `parse_units` still returns the affine unit, because
@@ -2216,7 +2020,8 @@ function _absolute_unit(u)
     u === nothing && return nothing
     try
         return Unitful.absoluteunit(u)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return u
     end
 end
@@ -2285,9 +2090,10 @@ _is_time_power(d) = all(x -> x isa Unitful.Dimension{:Time}, typeof(d).parameter
 """
     equation_unit_findings(eq::Equation, var_units::AbstractDict) -> Vector{String}
 
-The PROVABLE dimensional inconsistency of a derivative equation's two SIDES, if
-any: the comparison half of the equation check site (esm-spec §4.8.4, §4.8.6),
-which `validate` reports for every `D(u, t) = …` equation (see
+The PROVABLE dimensional inconsistencies of a derivative equation, if any: an
+operator-rule mismatch inside either side, then the mismatch between the two
+SIDES (the whole equation check site, esm-spec §4.8.4, §4.8.6), which
+`validate` reports for every `D(u, t) = …` equation (see
 [`model_unit_findings`](@ref)).
 
 Scope, and why it is this narrow:
@@ -2314,7 +2120,7 @@ Scope, and why it is this narrow:
 function equation_unit_findings(eq::Equation, var_units::AbstractDict)::Vector{String}
     lhs = eq.lhs
     (lhs isa OpExpr && lhs.op == "D" && length(lhs.args) == 1) || return String[]
-    return last(_site_check(lhs, eq.rhs, var_units))
+    return _site_findings(lhs, eq.rhs, var_units)
 end
 
 # THE CHECK OF ONE SITE (esm-spec §4.8.4, §4.8.6) under `var_units`'s literal
@@ -2370,10 +2176,10 @@ function _site_findings(lhs, rhs, var_units)::Vector{String}
 end
 
 # The operand `x` when `lhs` is `D(x)` taken with respect to an independent
-# variable (default `t`) the component does not declare, else `nothing`.
+# variable the component does not declare, else `nothing`.
 function _derivative_of_undeclared_time(lhs, var_units)
     (lhs isa OpExpr && lhs.op == "D" && length(lhs.args) == 1) || return nothing
-    wrt = lhs.wrt !== nothing ? lhs.wrt : "t"
+    wrt = lhs.wrt !== nothing ? lhs.wrt : _indep_of(var_units)
     get(var_units, wrt, nothing) === nothing || return nothing
     return lhs.args[1]
 end
@@ -2444,215 +2250,265 @@ const UNIT_PARSE_ERROR = ERROR_CODES.UNIT_PARSE_ERROR
 # A model's unit environment: its variables' declared units that RESOLVE (an
 # unresolvable one is reported at its declaration and left unknown here), then
 # scoped references into its own subsystems and into the document's top-level
-# components (esm-spec §4.8.4, EarthSciAST#414). The model's own bare names are
-# never overwritten.
-function _model_unit_env(model::Model, toplevel::_ScopedUnits)::_UnitEnv
+# components (esm-spec §4.8.4). The model's own bare names are never
+# overwritten.
+function _model_unit_env(model::Model, toplevel::_ScopedUnits; indep::AbstractString = "t")::_UnitEnv
     own_units = Dict{String, String}()
     for (name, var) in model.variables
         var.units !== nothing && !isempty(var.units) &&
             parse_units(var.units) !== nothing && (own_units[name] = var.units)
     end
-    return _UnitEnv(own_units, _relative_scoped_units(model), toplevel)
+    return _UnitEnv(own_units, _relative_scoped_units(model), toplevel, String(indep))
 end
 
 # A reaction system's unit environment, built as `_model_unit_env` builds a
 # model's: its species' and parameters' declared units that resolve, then its
 # scoped references.
-function _reaction_system_unit_env(rs::ReactionSystem, toplevel::_ScopedUnits)::_UnitEnv
+function _reaction_system_unit_env(
+        rs::ReactionSystem, toplevel::_ScopedUnits; indep::AbstractString = "t"
+    )::_UnitEnv
     own_units = Dict{String, String}()
     for decl in Iterators.flatten((rs.species, rs.parameters))
         u = decl.units
         (u !== nothing && !isempty(u) && parse_units(u) !== nothing) &&
             (own_units[decl.name] = u)
     end
-    return _UnitEnv(own_units, _relative_scoped_units(rs), toplevel)
+    return _UnitEnv(own_units, _relative_scoped_units(rs), toplevel, String(indep))
+end
+
+_component_unit_env(m::Model, toplevel; indep = "t") = _model_unit_env(m, toplevel; indep)
+_component_unit_env(rs::ReactionSystem, toplevel; indep = "t") =
+    _reaction_system_unit_env(rs, toplevel; indep)
+
+# Is `u` an affine unit (°C, °F) standing alone? `parse_units` keeps a
+# standalone affine atom (`_linear`), so a declared `K` and a default in `degC`
+# can be told apart.
+_is_affine_unit(u) = u isa Unitful.AffineUnits
+
+# Are two declared unit strings the same unit: the same dimension, exact scale
+# and angle power, and both affine or both not?
+_same_declared_unit(a, b) =
+    _is_affine_unit(a) == _is_affine_unit(b) &&
+    _same_unit(_absolute_unit(a), _absolute_unit(b))
+
+# The site kinds the units checker judges (esm-spec §4.8.4, §4.8.6): the
+# equations of a model, its initialization equations, a reaction system's
+# constraint equations, each reaction rate, and a parameter update's `when` and
+# `expression`. Every other site kind is visited only for its unit-bearing
+# `const` strings.
+const _UNIT_EQUATION_SITES = Dict{Symbol, Symbol}(
+    :equation_rhs => :equation_lhs,
+    :initialization_rhs => :initialization_lhs,
+    :constraint_rhs => :constraint_lhs,
+)
+const _UNIT_LHS_SITES = Set{Symbol}(values(_UNIT_EQUATION_SITES))
+# The sites the esm-spec §4.8.6 literal warning compares under both rules.
+const _UNIT_LITERAL_SITES = Set{Symbol}((keys(_UNIT_EQUATION_SITES)..., :rate))
+
+# The pointer below `component` a site pointer `p` names, without its leading
+# "/"; the equation sites are reported at the equation, not at its `rhs`.
+function _unit_site_subpath(p::AbstractString, kind::Symbol)
+    rel = p[2:end]
+    haskey(_UNIT_EQUATION_SITES, kind) && return rel[1:(end - length("/rhs"))]
+    kind === :rate && return rel[1:(end - length("/rate"))]
+    return rel
 end
 
 """
-    model_unit_findings(model::Model; file=nothing, toplevel=nothing) -> Vector{UnitFinding}
+    _component_unit_findings!(errors, warnings, component, pointer, env)
 
-Every units finding in `model`. A scoped reference (`sub.v`, `Leaf.p`) has the
-units its target declares: relative to `model`'s own subsystems always, and to
-the top-level models and reaction systems of `file` (the `EsmFile` holding
-`model`) when one is given — see [`scoped_reference_units`](@ref). A caller
-checking many components of one document passes the document-wide part,
-`toplevel = _toplevel_scoped_units(file)`, built once, in place of `file`.
-Callers prefix their JSON pointer and promote
-each finding to a structural error under its own code; see
-`validate_model_unit_consistency` in validate.jl, the single structural caller.
+The units checker for one model or reaction system (not its subsystems): every
+finding at every unit check site, judged once.
 
-Five families are checked:
+- A `units` / `default_units` string that does not resolve is a
+  `unit_parse_error` at the declaration; a model variable's `default_units`
+  that are not the same unit as its `units` are a `unit_inconsistency` there.
+- A unit-bearing `const` whose string does not resolve is a `unit_parse_error`
+  at the containing expression field, at every expression site.
+- Each equation, initialization equation, constraint equation, reaction rate
+  and parameter-update `when`/`expression` is judged under the current rule
+  (`_site_check`): any operator-rule mismatch inside it, and for an equation
+  the comparison of its two sides, is a `unit_inconsistency`. A model
+  equation whose left-hand side is a declared variable is reported at that
+  variable (its internal mismatches if any, else the comparison); every other
+  site at its own pointer.
+- A site of `_UNIT_LITERAL_SITES` the current rule passes but the esm-spec
+  §4.8.6 literal rule fails is a `units_dimensionless_literal_mismatch` pushed
+  onto `warnings`, its message naming `pointer` and the site.
 
-1. **Unresolvable unit strings** (`unit_parse_error`) — a `units` or
-   `default_units` string that does not resolve against the registry.
-2. **Declared vs default units** — a parameter whose `default` is supplied in
-   `default_units` that are not the same unit as its declared `units`.
-3. **Observed-variable defining expressions** — an inconsistency *inside* the
-   expression-bearing fields of a parameter's `update` (§5.4) — the `when`
-   trigger and the `expression` value form.
-4. **Equations** — the two-sided balance of a derivative equation.
-5. **Defining equations** — an inconsistency inside a bare-variable-LHS
-   equation's right-hand side, and the defined variable's declared units against
-   the dimension that right-hand side actually has (esm-spec §6.3.1). It
-   reports at the DEFINED VARIABLE's pointer, which is where the shared corpus
-   pins it.
-
-Subsystems are NOT recursed here (the caller owns path construction and does the
-recursion), keeping this function's pointers purely model-local.
-
-Iteration over `model.variables` is sorted by name so the finding order is
-deterministic regardless of Dict hashing.
+`errors` and `warnings` collect [`UnitFinding`](@ref)s whose `subpath` is
+relative to `pointer`, the component's own JSON pointer.
 """
-function model_unit_findings(
-        model::Model; file = nothing,
-        toplevel = nothing
-    )::Vector{UnitFinding}
-    # Only EXPLICITLY declared units enter the environment, and only those that
-    # RESOLVE. A variable with no declared units is unknown, not dimensionless;
-    # one whose declared units do not resolve is reported separately below and
-    # then treated as unknown, so a single bad string cannot cascade into a
-    # bogus mismatch at every site that mentions the variable.
-    var_units = _model_unit_env(
-        model,
-        toplevel === nothing ? _toplevel_scoped_units(file) : toplevel
+function _component_unit_findings!(
+        errors::Vector{UnitFinding}, warnings::Vector{UnitFinding},
+        c::Union{Model, ReactionSystem}, pointer::AbstractString, env
     )
+    _declaration_unit_findings!(errors, c)
+    lhs = Ref{Any}(nothing)
+    foreach_expression(c; subsystems = false) do e, p, kind
+        for units in unresolvable_const_units(e)
+            push!(
+                errors, UnitFinding(
+                    p[2:end], "Unit string '$units' is not a recognised unit", UNIT_PARSE_ERROR
+                )
+            )
+        end
+        if kind in _UNIT_LHS_SITES
+            lhs[] = e
+            return
+        end
+        site_lhs = haskey(_UNIT_EQUATION_SITES, kind) ? lhs[] : nothing
+        (site_lhs !== nothing || kind in (:rate, :update_when, :update_expression)) || return
+        _unit_site!(errors, warnings, c, pointer, p, kind, site_lhs, e, env)
+        return
+    end
+    return errors
+end
 
-    out = UnitFinding[]
-
-    for name in sort!(collect(keys(model.variables)))
-        var = model.variables[name]
-
-        # 1. Unresolvable unit strings — a defect in the file (§4.8.4).
+function _declaration_unit_findings!(out, m::Model)
+    for name in sort!(collect(keys(m.variables)))
+        var = m.variables[name]
+        at = _pointer("variables", name)
         for (field, str) in (("units", var.units), ("default_units", var.default_units))
-            str === nothing && continue
-            isempty(str) && continue
-            parse_units(str) === nothing || continue
+            (str === nothing || isempty(str) || parse_units(str) !== nothing) && continue
             push!(
                 out, UnitFinding(
-                    "variables/$name",
-                    "Unit string '$str' is not a recognised unit " *
+                    at, "Unit string '$str' is not a recognised unit " *
                         "(variable '$name', field '$field')", UNIT_PARSE_ERROR
                 )
             )
         end
-
-        # 2. default_units vs units.
         du, u = var.default_units, var.units
-        if du !== nothing && !isempty(du) && u !== nothing && !isempty(u) && du != u
-            du_parsed, u_parsed = parse_units(du), parse_units(u)
-            if du_parsed !== nothing && u_parsed !== nothing && du_parsed != u_parsed
-                push!(
-                    out, UnitFinding(
-                        "variables/$name",
-                        "Parameter default value units do not match declared units " *
-                            "(variable '$name', declared_units='$u', default_units='$du')",
-                        UNIT_DIMENSION_MISMATCH
-                    )
-                )
-            end
-        end
-
-        # 3. A parameter update's expression-bearing fields (esm-spec §5.4):
-        # the `when` trigger and the `expression` value form are ordinary
-        # expression positions, so an internal inconsistency in either is the
-        # same defect as one inside an equation side.
-        if var.update !== nothing
-            rules = var.update
-            for (ri, rule) in enumerate(rules)
-                # The pointer addresses the document AS WRITTEN: the object
-                # form is `/update/<field>`, the array form `/update/<i>/<field>`
-                # (`_update_rule_path`, types.jl). The message names the rule
-                # only when there is more than one to distinguish.
-                rule_path = _update_rule_path("variables/$name", rules, ri)
-                rule_label = _update_is_scalar_form(rules) ? "" :
-                    ", update rule $(ri - 1)"
-                for (field, e) in (("when", rule.when), ("expression", rule.expression))
-                    e === nothing && continue
-                    for msg in expression_unit_findings(e, var_units)
-                        push!(
-                            out, UnitFinding(
-                                "$rule_path/$field",
-                                "$msg (variable '$name'$rule_label, field '$field')",
-                                UNIT_DIMENSION_MISMATCH
-                            )
-                        )
-                    end
-                end
-            end
-        end
+        (du === nothing || isempty(du) || u === nothing || isempty(u) || du == u) && continue
+        du_parsed, u_parsed = parse_units(du), parse_units(u)
+        (du_parsed === nothing || u_parsed === nothing) && continue
+        _same_declared_unit(du_parsed, u_parsed) && continue
+        push!(
+            out, UnitFinding(
+                at, "Parameter default value units do not match declared units " *
+                    "(variable '$name', declared_units='$u', default_units='$du')",
+                UNIT_DIMENSION_MISMATCH
+            )
+        )
     end
+    return out
+end
 
-    # 4. equations — the two-sided balance of a derivative equation
-    # (`equation_unit_findings`). A declared `const` unit string that does not
-    # resolve is a defect at the containing expression field (esm-spec §4.8.5
-    # item 2), whatever kind of equation it sits in.
-    for (i, eq) in enumerate(model.equations)
-        for msg in equation_unit_findings(eq, var_units)
-            push!(out, UnitFinding("equations/$(i - 1)", msg, UNIT_DIMENSION_MISMATCH))
-        end
-        for (field, side) in (("lhs", eq.lhs), ("rhs", eq.rhs))
-            for units in unresolvable_const_units(side)
-                push!(
-                    out, UnitFinding(
-                        "equations/$(i - 1)/$field",
-                        "Unit string '$units' is not a recognised unit", UNIT_PARSE_ERROR
-                    )
-                )
-            end
-        end
-    end
-
-    # 5. DEFINING equations — an equation whose LHS is a bare variable naming a
-    # declared one. This is the 0.x "observed variable's defining expression"
-    # rule, following its expression out of `variables/<v>/expression` and into
-    # the equations (esm-spec §6.3.1). Both halves of the site check
-    # (`_site_check`) move with it:
-    #
-    #   a. an inconsistency INSIDE the defining right-hand side (`length + mass`
-    #      — 'm' + 'kg'), and
-    #   b. the declared units of the defined variable against the dimension its
-    #      definition actually has, reported only when the right-hand side was
-    #      internally clean so one defect is not reported twice.
-    #
-    # Reported at the DEFINED VARIABLE's pointer, not the equation's: the
-    # finding is about that variable's definition, and it is where the shared
-    # corpus pins it (`tests/invalid/units_gradient_operator_mismatch.esm` ⇒
-    # `/models/<M>/variables/bad_sum`). Only the layer holding the expression
-    # moved in 1.0.0; the defect and its address did not.
-    for eq in model.equations
-        lhs = eq.lhs
-        (lhs isa VarExpr && haskey(model.variables, lhs.name)) || continue
-        name = lhs.name
-        internal, comparison = _site_check(lhs, eq.rhs, var_units)
-        for msg in (isempty(internal) ? comparison : internal)
+function _declaration_unit_findings!(out, rs::ReactionSystem)
+    for (block, decls) in (("species", rs.species), ("parameters", rs.parameters))
+        for decl in decls, (field, str) in (("units", decl.units), ("default_units", decl.default_units))
+            (str === nothing || isempty(str) || parse_units(str) !== nothing) && continue
             push!(
                 out, UnitFinding(
-                    "variables/$name", "$msg (variable '$name')",
-                    UNIT_DIMENSION_MISMATCH
+                    _pointer(block, decl.name),
+                    "Unit string '$str' is not a recognised unit " *
+                        "($(block == "species" ? "species" : "parameter") '$(decl.name)', field '$field')",
+                    UNIT_PARSE_ERROR
                 )
             )
         end
     end
+    return out
+end
 
+# Judge one site (see `_component_unit_findings!`).
+function _unit_site!(errors, warnings, c, pointer, p, kind, lhs, rhs, env)
+    internal, comparison = _site_check(lhs, rhs, env)
+    sub = _unit_site_subpath(p, kind)
+    if !(isempty(internal) && isempty(comparison))
+        if kind === :equation_rhs && c isa Model && lhs isa VarExpr &&
+                haskey(c.variables, lhs.name)
+            name = lhs.name
+            for msg in (isempty(internal) ? comparison : internal)
+                push!(
+                    errors, UnitFinding(
+                        _pointer("variables", name), "$msg (variable '$name')",
+                        UNIT_DIMENSION_MISMATCH
+                    )
+                )
+            end
+        elseif kind === :update_when || kind === :update_expression
+            field = kind === :update_when ? "when" : "expression"
+            for msg in internal
+                push!(errors, UnitFinding(sub, "$msg ($(_update_site_label(c, p)), field '$field')", UNIT_DIMENSION_MISMATCH))
+            end
+        else
+            for msg in vcat(internal, comparison)
+                push!(errors, UnitFinding(sub, msg, UNIT_DIMENSION_MISMATCH))
+            end
+        end
+        return
+    end
+    kind in _UNIT_LITERAL_SITES || return
+    literals = _nonzero_literals(lhs === nothing ? (rhs,) : (lhs, rhs))
+    # With no nonzero literal the two rules type the site identically.
+    isempty(literals) && return
+    found = _site_findings(lhs, rhs, _with_literal_rule(env, true))
+    isempty(found) && return
+    at = string(pointer, "/", sub)
+    push!(
+        warnings, UnitFinding(
+            sub,
+            "$at: with bare numeric literals read as dimensionless " *
+                "(esm-spec §4.8.6), $(first(found)); bare literal(s): $(join(literals, ", ")). " *
+                "This becomes an error in a future version of EarthSciAST; a literal that " *
+                "carries a unit is written const(value, units \"...\") (esm-spec §4.8.5)",
+            UNIT_FINDING_DIMENSIONLESS_LITERAL
+        )
+    )
+    return
+end
+
+# "variable 'v'" or "parameter 'p'", with ", update rule i" when the rule list
+# has more than one rule: the label of an update site's finding, read off its
+# pointer (`/variables/<v>/update[/<i>]/<field>` or `/parameters/<p>/...`).
+function _update_site_label(c, p::AbstractString)
+    parts = split(p[2:end], '/')
+    owner = parts[1] == "variables" ? "variable" : "parameter"
+    name = replace(replace(parts[2], "~1" => "/"), "~0" => "~")
+    label = "$owner '$name'"
+    length(parts) == 5 && (label *= ", update rule $(parts[4])")
+    return label
+end
+
+"""
+    model_unit_findings(model::Model; file=nothing, toplevel=nothing, indep="t") -> Vector{UnitFinding}
+
+Every unit ERROR in `model`'s own sites (not its subsystems), each with a
+`subpath` relative to the model's JSON pointer: the checker
+`_component_unit_findings!` documents. A scoped reference (`sub.v`,
+`Leaf.p`) has the units its target declares: relative to `model`'s own
+subsystems always, and to the top-level models and reaction systems of `file`
+when one is given (see [`scoped_reference_units`](@ref)); a caller checking
+many components passes the document-wide map
+`toplevel = _toplevel_scoped_units(file)` once instead. `indep` is the
+document's independent variable.
+"""
+function model_unit_findings(
+        model::Model; file = nothing, toplevel = nothing, indep::AbstractString = "t"
+    )::Vector{UnitFinding}
+    env = _model_unit_env(
+        model, toplevel === nothing ? _toplevel_scoped_units(file) : toplevel; indep
+    )
+    out = UnitFinding[]
+    _component_unit_findings!(out, UnitFinding[], model, "", env)
     return out
 end
 
 """
 Validate dimensions for all equations and variable definitions in a model.
 
-Returns true when nothing in the model is PROVABLY dimensionally inconsistent.
-Recurses into model subsystems.
+Returns true when nothing in the model or its subsystems is PROVABLY
+dimensionally inconsistent.
 """
 function validate_model_dimensions(model::Model)::Bool
-    findings = model_unit_findings(model)
-    for f in findings
-        @warn "Unit finding at $(f.subpath) [$(f.code)]: $(f.message)"
-    end
-
-    all_valid = isempty(findings)
-    for (_, subsys) in model.subsystems
-        subsys isa Model || continue
-        validate_model_dimensions(subsys) || (all_valid = false)
+    all_valid = true
+    _foreach_component(model, "") do m, _, _
+        findings = model_unit_findings(m)
+        for f in findings
+            @warn "Unit finding at $(f.subpath) [$(f.code)]: $(f.message)"
+        end
+        isempty(findings) || (all_valid = false)
     end
     return all_valid
 end
@@ -2661,7 +2517,7 @@ end
 Validate dimensions for all reactions in a reaction system.
 
 Enforces the mass-action dimensional constraint from spec §7.4 by delegating
-to [`validate_reaction_rate_units`](@ref) in validate.jl — the single shared
+to [`validate_reaction_rate_units`](@ref) in validation/unit_checks.jl — the single shared
 implementation of the rule (also used by `validate_structural`) — so the two
 entry points cannot drift apart. Each finding is logged as a warning; returns
 `true` when no dimensional inconsistencies are found.
@@ -2756,112 +2612,10 @@ function _nonzero_literals(exprs)::Vector{String}
     return out
 end
 
-"""
-    dimensionless_literal_findings(file::EsmFile) -> Vector{Tuple{String, String}}
-
-The esm-spec §4.8.6 warnings: every check site whose verdict is a provable
-mismatch when bare numeric literals are read as dimensionless at scale 1 (zero
-excepted), but not under the current neutral-literal rule. Returns
-`(json_pointer, message)` pairs, models before reaction systems, each sorted by
-name.
-
-The sites are every model's `equations` and `initialization_equations` and
-every reaction system's `constraint_equations` and reaction rates, in the
-top-level components and in their inline subsystems at any depth
-(`/models/<M>/subsystems/<S>/equations/<i>`, …). Each component is typed in the
-unit environment its own unit checks use, with its surviving template
-references expanded, and each site is judged under both rules by the one site
-check those unit checks use. A site the current rule already rejects carries no
-warning: it is an error already.
-"""
-dimensionless_literal_findings(file::EsmFile)::Vector{Tuple{String, String}} =
-    _dimensionless_literal_findings(_UnitsInputs(file))
-
-# `dimensionless_literal_findings` over the units inputs a `validate` pass has
-# already built (validate.jl).
-function _dimensionless_literal_findings(units)::Vector{Tuple{String, String}}
-    out = Tuple{String, String}[]
-    file, toplevel = units.file, units.toplevel
-
-    function visit(pointer, lhs, rhs, env)
-        literals = _nonzero_literals(lhs === nothing ? (rhs,) : (lhs, rhs))
-        # With no nonzero literal the two rules type the site identically.
-        isempty(literals) && return
-        found = _site_findings(lhs, rhs, _with_literal_rule(env, true))
-        isempty(found) && return
-        isempty(_site_findings(lhs, rhs, env)) || return
-        named = join(literals, ", ")
-        push!(
-            out, (
-                pointer,
-                "$pointer: with bare numeric literals read as dimensionless " *
-                    "(esm-spec §4.8.6), $(first(found)); bare literal(s): $named. This " *
-                    "becomes an error in a future version of EarthSciAST; a literal that " *
-                    "carries a unit is written const(value, units \"...\") (esm-spec §4.8.5)",
-            )
-        )
-        return
-    end
-
-    function walk_model(pointer, model::Model)
-        env = _model_unit_env(model, toplevel)
-        for (field, eqs) in (
-                ("equations", model.equations),
-                ("initialization_equations", model.initialization_equations),
-            )
-            for (i, eq) in enumerate(eqs)
-                visit("$pointer/$field/$(i - 1)", eq.lhs, eq.rhs, env)
-            end
-        end
-        walk_subsystems(pointer, model)
-        return
-    end
-
-    function walk_reaction_system(pointer, rs::ReactionSystem)
-        env = _reaction_system_unit_env(rs, toplevel)
-        for (i, eq) in enumerate(rs.constraint_equations)
-            visit("$pointer/constraint_equations/$(i - 1)", eq.lhs, eq.rhs, env)
-        end
-        for (i, reaction) in enumerate(rs.reactions)
-            visit("$pointer/reactions/$(i - 1)", nothing, reaction.rate, env)
-        end
-        walk_subsystems(pointer, rs)
-        return
-    end
-
-    # Inline subsystems at any depth, a resolved mount included; anything that
-    # is not a typed component (an unresolved mount) has nothing to type.
-    function walk_subsystems(pointer, component)
-        subs = component.subsystems
-        for name in sort!(collect(keys(subs)))
-            sub = subs[name]
-            sub_pointer = "$pointer/subsystems/$(_ptr_escape(name))"
-            sub isa Model && walk_model(sub_pointer, sub)
-            sub isa ReactionSystem && walk_reaction_system(sub_pointer, sub)
-        end
-        return
-    end
-
-    # Each top-level component is typed through its template-expanded view, so
-    # a surviving `apply_expression_template` reference has the unit of its
-    # expansion (esm-spec §9.6.4 rule 2); the view expands its subsystems too.
-    if file.models !== nothing
-        for name in sort!(collect(keys(file.models)))
-            walk_model("/models/$(_ptr_escape(name))", units.models[name])
-        end
-    end
-    if file.reaction_systems !== nothing
-        for name in sort!(collect(keys(file.reaction_systems)))
-            rs = file.reaction_systems[name]
-            rs isa ReactionSystem || continue
-            walk_reaction_system(
-                "/reaction_systems/$(_ptr_escape(name))",
-                _reaction_system_units_view(file, name, rs)
-            )
-        end
-    end
-    return out
-end
+# The esm-spec §4.8.6 warnings of a `validate` pass, as `(pointer, message)`
+# pairs: the warning half of the units checker (`_unit_check!`, validation/unit_checks.jl).
+_dimensionless_literal_findings(units)::Vector{Tuple{String, String}} =
+    _unit_check!(units).warnings
 
 """
 Infer appropriate units for a variable based on its usage in equations.
@@ -2896,25 +2650,10 @@ end
 Reject declared `units` on any expression node in a document declaring `esm` <
 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node. Runs on the raw
 JSON before schema validation, like [`reject_solver_pre_v11`](@ref).
+The rule is the `const_units` row of [`_VERSION_GATES`](@ref).
 """
-function reject_const_units_pre_v12(raw_data)
-    raw_data === nothing && return
-    _is_object(raw_data) || return
-    esm_raw = _raw_get(raw_data, "esm")
-    esm_raw === nothing && return
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
-    m === nothing && return
-    (parse(Int, m.captures[1]), parse(Int, m.captures[2])) >= (1, 2) && return
-    path = _find_units_bearing_node(raw_data, "")
-    path === nothing && return
-    throw(
-        ExpressionTemplateError(
-            ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
-            "declared `units` on an expression node require esm >= 1.2.0; " *
-                "file declares $(string(esm_raw)). Offending path: $path"
-        )
-    )
-end
+reject_const_units_pre_v12(raw_data) =
+    _check_version_gate(_VERSION_GATES.const_units, raw_data)
 
 _find_units_bearing_node(node, at::String) =
     _find_json_path(n -> _raw_haskey(n, "op") && _raw_haskey(n, "units"), node, at)

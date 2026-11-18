@@ -2,26 +2,6 @@
 # Enum lowering — esm-spec §9.3
 # ============================================================
 
-"""
-    EnumLoweringError <: EarthSciASTError
-
-Raised when enum lowering (esm-spec §9.3) fails, carrying the stable diagnostic
-`code` as a structured field rather than interpolated into the message — the
-same error TYPE the four other bindings raise here (`EnumLoweringError` in TypeScript, Python and Rust;
-`DiagnosticError` in Go). Julia raised `ParseError` from this pass until
-API_SPEC.md §8 item 15, which made a caller's `catch e; e isa ParseError` the
-only portable way to handle a failure that is not a parse failure at all.
-
-Codes: `enum_op_malformed`, `unknown_enum`, `unknown_enum_symbol`.
-"""
-struct EnumLoweringError <: EarthSciASTError
-    code::String
-    message::String
-end
-
-Base.showerror(io::IO, e::EnumLoweringError) =
-    print(io, "EnumLoweringError(", e.code, "): ", e.message)
-
 # esm-spec §9.3: within ONE enum the integer values are unique — `0` included —
 # and a duplicate is a defect of the block itself, raised whether or not any
 # `enum` op names either symbol and before any op resolves. Values may coincide
@@ -75,45 +55,39 @@ function _lower_enum_ops_for_file(
     return _lower_raw_enum_ops(target, enums, open_names)
 end
 
-function _lower_raw_enum_ops(node, enums, open_names::AbstractSet{String})
-    if _is_array(node)
-        return Any[_lower_raw_enum_ops(v, enums, open_names) for v in node]
-    elseif _is_object(node)
-        if _raw_get(node, "op") == "enum"
-            args = _raw_get(node, "args")
-            (
-                args !== nothing && _is_array(args) && length(args) == 2 &&
-                    _allof(a -> a isa AbstractString, args) &&
-                    !_anyof(a -> String(a) in open_names, args)
-            ) || return node
-            enum_name, symbol = String(args[1]), String(args[2])
-            mapping = enums !== nothing && _is_object(enums) ?
-                _raw_get(enums, enum_name) : nothing
-            mapping === nothing && throw(
-                EnumLoweringError(
-                    ERROR_CODES.UNKNOWN_ENUM,
-                    "enum `$(enum_name)` is not declared in the file's `enums` block"
-                )
-            )
-            (_is_object(mapping) && _raw_haskey(mapping, symbol)) ||
-                throw(
-                EnumLoweringError(
-                    ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
-                    "symbol `$(symbol)` is not declared under enum `$(enum_name)`"
-                )
-            )
-            return OrderedDict{String, Any}(
-                "op" => "const", "args" => Any[],
-                "value" => Int(_raw_get(mapping, symbol))
-            )
-        end
-        out = OrderedDict{String, Any}()
-        for (k, v) in pairs(node)
-            out[string(k)] = _lower_raw_enum_ops(v, enums, open_names)
-        end
-        return out
-    end
-    return node
+# Every container is rebuilt (`_map_json`): callers may mutate the result.
+_lower_raw_enum_ops(node, enums, open_names::AbstractSet{String}) =
+    _map_json(node) do _, n
+    _is_object(n) || return _JSON_DESCEND
+    return _raw_get(n, "op") == "enum" ? _lower_enum_op(n, enums, open_names) : _JSON_DESCEND
+end
+
+# One raw `enum` op lowered to its `const`, or `n` itself when its arguments
+# are not two strings or one is an open name.
+function _lower_enum_op(n, enums, open_names::AbstractSet{String})
+    args = _raw_get(n, "args")
+    (
+        args !== nothing && _is_array(args) && length(args) == 2 &&
+            _allof(a -> a isa AbstractString, args) &&
+            !_anyof(a -> String(a) in open_names, args)
+    ) || return n
+    enum_name, symbol = String(args[1]), String(args[2])
+    mapping = enums !== nothing && _is_object(enums) ? _raw_get(enums, enum_name) : nothing
+    mapping === nothing && throw(
+        EnumLoweringError(
+            ERROR_CODES.UNKNOWN_ENUM,
+            "enum `$(enum_name)` is not declared in the file's `enums` block"
+        )
+    )
+    (_is_object(mapping) && _raw_haskey(mapping, symbol)) || throw(
+        EnumLoweringError(
+            ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
+            "symbol `$(symbol)` is not declared under enum `$(enum_name)`"
+        )
+    )
+    return OrderedDict{String, Any}(
+        "op" => "const", "args" => Any[], "value" => Int(_raw_get(mapping, symbol))
+    )
 end
 
 """
@@ -138,32 +112,19 @@ function _lower_mounted_document_enums(document, target = document)
     return _lower_mounted_enum_ops(target, enums)
 end
 
-function _lower_mounted_enum_ops(node, enums)
-    if _is_array(node)
-        return Any[_lower_mounted_enum_ops(v, enums) for v in node]
-    elseif _is_object(node)
-        _raw_get(node, "op") == "enum" && return _lower_raw_enum_ops(node, enums, Set{String}())
-        out = OrderedDict{String, Any}()
-        for (k, v) in pairs(node)
-            key = string(k)
-            out[key] = key == "expression_templates" && _is_object(v) ?
-                _lower_template_body_enums(v, enums) : _lower_mounted_enum_ops(v, enums)
-        end
-        return out
-    end
-    return node
+_lower_mounted_enum_ops(node, enums) =
+    _map_json(node) do key, n
+    _is_object(n) || return _JSON_DESCEND
+    key == "expression_templates" && return _lower_template_body_enums(n, enums)
+    _raw_get(n, "op") == "enum" && return _lower_enum_op(n, enums, Set{String}())
+    return _JSON_DESCEND
 end
 
 function _lower_template_body_enums(templates, enums)
     out = OrderedDict{String, Any}()
     for (name, decl) in pairs(templates)
         if _is_object(decl) && _raw_haskey(decl, "body")
-            params_raw = _raw_get(decl, "params")
-            params = Set{String}(
-                String(p) for p in
-                    (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
-                    if p isa AbstractString
-            )
+            params = Set{String}(_TemplateDecl(decl).params)
             lowered = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl))
             lowered["body"] = _lower_raw_enum_ops(_raw_get(decl, "body"), enums, params)
             out[string(name)] = lowered
@@ -198,9 +159,15 @@ lower_enums(file::EsmFile)::EsmFile = lower_enums!(deepcopy(file))
 """
     lower_enums!(file::EsmFile)
 
-Walk every expression tree in `file` and replace each `enum` op with a
-`const` integer per the file's `enums` block. After this pass runs, no
-`enum`-op nodes remain in the in-memory representation.
+Replace each `enum` op with a `const` integer per the file's `enums` block, at
+every expression site of the file ([`EXPRESSION_SITE_KINDS`](@ref), walked by
+[`map_expressions!`](@ref)): a model's equations, initialization equations,
+expression guesses, parameter update rules, expression bounds, events and
+inline-test references (recursing into subsystems); a reaction system's
+rates, parameter update rules, constraint equations, events and inline-test
+references (recursing into subsystems); and the expressions of `coupling`
+entries (a `variable_map` transform, an `event`'s conditions, trigger and
+affects, a `couple` connector equation's typed expression).
 
 The in-place twin of [`lower_enums`](@ref), which documents the validation
 rules and the [`EnumLoweringError`](@ref) codes both raise.
@@ -210,154 +177,21 @@ Mutates `file` in place; returns the file for convenience.
 function lower_enums!(file::EsmFile)::EsmFile
     enums = file.enums === nothing ? Dict{String, Dict{String, Int}}() : file.enums
     _check_enum_values_unique(enums)
-    if file.models !== nothing
-        for (_, m) in file.models
-            _lower_model_enums!(m, enums)
-        end
-    end
-    if file.reaction_systems !== nothing
-        for (_, rs) in file.reaction_systems
-            _lower_reaction_system_enums!(rs, enums)
-        end
-    end
-    if file.coupling !== nothing
-        for ce in file.coupling
-            _lower_coupling_entry_enums!(ce, enums)
-        end
-    end
-    return file
-end
-
-function _lower_model_enums!(model::Model, enums::Dict{String, Dict{String, Int}})
-    # esm 1.0.0: a variable carries no defining expression, so the only
-    # per-variable expression positions left are a parameter update's `when`
-    # trigger and its `expression` value form (esm-spec §5.4).
-    for (name, var) in model.variables
-        var.update === nothing && continue
-        rules = ParameterUpdate[]
-        changed = false
-        for r in var.update
-            nw = r.when === nothing ? nothing : _lower_expr_enums(r.when, enums)
-            ne = r.expression === nothing ? nothing : _lower_expr_enums(r.expression, enums)
-            (nw !== r.when || ne !== r.expression) && (changed = true)
-            push!(
-                rules, ParameterUpdate(
-                    r.kind; times = r.times, interval = r.interval,
-                    initial_offset = r.initial_offset, when = nw, direction = r.direction,
-                    source = r.source, hook = r.hook, expression = ne, from = r.from,
-                    handler = r.handler
-                )
-            )
-        end
-        changed && (model.variables[name] = reconstruct(var; update = rules))
-    end
-    new_eqs = Equation[]
-    for eq in model.equations
-        push!(
-            new_eqs, Equation(
-                _lower_expr_enums(eq.lhs, enums),
-                _lower_expr_enums(eq.rhs, enums);
-                _comment = eq._comment
-            )
-        )
-    end
-    empty!(model.equations)
-    append!(model.equations, new_eqs)
-
-    new_init_eqs = Equation[]
-    for eq in model.initialization_equations
-        push!(
-            new_init_eqs, Equation(
-                _lower_expr_enums(eq.lhs, enums),
-                _lower_expr_enums(eq.rhs, enums);
-                _comment = eq._comment
-            )
-        )
-    end
-    empty!(model.initialization_equations)
-    append!(model.initialization_equations, new_init_eqs)
-
-    for (_, sub) in model.subsystems
-        # An unresolved SubsystemRef carries no enums to lower.
-        sub isa Model || continue
-        _lower_model_enums!(sub, enums)
-    end
-    return
-end
-
-function _lower_reaction_system_enums!(
-        rs::ReactionSystem,
-        enums::Dict{String, Dict{String, Int}}
-    )
-    new_reactions = Reaction[]
-    for r in rs.reactions
-        # `raw_substrates`/`raw_products`: the ordered StoichiometryEntry
-        # fields (`get_reactants_dict`/`get_products_dict` give the unordered
-        # `Dict{String,Float64}` view instead).
-        push!(
-            new_reactions, Reaction(
-                r.id,
-                raw_substrates(r),
-                raw_products(r),
-                _lower_expr_enums(r.rate, enums);
-                name = r.name,
-                reference = r.reference
-            )
-        )
-    end
-    empty!(rs.reactions)
-    append!(rs.reactions, new_reactions)
-    for (_, sub) in rs.subsystems
-        _lower_reaction_system_enums!(sub, enums)
-    end
-    return
-end
-
-function _lower_coupling_entry_enums!(
-        ce::CouplingEntry,
-        enums::Dict{String, Dict{String, Int}}
-    )
-    return if ce isa CouplingCouple && haskey(ce.connector, "equations")
-        eqs = ce.connector["equations"]
-        if eqs isa AbstractVector
-            for (i, e) in enumerate(eqs)
-                if e isa AbstractDict && haskey(e, "expression")
-                    expr_obj = e["expression"]
-                    if expr_obj isa ASTExpr
-                        e["expression"] = _lower_expr_enums(expr_obj, enums)
-                    end
-                end
-            end
-        end
-    end
+    memo = IdDict{OpExpr, ASTExpr}()
+    return map_expressions!(e -> _lower_expr_enums(e, enums, memo), file)
 end
 
 # Recursive enum-op lowering. Returns a new tree only if a substitution
 # occurred; otherwise returns the input unchanged so identity-based caching
 # upstream still works.
-function _lower_expr_enums(e::NumExpr, _)
-    return e
-end
-function _lower_expr_enums(e::IntExpr, _)
-    return e
-end
-function _lower_expr_enums(e::VarExpr, _)
-    return e
-end
-
-# Identity-memoized entry: enum lowering is a pure, context-free function of
-# the node, so a subtree shared under many parents (template expansion stores
-# the expanded AST as a shared DAG) is lowered ONCE and the shared result
-# respliced — keeping this pass linear in UNIQUE nodes instead of exponential
-# in paths, and preserving the sharing for downstream consumers (the
-# build-time `IdDict` memo caches in tree_walk/compile.jl key on it).
-function _lower_expr_enums(
-        e::OpExpr,
-        enums::Dict{String, Dict{String, Int}}
-    )::ASTExpr
-    return _lower_expr_enums(e, enums, IdDict{OpExpr, ASTExpr}())
-end
-
+#
+# Identity-memoized: enum lowering is a pure, context-free function of the
+# node, so a subtree shared under many parents (template expansion stores the
+# expanded AST as a shared DAG, and one memo serves the whole file) is lowered
+# ONCE and the shared result respliced — keeping this pass linear in UNIQUE
+# nodes instead of exponential in paths, and preserving the sharing for
+# downstream consumers (the build-time `IdDict` memo caches in
+# tree_walk/compile.jl and its callers key on it).
 _lower_expr_enums(e::ASTExpr, _, ::IdDict{OpExpr, ASTExpr}) = e
 
 function _lower_expr_enums(
@@ -425,12 +259,9 @@ function _lower_expr_enums_uncached(
         end
         return OpExpr("const", ASTExpr[]; value = mapping[symbol_name])
     end
-    # Recurse into EVERY expression-bearing field via the shared field-preserving
+    # Recurse into every expression-bearing field through the field-preserving
     # rewrite (`map_children`), so an `enum` nested in an integral bound, a
-    # filter/key predicate, a makearray value, a table axis, or a dense `ranges`
-    # bound is also lowered — and no `OpExpr` field is silently dropped on the
-    # rebuild (the previous hand-listed ~17-keyword `OpExpr(...)` reconstruction
-    # dropped `int_var`/`semiring`/`join`/`filter`/`id`/… whenever any child
-    # changed, and never recursed `lower`/`upper`/`filter`/`key`/`ranges`).
+    # filter/key predicate, a makearray value, a table axis, or a dense
+    # `ranges` bound is also lowered, and every other `OpExpr` field is kept.
     return map_children(x -> _lower_expr_enums(x, enums, memo), e)
 end

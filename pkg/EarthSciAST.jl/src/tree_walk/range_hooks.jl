@@ -1,56 +1,53 @@
 # ========================================================================
 # tree_walk/range_hooks.jl — the build's seams for a range-restricted
-# program (API_SPEC §5.8, `restrict` / `lanes`; src/range_restricted.jl).
+# program (API_SPEC §5.8, `restrict` / `lanes`; src/range/).
 #
-# A restricted build runs the ordinary pipeline under a task-local range spec.
-# Without one (every other build) each hook below is the identity, so the
-# build is unchanged.
+# A restricted build runs the ordinary pipeline under a range spec on the build
+# context (`_with_range_spec`, compiler.jl). Without one (every other build)
+# each hook below is the identity, so the build is unchanged.
 # ========================================================================
 
-const _RANGE_SPEC_KEY = :earthsci_range_spec
-
-_range_spec_now() = get(task_local_storage(), _RANGE_SPEC_KEY, nothing)
-_with_range_spec(f, spec) = task_local_storage(f, _RANGE_SPEC_KEY, spec)
+# A range spec (`_RangeSpec`, compiler.jl). Each hook below has ONE fallback,
+# the identity, for no spec and for every spec that does not define its own
+# method.
+const _AnySpec = Union{Nothing, _RangeSpec}
 
 # The equation stream after the ODE partition, clipped to the needed cells.
 _range_restrict_parts(
-    ::Nothing, model, cls, parts, index_sets, const_arrays,
+    ::_AnySpec, model, cls, parts, index_sets, const_arrays,
     param_arrays
 ) = parts
 
 # Each array state's block, rebased onto the cells the program stores.
-_range_state_boxes!(::Nothing, array_var_info) = array_var_info
+_range_state_boxes!(::_AnySpec, array_var_info) = array_var_info
 
 # A materialized array observed's buffer block over its full extent `dims`, or
 # `nothing` to leave the observed inlined.
-_range_observed_box(::Nothing, name, dims) = (ones(Int, length(dims)), copy(dims))
+_range_observed_box(::_AnySpec, name, dims) = (ones(Int, length(dims)), copy(dims))
 
 # The fill equations of a materialized array observed over its block `box`.
-_range_fill_equations(::Nothing, name, def, dims, box) =
+_range_fill_equations(::_AnySpec, name, def, dims, box) =
     _materialized_fill_equations(name, def, dims)
 
-# The build's forcing epoch (tree_walk/cadence_stamp.jl), which a lane
-# program bumps when it rewrites its live lane buffers.
-_range_build_epoch(::Nothing, epoch) = nothing
-
-# The document and build keywords the AbstractDict front door hands the typed
-# build, recorded so a restriction re-lowers without re-reading the document.
-_range_front_door_done(::Nothing, file, model_name, kwd) = nothing
+# The document and build options (`BuildOptions`) the front door
+# (`_front_door`) hands the build, recorded so a restriction re-lowers without
+# re-reading the document.
+_range_front_door_done(::_AnySpec, file, model_name, opts) = nothing
 
 # Whether this build emits the code of every kernel the same way whatever part
 # of the domain it covers: a tile that shares its code with the operator's
-# other tiles (range_restricted.jl, `_tile_shares_code`). Such a build gives up
+# other tiles (range/tile.jl, `_tile_shares_code`). Such a build gives up
 # the optimizations that read a box's cells (kernel-class merging, the literal
 # fold of a uniform table, row fusion and fission, a boundary slab's literal
 # extent); every other build, the whole-domain program's included, keeps them.
-_range_shared_code(::Nothing) = false
+_range_shared_code(::_AnySpec) = false
 
 # The view the affine tier lowers one `faq` equation through so that a tile's
 # kernels come out with the whole-domain structure every sharing tile emits
 # (`_RangeAffineView`), with the equation's whole-domain ranges, or `nothing`.
 # `var` is the equation's output variable and `clipped` the ranges of its loop
 # subscripts, in subscript order.
-_range_affine_view(::Nothing, var, clipped, var_map, array_var_info, xeq) = nothing
+_range_affine_view(::_AnySpec, var, clipped, var_map, array_var_info, xeq) = nothing
 
 # ---- What a program's re-lowerings reuse from its own build ----
 #
@@ -69,23 +66,16 @@ struct _ProgramMemo
     flats::IdDict{Any, Vector{Float64}}  # a const array → its flat copy
     inline::Dict{Any, Any}               # a shaped parameter's broadcast value
     verdicts::Dict{Any, Any}             # an affine-tier box check → its answer
-    # The first decomposition the program was asked about (`halo`,
-    # `restrict`), and the tile over its whole domain under it, through which
-    # a workspace made after that evaluates the program (`_decomposed_form`):
-    # `missing` until a workspace asks, `nothing` where there is none.
-    dec::Base.RefValue{Any}
-    form::Base.RefValue{Any}
 end
 _ProgramMemo() = _ProgramMemo(
     ReentrantLock(), IdDict{Any, Any}(),
-    IdDict{Any, Vector{Float64}}(), Dict{Any, Any}(),
-    Dict{Any, Any}(), Ref{Any}(nothing), Ref{Any}(missing)
+    IdDict{Any, Vector{Float64}}(), Dict{Any, Any}(), Dict{Any, Any}()
 )
 
 # The memo this build reads (`nothing` for none), and whether it is the
 # program's own build, which records every answer.
-_range_memo(::Nothing) = nothing
-_range_memo_records(::Nothing) = false
+_range_memo(::_AnySpec) = nothing
+_range_memo_records(::_AnySpec) = false
 
 # `memo.<table>[key]`, else `make()`, recorded where `record`.
 function _memo_get(
@@ -107,7 +97,7 @@ _memo_get(make, spec, table::Symbol, key) =
 # tile build moved onto its layout (`_range_real_fixed!`): its variable (or
 # `nothing`) and its virtual slot. `nothing` for every other slot, whose value
 # names its cell.
-_range_fixed_ident(::Nothing, acc, i) = nothing
+_range_fixed_ident(::_AnySpec, acc, i) = nothing
 
 # ---- Tiles that share their code ----
 #
@@ -124,7 +114,7 @@ _range_fixed_ident(::Nothing, acc, i) = nothing
 # every box exactly as the whole-domain build does. Each kernel then runs only
 # the cells of its box the tile owns, which may be none: an empty box is still
 # emitted and runs zero iterations, and an equation the tile owns no cell of is
-# kept over no cells (`_need_root!`, range_restricted.jl), so every tile emits
+# kept over no cells (`_need_root!`, range/tile.jl), so every tile emits
 # the same code and carries what differs (bounds, bases, strides, slot tables)
 # as run-time data. Whatever the emitter would decide from a box's cells it
 # decides from the box's place in the program instead: the buffer a state read
@@ -179,6 +169,8 @@ Base.length(m::_RangeVMap) = length(m.L)
 Base.iterate(m::_RangeVMap, st...) = iterate(m.L, st...)
 @inline _vm_slot(m::_RangeVMap, name::AbstractString, idx) = _vm_slot(m.L, name, idx)
 _vm_block(m::_RangeVMap, name::AbstractString) = _vm_block(m.L, name)
+# A stencil lane asks for its cells by name, so each slot it reads is recorded.
+_affine_block(::_RangeVMap, ::AbstractString) = nothing
 
 struct _RangeAffineView
     vm::_RangeVMap
@@ -287,11 +279,7 @@ function _range_real_repls!(view::_RangeAffineView, lane_repl, recipes)
             end
         end
         lane_repl[k] = _AccRepl(
-            _AccDesc(
-                a.kind, a.arr, conn, a.delta,
-                _range_var_slot(view, rec, b), a.width, a.col,
-                a.dim, a.s1, a.s2, a.s3, off, a.v, a.sx
-            )
+            _acc_with_box(a; conn = conn, idx = _range_var_slot(view, rec, b), off = off)
         )
     end
     return lane_repl
@@ -331,24 +319,7 @@ function _range_real_fixed!(view::_RangeAffineView, kernels)
     return kernels
 end
 
-# ---- What a program build records for its workspaces (src/rhs_program.jl) ----
-#
-# A program's workspace is a private instance of its compiled right-hand side.
-# The instance needs, by identity, the arrays through which the build reads
-# each live buffer (its `_PGatherArray`s) and every array generated code
-# writes at run time besides `du` and the per-call state types (a build
-# registers each as scratch where it allocates it). A build with no capture
-# open records nothing.
-struct _WsCapture
-    pgathers::Vector{Any}
-    scratch::IdDict{Any, Nothing}
-end
-_WsCapture() = _WsCapture(Any[], IdDict{Any, Nothing}())
-
-const _WS_CAPTURE_KEY = :earthsci_ws_capture
-
-_ws_capture_now() = get(task_local_storage(), _WS_CAPTURE_KEY, nothing)
-_with_ws_capture(f, c::_WsCapture) = task_local_storage(f, _WS_CAPTURE_KEY, c)
+# ---- What a program build records for its workspaces (`_WsCapture`, compiler.jl) ----
 
 function _ws_note_pgather!(pgather)
     c = _ws_capture_now()

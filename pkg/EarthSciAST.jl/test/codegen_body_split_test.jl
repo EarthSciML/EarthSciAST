@@ -1,4 +1,4 @@
-# Intra-kernel body split (ess-iip-split, tree_walk/codegen_kernel.jl).
+# Intra-kernel body split (tree_walk/codegen_kernel.jl).
 #
 # A kernel whose emitted cell body exceeds `_codegen_fn_node_cap` is partitioned
 # so no single generated function is oversized — the body is split across
@@ -65,15 +65,14 @@ end
 # Build at an explicit per-function node cap (a retained tuning threshold);
 # `fncap = nothing` is the shipped cap, which this kernel fits inside, so that
 # build is the un-split reference. `transport` forces the by-value transport.
-# Returns RHS + a tally snapshot.
+# Returns RHS + the build's counts.
 function _bs_build(model, ics; fncap = nothing, transport = nothing)
     return withenv(
         "ESS_CODEGEN_FN_NODE_CAP" => (fncap === nothing ? nothing : string(fncap)),
         "ESS_CODEGEN_SPLIT_TRANSPORT" => transport
     ) do
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, _diag = ESM._build_evaluator_impl(model; initial_conditions = ics)
-        (f!, u0, p, copy(ESM._CASCADE_TALLY))
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(model; initial_conditions = ics)
+        (f!, u0, p, rep.counts)
     end
 end
 
@@ -90,7 +89,7 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
 
 @testset "intra-kernel body split" begin
     model = _bs_model(6)
-    ics = Dict("u" => 1.0)
+    ics = Dict("M.u" => 1.0)
 
     # Reference: the shipped cap, which this kernel fits inside — so the split
     # is a no-op and the emission is one function per kernel.

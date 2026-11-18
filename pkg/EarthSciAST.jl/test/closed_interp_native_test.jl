@@ -27,7 +27,6 @@ const _TI = EarthSciAST
 
 _ti_op(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
 _ti_ix(a, s...) = _ti_op("index", a, s...)
-_ti_const(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 _ti_apply(name; b...) = Dict{String, Any}(
     "op" => "apply_expression_template", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
@@ -104,7 +103,7 @@ function _ti_doc(shape::Symbol, n::Int)
         v = Dict{String, Any}("type" => "unknown");
         shape === nothing || (v["shape"] = shape); d === nothing || (v["default"] = d); v
     )
-    lookup(t, x) = _ti_apply("linear"; table = _ti_const(t), axis = _ti_const(z), x = x, n = n)
+    lookup(t, x) = _ti_apply("linear"; table = jconst(t), axis = jconst(z), x = x, n = n)
     # The query moves with t and passes below the axis, through every knot
     # interval and above it, so every branch of the template is taken.
     sweep = _ti_op("+", zt, _ti_op("*", 1.3 * zt, _ti_op("sin", _ti_op("*", 0.3, "t"))))
@@ -126,7 +125,7 @@ function _ti_doc(shape::Symbol, n::Int)
             end
         elseif shape === :ss
             vars["u"] = sv(["lev"], 0.0)
-            look = _ti_apply("searchsorted"; x = _ti_ix("xq", "l"), xs = _ti_const(z), n = n)
+            look = _ti_apply("searchsorted"; x = _ti_ix("xq", "l"), xs = jconst(z), n = n)
             push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", look, _ti_ix("u", "l")))))
         else
             vars["yq"] = sv()
@@ -134,7 +133,7 @@ function _ti_doc(shape::Symbol, n::Int)
             vars["u"] = sv(["lev"], 10.0)
             t2, ya = _ti_rows(_ti_t2(n)), _ti_ya()
             look = _ti_apply(
-                "bilinear"; table = _ti_const(t2), axis_x = _ti_const(z), axis_y = _ti_const(ya),
+                "bilinear"; table = jconst(t2), axis_x = jconst(z), axis_y = jconst(ya),
                 x = _ti_ix("xq", "l"), y = "yq", nx = n, ny = _TI_NY
             )
             push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", look, _ti_ix("u", "l")))))
@@ -153,14 +152,11 @@ const _TI_NOFOLD = _TI._plan_with(_TI._compiler_plan(:native); count_fold = fals
 const _TI_NOSHARE = _TI._plan_with(_TI._compiler_plan(:native); share_subtrees = false)
 const _TI_TIMES = (0.0, 0.7, 3.1, 6.0, 10.0, 17.5)
 
-# `du` keyed by variable name at each of `_TI_TIMES`, and the build's tally,
+# `du` keyed by variable name at each of `_TI_TIMES`, and the build's counts,
 # under `compiler` (a vocabulary value or a plan).
 function _ti_eval(doc, compiler; times = _TI_TIMES)
-    _TI._reset_cascade_tally!()
-    f!, u0, p, _, vm = compiler isa Symbol ?
-        _TI._build_evaluator(doc; compiler = compiler) :
-        _TI._with_compiler_plan(() -> _TI._build_evaluator_dict(doc; compiler = compiler), compiler)
-    tally = copy(_TI._CASCADE_TALLY)
+    f!, u0, p, _, vm, rep = _TI.Internal.build(doc; compiler = compiler)
+    tally = rep.counts
     out = Dict{String, Vector{Float64}}()
     for t in times
         du = similar(u0); fill!(du, NaN)
@@ -257,9 +253,9 @@ end
 @testset "repeated sub-trees computed once: matches and near misses" begin
     n = 23
     ax = Float64[(k - 3) / 2 for k in 1:n]
-    cnt(x; lit = 1) = _ti_count("k", n, _ti_op("<=", _ti_ix(_ti_const(ax), "k"), x), []; yes = lit)
+    cnt(x; lit = 1) = _ti_count("k", n, _ti_op("<=", _ti_ix(jconst(ax), "k"), x), []; yes = lit)
     # Below the contraction-loop floor: the count is unrolled into a fold.
-    cnt5(x) = _ti_count("k", 5, _ti_op("<=", _ti_ix(_ti_const(ax[1:5]), "k"), x), [])
+    cnt5(x) = _ti_count("k", 5, _ti_op("<=", _ti_ix(jconst(ax[1:5]), "k"), x), [])
     function doc(rhs_of)
         vars = Dict{String, Any}(
             "q" => Dict("type" => "unknown", "shape" => Any["lev"]),
@@ -277,13 +273,10 @@ end
     end
     qs = vcat(Any[NaN, -Inf, Inf, -0.0], Any[ax[k] for k in 1:2:n], Any[ax[k] + 0.25 for k in 2:2:n])
     function agree(d)
-        ics = Dict{String, Any}("q[$i]" => qs[mod1(i, length(qs))] for i in 1:n)
+        ics = Dict{String, Any}("M.q[$i]" => qs[mod1(i, length(qs))] for i in 1:n)
         r = Dict{Any, Any}()
         for c in (:native, _TI_NOSHARE, :interpreter)
-            _TI._reset_cascade_tally!()
-            f!, u0, p, _, vm = c isa Symbol ?
-                _TI._build_evaluator(d; initial_conditions = ics, compiler = c) :
-                _TI._with_compiler_plan(() -> _TI._build_evaluator_dict(d; initial_conditions = ics, compiler = c), c)
+            f!, u0, p, _, vm, rep = _TI.Internal.build(d; initial_conditions = ics, compiler = c)
             out = Dict{String, Vector{Float64}}()
             for t in (0.0, 0.4, 2.0, 4.4)
                 du = similar(u0); f!(du, u0, p, t)
@@ -291,7 +284,7 @@ end
                     push!(get!(() -> Float64[], out, k), du[v])
                 end
             end
-            r[c] = (out, copy(_TI._CASCADE_TALLY))
+            r[c] = (out, rep.counts)
         end
         @test _ti_same(r[:native][1], r[:interpreter][1])
         @test _ti_same(r[_TI_NOSHARE][1], r[:interpreter][1])
@@ -363,7 +356,7 @@ end
 @testset "repeated sub-tree only in later gather subscripts stays lazy" begin
     M = 24
     c = Float64[mod1(5m, M) for m in 1:M]
-    cg = _ti_ix(_ti_const(c), _ti_op("+", "k", "s"))
+    cg = _ti_ix(jconst(c), _ti_op("+", "k", "s"))
     body = _ti_op(
         "+", _ti_ix("q", _ti_op("+", "k", "i", 1), cg),
         _ti_op("*", 2.0, _ti_ix("q", _ti_op("+", "k", "i", 2), cg))
@@ -396,25 +389,22 @@ end
             )
         )
     )
-    ics = Dict{String, Any}("out[$i]" => 0.0 for i in 1:2)
-    ics["s"] = 2.0
+    ics = Dict{String, Any}("M.out[$i]" => 0.0 for i in 1:2)
+    ics["M.s"] = 2.0
     qv(a, b) = 10.0 * a + b / 64
     for a in 1:M, b in 1:M
-        ics["q[$a,$b]"] = qv(a, b)
+        ics["M.q[$a,$b]"] = qv(a, b)
     end
     # Exact sums of the reads in range (every one an exact binary fraction).
     rd(a, k) = a <= M ? qv(a, c[k + 2]) : 0.0
     expect = [sum(rd(k + i + 1, k) + 2.0 * rd(k + i + 2, k) for k in 1:M) for i in 1:2]
     r = Dict{Any, Any}()
     for comp in (:native, _TI_NOSHARE, :interpreter)
-        _TI._reset_cascade_tally!()
-        f!, u0, p, _, vm = comp isa Symbol ?
-            _TI._build_evaluator(doc; initial_conditions = ics, compiler = comp) :
-            _TI._with_compiler_plan(() -> _TI._build_evaluator_dict(doc; initial_conditions = ics, compiler = comp), comp)
-        comp === :native && @test get(_TI._CASCADE_TALLY, :array_contraction_codegen, 0) >= 1
+        f!, u0, p, _, vm, rep = _TI.Internal.build(doc; initial_conditions = ics, compiler = comp)
+        comp === :native && @test get(rep.counts, :array_contraction_codegen, 0) >= 1
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        r[comp] = Float64[du[vm["out[$i]"]] for i in 1:2]
+        r[comp] = Float64[du[vm["M.out[$i]"]] for i in 1:2]
     end
     @test r[:interpreter] == expect
     @test all(r[:native] .=== r[:interpreter])
@@ -465,8 +455,9 @@ end
 end
 
 # A build-constant subscript holding a `faq` keeps integer arithmetic outside
-# the `faq`: `/` is `div` there, as in the subscript without one, and a `faq`
-# whose value is not an integer is refused as that value written by hand is.
+# the `faq`: `/` is the exact quotient there, as in the subscript without one
+# (an inexact one is refused), and a `faq` whose value is not an integer is
+# refused as that value written by hand is.
 @testset "build-constant subscript with a faq: integer arithmetic" begin
     axis = _op("const"; value = Any[1.0, 2.0, 3.0, 4.0])
     # The number of axis entries <= 1.5: one.
@@ -475,11 +466,24 @@ end
         expr_body = _op("ifelse", _op("<=", _op("index", axis, _v("k")), _n(1.5)), _i(1), _i(0))
     )
     ca = Dict{String, Any}()
-    # 5/2 + 1 is 3 in integer arithmetic (3.5, rounded to 4, in floating point).
-    sub = _op("+", _op("/", _i(5), _i(2)), cnt)
-    @test _TI._const_subscript_int(sub, ca) == 3
+    # 6/2 + 1 is 4 on every route.
+    sub = _op("+", _op("/", _i(6), _i(2)), cnt)
+    @test _TI._const_subscript_int(sub, ca) == 4
     @test _TI._const_subscript_int(sub, ca) ==
-        _TI._eval_const_int(_op("+", _op("/", _i(5), _i(2)), _i(1)), _TI._EMPTY_IDX_ENV, ca)
+        _TI._eval_const_int(_op("+", _op("/", _i(6), _i(2)), _i(1)), _TI._EMPTY_IDX_ENV, ca)
+    # 5/2 has no integer reading that agrees with the floating-point walk (3.5,
+    # rounded to 4 there, where an integer `div` gives 2): refused on both.
+    for f in (
+            () -> _TI._const_subscript_int(_op("+", _op("/", _i(5), _i(2)), cnt), ca),
+            () -> _TI._eval_const_int(_op("+", _op("/", _i(5), _i(2)), _i(1)), _TI._EMPTY_IDX_ENV, ca),
+        )
+        e = try
+            f(); nothing
+        catch x
+            x
+        end
+        @test e isa _TI.TreeWalkError && e.code == "E_TREEWALK_INEXACT_SUBSCRIPT"
+    end
     # A `faq` worth 1.5: 2 + 1.5 is no subscript.
     half = _op("faq"; output_idx = Any[], reduce = "+", ranges = Dict{String, Any}("k" => Any[1, 3]), expr_body = _n(0.5))
     err(f) = try
@@ -529,8 +533,8 @@ _ti_sub_doc(sub; n = 9, nl = 23) = begin
         "pn" => Dict{String, Any}("type" => "parameter", "default" => Float64(n - 1)),
     )
     eqs = Any[
-        Dict("lhs" => "axis", "rhs" => _ti_const(z)),
-        Dict("lhs" => "tab", "rhs" => _ti_const(tab)),
+        Dict("lhs" => "axis", "rhs" => jconst(z)),
+        Dict("lhs" => "tab", "rhs" => jconst(tab)),
         Dict("lhs" => "xq", "rhs" => xq),
         Dict("lhs" => "r", "rhs" => _ti_lev(_ti_ix("tab", sub(cnt, n)))),
         Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", _ti_ix("r", "l"), _ti_ix("u", "l")))),
@@ -606,7 +610,7 @@ _ti_ngens(_) = 1
             "+", _ti_op("*", _ti_op("+", "i", _ti_op("*", 3, "j")), z[n] / (ni + 3 * nj)),
             _ti_op("*", 50.0, _ti_ix("u", "i", "j"))
         )
-        look = _ti_apply("linear"; table = _ti_const(tab), axis = _ti_const(z), x = x, n = n)
+        look = _ti_apply("linear"; table = jconst(tab), axis = jconst(z), x = x, n = n)
         doc = Dict{String, Any}(
             "esm" => "2.0.0", "metadata" => Dict("name" => "nest_2d_consumer"),
             "index_sets" => Dict(
@@ -648,7 +652,7 @@ _ti_ngens(_) = 1
         for j in 1:m
             vars["r$j"] = Dict{String, Any}("type" => "unknown", "shape" => ["lev"])
             tab = Float64[j + 0.125 * k * k for k in 1:n]
-            push!(eqs, Dict("lhs" => "r$j", "rhs" => _ti_lev(_ti_apply("linear"; table = _ti_const(tab), axis = _ti_const(z), x = _ti_ix("xq", "l"), n = n))))
+            push!(eqs, Dict("lhs" => "r$j", "rhs" => _ti_lev(_ti_apply("linear"; table = jconst(tab), axis = jconst(z), x = _ti_ix("xq", "l"), n = n))))
             push!(terms, _ti_ix("r$j", "l"))
         end
         push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", _ti_op("+", terms...), _ti_ix("u", "l")))))
@@ -683,7 +687,7 @@ end
     x = _ti_op("+", 0.5 * z[end], _ti_op("+", _ti_op("*", 100.0, "u"), _ti_op("*", 30.0, "t")))
     y = _ti_op("+", 2.25, _ti_op("+", "u", _ti_op("*", 0.001, "t")))
     look = _ti_apply(
-        "bilinear"; table = _ti_const(t2), axis_x = _ti_const(z), axis_y = _ti_const(ya),
+        "bilinear"; table = jconst(t2), axis_x = jconst(z), axis_y = jconst(ya),
         x = x, y = y, nx = n, ny = _TI_NY
     )
     model = Dict{String, Any}(

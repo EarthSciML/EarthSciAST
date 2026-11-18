@@ -17,9 +17,8 @@
 #     no compiled program carries it) without walking the shared query once
 #     per use.
 
-module TemplateNestedObservedTests
-
 using Test
+include("testutils.jl")
 using JSON3
 using EarthSciAST
 const EA = EarthSciAST
@@ -27,11 +26,6 @@ import OrdinaryDiffEqTsit5   # the solver `run_inline_tests` picks
 
 const REPO = normpath(joinpath(@__DIR__, "..", "..", ".."))
 
-_op(o, a...; kw...) = Dict{String, Any}(
-    "op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...
-)
-_ix(a, s...) = _op("index", a, s...)
-_const(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 _faq(out, ranges, e; kw...) = Dict{String, Any}(
     "op" => "faq", "args" => Any[], "output_idx" => Any[out...],
     "ranges" => ranges, "expr" => e, (String(k) => v for (k, v) in kw)...
@@ -51,8 +45,8 @@ function nested_doc(n::Int; tests::Bool = false)
     )
     suffix = _faq(
         ("k",), Dict("k" => Any[1, n], "j" => Any[1, n]),
-        _op("*", _ix("q", "j"), _ix(_const(Float64[0.5 + 0.01 * j for j in 1:n]), "j"));
-        reduce = "+", filter = _op(">=", "j", "k")
+        jop("*", jidx("q", "j"), jidx(jconst(Float64[0.5 + 0.01 * j for j in 1:n]), "j"));
+        reduce = "+", filter = jop(">=", "j", "k")
     )
     W = Dict{String, Any}(
         "op" => "makearray", "args" => Any[],
@@ -66,9 +60,9 @@ function nested_doc(n::Int; tests::Bool = false)
     look = Dict{String, Any}(
         "op" => "apply_expression_template", "args" => Any[], "name" => "bilinear",
         "bindings" => Dict{String, Any}(
-            "table" => _const(tab), "axis_x" => _const([0.0, 0.2, 0.5, 1.0]),
-            "axis_y" => _const([0.0, 1.0, 2.0, 3.0, 4.0]),
-            "x" => "mu", "y" => _ix("alw", "kn"), "nx" => 4, "ny" => 5,
+            "table" => jconst(tab), "axis_x" => jconst([0.0, 0.2, 0.5, 1.0]),
+            "axis_y" => jconst([0.0, 1.0, 2.0, 3.0, 4.0]),
+            "x" => "mu", "y" => jidx("alw", "kn"), "nx" => 4, "ny" => 5,
         )
     )
     vars = Dict{String, Any}(
@@ -77,26 +71,26 @@ function nested_doc(n::Int; tests::Bool = false)
         "R" => var(("lev_nodes",)), "dR" => var(("lev",)), "xr" => var(("lev",)),
     )
     eqs = Any[
-        Dict("lhs" => "mu", "rhs" => _op("+", 0.45, _op("*", 0.4, _op("sin", "t")))),
+        Dict("lhs" => "mu", "rhs" => jop("+", 0.45, jop("*", 0.4, jop("sin", "t")))),
         Dict("lhs" => "W", "rhs" => W),
         # Written elementwise over the shaped `W` (no `faq`), as a scheme
         # writes it: the build folds such an observed into its readers, which
         # is what puts the `makearray` inside the template's query.
         Dict(
             "lhs" => "alw",
-            "rhs" => _op("min", _op("log10", _op("+", _op("/", "W", _op("*", "mu", 0.01)), 1.0)), 3.999),
+            "rhs" => jop("min", jop("log10", jop("+", jop("/", "W", jop("*", "mu", 0.01)), 1.0)), 3.999),
         ),
-        Dict("lhs" => "R", "rhs" => _faq(("kn",), Dict("kn" => nodes), _op("/", look, 100.0))),
+        Dict("lhs" => "R", "rhs" => _faq(("kn",), Dict("kn" => nodes), jop("/", look, 100.0))),
         Dict(
             "lhs" => "dR", "rhs" => _faq(
                 ("k",), Dict("k" => lev),
-                _op("-", _ix("R", "k"), _ix("R", _op("+", "k", 1)))
+                jop("-", jidx("R", "k"), jidx("R", jop("+", "k", 1)))
             )
         ),
-        Dict("lhs" => "xr", "rhs" => _op("/", "dR", 0.01)),
+        Dict("lhs" => "xr", "rhs" => jop("/", "dR", 0.01)),
         Dict(
-            "lhs" => _faq(("k",), Dict("k" => lev), _op("D", _ix("q", "k"); wrt = "t")),
-            "rhs" => _faq(("k",), Dict("k" => lev), _op("-", _ix("dR", "k"), _op("*", 0.1, _ix("q", "k")))),
+            "lhs" => _faq(("k",), Dict("k" => lev), jop("D", jidx("q", "k"); wrt = "t")),
+            "rhs" => _faq(("k",), Dict("k" => lev), jop("-", jidx("dR", "k"), jop("*", 0.1, jidx("q", "k")))),
         ),
     ]
     model = Dict{String, Any}(
@@ -130,7 +124,7 @@ function nested_doc(n::Int; tests::Bool = false)
 end
 
 function rhs_at(doc, compiler; times = (0.0, 0.4, 1.3))
-    f!, u0, p, _, vm = EA._build_evaluator(doc; compiler = compiler)
+    f!, u0, p, _, vm = EA.Internal.build(doc; compiler = compiler)
     out = Dict{String, Vector{Float64}}()
     for t in times
         du = similar(u0)
@@ -190,5 +184,3 @@ same_bits(a, b) = keys(a) == keys(b) && all(all(a[k] .=== b[k]) for k in keys(a)
         end
     end
 end
-
-end # module

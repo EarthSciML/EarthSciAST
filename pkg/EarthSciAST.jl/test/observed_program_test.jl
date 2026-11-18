@@ -10,7 +10,7 @@
 using Test
 using EarthSciAST
 using OrdinaryDiffEqTsit5
-using DiffEqCallbacks            # loads EarthSciASTDataOutputExt (the sink test)
+using DiffEqCallbacks            # loads EarthSciASTCallbacksExt (the sink test)
 using SciMLBase
 using JSON3
 include("testutils.jl")
@@ -348,8 +348,7 @@ _OP.sink_observed_names(s::_OPSink) = s.names
         doc["models"]["M"]["equations"] = doc["models"]["M"]["equations"][[1, 3, 4]]
         pn = esm_problem(doc, (0.0, 1.0))
         refused = withenv(
-            "ESS_CODEGEN_NODE_BUDGET" => "0",
-            "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0"
+            "ESS_CODEGEN_NODE_BUDGET" => "0"
         ) do
             try
                 observed_field(pn, "h"); nothing
@@ -430,7 +429,7 @@ end
     route(name, ext) = _OP._with_compiler_plan(_OP._compiler_plan(:native)) do
         _OP._counting_program_reads() do
             _OP._authored_via_programs(
-                ctx, pn.inspection, name, _OP._row_major_cells(ext),
+                ctx, pn.build.products, name, _OP._row_major_cells(ext),
                 pn.u0, 0.0, pn.p, "M", sa, ss
             )
         end

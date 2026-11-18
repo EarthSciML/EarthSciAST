@@ -6,7 +6,7 @@
 #   * default                 → the codegen tier (RuntimeGeneratedFunctions)
 #   * compiler=:interpreter   → the pre-codegen runner (per-cell interpreter)
 # Every case asserts the codegen tier actually FIRED (`:codegen_kernel` in
-# `_CASCADE_TALLY`), so a silent decline cannot make the comparison pass
+# the build's counts), so a silent decline cannot make the comparison pass
 # trivially. Fixtures deliberately span the descriptor/op surface: affine
 # stencils (1-D/2-D, ghosts), makearray regions, const-array coefficients,
 # lazy guards over singular ops, scalar parameters, constant-bound
@@ -20,15 +20,17 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 # Build with the codegen tier on (default) or off (the differential reference).
-# Returns (f!, u0, p, vmap, diag, tally-snapshot).
+# Returns (f!, u0, p, vmap, stats, counts). `ics` is keyed by the model's local
+# names, which the build sees qualified (`M.u[1]`); `const_arrays` names arrays
+# the model does not declare, which flattening leaves bare.
 function _cgk_build(model, ics; codegen::Bool, const_arrays = Dict(), form = :inplace)
-    ESM._reset_cascade_tally!()
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+    f!, u0, p, _t, vm, rep = ESM.Internal.build(
         model;
-        initial_conditions = ics, const_arrays = const_arrays, form = form,
+        initial_conditions = Dict("M.$k" => v for (k, v) in ics),
+        const_arrays = const_arrays, form = form,
         compiler = codegen ? :native : :interpreter
     )
-    return (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
+    return (f!, u0, p, vm, rep.stats, rep.counts)
 end
 
 _cgk_fired(tally) = get(tally, :codegen_kernel, 0)
@@ -262,17 +264,15 @@ end
             TESTUTILS_REPO_ROOT, "tests", "bench",
             "transport_3axis_7cubed_fullrank.esm"
         )
-        if !isfile(FIX)
-            @test_skip "bench fixture transport_3axis_7cubed_fullrank.esm missing"
-        else
+        @test isfile(FIX)
+        if isfile(FIX)
             flat = ESM.flatten(ESM.load_path(FIX))
             function build(codegen)
-                ESM._reset_cascade_tally!()
-                f!, u0, p, _, _ = ESM._build_evaluator(
+                f!, u0, p, _, _, rep = ESM.Internal.build(
                     flat;
                     compiler = codegen ? :native : :interpreter
                 )
-                return (f!, u0, p, copy(ESM._CASCADE_TALLY))
+                return (f!, u0, p, rep.counts)
             end
             fc, u0, p, tally = build(true)
             fr, v0, q, rtally = build(false)
@@ -315,8 +315,7 @@ end
                 ESM._acc(3)
             )
             ESM._AccKernel(
-                ESM._CellSet([1], UnitRange{Int}[lo:hi], 0), sp, acc,
-                ESM._FixedBound(0), 0.0
+                ESM._CellSet([1], UnitRange{Int}[lo:hi], 0), sp, acc
             )
         end
         K1 = mk1d(2, N - 1, -1, 1)
@@ -332,12 +331,10 @@ end
         )
         K2 = ESM._AccKernel(
             ESM._CellSet([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -14),
-            sp4, acc4, ESM._FixedBound(0), 0.0
+            sp4, acc4
         )
         kernels = ESM._AccKernel[K1, K2]
-        ESM._reset_cascade_tally!()
-        section = ESM._make_kernel_section(kernels)
-        tally = copy(ESM._CASCADE_TALLY)
+        section, tally = ESM.Internal.counting(() -> ESM._make_kernel_section(kernels))
         @test get(tally, :codegen_kernel, 0) == 1
         @test get(tally, :codegen_decline_foreign_scratch, 0) == 1
         @test length(section.kernels) == 1          # K2 kept its scalar runner
@@ -378,12 +375,12 @@ end
             end
             sp = ESM._aop(:+, terms...)
             K = ESM._AccKernel(
-                ESM._CellSet(strides, ranges, base), sp, acc,
-                ESM._FixedBound(0), 0.0
+                ESM._CellSet(strides, ranges, base), sp, acc
             )
-            ESM._reset_cascade_tally!()
-            section = ESM._make_kernel_section(ESM._AccKernel[K])
-            @test get(ESM._CASCADE_TALLY, :codegen_kernel, 0) == 1
+            section, tally = ESM.Internal.counting(
+                () -> ESM._make_kernel_section(ESM._AccKernel[K])
+            )
+            @test get(tally, :codegen_kernel, 0) == 1
             u = _cgk_probe(ncell, 3)
             du = zeros(ncell)
             section(du, u, nothing, 0.0, Float64)

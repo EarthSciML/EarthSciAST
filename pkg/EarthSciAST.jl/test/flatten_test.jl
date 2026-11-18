@@ -267,6 +267,8 @@ end
             e -> e.error_type == "conflicting_derivative" &&
                 occursin("SimpleOzone.O3", e.message), errs
         )
+        # Reported at the document root, which is "" (not "/").
+        @test all(e -> e.path == "", filter(e -> e.error_type == "conflicting_derivative", errs))
     end
 
     @testset "6. operator_compose across two models (summed RHS)" begin
@@ -364,6 +366,75 @@ end
         eq = _find_eq(flat, "Target.T")
         @test eq !== nothing
         @test _uses_var(eq.rhs, "Source.value")
+    end
+
+    @testset "7e. variable_map substitution reaches every site a flattened system carries" begin
+        E = EarthSciAST
+        gt(e) = _op(">", e, _N(0.0))
+        vars = Dict{String, ModelVariable}(
+            "T" => ModelVariable(UnknownVariable; default = 1.0, ub = "external"),
+            "external" => ModelVariable(ParameterVariable, default = 1.0),
+            "q" => ModelVariable(
+                ParameterVariable; default = 0.0,
+                update = [
+                    E.ParameterUpdate("condition"; when = gt(_V("external")), expression = _V("external")),
+                    E.ParameterUpdate(
+                        "data"; source = "S",
+                        from = E.DataSourceBinding("f"; unit_conversion = _V("external"))
+                    ),
+                ]
+            ),
+        )
+        model = Model(
+            vars, [Equation(_deriv("T"), _op("*", _V("external"), _V("T")))];
+            continuous_events = [
+                ContinuousEvent(ESMExpr[gt(_V("external"))], [AffectEquation("T", _V("external"))]),
+            ],
+            discrete_events = [
+                DiscreteEvent(ConditionTrigger(gt(_V("external"))), [AffectEquation("T", _V("external"))]),
+            ]
+        )
+        source = Model(
+            Dict{String, ModelVariable}("value" => ModelVariable(UnknownVariable, default = 0.5)),
+            Equation[]
+        )
+        rs = ReactionSystem(
+            [Species("A")], [Reaction("r", [E.StoichiometryEntry("A", 1)], nothing, _V("k"))];
+            parameters = [
+                Parameter("k", 1.0; update = E.ParameterUpdate("condition"; when = gt(_V("A")), expression = _V("A"))),
+            ]
+        )
+        file = E.EsmFile(
+            "0.1.0", E.Metadata("t7e");
+            models = Dict("Target" => model, "Source" => source),
+            reaction_systems = Dict("R" => rs),
+            coupling = CouplingEntry[
+                CouplingVariableMap("Source.value", "Target.external", "param_to_var"),
+            ]
+        )
+        flat = flatten(file)
+        @test !haskey(flat.parameters, "Target.external")
+        stale = String[]
+        reads(e) = "Target.external" in E.free_variables(e)
+        for ev in flat.continuous_events
+            any(reads, ev.conditions) && push!(stale, "condition")
+            any(a -> reads(a.rhs), ev.affects) && push!(stale, "affect")
+        end
+        for ev in flat.discrete_events
+            reads(ev.trigger.expression) && push!(stale, "trigger")
+            any(a -> reads(a.rhs), ev.affects) && push!(stale, "discrete affect")
+        end
+        rules = flat.parameters["Target.q"].update
+        reads(rules[1].when) && push!(stale, "update when")
+        reads(rules[1].expression) && push!(stale, "update expression")
+        reads(rules[2].from.unit_conversion) && push!(stale, "unit_conversion")
+        @test isempty(stale)
+        @test rules[2].from.unit_conversion == _V("Source.value")
+        @test flat.state_variables["Target.T"].ub == "Source.value"
+        # A reaction system's parameter update rule resolves in its own scope.
+        krule = flat.parameters["R.k"].update[1]
+        @test krule.expression == _V("R.A")
+        @test E.free_variables(krule.when) == Set(["R.A"])
     end
 
     @testset "7a. variable_map endpoints reach INTO a subsystem (esm-spec §4.6)" begin
@@ -499,7 +570,13 @@ end
             models = Dict("Sink" => sink, "Src" => src),
             coupling = CouplingEntry[CouplingVariableMap("Src.F", "Sink.F_in", transform)]
         )
-        @test_throws ArgumentError flatten(file)
+        err = try
+            flatten(file); nothing
+        catch e
+            e
+        end
+        @test err isa FlattenError
+        @test error_code(err) == ERROR_CODES.VARIABLE_MAP_TRANSFORM_MISSING_FROM
     end
 
     @testset "7d. expression transform takes no factor" begin
@@ -545,11 +622,6 @@ end
         # additive term against an absent tendency is well defined, because zero
         # is the additive identity." So D(Chem.A) ~ (-Sink.k) * Chem.A exactly,
         # with no summation node.
-        #
-        # This testset used to assert a `+` here, because Julia emitted a vacuous
-        # `D(Chem.A) = 0` for the inert species and the connector summed onto it.
-        # The `+` was pinning that artifact, not the coupling behaviour under
-        # test; §4.6.1 removed the artifact and §4.7.2's own rule is what is left.
         rsys = EarthSciAST.ReactionSystem(
             [EarthSciAST.Species("A", default = 2.0)], EarthSciAST.Reaction[]
         )
@@ -693,7 +765,13 @@ end
             reaction_systems = Dict("Chem" => rsys),
             coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
         )
-        @test_throws ArgumentError flatten(file)
+        err = try
+            flatten(file); nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.FlattenRefusal
+        @test error_code(err) == ERROR_CODES.UNSUPPORTED_CONSTRUCT
     end
 
     @testset "8e. unknown connector transform raises a clear error" begin
@@ -718,7 +796,13 @@ end
             reaction_systems = Dict("Chem" => rsys),
             coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
         )
-        @test_throws ArgumentError flatten(file)
+        err = try
+            flatten(file); nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.FlattenRefusal
+        @test error_code(err) == ERROR_CODES.UNSUPPORTED_CONSTRUCT
     end
 
     @testset "9. Nested subsystems produce full dot paths" begin
@@ -1086,15 +1170,11 @@ end
         mk(name) = Equation(_deriv(name), _N(0.0))
         dep(eq) = (eq.lhs.args[1]::E.VarExpr).name
         function place(names, owners, items, components)
-            eqs = Equation[mk(n) for n in names]
-            cs = Vector{E.Contribution}[E.Contribution[] for _ in names]
-            os = copy(owners)
+            pool = [E._FlatEq(mk(n), E.Contribution[], o) for (n, o) in zip(names, owners)]
             E._insert_into_component_blocks!(
-                eqs, cs, os,
-                [(mk(n), E.Contribution[], o) for (n, o) in items], components
+                pool, [E._FlatEq(mk(n), E.Contribution[], o) for (n, o) in items], components
             )
-            @test length(cs) == length(eqs)
-            return dep.(eqs), os
+            return [dep(f.eq) for f in pool], [f.owner for f in pool]
         end
         # Unowned "" equations belong to no block; items of one owner keep
         # their order; owners are visited in component order whatever the
@@ -1144,4 +1224,114 @@ end
             end
         end
     end
+end
+
+# An elementwise operation over disjoint index sets spans their union, the
+# outer product (esm-spec §4.3.4, "An undeclared result takes the union").
+const _UNION_DOC = """
+{
+  "esm": "1.3.0",
+  "metadata": {"name": "union_shape"},
+  "index_sets": {"lon": {"kind": "interval", "size": 3}, "lat": {"kind": "interval", "size": 2}},
+  "models": {
+    "M": {
+      "variables": {
+        "a": {"type": "parameter", "units": "1/s", "shape": ["lon"], "default": [1.0, 2.0, 3.0]},
+        "b": {"type": "parameter", "units": "1/s", "shape": ["lat"], "default": [10.0, 20.0]},
+        "k": {"type": "unknown", "units": "1/s"},
+        "c": {"type": "unknown", "units": "1", "default": 1.0}
+      },
+      "equations": [
+        {"lhs": "k", "rhs": {"op": "+", "args": ["a", "b"]}},
+        {"lhs": {"op": "D", "args": ["c"], "wrt": "t"}, "rhs": {"op": "*", "args": ["k", "c"]}}
+      ]
+    }
+  }
+}
+"""
+
+@testset "elementwise over disjoint index sets: the union shape" begin
+    shapes = Dict("a" => ["lon"], "b" => ["lat"])
+    sum_ab = _op("+", _V("a"), _V("b"))
+    @test EarthSciAST._infer_expr_shape(sum_ab, shapes) == ["lon", "lat"]
+    @test EarthSciAST._infer_expr_shape(_op("*", _V("b"), _V("a")), shapes) == ["lat", "lon"]
+    # One inference: the lift reads the same answer.
+    env = EarthSciAST._ShapeEnv(Dict("a" => ["lon"], "b" => ["lat"]))
+    @test EarthSciAST._expr_axes(env, sum_ab) == ["lon", "lat"]
+    # A `broadcast` of a scalar operator is elementwise.
+    @test EarthSciAST._infer_expr_shape(
+        _op("broadcast", _V("a"), _V("b"); fn = "*"), shapes
+    ) == ["lon", "lat"]
+
+    file = EarthSciAST.load_string(_UNION_DOC)
+    flat = EarthSciAST.flatten(file)
+    # `c` is lifted onto the union grid, and the unshaped `k` it reads is
+    # gathered at the cell, not left a bare name inside the lifted `faq`.
+    @test flat.state_variables["M.c"].shape == ["lon", "lat"]
+    eq = only(e for e in flat.equations if e.lhs isa EarthSciAST.OpExpr && e.lhs.op == "faq")
+    gathered = Ref(false)
+    EarthSciAST.foreach_subexpr(eq.rhs.expr_body) do x
+        if x isa EarthSciAST.OpExpr && x.op == "index" && x.args[1] isa EarthSciAST.VarExpr &&
+                x.args[1].name == "M.k"
+            gathered[] = length(x.args) == 3
+        end
+        nothing
+    end
+    @test gathered[]
+
+    # Built and evaluated, `D(c[i, j]) = (a[i] + b[j]) * c[i, j]`.
+    prob = EarthSciAST.esm_problem(file, (0.0, 1.0))
+    du = zeros(length(prob.u0))
+    prob.f!(du, copy(prob.u0), prob.p, 0.0)
+    a, b = [1.0, 2.0, 3.0], [10.0, 20.0]
+    for i in 1:3, j in 1:2
+        @test du[Int(prob.var_map["M.c[$i,$j]"])] ≈ a[i] + b[j]
+    end
+end
+
+@testset "initialization equations are named by flatten" begin
+    doc = """
+    {
+      "esm": "1.3.0",
+      "metadata": {"name": "init_names"},
+      "models": {
+        "A": {
+          "variables": {"x": {"type": "unknown", "units": "1", "default": 0.0},
+                        "p": {"type": "parameter", "units": "1", "default": 2.0}},
+          "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "p"}],
+          "initialization_equations": [{"lhs": "x", "rhs": {"op": "*", "args": ["p", 3]}}]
+        },
+        "B": {
+          "variables": {"q": {"type": "parameter", "units": "1", "default": 5.0}},
+          "equations": []
+        }
+      },
+      "coupling": [{"type": "variable_map", "from": "B.q", "to": "A.p", "transform": "param_to_var"}]
+    }
+    """
+    flat = EarthSciAST.flatten(EarthSciAST.load_string(doc))
+    init = only(flat.initialization_equations)
+    @test init.lhs == _V("A.x")
+    # Namespaced, then substituted by the `variable_map` as the equations are.
+    @test EarthSciAST.free_variables(init.rhs) == Set(["B.q"])
+    # Kept by a copy.
+    @test only(EarthSciAST.FlattenedSystem(flat; domain = nothing).initialization_equations) === init
+end
+
+@testset "the subset maps are read off their parents" begin
+    flat = EarthSciAST.FlattenedSystem(;
+        parameters = EarthSciAST.OrderedDict(
+            "M.a" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable; default = 1.0),
+            "M.b" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable; default = 2.0),
+        ),
+        discrete_parameters = ["M.b", "M.gone"]
+    )
+    @test collect(keys(flat.discrete_parameters)) == ["M.b"]
+    newer = EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable; default = 3.0)
+    flat2 = EarthSciAST.FlattenedSystem(
+        flat; parameters = EarthSciAST.OrderedDict("M.b" => newer)
+    )
+    @test flat2.discrete_parameters["M.b"] === newer
+    @test :discrete_parameters in propertynames(flat2)
+    @test_throws ArgumentError EarthSciAST.FlattenedSystem(flat; no_such_field = 1)
 end

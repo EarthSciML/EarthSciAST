@@ -35,25 +35,24 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         model = ESM.Model(vars, eqs)
 
         # Default parameter value: ic(x) = k*2 = 6.
-        f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(model)
-        @test u0[var_map["x"]] == 6.0
+        f!, u0, p, tspan, var_map = EarthSciAST.Internal.build(model)
+        @test u0[var_map["M.x"]] == 6.0
 
         # parameter_overrides feed the same resolved scope: ic(x) = 5*2 = 10.
-        _, u0b, _, _, vmb = EarthSciAST._build_evaluator(
+        _, u0b, _, _, vmb = EarthSciAST.Internal.build(
             model;
-            parameter_overrides = Dict("k" => 5.0)
+            parameter_overrides = Dict("M.k" => 5.0)
         )
-        @test u0b[vmb["x"]] == 10.0
+        @test u0b[vmb["M.x"]] == 10.0
 
         # An explicit initial_conditions entry still wins over the ic equation.
-        _, u0c, _, _, vmc = EarthSciAST._build_evaluator(
+        _, u0c, _, _, vmc = EarthSciAST.Internal.build(
             model;
-            initial_conditions = Dict("x" => 42.0)
+            initial_conditions = Dict("M.x" => 42.0)
         )
-        @test u0c[vmc["x"]] == 42.0
+        @test u0c[vmc["M.x"]] == 42.0
 
-        # An UNBOUND name in a scalar ic RHS is still a clear error, and the
-        # diagnostic now carries the underlying cause.
+        # An UNBOUND name in a scalar ic RHS is a clear error that names it.
         badm = ESM.Model(
             vars, ESM.Equation[
                 ESM.Equation(_af_op("ic", _af_v("x")), _af_v("nope")),
@@ -61,14 +60,16 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
             ]
         )
         err = try
-            EarthSciAST._build_evaluator(badm)
+            EarthSciAST.Internal.build(badm)
             nothing
         catch e
             e
         end
-        @test err isa ESM.TreeWalkError
-        @test err.code == "E_TREEWALK_UNSUPPORTED_EQUATION"
-        @test occursin("nope", err.detail)
+        # Refused at the run's reference-integrity gate, ahead of the build,
+        # naming the unbound variable (esm-libraries-spec §2.5.2).
+        @test err isa ESM.ParseError
+        @test err.code == "undefined_variable"
+        @test occursin("nope", err.message)
     end
 
     # ----------------------------------------------------------------
@@ -87,6 +88,12 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         @test ESM._parse_cell_key("[3]") === nothing
         @test ESM._parse_cell_key("u[1,]") === nothing
         @test ESM._parse_cell_key("u[1]x") === nothing
+        # The spelling `_cell_key` writes, and only that: a negative index reads
+        # back, a leading zero does not.
+        @test ESM._parse_cell_key("u[-1,2]") == ("u", [-1, 2])
+        @test ESM._parse_cell_key(ESM._cell_key("u", [-3])) == ("u", [-3])
+        @test ESM._parse_cell_key("u[01]") === nothing
+        @test ESM._parse_cell_key("u[-0]") === nothing
     end
 
     # ----------------------------------------------------------------
@@ -131,8 +138,7 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         @test resolved.value isa ESM._PGatherRef
         @test (resolved.value::ESM._PGatherRef).lin == 2   # column-major (2,1)
         node = ESM._compile(
-            resolved, Dict{String, Int}(), Set{Symbol}(),
-            Dict{String, Any}()
+            resolved, Dict{String, Int}(), Set{Symbol}()
         )
         @test node.kind == ESM._NK_PARAM_GATHER
         @test ESM._eval_node(node, Float64[], NamedTuple(), 0.0) == 20.0

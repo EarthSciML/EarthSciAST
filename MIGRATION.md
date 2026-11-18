@@ -368,7 +368,7 @@ reasoning is worth reading once rather than five times.
 | `declared_system_kind_mismatch(model)` | for the `nothing` case: `declared_system_kind(m) === nothing \|\| declared_system_kind(m) == system_kind(m)`; for the `(declared, derived)` tuple: `(declared_system_kind(m), system_kind(m))` | `deleted` |
 | — | `declared_system_kind(model)` — reads the explicit field, `nothing` when absent | `new` |
 | — | `effective_system_kind(model)` — `declared` if present, else derived | `new` |
-| `validate(path::AbstractString)` | `validate_path(path)` | `deleted` |
+| `validate(path::AbstractString)` | `validate_path(path)` (returns a verdict for a schema-invalid or malformed file, see below) | `deleted` |
 | `validate(file)` | takes a **typed document** only; `validate(::String)` is now a `MethodError`, deliberately | `semantics` |
 | — | `validate_text(text; base_path)` | `new` |
 | `lower_enums!(file)` | `lower_enums(file)` is the **pure** canonical form (it deep-copies); `lower_enums!(file)` is the in-place twin. Both exported. | `semantics` |
@@ -378,6 +378,35 @@ reasoning is worth reading once rather than five times.
 | `build_reference_graph(model, name)` on a 1.0.0 document | takes an optional trailing `index_sets`; `resolve_references` threads it | `semantics` (bug fix) |
 | diagnostic pointer `…/update/0/…` for a scalar `update` | `…/update/…` | `semantics` |
 | `from_faq` / node `id` uniqueness | see [Part II](#part-ii--the-document-format-changed) | `format` |
+| `build_evaluator(input; …)` (deprecated alias) | `esm_problem(input, tspan; …)`, then `prob.f!` / `prob.u0` / `prob.p` / `prob.var_map`; `compiler = :xla` for what `form = :oop` handed a compiled backend. The alias is removed (`API_SPEC.md` §8 item 23). | `deleted` |
+| `insp.observed_defs`, `.derived_extents`, `.forcing_buffers`, `.forcing_buffer_index`, `.unvalued_slots`, `.ic_reseed`, `.program_seed`, `.observed_memo` and the other undocumented `BuildInspection` fields | gone from the record; `forcing_buffers(prob)` / `forcing_buffer_index(prob)` for the forcing buffers. A `BuildInspection` keeps `setup_arrays`, `const_arrays`, `observed_exprs`, `params`, `param_classes`, `recurrences`, `compiler_report`. | `deleted` |
+| one `BuildInspection` passed to two `esm_problem` calls | raises `ArgumentError`; pass a fresh record to each | `semantics` |
+| `EarthSciAST.notify_forcing_refresh!(buffer)` / `notify_forcing_refresh!()` after a direct write to a live forcing buffer | `EarthSciAST.notify_forcing_refresh!(prob)` or `notify_forcing_refresh!(prob, name)` (or the build's `DiscreteMaterializer`): the announcement goes to the build that reads the buffer, see below | `deleted` |
+| `build_refresh_callback(; providers, buffers)` | `build_refresh_callback(; providers, buffers, owner = prob)`: `owner` is required, so each boundary's writes are announced to the build that reads them (`owner = nothing` opts out) | `semantics` |
+| `sprint(showerror, e)` text of an `EarthSciAST` error | one rendering for every type: `TypeName [code]: message (at /pointer in file)`; read the parts with `error_code(e)`, `error_message(e)`, `error_path(e)`, `error_file(e)` | `semantics` |
+| — | `error_code`, `error_message`, `error_path`, `error_file` | `new` |
+| positional default constructor of `SimulateError`, `OutputError`, `MigrationError` (`code` was not the first field) | `code` is the first field of every exported error type; the documented constructors `SimulateError(msg, code = "")`, `OutputError(msg, code = "")` and `MigrationError(msg; code, path)` are unchanged | `semantics` |
+| `EditError(msg)`, `RefreshError(msg)`, `InlineTestError(msg)`, `FloatKeyError(msg)`, `QualifiedReferenceError(msg, ref, path)`, `UnboundVariableError(name, msg)` | unchanged constructors; each type gained a leading `code` field (`EditError`, `RefreshError`, `InlineTestError` and `QualifiedReferenceError` take it as an optional last argument) | `semantics` |
+| `catch e; e isa ArgumentError` around `flatten` | `catch e; e isa FlattenError` (exported; `CoupleMultiplicativeNoTendencyError` for a `multiplicative` connector with no tendency, otherwise read `error_code(e)`) | `semantics` |
+| `catch e; e isa ArgumentError` around `ModelingToolkit.System(flat)` / `Catalyst.ReactionSystem(rsys)` for a construct they cannot lower | `catch e; e isa SimulateError` (`error_code(e)` is `unsupported_construct`, `undefined_variable`, `unlowered_operator`, …) | `semantics` |
+| `ArgumentError` from `load_*` for a value a typed constructor refuses (a ragged inline array, a negative stoichiometry) | `ParseError` (the `ArgumentError` is its `original_error`) | `semantics` |
+| `ArgumentError` from `esm_problem` for a `parameter_overrides` key fed by a live forcing buffer | `SimulateError` with code `override_key_conflict`; the ambiguous-key and two-keys-one-name refusals carry `override_key_ambiguous` / `override_key_conflict` | `semantics` |
+| `ArgumentError` from `infer_array_shapes` | `SimulateError` (`array_shape_mismatch`, `unsupported_construct`) | `semantics` |
+
+### A forcing write is announced to the build that reads it
+
+The forcing epoch, which tells a build's memoized time-cadence values and
+discrete-cadence caches that a live buffer changed in place, now belongs to the
+build and is reached through its owner: `notify_forcing_refresh!(prob)`,
+`notify_forcing_refresh!(prob, name)` (which also checks that `name` is one of
+the Problem's forcing buffers), or `notify_forcing_refresh!(dm)` for the
+`DiscreteMaterializer` the build filled. The raw-array form and the
+process-wide no-argument form are gone with the process-wide table that served
+them. Two consequences: a write is no longer announced to every build that
+aliases the array, so tell each Problem you wrote under; and `_write_forcing!`
+(the refresh callback's write) announces nothing by itself — the problem's own
+refresh callback announces, and `build_refresh_callback` now takes a required
+`owner` to announce to.
 
 ### `unknown_names` and `parameter_names` stay exported
 
@@ -403,16 +432,12 @@ interpolating it into the message. This was a real defect, not only a rename:
 Julia raised `ParseError` where TypeScript, Python and Rust all raised
 `EnumLoweringError`.
 
-### `validate_path` still raises on bad input — `validate_text` does not
+### `validate_path` returns a verdict on bad input, as `validate_text` does
 
-Recorded, not fixed. `validate_text` renders a schema-invalid document, a
-malformed-JSON parse failure and a `(code, path)`-carrying rejection into the
-`ValidationResult`'s three channels, and returns the same error counts as
-Python on both bad inputs. `validate_path` renders only the third channel and
-still **raises** on schema-invalid or malformed input. Changing it would be a
-behaviour change to a `stable` function nobody asked for, so it was left alone.
-If you need uniform non-raising behaviour, read the file yourself and call
-`validate_text`.
+Both render a schema-invalid document, a malformed-JSON parse failure and a
+`(code, path)`-carrying rejection into the `ValidationResult`'s channels and
+return the same error counts as Python on both bad inputs. `load_path` still
+raises, for callers that want the exception.
 
 ### `update` diagnostic pointers lost a spurious `/0` (bug fix)
 
@@ -1549,7 +1574,7 @@ Listed because knowing the boundary is what stops you over-migrating.
   `extension`-tier seam, on the strength of its downstream call sites. It has
   since been RETIRED by `API_SPEC.md` §8 item 23, once `compiler = :xla` gave
   the compiled right-hand side a Problem-shaped entry point: it is private
-  behind `esm_problem` with a deprecated alias for one minor, and the
+  behind `esm_problem`, its deprecated alias is removed, and the
   forcing-buffer seam and the build report re-hang on the Problem.
 - **`load_path` (Rust) and `LoadString` (Go)** already meant what they now mean
   and are untouched.

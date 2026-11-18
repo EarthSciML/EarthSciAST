@@ -1,11 +1,10 @@
 # Compile-once materialization of a promoted-physics MAP — BIT-EXACTNESS.
 #
-# `_materialize_setup_general_map` used to re-run the ENTIRE build-time pipeline
-# (`_index_at_cell` → `_resolve_indices` → `_compile` → `_eval_node`) once per
-# output cell, so a per-cell physics lookup over an N-cell grid paid N full AST
-# lowerings — 55% of a ReSEACT chemistry `build_evaluator`, and the reason build
-# cost tracked the grid. It now resolves+compiles ONCE with the output indices
-# bound as parameters (the wall2 Phase C `_cellwise_compile_once` machinery: a
+# Run per output cell, the build-time pipeline (`_index_at_cell` →
+# `_resolve_indices` → `_compile` → `_eval_node`) would make a per-cell physics
+# lookup over an N-cell grid pay N full AST lowerings, so build cost would track
+# the grid. `_materialize_setup_general_map` resolves+compiles ONCE with the output indices
+# bound as parameters (the `_cellwise_compile_once` machinery: a
 # const read carrying an output index lowers to a runtime `_NK_CONST_GATHER`
 # instead of constant-folding) and rebinds only those per cell.
 #
@@ -15,20 +14,16 @@
 # demands `isequal` cell for cell. `isequal`, never `≈` and never `==`: `-0.0`
 # must not pass for `+0.0` and `NaN` must match `NaN`.
 #
-# The engagement counters make the comparison non-vacuous: a case that silently
+# The engagement counts (`Internal.counting`) make the comparison non-vacuous: a case that silently
 # stopped taking the fast path would compare the reference against itself and
 # pass, so each case asserts which path it took.
 
-module SetupMapCompileOnceTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 const EA = EarthSciAST
 
 # ---- small JSON AST builders ----
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
-_v(n) = n     # a bare String IS a variable reference (parse.jl)
 function _map(output_idx, ranges, expr)
     return Dict{String, Any}(
         "op" => "faq", "output_idx" => collect(output_idx),
@@ -49,24 +44,15 @@ const IDX = Dict{String, Int}("X" => 5, "Y" => 4)
 # Materialize `json` both ways and return (fast, reference, hits, miss).
 function both_ways(json, env)
     rhs = EA.expression_from_json(json)
-    regfns = Dict{String, Function}()
-    hits0, miss0 = EA._SETUP_MAP_FASTPATH_HITS[], EA._SETUP_MAP_FASTPATH_MISS[]
-    fast = EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX, regfns)
-    hits = EA._SETUP_MAP_FASTPATH_HITS[] - hits0
-    miss = EA._SETUP_MAP_FASTPATH_MISS[] - miss0
+    fast, c = EA.Internal.counting(
+        () -> EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX)
+    )
+    hits = get(c, :setup_map_fastpath_hit, 0)
+    miss = get(c, :setup_map_fastpath_miss, 0)
     ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-        EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX, regfns)
+        EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX)
     end
     return fast, ref, hits, miss
-end
-
-# Bitwise array agreement — the correctness bar.
-function bitsame(a, b)
-    size(a) == size(b) || return false
-    for i in eachindex(a)
-        isequal(a[i], b[i]) || return false
-    end
-    return true
 end
 
 # A gradient-y source field with a signed zero, a negative, and a huge value, so
@@ -83,22 +69,22 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # `A` has zero, negative and positive cells, so between them these bodies
         # produce a signed zero, ±Inf and a NaN — exactly what `isequal` (rather
         # than `==` or `≈`) is here to police.
-        Axy = _ix(_v("A"), _v("x"), _v("y"))
-        Bxy = _ix(_v("B"), _v("x"), _v("y"))
+        Axy = jidx("A", "x", "y")
+        Bxy = jidx("B", "x", "y")
         bodies = Dict(
             # signed zero out of the false arm of a gated physics branch
-            "gated" => _op(
+            "gated" => jop(
                 "ifelse",
-                _op("and", _op(">", Axy, _v("thr")), _op("<", Bxy, 40.0)),
-                _op("exp", _op("*", Axy, _v("s"))),
-                _op("neg", _op("*", 0, Bxy))
+                jop("and", jop(">", Axy, "thr"), jop("<", Bxy, 40.0)),
+                jop("exp", jop("*", Axy, "s")),
+                jop("neg", jop("*", 0, Bxy))
             ),
             # -Inf where A is zero
-            "log" => _op("log", _op("*", Axy, Axy)),
+            "log" => jop("log", jop("*", Axy, Axy)),
             # ±Inf where A is zero, finite elsewhere
-            "recip" => _op("/", _v("s"), Axy),
+            "recip" => jop("/", "s", Axy),
             # NaN (0/0) where A is zero
-            "nan" => _op("/", Axy, Axy),
+            "nan" => jop("/", Axy, Axy),
         )
         seen = Float64[]
         for (nm, body) in bodies
@@ -127,27 +113,24 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     @testset "shifted / arithmetic gather subscripts" begin
         # A subscript that is not the bare output index: the compiled gather must
         # recompute the offset from the rebound index, not from a folded literal.
-        body = _op(
-            "exp", _op(
+        body = jop(
+            "exp", jop(
                 "-",
-                _ix(_v("B"), _op("+", _v("x"), 1), _v("y")),
-                _ix(_v("B"), _v("x"), _op("min", _op("+", _v("y"), 1), 4))
+                jidx("B", jop("+", "x", 1), "y"),
+                jidx("B", "x", jop("min", jop("+", "y", 1), 4))
             )
         )
         j = _map(["x", "y"], ["x" => "X2", "y" => "Y"], body)
         idx = Dict{String, Int}("X2" => 4, "Y" => 4)
         rhs = EA.expression_from_json(j)
-        h0, m0 = EA._SETUP_MAP_FASTPATH_HITS[], EA._SETUP_MAP_FASTPATH_MISS[]
-        fast = EA._materialize_setup_general_map(
-            rhs, copy(ENV0), nothing, idx,
-            Dict{String, Function}()
+        fast, c = EA.Internal.counting(
+            () -> EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, idx)
         )
-        @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 1
-        @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 0
+        @test get(c, :setup_map_fastpath_hit, 0) == 1
+        @test get(c, :setup_map_fastpath_miss, 0) == 0
         ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(
-                rhs, copy(ENV0), nothing, idx,
-                Dict{String, Function}()
+                rhs, copy(ENV0), nothing, idx
             )
         end
         @test bitsame(fast, ref)
@@ -155,7 +138,7 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     end
 
     @testset "rank-1 map" begin
-        body = _op("*", _ix(_v("A"), _v("c"), 2), _v("s"))
+        body = jop("*", jidx("A", "c", 2), "s")
         j = _map(["c"], ["c" => "X"], body)
         fast, ref, hits, miss = both_ways(j, ENV0)
         @test hits == 1 && miss == 0
@@ -163,54 +146,69 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     end
 
     @testset "the interpreter keeps the per-cell reference available" begin
-        body = _op("exp", _ix(_v("A"), _v("x"), _v("y")))
+        body = jop("exp", jidx("A", "x", "y"))
         j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
         rhs = EA.expression_from_json(j)
-        m0 = EA._SETUP_MAP_FASTPATH_MISS[]
-        h0 = EA._SETUP_MAP_FASTPATH_HITS[]
-        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_setup_general_map(
-                rhs, copy(ENV0), nothing, IDX,
-                Dict{String, Function}()
-            )
+        _, c = EA.Internal.counting() do
+            EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
+                EA._materialize_setup_general_map(
+                    rhs, copy(ENV0), nothing, IDX
+                )
+            end
         end
-        @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 1   # forced onto the reference
-        @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 0
+        @test get(c, :setup_map_fastpath_miss, 0) == 1   # forced onto the reference
+        @test get(c, :setup_map_fastpath_hit, 0) == 0
     end
 
     # ---- the two guards that keep the fast path exact ----
 
     @testset "`/` in a gather subscript: the fill reads it as the reference does" begin
-        # `_eval_const_int` reads `/` as TRUNCATING integer `div`; a subscript the
-        # compile-once sweep keeps symbolic would read it as true Float64
-        # division, so that sweep declines any `/` under an `index` subscript
-        # (`_subscripts_int_exact`). The compiled fill resolves subscripts the
-        # way the right-hand side does, with the reference's integer reading, so
-        # it serves the map — including `(x+1)/2`, where the two readings
-        # differ at every even `x`.
-        for sub in (_op("/", _op("*", _v("x"), 2), 2), _op("/", _op("+", _v("x"), 1), 2))
-            body = _op("exp", _ix(_v("B"), sub, _v("y")))
-            j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
-            fast, ref, hits, miss = both_ways(j, ENV0)
-            @test hits == 1 && miss == 0
-            @test bitsame(fast, ref)
-            @test !EA._subscripts_int_exact(EA.expression_from_json(j))
+        # A bare quotient in an integer subscript must be exact
+        # (`_subscript_quotient`); a subscript the compile-once sweep keeps
+        # symbolic would carry a fractional quotient on as Float64, so that sweep
+        # declines any `/` under an `index` subscript (`_subscripts_int_exact`).
+        # The compiled fill resolves subscripts the way the reference does, so it
+        # serves an exact quotient `(2x)/2`, and an inexact one `(x+1)/2` is
+        # refused on both routes alike.
+        sub = jop("/", jop("*", "x", 2), 2)
+        body = jop("exp", jidx("B", sub, "y"))
+        j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
+        fast, ref, hits, miss = both_ways(j, ENV0)
+        @test hits == 1 && miss == 0
+        @test bitsame(fast, ref)
+        @test !EA._subscripts_int_exact(EA.expression_from_json(j))
+        inexact = _map(
+            ["x", "y"], ["x" => "X", "y" => "Y"],
+            jop("exp", jidx("B", jop("/", jop("+", "x", 1), 2), "y"))
+        )
+        rhs = EA.expression_from_json(inexact)
+        code(f) = try
+            f(); nothing
+        catch e
+            e isa EA.TreeWalkError ? e.code : e
         end
+        @test code(() -> EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX)) ==
+            "E_TREEWALK_INEXACT_SUBSCRIPT"
+        @test code(
+            () -> EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
+                EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX)
+            end
+        ) == "E_TREEWALK_INEXACT_SUBSCRIPT"
         # The compile-once guard finds a `/` in a NESTED node's body too, not
         # just in the top-level `args` spine (it walks via `foreach_subexpr_once`).
         inner = _map(
             ["k"], ["k" => "Y"],
-            _ix(_v("B"), _op("/", _op("*", _v("x"), 2), 2), _v("k"))
+            jidx("B", jop("/", jop("*", "x", 2), 2), "k")
         )
         nested = _map(
             ["x", "y"], ["x" => "X", "y" => "Y"],
-            _ix(inner, _v("y"))
+            jidx(inner, "y")
         )
         @test !EA._subscripts_int_exact(EA.expression_from_json(nested))
         # A `/` OUTSIDE an index subscript is harmless and must NOT decline.
         ok = _map(
             ["x", "y"], ["x" => "X", "y" => "Y"],
-            _op("/", _ix(_v("B"), _v("x"), _v("y")), _v("s"))
+            jop("/", jidx("B", "x", "y"), "s")
         )
         _, _, h2, m2 = both_ways(ok, ENV0)
         @test h2 == 1 && m2 == 0
@@ -222,12 +220,12 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # compiled paths at run time (`_const_gather_sub`), and both hand the
         # out-of-range case to `_resolve_const_index_oob`, so each reads the
         # same element: the compiled fill, and the compile-once sweep it falls
-        # back to, which no longer declines such an array.
+        # back to, which does not decline such an array.
         for pol in (:periodic, :clamp)
             wrapped = EA._wrap_bounded_const(copy(B), (pol, :error), "B")
             env = Dict{String, Any}("A" => A, "B" => wrapped, "s" => 1.5, "thr" => 0.0)
-            for sub in (_op("+", _v("x"), 1), _op("-", _v("x"), 2))
-                body = _op("exp", _ix(_v("B"), sub, _v("y")))
+            for sub in (jop("+", "x", 1), jop("-", "x", 2))
+                body = jop("exp", jidx("B", sub, "y"))
                 j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
                 fast, ref, hits, miss = both_ways(j, env)
                 @test (pol, hits, miss) == (pol, 1, 0)
@@ -235,7 +233,7 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
                 # The sweep the fill falls back to, on its own.
                 rhs = EA.expression_from_json(j)
                 ca, params = EA._setup_env_split(env)
-                ce = EA._setup_map_compile_once(rhs, 2, ca, Dict{String, Function}(), params)
+                ce = EA._setup_map_compile_once(rhs, 2, ca, params)
                 @test ce !== nothing
                 @test (pol, bitsame(EA._fill_map_fast(ce, [5, 4], 2), ref)) == (pol, true)
             end
@@ -247,19 +245,17 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # `ifelse(pred, term, 0̄)` per term the per-cell expansion builds (a join
         # gate is still refused there, and the caller swallows that refusal);
         # either way the values are the reference's.
-        body = _op("exp", _ix(_v("A"), _v("x"), _v("k")))
+        body = jop("exp", jidx("A", "x", "k"))
         j = _map(["x"], ["x" => "X", "k" => Any[1, 4]], body)
         j["reduce"] = "+"
-        j["filter"] = _op(">", _v("k"), 1)
+        j["filter"] = jop(">", "k", 1)
         rhs = EA.expression_from_json(j)
         fast = EA._materialize_setup_general_map(
-            rhs, copy(ENV0), nothing, IDX,
-            Dict{String, Function}()
+            rhs, copy(ENV0), nothing, IDX
         )
         ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(
-                rhs, copy(ENV0), nothing, IDX,
-                Dict{String, Function}()
+                rhs, copy(ENV0), nothing, IDX
             )
         end
         @test bitsame(fast, ref)
@@ -270,14 +266,14 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     # (B[x+1, 1] at x = 5 returned B[1, 2]) while the per-cell reference raised.
     @testset "out of range on one axis raises on both paths" begin
         for body in (
-                _ix(_v("B"), _op("+", _v("x"), 1), 1),
-                _ix(_v("B"), _op("-", _v("x"), 1), 2),
+                jidx("B", jop("+", "x", 1), 1),
+                jidx("B", jop("-", "x", 1), 2),
             )
             rhs = EA.expression_from_json(_map(["x"], ["x" => "X"], body))
             for interp in (false, true)
                 mat() = EA._materialize_setup_general_map(
                     rhs, copy(ENV0), nothing,
-                    IDX, Dict{String, Function}()
+                    IDX
                 )
                 err = try
                     interp ?
@@ -298,15 +294,15 @@ end
 # `:cellmemo` node: evaluated once per cell, to the same bits as the tree
 # without sharing, and allocating nothing per cell.
 @testset "a shared sub-tree is evaluated once per cell" begin
-    t1 = EA.expression_from_json(_op("*", "a", _op("+", "b", "__esm_oidx_1")))
-    t2 = EA.expression_from_json(_op("*", "a", _op("+", "b", "__esm_oidx_1")))
+    t1 = EA.expression_from_json(jop("*", "a", jop("+", "b", "__esm_oidx_1")))
+    t2 = EA.expression_from_json(jop("*", "a", jop("+", "b", "__esm_oidx_1")))
     e = EA.OpExpr("+", EA.ASTExpr[t1, EA.OpExpr("-", EA.ASTExpr[t2, EA.VarExpr("c")])])
     params = Dict{String, Any}("a" => 0.3, "b" => -1.25, "c" => 7.0)
-    ce_plain = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), Dict{String, Function}(), params)
+    ce_plain = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), params)
     @test ce_plain !== nothing
     # The same evaluator with the second copy of the term replaced by the
     # first, so one node has two parents.
-    ce0 = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), Dict{String, Function}(), params)
+    ce0 = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), params)
     root = ce0.node
     root.children[2].children[1] = root.children[1]
     syms, np, ni = typeof(ce0).parameters
@@ -332,5 +328,3 @@ end
         @test (@allocated EA._eval_cells(ce, cells)) == (@allocated EA._eval_cells(ce_plain, cells))
     end
 end
-
-end # module

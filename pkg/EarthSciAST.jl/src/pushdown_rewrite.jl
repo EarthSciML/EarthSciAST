@@ -1,30 +1,30 @@
 # ========================================================================
-# pushdown_rewrite.jl — Phase 4: the AUTOMATIC projection-pushdown DESUGAR.
+# pushdown_rewrite.jl — the AUTOMATIC projection-pushdown DESUGAR.
 #
 # A pre-build model-transform pass that recognises the ISRM-shaped
 # `+`-semiring "apply a provider-backed full-domain array to a sparsely
 # supported binned factor" pattern in a CLEAN model, and AUTO-GENERATES the
-# four hand-authored Phase-2b constructs (derived IndexSet + `distinct`
-# producer + member_factor + gated_select) so the existing 2b pipeline then
-# runs unchanged. The author writes NO derived set, NO producer, and NO
-# gated_select — only the natural math.
+# four constructs an author could otherwise write by hand (derived IndexSet +
+# `distinct` producer + member_factor + gated_select), which the build then
+# runs like authored ones. The author writes NO derived set, NO producer, and
+# NO gated_select — only the natural math.
 #
 # This is a NARROW desugarer (a pattern recogniser), NOT a general optimizer.
 # It fires ONLY when the reduction's semiring is the additive `(+, 0)` monoid
 # (`_aggregate_oplus_identity == ("+", 0.0)`); a `max_product` / `min_sum` /
 # etc. aggregate of the SAME shape is left untouched (the soundness guard).
 #
-# Hooked in the AbstractDict front door (`_build_evaluator(esm; …)`), opt-in
-# behind the `pushdown_rewrite=true` kwarg, BEFORE `coerce_esm_file` so both
-# the typed value-invention path and the impl re-parse see the generated
-# constructs. Off by default so every existing test is byte-identical.
+# Run by `esm_problem(…; pushdown_rewrite = true)` on the authored document
+# before it is flattened (and by the native-document build door,
+# `_build_evaluator(esm; pushdown_rewrite = true)`), so value invention and the
+# build both see the generated constructs. Off by default.
 # ========================================================================
 
 """
     desugar_pushdown(esm::AbstractDict; model_name=nothing) -> AbstractDict
 
 Recognise the projection-pushdown pattern in `esm`'s named model and, when it
-matches, return a NEW document with the four Phase-2b constructs desugared in
+matches, return a NEW document with the four constructs desugared in
 (a `kind:"derived"` index set, a `distinct:true` overlap-gated producer
 aggregate, a `member_factor` const parameter, and an inspectable
 `gated_select` record) plus the reduction axis of the matched E / A / conc
@@ -48,8 +48,8 @@ function desugar_pushdown(esm::AbstractDict; model_name = nothing)
     # generated constructs (compact E over the derived set, cell-gather rect
     # observeds) would otherwise re-match the pattern and stack a second
     # `pd_support__pd_support__…` layer. This makes the pass safe to request
-    # from BOTH `prepare` (which must run it before flattening/provider
-    # classification) and the `build_evaluator` front door.
+    # from BOTH `esm_problem` (which runs it before flattening/provider
+    # classification) and the `_build_evaluator` front door.
     _pushdown_record(esm) === nothing || return esm
     an = _pd_analyze(esm, model_name)
     an === nothing && return esm
@@ -108,9 +108,8 @@ end
 
 The rewrite's provenance record `metadata.x_esd.pushdown` written by
 [`desugar_pushdown`](@ref) (see `_pd_apply`), or `nothing` when `doc` carries
-none. This is the record the engine reads BACK to derive provider gates —
-callers no longer hand-author gate dicts (`esm_problem(...; pushdown_rewrite=true)`
-+ `providers`)."""
+none. This is the record `esm_problem(...; pushdown_rewrite=true)` reads back
+to derive provider gates."""
 function _pushdown_record(doc::AbstractDict)
     md = get(doc, "metadata", nothing)
     md isa AbstractDict || return nothing
@@ -131,7 +130,7 @@ _pd_model_name(file, model_name) = model_name !== nothing ? String(model_name) :
 # Under Option B (§9.6.4) `load` PRESERVES `apply_expression_template`
 # references: they ride to the build boundary where `_build_evaluator_impl`
 # expands them with site recording (see simulate.jl).
-# `prepare` therefore hands `desugar_pushdown` a document whose binning body may
+# `esm_problem` therefore hands `desugar_pushdown` a document whose binning body may
 # be a surviving reference rather than the containment `ifelse` the recogniser
 # looks for.
 #
@@ -183,12 +182,11 @@ end
 
 [`observed_definitions`](@ref) with every surviving `apply_expression_template`
 reference EXPANDED against `reg` — the `Expand(tree)` view the pattern matcher
-must see (§9.6.4 rule 2). From esm 1.0.0 an observed unknown's body is its
+must see (§9.6.4 rule 2). An observed unknown's body is its
 defining EQUATION's right-hand side, so this — not the variable table — is what
 the detector matches against; `_pd_detect` still reads `model.variables` for the
 shapes and types beside it. Returns the definition map UNCHANGED (no copy) when
-there is no registry or no reference to expand, so a template-free document
-takes the byte-identical pre-existing path.
+there is no registry or no reference to expand.
 
 Expansion is DETECTION-ONLY: the returned bodies are never emitted. A reference
 that fails to expand (an unresolvable template — `desugar_pushdown` is callable
@@ -328,7 +326,7 @@ function _pd_index_syms(e)
     return (f, syms)
 end
 
-# SHARED linear-mat-vec body predicate — also reused by the wall2 Phase D BLAS
+# SHARED linear-mat-vec body predicate — also reused by the BLAS
 # accelerator (`_evaluate_cellwise_blas`, inline_tests.jl). Classify an
 # aggregate BODY `A[c, out…] · E[c]` — a two-factor `⊗=·` product of a
 # rank-(1+|out|) array factor `A` subscripted `[c, out…]` (contracted index first,
@@ -362,11 +360,15 @@ function _pd_matvec_factors(
 end
 
 # (⊕ spelling, 0̄) for an aggregate node, or `nothing` on an unknown semiring.
-_pd_oplus(agg::OpExpr) =
-try
-    _aggregate_oplus_identity(agg.semiring, agg.reduce)
-catch
-    nothing
+# The node's ⊕ and 0̄, or `nothing` for a semiring or reducer the registry
+# refuses (the rewrite then leaves the node alone, and the build reports it).
+function _pd_oplus(agg::OpExpr)
+    return try
+        _aggregate_oplus_identity(agg.semiring, agg.reduce)
+    catch err
+        err isa EarthSciASTError || rethrow()
+        nothing
+    end
 end
 
 _pd_flip(op) = op == "<" ? ">" : op == "<=" ? ">=" : op == ">" ? "<" : "<="
@@ -491,15 +493,13 @@ end
 #
 # Returns `(c_sym, r_sym, C, R, out_is_cell, src_env, tgt_env)` or `nothing`.
 # `agg` is the observed unknown's DEFINING EQUATION RHS (esm-spec §6.3.1),
-# supplied by the caller from `observed_definitions`: from esm 1.0.0 a variable
+# supplied by the caller from `observed_definitions`: a variable
 # carries no expression of its own, so a non-observed variable simply has no
 # definition to pass and never reaches here.
-function _pd_detect_binning(
-        ev::ModelVariable, agg::Union{ASTExpr, Nothing},
-        out_set::AbstractString;
-        out_is_cell::Union{Bool, Nothing} = nothing
-    )
-    (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
+# The shape every pushdown read starts from: a `+`-semiring `faq` (0̄ = 0) with
+# one output index and exactly two ranges, both over named index sets.
+# `(out_sym, in_sym, out_set, in_set)`, or `nothing`.
+function _pd_join_shape(agg)
     (agg isa OpExpr && _is_faq_op(agg.op)) || return nothing
     oz = _pd_oplus(agg); oz === nothing && return nothing
     (oz[1] == "+" && oz[2] == 0.0) || return nothing              # SEMIRING GUARD
@@ -507,18 +507,38 @@ function _pd_detect_binning(
     (oi !== nothing && length(oi) == 1) || return nothing
     out_sym = String(oi[1])
     ranges = agg.ranges === nothing ? Dict{String, Any}() : agg.ranges
-    length(ranges) == 2 || return nothing
-    (
-        haskey(ranges, out_sym) && ranges[out_sym] isa IndexSetRef &&
-            ranges[out_sym].from == out_set
-    ) || return nothing
-    in_sym = nothing
+    (length(ranges) == 2 && haskey(ranges, out_sym)) || return nothing
+    in_sym = ""
     for k in keys(ranges)
-        k == out_sym && continue; in_sym = k
+        k == out_sym || (in_sym = String(k))
     end
-    (in_sym !== nothing && ranges[in_sym] isa IndexSetRef) || return nothing
-    in_set = String(ranges[in_sym].from)
-    body = agg.expr_body
+    (ranges[out_sym] isa IndexSetRef && ranges[in_sym] isa IndexSetRef) || return nothing
+    return (;
+        out_sym, in_sym, out_set = String(ranges[out_sym].from),
+        in_set = String(ranges[in_sym].from),
+    )
+end
+
+# A rank-1 variable over `out_set` defined by a join-shaped aggregate whose
+# output range is `out_set`: the aggregate's join shape, else `nothing`.
+function _pd_binning_shape(
+        ev::ModelVariable, agg::Union{ASTExpr, Nothing}, out_set::AbstractString
+    )
+    (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
+    js = _pd_join_shape(agg)
+    (js !== nothing && js.out_set == out_set) || return nothing
+    return js
+end
+
+function _pd_detect_binning(
+        ev::ModelVariable, agg::Union{ASTExpr, Nothing},
+        out_set::AbstractString;
+        out_is_cell::Union{Bool, Nothing} = nothing
+    )
+    js = _pd_binning_shape(ev, agg, out_set)
+    js === nothing && return nothing
+    out_sym, in_sym, in_set = js.out_sym, js.in_sym, js.in_set
+    body = (agg::OpExpr).expr_body
     body isa OpExpr || return nothing
     pred = _pd_find_ifelse_cond(body)
     pred === nothing && return nothing
@@ -526,11 +546,11 @@ function _pd_detect_binning(
     # `_pd_parse_containment` demands the record side yield two coordinates each
     # with a min AND a max cell bound, which the rect side cannot do. An
     # ENVELOPE-OVERLAP predicate is SYMMETRIC and parses BOTH ways, so the
-    # predicate alone no longer says which symbol is the cell. `out_is_cell`
+    # predicate alone does not say which symbol is the cell. `out_is_cell`
     # lets a caller that already knows say so: the forward arm's cell set comes
     # from the mat-vec array's first axis, and mirrors are collected only after
     # `C`/`R` are fixed. Left `nothing` (the point case, and the forward arm's
-    # unhinted call) the out-as-cell reading is preferred, as before.
+    # unhinted call) the out-as-cell reading is preferred.
     if out_is_cell !== false
         env = _pd_parse_containment(pred, out_sym, in_sym)
         env === nothing || return (
@@ -566,7 +586,7 @@ end
 # WARNING, not error, and deliberately so. `desugar_pushdown`'s contract — spelled
 # in CONFORMANCE_SPEC §5.5.7 and asserted by the conformance adapters — is that a
 # document it does not recognise comes back byte-identical; it is an OPTIMISATION
-# pass that `prepare` runs over whole documents it does not own. Promoting "I did
+# pass that `esm_problem` runs over whole documents it does not own. Promoting "I did
 # not recognise this" to a hard error would make an unrecognised-but-correct
 # document unrunnable, and the recogniser is narrow enough (2-D rectangles, one
 # cell set) that honest near-misses exist. The residue is a PERFORMANCE defect:
@@ -605,25 +625,8 @@ function _pd_binning_refusal(
         ev::ModelVariable, agg::Union{ASTExpr, Nothing},
         out_set::AbstractString
     )
-    (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
-    (agg isa OpExpr && _is_faq_op(agg.op)) || return nothing
-    oz = _pd_oplus(agg); oz === nothing && return nothing
-    (oz[1] == "+" && oz[2] == 0.0) || return nothing
-    oi = agg.output_idx
-    (oi !== nothing && length(oi) == 1) || return nothing
-    out_sym = String(oi[1])
-    ranges = agg.ranges === nothing ? Dict{String, Any}() : agg.ranges
-    length(ranges) == 2 || return nothing
-    (
-        haskey(ranges, out_sym) && ranges[out_sym] isa IndexSetRef &&
-            ranges[out_sym].from == out_set
-    ) || return nothing
-    in_sym = nothing
-    for k in keys(ranges)
-        k == out_sym && continue; in_sym = k
-    end
-    (in_sym !== nothing && ranges[in_sym] isa IndexSetRef) || return nothing
-    body = agg.expr_body
+    _pd_binning_shape(ev, agg, out_set) === nothing && return nothing
+    body = (agg::OpExpr).expr_body
     body isa OpExpr || return nothing
     pred = _pd_find_ifelse_cond(body)
     if pred === nothing
@@ -657,6 +660,44 @@ function _pd_diagnostic_message(d::AbstractDict)
         "template's params, or write the predicate longhand."
 end
 
+# One forward binning aggregate the rewrite re-points onto the derived set:
+# `E[c] = Σ_r [contains(cell_c, pt_r)]·…`, its cell output symbol, and the
+# envelopes of its gate (record side `src_env`, cell side `tgt_env`).
+struct _PdBinning
+    name::String
+    cell_sym::String
+    src_env::Vector{String}
+    tgt_env::Vector{String}
+end
+
+# A mirrored per-record binning aggregate, which gets only the gate.
+struct _PdMirror
+    name::String
+    src_env::Vector{String}
+    tgt_env::Vector{String}
+end
+
+# What `_pd_detect` found and `_pd_apply` emits. `C` is the cell set, `R` the
+# record set and `rcv_set` the provider arrays' second axis; `forward[1]` is
+# the representative binning, whose predicate becomes the producer's filter and
+# whose record symbol is `rep_rsym`.
+struct _PdPlan
+    C::String
+    rcv_set::String
+    R::String
+    # (consumer, its reduction symbol over `C`)
+    conc_specs::Vector{Tuple{String, String}}
+    # The provider-backed arrays to gate.
+    A_names::Vector{String}
+    forward::Vector{_PdBinning}
+    mirrors::Vector{_PdMirror}
+    # Every array a binning body reads on the cell axis, name => declared
+    # shape, and the ones that cannot be gathered, name => why.
+    cell_factors::OrderedDict{String, Vector{String}}
+    cell_bad::OrderedDict{String, String}
+    rep_rsym::String
+end
+
 # The MIRRORED-orientation binning aggregates of a model: per-RECORD observeds
 # `P[r] = Σ_{c∈C} [contains(cell_c, pt_r)] · …` over the plan's cell set `C` and
 # record set `R`. Returned as `(name, src_env, tgt_env)` triples, sorted by name
@@ -669,7 +710,7 @@ function _pd_mirror_specs(
         model::Model, obs_defs::AbstractDict,
         C::AbstractString, R::AbstractString, forward_names
     )
-    out = Tuple{String, Vector{String}, Vector{String}}[]
+    out = _PdMirror[]
     for (name, defn) in obs_defs
         name in forward_names && continue
         v = model.variables[name]
@@ -678,9 +719,9 @@ function _pd_mirror_specs(
         (!bind.out_is_cell && bind.C == C && bind.R == R) || continue
         # Never stack a second gate on an aggregate that already declares a join.
         (defn isa OpExpr && (defn::OpExpr).join !== nothing) && continue
-        push!(out, (name, bind.src_env, bind.tgt_env))
+        push!(out, _PdMirror(name, bind.src_env, bind.tgt_env))
     end
-    sort!(out; by = t -> t[1])
+    sort!(out; by = m -> m.name)
     return out
 end
 
@@ -697,36 +738,20 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
     diags = Dict{String, Any}[]
     conc_specs = Tuple{String, String}[]        # (conc name, reduction symbol)
     A_names = String[]                          # provider-backed arrays to gate
-    # (E name, cell output symbol, gate src_env, gate tgt_env)
-    E_specs = Tuple{String, String, Vector{String}, Vector{String}}[]
+    forward = _PdBinning[]
     # EVERY array any binning body reads on the cell axis, name => declared
     # shape, and the ungatherable ones. The envelope factors are a SUBSET: a
     # binning body is free to read the cell's geometry, its area, its ring
     # stack, and all of them ride the same re-pointing (`_pd_cell_factors!`).
     cell_factors = OrderedDict{String, Vector{String}}()
     cell_bad = OrderedDict{String, String}()
-    C = nothing; rcv_set = nothing; R = nothing
-    src_env = nothing; tgt_env = nothing
-    rep_ename = nothing; rep_csym = nothing; rep_rsym = nothing
+    C = nothing; rcv_set = nothing; R = nothing; rep_rsym = nothing
 
     for (cname, agg) in obs_defs
-        (agg isa OpExpr && _is_faq_op(agg.op)) || continue
-        oz = _pd_oplus(agg); oz === nothing && continue
-        (oz[1] == "+" && oz[2] == 0.0) || continue                # SEMIRING GUARD
-        oi = agg.output_idx
-        (oi !== nothing && length(oi) == 1) || continue
-        rcv_sym = String(oi[1])
-        ranges = agg.ranges === nothing ? Dict{String, Any}() : agg.ranges
-        length(ranges) == 2 || continue
-        haskey(ranges, rcv_sym) || continue
-        s_sym = nothing
-        for k in keys(ranges)
-            k == rcv_sym && continue; s_sym = k
-        end
-        s_sym === nothing && continue
-        (ranges[s_sym] isa IndexSetRef && ranges[rcv_sym] isa IndexSetRef) || continue
-        c_set = ranges[s_sym].from; r_set = ranges[rcv_sym].from
-        facs = _pd_matvec_factors(agg.expr_body, s_sym, String[rcv_sym])
+        js = _pd_join_shape(agg)
+        js === nothing && continue
+        rcv_sym, s_sym, c_set, r_set = js.out_sym, js.in_sym, js.in_set, js.out_set
+        facs = _pd_matvec_factors((agg::OpExpr).expr_body, s_sym, String[rcv_sym])
         facs === nothing && continue
         Aname, Ename = facs
         av = get(vars, Aname, nothing)
@@ -758,16 +783,14 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
         end
 
         if C === nothing
-            C = c_set; rcv_set = r_set; R = bind.R
-            src_env = bind.src_env; tgt_env = bind.tgt_env
-            rep_ename = Ename; rep_csym = bind.c_sym; rep_rsym = bind.r_sym
+            C = c_set; rcv_set = r_set; R = bind.R; rep_rsym = bind.r_sym
         else
             (c_set == C && r_set == rcv_set) || continue          # narrow: one cell set
         end
         push!(conc_specs, (cname, s_sym))
         Aname in A_names || push!(A_names, Aname)
-        if !any(e -> e[1] == Ename, E_specs)
-            push!(E_specs, (Ename, bind.c_sym, bind.src_env, bind.tgt_env))
+        if !any(b -> b.name == Ename, forward)
+            push!(forward, _PdBinning(Ename, bind.c_sym, bind.src_env, bind.tgt_env))
             # Collected on the DETECTION view, like every other pattern read: a
             # body factored through a template must yield the same gather set as
             # its longhand twin (esm-spec §9.6.4 rule 2). Emission still edits
@@ -784,7 +807,7 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
     sort!(diags; by = d -> (d["variable"], d["consumer"], d["array"]))
     unique!(d -> (d["variable"], d["consumer"], d["array"]), diags)
     isempty(conc_specs) && return (nothing, diags)
-    # Deterministic plan order (Phase 3, cross-language goldens): `vars` is a
+    # Deterministic plan order (cross-language goldens): `vars` is a
     # hash-ordered Dict, so the collection order of `A_names` above is a Julia
     # implementation detail. It leaks into the emitted document only through
     # `gated_select.applies_to` (everything else the plan orders is either
@@ -796,17 +819,11 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
     # MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
     # cell/record sets. They are collected only once the forward pattern has
     # fixed `C`/`R`: the mirror is a rider on the rewrite, never its trigger.
-    mirror_specs = _pd_mirror_specs(
-        model, obs_defs, C, R,
-        Set{String}(e[1] for e in E_specs)
-    )
+    mirrors = _pd_mirror_specs(model, obs_defs, C, R, Set{String}(b.name for b in forward))
     return (
-        (
-            C = C, rcv_set = rcv_set, R = R, conc_specs = conc_specs,
-            A_names = A_names, E_specs = E_specs, mirror_specs = mirror_specs,
-            src_env = src_env, tgt_env = tgt_env,
-            cell_factors = cell_factors, cell_bad = cell_bad,
-            rep_ename = rep_ename, rep_csym = rep_csym, rep_rsym = rep_rsym,
+        _PdPlan(
+            C, rcv_set, R, conc_specs, A_names, forward, mirrors,
+            cell_factors, cell_bad, rep_rsym
         ), diags,
     )
 end
@@ -963,11 +980,9 @@ end
 Each name DEFINED by a bare-variable-LHS equation, mapped to that equation's
 position in `eqs`.
 
-esm 1.0.0 moved an observed unknown's defining right-hand side out of
-`variables[v]["expression"]` and into the model's `equations` (esm-spec §6.3.1),
-so the desugar reads and rewrites a definition through this index exactly where
-it used to reach into the declaration. The FIRST definition of a name wins,
-matching the classification.
+An observed unknown's defining right-hand side lives in the model's `equations`
+(esm-spec §6.3.1), so the desugar reads and rewrites a definition through this
+index. The FIRST definition of a name wins, matching the classification.
 """
 function _pd_definitions(eqs)
     idx = Dict{String, Int}()
@@ -1109,45 +1124,43 @@ function _pd_refuse_ungatherable(
     )
 end
 
-# Apply the desugar to the raw document, returning a NEW mutable dict tree.
+# The names the rewrite generates for cell set `C`.
+struct _PdNames
+    support_set::String     # the derived index set
+    producer_id::String     # its `distinct` producer
+    member_var::String      # the producer's output
+    member_factor::String   # the set's member factor
+end
+_PdNames(C::AbstractString) = _PdNames(
+    "pd_support__" * C, "pd_faq__" * C, "pd_members__" * C, "pd_member_factor__" * C
+)
+_pd_cell_gather_name(C::AbstractString, F::AbstractString) = "pd_cell__" * C * "__" * F
+
+# Emit the rewrite of `esm`'s model `mname` for `plan`, in order: the rect
+# factors to gather; the derived index set; the producer filter, read from the
+# representative binning before any binning is rewritten (it keeps the
+# full-grid rect references); the member unknown and factor; the cell gathers;
+# the gated provider arrays; the forward binnings re-pointed and gated; the
+# mirrors gated; the consumers restricted; the producer; the provenance record.
 # `reg` is the component template registry (`nothing` when the document carries
-# no surviving `apply_expression_template` references) — needed to read the
-# containment predicate out of a body that was factored through a template, and
-# to discharge the `_pd_assert_rects_rebound` post-condition.
-function _pd_apply(esm, mname::AbstractString, plan, reg = nothing)
+# no surviving template reference), which reads a predicate factored through a
+# template. Returns the rewritten document; `esm` is not modified.
+function _pd_apply(esm, mname::AbstractString, plan::_PdPlan, reg = nothing)
     d = _to_ordered(esm)                        # fresh, mutable, string-keyed
     C = plan.C
-    setname = "pd_support__" * C
-    faqid = "pd_faq__" * C
-    memvar = "pd_members__" * C
-    mfactor = "pd_member_factor__" * C
-    cellgath(F) = "pd_cell__" * C * "__" * F
+    names = _PdNames(C)
+    _pd_refuse_ungatherable(plan.cell_bad, C, names.support_set)
+    rects = _pd_rect_factors(plan)
+    rectmap = Dict{String, String}(F => _pd_cell_gather_name(C, F) for F in rects)
 
-    # The gather set is the envelope factors PLUS every other array a binning
-    # body reads on the cell axis. Envelopes lead, so a document whose bodies
-    # read nothing else emits exactly what it emitted before; the rest follow in
-    # sorted order, and emission below re-sorts anyway.
-    cell_shapes = plan.cell_factors
-    _pd_refuse_ungatherable(plan.cell_bad, C, setname)
-    rects = String[]                            # rect factors, [xmin,ymin,xmax,ymax] order
-    for F in plan.tgt_env
-        F in rects || push!(rects, F)
-    end
-    for F in sort(collect(keys(cell_shapes)))
-        F in rects || push!(rects, F)
-    end
-    rectmap = Dict{String, String}(F => cellgath(F) for F in rects)
-
-    # --- derived index set ---
     haskey(d, "index_sets") || (d["index_sets"] = OrderedDict{String, Any}())
-    d["index_sets"][setname] = Dict{String, Any}(
-        "kind" => "derived", "from_faq" => faqid, "member_factor" => mfactor
+    d["index_sets"][names.support_set] = Dict{String, Any}(
+        "kind" => "derived", "from_faq" => names.producer_id,
+        "member_factor" => names.member_factor
     )
-
     mv = d["models"][mname]["variables"]
-
-    # esm 1.0.0: a definition is an EQUATION, so the equations array is fetched
-    # (and created when absent) before any read, and indexed by defined name.
+    # A definition is an equation: the equations array is fetched (and created
+    # when absent) before any read, and indexed by defined name.
     eqs = get(d["models"][mname], "equations", nothing)
     if !(eqs isa AbstractVector)
         eqs = Any[]
@@ -1155,164 +1168,172 @@ function _pd_apply(esm, mname::AbstractString, plan, reg = nothing)
     end
     defs = _pd_definitions(eqs)
 
-    # --- producer filter comparisons, deep-copied from the representative E
-    #     BEFORE E is rewritten (they must keep full-grid rect factor refs) ---
-    repexpr = _pd_defining_rhs(eqs, defs, plan.rep_ename)
+    prod_filter = _pd_producer_filter(eqs, defs, plan, reg)
+    # The member buffer is an `unknown`: the generated producer equation
+    # defines it (esm-spec §6.3.1).
+    mv[names.member_var] = Dict{String, Any}("type" => "unknown", "shape" => Any[names.support_set])
+    mv[names.member_factor] = Dict{String, Any}(
+        "type" => "parameter", "default" => 0.0, "shape" => Any[names.support_set]
+    )
+    _pd_emit_cell_gathers!(d, mv, eqs, rects, plan, names)
+    for A in plan.A_names
+        mv[A]["shape"] = Any[names.support_set, plan.rcv_set]
+    end
+    _pd_rewrite_forward!(mv, eqs, defs, plan, names, rectmap, reg)
+    _pd_gate_mirrors!(eqs, defs, plan)
+    for (cname, ssym) in plan.conc_specs
+        _pd_defining_rhs(eqs, defs, cname)["ranges"][ssym]["from"] = names.support_set
+    end
+    # `defs` holds positions in `eqs`, so the producer goes in last.
+    pushfirst!(eqs, _pd_producer(plan, names, prod_filter))
+    _pd_canonicalize_equations!(d["models"][mname])
+    _pd_record!(d, plan, names)
+    return d
+end
+
+# The rect factors to gather onto the support set: the representative's
+# envelope factors first, then every other array a binning body reads on the
+# cell axis, in sorted order.
+function _pd_rect_factors(plan::_PdPlan)
+    rects = String[]
+    for F in plan.forward[1].tgt_env
+        F in rects || push!(rects, F)
+    end
+    for F in sort(collect(keys(plan.cell_factors)))
+        F in rects || push!(rects, F)
+    end
+    return rects
+end
+
+# The producer's filter: the comparisons of the representative binning's
+# containment, deep-copied, with their full-grid rect references. A body
+# factored through a template is read off its expansion (§9.6.4 rule 2), a
+# scratch value of which nothing else is emitted.
+function _pd_producer_filter(eqs, defs::Dict{String, Int}, plan::_PdPlan, reg)
+    repexpr = _pd_defining_rhs(eqs, defs, plan.forward[1].name)
     ifcond = _pd_dict_find_ifelse_cond(get(repexpr, "expr", nothing))
-    if ifcond === nothing
-        # The body is factored through a template. Read the predicate off the
-        # EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID rect
-        # references, which is exactly what the pre-rewrite expansion yields. The
-        # expansion is a scratch value: nothing of it is emitted except these
-        # comparisons, so the document's template block and call sites are
-        # untouched. Template-free documents never reach this branch, so their
-        # emitted filter is byte-identical to before.
-        ifcond = reg === nothing ? nothing :
-            _pd_dict_find_ifelse_cond(
-                _expand_all(
-                    _to_ordered(deepcopy(get(repexpr, "expr", nothing))),
-                    reg, "pushdown_rewrite"
-                )
+    if ifcond === nothing && reg !== nothing
+        ifcond = _pd_dict_find_ifelse_cond(
+            _expand_all(
+                _to_ordered(deepcopy(get(repexpr, "expr", nothing))),
+                reg, "pushdown_rewrite"
             )
+        )
     end
     ifcond === nothing && error("pushdown desugar: representative E lost its containment ifelse")
     comps = get(ifcond, "op", nothing) in ("and", "*") ? ifcond["args"] : Any[ifcond]
-    prod_filter = Dict{String, Any}("op" => "*", "args" => Any[_to_ordered(c) for c in comps])
+    return Dict{String, Any}("op" => "*", "args" => Any[_to_ordered(c) for c in comps])
+end
 
-    # --- member unknown + member_factor param ---
-    # The member buffer is an `unknown`: the generated producer equation below
-    # DEFINES it, and that equation is what makes it one (esm-spec §6.3.1).
-    mv[memvar] = Dict{String, Any}("type" => "unknown", "shape" => Any[setname])
-    mv[mfactor] = Dict{String, Any}("type" => "parameter", "default" => 0.0, "shape" => Any[setname])
-
-    # --- per-rect cell-gather observeds: cell_F[c] = index(F, index(member_factor, c)) ---
-    # Declaration and DEFINING EQUATION, emitted in sorted name order so the
-    # rewritten document does not depend on `rects`' construction order.
+# The per-rect cell-gather observeds `cell_F[c] = index(F, index(member_factor, c))`,
+# declaration and defining equation, in sorted name order.
+function _pd_emit_cell_gathers!(d, mv, eqs, rects::Vector{String}, plan::_PdPlan, names::_PdNames)
+    C = plan.C
     for F in sort(rects)
-        shape = get(cell_shapes, F, nothing)
+        shape = get(plan.cell_factors, F, nothing)
         if shape === nothing
             sh = get(mv, F, nothing)
             shape = (sh isa AbstractDict && get(sh, "shape", nothing) isa AbstractVector) ?
                 String[String(x) for x in sh["shape"]] : String[C]
         end
         decl, defn = _pd_gather_defn(
-            F, shape, setname, mfactor,
+            F, shape, names.support_set, names.member_factor,
             get(d, "index_sets", nothing), C
         )
-        mv[cellgath(F)] = decl
-        push!(eqs, Dict{String, Any}("lhs" => cellgath(F), "rhs" => defn))
+        g = _pd_cell_gather_name(C, F)
+        mv[g] = decl
+        push!(eqs, Dict{String, Any}("lhs" => g, "rhs" => defn))
     end
+    return nothing
+end
 
-    # --- gate the provider-backed arrays onto the derived axis ---
-    for A in plan.A_names
-        mv[A]["shape"] = Any[setname, plan.rcv_set]
-    end
-
-    # --- rewrite E: axis → derived set, rect factors → cell gathers, + GATE ---
-    # The rewritten `E` still reduces over the FULL record axis, so without a
-    # gate it visits |support|·|records| pairs — 1520·43650 on isrm.esm. Attach
-    # the SAME overlap clause the producer carries, re-pointed at the generated
-    # cell gathers, and the enumeration driver (§5.5.6) walks one candidate
-    # partner list per output cell instead. The clause is derived, not authored:
-    # its envelopes are exactly the ones `_pd_parse_containment` read out of this
-    # aggregate's own containment predicate.
-    for (Ename, csym, e_src, e_tgt) in plan.E_specs
-        # DEEP-COPY before the in-place rect rewrite. `_to_ordered` is
-        # identity-MEMOIZED, so a document built in memory keeps whatever
-        # subtree sharing its author created — and the ISRM-shaped fixtures
-        # share one `contains(...)` predicate object across every aggregate that
-        # bins. Rewriting E's rects in place would then reach through the shared
-        # node into a variable that is NOT being re-pointed (a mirrored
-        # per-record aggregate, say) and leave it gathering the compact cell
-        # buffers with full-grid indices. Copying first confines the rewrite to
-        # this variable; the emitted JSON is unchanged (sharing is not a
-        # document-level property).
-        expr = deepcopy(_pd_defining_rhs(eqs, defs, Ename))
-        eqs[defs[Ename]]["rhs"] = expr
-        expr["ranges"][csym]["from"] = setname
+# Each forward binning onto the support set: its cell axis, its rect factors
+# re-pointed at the cell gathers, and the gate (the overlap clause its own
+# predicate reads, re-pointed the same way) so the driver walks one candidate
+# list per output cell instead of every (cell, record) pair. Each definition is
+# deep-copied before the in-place rewrite: a document built in memory may share
+# one predicate object between aggregates, and the rewrite must not reach a
+# variable that is not re-pointed.
+function _pd_rewrite_forward!(
+        mv, eqs, defs::Dict{String, Int}, plan::_PdPlan, names::_PdNames,
+        rectmap::Dict{String, String}, reg
+    )
+    for b in plan.forward
+        expr = deepcopy(_pd_defining_rhs(eqs, defs, b.name))
+        eqs[defs[b.name]]["rhs"] = expr
+        expr["ranges"][b.cell_sym]["from"] = names.support_set
         _pd_rewrite_rects!(expr, rectmap)
         haskey(expr, "args") && (expr["args"] = Any[get(rectmap, string(s), s) for s in expr["args"]])
-        mv[Ename]["shape"] = Any[setname]
+        mv[b.name]["shape"] = Any[names.support_set]
         haskey(expr, "join") || (
             expr["join"] = Any[
                 _pd_overlap_clause(
-                    e_src, String[get(rectmap, F, F) for F in e_tgt]
+                    b.src_env, String[get(rectmap, F, F) for F in b.tgt_env]
                 ),
             ]
         )
-        _pd_assert_rects_rebound(expr, Ename, rectmap, reg)
+        _pd_assert_rects_rebound(expr, b.name, rectmap, reg)
     end
+    return nothing
+end
 
-    # --- MIRRORED orientation: gate only ---
-    # A per-record binning aggregate `P[r] = Σ_{c∈C} [contains(cell_c, pt_r)]·…`
-    # is the same join read the other way round. It gets ONLY the gate — no
-    # derived index set, no `distinct` producer, no `member_factor`, no provider
-    # gating — because it wants the FULL record axis: every record must produce a
-    # value, and a record outside the grid must come out as the semiring identity
-    # (the driver leaves such a position with no term and 0̄ is emitted). There is
-    # nothing to compact, so a mirrored VALUE-INVENTION would derive a support set
-    # nobody reads. Its envelopes stay the document's own const-array factors
-    # (the cell axis is not re-pointed), so the mirror also needs no rect gathers.
-    for (Pname, p_src, p_tgt) in plan.mirror_specs
-        pexpr = deepcopy(_pd_defining_rhs(eqs, defs, Pname))   # see the deep-copy note above
-        eqs[defs[Pname]]["rhs"] = pexpr
-        haskey(pexpr, "join") || (pexpr["join"] = Any[_pd_overlap_clause(p_src, p_tgt)])
+# A mirrored per-record binning gets only the gate: it keeps the full record
+# axis (every record produces a value, the semiring identity outside the grid)
+# and the document's own cell-axis envelopes. Deep-copied as above.
+function _pd_gate_mirrors!(eqs, defs::Dict{String, Int}, plan::_PdPlan)
+    for m in plan.mirrors
+        pexpr = deepcopy(_pd_defining_rhs(eqs, defs, m.name))
+        eqs[defs[m.name]]["rhs"] = pexpr
+        haskey(pexpr, "join") || (pexpr["join"] = Any[_pd_overlap_clause(m.src_env, m.tgt_env)])
     end
+    return nothing
+end
 
-    # --- restrict the conc reductions to the derived axis ---
-    for (cname, ssym) in plan.conc_specs
-        _pd_defining_rhs(eqs, defs, cname)["ranges"][ssym]["from"] = setname
-    end
-
-    # --- generated `distinct` producer (reuses E's containment + geometry) ---
-    producer = Dict{String, Any}(
-        "lhs" => _pd_ix(memvar, "m"),
+# The generated `distinct` producer of the support set: the representative's
+# containment and geometry over (record, cell).
+function _pd_producer(plan::_PdPlan, names::_PdNames, prod_filter)
+    rep = plan.forward[1]
+    return Dict{String, Any}(
+        "lhs" => _pd_ix(names.member_var, "m"),
         "rhs" => Dict{String, Any}(
             "op" => "faq", "output_idx" => Any["m"],
             "ranges" => Dict{String, Any}(
                 plan.rep_rsym => Dict{String, Any}("from" => plan.R),
-                plan.rep_csym => Dict{String, Any}("from" => C)
+                rep.cell_sym => Dict{String, Any}("from" => plan.C)
             ),
             "expr" => Dict{String, Any}("op" => "true", "args" => Any[]),
-            "distinct" => true, "semiring" => "bool_and_or", "id" => faqid,
-            "join" => Any[_pd_overlap_clause(plan.src_env, plan.tgt_env)],
+            "distinct" => true, "semiring" => "bool_and_or", "id" => names.producer_id,
+            "join" => Any[_pd_overlap_clause(rep.src_env, rep.tgt_env)],
             "filter" => prod_filter,
-            "key" => plan.rep_csym,
-            "args" => Any[unique(vcat(plan.src_env, plan.tgt_env))...]
+            "key" => rep.cell_sym,
+            "args" => Any[unique(vcat(rep.src_env, rep.tgt_env))...]
         )
     )
-    pushfirst!(eqs, producer)
-    _pd_canonicalize_equations!(d["models"][mname])
+end
 
-    # --- inspectable pushdown provenance / gated_select record ---
-    # Stashed under `metadata.x_esd` — the spec's free-form extension point
-    # (esm-spec §3) — so the transformed document still round-trips `load`'s
-    # schema validation (a top-level key would not). The `gated_select` mirrors
-    # the `data_sources.<name>.metadata.x_esd.gated_select` a real gated
-    # provider is built from (see `provider_gate_spec`): the runtime gate for
-    # this model's provider-backed arrays, gating the cell axis by the derived
-    # support set.
+# The provenance record under `metadata.x_esd` (esm-spec §3's extension point,
+# so the document still validates): the generated names and the gate of the
+# provider-backed arrays, as `provider_gate_spec` reads one.
+function _pd_record!(d, plan::_PdPlan, names::_PdNames)
     md = get!(d, "metadata", OrderedDict{String, Any}())
     xesd = get!(md, "x_esd", OrderedDict{String, Any}())
     xesd["pushdown"] = Dict{String, Any}(
-        "derived_set" => setname, "producer_id" => faqid,
-        "member_factor" => mfactor, "member_var" => memvar,
+        "derived_set" => names.support_set, "producer_id" => names.producer_id,
+        "member_factor" => names.member_factor, "member_var" => names.member_var,
         "gated_select" => Dict{String, Any}(
-            "gated_by" => setname, "applies_to" => Any[plan.A_names...],
+            "gated_by" => names.support_set, "applies_to" => Any[plan.A_names...],
             "gated_axis" => 0
         )
     )
-    return d
+    return nothing
 end
 
 # ============================================================================
-# RECORD-DERIVED PROVIDER GATING (Phase 1, clean consolidation).
+# RECORD-DERIVED PROVIDER GATING.
 #
 # `desugar_pushdown` records `metadata.x_esd.pushdown.gated_select` — which
-# derived set gates which model arrays on which axis — but until Phase 1
-# NOTHING read that record back: callers hand-implemented `provider_gate_spec`
-# or hand-authored gate dicts. These helpers close the loop for `prepare`:
-# given the REWRITTEN (pre-flatten) document and the caller's public
+# derived set gates which model arrays on which axis. These helpers read it
+# back for `esm_problem`: given the REWRITTEN (pre-flatten) document and the caller's public
 # `providers` dict, derive the engine gate (`Dict("axes"=>…, "applies_to"=>…)`,
 # the `_fetch_gated_providers` format) for every provider that the document's
 # coupling identifies as feeding a rewritten array.
@@ -1326,8 +1347,7 @@ Provider-key ⇒ engine gate, derived from `doc`'s rewrite record
 
 A provider is GATED when its key names a PARAMETER that a `data` update binds to
 a source and whose local name is one of the record's `applies_to` model arrays.
-From esm 1.0.0 that is a direct match: a source is not a coupling endpoint, so a
-provider is keyed by the consuming parameter's own flattened name
+That is a direct match: a source is not a coupling endpoint, so a provider is keyed by the consuming parameter's own flattened name
 (`"<ModelPath>.<param>"`, see `providers_from_document`) and there is no
 `variable_map` indirection to follow. The gate's per-NATIVE-axis `axes` come
 from the bound SOURCE's `metadata.x_esd.gated_select.axes` template when it
@@ -1464,14 +1484,16 @@ function _pushdown_gate_axes(
             RefreshError(
                 "data_sources.$loader gated_select template puts the gated axis at " *
                     "non-fixed position $gpos, but the rewrite record gates model axis " *
-                    "$gaxis — the loader template and the rewritten arrays disagree"
+                    "$gaxis — the loader template and the rewritten arrays disagree",
+                ERROR_CODES.PROVIDER_GATE_INVALID
             )
         )
         return axes
     end
     (0 <= gaxis < mrank) || throw(
         RefreshError(
-            "rewrite record gated_axis $gaxis out of range for rank-$mrank gated arrays"
+            "rewrite record gated_axis $gaxis out of range for rank-$mrank gated arrays",
+            ERROR_CODES.PROVIDER_GATE_INVALID
         )
     )
     axes = Any[fill("all", mrank)...]
@@ -1480,7 +1502,7 @@ function _pushdown_gate_axes(
 end
 
 """
-    _inject_pushdown_aliases!(dst, run_doc, coupling_pairs) -> dst
+    _inject_pushdown_aliases!(dst, run_file::EsmFile, coupling_pairs) -> dst
 
 Alias-key injection for the `esm_problem` pushdown path (same-object references,
 no copies). The flattener rewrites EQUATION references through the coupling
@@ -1500,21 +1522,14 @@ authored name (`"src_W"`) must ALSO resolve under:
 Existing keys are never overwritten.
 """
 function _inject_pushdown_aliases!(
-        dst::AbstractDict, run_doc::AbstractDict,
+        dst::AbstractDict, run_file::EsmFile,
         coupling_pairs::AbstractVector
     )
     for (frm, to) in coupling_pairs
         haskey(dst, frm) && !haskey(dst, to) && (dst[to] = dst[frm])
     end
-    models = get(run_doc, "models", nothing)
-    models isa AbstractDict || return dst
-    vnames = String[]
-    for (_, m) in models
-        m isa AbstractDict || continue
-        mv = get(m, "variables", nothing)
-        mv isa AbstractDict || continue
-        append!(vnames, (String(k) for k in keys(mv)))
-    end
+    run_file.models === nothing && return dst
+    vnames = String[v for m in values(run_file.models) for v in keys(m.variables)]
     for k in collect(keys(dst))
         ks = String(k)
         occursin('.', ks) && continue
@@ -1527,7 +1542,7 @@ function _inject_pushdown_aliases!(
 end
 
 # The coupling `variable_map` (from ⇒ to) pairs of a raw document — captured
-# BEFORE `_prepare_run_doc` flattens them away, for `_inject_pushdown_aliases!`.
+# BEFORE `_prepare_run` flattens them away, for `_inject_pushdown_aliases!`.
 function _pushdown_coupling_pairs(doc::AbstractDict)
     out = Pair{String, String}[]
     cp = get(doc, "coupling", nothing)

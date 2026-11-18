@@ -1,6 +1,6 @@
-# Tests for faq evaluation in tree_walk (ess-evm).
+# Tests for faq evaluation in tree_walk.
 #
-# Verifies that build_evaluator handles:
+# Verifies that the build (`EarthSciAST.Internal.build`) handles:
 #   1. D(index(var, k)) — indexed scalar derivative
 #   2. faq(D(index(var, i+off))) — array-loop derivative, 1D
 #   3. faq(D(index(var, i, j))) — array-loop derivative, 2D
@@ -25,7 +25,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     ranges = Dict(i => [ilo, ihi], j => [jlo, jhi])
 )
 
-@testset "tree_walk faq (ess-evm)" begin
+@testset "tree_walk faq" begin
 
     # ------------------------------------------------------------------
     # 1. D(index(u, k)) — indexed scalar derivatives
@@ -38,12 +38,12 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             ESM.Equation(_D_idx("u", _i(3)), _op("*", _n(-3.0), _idx("u", _i(3)))),
         ]
         model = ESM.Model(vars, eqs)
-        ics = Dict("u[1]" => 1.0, "u[2]" => 2.0, "u[3]" => 3.0)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.u[1]" => 1.0, "M.u[2]" => 2.0, "M.u[3]" => 3.0)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["u[1]"]], -1.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[2]"]], -4.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[3]"]], -9.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[1]"]], -1.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[2]"]], -4.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[3]"]], -9.0; rtol = 1.0e-12)
     end
 
     # ------------------------------------------------------------------
@@ -55,11 +55,11 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         lhs = _faq1d(_D_idx("u", _v("i")), "i", 1, N)
         rhs = _faq1d(_op("-", _idx("u", _v("i"))), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
-        ics = Dict("u[$k]" => Float64(k) for k in 1:N)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.u[$k]" => Float64(k) for k in 1:N)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
         for k in 1:N
-            @test isapprox(du[vmap["u[$k]"]], -Float64(k); rtol = 1.0e-12)
+            @test isapprox(du[vmap["M.u[$k]"]], -Float64(k); rtol = 1.0e-12)
         end
     end
 
@@ -72,11 +72,11 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         lhs = _faq2d(_D_idx("u", _v("i"), _v("j")), "i", 1, M, "j", 1, N)
         rhs = _faq2d(_op("-", _idx("u", _v("i"), _v("j"))), "i", 1, M, "j", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
-        ics = Dict("u[$i,$j]" => Float64(i + j) for i in 1:M for j in 1:N)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.u[$i,$j]" => Float64(i + j) for i in 1:M for j in 1:N)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
         for i in 1:M, j in 1:N
-            @test isapprox(du[vmap["u[$i,$j]"]], -Float64(i + j); rtol = 1.0e-12)
+            @test isapprox(du[vmap["M.u[$i,$j]"]], -Float64(i + j); rtol = 1.0e-12)
         end
     end
 
@@ -97,11 +97,11 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             ESM.Equation(_D_idx("u", _i(2)), _n(0.0)),
         ]
         model = ESM.Model(vars, eqs)
-        ics = Dict("u[1]" => 1.0, "u[2]" => 2.0)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.u[1]" => 1.0, "M.u[2]" => 2.0)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
         # 0 - 2*1 + 2 = 0
-        @test isapprox(du[vmap["u[1]"]], 0.0; atol = 1.0e-14)
+        @test isapprox(du[vmap["M.u[1]"]], 0.0; atol = 1.0e-14)
     end
 
     # ------------------------------------------------------------------
@@ -128,13 +128,13 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         )
         model = ESM.Model(vars, [ESM.Equation(lhs_int, rhs_int), bc1, bcN])
         # Delta spike at u[5]
-        ics = Dict("u[$k]" => (k == 5 ? 1.0 : 0.0) for k in 1:N)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.u[$k]" => (k == 5 ? 1.0 : 0.0) for k in 1:N)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["u[5]"]], -2.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[4]"]], 1.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[6]"]], 1.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[1]"]], 0.0; atol = 1.0e-14)
+        @test isapprox(du[vmap["M.u[5]"]], -2.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[4]"]], 1.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[6]"]], 1.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[1]"]], 0.0; atol = 1.0e-14)
     end
 
     # ------------------------------------------------------------------
@@ -149,8 +149,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         file = load_path(path)
         model = file.models["Heat1D"]
         t = model.tests[1]
-        ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.$k" => Float64(v) for (k, v) in t.initial_conditions)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         ts = (Float64(t.time_span.start), Float64(t.time_span.stop))
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, ts, p)
         sol = OrdinaryDiffEqTsit5.solve(
@@ -160,7 +160,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         rtol = model.tolerance !== nothing ? model.tolerance.rel : 1.0e-3
         for ass in t.assertions
             var = String(ass.variable)
-            actual = sol(Float64(ass.time))[vmap[var]]
+            actual = sol(Float64(ass.time))[vmap["M.$var"]]
             @test isapprox(actual, Float64(ass.expected); rtol = rtol)
         end
     end
@@ -177,8 +177,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         file = load_path(path)
         model = file.models["Heat2D"]
         t = model.tests[1]
-        ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.$k" => Float64(v) for (k, v) in t.initial_conditions)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         ts = (Float64(t.time_span.start), Float64(t.time_span.stop))
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, ts, p)
         sol = OrdinaryDiffEqTsit5.solve(
@@ -188,7 +188,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         rtol = model.tolerance !== nothing ? model.tolerance.rel : 1.0e-3
         for ass in t.assertions
             var = String(ass.variable)
-            actual = sol(Float64(ass.time))[vmap[var]]
+            actual = sol(Float64(ass.time))[vmap["M.$var"]]
             @test isapprox(actual, Float64(ass.expected); rtol = rtol)
         end
     end
@@ -205,8 +205,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         file = load_path(path)
         model = file.models["HeatLatLon"]
         t = model.tests[1]
-        ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.$k" => Float64(v) for (k, v) in t.initial_conditions)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         ts = (Float64(t.time_span.start), Float64(t.time_span.stop))
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, ts, p)
         sol = OrdinaryDiffEqTsit5.solve(
@@ -216,13 +216,13 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         rtol = model.tolerance !== nothing ? model.tolerance.rel : 1.0e-3
         for ass in t.assertions
             var = String(ass.variable)
-            actual = sol(Float64(ass.time))[vmap[var]]
+            actual = sol(Float64(ass.time))[vmap["M.$var"]]
             @test isapprox(actual, Float64(ass.expected); rtol = rtol)
         end
     end
 
     # ------------------------------------------------------------------
-    # 9. Fixture 18 — two-domain interface BC (ess-x76)
+    # 9. Fixture 18 — two-domain interface BC
     # ------------------------------------------------------------------
     @testset "9. Fixture 18: two-domain interface BC" begin
         path = joinpath(
@@ -233,8 +233,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         file = load_path(path)
         model = file.models["TwoDomainHeat"]
         t = model.tests[1]
-        ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.$k" => Float64(v) for (k, v) in t.initial_conditions)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         ts = (Float64(t.time_span.start), Float64(t.time_span.stop))
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, ts, p)
         sol = OrdinaryDiffEqTsit5.solve(
@@ -244,13 +244,13 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         rtol = model.tolerance !== nothing ? model.tolerance.rel : 1.0e-3
         for ass in t.assertions
             var = String(ass.variable)
-            actual = sol(Float64(ass.time))[vmap[var]]
+            actual = sol(Float64(ass.time))[vmap["M.$var"]]
             @test isapprox(actual, Float64(ass.expected); rtol = rtol)
         end
     end
 
     # ------------------------------------------------------------------
-    # 10. Fixture 19 — generalized einsum: contracted stencil index (ess-trq)
+    # 10. Fixture 19 — generalized einsum: contracted stencil index
     # ------------------------------------------------------------------
     @testset "10. Fixture 19: einsum 1D stencil (contracted index)" begin
         path = joinpath(
@@ -261,8 +261,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         file = load_path(path)
         model = file.models["Heat1DEinsum"]
         t = model.tests[1]
-        ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.$k" => Float64(v) for (k, v) in t.initial_conditions)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         ts = (Float64(t.time_span.start), Float64(t.time_span.stop))
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, ts, p)
         sol = OrdinaryDiffEqTsit5.solve(
@@ -272,13 +272,13 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         rtol = model.tolerance !== nothing ? model.tolerance.rel : 1.0e-3
         for ass in t.assertions
             var = String(ass.variable)
-            actual = sol(Float64(ass.time))[vmap[var]]
+            actual = sol(Float64(ass.time))[vmap["M.$var"]]
             @test isapprox(actual, Float64(ass.expected); rtol = rtol)
         end
     end
 
     # ------------------------------------------------------------------
-    # 11. Fixture 20 — embedded faq contraction (ess-n0w)
+    # 11. Fixture 20 — embedded faq contraction
     #     Scalar faq (empty output_idx) as scalar equation RHS,
     #     plus index(faq(...), k) for a 1D output faq with
     #     contracted index.
@@ -292,20 +292,20 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         file = load_path(path)
         model = file.models["ContractionEmbedded"]
         t = model.tests[1]
-        ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.$k" => Float64(v) for (k, v) in t.initial_conditions)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
         # D(z) = sum_{j=1}^{3} j^2 = 1+4+9 = 14
-        @test isapprox(du[vmap["z"]], 14.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.z"]], 14.0; rtol = 1.0e-12)
         # D(w) = max_{j=1}^{4} j = 4
-        @test isapprox(du[vmap["w"]], 4.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.w"]], 4.0; rtol = 1.0e-12)
         # D(z3) = index(faq[i]{sum_j j*(i+j), j in 1:2}, 1)
         #        = sum_{j=1}^{2} j*(1+j) = 1*2 + 2*3 = 2+6 = 8
-        @test isapprox(du[vmap["z3"]], 8.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.z3"]], 8.0; rtol = 1.0e-12)
     end
 
     # ------------------------------------------------------------------
-    # 12. Fixture 09 — makearray block assembly (ess-n0w)
+    # 12. Fixture 09 — makearray block assembly
     #     index(makearray(regions, values), i, j) resolved at build time.
     # ------------------------------------------------------------------
     @testset "12. Fixture 09: makearray block assembly" begin
@@ -317,8 +317,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         file = load_path(path)
         model = file.models["MakeArrayBlocks"]
         t = model.tests[1]
-        ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.$k" => Float64(v) for (k, v) in t.initial_conditions)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         ts = (Float64(t.time_span.start), Float64(t.time_span.stop))
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, ts, p)
         sol = OrdinaryDiffEqTsit5.solve(
@@ -328,13 +328,13 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         rtol = model.tolerance !== nothing ? model.tolerance.rel : 1.0e-3
         for ass in t.assertions
             var = String(ass.variable)
-            actual = sol(Float64(ass.time))[vmap[var]]
+            actual = sol(Float64(ass.time))[vmap["M.$var"]]
             @test isapprox(actual, Float64(ass.expected); rtol = rtol)
         end
     end
 
     # ------------------------------------------------------------------
-    # 13. Scalar faq over state variables — runner numeric test (ess-n0w)
+    # 13. Scalar faq over state variables — runner numeric test
     #     D(z) = sum_{j=1}^{3} x[j]  via contracted faq (reduce="+")
     #     D(w) = max_{j=1}^{3} x[j]  via contracted faq (reduce="max")
     #     x[j] are state variables (constant D=0).
@@ -366,17 +366,17 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             ESM.Equation(_D_idx("x", _i(3)), _n(0.0)),
         ]
         model = ESM.Model(vars, eqs)
-        ics = Dict("z" => 0.0, "w" => 0.0, "x[1]" => 2.0, "x[2]" => 5.0, "x[3]" => 3.0)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.z" => 0.0, "M.w" => 0.0, "M.x[1]" => 2.0, "M.x[2]" => 5.0, "M.x[3]" => 3.0)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
         # D(z) = sum(x) = 2+5+3 = 10
-        @test isapprox(du[vmap["z"]], 10.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.z"]], 10.0; rtol = 1.0e-12)
         # D(w) = max(x) = 5
-        @test isapprox(du[vmap["w"]], 5.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.w"]], 5.0; rtol = 1.0e-12)
     end
 
     # ------------------------------------------------------------------
-    # 14. Scalar faq max/min reducers (ess-n0w)
+    # 14. Scalar faq max/min reducers
     #     D(z_max) = max_{j=1}^{5} j = 5
     #     D(z_min) = min_{j=1}^{5} j = 1
     # ------------------------------------------------------------------
@@ -401,20 +401,20 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             ),
         ]
         model = ESM.Model(vars, eqs)
-        ics = Dict("z_max" => 0.0, "z_min" => 0.0)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.z_max" => 0.0, "M.z_min" => 0.0)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["z_max"]], 5.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["z_min"]], 1.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.z_max"]], 5.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.z_min"]], 1.0; rtol = 1.0e-12)
     end
 
     # ------------------------------------------------------------------
-    # 16. Fixture 24 — makearray region dispatch in faq body (ess-e9l)
+    # 16. Fixture 24 — makearray region dispatch in faq body
     #     Pins _resolve_index_of_makearray (tree_walk.jl:1114) through the
     #     LHS-faq unrolling path: RHS body contains
     #     index(makearray(regions,values),i,j) where i,j are the loop vars.
     # ------------------------------------------------------------------
-    @testset "16. Fixture 24: makearray region dispatch in faq body (ess-e9l)" begin
+    @testset "16. Fixture 24: makearray region dispatch in faq body" begin
         path = joinpath(
             _REPO_ROOT, "tests", "fixtures", "faq",
             "24_faq_makearray_region_dispatch.esm"
@@ -423,8 +423,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         file = load_path(path)
         model = file.models["MakeArrayLoopRegions"]
         t = model.tests[1]
-        ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.$k" => Float64(v) for (k, v) in t.initial_conditions)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         ts = (Float64(t.time_span.start), Float64(t.time_span.stop))
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, ts, p)
         sol = OrdinaryDiffEqTsit5.solve(
@@ -434,13 +434,13 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         rtol = model.tolerance !== nothing ? model.tolerance.rel : 1.0e-3
         for ass in t.assertions
             var = String(ass.variable)
-            actual = sol(Float64(ass.time))[vmap[var]]
+            actual = sol(Float64(ass.time))[vmap["M.$var"]]
             @test isapprox(actual, Float64(ass.expected); rtol = rtol)
         end
     end
 
     # ------------------------------------------------------------------
-    # 15. makearray interior+boundary regions (later-overwrite, ess-n0w)
+    # 15. makearray interior+boundary regions (later-overwrite)
     #     A 1D 5-cell domain where:
     #       region 1 [1,5] = 1.0  (border default)
     #       region 2 [2,4] = 2.0  (interior overwrites)
@@ -461,24 +461,23 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             push!(eqs, ESM.Equation(_D_idx("u", _i(k)), rhs))
         end
         model = ESM.Model(vars, eqs)
-        ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
         # Boundary cells (1,5) → 1.0; interior (2,3,4) → 2.0
-        @test isapprox(du[vmap["u[1]"]], 1.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[2]"]], 2.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[3]"]], 2.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[4]"]], 2.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[5]"]], 1.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[1]"]], 1.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[2]"]], 2.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[3]"]], 2.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[4]"]], 2.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[5]"]], 1.0; rtol = 1.0e-12)
     end
 
     # ------------------------------------------------------------------
-    # 17. Fixture 23 — pure matvec contraction (ess-zmm / ess-6ny)
+    # 17. Fixture 23 — pure matvec contraction
     #     D(y[i])/dt = sum_{j=1..3} i*j  →  y[1]=6, y[2]=12 at t=1
     #     D(w[i])/dt = max_{j=1..3}(i+j) →  w[1]=4, w[2]=5  at t=1
-    #     Flips the ess-zmm tree-walk Julia xfail to pass.
     # ------------------------------------------------------------------
-    @testset "17. Fixture 23: pure matvec contraction (ess-zmm)" begin
+    @testset "17. Fixture 23: pure matvec contraction" begin
         path = joinpath(
             _REPO_ROOT, "tests", "fixtures", "faq",
             "23_faq_pure_matvec_contraction.esm"
@@ -487,8 +486,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         file = load_path(path)
         model = file.models["PureMatVecContraction"]
         t = model.tests[1]
-        ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.$k" => Float64(v) for (k, v) in t.initial_conditions)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         ts = (Float64(t.time_span.start), Float64(t.time_span.stop))
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, ts, p)
         sol = OrdinaryDiffEqTsit5.solve(
@@ -498,13 +497,13 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         rtol = model.tolerance !== nothing ? model.tolerance.rel : 1.0e-3
         for ass in t.assertions
             var = String(ass.variable)
-            actual = sol(Float64(ass.time))[vmap[var]]
+            actual = sol(Float64(ass.time))[vmap["M.$var"]]
             @test isapprox(actual, Float64(ass.expected); rtol = rtol)
         end
     end
 
     # ------------------------------------------------------------------
-    # 18. Mesh reduction: 3-cell nn_diffusion with padded connectivity (ess-6ny)
+    # 18. Mesh reduction: 3-cell nn_diffusion with padded connectivity
     #     D(u[c]) = sum_k coeff[c,k] * (u[cells_on_cell[c,k]] - u[c])
     #     3-cell fully-connected mesh, coeff=0.5, u=[1,2,3] at t=0.
     #     Expected: du[1]=1.5, du[2]=0.0, du[3]=-1.5
@@ -543,8 +542,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             expr_body = body
         )
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
-        ics = Dict("u[$c]" => Float64(c) for c in 1:N_c)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        ics = Dict("M.u[$c]" => Float64(c) for c in 1:N_c)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
             model;
             initial_conditions = ics,
             const_arrays = Dict(
@@ -553,9 +552,9 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             )
         )
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["u[1]"]], 1.5; rtol = 1.0e-12)
-        @test isapprox(du[vmap["u[2]"]], 0.0; atol = 1.0e-14)
-        @test isapprox(du[vmap["u[3]"]], -1.5; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[1]"]], 1.5; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[2]"]], 0.0; atol = 1.0e-14)
+        @test isapprox(du[vmap["M.u[3]"]], -1.5; rtol = 1.0e-12)
     end
 
     # ------------------------------------------------------------------
@@ -632,8 +631,8 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
         )
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 
-        ics = Dict("u[$c]" => 0.0 for c in 1:N_c)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        ics = Dict("M.u[$c]" => 0.0 for c in 1:N_c)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
             model;
             initial_conditions = ics,
             const_arrays = Dict(
@@ -645,23 +644,23 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
 
         # u = [0,1,0,0]
         u = copy(u0)
-        u[vmap["u[1]"]] = 0.0; u[vmap["u[2]"]] = 1.0
-        u[vmap["u[3]"]] = 0.0; u[vmap["u[4]"]] = 0.0
+        u[vmap["M.u[1]"]] = 0.0; u[vmap["M.u[2]"]] = 1.0
+        u[vmap["M.u[3]"]] = 0.0; u[vmap["M.u[4]"]] = 0.0
         du = similar(u0); f!(du, u, p, 0.0)
-        @test isapprox(du[vmap["u[1]"]], 1.0; atol = 1.0e-12)
-        @test isapprox(du[vmap["u[2]"]], -2.0; atol = 1.0e-12)
-        @test isapprox(du[vmap["u[3]"]], 1.0; atol = 1.0e-12)
-        @test isapprox(du[vmap["u[4]"]], 0.0; atol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[1]"]], 1.0; atol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[2]"]], -2.0; atol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[3]"]], 1.0; atol = 1.0e-12)
+        @test isapprox(du[vmap["M.u[4]"]], 0.0; atol = 1.0e-12)
 
         # Uniform field u≡1 ⇒ exact-zero discrete Laplacian everywhere, INCLUDING
         # the valence-1 boundary cells (no spurious term from the dropped slot).
         u1 = copy(u0)
         for c in 1:N_c
-            u1[vmap["u[$c]"]] = 1.0
+            u1[vmap["M.u[$c]"]] = 1.0
         end
         du1 = similar(u0); f!(du1, u1, p, 0.0)
         for c in 1:N_c
-            @test isapprox(du1[vmap["u[$c]"]], 0.0; atol = 1.0e-12)
+            @test isapprox(du1[vmap["M.u[$c]"]], 0.0; atol = 1.0e-12)
         end
 
         # Backward-compat guard: the CONSTANT-bound padded form (test 18) must
@@ -676,19 +675,19 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             expr_body = body
         )
         model_const = ESM.Model(vars, [ESM.Equation(lhs, rhs_const)])
-        f2!, u02, p2, _, vmap2 = EarthSciAST._build_evaluator(
+        f2!, u02, p2, _, vmap2 = EarthSciAST.Internal.build(
             model_const;
-            initial_conditions = Dict("u[$c]" => 0.0 for c in 1:N_c),
+            initial_conditions = Dict("M.u[$c]" => 0.0 for c in 1:N_c),
             const_arrays = Dict("cells_on_cell" => cells_pad, "coeff" => coeff_pad)
         )
         uc = copy(u02)
-        uc[vmap2["u[1]"]] = 0.0; uc[vmap2["u[2]"]] = 1.0
-        uc[vmap2["u[3]"]] = 0.0; uc[vmap2["u[4]"]] = 0.0
+        uc[vmap2["M.u[1]"]] = 0.0; uc[vmap2["M.u[2]"]] = 1.0
+        uc[vmap2["M.u[3]"]] = 0.0; uc[vmap2["M.u[4]"]] = 0.0
         du2 = similar(u02); f2!(du2, uc, p2, 0.0)
-        @test isapprox(du2[vmap2["u[1]"]], 1.0; atol = 1.0e-12)
-        @test isapprox(du2[vmap2["u[2]"]], -2.0; atol = 1.0e-12)
-        @test isapprox(du2[vmap2["u[3]"]], 1.0; atol = 1.0e-12)
-        @test isapprox(du2[vmap2["u[4]"]], 0.0; atol = 1.0e-12)
+        @test isapprox(du2[vmap2["M.u[1]"]], 1.0; atol = 1.0e-12)
+        @test isapprox(du2[vmap2["M.u[2]"]], -2.0; atol = 1.0e-12)
+        @test isapprox(du2[vmap2["M.u[3]"]], 1.0; atol = 1.0e-12)
+        @test isapprox(du2[vmap2["M.u[4]"]], 0.0; atol = 1.0e-12)
     end
 
     # ---------------------------------------------------------------------- #
@@ -723,14 +722,14 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             Dict("y" => ModelVariable(UnknownVariable)),
             [EarthSciAST.Equation(_D("y"), rhs)]
         )
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator_impl(
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
             model;
-            initial_conditions = Dict("y" => 0.0),
+            initial_conditions = Dict("M.y" => 0.0),
             const_arrays = Dict("a" => a, "b" => b)
         )
         du = fill(-1.0, length(u0))
         f!(du, u0, p, 0.0)
-        @test du[vmap["y"]] ≈ 2 * sum(a) + 3 * sum(b)
+        @test du[vmap["M.y"]] ≈ 2 * sum(a) + 3 * sum(b)
 
         # A SCALAR operand must still broadcast, not be indexed.
         rhs2 = EarthSciAST.OpExpr(
@@ -743,13 +742,13 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
             Dict("y" => ModelVariable(UnknownVariable)),
             [EarthSciAST.Equation(_D("y"), rhs2)]
         )
-        f2!, u02, p2, _, vmap2 = EarthSciAST._build_evaluator_impl(
+        f2!, u02, p2, _, vmap2 = EarthSciAST.Internal.build(
             model2;
-            initial_conditions = Dict("y" => 0.0), const_arrays = Dict("a" => a)
+            initial_conditions = Dict("M.y" => 0.0), const_arrays = Dict("a" => a)
         )
         du2 = fill(-1.0, length(u02))
         f2!(du2, u02, p2, 0.0)
-        @test du2[vmap2["y"]] ≈ 5 * 2 * sum(a)
+        @test du2[vmap2["M.y"]] ≈ 5 * 2 * sum(a)
     end
 
 end

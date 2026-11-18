@@ -1,9 +1,8 @@
 # Cross-binding conformance tests for the M1 semiring / index-set worked
-# examples (bead ess-my4.1.5) and the M2 value-equality join.on worked examples
-# (bead ess-my4.2.5).
+# examples and the M2 value-equality join.on worked examples.
 #
 # Loads the shared fixtures under tests/valid/faq/ that carry inline
-# `tests` blocks and evaluates each through `build_evaluator`. Julia, Rust, and
+# `tests` blocks and evaluates each through the build. Julia, Rust, and
 # Python all check the SAME inline expected values baked into these shared
 # fixtures, so agreement here is the cross-binding semiring-equivalence proof.
 # (The M2 many-to-many fixtures are Julia/Python only — the data-derived
@@ -27,25 +26,25 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 const _AGG_REPO_ROOT = TESTUTILS_REPO_ROOT
 
 # Evaluate a shared aggregate fixture and return (du, vmap), seeding every
-# state element to zero (the constant-RHS worked examples start from rest).
+# state element of component `model_name` to zero (the constant-RHS worked
+# examples start from rest). `vmap` is that component's slice of the build's
+# map, keyed by its local element names.
 function _eval_aggregate_fixture(
         filename::AbstractString, model_name::AbstractString,
         elements::Vector{<:AbstractString}
     )
     path = joinpath(_AGG_REPO_ROOT, "tests", "valid", "faq", filename)
     @test isfile(path)
-    file = EarthSciAST.load_path(path)
-    ics = Dict(e => 0.0 for e in elements)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-        file; model_name = model_name,
-        initial_conditions = ics
-    )
+    ics = Dict("$model_name.$e" => 0.0 for e in elements)
+    f!, u0, p, _, vmap = EarthSciAST.Internal.build(path; initial_conditions = ics)
     du = similar(u0)
     f!(du, u0, p, 0.0)
-    return du, vmap
+    prefix = model_name * "."
+    local_vm = Dict(k[(length(prefix) + 1):end] => v for (k, v) in vmap if startswith(k, prefix))
+    return du, local_vm
 end
 
-@testset "aggregate worked-example conformance (ess-my4.1.5)" begin
+@testset "aggregate worked-example conformance" begin
     # 7.1 FVM diffusion as the default sum_product ring, plus the empty-range
     # 0̄ identity: degenerate[i] = Σ_{j∈∅} i·j = 0 (sum_product 0̄).
     @testset "fvm_diffusion_sum_product" begin
@@ -89,7 +88,7 @@ end
         @test du[vmap["emissions[2]"]] ≈ 12.0
     end
 
-    # §7.3 DOWNSTREAM geometric FAQ (bead ess-my4.3.10): the second half of the
+    # §7.3 DOWNSTREAM geometric FAQ: the second half of the
     # value-invention end-to-end chain. The first half (mesh-edge enumeration via
     # bool_and_or + distinct over edge keys) MINTS the `edges` index set as a
     # CONST-fold whose byte-identical output is pinned by the determinism
@@ -107,13 +106,13 @@ end
     end
 end
 
-# Resolver-level invalid fixture (bead ess-my4.1.6; RFC §5.2): a `faq`
-# `{from}` range naming an index set absent from the model `index_sets` registry
-# is SCHEMA-VALID (so `load` succeeds) but rejected by the index-set-registry
-# resolver inside `build_evaluator` — no implicit interval is inferred for an
-# undeclared name. Schema-only bindings (TypeScript/Go) accept it; see
+# Resolver-level invalid fixture (RFC §5.2): a `faq` `{from}` range naming an
+# index set absent from the model `index_sets` registry is SCHEMA-VALID (so
+# `load` succeeds) but refused before the build, as the structural finding
+# `undefined_index_set` — no implicit interval is inferred for an undeclared
+# name. Schema-only bindings (TypeScript/Go) accept it; see
 # tests/invalid/expected_errors.json (resolver_only entry).
-@testset "invalid: undeclared {from} index set rejected (ess-my4.1.6)" begin
+@testset "invalid: undeclared {from} index set rejected" begin
     path = joinpath(
         _AGG_REPO_ROOT, "tests", "invalid", "faq",
         "undeclared_from_name.esm"
@@ -121,12 +120,14 @@ end
     @test isfile(path)
     file = EarthSciAST.load_path(path)   # schema-valid: load must succeed
     err = try
-        EarthSciAST._build_evaluator(file; model_name = "UndeclaredFrom")
+        EarthSciAST.Internal.build(file)
         nothing
     catch e
         e
     end
-    @test err isa EarthSciAST.TreeWalkError
+    # Refused as the document's reference-integrity finding before the build
+    # runs (esm-libraries-spec §2.5.2), as `esm_problem` refuses it.
+    @test err isa EarthSciAST.ParseError && err.code == "undefined_index_set"
     @test occursin("ghost_cells", sprint(showerror, err))
 end
 
@@ -140,7 +141,7 @@ end
     @test any(e -> e.error_type == "undefined_index_set" && e.path == "/models/M/equations/0/rhs", errs)
     @test !any(e -> e.error_type == "undefined_variable", errs)
     err = try
-        EarthSciAST._build_evaluator(file; model_name = "M")
+        EarthSciAST.Internal.build(file)
         nothing
     catch e
         e
@@ -199,7 +200,7 @@ end
 # mirroring §9.6.1, where `template_constraint_unknown_index_set` does not run
 # for a library file validated standalone. Before the fix `validate()` rejected
 # every conforming leaf. The typo case stays covered by the negative fixture
-# above (which DOES declare a registry) and by `build_evaluator`.
+# above (which DOES declare a registry) and by the build.
 @testset "valid: agnostic leaf's injected {from} index set is not a load error (#185)" begin
     path = joinpath(
         _AGG_REPO_ROOT, "tests", "conformance", "expression_templates",
@@ -212,13 +213,13 @@ end
     @test result.is_valid
 end
 
-# M2 join.on conformance (bead ess-my4.2.5). Evaluates the shared join fixtures
+# M2 join.on conformance. Evaluates the shared join fixtures
 # under tests/valid/faq/. Julia and Python check the SAME inline expected
 # values; Rust additionally checks the degenerate fixture (the value-equality
 # m·n engine is M3 in Rust, so the m2m fixtures are Julia/Python here). The
 # RFC §5.3 / §5.7 / §7.2 semantics: inner-only; m·n defined; output in declared
 # index order (permutation-invariant value); float/null keys rejected at build.
-@testset "join.on worked-example conformance (ess-my4.2.5)" begin
+@testset "join.on worked-example conformance" begin
     # §7.2 MOVES running-exhaust contraction as the degenerate positional join:
     # the join key columns are the loop indices, so the gate admits every
     # (sourceType x fuelType) combination — byte-identical to the join-free
@@ -298,7 +299,7 @@ end
     # fixtures live in tests/invalid/faq/build_time/ — schema-valid (so the
     # Go/TS schema harness, which globs the parent dir non-recursively, skips
     # them) but rejected by the evaluating bindings at build. A float member or a
-    # null member in a join key set must make `build_evaluator` raise, never
+    # null member in a join key set must make the build raise, never
     # silently bucket on a non-portable key.
     @testset "build-time key-type rejection" begin
         function _build_error_msg(filename, model_name)
@@ -309,9 +310,8 @@ end
             @test isfile(path)
             file = EarthSciAST.load_path(path)
             try
-                EarthSciAST._build_evaluator(
-                    file; model_name = model_name,
-                    initial_conditions = Dict("count" => 0.0)
+                EarthSciAST.Internal.build(
+                    file; initial_conditions = Dict("$model_name.count" => 0.0)
                 )
                 return nothing
             catch e
@@ -498,4 +498,76 @@ end
         msgs = [e.message for e in r.structural_errors if e.error_type == "ragged_values_not_gathered"]
         @test any(m -> occursin("index(parentMember, i, j)", m), msgs)
     end
+end
+
+# The faq and broadcast checks reach every expression site of the document
+# (`foreach_expression`): events, initialization equations, guesses, update
+# rules, bounds, inline tests, reaction systems and coupling entries, each
+# reported at its own pointer.
+@testset "faq and broadcast checks reach every expression site" begin
+    E = EarthSciAST
+    A(xs...) = E.ASTExpr[xs...]
+    ghost() = OpExpr(
+        "faq", A(); expr_body = VarExpr("x"), reduce = "+",
+        ranges = Dict{String, Any}("i" => E.IndexSetRef("ghost"))
+    )
+    bare() = OpExpr(
+        "faq", A(); expr_body = VarExpr("w"), reduce = "+",
+        ranges = Dict{String, Any}("i" => E.IndexSetRef("cells"))
+    )
+    nofn() = OpExpr("broadcast", A(VarExpr("x"), VarExpr("x")))
+    site(e) = OpExpr("+", A(VarExpr("x"), e))
+    gt(e) = OpExpr(">", A(e, NumExpr(0.0)))
+    function file_with(mk)
+        model = Model(
+            Dict(
+                "x" => ModelVariable(E.UnknownVariable; default = 0.0, ub = site(mk())),
+                "w" => ModelVariable(E.ParameterVariable; default = 1.0, shape = ["cells"]),
+                "p" => ModelVariable(
+                    E.ParameterVariable; default = 0.0,
+                    update = ParameterUpdate("condition"; when = gt(site(mk())), expression = site(mk()))
+                ),
+            ),
+            [Equation(OpExpr("D", A(VarExpr("x")); wrt = "t"), NumExpr(0.0))];
+            continuous_events = [ContinuousEvent(A(site(mk())), [AffectEquation("x", site(mk()))])],
+            discrete_events = [DiscreteEvent(ConditionTrigger(gt(site(mk()))), [AffectEquation("x", NumExpr(0.0))])],
+            initialization_equations = [Equation(VarExpr("x"), site(mk()))],
+            guesses = Dict{String, Union{Float64, E.ASTExpr}}("x" => site(mk())),
+            tests = [
+                E.InlineTest(
+                    "t", E.TimeSpan(0.0, 1.0),
+                    [E.Assertion("x", 1.0, 0.0; reduce = "L2_error", reference = site(mk()))]
+                ),
+            ]
+        )
+        rs = ReactionSystem(
+            [Species("A")], [Reaction("r", [E.StoichiometryEntry("A", 1)], nothing, site(mk()))];
+            parameters = [
+                Parameter("k", 1.0; update = ParameterUpdate("condition"; when = gt(site(mk())), expression = NumExpr(1.0))),
+            ]
+        )
+        return EsmFile(
+            "2.0.0", Metadata("Sites"); models = Dict("M" => model),
+            reaction_systems = Dict("R" => rs),
+            coupling = E.CouplingEntry[E.CouplingVariableMap("M.x", "R.k", site(mk()))],
+            index_sets = Dict("cells" => E.IndexSet("interval"; size = 3))
+        )
+    end
+    pointers = [
+        "/models/M/initialization_equations/0/rhs", "/models/M/guesses/x",
+        "/models/M/variables/p/update/when", "/models/M/variables/p/update/expression",
+        "/models/M/variables/x/ub", "/models/M/continuous_events/0/conditions/0",
+        "/models/M/continuous_events/0/affects/0/rhs",
+        "/models/M/discrete_events/0/trigger/expression",
+        "/models/M/tests/0/assertions/0/reference", "/reaction_systems/R/reactions/0/rate",
+        "/reaction_systems/R/parameters/k/update/when", "/coupling/0/transform",
+    ]
+    at(errs, code) = Set(e.path for e in errs if e.error_type == code)
+    agg = E.validate_aggregate_semantics(file_with(ghost))
+    @test at(agg, "undefined_index_set") == Set(pointers)
+    agg = E.validate_aggregate_semantics(file_with(bare))
+    # `w` is the model's array; a reaction system or coupling entry has no `w`.
+    @test at(agg, "faq_bare_array_operand") == Set(p for p in pointers if startswith(p, "/models/"))
+    bc = E.validate_broadcast_semantics(file_with(nofn))
+    @test at(bc, "invalid_broadcast_fn") == Set(pointers)
 end

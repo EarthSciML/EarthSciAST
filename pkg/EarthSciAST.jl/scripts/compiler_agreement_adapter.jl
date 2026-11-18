@@ -71,42 +71,15 @@
 # loaded; `parse_args` below is still the validating read, and a value this one
 # does not recognise simply falls through to the slim env and then to that
 # error.
-#
-# Manifest.toml is gitignored repo-wide, so on a fresh checkout — for ANY of
-# the three — we re-establish the local dev path then instantiate; on warm runs
-# this is a fast resolve check.
-import Pkg
-const COMPILER_ARG = let c = ""
-    for i in eachindex(ARGS)
-        ARGS[i] == "--compiler" && i < length(ARGS) && (c = ARGS[i + 1])
-    end
-    c
-end
-let env = joinpath(
+include(joinpath(@__DIR__, "adapter_support.jl"))
+const COMPILER_ARG = flag_value(ARGS, "--compiler", "")
+activate_adapter_env(
+    joinpath(
         @__DIR__, COMPILER_ARG == "mtk" ? "compiler_agreement_mtk_env" :
             COMPILER_ARG == "xla" ? "compiler_agreement_reactant_env" :
             "compiler_agreement_env"
-    ),
-        manifest = joinpath(env, "Manifest.toml")
-    bootstrap() = begin
-        Pkg.activate(env; io = devnull)
-        isfile(manifest) ||
-            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
-        Pkg.instantiate(; io = devnull)
-    end
-    try
-        bootstrap()
-    catch err
-        # A Manifest.toml is a machine-local CACHE that can lag a Project.toml
-        # that has moved on and then contradict it; one that cannot instantiate
-        # has no value, so rebuild rather than fail the gate. `Pkg.develop` only
-        # writes the Manifest here — EarthSciAST is already in the Project's
-        # [deps], so the tracked Project.toml is not touched.
-        @warn "$(basename(env)) did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force = true)
-        bootstrap()
-    end
-end
+    )
+)
 
 using EarthSciAST
 using JSON3
@@ -115,11 +88,6 @@ import OrdinaryDiffEqRosenbrock
 import SciMLBase
 
 const BINDING = "julia"
-
-# API_SPEC §5.8's closed vocabulary, checked here as well as in the runner. A
-# value outside it is a broken invocation rather than a compiler this binding
-# happens not to have, and the two must not arrive at the same answer.
-const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
 
 # The runtime a compiler needs in the session, loaded for that compiler alone.
 # `:mtk` needs ModelingToolkit (the extension that implements it) plus a
@@ -134,12 +102,10 @@ const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
 # which then raises the `compiler_unavailable` this adapter reports verbatim.
 #
 # CALLED AT TOP LEVEL, not from `main`. A package loaded by `@eval` defines its
-# methods in a NEW world age, and a frame that is already running cannot call
-# them — from inside `main` every fixture failed with "method too new to be
-# called from this world context" naming the extension's own entry point, which
-# reads as a broken binding rather than as this file calling too early. Each
-# top-level statement gets the current world, so loading here and calling `main`
-# on the next line is what makes the extension visible.
+# methods in a NEW world age, which a frame that is already running cannot call
+# ("method too new to be called from this world context"). Each top-level
+# statement gets the current world, so loading here and calling `main` on the
+# next line is what makes the extension visible.
 function load_compiler_runtime(compiler)
     if compiler == "mtk"
         @eval begin
@@ -157,6 +123,10 @@ function load_compiler_runtime(compiler)
     return nothing
 end
 
+# The value after the flag at `args[i]`; a flag at the end of the line has none.
+_flag_value(args, i) =
+    i < length(args) ? args[i + 1] : error("$(PROGRAM_FILE): $(args[i]) needs a value")
+
 function parse_args(args)
     manifest = nothing
     output = nothing
@@ -164,23 +134,19 @@ function parse_args(args)
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
-            manifest = args[i + 1]; i += 2
+            manifest = _flag_value(args, i); i += 2
         elseif args[i] == "--output"
-            output = args[i + 1]; i += 2
+            output = _flag_value(args, i); i += 2
         elseif args[i] == "--compiler"
-            compiler = args[i + 1]; i += 2
+            compiler = _flag_value(args, i); i += 2
         else
-            i += 1
+            error("$(PROGRAM_FILE): unrecognised argument $(repr(args[i]))")
         end
     end
     manifest === nothing && error("--manifest is required")
     output === nothing && error("--output is required")
     compiler === nothing && error("--compiler is required")
-    compiler in COMPILER_VOCABULARY ||
-        error(
-        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-            ", got '$compiler'"
-    )
+    check_compiler(compiler, EarthSciAST.COMPILER_VOCABULARY)
     return (manifest, output, compiler)
 end
 
@@ -276,7 +242,7 @@ end
 # against the whole flattened document, where that locality is gone. A key whose
 # `<model>.<key>` form names a real variable of the flattened system is rewritten
 # to it, and one that does not passes through untouched so `esm_problem` reports
-# on it exactly as it would have. This is what `_scope_to_component` does for the
+# on it. This is what `_scope_to_component` does for the
 # library's own inline-test runner, so both paths resolve a test's keys the same
 # way.
 function scope_to_model(overrides, known, mname)
@@ -358,20 +324,6 @@ function solver_alg(doc)
     return OrdinaryDiffEqTsit5.Tsit5()
 end
 
-# The saved point at `t`. `saveat` puts a point ON each requested time, so this
-# is an exact hit up to the solver's own float arithmetic; taking the nearest
-# saved index rather than the dense interpolant reports the value the solver
-# actually saved.
-function time_index(times, t)
-    best = firstindex(times)
-    bestd = abs(times[best] - t)
-    for i in eachindex(times)
-        d = abs(times[i] - t)
-        d < bestd && (bestd = d; best = i)
-    end
-    return best
-end
-
 function fixture_trajectory(fx, base, compiler)
     # `observed` carries one series per name in `trajectory.observed`, and `{}`
     # when the fixture names none — which is every fixture today. A fixture that
@@ -411,7 +363,7 @@ function fixture_trajectory(fx, base, compiler)
 
     state = Dict{String, Any}()
     for t in saveat
-        ti = time_index(sol.t, t)
+        ti = nearest_index(sol.t, t)
         state[tkey(t)] = Dict{String, Float64}(
             name => Float64(sol.u[ti][idx])
                 for (idx, name) in slots
@@ -425,15 +377,16 @@ function fixture_trajectory(fx, base, compiler)
     )
 end
 
-# The refusal's `rule` and `reason`, off the message `_refuse_rule` builds:
-# `compiler=:<name> refuses '<rule>': <reason>`. The shape is the one
-# esm-libraries-spec §2.5.10 fixes and the one this tier reads back, so parsing
-# it is reading a contract rather than scraping a string; a message that does not
-# match is reported whole under an unnamed rule instead of being dropped.
-function refusal_parts(detail::AbstractString)
-    m = match(r"^compiler=:\w+ refuses '(.*?)': (.*)$"s, detail)
-    m === nothing && return ("(unnamed rule)", String(detail))
-    return (String(m.captures[1]), String(m.captures[2]))
+# The refusal's `rule` and `reason`, read off the error (`outcome`): the rule
+# is its `rule` field, the reason its detail after the
+# `compiler=:<name> refuses '<rule>': ` prefix `_refuse_rule` writes
+# (esm-libraries-spec §2.5.10), or the whole detail when it carries no such
+# prefix. A refusal that names no rule is reported under an unnamed rule
+# instead of being dropped.
+function refusal_parts(o)
+    isempty(o.rule) && return ("(unnamed rule)", o.detail)
+    at = findfirst("refuses '$(o.rule)': ", o.detail)
+    return (o.rule, at === nothing ? o.detail : o.detail[(last(at) + 1):end])
 end
 
 function main()
@@ -449,17 +402,16 @@ function main()
         try
             fixtures[id] = fixture_trajectory(fx, base, compiler)
         catch err
-            if err isa SimulateError &&
-                    err.code == ERROR_CODES.COMPILER_UNAVAILABLE
+            o = outcome(err)
+            if o.kind === :unavailable
                 # A fact about the BINDING, not about a document, so it becomes
                 # the whole output and the remaining fixtures are not attempted:
                 # each would raise the identical error, and a per-fixture answer
                 # would read as a coverage backlog instead of a missing compiler.
-                unavailable = err.msg
+                unavailable = o.detail
                 break
-            elseif err isa TreeWalkError &&
-                    err.code == ERROR_CODES.COMPILER_REFUSED_RULE
-                rule, reason = refusal_parts(err.detail)
+            elseif o.code == ERROR_CODES.COMPILER_REFUSED_RULE
+                rule, reason = refusal_parts(o)
                 fixtures[id] = Dict(
                     "status" => "refused",
                     "rule" => rule, "reason" => reason

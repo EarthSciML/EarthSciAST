@@ -12,14 +12,12 @@
 # const-op observeds, not among the setup-geometry arrays a ring built from
 # parameters lands in.
 
-module OverlapGateLiveForcingTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 const EA = EarthSciAST
 
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = _op("index", f, args...)
+_ix(f, args...) = jop("index", f, args...)
 _faq(out, ranges, expr; kw...) = merge(
     Dict{String, Any}(
         "op" => "faq", "semiring" => "sum_product", "args" => Any[],
@@ -31,7 +29,7 @@ _faq(out, ranges, expr; kw...) = merge(
 )
 const GATE = Any[Dict("overlap" => Dict("src_env" => ["src_poly"], "tgt_env" => ["tgt_poly"], "eps" => 1.0e-9))]
 const IJ = ("i" => "src_cells", "j" => "tgt_cells")
-const SLIVER = _op(">", _ix("A_ij", "i", "j"), "atol")
+const SLIVER = jop(">", _ix("A_ij", "i", "j"), "atol")
 
 # The overlap area of `src_poly[i]` and `tgt_poly[j]` (lib/geometry.esm).
 const OVERLAP = Dict{String, Any}(
@@ -48,13 +46,13 @@ const OVERLAP = Dict{String, Any}(
 # (1,1) = 1, (2,1) = 0.5, (3,2) = 0.5; the other three pairs are pruned by the
 # gate. So F_tgt = [(F1 + 0.5 F2) / 1.5, F3].
 function document()
-    ring = _op(
-        "ifelse", _op("<", "k", 2),
-        _op(
-            "+", _op("*", _op("-", "c", 1), "pitch"),
-            _op("ifelse", _op("<", "v", 2), 0.0, _op("ifelse", _op("<", "v", 4), 1.0, 0.0))
+    ring = jop(
+        "ifelse", jop("<", "k", 2),
+        jop(
+            "+", jop("*", jop("-", "c", 1), "pitch"),
+            jop("ifelse", jop("<", "v", 2), 0.0, jop("ifelse", jop("<", "v", 4), 1.0, 0.0))
         ),
-        _op("ifelse", _op("<", "v", 3), 0.0, 1.0)
+        jop("ifelse", jop("<", "v", 3), 0.0, 1.0)
     )
     return Dict{String, Any}(
         "esm" => "2.0.0",
@@ -100,7 +98,7 @@ function document()
                     Dict(
                         "lhs" => "F_tgt", "rhs" => _faq(
                             ("j",), IJ,
-                            _op("/", _op("*", _ix("A_ij", "i", "j"), _ix("F", "i")), _ix("A_j", "j"));
+                            jop("/", jop("*", _ix("A_ij", "i", "j"), _ix("F", "i")), _ix("A_j", "j"));
                             join = GATE, filter = SLIVER
                         )
                     ),
@@ -171,9 +169,9 @@ end
 # The same regrid through `rhs_program` (issue #665). A program has no
 # discrete-cadence cut (its forcing set is an argument of every call), so the
 # gated apply `F_tgt` is not lifted into a per-refresh cache as it is in
-# `esm_problem`. Native used to splice it into its reader, where an aggregate
-# with a join or filter does not lower, and refused the reader's equation. It
-# now fills `F_tgt` into a buffer once per call and the reader gathers it.
+# `esm_problem`. Spliced into its reader, an aggregate with a join or filter
+# does not lower, so native fills `F_tgt` into a buffer once per call and the
+# reader gathers it.
 #
 # Readers: the plain gather, one with a state term, a computed 2-D gather, and
 # an observed between the regrid and a 3-D state with a surface-only `ifelse`
@@ -191,7 +189,7 @@ const _READERS = [
         m["equations"][end] = Dict(
             "lhs" => _d("u"), "rhs" => _faq(
                 ("j",), ("j" => "tgt_cells",),
-                _op("+", _ix("F_tgt", "j"), _op("*", -0.1, _ix("u", "j")))
+                jop("+", _ix("F_tgt", "j"), jop("*", -0.1, _ix("u", "j")))
             )
         )
     end,
@@ -202,7 +200,7 @@ const _READERS = [
         m["equations"][end] = Dict(
             "lhs" => _d("u"), "rhs" => _faq(
                 ("x", "y"), ("x" => "X", "y" => "Y"),
-                _ix("F_tgt", _op("+", _op("*", _op("-", "y", 1), 1), "x"))
+                _ix("F_tgt", jop("+", jop("*", jop("-", "y", 1), 1), "x"))
             )
         )
     end,
@@ -213,14 +211,14 @@ const _READERS = [
         R = ("j" => "tgt_cells", "k" => "lev")
         m["equations"][end] = Dict(
             "lhs" => "Fm", "rhs" => _faq(
-                ("j", "k"), R, _op("ifelse", _op("<", "k", 2), _ix("F_tgt", "j"), 0.0)
+                ("j", "k"), R, jop("ifelse", jop("<", "k", 2), _ix("F_tgt", "j"), 0.0)
             )
         )
         push!(
             m["equations"], Dict(
                 "lhs" => _d("u"), "rhs" => _faq(
                     ("j", "k"), R,
-                    _op("+", _ix("Fm", "j", "k"), _op("*", -0.1, _ix("u", "j", "k")))
+                    jop("+", _ix("Fm", "j", "k"), jop("*", -0.1, _ix("u", "j", "k")))
                 )
             )
         )
@@ -239,14 +237,14 @@ function _reindexed_source()
     m = doc["models"]["M"]
     m["variables"]["F"]["shape"] = ["fr", "fc"]
     m["variables"]["PHI"] = Dict("type" => "unknown", "units" => "1", "shape" => ["src_cells"])
-    row = _op("floor", _op("/", _op("-", "c", 1), 3))
+    row = jop("floor", jop("/", jop("-", "c", 1), 3))
     push!(
         m["equations"], Dict(
             "lhs" => "PHI", "rhs" => _faq(
                 ("c",), ("c" => "src_cells",),
-                _op(
-                    "*", _ix("F", _op("+", row, 1), _op("-", "c", _op("*", 3, row))),
-                    _op("+", 1.0, _op("*", 0.1, _ix("src_poly", "c", 1, 1)))
+                jop(
+                    "*", _ix("F", jop("+", row, 1), jop("-", "c", jop("*", 3, row))),
+                    jop("+", 1.0, jop("*", 0.1, _ix("src_poly", "c", 1, 1)))
                 )
             )
         )
@@ -254,7 +252,7 @@ function _reindexed_source()
     k = findfirst(e -> e["lhs"] == "F_tgt", m["equations"])
     m["equations"][k] = Dict(
         "lhs" => "F_tgt", "rhs" => _faq(
-            ("j",), IJ, _op("/", _op("*", _ix("A_ij", "i", "j"), _ix("PHI", "i")), _ix("A_j", "j"));
+            ("j",), IJ, jop("/", jop("*", _ix("A_ij", "i", "j"), _ix("PHI", "i")), _ix("A_j", "j"));
             join = GATE, filter = SLIVER
         )
     )
@@ -317,7 +315,7 @@ end
         m["equations"][end] = Dict(
             "lhs" => _d("u"), "rhs" => _faq(
                 ("j",), ("j" => "tgt_cells",),
-                _op("+", _ix("F_tgt", "j"), _ix("u", _op("ifelse", _op(">", _ix("F_tgt", 1), 0.0), 1, 2)))
+                jop("+", _ix("F_tgt", "j"), _ix("u", jop("ifelse", jop(">", _ix("F_tgt", 1), 0.0), 1, 2)))
             )
         )
     end
@@ -344,14 +342,14 @@ function _with_apply(term, filter = SLIVER)
     eqs[k] = Dict("lhs" => "F_tgt", "rhs" => _faq(("j",), IJ, term; join = GATE, filter = filter))
     return doc
 end
-const _APPLY = _op("/", _op("*", _ix("A_ij", "i", "j"), _ix("F", "i")), _ix("A_j", "j"))
+const _APPLY = jop("/", jop("*", _ix("A_ij", "i", "j"), _ix("F", "i")), _ix("A_j", "j"))
 
 @testset "overlap gate: live reads around the gated apply agree with the interpreter" begin
     docs = [
-        "live read in the filter" => _with_apply(_APPLY, _op("and", SLIVER, _op(">", _ix("F", "i"), -10.0))),
-        "constant and loop-index reads" => _with_apply(_op("+", _APPLY, _op("*", 0.25, _ix("F", 2)))),
+        "live read in the filter" => _with_apply(_APPLY, jop("and", SLIVER, jop(">", _ix("F", "i"), -10.0))),
+        "constant and loop-index reads" => _with_apply(jop("+", _APPLY, jop("*", 0.25, _ix("F", 2)))),
         "computed subscript" => _with_apply(
-            _op("/", _op("*", _ix("A_ij", "i", "j"), _ix("F", _op("-", 4, "i"))), _ix("A_j", "j"))
+            jop("/", jop("*", _ix("A_ij", "i", "j"), _ix("F", jop("-", 4, "i"))), _ix("A_j", "j"))
         ),
     ]
     for (label, doc) in docs, F in ([1.0, 2.0, 3.0], [2.0, -40.0, 6.0])
@@ -368,7 +366,7 @@ const _APPLY = _op("/", _op("*", _ix("A_ij", "i", "j"), _ix("F", "i")), _ix("A_j
 
     # A loop-index read past the end of the buffer is the forcing gather's
     # own error under both compilers.
-    doc = _with_apply(_op("/", _op("*", _ix("A_ij", "i", "j"), _ix("F", _op("+", "i", 1))), _ix("A_j", "j")))
+    doc = _with_apply(jop("/", jop("*", _ix("A_ij", "i", "j"), _ix("F", jop("+", "i", 1))), _ix("A_j", "j")))
     for c in (:native, :interpreter)
         err = try
             rhs(EA.esm_problem(doc, (0.0, 1.0); compiler = c, param_arrays = Dict{String, Any}("M.F" => [1.0, 2.0, 3.0])))
@@ -413,7 +411,6 @@ end
         ctr[] = c
         @test EA._index_int(opn(:floor, q)) == floor(Int, (c - 1) / 2)
         @test EA._index_int(opn(:ceil, q)) == ceil(Int, (c - 1) / 2)
-        @test EA._index_int(opn(:mod, sub, lit(3))) == mod(c, 3)
     end
     # The same gather read by the walk (`_eval_node`) and by the traced
     # subscript evaluator (`_index_int`) at counters where flooring and
@@ -467,7 +464,7 @@ end
     for sub in (
             V("k"), O("-", I(4), V("k")), O("+", O("*", I(2), V("k")), I(-1)), O("-", V(lv), N(1.0)),
             O("+", O("floor", O("/", O("-", V("k"), I(1)), I(2))), I(1)),
-            O("ceil", O("/", V(lv), I(2))), O("+", O("mod", V("k"), I(3)), I(1)),
+            O("ceil", O("/", V(lv), I(2))),
         )
         r = res(sub)
         @test r isa EA.OpExpr && r.value isa EA._LiveGatherRef
@@ -475,6 +472,8 @@ end
     for sub in (
             O("+", V("k"), V("m")), O("+", V("k"), V("off")), O("+", V("k"), V("t")),
             O("index", V("conn"), V("k")), O("/", V("k"), I(1)),
+            # `mod` is no esm operator; the scalar compiler would refuse it.
+            O("+", O("mod", V("k"), I(3)), I(1)),
             O("floor", O("/", V("k"), V("m"))), O("floor", V("t")),
             # A quotient anywhere but directly under `floor`/`ceil`, and a
             # non-integer literal: the traced evaluator works in integers and
@@ -574,7 +573,7 @@ end
 end
 
 # A value-invention producer gated by the single-name ring form, which its
-# resolver used to refuse as "must be a 1-D buffer". Source rings are the unit
+# resolver must not refuse as "must be a 1-D buffer". Source rings are the unit
 # squares at x ∈ [0,1], [1.5,2.5], [3,4]; target cells are [0,2] and [5,6]
 # (× [0,1]). Only cell 1 overlaps a source, and with no narrow phase the gate
 # alone decides, so the producer's members are exactly [1].
@@ -649,5 +648,3 @@ end
     @test occursin("E_TREEWALK_VI_JOIN", sprint(showerror, err))
     @test occursin("'ring' is not a const array", sprint(showerror, err))
 end
-
-end # module

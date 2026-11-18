@@ -1,10 +1,10 @@
 # Cross-binding conformance tests for the four inverse-trigonometric scalar
-# leaf ops acos / asin / atan / atan2 (bead ess-9x1).
+# leaf ops acos / asin / atan / atan2.
 #
 # Loads the shared fixture tests/valid/scalar_leaves/inverse_trig_leaves.esm —
 # which carries an inline `tests` block checked by Python (simulate) and Rust
-# (simulate) against the SAME expected values — and evaluates it through
-# `build_evaluator`. Julia, Python, and Rust all pin the same constants, so
+# (simulate) against the SAME expected values — and evaluates it through the
+# internal build entry. Julia, Python, and Rust all pin the same constants, so
 # agreement here is the cross-binding inverse-trig-leaf proof.
 #
 # Each variable's RHS is a CONSTANT inverse-trig expression integrated from a
@@ -17,8 +17,8 @@
 # the 2-arg quadrant resolution rather than a bare atan of a ratio.
 #
 # These leaves back the spherical-geometry FAQs (great-circle arc R·acos,
-# lat/lon asin/atan2) consumed by M4 polygon_area (ess-my4.4.3) and the ESD-DUO
-# geometry beads.
+# lat/lon asin/atan2) consumed by polygon_area and the spherical geometry
+# templates.
 
 using Test
 using EarthSciAST
@@ -29,7 +29,7 @@ const _INVTRIG_REPO_ROOT = TESTUTILS_REPO_ROOT
 
 # Evaluate the shared scalar-leaf fixture and return (du, vmap), seeding every
 # state element to zero (the constant-RHS worked examples start from rest).
-# Scalar state variables key into `vmap` by their bare name (no model prefix).
+# State variables key into `vmap` by their flattened name (`<model>.<name>`).
 function _eval_invtrig_fixture(
         filename::AbstractString, model_name::AbstractString,
         elements::Vector{<:AbstractString}
@@ -37,17 +37,14 @@ function _eval_invtrig_fixture(
     path = joinpath(_INVTRIG_REPO_ROOT, "tests", "valid", "scalar_leaves", filename)
     @test isfile(path)
     file = EarthSciAST.load_path(path)
-    ics = Dict(e => 0.0 for e in elements)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-        file; model_name = model_name,
-        initial_conditions = ics
-    )
+    ics = Dict("$model_name.$e" => 0.0 for e in elements)
+    f!, u0, p, _, vmap = EarthSciAST.Internal.build(file; initial_conditions = ics)
     du = similar(u0)
     f!(du, u0, p, 0.0)
-    return du, vmap
+    return du, Dict(k[(length(model_name) + 2):end] => v for (k, v) in vmap)
 end
 
-@testset "inverse-trig scalar-leaf conformance (ess-9x1)" begin
+@testset "inverse-trig scalar-leaf conformance" begin
     du, vmap = _eval_invtrig_fixture(
         "inverse_trig_leaves.esm", "InverseTrigLeaves",
         ["asin_v", "acos_v", "atan_v", "atan2_v"]
@@ -59,11 +56,11 @@ end
 end
 
 # Hyperbolic family sinh / cosh / tanh and inverses asinh / acosh / atanh
-# (bead ess-v9a.1). Same constant-RHS-from-zero worked-example construction as
+# Same constant-RHS-from-zero worked-example construction as
 # the inverse-trig set above, so each du element IS the op's value at t=1; the
 # asserted constants mirror the shared fixture's inline `tests[].expected`,
 # which Python (simulate) and Rust (simulate) also check.
-@testset "hyperbolic-trig scalar-leaf conformance (ess-v9a.1)" begin
+@testset "hyperbolic-trig scalar-leaf conformance" begin
     du, vmap = _eval_invtrig_fixture(
         "hyperbolic_trig_leaves.esm", "HyperbolicTrigLeaves",
         ["sinh_v", "cosh_v", "tanh_v", "asinh_v", "acosh_v", "atanh_v"]

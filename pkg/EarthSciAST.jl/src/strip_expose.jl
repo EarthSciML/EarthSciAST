@@ -10,28 +10,13 @@
 
 const STRIP_CLASSES = ("algebraic", "continuous_events", "discrete_events", "parameter_updates")
 
-"""
-    StrippedConstructs
-
-What `esm_problem(…; strip)` removed (API_SPEC §5.8, "The stripped object"):
-the events, the stripped parameter updates, the residuals of the implicit
-equations, and the `z` layout with its starting values. Read it with
-[`stripped`](@ref); [`canonical_json`](@ref) gives its canonical JSON.
-"""
-struct StrippedConstructs
-    strip::Vector{String}
-    events::Vector{Any}
-    parameter_updates::Vector{Any}
-    z_layout::Vector{Any}
-    z0::Vector{Union{Float64, Nothing}}
-    residuals::Vector{Any}
-end
-
+# One stripped event: the namespaced typed event (`_event_body` writes its JSON)
+# and the expressions a kernel reads off it.
 struct _StrippedEvent
     id::String
     origin::TermOrigin
     kind::String
-    body::Dict{String, Any}
+    event::Union{ContinuousEvent, DiscreteEvent, CouplingEvent}
     conditions::Vector{ASTExpr}
     trigger::Union{ASTExpr, Nothing}
     affects::Vector{AffectEquation}
@@ -60,8 +45,26 @@ struct _ZBlock
     sets::Vector{String}
 end
 
+"""
+    StrippedConstructs
+
+What `esm_problem(…; strip)` removed (API_SPEC §5.8, "The stripped object"):
+the events, the stripped parameter updates, the residuals of the implicit
+equations, and the `z` layout with its starting values. Read it with
+[`stripped`](@ref); [`canonical_json`](@ref) gives its canonical JSON.
+"""
+struct StrippedConstructs
+    strip::Vector{String}
+    events::Vector{_StrippedEvent}
+    parameter_updates::Vector{_StrippedUpdate}
+    z_layout::Vector{_ZBlock}
+    z0::Vector{Union{Float64, Nothing}}
+    residuals::Vector{_StrippedResidual}
+end
+
 _empty_stripped(classes = String[]) = StrippedConstructs(
-    classes, Any[], Any[], Any[], Union{Float64, Nothing}[], Any[]
+    classes, _StrippedEvent[], _StrippedUpdate[], _ZBlock[], Union{Float64, Nothing}[],
+    _StrippedResidual[]
 )
 
 Base.isempty(s::StrippedConstructs) =
@@ -133,7 +136,7 @@ _origin_json(o::TermOrigin) = o.component !== nothing ?
 function _stripped_json(s::StrippedConstructs)
     events = Any[]
     for e in s.events
-        d = copy(e.body)
+        d = _event_body(e.event)
         d["id"] = e.id
         d["origin"] = _origin_json(e.origin)
         d["kind"] = e.kind
@@ -177,22 +180,16 @@ across Julia, Rust and Python.
 """
 canonical_json(s::StrippedConstructs) = (io = IOBuffer(); _write_canonical(io, _stripped_json(s)); String(take!(io)))
 
+# Numbers, booleans and strings print as the package's canonical value
+# emitter prints them (`_emit_canonical_value`), so an integral float has one
+# cut-off for printing as an integer token everywhere.
 function _write_canonical(io::IO, v)
     if v === nothing
         print(io, "null")
-    elseif v isa Bool
-        print(io, v ? "true" : "false")
-    elseif v isa Integer
-        print(io, string(v))
+    elseif v isa Union{Bool, Integer, AbstractFloat, AbstractString}
+        print(io, _emit_canonical_value(v))
     elseif v isa Real
-        x = Float64(v)
-        if isinteger(x) && abs(x) < 9.2e18
-            print(io, string(Int64(x)))
-        else
-            print(io, format_canonical_float(x))
-        end
-    elseif v isa AbstractString
-        print(io, _json_string(String(v)))
+        print(io, _emit_canonical_value(Float64(v)))
     elseif v isa Symbol
         print(io, _json_string(String(v)))
     elseif v isa AbstractDict
@@ -224,7 +221,7 @@ end
 function _strippable_implicit(lhs::ASTExpr)
     first(_lhs_role(lhs)) === :implicit || return false
     head = _lhs_unwrap(lhs)
-    return !(head isa OpExpr && head.op in ("ic", "D", "grad", "div", "laplacian"))
+    return !(head isa OpExpr && _is_calculus_op(head.op))
 end
 
 function _strips_update(rules, classes::Vector{String})
@@ -258,7 +255,9 @@ function _event_body(ev)
         d["conditions"] = Any[serialize_expression(c) for c in ev.conditions]
     end
     if ev isa DiscreteEvent || (ev isa CouplingEvent && ev.trigger !== nothing)
-        d["trigger"] = serialize_trigger(ev.trigger)
+        trig = serialize_trigger(ev.trigger)
+        get(trig, "initial_offset", nothing) == 0 && delete!(trig, "initial_offset")
+        d["trigger"] = trig
     end
     d["affects"] = Any[_affect_json(a) for a in ev.affects]
     if !(ev isa DiscreteEvent) && ev.affect_neg !== nothing
@@ -272,38 +271,25 @@ function _event_body(ev)
     return d
 end
 
-function _events_of_model!(out, model::Model, prefix::String)
-    local_names = Set{String}(keys(model.variables))
-    for (k, _) in model.subsystems
-        push!(local_names, k)
-    end
+# A component's own events, namespaced as flatten namespaces them, appended to
+# `out` as `(prefix, kind, event)`, continuous before discrete.
+function _component_events!(out, comp, prefix::String, local_names)
     ns(e) = namespace_expr(e, prefix, local_names)
     cv, dv = ContinuousEvent[], DiscreteEvent[]
-    _collect_events!(cv, dv, model.continuous_events, model.discrete_events, prefix, ns)
+    _collect_events!(cv, dv, comp.continuous_events, comp.discrete_events, prefix, ns)
     foreach(e -> push!(out, (prefix, "continuous", e)), cv)
     foreach(e -> push!(out, (prefix, "discrete", e)), dv)
-    for (k, sub) in model.subsystems
-        sub isa Model && _events_of_model!(out, sub, "$prefix.$k")
-    end
     return out
 end
 
-function _events_of_reaction_system!(out, rs::ReactionSystem, prefix::String)
-    local_names = Set{String}()
-    foreach(sp -> push!(local_names, sp.name), rs.species)
-    foreach(p -> push!(local_names, p.name), rs.parameters)
-    for (k, _) in rs.subsystems
-        push!(local_names, k)
-    end
-    ns(e) = namespace_expr(e, prefix, local_names)
-    cv, dv = ContinuousEvent[], DiscreteEvent[]
-    _collect_events!(cv, dv, rs.continuous_events, rs.discrete_events, prefix, ns)
-    foreach(e -> push!(out, (prefix, "continuous", e)), cv)
-    foreach(e -> push!(out, (prefix, "discrete", e)), dv)
-    for (k, sub) in rs.subsystems
-        sub isa ReactionSystem && _events_of_reaction_system!(out, sub, "$prefix.$k")
-    end
-    return out
+# The event lists of a component with the stripped event classes emptied.
+function _kept_events(comp, classes)
+    return (
+        continuous_events = "continuous_events" in classes ?
+            ContinuousEvent[] : comp.continuous_events,
+        discrete_events = "discrete_events" in classes ?
+            DiscreteEvent[] : comp.discrete_events,
+    )
 end
 
 _event_id(prefix, name, kind, j) = name === nothing ? "$prefix.$(kind)_event[$j]" : "$prefix.$name"
@@ -313,43 +299,88 @@ function _stripped_event(prefix, origin, kind, j, ev)
     conds = (hasproperty(ev, :conditions) && ev.conditions !== nothing) ? ASTExpr[c for c in ev.conditions] : ASTExpr[]
     neg = hasproperty(ev, :affect_neg) ? ev.affect_neg : nothing
     return _StrippedEvent(
-        _event_id(prefix, ev.name, kind, j), origin, kind, _event_body(ev),
+        _event_id(prefix, ev.name, kind, j), origin, kind, ev,
         conds, trig, AffectEquation[a for a in ev.affects], neg
     )
 end
 
-# The parameters of `model` (and its subsystems) whose update `classes`
-# strips, as flattened names.
-function _stripped_update_names!(out, model::Model, prefix, classes)
+# One visit of a model and its subsystems: its events are collected into
+# `events` (`_component_events!`), the parameters whose update `classes` strips
+# into `updates` (flattened names), and the model is returned with both
+# removed, and with its implicit algebraic equations removed when `classes`
+# takes `algebraic`. An unresolved subsystem reference is kept as it is.
+function _strip_model(model::Model, prefix::String, classes, events, updates)
+    local_names = Set{String}(keys(model.variables))
+    union!(local_names, keys(model.subsystems))
+    _component_events!(events, model, prefix, local_names)
+    variables = OrderedDict{String, ModelVariable}()
     for (n, v) in model.variables
-        v.type == ParameterVariable && v.update !== nothing &&
-            _strips_update(v.update, classes) && push!(out, "$prefix.$n")
+        if v.type == ParameterVariable && v.update !== nothing && _strips_update(v.update, classes)
+            push!(updates, "$prefix.$n")
+            v = reconstruct(v; update = nothing)
+        end
+        variables[n] = v
     end
-    for (k, sub) in model.subsystems
-        sub isa Model && _stripped_update_names!(out, sub, "$prefix.$k", classes)
+    subsystems = OrderedDict{String, SubsystemNode}(
+        k => (sub isa Model ? _strip_model(sub, "$prefix.$k", classes, events, updates) : sub)
+            for (k, sub) in model.subsystems
+    )
+    equations = "algebraic" in classes ?
+        filter(eq -> !_strippable_implicit(eq.lhs), model.equations) : model.equations
+    return reconstruct(
+        model; variables, equations, subsystems, _kept_events(model, classes)...
+    )
+end
+
+# A reaction system and its subsystems, as `_strip_model` visits a model. A
+# parameter update is stripped from a top-level reaction system's own
+# parameters only.
+function _strip_reaction_system(
+        rs::ReactionSystem, prefix::String, classes, events, updates; top::Bool = true
+    )
+    local_names = Set{String}()
+    foreach(sp -> push!(local_names, sp.name), rs.species)
+    foreach(p -> push!(local_names, p.name), rs.parameters)
+    union!(local_names, keys(rs.subsystems))
+    _component_events!(events, rs, prefix, local_names)
+    parameters = Parameter[]
+    for p in rs.parameters
+        if top && p.update !== nothing && _strips_update(p.update, classes)
+            push!(updates, "$prefix.$(p.name)")
+            p = reconstruct(p; update = nothing)
+        end
+        push!(parameters, p)
     end
-    return out
+    subsystems = OrderedDict{String, ReactionSystem}(
+        k => _strip_reaction_system(sub, "$prefix.$k", classes, events, updates; top = false)
+            for (k, sub) in rs.subsystems
+    )
+    return reconstruct(rs; parameters, subsystems, _kept_events(rs, classes)...)
 end
 
 """
-    _strip_document(file::EsmFile, classes) -> (doc::Dict, constructs::StrippedConstructs)
+    _strip_document(file::EsmFile, classes) -> (stripped::EsmFile, constructs::StrippedConstructs)
 
-The run document with `classes`' constructs removed, and what was removed,
-read off the flattened original (API_SPEC §5.8). Coupling-level events stay in
-the document: no build lowers one, and keeping them keeps the coupling indices
-of the stripped document's provenance the original's.
+`file` with `classes`' constructs removed, and what was removed, read off the
+flattened original (API_SPEC §5.8). One walk of the component tree decides both
+what is reported and what is removed. Coupling-level events stay in the
+document: no build lowers one, and keeping them keeps the coupling indices of
+the stripped document's provenance the original's.
 """
 function _strip_document(file::EsmFile, classes::Vector{String})
     flat = flatten(file)
     s = _empty_stripped(classes)
-    # ---- events ----
     found = Any[]
-    for (name, m) in something(file.models, OrderedDict{String, Model}())
-        _events_of_model!(found, m, name)
-    end
-    for (name, rs) in something(file.reaction_systems, OrderedDict{String, ReactionSystem}())
-        _events_of_reaction_system!(found, rs, name)
-    end
+    names = String[]
+    models = file.models === nothing ? nothing : OrderedDict{String, Model}(
+            name => _strip_model(m, name, classes, found, names) for (name, m) in file.models
+        )
+    rsystems = file.reaction_systems === nothing ? nothing :
+        OrderedDict{String, ReactionSystem}(
+            name => _strip_reaction_system(rs, name, classes, found, names)
+            for (name, rs) in file.reaction_systems
+        )
+    # ---- events ----
     counters = Dict{Tuple{String, String}, Int}()
     for (prefix, kind, ev) in found
         _strips_kind(kind, classes) || continue
@@ -365,16 +396,6 @@ function _strip_document(file::EsmFile, classes::Vector{String})
         push!(s.events, _stripped_event(prefix, TermOrigin(nothing, k - 1), kind, j, entry))
     end
     # ---- parameter updates ----
-    names = String[]
-    for (name, m) in something(file.models, OrderedDict{String, Model}())
-        _stripped_update_names!(names, m, name, classes)
-    end
-    for (rname, rs) in something(file.reaction_systems, OrderedDict{String, ReactionSystem}())
-        for p in rs.parameters
-            p.update !== nothing && _strips_update(p.update, classes) &&
-                push!(names, "$rname.$(p.name)")
-        end
-    end
     nameset = Set(names)
     for (name, v) in flat.parameters
         name in nameset || continue
@@ -388,54 +409,11 @@ function _strip_document(file::EsmFile, classes::Vector{String})
             )
         )
     end
-    # ---- the document ----
-    doc = serialize_esm_file(file)
-    ev_classes = filter(c -> c in ("continuous_events", "discrete_events"), classes)
-    for key in ("models", "reaction_systems")
-        comps = get(doc, key, nothing)
-        comps isa AbstractDict || continue
-        for (cname, comp) in comps
-            comp isa AbstractDict || continue
-            _strip_component_dict!(comp, String(cname), ev_classes, nameset, "algebraic" in classes)
-        end
-    end
     # ---- algebraic ----
     if "algebraic" in classes && any(eq -> _strippable_implicit(eq.lhs), flat.equations)
         _collect_algebraic!(s, flat)
     end
-    return doc, s
-end
-
-function _strip_component_dict!(comp::AbstractDict, prefix, ev_classes, params, algebraic)
-    for c in ev_classes
-        delete!(comp, c)
-    end
-    vars = get(comp, "variables", nothing)
-    if vars isa AbstractDict
-        for (n, v) in vars
-            "$prefix.$n" in params && v isa AbstractDict && delete!(v, "update")
-        end
-    end
-    ps = get(comp, "parameters", nothing)
-    if ps isa AbstractDict
-        for (n, v) in ps
-            "$prefix.$n" in params && v isa AbstractDict && delete!(v, "update")
-        end
-    end
-    if algebraic && haskey(comp, "equations") && comp["equations"] isa AbstractVector
-        comp["equations"] = Any[
-            eq for eq in comp["equations"]
-                if !(eq isa AbstractDict && _strippable_implicit(expression_from_json(eq["lhs"])))
-        ]
-    end
-    subs = get(comp, "subsystems", nothing)
-    if subs isa AbstractDict
-        for (k, sub) in subs
-            sub isa AbstractDict && !haskey(sub, "ref") &&
-                _strip_component_dict!(sub, "$prefix.$k", ev_classes, params, algebraic)
-        end
-    end
-    return comp
+    return reconstruct(file; models = models, reaction_systems = rsystems), s
 end
 
 function _set_sizes(sets, flat::FlattenedSystem)
@@ -557,7 +535,8 @@ function _z_starting_values(flat::FlattenedSystem, z, params, t0)
                 [collect(Int, Tuple(c)) for c in vec(collect(CartesianIndices(Tuple(b.shape))))]
             vals = try
                 evaluate_cellwise(rhs, cells; params = params, t = t0)
-            catch
+            catch err
+                err isa EarthSciASTError || rethrow()
                 nothing
             end
         end
@@ -657,6 +636,9 @@ struct KernelBlock
     shape::Vector{Int}
 end
 
+_kernel_blocks(blocks::Vector{StateBlock}) =
+    KernelBlock[KernelBlock(b.name, b.offset, b.shape) for b in blocks]
+
 """
     Kernel
 
@@ -710,9 +692,7 @@ state_layout(ks::KernelSet) = state_layout(ks.rhs)
 The `z` layout every kernel of `ks` reads (empty when nothing algebraic was
 stripped).
 """
-z_layout(ks::KernelSet) = StateBlock[
-    StateBlock(b.name, b.base, Int[length(r) for r in b.storage]) for b in ks.rhs.layout.aux
-]
+z_layout(ks::KernelSet) = _state_blocks(ks.rhs.layout.aux)
 parameters(ks::KernelSet) = parameters(ks.rhs)
 parameter_vector(ks::KernelSet, overrides::AbstractDict = Dict{String, Float64}()) =
     parameter_vector(ks.rhs, overrides)
@@ -797,13 +777,14 @@ end
 # `e` with every child expression mapped by `f`.
 _map_opexpr(e::OpExpr, f) = map_children(f, e)
 
+# Every name `e` reads outside a `Pre`, in every expression-bearing field (a
+# `faq` filter, a `makearray` value, an integral bound included).
 function _bare_reads!(out::Set{String}, e::ASTExpr)
     if e isa VarExpr
         push!(out, e.name)
     elseif e isa OpExpr
         e.op == "Pre" && return out
-        foreach(a -> _bare_reads!(out, a), e.args)
-        e.expr_body === nothing || _bare_reads!(out, e.expr_body)
+        foreach_child(c -> _bare_reads!(out, c), e)
     end
     return out
 end
@@ -845,16 +826,16 @@ function compile_kernels(prob::EsmProblem, specs)
             ERROR_CODES.COMPILER_UNAVAILABLE
         )
     )
-    seed = task_local_storage(() -> _program_seed(prob), :_esm_strip_taken, stripped(prob).strip)
-    seed === nothing && throw(SimulateError("compile_kernels: this Problem carries no program seed"))
-    flat = seed.flat
+    seed = prob.build.seed
+    seed === nothing && throw(SimulateError("compile_kernels: this Problem carries no program seed", ERROR_CODES.COMPILER_UNAVAILABLE))
+    flat = seed.prep.flat
     s = stripped(prob)
     znames = String[b.name for b in s.z_layout]
     all_states = Set{String}(keys(flat.state_variables))
     unames = Set{String}(n for n in all_states if !(n in znames))
-    rhsprog = _whole_program(seed, flat, unames, all_states, :all, :all)
+    rhsprog = _whole_program(seed, flat, unames, all_states)
     ulay = state_layout(rhsprog)
-    zlay = StateBlock[StateBlock(b.name, b.base, Int[length(r) for r in b.storage]) for b in rhsprog.layout.aux]
+    zlay = _state_blocks(rhsprog.layout.aux)
     kernels = OrderedDict{String, Kernel}()
     for spec in _normalize_specs(specs)
         name, dtp, outs = _parse_kernel_spec(spec)
@@ -880,153 +861,196 @@ function _rhs_kernel(rhs::RhsProgram, ulay, zlay)
     np = length(parameters(rhs))
     return Kernel(
         "rhs", rhs, true, false, aux_plan, collect(1:np), NTuple{3, Int}[],
-        KernelBlock[KernelBlock(b.name, b.offset, b.shape) for b in ulay], n_u, n_z, np, n_u
+        _kernel_blocks(ulay), n_u, n_z, np, n_u
     )
 end
 
-function _value_or_map_kernel(kname, dtp, outs, seed, flat, rhs, s, ulay, zlay)
-    unresolved(what) = _kernel_error("kernel '$kname': $what does not resolve")
-    kinds = ("observed", "expr", "residual", "condition", "update", "affect", "assign")
-    okind(o) = (
-        o isa AbstractDict || throw(_kernel_error("kernel '$kname': an output is not an object"));
-        k = findfirst(x -> haskey(o, x), kinds);
-        k === nothing && throw(_kernel_error("kernel '$kname': an output names no output kind"));
-        kinds[k]
-    )
-    nmap = count(o -> okind(o) in ("affect", "assign"), outs)
-    (nmap > 0 && nmap != length(outs)) && throw(
-        _kernel_error(
-            "kernel '$kname' mixes map outputs (assign, affect) with value outputs; a map " *
-                "kernel's output is a whole state"
+# One output of a value or map kernel: the synthetic held state it becomes, the
+# index sets it ranges over, its expression, its label in the kernel's layout,
+# and the `u` state a map output assigns (`nothing` for a value output).
+struct _KernelOutput
+    name::String
+    sets::Vector{String}
+    expr::ASTExpr
+    label::String
+    target::Union{Nothing, String}
+end
+
+# What resolving a kernel's outputs reads: the kernel's name, the flattened
+# system, what `strip` removed, and the names of `u`'s unknowns.
+struct _KernelCx
+    kname::String
+    flat::FlattenedSystem
+    stripped::StrippedConstructs
+    unames::Set{String}
+end
+
+const _KERNEL_OUTPUT_KINDS = ("observed", "expr", "residual", "condition", "update", "affect", "assign")
+
+_kunresolved(cx::_KernelCx, what) = _kernel_error("kernel '$(cx.kname)': $what does not resolve")
+
+function _koutput_kind(cx::_KernelCx, o)
+    o isa AbstractDict || throw(_kernel_error("kernel '$(cx.kname)': an output is not an object"))
+    k = findfirst(x -> haskey(o, x), _KERNEL_OUTPUT_KINDS)
+    k === nothing && throw(_kernel_error("kernel '$(cx.kname)': an output names no output kind"))
+    return _KERNEL_OUTPUT_KINDS[k]
+end
+
+# Every name `e` reads resolves: time, a declared variable, or an index set.
+function _kresolve_names(cx::_KernelCx, e, what)
+    for n in free_variables(e)
+        (n == _indep_var(cx.flat) || _declared_sets(n, cx.flat) !== nothing || haskey(cx.flat.index_sets, n)) &&
+            continue
+        throw(_kunresolved(cx, "$what reads '$n', which"))
+    end
+    return nothing
+end
+
+function _ksets_of(cx::_KernelCx, e, what)
+    try
+        return _expr_sets(e, cx.flat)
+    catch err
+        err isa ArgumentError || rethrow()
+        throw(_kernel_error("kernel '$(cx.kname)': the shape of $what cannot be decided: $(err.msg)"))
+    end
+end
+
+# A spec's `index` is a 1-based integer; anything else is the spec's error, not
+# a bounds error out of the lookup it feeds.
+function _kspec_index(cx::_KernelCx, o, k, default)
+    i = get(o, "index", default)
+    (i isa Integer && !(i isa Bool) && i >= 1) ||
+        throw(_kernel_error("kernel '$(cx.kname)': output $k `index` is a 1-based integer"))
+    return Int(i)
+end
+
+function _kevent(cx::_KernelCx, id)
+    i = findfirst(e -> e.id == id, cx.stripped.events)
+    i === nothing && throw(_kunresolved(cx, "event '$id'"))
+    return cx.stripped.events[i]
+end
+
+# The outputs output `o` (the `k`th of its spec) contributes, appended to
+# `outs`, one method per output kind.
+_kernel_output!(outs, cx, o, k) =
+    _kernel_output!(Val(Symbol(_koutput_kind(cx, o))), outs, cx, o, k, get(o, "label", nothing))
+
+function _kadd!(outs, sets, e, label, target)
+    push!(outs, _KernelOutput("__kernel_out_$(length(outs) + 1)", sets, e, String(label), target))
+    return outs
+end
+
+function _kernel_output!(::Val{:observed}, outs, cx, o, k, label)
+    n = String(o["observed"])
+    sets = _declared_sets(n, cx.flat)
+    sets === nothing && throw(_kunresolved(cx, "observed '$n'"))
+    return _kadd!(outs, sets, VarExpr(n), something(label, n), nothing)
+end
+
+function _kernel_output!(::Val{:expr}, outs, cx, o, k, label)
+    e = _strip_pre(expression_from_json(o["expr"]))
+    _kresolve_names(cx, e, "output $k")
+    return _kadd!(outs, _ksets_of(cx, e, "output $k"), e, something(label, "out[$k]"), nothing)
+end
+
+function _kernel_output!(::Val{:residual}, outs, cx, o, k, label)
+    id = String(o["residual"])
+    i = findfirst(r -> r.id == id, cx.stripped.residuals)
+    i === nothing && throw(_kunresolved(cx, "residual '$id'"))
+    r = cx.stripped.residuals[i]
+    return _kadd!(outs, r.sets, r.expr, something(label, id), nothing)
+end
+
+function _kernel_output!(::Val{:condition}, outs, cx, o, k, label)
+    id = String(o["condition"])
+    idx = _kspec_index(cx, o, k, 1)
+    ev = _kevent(cx, id)
+    e = if ev.kind == "continuous"
+        idx <= length(ev.conditions) || throw(_kunresolved(cx, "condition $idx of event '$id'"))
+        ev.conditions[idx]
+    else
+        ev.trigger === nothing && throw(
+            _kunresolved(cx, "the condition of event '$id' (its trigger is not a `condition`), which")
         )
+        idx == 1 || throw(_kunresolved(cx, "condition $idx of event '$id'"))
+        OpExpr("ifelse", ASTExpr[ev.trigger, NumExpr(1.0), NumExpr(0.0)])
+    end
+    e = _strip_pre(e)
+    return _kadd!(
+        outs, _ksets_of(cx, e, "the condition of '$id'"), e,
+        something(label, "$id.condition[$idx]"), nothing
     )
-    ismap = nmap > 0
-    for p in dtp
-        v = get(flat.parameters, p, nothing)
-        (v !== nothing && (v.shape === nothing || isempty(v.shape))) || throw(
-            _kernel_error("kernel '$kname': dt_params entry '$p' is not a scalar parameter")
+end
+
+function _kernel_output!(::Val{:update}, outs, cx, o, k, label)
+    pname = String(o["update"])
+    i = findfirst(u -> u.parameter == pname, cx.stripped.parameter_updates)
+    i === nothing && throw(_kunresolved(cx, "parameter update '$pname'"))
+    u = cx.stripped.parameter_updates[i]
+    idx = haskey(o, "index") ? _kspec_index(cx, o, k, 1) :
+        length(u.values) == 1 ? 1 :
+        throw(
+            _kernel_error(
+                "kernel '$(cx.kname)': parameter '$pname' has $(length(u.values)) update " *
+                "rules; name one with `index`"
+            )
         )
-    end
-    unames = Set{String}(b.name for b in ulay)
-    function resolve_names(e, what)
-        for n in free_variables(e)
-            (n == "t" || _declared_sets(n, flat) !== nothing || haskey(flat.index_sets, n)) && continue
-            throw(unresolved("$what reads '$n', which"))
-        end
-        return
-    end
-    function sets_of(e, what)
-        try
-            return _expr_sets(e, flat)
-        catch err
-            err isa ArgumentError || rethrow()
-            throw(_kernel_error("kernel '$kname': the shape of $what cannot be decided: $(err.msg)"))
-        end
-    end
-    # A spec's `index` is a 1-based integer; anything else is the spec's error,
-    # not a bounds error out of the lookup it feeds.
-    function spec_index(o, k, default)
-        i = get(o, "index", default)
-        (i isa Integer && !(i isa Bool) && i >= 1) ||
-            throw(_kernel_error("kernel '$kname': output $k `index` is a 1-based integer"))
-        return Int(i)
-    end
-    synth = Any[]   # (name, sets, expr, label, target)
-    add!(sets, e, label, target) = push!(synth, ("__kernel_out_$(length(synth) + 1)", sets, e, label, target))
-    function event(id)
-        i = findfirst(e -> e.id == id, s.events)
-        i === nothing && throw(unresolved("event '$id'"))
-        return s.events[i]
-    end
-    for (k, o) in enumerate(outs)
-        label = get(o, "label", nothing)
-        kind = okind(o)
-        if kind == "observed"
-            n = String(o["observed"])
-            sets = _declared_sets(n, flat)
-            sets === nothing && throw(unresolved("observed '$n'"))
-            add!(sets, VarExpr(n), something(label, n), nothing)
-        elseif kind == "expr"
-            e = _strip_pre(expression_from_json(o["expr"]))
-            resolve_names(e, "output $k")
-            add!(sets_of(e, "output $k"), e, something(label, "out[$k]"), nothing)
-        elseif kind == "residual"
-            id = String(o["residual"])
-            i = findfirst(r -> r.id == id, s.residuals)
-            i === nothing && throw(unresolved("residual '$id'"))
-            r = s.residuals[i]
-            add!(r.sets, r.expr, something(label, id), nothing)
-        elseif kind == "condition"
-            id = String(o["condition"])
-            idx = spec_index(o, k, 1)
-            ev = event(id)
-            e = if ev.kind == "continuous"
-                idx <= length(ev.conditions) || throw(unresolved("condition $idx of event '$id'"))
-                ev.conditions[idx]
-            else
-                ev.trigger === nothing &&
-                    throw(unresolved("the condition of event '$id' (its trigger is not a `condition`), which"))
-                idx == 1 || throw(unresolved("condition $idx of event '$id'"))
-                OpExpr("ifelse", ASTExpr[ev.trigger, NumExpr(1.0), NumExpr(0.0)])
-            end
-            e = _strip_pre(e)
-            add!(sets_of(e, "the condition of '$id'"), e, something(label, "$id.condition[$idx]"), nothing)
-        elseif kind == "update"
-            pname = String(o["update"])
-            i = findfirst(u -> u.parameter == pname, s.parameter_updates)
-            i === nothing && throw(unresolved("parameter update '$pname'"))
-            u = s.parameter_updates[i]
-            idx = haskey(o, "index") ? spec_index(o, k, 1) :
-                (
-                    length(u.values) == 1 ? 1 :
-                    throw(_kernel_error("kernel '$kname': parameter '$pname' has $(length(u.values)) update rules; name one with `index`"))
-                )
-            1 <= idx <= length(u.values) || throw(unresolved("update rule $idx of parameter '$pname'"))
-            e = _strip_pre(u.values[idx])
-            add!(something(_declared_sets(pname, flat), String[]), e, something(label, pname), nothing)
-        elseif kind == "affect"
-            id = String(o["affect"])
-            ev = event(id)
-            neg = get(o, "negative", false) === true
-            affs = neg ? ev.affect_neg : ev.affects
-            affs === nothing && throw(unresolved("the negative affects of event '$id'"))
-            assigned = Set{String}(a.lhs for a in affs)
-            for a in affs
-                reads = _bare_reads!(Set{String}(), a.rhs)
-                for v in sort!(collect(reads))
-                    v in assigned || continue
-                    throw(
-                        SimulateError(
-                            "kernel '$kname': event '$id' assigns '$v' and its affect on '$(a.lhs)' " *
-                                "reads '$v' bare, which is its post-event value; read the pre-event " *
-                                "value as Pre($v)",
-                            ERROR_CODES.AFFECT_READS_POST_VALUE
-                        )
-                    )
-                end
-                a.lhs in unames || throw(unresolved("the affect target '$(a.lhs)' of event '$id' (not an unknown of `u`)"))
-                e = _strip_pre(a.rhs)
-                resolve_names(e, "the affect on '$(a.lhs)'")
-                add!(something(_declared_sets(a.lhs, flat), String[]), e, a.lhs, a.lhs)
-            end
-        else # assign
-            tgt = String(o["assign"])
-            tgt in unames || throw(unresolved("the assign target '$tgt' (not an unknown of `u`)"))
-            src = o["from"]
-            e = _strip_pre(src isa AbstractString ? VarExpr(String(src)) : expression_from_json(src))
-            resolve_names(e, "the source of '$tgt'")
-            sets = something(_declared_sets(tgt, flat), String[])
-            ss = sets_of(e, "the source of '$tgt'")
-            (isempty(ss) || ss == sets) || throw(
-                _kernel_error(
-                    "kernel '$kname': the source of '$tgt' ranges over [$(join(ss, ", "))], the " *
-                        "target over [$(join(sets, ", "))]"
+    1 <= idx <= length(u.values) || throw(_kunresolved(cx, "update rule $idx of parameter '$pname'"))
+    e = _strip_pre(u.values[idx])
+    return _kadd!(outs, something(_declared_sets(pname, cx.flat), String[]), e, something(label, pname), nothing)
+end
+
+function _kernel_output!(::Val{:affect}, outs, cx, o, k, label)
+    id = String(o["affect"])
+    ev = _kevent(cx, id)
+    neg = get(o, "negative", false) === true
+    affs = neg ? ev.affect_neg : ev.affects
+    affs === nothing && throw(_kunresolved(cx, "the negative affects of event '$id'"))
+    assigned = Set{String}(a.lhs for a in affs)
+    for a in affs
+        reads = _bare_reads!(Set{String}(), a.rhs)
+        for v in sort!(collect(reads))
+            v in assigned || continue
+            throw(
+                SimulateError(
+                    "kernel '$(cx.kname)': event '$id' assigns '$v' and its affect on '$(a.lhs)' " *
+                        "reads '$v' bare, which is its post-event value; read the pre-event " *
+                        "value as Pre($v)",
+                    ERROR_CODES.AFFECT_READS_POST_VALUE
                 )
             )
-            add!(sets, e, tgt, tgt)
         end
+        a.lhs in cx.unames || throw(
+            _kunresolved(cx, "the affect target '$(a.lhs)' of event '$id' (not an unknown of `u`)")
+        )
+        e = _strip_pre(a.rhs)
+        _kresolve_names(cx, e, "the affect on '$(a.lhs)'")
+        _kadd!(outs, something(_declared_sets(a.lhs, cx.flat), String[]), e, a.lhs, a.lhs)
     end
-    # ---- the kernel's flattened system ----
+    return outs
+end
+
+function _kernel_output!(::Val{:assign}, outs, cx, o, k, label)
+    tgt = String(o["assign"])
+    tgt in cx.unames || throw(_kunresolved(cx, "the assign target '$tgt' (not an unknown of `u`)"))
+    src = o["from"]
+    e = _strip_pre(src isa AbstractString ? VarExpr(String(src)) : expression_from_json(src))
+    _kresolve_names(cx, e, "the source of '$tgt'")
+    sets = something(_declared_sets(tgt, cx.flat), String[])
+    ss = _ksets_of(cx, e, "the source of '$tgt'")
+    (isempty(ss) || ss == sets) || throw(
+        _kernel_error(
+            "kernel '$(cx.kname)': the source of '$tgt' ranges over [$(join(ss, ", "))], the " *
+                "target over [$(join(sets, ", "))]"
+        )
+    )
+    return _kadd!(outs, sets, e, tgt, tgt)
+end
+
+# The kernel's flattened system: the model's non-`D` equations, each `dt`
+# parameter a held state, and each output a held state whose `D` equation is
+# its expression.
+function _kernel_flat(flat::FlattenedSystem, dtp, outs::Vector{_KernelOutput})
     eqs = Equation[]
     contribs = Vector{Contribution}[]
     for (eq, cs) in zip(flat.equations, flat.equation_contributions)
@@ -1041,14 +1065,15 @@ function _value_or_map_kernel(kname, dtp, outs, seed, flat, rhs, s, ulay, zlay)
         delete!(params, p)
         states[p] = ModelVariable(UnknownVariable; default = 0.0, units = v.units)
     end
-    for (n, sets, e, _, _) in synth
-        states[n] = ModelVariable(UnknownVariable; default = 0.0, shape = isempty(sets) ? nothing : sets)
-        lhs = isempty(sets) ? OpExpr("D", ASTExpr[VarExpr(n)]; wrt = "t") : _faq_shell_D(n, sets)
-        body = isempty(sets) ? e : _faq_body(e, sets, flat)
+    for out in outs
+        sets = out.sets
+        states[out.name] = ModelVariable(UnknownVariable; default = 0.0, shape = isempty(sets) ? nothing : sets)
+        lhs = isempty(sets) ? OpExpr("D", ASTExpr[VarExpr(out.name)]; wrt = "t") : _faq_shell_D(out.name, sets)
+        body = isempty(sets) ? out.expr : _faq_body(out.expr, sets, flat)
         push!(eqs, Equation(lhs, body))
         push!(contribs, Contribution[Contribution(body, TermOrigin[])])
     end
-    kflat = FlattenedSystem(
+    return FlattenedSystem(
         flat;
         state_variables = states, parameters = params,
         discrete_parameters = OrderedDict{String, ModelVariable}(
@@ -1056,9 +1081,13 @@ function _value_or_map_kernel(kname, dtp, outs, seed, flat, rhs, s, ulay, zlay)
         ),
         equations = eqs, equation_contributions = contribs
     )
-    W = Set{String}(x[1] for x in synth)
-    prog = _whole_program(seed, kflat, W, Set{String}(keys(states)), :all, :all)
-    # ---- copy plans ----
+end
+
+# The copy plans of a kernel program `prog`: where each `aux` block comes from
+# (`u`, `z`, a `dt` argument, or nothing), the right-hand side's parameter of
+# each of `prog`'s, and where each output lands (its own buffer, or the `u`
+# state a map output assigns), with the value outputs' layout.
+function _kernel_plans(kname, prog, rhs, outs::Vector{_KernelOutput}, ulay, zlay, dtp, flat)
     aux_plan = NTuple{4, Int}[]
     for b in prog.layout.aux
         n = max(prod(length(r) for r in b.storage; init = 1), 1)
@@ -1079,35 +1108,59 @@ function _value_or_map_kernel(kname, dtp, outs, seed, flat, rhs, s, ulay, zlay)
     for x in parameters(prog)
         j = findfirst(==(x.name), set_params)
         j === nothing && throw(
-            SimulateError("kernel '$kname' reads parameter '$(x.name)', which the right-hand side does not")
+            SimulateError("kernel '$kname' reads parameter '$(x.name)', which the right-hand side does not", ERROR_CODES.KERNEL_OUTPUT_UNRESOLVED)
         )
         push!(p_map, j)
     end
     out_plan = NTuple{3, Int}[]
     layout = KernelBlock[]
     off = 1
-    for (n, sets, _, label, target) in synth
-        b = prog.layout.u[findfirst(x -> x.name == n, prog.layout.u)]
+    for out in outs
+        b = prog.layout.u[findfirst(x -> x.name == out.name, prog.layout.u)]
         len = max(prod(length(r) for r in b.storage; init = 1), 1)
-        if target !== nothing
-            ub = ulay[findfirst(x -> x.name == target, ulay)]
+        if out.target !== nothing
+            ub = ulay[findfirst(x -> x.name == out.target, ulay)]
             push!(out_plan, (b.base, ub.offset, len))
         else
             push!(out_plan, (b.base, off, len))
-            push!(layout, KernelBlock(label, off, _set_sizes(sets, flat)))
+            push!(layout, KernelBlock(out.label, off, _set_sizes(out.sets, flat)))
             off += len
         end
     end
-    n_u = rhs.layout.n_u
-    if ismap
-        layout = KernelBlock[KernelBlock(b.name, b.offset, b.shape) for b in ulay]
-        out_len = n_u
-    else
-        out_len = off - 1
+    return aux_plan, p_map, out_plan, layout, off - 1, length(set_params)
+end
+
+function _value_or_map_kernel(kname, dtp, specs, seed, flat, rhs, s, ulay, zlay)
+    cx = _KernelCx(String(kname), flat, s, Set{String}(b.name for b in ulay))
+    nmap = count(o -> _koutput_kind(cx, o) in ("affect", "assign"), specs)
+    (nmap > 0 && nmap != length(specs)) && throw(
+        _kernel_error(
+            "kernel '$kname' mixes map outputs (assign, affect) with value outputs; a map " *
+                "kernel's output is a whole state"
+        )
+    )
+    ismap = nmap > 0
+    for p in dtp
+        v = get(flat.parameters, p, nothing)
+        (v !== nothing && (v.shape === nothing || isempty(v.shape))) || throw(
+            _kernel_error("kernel '$kname': dt_params entry '$p' is not a scalar parameter")
+        )
     end
+    outs = _KernelOutput[]
+    for (k, o) in enumerate(specs)
+        _kernel_output!(outs, cx, o, k)
+    end
+    kflat = _kernel_flat(flat, dtp, outs)
+    W = Set{String}(out.name for out in outs)
+    prog = _whole_program(seed, kflat, W, Set{String}(keys(kflat.state_variables)))
+    aux_plan, p_map, out_plan, layout, value_len, np = _kernel_plans(
+        kname, prog, rhs, outs, ulay, zlay, dtp, flat
+    )
+    n_u = rhs.layout.n_u
     return Kernel(
-        kname, prog, false, ismap, aux_plan, p_map, out_plan, layout,
-        n_u, rhs.layout.n_aux, length(set_params), out_len
+        kname, prog, false, ismap, aux_plan, p_map, out_plan,
+        ismap ? _kernel_blocks(ulay) : layout,
+        n_u, rhs.layout.n_aux, np, ismap ? n_u : value_len
     )
 end
 

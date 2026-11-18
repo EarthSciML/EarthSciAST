@@ -1,10 +1,9 @@
-# Standalone array-variable shape inference over flattened equations (gt-vt3).
-# Deliberately independent of FlattenedSystem — called at MTK build time from
-# ext/EarthSciASTMTKExt.jl so scalar-only callers pay no cost. Split from
-# flatten.jl.
+# Standalone array-variable shape inference over flattened equations.
+# Independent of FlattenedSystem; called at ModelingToolkit build time from
+# ext/mtk_ext/variables.jl so scalar-only callers pay no cost.
 
 # ========================================
-# Array-variable shape inference (gt-vt3)
+# Array-variable shape inference
 # ========================================
 
 """
@@ -27,10 +26,11 @@ Semantics:
   iteration space. Index names with no explicit range are left for
   inference from their usages inside the body.
 - Conflicts: if a variable is referenced with inconsistent dimensionality
-  across equations, this function raises an `ArgumentError`.
+  across equations, this function raises a [`SimulateError`](@ref) with code
+  `array_shape_mismatch`.
 
 This pass is deliberately standalone — it does not mutate `FlattenedSystem`.
-It is called at MTK build time from `ext/EarthSciASTMTKExt.jl` so
+It is called at ModelingToolkit build time from `ext/mtk_ext/variables.jl` so
 scalar-only callers pay no cost.
 """
 function infer_array_shapes(equations::Vector{Equation})
@@ -115,7 +115,7 @@ function _range_bounds(r::AbstractVector)
     elseif length(r) == 3
         return Int(r[1]), Int(r[3])  # [start, step, stop]
     end
-    throw(ArgumentError("range must have 2 or 3 entries, got $(length(r))"))
+    throw(SimulateError("range must have 2 or 3 entries, got $(length(r))", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
 end
 
 # Record a shape entry for `u` from `index(u, i1, i2, ...)`. Each index
@@ -141,9 +141,10 @@ function _record_index!(
         existing = shapes[vname]
         if length(existing) != length(axis_ranges)
             throw(
-                ArgumentError(
+                SimulateError(
                     "Inconsistent dimensionality for variable '$vname': " *
-                        "saw $(length(existing))-D and $(length(axis_ranges))-D references"
+                        "saw $(length(existing))-D and $(length(axis_ranges))-D references",
+                    ERROR_CODES.ARRAY_SHAPE_MISMATCH
                 )
             )
         end
@@ -157,9 +158,9 @@ end
 
 # Evaluate an index expression against the index-symbol environment.
 # Supports: integer literals, bare index symbols (VarExpr in idx_env), and
-# affine offsets `op("+", [idx, NumExpr(k)])` / `op("-", ...)` with either
-# operand order. Returns a UnitRange representing the range that expression
-# sweeps, or `nothing` if the shape cannot be inferred from this node alone.
+# affine offsets `i + k`, `k + i`, `i - k` and `k - i`. Returns a UnitRange
+# representing the range that expression sweeps, or `nothing` if the shape
+# cannot be inferred from this node alone.
 function _eval_index_range(idx_expr::ASTExpr, idx_env::Dict{String, UnitRange{Int}})
     if idx_expr isa IntExpr
         v = Int(idx_expr.value)
@@ -174,25 +175,25 @@ function _eval_index_range(idx_expr::ASTExpr, idx_env::Dict{String, UnitRange{In
         return nothing
     elseif idx_expr isa OpExpr && idx_expr.op in ("+", "-") && length(idx_expr.args) == 2
         a, b = idx_expr.args
-        base, offset = _split_affine(a, b)
+        base, offset, var_first = _split_affine(a, b)
         base === nothing && return nothing
         haskey(idx_env, base) || return nothing
-        env_r = idx_env[base]
-        shift = idx_expr.op == "+" ? offset : -offset
-        return (first(env_r) + shift):(last(env_r) + shift)
+        lo, hi = first(idx_env[base]), last(idx_env[base])
+        idx_expr.op == "+" && return (lo + offset):(hi + offset)
+        # `i - k` sweeps (lo-k):(hi-k); `k - i` sweeps (k-hi):(k-lo).
+        return var_first ? ((lo - offset):(hi - offset)) : ((offset - hi):(offset - lo))
     end
     return nothing
 end
 
+# Split a two-operand affine index into (index name, literal, index-is-first).
+# `(nothing, 0, false)` when the operands are not one index symbol and one
+# integer-valued literal.
 function _split_affine(a::ASTExpr, b::ASTExpr)
-    if a isa VarExpr && b isa IntExpr
-        return a.name, Int(b.value)
-    elseif a isa IntExpr && b isa VarExpr
-        return b.name, Int(a.value)
-    elseif a isa VarExpr && b isa NumExpr
-        return a.name, Int(b.value)
-    elseif a isa NumExpr && b isa VarExpr
-        return b.name, Int(a.value)
+    if a isa VarExpr && (b isa IntExpr || b isa NumExpr)
+        return a.name, Int(b.value), true
+    elseif (a isa IntExpr || a isa NumExpr) && b isa VarExpr
+        return b.name, Int(a.value), false
     end
-    return nothing, 0
+    return nothing, 0, false
 end

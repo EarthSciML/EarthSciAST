@@ -185,13 +185,11 @@ function _sic_write_fixture(dir)
 end
 
 function _sic_build(F; disable = false)
-    ESM._reset_cascade_tally!()
-    flat = ESM.flatten(ESM.load_path(F))
-    f!, u0, p, _t, vm = ESM._build_evaluator(
-        flat;
+    f!, u0, p, _t, vm, rep = ESM.Internal.build(
+        ESM.flatten(ESM.load_path(F));
         compiler = disable ? :interpreter : :native
     )
-    return (f!, u0, p, vm, copy(ESM._CASCADE_TALLY))
+    return (f!, u0, p, vm, rep.counts)
 end
 
 _sic_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)

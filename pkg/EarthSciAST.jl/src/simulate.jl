@@ -8,18 +8,12 @@
 #
 # Construction absorbs the whole deterministic-per-document pipeline (load →
 # flatten → shape transforms → pushdown rewrite → value invention → the gated
-# fetch of provider data → `build_evaluator`), plus the run wiring that belongs
+# fetch of provider data → `_build_evaluator`), plus the run wiring that belongs
 # to the DOCUMENT rather than to a particular run: the initial state, the
 # data-refresh callback, the output-sink callback and the checkpoint callback.
 # `solve` varies only the per-run knobs.
 #
-# The `simulate` / `prepare` pair this replaces conflated the two — and had
-# grown a second, `prepare`-shaped entry point next to `simulate` precisely
-# because callers needed the split. `EsmProblem` IS the `PreparedModel`
-# concept under the canonical name, with the run knobs it was missing.
-#
-# `[[library-exposes-rhs-not-solver]]`: EarthSciAST never depends on a solver.
-# Everything here — coerce → build_evaluator → seed → compose callbacks — is
+# EarthSciAST never depends on a solver. Everything here — coerce → _build_evaluator → seed → compose callbacks — is
 # solver-free, so CONSTRUCTING an `EsmProblem` needs no SciMLBase and no
 # OrdinaryDiffEq (§2.5.9). The `ODEProblem` + `solve` live in a SciMLBase
 # package EXTENSION (EarthSciASTSimulateExt), which specializes
@@ -45,29 +39,27 @@ final_state(sol) = isempty(sol.u) ? Float64[] : Vector{Float64}(sol.u[end])
 
 
 """
-    SimulateError(msg::AbstractString)
-    SimulateError(msg::String, code::String)
+    SimulateError(msg, code = "")
 
 Exception thrown when a simulation Problem cannot be built or run (API_SPEC
 §5.8): [`esm_problem`](@ref) given a missing file or an unsupported input, an
-override in `p` / `u0` that names no variable or collides with another, a
-document with no models, a provider or compiler that cannot serve the request,
-an [`observed_field`](@ref) read of a name that is not an evaluable observed,
-or `solve` called without the solver extension loaded.
+override in `p` / `u0` that names no variable, is ambiguous or collides with
+another, a document with no models, a provider or compiler that cannot serve
+the request, an [`observed_field`](@ref) read of a name that is not an
+evaluable observed, or `solve` called without the solver extension loaded. The
+ModelingToolkit and Catalyst constructors (`ModelingToolkit.System`,
+`Catalyst.ReactionSystem`) raise it too, for a document construct they cannot
+lower.
 
-`msg` is the human-readable description. `code` is the [`ERROR_CODES`](@ref)
-value when the failure has one, such as `"compiler_unknown"` or
-`"compiler_unavailable"` for a `compiler =` selection that cannot be honoured,
-and `""` otherwise. `showerror` prints `SimulateError: <code>: <msg>`, omitting
-the code when it is empty.
+Fields: `code`, the [`ERROR_CODES`](@ref) value when the failure has one (such
+as `compiler_unknown`, `override_key_ambiguous` or `unsupported_construct`) and
+`""` otherwise, then `msg`, the human-readable description.
 """
 struct SimulateError <: EarthSciASTError
-    msg::String
     code::String
+    msg::String
+    SimulateError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
 end
-SimulateError(msg::AbstractString) = SimulateError(String(msg), "")
-Base.showerror(io::IO, e::SimulateError) =
-    print(io, "SimulateError: ", isempty(e.code) ? "" : e.code * ": ", e.msg)
 
 # --------------------------------------------------------------------------- #
 # Default solver tolerances. Shared with the SciMLBase solve extension
@@ -78,32 +70,6 @@ Base.showerror(io::IO, e::SimulateError) =
 const DEFAULT_SIM_RELTOL = 1.0e-4
 const DEFAULT_SIM_ABSTOL = 1.0e-6
 
-# --------------------------------------------------------------------------- #
-# Input coercion: path | native Dict | EsmFile | FlattenedSystem → a runnable
-# ESM document for build_evaluator.
-#
-# EVERY carrier of an AUTHORED document (a path, or the same document as a
-# Dict) is parsed and FLATTENED; only a `FlattenedSystem` — the type that says
-# "already flattened" — skips the flattener, and it is lowered to the native
-# single-model run document `build_evaluator` actually consumes.
-#
-# A Dict must NOT be handed to `build_evaluator` directly. `build_evaluator`
-# runs ONE model (`_select_model`) and never reads `reaction_systems` or
-# `coupling` — those are lowered/applied BY `flatten`. So passing an authored
-# Dict through silently ran a single model with the reaction network and every
-# coupling edge dropped, reporting `success = true` on a system the caller
-# never wrote (an authored `{reaction_systems, models: {Sink}}` document ran as
-# the bare `Sink`, with an empty state vector). Routing it through `load`
-# instead gives a Dict the schema validation, version gates and `{ref}`
-# resolution a path input has always had — the last of these mattering because
-# `flatten` SKIPS an unresolved `SubsystemRef` (`_collect_model!`), so merely
-# coercing would swap one silent drop for another.
-#
-# Consequence: state names from a Dict are now the flattener's namespaced names
-# (`"M.y"`, not `"y"`) — i.e. exactly what the identical document in a file has
-# always produced. `base_path = pwd()` anchors its relative refs, a file input
-# anchoring them at its own directory.
-# --------------------------------------------------------------------------- #
 """
     _resolve_merged_renames(renames, overrides) -> AbstractDict
 
@@ -141,10 +107,10 @@ end
 # 2.0.0 removed means the same thing under 2.0.0 (a removed one is refused by
 # name at load, `removed_op`), so the major version alone never refuses it.
 function _refuse_unsupported_major_version(version)
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(version))
-    m === nothing && return nothing
-    supported = parse(Int, match(r"^(\d+)\.", SCHEMA_VERSION).captures[1])
-    major = parse(Int, m.captures[1])
+    parsed = _parse_esm_version(string(version))
+    parsed === nothing && return nothing
+    supported = _parse_esm_version(SCHEMA_VERSION)[1]
+    major = parsed[1]
     (major == supported || major == 1) || throw(
         ParseError(
             "Unsupported major version $major. This library supports major versions " *
@@ -223,8 +189,8 @@ end
 # They are the reference-integrity findings: a name, reference or data source the
 # document uses and does not declare. A build that went ahead would read a value
 # the document does not describe. Equation-count and unit findings are not here:
-# they stay `validate`'s to report. `faq_bare_array_operand` (esm-spec §4.3.1,
-# issue #441) is here too: a shaped variable read by bare name in a `faq` body or
+# they stay `validate`'s to report. `faq_bare_array_operand` (esm-spec §4.3.1)
+# is here too: a shaped variable read by bare name in a `faq` body or
 # filter has no defined alignment to the node's symbols, and another binding
 # built it into a silently ignored filter.
 const _BUILD_REFUSED_VALIDATION_CODES = ("undefined_variable", "undefined_parameter", "undefined_species", "undefined_system", "undefined_index_set", "unresolved_scoped_ref", "event_var_undeclared", "data_source_undefined", "missing_required_field", "faq_bare_array_operand")
@@ -249,244 +215,142 @@ function _refuse_reference_integrity_errors(file::EsmFile; supplied_names = ())
     return nothing
 end
 
-#
-# `renames_out`, when given, is filled with the flattened system's
-# `merged_variable_renames` (issue #230) — the states an `operator_compose`
-# renaming match DELETED, mapped onto the survivors. `flattened_to_esm` drops
-# `FlattenMetadata`, so this out-parameter is the only channel a caller's
-# `parameter_overrides` / `initial_conditions` keys have to reach it. Optional so
-# the existing callers that want only the doc are unchanged.
-function _prepare_run_doc(
-        input; metaparameters::AbstractDict = Dict{String, Int}(),
-        base_path::AbstractString = pwd(),
-        renames_out::Union{Nothing, AbstractDict} = nothing,
-        supplied_names = (),
-        flat_out::Union{Nothing, Base.RefValue{Any}} = nothing
-    )
-    if input isa AbstractString
-        isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
-        input = load_path(input; metaparameters = metaparameters)
-    end
-    if input isa AbstractDict
-        input = load_document(input; base_path = base_path, metaparameters = metaparameters)
-    end
-    # Capture the verbatim document-scoped `coordinates` registry (RFC §8.3) BEFORE
-    # flattening drops it (it rides on `EsmFile`, not `FlattenedSystem`); re-inject
-    # it into the run doc below so `derive_output_meta` can emit CF coordinates.
-    run_coordinates = nothing
-    # Same for the document-scoped `solver` block (esm-spec §2.2): it rides on
-    # `EsmFile`, not on `FlattenedSystem`, so `flattened_to_esm` cannot know
-    # about it. Captured here and re-attached below, which is what makes
-    # `_document_solver` — and therefore the whole §2.2.2 chain — reachable at
-    # all; without it the run doc never carries the key and the document's
-    # declared tolerances were silently dropped.
-    run_solver = nothing
-    # And the `faq`-valued initialization equations (esm-spec §6.2), which ride
-    # on each `Model`, not on `FlattenedSystem`: namespaced here, re-attached to
-    # the run doc's model below, where the tree-walk build seeds `u0` from them
-    # (`_seed_faq_init_u0!`).
-    run_init = Equation[]
-    # The names a `variable_map` coupling reads (its `from` endpoints), which
-    # flatten resolves away: a provider keyed by one keeps its own name
-    # (`_routable_keys`).
-    coupling_reads = Set{String}()
-    if input isa EsmFile
-        _refuse_unsupported_major_version(input.esm)
-        _refuse_reserved_declaration_names(input)
-        _refuse_unregistered_callback_reads(input)
-        _refuse_reference_integrity_errors(input; supplied_names = supplied_names)
-        run_coordinates = input.coordinates
-        run_solver = input.solver
-        for c in input.coupling
-            c isa CouplingVariableMap && push!(coupling_reads, c.from)
-        end
-        for (mname, model) in something(input.models, ())
-            _collect_initialization_faqs!(run_init, model, String(mname))
-        end
-        # esm-spec §9.6.4 Option B: `flatten` ALWAYS carries surviving
-        # `apply_expression_template` references into the FlattenedSystem; they
-        # ride to the tree-walk build boundary below.
-        # A coupling-level event is lowered by no compiler here: refused unless
-        # the caller stripped its class (`esm_problem(…; strip)`).
-        _refuse_coupling_events(input, get(task_local_storage(), :_esm_strip_taken, String[]))
-        _refuse_reserved_liftings(input)
-        input = flatten(input)
-    end
-    if input isa FlattenedSystem
-        # esm-spec §9.6.6: refuse an event, continuous or discrete, while the
-        # flattened system still carries it. `flattened_to_esm` below does not
-        # emit events, so the tree-walk build never sees one and would run the
-        # model without it.
-        _refuse_flat_events(input)
-        _refuse_reserved_liftings(input)
-        _refuse_flat_wiener_noise(input)
-        _refuse_flat_symbolic_updates(input)
-        renames_out === nothing ||
-            merge!(renames_out, input.metadata.merged_variable_renames)
-        # The last point the per-term provenance (`equation_contributions`) is
-        # still in hand: `rhs_program` selects operators from it.
-        flat_out === nothing || (
-            flat_out[] = (
-                flat = input, coordinates = run_coordinates,
-                solver = run_solver, init = run_init,
-                coupling_reads = coupling_reads,
-            )
-        )
-        return _flat_run_doc(input, run_coordinates, run_solver, run_init)
-    end
-    throw(
-        SimulateError(
-            "simulate: unsupported input of type $(typeof(input)); " *
-                "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"
-        )
-    )
-end
-
-# The run document of the table-lowered flattened system `input`, with the
-# document-scoped blocks flatten does not carry re-attached.
-function _flat_run_doc(
-        input::FlattenedSystem, run_coordinates, run_solver,
-        run_init::Vector{Equation}
-    )
-    # Surviving references are THE behavior: they ride through
-    # `flattened_to_esm` to the build boundary, where `_build_evaluator_impl`
-    # expands them with SITE RECORDING — the SINGLE evaluator-side expansion
-    # point — and the affine-stencil compile-once tier factors each body once
-    # per (use site, region class) instead of fusing it into every branch
-    # spine (RFC out-of-line-expression-templates step c), which is an
-    # order-of-magnitude reduction in node lowerings on a deep template stack.
-    # The downstream shape transforms
-    # below only inspect equation LHS / infer shapes from already-shaped
-    # operands, so a surviving `apply_expression_template` node rides through
-    # them untouched.
-    #
-    # Lift a feed-forward algebraic physics chain authored as scalars into the
-    # grid shape it inherits from the fields it reads (regrid outputs, loader
-    # fields, the spatial state), so a scalar observed that consumes a build-once
-    # spatial field (`tan_phi = sqrt(dzdx² + dzdy²)` over the regridded terrain)
-    # becomes a per-cell array whose operand references lower to gathers
-    # (`index(TerrainRegrid.dzdx, i, j)`) the evaluator resolves against the
-    # const-array registry. Both transforms are no-ops (return an equivalent
-    # system) for a document with no algebraic states / no scalar-downstream-of-
-    # array observeds, so an already-array (discretized) or purely-scalar (0-D)
-    # run is byte-identical.
-    input = promote_downstream_shapes(algebraic_states_to_observeds(input))
-    doc = flattened_to_esm(input)
-    # Re-attach the verbatim `coordinates` registry (captured pre-flatten) so the
-    # streaming-output writer sees it (RFC §8.3). Document-scoped + un-namespaced,
-    # like `index_sets`, so it drops straight onto the run doc.
-    run_coordinates !== nothing && !isempty(run_coordinates) &&
-        (doc["coordinates"] = run_coordinates)
-    # Re-attach the §2.2 `solver` block (captured pre-flatten) in its RAW
-    # shape, which is what `_document_solver` coerces back. Document-scoped
-    # and un-namespaced, like `coordinates`.
-    if run_solver !== nothing
-        block = serialize_solver(run_solver)
-        isempty(block) || (doc["solver"] = block)
-    end
-    if !isempty(run_init)
-        for (_, m) in doc["models"]
-            m["initialization_equations"] = Any[serialize_equation(eq) for eq in run_init]
-        end
-    end
-    return doc
-end
-
-# The `faq`-valued initialization equations of `model` and its subsystems —
-# `u ~ faq(…)`, a bare-variable left-hand side and an array-valued right-hand
-# side (esm-spec §6.2) — namespaced under `prefix` exactly as `flatten`
-# namespaces the model's equations, appended to `out` in document order. The
-# other spellings name no cells for the tree-walk seed to assign.
-function _collect_initialization_faqs!(out::Vector{Equation}, model::Model, prefix::String)
-    local_names = Set{String}(keys(model.variables))
-    for (sub_name, _) in model.subsystems
-        push!(local_names, sub_name)
-    end
-    for eq in model.initialization_equations
-        (
-            eq.lhs isa VarExpr && eq.rhs isa OpExpr && _is_faq_op(eq.rhs.op) &&
-                eq.rhs.output_idx !== nothing && !isempty(eq.rhs.output_idx)
-        ) || continue
-        push!(
-            out, Equation(
-                namespace_expr(eq.lhs, prefix, local_names),
-                namespace_expr(eq.rhs, prefix, local_names)
-            )
-        )
-    end
-    for (sub_name, sub_model) in model.subsystems
-        sub_model isa Model || continue
-        _collect_initialization_faqs!(out, sub_model, "$(prefix).$(sub_name)")
-    end
-    return out
-end
-
 # --------------------------------------------------------------------------- #
 # Initial-condition seeding (mirrors the Python `_apply_initial_conditions`):
 # a key may be a scalar name, an explicit element `name[i,j]`, or a bare array
 # name that broadcasts a single value over every element of that array.
 # --------------------------------------------------------------------------- #
+
+# The state elements an `initial_conditions` key can address in `var_map`: the
+# scalar names with their slots, and each array base name. A `StateLayout` is
+# read through its blocks, so no cell's key is spelled; any other map is read
+# by decoding its cell keys (`_parse_cell_key`).
+struct _IcSpace
+    scalars::Dict{String, Int}
+    bases::Vector{String}
+    layout::Union{Nothing, StateLayout}
+    cells::Dict{String, Vector{Tuple{Vector{Int}, Int}}}   # when `layout` is nothing
+end
+function _IcSpace(L::StateLayout)
+    bases = String[b.name for b in _layout_blocks(L)]
+    return _IcSpace(L.scalars, bases, L, Dict{String, Vector{Tuple{Vector{Int}, Int}}}())
+end
+function _IcSpace(var_map::AbstractDict)
+    scalars = Dict{String, Int}()
+    cells = Dict{String, Vector{Tuple{Vector{Int}, Int}}}()
+    for (vname, idx) in var_map
+        parsed = _parse_cell_key(String(vname))
+        if parsed === nothing
+            scalars[String(vname)] = idx
+        else
+            push!(get!(cells, parsed[1], Tuple{Vector{Int}, Int}[]), (parsed[2], idx))
+        end
+    end
+    return _IcSpace(scalars, collect(keys(cells)), nothing, cells)
+end
+
+# The slot of cell `idx` of array `base`, or 0.
+function _ic_slot(sp::_IcSpace, base::String, idx::Vector{Int})
+    sp.layout === nothing || return _layout_slot(sp.layout, base, idx)
+    for (c, slot) in get(sp.cells, base, ())
+        c == idx && return slot
+    end
+    return 0
+end
+
+# `f(idx, slot)` for every cell of array `base`, in slot order.
+function _ic_foreach_cell(f, sp::_IcSpace, base::String)
+    if sp.layout === nothing
+        for (idx, slot) in sort(sp.cells[base]; by = last)
+            f(idx, slot)
+        end
+    else
+        b = _layout_block(sp.layout, base)
+        for slot in b.base:(b.base + b.len - 1)
+            f(_block_cell!(Vector{Int}(undef, length(b.lo)), b, slot), slot)
+        end
+    end
+    return nothing
+end
+
+# Resolve a cell key `base[i,…]` (`parsed`, from `_parse_cell_key`) through the
+# array base names: the bases the key's base designates, kept only when they
+# hold that cell. The resolution names the cell key.
+function _ic_cell_resolution(sp::_IcSpace, bases::NameTable, parsed)
+    base, idx = parsed
+    r = resolve_key(bases, base)
+    if r.how === :ambiguous
+        held = String[c for c in r.candidates if _ic_slot(sp, c, idx) != 0]
+        isempty(held) && return KeyResolution(nothing, :unknown, String[])
+        length(held) == 1 && return KeyResolution(_cell_key(held[1], idx), :suffix, String[])
+        return KeyResolution(nothing, :ambiguous, String[_cell_key(c, idx) for c in held])
+    end
+    (r.name === nothing || _ic_slot(sp, r.name, idx) == 0) &&
+        return KeyResolution(nothing, :unknown, String[])
+    return KeyResolution(_cell_key(r.name, idx), r.how, String[])
+end
+
 function _apply_initial_conditions!(
         u0::Vector{Float64}, var_map::AbstractDict,
         ics::AbstractDict
     )
     isempty(ics) && return u0
-    # esm-spec §6.6.2 keys `initial_conditions` by LOCAL variable name (`u`),
-    # but every document front-door reaches the run through `flatten`, which
-    # renames each state after its owning component (`M.u`) — so an EXACT-key
-    # lookup missed the very spelling the spec tells authors to write, and a
-    # test's `initial_conditions: {"u": 9.0}` died with "unknown state element
-    # 'u'". Same defect as `parameter_overrides` had, on the state side; it
-    # merely failed loudly instead of silently. Resolve the caller's key onto
-    # the name the build uses with the SAME rules (build.jl
-    # `_canonicalize_override_keys`): exact hit, else a dotted key whose LONGEST
-    # dotted suffix is a state name, else a key that is itself a dotted suffix
-    # of exactly one state name (`u` — and equally `sub.u` — for `P.sub.u`) —
-    # an ambiguous suffix is rejected, never guessed at.
-    #
-    # Two name spaces are tried in order: the ELEMENT names (`M.u`, `M.f[1]`),
-    # then the array BASE names for the broadcast form (`M.f` sets every
-    # `M.f[...]` cell). `_parse_cell_key` (tree_walk.jl) is the single inverse
-    # of `_cell_key`'s "name[i,j]" element encoding.
-    element_names = Set{String}(String(k) for k in keys(var_map))
-    # Each array base name's cells as `(multi-index, slot)` pairs: the slot is
-    # what a broadcast scalar writes, and the multi-index is what INLINE ARRAY
-    # DATA (esm-spec §6.3 / §6.6.2) is read at, so a whole authored profile
-    # lands cell-for-cell rather than by flat position.
-    cells_of = Dict{String, Vector{Tuple{Vector{Int}, Int}}}()
-    for (vname, idx) in var_map
-        parsed = _parse_cell_key(String(vname))
-        parsed === nothing && continue
-        push!(get!(cells_of, parsed[1], Tuple{Vector{Int}, Int}[]), (parsed[2], idx))
+    # esm-spec §6.6.2 keys `initial_conditions` by LOCAL variable name (`u`)
+    # while every name the build uses is flattened (`M.u`): each key is resolved
+    # onto a state by the one resolver every caller key goes through
+    # (`resolve_key`, src/name_table.jl), and an ambiguous suffix is refused, never
+    # guessed at.
+    sp = _IcSpace(var_map)
+    scalar_names = Set{String}(keys(sp.scalars))
+    base_names = Set{String}(sp.bases)
+    # Two name spaces, tried in order: the ELEMENT names (`M.u`, and a cell key
+    # `M.f[1]` resolved through its base), then the array BASE names for the
+    # broadcast form (`M.f` sets every `M.f[...]` cell). Rule 2 validates a
+    # key's leading segments against the components the build's names carry
+    # (`M.u` ⇒ `M`), so `Missing.u` is reported rather than re-pointed at `u`.
+    namespaces = _override_namespaces(union(scalar_names, base_names))
+    scalars = NameTable(scalar_names; namespaces = namespaces)
+    bases = NameTable(base_names; namespaces = namespaces)
+    function refuse_ambiguous(key, r)
+        r.how === :ambiguous && throw(
+            SimulateError(
+                _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state"),
+                ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
+            )
+        )
+        return r
     end
-    base_names = Set{String}(keys(cells_of))
-    element_alias = _suffix_alias_groups(element_names)
-    base_alias = _suffix_alias_groups(base_names)
-    # esm-spec §6.6.2 rule 2 validates a key's LEADING segments against the
-    # component / subsystem scope, so `Missing.u` is reported rather than
-    # silently re-pointed at the state `u` by its trailing segment. The scope is
-    # read off the build's own names (`M.u` ⇒ `M`), the only structure reachable
-    # here.
-    namespaces = _override_namespaces(union(element_names, base_names))
-    # Which NON-EXACT key claimed each resolved name. Two of them designating one
-    # state is a document authoring error, not a last-write-wins race: the caller
-    # wrote two initial conditions and only one can take effect (Decision: §6.6.2
-    # "two keys, one name"). An EXACT key wins outright and never collides.
+    function state_key(key)
+        r = refuse_ambiguous(key, resolve_key(scalars, key))
+        r.name === nothing || return r, :element
+        parsed = _parse_cell_key(key)
+        if parsed !== nothing
+            r = refuse_ambiguous(key, _ic_cell_resolution(sp, bases, parsed))
+            r.name === nothing || return r, :cell
+        end
+        r = refuse_ambiguous(key, resolve_key(bases, key))
+        r.name === nothing || return r, :base
+        return nothing
+    end
+    # An exact key wins outright; two NON-EXACT keys designating one state is an
+    # authoring error (esm-spec §6.6.2 "two keys, one name"): the caller wrote
+    # two initial conditions and only one can take effect.
     claimed = Dict{String, Vector{String}}()
     exact_keys = Set{String}()
+    resolved_keys = Dict{String, Tuple{KeyResolution, Symbol}}()
     for (rawkey, _) in ics
         key = String(rawkey)
-        if key in element_names || key in base_names
-            push!(exact_keys, key)
-            continue
-        end
-        for (space, alias) in ((element_names, element_alias), (base_names, base_alias))
-            hit = _resolve_state_key(key, space, alias, namespaces)
-            if hit !== nothing
-                push!(get!(claimed, hit, String[]), key)
-                break
-            end
-        end
+        hit = state_key(key)
+        hit === nothing && throw(
+            SimulateError(
+                "esm_problem: initial_conditions names unknown state element '$key'",
+                ERROR_CODES.UNKNOWN_OVERRIDE_KEY
+            )
+        )
+        resolved_keys[key] = hit
+        r = first(hit)
+        r.how === :exact ? push!(exact_keys, r.name) :
+            push!(get!(claimed, r.name, String[]), key)
     end
     for name in sort!(collect(keys(claimed)))
         (name in exact_keys || length(claimed[name]) < 2) && continue
@@ -494,102 +358,48 @@ function _apply_initial_conditions!(
             SimulateError(
                 _override_collision_message(
                     "initial_conditions", "state", name, sort!(claimed[name])
-                )
+                ),
+                ERROR_CODES.OVERRIDE_KEY_CONFLICT
             )
         )
     end
     for (rawkey, value) in ics
         key = String(rawkey)
-        resolved = _resolve_state_key(key, element_names, element_alias, namespaces)
-        if resolved !== nothing
+        r, space = resolved_keys[key]
+        resolved = r.name::String
+        if space === :element || space === :cell
             is_inline_array(value) && throw(
                 SimulateError(
-                    "simulate: initial_conditions['$key'] carries inline array data for a " *
+                    "esm_problem: initial_conditions['$key'] carries inline array data for a " *
                         "single state element; only a SHAPED unknown's whole-variable key takes " *
-                        "a nested array (esm-spec §6.6.2)"
+                        "a nested array (esm-spec §6.6.2)",
+                    ERROR_CODES.ARRAY_SHAPE_MISMATCH
                 )
             )
-            u0[var_map[resolved]] = Float64(value)
+            slot = space === :element ? sp.scalars[resolved] :
+                _ic_slot(sp, _parse_cell_key(resolved)...)
+            u0[slot] = Float64(value)
             continue
         end
-        resolved = _resolve_state_key(key, base_names, base_alias, namespaces)
-        if resolved !== nothing
-            cells = cells_of[resolved]
-            if is_inline_array(value)
-                for (idxs, idx) in cells
-                    checkbounds(Bool, value, idxs...) || throw(
-                        SimulateError(
-                            "simulate: initial_conditions['$key'] has shape $(size(value)), " *
-                                "which does not cover cell $(Tuple(idxs)) of '$resolved' " *
-                                "(esm-spec §6.6.2 — the array MUST match the variable's declared " *
-                                "shape after metaparameter folding)"
-                        )
+        if is_inline_array(value)
+            _ic_foreach_cell(sp, resolved) do idxs, idx
+                checkbounds(Bool, value, idxs...) || throw(
+                    SimulateError(
+                        "esm_problem: initial_conditions['$key'] has shape $(size(value)), " *
+                            "which does not cover cell $(Tuple(idxs)) of '$resolved' " *
+                            "(esm-spec §6.6.2 — the array MUST match the variable's declared " *
+                            "shape after metaparameter folding)",
+                        ERROR_CODES.ARRAY_SHAPE_MISMATCH
                     )
-                    u0[idx] = Float64(value[idxs...])
-                end
-            else
-                v = Float64(value)
-                for (_, idx) in cells
-                    u0[idx] = v
-                end
+                )
+                u0[idx] = Float64(value[idxs...])
             end
-            continue
+        else
+            v = Float64(value)
+            _ic_foreach_cell((_, idx) -> (u0[idx] = v), sp, resolved)
         end
-        throw(
-            SimulateError(
-                "simulate: initial_conditions names unknown " *
-                    "state element '$key'"
-            )
-        )
     end
     return u0
-end
-
-# `dotted suffix => every qualified name carrying it as one`, built once per
-# name space so key resolution below stays O(1) per key. esm-spec §6.6.2 rule 3
-# admits EVERY proper suffix of a build name, not only its trailing segment, so
-# a flattened `P.sub.u` is reachable as `sub.u` as well as `u`.
-function _suffix_alias_groups(names::AbstractSet{String})
-    groups = Dict{String, Vector{String}}()
-    for n in names
-        for s in _dotted_suffixes(n)
-            push!(get!(groups, s, String[]), n)
-        end
-    end
-    return groups
-end
-
-# Resolve ONE caller-spelled state key against a set of build-resolved names,
-# by the esm-spec §6.6.2 precedence shared with `parameter_overrides`. Returns
-# the resolved name, or `nothing` when the key designates none of them. An
-# AMBIGUOUS suffix (a local, or partially qualified, name two mounted
-# components' states both carry) raises its own diagnostic rather than being
-# lumped in with "unknown" — silently binding one of the candidates would be a
-# wrong answer, not a missing one.
-function _resolve_state_key(
-        key::AbstractString, names::AbstractSet{String},
-        alias::AbstractDict{String, Vector{String}},
-        namespaces::AbstractSet{String}
-    )
-    key in names && return String(key)
-    # Rule 2, leading segments validated (`_dotted_suffix_hit`): a dotted key
-    # resolves to the LONGEST of its dotted suffixes that is a state name, and
-    # only when every qualifier it drops names a real component or subsystem.
-    suffix = _dotted_suffix_hit(names, namespaces, key)
-    suffix === nothing || return suffix
-    # Rule 3, the other direction: the key is itself a dotted suffix of exactly
-    # one state name (`u` — and equally `sub.u` — for `P.sub.u`).
-    cands = get(alias, String(key), nothing)
-    cands === nothing && return nothing
-    length(cands) == 1 && return cands[1]
-    throw(
-        SimulateError(
-            "simulate: initial_conditions names the ambiguous local " *
-                "state '$key' — $(length(cands)) states carry it as a suffix " *
-                "($(join(sort(cands), ", "))). Qualify it further with its " *
-                "owning component (esm-spec §6.6.2)."
-        )
-    )
 end
 
 """
@@ -703,14 +513,17 @@ end
 # The seed's expression compiled once with the dimension names as parameters:
 # a `_CellEval` whose "cell" is the vector of coordinate values, or `nothing`
 # when a name collides with the time symbol or the expression does not compile.
+# The time symbol is the build compiler's (`_compile` reads the name `"t"` as
+# time whatever the document's independent variable), so a dimension spelled
+# `"t"` could not be read as a parameter.
 function _seed_expression_compile(expr::ASTExpr, dims::Vector{String})
     any(==("t"), dims) && return nothing
     allunique(dims) || return nothing
     psyms = Symbol[Symbol(d) for d in dims]
     node = try
-        _compile(expr, Dict{String, Int}(), Set{Symbol}(psyms), Dict{String, Any}())
+        _compile(expr, Dict{String, Int}(), Set{Symbol}(psyms))
     catch err
-        _is_resource_error(err) && rethrow()
+        err isa EarthSciASTError || rethrow()
         return nothing
     end
     return _CoordEval{Tuple(psyms), length(dims)}(node)
@@ -731,7 +544,7 @@ end
 # The build reads only the flattened name, so data written under any other
 # spelling was never read and the parameter silently kept its default. Keys are
 # resolved onto the flattened PARAMETERS by the resolver `parameter_overrides`
-# uses (`_canonicalize_override_keys`), so the two surfaces cannot disagree: an
+# uses (`canonicalize_keys`), so the two surfaces cannot disagree: an
 # exact key wins outright over a non-exact key for the same parameter, two
 # non-exact keys for one parameter collide, and a key two parameters carry is
 # ambiguous; the last two are errors.
@@ -752,17 +565,9 @@ function _provider_routing(flat_rec, keys_; model_name = nothing)
     params = Set{String}(keys(flat.parameters))
     asked = _routable_keys(flat_rec, keys_)
     isempty(asked) && return targets, shadowed
-    namespaces = _override_namespaces(params; model_name = model_name)
-    normalized, unknown, ambiguous, collisions =
-        _canonicalize_override_keys(Any, params, namespaces, asked)
-    if !isempty(ambiguous)
-        k, cands = first(sort!(collect(ambiguous), by = first))
-        throw(ArgumentError(_override_ambiguous_message("providers", k, cands)))
-    end
-    if !isempty(collisions)
-        name, ks = first(sort!(collect(collisions), by = first))
-        throw(ArgumentError(_override_collision_message("providers", "parameter", name, ks)))
-    end
+    table = NameTable(params; namespaces = _override_namespaces(params; model_name = model_name))
+    normalized, unknown, ambiguous, collisions = canonicalize_keys(Any, table, asked)
+    _raise_key_failures("providers", "parameter", unknown, ambiguous, collisions)
     for (name, k) in normalized
         targets[k::String] = name
     end
@@ -797,7 +602,7 @@ end
 # value, where writing the provider's would silently replace the caller's array
 # (or, for a live buffer, the very object the caller holds). A registry key is
 # resolved onto the parameters by the same resolver the provider keys went
-# through (`_canonicalize_override_keys`, via `_routable_keys`), so the two
+# through (`canonicalize_keys`, via `_routable_keys`), so the two
 # surfaces agree on what a key designates. A registry key carried by several
 # parameters, one of them provider-fed, is refused as ambiguous (esm-spec
 # §6.6.2); one that names a state, observed or loader field is not a
@@ -809,23 +614,23 @@ function _refuse_provider_registry_overlap(
     (isempty(targets) || flat_rec === nothing) && return nothing
     flat = flat_rec.flat::FlattenedSystem
     params = Set{String}(keys(flat.parameters))
-    namespaces = _override_namespaces(params; model_name = model_name)
+    table = NameTable(params; namespaces = _override_namespaces(params; model_name = model_name))
     fed = Dict{String, String}(name => pk for (pk, name) in targets)
     overlap(label, pk, rk, name) = throw(
-        ArgumentError(
+        SimulateError(
             "providers['$(pk)'] and $(label)['$(rk)'] both supply the parameter " *
-                "'$(name)'; pass one of them (esm-spec §6.6.2)"
+                "'$(name)'; pass one of them (esm-spec §6.6.2)",
+            ERROR_CODES.OVERRIDE_KEY_CONFLICT
         )
     )
     for (label, reg) in registries
         reg === nothing && continue
         asked = _routable_keys(flat_rec, keys(reg))
         isempty(asked) && continue
-        normalized, _, ambiguous, collisions =
-            _canonicalize_override_keys(Any, params, namespaces, asked)
+        normalized, _, ambiguous, collisions = canonicalize_keys(Any, table, asked)
         for (k, cands) in sort!(collect(ambiguous), by = first)
             any(c -> haskey(fed, c), cands) &&
-                throw(ArgumentError(_override_ambiguous_message(label, k, cands)))
+                throw(SimulateError(_override_ambiguous_message(label, k, cands), ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS))
         end
         for (name, rk) in sort!(collect(normalized), by = first)
             haskey(fed, name) && overlap(label, fed[name], rk, name)
@@ -841,8 +646,8 @@ end
 # under the name the build reads, so the refresh callback and the re-seed at a
 # run's start find it under the buffer's own name. One wrapper per provider
 # object, so a provider serving several fields is still sampled once per
-# refresh. Every optional capability of the provider interface is forwarded, so
-# the wrapper answers each one as the provider it wraps does.
+# refresh. Every function of the provider protocol is forwarded, so the
+# wrapper answers each one as the provider it wraps does.
 struct _RekeyedProvider
     inner::Any
     fields::Vector{Pair{String, String}}   # name the build reads => caller's key
@@ -881,10 +686,20 @@ end
 
 # The provider keys routed by name: every key but a gated provider's, whose
 # fields are placed by its gate spec.
-_routable_provider_keys(providers, pd_gated) = String[
-    String(k) for (k, prov) in providers
-        if !(String(k) in pd_gated) && !provider_is_gated(prov)
-]
+_routable_provider_keys(traits::AbstractDict{String, _ProviderTraits}) =
+    String[k for (k, t) in traits if t.gate === nothing]
+
+# Every provider described once (`_provider_traits`), under its caller's key.
+_describe_providers(::Nothing) = Dict{String, _ProviderTraits}()
+_describe_providers(providers::AbstractDict) = Dict{String, _ProviderTraits}(
+    String(k) => _provider_traits(prov, String(k)) for (k, prov) in providers
+)
+
+# `t` with the gate the pushdown rewrite's record derives for its provider, which
+# takes precedence over the provider's own.
+_with_gate(t::_ProviderTraits, gate::_GateSpec) = _ProviderTraits(
+    gate, true, Float64[], t.extent_metaparameter, t.supports_selection
+)
 
 # Const provider data under the name the build reads, and under the caller's
 # key beside it (as `_normalize_const_array_keys` keeps a caller's const key),
@@ -906,7 +721,8 @@ function _callback_set end
 _callback_set(cbs) = throw(
     SimulateError(
         "composing $(length(cbs)) problem-level callbacks needs the SciMLBase extension; " *
-            "add `using SciMLBase` so EarthSciASTSimulateExt is active"
+            "add `using SciMLBase` so EarthSciASTSimulateExt is active",
+        ERROR_CODES.EXTENSION_UNAVAILABLE
     )
 )
 
@@ -947,35 +763,73 @@ function _mtk_problem end
 # --------------------------------------------------------------------------- #
 function _solve_problem end
 _solve_problem(prob, alg; kwargs...) = throw(
-    SimulateError(
-        alg === nothing ?
+    alg === nothing ?
+        SimulateError(
             "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
-            "(and `using OrdinaryDiffEqTsit5`)" :
+            "(and `using OrdinaryDiffEqTsit5`)",
+            ERROR_CODES.INVALID_ARGUMENT
+        ) :
+        SimulateError(
             "solving an EsmProblem needs the SciMLBase extension; add `using SciMLBase` " *
-            "plus a solver (e.g. OrdinaryDiffEqTsit5) so EarthSciASTSimulateExt is active"
-    )
+            "plus a solver (e.g. OrdinaryDiffEqTsit5) so EarthSciASTSimulateExt is active",
+            ERROR_CODES.EXTENSION_UNAVAILABLE
+        )
 )
 
 # --------------------------------------------------------------------------- #
-# EsmProblem — the run-ready artifact, built exactly once per document.
-#
-# Everything deterministic-per-document (load → flatten → shape transforms →
-# flattened_to_esm → build_evaluator) plus the run wiring that belongs to the
-# document (the seeded initial state, the refresh / output / checkpoint
-# callbacks) is done HERE, once. `solve(prob, alg; …)` then only varies the
-# per-run knobs, and `remake(prob; p, u0, tspan)` substitutes without redoing
-# anything the substitution cannot have invalidated.
+# EsmProblem — the run-ready artifact, built once per document. `solve` varies
+# only the per-run settings, and `remake(prob; p, u0, tspan)` substitutes without
+# redoing what the substitution cannot have invalidated.
 # --------------------------------------------------------------------------- #
+
+# What a program of a Problem is built from (`rhs_program`, `compile_kernels`):
+# the prepared run the Problem's build compiled and the inputs that build took,
+# so a program is lowered from the same prepared document without loading it
+# again or sampling a provider twice.
+struct _ProgramSeed
+    prep::PreparedRun                 # with the data shapes the Problem adopted
+    compiler::Symbol
+    model_name::Union{Nothing, String}
+    overrides::Dict{String, Any}
+    const_arrays::Dict{String, Any}   # the merged const registry the build read
+    param_arrays::Dict{String, Any}   # the Problem's live buffers (the same arrays)
+    gated_providers::Dict{String, _GatedProvider}
+    sample_time::Float64
+    runtime_array_parameters::Bool
+    # The start of the run and the data-fed values there, which the `ic`
+    # right-hand sides read (esm-spec §11.4.2).
+    ic_t0::Float64
+    ic_data::Dict{String, Any}
+end
+
+# A Problem's own build products, plus what the Problem keeps across reads of
+# them: the `observed_field` answers (name → `_ObservedMemo`), the lock around
+# them and the report rows reads file, since two tasks may read one problem at
+# once; the seed its programs are built from (`nothing` for a compiler that
+# builds no program); and its whole-model program once one is built (by
+# `rhs_program`, or by `esm_problem(…; program_build = true)` as the Problem's
+# own right-hand side).
+struct _ProblemBuild
+    products::BuildProducts
+    observed_memo::Dict{String, _ObservedMemo}
+    observed_lock::ReentrantLock
+    seed::Union{Nothing, _ProgramSeed}
+    program::Base.RefValue{Any}
+    program_lock::ReentrantLock
+end
+_ProblemBuild(products::BuildProducts, seed = nothing, program = nothing) = _ProblemBuild(
+    products, Dict{String, _ObservedMemo}(), ReentrantLock(), seed,
+    Ref{Any}(program), ReentrantLock()
+)
 
 """
     EsmProblem
 
-The ESM simulation problem: the right-hand side `f!` the chosen `compiler`
-built — the compiled tree walk under `:native` / `:interpreter`, the compiled
-StableHLO program under `:xla` — the seeded initial state `u0`, the integration interval `tspan`, the parameter carrier `p`, the
-`var_map`, the live forcing buffers, the discrete-provider/refresh scaffolding,
-and the problem's own callback set — everything deterministic per document,
-built exactly once by [`esm_problem`](@ref).
+The ESM simulation problem [`esm_problem`](@ref) builds once per document: the
+right-hand side `f!` the chosen `compiler` built, the seeded initial state `u0`,
+the integration interval `tspan`, the parameter carrier `p`, the `var_map`, the
+live forcing buffers, the discrete-provider refresh state and the problem's own
+callback set.
 
 ```julia
 using EarthSciAST, OrdinaryDiffEqTsit5
@@ -986,11 +840,9 @@ sol[Symbol("M.y")]              # that state element's trajectory, BY NAME
 prob2 = remake(prob; tspan = (0.0, 5.0))   # no re-load / re-flatten / re-build
 ```
 
-Snapshot semantics: the input document is fully parsed and compiled at
-construction, so mutations to the input (e.g. editing the `Dict` you passed)
-afterwards are NOT seen. Forcing arrays (`const_arrays` / `param_arrays`) are
-the exception by design: they are captured BY REFERENCE (the live-buffer
-refresh contract), not copied.
+The input document is parsed and compiled at construction, so later mutations
+to it are not seen. Forcing arrays (`const_arrays` / `param_arrays`) are the
+exception: they are captured by reference, not copied.
 
 Repeated runs are independent: `u0` is copied per run, and discrete forcing
 buffers are re-seeded from their providers at each run's `t0` (with the
@@ -999,9 +851,9 @@ have refreshed them or the start time changed.
 
 Parameter overrides split by CLASS (see [`parameter_classes`](@ref)):
 `:numeric` ones may be passed to `remake(prob; p = …)` and are applied by
-swapping `p` (cheap, and AD-transparent — no rebuild). `:structural`,
-`:const_folded` and `:forcing` ones throw: their values were consumed at BUILD
-time (or never reach `p` at all), so call [`esm_problem`](@ref) again.
+swapping `p` (no rebuild). `:structural`, `:const_folded` and `:forcing` ones
+throw, since the build consumed them or they never reach `p`; call
+[`esm_problem`](@ref) again for those.
 
 Fields are an extension seam, not stable API; `var_map`, `p`, `u0`, `tspan`
 and `output_meta` are the ones downstream code reads.
@@ -1020,22 +872,19 @@ struct EsmProblem
     buffer_time::Base.RefValue{Float64}   # t the discrete buffers currently hold
     dirty::Base.RefValue{Bool}            # true once a run may have refreshed them
     output_meta::OutputMeta               # doc-derived output naming/CF metadata (RFC §7–§8)
-    # The prepared (flattened, single-model) RUN DOCUMENT the evaluator was
-    # built from — the carrier [`observed_field`](@ref) resolves shapes and
-    # index sets against, so a caller can read build-time observeds through the
-    # PUBLIC problem surface instead of re-running the document pipeline.
-    run_doc::Dict{String, Any}
-    run_file::Base.RefValue{Any}          # lazy coerce_esm_file(run_doc) memo
+    # The single-model run document the problem was built from (`_run_file`):
+    # what [`observed_field`](@ref) resolves shapes and index sets against, and
+    # where `solve` reads the document's `solver` block.
+    run_file::EsmFile
     # The parameter PARTITION this build produced (see `parameter_classes`):
     # name → `:numeric` / `:structural` / `:const_folded` / `:forcing`. Derived
     # from what the build-time consumers actually READ, which is what decides
     # whether an override can ride `p` at solve time or needs a rebuild.
     param_classes::Dict{String, Symbol}
-    # Build observability, owned by the PROBLEM (§5.8: `observed_field(prob,
-    # name)` is two arguments). The caller no longer threads a `BuildInspection`
-    # through construction and back into the accessor; one is always allocated
-    # here, and a caller that wants to inspect it passes its own via `inspect`.
-    inspection::BuildInspection
+    # What the build produced besides the right-hand side, and this problem's
+    # output-time read cache (`_ProblemBuild`). Shared by its `remake`s, which
+    # share its build.
+    build::_ProblemBuild
     # The problem's callback set (§2.5.4). Composed at CONSTRUCTION from the
     # data-refresh, output-sink and checkpoint callbacks, because a callback
     # that refreshes provider buffers or writes an output stream belongs to the
@@ -1048,11 +897,9 @@ struct EsmProblem
     lifecycle_sinks::Vector{Any}          # distinct sinks to open!/close! per run
     symcache::Base.RefValue{Any}          # lazy SymbolicIndexingInterface cache
     # Every state spelling an `operator_compose` renaming match DELETED, mapped
-    # onto the survivor it was folded into (issue #230). Carried here because
-    # `flattened_to_esm` drops `FlattenMetadata`, so the run doc cannot hold it,
-    # and because a NAME-KEYED read of this problem — `observed_field(prob, name)`
-    # — is naming a quantity that MOVED, not one that never existed. Empty for a
-    # document with no renaming merge, which is the overwhelming majority.
+    # onto the survivor it was folded into (issue #230): a NAME-KEYED read of
+    # this problem — `observed_field(prob, name)` — names a quantity that MOVED,
+    # not one that never existed. Empty for a document with no renaming merge.
     merged_renames::OrderedDict{String, String}
     # `(; seed, overrides)`, `seed(t0, overrides) -> u0`: this problem's
     # initial state at another start of the run, for a document whose `ic`
@@ -1065,16 +912,26 @@ struct EsmProblem
     stripped::Any
 end
 
-# Every construction site that predates `ic_restart` builds a problem whose
-# initial state does not move with its start, and every one that predates
-# `stripped` a problem nothing was stripped from.
-EsmProblem(args::Vararg{Any, 23}) = EsmProblem(args..., nothing, nothing)
-EsmProblem(args::Vararg{Any, 24}) = EsmProblem(args..., nothing)
-
-# `prob` with its stripped constructs set.
-_with_stripped(prob::EsmProblem, s) = EsmProblem(
-    (getfield(prob, f) for f in fieldnames(EsmProblem)[1:(end - 1)])..., s
+# The keyword constructor every construction site uses, so a field added to
+# the struct is an error at each site rather than a shifted argument.
+EsmProblem(;
+    f!, u0, tspan, p, var_map, param_buffers = Dict{String, Any}(),
+    discrete_providers = Dict{String, Any}(), dm = DiscreteMaterializer(),
+    n_equations, buffer_time, dirty = Ref(false), output_meta, run_file,
+    param_classes, build, callback, tstops, save_everystep, sinks, lifecycle_sinks,
+    symcache = Ref{Any}(nothing), merged_renames, ic_restart = nothing, stripped = nothing
+) = EsmProblem(
+    f!, u0, tspan, p, var_map, param_buffers, discrete_providers, dm, n_equations,
+    buffer_time, dirty, output_meta, run_file, param_classes, build, callback, tstops,
+    save_everystep, sinks, lifecycle_sinks, symcache, merged_renames, ic_restart, stripped
 )
+
+# `prob` with the fields named in `changes` replaced.
+function _with(prob::EsmProblem; changes...)
+    names = fieldnames(EsmProblem)
+    fields = NamedTuple{names}(map(f -> getfield(prob, f), names))
+    return EsmProblem(; merge(fields, values(changes))...)
+end
 
 function Base.show(io::IO, prob::EsmProblem)
     # A compiler that built its own program carries its own parameter object
@@ -1127,12 +984,12 @@ show(stdout, MIME"text/plain"(), compiler_report(prob))
 
 The names and their meanings are stable; the record's shape is per-binding.
 """
-compiler_report(prob::EsmProblem)::CompilerReport = prob.inspection.compiler_report
+compiler_report(prob::EsmProblem)::CompilerReport = prob.build.products.compiler_report
 
 """
     compiler_report(insp::BuildInspection) -> CompilerReport
 
-The same record, off a build's inspection sink. A caller who passed
+The same record, off a build's [`BuildInspection`](@ref). A caller who passed
 `inspect = insp` to [`esm_problem`](@ref) reads it here — including after a
 build that REFUSED, which is the case the partial record is most wanted for and
 the one no Problem exists to carry.
@@ -1157,7 +1014,7 @@ The Problem publishes it whatever compiler built it. Position of a name is
 [`sync_forcing!`](@ref) mirrors the container into a compiled program's device
 arrays at a cadence boundary.
 """
-forcing_buffers(prob::EsmProblem)::NamedTuple = prob.inspection.forcing_buffers
+forcing_buffers(prob::EsmProblem)::NamedTuple = prob.build.products.forcing_buffers
 
 """
     forcing_buffer_index(prob::EsmProblem) -> Dict{String,Int}
@@ -1166,33 +1023,19 @@ Name → position in [`forcing_buffers`](@ref)`(prob)`, and in any container
 aligned with it. Treat as read-only.
 """
 forcing_buffer_index(prob::EsmProblem)::Dict{String, Int} =
-    prob.inspection.forcing_buffer_index
+    prob.build.products.forcing_buffer_index
 
 
-# Equation count of the prepared (flattened, single-model) run document —
-# display metadata only, read off the doc `prepare` already holds.
-function _doc_equation_count(doc::AbstractDict)
-    n = 0
-    models = get(doc, "models", nothing)
-    models isa AbstractDict || return n
-    for (_, m) in models
-        m isa AbstractDict || continue
-        eqs = get(m, "equations", nothing)
-        eqs isa AbstractVector && (n += length(eqs))
-    end
-    return n
-end
+# Equation count of the run document — display metadata only.
+_doc_equation_count(file::EsmFile) =
+    file.models === nothing ? 0 : sum(m -> length(m.equations), values(file.models); init = 0)
 
 # The pushdown prepass's input (`esm_problem(...; pushdown_rewrite = true)`):
 # the rewritten document when the pattern matched, else the loaded file, and
 # whether it matched.
 function _pushdown_input(input, model_name, metaparams, base_path)
     pfile = input isa EsmFile ? input :
-        input isa AbstractString ?
-        (
-            isfile(input) || throw(SimulateError("esm_problem: no such file '$input'"));
-            load_path(input; metaparameters = metaparams)
-        ) :
+        input isa AbstractString ? _load_run_path(String(input), metaparams) :
         input isa AbstractDict ? load_document(
             input; base_path = base_path,
             metaparameters = metaparams
@@ -1200,7 +1043,8 @@ function _pushdown_input(input, model_name, metaparams, base_path)
         throw(
             SimulateError(
                 "esm_problem: pushdown_rewrite=true needs a path, native Dict, or " *
-                "EsmFile input — a FlattenedSystem is already past the rewrite point"
+                "EsmFile input — a FlattenedSystem is already past the rewrite point",
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     raw = serialize_esm_file(pfile)
@@ -1208,146 +1052,35 @@ function _pushdown_input(input, model_name, metaparams, base_path)
     return rewritten !== raw ? (rewritten, true) : (pfile, false)
 end
 
-# What `rhs_program` (src/range_restricted.jl) rebuilds an operator's seed from:
-# the inputs `esm_problem` was called with and the choices it made from them.
-# The seed itself — the table-lowered flattened system while it still carries
-# its per-term provenance, and the merged const arrays — is built on the first
-# `rhs_program` call (`_program_seed`) and kept from then on.
-struct _ProgramSeedRecipe
-    input::Any                        # the caller's document, before any rewrite
-    pushdown::Bool
-    metaparams::Dict{String, Int}
-    base_path::String
-    supplied::Set{String}
-    model_name::Union{Nothing, String}
-    compiler::Symbol
-    overrides::AbstractDict
-    const_arrays::AbstractDict        # the caller's, not the merged registry
-    providers::Any
-    discovered::Set{String}           # providers the extent pre-pass sampled
-    provider_shapes::Dict{String, Vector{Int}}  # what each sample is checked against
-    pd_gated::Set{String}             # providers the pushdown record gates
-    pd_coupling::Vector{Pair{String, String}}
-    gated_providers::Dict{String, Any}
-    sample_time::Float64
-    runtime_array_parameters::Bool
-    memo::Base.RefValue{Any}
-    lock::ReentrantLock
-    # The whole-model program when `esm_problem(…; program_build = true)` built
-    # it as the Problem's own right-hand side; `nothing` otherwise.
-    program::Base.RefValue{Any}
-    # The start of the run and the data-fed values there, which the `ic`
-    # right-hand sides read (esm-spec §11.4.2; `_build_evaluator`'s `_ic_t0`,
-    # `_ic_data`).
-    ic_t0::Float64
-    ic_data::Dict{String, Any}
-end
-
-# The seed of `prob`'s programs, built once from its recipe; `nothing` for a
-# Problem `esm_problem` did not build.
-function _program_seed(prob)
-    r = prob.inspection.program_seed
-    r isa _ProgramSeedRecipe || return r
-    return _recipe_seed(r, prob.param_buffers, prob.run_doc)
-end
-
-# The seed of recipe `r` for a Problem whose live buffers are `param_buffers`
-# and whose run document is `run_doc`. A caller that already holds what the
-# seed is made of (`esm_problem` building the Problem as its program) passes
-# it: `prepared`, what `_prepare_run_doc` returned through `flat_out` for the
-# recipe's own input and arguments, and `const_arrays`, the const registry it
-# merged from the recipe's arrays and providers. Each one left `nothing` is
-# made again: the input prepared, the providers sampled.
-function _recipe_seed(
-        r::_ProgramSeedRecipe, param_buffers, run_doc;
-        prepared = nothing, const_arrays = nothing
-    )
-    return lock(r.lock) do
-        r.memo[] === nothing || return r.memo[]
-        flat = Ref{Any}(prepared)
-        if prepared === nothing
-            input = r.pushdown ?
-                first(_pushdown_input(r.input, r.model_name, r.metaparams, r.base_path)) :
-                r.input
-            _prepare_run_doc(
-                input; metaparameters = r.metaparams, base_path = r.base_path,
-                supplied_names = r.supplied, flat_out = flat
-            )
-        end
-        # The const registry `esm_problem` merged, provider by provider as it
-        # routed them; the live forcing buffers are the Problem's own.
-        merged_const = const_arrays !== nothing ? const_arrays :
-            Dict{String, Any}(String(k) => v for (k, v) in r.const_arrays)
-        if const_arrays === nothing && r.providers !== nothing
-            targets, shadowed = _provider_routing(
-                flat[], _routable_provider_keys(r.providers, r.pd_gated);
-                model_name = r.model_name
-            )
-            for (rawk, prov) in r.providers
-                k = String(rawk)
-                # A key that lost to an exact key for the same parameter is
-                # not read (esm-spec §6.6.2).
-                k in shadowed && continue
-                # The const fields `esm_problem` bound whole, sampled again: the
-                # recipe holds no provider data, so a Problem no program is
-                # made from keeps none alive.
-                whole_const = k in r.discovered || (
-                    !(k in r.pd_gated) && !provider_is_gated(prov) &&
-                        provider_is_const(prov)
-                )
-                whole_const || continue
-                tk = get(targets, k, k)
-                _put_provider_const!(
-                    merged_const, k, tk,
-                    forcing_from_sample(
-                        provider_sample(prov, r.sample_time), k;
-                        shape = get(r.provider_shapes, tk, nothing)
-                    )
-                )
-            end
-        end
-        const_arrays === nothing && r.pushdown &&
-            _inject_pushdown_aliases!(merged_const, run_doc, r.pd_coupling)
-        # The shapes `esm_problem` adopted from the same data (a no-op on the
-        # record it already adopted them on).
-        flat[] = first(_prepared_with_data_shapes(flat[], run_doc, merged_const, param_buffers))
-        r.memo[] = (;
-            flat[]..., compiler = r.compiler, model_name = r.model_name,
-            overrides = r.overrides, const_arrays = merged_const,
-            param_arrays = Dict{String, Any}(param_buffers),
-            gated_providers = r.gated_providers, sample_time = r.sample_time,
-            runtime_array_parameters = r.runtime_array_parameters,
-            ic_t0 = r.ic_t0, ic_data = r.ic_data,
-        )
-    end
-end
-
 # --------------------------------------------------------------------------- #
 # Loader-discovered extents (esm-spec §8.9.4, CONFORMANCE_SPEC §5.5) — the
-# pre-pass `prepare` runs before ANY load, because a discovered extent closes a
+# pre-pass `esm_problem` runs before ANY load, because a discovered extent closes a
 # metaparameter and metaparameters are bound at the loader API.
 #
 # Returns `(metaparameters, discovered)`: the caller's bindings PLUS whatever
 # the loaders measured, and the sampled arrays themselves so the injection loop
 # reuses them instead of re-reading (a zipped inventory is decoded once).
 # --------------------------------------------------------------------------- #
-function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::Float64)
+function _discover_loader_extents(
+        providers, traits::AbstractDict{String, _ProviderTraits},
+        metaparameters::AbstractDict, t0::Float64
+    )
     out = Dict{String, Int}(String(k) => Int(v) for (k, v) in metaparameters)
     discovered = Dict{String, Any}()
     providers === nothing && return out, discovered
     # `by` records which provider bound each metaparameter, so a disagreement
     # names BOTH sides. Sorted keys keep that naming deterministic.
     by = Dict{String, Tuple{Int, String}}()
-    for rawk in sort!(String[String(k) for k in keys(providers)])
+    for rawk in sort!(collect(keys(traits)))
         prov = providers[rawk]
-        mp = provider_extent_metaparameter(prov)
+        mp = traits[rawk].extent_metaparameter
         mp === nothing && continue
-        mp = String(mp)
-        provider_is_gated(prov) && throw(
+        traits[rawk].gate === nothing || throw(
             SimulateError(
                 "provider '$rawk' both GATES on a derived index set and declares the " *
                     "extent metaparameter '$mp'; a gated slab's extent is the gating set's, " *
-                    "not a discovered one"
+                    "not a discovered one",
+                ERROR_CODES.PROVIDER_EXTENT_CONFLICT
             )
         )
         # Only the record count is read here; the field is checked and
@@ -1359,7 +1092,8 @@ function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::F
             prev == n || throw(
                 SimulateError(
                     "loader extent '$mp' is $prev from provider '$prevk' but $n from " *
-                        "'$rawk' — the loader's variables are not aligned on one record axis"
+                        "'$rawk' — the loader's variables are not aligned on one record axis",
+                    ERROR_CODES.PROVIDER_EXTENT_CONFLICT
                 )
             )
         elseif haskey(out, mp) && out[mp] != n
@@ -1367,7 +1101,8 @@ function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::F
                 SimulateError(
                     "metaparameter '$mp' was closed at $(out[mp]) by the caller but " *
                         "provider '$rawk' discovers $n records; drop the binding and let the " *
-                        "loader declare its own extent"
+                        "loader declare its own extent",
+                    ERROR_CODES.PROVIDER_EXTENT_CONFLICT
                 )
             )
         end
@@ -1410,22 +1145,30 @@ end
 # axis is an anonymous interval index set `<name>__data<k>` of the data's extent
 # on that axis. Data of one value leaves the parameter a scalar, and
 # `shape: []` declares a scalar whatever its data (the build refuses array data
-# for it, `_refuse_array_data_for_scalar`). A registry key names a parameter by
-# its exact flattened name or by a dotted suffix only that parameter carries
-# (esm-spec §6.6.2). Returns `flat` itself when nothing adopts a shape.
+# for it, `_refuse_array_data_for_scalar`). A registry key names a parameter as
+# any caller key does (`resolve_key`, esm-spec §6.6.2); one that several parameters
+# carry is refused. Returns `flat` itself when nothing adopts a shape.
+# Whether `flat` declares `name` (in any partition).
+_declares(flat::FlattenedSystem, name::AbstractString) =
+    haskey(flat.parameters, name) || haskey(flat.state_variables, name) ||
+    haskey(flat.observed_variables, name) || haskey(flat.discrete_parameters, name)
+
 function _adopt_data_shapes(flat::FlattenedSystem, registries...)
     cands = Set{String}(k for (k, v) in flat.parameters if v.shape === nothing)
     isempty(cands) && return flat
-    suffix_group = Dict{String, Vector{String}}()
-    for n in cands, s in _dotted_suffixes(n)
-        push!(get!(suffix_group, s, String[]), n)
-    end
+    table = NameTable(cands)
     adopted = Dict{String, Vector{Int}}()
     for reg in registries, (rawk, a) in reg
         a isa AbstractArray && length(a) != 1 || continue
         k = String(rawk)
-        group = get(suffix_group, k, String[])
-        name = k in cands ? k : length(group) == 1 ? group[1] : nothing
+        # A key naming another declaration exactly (a state, a loader field) is
+        # that declaration's.
+        k in cands || !_declares(flat, k) || continue
+        r = resolve_key(table, k)
+        r.how === :ambiguous && throw(
+            SimulateError(_override_ambiguous_message("const_arrays", k, r.candidates), ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS)
+        )
+        name = r.name
         name === nothing && continue
         # An exact key outranks a suffix spelling of the same parameter.
         haskey(adopted, name) && k != name && continue
@@ -1447,238 +1190,110 @@ function _adopt_data_shapes(flat::FlattenedSystem, registries...)
     )
 end
 
-# `prepared` (a `flat_out` record from `_prepare_run_doc`) with its flattened
-# system's unshaped data-fed parameters given their data's shape
-# (`_adopt_data_shapes`), and the run document rebuilt from it; `(prepared, doc)`
-# unchanged when no parameter adopts one.
-function _prepared_with_data_shapes(prepared, doc, registries...)
-    flat = _adopt_data_shapes(prepared.flat, registries...)
-    flat === prepared.flat && return prepared, doc
-    return merge(prepared, (; flat = flat)),
-        _flat_run_doc(flat, prepared.coordinates, prepared.solver, prepared.init)
-end
-
 """
     esm_problem(input, tspan; p=Dict(), u0=nothing, kwargs...) -> EsmProblem
 
-Build the ESM simulation problem for `input` over `tspan = (t0, t1)` — the one
-noun of esm-libraries-spec §2.5. Construction runs everything deterministic per
-document ONCE (coerce `input` to a runnable document: load → flatten → shape
-transforms; materialize provider fields; build the tree-walk evaluator; seed the
-initial state; compose the problem's callbacks) and returns an
-[`EsmProblem`](@ref) that `solve` integrates as often as you like.
+Build the simulation problem for `input` over `tspan = (t0, t1)`
+(esm-libraries-spec §2.5). Construction loads, flattens and shape-transforms the
+document, materializes provider fields, builds the evaluator, seeds the initial
+state and composes the callbacks once; `solve` then integrates the returned
+[`EsmProblem`](@ref) as often as you like.
 
-`input` may be a path to an `.esm` file, a native ESM `Dict`, a loaded
-[`EsmFile`](@ref), or a [`FlattenedSystem`](@ref). The first three are AUTHORED
-documents and are FLATTENED, so every name below (and every solution index) is
-the flattener's namespaced one — `"Chem.A"`, not `"A"`. Only a
-`FlattenedSystem` skips the flattener, that being the type whose whole meaning
-is "already flattened". **Snapshot semantics**: the document is fully parsed
-here, so mutating `input` afterwards does not affect the problem (forcing arrays
-are aliased by design; see [`EsmProblem`](@ref)).
+`input` is a path to an `.esm` file, a native ESM `Dict`, a loaded
+[`EsmFile`](@ref) or a [`FlattenedSystem`](@ref). All but a `FlattenedSystem` are
+flattened, so every name below and every solution index is namespaced
+(`"Chem.A"`, not `"A"`). The document is parsed here: mutating `input` afterwards
+does not affect the problem (forcing arrays are aliased; see [`EsmProblem`](@ref)).
+Two problems may be built at once on two tasks; one problem's `f!` is not to be
+called from several threads at once.
 
-Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
+Keywords (API_SPEC §5.8):
 
-* `p::AbstractDict` — parameter overrides. Baked into the build (they feed
-  build-time constant folding), which is why EVERY class of parameter can be set
-  here — including the `:structural` ones a `remake` must refuse (see
-  [`parameter_classes`](@ref)). A purely `:numeric` change need not rebuild:
-  pass it to `remake(prob; p = …)`, which swaps `p`. Keys may be spelled LOCALLY
-  (`pert_amp`, the form esm-spec §6.6 pins for a test's `parameter_overrides`)
-  or with the flattener's namespacing (`Chem.pert_amp`); both resolve to the
-  same parameter. The resolved values also bind the BUILD-TIME evaluation scope
-  (esm-spec §6.6.5): a coordinate-expression `ic` and an inline assertion
-  `reference` see the override, not the declared default.
-* `u0` — the initial state. Either an `AbstractDict` of per-element or broadcast
-  overrides applied on top of the document's own initial conditions (keys spelled
-  `"M.y"`, `"M.f[1,2]"`, or a bare array name `"M.f"` broadcasting one value over
-  every cell), or an `AbstractVector` replacing the seeded vector outright.
-* `providers::AbstractDict` — `<Loader>.<var> => data Provider`, the loaded-data
-  injection seam. CONST providers ([`provider_is_const`](@ref)) are materialized
-  once at build time into `const_arrays` under their loader variable name — so a
-  scoped-reference `ic(Sys.sp) ~ Model.param` folds the seeded field into `u0`
-  and a loader→consumer `variable_map` binding resolves the consumer gather from
-  it. DISCRETE providers get a live buffer plus a [`build_refresh_callback`](@ref)
-  on the problem, so their forcing refreshes in place at its cadence. A key
-  that names a data-fed parameter may spell it as a `parameter_overrides` key
-  may (esm-spec §6.6.2): `Fed.s` or `s` both feed the flattened `Fed.s`. A
-  scalar parameter given data this way has no slot in `p`; the right-hand side
-  reads the data (`parameter_classes(prob)` reports it `:const_folded` or
-  `:forcing`).
-* `model_name` — select one model when the document holds several.
-* `metaparameters::AbstractDict` — binds the document's open metaparameters at
-  the loader API (esm-spec §9.7.6 binding site 3), exactly as
-  [`load_path`](@ref)`(path; metaparameters=…)` does. Pass them HERE rather than
-  pre-`load`ing, so a loader that discovers its own extent can close one first
-  (below); a caller binding that CONTRADICTS a discovered extent is an error.
-* `base_path::AbstractString = pwd()` — the directory a native `Dict` input's
-  relative `{ref}`s resolve against (a path input anchors them at its own
-  directory).
-* `sample_time::Real = tspan[1]` — the `t` at which providers are sampled for
-  the build. A CONST provider is time-invariant by contract; DISCRETE buffers
-  seeded here are re-seeded at each run's `t0` anyway. An `ic` right-hand side
-  reads every data-fed parameter at `tspan[1]`, whatever `sample_time` is
-  (esm-libraries-spec §2.5.2): a discrete provider is sampled there too when
-  the two differ, for the initial state only.
-* `compiler::Symbol` — which strategy builds the right-hand side, over the
-  closed vocabulary `:interpreter`, `:native`, `:xla`, `:mtk`, `:sympy`
-  (esm-libraries-spec §2.5.10). Unnamed, it is `:native`. Read back with
-  [`compiler`](@ref)`(prob)` and [`compiler_report`](@ref)`(prob)`.
+* `p::AbstractDict` — parameter overrides, baked into the build, so every class
+  of parameter can be set here, including the `:structural` ones `remake` refuses
+  ([`parameter_classes`](@ref)). Keys may be local (`pert_amp`) or namespaced
+  (`Chem.pert_amp`). The values also bind build-time evaluation (esm-spec §6.6.5):
+  a coordinate-expression `ic` and an inline assertion `reference` see them.
+* `u0` — an `AbstractDict` of overrides applied on top of the document's initial
+  conditions (`"M.y"`, `"M.f[1,2]"`, or `"M.f"` broadcasting one value over every
+  cell), or an `AbstractVector` replacing the seeded state.
+* `providers::AbstractDict` — `<Loader>.<var> => data Provider`. Const providers
+  ([`provider_is_const`](@ref)) are materialized once into `const_arrays`;
+  discrete providers get a live buffer and a [`build_refresh_callback`](@ref). A
+  key naming a data-fed parameter may be local or namespaced (esm-spec §6.6.2).
+  A scalar parameter fed this way has no slot in `p`.
+* `model_name` — the model to build when the document holds several.
+* `metaparameters::AbstractDict` — binds open metaparameters, as
+  [`load_path`](@ref)`(path; metaparameters=…)` does (esm-spec §9.7.6).
+* `base_path::AbstractString = pwd()` — where a `Dict` input's relative `{ref}`s
+  resolve (a path input uses its own directory).
+* `sample_time::Real = tspan[1]` — the `t` at which providers are sampled for the
+  build. An `ic` right-hand side reads data-fed parameters at `tspan[1]` whatever
+  `sample_time` is (esm-libraries-spec §2.5.2).
+* `compiler::Symbol = :native` — one of `:native`, `:interpreter`, `:xla`, `:mtk`,
+  `:sympy` (esm-libraries-spec §2.5.10); read back with [`compiler`](@ref) and
+  [`compiler_report`](@ref). `:native` is strict: where one of its compiled tiers
+  declines, the build raises `compiler_refused_rule` naming the rule and reason
+  instead of falling back to a slower path. It refuses events, implicit equations
+  and SDE noise with `unsupported_construct`. `:interpreter` is the reference tree
+  walk with no performance promise. `:mtk` needs `using ModelingToolkit`, runs
+  events and implicit equations, refuses loaded data, a continuous spatial
+  dimension, a geometry operator and a time derivative of an expression
+  (`compiler_refused_rule`), classifies every parameter `:structural`, and indexes
+  its solution by the compiled system's symbols (`prob.var_map` and
+  [`observed_field`](@ref) give the document names). `:xla` needs `using Reactant`.
+  A compiler this session cannot run raises `compiler_unavailable` (`:sympy`
+  always does in Julia); a value outside the vocabulary raises `compiler_unknown`.
+  Both are raised before the document is loaded. The Simulation Runners page has
+  the details.
+* `strip` — classes of construct to remove before the build (`"algebraic"`,
+  `"continuous_events"`, `"discrete_events"`, `"parameter_updates"`); the removed
+  constructs are on the problem ([`stripped`](@ref)) and `solve` refuses a problem
+  that lost any. `:native` and `:interpreter` only.
+* `program_build::Bool = false` — build the right-hand side as the whole-model
+  program [`rhs_program`](@ref) returns, so `rhs_program(prob)` does not lower the
+  model again. Evaluations are bitwise those of that program. A state-free field
+  over a live forcing buffer is recomputed on every call rather than per refresh,
+  and every externally fed parameter is read from a live buffer (classified
+  `:forcing`, absent from `prob.p`). Needs `:native` or `:interpreter`; refuses
+  `materialize_out`.
+* `runtime_array_parameters::Bool = false` — keep every shaped parameter with a
+  value as a live buffer ([`forcing_buffers`](@ref)) instead of folding it, so a
+  program of the problem takes it as a [`ForcingSlot`](@ref) of kind
+  `:array_parameter`. A shaped parameter bound through `param_arrays` is a live
+  buffer either way.
+* `pushdown_rewrite::Bool = false` — apply [`desugar_pushdown`](@ref) to the
+  authored document before flattening; a provider routed onto a rewritten array
+  is then fetched pre-sliced to its support set.
 
-  **`:native` (the default) is STRICT.** It is this package's compiled tiers —
-  the affine stencil build, the `RuntimeGeneratedFunctions` emitter and the
-  whole-array forms — for every document whatever its shape, and never a quiet
-  demotion to a slower path. It covers the whole evaluable core, and the only
-  documents it may refuse are those carrying a construct outside its scope,
-  each refused by name: events, implicit equations and SDE noise
-  (`unsupported_construct`; `:mtk` runs the first two) and a spatial operator
-  with no discretization rule (`unlowered_operator`, refused under every
-  compiler). Every compiler-driven conformance tier requires `:native` for
-  every fixture, so any other refusal is a defect in this package.
+Julia extension-seam keywords (allowed by §2.5.2; not stable API): `const_arrays`,
+`param_arrays` (forwarded to the build), `inspect` (a fresh
+[`BuildInspection`](@ref) the build fills; one record per call),
+`materialize_out` (a caller-owned [`DiscreteMaterializer`](@ref)), `seed_ic!` (an
+`(u0, var_map) -> nothing` hook run after `u0`; see
+[`seed_expression_ic!`](@ref)), and the streaming-output set `sinks`, `snapshot`,
+`pre_write`, `checkpoint_predicates`, `checkpoint_sinks`,
+`terminate_on_checkpoint`.
 
-  The strictness is enforced as a BUILD error, `compiler_refused_rule`, naming
-  the rule and the deepest decline reason, raised at exactly three points —
-  each one a compiled tier declining where it must not:
-
-  1. **An access kernel both codegen emissions declined.** Such a kernel runs
-     on `_run_acc_kernel!` — a tree walk once per output cell, on every
-     right-hand-side call. A decline by the PRIMARY emission alone is not a
-     refusal: the overflow emission retries under an unbounded node budget and
-     also serves Float64, so the budget reason cannot recur.
-  2. **An equation the whole-array contraction tier ACCEPTED.** On that tier
-     success is what leaves an interpreter in the right-hand side: its runner
-     evaluates the body once per output cell and no codegen tier ever sees the
-     section. This is compiler backlog, not a property of the document.
-  3. **A construction-time or output-time materialization that resolves and
-     compiles the expression once per cell** — the per-cell arms of the setup
-     MAP, of the whole-array setup materializer, of the coordinate-expression
-     initial-condition seed and of the faq initialization-equation seed, which
-     are reached only when the compiled fill (each filled through the
-     right-hand-side cascade and emitted code, once) and any compile-once form
-     decline, and the build-time observed evaluator's per-cell arm. §2.5.10
-     puts every evaluation a compiler performs for the problem under the same
-     rule, not the right-hand side alone.
-
-  What it does NOT refuse: a per-cell BUILD (an equation scalarized one output
-  cell at a time whose cell entries are then compiled — that costs build time
-  and nothing per step), a `_StencilFallback` on its own (its landing is a
-  per-cell build), and a compile-once setup sweep that evaluates an already
-  compiled node per cell.
-
-  `:interpreter` is the reference and carries no performance promise: every
-  fast tier off, one tree walk per output cell. Pick it to check another
-  compiler. It keeps the build-time
-  MEMOS (the template expansion memo, the reference-preserving template image),
-  which change build wall time and not one evaluated bit.
-
-  **`:mtk` is the specialty compiler that works only for some documents**, and
-  it is the one that runs EVENTS and IMPLICIT EQUATIONS — the constructs
-  CONFORMANCE_SPEC §5.39 has every other evaluator refuse with
-  `unsupported_construct`. It needs `using ModelingToolkit` (without it, the
-  answer is `compiler_unavailable` naming that), and it builds
-  `ModelingToolkit.System(flatten(input))` → `mtkcompile` → `ODEProblem`, which
-  is what `solve` then integrates, so the compiled system's events, mass matrix
-  and observed equations are all in force. What it REFUSES by name
-  (`compiler_refused_rule`) is the document content it cannot express: a
-  parameter or field fed by LOADED DATA (a `providers` entry, a `const_arrays`
-  / `param_arrays` argument, `pushdown_rewrite = true`), a CONTINUOUS spatial
-  dimension (a PDE, which needs `ModelingToolkit.PDESystem` and a
-  discretization), a geometry operator, and a time derivative of an expression.
-  Two consequences a caller sees: every parameter classifies `:structural`
-  (the value is read where `mtkcompile` can see it and is baked into the
-  compiled problem, so `esm_problem(…; p = …)` sets it and `remake(prob; p = …)`
-  refuses), and a solution is indexed with the COMPILED SYSTEM's symbols rather
-  than the flattened ESM spelling — `prob.var_map` and
-  [`observed_field`](@ref) are the document-named surface there. See the
-  Simulation Runners page for the whole story.
-
-  `:xla` and `:sympy` raise `compiler_unavailable` from this entry point,
-  naming what to load or which binding has them; a value outside the vocabulary
-  raises `compiler_unknown`.
-
-  Naming `:native` is exactly the default: no environment variable selects an
-  evaluation strategy, so the keyword is the whole answer (esm-libraries-spec
-  §2.5.10). The `ESS_*` variables that remain are tuning thresholds — under a
-  strict `native` each is a refusal boundary: moving one off its default can
-  make `native` refuse an in-scope document, a defect, rather than run it
-  more slowly.
-
-Julia extension-seam keywords (§2.5.2 explicitly allows these; NOT stable API):
-`const_arrays`, `param_arrays` (forwarded to the build — the
-regridder source polygons and the live forcing buffers), `inspect` (share the
-problem's [`BuildInspection`](@ref) with the caller), `materialize_out` (a
-caller-owned [`DiscreteMaterializer`](@ref)), `pushdown_rewrite`, `seed_ic!`
-(an `(u0, var_map) -> nothing` hook for array ICs that need grid geometry; runs
-after `u0`, see [`seed_expression_ic!`](@ref)), and the streaming-output set
-`sinks` / `snapshot` / `pre_write` / `checkpoint_predicates` /
-`checkpoint_sinks` / `terminate_on_checkpoint`.
-
-`program_build::Bool = false` builds the Problem's right-hand side as its
-whole-model program ([`rhs_program`](@ref), API_SPEC §5.8): the model is lowered
-once, by the build `rhs_program` would otherwise run on its first call, and
-`rhs_program(prob)` returns that program instead of lowering the model a
-second time. The program is the one a later `rhs_program` call builds, so its
-evaluations are bitwise the same; the Problem's `f!` is the program's own
-evaluator over the Problem's state layout, eltype-generic as always. Each
-`rhs_program(prob)` call returns that program with its default forcing set
-holding the Problem's forcing as it is then, as a default-built Problem's
-`rhs_program` would. Two things differ from a Problem built the default way:
-- No discrete-cadence cut: a state-free field over a live forcing buffer is
-  computed on every call, not cached per refresh, which changes no value. So
-  `materialize_out`, which only that cut fills, is refused with
-  `program_build`.
-- Every externally fed parameter (one with a data `update`) is read from a live
-  buffer, as a program reads it. Such a parameter is not in `prob.p` and is
-  classified `:forcing` ([`parameter_classes`](@ref)), so `remake(prob; p = …)`
-  refuses it, where a default build may fold it or take it as `:numeric`.
-Observed fields read the same values either way. Needs `compiler = :native` or
-`:interpreter`.
-
-`runtime_array_parameters::Bool = false` makes every shaped parameter with a
-value (a declared `default`, a scalar broadcast over its grid, an inline
-override in `p`, or a caller's `const_arrays` entry) a live buffer holding that
-value rather than build-time data: it appears in
-[`forcing_buffers`](@ref)`(prob)`, and a program of the Problem
-([`rhs_program`](@ref)) takes it as a [`ForcingSlot`](@ref) of kind
-`:array_parameter` whose default buffer is that value, so a caller evaluates at
-another field without a rebuild. Off, those parameters are folded into the
-build as before. Either way, a shaped parameter the caller binds through
-`param_arrays` is a live buffer, and a program's slot of kind `:array_parameter`
-unless the parameter is externally fed.
-
-`pushdown_rewrite::Bool = false` opts in to the automatic projection-pushdown
-desugar ([`desugar_pushdown`](@ref)) at the PUBLIC entry point. The rewrite runs
-on the authored document BEFORE flattening (the pattern is authored in the
-un-namespaced model), and the engine then derives every provider gate from the
-rewrite's own `metadata.x_esd.pushdown` record: a `providers` entry that the
-document's coupling routes onto a rewritten array is DEFERRED and fetched
-pre-sliced to the invented support set — the caller hand-authors no gate dict.
-
-**Callbacks** (§2.5.4). A discrete provider contributes a refresh callback, a
-non-empty `sinks` an output callback, and non-empty `checkpoint_predicates` a
-checkpoint callback; they are composed into ONE callback set on the problem.
-Read it back with [`callbacks`](@ref). A `callback` argument to `solve`
-REPLACES it entirely — it does not append, merge, or wrap:
+**Callbacks** (§2.5.4). Discrete providers, `sinks` and `checkpoint_predicates`
+contribute refresh, output and checkpoint callbacks, composed into one set read
+back with [`callbacks`](@ref). A `callback` passed to `solve` replaces that set:
 
 ```julia
-solve(prob, Tsit5(); callback = CallbackSet(callbacks(prob), my_extra))
+prob = esm_problem("model.esm", (0.0, 10.0); p = Dict("Chem.k" => 2.0))
+sol = solve(prob, Tsit5(); callback = CallbackSet(callbacks(prob), my_extra))
 ```
 
-**Loader-discovered extents** (esm-spec §8.9.4, CONFORMANCE_SPEC §5.5). A
-provider reporting a [`provider_extent_metaparameter`](@ref) is sampled ONCE
-here, ahead of everything else, and the length of its delivered record axis
-binds that metaparameter for the load below — so `size: "N_REC"` is sized by the
-data itself. That array is REUSED when the provider is injected (never sampled
-twice); providers of one loader disagreeing on the count is an error naming
-both, and a `metaparameters` binding contradicting the discovered value is an
-error rather than a silent preference for either. Because the metaparameter must
-still be OPEN, `input` must be a path or a native `Dict` — an already-`load`ed
-`EsmFile` has closed it already, which is an error rather than a silent
-fallback.
+**Loader-discovered extents** (esm-spec §8.9.4). A provider reporting a
+[`provider_extent_metaparameter`](@ref) is sampled once, first, and its record
+count binds that metaparameter for the load; the sample is reused at injection.
+Providers of one loader disagreeing on the count, or a `metaparameters` binding
+contradicting it, is an error, and `input` must then be a path or a `Dict` (an
+`EsmFile` has its metaparameters closed already).
 
-Per-RUN knobs (`alg`, `abstol`, `reltol`, `saveat`, `callback`, `maxiters`)
-belong to `solve(prob, alg; …)`; §2.5.9 keeps the solver out of construction, so
-this call needs neither SciMLBase nor an OrdinaryDiffEq package.
+Per-run settings (`alg`, `abstol`, `reltol`, `saveat`, `callback`, `maxiters`)
+belong to `solve(prob, alg; …)`; this call needs neither SciMLBase nor an
+OrdinaryDiffEq package.
 """
 function esm_problem(
         input, tspan;
@@ -1710,92 +1325,129 @@ function esm_problem(
     # The compiler is resolved before anything else runs: `compiler_unknown` and
     # `compiler_unavailable` are answers about the REQUEST, and making the
     # caller wait through a load and a flatten to hear one would be a worse
-    # diagnostic for no gain. The plan comes back out of `_compiler_plan`; the
-    # build below re-derives it from the same keyword.
-    _plan_for(compiler)
-    classes = _strip_classes(strip)
-    if !isempty(classes)
-        compiler in (:native, :interpreter) || throw(
-            SimulateError(
-                "esm_problem: `strip` serves the :native and :interpreter compilers (API_SPEC " *
-                    "§5.8, \"Strip and expose\"); this call names :$compiler",
-                ERROR_CODES.COMPILER_UNAVAILABLE
-            )
-        )
-        file = input isa EsmFile ? input :
-            input isa AbstractDict ?
-            load_document(input; base_path = base_path, metaparameters = metaparameters) :
-            load_path(String(input); metaparameters = metaparameters)
-        sdoc, sobj = _strip_document(file, classes)
-        bp = input isa AbstractString ? dirname(abspath(String(input))) : base_path
-        prob = task_local_storage(:_esm_strip_taken, classes) do
-            esm_problem(
-                sdoc, tspan; p = p, u0 = u0, providers = providers, model_name = model_name,
-                base_path = bp, compiler = compiler,
-                sample_time = sample_time, runtime_array_parameters = runtime_array_parameters,
-                const_arrays = const_arrays, param_arrays = param_arrays, inspect = inspect,
-                materialize_out = materialize_out, pushdown_rewrite = pushdown_rewrite,
-                program_build = program_build, seed_ic! = seed_ic!, sinks = sinks,
-                snapshot = snapshot, pre_write = pre_write,
-                checkpoint_predicates = checkpoint_predicates,
-                checkpoint_sinks = checkpoint_sinks,
-                terminate_on_checkpoint = terminate_on_checkpoint
-            )
-        end
-        if !isempty(sobj.z_layout)
-            sflat = flatten(load_document(sdoc; base_path = bp))
-            params = Dict{String, Float64}(
-                k => Float64(v.default) for (k, v) in sflat.parameters if v.default isa Real
-            )
-            for (k, v) in p
-                haskey(params, String(k)) && (params[String(k)] = Float64(v))
-            end
-            append!(sobj.z0, _z_starting_values(sflat, sobj.z_layout, params, Float64(tspan[1])))
-        end
-        return _with_stripped(prob, sobj)
-    end
-    if program_build
-        (compiler === :native || compiler === :interpreter) || throw(
-            SimulateError(
-                "esm_problem: program_build = true needs compiler = :native or :interpreter, " *
-                    "the compilers a program is built with (API_SPEC §5.8); this call names :$compiler",
-                ERROR_CODES.COMPILER_UNAVAILABLE
-            )
-        )
-        # A program has no discrete-cadence cut, so a build as one leaves a
-        # materializer empty: a caller's would never be filled.
-        materialize_out === nothing || throw(
-            SimulateError(
-                "esm_problem: program_build = true takes no materialize_out: a Problem built as " *
-                    "its program has no discrete-cadence cut, so nothing would fill the materializer"
-            )
-        )
-    end
+    # diagnostic for no gain.
+    _check_compiler(compiler)
     span = (Float64(tspan[1]), Float64(tspan[2]))
-    t_sample = sample_time === nothing ? span[1] : Float64(sample_time)
+    req = _ProblemRequest(
+        span, p, u0, providers, model_name === nothing ? nothing : String(model_name),
+        metaparameters, String(base_path), compiler,
+        sample_time === nothing ? span[1] : Float64(sample_time),
+        runtime_array_parameters, const_arrays, param_arrays, inspect, materialize_out,
+        pushdown_rewrite, program_build, seed_ic!, sinks, snapshot, pre_write,
+        checkpoint_predicates, checkpoint_sinks, terminate_on_checkpoint
+    )
+    classes = _strip_classes(strip)
+    isempty(classes) || return _stripped_problem(input, req, classes)
+    _refuse_program_build_request(req)
     # `:mtk` builds a ModelingToolkit `System` rather than this package's own
-    # evaluator, so it takes the whole construction (EarthSciASTMTKExt). The
-    # plan above has already answered `compiler_unavailable` if MTK is absent.
-    if compiler === :mtk
-        return _mtk_problem(
-            input, span; p = p, u0 = u0, providers = providers,
-            model_name = model_name, metaparameters = metaparameters,
-            base_path = base_path, sample_time = t_sample,
-            const_arrays = const_arrays, param_arrays = param_arrays,
-            inspect = inspect, materialize_out = materialize_out,
-            pushdown_rewrite = pushdown_rewrite, seed_ic! = seed_ic!,
-            sinks = sinks, snapshot = snapshot, pre_write = pre_write,
-            checkpoint_predicates = checkpoint_predicates,
-            checkpoint_sinks = checkpoint_sinks,
-            terminate_on_checkpoint = terminate_on_checkpoint
+    # evaluator (EarthSciASTMTKExt). The plan above has already answered
+    # `compiler_unavailable` if ModelingToolkit is not loaded.
+    compiler === :mtk && return _mtk_problem(input, req)
+    return _esm_problem(input, req)
+end
+
+# What an `esm_problem` call asked for: its keywords, with the span and the
+# sample time resolved.
+struct _ProblemRequest
+    span::Tuple{Float64, Float64}
+    p::AbstractDict
+    u0::Any
+    providers::Union{Nothing, AbstractDict}
+    model_name::Union{Nothing, String}
+    metaparameters::AbstractDict
+    base_path::String
+    compiler::Symbol
+    sample_time::Float64
+    runtime_array_parameters::Bool
+    const_arrays::AbstractDict
+    param_arrays::AbstractDict
+    inspect::Union{Nothing, BuildInspection}
+    materialize_out::Union{Nothing, DiscreteMaterializer}
+    pushdown_rewrite::Bool
+    program_build::Bool
+    seed_ic!::Any
+    sinks::Any
+    snapshot::Any
+    pre_write::Any
+    checkpoint_predicates::Any
+    checkpoint_sinks::Any
+    terminate_on_checkpoint::Bool
+end
+
+function _refuse_program_build_request(req::_ProblemRequest)
+    req.program_build || return nothing
+    (req.compiler === :native || req.compiler === :interpreter) || throw(
+        SimulateError(
+            "esm_problem: program_build = true needs compiler = :native or :interpreter, " *
+                "the compilers a program is built with (API_SPEC §5.8); this call names :$(req.compiler)",
+            ERROR_CODES.COMPILER_UNAVAILABLE
         )
+    )
+    # A program has no discrete-cadence cut, so a build as one leaves a
+    # materializer empty: a caller's would never be filled.
+    req.materialize_out === nothing || throw(
+        SimulateError(
+            "esm_problem: program_build = true takes no materialize_out: a Problem built as " *
+                "its program has no discrete-cadence cut, so nothing would fill the materializer",
+            ERROR_CODES.INVALID_ARGUMENT
+        )
+    )
+    return nothing
+end
+
+# `esm_problem(…; strip)`: the document with the constructs of `classes`
+# removed (`_strip_document`), built as any other, with what was removed on the
+# Problem. A coupling-level event the stripped document keeps is not refused
+# when its class was taken.
+function _stripped_problem(input, req::_ProblemRequest, classes::Vector{String})
+    req.compiler in (:native, :interpreter) || throw(
+        SimulateError(
+            "esm_problem: `strip` serves the :native and :interpreter compilers (API_SPEC " *
+                "§5.8, \"Strip and expose\"); this call names :$(req.compiler)",
+            ERROR_CODES.COMPILER_UNAVAILABLE
+        )
+    )
+    _refuse_program_build_request(req)
+    input isa Union{AbstractString, AbstractDict, EsmFile} || throw(
+        SimulateError(
+            "esm_problem: `strip` removes constructs from a document; pass a path, a " *
+                "native Dict or an EsmFile, not a $(typeof(input))",
+            ERROR_CODES.INVALID_ARGUMENT
+        )
+    )
+    # The providers are described and any loader extent discovered before the
+    # load, which closes the metaparameters a discovered extent binds.
+    found = _discover_extents(input, req)
+    file = input isa EsmFile ? input :
+        input isa AbstractDict ?
+        load_document(input; base_path = req.base_path, metaparameters = found.metaparameters) :
+        _load_run_path(String(input), found.metaparameters)
+    sfile, sobj = _strip_document(file, classes)
+    prob = _esm_problem(sfile, req; strip_taken = classes, found = found)
+    if !isempty(sobj.z_layout)
+        sflat = prob.build.seed.prep.flat
+        params = Dict{String, Float64}(
+            k => Float64(v.default) for (k, v) in sflat.parameters if v.default isa Real
+        )
+        for (k, v) in req.p
+            haskey(params, String(k)) && (params[String(k)] = Float64(v))
+        end
+        append!(sobj.z0, _z_starting_values(sflat, sobj.z_layout, params, req.span[1]))
     end
-    # ---- extent discovery: a loader that measures its OWN record count ------
-    # FIRST, because a discovered extent CLOSES a metaparameter and every load
-    # below binds metaparameters at the loader API (esm-spec §9.7.6 site 3). The
-    # sampled arrays are kept and reused at injection, so a zipped inventory is
-    # decoded once, not once here and again there.
-    metaparams, discovered = _discover_loader_extents(providers, metaparameters, t_sample)
+    return _with(prob; stripped = sobj)
+end
+
+# The providers of `req` described (`_provider_traits`) and the loader extents
+# they discover, with the metaparameters those close: what every load of the
+# run binds. A loader that measures its OWN record count is sampled FIRST,
+# because a discovered extent CLOSES a metaparameter and a load binds
+# metaparameters at the loader API (esm-spec §9.7.6 site 3). The sampled arrays
+# are kept and reused at injection, so a zipped inventory is decoded once.
+function _discover_extents(input, req::_ProblemRequest)
+    traits = _describe_providers(req.providers)
+    metaparams, discovered = _discover_loader_extents(
+        req.providers, traits, req.metaparameters, req.sample_time
+    )
     # `load` is where a metaparameter closes, so an ALREADY-loaded carrier has
     # closed them — silently ignoring a binding (the caller's or a loader's) is
     # exactly the failure this seam exists to prevent.
@@ -1811,200 +1463,129 @@ function esm_problem(
                 "esm_problem: metaparameters $(sort!(collect(keys(metaparams)))) must be bound " *
                     "at the loader API, but `input` is a $(typeof(input)) whose metaparameters " *
                     "are already closed — pass the path or the native Dict to esm_problem (and drop " *
-                    "the pre-`load`), or bind them in that `load` call instead" * why
+                    "the pre-`load`), or bind them in that `load` call instead" * why,
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     end
+    return (; traits, metaparameters = metaparams, discovered)
+end
 
-    # ---- Phase 1 (clean consolidation): pushdown prepass, BEFORE flatten ----
-    # The desugar must see the AUTHORED (namespaced-not-yet-flattened) model:
-    # the flattener rewrites coupling-fed references in equations but not in the
-    # variables' `expression` fields, so the pattern no longer matches
-    # post-flatten. Running it here also puts the provenance record in hand
-    # BEFORE the provider classification below needs it. `desugar_pushdown` is
-    # idempotent (guarded on its own record), so the front door's own hook —
-    # never triggered from here — stays safe for direct callers.
-    pd_gates = Dict{String, Any}()
+# The `:native`, `:interpreter` and `:xla` construction (`esm_problem`). `found`
+# is `_discover_extents(input, req)`, already run by a caller that loads the
+# document itself (`strip`).
+function _esm_problem(
+        input, req::_ProblemRequest; strip_taken = String[],
+        found = _discover_extents(input, req)
+    )
+    compiler = req.compiler
+    span = req.span
+    t_sample = req.sample_time
+    providers = req.providers
+    traits, metaparams, discovered = found.traits, found.metaparameters, found.discovered
+
+    # ---- the projection-pushdown prepass, BEFORE flatten ----
+    # The desugar matches the AUTHORED (not yet flattened) model, and running it
+    # here puts the provenance record in hand BEFORE the provider
+    # classification below needs it.
     pd_coupling = Pair{String, String}[]
-    authored_input = input
-    if pushdown_rewrite
-        input, matched = _pushdown_input(input, model_name, metaparams, base_path)
+    if req.pushdown_rewrite
+        input, matched = _pushdown_input(input, req.model_name, metaparams, req.base_path)
         if matched
-            pd_gates = _pushdown_provider_gates(input, providers)
+            for (k, gate) in _pushdown_provider_gates(input, providers)
+                # A discovered extent and a record-derived gate are mutually
+                # exclusive: a gated slab's extent belongs to the gating set,
+                # which value invention has not materialized yet. (The
+                # provider's OWN gate is caught in the pre-pass; this catches
+                # the gate the rewrite record derives, which only exists now.)
+                haskey(discovered, k) && throw(
+                    SimulateError(
+                        "provider '$k' both GATES on a derived index set and declares the extent " *
+                            "metaparameter '$(traits[k].extent_metaparameter)'; a gated " *
+                            "slab's extent is the gating set's, not a discovered one",
+                        ERROR_CODES.PROVIDER_EXTENT_CONFLICT
+                    )
+                )
+                traits[k] = _with_gate(traits[k], _GateSpec(gate, k))
+            end
             pd_coupling = _pushdown_coupling_pairs(input)
         end
     end
-    # A discovered extent and a record-derived gate are mutually exclusive: a
-    # gated slab's extent belongs to the gating set, which value-invention has
-    # not materialised yet. (The provider's OWN gate is caught in the pre-pass;
-    # this catches the gate the rewrite record derives, which only exists now.)
-    for k in keys(discovered)
-        haskey(pd_gates, k) && throw(
-            SimulateError(
-                "provider '$k' both GATES on a derived index set and declares the extent " *
-                    "metaparameter '$(provider_extent_metaparameter(providers[k]))'; a gated " *
-                    "slab's extent is the gating set's, not a discovered one"
-            )
-        )
-    end
-    # `merged_renames` records the state spellings an `operator_compose` renaming
-    # match DELETED (issue #230). A caller holding `"Sink.O3"` after the merge
-    # folded it into `Chem.O3` is addressing a state that has moved, and nothing
-    # rewrites the strings a caller holds — so the key resolves to nothing and
-    # the state silently runs from its default. Resolve those keys here, where
-    # the flattened system's metadata is still reachable.
-    merged_renames = OrderedDict{String, String}()
     supplied = Set{String}(
-        string(k) for d in (const_arrays, param_arrays, providers)
+        string(k) for d in (req.const_arrays, req.param_arrays, providers)
             if d !== nothing for k in keys(d)
     )
-    run_flat = Ref{Any}(nothing)
-    doc = _prepare_run_doc(
-        input; metaparameters = metaparams, base_path = base_path,
-        renames_out = merged_renames, supplied_names = supplied, flat_out = run_flat
+    prep = _prepare_run(
+        input; metaparameters = metaparams, base_path = req.base_path,
+        supplied_names = supplied, strip_taken = strip_taken
     )
+    # The state spellings an `operator_compose` renaming match DELETED (issue
+    # #230). A caller holding `"Sink.O3"` after the merge folded it into
+    # `Chem.O3` addresses a state that has moved, and nothing rewrites the
+    # strings a caller holds, so its keys are resolved onto the survivors here.
+    merged_renames = OrderedDict{String, String}(_merged_renames(prep))
     # The parameter each provider feeds, under the name the build reads
     # (`_provider_routing`): a bare `s` lands on `Fed.s`.
     provider_targets, provider_shadowed = providers === nothing ?
         (Dict{String, String}(), Set{String}()) :
         _provider_routing(
-            run_flat[], _routable_provider_keys(providers, keys(pd_gates));
-            model_name = model_name
+            prep, _routable_provider_keys(traits);
+            model_name = req.model_name
         )
     _refuse_provider_registry_overlap(
-        provider_targets, run_flat[],
-        "const_arrays" => const_arrays, "param_arrays" => param_arrays;
-        model_name = model_name
+        provider_targets, prep,
+        "const_arrays" => req.const_arrays, "param_arrays" => req.param_arrays;
+        model_name = req.model_name
     )
     # The declared shape every whole-bound provider sample is checked against
     # (`forcing_from_sample`), resolved now that discovery has closed the
     # loader extents.
     provider_shapes = providers === nothing ? Dict{String, Vector{Int}}() :
         _provider_declared_shapes(
-            run_flat[].flat,
+            prep.flat,
             (get(provider_targets, String(k), String(k)) for k in keys(providers))
         )
 
     # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
     # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
     # `_coerce_inline_value` normalizes both; the build then routes the array
-    # ones onto the const-array channel (`_register_inline_array_parameters`),
-    # which is where an array-shaped parameter's value has always lived.
+    # ones onto the const-array channel (`_register_inline_array_parameters`).
     overrides = _resolve_merged_renames(
         merged_renames,
-        Dict{String, Any}(String(k) => _coerce_inline_value(v) for (k, v) in p)
+        Dict{String, Any}(String(k) => _coerce_inline_value(v) for (k, v) in req.p)
     )
+    u0 = req.u0
     u0 = u0 === nothing || isempty(merged_renames) ? u0 :
         (u0 isa AbstractDict ? _resolve_merged_renames(merged_renames, u0) : u0)
 
-    # Provider injection (DESIGN pde_simulation_pipeline §2). Loaded fields enter
-    # through the Provider seam, never as raw `const_arrays` keyed by internal
-    # consumer names. CONST providers (empty `provider_refresh_times`) are
-    # materialized ONCE at build time into `const_arrays` keyed by their declared
-    # loader variable name — reachable when scoped-`ic` folds `Loader.*` into u0
-    # (R2) and when the loader→consumer `variable_map` binding routes a consumer
-    # gather to the loader name. DISCRETE providers ride the refresh callback.
-    merged_const = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
-    merged_param = Dict{String, Any}(String(k) => v for (k, v) in param_arrays)
-    discrete_providers = Dict{String, Any}()
-    ic_data = Dict{String, Any}()
-    # Phase 2b Hook 2: GATED providers are DEFERRED — not pulled whole here, but
-    # stashed and fetched pre-sliced after value-invention (the const-tier
-    # dependency edge). A provider is gated when it reports a `provider_gate_spec`
-    # (the runner sets it from the loader's `gated_select`; a mock carries it).
-    gated_providers = Dict{String, Any}()
-    if providers !== nothing
-        for (rawk, prov) in providers
-            k = String(rawk)
-            # A key that lost to an exact key for the same parameter is not
-            # read (esm-spec §6.6.2, as for `parameter_overrides`).
-            k in provider_shadowed && continue
-            pd_gate = get(pd_gates, k, nothing)
-            if haskey(discovered, k)
-                # Already materialized by the extent-discovery pre-pass; never
-                # sampled twice.
-                _put_provider_const!(
-                    merged_const, k, get(provider_targets, k, k),
-                    forcing_from_sample(
-                        discovered[k], k;
-                        shape = get(provider_shapes, get(provider_targets, k, k), nothing)
-                    )
-                )
-            elseif pd_gate !== nothing
-                # Phase 1: RECORD-DERIVED gate — the rewrite's own
-                # `metadata.x_esd.pushdown.gated_select`, mapped onto this
-                # provider through the document coupling. Takes precedence over
-                # a provider-implemented `provider_gate_spec`.
-                gated_providers[k] = (prov = prov, gate = pd_gate)
-            elseif provider_is_gated(prov)
-                # Defer: value-invention must derive the gating set's members
-                # before we know which rows to fetch. Bundle the gate spec so the
-                # build resolves the selection without re-consulting the provider.
-                gated_providers[k] = (prov = prov, gate = provider_gate_spec(prov))
-            elseif provider_is_const(prov)
-                _put_provider_const!(
-                    merged_const, k, get(provider_targets, k, k),
-                    forcing_from_sample(
-                        provider_sample(prov, t_sample), k;
-                        shape = get(provider_shapes, get(provider_targets, k, k), nothing)
-                    )
-                )
-            else
-                # DISCRETE: allocate a LIVE forcing buffer seeded at the initial tick
-                # and register it in `param_arrays`. That makes the loader field a
-                # `live_param`, so the setup partition (`_geometry_setup_vars`) taints
-                # any in-model regrid over it: `F_tgt = A_ij ⊗ F_src / A_j` keeps its
-                # overlap WEIGHTS at setup but stays a runtime observed / discrete-
-                # materialized cache, instead of a build-once setup const where the
-                # (still-unbound) live `F_src` would fail. The refresh callback then
-                # rewrites this SAME buffer in place at each cadence tick.
-                tk = get(provider_targets, k, k)
-                merged_param[tk] = forcing_from_sample(
-                    provider_sample(prov, t_sample), k; shape = get(provider_shapes, tk, nothing)
-                )
-                discrete_providers[tk] = prov
-                # An `ic` right-hand side reads the record at the run's start,
-                # whatever `sample_time` the forcing holds (esm-libraries-spec
-                # §2.5.2); sampled again only when the two differ.
-                t_sample == span[1] || (
-                    ic_data[tk] = forcing_from_sample(
-                        provider_sample(prov, span[1]), k;
-                        shape = get(provider_shapes, tk, nothing)
-                    )
-                )
-            end
-        end
-        _rekey_discrete_providers!(
-            discrete_providers, filter(((k, n),) -> k != n, provider_targets)
-        )
-    end
+    merged_const, merged_param, discrete_providers, ic_data, gated_providers =
+        _sample_providers(
+        req, traits, discovered, provider_targets, provider_shadowed, provider_shapes
+    )
     # Every whole-bound array is in hand: an unshaped parameter fed array data
     # takes the data's shape now, before anything reads the run document.
-    prepared, doc = _prepared_with_data_shapes(run_flat[], doc, merged_const, merged_param)
-    run_flat[] = prepared
+    prep = _with_data_shapes(prep, merged_const, merged_param)
+    file = _run_file(prep)
 
-    # Phase 1: pushdown-path name aliasing. The build-front-door consumers that
-    # run BEFORE the impl parse (`_derive_binning_coords`, value-invention,
-    # `_observed_field`) read the flattened VARIABLES' expressions, which keep
-    # namespaced pre-coupling names — inject the caller's/providers' arrays
-    # under those spellings too (same objects, no copies).
-    if pushdown_rewrite
-        _inject_pushdown_aliases!(merged_const, doc, pd_coupling)
-        _inject_pushdown_aliases!(merged_param, doc, pd_coupling)
+    # The pushdown path's name aliasing. The build's pre-passes
+    # (`_derive_binning_coords`, value invention) and `observed_field` read the
+    # flattened VARIABLES' expressions, which keep namespaced pre-coupling names:
+    # the caller's and the providers' arrays are registered under those
+    # spellings too (same objects, no copies).
+    if req.pushdown_rewrite
+        _inject_pushdown_aliases!(merged_const, file, pd_coupling)
+        _inject_pushdown_aliases!(merged_param, file, pd_coupling)
     end
 
-    # Discrete-cadence materialization sink (the middle cadence phase), ALWAYS
-    # passed, so a state-free derived field over a live forcing buffer (a
-    # regrid→physics stack) is cut out of the per-step RHS into a cache filled once
-    # per refresh, not recomputed on every continuous step. Empty (no
-    # discrete-materialize var) ⇒ no effect. A caller-supplied `materialize_out` is
-    # reused (and thus inspectable), else fresh.
-    dm = materialize_out === nothing ? DiscreteMaterializer() : materialize_out
-    # Build observability is a CONSTRUCTION-time seam now (§5.8): the problem
-    # always owns a `BuildInspection`, so `observed_field(prob, name)` is two
-    # arguments. A caller that wants to read the sink itself passes its own.
-    insp = inspect === nothing ? BuildInspection() : inspect
-    # The parameter partition sink (differentiability plan §3 Phase 5): the build
+    # The discrete-cadence materializer (`_problem_build_run`): the caller's,
+    # or a fresh one.
+    dm = _problem_materializer(req.materialize_out)
+    # What the build produces besides the right-hand side; the Problem owns it.
+    # A caller's `inspect` record is claimed now and pointed at it when the
+    # build ends, refused or not.
+    products = BuildProducts()
+    req.inspect === nothing || _take_inspection!(req.inspect)
+    # The parameter partition sink: the build
     # fills it with name → `:numeric` / `:structural` / `:const_folded` /
     # `:forcing`, derived from which names its BUILD-TIME consumers read. It is
     # what lets `remake(prob; p = …)` accept the numeric half instead of refusing
@@ -2016,159 +1597,232 @@ function esm_problem(
     # the build product too, for the discrete-materializer caches only the
     # build creates.
     compiler === :xla && _xla_refuse_before_build(merged_param)
-    # What `rhs_program` rebuilds its seed from, on its first call: the
-    # caller's own inputs, not the flattened system or the merged arrays, so a
-    # Problem no program is made from keeps nothing extra alive. A Problem
-    # built as its program (`program_build`) holds that program, and with it
-    # the seed and the build it was made from.
-    recipe = _ProgramSeedRecipe(
-        authored_input, pushdown_rewrite, metaparams,
-        String(base_path), supplied, model_name === nothing ? nothing : String(model_name),
-        compiler, overrides, const_arrays, providers,
-        Set{String}(keys(discovered)), provider_shapes, Set{String}(keys(pd_gates)),
-        pd_coupling,
-        gated_providers, t_sample, runtime_array_parameters,
-        Ref{Any}(nothing), ReentrantLock(), Ref{Any}(nothing),
-        span[1], ic_data
-    )
+    # What a program of this Problem is built from (`rhs_program`). It holds the
+    # prepared run and the merged const registry, so a program is lowered from
+    # the document this build compiled, without loading it again.
+    seed = compiler in (:native, :interpreter) ? _ProgramSeed(
+            prep, compiler, req.model_name, overrides, merged_const, merged_param,
+            gated_providers, t_sample, req.runtime_array_parameters, span[1], ic_data
+        ) : nothing
     # `:xla` is built OUT OF PLACE — the compiled tree-walk intermediate
     # representation is what the direct StableHLO emitter lowers — and the
     # executable is wrapped back into the in-place `f!` this Problem's surface
     # promises, just below. Every other compiler builds the in-place evaluator
     # directly. See src/compiler_xla.jl.
     # With `program_build`, the Problem's right-hand side IS its whole-model
-    # program: the build `rhs_program` would run, run once here
-    # (`_problem_program`), from the seed of this call's own prepared document;
-    # `rhs_program(prob)` returns it rather than lowering the model again.
+    # program, built once here; `rhs_program(prob)` returns it rather than
+    # lowering the model again.
     shared_program = nothing
-    if program_build
-        shared_program, u0_built, p_built = _with_caller_u0(u0) do
-            seed = _recipe_seed(
-                recipe, merged_param, doc; prepared = run_flat[], const_arrays = merged_const
+    local f!, u0_built, p_built, var_map
+    try
+        if req.program_build
+            shared_program, u0_built, p_built = _problem_program(
+                seed; products = products, param_classes = param_classes, caller_u0 = u0
             )
-            _problem_program(seed; inspect = insp, param_classes = param_classes)
-        end
-        f!, var_map = shared_program.f!, shared_program.internal
-        _publish_program_slots!(insp, shared_program, merged_param)
-    else
-        f!, u0_built, p_built, _tspan, var_map = _with_caller_u0(u0) do
-            _build_evaluator(
-                doc;
+            f!, var_map = shared_program.f!, shared_program.internal
+            _publish_program_slots!(products, shared_program, merged_param)
+        else
+            f!, u0_built, p_built, _tspan, var_map = _problem_build_run(
+                file;
                 compiler = compiler,
                 form = compiler === :xla ? :oop : :inplace,
-                model_name = model_name,
+                model_name = req.model_name,
                 parameter_overrides = overrides,
                 const_arrays = merged_const,
                 param_arrays = merged_param,
-                inspect = insp,
+                products = products,
                 materialize_out = dm,
-                _param_classes = param_classes,
-                _runtime_array_parameters = runtime_array_parameters,
-                # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
-                # The front door fetches these pre-sliced right after value-invention.
-                _gated_providers = gated_providers,
-                _sample_time = t_sample,
-                _ic_t0 = span[1], _ic_data = ic_data
+                param_classes = param_classes,
+                runtime_array_parameters = req.runtime_array_parameters,
+                gated_providers = gated_providers,
+                sample_time = t_sample,
+                ic_t0 = span[1], ic_data = ic_data, caller_u0 = u0,
+                seed_ic! = req.seed_ic!
             )
         end
+    finally
+        req.inspect === nothing || _publish_inspection!(req.inspect, products)
     end
 
     if compiler === :xla
         f! = _xla_problem_rhs(
             f!, var_map, u0_built, p_built,
-            insp.compiler_report
+            products.compiler_report
         )
     end
-    recipe.program[] = shared_program
-    insp.program_seed = recipe
 
     # ---- initial state: the document's own ICs, then the caller's -----------
     # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an
     # evaluation for this problem, and §2.5.10 puts the seed under the same
     # refusal rule as the right-hand side.
-    u0_run = _with_compiler_plan(_plan_for(compiler)) do
-        _seed_u0(u0_built, var_map, u0, seed_ic!)
+    u0_run = _with_compiler_plan(_plan(compiler)) do
+        _seed_u0(u0_built, var_map, u0, req.seed_ic!)
     end
-    _refuse_missing_initial_values(insp.unvalued_slots, u0_built, var_map, u0, seed_ic!)
+    # `_problem_build_run` refused a state with no starting value; a program
+    # build is checked here.
+    req.program_build &&
+        _refuse_missing_initial_values(products.unvalued_slots, u0_built, var_map, u0, req.seed_ic!)
     # The same seeding at another start of the run, when the document's `ic`
     # right-hand sides read it: the build's re-seed with each discrete
     # provider sampled at the new start, then the caller's `u0` and hook.
     ic_restart = _ic_restart(
-        insp.ic_reseed, discrete_providers, provider_shapes, var_map, u0, seed_ic!,
+        products.ic_reseed, discrete_providers, provider_shapes, var_map, u0, req.seed_ic!,
         compiler
     )
 
-    # ---- the problem's callback set (§2.5.4) --------------------------------
-    # Composed HERE, at construction, because a callback that refreshes provider
-    # buffers or writes an output stream belongs to the DOCUMENT, not to a
-    # particular run's tolerances. `solve(prob; callback=…)` replaces the whole
-    # set; `callbacks(prob)` reads it back so a caller can extend explicitly.
+    cbs = _problem_callbacks(
+        req, isempty(discrete_providers) ? nothing :
+            (
+                providers = discrete_providers, buffers = merged_param, owner = dm,
+                post_refresh = dm.materialize!,
+            )
+    )
+    prob = EsmProblem(;
+        f!, u0 = u0_run, tspan = span, p = p_built, var_map, param_buffers = merged_param,
+        discrete_providers, dm, n_equations = _doc_equation_count(file),
+        buffer_time = Ref(t_sample), output_meta = derive_output_meta(file), run_file = file,
+        param_classes, build = _ProblemBuild(products, seed, shared_program),
+        callback = cbs.callback, tstops = cbs.tstops, save_everystep = cbs.save_everystep,
+        sinks = cbs.sinks, lifecycle_sinks = cbs.lifecycle_sinks, merged_renames, ic_restart
+    )
+    cbs.prob_ref[] = prob
+    return prob
+end
+
+# Provider injection (DESIGN pde_simulation_pipeline §2). Loaded fields enter
+# through the Provider seam, never as raw `const_arrays` keyed by internal
+# consumer names. CONST providers (empty `provider_refresh_times`) are
+# materialized ONCE at build time into `const_arrays` keyed by their declared
+# loader variable name — reachable when scoped-`ic` folds `Loader.*` into u0
+# and when the loader→consumer `variable_map` binding routes a consumer gather
+# to the loader name. DISCRETE providers ride the refresh callback. GATED
+# providers are deferred: fetched pre-sliced after value invention
+# (`_build_run`).
+#
+# Returns `(merged_const, merged_param, discrete_providers, ic_data,
+# gated_providers)`: the caller's `const_arrays` and `param_arrays` with the
+# providers' data added, the discrete providers by the buffer they refresh, the
+# data-fed values at the run's start where they differ from the sample time,
+# and the deferred gated providers with their gates.
+function _sample_providers(
+        req::_ProblemRequest, traits::AbstractDict{String, _ProviderTraits}, discovered,
+        provider_targets, provider_shadowed, provider_shapes
+    )
+    t_sample = req.sample_time
+    merged_const = Dict{String, Any}(String(k) => v for (k, v) in req.const_arrays)
+    merged_param = Dict{String, Any}(String(k) => v for (k, v) in req.param_arrays)
+    discrete_providers = Dict{String, Any}()
+    ic_data = Dict{String, Any}()
+    gated_providers = Dict{String, _GatedProvider}()
+    req.providers === nothing &&
+        return merged_const, merged_param, discrete_providers, ic_data, gated_providers
+    sample(prov, t, k, tk) = forcing_from_sample(
+        provider_sample(prov, t), k; shape = get(provider_shapes, tk, nothing)
+    )
+    for (rawk, prov) in req.providers
+        k = String(rawk)
+        # A key that lost to an exact key for the same parameter is not read
+        # (esm-spec §6.6.2, as for `parameter_overrides`).
+        k in provider_shadowed && continue
+        tk = get(provider_targets, k, k)
+        tr = traits[k]
+        if haskey(discovered, k)
+            # Already materialized by the extent-discovery pre-pass; never
+            # sampled twice.
+            _put_provider_const!(
+                merged_const, k, tk,
+                forcing_from_sample(discovered[k], k; shape = get(provider_shapes, tk, nothing))
+            )
+        elseif tr.gate !== nothing
+            # Deferred: value invention must derive the gating set's members
+            # before the rows to fetch are known. The gate is the provider's
+            # own or the one the pushdown rewrite's record derives.
+            gated_providers[k] = _GatedProvider(prov, tr.gate)
+        elseif tr.is_const
+            _put_provider_const!(merged_const, k, tk, sample(prov, t_sample, k, tk))
+        else
+            # DISCRETE: a LIVE forcing buffer seeded at the initial tick, in
+            # `param_arrays`. That makes the loader field a `live_param`, so the
+            # setup partition (`_geometry_setup_vars`) taints any in-model regrid
+            # over it: `F_tgt = A_ij ⊗ F_src / A_j` keeps its overlap WEIGHTS at
+            # setup but stays a runtime observed / discrete-materialized cache,
+            # instead of a build-once setup const where the (still-unbound) live
+            # `F_src` would fail. The refresh callback then rewrites this SAME
+            # buffer in place at each cadence tick.
+            merged_param[tk] = sample(prov, t_sample, k, tk)
+            discrete_providers[tk] = prov
+            # An `ic` right-hand side reads the record at the run's start,
+            # whatever `sample_time` the forcing holds (esm-libraries-spec
+            # §2.5.2); sampled again only when the two differ.
+            t_sample == req.span[1] || (ic_data[tk] = sample(prov, req.span[1], k, tk))
+        end
+    end
+    _rekey_discrete_providers!(
+        discrete_providers, filter(((k, n),) -> k != n, provider_targets)
+    )
+    return merged_const, merged_param, discrete_providers, ic_data, gated_providers
+end
+
+# The problem's callback set (§2.5.4), composed at construction because a
+# callback that refreshes provider buffers or writes an output stream belongs to
+# the DOCUMENT, not to a particular run's tolerances. `solve(prob; callback=…)`
+# replaces the whole set; `callbacks(prob)` reads it back so a caller can extend
+# it. `refresh` is `(; providers, buffers, owner, post_refresh)` for a document with
+# discrete providers, else `nothing`.
+#
+# Returns `(; callback, tstops, save_everystep, sinks, lifecycle_sinks,
+# prob_ref)`; `prob_ref[]` is to be set to the Problem once it exists, which is
+# how a sink naming observed fields reads them through the Problem's compiled
+# observed program.
+function _problem_callbacks(req::_ProblemRequest, refresh)
     cbs = Any[]
     tstops = Float64[]
-    if !isempty(discrete_providers)
+    if refresh !== nothing
         cb, ts = build_refresh_callback(;
-            providers = discrete_providers,
-            buffers = RefreshBuffers(merged_param),
-            post_refresh = dm.materialize!
-        )   # recompute discrete caches per boundary
+            providers = refresh.providers,
+            buffers = RefreshBuffers(refresh.buffers),
+            owner = refresh.owner,
+            post_refresh = refresh.post_refresh
+        )
         push!(cbs, cb)
         tstops = _union_tstops(tstops, ts)
     end
-    # Streaming output sinks (streaming-output-sinks RFC §16.5). When any sink is
-    # present, build the output callback and UNION its output tstops into the
-    # refresh tstops (so input-refresh and output-write stop the solver at the
-    # union of their anchors). `save_everystep=false` then tells the solver to
-    # stop accumulating the dense RAM trajectory — the sink IS the trajectory
-    # store. With no sinks nothing here fires and the solve is unchanged.
-    sink_vec = collect(Any, sinks)
+    # Streaming output sinks (streaming-output-sinks RFC §16.5): the output
+    # callback's tstops join the refresh tstops, so input refresh and output
+    # write stop the solver at the union of their anchors, and
+    # `save_everystep = false` stops the dense in-memory trajectory: the sink IS
+    # the trajectory store.
+    sink_vec = collect(Any, req.sinks)
     save_everystep = true
-    # A sink that names observed fields gets them read at each record's state
-    # through the problem's compiled observed program (the problem is bound
-    # once it exists, below).
     prob_ref = Ref{Any}(nothing)
-    snapshot = _observed_snapshot(snapshot, sink_vec, prob_ref)
+    snapshot = _observed_snapshot(req.snapshot, sink_vec, prob_ref)
     if !isempty(sink_vec)
         out_cb, out_tstops = build_output_callback(;
-            sinks = sink_vec, snapshot = snapshot, pre_write = pre_write
+            sinks = sink_vec, snapshot = snapshot, pre_write = req.pre_write
         )
         tstops = _union_tstops(tstops, out_tstops)
         push!(cbs, out_cb)
         save_everystep = false
     end
-    # Predicate-driven checkpointing (streaming-output-sinks RFC §10, §16.7). When
-    # `checkpoint_predicates` is non-empty, compose a `DiscreteCallback` that writes a
-    # full-state checkpoint to `checkpoint_sinks` (default: `sinks`) + flushes the
-    # durable barrier the instant any predicate (SLURM walltime, spot notice, custom)
-    # fires, optionally terminating for a clean pre-preemption exit. Interval-only
-    # checkpointing needs none of this — a checkpoint-profile sink's cadence rides the
-    # ordinary output callback above.
-    ck_vec = checkpoint_sinks === nothing ? sink_vec : collect(Any, checkpoint_sinks)
-    if !isempty(collect(Any, checkpoint_predicates))
-        ck_cb = build_checkpoint_callback(;
-            sinks = ck_vec, predicates = checkpoint_predicates, snapshot = snapshot,
-            pre_write = pre_write, terminate_on_fire = terminate_on_checkpoint
+    # Predicate-driven checkpointing (streaming-output-sinks RFC §10, §16.7): a
+    # full-state checkpoint to `checkpoint_sinks` (default: `sinks`) and a flush
+    # of the durable barrier the instant any predicate fires, optionally
+    # terminating for a clean pre-preemption exit. Interval-only checkpointing
+    # rides the ordinary output callback above.
+    ck_vec = req.checkpoint_sinks === nothing ? sink_vec : collect(Any, req.checkpoint_sinks)
+    if !isempty(collect(Any, req.checkpoint_predicates))
+        push!(
+            cbs, build_checkpoint_callback(;
+                sinks = ck_vec, predicates = req.checkpoint_predicates, snapshot = snapshot,
+                pre_write = req.pre_write, terminate_on_fire = req.terminate_on_checkpoint
+            )
         )
-        push!(cbs, ck_cb)
         save_everystep = false
     end
-
-    # The record now describes this problem's build (`_observed_field_memo`).
-    run_file = Ref{Any}(nothing)
-    lock(insp.observed_lock) do
-        insp.observed_build = run_file
-        insp.observed_ctx === nothing || (insp.observed_ctxs[run_file] = insp.observed_ctx)
-    end
-    prob = EsmProblem(
-        f!, u0_run, span, p_built, var_map, merged_param,
-        discrete_providers, dm, _doc_equation_count(doc),
-        Ref(t_sample), Ref(false), derive_output_meta(doc), doc,
-        run_file, param_classes, insp,
-        _compose_callbacks(cbs), tstops, save_everystep,
-        sink_vec, _distinct_sinks(sink_vec, ck_vec), Ref{Any}(nothing),
-        merged_renames, ic_restart
+    return (;
+        callback = _compose_callbacks(cbs), tstops, save_everystep, sinks = sink_vec,
+        lifecycle_sinks = _distinct_sinks(sink_vec, ck_vec), prob_ref,
     )
-    prob_ref[] = prob
-    return prob
 end
 
 # `esm_problem`'s initial-state seeding as a function of the start of the run
@@ -2184,7 +1838,7 @@ function _ic_restart(reseed, discrete_providers, provider_shapes, var_map, u0, s
                 provider_sample(prov, t0), k; shape = get(provider_shapes, k, nothing)
             ) for (k, prov) in providers
         )
-        return _with_compiler_plan(_plan_for(compiler)) do
+        return _with_compiler_plan(_plan(compiler)) do
             out = _seed_u0(reseed(t0, data), var_map, u0, seed_ic!)
             for o in overrides
                 out = _seed_u0(out, var_map, o, nothing)
@@ -2199,18 +1853,18 @@ end
 # live buffer, and the program's build registered one, filled with the
 # parameter's value, for each the Problem holds none for (`_program_build`).
 # Nothing refreshes those, so their values are the build's constants: publish
-# them into the Problem's inspection as the default build does its folded and
+# them into the Problem's build products as the default build does its folded and
 # const-bound parameters, so a build-time observed read (`observed_field`
 # through the cellwise evaluator) finds them: an array into `const_arrays`; a
 # scalar into `params` and, as the one-cell array the program reads it as
 # (`_scalar_slots_to_arrays`), into `const_arrays`.
-function _publish_program_slots!(insp::BuildInspection, prog, live::AbstractDict)
+function _publish_program_slots!(products::BuildProducts, prog, live::AbstractDict)
     d = default_forcing_set(prog)
     for (k, s) in enumerate(forcing_slots(prog))
         haskey(live, s.name) && continue
         b = d.bufs[k]
-        isempty(s.shape) && (insp.params[s.name] = b[1])
-        insp.const_arrays[s.name] = isempty(s.shape) ? copy(b) : reshape(copy(b), s.shape...)
+        isempty(s.shape) && (products.params[s.name] = b[1])
+        products.const_arrays[s.name] = isempty(s.shape) ? copy(b) : reshape(copy(b), s.shape...)
     end
     return nothing
 end
@@ -2243,6 +1897,40 @@ function _observed_snapshot(snapshot, sinks, prob_ref::Base.RefValue{Any})
     end
 end
 
+# The discrete-cadence materialization sink a build always has: the caller's
+# (reused, so it stays inspectable) or a fresh one. With it, a state-free derived
+# field over a live forcing buffer (a regrid→physics stack) is cut out of the
+# per-step right-hand side into a cache filled once per refresh, and a
+# parameter-only array observed is filled once at setup; with no such field it
+# changes nothing.
+_problem_materializer(dm) = dm === nothing ? DiscreteMaterializer() : dm
+
+"""
+    _problem_build_run(file::EsmFile; products, materialize_out = nothing,
+                       param_classes = Dict(), caller_u0 = nothing, seed_ic! = nothing,
+                       kwargs...)
+
+The build `esm_problem` runs on its run file (`_run_file`), which
+`Internal.build` runs too, so the two compile the same thing: `_build_run` with
+a discrete-cadence materializer (`_problem_materializer`) and a parameter
+partition sink, then the refusal of an ODE state nothing gives a starting value
+(esm-spec §11.4; a caller `u0`, an `initial_conditions` entry or `seed_ic!`
+gives one). `kwargs` are the build's own.
+"""
+function _problem_build_run(
+        file::EsmFile; products::BuildProducts, materialize_out = nothing,
+        param_classes::AbstractDict = Dict{String, Symbol}(), caller_u0 = nothing,
+        seed_ic! = nothing, kwargs...
+    )
+    out = _build_run(
+        file; products = products, materialize_out = _problem_materializer(materialize_out),
+        param_classes = param_classes, caller_u0 = caller_u0, kwargs...
+    )
+    _, u0_built, _, _, var_map = out
+    _refuse_missing_initial_values(products.unvalued_slots, u0_built, var_map, caller_u0, seed_ic!)
+    return out
+end
+
 # The seeded initial state: the build's own `u0`, then the caller's `u0`
 # argument (a Dict of per-element / broadcast overrides, or a whole vector),
 # then the `seed_ic!` hook. Always a fresh vector — the build's `u0` is never
@@ -2250,7 +1938,7 @@ end
 # esm-spec §11.4: an unknown that needs a starting value and has none — no
 # `default`, no initial condition, no `ic` equation, no caller `u0` — is an
 # error when the problem is built. The build reports the slots it could not
-# seed (`BuildInspection.unvalued_slots`, holding a 0.0 placeholder); a caller
+# seed (`BuildProducts.unvalued_slots`, holding a 0.0 placeholder); a caller
 # `u0` that names them, a whole replacement vector, or a `seed_ic!` hook covers
 # them.
 function _refuse_missing_initial_values(
@@ -2299,7 +1987,8 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
         length(u0) == length(out) || throw(
             SimulateError(
                 "u0 has $(length(u0)) elements but the flattened state vector has " *
-                    "$(length(out)); pass a Dict of named overrides to set a subset"
+                    "$(length(out)); pass a Dict of named overrides to set a subset",
+                ERROR_CODES.ARRAY_SHAPE_MISMATCH
             )
         )
         out = collect(Float64, u0)
@@ -2307,7 +1996,8 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
         throw(
             SimulateError(
                 "u0 must be an AbstractDict of named overrides or an AbstractVector " *
-                    "replacing the whole state, got a $(typeof(u0))"
+                    "replacing the whole state, got a $(typeof(u0))",
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     end
@@ -2315,287 +2005,17 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
     return out
 end
 
-# The distinct components owning a prepared document's build-time observeds.
-# A component is everything before a flattened name's final segment
-# (`Sites.North` for `Sites.North.u`), and `""` for an unqualified one.
-# [`observed_field`](@ref) resolves a BARE name only when this set holds exactly
-# ONE (API_SPEC §5.8): with two mounted components a bare `u` designates
-# `Sites.North.u` and `Sites.South.u` equally, and answering with whichever the
-# variable iteration reached first is a wrong value rather than a missing one.
-function _field_components(model)
-    comps = Set{String}()
-    for k in observed_unknowns(model)
-        s = String(k)
-        push!(comps, occursin('.', s) ? String(rsplit(s, '.'; limit = 2)[1]) : "")
-    end
-    return comps
-end
 
-# Every flattened observed of `model` whose final segment is the bare name `v`,
-# sorted — the candidates a refused bare lookup must name so the author can
-# qualify it (esm-spec §6.6.2 requires the same of an ambiguous override key).
-function _bare_candidates(model, v::AbstractString)
-    return sort!(
-        String[
-            String(k) for k in observed_unknowns(model)
-                if occursin('.', String(k)) &&
-                String(rsplit(String(k), '.'; limit = 2)[2]) == v
-        ]
-    )
-end
+notify_forcing_refresh!(prob::EsmProblem) = _bump_epoch!(prob.build.products.forcing_epoch)
 
-"""
-    observed_field(prob::EsmProblem, name; u = nothing, t = nothing) -> Vector{Float64}
-
-The observed `name` of the problem, as a flat vector in row-major cell order
-(last index fastest; one element for a scalar observed).
-
-With no `u`, it is the field the BUILD defines: a state-free observed evaluated
-with the parameters the problem was built with, at `t = 0` unless `t` is given.
-With `u` — a state vector laid out like `prob.u0`, such as `sol.u[k]` — it is
-the observed at that state and time `t` (default `0`), which is how a
-STATE-DEPENDENT observed is read; `t` is `sol.t[k]` for a saved solution point.
-A read at a state or time binds the problem's own parameters `prob.p`, so on a
-`remake(prob; p = …)` it answers with the substituted values.
-
-Under `compiler = :native` the value comes from a program compiled once per
-problem and name — the same array cascade as the right-hand side, run over the
-state — so a read costs one pass over the field whatever `u` and `t` are. Under
-`compiler = :interpreter` it is the build-time cellwise evaluator, the oracle the
-compiled program agrees with bit for bit. The first read of a name files an
-`:observed` row in [`compiler_report`](@ref) naming the route
-(`:output_compiled`, or `:output_compiled_once` / `:output_percell` for the
-cellwise evaluator); an observed native cannot compile is refused by name.
-
-Two arguments (API_SPEC §5.8): the problem owns its own
-[`BuildInspection`](@ref), so none is passed here. Pass your own via
-`esm_problem(...; inspect = insp)` if you also want to read the sink directly.
-`u` and `t` are keywords, not arguments: the result has the rank of the field
-whatever they are, which API_SPEC §5.8 lets a binding that can overload spell
-this way.
-
-Resolution is the cross-binding rule of API_SPEC §5.8, in precedence order:
-
-1. **Exact hit** — `name` is a flattened observed name (`"ISRM.deathsK"`).
-2. **Bare name** — `name` carries no `.`, and the document has exactly ONE
-   component; it then resolves to the unique observed with that tail
-   (`"deathsK"`).
-
-A bare name against a MULTI-component document is refused, with every qualified
-candidate named, rather than bound to an arbitrary one.
-
-Throws a `SimulateError` when `name` is not an evaluable observed (an unsized
-axis, or not an observed at all), or when it reads the state and no `u` was
-given.
-"""
-function observed_field(
-        prob::EsmProblem, name::AbstractString;
-        u::Union{Nothing, AbstractVector} = nothing,
-        t::Union{Nothing, Real} = nothing
-    )
-    return _observed_field_read(prob, String(name), u, t, prob.p)
-end
-
-# `observed_field` with the parameter carrier `p` to read at: the problem's own,
-# or a running integrator's (an output sink's snapshot).
-function _observed_field_read(
-        prob::EsmProblem, name::String,
-        u::Union{Nothing, AbstractVector},
-        t::Union{Nothing, Real}, p
-    )
-    # A compiler that built its own program answers for its own observeds: under
-    # `:mtk` the value lives in the compiled system's OBSERVED EQUATIONS, which
-    # this package's build-time observed graph knows nothing about.
-    backend = _compiler_backend(prob.f!)
-    backend === nothing ||
-        return _backend_observed_field(backend, prob, name; u = u, t = t)
-    # Reading an observed at output time is one of the evaluations
-    # esm-libraries-spec §2.5.10 puts under the compiler's refusal rule, so it
-    # runs under the plan that BUILT the problem rather than under whatever
-    # plan (if any) happens to be in scope on the reader's task.
-    return _with_compiler_plan(_compiler_plan(compiler(prob))) do
-        _observed_field_memo(prob, name, u, t, p)
-    end
-end
-
-# The output-time tiers an `observed_field` row can carry.
-const _OUTPUT_TIERS = (:output_compiled, :output_compiled_once, :output_percell)
-
-# The output-time route, reported in the problem's compiler report and, for the
-# build-time read (no `u`, no `t`), memoized on the problem's build. The first
-# read of a name in this build files one `:observed` row saying which route
-# served it, from what THIS call did (`_counting_program_reads`,
-# `_counting_percell`). A memoized read at the same forcing epoch returns the
-# stored field without evaluating anything: that read is state-free, so only an
-# in-place refresh of a live buffer (which bumps the epoch) can move it. A
-# `remake` of the problem shares the build and so the memo: the build-time read
-# reports what the build materialized (API_SPEC §5.8), with the build's
-# parameters, which a `p` or `u0` swap does not change. A read at a state or
-# time is the observed as a function of `(u, p, t)`, so it binds `p` — the
-# reading problem's, or the running integrator's.
-function _observed_field_memo(
-        prob::EsmProblem, name::String,
-        u::Union{Nothing, AbstractVector} = nothing,
-        t::Union{Nothing, Real} = nothing, p = nothing
-    )
-    insp = prob.inspection
-    memoizable = u === nothing && t === nothing
-    memoizable && (p = nothing)
-    # The read gathers the discrete-cadence caches, so bring them up to an
-    # announced forcing write first, as `f!` does; a read between the
-    # announcement and the next `f!` would otherwise store the old fill under
-    # the new epoch. It also settles the epoch the memo is keyed on, since a
-    # refill bumps it.
-    prob.dm.refresh!()
-    epoch = _epoch_value(prob.dm.epoch)
-    key = (prob.run_file, name)
-    if memoizable
-        hit = lock(() -> get(insp.observed_memo, key, nothing), insp.observed_lock)
-        hit !== nothing && hit.epoch == epoch && return copy(hit.value)
-    end
-    (v, nprog), percell = _counting_percell() do
-        _counting_program_reads() do
-            _observed_field_impl(prob, name; u = u, t = t, p = p)
-        end
-    end
-    lock(insp.observed_lock) do
-        # One row per name per build, filed into the report of the build this
-        # record describes (a problem built earlier with the same record reads
-        # through it, but files nothing into another build's report).
-        if insp.observed_build === prob.run_file &&
-                !any(
-                r -> r.kind === :observed && r.rule == name && r.tier in _OUTPUT_TIERS,
-                insp.compiler_report.rules
-            )
-            tier = nprog > 0 ? :output_compiled :
-                percell > 0 ? :output_percell : :output_compiled_once
-            push!(
-                insp.compiler_report.rules,
-                CompilerRuleRecord(name, :observed, tier, Pair{Symbol, Symbol}[])
-            )
-        end
-        memoizable && (insp.observed_memo[key] = _ObservedMemo(epoch, copy(v)))
-    end
-    return v
-end
-
-function _observed_field_impl(
-        prob::EsmProblem, name::AbstractString;
-        u::Union{Nothing, AbstractVector} = nothing,
-        t::Union{Nothing, Real} = nothing, p = nothing
-    )
-    insp = prob.inspection
-    ctx = _obs_ctx(prob)
-    if prob.run_file[] === nothing
-        prob.run_file[] = coerce_esm_file(prob.run_doc)
-    end
-    file = prob.run_file[]::EsmFile
-    (file.models !== nothing && !isempty(file.models)) || throw(
-        SimulateError(
-            "observed_field: prepared document has no model"
+function notify_forcing_refresh!(prob::EsmProblem, name::AbstractString)
+    haskey(prob.param_buffers, name) || throw(
+        ArgumentError(
+            "notify_forcing_refresh!: '$name' is not a live forcing buffer of this " *
+                "problem; its buffers are " * join(sort!(collect(keys(prob.param_buffers))), ", ")
         )
     )
-    mname = String(first(keys(file.models)))
-    field_of(k) = _observed_field(
-        insp, file, mname, k; ctx = ctx, u = u, t = t,
-        var_map = prob.var_map, p = p
-    )
-    # A name an `operator_compose` renaming match DELETED addresses a field that
-    # MOVED (issue #230). The merge only ever REMOVES a spelling, so resolving
-    # here can never shadow a live field.
-    v = get(prob.merged_renames, String(name), String(name))
-    model = file.models[mname]
-    comps = _field_components(model)
-    single = length(comps) == 1
-    fld = field_of(v)
-    if fld === nothing && !occursin('.', v)
-        # Bare spelling: resolve against the run model's observed tails, but
-        # only on a SINGLE-component document (API_SPEC §5.8). On a multi-
-        # component one the bare name is refused with every candidate named.
-        cands = _bare_candidates(model, v)
-        if single
-            for k in cands
-                fld = field_of(k)
-                fld === nothing || break
-            end
-        elseif !isempty(cands)
-            throw(
-                SimulateError(
-                    "observed_field: '$name' is a bare name and this problem has " *
-                        "$(length(comps)) components ($(join(sort!(collect(comps)), ", "))); " *
-                        "qualify it as one of: $(join(cands, ", "))"
-                )
-            )
-        end
-    end
-    if fld === nothing
-        # MATERIALIZED observeds. A build-once body (an overlap-area weight, a
-        # gated reduction) is materialized at
-        # SETUP into `insp.setup_arrays` rather than left as a build-time
-        # observed — and so, transitively, is everything downstream of it, since
-        # a setup array is a build constant and its readers fold against it.
-        # `_observed_field` looks only at the observed graph, so on a document
-        # whose emissions come from an area overlap rather than a point
-        # containment that is the WHOLE reported chain: the per-cell emissions,
-        # the source-receptor contraction, the concentrations and the deaths all
-        # became unreadable BY NAME, even though the build computed every one of
-        # them. `const_arrays` is the same story one step earlier: a projected
-        # coordinate (`X`, `Y`) is materialized ahead of value invention and
-        # seeded there as a build constant, so it too is computed and unreadable.
-        # The array the build itself used is the value; return it rather than
-        # re-deriving it. Flattened in the same ROW-MAJOR cell order
-        # `_observed_field` returns (`_state_cells`, the Python `np.ndindex` and
-        # the Rust row-major enumeration all agree on it), so the two paths are
-        # interchangeable at any rank.
-        # The setup arrays are keyed by the name as the SETUP pass saw it — the
-        # AUTHORED model's flattened name (`ISRM.E_PM25`) — while `mname` here
-        # is the RUN document's single model, which flattening renamed
-        # (`Flattened`). So resolve by tail as well, and only when it is
-        # unambiguous: two models may carry the same local name, and answering
-        # a bare `E_PM25` with an arbitrary one of them would be worse than
-        # refusing.
-        # GUARD: only an OBSERVED may be answered this way. `const_arrays` also
-        # holds every array-valued PARAMETER, and quietly returning one of those
-        # from `observed_field` would turn a wrong name into a plausible answer.
-        obs = Set{String}(observed_unknowns(model))
-        is_obs = any(
-            k -> (
-                String(k) == v ||
-                    (single && String(split(String(k), '.')[end]) == v)
-            )
-                && String(k) in obs, keys(model.variables)
-        )
-        is_obs || throw(
-            SimulateError(
-                "observed_field: '$name' is not a build-time-evaluable observed of the " *
-                    "prepared document"
-            )
-        )
-        arr = nothing
-        for reg in (insp.setup_arrays, insp.const_arrays)
-            arr = get(reg, mname * "." * v, get(reg, v, nothing))
-            if arr === nothing && single
-                # Bare tail, single-component only — same §5.8 gate the observed
-                # graph applies above, so the two fallbacks cannot disagree
-                # about whether a bare name is answerable.
-                hits = [
-                    k for k in keys(reg)
-                        if occursin('.', k) && String(split(k, '.')[end]) == v
-                ]
-                length(hits) == 1 && (arr = reg[first(hits)])
-            end
-            arr isa AbstractArray || (arr = nothing)
-            arr === nothing || break
-        end
-        arr === nothing && throw(
-            SimulateError(
-                "observed_field: '$name' is not a build-time-evaluable observed of the " *
-                    "prepared document"
-            )
-        )
-        return ndims(arr) > 1 ? vec(permutedims(arr, reverse(1:ndims(arr)))) : vec(arr)
-    end
-    return fld[1]
+    return notify_forcing_refresh!(prob)
 end
 
 # Re-seed the DISCRETE forcing buffers at the run's t0 and recompute the
@@ -2612,6 +2032,7 @@ function _prepare_run!(prob::EsmProblem, t0::Float64)
             buf = prob.param_buffers[k]::Array{Float64}
             _write_forcing!(buf, k, provider_sample(prov, t0))
         end
+        notify_forcing_refresh!(prob)
         prob.dm.materialize!()   # discrete caches must see the re-seeded buffers
         prob.buffer_time[] = t0
     end
@@ -2632,7 +2053,7 @@ parameter_classes(prob::EsmProblem) = prob.param_classes
 # and dumping all of them buries the diagnostic that matters.
 function _elide_names(ns::AbstractVector{String}, n::Int = 12)
     length(ns) <= n && return join(ns, ", ")
-    return join(ns[1:n], ", ") * ", … ($(length(ns)) total; see parameter_classes(prep))"
+    return join(ns[1:n], ", ") * ", … ($(length(ns)) total; see parameter_classes(prob))"
 end
 
 # One override's refusal message, naming the parameter AND its class AND why the
@@ -2699,15 +2120,14 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
     pm = param_map(prob.p)
     names = Set{String}(keys(classes))
     union!(names, keys(pm))
-    namespaces = _override_namespaces(names)
-    normalized, unknown, ambiguous, collisions =
-        _canonicalize_override_keys(Any, names, namespaces, overrides)
+    normalized, unknown, ambiguous, collisions = canonicalize_keys(Any, NameTable(names), overrides)
     isempty(collisions) || throw(
         SimulateError(
             _override_collision_message(
                 "remake(prob; p)", "parameter",
                 first(sort!(collect(collisions), by = first))...
-            )
+            ),
+            ERROR_CODES.OVERRIDE_KEY_CONFLICT
         )
     )
     isempty(unknown) || throw(
@@ -2716,7 +2136,8 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
                 join(("'" * k * "'" for k in sort(unknown)), ", ") *
                 " in the problem (keys may be local or namespaced; a name the " *
                 "flattener's coupling rewired onto a loader variable is spelled by its " *
-                "SURVIVING name). Known: " * _elide_names(sort(collect(names)))
+                "SURVIVING name). Known: " * _elide_names(sort(collect(names))),
+            ERROR_CODES.UNKNOWN_OVERRIDE_KEY
         )
     )
     isempty(ambiguous) || throw(
@@ -2728,21 +2149,23 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
                         for (k, v) in sort(collect(ambiguous), by = first)
                 ), "; "
             ) *
-                "; spell the namespaced name."
+                "; spell the namespaced name.",
+            ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
         )
     )
     syms = Symbol[]
     vals = Any[]
     for name in sort(collect(keys(normalized)))
         cls = get(classes, name, haskey(pm, name) ? :numeric : :unclassified)
-        cls === :numeric || throw(SimulateError(_param_class_refusal(name, cls)))
+        cls === :numeric || throw(SimulateError(_param_class_refusal(name, cls), ERROR_CODES.PARAMETER_NOT_OVERRIDABLE))
         # A `:numeric` parameter is by definition a slot of `p`; if it somehow is
         # not, refuse rather than silently drop the override.
         haskey(pm, name) || throw(
             SimulateError(
                 "remake(prob; p): '$name' classifies :numeric but is not a " *
                     "slot of the problem's `p` — refusing to apply an override that would " *
-                    "have no effect (this is a build bug; please report it)."
+                    "have no effect (this is a build bug; please report it).",
+                ERROR_CODES.INTERNAL_ERROR
             )
         )
         push!(syms, Symbol(name))
@@ -2822,10 +2245,10 @@ right-hand side.
 * `tspan` — a new `(t0, t1)`. A new start `t0` evaluates the document's `ic`
   right-hand sides again at it, where they read the start (`t`, a data-fed
   parameter, an observed over those; esm-spec §11.4.2), with the caller's `u0`
-  overrides applied on top as before.
+  overrides applied on top.
 * `callback` — replace the problem's callback set (§2.5.4). Omit to keep it.
 
-Refusal behaviour is preserved from `remake_parameters`: a substitution the
+Refusal behaviour is that of `remake_parameters`: a substitution the
 problem cannot honour without a rebuild raises, naming the parameter AND the
 class that makes it un-substitutable (`:structural`, `:const_folded`,
 `:forcing`), rather than silently rebuilding or silently ignoring it.
@@ -2861,13 +2284,8 @@ function remake(
     # which a Dict-driven swap can change — so it is shared. A verbatim carrier
     # could carry different names, so that path gets a fresh (lazy) slot.
     sc = (p === nothing || p isa AbstractDict) ? prob.symcache : Ref{Any}(nothing)
-    return EsmProblem(
-        prob.f!, u0_new, span, p_new, prob.var_map,
-        prob.param_buffers, prob.discrete_providers, prob.dm,
-        prob.n_equations, prob.buffer_time, prob.dirty,
-        prob.output_meta, prob.run_doc, prob.run_file,
-        prob.param_classes, prob.inspection, cb, prob.tstops,
-        prob.save_everystep, prob.sinks, prob.lifecycle_sinks, sc,
-        prob.merged_renames, restart, prob.stripped
+    return _with(
+        prob; u0 = u0_new, tspan = span, p = p_new, callback = cb, symcache = sc,
+        ic_restart = restart
     )
 end

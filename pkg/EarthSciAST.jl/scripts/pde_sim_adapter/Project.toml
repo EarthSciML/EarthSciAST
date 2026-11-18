@@ -1,6 +1,4 @@
 [deps]
-DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
-EarthSciIO = "180e2c70-dda6-501b-9997-3c819c50e0c3"
 EarthSciAST = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"

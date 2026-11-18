@@ -13,14 +13,13 @@
 # asserting:
 #   * every diag counter except the buffer-cell count `n_mat_array_cells` is
 #     IDENTICAL — including the hard-zero `_VecNode`-overlay fields;
-#   * the residual kernel lists (introspected via `kernel_section.kernels` on
-#     a build whose primary emission declined on the node budget, so the
-#     affine tier still built every kernel and none was emitted away — the
-#     oop_merge/xcse idiom) have EQUAL per-kernel structural
+#   * the kernel lists (the build report's `kernels`, on a build whose
+#     primary emission declined on the node budget, so none was emitted away)
+#     have EQUAL per-kernel structural
 #     signatures: spine (kind, op) preorder, spine/recipe node counts,
 #     descriptor count + kinds, sub-kernel count, bound type. Descriptor
 #     VALUES (a boundary wrap delta embeds N) are deliberately excluded;
-#   * the always-on `_CASCADE_TALLY` is identical at both sizes, and both
+#   * the build's cascade counts are identical at both sizes, and both
 #     array equations landed on `:affine` — a size-dependent fallback to
 #     `:percell_acc` would silently trade O(1) IR for O(N);
 #   * the per-lane data total (covered cells + descriptor arr/conn tables)
@@ -75,31 +74,30 @@ function _gi_model(N)
 end
 
 # Build with the primary emission's node budget at zero — a retained tuning
-# threshold — so `kernel_section.kernels` holds EVERY kernel the affine tier
-# built (n_emitted == 0, asserted below) while the compiler stays `:native`.
-# The codegen tier only relocates runners, never changes the kernel IR under
-# it, so the list is the IR to compare. `:interpreter` would not do: it turns
-# the affine tier off too, and then there are no kernels at all. Tally
-# reset/copy brackets the build, the scan_prefix idiom.
+# threshold — so no kernel is emitted away (n_emitted == 0, asserted below)
+# while the compiler stays `:native`; the report's `kernels` is every kernel
+# the affine tier built. The codegen tier only relocates runners, never changes
+# the kernel IR under it, so the list is the IR to compare. `:interpreter`
+# would not do: it turns the affine tier off too, and then there are no kernels
+# at all.
 function _gi_build(N)
-    ics = Dict{String, Float64}("x" => 1.0)
+    ics = Dict{String, Float64}("M.x" => 1.0)
     for k in 1:N
-        ics["u[$k]"] = sin(0.3k) + 0.1k
-        ics["y[$k]"] = 0.0
+        ics["M.u[$k]"] = sin(0.3k) + 0.1k
+        ics["M.y[$k]"] = 0.0
     end
     return withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
-        ESM._reset_cascade_tally!()
         # Non-strict: at a zero budget the scalar equation is walked too, which
         # strict native refuses.
-        f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        f, u0, p, _t, vm, rep = ESM.Internal.build(
             _gi_model(N);
             initial_conditions = ics,
             compiler = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
         )
         (
-            f = f, u0 = u0, p = p, vm = vm, diag = diag, tally = copy(ESM._CASCADE_TALLY),
-            kernels = getfield(getfield(f, :kernel_section), :kernels),
-            n_emitted = getfield(getfield(f, :kernel_section), :n_emitted),
+            f = f, u0 = u0, p = p, vm = vm, diag = rep.stats, tally = rep.counts,
+            kernels = rep.kernels,
+            n_emitted = getfield(f.state.kernels, :n_emitted),
         )
     end
 end
@@ -125,7 +123,6 @@ function _gi_sig(K::ESM._AccKernel)
         cell_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.recipes],
         inv_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.inv_recipes],
         n_subs = length(K.subs),
-        bound = nameof(typeof(K.bound)),
     )
 end
 # Sorted-by-repr so the comparison pins the kernel SET, not an incidental
@@ -241,12 +238,12 @@ end
 
 @testset "generated functions are shared across grid sizes" begin
     function build(N)
-        ics = Dict{String, Float64}("x" => 1.0)
+        ics = Dict{String, Float64}("M.x" => 1.0)
         for k in 1:N
-            ics["u[$k]"] = sin(0.3k) + 0.1k
-            ics["y[$k]"] = 0.0
+            ics["M.u[$k]"] = sin(0.3k) + 0.1k
+            ics["M.y[$k]"] = 0.0
         end
-        f, u0, p, _t, vm, _ = ESM._build_evaluator_impl(
+        f, u0, p, _t, vm, _ = ESM.Internal.build(
             _gi_model(N);
             initial_conditions = ics
         )

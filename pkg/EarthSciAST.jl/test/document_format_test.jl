@@ -556,3 +556,91 @@ end
         end
     end
 end
+
+@testset "printing leaves no reader state in the caller's task" begin
+    # A template with parameters makes the Markdown printer try the math parser
+    # on its header; that trial read must not leave its state behind.
+    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "expression_templates_arrhenius.esm")
+    doc = JSON.parse(read(path, String))
+    key = EarthSciAST.DocumentFormats.DLimits.KEY
+    for print_fn in (print_markdown, print_typst)
+        haskey(task_local_storage(), key) && delete!(task_local_storage(), key)
+        @test !isempty(print_fn(doc))
+        @test !haskey(task_local_storage(), key)
+    end
+    print_math(Dict("op" => "+", "args" => Any["a", 1]), ["a"], :markdown)
+    @test !haskey(task_local_storage(), key)
+end
+
+@testset "math keyword lists agree with the surfaces' spellings" begin
+    # Each list below ports one Lean definition (Math.atomStart, Latex.atomEnd,
+    # Math.isBin, Source.delta), so they stay separate; these checks keep them
+    # consistent with the spellings the lexers are derived from.
+    DF = EarthSciAST.DocumentFormats
+    MT = DF.MToken
+    spelled(k) = haskey(DF.MLatex.KW_CHARS, k) || haskey(DF.MTypst.KW_CHARS, k)
+    @test all(spelled, instances(MT.Kw))
+    @test all(spelled, DF.MParse.ATOM_KWS)
+    @test all(spelled, DF.MLatex.ATOM_END_KWS)
+    @test all(spelled, DF.MSurface.BIN_KWS)
+    @test length(DF.SMultiLine.OPENS) == length(DF.SMultiLine.CLOSES)
+    @test isempty(intersect(DF.SMultiLine.OPENS, DF.SMultiLine.CLOSES))
+    @test all(spelled, DF.SMultiLine.OPENS) && all(spelled, DF.SMultiLine.CLOSES)
+    # A keyword that starts an operand never ends one, and no binary operator
+    # is either.
+    @test isempty(intersect(DF.MParse.ATOM_KWS, DF.MLatex.ATOM_END_KWS))
+    @test isempty(intersect(DF.MSurface.BIN_KWS, DF.MParse.ATOM_KWS))
+end
+
+@testset "print_math takes a typed expression or equation" begin
+    E = EarthSciAST
+    e = E.OpExpr("+", E.ASTExpr[E.VarExpr("a"), E.IntExpr(1)])
+    raw = Dict("op" => "+", "args" => Any["a", 1])
+    for f in (:markdown, :typst)
+        @test print_math(e, ["a"], f) == print_math(raw, ["a"], f)
+        eq = E.Equation(E.VarExpr("y"), e)
+        @test print_math(eq, ["a", "y"], f) ==
+            print_math(Dict("lhs" => "y", "rhs" => raw), ["a", "y"], f)
+    end
+    @test sprint(show, e) == print_math(e, expression_names(e), :typst)
+    @test_throws ArgumentError print_math(raw, ["a"], :latex)
+end
+
+@testset "a refused document says where" begin
+    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "expression_templates_arrhenius.esm")
+    doc = JSON.parse(read(path, String))
+    for (fmt, decls) in ((:markdown, (":var[", ":param[")), (:typst, ("#var(", "#param(")))
+        lines = split(print_document(doc, fmt), '\n')
+        i = findfirst(l -> any(d -> startswith(l, d), decls), lines)
+        @test i !== nothing
+        decl = decls[findfirst(d -> startswith(lines[i], d), decls)]
+        bad = copy(lines)
+        bad[i] = replace(bad[i], decl => decl * "\"")
+        err = try
+            parse_document(join(bad, '\n'), fmt)
+            nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.ParseError
+        @test err.code == "parse_error"
+        @test get(err.details, "line", nothing) == i
+        @test occursin("line $i:", sprint(showerror, err))
+        # CRLF line ends and a byte-order mark move no line.
+        err2 = try
+            parse_document("\ufeff" * join(bad, "\r\n"), fmt)
+            nothing
+        catch e
+            e
+        end
+        @test get(err2.details, "line", nothing) == i
+    end
+    # A refusal past the constructs (math that does not read) names the math.
+    err = try
+        parse_markdown("---\nesm: \"2.3.0\"\n---\n\n\$\$\n\\frac{\n\$\$\n")
+        nothing
+    catch e
+        e
+    end
+    @test err isa EarthSciAST.ParseError && err.code == "parse_error"
+end

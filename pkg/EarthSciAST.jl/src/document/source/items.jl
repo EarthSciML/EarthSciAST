@@ -11,6 +11,7 @@ Math entries are held as the container's math text at this layer;
 module SItems
 
 using ..DJson
+import ..DLimits
 using ..MExpr: Sym
 using ..SSkeleton
 using ..SSkeleton: is_math_field, sym_for, top_sym, map_math, scope, mscope
@@ -50,8 +51,6 @@ end
 struct RTm <: RItem
     t::Tm
 end
-Base.:(==)(a::T, b::T) where {T <: RItem} = fieldeq(a, b)
-Base.:(==)(a::RItem, b::RItem) = false
 
 """`Source.mItem`: the construct of a math entry."""
 m_item(m::MxEq) = m.role == R_EQN ? REqn(m.a) : REqx(m.role, m.a)
@@ -79,7 +78,7 @@ function comp_items(c::Comp, out::Vector{RItem})
 end
 
 """`Source.items`: the constructs of a skeleton, in the printer's order."""
-function items(d::Doc)
+function items(d::Doc{AsText})
     out = RItem[]
     d.desc === nothing || push!(out, RDesc(d.desc))
     for (k, v) in d.blocks
@@ -95,9 +94,9 @@ function items(d::Doc)
 end
 
 """`Comp.fresh`."""
-comp_fresh(k::Kind, n::String) = Comp(k, n, nothing, Decl[], Any[], Kvs(), Kvs())
+comp_fresh(k::Kind, n::String) = Comp{AsText}(k, n, nothing, Decl[], Any[], Kvs(), Kvs())
 
-with_desc(c::Comp, s) = Comp(c.kind, c.name, s, c.decls, c.math, c.math_blocks, c.blocks)
+with_desc(c::Comp{P}, s) where {P} = Comp{P}(c.kind, c.name, s, c.decls, c.math, c.math_blocks, c.blocks)
 
 """`Source.addTo`: add a construct to a component section (the updated section);
 a second description is refused (`nothing`)."""
@@ -130,10 +129,10 @@ mutable struct St
     desc::Union{Nothing, String}
     blocks::Kvs
     math::Vector{Any}
-    comps::Vector{Comp}
-    cur::Union{Nothing, Comp}
+    comps::Vector{Comp{AsText}}
+    cur::Union{Nothing, Comp{AsText}}
 end
-St() = St(nothing, Kvs(), Any[], Comp[], nothing)
+St() = St(nothing, Kvs(), Any[], Comp{AsText}[], nothing)
 
 """`Source.step`: read one construct (`false` when refused). Before the first
 directive only a description, blocks and templates are allowed."""
@@ -172,51 +171,60 @@ function unitems(front::Kvs, its)
     end
     comps = st.comps
     st.cur === nothing || push!(comps, st.cur)
-    return Doc(front, st.desc, st.blocks, st.math, comps)
+    return Doc{AsText}(front, st.desc, st.blocks, st.math, comps)
 end
 
 """`Source.rawDoc`: every math entry printed under its symbol table
 (`pr(sym, m)`)."""
-function raw_doc(pr, d::Doc)
+function raw_doc(pr, d::Doc{AsRead})::Doc{AsText}
     ts = top_sym(d)
-    comps = Comp[]
+    comps = Comp{AsText}[]
     for c in d.comps
         s = sym_for(d, c)
-        push!(comps, map_math(c, (_, m) -> pr(s, m)))
+        push!(comps, map_math(c, (_, m) -> pr(s, m), AsText))
     end
-    return Doc(d.front, d.desc, d.blocks, Any[pr(ts, m) for m in d.math], comps)
+    return Doc{AsText}(d.front, d.desc, d.blocks, Any[pr(ts, m) for m in d.math], comps)
 end
 
 """`Source.cookComp`: read a component's math entries under its symbol table;
 one math text may hold several equations (`ck(sym, m)` gives a vector or
 `nothing`)."""
-function cook_comp(ck, d::Doc, c::Comp)
+function cook_comp(ck, d::Doc{AsText}, c::Comp{AsText})
     s = sym_for(d, c)
     math = Any[]
     for m in c.math
         x = ck(s, m)
-        x === nothing && return nothing
+        x === nothing && return refused_math!(" in `$(c.name)`", m)
         append!(math, x)
     end
-    return Comp(c.kind, c.name, c.desc, c.decls, math, c.math_blocks, c.blocks)
+    return Comp{AsRead}(c.kind, c.name, c.desc, c.decls, math, c.math_blocks, c.blocks)
+end
+
+# Record a math entry of a component (`where`) that does not read, for the
+# diagnostic; returns `nothing`.
+function refused_math!(where::String, m)
+    text = m isa MxEq ? m.a : m isa MxRxn ? m.x.rate : m isa MxTm ? m.t.body : ""
+    text = text isa AbstractString ? text : ""
+    short = length(text) > 60 ? first(text, 60) * "…" : text
+    return DLimits.refused!("the math `$short`$where", nothing)
 end
 
 """`Source.cookDoc`: read every math entry of a skeleton."""
-function cook_doc(ck, d::Doc)
+function cook_doc(ck, d::Doc{AsText})
     ts = top_sym(d)
     rm = Any[]
     for m in d.math
         x = ck(ts, m)
-        x === nothing && return nothing
+        x === nothing && return refused_math!("", m)
         append!(rm, x)
     end
-    cs = Comp[]
+    cs = Comp{AsRead}[]
     for c in d.comps
         x = cook_comp(ck, d, c)
         x === nothing && return nothing
         push!(cs, x)
     end
-    return Doc(d.front, d.desc, d.blocks, rm, cs)
+    return Doc{AsRead}(d.front, d.desc, d.blocks, rm, cs)
 end
 
 """`Source.prMx`: a math entry's text, from the equation and expression
@@ -255,6 +263,60 @@ function ck_mx(ck_e, ck_r, s::Sym, m::MxTm)
     body = ck_r(sc, t.body)
     body === nothing && return nothing
     return Any[MxTm(Tm(t.name, t.params, lhs, body, t.attrs))]
+end
+
+# ## Shared by the two containers
+#
+# What the Markdown and Typst containers write identically, under one name
+# here; each container keeps its Lean-named forwards (`Md.render`,
+# `Typ.canonSegs`, …).
+
+"""A piece of a document body: a construct or prose (Lean `Md.Seg` and
+`Typ.Seg`, whose labelled-equation and code-span cases are never built
+here)."""
+abstract type Seg end
+struct SegItem <: Seg
+    it::RItem
+end
+struct SegProse <: Seg
+    p::Vector{Char}
+end
+
+# The text of a document body, each construct through the container's
+# `item_text` (`Md.render`, `Typ.render`).
+function render_segs(item_text::F, segs) where {F}
+    out = Char[]
+    for s in segs
+        append!(out, s isa SegItem ? item_text(s.it) : s.p)
+    end
+    return out
+end
+
+"""`Md.isBlock`: a construct that must start a line (all but declarations);
+`Typ.isBlock` is the same."""
+is_block(it::RItem) = it isa RDecl ? it.d.kind == D_SUB : true
+
+"""`Md.canonSegs`: each construct after a blank line, a declaration on a line of
+its own; `Typ.canonSegs` is the same."""
+function canon_segs(its)
+    out = Seg[]
+    for it in its
+        block = is_block(it)
+        push!(out, SegProse(Char['\n']))
+        push!(out, SegItem(it))
+        block || push!(out, SegProse(Char['\n']))
+    end
+    return out
+end
+
+# Read a construct sequence and its front matter into a document, the
+# container's math read by `ck` (`Md.parseItemsMd`, `Typ.parseItemsT`).
+function parse_items(ck, front::Kvs, its)
+    r = unitems(front, its)
+    r === nothing && return DLimits.refused!("the order of the constructs", nothing)
+    d = cook_doc(ck, r)
+    d === nothing && return nothing
+    return SSkeleton.of_doc(d)
 end
 
 end # module SItems

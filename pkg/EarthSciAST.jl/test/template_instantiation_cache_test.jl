@@ -1,4 +1,4 @@
-# The template instantiation cache (src/lower_expression_templates.jl
+# The template instantiation cache (src/templates/expand_typed.jl
 # `_TplSkel`): a call site is instantiated from its template's skeleton, built
 # once per expansion with a sentinel per parameter, instead of being serialized,
 # substituted and re-parsed level by level. The direct route (`memo = nothing`)
@@ -73,7 +73,6 @@ _tic_apply(name; b...) = Dict{String, Any}(
     "op" => "apply_expression_template", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(string(k) => v for (k, v) in b)
 )
-_tic_const(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 
 function _tic_doc(model; index_sets = Dict{String, Any}())
     return Dict{String, Any}(
@@ -102,7 +101,7 @@ function _tic_interp_doc(; xs = nothing)
         x = xs === nothing ? _tic_op("+", "u", 0.125 * i) : xs[i]
         r = "r$i"
         vars[r] = Dict("type" => "unknown")
-        push!(eqs, Dict("lhs" => r, "rhs" => _tic_apply("linear"; table = _tic_const([1.0 * i, 2.0, -1.0, 0.5, 3.0]), axis = _tic_const(axis), x = x, n = 5)))
+        push!(eqs, Dict("lhs" => r, "rhs" => _tic_apply("linear"; table = jconst([1.0 * i, 2.0, -1.0, 0.5, 3.0]), axis = jconst(axis), x = x, n = 5)))
         push!(sites, r)
     end
     for i in 1:2
@@ -112,8 +111,8 @@ function _tic_interp_doc(; xs = nothing)
         push!(
             eqs, Dict(
                 "lhs" => r, "rhs" => _tic_apply(
-                    "bilinear"; table = _tic_const(tab), axis_x = _tic_const([0.0, 1.0, 2.0]),
-                    axis_y = _tic_const([0.0, 0.5, 1.5]), x = _tic_op("+", "u", 0.5 * i),
+                    "bilinear"; table = jconst(tab), axis_x = jconst([0.0, 1.0, 2.0]),
+                    axis_y = jconst([0.0, 0.5, 1.5]), x = _tic_op("+", "u", 0.5 * i),
                     y = _tic_op("*", "u", 1.5), nx = 3, ny = 3
                 )
             )

@@ -193,7 +193,8 @@ end
         @test run_du(prob) == [4.75]
         live = _PFCProvider(key, [0.5], Int[], 3.0, 0.0)
         err = _pfc_err(() -> mk(p = Dict("s" => 5.0), providers = Dict{String, Any}(key => live)))
-        @test err isa ArgumentError && occursin("live forcing buffer", err.msg)
+        @test err isa SimulateError && occursin("live forcing buffer", err.msg)
+        @test error_code(err) == ERROR_CODES.OVERRIDE_KEY_CONFLICT
     end
     # A provider and the caller's own array for one parameter, under any
     # spellings: refused rather than one silently replacing the other.
@@ -202,7 +203,7 @@ end
         err = _pfc_err(
             () -> mk(providers = Dict{String, Any}(pk_ => pr), const_arrays = Dict(ck => [9.0]))
         )
-        @test err isa ArgumentError && occursin("both supply the parameter 'M.s'", err.msg)
+        @test err isa SimulateError && occursin("both supply the parameter 'M.s'", err.msg)
     end
     # The override replaces the data under every key that holds it: the
     # caller's spelling (`s`) beside the build's name (`M.s`), so a consumer
@@ -239,7 +240,7 @@ end
             providers = Dict{String, Any}("Fed.s" => pr), const_arrays = Dict("s" => [9.0])
         )
     )
-    @test err isa ArgumentError && occursin("const_arrays: ambiguous parameter name 's'", err.msg)
+    @test err isa SimulateError && occursin("const_arrays: ambiguous parameter name 's'", err.msg)
     # The other model's own `s`, named in full, is no overlap.
     prob = PFC.esm_problem(
         two, (0.0, 1.0); compiler = :native,

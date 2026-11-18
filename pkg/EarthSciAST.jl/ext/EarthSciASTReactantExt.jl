@@ -4,50 +4,32 @@
 The Reactant/XLA backend for EarthSciAST, loaded automatically when `Reactant`
 is in the session.
 
-WHAT IT PROVIDES. `direct_rhs` / `direct_rhs_with_buffers`
-(ext/reactant_direct/): a StableHLO program built DIRECTLY from the compiled
-tree-walk intermediate representation that `EarthSciAST._build_evaluator(model; form = :oop)`
-returns — every operation in the module comes from an IR node rather than from
-Julia broadcast tracing. See ext/reactant_direct/mod.jl for the value model and
-ext/reactant_direct/api.jl for the contract (hard errors, never a fallback).
-Device choice and multi-device sharding live in ext/reactant_direct/device.jl and
-are documented in docs/src/compiled-backend-devices.md.
+It provides `direct_rhs` / `direct_rhs_with_buffers` (ext/reactant_direct/): a
+StableHLO program built directly from the compiled tree-walk intermediate
+representation that `EarthSciAST.Internal.build(model; form = :oop)` returns, every
+operation coming from an IR node. Anything the emitter cannot lower is a hard
+error, never a fallback (ext/reactant_direct/api.jl). Device choice and sharding
+are in ext/reactant_direct/device.jl and docs/src/compiled-backend-devices.md.
+ext/reactant_knot_count.jl specializes `_knot_count` (src/tree_walk/knot_count.jl)
+on Reactant's traced query types.
 
-It also specializes the comparison count `_knot_count`
-(src/tree_walk/knot_count.jl) on Reactant's traced query types, so the count the
-closed-AST templates lower to is an elementwise locate rather than an O(table)
-select ladder. That is ext/reactant_knot_count.jl.
+Live forcing buffers (`param_arrays`, and `DiscreteMaterializer` caches) are
+program inputs, not captures: a captured host array would be a compile-time
+constant and an in-place refresh would never reach the compiled program. They
+are passed through the argument list, and `copyto!` into the same
+`ConcreteRArray` between calls is seen by the compiled program:
 
-LIVE FORCING BUFFERS ARE PROGRAM INPUTS, NOT CAPTURES. A live forcing buffer
-(`param_arrays`, and a `DiscreteMaterializer` cache by construction) is bound BY
-REFERENCE into the IR's node payloads and forcing descriptors. A captured host
-array is a compile-time CONSTANT: XLA would bake in whatever the buffer held at
-`@compile`, the discrete-cadence refresh callback (src/data_refresh.jl) would
-then write the buffer in place, and the compiled program would not see it —
-silently stale forcing, no error, plausible numbers. So the buffers arrive
-through the ARGUMENT LIST instead. An array passed as an argument is a real XLA
-input, and `copyto!`-ing new values into that same `ConcreteRArray` between calls
-IS seen by the already-compiled program, so the discrete-cadence model survives
-compilation verbatim: one aliased buffer per forcing, refreshed in place at each
-cadence boundary, no reallocation and no recompile.
-
-    fo   = EarthSciAST._build_evaluator(model; form = :oop, param_arrays = forcing)[1]
+    fo   = EarthSciAST.Internal.build(model; form = :oop, param_arrays = forcing)[1]
     db   = direct_rhs_with_buffers(fo)
     dev  = map(ConcreteRArray, forcing_buffers(fo))
     xla  = @compile db(u_r, p_r, t_r, dev)
     # at each cadence boundary, after the host refresh:
     sync_forcing!(dev, forcing_buffers(fo))
 
-The 3-argument form `direct_rhs(fo)` REFUSES a model that binds live forcing:
-that configuration is exactly the silent-staleness one, so the emission stops
-with a `DirectEmitError` rather than baking the buffers in. A model with no
-`param_arrays` compiles through the 3-argument form.
+The 3-argument form `direct_rhs(fo)` refuses a model that binds live forcing with
+a `DirectEmitError`.
 
-UPSTREAM DEFECTS THIS EXTENSION WORKS AROUND are catalogued in
-UPSTREAM_ISSUES.md, together with what each one unblocks here and what it does
-NOT. Read it before adding a workaround, and before concluding that a cost
-centre is upstream's fault — most of the compile cost seen so far has been
-emitter shape in THIS repository.
+Upstream defects this extension works around are listed in UPSTREAM_ISSUES.md.
 """
 module EarthSciASTReactantExt
 

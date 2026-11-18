@@ -1,5 +1,5 @@
 """
-`validate_schema` walks the schema itself (`_schema_walk!` in src/validate.jl)
+`validate_schema` walks the schema itself (`_schema_walk!` in src/validation/schema.jl)
 rather than calling JSONSchema.jl's whole-subschema `_validate`, and decides
 every `oneOf`/`anyOf`/`if` branch with that walk. These tests pin the walk's
 match verdict to the library's, so a change on either side that makes them

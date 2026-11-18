@@ -2,7 +2,7 @@
 #
 # The natural target of an inline test is a quantity computed FOR the test — a
 # tendency, a flux, a diagnostic — which by construction nothing else reads.
-# Such an observed never reaches `BuildInspection.observed_exprs`: the
+# Such an observed is absent from the build's `observed_exprs`: the
 # elementwise array-observed fold inlines an observed into its readers and drops
 # its equation, and a DEAD one has no readers to be inlined into, so it is
 # dropped outright. `_observed_field` then found no body and the assertion
@@ -446,15 +446,14 @@ end
 end
 
 @testset "an UNEVALUABLE body names the operand it could not bind" begin
-    # The one diagnostic this fix changes (CONFORMANCE_SPEC §5.27.3). Reaching
-    # the evaluator is the whole point of the fallback, so a body that cannot
-    # be evaluated there now reports WHY instead of the state-lookup message it
-    # used to fall out with. Same ERROR verdict, never a plausible number.
+    # CONFORMANCE_SPEC §5.27.3. Reaching the evaluator is the whole point of
+    # the fallback, so a body that cannot be evaluated there reports WHY rather
+    # than a state-lookup message. ERROR verdict, never a plausible number.
     results = _dob_run(_dob_load(_dob_unbound_doc()))
     @test length(results) == 1
     @test results[1].status == EarthSciAST.ERROR
     @test results[1].actual === nothing
-    # The construction's reference-integrity gate now names it first, as an
+    # The construction's reference-integrity gate names it first, as an
     # undeclared variable.
     @test occursin("undefined_variable", results[1].message)
     @test occursin("ghost", results[1].message)
@@ -473,5 +472,6 @@ end
     @test length(results) == 1
     @test results[1].status == EarthSciAST.ERROR
     @test results[1].actual === nothing
-    @test occursin("has no cells in var_map", results[1].message)
+    # The refusal names the variable and the component it is not declared in.
+    @test occursin("'nope' not found in component 'M'", results[1].message)
 end

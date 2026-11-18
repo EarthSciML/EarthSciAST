@@ -13,7 +13,7 @@ include("../testutils.jl")  # _v/_op builders
 @testset "MTK exporter speaks the same `fn` vocabulary" begin
     # The shared `tests/fixtures/faq/` corpus runs through the MTK exporter,
     # not the tree-walk evaluator, so its `broadcast` vocabulary must be the same
-    # one `validate()` accepts. It used to be a hand-listed dozen ops; it is now
+    # one `validate()` accepts. It is
     # derived from the registry (arithmetic + elementary rows with a scalar fn).
     MTKExt = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
     @test MTKExt !== nothing
@@ -35,13 +35,12 @@ include("../testutils.jl")  # _v/_op builders
     end
     # A unary broadcast lowers through the exporter to the plain unary op — the
     # shape `tests/fixtures/faq/27_broadcast_unary.esm` exercises.
-    vd = Dict{String, Any}("u" => Symbolics.variable(:u))
-    dd = Dict{String, Any}()
+    L = MTKExt._Lowering(Dict{String, Any}("u" => Symbolics.variable(:u)), nothing)
     for f in ["-", "exp", "sqrt", "abs", "sin", "tan"]
         bc = MTKExt._build_broadcast(
-            ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]; fn = f), vd, nothing, dd
+            ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]; fn = f), L
         )
-        plain = MTKExt._esm_to_symbolic(_op(f, _v("u")), vd, nothing, dd)
+        plain = MTKExt._esm_to_symbolic(_op(f, _v("u")), L)
         @test isequal(bc, plain)
     end
     # The derived vocabulary is a strict SUPERSET of this exporter's plain-op
@@ -51,9 +50,9 @@ include("../testutils.jl")  # _v/_op builders
     @test isequal(
         MTKExt._build_broadcast(
             ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]; fn = "neg"),
-            vd, nothing, dd
+            L
         ),
-        MTKExt._esm_to_symbolic(_op("-", _v("u")), vd, nothing, dd)
+        MTKExt._esm_to_symbolic(_op("-", _v("u")), L)
     )
     # …and the §4.3.4 `fn` contract is enforced there too.
     for bad in [
@@ -63,6 +62,6 @@ include("../testutils.jl")  # _v/_op builders
             ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u"), _v("u")]; fn = "sin"),
             ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]; fn = "min"),
         ]
-        @test_throws ArgumentError MTKExt._build_broadcast(bad, vd, nothing, dd)
+        @test_throws SimulateError MTKExt._build_broadcast(bad, L)
     end
 end

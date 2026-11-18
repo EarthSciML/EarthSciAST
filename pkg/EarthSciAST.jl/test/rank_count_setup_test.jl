@@ -30,7 +30,6 @@ const _RC_LIB = joinpath(TESTUTILS_REPO_ROOT, "lib")
 
 _rc_op(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
 _rc_ix(a, s...) = _rc_op("index", a, s...)
-_rc_const(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 _rc_apply(name; b...) = Dict{String, Any}(
     "op" => "apply_expression_template", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
@@ -53,16 +52,11 @@ end
 
 _rc_same(a, b) = keys(a) == keys(b) && all(a[k] === b[k] for k in keys(a))
 
-# `du` by state name at the initial state, and the build's tally, from an
+# `du` by state name at the initial state, and the build's counts, from an
 # in-memory document (whose constants may hold NaN and Inf, which JSON cannot).
 function _rc_du_doc(doc, compiler)
-    _RC._reset_cascade_tally!()
-    f!, u0, p, _, vm = compiler isa Symbol ?
-        _RC._build_evaluator(doc; compiler = compiler) :
-        _RC._with_compiler_plan(compiler) do
-            _RC._build_evaluator_dict(doc; compiler = compiler)
-    end
-    tally = copy(_RC._CASCADE_TALLY)
+    f!, u0, p, _, vm, rep = _RC.Internal.build(doc; compiler = compiler)
+    tally = rep.counts
     du = similar(u0); fill!(du, NaN)
     f!(du, u0, p, 0.3)
     return (Dict(k => du[v] for (k, v) in vm), tally)
@@ -73,9 +67,9 @@ end
 function _rc_du_file(doc, compiler::Symbol)
     path = joinpath(mktempdir(), "doc.esm")
     write(path, JSON3.write(doc))
-    _RC._reset_cascade_tally!()
-    prob = _RC.esm_problem(path, (0.0, 1.0); compiler = compiler)
-    tally = copy(_RC._CASCADE_TALLY)
+    prob, tally = _RC.Internal.counting(
+        () -> _RC.esm_problem(path, (0.0, 1.0); compiler = compiler)
+    )
     du = similar(prob.u0); fill!(du, NaN)
     prob.f!(du, prob.u0, prob.p, 0.3)
     return (Dict(k => du[v] for (k, v) in prob.var_map), tally)
@@ -123,8 +117,8 @@ function _rc_mesh_doc(n, spelling)
     E_ = Dict("e" => Dict("from" => "edge_ids"))
     F_ = Dict("f" => Dict("from" => "faces"))
     eqs = Any[
-        Dict("lhs" => "edge_lo", "rhs" => _rc_const(lo)),
-        Dict("lhs" => "edge_hi", "rhs" => _rc_const(hi)),
+        Dict("lhs" => "edge_lo", "rhs" => jconst(lo)),
+        Dict("lhs" => "edge_hi", "rhs" => jconst(hi)),
         Dict(
             "lhs" => _rc_ix("edge_exists", "e"),
             "rhs" => _rc_faq(
@@ -149,7 +143,7 @@ function _rc_mesh_doc(n, spelling)
     edges_set = Dict{String, Any}("kind" => "derived", "from_faq" => "edge_set")
     model = Dict{String, Any}("variables" => vars, "equations" => eqs)
     if spelling === :const
-        push!(eqs, Dict("lhs" => "face_edge_rank", "rhs" => _rc_const([[rank[(lo[f][k], hi[f][k])] for k in 1:3] for f in 1:F])))
+        push!(eqs, Dict("lhs" => "face_edge_rank", "rhs" => jconst([[rank[(lo[f][k], hi[f][k])] for k in 1:3] for f in 1:F])))
         model["expression_templates"] = _rc_templates("edge_key")
     else
         vars["edge_members"] = Dict("type" => "parameter", "shape" => Any["edges"], "default" => 0.0)
@@ -195,8 +189,8 @@ function _rc_count_doc(keys, queries, body; krange = Dict("from" => "keys"), kw.
         "s" => Dict("type" => "unknown", "shape" => Any["cells"], "default" => 0.0),
     )
     eqs = Any[
-        Dict("lhs" => "kv", "rhs" => _rc_const(keys)),
-        Dict("lhs" => "xq", "rhs" => _rc_const(queries)),
+        Dict("lhs" => "kv", "rhs" => jconst(keys)),
+        Dict("lhs" => "xq", "rhs" => jconst(queries)),
         Dict("lhs" => _rc_ix("r", "i"), "rhs" => _rc_faq(_rc_op("+", 1, cnt), ["i"], I; args = Any["kv", "xq"])),
         Dict("lhs" => _rc_dlhs("s", ["i"], I), "rhs" => _rc_faq(_rc_ix("r", "i"), ["i"], I)),
     ]
@@ -257,7 +251,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
         @test get(tn, :count_fold_setup, 0) >= 1
         # Anchored on the count itself.
         want = [1.0 + count(v -> (yes == 1) == f(v, x), ks) for x in queries]
-        @test all(dn["s[$i]"] === want[i] for i in eachindex(queries))
+        @test all(dn["M.s[$i]"] === want[i] for i in eachindex(queries))
     end
 
     near = (
@@ -296,8 +290,8 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
             "s" => Dict("type" => "unknown", "shape" => Any["cells"], "default" => 1.3),
         )
         eqs = Any[
-            Dict("lhs" => "mv", "rhs" => _rc_const(members)),
-            Dict("lhs" => "xq", "rhs" => _rc_const(xs)),
+            Dict("lhs" => "mv", "rhs" => jconst(members)),
+            Dict("lhs" => "xq", "rhs" => jconst(xs)),
             Dict("lhs" => _rc_ix("r", "i"), "rhs" => _rc_faq(_rc_apply("rank_of"; x = x, members = "mv", n = "nm"), ["i"], I)),
             Dict("lhs" => _rc_dlhs("s", ["i"], I), "rhs" => _rc_faq(_rc_ix("r", "i"), ["i"], I)),
         ]
@@ -363,7 +357,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
             "w" => Dict("type" => "parameter", "default" => 0.25),
         )
         eqs = Any[
-            Dict("lhs" => "g", "rhs" => _rc_const(_rc_gens)),
+            Dict("lhs" => "g", "rhs" => jconst(_rc_gens)),
             Dict("lhs" => _rc_ix("r", "j"), "rhs" => _rc_faq(body, ["j"], J; args = Any["g"])),
             Dict("lhs" => "acc", "rhs" => _rc_ix("r", 1)),
             Dict("lhs" => _rc_op("D", "u"; wrt = "t"), "rhs" => _rc_op("-", "acc", "u")),
@@ -393,7 +387,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
         @test _rc_same(dn, di)
         # D(u) = acc - u at u = 0.5, acc the first extreme candidate's index.
         vals = [(x - 0.013) * (x - 0.013) for x in _rc_gens]
-        @test dn["u"] === Float64(which == "argmin" ? argmin(vals) : argmax(vals)) - 0.5
+        @test dn["M.u"] === Float64(which == "argmin" ? argmin(vals) : argmax(vals)) - 0.5
         @test get(tn, :geo_kernel, 0) >= 1
         @test get(ti, :geo_kernel, 0) == 0
         dw, tw = _rc_du_doc(tp, _RC_NOCOMPILE)

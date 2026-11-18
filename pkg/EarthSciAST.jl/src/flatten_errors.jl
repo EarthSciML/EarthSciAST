@@ -1,7 +1,79 @@
-# Flatten error taxonomy (spec §4.7.5 / §4.7.6): the 8 exported error types,
-# kept name-for-name with the Rust `FlattenError` variants and the Python
-# `flatten()` exception set for cross-language parity. Split from flatten.jl;
-# see flatten.jl for the pipeline overview.
+# Flatten error taxonomy (esm-libraries-spec §4.7.5, §4.7.6), kept name for
+# name with the Rust `FlattenError` variants and the Python `flatten()`
+# exception set.
+
+"""
+    FlattenError <: EarthSciASTError
+
+Supertype of the errors `flatten` raises about the document it flattens, as in
+Python, TypeScript and Rust. Each subtype leads with `code::String`, the
+diagnostic code a caller branches on (for a type whose message begins with a
+code, `"<code>: …"`, that code). Its message is composed from its fields by
+`_flatten_message`, and it prints through the package's one `showerror`. Each
+keeps its positional constructor without the code, which it fills in.
+
+A refusal the other bindings do not name with a type of its own is a
+`FlattenRefusal` (unexported): catch it as `FlattenError` and read its code
+with [`error_code`](@ref).
+"""
+abstract type FlattenError <: EarthSciASTError end
+
+error_message(e::FlattenError) = sprint(_flatten_message, e)
+
+"""
+    FlattenRefusal <: FlattenError
+
+A document `flatten` refuses for a reason no named flatten error covers:
+`nothing_to_flatten` (no `models` and no `reaction_systems`; a template
+library), `unsupported_construct` (a `couple` connector transform this binding
+does not implement), or `variable_map_transform_missing_from` (a `variable_map`
+expression transform that does not read its `from` variable).
+
+    FlattenRefusal(code, message)
+"""
+struct FlattenRefusal <: FlattenError
+    code::String
+    message::String
+end
+_flatten_message(io::IO, e::FlattenRefusal) = print(io, e.message)
+
+"""
+    CoupleMultiplicativeNoTendencyError
+
+Raised when a `couple` connector equation applies the `multiplicative`
+transform to a variable with no tendency `D(to)` to multiply: a parameter, an
+observed, an algebraic unknown or an undeclared name (esm-spec §10.3,
+esm-libraries-spec §4.7.2). `additive` has no counterpart: zero is the additive
+identity, so an additive term against an absent tendency becomes the tendency.
+
+Fields: `code` (`couple_multiplicative_no_tendency`) and `target`, the
+connector's `to`.
+"""
+struct CoupleMultiplicativeNoTendencyError <: FlattenError
+    code::String
+    target::String
+end
+CoupleMultiplicativeNoTendencyError(target::AbstractString) = CoupleMultiplicativeNoTendencyError(
+    ERROR_CODES.COUPLE_MULTIPLICATIVE_NO_TENDENCY, String(target)
+)
+_flatten_message(io::IO, e::CoupleMultiplicativeNoTendencyError) = print(
+    io, "couple connector 'multiplicative' transform targets '", e.target,
+    "', which has no tendency (`D(", e.target, ")`) to multiply (esm-spec §10.3)."
+)
+
+# The registered code a message spells as its prefix (`"array_shape_mismatch: …"`),
+# else `default`.
+function _prefix_code(details::AbstractString, default::String)
+    m = match(r"^([a-z][a-z0-9_]*): ", details)
+    m === nothing && return default
+    code = String(m.captures[1])
+    return code in values(ERROR_CODES) ? code : default
+end
+
+# A flatten diagnostic that does not stop the pass: logged at `Warn` level, the
+# message led by its code and the code also on the log record (`code`), so a
+# caller can filter on it.
+_flatten_warn(code::String, msg::String) = @warn "$(code): $(msg)" code = code
 
 # ========================================
 # Error Types (§4.7.5 / §4.7.6 taxonomy)
@@ -26,17 +98,19 @@ Fields:
 - `reason::String`: what conflicts; the reaction-contribution wording when
   constructed with the species alone.
 """
-struct ConflictingDerivativeError <: EarthSciASTError
+struct ConflictingDerivativeError <: FlattenError
+    code::String
     species::Vector{String}
     reason::String
 end
+ConflictingDerivativeError(species, reason) = ConflictingDerivativeError(ERROR_CODES.CONFLICTING_DERIVATIVE, species, reason)
 
 ConflictingDerivativeError(species::Vector{String}) = ConflictingDerivativeError(
     species, "species have both an explicit derivative equation and a reaction contribution"
 )
 
-function Base.showerror(io::IO, e::ConflictingDerivativeError)
-    return print(io, "ConflictingDerivativeError: ", e.reason, ": ", join(e.species, ", "))
+function _flatten_message(io::IO, e::ConflictingDerivativeError)
+    return print(io, e.reason, ": ", join(e.species, ", "))
 end
 
 """
@@ -59,11 +133,13 @@ Fields:
 - `details::String`: the entry, the merge tally, and the unmatched dependent
   variables.
 """
-struct OperatorComposeNoMergeError <: EarthSciASTError
+struct OperatorComposeNoMergeError <: FlattenError
+    code::String
     details::String
 end
-Base.showerror(io::IO, e::OperatorComposeNoMergeError) =
-    print(io, "OperatorComposeNoMergeError: ", e.details)
+OperatorComposeNoMergeError(details) = OperatorComposeNoMergeError(_prefix_code(details, ERROR_CODES.OPERATOR_COMPOSE_NO_MERGE), details)
+_flatten_message(io::IO, e::OperatorComposeNoMergeError) =
+    print(io, e.details)
 
 """
     OperatorComposeRequireMatchError
@@ -81,11 +157,13 @@ Fields:
 - `details::String`: the entry, the merge tally, and the unmatched dependent
   variables.
 """
-struct OperatorComposeRequireMatchError <: EarthSciASTError
+struct OperatorComposeRequireMatchError <: FlattenError
+    code::String
     details::String
 end
-Base.showerror(io::IO, e::OperatorComposeRequireMatchError) =
-    print(io, "OperatorComposeRequireMatchError: ", e.details)
+OperatorComposeRequireMatchError(details) = OperatorComposeRequireMatchError(_prefix_code(details, ERROR_CODES.OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED), details)
+_flatten_message(io::IO, e::OperatorComposeRequireMatchError) =
+    print(io, e.details)
 
 """
     OperatorComposeAmbiguousBareNameError
@@ -108,11 +186,13 @@ initial condition, so the state is the owner and the merge renames onto it.
 Fields:
 - `details::String`: the entry and the two spellings it tried to unify.
 """
-struct OperatorComposeAmbiguousBareNameError <: EarthSciASTError
+struct OperatorComposeAmbiguousBareNameError <: FlattenError
+    code::String
     details::String
 end
-Base.showerror(io::IO, e::OperatorComposeAmbiguousBareNameError) =
-    print(io, "OperatorComposeAmbiguousBareNameError: ", e.details)
+OperatorComposeAmbiguousBareNameError(details) = OperatorComposeAmbiguousBareNameError(_prefix_code(details, ERROR_CODES.OPERATOR_COMPOSE_AMBIGUOUS_BARE_NAME), details)
+_flatten_message(io::IO, e::OperatorComposeAmbiguousBareNameError) =
+    print(io, e.details)
 
 """
     VariableMapUnresolvedEndpointError
@@ -120,7 +200,7 @@ Base.showerror(io::IO, e::OperatorComposeAmbiguousBareNameError) =
 Raised when a `variable_map` endpoint names nothing the flattened system
 carries (esm-spec §4.6, §10.4).
 
-Both halves of the entry are load-bearing and both used to fail SILENTLY. A
+Both halves of the entry are load-bearing, and neither may fail silently. A
 `to` that resolves to no parameter is simply never promoted
 (`_promote_variable_map_param!` returns on `haskey(params, entry.to) ||
 return`): the document declares a coupling, the target keeps its declared
@@ -138,16 +218,18 @@ Fields:
 - `side`: `"from"` or `"to"` — which endpoint failed to resolve.
 - `endpoint`: the offending reference.
 """
-struct VariableMapUnresolvedEndpointError <: EarthSciASTError
+struct VariableMapUnresolvedEndpointError <: FlattenError
+    code::String
     from::String
     to::String
     side::String
     endpoint::String
 end
+VariableMapUnresolvedEndpointError(from, to, side, endpoint) = VariableMapUnresolvedEndpointError(ERROR_CODES.VARIABLE_MAP_UNRESOLVED_ENDPOINT, from, to, side, endpoint)
 
-Base.showerror(io::IO, e::VariableMapUnresolvedEndpointError) =
+_flatten_message(io::IO, e::VariableMapUnresolvedEndpointError) =
     print(
-    io, "VariableMapUnresolvedEndpointError: variable_map(", e.from, " -> ", e.to,
+    io, "variable_map(", e.from, " -> ", e.to,
     "): the '", e.side, "' endpoint '", e.endpoint, "' resolves to no variable, ",
     "parameter or observed in the flattened system (esm-spec §4.6, §10.4). A scoped ",
     "reference walks EVERY dot-separated segment, so a subsystem endpoint is spelled ",
@@ -179,17 +261,19 @@ Fields:
 - `took_shape`: the source declares no `shape` and took `source_shape` from an
   earlier `param_to_var` target.
 """
-struct VariableMapShapeConflictError <: EarthSciASTError
+struct VariableMapShapeConflictError <: FlattenError
+    code::String
     from::String
     to::String
     source_shape::Vector{String}
     target_shape::Vector{String}
     took_shape::Bool
 end
+VariableMapShapeConflictError(from, to, source_shape, target_shape, took_shape) = VariableMapShapeConflictError(ERROR_CODES.VARIABLE_MAP_SHAPE_CONFLICT, from, to, source_shape, target_shape, took_shape)
 
-function Base.showerror(io::IO, e::VariableMapShapeConflictError)
+function _flatten_message(io::IO, e::VariableMapShapeConflictError)
     print(
-        io, "VariableMapShapeConflictError: variable_map(", e.from, " -> ", e.to,
+        io, "variable_map(", e.from, " -> ", e.to,
         "): the data-fed source '", e.from, "' "
     )
     if e.took_shape
@@ -218,11 +302,13 @@ Raised during flatten when a variable or equation cannot be promoted from
 its source domain to the target domain given the available `Interface` rules
 (§4.7.6).
 """
-struct DimensionPromotionError <: EarthSciASTError
+struct DimensionPromotionError <: FlattenError
+    code::String
     details::String
 end
-Base.showerror(io::IO, e::DimensionPromotionError) =
-    print(io, "DimensionPromotionError: ", e.details)
+DimensionPromotionError(details) = DimensionPromotionError(_prefix_code(details, ERROR_CODES.DIMENSION_PROMOTION), details)
+_flatten_message(io::IO, e::DimensionPromotionError) =
+    print(io, e.details)
 
 """
     UnmappedDomainError
@@ -230,13 +316,15 @@ Base.showerror(io::IO, e::DimensionPromotionError) =
 Raised when two systems on different domains are coupled without an `Interface`
 that defines their dimension mapping (§4.7.6).
 """
-struct UnmappedDomainError <: EarthSciASTError
+struct UnmappedDomainError <: FlattenError
+    code::String
     source::String
     target::String
 end
-Base.showerror(io::IO, e::UnmappedDomainError) =
+UnmappedDomainError(source, target) = UnmappedDomainError(ERROR_CODES.UNMAPPED_DOMAIN, source, target)
+_flatten_message(io::IO, e::UnmappedDomainError) =
     print(
-    io, "UnmappedDomainError: no Interface maps domain '", e.source,
+    io, "no Interface maps domain '", e.source,
     "' to domain '", e.target, "'"
 )
 
@@ -251,12 +339,14 @@ strategy that is not supported by the current library tier (§4.7.6). The
 and the Python `UnsupportedMappingError` exception for cross-language
 error-name parity.
 """
-struct UnsupportedMappingError <: EarthSciASTError
+struct UnsupportedMappingError <: FlattenError
+    code::String
     mapping_type::String
 end
-Base.showerror(io::IO, e::UnsupportedMappingError) =
+UnsupportedMappingError(mapping_type) = UnsupportedMappingError(ERROR_CODES.UNSUPPORTED_MAPPING, mapping_type)
+_flatten_message(io::IO, e::UnsupportedMappingError) =
     print(
-    io, "UnsupportedMappingError: mapping type '",
+    io, "mapping type '",
     e.mapping_type, "' is not supported by this library tier"
 )
 
@@ -266,14 +356,16 @@ Base.showerror(io::IO, e::UnsupportedMappingError) =
 Raised when coupling across an `Interface` requires a unit conversion that
 was not declared by the user (§4.7.6).
 """
-struct DomainUnitMismatchError <: EarthSciASTError
+struct DomainUnitMismatchError <: FlattenError
+    code::String
     variable::String
     source_units::String
     target_units::String
 end
-Base.showerror(io::IO, e::DomainUnitMismatchError) =
+DomainUnitMismatchError(variable, source_units, target_units) = DomainUnitMismatchError(ERROR_CODES.DOMAIN_UNIT_MISMATCH, variable, source_units, target_units)
+_flatten_message(io::IO, e::DomainUnitMismatchError) =
     print(
-    io, "DomainUnitMismatchError: variable '", e.variable,
+    io, "variable '", e.variable,
     "' has units '", e.source_units, "' on source and '",
     e.target_units, "' on target"
 )
@@ -288,12 +380,14 @@ independent variable disagree. The Julia flatten pipeline does not currently
 perform this check, so this type is reserved and never raised by the current
 implementation — it exists so consumers can catch it by name.
 """
-struct DomainExtentMismatchError <: EarthSciASTError
+struct DomainExtentMismatchError <: FlattenError
+    code::String
     variable::String
 end
-Base.showerror(io::IO, e::DomainExtentMismatchError) =
+DomainExtentMismatchError(variable) = DomainExtentMismatchError(ERROR_CODES.DOMAIN_EXTENT_MISMATCH, variable)
+_flatten_message(io::IO, e::DomainExtentMismatchError) =
     print(
-    io, "DomainExtentMismatchError: domain extent mismatch on ",
+    io, "domain extent mismatch on ",
     "independent variable '", e.variable, "' under identity mapping"
 )
 
@@ -305,13 +399,15 @@ implemented at a higher tier in the Julia flatten pipeline. Would be raised
 when a `slice` mapping's fixed coordinate lies outside the source variable's
 declared domain extent.
 """
-struct SliceOutOfDomainError <: EarthSciASTError
+struct SliceOutOfDomainError <: FlattenError
+    code::String
     coordinate::String
     value::String
 end
-Base.showerror(io::IO, e::SliceOutOfDomainError) =
+SliceOutOfDomainError(coordinate, value) = SliceOutOfDomainError(ERROR_CODES.SLICE_OUT_OF_DOMAIN, coordinate, value)
+_flatten_message(io::IO, e::SliceOutOfDomainError) =
     print(
-    io, "SliceOutOfDomainError: slice coordinate '", e.coordinate,
+    io, "slice coordinate '", e.coordinate,
     "' = ", e.value, " lies outside the source domain extent"
 )
 
@@ -324,11 +420,13 @@ does promotion-graph analysis. Would signal that the declared `Interface`
 rules form a cycle (A promotes to B, B promotes back to A on a different
 axis).
 """
-struct CyclicPromotionError <: EarthSciASTError
+struct CyclicPromotionError <: FlattenError
+    code::String
     variables::Vector{String}
 end
-Base.showerror(io::IO, e::CyclicPromotionError) =
+CyclicPromotionError(variables) = CyclicPromotionError(ERROR_CODES.CYCLIC_PROMOTION, variables)
+_flatten_message(io::IO, e::CyclicPromotionError) =
     print(
-    io, "CyclicPromotionError: cyclic promotion detected involving ",
+    io, "cyclic promotion detected involving ",
     "variables ", e.variables
 )

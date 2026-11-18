@@ -29,11 +29,12 @@ using ..MToken
 using ..MUnits: Factor
 import ..MUnits
 import ..DNumber
-using ..MExpr: REMOVED_OPS, Sym, is_e, is_formula, is_id_char, is_id_start, is_single,
+import ..DStrings
+using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, Sym, is_e, is_formula, is_id_char, is_id_start, is_single,
     keys_sorted, name_ok, pieces, seg_ok, split_dots, sub_parts, num_ok
 
 # The package the document module sits in: its unit grammar reads a units
-# string's factors (`factors_of`).
+# string's factors (`factors_of`) and spells them.
 const HOST = parentmodule(parentmodule(@__MODULE__))
 
 kw(k::Kw) = TKw(k)
@@ -47,7 +48,7 @@ function tc(parts...)
     return out
 end
 
-s_of(cs) = String(collect(Char, cs))
+const s_of = str_of
 
 # ## Text pieces
 
@@ -114,8 +115,8 @@ end
 digit)."""
 char_digit_nat(c::Char) = UInt64(max(Int64(UInt32(c)) - 48, 0))
 
-"""Lean's `Char.ofNat`: an invalid code point is `'\\0'`."""
-char_of_nat(n::Integer) = (n > 0x0010ffff || 0xd800 <= n <= 0xdfff) ? '\0' : Char(n)
+"""Lean's `Char.ofNat`: an invalid code point is `'\\0'` (`DStrings.char_of`)."""
+const char_of_nat = DStrings.char_of
 
 """`Math.unescK`: undo [`esc_k`](@ref)."""
 function unesc_k(cs)
@@ -290,7 +291,7 @@ const FIELD_CALL_OPS =
 """`Math.reservedOpn`: names `\\operatorname{…}` never means a template or an
 open operator by."""
 reserved_opn(n::AbstractString) =
-    n in CALL_OPS || n in ("D", "neg", "pow") || n in REMOVED_OPS
+    n in CALL_OPS || n == "D" || n in DEPRECATED_OPS || n in REMOVED_OPS
 
 """`Math.coreOps` (`coreOpNames` of `Notation`)."""
 const CORE_OPS = Set{String}(
@@ -442,34 +443,12 @@ does not parse): the parse's factors normalized per side (`Esm.Units.norm2`),
 positive exponents first."""
 function factors_of(u::AbstractString)
     isempty(u) && return Factor[]
-    toks = HOST._canon_lex(collect(HOST._normalize_unit_string(u)))
-    toks === nothing && return Factor[]
-    p = HOST._CanonParser(toks, 1)
-    fs = try
-        f = HOST._cp_unit!(p)
-        p.i == length(toks) + 1 || return Factor[]
-        f
-    catch e
-        e isa HOST._CanonFail && return Factor[]
-        rethrow()
-    end
-    num = HOST._canon_side(filter(f -> f[2] > 0, fs))
-    den = HOST._canon_side(filter(f -> !(f[2] > 0), fs))
-    return Factor[(String(s), Rational{BigInt}(q)) for (s, q) in vcat(num, den)]
+    l = HOST._canonical_unit_factors(u)
+    return l === nothing ? Factor[] : l
 end
 
 """`Esm.Units.spell`: the canonical spelling of a factor list."""
-function spell_unit_factors(l)
-    num = [HOST._canon_factor((s, q)) for (s, q) in l if q > 0]
-    den = [HOST._canon_factor((s, q)) for (s, q) in l if !(q > 0)]
-    out = isempty(num) ? "1" : join(num, "*")
-    if length(den) == 1
-        out *= "/" * den[1]
-    elseif length(den) > 1
-        out *= "/(" * join(den, "*") * ")"
-    end
-    return out
-end
+spell_unit_factors(l) = HOST._spell_unit_factors(l)
 
 """`Math.unitsOK`: the units of a quantity print typeset."""
 function units_ok(sf::Sf, u::AbstractString)
@@ -547,7 +526,6 @@ struct Out
     toks::Vector{Tok}
     crow::Vector{Tok}
 end
-Base.:(==)(a::Out, b::Out) = fieldeq(a, b)
 
 """`Math.mkOut`."""
 function mk_out(l::Int, t::Vector{Tok})
@@ -829,7 +807,6 @@ struct AForm
     ns::Vector{JNum}
     rs::Vector{Vector{JNum}}
 end
-Base.:(==)(a::AForm, b::AForm) = fieldeq(a, b)
 
 """`Math.arrForm`: a constant array printed natively."""
 function arr_form(j)
@@ -914,19 +891,18 @@ end
 """`Math.bases`."""
 bases(e) = bases_j(e, String[])
 
-"""`Math.RedK`: the reductions with a native spelling (`:sum`, `:prod`, `:max`,
-`:min`)."""
-const RedK = Symbol
+"""The native reductions: each one's name, keyword and `reduce` field
+(`nothing` for the default sum). `redk_kw`, `redk_field`, `faq_cand`'s reading of
+`reduce` and the parser's `red_of` are all read from it."""
+const RED_TABLE = ((:sum, KSum, nothing), (:prod, KProd, "*"), (:max, KMax, "max"), (:min, KMin, "min"))
 
 """`Math.RedK.kw`."""
-redk_kw(r::Symbol) = r === :sum ? KSum : r === :prod ? KProd : r === :max ? KMax : KMin
+redk_kw(r::Symbol) = RED_TABLE[findfirst(x -> x[1] === r, RED_TABLE)][2]
 
 """`Math.RedK.field`."""
 function redk_field(r::Symbol)
-    r === :sum && return Kvs()
-    r === :prod && return Kvs(["reduce" => "*"])
-    r === :max && return Kvs(["reduce" => "max"])
-    return Kvs(["reduce" => "min"])
+    f = RED_TABLE[findfirst(x -> x[1] === r, RED_TABLE)][3]
+    return f === nothing ? Kvs() : Kvs(["reduce" => f])
 end
 
 """`Math.FaqForm`: a `faq` node with a native spelling, by its parts. `filter`
@@ -941,7 +917,6 @@ struct FaqForm
     filter::Any
     set::Vector{String}
 end
-Base.:(==)(a::FaqForm, b::FaqForm) = fieldeq(a, b)
 
 """`Math.FaqForm.args`: the `args` of a native `faq`."""
 faq_args(f::FaqForm) = f.marked ? Any[s for s in bases(f.expr)] : Any[s for s in f.set]
@@ -979,17 +954,9 @@ function faq_cand(kvs)
     args = look("args", kvs)
     (e !== nothing && out isa JArr && args isa JArr) || return nothing
     r = look("reduce", kvs)
-    red = if r === nothing
-        :sum
-    elseif r == "*"
-        :prod
-    elseif r == "max"
-        :max
-    elseif r == "min"
-        :min
-    else
-        return nothing
-    end
+    i = findfirst(x -> r === nothing ? x[3] === nothing : (x[3] !== nothing && r == x[3]), RED_TABLE)
+    i === nothing && return nothing
+    red = RED_TABLE[i][1]
     rr = look("ranges", kvs)
     rs = if rr isa JObj
         copy(rr.kvs)
@@ -1209,7 +1176,6 @@ struct MkForm
     regions::Vector{Vector{Tuple{Any, Any}}}
     values::Vector{Any}
 end
-Base.:(==)(a::MkForm, b::MkForm) = fieldeq(a, b)
 
 """`Math.regionJson`."""
 region_json(r) = JArr(Any[JArr(Any[p[1], p[2]]) for p in r])
@@ -1333,13 +1299,15 @@ function mk_out_t(c::Ctx, m::MkForm)
     return mk_out(10, tc(MAT_HEAD, rows, (kw(KRp),), mk_sub(c, m.out)))
 end
 
-"""`Math.callFormHead`: the operator `o` with the fields `fs` has the call form:
+"""Not in Lean: part of `Math.callCond` (its call-form, name and template
+conditions). The operator `o` with the fields `fs` has the call form:
 [`call_form_ok`](@ref), a name `\\operatorname` can spell, and no template of
 that name in scope."""
 call_form_head(c::Ctx, o::AbstractString, fs) =
     call_form_ok(o, fs) && opn_ok(o) && tparams(c.s, o) === nothing
 
-"""`Math.callForm`: [`pr_opn`](@ref) prints the operator `o` with the fields
+"""Not in Lean: part of `Math.callCond` with `Math.fieldsOK`.
+[`pr_opn`](@ref) prints the operator `o` with the fields
 `fs` in the call form: [`call_form_head`](@ref) and every key an identifier."""
 call_form(c::Ctx, o::AbstractString, fs) =
     call_form_head(c, o, fs) && all(kv -> key_ok(kv.first), fs)
@@ -1439,7 +1407,8 @@ function pr(c::Ctx, e)
     return pr_opn(c, kvs)
 end
 
-"""`Math.constForm`: the parts of a `const` node with a native spelling: its
+"""Not in Lean: the `const` arms of `Math.nativeK`. The parts of a `const` node
+with a native spelling: its
 array form (`nothing` for a quantity) and its unit (`nothing` when it has none);
 `nothing` when the node has no native spelling (it then prints in the call
 form)."""
@@ -1463,7 +1432,8 @@ function const_form(sf::Sf, kvs)
     return af === nothing ? nothing : (af, u)
 end
 
-"""`Math.constOut`: the native spelling of a `const` node: an array as a matrix
+"""Not in Lean (the `const` arm of `Math.pr`): the native spelling of a `const`
+node: an array as a matrix
 or column vector, a quantity, an array with its unit ([`const_form`](@ref))."""
 function const_out(sf::Sf, kvs)
     q = const_form(sf, kvs)
@@ -1474,19 +1444,22 @@ function const_out(sf::Sf, kvs)
     return mk_out(7, tc(arr_toks(sf, af), unit_toks(factors_of(u))))
 end
 
-"""`Math.nativeFaq`: the parts of a `faq` node that prints natively."""
+"""Not in Lean: the `faq` arm of `Math.nativeK`. The parts of a `faq` node that
+prints natively."""
 function native_faq(kvs)
     f = faq_form(kvs)
     return (f !== nothing && faq_ok(f)) ? f : nothing
 end
 
-"""`Math.nativeMk`: the parts of a `makearray` node that prints natively."""
+"""Not in Lean: the `makearray` arm of `Math.nativeK`. The parts of a
+`makearray` node that prints natively."""
 function native_mk(kvs)
     m = mk_form(kvs)
     return (m !== nothing && mk_ok(m)) ? m : nothing
 end
 
-"""`Math.callFormNode`: the node is one [`pr`](@ref) gives the call form with
+"""Not in Lean: `Math.callCond` over a whole node. The node is one [`pr`](@ref)
+gives the call form with
 named fields: [`call_form_head`](@ref) holds and no native spelling of a
 `const`, `faq` or `makearray` applies. The reader accepts the call form with `;`
 only for such a node. Keys are not checked: a key the printer would not write

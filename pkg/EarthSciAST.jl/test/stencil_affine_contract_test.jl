@@ -1,7 +1,6 @@
 # Differential test for CONSTANT-bound contractions (aggregate reductions) on the
-# affine access-kernel path (ess-affine). A contraction used to be gated out of the
-# affine path entirely (`isempty(contract_names)`), forcing the per-cell reduce.
-# It is now UNROLLED into a plain ⊕-fold of affine-gather terms
+# affine access-kernel path. A contraction is UNROLLED into a plain ⊕-fold of
+# affine-gather terms
 # (`_unrolled_contraction_body`) and lowered by the existing box processor — no
 # runtime reduce, no per-cell loop. The unroll reuses `_foreach_aggregate_term`
 # (term order, filter `ifelse`-guard) and seeds the fold with the 0̄ identity first,
@@ -15,14 +14,17 @@ using EarthSciAST
 include("testutils.jl")
 const ESM = EarthSciAST
 
+# The model is built as component `M`, so the state keys are qualified here;
+# the const arrays are undeclared data names, which flattening leaves bare.
 function _ct_build(model, ics; affine::Bool, const_arrays = Dict())
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+    f!, u0, p, _t, vm, rep = ESM.Internal.build(
         model;
-        initial_conditions = ics, const_arrays = const_arrays,
+        initial_conditions = Dict{String, Any}("M." * String(k) => v for (k, v) in ics),
+        const_arrays = const_arrays,
         compiler = affine ? :native : :interpreter
     )
     du = zero(u0); f!(du, u0, p, 0.0)
-    return (du, u0, vm, diag)
+    return (du, u0, vm, rep.stats)
 end
 
 # D(y[i]) = ⊕_{k=lo:hi} body, output i in 1:ni. `reduce` names ⊕; `filt` optional.
@@ -35,7 +37,7 @@ function _reduce_model(statevars, ybody, ni, klo, khi; reduce = "+", filt = noth
     return ESM.Model(vars, [ESM.Equation(_ao1(_Didx(statevars[1], _v("i")), "i", 1, ni), rhs)])
 end
 
-@testset "affine constant-bound contraction ≡ per-cell (differential, ess-affine)" begin
+@testset "affine constant-bound contraction ≡ per-cell (differential)" begin
     @testset "matvec sum_product D(y[i])=Σ A[i,k]·x[k]" begin
         A = [1.0 2.0 3.0; 4.0 5.0 6.0]
         body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))
@@ -44,9 +46,8 @@ end
         du_a, _, vm, d = _ct_build(m, ics; affine = true, const_arrays = Dict("A" => A))
         du_r, _, _, _ = _ct_build(m, ics; affine = false, const_arrays = Dict("A" => A))
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
-        @test du_a[vm["y[1]"]] == 6.0 && du_a[vm["y[2]"]] == 15.0
+        @test du_a[vm["M.y[1]"]] == 6.0 && du_a[vm["M.y[2]"]] == 15.0
     end
 
     @testset "min_sum D(d[i])=min_k (u[i]+k) (N=$ni)" for ni in (3, 8, 32)
@@ -59,7 +60,6 @@ end
         du_a, _, _, d = _ct_build(m, ics; affine = true)
         du_r, _, _, _ = _ct_build(m, ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
     end
 
@@ -73,7 +73,6 @@ end
         du_a, _, _, d = _ct_build(m, ics; affine = true)
         du_r, _, _, _ = _ct_build(m, ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
     end
 
@@ -102,9 +101,8 @@ end
         du_a, _, vm, d = _ct_build(m, ics; affine = true)
         du_r, _, _, _ = _ct_build(m, ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
-        @test du_a[vm["w[1]"]] == 3.0     # 1·1 + 1·2 (k=3,4 filtered out)
+        @test du_a[vm["M.w[1]"]] == 3.0     # 1·1 + 1·2 (k=3,4 filtered out)
     end
 
     @testset "contraction kernel count N-independent" begin
@@ -143,7 +141,6 @@ end
         du_a, _, _, d = _ct_build(m, ics; affine = true)
         du_r, _, _, _ = _ct_build(m, ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
     end
 end

@@ -1,4 +1,4 @@
-# The kernel-CLASS merge (src/tree_walk/oop_merge.jl): `_build_evaluator_impl`
+# The kernel-CLASS merge (src/tree_walk/oop_merge.jl): the build
 # groups structurally identical `_AccKernel`s (before the xcse gate and the
 # emitter branch, so BOTH `:oop` and `:inplace` get it) and merges each class
 # into one lane-batched kernel whose varying leaves are per-lane tables.
@@ -24,21 +24,26 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-# Out-of-place builds with the class merge on / off. Kernel counts are read off
-# the compiled IR's own field — the same reflection a compiled backend uses.
+# The build flattens its model into component `M`, so every declared name it
+# takes is qualified (the live `forcing` buffer is not declared and keeps its
+# spelling).
+_om_q(d) = Dict{String, Any}("M.$k" => v for (k, v) in d)
+
+# Out-of-place builds. Kernel counts are read off the compiled IR's own field —
+# the same reflection a compiled backend uses — and the structural counts off
+# the build report's `stats`.
 function _om_build(model, ics; param_arrays = Dict{String, Any}())
-    fo, u0, p, _t, vm, d = ESM._build_evaluator_impl(
+    fo, u0, p, _t, vm, rep = ESM.Internal.build(
         model;
-        initial_conditions = ics, form = :oop, param_arrays = param_arrays
+        initial_conditions = _om_q(ics), form = :oop, param_arrays = param_arrays
     )
-    return (fo, u0, p, vm, d)
+    return (fo, u0, p, vm, rep.stats)
 end
 _om_nkernels(fo) = length(getfield(getfield(fo, :rhs), :acc_kernels))
 # The pass fired iff it left fewer kernels than it was handed. `n_classmerge_in`
 # is the PRE-merge count this build recorded, so one build answers it — there is
 # no second compiler that keeps the affine tier but drops the merge.
 _om_fired(d) = d.n_acc_kernels < d.n_classmerge_in
-_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 
 # Two SAME-STRUCTURE equations over different states — one merge class of two
 # members. The kernels differ only in their state slots (and out-slots), the
@@ -124,7 +129,7 @@ function _om_twin_inv_model(N; g = 3.0, h = 7.0)
 end
 
 @testset "the out-of-place build receives the merged kernels (oop_merge.jl)" begin
-    # The merge runs in `_build_evaluator_impl` phase 4, before the emitter
+    # The merge runs in the build's last phase, before the emitter
     # branch, so it is a property of the BUILD. What is checked here is that the
     # out-of-place product carries the merged list — the values are pinned by the
     # in-place testsets below, which run the same models through `f!`.
@@ -161,10 +166,9 @@ end
 end
 
 # ============================================================================
-# The `:inplace` side of the SAME pass. Since the hoist into
-# `_build_evaluator_impl` phase 4 (build.jl, before the xcse gate and before
-# the emitter branch), the class merge applies to the production in-place
-# `f!` too. The `:native` build must be BIT-IDENTICAL (`==`, never `isapprox`)
+# The `:inplace` side of the SAME pass. The class merge runs in the build's
+# last phase (build_pipeline.jl, before the xcse gate and before the emitter branch), so
+# it applies to the production in-place `f!` too. The `:native` build must be BIT-IDENTICAL (`==`, never `isapprox`)
 # to `compiler=:interpreter` on the twin pointwise model, the twin stencil
 # (ghost boundary) model, and the live-forcing model incl. an in-place buffer
 # refresh; and the pass must observably FIRE (`n_acc_kernels` below
@@ -173,34 +177,37 @@ end
 # full list is introspectable).
 # ============================================================================
 
-# In-place builds. `codegen=false` puts the primary emission's node budget at
-# zero — a retained tuning threshold — so nothing is emitted away and
-# `getfield(f!, :kernel_section).kernels` holds every merged kernel; the
-# default `codegen=true` build exercises the codegen emitter OVER merged
-# kernels (source generation + compiled loop nests). `compiler=:interpreter` is
-# the reference: no merge, no codegen, no affine tier.
+# In-place builds. `codegen=false` puts the emission's node budget at zero —
+# a refusal boundary under strict native, so that build is non-strict — and
+# nothing is emitted away: `f!.state.kernels.kernels` holds every
+# merged kernel. The default `codegen=true` build exercises the codegen
+# emitter OVER merged kernels (source generation + compiled loop nests).
+# `compiler=:interpreter` is the reference: no merge, no codegen, no affine
+# tier.
 function _im_build(
         model, ics; codegen::Bool = true, compiler::Symbol = :native,
         param_arrays = Dict{String, Any}()
     )
+    plan = codegen || compiler !== :native ? compiler :
+        ESM._plan_with(ESM._compiler_plan(:native); strict = false)
     return withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
-        f!, u0, p, _t, vm, d = ESM._build_evaluator_impl(
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
-            initial_conditions = ics, param_arrays = param_arrays,
-            compiler = compiler
+            initial_conditions = _om_q(ics), param_arrays = param_arrays,
+            compiler = plan
         )
-        (f!, u0, p, vm, d)
+        (f!, u0, p, vm, rep.stats)
     end
 end
-# Full kernel count of the in-place closure — the whole list when the primary
+# Full kernel count of the in-place right-hand side — the whole list when the
 # emission declined everything (n_emitted == 0).
 function _im_nkernels(f!)
-    ks = getfield(f!, :kernel_section)
+    ks = f!.state.kernels
     @test getfield(ks, :n_emitted) == 0
     return length(getfield(ks, :kernels))
 end
 
-@testset ":inplace kernel-class merge ≡ interpreter (hoisted, build.jl)" begin
+@testset ":inplace kernel-class merge ≡ interpreter (hoisted, build_pipeline.jl)" begin
 
     @testset "pointwise twins: fires + bit-identical (N=$N)" for N in (8, 33)
         ics = _om_ics(N)
@@ -210,13 +217,13 @@ end
         @test _im_nkernels(fm) < dm.n_classmerge_in      # the pass FIRED (IIP)
         @test dm.n_acc_kernels < dm.n_classmerge_in      # and the diag agrees
         for t in (0.0, 0.37)
-            @test _ip(fm, um, pm, t) == _ip(fu, uu, pu, t)
+            @test rhs_du(fm, um, pm, t) == rhs_du(fu, uu, pu, t)
         end
         # default (fully emitted) build: the B1 tier accepts merged kernels
         fmc, umc, pmc, _, _ = _im_build(_om_twin_model(N), ics)
         for t in (0.0, 0.37)
-            @test _ip(fmc, umc, pmc, t) == _ip(fu, uu, pu, t)
-            @test _ip(fmc, umc, pmc, t) == _ip(fm, um, pm, t)  # ≡ interpreted
+            @test rhs_du(fmc, umc, pmc, t) == rhs_du(fu, uu, pu, t)
+            @test rhs_du(fmc, umc, pmc, t) == rhs_du(fm, um, pm, t)  # ≡ interpreted
         end
     end
 
@@ -229,11 +236,11 @@ end
         )
         @test _im_nkernels(fm) < dm.n_classmerge_in
         for t in (0.0, 1.9)
-            @test _ip(fm, um, pm, t) == _ip(fu, uu, pu, t)
+            @test rhs_du(fm, um, pm, t) == rhs_du(fu, uu, pu, t)
         end
         # codegen tier over the merged stencil kernels, still bit-identical
         fmc, umc, pmc, _, _ = _im_build(_om_twin_stencil_model(N), ics)
-        @test _ip(fmc, umc, pmc, 1.9) == _ip(fu, uu, pu, 1.9)
+        @test rhs_du(fmc, umc, pmc, 1.9) == rhs_du(fu, uu, pu, 1.9)
     end
 
     @testset "live forcing stays live through the merged table (in place)" begin
@@ -250,11 +257,11 @@ end
             compiler = :interpreter, param_arrays = pa
         )
         @test _im_nkernels(fm) < dm.n_classmerge_in
-        du1 = _ip(fm, um, pm, 0.0)
-        @test du1 == _ip(fu, uu, pu, 0.0)
+        du1 = rhs_du(fm, um, pm, 0.0)
+        @test du1 == rhs_du(fu, uu, pu, 0.0)
         buf .= reverse(buf) .+ 3.0            # in-place refresh, no rebuild
-        du2 = _ip(fm, um, pm, 0.0)
-        @test du2 == _ip(fu, uu, pu, 0.0)     # both builds saw the refresh
+        du2 = rhs_du(fm, um, pm, 0.0)
+        @test du2 == rhs_du(fu, uu, pu, 0.0)     # both builds saw the refresh
         @test du2 != du1                      # and it actually changed values
     end
 
@@ -283,11 +290,11 @@ end
         @test dm.n_acc_kernels < dm.n_classmerge_in    # classes merged
         @test dm.n_acc_inv_slots >= 1                  # …but the hoist survived
         for t in (0.0, 0.42)
-            @test _ip(fm, um, pm, t) == _ip(fu, uu, pu, t)
+            @test rhs_du(fm, um, pm, t) == rhs_du(fu, uu, pu, t)
         end
         # …and through the codegen tier
         fmc, umc, pmc, _, _ = _im_build(_om_twin_inv_model(N), ics)
-        @test _ip(fmc, umc, pmc, 0.42) == _ip(fu, uu, pu, 0.42)
+        @test rhs_du(fmc, umc, pmc, 0.42) == rhs_du(fu, uu, pu, 0.42)
         # the out-of-place build merges the same classes
         fom, _, _, _, dom = _om_build(_om_twin_inv_model(N), ics)
         @test _om_fired(dom)

@@ -27,14 +27,19 @@ using EarthSciAST
 include("testutils.jl")
 const ESM_CS = EarthSciAST
 
+# The build flattens its model into component `M`: every declared name it
+# takes or returns is qualified. The const arrays and live buffers these models
+# read are not declared, so they keep the spelling the equations use.
+_cs_q(d) = Dict{String, Any}("M.$k" => v for (k, v) in d)
+
 # D(a[j])   = 0                          — a 1-D column, extent N
 # D(u[i,j]) = a[j] * u[i,j]              — a 2-D field, extent N×N
 # `a[j]` read from the (i,j) loop is the cross-shape gather: slot(a[j]) is
 # affine in `j` alone while the output slot moves with both `i` and `j`.
 function _cs_model(N)
     vars = Dict{String, ESM_CS.ModelVariable}(
-        "a" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+        "a" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0),
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0)
     )
     ao2(body, lhs) = ESM_CS.OpExpr(
         "faq", ESM_CS.ASTExpr[];
@@ -68,16 +73,15 @@ function _cs_build(N; compiler::Symbol = :native)
             ics["u[$i,$j]"] = sin(0.3i) + 0.2j
         end
     end
-    ESM_CS._reset_cascade_tally!()
-    f, u0, p, _t, vm, diag = ESM_CS._build_evaluator_impl(
+    f, u0, p, _t, vm, rep = ESM_CS.Internal.build(
         _cs_model(N);
-        initial_conditions = ics, compiler = compiler
+        initial_conditions = _cs_q(ics), compiler = compiler
     )
     du = zero(u0); f(du, u0, p, 0.0)
-    ks = getfield(getfield(f, :kernel_section), :kernels)
+    ks = rep.kernels
     return (
-        u0 = u0, du = du, diag = diag, kernels = ks,
-        tally = copy(ESM_CS._CASCADE_TALLY),
+        u0 = u0, du = du, diag = rep.stats, kernels = ks,
+        tally = rep.counts,
         n_kernels = length(ks),
         conn_entries = sum(
             sum(length(d.conn) for d in K.acc; init = 0)
@@ -86,12 +90,7 @@ function _cs_build(N; compiler::Symbol = :native)
     )
 end
 
-# `kernel_section.kernels` is complete only when the primary emission declined
-# everything, which a zero node budget — a retained tuning threshold — forces
-# (the oop_merge/xcse idiom used by grid_invariance_test.jl).
-_cs_run(N) = withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do;
-    _cs_build(N)
-end
+_cs_run(N) = _cs_build(N)
 _cs_run_ref(N) = _cs_build(N; compiler = :interpreter)
 
 @testset "cross-shape state gather is grid-independent" begin
@@ -128,17 +127,17 @@ _cs_run_ref(N) = _cs_build(N; compiler = :interpreter)
 
     @testset "the values are right" begin
         # du[u[i,j]] = a[j]·u[i,j]; du[a[j]] = 0
-        vm = ESM_CS._build_evaluator_impl(
+        vm = ESM_CS.Internal.build(
             _cs_model(N1);
-            initial_conditions = Dict("a[1]" => 0.0)
-        )[5]
+            initial_conditions = Dict("M.a[1]" => 0.0)
+        ).var_map
         for j in 1:N1, i in 1:N1
             aj = 0.5 + 0.1j
             uij = sin(0.3i) + 0.2j
-            @test A.du[vm["u[$i,$j]"]] ≈ aj * uij
+            @test A.du[vm["M.u[$i,$j]"]] ≈ aj * uij
         end
         for j in 1:N1
-            @test A.du[vm["a[$j]"]] == 0.0
+            @test A.du[vm["M.a[$j]"]] == 0.0
         end
     end
 end
@@ -164,8 +163,8 @@ end
     N, i0 = 40, 20
     perm = collect(1:N); perm[i0] = i0 + 1        # identity but for one swap
     vars = Dict{String, ESM_CS.ModelVariable}(
-        "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+        "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0),
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0)
     )
     ao2(body) = ESM_CS.OpExpr(
         "faq", ESM_CS.ASTExpr[];
@@ -194,9 +193,9 @@ end
     ca = Dict("conn" => Float64.(perm))
 
     function ev(compiler = :native)
-        f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(
+        f, u0, p, _t, vm, _ = ESM_CS.Internal.build(
             model;
-            initial_conditions = ics, const_arrays = ca, compiler = compiler
+            initial_conditions = _cs_q(ics), const_arrays = ca, compiler = compiler
         )
         du = fill(NaN, length(u0)); f(du, u0, p, 0.0)
         return (du = du, vm = vm, u0 = u0)
@@ -209,7 +208,7 @@ end
     # than a whole vector (`i0` is the wrong one; its neighbours are the
     # control that the rest of the box is still right).
     for i in (i0 - 1, i0, i0 + 1), j in (1, N)
-        @test got.du[got.vm["u[$i,$j]"]] == got.u0[got.vm["w[$(perm[i])]"]]
+        @test got.du[got.vm["M.u[$i,$j]"]] == got.u0[got.vm["M.w[$(perm[i])]"]]
     end
 end
 
@@ -221,9 +220,9 @@ end
 @testset "same-shape state gather is not licensed by corner agreement" begin
     function check(model, ics, ca, cells; pa = Dict{String, Any}())
         function ev(compiler = :native)
-            f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(
+            f, u0, p, _t, vm, _ = ESM_CS.Internal.build(
                 model;
-                initial_conditions = ics, const_arrays = ca,
+                initial_conditions = _cs_q(ics), const_arrays = ca,
                 param_arrays = Dict(k => copy(v) for (k, v) in pa),
                 compiler = compiler
             )
@@ -234,12 +233,12 @@ end
         ref = ev(:interpreter)                    # the per-cell walk
         @test got.du == ref.du
         for c in cells
-            @test got.du[got.vm[c]] == ref.du[ref.vm[c]]
+            @test got.du[got.vm["M.$c"]] == ref.du[ref.vm["M.$c"]]
         end
     end
     vars() = Dict{String, ESM_CS.ModelVariable}(
-        "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+        "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0),
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0)
     )
 
     # 1-D: D(u[i]) = w[conn[i]]
@@ -286,7 +285,7 @@ end
     # swap reads the wrong element, and a table that is 1 at every corner derives
     # a zero stride and folds the whole box to one literal.
     cvars = Dict{String, ESM_CS.ModelVariable}(
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0)
     )
     mc = ESM_CS.Model(
         cvars, [

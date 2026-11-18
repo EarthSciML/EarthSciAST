@@ -27,11 +27,21 @@
 # disagreement here is a disagreement about the numbers the model integrates.
 # ============================================================================
 
-"""A `unit_conversion` that cannot be parsed or applied."""
+"""
+    UnitConversionError <: EarthSciASTError
+
+A `unit_conversion` that cannot be parsed or applied. Fields: `code`
+(`unit_error`, the code TypeScript's `UnitConversionError` carries) and
+`message`.
+
+    UnitConversionError(message)
+"""
 struct UnitConversionError <: EarthSciASTError
-    msg::String
+    code::String
+    message::String
 end
-Base.showerror(io::IO, e::UnitConversionError) = print(io, e.msg)
+UnitConversionError(message::AbstractString) =
+    UnitConversionError(ERROR_CODES.UNIT_ERROR, String(message))
 
 """
     parse_unit_conversion(raw; variable_name) -> Nothing | Float64 | ASTExpr
@@ -67,9 +77,10 @@ function _unit_conversion_scale(conversion, variable_name::AbstractString)
     conversion isa Real && return Float64(conversion)
     isempty(free_variables(conversion)) || return nothing
     try
-        node = _compile(conversion, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}())
+        node = _compile(conversion, Dict{String, Int}(), Set{Symbol}())
         return _eval_node(node, Float64[], NamedTuple(), 0.0)
     catch e
+        _is_resource_error(e) && rethrow()
         throw(
             UnitConversionError(
                 "variable '$(variable_name)' unit_conversion is a constant expression " *
@@ -112,7 +123,7 @@ function apply_unit_conversion!(
         )
     )
     sym = Symbol(free[1])
-    node = _compile(conversion, Dict{String, Int}(), Set{Symbol}([sym]), Dict{String, Any}())
+    node = _compile(conversion, Dict{String, Int}(), Set{Symbol}([sym]))
     @inbounds for i in eachindex(values)
         values[i] = _eval_node(node, Float64[], NamedTuple{(sym,)}((values[i],)), 0.0)
     end

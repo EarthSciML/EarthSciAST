@@ -9,14 +9,12 @@
 # evaluating it 52,411 times. `_materialized_obs_scope` exists to evaluate each
 # producer once, in dependency order, and hand the consumer buffers.
 #
-# It walked `insp.observed_defs`, the UN-inlined bodies, and the build does not
-# publish one for every observed: an intermediate it folded into its readers
-# appears only in `observed_exprs`, the fully substituted map. So the first
-# producer whose definition named such an intermediate raised
-# E_TREEWALK_UNBOUND_VARIABLE, was swallowed by the pass's tolerant `catch`, and
-# every producer above it then failed on the one below. Nothing was
-# materialized and the whole chain was re-executed per output cell — silently,
-# because the fallback is slower and never wrong.
+# It walks the build's `observed_defs`, the UN-inlined bodies, and the build
+# does not publish one for every observed: an intermediate it folded into its
+# readers appears only in `observed_exprs`, the fully substituted map. The pass
+# must still materialize every producer above such an intermediate, rather than
+# fail on it and leave the whole chain to be re-executed per output cell, which
+# is slower and never wrong, so nothing else would notice.
 #
 # The shape that exposes it is a LINE-source allocation: no geometry kernel
 # anywhere (so nothing is setup-materialized, unlike the polygon document in
@@ -24,14 +22,11 @@
 # the build inlines away, and a chain of ordinary record-axis observeds above
 # it. This document is that shape, at four cells and four records.
 
-module ObservedMaterializationTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 const EA = EarthSciAST
 
-_ix(f, idx...) = Dict{String, Any}("op" => "index", "args" => Any[f, idx...])
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
 _param(shape) = Dict{String, Any}(
     "type" => "parameter", "default" => 0.0,
     "shape" => Any[shape...]
@@ -77,31 +72,31 @@ const EXPECT_CONC = [
     4.0 * 0.5 + 8.0 * 0.25 + 2.0 * 0.125,
 ]
 
-_env_overlap() = _op(
+_env_overlap() = jop(
     "and",
-    _op("<=", _ix("src_W", "c"), _ix("seg_xmax", "r")),
-    _op("<=", _ix("seg_xmin", "r"), _ix("src_E", "c")),
-    _op("<=", _ix("src_S", "c"), _ix("seg_ymax", "r")),
-    _op("<=", _ix("seg_ymin", "r"), _ix("src_N", "c"))
+    jop("<=", jidx("src_W", "c"), jidx("seg_xmax", "r")),
+    jop("<=", jidx("seg_xmin", "r"), jidx("src_E", "c")),
+    jop("<=", jidx("src_S", "c"), jidx("seg_ymax", "r")),
+    jop("<=", jidx("seg_ymin", "r"), jidx("src_N", "c"))
 )
 
 # Liang–Barsky, branchless, with a SIGN-PRESERVING floor under each divisor so a
 # segment parallel to an axis does not divide by zero (`ifelse` does not guard
 # its arms inside an aggregate).
 function _length_share()
-    x0, x1 = _ix("px", "r", 1), _ix("px", "r", 2)
-    y0, y1 = _ix("py", "r", 1), _ix("py", "r", 2)
-    dx, dy = _op("-", x1, x0), _op("-", y1, y0)
-    neg = _op("-", 0.0, EPS)
-    dxs = _op("ifelse", _op(">=", dx, 0.0), _op("max", dx, EPS), _op("min", dx, neg))
-    dys = _op("ifelse", _op(">=", dy, 0.0), _op("max", dy, EPS), _op("min", dy, neg))
-    ta = _op("/", _op("-", _ix("src_W", "c"), x0), dxs)
-    tb = _op("/", _op("-", _ix("src_E", "c"), x0), dxs)
-    tc = _op("/", _op("-", _ix("src_S", "c"), y0), dys)
-    td = _op("/", _op("-", _ix("src_N", "c"), y0), dys)
-    enter = _op("max", 0.0, _op("min", ta, tb), _op("min", tc, td))
-    exit_ = _op("min", 1.0, _op("max", ta, tb), _op("max", tc, td))
-    return _op("max", _op("-", exit_, enter), 0.0)
+    x0, x1 = jidx("px", "r", 1), jidx("px", "r", 2)
+    y0, y1 = jidx("py", "r", 1), jidx("py", "r", 2)
+    dx, dy = jop("-", x1, x0), jop("-", y1, y0)
+    neg = jop("-", 0.0, EPS)
+    dxs = jop("ifelse", jop(">=", dx, 0.0), jop("max", dx, EPS), jop("min", dx, neg))
+    dys = jop("ifelse", jop(">=", dy, 0.0), jop("max", dy, EPS), jop("min", dy, neg))
+    ta = jop("/", jop("-", jidx("src_W", "c"), x0), dxs)
+    tb = jop("/", jop("-", jidx("src_E", "c"), x0), dxs)
+    tc = jop("/", jop("-", jidx("src_S", "c"), y0), dys)
+    td = jop("/", jop("-", jidx("src_N", "c"), y0), dys)
+    enter = jop("max", 0.0, jop("min", ta, tb), jop("min", tc, td))
+    exit_ = jop("min", 1.0, jop("max", ta, tb), jop("max", tc, td))
+    return jop("max", jop("-", exit_, enter), 0.0)
 end
 
 function _doc()
@@ -141,7 +136,7 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "px", "rhs" => _agg(
                 ["r", "v"], [("r", "emis_records"), ("v", "seg_vertex")], ["raw_x"],
-                _op("*", _ix("raw_x", "r", "v"), 1.0)
+                jop("*", jidx("raw_x", "r", "v"), 1.0)
             )
         )
     )
@@ -149,7 +144,7 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "py", "rhs" => _agg(
                 ["r", "v"], [("r", "emis_records"), ("v", "seg_vertex")], ["raw_y"],
-                _op("*", _ix("raw_y", "r", "v"), 1.0)
+                jop("*", jidx("raw_y", "r", "v"), 1.0)
             )
         )
     )
@@ -161,7 +156,7 @@ function _doc()
             eqs, Dict{String, Any}(
                 "lhs" => nm, "rhs" => _agg(
                     ["r"], [("r", "emis_records")], [col],
-                    _op(o, _ix(col, "r", 1), _ix(col, "r", 2))
+                    jop(o, jidx(col, "r", 1), jidx(col, "r", 2))
                 )
             )
         )
@@ -170,11 +165,11 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "seg_len", "rhs" => _agg(
                 ["r"], [("r", "emis_records")], ["px", "py"],
-                _op(
-                    "sqrt", _op(
+                jop(
+                    "sqrt", jop(
                         "+",
-                        _op("^", _op("-", _ix("px", "r", 2), _ix("px", "r", 1)), 2.0),
-                        _op("^", _op("-", _ix("py", "r", 2), _ix("py", "r", 1)), 2.0)
+                        jop("^", jop("-", jidx("px", "r", 2), jidx("px", "r", 1)), 2.0),
+                        jop("^", jop("-", jidx("py", "r", 2), jidx("py", "r", 1)), 2.0)
                     )
                 )
             )
@@ -187,12 +182,12 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "road_len", "rhs" => _agg(
                 ["r"], [("r", "emis_records"), ("q", "emis_records")], ["seg_key", "seg_len"],
-                _op(
-                    "*", _op(
-                        "ifelse", _op("==", _ix("seg_key", "q"), _ix("seg_key", "r")),
+                jop(
+                    "*", jop(
+                        "ifelse", jop("==", jidx("seg_key", "q"), jidx("seg_key", "r")),
                         1.0, 0.0
                     ),
-                    _ix("seg_len", "q")
+                    jidx("seg_len", "q")
                 ); reduce = "+"
             )
         )
@@ -201,9 +196,9 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "seg_emis", "rhs" => _agg(
                 ["r"], [("r", "emis_records")], ["seg_emis_in", "seg_len", "road_len"],
-                _op(
-                    "/", _op("*", _ix("seg_emis_in", "r"), _ix("seg_len", "r")),
-                    _ix("road_len", "r")
+                jop(
+                    "/", jop("*", jidx("seg_emis_in", "r"), jidx("seg_len", "r")),
+                    jidx("road_len", "r")
                 )
             )
         )
@@ -216,9 +211,9 @@ function _doc()
                     "src_W", "src_S", "src_E", "src_N",
                     "seg_xmin", "seg_ymin", "seg_xmax", "seg_ymax", "px", "py", "seg_emis",
                 ],
-                _op(
-                    "*", _op("ifelse", _env_overlap(), 1.0, 0.0),
-                    _op("*", _ix("seg_emis", "r"), _length_share())
+                jop(
+                    "*", jop("ifelse", _env_overlap(), 1.0, 0.0),
+                    jop("*", jidx("seg_emis", "r"), _length_share())
                 ); reduce = "+"
             )
         )
@@ -227,7 +222,7 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "conc_PM25", "rhs" => _agg(
                 ["rcv"], [("rcv", "rcv_cells"), ("s", "src_cells")], ["SR_PM25", "E_PM25"],
-                _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")); reduce = "+"
+                jop("*", jidx("SR_PM25", "s", "rcv"), jidx("E_PM25", "s")); reduce = "+"
             )
         )
     )
@@ -277,13 +272,13 @@ function _prepared(; compiler = :native)
         ca["Binned." * k] = v
     end
     g = MockGatedSR(SR, Any[])
-    insp = EA.BuildInspection()
     prep = EA.esm_problem(
         _doc(), (0.0, 1.0); const_arrays = ca,
         providers = Dict{String, Any}("Binned.SR_PM25" => g),
-        inspect = insp, pushdown_rewrite = true, compiler = compiler
+        pushdown_rewrite = true, compiler = compiler
     )
-    return prep, insp, g
+    # The Problem's own build products: the cellwise route reads them.
+    return prep, prep.build.products, g
 end
 
 @testset "line allocation: the values, with no geometry kernel in the path" begin
@@ -334,10 +329,9 @@ end
 
 @testset "the producers of a build-time field are materialized ONCE" begin
     prep, insp, _ = _prepared()
-    # `observed_field` coerces this lazily on first use; do the same so the
-    # scope call below sees exactly the file the production path passes.
-    prep.run_file[] === nothing && (prep.run_file[] = EA.coerce_esm_file(prep.run_doc))
-    file = prep.run_file[]
+    # The run file `observed_field` reads, so the scope call below sees exactly
+    # the file the production path passes.
+    file = prep.run_file
     mname = String(first(keys(file.models)))
     vars = keys(file.models[mname].variables)
     qual(n) = String(
@@ -349,9 +343,9 @@ end
     params = EA._param_scope_with_aliases(insp.params)
     scope = EA._materialized_obs_scope(insp, file, mname, qual("conc_PM25"), params)
 
-    # THE REGRESSION. Before the fix this scope came back as `insp.const_arrays`
-    # itself — nothing materialized — and `conc_PM25` then re-ran the binning
-    # aggregate once per receptor cell.
+    # A scope that is `insp.const_arrays` itself means nothing was
+    # materialized, and `conc_PM25` would re-run the binning aggregate once per
+    # receptor cell.
     @test length(scope) > length(insp.const_arrays)
     tails = Set(String(split(String(k), '.')[end]) for k in keys(scope))
     for n in ("px", "py", "seg_len", "road_len", "seg_emis", "E_PM25")
@@ -379,5 +373,3 @@ end
     @test "px" in exprs
     @test !("px" in defs)
 end
-
-end # module ObservedMaterializationTests

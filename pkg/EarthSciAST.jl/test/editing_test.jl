@@ -143,6 +143,94 @@ end
         @test haskey(m.variables, "x")
     end
 
+    @testset "rename_variable reaches every expression site and every name" begin
+        x = VarExpr("x")
+        gt(e) = OpExpr(">", ESS.ASTExpr[e, NumExpr(1.0)])
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "y" => ModelVariable(UnknownVariable; default = 0.0, lb = "x", ub = gt(x)),
+            "p" => ModelVariable(
+                ParameterVariable; default = 0.0,
+                update = ParameterUpdate("condition"; when = gt(x), expression = x)
+            ),
+        )
+        sub = Model(
+            Dict("x" => ModelVariable(UnknownVariable; default = 0.0)),
+            Equation[_make_eq("x", 1.0)]
+        )
+        m = Model(
+            vars, Equation[_make_eq("x", 2.0), _make_eq("y", 1.0)];
+            continuous_events = [
+                ContinuousEvent(ESS.ASTExpr[gt(x)], [AffectEquation("x", x)]; affect_neg = [AffectEquation("x", x)]),
+            ],
+            discrete_events = [DiscreteEvent(ConditionTrigger(gt(x)), [AffectEquation("x", x)])],
+            initialization_equations = Equation[Equation(x, NumExpr(2.0))],
+            guesses = Dict{String, Union{Float64, ESS.ASTExpr}}("x" => 1.0, "y" => x),
+            tests = [
+                ESS.InlineTest(
+                    "t", ESS.TimeSpan(0.0, 1.0),
+                    [ESS.Assertion("x", 1.0, 1.0; reduce = "L2_error", reference = x)];
+                    initial_conditions = Dict("x" => 3.0), parameter_overrides = Dict("p" => 1.0)
+                ),
+            ],
+            subsystems = Dict("S" => sub)
+        )
+        r = rename_variable(m, "x", "z")
+        # No expression site still reads `x`, outside the subsystem's own scope.
+        leftovers = String[]
+        ESS.foreach_expression(r, ""; subsystems = false) do e, p, _
+            "x" in ESS.free_variables(e) && push!(leftovers, p)
+        end
+        @test isempty(leftovers)
+        @test r.variables["y"].lb == "z"
+        @test r.continuous_events[1].affects[1].lhs == "z"
+        @test r.continuous_events[1].affect_neg[1].lhs == "z"
+        @test r.discrete_events[1].affects[1].lhs == "z"
+        @test r.initialization_equations[1].lhs == VarExpr("z")
+        @test haskey(r.guesses, "z") && !haskey(r.guesses, "x")
+        @test r.guesses["y"] == VarExpr("z")
+        t = r.tests[1]
+        @test t.assertions[1].variable == "z" && t.assertions[1].reference == VarExpr("z")
+        @test haskey(t.initial_conditions, "z") && !haskey(t.initial_conditions, "x")
+        @test t.parameter_overrides == Dict{String, Any}("p" => 1.0)
+        # A subsystem is its own scope: its `x` is another variable.
+        @test r.subsystems["S"].equations[1].lhs.args[1] == VarExpr("x")
+        # The input is untouched.
+        @test m.continuous_events[1].affects[1].lhs == "x"
+        @test m.variables["y"].lb == "x"
+        @test haskey(m.guesses, "x")
+        @test m.tests[1].assertions[1].variable == "x"
+
+        # A name in an update handler's `read_vars` / `read_params` follows too.
+        hp = ModelVariable(
+            ParameterVariable; default = 0.0,
+            update = ParameterUpdate(
+                "schedule"; times = [1.0],
+                handler = FunctionalUpdate("h"; read_vars = ["x"], read_params = ["k"])
+            )
+        )
+        m3 = Model(
+            Dict(
+                "x" => ModelVariable(UnknownVariable; default = 0.0),
+                "k" => ModelVariable(ParameterVariable; default = 1.0), "h" => hp
+            ),
+            Equation[]
+        )
+        u = rename_variable(rename_variable(m3, "x", "z"), "k", "q").variables["h"].update[1].handler
+        @test u.read_vars == ["z"] && u.read_params == ["q"]
+    end
+
+    @testset "rename_variable and substitute_in_equations keep equation comments" begin
+        eq = _make_eq("x", 2.0)
+        m = Model(
+            _make_model().variables,
+            Equation[Equation(eq.lhs, eq.rhs; _comment = "decay")]
+        )
+        @test rename_variable(m, "x", "z").equations[1]._comment == "decay"
+        bindings = Dict{String, ESS.ASTExpr}("x" => NumExpr(1.0))
+        @test substitute_in_equations(m, bindings).equations[1]._comment == "decay"
+    end
+
     @testset "add_equation appends" begin
         m = _make_model()
         new_eq = _make_eq("k", 0.0)  # D(k) = 0*k
@@ -169,17 +257,31 @@ end
     @testset "remove_equation by LHS pattern" begin
         m = _make_model()
         m = add_equation(m, _make_eq("k", 0.0))
-        # Pattern must match the stored lhs by `==` — for OpExpr that is
-        # `===` in the default struct, so reuse the exact lhs object here.
-        pattern = m.equations[1].lhs
+        # A freshly built pattern matches structurally, not by identity.
+        pattern = OpExpr("D", ESS.ASTExpr[VarExpr("x")], wrt = "t")
         m2 = remove_equation(m, pattern)
         @test length(m2.equations) == 1
         remaining = m2.equations[1]
         @test remaining.lhs.args[1].name == "k"
+        # The stored object itself still matches.
+        @test length(remove_equation(m, m.equations[2].lhs).equations) == 1
 
         # Pattern with no match: throws EditError
         bogus = OpExpr("D", ESS.ASTExpr[VarExpr("nonexistent")], wrt = "t")
         @test_throws ESS.EditError remove_equation(m2, bogus)
+    end
+
+    @testset "_expr_equal: one structural equality for expressions" begin
+        eq = ESS._expr_equal
+        mk(x) = OpExpr("+", ESS.ASTExpr[VarExpr("a"), x])
+        @test eq(mk(IntExpr(1)), mk(IntExpr(1)))
+        @test !eq(mk(IntExpr(1)), mk(NumExpr(1.0)))
+        @test !eq(mk(NumExpr(0.0)), mk(NumExpr(-0.0)))
+        @test !eq(OpExpr("D", ESS.ASTExpr[VarExpr("x")], wrt = "t"), OpExpr("D", ESS.ASTExpr[VarExpr("x")], wrt = "s"))
+        @test !eq(OpExpr("+", ESS.ASTExpr[VarExpr("a")], id = "n1"), OpExpr("+", ESS.ASTExpr[VarExpr("a")]))
+        body(x) = OpExpr("faq", ESS.ASTExpr[]; expr_body = x, semiring = "sum_product")
+        @test eq(body(mk(IntExpr(2))), body(mk(IntExpr(2))))
+        @test !eq(body(mk(IntExpr(2))), body(mk(IntExpr(3))))
     end
 
     @testset "substitute_in_equations rewrites expression trees" begin

@@ -1,22 +1,12 @@
 # Shared test prelude for the EarthSciAST.jl suite.
 #
 # Every test file that needs the shared repo root, the canonical
-# expression-builder helpers, the JSON-normalization helper, or the
-# missing-fixture skip idiom does `include("testutils.jl")` near its top.
-# The `isdefined` guard below makes that include idempotent, so each file
-# still runs standalone
-# (`julia --project -e 'using EarthSciAST, Test; include("test/<file>")'`)
-# AND under runtests.jl (where many files include this prelude) without
-# double-definition warnings.
-#
-# The guard is per-INCLUDING-MODULE (`@__MODULE__`), not `Main`: a test file
-# that wraps itself in a `module` gets its own copy of the prelude. Guarding on
-# `Main` instead made the prelude a silent no-op inside such a module (Main's
-# bindings are not visible there), so every name it defines —
-# `TESTUTILS_REPO_ROOT` above all — was UndefVarError under runtests.jl while
-# the same file passed standalone. Top-level (Main-scoped) files are unaffected:
-# runtests.jl loads the prelude into Main once and every later top-level include
-# still short-circuits exactly as before.
+# expression-builder helpers, the JSON-normalization helper, or the fixture
+# check does `include("testutils.jl")` near its top. runtests.jl runs each file
+# in a module of its own, and so does a standalone run
+# (`julia --project -e 'include("test/<file>")'`), so each gets its own copy.
+# The guard is per including module (`@__MODULE__`), which makes a second
+# include from the same file (or a `module` it wraps itself in) harmless.
 if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
 
     const ESM_TESTUTILS_LOADED = true
@@ -29,6 +19,13 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
     # `tests/` fixture tree, `esm-schema.json`, `esm-spec.md`, ...).
     const TESTUTILS_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
 
+    # The EarthSciModels checkout a test reads a real component from:
+    # `ESM_EARTHSCIMODELS` when set (CI checks the repository out inside the
+    # workspace and sets it), else the sibling of this repository's root.
+    earthscimodels_root() = normpath(
+        get(ENV, "ESM_EARTHSCIMODELS", joinpath(TESTUTILS_REPO_ROOT, "..", "EarthSciModels"))
+    )
+
     # ---------------------------------------------------------------------------
     # Canonical expression-builder quartet (+ the `index` shorthand built on it).
     # These keep hand-built AST fixtures readable.
@@ -40,11 +37,8 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
         EarthSciAST.OpExpr(String(op), EarthSciAST.ASTExpr[args...]; kw...)
     _idx(v, is...) = _op("index", _v(v), is...)
 
-    # Derived shorthands shared by the tree-walk / data-refresh test files
-    # (previously redefined per-file with identical bodies, producing
-    # method-overwrite warnings under runtests.jl). `_D_idx`/`_faq1d` are the
-    # historical spellings of `_Didx`/`_ao1` — kept as forwarding aliases so both
-    # call styles keep working.
+    # Derived shorthands shared by the tree-walk / data-refresh test files.
+    # `_D_idx` / `_faq1d` are second spellings of `_Didx` / `_ao1`.
     _D(v) = _op("D", _v(v); wrt = "t")
     _Didx(v, is...) = _op("D", _idx(v, is...); wrt = "t")
     _D_idx(v, is...) = _Didx(v, is...)
@@ -58,6 +52,81 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
         "const",
         EarthSciAST.ASTExpr[]; value = val
     )
+
+    # ---------------------------------------------------------------------------
+    # The raw-JSON (`Dict`) spelling of the same nodes, for a document built as
+    # a native `Dict` and handed to `esm_problem` / `Internal.build`.
+    # ---------------------------------------------------------------------------
+    jop(o, args...; kw...) = Dict{String, Any}(
+        "op" => String(o), "args" => Any[args...],
+        (String(k) => v for (k, v) in kw)...
+    )
+    jidx(v, is...) = jop("index", v, is...)
+    jD(v; wrt = "t") = jop("D", v; wrt = wrt)
+    jconst(value) = jop("const"; value = value)
+    # A `faq` node: `body` summed (or folded by `semiring`) over `ranges`
+    # (index name => `Dict("from" => set)` or `[lo, hi]`), keeping `output_idx`.
+    function jfaq(
+            body, output_idx, ranges::AbstractDict; filter = nothing,
+            semiring = "sum_product", args = Any[]
+        )
+        d = Dict{String, Any}(
+            "op" => "faq", "semiring" => semiring, "output_idx" => Any[output_idx...],
+            "ranges" => Dict{String, Any}(String(k) => v for (k, v) in ranges),
+            "args" => Any[args...], "expr" => body
+        )
+        filter === nothing || (d["filter"] = filter)
+        return d
+    end
+    # A one-model document in the current schema version.
+    function jdoc(
+            variables::AbstractDict, equations::AbstractVector; name = "M",
+            index_sets = nothing, extra...
+        )
+        model = Dict{String, Any}("variables" => variables, "equations" => Any[equations...])
+        for (k, v) in extra
+            model[String(k)] = v
+        end
+        doc = Dict{String, Any}(
+            "esm" => EarthSciAST.SCHEMA_VERSION,
+            "metadata" => Dict{String, Any}("name" => String(name)),
+            "models" => Dict{String, Any}(String(name) => model)
+        )
+        index_sets === nothing || (doc["index_sets"] = index_sets)
+        return doc
+    end
+
+    # Bit equality of two arrays (`===` per element, so `-0.0 !== 0.0`).
+    bitsame(a, b) = size(a) == size(b) && all(a .=== b)
+    # The right-hand side `f!` writes at `(u, p, t)`, into a zeroed `du`.
+    rhs_du(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
+    # The exception `f()` throws, or `nothing`.
+    caught(f) = try
+        f()
+        nothing
+    catch err
+        err
+    end
+
+    # ---------------------------------------------------------------------------
+    # Stub data providers (the provider protocol of providers.jl).
+    # ---------------------------------------------------------------------------
+    # The same sample at every time and no refresh times: a CONST source.
+    struct ConstProvider{T}
+        value::T
+    end
+    EarthSciAST.provider_refresh_times(::ConstProvider) = Float64[]
+    EarthSciAST.provider_sample(p::ConstProvider, ::Real; selection = nothing) = p.value
+
+    # A sample per refresh time (`time => sample`), refreshing at each of them.
+    struct SeriesProvider{T}
+        fields::Dict{Float64, T}
+    end
+    SeriesProvider(fields::AbstractDict) =
+        SeriesProvider(Dict(Float64(t) => v for (t, v) in fields))
+    EarthSciAST.provider_refresh_times(p::SeriesProvider) = sort!(collect(keys(p.fields)))
+    EarthSciAST.provider_sample(p::SeriesProvider, t::Real; selection = nothing) =
+        p.fields[Float64(t)]
 
     # ---------------------------------------------------------------------------
     # Expressions from math text, and expressions compared as canonical JSON.
@@ -161,10 +230,10 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
     """
         _require_fixture(path) -> Bool
 
-    Return `true` when the fixture file (or directory) at `path` exists. When it
-    is missing, record a standardized `@test_skip` in the enclosing testset (so
-    the gap is visible in the summary as Broken, never silently green) and
-    return `false`. Use as:
+    Return `true` when the fixture file (or directory) at `path` exists. Every
+    fixture lives in this repository, so a missing one is a FAILED test in the
+    enclosing testset, not a skip, and the function returns `false` so the
+    caller does not go on to read it. Use as:
 
         if _require_fixture(fixture_path)
             ... tests that consume the fixture ...
@@ -172,8 +241,7 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
     """
     function _require_fixture(path::AbstractString)
         ispath(path) && return true
-        @warn "Fixture not found — skipping" path
-        @test_skip ispath(path)
+        @test ispath(path)
         return false
     end
 
@@ -252,6 +320,139 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
         path = joinpath(mktempdir(), "transport_3axis_7cubed_fullrank_per_cell.esm")
         open(io -> JSON3.write(io, doc), path, "w")
         return path
+    end
+
+    # ---------------------------------------------------------------------------
+    # Manifest-driven conformance categories (tests/conformance/<category>/)
+    # ---------------------------------------------------------------------------
+
+    """
+        conformance_manifest(category; bindings = ("julia", "python", "rust"))
+            -> (dir, manifest)
+
+    The category's directory and parsed `manifest.json`, checked: the file
+    exists, names this category, and lists each of `bindings` as required.
+    """
+    function conformance_manifest(
+            category::AbstractString;
+            bindings = ("julia", "python", "rust")
+        )
+        dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", category)
+        path = joinpath(dir, "manifest.json")
+        @test isfile(path)
+        manifest = JSON3.read(read(path, String))
+        @test manifest.category == category
+        for b in bindings
+            @test b in manifest.bindings_required
+        end
+        return dir, manifest
+    end
+
+    """
+        check_inline_golden(category, alg; by_test = false, solver_from_manifest = false,
+                            compiler = :native, extra = nothing) -> Dict{String,Dict}
+
+    Run every fixture of an inline-test conformance category through
+    `run_inline_tests` with `alg` (and `compiler`, named rather than inherited)
+    and require each golden assertion to pass and to reproduce the golden actual
+    within the manifest's assertion tolerances. Results are matched to the
+    golden by `assertion_idx`, or by `(test_id, assertion_idx)` with
+    `by_test = true`. Tolerances of the solve are the manifest's
+    `integrators.julia` with `solver_from_manifest = true`, else
+    `reltol = 1e-12, abstol = 1e-14`. A golden assertion that names its
+    `variable` must name the same one.
+
+    `extra(fixture, by_key, tol)` runs inside each fixture's testset for a
+    category's own assertions (`tol = (rtol, atol)`). Returns fixture id →
+    the results keyed as matched.
+    """
+    function check_inline_golden(
+            category::AbstractString, alg; by_test::Bool = false,
+            solver_from_manifest::Bool = false, compiler::Symbol = :native,
+            extra = nothing
+        )
+        dir, manifest = conformance_manifest(category)
+        @test !isempty(manifest.fixtures)
+        rtol = Float64(manifest.tolerances.assertion_rtol)
+        atol = Float64(manifest.tolerances.assertion_atol)
+        reltol, abstol = 1.0e-12, 1.0e-14
+        if solver_from_manifest
+            integ = manifest.integrators.julia
+            @test String(integ.algorithm) == "Tsit5"
+            reltol, abstol = Float64(integ.reltol), Float64(integ.abstol)
+        end
+        out = Dict{String, Dict}()
+        for fixture in manifest.fixtures
+            id = String(fixture.id)
+            @testset "$(id)" begin
+                esm_path = joinpath(dir, String(fixture.path))
+                golden_path = joinpath(dir, String(fixture.golden))
+                @test isfile(esm_path)
+                @test isfile(golden_path)
+                golden = JSON3.read(read(golden_path, String))
+                @test String(golden.reference_binding) == "julia"
+                results = run_inline_tests(
+                    esm_path; model_name = String(fixture.model), alg = alg,
+                    reltol = reltol, abstol = abstol, compiler = compiler
+                )
+                @test length(results) == length(golden.assertions)
+                key(r) = by_test ? (r.test_id, r.assertion_idx) : r.assertion_idx
+                gkey(g) = by_test ? (String(g.test_id), Int(g.assertion_idx)) :
+                    Int(g.assertion_idx)
+                by_key = Dict(key(r) => r for r in results)
+                for g in golden.assertions
+                    k = gkey(g)
+                    @test haskey(by_key, k)
+                    r = by_key[k]
+                    @test r.passed
+                    @test r.actual !== nothing
+                    haskey(g, :variable) && @test r.variable == String(g.variable)
+                    @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
+                end
+                extra === nothing || extra(fixture, by_key, (rtol, atol))
+                out[id] = by_key
+            end
+        end
+        return out
+    end
+
+    # ---------------------------------------------------------------------------
+    # Workspace purity (API_SPEC §5.8): every object reachable from `f`.
+    # ---------------------------------------------------------------------------
+    function reachable_objects(f)
+        seen = IdDict{Any, Nothing}()
+        function walk(x)
+            isbits(x) && return
+            x isa Union{String, Symbol, Expr, Module, DataType, UnionAll, Core.TypeName, Method} &&
+                return
+            haskey(seen, x) && return
+            seen[x] = nothing
+            if x isa Array
+                isbitstype(eltype(x)) && return
+                foreach(i -> isassigned(x, i) && walk(x[i]), eachindex(x))
+                return
+            end
+            return foreach(i -> isdefined(x, i) && walk(getfield(x, i)), 1:nfields(x))
+        end
+        walk(f)
+        return seen
+    end
+
+    # Whether calls on two workspaces of `prog` leave every numeric array both
+    # instances reach as it was: a call writing an array the build did not
+    # register as scratch would give the two workspaces one buffer.
+    # `call(ws)` evaluates on workspace `ws`.
+    function workspace_shared_arrays_unchanged(prog, call)
+        w1, w2 = EarthSciAST.rhs_workspace(prog), EarthSciAST.rhs_workspace(prog)
+        o1, o2 = reachable_objects(w1.f!), reachable_objects(w2.f!)
+        shared = [
+            x for x in keys(o1)
+                if haskey(o2, x) && x isa Array && isbitstype(eltype(x)) && !isempty(x)
+        ]
+        snap = map(copy, shared)
+        call(w1)
+        call(w2)
+        return all(isequal.(shared, snap))
     end
 
 end # ESM_TESTUTILS_LOADED guard

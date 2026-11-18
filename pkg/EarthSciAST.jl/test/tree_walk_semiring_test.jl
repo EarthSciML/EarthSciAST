@@ -1,4 +1,4 @@
-# Tests for the semiring-parameterized FAQ evaluator changes (ess-my4.1.2):
+# Tests for the semiring-parameterized FAQ evaluator:
 #   (a) semiring parameterization of _combine_with_reducer / _NK_CONTRACTION,
 #       with the §5.1 normative empty-reduction identities (0̄);
 #   (b) op:aggregate accepted identically to op:faq (§5.6);
@@ -17,7 +17,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
 
-@testset "tree_walk semiring + index-set registry + aggregate (ess-my4.1.2)" begin
+@testset "tree_walk semiring + index-set registry + aggregate" begin
     # Helpers (scoped local to this testset so they don't clobber siblings).
     _n(x) = NumExpr(Float64(x))
     _i(x) = IntExpr(Int64(x))
@@ -45,6 +45,17 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         @test ESM._aggregate_oplus_identity("min_sum", "+") == ("min", Inf)
         # Unregistered semiring → clear error (closed registry, §5.1).
         @test_throws ESM.TreeWalkError ESM._aggregate_oplus_identity("tropical_max", nothing)
+        # `reduce` takes only the schema's enum (+, *, max, min); boolean `or`
+        # is reachable only as `semiring: "bool_and_or"`.
+        let err = try
+                ESM._aggregate_oplus_identity(nothing, "or")
+            catch e
+                e
+            end
+            @test err isa ESM.TreeWalkError
+            @test err.code == "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE"
+        end
+        @test ESM._aggregate_oplus_identity("bool_and_or", nothing) == ("or", 0.0)
     end
 
     # ------------------------------------------------------------------
@@ -60,10 +71,15 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         @test (ESM._combine_with_reducer("*", 1.0, empty)).value == 1.0
         # bool_and_or (⊕=or) is index-set-producing (§5.5) — out of M1 scope.
         @test_throws ESM.TreeWalkError ESM._combine_with_reducer("or", 0.0, ESM.ASTExpr[_n(1.0), _n(0.0)])
+        # …whatever the term count: one term or none is not a value either.
+        @test_throws ESM.TreeWalkError ESM._combine_with_reducer("or", 0.0, ESM.ASTExpr[_n(1.0)])
+        @test_throws ESM.TreeWalkError ESM._combine_with_reducer("or", 0.0, ESM.ASTExpr[])
+        # A scalar (rank-0) bool_and_or folds crisply from false.
+        @test ESM._combine_with_reducer("or", 0.0, ESM.ASTExpr[]; scalar = true).value == 0.0
     end
 
     # ------------------------------------------------------------------
-    # (a) End-to-end empty reduction through build_evaluator: a scalar aggregate
+    # (a) End-to-end empty reduction through the build: a scalar aggregate
     #     over an empty contraction range evaluates to the semiring's 0̄.
     # ------------------------------------------------------------------
     @testset "(a) e2e empty scalar aggregate → 0̄" begin
@@ -71,7 +87,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                 ("sum_product", 0.0), ("min_sum", Inf),
                 ("max_product", -Inf), ("max_sum", -Inf),
             )
-            vars = Dict("z" => ModelVariable(UnknownVariable))
+            vars = Dict("z" => ModelVariable(UnknownVariable; default = 0.0))
             # D(z) = aggregate_{k ∈ [1,0]} 1   (empty range ⇒ 0̄)
             rhs = OpExpr(
                 "faq", ESM.ASTExpr[];
@@ -79,9 +95,9 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                 ranges = Dict("k" => Any[1, 0])
             )
             model = ESM.Model(vars, [ESM.Equation(_op("D", _v("z"); wrt = "t"), rhs)])
-            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
+            f!, u0, p, _, vmap = EarthSciAST.Internal.build(model)
             du = similar(u0); f!(du, u0, p, 0.0)
-            @test du[vmap["z"]] == expected
+            @test du[vmap["M.z"]] == expected
         end
     end
 
@@ -91,9 +107,9 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     @testset "(a) non-empty min_sum / max_product reductions" begin
         # D(z) = min_{j ∈ 1:5} x[j];  D(w) = max_{j ∈ 1:5} x[j]
         vars = Dict(
-            "x" => ModelVariable(UnknownVariable),
-            "z" => ModelVariable(UnknownVariable),
-            "w" => ModelVariable(UnknownVariable)
+            "x" => ModelVariable(UnknownVariable; default = 0.0),
+            "z" => ModelVariable(UnknownVariable; default = 0.0),
+            "w" => ModelVariable(UnknownVariable; default = 0.0)
         )
         agg_min = OpExpr(
             "faq", ESM.ASTExpr[];
@@ -110,11 +126,11 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             ESM.Equation(_op("D", _v("w"); wrt = "t"), agg_max),
         ]
         model = ESM.Model(vars, eqs)
-        ics = Dict("x[1]" => 3.0, "x[2]" => 1.0, "x[3]" => 5.0, "x[4]" => 2.0, "x[5]" => 4.0)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions = ics)
+        ics = Dict("M.x[1]" => 3.0, "M.x[2]" => 1.0, "M.x[3]" => 5.0, "M.x[4]" => 2.0, "M.x[5]" => 4.0)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vmap["z"]] == 1.0   # min
-        @test du[vmap["w"]] == 5.0   # max
+        @test du[vmap["M.z"]] == 1.0   # min
+        @test du[vmap["M.w"]] == 5.0   # max
     end
 
     # ------------------------------------------------------------------
@@ -122,8 +138,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # ------------------------------------------------------------------
     @testset "(b) aggregate alias ≡ faq" begin
         N = 4
-        vars = Dict("u" => ModelVariable(UnknownVariable))
-        ics = Dict("u[$i]" => Float64(i) for i in 1:N)
+        vars = Dict("u" => ModelVariable(UnknownVariable; default = 0.0))
+        ics = Dict("M.u[$i]" => Float64(i) for i in 1:N)
         mk(tag) = ESM.Model(
             vars, [
                 ESM.Equation(
@@ -138,14 +154,14 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                 ),
             ]
         )
-        fa!, ua, pa, _, va = EarthSciAST._build_evaluator(mk("faq"); initial_conditions = ics)
-        fb!, ub, pb, _, vb = EarthSciAST._build_evaluator(mk("faq"); initial_conditions = ics)
+        fa!, ua, pa, _, va = EarthSciAST.Internal.build(mk("faq"); initial_conditions = ics)
+        fb!, ub, pb, _, vb = EarthSciAST.Internal.build(mk("faq"); initial_conditions = ics)
         dua = similar(ua); fa!(dua, ua, pa, 0.0)
         dub = similar(ub); fb!(dub, ub, pb, 0.0)
         @test va == vb
         @test dua == dub
         for i in 1:N
-            @test dub[vb["u[$i]"]] == -Float64(i)
+            @test dub[vb["M.u[$i]"]] == -Float64(i)
         end
     end
 
@@ -155,8 +171,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     @testset "(c) interval index set resolution" begin
         N = 5
         vars = Dict(
-            "u" => ModelVariable(UnknownVariable),
-            "total" => ModelVariable(UnknownVariable)
+            "u" => ModelVariable(UnknownVariable; default = 0.0),
+            "total" => ModelVariable(UnknownVariable; default = 0.0)
         )
         index_sets = Dict("cells" => ESM.IndexSet("interval"; size = N))
         eqs = [
@@ -184,16 +200,16 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             ),
         ]
         model = ESM.Model(vars, eqs)
-        ics = Dict("u[$i]" => Float64(i) for i in 1:N)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        ics = Dict("M.u[$i]" => Float64(i) for i in 1:N)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
             model; index_sets = index_sets,
             initial_conditions = ics
         )
         du = similar(u0); f!(du, u0, p, 0.0)
         for i in 1:N
-            @test du[vmap["u[$i]"]] == -Float64(i)
+            @test du[vmap["M.u[$i]"]] == -Float64(i)
         end
-        @test du[vmap["total"]] == sum(1.0:N)   # 15
+        @test du[vmap["M.total"]] == sum(1.0:N)   # 15
     end
 
     # ------------------------------------------------------------------
@@ -201,7 +217,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     #         the categorical index is just a const_array (keyed factor, §5.4).
     # ------------------------------------------------------------------
     @testset "(c)+(d) categorical index set + keyed-factor table" begin
-        vars = Dict("total" => ModelVariable(UnknownVariable))
+        vars = Dict("total" => ModelVariable(UnknownVariable; default = 0.0))
         index_sets = Dict(
             "county" =>
                 ESM.IndexSet("categorical"; members = ["Champaign", "Cook", "Sangamon"])
@@ -216,12 +232,12 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             )
         )
         model = ESM.Model(vars, [eq])
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
             model; index_sets = index_sets,
             const_arrays = Dict("pop" => [10.0, 20.0, 30.0])
         )
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vmap["total"]] == 60.0
+        @test du[vmap["M.total"]] == 60.0
     end
 
     # ------------------------------------------------------------------
@@ -238,7 +254,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             "cells_on_cell" => cells_on_cell, "coeff" => coeff,
             "n_edges_on_cell" => n_edges
         )
-        vars = Dict("u" => ModelVariable(UnknownVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable; default = 0.0))
         _c = _v("c"); _k = _v("k")
         body = _op(
             "*", _op("index", _v("coeff"), _c, _k),
@@ -275,21 +291,21 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         )
         model_exp = ESM.Model(vars, [ESM.Equation(lhs, rhs_exp)])
 
-        ics = Dict("u[$c]" => 0.0 for c in 1:N_c)
-        fr!, ur, pr, _, vr = EarthSciAST._build_evaluator(
+        ics = Dict("M.u[$c]" => 0.0 for c in 1:N_c)
+        fr!, ur, pr, _, vr = EarthSciAST.Internal.build(
             model_reg; index_sets = index_sets,
             initial_conditions = ics, const_arrays = carrs
         )
-        fe!, ue, pe, _, ve = EarthSciAST._build_evaluator(model_exp; initial_conditions = ics, const_arrays = carrs)
-        u = copy(ur); u[vr["u[2]"]] = 1.0
+        fe!, ue, pe, _, ve = EarthSciAST.Internal.build(model_exp; initial_conditions = ics, const_arrays = carrs)
+        u = copy(ur); u[vr["M.u[2]"]] = 1.0
         dur = similar(ur); fr!(dur, u, pr, 0.0)
-        ue2 = copy(ue); ue2[ve["u[2]"]] = 1.0
+        ue2 = copy(ue); ue2[ve["M.u[2]"]] = 1.0
         due = similar(ue); fe!(due, ue2, pe, 0.0)
         @test dur == due
-        @test isapprox(dur[vr["u[1]"]], 1.0; atol = 1.0e-12)
-        @test isapprox(dur[vr["u[2]"]], -2.0; atol = 1.0e-12)
-        @test isapprox(dur[vr["u[3]"]], 1.0; atol = 1.0e-12)
-        @test isapprox(dur[vr["u[4]"]], 0.0; atol = 1.0e-12)
+        @test isapprox(dur[vr["M.u[1]"]], 1.0; atol = 1.0e-12)
+        @test isapprox(dur[vr["M.u[2]"]], -2.0; atol = 1.0e-12)
+        @test isapprox(dur[vr["M.u[3]"]], 1.0; atol = 1.0e-12)
+        @test isapprox(dur[vr["M.u[4]"]], 0.0; atol = 1.0e-12)
     end
 
     # ------------------------------------------------------------------
@@ -297,8 +313,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # ------------------------------------------------------------------
     @testset "(c) undeclared index set errors" begin
         vars = Dict(
-            "u" => ModelVariable(UnknownVariable),
-            "total" => ModelVariable(UnknownVariable)
+            "u" => ModelVariable(UnknownVariable; default = 0.0),
+            "total" => ModelVariable(UnknownVariable; default = 0.0)
         )
         eq = ESM.Equation(
             _op("D", _v("total"); wrt = "t"),
@@ -310,11 +326,11 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         )
         # No registry at all.
         model0 = ESM.Model(vars, [eq])
-        @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(model0)
+        @test_throws ESM.TreeWalkError EarthSciAST.Internal.build(model0)
         # Registry present but missing the referenced name.
         model1 = ESM.Model(vars, [eq])
         err = try
-            EarthSciAST._build_evaluator(
+            EarthSciAST.Internal.build(
                 model1;
                 index_sets = Dict("cells" => ESM.IndexSet("interval"; size = 3))
             )
@@ -322,7 +338,9 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         catch e
             e
         end
-        @test err isa ESM.TreeWalkError
+        # Refused with the document's reference-integrity finding, before the
+        # build (esm-libraries-spec §2.5.2).
+        @test err isa ESM.ParseError && err.code == "undefined_index_set"
         @test occursin("not_declared", sprint(showerror, err))
     end
 
@@ -363,19 +381,16 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             "faq_semiring_indexset.esm"
         )
         if isfile(path)
-            file = EarthSciAST.load_path(path)
-            ics = Dict("u[$i]" => Float64(i) for i in 1:5)
-            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-                file; model_name = "AggregateDemo",
-                initial_conditions = ics
-            )
+            ics = Dict{String, Float64}("AggregateDemo.u[$i]" => Float64(i) for i in 1:5)
+            ics["AggregateDemo.total"] = 0.0   # the fixture declares no default
+            f!, u0, p, _, vmap = EarthSciAST.Internal.build(path; initial_conditions = ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             for i in 1:5
-                @test du[vmap["u[$i]"]] == -Float64(i)
+                @test du[vmap["AggregateDemo.u[$i]"]] == -Float64(i)
             end
-            @test du[vmap["total"]] == 15.0
+            @test du[vmap["AggregateDemo.total"]] == 15.0
         else
-            @warn "fixture not found; skipping" path
+            @test isfile(path)
         end
     end
 end

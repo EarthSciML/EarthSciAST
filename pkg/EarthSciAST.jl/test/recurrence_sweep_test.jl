@@ -59,9 +59,9 @@ function _rs_with_state(doc::AbstractDict, var::String, rank::Int)
     push!(
         m["equations"], Dict{String, Any}(
             "lhs" => Dict{String, Any}("op" => "D", "args" => Any["u"], "wrt" => "t"),
-            "rhs" => _rs_o(
-                "+", _rs_o("*", -0.5, "u"),
-                _rs_o("*", 1.0e-3, _rs_idx(var, fill(1, rank)...))
+            "rhs" => jop(
+                "+", jop("*", -0.5, "u"),
+                jop("*", 1.0e-3, jidx(var, fill(1, rank)...))
             )
         )
     )
@@ -75,20 +75,18 @@ _rs_faq(sym, set, body; kw...) =
     "ranges" => Dict{String, Any}(sym => Dict("from" => set)),
     "expr" => body, kw...
 )
-_rs_idx(a, i...) = Dict{String, Any}("op" => "index", "args" => Any[a, i...])
-_rs_o(op, a...) = Dict{String, Any}("op" => op, "args" => Any[a...])
 
 # A dynamic document: state `u` over `cells`, a recurrence `R` over the state
 # (a two-lag body with a clamp, and a banded fold `Q` over `R`), and `D(u)`
 # reading both, so the per-call fill level is the route the solver sees.
 function _rs_dynamic(n::Int)
     R = _rs_faq(
-        "k", "cells", _rs_o(
-            "ifelse", _rs_o("<=", "k", 2), _rs_idx("u", "k"),
-            _rs_o(
-                "+", _rs_o("*", "b", _rs_o("max", _rs_idx("R", _rs_o("-", "k", 1)), 0.0)),
-                _rs_o("sin", _rs_idx("u", "k")),
-                _rs_o("*", -0.25, _rs_idx("R", _rs_o("-", "k", 2)))
+        "k", "cells", jop(
+            "ifelse", jop("<=", "k", 2), jidx("u", "k"),
+            jop(
+                "+", jop("*", "b", jop("max", jidx("R", jop("-", "k", 1)), 0.0)),
+                jop("sin", jidx("u", "k")),
+                jop("*", -0.25, jidx("R", jop("-", "k", 2)))
             )
         )
     )
@@ -96,13 +94,13 @@ function _rs_dynamic(n::Int)
         "op" => "faq", "args" => Any[], "output_idx" => ["k"],
         "reduce" => "+",
         "ranges" => Dict{String, Any}("k" => Dict("from" => "cells"), "a" => [0, 3]),
-        "filter" => _rs_o("<=", "a", _rs_o("-", "k", 1)),
-        "expr" => _rs_o(
-            "ifelse", _rs_o("==", "a", 0), _rs_idx("R", "k"),
-            _rs_o(
-                "*", -0.5, _rs_o(
-                    "*", _rs_idx("Q", _rs_o("-", "k", "a")),
-                    _rs_o("/", 1.0, _rs_o("+", "a", 1.0))
+        "filter" => jop("<=", "a", jop("-", "k", 1)),
+        "expr" => jop(
+            "ifelse", jop("==", "a", 0), jidx("R", "k"),
+            jop(
+                "*", -0.5, jop(
+                    "*", jidx("Q", jop("-", "k", "a")),
+                    jop("/", 1.0, jop("+", "a", 1.0))
                 )
             )
         )
@@ -111,14 +109,14 @@ function _rs_dynamic(n::Int)
         "op" => "faq", "args" => Any[], "output_idx" => ["i"],
         "ranges" => Dict{String, Any}("i" => Dict("from" => "cells")),
         "expr" => Dict{String, Any}(
-            "op" => "D", "args" => Any[_rs_idx("u", "i")],
+            "op" => "D", "args" => Any[jidx("u", "i")],
             "wrt" => "t"
         )
     )
     rhs = _rs_faq(
-        "i", "cells", _rs_o(
-            "-", _rs_o("*", -0.1, _rs_idx("Q", "i")),
-            _rs_idx("u", "i")
+        "i", "cells", jop(
+            "-", jop("*", -0.1, jidx("Q", "i")),
+            jidx("u", "i")
         )
     )
     return Dict{String, Any}(
@@ -305,7 +303,7 @@ end
             prob = esm_problem(_rs_dynamic(n), (0.0, 1.0); compiler = :native, inspect = insp)
             ctx = _RS._obs_ctx(prob)
             prog = _RS._observed_program!(ctx, "M.R")
-            sws = [sw for lv in prog.levels for sw in lv[5]]
+            sws = [sw for lv in prog.levels for sw in lv.sweeps]
             @test length(sws) == 1
             push!(gens, typeof(only(sws).gen))
         end
@@ -319,7 +317,7 @@ end
         unguarded = _rs_static(
             _rs_faq(
                 "k", "steps",
-                _rs_o("+", _rs_o("max", _rs_idx("s", _rs_o("-", "k", 1)), 0.0), 1.0)
+                jop("+", jop("max", jidx("s", jop("-", "k", 1)), 0.0), 1.0)
             )
         )
         # A straddling lag (§4.3.1.1 "Admitted lag") whose `a = 0` term is NOT
@@ -329,9 +327,9 @@ end
                 "op" => "faq", "args" => Any[],
                 "output_idx" => ["k"], "reduce" => "+",
                 "ranges" => Dict{String, Any}("k" => Dict("from" => "steps"), "a" => [0, 1]),
-                "expr" => _rs_o(
-                    "ifelse", _rs_o("<=", "k", 1), 1.0,
-                    _rs_idx("s", _rs_o("-", "k", "a"))
+                "expr" => jop(
+                    "ifelse", jop("<=", "k", 1), 1.0,
+                    jidx("s", jop("-", "k", "a"))
                 )
             )
         )
@@ -399,9 +397,9 @@ end
     @testset "a binary32 recurrence is refused by name under both compilers" begin
         doc = _rs_static(
             _rs_faq(
-                "k", "steps", _rs_o(
-                    "ifelse", _rs_o("<=", "k", 1), 0.1,
-                    _rs_o("+", _rs_idx("s", _rs_o("-", "k", 1)), 0.1)
+                "k", "steps", jop(
+                    "ifelse", jop("<=", "k", 1), 0.1,
+                    jop("+", jidx("s", jop("-", "k", 1)), 0.1)
                 )
             );
             extra = Dict{String, Any}("element_type" => "Float32")
@@ -453,33 +451,31 @@ end
         @test n >= 10
     end
 
-    @testset "build inspection never changes which error a build raises" begin
+    @testset "a recorded build raises the sweep's own refusal" begin
         # A forward self-read is not well founded. Built as the out-of-place
         # product, the sweep's own refusal (the rule, by name) comes first;
-        # asking for the inspection must not swap in the axis analysis's code.
+        # recording the build's products (as every build does) must not swap
+        # in the axis analysis's code.
         file = load_string(
             JSON3.write(
                 _rs_static(
                     _rs_faq(
-                        "k", "steps", _rs_o(
-                            "ifelse", _rs_o(">=", "k", 4), 0.1,
-                            _rs_o("+", _rs_idx("s", _rs_o("+", "k", 1)), 0.1)
+                        "k", "steps", jop(
+                            "ifelse", jop(">=", "k", 4), 0.1,
+                            jop("+", jidx("s", jop("+", "k", 1)), 0.1)
                         )
                     )
                 )
             )
         )
-        codes = map((nothing, _RS.BuildInspection())) do insp
-            err = try
-                _RS._build_evaluator(file; form = :oop, inspect = insp)
-                nothing
-            catch e
-                e
-            end
-            @test err isa _RS.TreeWalkError
-            err.code
+        err = try
+            _RS.Internal.build(file; form = :oop)
+            nothing
+        catch e
+            e
         end
-        @test codes[1] == codes[2] == _RS.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test err isa _RS.TreeWalkError
+        @test err.code == _RS.ERROR_CODES.COMPILER_REFUSED_RULE
     end
 
     @testset "build inspection reports the sweep's own extents" begin
@@ -503,11 +499,11 @@ end
         # `k - 1` has a static lag; `k - m` (a parameter) has none.
         doc = _rs_static(
             _rs_faq(
-                "k", "steps", _rs_o(
-                    "ifelse", _rs_o("<=", "k", 1), 0.1,
-                    _rs_o(
-                        "+", _rs_idx("s", _rs_o("-", "k", 1)),
-                        _rs_o("*", 0.5, _rs_idx("s", _rs_o("-", "k", "m")))
+                "k", "steps", jop(
+                    "ifelse", jop("<=", "k", 1), 0.1,
+                    jop(
+                        "+", jidx("s", jop("-", "k", 1)),
+                        jop("*", 0.5, jidx("s", jop("-", "k", "m")))
                     )
                 )
             )
@@ -624,18 +620,18 @@ end
         function coldoc(along_x::Bool)
             rr = Dict("i" => Dict("from" => "x"), "k" => Dict("from" => "z"))
             body = along_x ?
-                _rs_o(
-                    "ifelse", _rs_o("<=", "i", 1), _rs_idx("u", 1, "k"),
-                    _rs_o(
-                        "+", _rs_o("*", 0.5, _rs_idx("R", _rs_o("-", "i", 1), "k")),
-                        _rs_idx("u", "i", "k")
+                jop(
+                    "ifelse", jop("<=", "i", 1), jidx("u", 1, "k"),
+                    jop(
+                        "+", jop("*", 0.5, jidx("R", jop("-", "i", 1), "k")),
+                        jidx("u", "i", "k")
                     )
                 ) :
-                _rs_o(
-                    "ifelse", _rs_o("<=", "k", 1), _rs_idx("u", "i", 1),
-                    _rs_o(
-                        "+", _rs_o("*", 0.5, _rs_idx("R", "i", _rs_o("-", "k", 1))),
-                        _rs_idx("u", "i", "k")
+                jop(
+                    "ifelse", jop("<=", "k", 1), jidx("u", "i", 1),
+                    jop(
+                        "+", jop("*", 0.5, jidx("R", "i", jop("-", "k", 1))),
+                        jidx("u", "i", "k")
                     )
                 )
             faq2(e) = Dict{String, Any}(
@@ -662,11 +658,11 @@ end
                             Dict(
                                 "lhs" => faq2(
                                     Dict{String, Any}(
-                                        "op" => "D", "args" => Any[_rs_idx("u", "i", "k")],
+                                        "op" => "D", "args" => Any[jidx("u", "i", "k")],
                                         "wrt" => "t"
                                     )
                                 ),
-                                "rhs" => faq2(_rs_o("-", _rs_idx("R", "i", "k")))
+                                "rhs" => faq2(jop("-", jidx("R", "i", "k")))
                             ),
                         ]
                     )
@@ -720,16 +716,16 @@ end
             "01_recurrence_doubling.esm"
         )
         err = try
-            _RS._build_evaluator(load_path(path); form = :oop)
+            _RS.Internal.build(path; form = :oop)
             nothing
         catch e
             e
         end
         @test err isa _RS.TreeWalkError
         @test err.code == _RS.ERROR_CODES.COMPILER_REFUSED_RULE
-        @test occursin("refuses 's'", err.detail)
+        @test occursin("refuses 'RecurrenceDoubling.s'", err.detail)
         @test occursin("out-of-place", err.detail)
         # The rule is a field, not something a caller parses out of the text.
-        @test err.rule == "s"
+        @test err.rule == "RecurrenceDoubling.s"
     end
 end

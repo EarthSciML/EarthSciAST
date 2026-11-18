@@ -35,7 +35,7 @@
 # runtime contraction (`_NK_CONTRACTION`) and, unrolled at build, an n-ary `+`
 # whose first operand is the `+0.0` seed. A fold of any other shape — another
 # seed, ⊕, body, branch literal or comparison, a key that is not host data, a
-# query that differs between terms — is not this shape and lowers as before.
+# query that differs between terms — is not this shape and lowers generically.
 
 # ---- interval walk -----------------------------------------------------------
 
@@ -141,6 +141,7 @@ function _de_cgather(ctx::_DECtx, nd::_E._Node, ev::F, cached::G)::_DEVal where 
         ch = nd.children[d]
         r = _de_subrange(ch, cached)
         r === nothing && _de_refuse(
+            ctx,
             "a read of $nm at a computed subscript",
             "the subscript on dimension $d is not provably a finite number, and the " *
                 "interpreter's `round(Int, …)` of a NaN or an infinite subscript " *
@@ -153,6 +154,7 @@ function _de_cgather(ctx::_DECtx, nd::_E._Node, ev::F, cached::G)::_DEVal where 
         inside = 1 <= rlo && rhi <= n
         wraps = n >= 1 && (pol === :periodic || pol === :clamp)
         (inside || wraps) || _de_refuse(
+            ctx,
             "a read of $nm at a computed subscript",
             "the subscript on dimension $d can take values in [$(r[1]), $(r[2])], " *
                 "outside 1..$n, where the `$(pol)` boundary policy raises at run time; " *
@@ -308,7 +310,10 @@ function _de_emit_count(ctx::_DECtx, c::_DECount, qv::_DEVal)::_DEVal
         prefix = c.rel === :<= || c.rel === :<
         cmp = (c.rel === :<= || c.rel === :>) ? (<=) : (<)
         k = _de_untraced(
-            Reactant.call_with_reactant(_de_knot_count, ks, _de_traced(qv), cmp)
+            Reactant.call_with_reactant(
+                _de_knot_count, ks, _de_traced(qv), cmp,
+                ctx.opts.locate, ctx.opts.locate_ladder_max
+            )
         )
         if prefix
             k
@@ -325,8 +330,10 @@ function _de_emit_count(ctx::_DECtx, c::_DECount, qv::_DEVal)::_DEVal
     return _de_bin(ctx, _hlo.subtract, _de_const(ctx, Float64(n)), cnt)
 end
 
-_de_knot_count(ks::Vector{Float64}, q::TracedRArray{Float64, 1}, cmp::F) where {F} =
-    _knot_count(ks, q, cmp)
+_de_knot_count(
+    ks::Vector{Float64}, q::TracedRArray{Float64, 1}, cmp::F,
+    locate::Symbol, ladder_max::Int
+) where {F} = _rx_knot_count(ks, q, cmp, locate, ladder_max)
 
 # Structural sameness of two scalar-spine query subtrees.
 function _de_same_node(a::_E._Node, b::_E._Node)::Bool
@@ -351,16 +358,13 @@ end
 
 # ---- access-kernel views of the two shapes ------------------------------------
 
-# A key's host value inside an access kernel: a literal, an invariant scalar
-# descriptor, a frozen lane table holding one value in every lane, or an
+# A key's host value inside an access kernel: a literal, a frozen lane table holding one value in every lane, or an
 # operator over those.
 function _de_acck_keyval(nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan)
     k = nd.kind
     if k === _E._NK_LITERAL
         return nd.literal
     elseif k === _E._NK_ACCESS
-        a = K.acc[nd.idx]
-        a.kind === _E._AK_SCALAR && return a.v
         vals = plan.consts[nd.idx]
         isempty(vals) && return nothing
         v1 = vals[1]
@@ -373,7 +377,7 @@ function _de_acck_keyval(nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan)
             v === nothing && return nothing
             push!(c, v)
         end
-        return Float64(_E._scalar_op(nd.op, c, Float64))
+        return _E._scalar_op(nd.op, c)
     end
     return nothing
 end
@@ -396,8 +400,6 @@ function _de_acck_same(a::_E._Node, b::_E._Node, K::_E._AccKernel, plan::_E._Oop
             ak = da.kind
             if ak === _E._AK_STATE_FIXED
                 da.idx == db.idx || return false
-            elseif ak === _E._AK_SCALAR
-                isequal(da.v, db.v) || return false
             elseif !isempty(plan.gathers[a.idx]) || !isempty(plan.gathers[b.idx])
                 (
                     plan.gathers[a.idx] == plan.gathers[b.idx] &&

@@ -161,98 +161,22 @@ _stamp_eltype(::typeof(_pprimal), ::Type) = nothing
 # after it is at the same `t` as the calls before it). A `(p, t)` stamp cannot
 # see that, so every in-place refresh bumps an epoch the time tiers compare.
 #
-# The epoch is per BUILD: each build owns a counter (`_ForcingEpoch`), and a
-# refresh bumps the counters of exactly the builds that read the buffer it
-# wrote. A build registers its `param_arrays` buffers at build time
-# (`_register_forcing_buffers!`), keyed by their data pointer so that a write
-# through the caller's N-d array and a read through its `vec` meet; the
-# discrete-cadence materializer bumps its own build's counter directly. A
-# refresh in one problem therefore leaves every other problem's memoized values
-# alone.
-#
-# `_FORCING_EPOCH` is the process-wide part every build's epoch also includes:
-# `notify_forcing_refresh!()` with no argument bumps it, for a caller who wrote a
-# buffer directly and does not say which.
-
-const _FORCING_EPOCH = Ref{UInt64}(0)
-
-# A build's epoch: its own count, and whether the process-wide count is part of
-# it. Every build's epoch is (`shared`). The private instance of a program that
-# an `RhsWorkspace` evaluates (rhs_program.jl) has unshared epochs: its forcing
-# arrives as a `ForcingSet` whose epoch it tracks itself, so a refresh elsewhere
-# in the process is no reason to refill it, and that path never reads the global.
+# The epoch belongs to one build, and the build's owner carries it: a Problem's
+# build products and its `DiscreteMaterializer`, or an `Internal.Build`'s
+# report. A writer announces a refresh to that owner
+# ([`notify_forcing_refresh!`](@ref), data_refresh.jl); the discrete-cadence
+# materializer bumps it after every fill. A refresh announced to one owner
+# leaves every other build's memoized values alone. A program workspace
+# (rhs_program.jl) gets epochs of its own and bumps them when its forcing set
+# changes.
 mutable struct _ForcingEpoch
     n::UInt64
-    shared::Bool
 end
-_new_forcing_epoch() = _ForcingEpoch(UInt64(0), true)
+_new_forcing_epoch() = _ForcingEpoch(UInt64(0))
 Base.getindex(e::_ForcingEpoch) = e.n
 Base.setindex!(e::_ForcingEpoch, v) = (e.n = UInt64(v); e)
 
-# The epoch a time tier stamps and compares: the build's own count plus, when
-# shared, the process-wide one. Both only grow, so any bump of either moves the
-# sum.
-@inline _epoch_value(e::_ForcingEpoch) = e.shared ? e.n + _FORCING_EPOCH[] : e.n
+# The value a time tier stamps and compares. It only grows.
+@inline _epoch_value(e::_ForcingEpoch) = e.n
 
 @inline _bump_epoch!(e::_ForcingEpoch) = (e.n += UInt64(1); nothing)
-
-# Data pointer => the builds reading that buffer: a weak reference to the
-# registered array (so a recycled address is told apart from the buffer it
-# once was) and a weak reference to each build's epoch.
-const _BUFFER_EPOCHS = Dict{UInt, Vector{Tuple{WeakRef, WeakRef}}}()
-const _BUFFER_EPOCHS_LOCK = ReentrantLock()
-
-# Registrations die with their build or buffer, but nothing removes them then (a
-# finalizer may not take the lock). Registration instead sweeps the whole table
-# once it has doubled since the last sweep, so the table stays within a constant
-# factor of the live registrations at an amortized O(1) per registration.
-const _BUFFER_EPOCHS_SWEEP_AT = Ref(64)
-
-_buffer_key(buf::AbstractArray) = UInt(pointer(buf))
-
-_live_registration(r::Tuple{WeakRef, WeakRef}) =
-    r[1].value !== nothing && r[2].value !== nothing
-
-function _sweep_buffer_epochs!()
-    filter!(_BUFFER_EPOCHS) do (_, regs)
-        filter!(_live_registration, regs)
-        !isempty(regs)
-    end
-    _BUFFER_EPOCHS_SWEEP_AT[] = max(64, 2 * length(_BUFFER_EPOCHS))
-    return nothing
-end
-
-function _register_forcing_buffers!(epoch::_ForcingEpoch, buffers)
-    isempty(buffers) && return nothing
-    lock(_BUFFER_EPOCHS_LOCK) do
-        for buf in buffers
-            buf isa DenseArray || continue
-            k = _buffer_key(buf)
-            regs = get!(Vector{Tuple{WeakRef, WeakRef}}, _BUFFER_EPOCHS, k)
-            filter!(_live_registration, regs)
-            push!(regs, (WeakRef(buf), WeakRef(epoch)))
-        end
-        length(_BUFFER_EPOCHS) >= _BUFFER_EPOCHS_SWEEP_AT[] && _sweep_buffer_epochs!()
-    end
-    return nothing
-end
-
-# Bump the epoch of every build that reads `buf`. A buffer no build registered
-# (a caller's own array) bumps nothing.
-function _bump_buffer_epochs!(buf::AbstractArray)
-    buf isa DenseArray || return _bump_global_epoch!()
-    k = _buffer_key(buf)
-    lock(_BUFFER_EPOCHS_LOCK) do
-        regs = get(_BUFFER_EPOCHS, k, nothing)
-        regs === nothing && return nothing
-        for (wb, we) in regs
-            b = wb.value
-            e = we.value
-            (b === nothing || e === nothing) && continue
-            _buffer_key(b) == k && length(b) == length(buf) && _bump_epoch!(e::_ForcingEpoch)
-        end
-    end
-    return nothing
-end
-
-@inline _bump_global_epoch!() = (_FORCING_EPOCH[] += UInt64(1); nothing)

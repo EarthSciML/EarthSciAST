@@ -44,19 +44,17 @@ const _SETUP_FILL_TIERS = (:affine, :scan, :array_contraction_codegen)
 """
     _SetupFill
 
-A compiled fill over the box `lo:hi` (inclusive, per dimension): the kernel
-section, the prefix-scan post-passes and the whole-array contraction section
-the cascade produced for the fill equation, and the parameter tuple they read.
+A compiled fill over the box `lo:hi` (inclusive, per dimension): the fill
+level (`_RhsStage`) the cascade produced for the fill equation, and the
+parameter tuple it reads.
 [`_run_setup_fill`](@ref) runs it once and returns the buffer, column-major
 over the box (first index fastest).
 """
-struct _SetupFill{S, C, P}
+struct _SetupFill{L <: _RhsStage, P}
     lo::Vector{Int}
     hi::Vector{Int}
     n::Int
-    section::S
-    scans::Vector{_ScanFold}
-    contractions::C
+    level::L
     p::P
     # The cascade tier the fill equation landed on (`_SETUP_FILL_TIERS`).
     tier::Symbol
@@ -86,8 +84,7 @@ function _setup_fill_loops(def::ASTExpr, nd::Int)
 end
 
 """
-    _compile_setup_fill(def, lo, hi; const_arrays, p, param_sym_set, pgather,
-                        reg_funcs) -> Union{_SetupFill,Nothing}
+    _compile_setup_fill(def, lo, hi; const_arrays, p, param_sym_set, pgather) -> Union{_SetupFill,Nothing}
 
 Compile the fill of the field expression `def` over the box `lo:hi` (see the
 file header), or return `nothing` when no whole-array compiled form serves it.
@@ -99,9 +96,8 @@ reference untouched.
 """
 function _compile_setup_fill(
         def::ASTExpr, lo::Vector{Int}, hi::Vector{Int};
-        const_arrays::AbstractDict, p, param_sym_set,
-        pgather::AbstractDict = Dict{String, _PGatherArray}(),
-        reg_funcs::AbstractDict = Dict{String, Any}()
+        const_arrays::AbstractDict, p, param_sym_set::Dict{Symbol, Int},
+        pgather::AbstractDict = Dict{String, _PGatherArray}()
     )
     nd = length(lo)
     (nd >= 1 && length(hi) == nd && all(d -> lo[d] <= hi[d], 1:nd)) || return nothing
@@ -119,38 +115,37 @@ function _compile_setup_fill(
     )
     eq = Equation(lhs, _index_at_cell_sym(def, loops))
     box = (copy(lo), copy(hi))
-    avi = Dict{String, Tuple{Vector{Int}, Vector{Int}}}(_SETUP_FILL_NAME => box)
-    layout = StateLayout(String[], [_SETUP_FILL_NAME => box])
-    n = length(layout)
-    reg = reg_funcs isa Dict{String, Any} ? reg_funcs :
-        Dict{String, Any}(String(k) => v for (k, v) in reg_funcs)
+    cs = _CompileScope(
+        Dict{String, Tuple{Vector{Int}, Vector{Int}}}(_SETUP_FILL_NAME => box),
+        StateLayout(String[], [_SETUP_FILL_NAME => box]), const_arrays, pgather,
+        param_sym_set
+    )
+    n = length(cs.var_map)
     # A record of its own: the fill's cascade rows and refusals belong to the
     # fill, not to the rule the caller files, and the caller's report gets one
     # row for it (`_record_rule!`, at the call site).
     rec = _BuildRecord(_compiler_plan_now())
     return _with_build_record(rec) do
         try
-            se, pcs, aks, sfs, acs = _compile_derivative_equations(
-                Equation[eq],
-                Dict{String, ASTExpr}(), avi, layout, const_arrays, pgather,
-                param_sym_set, reg, n
+            lv = _compile_fill_level(
+                (_SETUP_FILL_NAME,), :dynamic, _ -> Equation[eq], _ -> nothing,
+                Dict{String, ASTExpr}(), cs, n
             )
-            (isempty(se) && isempty(pcs)) || return nothing
+            isempty(lv.scalars) || return nothing
             tiers = Symbol[r.tier for r in rec.rules]
             (length(tiers) == 1 && tiers[1] in _SETUP_FILL_TIERS) || return nothing
-            merged, _ = _merge_acc_kernel_classes(aks)
-            section = _make_kernel_section(merged)
-            _section_interprets(section) && return nothing
-            return _SetupFill(
-                box[1], box[2], n, section, sfs,
-                _make_contraction_section(acs), p, tiers[1]
+            level = _inplace_fill_level(
+                lv.scalars, lv.kernels, lv.scans, lv.contractions, lv.recurrences
             )
+            _section_interprets(level.kernels) && return nothing
+            return _SetupFill(box[1], box[2], n, level, p, tiers[1])
         catch err
-            # Running out of memory or stack, or an interrupt, says nothing
-            # about whether this form serves the fill; everything else is a
-            # decline, and the caller's route reproduces the document's own
-            # value or error.
-            _is_resource_error(err) && rethrow()
+            # A document-level refusal (an `EarthSciASTError`, a strict
+            # compiler's refusal among them) is a decline, and the caller's
+            # route reproduces the document's own value or error. Running out
+            # of memory or stack, an interrupt, or a programming error says
+            # nothing about whether this form serves the fill, and propagates.
+            err isa EarthSciASTError || rethrow()
             return nothing
         end
     end
@@ -173,9 +168,7 @@ function _run_setup_fill(sf::_SetupFill)
     buf = zeros(Float64, sf.n)
     # The fill reads no state, so its `u` is the buffer itself, as an observed
     # fill level's is.
-    sf.section(buf, buf, sf.p, 0.0, Float64)
-    isempty(sf.scans) || _apply_scan_folds!(buf, sf.scans)
-    _apply_array_contractions!(buf, buf, sf.p, 0.0, sf.contractions, Float64)
+    _fill_obs_levels!((sf.level,), buf, sf.p, 0.0, Float64)
     return buf
 end
 
@@ -212,7 +205,7 @@ end
 end
 
 """
-    _setup_fill_array(def, exts; const_arrays, params, reg_funcs) ->
+    _setup_fill_array(def, exts; const_arrays, params) ->
         Union{Array{Float64},Nothing}
 
 The dense array a setup-time materializer produces for `def` over `1:exts`,
@@ -221,16 +214,14 @@ setup scope's scalar name → value map.
 """
 function _setup_fill_array(
         def::ASTExpr, exts::Vector{Int};
-        const_arrays::AbstractDict, params::AbstractDict,
-        reg_funcs::AbstractDict
+        const_arrays::AbstractDict, params::AbstractDict
     )
     _setup_compile_once_enabled() || return nothing
     (!isempty(exts) && all(>(0), exts)) || return nothing
     p, psyms = _setup_fill_params(params)
     sf = _compile_setup_fill(
         def, ones(Int, length(exts)), copy(exts);
-        const_arrays = const_arrays, p = p, param_sym_set = psyms,
-        reg_funcs = reg_funcs
+        const_arrays = const_arrays, p = p, param_sym_set = psyms
     )
     sf === nothing && return nothing
     buf = _try_run_setup_fill(sf)
@@ -238,7 +229,7 @@ function _setup_fill_array(
 end
 
 """
-    _field_ic_fill(rhs, cells, param_scope, registered_functions, const_arrays)
+    _field_ic_fill(rhs, cells, param_scope, const_arrays)
         -> Union{Tuple{_SetupFill,Vector{Float64}},Nothing}
 
 A field `ic`'s coordinate expression filled over its target's cells, as the
@@ -250,8 +241,7 @@ at least 1): the fill computes every cell of its box, and a cell the target
 does not have must not be evaluated.
 """
 function _field_ic_fill(
-        rhs::ASTExpr, cells::_DiscoveredCells, param_scope::AbstractDict,
-        registered_functions::AbstractDict, const_arrays::AbstractDict
+        rhs::ASTExpr, cells::_DiscoveredCells, param_scope::AbstractDict, const_arrays::AbstractDict
     )
     (rhs isa OpExpr && _setup_compile_once_enabled() && !isempty(cells)) || return nothing
     _has_array_producer(rhs) || return nothing
@@ -261,7 +251,7 @@ function _field_ic_fill(
     p, psyms = _setup_fill_params(param_scope)
     sf = _compile_setup_fill(
         rhs, lo, hi; const_arrays = const_arrays, p = p,
-        param_sym_set = psyms, reg_funcs = registered_functions
+        param_sym_set = psyms
     )
     sf === nothing && return nothing
     buf = _try_run_setup_fill(sf)
@@ -271,14 +261,14 @@ end
 _colmajor_strides(hi::Vector{Int}) = Int[prod(hi[1:(d - 1)]; init = 1) for d in eachindex(hi)]
 
 """
-    _init_equation_fill(agg, range_iters, var_map, const_arrays, pgather,
-                        param_sym_set, reg_funcs, p)
+    _init_equation_fill(agg, range_iters, cs, p)
         -> Union{Tuple{_SetupFill,Vector{Float64}},Nothing}
 
 A `faq`-valued initialization equation's aggregate `agg` filled over its own
 output ranges (`range_iters`, unit-step), as the fill and its buffer, or
 `nothing` when no compiled fill serves it. The fill reads the build's scalar
-parameters (`p`), const arrays and live forcing buffers. A body that reads a
+parameters (`p`), and the const arrays and live forcing buffers of the
+state-only scope `cs`. A body that reads a
 state reads the initial state seeded so far (`u0`, the caller's override
 included): each state it reads enters the fill as a snapshot of its current
 values — a const array for an array state with unit origin, a literal for a
@@ -286,11 +276,12 @@ scalar — which is what the per-cell reference reads, since the equation's own
 target is not among them. Any other state read is left to the caller's route.
 """
 function _init_equation_fill(
-        agg::OpExpr, range_iters, var_map, const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs, p;
+        agg::OpExpr, range_iters, cs::_CompileScope, p;
         u0::Union{Nothing, Vector{Float64}} = nothing,
         target::AbstractString = ""
     )
+    var_map = cs.var_map
+    const_arrays = cs.const_registry
     _setup_compile_once_enabled() || return nothing
     all(r -> !isempty(r) && step(r) == 1, range_iters) || return nothing
     # A pure map, as the per-cell reference reads it: that reference substitutes
@@ -318,8 +309,7 @@ function _init_equation_fill(
     hi = Int[last(r) for r in range_iters]
     sf = _compile_setup_fill(
         agg, lo, hi; const_arrays = const_arrays, p = p,
-        param_sym_set = param_sym_set, pgather = pgather,
-        reg_funcs = reg_funcs
+        param_sym_set = cs.param_index, pgather = cs.pgather
     )
     sf === nothing && return nothing
     buf = _try_run_setup_fill(sf)

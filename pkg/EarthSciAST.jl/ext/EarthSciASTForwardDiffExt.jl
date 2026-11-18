@@ -11,11 +11,10 @@ own — a `Dual` cannot exist in a session that has not loaded ForwardDiff, and 
 it has, this extension is loaded too (Julia fires an extension as soon as its
 trigger package is loaded, whoever loads it — a stiff solver pulling in
 ForwardDiff for its Jacobian is enough). So the identity is never wrong and this
-method is never missing. Mirrors the `SimulateExt` / `DataRefreshExt` /
-`MTKExt` pattern: the base package stays solver- and AD-agnostic.
+method is never missing. The base package stays AD-agnostic.
 
 `_value` is how a build-time gate or a scatter key reads a dual number's primal
-(`src/tree_walk/helpers.jl`).
+(`src/tree_walk/rhs_seams.jl`).
 """
 module EarthSciASTForwardDiffExt
 

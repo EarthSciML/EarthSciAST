@@ -9,7 +9,7 @@
 # later "simplification" cannot quietly remove them:
 #
 #   * `_rhs_value_type(u, p, t)` derives the value type from ALL THREE inputs
-#     (compile.jl). Sized from `eltype(u)` alone, every scratch buffer would be
+#     (rhs_seams.jl). Sized from `eltype(u)` alone, every scratch buffer would be
 #     `Float64` and the first store of a `Dual` would throw.
 #   * `const_tier.jl` deliberately does NOT constant-fold parameter-only
 #     subexpressions at build time. Freezing them would return a ZERO derivative
@@ -25,6 +25,7 @@
 #   self-consistent.
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 using ForwardDiff
 
@@ -36,31 +37,29 @@ const _PG_ESM = EarthSciAST
 # through the reaction term, and `Ea`/`T` nonlinearly through the hoisted
 # INVARIANT `exp(-Ea/T)` — the arm a build-time constant fold would silently
 # freeze.
-_pg_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_pg_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
-_pg_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 _pg_ao(e) = Dict{String, Any}(
     "op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
     "args" => Any[], "expr" => e
 )
+# A state starts at 0 unless the caller gives a `default`.
 _pg_state(; kw...) = Dict{String, Any}(
-    "type" => "unknown",
+    "type" => "unknown", "default" => 0.0,
     (String(k) => v for (k, v) in kw)...
 )
 _pg_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)
 
 function _pg_rd(N)
-    stencil = _pg_o(
-        "+", _pg_o(
-            "-", _pg_ix("c", _pg_o("-", "i", 1.0)),
-            _pg_o("*", 2.0, _pg_ix("c", "i"))
+    stencil = jop(
+        "+", jop(
+            "-", jidx("c", jop("-", "i", 1.0)),
+            jop("*", 2.0, jidx("c", "i"))
         ),
-        _pg_ix("c", _pg_o("+", "i", 1.0))
+        jidx("c", jop("+", "i", 1.0))
     )
-    rate = _pg_o("*", "k_rxn", _pg_o("exp", _pg_o("neg", _pg_o("/", "Ea", "T"))))
+    rate = jop("*", "k_rxn", jop("exp", jop("neg", jop("/", "Ea", "T"))))
     return Dict{String, Any}(
-        "esm" => "0.5.0", "metadata" => Dict{String, Any}("name" => "RD"),
+        "esm" => _PG_ESM.SCHEMA_VERSION, "metadata" => Dict{String, Any}("name" => "RD"),
         "index_sets" => Dict{String, Any}(
             "n" => Dict{String, Any}("kind" => "interval", "size" => N)
         ),
@@ -73,13 +72,13 @@ function _pg_rd(N)
                 ),
                 "equations" => Any[
                     Dict{String, Any}(
-                        "lhs" => _pg_ao(_pg_Dt(_pg_ix("c", "i"))),
+                        "lhs" => _pg_ao(jD(jidx("c", "i"))),
                         "rhs" => _pg_ao(
-                            _pg_o(
-                                "-", _pg_o("*", "k_diff", stencil),
-                                _pg_o(
+                            jop(
+                                "-", jop("*", "k_diff", stencil),
+                                jop(
                                     "*", rate,
-                                    _pg_o("^", _pg_ix("c", "i"), 2.0)
+                                    jop("^", jidx("c", "i"), 2.0)
                                 )
                             )
                         )
@@ -98,7 +97,7 @@ const _PG_T = 0.37
 # hide a per-cell sign or ordering error by cancellation.
 const _PG_W = [1.0 + 0.05k for k in 1:_PG_N]
 
-const _PG_FI, _, _PG_P0, _, _ = _PG_ESM._build_evaluator(_PG_DOC)
+const _PG_FI, _, _PG_P0, _, _ = _PG_ESM.Internal.build(_PG_DOC)
 const _PG_SYMS = keys(_PG_P0)
 const _PG_PVEC0 = collect(Float64, values(_PG_P0))
 _pg_nt(pv) = NamedTuple{_PG_SYMS}(Tuple(pv))

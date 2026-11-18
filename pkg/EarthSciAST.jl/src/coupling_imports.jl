@@ -15,8 +15,7 @@ source entry is preserved for round-trip; only the flattened system carries the
 expanded edges.
 
 All diagnostics are raised as [`ExpressionTemplateError`](@ref) carrying the
-stable §10.11 codes so they are machine-checkable across bindings. Mirrors the
-TypeScript reference `pkg/earthsci-ast-ts/src/coupling-imports.ts`.
+stable §10.11 codes.
 """
 
 # Payload keys a coupling-library file MUST NOT declare (esm-spec §10.9).
@@ -177,9 +176,9 @@ function _rewrite_entry!(entry::AbstractDict, structfn, exprfn)
                 haskey(trig, "expression")
             trig["expression"] = _rewrite_expr!(trig["expression"], exprfn)
         end
-        # esm 1.0.0: an event carries neither a `functional_affect` handler
-        # descriptor nor a `discrete_parameters` list — both moved onto the
-        # parameter they write (esm-spec §5.4, §5.5).
+        # An event carries neither a `functional_affect` handler descriptor nor
+        # a `discrete_parameters` list — both live on the parameter they write
+        # (esm-spec §5.4, §5.5).
     end
     return entry
 end
@@ -209,78 +208,50 @@ end
 # Ref loading (synchronous, mirrors the §9.7 template resolver)
 # ---------------------------------------------------------------------------
 
-"""
-    _COUPLING_IMPORT_BASE
-
-The directory a loaded document's relative `coupling_import` refs resolve
-against (esm-spec §10.10 -> §4.7: "relative to the directory of the referencing
-file"), keyed by the document's `coupling` vector. `flatten` never learns where a
-document came from, so the loader records the base here and
-[`expand_coupling_imports`](@ref) prefers it over its `base_path` keyword. Kept
-beside the document rather than in a struct field so the `coupling_import` entry
-round-trips verbatim (§10.10.3) and the record field tables need no change; weak,
-so an unreachable document's entry is collected with it.
-"""
-const _COUPLING_IMPORT_BASE = WeakKeyDict{Vector{CouplingEntry}, String}()
-
-function _record_coupling_import_base!(file::EsmFile, base_path::AbstractString)
+# Record `base_path` as the directory `file`'s relative `coupling_import` refs
+# resolve against ([`EsmFile`](@ref)'s `coupling_import_base`); a document with
+# no `coupling_import` comes back unchanged.
+function _record_coupling_import_base(file::EsmFile, base_path::AbstractString)::EsmFile
     any(e -> e isa CouplingImport, file.coupling) || return file
-    _COUPLING_IMPORT_BASE[file.coupling] = String(base_path)
-    return file
+    return reconstruct(file; coupling_import_base = String(base_path))
 end
 
 """
-    _default_coupling_load_ref(ref, base_path) -> raw JSON doc
+    _read_coupling_library(src, base, ref) -> post-wire document
 
-Default resolver for a `coupling_import` `ref`: reads the local file the ref
-resolves to (via `_canonical_ref`) and parses it as JSON. Remote (http/https)
-refs are rejected — download the file and import it by local path. Raises
-`coupling_import_unresolved` on any failure.
+Read the coupling library a `coupling_import` `ref` names (esm-spec §10.10),
+resolved against the importing document's `base`, through the reader `src`.
+Any failure is `coupling_import_unresolved`.
+
+Remote (http/https) refs are refused here, the one place the coupling
+mechanism states it: URL refs are an optional binding capability (esm-spec
+§4.7), and this binding does not offer it for coupling imports. Download the
+file and import it by local path.
 """
-function _default_coupling_load_ref(ref::AbstractString, base_path::AbstractString)
-    # esm-spec §10.10: a `coupling_import` ref resolves by the §4.7 reference
-    # formats — including `${VAR}` — "with the same per-binding capability rules
-    # as a template import". Expansion runs BEFORE the URL classification, so a
-    # variable holding a URL is recognised as the remote ref it expands to.
-    ref = _expand_ref_env(String(ref), String(base_path))
-    if _is_url(ref)
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-                "remote coupling_import ref '$(ref)' cannot be loaded synchronously; " *
-                    "download the file and import it by local path"
-            )
+function _read_coupling_library(src::_DocumentSource, base::_RefBase, ref::AbstractString)
+    # `${VAR}` expands BEFORE the URL classification, so a variable holding a
+    # URL is recognised as the remote ref it expands to.
+    t = _resolve_ref(src, base, ref)
+    _is_remote(t) && throw(
+        ExpressionTemplateError(
+            ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
+            "remote coupling_import ref '$(t.ref)' cannot be loaded synchronously; " *
+                "download the file and import it by local path"
         )
-    end
-    path = _canonical_ref(ref, String(base_path))
-    if !isfile(path)
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-                "coupling-library file not found or unreadable: $(path) (from ref '$(ref)')"
-            )
-        )
-    end
-    local content::String
-    try
-        content = read(path, String)
+    )
+    return try
+        _read_document(src, t)
     catch e
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-                "coupling-library file not found or unreadable: $(path) (from ref '$(ref)'): $(e)"
-            )
-        )
-    end
-    try
-        return JSON3.read(content)
-    catch e
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-                "coupling-library ref '$(path)' is not valid JSON: $(e)"
-            )
-        )
+        e isa _RefUnreadable || rethrow()
+        msg = if e.reason === :invalid_json
+            "coupling-library ref '$(t.key)' is not valid JSON: $(e.cause.original_error)"
+        elseif e.reason === :not_found
+            "coupling-library file not found or unreadable: $(t.key) (from ref '$(t.ref)')"
+        else
+            "coupling-library file not found or unreadable: $(t.key) (from ref " *
+                "'$(t.ref)'): $(_unreadable_cause(e))"
+        end
+        throw(ExpressionTemplateError(ERROR_CODES.COUPLING_IMPORT_UNRESOLVED, msg))
     end
 end
 
@@ -297,7 +268,7 @@ _node_subsystems(::Any) = nothing
 
 Resolve a `bind` value as a component path (esm-spec §10.10.1) — a system node,
 walking `models`/`reaction_systems` then nested `subsystems`, never terminating
-on a variable. A data source is a registry entry from 1.0.0, not a component,
+on a variable. A data source is a registry entry, not a component,
 so it can never be bound to a role.
 """
 function _resolves_to_component(file::EsmFile, value::AbstractString)::Bool
@@ -525,9 +496,12 @@ splicing them in the position of the import entry (esm-spec §10.10.3). Returns
 the effective coupling vector; a file with no `coupling_import` entries returns
 `file.coupling` unchanged (same object, so no reload) and needs no options.
 
-`base_path` anchors the import `ref`s. `load_ref` is an optional resolver
-`(ref, base_path) -> raw JSON doc` (tests supply an in-memory resolver); it
-defaults to [`_default_coupling_load_ref`](@ref).
+The import `ref`s resolve against `file.coupling_import_base`, the directory
+the loader recorded for the document, and otherwise against `base_path`.
+`load_ref` is an optional reader of raw library documents
+`(ref, base_path) -> raw JSON doc` (tests supply an in-memory one); what it
+returns passes the same op-spelling boundary as a file read. By default the
+libraries are read from local files ([`_read_coupling_library`](@ref)).
 """
 function expand_coupling_imports(
         file::EsmFile; base_path::AbstractString = ".",
@@ -535,24 +509,24 @@ function expand_coupling_imports(
     )::Vector{CouplingEntry}
     coupling = file.coupling
     any(e -> e isa CouplingImport, coupling) || return coupling
-    loader = load_ref === nothing ? _default_coupling_load_ref : load_ref
+    src = _DocumentSource()
     out = CouplingEntry[]
     for entry in coupling
         if !(entry isa CouplingImport)
             push!(out, entry)
             continue
         end
-        local lib
-        try
-            lib = loader(entry.ref, get(_COUPLING_IMPORT_BASE, coupling, String(base_path)))
-        catch e
-            e isa ExpressionTemplateError && rethrow(e)
-            throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-                    "coupling_import ref '$(entry.ref)' failed to load: $(e)"
-                )
-            )
+        base = something(file.coupling_import_base, String(base_path))
+        lib = if load_ref === nothing
+            _read_coupling_library(src, _ref_base(base), entry.ref)
+        else
+            raw = _rebrand(
+                ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
+                "coupling_import ref '$(entry.ref)' failed to load"
+            ) do
+                load_ref(entry.ref, base)
+            end
+            _library_wire_form(raw)
         end
         for expanded_edge in _expand_one(lib, entry.ref, entry.bind, file)
             push!(out, expanded_edge)

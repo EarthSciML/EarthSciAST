@@ -1,5 +1,4 @@
-# Type-constructor unit tests for the core src/types.jl surface
-# (extracted from the inline testsets that used to live in runtests.jl).
+# Type-constructor unit tests for the core src/types.jl surface.
 
 using Test
 using EarthSciAST
@@ -143,6 +142,18 @@ using EarthSciAST
         @test periodic_trigger.period == 10.0
         @test periodic_trigger.phase == 2.0
 
+        # `initial_offset` keeps its presence: an authored 0 is written back,
+        # an absent key stays absent.
+        @test PeriodicTrigger(10.0).phase === nothing
+        for raw in (
+                Dict("type" => "periodic", "interval" => 10.0, "initial_offset" => 0.0),
+                Dict("type" => "periodic", "interval" => 10.0),
+            )
+            back = EarthSciAST.serialize_trigger(EarthSciAST.coerce_trigger(raw))
+            @test haskey(back, "initial_offset") == haskey(raw, "initial_offset")
+            haskey(raw, "initial_offset") && @test back["initial_offset"] === 0.0
+        end
+
         preset_trigger = PresetTimesTrigger([1.0, 5.0, 10.0])
         @test preset_trigger isa DiscreteEventTrigger
         @test preset_trigger.times == [1.0, 5.0, 10.0]
@@ -240,5 +251,19 @@ using EarthSciAST
         end
         @test err isa ESM.ParseError
         @test occursin("Invalid ModelVariableType: bogus", sprint(showerror, err))
+    end
+
+    @testset "Integral numbers in Int64 range are integers (CONFORMANCE §5.5.3.1)" begin
+        as_int = EarthSciAST._as_int64
+        @test as_int(1.0) === 1
+        @test as_int(-0.0) === 0
+        @test as_int(0.5) === nothing
+        @test as_int(0x1p63) === nothing
+        @test as_int(-0x1p63) === typemin(Int64)
+        @test as_int(Inf) === nothing && as_int(NaN) === nothing
+        @test as_int(Int128(2)^63) === nothing
+        @test as_int(typemax(Int64)) === typemax(Int64)
+        @test EarthSciAST.expression_from_json(-0x1p63) isa IntExpr
+        @test EarthSciAST.expression_from_json(0x1p63) isa NumExpr
     end
 end

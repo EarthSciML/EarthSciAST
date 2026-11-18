@@ -4,10 +4,10 @@
 # Option B has `load` PRESERVE `apply_expression_template` references so the
 # build boundary can expand them once with site recording. `esm_problem` therefore
 # hands `desugar_pushdown` an UNEXPANDED document — and an author who factored a
-# binning body through a template used to hide the containment `ifelse` from the
-# recogniser, which then declined SILENTLY: no derived support set, no gate, and
-# the provider array fetched wholesale (330 GB on isrm.esm, surfacing hours later
-# as a memory failure, with the numbers still correct).
+# binning body through a template must not hide the containment `ifelse` from the
+# recogniser. If it did, the recogniser would decline SILENTLY: no derived
+# support set, no gate, and the provider array fetched wholesale (surfacing as a
+# memory failure, with the numbers still correct).
 #
 # Rule 4 ("patterns do not see through surviving references") governs the §9.6.3
 # rewrite-rule ENGINE. This is a different consumer, and rule 2 governs it: a
@@ -20,7 +20,6 @@
 # `pushdown/template_body`) pins the emitted document cross-binding; this file
 # pins the cases a golden document cannot express — the second binding spelling,
 # the hard post-condition error, and the residual-diagnostic split.
-module PushdownTemplateRefTests
 
 using Test
 using EarthSciAST
@@ -29,8 +28,6 @@ const EA = EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
 _apply(name, bindings) = Dict{String, Any}(
     "op" => "apply_expression_template", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(bindings)
@@ -73,10 +70,10 @@ function _define!(model, name, shape, expr)
     push!(model["equations"], Dict{String, Any}("lhs" => name, "rhs" => expr))
     return model
 end
-_contain() = _op(
+_contain() = jop(
     "and",
-    _op("<=", _ix("src_W", "c"), _ix("px", "r")), _op("<", _ix("px", "r"), _ix("src_E", "c")),
-    _op("<=", _ix("src_S", "c"), _ix("py", "r")), _op("<", _ix("py", "r"), _ix("src_N", "c"))
+    jop("<=", jidx("src_W", "c"), jidx("px", "r")), jop("<", jidx("px", "r"), jidx("src_E", "c")),
+    jop("<=", jidx("src_S", "c"), jidx("py", "r")), jop("<", jidx("py", "r"), jidx("src_N", "c"))
 )
 _ERANGES() = Dict{String, Any}(
     "c" => Dict{String, Any}("from" => "src_cells"),
@@ -113,7 +110,7 @@ function base_doc()
     _define!(
         m, "E_PM25", ["src_cells"], _agg(
             ["c"], _ERANGES(),
-            _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("emis_annual", "r"));
+            jop("*", jop("ifelse", _contain(), 1.0, 0.0), jidx("emis_annual", "r"));
             reduce = "+", args = _EARGS
         )
     )
@@ -124,7 +121,7 @@ function base_doc()
                 "s" => Dict{String, Any}("from" => "src_cells"),
                 "rcv" => Dict{String, Any}("from" => "rcv_cells")
             ),
-            _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s"));
+            jop("*", jidx("SR_PM25", "s", "rcv"), jidx("E_PM25", "s"));
             reduce = "+", args = ["SR_PM25", "E_PM25"]
         )
     )
@@ -144,12 +141,12 @@ end
         m["expression_templates"] = Dict{String, Any}(
             "bin2" => Dict{String, Any}(
                 "params" => Any["lo_x", "lo_y", "hi_x", "hi_y", "x", "y", "wgt"],
-                "body" => _op(
-                    "*", _op(
-                        "ifelse", _op(
+                "body" => jop(
+                    "*", jop(
+                        "ifelse", jop(
                             "and",
-                            _op("<=", "lo_x", "x"), _op("<", "x", "hi_x"),
-                            _op("<=", "lo_y", "y"), _op("<", "y", "hi_y")
+                            jop("<=", "lo_x", "x"), jop("<", "x", "hi_x"),
+                            jop("<=", "lo_y", "y"), jop("<", "y", "hi_y")
                         ), 1.0, 0.0
                     ), "wgt"
                 )
@@ -160,10 +157,10 @@ end
                 ["c"], _ERANGES(),
                 _apply(
                     "bin2", [
-                        "lo_x" => _ix("src_W", "c"), "lo_y" => _ix("src_S", "c"),
-                        "hi_x" => _ix("src_E", "c"), "hi_y" => _ix("src_N", "c"),
-                        "x" => _ix("px", "r"), "y" => _ix("py", "r"),
-                        "wgt" => _ix("emis_annual", "r"),
+                        "lo_x" => jidx("src_W", "c"), "lo_y" => jidx("src_S", "c"),
+                        "hi_x" => jidx("src_E", "c"), "hi_y" => jidx("src_N", "c"),
+                        "x" => jidx("px", "r"), "y" => jidx("py", "r"),
+                        "wgt" => jidx("emis_annual", "r"),
                     ]
                 );
                 reduce = "+", args = _EARGS
@@ -198,7 +195,7 @@ end
         m["expression_templates"] = Dict{String, Any}(
             "bin3" => Dict{String, Any}(
                 "params" => Any["wgt"],
-                "body" => _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("wgt", "r"))
+                "body" => jop("*", jop("ifelse", _contain(), 1.0, 0.0), jidx("wgt", "r"))
             )
         )
         _define!(
@@ -227,7 +224,7 @@ end
         _define!(
             dense["models"]["Binned"], "E_PM25", ["src_cells"],
             _agg(
-                ["c"], _ERANGES(), _op("*", _ix("emis_annual", "r"), 1.0);
+                ["c"], _ERANGES(), jop("*", jidx("emis_annual", "r"), 1.0);
                 reduce = "+", args = ["emis_annual"]
             )
         )
@@ -270,17 +267,17 @@ end
         @test isfile(fx)
         doc = JSON.parsefile(fx)
         m = doc["models"]["ISRM"]
-        tpl_contain = _op(
+        tpl_contain = jop(
             "and",
-            _op("<=", _ix("xmin", "c"), _ix("ptx", "r")), _op("<", _ix("ptx", "r"), _ix("xmax", "c")),
-            _op("<=", _ix("ymin", "c"), _ix("pty", "r")), _op("<", _ix("pty", "r"), _ix("ymax", "c"))
+            jop("<=", jidx("xmin", "c"), jidx("ptx", "r")), jop("<", jidx("ptx", "r"), jidx("xmax", "c")),
+            jop("<=", jidx("ymin", "c"), jidx("pty", "r")), jop("<", jidx("pty", "r"), jidx("ymax", "c"))
         )
         m["expression_templates"] = Dict{String, Any}(
             "bin_emissions" => Dict{String, Any}(
                 "params" => Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "tot", "frac"],
-                "body" => _op(
-                    "*", _op("ifelse", tpl_contain, 1.0, 0.0),
-                    _op("*", _ix("tot", "r"), _ix("frac", "r"))
+                "body" => jop(
+                    "*", jop("ifelse", tpl_contain, 1.0, 0.0),
+                    jop("*", jidx("tot", "r"), jidx("frac", "r"))
                 )
             )
         )
@@ -324,5 +321,3 @@ end
         @test isempty(EA.pushdown_diagnostics(raw; model_name = "ISRM"))
     end
 end
-
-end # module PushdownTemplateRefTests

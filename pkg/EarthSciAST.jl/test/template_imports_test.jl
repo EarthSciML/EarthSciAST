@@ -11,7 +11,7 @@ using EarthSciAST: lower_expression_templates, resolve_template_machinery,
     reject_template_imports_pre_v08, ExpressionTemplateError,
     MAX_TEMPLATE_EXPANSION_DEPTH, serialize_esm_file, IntExpr, OpExpr,
     _url_join, _url_normalize, _url_dirname, _remove_dot_segments,
-    _canonical_ref, _URL_FETCHER, require_meta_expr, eval_meta_expr
+    require_meta_expr, eval_meta_expr
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
@@ -505,16 +505,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     end
 
     @testset "round-trip expands CALL SITES, keeps DECLARATIONS (§9.6.4 rule 5)" begin
-        # This testset used to assert `!occursin("expression_templates", text)`
-        # and `!occursin("metaparameters", text)` — i.e. that a round trip strips
-        # EVERY §9.7 construct. That is the bug, enshrined as the contract.
-        #
-        # Option A expands CALL SITES; it does not delete DECLARATIONS. The two
-        # assertions passed only incidentally, because this fixture declares
-        # neither block at the top level (its templates come in over an import
-        # edge). Applied to a file that DOES declare them — a template library —
-        # the same rule emitted `{esm, metadata, index_sets}`: not one of the five
-        # payload keys the top-level `anyOf` requires. See the next testset.
+        # Option A expands CALL SITES; it does not delete DECLARATIONS. This
+        # fixture declares neither block at the top level (its templates come in
+        # over an import edge), so it cannot show that declarations survive.
+        # Applied to a file that DOES declare them — a template library — a rule
+        # that stripped every §9.7 construct would emit `{esm, metadata,
+        # index_sets}`: not one of the five payload keys the top-level `anyOf`
+        # requires. See the next testset.
         f = EarthSciAST.load_path(conf("import_smoke", "fixture.esm"))
         tmp = tempname() * ".esm"
         try
@@ -541,7 +538,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # was legal on disk and illegal the instant it was loaded and re-emitted.
         for name in ("template_import_lib.esm", "template_import_rename_lib.esm")
             src = joinpath(repo_root, "tests", "valid", name)
-            isfile(src) || continue
+            @test isfile(src)
             f = EarthSciAST.load_path(src)
 
             # The declarations SURVIVE the load...
@@ -595,7 +592,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # TypeScript `§9.6.4 rule 5: a template library round-trips to itself`.
         for name in ("template_import_lib.esm", "template_import_rename_lib.esm")
             src = joinpath(repo_root, "tests", "valid", name)
-            isfile(src) || continue
+            @test isfile(src)
             authored = JSON3.read(read(src, String))
             resolved = resolve_template_machinery(authored, dirname(src))
             @test resolved !== nothing
@@ -778,7 +775,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # The empty region is inert: the evaluator builds, and the two faces
         # tile the axis — d(c)/dt is the one-sided difference everywhere. With
         # a uniform state the differences vanish, so du == 0 exactly.
-        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(f)
+        f!, u0, p, tspan, vmap = EarthSciAST.Internal.build(f)
         du = similar(u0); fill!(du, NaN)
         f!(du, u0, p, 0.0)
         @test all(du .== 0.0)
@@ -853,7 +850,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 """
             )
             # esm-spec §9.6.4 Option B: t_keep's body reference to t_inner
-            # resolved in the LIBRARY's own scope. Bodies are no longer inlined
+            # resolved in the LIBRARY's own scope. Bodies are not inlined
             # (§9.7.3), so importing `only: [t_keep]` carries the internal-wiring
             # reference-closure (t_inner) along and the reference SURVIVES;
             # `Expand` yields 2 * 7 (the Option-A image, §9.6.4 rule 2).
@@ -1027,7 +1024,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 )
                 f = EarthSciAST.load_path(p)
                 @test f.index_sets["x"].size == 4
-                # A metaparameter closed by this edge's `bindings` is no longer
+                # A metaparameter closed by this edge's `bindings` is not
                 # exported, so renaming it is a loud unknown-name error.
                 write(
                     p, _model_json(
@@ -1367,14 +1364,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             # Cycle-detection keys: URL identity is canonical. A relative ref
             # inside a URL-loaded document joins against the URL base; two
             # spellings of the same target collapse to one key.
-            @test _canonical_ref("../x.esm", "https://h/a/b") == "https://h/a/x.esm"
-            @test _canonical_ref("https://h/a/../x.esm", "/tmp") == "https://h/x.esm"
-            @test _canonical_ref("sub/model.esm", "/tmp/base") ==
+            key(ref, base) = EarthSciAST._resolve_ref(EarthSciAST._ref_base(base), ref).key
+            @test key("../x.esm", "https://h/a/b") == "https://h/a/x.esm"
+            @test key("https://h/a/../x.esm", "/tmp") == "https://h/x.esm"
+            @test key("sub/model.esm", "/tmp/base") ==
                 abspath(joinpath("/tmp/base", "sub/model.esm"))
         end
 
-        # Offline integration: substitute the URL fetcher (no live network) and
-        # drive the real resolvers over a fake https host.
+        # Offline integration: the load's reader gets an offline fetcher (no
+        # live network) and the real resolvers run over a fake https host.
         _hosted = Dict{String, String}(
             # Template libraries: stencil.esm's OWN relative import must join
             # against ITS URL base -> https://esm.invalid/shared/grid.esm.
@@ -1425,13 +1423,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                    "equations": []}}}""",
         )
         _fetched = String[]
-        _old_fetcher = _URL_FETCHER[]
-        _URL_FETCHER[] = url -> begin
+        _fetch = url -> begin
             push!(_fetched, String(url))
             haskey(_hosted, url) || error("offline test host has no '$url'")
             _hosted[url]
         end
-        try
+        _load_offline(path) = EarthSciAST._load_document(
+            EarthSciAST._read_json_document(read(path, String)), dirname(abspath(path));
+            source = EarthSciAST._DocumentSource(fetch = _fetch)
+        )
+        begin
             mktempdir() do dir
                 # (1) Template-library import: relative refs INSIDE the
                 # URL-loaded library resolve against the URL base.
@@ -1450,7 +1451,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                                      {"lhs": "y",
                                       "rhs": {"op": "scale_by_n", "args": ["x"]}}]}}}"""
                 )
-                f = EarthSciAST.load_path(consumer)
+                f = _load_offline(consumer)
                 @test f.index_sets["cells"].size == 8
                 y = observed_definition(f.models["M"], "y")
                 @test y isa OpExpr && y.op == "*"
@@ -1468,7 +1469,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                        "variables": {"x": {"type": "unknown", "units": "1", "default": 1.5}},
                        "equations": []}}}"""
                 )
-                @test _err_code(() -> EarthSciAST.load_path(cyc)) ==
+                @test _err_code(() -> _load_offline(cyc)) ==
                     "template_import_cycle"
 
                 # (3) Subsystem ref to a URL: the remote document's own
@@ -1482,7 +1483,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                        "equations": [],
                        "subsystems": {"S": {"ref": "https://esm.invalid/models/outer.esm"}}}}}"""
                 )
-                fw = EarthSciAST.load_path(wrapper)
+                fw = _load_offline(wrapper)
                 sub = fw.models["Top"].subsystems["S"]
                 @test sub isa EarthSciAST.Model
                 w = observed_definition(sub, "w")
@@ -1493,8 +1494,6 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 @test "https://esm.invalid/models/tpl/lib.esm" in _fetched
                 @test "https://esm.invalid/models/inner.esm" in _fetched
             end
-        finally
-            _URL_FETCHER[] = _old_fetcher
         end
     end
 
@@ -1547,6 +1546,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             @test _hc(
                 Dict("op" => "/", "args" => Any["NX", 7]),
                 Dict("NX" => 18)
+            ) == "metaparameter_type_error"
+
+            # A mount contribution's size: an unbound name stays symbolic, a
+            # bound one folds, and a bound one that does not fold is an error.
+            decl = Dict{String, Any}(
+                "kind" => "interval",
+                "size" => Dict("op" => "/", "args" => Any["NX", 7])
+            )
+            @test EarthSciAST.fold_mount_contribution(decl, Dict("NY" => 3)) === decl
+            @test EarthSciAST.fold_mount_contribution(decl, Dict("NX" => 14))["size"] == 2
+            @test _err_code(
+                () -> EarthSciAST.fold_mount_contribution(decl, Dict("NX" => 18))
             ) == "metaparameter_type_error"
         end
 

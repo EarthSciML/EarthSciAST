@@ -134,8 +134,7 @@ name:
 - **Julia's build/inspection seam** — `BuildInspection` (and the
   `RecurrenceInfo` records its `recurrences` field holds), `evaluate_expr`,
   `expanded_model`, `expand_flattened_refs`, `param_map`, `parameter_classes`,
-  `remake_parameters`, and the deprecated `build_evaluator` until its removal
-  (§8 item 23).
+  `remake_parameters`. `build_evaluator` is removed (§8 item 23).
 - **Julia's forcing-buffer surface** (the live forcing buffers of a **Problem**,
   and the hook that mirrors a host refresh into a compiled program's argument
   arrays) — `forcing_buffers`, `forcing_buffer_index`, `sync_forcing!`.
@@ -240,6 +239,33 @@ three run the SAME pipeline — top-level `{ref}` inlining, version gates, schem
 validation, §9.7 template machinery, typed coercion, and nested subsystem-ref
 resolution. `load_path` anchors relative refs at the file's own directory; the
 other two take `base_path`.
+
+In Julia the load errors `ParseError`, `ExpressionTemplateError`,
+`SubsystemRefError`, `EnumLoweringError` and `SchemaValidationError` lead with
+the same fields, in this order: `code`, `message`, `path` (an RFC 6901 pointer
+into the document the error is about, `""` if none), `file` (that document's
+canonical path or URL, `""` for the root document) and `details`; each type's
+own fields follow (`ParseError.original_error`; `SubsystemRefError.ref`,
+`.subsystem`, `.parent_model`; `SchemaValidationError.errors`).
+`SubsystemRefError` takes its `code` as a required keyword.
+
+**One error shape in Julia.** Every exported error type subtypes
+`EarthSciASTError` and stores its diagnostic code in its FIRST field, `code`
+(`""` when the failure has none). Four accessors read any of them:
+`error_code(e)`, `error_message(e)` (the text alone, which is what the
+conformance corpus pins), `error_path(e)` and `error_file(e)` (`""` when the
+type carries no location). All of them print through one `showerror`:
+`TypeName [code]: message (at /pointer in file)`, the bracket left out for an
+empty code and the parenthesis for an error with no location. The codes are
+`ERROR_CODES` values, or for the Julia evaluators' own failures an
+`E_TREEWALK_*`, `E_CANONICAL_*`, `E_REF_*` or `E_DIRECT_*` code, which are
+binding-local. An `ArgumentError` means the caller misused a Julia API (a wrong
+keyword value, an object made for another program, a typed constructor called
+with a bad value); a refusal of the document's content is always a package
+error: a value a typed constructor refuses while a document is read is a
+`ParseError`, a `flatten` refusal is a `FlattenError`, and a document construct
+the ModelingToolkit or Catalyst constructors cannot lower is a
+`SimulateError`.
 
 Options ride on the entry points they apply to: `metaparameters` and
 `base_path` on all three; TypeScript's `canonical` (tagged numeric literals,
@@ -381,7 +407,9 @@ math for `typst`. `names` plays the part of the names a component declares
 (its variables, species and parameters, and the document's index sets): a name
 in it prints in its declared shape and the printer avoids spellings that would
 collide with it. No template is in scope. The golden set's `math` field is
-`print_math` of the case's equation under its model's names.
+`print_math` of the case's equation under its model's names. Julia's
+`print_math` and `expression_names` also take a typed expression or equation,
+which they read through its serialized form.
 
 `parse_math(text, names, format)` is its inverse:
 `parse_math(print_math(e, names, f), names, f) == canonicalize_document(e)`. It
@@ -596,26 +624,39 @@ lists each removed function and its replacement.
 Raises the §4.7.6.10 error taxonomy (`ConflictingDerivativeError`,
 `DimensionPromotionError`, `UnmappedDomainError`, `UnsupportedMappingError`,
 `DomainUnitMismatchError`, `DomainExtentMismatchError`,
-`SliceOutOfDomainError`, `CyclicPromotionError`).
+`SliceOutOfDomainError`, `CyclicPromotionError`), all under `FlattenError` in
+Julia, Python, TypeScript and Rust. Julia, Python, TypeScript and Go also name
+`CoupleMultiplicativeNoTendencyError`. A refusal no named type covers is a
+`FlattenError` with a code in Julia (the unexported `FlattenRefusal`:
+`nothing_to_flatten`, `unsupported_construct`,
+`variable_map_transform_missing_from`); Python raises a bare `FlattenError` or
+`ValueError` there.
 
 The options are reachable five different ways today: keywords (Julia),
 positional (Python), an options object (TypeScript), and **a separate function**
 in Rust (`flatten_with_options`) and Go (`FlattenWithOptions`). Julia and Rust
 additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
+Julia's `FlattenedSystem` also carries the optional `initialization_equations`
+field (esm-libraries-spec §4.7.5 step 4), named by flatten; the other bindings
+leave it out. Julia builds a `FlattenedSystem` with one keyword constructor,
+`FlattenedSystem(; fields...)`, and copies one with `FlattenedSystem(flat;
+fields...)`; its three subset maps are read off their parent maps.
+
 ### 5.7 Load-time lowering
 
 | Canonical | Julia | TypeScript | Python | Rust | Go |
 |---|---|---|---|---|---|
 | `lower_enums` | **pure**, returns a new file; `lower_enums!` is the in-place twin; raises `EnumLoweringError` | **pure**, returns a new file, throws `EnumLoweringError` | **pure**, returns a new file; `lower_enums_mut` is the in-place twin; raises `EnumLoweringError` | **pure**, `(&EsmFile) -> Result<EsmFile, EnumLoweringError>`; `lower_enums_mut` is the in-place twin, `lower_enums_raw` the raw-`Value` seam | **pure**, returns `(*ESMFile, error)` carrying `*EnumLoweringError`; `LowerEnumsMut` is the in-place twin |
-| `resolve_subsystem_refs` | `resolve_subsystem_refs!(file, base_path)` returns the resolved `EsmFile` — `file` itself, or a rebuilt one carrying the mounted documents' `data_sources` when `file` declared none (`EsmFile` is immutable), so use the return value; raises `SubsystemRefError` | **`async`**, returns `Promise<void>`; the only binding that resolves remote `http(s)://` refs | mutates, returns `None` | `(&mut EsmFile, &Path) -> Result<(), DiagnosticError>`; `resolve_subsystem_refs_raw` is the raw-`Value` seam | returns `error` |
+| `resolve_subsystem_refs` | `resolve_subsystem_refs!(file, base_path)` returns the resolved `EsmFile` — `file` itself, or a rebuilt one carrying the mounted documents' `data_sources` when `file` declared none (`EsmFile` is immutable), so use the return value; resolves local and remote `http(s)://` refs; raises `SubsystemRefError` | **`async`**, returns `Promise<void>`; resolves remote `http(s)://` refs | mutates, returns `None` | `(&mut EsmFile, &Path) -> Result<(), DiagnosticError>`; `resolve_subsystem_refs_raw` is the raw-`Value` seam | returns `error` |
 | `resolve_template_machinery` | `(raw, base_path; metaparameters, load_ref)` | `(rawData, basePath, {metaparameters, readFile, validateSchema})` | `(raw, base_path, metaparameters)` — no loader seam | `(&Value, &Path, &BTreeMap)` — no loader seam | **not exported** |
 | `expand_coupling_imports` | returns the coupling list | returns `CouplingEntry[] \| undefined` | returns the list | returns `Result<Option<Vec<_>>, _>` | **not exported** |
 
 > **⚠ Two cross-cutting divergences here.** (a) **`resolve_template_machinery`
 > takes the raw, undecoded document in all four bindings that export it**, not
 > a typed `EsmFile` (§8 item 14). (b) **TypeScript's `resolve_subsystem_refs`
-> is the only `async` one**, and the only one that resolves remote refs.
+> is the only `async` one.** Julia and TypeScript resolve remote `http(s)://`
+> refs; Julia sends a fetched leaf through the same mount pipeline as a local one.
 
 ### 5.8 Simulation (Julia, Python, Rust)
 
@@ -661,9 +702,8 @@ will not.
 build with run, which is why two of the three had already grown a second
 `prepare`-shaped entry point beside it. `prepare` / `PreparedModel` / `Prepared`
 are replaced by Problem construction, which absorbs the same pipeline (rewrite →
-value invention → gated fetch → compile). `build_evaluator` is **deprecated**
-(§8 item 23): the build is private behind `esm_problem`, and the exported name
-is an alias that warns and forwards, kept for one minor. What used to come off it comes off the Problem —
+value invention → gated fetch → compile). `build_evaluator` is **removed**
+(§8 item 23): the build is private behind `esm_problem`. What used to come off it comes off the Problem —
 `prob.f!` / `prob.u0` / `prob.p` / `prob.var_map`, `forcing_buffers(prob)`,
 `forcing_buffer_index(prob)`, `compiler_report(prob)` — and the compiled
 right-hand side it reached through `form = :oop` is `compiler = :xla`.
@@ -853,7 +893,58 @@ build actually used, and `compiler_report` gives, per rule, the tier it landed
 on — which is informative even under `native`, where the interesting question
 is affine versus codegen versus whole-array, or taped versus fused. Both names
 and both meanings are stable surface. The report's exact **shape** is
-per-binding for now and is not pinned here. A compiler that builds a FOREIGN
+per-binding for now and is not pinned here.
+
+**Why a tier passed, in Julia.** Each row of Julia's report also lists the
+tiers that looked at the rule and passed it, deepest last, as
+`(tier, reason, detail)`: `reason` is a `Symbol` from a CLOSED vocabulary and
+`detail` is free text naming the construct (the operator, the variable, the
+error the body raised). A strict `compiler_refused_rule` message prints every
+one, with its detail. The vocabulary, whose meanings the `CompilerRuleRecord`
+docstring repeats:
+
+| Reason | Meaning |
+|---|---|
+| `lhs_not_indexed_derivative` | the left-hand side is not `D(index(var, i…))` |
+| `lhs_subscript_count` | the left-hand side's subscripts do not match the output indices |
+| `no_output_index` | the equation has no output index |
+| `no_contracted_index` | the equation has no contracted index |
+| `range_not_unit_run` | an output range is empty or not a unit-step run |
+| `below_floor` | the contraction is shorter than the tier's length floor |
+| `tier_off` | the tier is off under this compiler |
+| `gated_reduction` | a contraction with a join gate, whose terms vary per output cell |
+| `filtered_reduction` | a contraction with a filter the tier cannot guard |
+| `ragged_contraction` | a contracted range that is not a constant dense range |
+| `contracted_axis_cut` | a contracted axis the box cut splits, so one fold cannot walk it in one piece |
+| `symbolic_body_did_not_lower` | the body does not resolve or compile with its indices kept symbolic |
+| `unsupported_op` | an operator the tier has no form for |
+| `unknown_kind` | a compiled node kind the tier has no form for |
+| `unknown_array` | a gather of a name that is not a known array |
+| `malformed_index` | an `index` node with no operand |
+| `subscript_rank_mismatch` | a gather whose subscript count is not the array's rank |
+| `subscript_not_static` | a subscript that is not an integer function of the loop indices and build-time tables |
+| `gathered_reduction_shape` | a gathered reduction whose output indices do not match its subscripts |
+| `region_value_shape` | a `makearray` region value whose rank does not match the region |
+| `region_multi_index` | a `makearray` region selected by a subscript of several loop indices |
+| `guarded_out_of_range` | a constant subscript out of range under a run-time guard |
+| `output_layout_not_affine` | the output cells' slots are not an affine function of the loop indices |
+| `subtree_table_declined` | a build-time-evaluable subtree that the compile-once evaluator declined |
+| `scatter_too_many_pinned_cells` | the equality filter pins more output cells than the scatter takes |
+| `scatter_ragged_or_empty` | a scatter whose contracted range is ragged or empty |
+| `scatter_ragged_reads_output` | a ragged scatter whose body reads its own output |
+| `budget` | the generated code would exceed its node budget |
+| `unsupported_desc` | an access descriptor the code generator has no form for |
+| `unsupported_bound` | a loop bound the code generator cannot write |
+| `foreign_scratch` | a read of a scratch buffer the generated function does not own |
+| `subcall_order` | a sub-kernel call emitted before its invariants are in scope |
+| `loopvar_out_of_scope` | a loop variable read outside the loop that binds it |
+| `loop_reentered` | a loop entered again inside its own body |
+| `lane_spec_on_scalar_spine` | a lane descriptor on a scalar spine |
+| `cached_scalar_slot` | a cached scalar slot the generated function cannot read |
+
+The vocabulary is Julia's and is not a cross-binding contract: Python's and
+Rust's refusals carry their tiers' decline reasons as free text, and their
+reports do not list declines this way. A compiler that builds a FOREIGN
 program reports that program's decisions in the same record: `mtk` names, per
 rule, whether the compiled system integrates it, carries it in a residual, or
 ELIMINATED it into an observed equation — the third being a decision no other
@@ -1324,8 +1415,9 @@ gather failed, or that were never gathered, are `NotGathered`. Build-time calls 
   `Threads.Atomic{UInt64}` in Julia), incremented for every set built; an epoch
   is never reused within a process. Two distinct sets never share an epoch,
   so a stale read is impossible by construction. A clone of a set is the same
-  set and keeps its epoch. Julia's process-global `_FORCING_EPOCH` is not
-  consulted on the `rhs!` path.
+  set and keeps its epoch. A Julia Problem's own in-place `f!` keeps a
+  separate epoch per build, which `notify_forcing_refresh!(prob)` moves; the
+  `rhs!` path never reads it.
 - **Refresh is a swap.** `replace_forcing(fs, slot, buf)` / `replace` returns a
   NEW set with a new epoch, sharing every other buffer; the old set is
   unchanged and stays valid for whoever still holds it. `slot` is 0-based in
@@ -2122,6 +2214,7 @@ reading that as a gap.
 | `conflicting_derivative_error` | error | `ConflictingDerivativeError` | `ConflictingDerivativeError` | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` |
 | `contains` | function | – | `contains` | `contains` | `contains` | `Contains` |
 | `continuous_event` | type | `ContinuousEvent` | – | `ContinuousEvent` | `ContinuousEvent` | `ContinuousEvent` |
+| `couple_multiplicative_no_tendency_error` | error | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_entry` | type | `CouplingEntry` | – | `CouplingEntry` | `CouplingEntry` | `CouplingEntry` |
 | `data_source` | type | `DataSource` | – | `DataSource` | `DataSource` | `DataSource` |
 | `data_source_binding` | type | `DataSourceBinding` | – | `DataSourceBinding` | `DataSourceBinding` | `DataSourceBinding` |
@@ -2144,6 +2237,7 @@ reading that as a gap.
 | `expression_graph` | function | `expression_graph` | `expressionGraph` | `expression_graph` | `expression_graph` | – |
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
 | `extract` | function | `extract` | `extract` | `extract` / `extract_component_from_file` | – | `Extract` |
+| `flatten_error` | error | `FlattenError` | `FlattenError` | `FlattenError` | `FlattenError` | – |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
 | `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
@@ -2183,7 +2277,6 @@ reading that as a gap.
 | `component_exists` | function | – | `componentExists` | `component_exists` | `component_exists` | – |
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
 | `convert_units` | function | – | `convertUnits` | `convert_units` | `convert_units` | – |
-| `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
@@ -2191,7 +2284,6 @@ reading that as a gap.
 | `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
 | `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
-| `flatten_error` | error | – | `FlattenError` | `FlattenError` | `FlattenError` | – |
 | `flattened_equation` | type | – | `FlattenedEquation` | `FlattenedEquation` | – | `FlattenedEquation` |
 | `flattened_variable` | type | – | `FlattenedVariable` | `FlattenedVariable` | – | `FlattenedVariable` |
 | `format_canonical_float` | function | `format_canonical_float` | `formatCanonicalFloat` | – | `format_canonical_float` | – |
@@ -2366,7 +2458,7 @@ allowed to differ.
 
 | Family | Bindings | Why it is a seam |
 |---|---|---|
-| Julia build/inspection | Julia | `BuildInspection` exposes the tree-walk evaluator's internals so downstream analysers (EarthSciASTDiff) can differentiate the expanded tree. There is no cross-language analogue to harmonize against. `build_evaluator` is deprecated and leaves the surface at its removal (§8 item 23); `BuildInspection` remains because `esm_problem`'s `inspect` keyword takes one, and the compiler half of what it carried is `compiler_report`, which both an `EsmProblem` and a `BuildInspection` answer. |
+| Julia build/inspection | Julia | `BuildInspection` exposes the tree-walk evaluator's build-time products so downstream analysers (EarthSciASTDiff) can differentiate the expanded tree. There is no cross-language analogue to harmonize against. It remains because `esm_problem`'s `inspect` keyword takes one. Its fields are the seven its docstring lists — `setup_arrays`, `const_arrays`, `observed_exprs`, `params`, `param_classes`, `recurrences` and `compiler_report` (which `compiler_report(insp)` returns, including after a refused build) — and a record describes ONE build: passing it to a second raises. Python's `BuildInspection` is a separate type with its own fields and is not held to this. `build_evaluator` is removed (§8 item 23). |
 | Julia forcing buffers | Julia | The compiled program's argument ABI, now read off an `EsmProblem` (`forcing_buffers(prob)`) rather than off an out-of-place build product. Its shape is dictated by the compiled program's argument arrays and will change with the emitter. |
 | Julia MTK/Catalyst export | Julia | `mtk2esm`, `mtk2esm_gaps`, `GapReport` — migration tooling for one host ecosystem. |
 | Rust `intern` | Rust | Hash-consing of expression subtrees. Performance-shaped, not semantics-shaped. |
@@ -2402,7 +2494,7 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 10 | `reference_resolution_error` | Julia and Python raise `ReferenceResolutionError`; Rust's is `ReferenceError`. | Rust renames, keeping a type alias for one minor. **DONE (phase 6).** Rust renamed; `ReferenceError` kept as a `#[deprecated]` type alias for one minor. | Rust |
 | 11 | `system_kind` family | `system_kind` is a function everywhere but takes an extra `domain` in Go; `declared_system_kind` exists in TypeScript and Python; `declared_system_kind_mismatch` only in Julia; `EffectiveSystemKind` only in Go. Three overlapping two-binding subsets. | **Ruled (phase 6).** The four spellings are three distinct questions plus one composition. `system_kind(model)` is the *derived* kind — Go drops the `domain` argument, which both Go bodies already ignore. `declared_system_kind(model)` reads the explicit field, nullable. `effective_system_kind(model)` is `declared ?? derived` — the question a caller choosing a solver actually asks. All three become `stable` in all five. Julia's `declared_system_kind_mismatch` is **deleted**: it is one line over the other two, and the only 1-of-5 member of the family. **TypeScript DONE (phase 6):** `effectiveSystemKind(model)` added alongside the existing `systemKind` / `declaredSystemKind`. | Julia, TS, Python, Go |
 | 12 | `validate` return shape | Go's `Validate` returns the legacy `DetailedValidationResult`; the four-field shape everyone else returns is Go's *other* function, `ValidateFile`. | Go's `Validate` returns the four-field `ValidationResult`; `ValidateFile` folds into it. **DONE (phase 6).** Go's `Validate` returns the four-field `ValidationResult`; `ValidateFile` folded in. `SchemaErrors` is always empty, because a `*ESMFile` can only exist by having passed the schema at load — matching Rust's documented behaviour. | Go |
-| 13 | `validate` input type | Rust and Go accept only a typed document; Julia also accepts a path; Python accepts path/text/dict/document; TypeScript accepts text/object. | `validate(file)` takes a typed document everywhere. Path and text convenience become `validate_path` / `validate_text`. **TypeScript DONE (phase 6):** `validate(document)` is typed (and throws a `TypeError` naming `validateText` if handed a string at runtime, since a JS caller has no compiler to stop them); `validateText(text)` added. TypeScript deliberately has **no** `validatePath`: `@earthsciml/ast` targets the browser as well as Node and exposes no synchronous filesystem read, so a `validatePath` here would be a Node-only stub that breaks the bundle. A caller reads the file and calls `validateText(text, { basePath })`. **CLOSED (phase 6b): Julia gained `validate_text(text; base_path)`, so the symbol is 5/5.** Phase 6's Julia agent correctly declined it at the time — this row scoped the work to RENAMING an existing convenience, and Julia had no text one to rename — but at four bindings out of five it had become a parity hole rather than a rename, which is a different question. Julia's version is the text twin of its existing `validate_path` and shares `load_failure_structural_error` with it. Its bad-input behaviour was MEASURED against the other four rather than assumed: Python's `validate_text` and Go's `ValidateText` both return `is_valid=false` with populated `schema_errors` for schema-invalid AND malformed text and neither raises, so Julia renders three channels — a `SchemaValidationError`'s structured errors straight into `schema_errors`, a codeless `ParseError` (malformed JSON) as one root `SchemaError` under the `parse` keyword, and a `(code, path)`-carrying rejection into `structural_errors`. Julia now returns the same error counts as Python on both bad inputs. **One residual, recorded not fixed:** `validate_path` renders only the third channel and still RAISES on schema-invalid or malformed input, so Julia's two convenience entry points differ on bad input. Changing `validate_path` is a behaviour change to a `stable` function nobody asked for and is left alone. | all five |
+| 13 | `validate` input type | Rust and Go accept only a typed document; Julia also accepts a path; Python accepts path/text/dict/document; TypeScript accepts text/object. | `validate(file)` takes a typed document everywhere. Path and text convenience become `validate_path` / `validate_text`. **TypeScript DONE (phase 6):** `validate(document)` is typed (and throws a `TypeError` naming `validateText` if handed a string at runtime, since a JS caller has no compiler to stop them); `validateText(text)` added. TypeScript deliberately has **no** `validatePath`: `@earthsciml/ast` targets the browser as well as Node and exposes no synchronous filesystem read, so a `validatePath` here would be a Node-only stub that breaks the bundle. A caller reads the file and calls `validateText(text, { basePath })`. **CLOSED (phase 6b): Julia gained `validate_text(text; base_path)`, so the symbol is 5/5.** Phase 6's Julia agent correctly declined it at the time — this row scoped the work to RENAMING an existing convenience, and Julia had no text one to rename — but at four bindings out of five it had become a parity hole rather than a rename, which is a different question. Julia's version is the text twin of its existing `validate_path` and shares `load_failure_structural_error` with it. Its bad-input behaviour was MEASURED against the other four rather than assumed: Python's `validate_text` and Go's `ValidateText` both return `is_valid=false` with populated `schema_errors` for schema-invalid AND malformed text and neither raises, so Julia renders three channels — a `SchemaValidationError`'s structured errors straight into `schema_errors`, a codeless `ParseError` (malformed JSON) as one root `SchemaError` under the `parse` keyword, and a `(code, path)`-carrying rejection into `structural_errors`. Julia now returns the same error counts as Python on both bad inputs. `validate_path` renders a load failure through the same three channels, so Julia's two convenience entry points agree on bad input, as Python's do. | all five |
 | 14 | raw-`Value` entry points | Rust takes untyped `serde_json::Value` for `lower_enums`, `resolve_subsystem_refs`, `resolve_template_machinery` and `prepare`, where every other binding takes a typed document. | Add typed wrappers at the canonical names; keep the raw forms as `*_raw` extension seams. **PARTLY DONE, PARTLY REFUSED (phase 6).** `lower_enums` and `resolve_subsystem_refs` gained typed wrappers with `*_raw` seams. `prepare` is moot — phase 4 deleted it. `resolve_template_machinery` was REFUSED with evidence: the premise says every other binding takes a typed document, and all three measured take raw — Python `(raw: Any, …)`, Julia `(raw_data, …)`, TypeScript `(rawData: unknown, …)`. A typed wrapper would have made Rust the only non-conformant binding. | Rust |
 | 15 | `lower_enums` mutation | TypeScript is pure; Julia, Python, Rust and Go mutate in place. Julia raises `ParseError` where the rest raise `EnumLoweringError`. | Canonicalize on the pure form; mutating variants take Julia's `!`. Julia raises `EnumLoweringError`. **TypeScript VERIFIED (phase 6):** `lowerEnums(file)` returns a new document and shares unchanged subtrees with the input — it never writes through its argument — and raises `EnumLoweringError` (an `EsmDiagnosticError` subclass carrying a registry-backed `code`), not a bare `Error`. Nothing to change. **DONE:** `lower_enums` is pure in all five; the in-place twins are Julia's `lower_enums!` and `lower_enums_mut` in Python, Rust and Go (`LowerEnumsMut`), and Julia raises `EnumLoweringError`. | Julia, Python, Rust, Go |
 | 16 | `substitute` cycles | ~~Only Go detects substitution cycles; the other four loop.~~ **RESOLVED — the premise was false, and inverted.** The other four never looped: all four are single-pass, so a cyclic binding set terminates on its own, exactly as CONFORMANCE_SPEC.md §2.2.3 rule 1 requires. Go was the sole non-conformant binding: it expanded replacements *transitively*, which (a) silently corrupted chained renames — `substitute("a", {a: b, b: c})` returned `"c"`, not `"b"`, mis-applying every overlapping rename through `renameRawExpr` — and (b) made cyclic sets non-terminating, which was then patched with cycle detection instead of by removing the transitivity. | Go made single-pass; `SubstitutionError` / `cyclic_substitution` removed as unnecessary. Pinned cross-binding by `tests/substitution/cyclic_bindings.json`. | Go (done) |
@@ -2412,7 +2504,7 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 20 | `component_graph` alias | TypeScript exports **both** `component_graph` (snake_case, violating §2) and `componentGraph`. | **DONE (phase 6).** `component_graph` is deleted. It was kept only for the (since-deleted) editor package's web components, which had already migrated to `componentGraph`; no caller outside this binding's own tests remained. | TypeScript |
 | 21 | `compiler` | Each binding picks its build strategy by inspecting the document, and a caller can neither ask for one nor read back which ran. Julia's stable entry point always builds the tree walk, so its XLA emitter is unreachable from `esm_problem`; Rust routes on whether the document is arrayed; Python routes on document content between two pathways that disagree numerically. | `esm_problem` gains the keyword `compiler` over §5.8's closed vocabulary (`interpreter` / `native` / `xla` / `mtk` / `sympy`), defaulting to a **strict** `native`, and every Problem exposes `compiler` and `compiler_report`. Julia `compiler::Symbol`, Python `compiler: str \| None`, Rust `ProblemOptions.compiler: Option<Compiler>` over a new `Compiler` enum. Adding an optional keyword is a minor (§10). Flipping the default is a behaviour change and lands together with the conformance tier that measures what it refuses (`CONFORMANCE_SPEC.md` §5.44). **DONE.** Implemented in Julia, Rust and Python: the keyword, the strict `native` default, the three selection failures and the two readbacks are live in all three, and §5.44's compiler-agreement tier carries the goldens the refusals are measured against. The specialty members land per binding on the same one-way ratchet: Python's `sympy` and Julia's `mtk` are reachable from `esm_problem` (Julia's needs ModelingToolkit loaded and is the one compiler that runs the events and implicit equations of `CONFORMANCE_SPEC.md` §5.39); Rust's `xla` reached `esm_problem` on 2026-09-22 — the emitter over the tape now builds the Problem's right-hand side and the Jacobian differenced out of it, and rust is `bindings_required` for `xla` in that tier, on a build that has the feature and the extension. Julia's `:xla` reached `esm_problem` too: the direct StableHLO emitter builds the Problem's right-hand side, compiled once per build, and hands the solver a finite-difference Jacobian through it, so every Julia member of the vocabulary is reachable from the stable entry point. | Julia, Python, Rust |
 | 22 | Rust `Compile` | Rust already exports an enum `Compile::{Auto, Always, Never}`, which decides whether a right-hand side is built **at all** — the static-versus-dynamic question — and says nothing about *which* compiler builds it. Beside item 21's `Compiler` the two names differ by one letter and mean different things, which is exactly the confusion §2 exists to prevent — and the collision is worse on the struct than on the type, since item 21 puts a field `compiler` next to the existing field `compile` on the same `ProblemOptions`. | Rename the type to `Rhs::{Auto, Always, Never}` and the field to `rhs`, keeping `Compile` as a deprecated type alias for one minor (§10). `Compile` is `extension` tier, so the rename is a minor. **DONE (compiler selection):** the enum is `Rhs`, the field is `ProblemOptions::rhs`, and `pub type Compile = Rhs` carried `#[deprecated(since = "0.2.0")]` for its one minor; the alias is removed. | Rust |
-| 23 | `build_evaluator` | §5.8 kept it as a documented extension seam on two grounds: it is the entry point for a caller who wants the compiled right-hand side without a Problem around it, and it has substantial downstream use. Item 21 answers both — `esm_problem(…; compiler=:xla)` *is* the compiled right-hand side, and the downstream use is one package, which migrates to that call. | **DONE except the downstream migration.** `build_evaluator` is no longer documented surface: the build is private (`_build_evaluator`) behind `esm_problem`, and the exported name is a deprecated alias that warns once and forwards, kept for one minor (§10). The forcing-buffer seam re-hung on the Problem — `forcing_buffers(prob)` / `forcing_buffer_index(prob)` answer for **every** compiler, not only for an out-of-place build, and `sync_forcing!` takes that container — and the compiler half of `BuildInspection` is `compiler_report`, which a `BuildInspection` and an `EsmProblem` now both answer. Every in-package caller (src, ext, scripts, test, docs) moved off the name. `BuildInspection` itself stays exported: `esm_problem`'s `inspect` keyword takes one, and a build that REFUSED leaves no Problem to read the partial report off. **The downstream migration is not done.** ReSEACT (`run_reseact_reactant.jl`, `tools/adjoint_gradient.jl`, `tools/rx_adjoint_check.jl`, `tools/sensitivity_forward.jl`, `tools/diag/*`, `prototypes/*`) calls `EA.build_evaluator(doc; form = :oop, …)` on each half of an operator-split document, reads `EA.forcing_buffers(fo)` off the product, mirrors it to device arrays and re-syncs with `EA.sync_forcing!` at each cadence boundary, and then traces its OWN macro step — advection plus sub-cycled chemistry over one window — of which the emitted right-hand side is a COMPONENT. `EarthSciASTDiff.prepare_jacobian` reaches the same seam through `build_kwargs = (; form = :oop, …)`. Both qualified and bare calls keep working on the alias (EarthSciASTDiff's tests call the bare name after `using EarthSciAST`), so nothing breaks today. Four things are still missing before the alias can be deleted: (1) a public way to obtain the out-of-place compiled intermediate representation itself, since `compiler = :xla` hands back a Problem whose `f!` is already compiled and host-in/host-out and cannot be composed into a larger traced program; (2) live forcing under `compiler = :xla`, which is a named refusal today (the device re-sync is not wired to the refresh callback's `post_refresh` hook); (3) a Problem-shaped replacement for `prepare_jacobian`'s `build_kwargs`; (4) an answer for a caller that builds SEVERAL right-hand sides from one document and drives them in one time loop, which one Problem does not describe. | Julia |
+| 23 | `build_evaluator` | §5.8 kept it as a documented extension seam on two grounds: it is the entry point for a caller who wants the compiled right-hand side without a Problem around it, and it has substantial downstream use. Item 21 answers both — `esm_problem(…; compiler=:xla)` *is* the compiled right-hand side, and the downstream use is one package, which migrates to that call. | **DONE.** `build_evaluator` is removed: the build is private behind `esm_problem`, and the package's own tests and conformance adapters build through the documented, unexported `EarthSciAST.Internal.build`, which flattens first and so builds exactly what `esm_problem` builds (not cross-binding API, not for callers outside this repository). The deprecated alias is gone; the downstream callers named below must move off it. The forcing-buffer seam re-hung on the Problem — `forcing_buffers(prob)` / `forcing_buffer_index(prob)` answer for **every** compiler, not only for an out-of-place build, and `sync_forcing!` takes that container — and the compiler half of `BuildInspection` is `compiler_report`, which a `BuildInspection` and an `EsmProblem` now both answer. Every in-package caller (src, ext, scripts, test, docs) moved off the name. `BuildInspection` itself stays exported: `esm_problem`'s `inspect` keyword takes one, and a build that REFUSED leaves no Problem to read the partial report off. ReSEACT (`run_reseact_reactant.jl`, `tools/adjoint_gradient.jl`, `tools/rx_adjoint_check.jl`, `tools/sensitivity_forward.jl`, `tools/diag/*`, `prototypes/*`) calls `EA.build_evaluator(doc; form = :oop, …)` on each half of an operator-split document, reads `EA.forcing_buffers(fo)` off the product, mirrors it to device arrays and re-syncs with `EA.sync_forcing!` at each cadence boundary, and then traces its OWN macro step — advection plus sub-cycled chemistry over one window — of which the emitted right-hand side is a COMPONENT. `EarthSciASTDiff.prepare_jacobian` reaches the same seam through `build_kwargs = (; form = :oop, …)`. With the alias removed those calls fail; they can reach the same build through `EarthSciAST.Internal.build`, which is not public API. Four things a Problem-shaped replacement still lacks: (1) a public way to obtain the out-of-place compiled intermediate representation itself, since `compiler = :xla` hands back a Problem whose `f!` is already compiled and host-in/host-out and cannot be composed into a larger traced program; (2) live forcing under `compiler = :xla`, which is a named refusal today (the device re-sync is not wired to the refresh callback's `post_refresh` hook); (3) a Problem-shaped replacement for `prepare_jacobian`'s `build_kwargs`; (4) an answer for a caller that builds SEVERAL right-hand sides from one document and drives them in one time loop, which one Problem does not describe. | Julia |
 | G-2 | `supported_migration_targets` | TypeScript and Rust spelled it `get_supported_migration_targets`; Julia, Python and Go spell it `supported_migration_targets`. One capability under two canonical names, so the manifest carried two `stable` entries for it. | **TypeScript DONE (phase 6).** `supportedMigrationTargets()` added at the canonical name over the same table `migrate` / `canMigrate` use; `getSupportedMigrationTargets` stays a deprecated alias for one minor (§10), the same function object. **Rust DONE (phase 6)** as well (`a154aa171`): `supported_migration_targets` is the definition, `get_supported_migration_targets` a `#[deprecated]` delegate. Both spellings fold under the canonical name via `ALIAS_OVERRIDES`, so the manifest carries one entry, not two. | TypeScript, Rust |
 | G-3 | `build_reference_graph` | Exported by Julia, Python, Rust and Go; **absent in TypeScript** — a four-of-five gap in a `stable` symbol that no row above covered. | **DONE (phase 6).** TypeScript gains `buildReferenceGraph`, plus the rest of the module's public surface (`resolveReferences`, `ReferenceGraph`, `ReferenceVertex`, `ReferenceEdge`, `VertexKind`, `EdgeKind`, `ReferenceResolutionError`), so the family is 5/5. See item 17 for the signature and the cross-binding verification. | TypeScript |
 | H-4 | Python layering | Python re-exported the whole `data_sources` loader stack through the top-level `__all__` — 32 spellings, of which 29 were `extension`-tier and Python-only — so `import earthsci_ast` handed you a data-loading toolkit as well as a format library. `xarray` and `netcdf4` sat in the BASE dependency set, which a comment justified as "the IO tier hard-depends on them". | **DONE (phase 6).** The premise was measured FALSE: no module under `earthsci_ast/` imports `xarray` or `netCDF4` at module scope — `xarray` is imported inside `data_sources._xarray._default_xarray_opener`, and `netCDF4` is never imported by this package at all (it is the engine xarray selects). With all three of `xarray` / `netCDF4` / `scipy` blocked by an import hook, `import earthsci_ast` already succeeded and `__all__` was still the full 272, so nothing had to be restructured to make the split possible. The 29 `extension` spellings left `__all__` and now live only on `earthsci_ast.data_sources`; Python's declared surface is **272 -> 243**. The three `stable` spellings in that block — `apply_unit_conversion`, `parse_unit_conversion`, `UnitConversionError` — were **deliberately KEPT** at the top level: Julia defines them in core `src/unit_conversion.jl` (not `EarthSciASTEarthSciIOExt`), TypeScript exports `UnitConversionError` from its index, and §6 carries all three as `stable`, so dropping them would have made Python the sole non-conformant binding and downgraded a stable symbol. The manifest's `stable` count is unchanged at 272 — every symbol removed was `extension`. `xarray` / `netcdf4` moved to a new `data` extra; `scipy` had already moved to `simulate` in an earlier round, per esm-libraries-spec §2.4 / §2.5.9. A missing optional dependency is reported at the point of use, naming the extra. | Python |
@@ -2503,7 +2595,6 @@ The §8 SciML renames are therefore major-or-aliased, not silent.
 
 | Name | Binding | Since | Replacement | Removed in |
 |---|---|---|---|---|
-| `build_evaluator` | Julia | §8 item 23 | `esm_problem(input, tspan; compiler = …)`; `prob.f!` / `prob.u0` / `prob.p` / `prob.var_map`, `forcing_buffers(prob)`, `forcing_buffer_index(prob)`, `compiler_report(prob)`; `compiler = :xla` for what `form = :oop` handed a compiled backend | the next minor |
 | `to_json(::Graph)` methods | Julia | §8 item 8 | `to_json_graph` | the next major |
 | `deriveODEs` | TypeScript | §8 item 5 | `deriveOdes` | the next major |
 | `getSupportedMigrationTargets` | TypeScript | §8 item G-2 | `supportedMigrationTargets` | the next major |
@@ -2517,12 +2608,7 @@ The removal release follows the alias's tier in the table above: a spelling of
 a `stable` symbol leaves at a major, an `extension` one at a minor.
 
 **An alias stays exported until it is removed**, as the rule above requires.
-Its purpose is that a downstream keeps running while it migrates. For
-`build_evaluator` a downstream does reach the bare name: EarthSciASTDiff calls `build_evaluator(…)`
-after `using EarthSciAST` throughout its tests and scripts, which an unexported
-alias would answer with `UndefVarError` rather than the deprecation warning. It
-therefore stays in the manifest and in §6's count until the release that
-deletes it.
+Its purpose is that a downstream keeps running while it migrates.
 
 ---
 

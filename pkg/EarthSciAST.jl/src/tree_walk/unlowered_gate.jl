@@ -7,8 +7,7 @@
 # `_compile`'s own gate (compile.jl) refuses an unlowered op in every tree it
 # compiles, but the build discards some trees before compiling anything: a DEAD
 # observed is never compiled, and `_fold_elementwise_array_observeds` folds an
-# elementwise array observed into its readers and drops it. A rewrite-target op
-# in one of those used to build silently. This walk runs over the model's
+# elementwise array observed into its readers and drops it. This walk runs over the model's
 # equations at the build entry, ahead of every such pass, so the answer is a
 # property of the document rather than of which trees the build kept.
 #

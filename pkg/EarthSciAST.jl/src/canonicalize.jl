@@ -4,7 +4,7 @@
 # ASTs are canonically equal iff their `canonical_json` outputs are
 # byte-identical.
 #
-# See `docs/rfcs/discretization.md` §5.4.1–§5.4.7 for the normative rules.
+# See `docs/content/rfcs/discretization.md` §5.4.1–§5.4.7 for the normative rules.
 
 """
     CanonicalizeError(code::String, message::String)
@@ -29,9 +29,6 @@ struct CanonicalizeError <: EarthSciASTError
     code::String
     message::String
 end
-
-Base.showerror(io::IO, e::CanonicalizeError) =
-    print(io, "CanonicalizeError(", e.code, "): ", e.message)
 
 """
     canonicalize(expr::ASTExpr) -> ASTExpr
@@ -77,7 +74,6 @@ function canonicalize(e::OpExpr)
     # `reconstruct` copies EVERY OpExpr field (semiring, join, filter,
     # join_gates, id, distinct, key, …) —
     # matching the field-preserving rebuilds in the TS/Python/Rust bindings.
-    # A hand-listed keyword subset here previously dropped ~11 fields.
     work = reconstruct(e; args = new_args)
     return _canonicalize_shallow(work)
 end
@@ -85,10 +81,10 @@ end
 # The LOCAL (single-node) canonicalization step, applied to a node whose args
 # are already canonical. Factored out of `canonicalize(::OpExpr)` so the
 # tree-walk CSE's identity-memoized driver (`_canonicalize_memo`,
-# tree_walk/compile.jl) can canonicalize a structurally-SHARED expression DAG
+# tree_walk/scalar_cse.jl) can canonicalize a structurally-SHARED expression DAG
 # node-by-unique-node — `canonicalize` is compositional, so
 # `canonicalize(e) == _canonicalize_shallow(e with canonicalized args)` and
-# the memoized driver is byte-identical to the plain recursion.
+# the memoized driver gives the same result as the plain recursion.
 function _canonicalize_shallow(work::OpExpr)
     if work.units !== nothing
         # A `const` node's declared units take the canonical unit spelling
@@ -135,7 +131,7 @@ function _canon_add(node::OpExpr)
         return others[1]
     end
     _sort_args!(others)
-    return OpExpr("+", others)
+    return reconstruct(node; args = others)
 end
 
 function _canon_mul(node::OpExpr)
@@ -160,7 +156,7 @@ function _canon_mul(node::OpExpr)
         return others[1]
     end
     _sort_args!(others)
-    return OpExpr("*", others)
+    return reconstruct(node; args = others)
 end
 
 function _canon_sub(node::OpExpr)
@@ -329,7 +325,7 @@ A node carrying any OTHER set field (aggregate `expr_body`/`ranges`/
 `output_idx`/`semiring`, `join`/`filter`, node `id`, …) has NO faithful
 canonical JSON in this format:
 emitting only the pinned fields would make structurally-different aggregates
-byte-identical (the defect class behind the `fn` bc-node bug). Rather than
+byte-identical. Rather than
 emit ambiguous bytes — or diverge unilaterally from the other bindings by
 emitting more fields — such nodes throw
 `CanonicalizeError("E_CANONICAL_UNSUPPORTED_FIELD", …)`. The one in-package
@@ -376,11 +372,8 @@ const _EMISSIBLE_FIELDS = (:op, :args, :wrt, :dim, :fn, :name, :value, :units)
 # `expect_cadence` and `attrs` are deliberately NOT here. Both are author
 # annotations with no canonical wire slot, and
 # `tests/conformance/canonical/README.md` names them among the fields a node may
-# carry that MUST make `canonical_json` raise `E_CANONICAL_UNSUPPORTED_FIELD` —
-# a requirement that was unreachable until the typed IR started carrying them
-# (before that, parse dropped both and the emitter never saw one). They fall
-# through to the derived `_NON_EMISSIBLE_FIELDS` below, so no edit is needed
-# here; this note records that the omission is a decision, not an oversight.
+# carry that MUST make `canonical_json` raise `E_CANONICAL_UNSUPPORTED_FIELD`.
+# They fall through to the derived `_NON_EMISSIBLE_FIELDS` below.
 const _CANONICAL_IGNORED_FIELDS = (:bindings, :template_origin)
 
 # OpExpr fields WITHOUT a pinned slot in the cross-binding canonical JSON node
@@ -390,8 +383,8 @@ const _CANONICAL_IGNORED_FIELDS = (:bindings, :template_origin)
 # explicitly ignored is non-emissible, so a future field cannot be silently
 # dropped from canonical JSON by forgetting to list it here — it must be added
 # to one of the two closed tuples above deliberately. `setdiff` preserves
-# `fieldnames` order, keeping the E_CANONICAL_UNSUPPORTED_FIELD message's
-# field listing byte-identical to the former literal tuple.
+# `fieldnames` order, which fixes the order of the E_CANONICAL_UNSUPPORTED_FIELD
+# message's field listing.
 const _NON_EMISSIBLE_FIELDS = Tuple(
     setdiff(
         fieldnames(OpExpr),
@@ -419,7 +412,7 @@ function _emit_node_json(n::OpExpr, emit::F)::String where {F}
         # (esm-spec §9.2). Emit it symmetrically with `dim`/`wrt` so the kind is
         # preserved in the canonical form — otherwise bc(u,dirichlet,xmin) and
         # bc(u,neumann,xmin) collapse to the same canonical JSON, making the
-        # kind/side matcher's canonical equality kind-blind (ess-tox / G8).
+        # kind/side matcher's canonical equality kind-blind.
         push!(entries, ("fn", _json_string(n.fn::String)))
     end
     if n.name !== nothing
@@ -487,11 +480,8 @@ function _emit_canonical_value(v)::String
     elseif v isa Integer
         return string(v)
     elseif v isa AbstractFloat
-        f = Float64(v)
-        if isfinite(f) && isinteger(f) && _int64_exactly_representable(f)
-            return string(Int64(f))
-        end
-        return format_canonical_float(f)
+        i = _as_int64(v)
+        return i === nothing ? format_canonical_float(Float64(v)) : string(i)
     elseif v isa AbstractString
         return _json_string(v)
     elseif v isa AbstractArray
@@ -579,9 +569,7 @@ end
 function _expand_to_plain(f::Float64)::String
     # Expand Julia's shortest-round-trip exponent form (e.g. "1.5e6",
     # "1.0e-5") to plain decimal by shifting the mantissa's decimal point.
-    # This is fully deterministic; an earlier BigFloat re-parse detour was
-    # dead code (`string(::BigFloat)` always kept exponent form here) and was
-    # removed after verifying byte-identical output on the plain range.
+    # This is fully deterministic.
     s = repr(f)
     if !occursin('e', lowercase(s))
         return s
@@ -667,19 +655,18 @@ kept, and nothing else changes. These are the rules of Lean
 canonicalize_document(doc::AbstractDict) =
     _canonical_document_numbers(_canonicalize_document_value(doc, false))
 
-# The deprecated ops (esm-spec §4.2): spelling => (replacement, operand count).
-const _DEPRECATED_DOCUMENT_OPS = Dict("neg" => ("-", 1), "pow" => ("^", 2))
+# The deprecated ops (esm-spec §4.2): spelling => (replacement, operand count),
+# from the registry (`_DEPRECATED_OPS` and each spelling's fixed arity).
+const _DEPRECATED_DOCUMENT_OPS = Dict(
+    k => (v, only(_op_spec(k).arity::UnitRange{Int})) for (k, v) in _DEPRECATED_OPS
+)
 
 # A JSON number in canonical form (CONFORMANCE §5.5.3.1): an integral float in
 # Int64 is an integer, an integer outside Int64 a float. A float already holds
 # the nearest binary64 of its token.
 function _canonical_document_number(x::Real)
     x isa Bool && return x
-    if x isa AbstractFloat
-        return isinteger(x) && -0x1p63 <= x < 0x1p63 ? Int64(x) : Float64(x)
-    end
-    x isa Integer && !(typemin(Int64) <= x <= typemax(Int64)) && return Float64(x)
-    return x
+    return something(_as_int64(x), Float64(x))
 end
 
 # Every number of a JSON value in canonical form, at every depth.
@@ -711,26 +698,17 @@ function _rewrite_deprecated_document_op!(out::OrderedDict{String, Any})
     return out
 end
 
-# A field of a decoded JSON object, whose keys are Strings (Dict) or Symbols
-# (JSON3.Object).
-function _document_field(d::AbstractDict, key::String)
-    for k in keys(d)
-        String(k) == key && return d[k]
-    end
-    return nothing
-end
-
 function _canonicalize_document_value(value, is_map::Bool)
     if value isa AbstractVector
         return Any[_canonicalize_document_value(v, false) for v in value]
     elseif value isa AbstractDict
-        units = _document_field(value, "units")
-        op = _document_field(value, "op")
+        units = _raw_get(value, "units")
+        op = _raw_get(value, "op")
         drop_units = false
         if !is_map && op == "const" && units isa AbstractString && _canonical_units(units) == "1"
             # A dimensionless const drops its units: a scalar becomes the bare
             # literal, an array a unitless const.
-            literal = _document_field(value, "value")
+            literal = _raw_get(value, "value")
             literal isa Real && !(literal isa Bool) && return literal
             drop_units = true
         end

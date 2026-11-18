@@ -3,6 +3,7 @@
 # The manifest-driven suite is conformance_range_restricted_rhs_test.jl.
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 
 const RRT = EarthSciAST
@@ -295,13 +296,6 @@ function _rrt_eval(x, p)
     return du
 end
 
-_rrt_err(f) = try
-    f()
-    nothing
-catch e
-    e
-end
-
 _rrt_allocated(du, x, ws, u, aux, p, fs) = @allocated rhs!(du, x, ws, u, aux, p, 0.0, fs)
 
 # The expressions of every generated function a program holds.
@@ -462,17 +456,22 @@ end
             end
         end
         @test !isempty(codes[1]) && all(==(codes[1]), codes)
-        # Once decomposed, the program evaluates a new workspace through the
-        # code its tiles share, to the same values, allocation-free.
-        alt = RRT._decomposed_form(prog)
-        @test alt isa RRT.TileProgram && _rrt_generated(alt.f!) == codes[1]
-        ws2 = rhs_workspace(prog)
+        # Decomposing a program does not change what its own workspaces run.
+        @test rhs_workspace(prog).shared === prog.shared
+        # A caller who wants the program and its tiles to run one compiled
+        # right-hand side restricts it to its whole domain: the same code as
+        # the tiles, the same values, allocation-free.
+        dom = ("x" => 1:nx, "y" => 1:ny)
+        whole = restrict(prog, dec; owned = dom, storage = dom)
+        @test _rrt_generated(whole.f!) == codes[1]
+        @test tile_layout(whole).n_u == L.n_u
+        ws2 = rhs_workspace(whole)
         du2 = fill(NaN, L.n_u)
-        rhs!(du2, prog, ws2, u, Float64[], prob.p, 0.0, fs)
+        rhs!(du2, whole, ws2, u, Float64[], prob.p, 0.0, fs)
         @test _rrt_bits.(du2) == _rrt_bits.(G)
         noaux = Float64[]
-        _rrt_allocated(du2, prog, ws2, u, noaux, prob.p, fs)
-        @test _rrt_allocated(du2, prog, ws2, u, noaux, prob.p, fs) == 0
+        _rrt_allocated(du2, whole, ws2, u, noaux, prob.p, fs)
+        @test _rrt_allocated(du2, whole, ws2, u, noaux, prob.p, fs) == 0
     end
 
     @testset "a tile emits a box it runs no cell of as every tile does" begin
@@ -613,15 +612,13 @@ end
         @test occursin("Diff.u", err.msg)
     end
 
-    @testset "the program seed is built on the first rhs_program call" begin
+    @testset "the program is built on the first rhs_program call, once" begin
         p2 = esm_problem(_rrt_doc(nx, ny), (0.0, 1.0))
-        r = p2.inspection.program_seed
-        @test r isa RRT._ProgramSeedRecipe
-        @test r.memo[] === nothing
-        @test !any(f -> getfield(r, f) isa RRT.FlattenedSystem, fieldnames(typeof(r)))
+        @test p2.build.seed isa RRT._ProgramSeed
+        @test p2.build.program[] === nothing
         pr = rhs_program(p2)
-        @test r.memo[] !== nothing && r.memo[].flat isa RRT.FlattenedSystem
-        @test rhs_program(p2).seed === pr.seed
+        @test p2.build.program[] === pr
+        @test rhs_program(p2) === pr
         @test _rrt_bits.(_rrt_eval(pr, p2.p)) == _rrt_bits.(_rrt_eval(prog, prob.p))
     end
 
@@ -684,11 +681,11 @@ end
         @test _rrt_bits.(_rrt_eval(select(no2), sprob.p)) ==
             _rrt_bits.(_rrt_eval(no2, sprob.p))
         # A variable the program only reads cannot be written.
-        err = _rrt_err(() -> select(no2; writes = ["Chem.O3"]))
+        err = caught(() -> select(no2; writes = ["Chem.O3"]))
         @test err isa SimulateError && occursin("Chem.O3", err.msg)
         # Kept contributions to a variable left out of `writes` still raise.
         emis = select(sp; writes = ["Chem.NO2", "Chem.O3"], terms = [TO(coupling = 0)])
-        err = _rrt_err(() -> select(emis; writes = ["Chem.O3"]))
+        err = caught(() -> select(emis; writes = ["Chem.O3"]))
         @test err isa SimulateError && err.code == "range_selection_writes_incomplete"
         @test occursin("Chem.NO2", err.msg)
     end
@@ -705,7 +702,7 @@ end
             storage = ("x" => 4:11, "y" => 0:7)
         )
         T = tile_layout(tile)
-        err = _rrt_err(
+        err = caught(
             () -> rhs!(
                 zeros(T.n_u), tile, rhs_workspace(other), zeros(T.n_u),
                 Float64[], prob.p, 0.0, default_forcing_set(tile)

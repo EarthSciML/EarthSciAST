@@ -26,7 +26,7 @@ meant:
 | `lift_inferred_operand` | `fixtures/lift_inferred_operand.esm` | `Grid.kk = 0.1 * rho` declares no shape and is fed to a pointwise-lifted mechanism. The lift reads `index(Grid.kk, i)`. |
 | `field_ic_application` | `fixtures/field_ic_application.esm` | A field initial condition `ic(c) = linear(…, x = rho)` is lifted over `c`'s index sets like an equation. |
 | `declared_scalar_application` | `fixtures/declared_scalar_application.esm` | `y` declares `shape: []`, a scalar, so its equation is never lifted. The build refuses it. |
-| `refused_lift` | `fixtures/refused_lift.esm` | `y` applies `linear` over arrays on unrelated index sets, which the lift refuses. Flatten then leaves every equation as written, `z`'s too, though `z` alone could be lifted. The build refuses it. |
+| `union_lift` | `fixtures/union_lift.esm` | `y` applies `linear` over arrays on disjoint index sets `[x]` and `[y]`; the result spans their union (esm-spec §4.3.4), so `y` is lifted over `[x, y]` with loops `_p0, _p1`, and `z` over `[x]`. |
 
 ## The golden form
 

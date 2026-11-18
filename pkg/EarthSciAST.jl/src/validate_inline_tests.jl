@@ -18,9 +18,6 @@ function _strip_element_suffix(name::AbstractString)
     return m === nothing ? (String(name), false) : (String(m.captures[1]), true)
 end
 
-# Escape one JSON Pointer reference token (RFC 6901).
-_pointer_token(key::AbstractString) = replace(replace(key, "~" => "~0"), "/" => "~1")
-
 # The names an assertion may target by a bare name, mapped to the declared
 # `shape` (empty when absent): a model's `variables`, or a reaction system's
 # `species` (which carry no shape) and `parameters`.
@@ -42,30 +39,10 @@ end
 # component and subsystem names §6.6.2 rule 2 validates a key's leading segments
 # against, and whether every mount is resolved.
 function _declared_override_names(file::EsmFile)
-    names = Set{String}()
-    namespaces = Set{String}()
-    complete = Ref(true)
-    function walk(prefix::String, component)
-        if !(component isa Model || component isa ReactionSystem)
-            complete[] = false
-            return
-        end
-        push!(namespaces, last(split(prefix, '.')))
-        for name in keys(_test_target_shapes(component))
-            push!(names, "$prefix.$name")
-        end
-        for (sub_name, sub) in component.subsystems
-            walk("$prefix.$sub_name", sub)
-        end
-        return
-    end
-    file.models === nothing || for (name, model) in file.models
-        walk(String(name), model)
-    end
-    file.reaction_systems === nothing || for (name, rs) in file.reaction_systems
-        walk(String(name), rs)
-    end
-    return names, namespaces, complete[]
+    ix = _scoped_index(file)
+    names = Set{String}(keys(ix.members))
+    namespaces = Set{String}(String(last(split(c, '.'))) for c in ix.components)
+    return names, namespaces, ix.complete
 end
 
 # Whether `key` reaches a declared name under §6.6.2 rules 1-3: an exact hit; a
@@ -89,7 +66,7 @@ function _check_inline_tests!(
         shapes::Dict{String, Vector{String}}, names, namespaces, complete
     )
     for (ti, test) in enumerate(tests)
-        base = "$component_path/tests/$(ti - 1)"
+        base = _pointer(component_path, "tests", ti)
         if complete
             for (field, overrides) in (
                     ("initial_conditions", test.initial_conditions),
@@ -98,13 +75,11 @@ function _check_inline_tests!(
                 for key in sort!(collect(keys(overrides)))
                     bare_key, _ = _strip_element_suffix(key)
                     _override_key_matches(bare_key, names, namespaces) && continue
-                    push!(
-                        errors, StructuralError(
-                            "$base/$field/$(_pointer_token(key))",
-                            "Override key \"$key\" in $field matches no declared name",
-                            ERROR_CODES.UNKNOWN_OVERRIDE_KEY,
-                            Dict{String, Any}("key" => key, "field" => field)
-                        )
+                    _report!(
+                        errors, ERROR_CODES.UNKNOWN_OVERRIDE_KEY,
+                        _pointer(base, field, key),
+                        "Override key \"$key\" in $field matches no declared name",
+                        Dict{String, Any}("key" => key, "field" => field)
                     )
                 end
             end
@@ -112,15 +87,13 @@ function _check_inline_tests!(
         for (ai, assertion) in enumerate(test.assertions)
             bare, is_element = _strip_element_suffix(assertion.variable)
             occursin('.', bare) && continue
-            pointer = "$base/assertions/$(ai - 1)"
+            pointer = _pointer(base, "assertions", ai)
             if !haskey(shapes, bare)
-                push!(
-                    errors, StructuralError(
-                        "$pointer/variable",
-                        "Variable \"$bare\" referenced in assertion variable but not declared",
-                        ERROR_CODES.UNDEFINED_VARIABLE,
-                        Dict{String, Any}("variable" => bare)
-                    )
+                _report!(
+                    errors, ERROR_CODES.UNDEFINED_VARIABLE,
+                    "$pointer/variable",
+                    "Variable \"$bare\" referenced in assertion variable but not declared",
+                    Dict{String, Any}("variable" => bare)
                 )
                 continue
             end
@@ -128,22 +101,18 @@ function _check_inline_tests!(
             shape = shapes[bare]
             selects = assertion.coords !== nothing || assertion.reduce !== nothing
             if !isempty(shape) && !selects
-                push!(
-                    errors, StructuralError(
-                        pointer,
-                        "Assertion on shaped variable \"$bare\" selects no scalar (give coords, reduce, or an element name)",
-                        ERROR_CODES.ASSERTION_RANK_MISMATCH,
-                        Dict{String, Any}("variable" => bare, "shape" => shape)
-                    )
+                _report!(
+                    errors, ERROR_CODES.ASSERTION_RANK_MISMATCH,
+                    pointer,
+                    "Assertion on shaped variable \"$bare\" selects no scalar (give coords, reduce, or an element name)",
+                    Dict{String, Any}("variable" => bare, "shape" => shape)
                 )
             elseif isempty(shape) && selects
-                push!(
-                    errors, StructuralError(
-                        pointer,
-                        "Assertion on scalar variable \"$bare\" carries coords or reduce",
-                        ERROR_CODES.ASSERTION_RANK_MISMATCH,
-                        Dict{String, Any}("variable" => bare, "shape" => String[])
-                    )
+                _report!(
+                    errors, ERROR_CODES.ASSERTION_RANK_MISMATCH,
+                    pointer,
+                    "Assertion on scalar variable \"$bare\" carries coords or reduce",
+                    Dict{String, Any}("variable" => bare, "shape" => String[])
                 )
             end
         end
@@ -160,7 +129,7 @@ function _validate_inline_tests(file::EsmFile)::Vector{StructuralError}
         for name in sort!(collect(keys(file.models)))
             model = file.models[name]
             _check_inline_tests!(
-                errors, model.tests, "/models/$name",
+                errors, model.tests, _pointer("", "models", name),
                 _test_target_shapes(model), names, namespaces, complete
             )
         end
@@ -169,7 +138,7 @@ function _validate_inline_tests(file::EsmFile)::Vector{StructuralError}
         for name in sort!(collect(keys(file.reaction_systems)))
             rs = file.reaction_systems[name]
             _check_inline_tests!(
-                errors, rs.tests, "/reaction_systems/$name",
+                errors, rs.tests, _pointer("", "reaction_systems", name),
                 _test_target_shapes(rs), names, namespaces, complete
             )
         end

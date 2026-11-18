@@ -8,12 +8,13 @@
 #     index(1 + cos(pi*zc), j)
 #
 # and `_resolve_indices_op`'s push-down branch has to distribute that gather over
-# the elementwise combination. It used to test only the IMMEDIATE operands for
-# array-ness: `1` is a literal and `cos(pi*zc)` is neither a producer node nor a
-# variable, so nothing was wrapped, the gather was dropped, and the array leaf
-# `zc` reached `_compile` bare as `E_TREEWALK_UNBOUND_VARIABLE: zc`. The operand
-# test (`_index_pushdown_arrayish`) now looks THROUGH nested elementwise ops, so
-# the gather lands on the leaves: `1 + cos(pi*index(zc, j))`.
+# the elementwise combination. Testing only the IMMEDIATE operands for
+# array-ness is not enough: `1` is a literal and `cos(pi*zc)` is neither a
+# producer node nor a variable, so nothing would be wrapped, the gather would be
+# dropped, and the array leaf `zc` would reach `_compile` bare as
+# `E_TREEWALK_UNBOUND_VARIABLE: zc`. The operand test (`_index_pushdown_arrayish`)
+# looks THROUGH nested elementwise ops, so the gather lands on the leaves:
+# `1 + cos(pi*index(zc, j))`.
 #
 # The two spellings the issue reports as already working — the same body written
 # as an explicit `aggregate(i from lev; … index(zc, i) …)` gather, and the same
@@ -41,8 +42,7 @@ const ESM_EOG = EarthSciAST
 
     @testset "fixture builds and evaluates" begin
         @test isfile(fixture)
-        file = ESM_EOG.load_path(fixture)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name = "Column")
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(fixture)
         du = similar(u0)
         f!(du, u0, p, 0.0)
 
@@ -50,11 +50,11 @@ const ESM_EOG = EarthSciAST
         # elementwise-defined array observed reached only through `index(h, j)`.
         expected = cumsum(hvals)
         for i in 1:4
-            @test du[vmap["u[$(i)]"]] ≈ expected[i]
+            @test du[vmap["Column.u[$(i)]"]] ≈ expected[i]
         end
         # `total = Σ_j f[j]` — the same shape through a SCALAR reduction, whose
         # only reference to `f` is the gather (so `zc` is reachable no other way).
-        @test du[vmap["s"]] ≈ sum(fvals)
+        @test du[vmap["Column.s"]] ≈ sum(fvals)
     end
 
     # ---- The two working spellings the issue names, as differential oracles ----
@@ -114,9 +114,9 @@ const ESM_EOG = EarthSciAST
                 expr_body = body
             )
         )
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vmap["s"]] ≈ sum(fvals)
+        @test du[vmap["M.s"]] ≈ sum(fvals)
     end
 
     @testset "elementwise spelling agrees" begin
@@ -137,9 +137,9 @@ const ESM_EOG = EarthSciAST
             ]
         )
         model = _column_model(body)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vmap["s"]] ≈ sum(fvals)
+        @test du[vmap["M.s"]] ≈ sum(fvals)
     end
 
     # ---- The predicate itself -------------------------------------------------

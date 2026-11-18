@@ -9,86 +9,39 @@
 # committed golden actuals (which that same pathway minted). The manifest
 # declares julia/python/rust as bindings_required.
 #
-# This is the conformance GATE for the `parameter_overrides` key-canonicalization
-# fix. Before it, the tree-walk build resolved overrides by EXACT key against the
-# flattening-qualified parameter name (`M.A`), so the spec-spelled local key
-# (`A`) missed every consumer — the coordinate-expression `ic` seed, the
-# parameter NamedTuple, and `inspect.params` (the §6.6.5 reference scope). The
-# run silently used the DEFAULT and the inline test still reported a verdict:
-# a quiet wrong answer in the test runner itself. Fixture parameter `A` appears
-# ONLY in `ic(u)` and in assertion references, never in an equation, so the
-# override can change the answer through the build-time scope and nowhere else.
+# Overrides are keyed by LOCAL name (`A`) and must reach the flattening-qualified
+# parameter (`M.A`) in every consumer: the coordinate-expression `ic` seed, the
+# parameter vector, and the §6.6.5 reference scope. Fixture parameter `A`
+# appears ONLY in `ic(u)` and in assertion references, never in an equation,
+# so the override can change the answer through the build-time scope and
+# nowhere else.
 # See tests/conformance/pde_inline_ic_param_override/.
 
 using Test
 using JSON3
 using EarthSciAST
 import SciMLBase
-import SciMLBase: solve, remake
+import SciMLBase: solve
 import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _ICPO_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _ICPO_CAT_DIR = joinpath(
-    _ICPO_REPO_ROOT, "tests", "conformance",
-    "pde_inline_ic_param_override"
-)
-const _ICPO_MANIFEST = joinpath(_ICPO_CAT_DIR, "manifest.json")
+const _ICPO_CAT_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "pde_inline_ic_param_override")
 
 @testset "Conformance: pde_inline_ic_param_override (manifest-driven)" begin
-    @test isfile(_ICPO_MANIFEST)
-    manifest = JSON3.read(read(_ICPO_MANIFEST, String))
-    @test manifest.category == "pde_inline_ic_param_override"
-    @test !isempty(manifest.fixtures)
-    @test "julia" in manifest.bindings_required
-    @test "python" in manifest.bindings_required
-    @test "rust" in manifest.bindings_required
-
-    rtol = Float64(manifest.tolerances.assertion_rtol)
-    atol = Float64(manifest.tolerances.assertion_atol)
-
-    for fixture in manifest.fixtures
-        id = String(fixture.id)
-        @testset "$(id)" begin
-            esm_path = joinpath(_ICPO_CAT_DIR, String(fixture.path))
-            golden_path = joinpath(_ICPO_CAT_DIR, String(fixture.golden))
-            @test isfile(esm_path)
-            @test isfile(golden_path)
-
-            golden = JSON3.read(read(golden_path, String))
-            @test String(golden.reference_binding) == "julia"
-
-            # `compiler=:interpreter`: the `ic_param_override` fixture seeds
-            # from a coordinate expression, which the seed lowers once per cell
-            # — a construction-time tree walk per cell that the strict `native`
-            # refuses (API_SPEC §5.8). This tier's subject is §6.6.5 build-time
-            # override scope against a committed golden, so it is measured under
-            # the reference evaluator, as CONFORMANCE_SPEC §5.44 has every
-            # non-compiler conformance stage pin.
-            results = run_inline_tests(
-                esm_path; model_name = String(fixture.model),
-                alg = OrdinaryDiffEqTsit5.Tsit5(),
-                reltol = 1.0e-12, abstol = 1.0e-14,
-                compiler = :interpreter
-            )
-            @test length(results) == length(golden.assertions)
-
-            # Index by (test_id, assertion_idx) — this category has THREE tests
-            # in one model, distinguished only by their `parameter_overrides` —
-            # and gate each against BOTH the golden actual (cross-binding
-            # anchor) and the fixture's own declared `expected` (author intent).
-            by_key = Dict((r.test_id, r.assertion_idx) => r for r in results)
-            for g in golden.assertions
-                key = (String(g.test_id), Int(g.assertion_idx))
-                @test haskey(by_key, key)
-                r = by_key[key]
-                @test r.passed
-                @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
-            end
-        end
-    end
+    # `compiler=:interpreter`: the `ic_param_override` fixture seeds from a
+    # coordinate expression, which the seed lowers once per cell — a
+    # construction-time tree walk per cell that the strict `native` refuses
+    # (API_SPEC §5.8). This tier's subject is §6.6.5 build-time override scope
+    # against a committed golden, so it is measured under the reference
+    # evaluator, as CONFORMANCE_SPEC §5.44 has every non-compiler conformance
+    # stage pin. The category has THREE tests in one model, distinguished only
+    # by their `parameter_overrides`, so results match the golden by
+    # `(test_id, assertion_idx)`.
+    check_inline_golden(
+        "pde_inline_ic_param_override", OrdinaryDiffEqTsit5.Tsit5();
+        by_test = true, compiler = :interpreter
+    )
 end
 
 # Direct unit coverage of the key canonicalization the category gates, on the
@@ -121,14 +74,10 @@ end
     end
 
     # An override naming NO parameter of the model is REJECTED (esm-spec §6.6.2
-    # "Unrecognized override keys"). This test previously pinned the opposite —
-    # that such a key stayed inert — which was the deliberately-preserved
-    # pre-existing behaviour when the canonicalization landed. It is the same
-    # silent-wrong-answer shape one level up: the author writes an override,
-    # nothing happens, and the run measures the configuration they thought they
-    # had switched off while still reporting a verdict. Rust already raised
-    # `InvalidParameter` here; Julia and Python now match it.
-    @test_throws ArgumentError solve(
+    # "Unrecognized override keys"): an inert key would leave the run measuring
+    # a configuration the author thought they had changed. Rust and Python
+    # refuse it too.
+    @test_throws SimulateError solve(
         EarthSciAST.esm_problem(
             esm_path, (0.0, 1.0); compiler = :interpreter,
             p = Dict("not_a_param" => 7.0)

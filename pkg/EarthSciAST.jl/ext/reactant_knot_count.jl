@@ -49,83 +49,37 @@ const _RxIdx = Union{TracedRArray{<:Any, 1}, TracedRNumber}
 # The constant the reduce tier compares against: a 1×n knot ROW.
 _rx_knot_matrix(v::Vector{Float64}) = reshape(copy(v), 1, length(v))
 
-# count-locate: `Σ_k [cmp(knots[k], q)]`, WITHOUT a `stablehlo.reduce`.
+# count-locate: `Σ_k [cmp(knots[k], q)]` computed elementwise, in one of three
+# tiers, each returning the same Float64 as the ladder in
+# `tree_walk/knot_count.jl` (the terms are 0.0/1.0 and n ≪ 2^53, so every sum is
+# exact):
 #
-# WHY NOT THE REDUCE. The obvious lowering — broadcast the knot row against the
-# query column, select 1.0/0.0, `reduce` along the knot axis — is five ops and was
-# the first thing here. Locating elementwise instead has measured faster on the one
-# real chemistry mechanism it was compared on, bit-exact against the reduce form,
-# for a small increase in emitted ops. That is the whole case for it.
+#   LADDER (n ≤ `locate_ladder_max`, default 8): the host chain verbatim, `n`
+#     compares against knot constants, `n` selects, `n-1` adds.
 #
-# It is NOT a fusion-boundary argument. An earlier version of this comment claimed
-# reductions were hard fusion boundaries whose removal would collapse the step's
-# fusion count; removing every locate reduction moved it by ~2%. Do not cite that
-# model here, and do not extend this lowering on its strength.
-#
-# So the count is computed elementwise instead, in one of three tiers. All three
-# return the SAME Float64 lane value as the ladder in `tree_walk/knot_count.jl` — the
-# terms are 0.0/1.0 and `n ≪ 2^53`, so every association order is exact, and the
-# tiers below only ever ADD exact small integers.
-#
-#   LADDER (n ≤ `ESS_RX_LOCATE_LADDER_MAX`, default 8). Emit the host chain
-#     verbatim: `n` compares against knot CONSTANTS, `n` selects, `n-1` adds.
-#     Bit-identical by construction — it IS the reference expression. This is
-#     not the O(table) ladder the file header warns of: it is CAPPED at a few
-#     knots, which is what most real axes are (a 2- or 3-point temperature axis,
-#     where a reduce reduces two elements).
-#
-#   AFFINE (larger `n`, when a host-time fit succeeds). A uniform axis locates
-#     arithmetically: `g = floor(q·a + b)` is the index, in ~7 elementwise ops,
-#     no gather and no reduce. But `g` is NOT exact — for the Fast-JX flux
-#     table's `-0.2 : 0.02 : 1.0` axis, `a = 50, b = 11` gives
-#     `fl(fl(-0.2·50) + 11) = 0.999999999999998`, so a query sitting exactly ON
-#     a knot lands one cell low. No choice of `(a, b)` fixes this in
-#     general: the map would have to send every knot to an integer EXACTLY, and
-#     the neighbouring float to strictly below it, which asks a rounding error
-#     of ~1e-16·k to fall the right way n times over.
-#
-#     So the affine step is used only as a GUESS, and corrected by comparing
-#     against the one real knot above it — a single gather of the constant axis.
-#     Writing `P(k)` for
-#     `cmp(knots[k], q)`, which for a sorted axis is TRUE exactly on the prefix
-#     `k ≤ c` (that is the definition of the count `c`, under either `cmp`
-#     sense), and `gm = clamp(g, 0, n-1)`:
+#   AFFINE (larger n, when a host-time fit succeeds): a uniform axis guesses the
+#     count as `g = floor(q·a + b)`, clamped to [0, n], then corrects it with one
+#     gather of the knot above. With `P(k) = cmp(knots[k], q)`, true exactly for
+#     `k ≤ c` on a sorted axis, and `gm = clamp(g, 0, n-1)`,
 #
 #         c = gm + [P(gm + 1)]
 #
-#     is EXACT — no guards, at either end — provided the guess `g` (clamped to
-#     [0, n]) satisfies the ONE-SIDED bound `0 ≤ c − g ≤ 1`, i.e. it never
-#     overshoots and undershoots by at most one:
-#       * `0 ≤ g ≤ n-1`, so `gm = g` and `c ∈ {g, g+1}`. `P(g+1)` holds iff
-#         `c ≥ g+1`, which is precisely the `c = g+1` case.
-#       * `g = n`, so `gm = n-1` and the bound forces `c = n` (`c ≤ n` always).
-#         `P(n)` holds, giving `n-1 + 1`.
-#     A NaN query is the `g = 0` case by construction (the select below), `P(1)`
-#     fails, and the count is 0 — exactly what the ladder gives.
+#     is exact provided `0 ≤ c − g ≤ 1` (the guess never overshoots and
+#     undershoots by at most one). Floating-point rounding alone does not give
+#     that (a query exactly on a knot can land one cell low or high), so `b` is
+#     biased down by a δ far above the rounding error and far below 1, which
+#     makes the error one-sided, and `_rx_affine_ok` verifies the bound
+#     exhaustively on the host at trace time. A NaN query takes `g = 0` and
+#     counts 0, as the ladder does.
 #
-#     One-sidedness is what a downward BIAS in `b` buys: on the cell
-#     `[knots[c], knots[c+1])` the exact affine map lands `t` in `[c, c+1)`, so
-#     rounding can push `floor(t)` to `c+1` at the top of the cell. Subtracting
-#     a δ that is huge next to the ~1e-15 rounding error and tiny next to 1
-#     removes that side without introducing a second, and `floor(t)` lands on
-#     `c` or `c-1`. Real axes so far take δ = 1e-9 or 0.
+#   REDUCE (everything else, and `locate = :reduce`): broadcast the knot row
+#     against the query column, select 1.0/0.0, `reduce` along the knot axis.
 #
-#     None of this is assumed. The bound is VERIFIED on the host, exhaustively,
-#     at trace time: see `_rx_affine_ok`.
-#
-#   REDUCE (everything else, and `ESS_RX_LOCATE=reduce`). The original lowering,
-#     kept as the documented fallback for a non-uniform axis too big for the
-#     ladder. Nothing about it changed.
-#
-# `ESS_RX_LOCATE` picks the lowering (`auto` | `reduce` | `ladder` | `affine`)
-# and `ESS_RX_LOCATE_LADDER_MAX` moves the ladder/affine cut. Both are tuning
-# thresholds of ONE tier, not a choice of evaluator: the three lowerings are
-# observationally identical, every one of them is a compiled locate, and none
-# of them puts a tree walk in the right-hand side — so neither variable selects
-# an oracle and neither is a refusal boundary. What they change is the emitted
-# program, which is what makes them worth measuring.
-_rx_locate_mode() = get(ENV, "ESS_RX_LOCATE", "auto")
-_rx_ladder_max() = something(tryparse(Int, get(ENV, "ESS_RX_LOCATE_LADDER_MAX", "8")), 8)
+# `DirectEmitOptions.locate` (`:auto` | `:reduce` | `:ladder` | `:affine`) picks the
+# lowering and `locate_ladder_max` moves the ladder/affine cut (environment
+# `ESS_RX_LOCATE`, `ESS_RX_LOCATE_LADDER_MAX`). The tiers are observationally
+# identical compiled locates, so neither setting selects an evaluator or is a
+# refusal boundary.
 
 # LADDER tier: the reference chain, op for op.
 function _rx_count_ladder(knots::Vector{Float64}, qv, cmp::F) where {F}
@@ -211,20 +165,28 @@ function _rx_count_affine(knots::Vector{Float64}, qv, cmp::F, a::Float64, b::Flo
     return gm .+ ifelse.(cmp.(_rx_take(flat, lin), qv), 1.0, 0.0)   # knots[gm+1]
 end
 
+# A traced count outside a direct emission takes the options from `ENV`.
 function _knot_count(knots::Vector{Float64}, q::_RxIdx, cmp::F) where {F}
+    o = DirectEmitOptions(ENV)
+    return _rx_knot_count(knots, q, cmp, o.locate, o.locate_ladder_max)
+end
+
+function _rx_knot_count(
+        knots::Vector{Float64}, q::_RxIdx, cmp::F,
+        mode::Symbol, ladder_max::Int
+    ) where {F}
     n = length(knots)
     L = _rx_len(q)
-    mode = _rx_locate_mode()
-    if mode != "reduce" && n >= 1
+    if mode !== :reduce && n >= 1
         qv = _rx_vec(q, max(L, 1))
-        if n <= _rx_ladder_max() || mode == "ladder"
+        if n <= ladder_max || mode === :ladder
             return _rx_unwrap(_rx_count_ladder(knots, qv, cmp), L)
         end
         ab = _rx_affine_fit(knots, cmp)
         if ab !== nothing
             return _rx_unwrap(_rx_count_affine(knots, qv, cmp, ab[1], ab[2]), L)
         end
-        mode == "affine" && return _rx_unwrap(_rx_count_ladder(knots, qv, cmp), L)
+        mode === :affine && return _rx_unwrap(_rx_count_ladder(knots, qv, cmp), L)
     end
     # Fallback: one compare against a constant knot row + one reduce.
     Lq = max(_rx_len(q), 1)

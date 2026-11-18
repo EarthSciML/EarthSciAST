@@ -8,13 +8,13 @@
 #   2. CHUNK-INSTANCE DECOMPOSITION — the generated function's `(c, nchunks)`
 #      instances, run sequentially in THIS process, reproduce the serial
 #      `(1, 1)` du bitwise (`===`, so NaN/-0.0 count) for every cell-set kind
-#      the emitter chunks: outs/contig, rank-1, rank-2, rank-3 and rank-4 boxes.
+#      the emitter chunks: listed slots, rank-1, rank-2, rank-3 and rank-4 boxes.
 #      This pins the chunked loop-bound arithmetic (the row clamps of the
 #      rank-2/3/N nests) with no threads involved — threaded, the chunks
 #      only ever run concurrently, which cannot change per-cell values when
 #      the out-slots are disjoint (the build-time check below).
 #   3. DISJOINTNESS — `_cellsets_outs_unique` catches duplicates within an
-#      outs set AND across cell sets (contiguous ranges included); real builds
+#      outs set AND across cell sets; real builds
 #      carry `outs_disjoint == true` into the section caches, and a poisoned
 #      cache yields the permanent `:cg_serial_shared_outs` verdict.
 #      (A shared-outs section under threading runs the serial `(1, 1)`
@@ -25,8 +25,7 @@
 #      with the work floor above the section, which is what keeps a
 #      section off the threaded route — and vs a `compiler=:interpreter`
 #      build; `:cg_threaded` in `_THREAD_TALLY`; the serial work floor
-#      (`:cg_serial_small` at the default on a small section); and
-#      the budget-0 OVERFLOW function threading the same way.
+#      (`:cg_serial_small` at the default on a small section).
 using Test
 using EarthSciAST
 include("testutils.jl")
@@ -34,9 +33,8 @@ const ESM = EarthSciAST
 
 # ---- shared fixtures ---------------------------------------------------------
 
-# Two-variable 1-D elementwise model: a contig cell set (first state block)
-# plus a base-offset rank-1 box (second block). Fully budget-declinable, so
-# the budget-0 build exercises the overflow function too.
+# Two-variable 1-D elementwise model: a rank-1 box over the first state block
+# plus a base-offset rank-1 box (second block).
 function _cgt_1d_model(N)
     ubody = _op(
         "+",
@@ -62,7 +60,7 @@ function _cgt_1d_model(N)
     return ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
 end
 _cgt_1d_ics(N) = Dict(
-    "$x[$k]" => 2.0 + sin(0.3k + 0.1j)
+    "M.$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         for (j, x) in enumerate(("u", "v")), k in 1:N
 )
 
@@ -90,7 +88,7 @@ function _cgt_2d_model(N)
     return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 _cgt_2d_ics(N) = Dict(
-    "u[$i,$j]" => sin(0.3i) * cos(0.2j) + 0.05i
+    "M.u[$i,$j]" => sin(0.3i) * cos(0.2j) + 0.05i
         for i in 1:N, j in 1:N
 )
 
@@ -118,7 +116,7 @@ function _cgt_3d_model(Ni, Nj, Nk)
     return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 _cgt_3d_ics(Ni, Nj, Nk) = Dict(
-    "u[$i,$j,$k]" => sin(0.3i) * cos(0.2j) + 0.07k
+    "M.u[$i,$j,$k]" => sin(0.3i) * cos(0.2j) + 0.07k
         for i in 1:Ni, j in 1:Nj, k in 1:Nk
 )
 
@@ -147,18 +145,17 @@ function _cgt_4d_model(Ni, Nj, Nk, Nl)
     return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 _cgt_4d_ics(Ni, Nj, Nk, Nl) = Dict(
-    "u[$i,$j,$k,$l]" => sin(0.3i) * cos(0.2j) + 0.07k - 0.03l
+    "M.u[$i,$j,$k,$l]" => sin(0.3i) * cos(0.2j) + 0.07k - 0.03l
         for i in 1:Ni, j in 1:Nj, k in 1:Nk, l in 1:Nl
 )
 
-function _cgt_build(model, ics; compiler::Symbol = :native, env...)
+function _cgt_build(model, ics; compiler = :native, env...)
     return withenv((String(k) => v for (k, v) in pairs(env))...) do
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
             initial_conditions = ics, compiler = compiler
         )
-        (f!, u0, p, copy(ESM._CASCADE_TALLY))
+        (f!, u0, p, rep.counts)
     end
 end
 
@@ -167,21 +164,22 @@ _cgt_alloc(f!, du, u, p, t) = (f!(du, u, p, t); f!(du, u, p, t); @allocated f!(d
 
 # The serial oracle: the SAME program built with the per-chunk work floor
 # above the whole section, which is what keeps a section off the threaded
-# route. It has to be a fresh build — the verdict caches on a section's first
-# call, so moving the floor afterwards changes nothing.
+# route. It has to be a fresh build: a section keeps the floor of the build
+# that made it.
 _cgt_serial(model, ics; env...) =
-    withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+    withenv("ESS_THREADS_MIN_WORK" => string(typemax(Int))) do
     _cgt_build(model, ics; env...)
 end
 _cgt_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 
-# The section's box-kernel ranks, read off a build whose primary emission
+# The section's box-kernel ranks, read off a non-strict build whose emission
 # declined on the node budget (where `kernels` holds EVERY kernel — the
 # grid_invariance idiom; the kernel IR under the runners is build-invariant, so
 # the ranks apply to the emitting build too).
 function _cgt_ranks(model, ics)
-    f!, _, _, _ = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
-    ks = getfield(f!, :kernel_section)
+    lax = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
+    f!, _, _, _ = _cgt_build(model, ics; compiler = lax, ESS_CODEGEN_NODE_BUDGET = "0")
+    ks = f!.state.kernels
     return [length(K.cells.strides) for K in getfield(ks, :kernels)]
 end
 
@@ -205,7 +203,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             fS, _uS, pS, _ = _cgt_serial(model, ics)
             fR, uR, pR, _ = _cgt_build(model, ics; compiler = :interpreter)
             @test get(tallyA, :codegen_kernel, 0) >= 1
-            ksA = getfield(fA, :kernel_section)
+            ksA = fA.state.kernels
             @test getfield(ksA, :tcache).disjoint      # build-time global check
             for k in 1:4, t in (0.0, 0.7, 3.25)
                 u = k == 1 ? copy(uA) :
@@ -229,17 +227,17 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             ESM._reset_thread_tally!()
             fS, uS, pS, _ = _cgt_build(_cgt_1d_model(48), _cgt_1d_ics(48))
             du = _cgt_du(fS, uS, pS, 0.3)     # 96 cells, under two chunks of work ⇒ serial
-            @test getfield(getfield(fS, :kernel_section), :tcache).state == -1
+            @test getfield(fS.state.kernels, :tcache).state == -1
             @test get(ESM._THREAD_TALLY, :cg_serial_small, 0) >= 1
             @test get(ESM._THREAD_TALLY, :cg_threaded, 0) == 0
             @test any(x -> x !== 0.0, du)
             # ... and a lowered threshold flips the SAME model to threaded.
             ESM._reset_thread_tally!()
-            fT, uT, pT, _ = _cgt_build(_cgt_1d_model(48), _cgt_1d_ics(48))
-            duT = withenv("ESS_THREADS_MIN_CELLS" => "8") do
-                _cgt_du(fT, uT, pT, 0.3)
-            end
-            @test getfield(getfield(fT, :kernel_section), :tcache).state == 1
+            fT, uT, pT, _ = _cgt_build(
+                _cgt_1d_model(48), _cgt_1d_ics(48); ESS_THREADS_MIN_WORK = "8"
+            )
+            duT = _cgt_du(fT, uT, pT, 0.3)
+            @test getfield(fT.state.kernels, :tcache).state == 1
             @test get(ESM._THREAD_TALLY, :cg_threaded, 0) >= 1
             @test _cgt_bitsame(duT, du)
         end
@@ -257,7 +255,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test get(ESM._THREAD_TALLY, :cg_serial_shared_outs, 0) == 1
             tc2 = ESM._SecTCache(1_000_000, true)
             @test ESM._sec_prep_threads!(tc2).state == 1
-            @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ ESM._thread_min_work())
+            @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ ESM._tuning_from_env().thread_min_work)
         end
 
         @testset "contraction verdict weighs fold terms, chunks never exceed cells" begin
@@ -276,7 +274,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test ESM._ac_work(2, ESM._ACFold([r], :+, 0.0, [1, 3, 6], [[1, 2, 1, 2, 3]]), body) ==
                 2 + 5 * 3
             # 600 cells alone stay serial at the floor; their fold terms do not.
-            minw = ESM._thread_min_work()
+            minw = ESM._tuning_from_env().thread_min_work
             @test ESM._sec_prep_threads!(ESM._SecTCache(600, true)).state == -1
             w3 = ESM._ac_work(600, ESM._ACFold([r], :+, 0.0, [1:1:20]), body)
             tc3 = ESM._SecTCache(600, true, w3)
@@ -308,7 +306,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                     Dict(k => du[i] for (k, i) in prob.var_map if i <= length(du))
                 end
             end
-            du_ser = rhs(:native, "ESS_THREADS_MIN_CELLS" => "100000000")
+            du_ser = rhs(:native, "ESS_THREADS_MIN_WORK" => "100000000")
             ESM._reset_thread_tally!()
             du_thr = rhs(:native)
             # The contraction chunks, with the state kernel that consumes its
@@ -327,38 +325,13 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test all(du_thr[k] === du_ser[k] for k in keys(du_thr))
         end
 
-        @testset "overflow RGF (budget 0): threaded ≡ serial oracle ≡ interpreter" begin
-            ESM._reset_thread_tally!()
-            fO, uO, pO, tallyO = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
-            fOS, _uOS, pOS, _ = _cgt_serial(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
-            fB, uB, pB, _ = _cgt_build(model, ics; compiler = :interpreter)
-            @test get(tallyO, :dual_codegen_kernel, 0) >= 1
-            @test get(tallyO, :f64_overflow_armed, 0) == 1
-            ksO = getfield(fO, :kernel_section)
-            @test getfield(ksO, :dualf) !== nothing
-            @test getfield(ksO, :dual_tcache).disjoint
-            for k in 1:3, t in (0.0, 0.7)
-                u = Float64[
-                    2.0 + 1.3 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.01i
-                        for i in 1:length(uO)
-                ]
-                du_thr = _cgt_du(fO, u, pO, t)
-                du_ser = _cgt_du(fOS, u, pOS, t)   # same program, serial route
-                du_int = _cgt_du(fB, u, pB, t)     # the interpreter
-                @test _cgt_bitsame(du_thr, du_ser)
-                @test _cgt_bitsame(du_thr, du_int)
-            end
-            @test getfield(ksO, :dual_tcache).state == 1
-            @test get(ESM._THREAD_TALLY, :cg_threaded, 0) >= 1
-        end
-
         @testset "2-D boxes under real threading" begin
             N2 = 40                    # 1600 cells ≥ 2 chunks at the default
             f2, u2, p2, _ = _cgt_build(_cgt_2d_model(N2), _cgt_2d_ics(N2))
             f2s, _u2s, p2s, _ = _cgt_serial(_cgt_2d_model(N2), _cgt_2d_ics(N2))
             du_thr = _cgt_du(f2, u2, p2, 0.4)
             du_ser = _cgt_du(f2s, u2, p2s, 0.4)
-            @test getfield(getfield(f2, :kernel_section), :tcache).state == 1
+            @test getfield(f2.state.kernels, :tcache).state == 1
             @test _cgt_bitsame(du_thr, du_ser)
         end
 
@@ -369,13 +342,13 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             if VERSION >= v"1.12"
                 @test bytes == 0
             end
-            @test getfield(getfield(fA, :kernel_section), :tcache).state == 1
+            @test getfield(fA.state.kernels, :tcache).state == 1
         end
 
         @testset "dual numbers thread: threaded ≡ serial, partials included" begin
-            if Base.find_package("ForwardDiff") === nothing
-                @info "ForwardDiff not in the active environment; skipping"
-            else
+            # ForwardDiff is a test dependency: missing, this fails.
+            @test Base.find_package("ForwardDiff") !== nothing
+            if Base.find_package("ForwardDiff") !== nothing
                 @eval using ForwardDiff
                 fA, uA, pA, _ = _cgt_build(model, ics)
                 fS, _, pS, _ = _cgt_serial(model, ics)
@@ -385,10 +358,8 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                 ]
                 dthr = similar(ud); dser = similar(ud)
                 Base.invokelatest(fA, dthr, ud, pA, 0.7)
-                withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
-                    Base.invokelatest(fS, dser, ud, pS, 0.7)
-                end
-                @test getfield(getfield(fA, :kernel_section), :tcache).state == 1
+                Base.invokelatest(fS, dser, ud, pS, 0.7)
+                @test getfield(fA.state.kernels, :tcache).state == 1
                 @test all(i -> dthr[i] === dser[i], eachindex(dthr))
             end
         end
@@ -405,11 +376,11 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                     ),
                 ]
             )
-            ic = Dict("u[$k]" => 1.0 + k for k in 1:Ns)
+            ic = Dict("M.u[$k]" => 1.0 + k for k in 1:Ns)
             fE, uE, pE, _ = _cgt_build(m, ic)
             du = similar(uE)
             fE(du, uE, pE, 0.0)
-            @test getfield(getfield(fE, :kernel_section), :tcache).state == 1
+            @test getfield(fE.state.kernels, :tcache).state == 1
             bad = copy(uE); bad[end] = -1.0          # a cell in the last chunk
             @test_throws DomainError fE(du, bad, pE, 0.0)
             fE(du, uE, pE, 0.0)                      # the pool is usable again
@@ -475,12 +446,14 @@ else
             U = ESM._cellsets_outs_unique
             @test U([ESM._outs_cells([4, 9, 2])])
             @test !U([ESM._outs_cells([4, 9, 4])])
-            # contig vs box overlap ACROSS sets (the case a per-kernel check
-            # would never see): contig 1:6, then a stride-2 box hitting slot 4.
-            @test !U([ESM._outs_cells([4, 9, 2]), ESM._contig_cells(6)])
+            # listed slots vs box overlap ACROSS sets (the case a per-kernel
+            # check would never see): a unit box over slots 1:6, then a
+            # stride-2 box hitting slot 4.
+            run(n) = ESM._CellSet([1], [UnitRange{Int}(1, n)], 0)  # slots 1..n
+            @test !U([ESM._outs_cells([4, 9, 2]), run(6)])
             box = ESM._CellSet([2], [UnitRange{Int}(1, 3)], 2)  # slots 4, 6, 8
-            @test !U([ESM._contig_cells(6), box])
-            @test U([ESM._contig_cells(3), box])                # 1..3 vs 4,6,8
+            @test !U([run(6), box])
+            @test U([run(3), box])                              # 1..3 vs 4,6,8
             # Boxes of one layout map (a 10x10 column-major block at slot 1):
             # decided box against box, with no slot enumerated.
             b2(r1, r2) = ESM._CellSet([1, 10], [r1, r2], -10)
@@ -506,7 +479,7 @@ else
             @test wantrank in _cgt_ranks(model, ics)
             f!, u0, p, tally = _cgt_build(model, ics)
             @test get(tally, :codegen_kernel, 0) >= 1
-            ks = getfield(f!, :kernel_section)
+            ks = f!.state.kernels
             cgf = getfield(ks, :cgf)
             tabs = getfield(ks, :cgtabs)
             @test cgf !== nothing
@@ -537,7 +510,7 @@ else
             N = 4096
             model, ics = _cgt_1d_model(N), _cgt_1d_ics(N)
             f!, u0, p, _ = _cgt_serial(model, ics)
-            ks = getfield(f!, :kernel_section)
+            ks = f!.state.kernels
             @test getfield(ks, :ntiles) > 1
             fi!, ui, pi_, _ = _cgt_build(model, ics; compiler = :interpreter)
             u = u0 .* (1.0 .+ 1.0e-3 .* sin.(1:length(u0)))
@@ -546,27 +519,6 @@ else
             @test _cgt_bitsame(_cgt_du(f!, u, p, 0.4), du1)
             @test ui == u0
             @test _cgt_bitsame(_cgt_du(fi!, u, pi_, 0.4), du1)
-        end
-
-        @testset "overflow RGF chunk instances (budget 0)" begin
-            model = _cgt_1d_model(41)
-            ics = _cgt_1d_ics(41)
-            f!, u0, p, tally = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
-            @test get(tally, :dual_codegen_kernel, 0) >= 1
-            ks = getfield(f!, :kernel_section)
-            dualf = getfield(ks, :dualf)
-            dtabs = getfield(ks, :dualtabs)
-            @test dualf !== nothing
-            @test getfield(ks, :dual_tcache).disjoint
-            du1 = fill(0.0, length(u0))
-            dualf(du1, u0, p, 0.7, dtabs, 1, 1)
-            for nc in (2, 5)
-                duN = fill(0.0, length(u0))
-                for c in 1:nc
-                    dualf(duN, u0, p, 0.7, dtabs, c, nc)
-                end
-                @test _cgt_bitsame(duN, du1)
-            end
         end
 
         @testset "serial-process verdicts" begin

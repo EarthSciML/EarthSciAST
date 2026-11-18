@@ -1,4 +1,4 @@
-# Unit test for the affine-build lowering (ess-affine): `_lower_to_access` turns a
+# Unit test for the affine-build lowering: `_lower_to_access` turns a
 # compiled sentinel spine template (the SAME kind `_stencilize`+`_compile` produce
 # — `_NK_STATE(idx=-k)` lane leaves, invariant fixed-slot leaves, params, literals)
 # into an access spine + descriptor table, and the resulting `_AccKernel` must be
@@ -45,7 +45,7 @@ const E = EarthSciAST
     function mkkernel(l1, l2, l3, ir)
         acc = E._AccDesc[]
         spine = E._lower_to_access(tmpl, E._LaneRepl[l1, l2, l3], acc)
-        E._AccKernel(box(ir), spine, acc, E._FixedBound(0), 0.0)
+        E._AccKernel(box(ir), spine, acc)
     end
 
     kernels = E._AccKernel[]
@@ -83,6 +83,6 @@ const E = EarthSciAST
     end
     # a contraction node is the remaining unmodelled kind → still a fallback.
     let ctr = E._mknode(kind = E._NK_CONTRACTION, op = :+, children = E._Node[st(-1)])
-        @test_throws E._StencilFallback E._lower_to_access(ctr, E._LaneRepl[Acc(SA(0))], E._AccDesc[])
+        @test_throws E._Decline E._lower_to_access(ctr, E._LaneRepl[Acc(SA(0))], E._AccDesc[])
     end
 end

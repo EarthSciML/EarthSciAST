@@ -25,18 +25,31 @@ under `:xla` when Reactant is loaded, and the ModelingToolkit system under
 `:mtk` when that package is loaded. Every Julia member of the vocabulary is
 reachable from the stable entry point.
 
-No environment variable selects an evaluation strategy. The `ESS_*` variables
-that remain are tuning thresholds — a node budget, a per-function size cap, a
-threading floor, a tier's admission floor — and under a strict `:native` each
-is a **refusal boundary**: crossing it produces `compiler_refused_rule` rather
-than a quiet demotion. Moving one off its default can therefore make `:native`
-refuse an in-scope document, which the conformance tiers report as a defect. Two
-experimental emission tiers ship off and are opted into by name
-(`ESS_CG_SUBCALL_FN`, `ESS_NESTED_TEMPLATE_BOUNDARY`); neither is an oracle,
-and nothing in the corpus depends on either.
+No environment variable selects an evaluation strategy. The variables below
+are the complete list the package and its extensions read. Each is read at
+build (or emission) time; an unset or unparseable value keeps the default.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `ESS_CODEGEN_NODE_BUDGET` | 64000000 | Cumulative emitted-node budget of one `:native` build. A kernel past it is refused (`compiler_refused_rule`). |
+| `ESS_CODEGEN_FN_NODE_CAP` | 20000 | Emitted-node cap of one generated function; larger loop nests are split into sub-functions. `0` disables splitting. |
+| `ESS_CODEGEN_SPLIT_TRANSPORT` | unset | `value` or `definition` forces how split sub-functions are carried (by value, or as inner definitions); unset decides by size and Julia version. |
+| `ESS_THREADS_MIN_WORK` | 6000 | Least work (node evaluations) per thread chunk; a section with less than two chunks' worth runs serially. Does not change results. |
+| `ESS_CONTRACTION_LOOP_MIN` | 8 | Reduction length at and above which a scalar reduction loops at run time instead of being unrolled. |
+| `ESS_ARRAY_CONTRACTION_MIN` | 1024 | Reduction length at and above which the out-of-place build emits a whole-array contraction nest. |
+| `EARTHSCI_JULIA_XLA_DEVICE` | `cpu` | The XLA client `compiler = :xla` compiles on (`cpu` or `gpu`); see below. |
+| `ESM_DIRECT_EMIT_READ` | `gather` | The `:xla` direct emitter's read lowering (`gather`, `runs`, `always`). Changes the program's shape, not its values. |
+| `ESM_DIRECT_GATHER_INDEX_BITS` | 32 | Element width (32 or 64) of the `:xla` emitter's gather indices. |
+| `ESS_RX_LOCATE`, `ESS_RX_LOCATE_LADDER_MAX` | `auto`, 8 | The traced comparison-count lowering of the Reactant extension and its ladder/affine cut. All lowerings compute the same values. |
+| `ESM_TESTS_EXCLUDE` | unset | `run_esm_tests`: `;`- or `:`-separated substrings of document paths to skip. |
+
+Under a strict `:native` the node budget and the function cap are **refusal
+boundaries**: crossing one produces `compiler_refused_rule` rather than a quiet
+demotion. Moving one off its default can therefore make `:native` refuse an
+in-scope document, which the conformance tiers report as a defect.
 
 ModelingToolkit is reached BOTH ways: `compiler = :mtk` builds a problem
-through it, and the `ModelingToolkit.System` / `PDESystem` constructors remain
+through it, and the `ModelingToolkit.System` constructor remains
 the direct route for a caller who wants the symbolic system itself. Neither
 `:mtk` nor `:xla` is the default — a document run through `esm_problem` with no
 `compiler` is run by the tree-walk build.
@@ -111,10 +124,10 @@ evaluator instead, the oracle the compiled program agrees with bit for bit.
 Rust's `observed_trajectory(prob, sol, name)` answers the same question for
 every saved point of a solution at once (API_SPEC §5.8).
 
-!!! note "`build_evaluator` is deprecated"
-    `build_evaluator` warns once and forwards; use [`esm_problem`](@ref)
-    (`API_SPEC.md` §8 item 23). Its docstring maps each of its results to the
-    field or function of the Problem that provides it.
+!!! note "`build_evaluator` is removed"
+    Use [`esm_problem`](@ref) (`API_SPEC.md` §8 item 23): `prob.f!`,
+    `prob.u0`, `prob.p` and `prob.var_map` are what it returned, and
+    [`forcing_buffers`](@ref) / [`compiler_report`](@ref) take the Problem.
 
 ## `:xla` — the compiled StableHLO right-hand side
 
@@ -194,17 +207,14 @@ is no parallel dispatch table. Unbound variables raise
 
 ### Performance characteristics
 
-- **Build time independent of system size.** The build walks each
-  equation's RHS once at build time and produces a compact compiled-IR tree
-  (`_Node`) where ops are `Symbol` (pointer compare), state references have
-  their `u`-index baked in, parameter references have their `Val{sym}` type
-  parameter baked in for monomorphic `NamedTuple` access, and literals are
-  pre-promoted to `Float64`. There is no symbolic simplification or tearing
-  pass.
-- **Per-step cost is one type-stable closure call** that iterates `rhs_list`
-  and dispatches on `_Node.kind`/`_Node.op`. Observed-variable RHSes are
-  inlined at build time (substituted to a fixed point), so the runtime hot
-  path never re-resolves observers.
+- **Each equation is lowered once, at build time,** to a compact IR (`_Node`)
+  with state slots, parameter positions and literals resolved. Array
+  equations become access kernels; under `:native` those are compiled to
+  Julia functions (RuntimeGeneratedFunctions) and threaded when Julia runs
+  with more than one thread. Array observeds are materialized into buffers
+  the right-hand side reads.
+- **The right-hand side does not allocate** at `Float64` and is eltype-generic,
+  so ForwardDiff runs through it.
 - **No structural simplification.** Trade-off: MTK can eliminate observed
   variables, alias-equate states, and tear DAEs; `tree_walk` does not. If
   your model benefits from structural simplification and fits comfortably in
@@ -212,8 +222,8 @@ is no parallel dispatch table. Unbound variables raise
 
 ### Supported ops
 
-`tree_walk` consumes scalarized canonical-form AST. It supports the full
-arithmetic, comparison, logical and elementary-function op set per
+`tree_walk` consumes canonical-form AST, scalar and `faq` array equations. It
+supports the full arithmetic, comparison, logical and elementary-function op set per
 `esm-spec` §4:
 
 - Arithmetic: `+`, `-`, `*`, `/`, `^` / `pow`
@@ -246,7 +256,7 @@ cross-binding operator codes):
 | `unevaluable_operator` | An evaluable-core op the walker has no rule for (an array or value-invention op an earlier stage should have eliminated). Cross-binding code, raised at build (esm-spec §9.6.6). |
 | `unlowered_operator` | A rewrite-target op (`grad`, a spatial or right-hand-side `D`, a user op) that no rewrite rule lowered. Cross-binding code (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_OP` | An internal pipeline defect: a `call` op built in code (it is not part of the format), or an `index` that reached compilation unresolved. |
-| `E_TREEWALK_UNSUPPORTED_SHAPE` | A variable still has `shape` set — the model is not yet scalarized. |
+| `E_TREEWALK_UNSUPPORTED_SHAPE` | Array data that does not fit a variable's declared `shape` (or array data for an unshaped variable), or an array-shaped observed the build cannot own. |
 | `unsupported_construct` | The model declares a continuous event, a discrete event, an implicit equation (an expression LHS such as `s - f(s) ~ 0`), or Wiener noise (a parameter whose `update.kind` is `wiener`). The walker runs none of them, so `:native` and `:interpreter` both refuse; `compiler = :mtk` runs the events and implicit equations, and no compiler integrates an SDE (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_EQUATION` | Any other equation LHS that is neither `D(state, wrt=t)` nor an observed-variable assignment. |
 | `E_TREEWALK_UNBOUND_VARIABLE` | Free variable is neither a state, parameter, nor `t`. |
@@ -283,13 +293,17 @@ and the reason for:
   `const_arrays` / `param_arrays` array handed in at the call, or
   `pushdown_rewrite = true`. A ModelingToolkit system carries symbols and
   equations; a loaded field has nowhere to land in it.
-* a CONTINUOUS spatial dimension. That is a PDE, and it needs
-  `ModelingToolkit.PDESystem` plus a discretizer this compiler does not run. A
-  document already discretized into a `faq` stencil has no spatial
-  independent variable and builds normally.
+* a CONTINUOUS spatial dimension. That is a PDE, and this binding has no PDE
+  constructor. A document already discretized into a `faq` stencil has no
+  spatial independent variable and builds normally.
 * `D(<expression>)` — a time derivative of an expression credits no state, so it
   is an implicit equation spelled wrong; ModelingToolkit rejects the system and
   this names the equation instead.
+* a parameter recomputed by its own `update` rule (`schedule`, `condition`,
+  `crossing` with an `expression`) or loaded by a `data` update, a
+  coupling-level event, a `faq`-valued initialization equation, and an
+  operator the lowering has no arm for. Each would otherwise be dropped or
+  fail inside ModelingToolkit.
 
 **Two differences from the other compilers, both deliberate.**
 
@@ -308,8 +322,9 @@ and the reason for:
    ModelingToolkit's own initialization, which reads that field back as a
    `System`.
 
-`ModelingToolkit.System(model)` / `ModelingToolkit.PDESystem(model)` remain the
-direct route to the symbolic system itself. See
+`ModelingToolkit.System(model)` remains the direct route to the symbolic system
+itself (ODE systems only; a system with a continuous spatial dimension is
+refused). See
 [ModelingToolkit / Catalyst integration](index.md#ModelingToolkit-/-Catalyst-integration)
 in the manual home page.
 

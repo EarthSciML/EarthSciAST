@@ -7,7 +7,7 @@
 #   * NUMERIC IDENTITY to the unrolled fold (bit-identical for a single contracted
 #     index — same accumulation order, seeded from 0̄);
 #   * BUILD SIZE is O(1) in the reduction length (the unroll is O(length)) —
-#     asserted via build time being ~flat in M while the unroll grows linearly;
+#     asserted on the size of the built right-hand side's object graph;
 #   * the loop preserves the zero-allocation `f!` hot path and differentiates
 #     (ForwardDiff) — the loop counter is an integer constant of the value type;
 #   * the const-array-gather-in-loop path (a loop var as a runtime subscript);
@@ -110,13 +110,13 @@ _cl_build(doc; loop::Bool) =
     "ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
     "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))
 ) do
-    EarthSciAST._build_evaluator(doc; initial_conditions = Dict("x" => 2.0, "s" => 0.0))
+    EarthSciAST.Internal.build(doc; initial_conditions = Dict("Repro.x" => 2.0, "Repro.s" => 0.0))
 end
 
 _cl_du_s(doc; loop::Bool) = begin
     f!, u0, p, _, vmap = _cl_build(doc; loop = loop)
     du = similar(u0); f!(du, u0, p, 0.0)
-    du[vmap["s"]]
+    du[vmap["Repro.s"]]
 end
 
 @testset "runtime contraction loop (ess-runtime-contraction)" begin
@@ -150,10 +150,10 @@ end
     @testset "AD (ForwardDiff) differentiates through the loop" begin
         M = 50
         f!, u0, p, _, vmap = _cl_build(_cl_doc(M); loop = true)
-        g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vmap["s"]])
+        g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vmap["Repro.s"]])
         J = ForwardDiff.gradient(g, u0)
-        @test J[vmap["x"]] == M * (M + 1) ÷ 2     # d(du_s)/dx = Σk, loop var has 0 deriv
-        @test J[vmap["s"]] == 0.0
+        @test J[vmap["Repro.x"]] == M * (M + 1) ÷ 2     # d(du_s)/dx = Σk, loop var has 0 deriv
+        @test J[vmap["Repro.s"]] == 0.0
     end
 
     # Every term has partials of -0.0. The interpreter's fold is seeded from the
@@ -190,19 +190,17 @@ end
                 (true, walked),
             )
         ) do (loop, c)
-            insp = _CL_ESS.BuildInspection()
-            kw = (; inspect = insp, initial_conditions = Dict("x" => 2.0, "s" => 0.0))
-            f!, u0, p, _, vmap = withenv(
+            f!, u0, p, _, vmap, rep = withenv(
                 "ESS_CONTRACTION_LOOP_MIN" =>
                     (loop ? "8" : string(typemax(Int)))
             ) do
-                c isa Symbol ? EarthSciAST._build_evaluator(doc; compiler = c, kw...) :
-                    _CL_ESS._with_compiler_plan(c) do
-                        _CL_ESS._build_evaluator_dict(doc; compiler = c, kw...)
-                end
+                EarthSciAST.Internal.build(
+                    doc; compiler = c,
+                    initial_conditions = Dict("Repro.x" => 2.0, "Repro.s" => 0.0)
+                )
             end
-            g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vmap["s"]])
-            tiers = [r.tier for r in insp.compiler_report.rules if occursin("s", r.rule)]
+            g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vmap["Repro.s"]])
+            tiers = [r.tier for r in rep.compiler_report.rules if occursin("s", r.rule)]
             (ForwardDiff.gradient(g, u0), tiers, g(u0))
         end
         @test all(x -> x === -0.0, runs[1][1])
@@ -215,17 +213,13 @@ end
     end
 
     @testset "build size is O(1) in reduction length (loop) vs O(M) (unroll)" begin
-        # Warm up compilation once so the timing reflects build work, not JIT.
-        _cl_build(_cl_doc(16); loop = true); _cl_build(_cl_doc(16); loop = false)
-        t_loop(M) = @elapsed _cl_build(_cl_doc(M); loop = true)
-        t_unroll(M) = @elapsed _cl_build(_cl_doc(M); loop = false)
-        # Loop build time is ~flat in M; unroll grows ~linearly. Assert the loop
-        # build at large M is much faster than the unroll at the same M (a robust,
-        # machine-independent proxy for O(1)-vs-O(M) build IR size).
+        # The size of everything the built right-hand side holds: the loop
+        # build is the same object graph at every M, the unroll grows with M.
+        size_of(M; loop) = Base.summarysize(_cl_build(_cl_doc(M); loop = loop).f!)
         big = 4000
-        tl = min(t_loop(big), t_loop(big))
-        tu = min(t_unroll(big), t_unroll(big))
-        @test tl < tu / 5     # loop build ≥5× faster than unroll at M=4000
+        @test size_of(big; loop = true) == size_of(16; loop = true)
+        @test size_of(big; loop = false) > 5 * size_of(big; loop = true)
+        @test size_of(big; loop = false) > 5 * size_of(16; loop = false)
     end
 
     @testset "an admission floor above the length forces the unroll reference" begin
@@ -332,14 +326,14 @@ function _cl_doc2d_arith(M::Int)
     )
 end
 
-_cl_ics2d_w() = Dict("out[1,1]" => 0.0, "out[1,2]" => 0.0, "out[2,1]" => 0.0, "out[2,2]" => 0.0)
-_cl_ics2d_a() = merge(_cl_ics2d_w(), Dict("x[1,1]" => 1.0, "x[1,2]" => 2.0, "x[2,1]" => 3.0, "x[2,2]" => 4.0))
+_cl_ics2d_w() = Dict("R.out[1,1]" => 0.0, "R.out[1,2]" => 0.0, "R.out[2,1]" => 0.0, "R.out[2,2]" => 0.0)
+_cl_ics2d_a() = merge(_cl_ics2d_w(), Dict("R.x[1,1]" => 1.0, "R.x[1,2]" => 2.0, "R.x[2,1]" => 3.0, "R.x[2,2]" => 4.0))
 _cl_build2d(doc, ics; loop::Bool) =
     withenv(
     "ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
     "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))
 ) do
-    EarthSciAST._build_evaluator(doc; initial_conditions = ics)
+    EarthSciAST.Internal.build(doc; initial_conditions = ics)
 end
 _cl_du2d(doc, ics; loop::Bool) = begin
     f!, u0, p, _, vm = _cl_build2d(doc, ics; loop = loop)
@@ -353,7 +347,7 @@ end
         du, vmu = _cl_du2d(_cl_doc2d_weighted(M), _cl_ics2d_w(); loop = false)
         exp = _cl_expected2d(M)
         for i in 1:2, j in 1:2
-            key = "out[$i,$j]"
+            key = "R.out[$i,$j]"
             @test dl[vml[key]] == du[vmu[key]]      # integer weights ⇒ bit-equal
             @test dl[vml[key]] == exp[i, j]
         end
@@ -365,7 +359,7 @@ end
         du, vmu = _cl_du2d(_cl_doc2d_arith(M), _cl_ics2d_a(); loop = false)
         Sk = sum((k * l + 1) for k in 0:M for l in 0:M)
         for i in 1:2, j in 1:2
-            key = "out[$i,$j]"; x0 = _cl_ics2d_a()["x[$i,$j]"]
+            key = "R.out[$i,$j]"; x0 = _cl_ics2d_a()["R.x[$i,$j]"]
             @test dl[vml[key]] == du[vmu[key]]
             @test dl[vml[key]] == x0 * Sk
         end
@@ -380,17 +374,19 @@ end
         end
     end
 
-    # Flat in M on both routes: the loop tier's, and the affine tier's, which no
-    # longer unrolls the reduction (its kernel folds it at run time) — an unroll
-    # would grow ~20× from M=8 (81 terms per cell) to M=40 (1681).
+    # Flat in M on both routes: the loop tier's, and the affine tier's, which
+    # folds the reduction at run time in its kernel rather than unrolling it (an
+    # unroll would grow ~20x from M=8, 81 terms per cell, to M=40, 1681). The
+    # built right-hand side is the same object graph, and the build reports the
+    # same structure, at both sizes.
     @testset "einsum build size is ~flat in M (loop, and the affine run-time fold)" begin
-        _cl_build2d(_cl_doc2d_arith(8), _cl_ics2d_a(); loop = true)     # warm
-        _cl_build2d(_cl_doc2d_arith(8), _cl_ics2d_a(); loop = false)
-        tl(M) = @elapsed _cl_build2d(_cl_doc2d_arith(M), _cl_ics2d_a(); loop = true)
-        tu(M) = @elapsed _cl_build2d(_cl_doc2d_arith(M), _cl_ics2d_a(); loop = false)
-        big = 40
-        @test min(tl(big), tl(big)) < 5 * min(tl(8), tl(8))
-        @test min(tu(big), tu(big)) < 5 * min(tu(8), tu(8))
+        for loop in (true, false)
+            small = _cl_build2d(_cl_doc2d_arith(8), _cl_ics2d_a(); loop = loop)
+            large = _cl_build2d(_cl_doc2d_arith(40), _cl_ics2d_a(); loop = loop)
+            @test Base.summarysize(large.f!) == Base.summarysize(small.f!)
+            @test large.report.stats == small.report.stats
+            @test length(large.report.kernels) == length(small.report.kernels)
+        end
     end
 
     # A contraction that indexes STATE at a contracted index (`src[k,l]`) now
@@ -442,21 +438,21 @@ end
                 )
             )
         )
-        ics = Dict{String, Any}("out[1,1]" => 0.0, "out[1,2]" => 0.0, "out[2,1]" => 0.0, "out[2,2]" => 0.0)
+        ics = Dict{String, Any}("R.out[1,1]" => 0.0, "R.out[1,2]" => 0.0, "R.out[2,1]" => 0.0, "R.out[2,2]" => 0.0)
         for k in 1:N, l in 1:N
-            ics["src[$k,$l]"] = Float64(k + l)
+            ics["R.src[$k,$l]"] = Float64(k + l)
         end
         du(loop) = withenv(
             "ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
             "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))
         ) do
-            f!, u0, p, _, vm = EarthSciAST._build_evaluator(doc; initial_conditions = ics)
+            f!, u0, p, _, vm = EarthSciAST.Internal.build(doc; initial_conditions = ics)
             d = similar(u0); f!(d, u0, p, 0.0); (d, vm)
         end
         dl, vml = du(true); dr, vmr = du(false)
         Wf(i, j, k, l) = Float64((i + 2j + 3k + 5l) % 7)
         for i in 1:2, j in 1:2
-            key = "out[$i,$j]"
+            key = "R.out[$i,$j]"
             @test dl[vml[key]] == dr[vmr[key]]     # loop (state-gather) == unroll reference
             @test dl[vml[key]] == sum(Wf(i, j, k, l) * (k + l) for k in 1:N for l in 1:N)
         end
@@ -519,9 +515,9 @@ function _cl_halo(M::Int; ghost::Bool = false)
 end
 _cl_qval(a, b) = Float64(10a + b)
 function _cl_halo_ics(NQ)
-    d = Dict{String, Any}("out[1,1]" => 0.0, "out[1,2]" => 0.0, "out[2,1]" => 0.0, "out[2,2]" => 0.0)
+    d = Dict{String, Any}("R.out[1,1]" => 0.0, "R.out[1,2]" => 0.0, "R.out[2,1]" => 0.0, "R.out[2,2]" => 0.0)
     for a in 1:NQ, b in 1:NQ
-        d["q[$a,$b]"] = _cl_qval(a, b)
+        d["R.q[$a,$b]"] = _cl_qval(a, b)
     end
     return d
 end
@@ -530,7 +526,7 @@ function _cl_halo_du(doc, ics; loop::Bool)
         "ESS_CONTRACTION_LOOP_MIN" => (loop ? "8" : string(typemax(Int))),
         "ESS_ARRAY_CONTRACTION_MIN" => string(typemax(Int))
     ) do
-        f!, u0, p, _, vm = EarthSciAST._build_evaluator(doc; initial_conditions = ics)
+        f!, u0, p, _, vm = EarthSciAST.Internal.build(doc; initial_conditions = ics)
         (f!, u0, p, vm)
     end
 end
@@ -550,7 +546,7 @@ end
         dr = similar(u0r); fr(dr, u0r, pr, 0.0)
         exp = _cl_halo_expected(M, NI, NJ, NQ)
         for i in 1:NI, j in 1:NJ
-            key = "out[$i,$j]"
+            key = "R.out[$i,$j]"
             @test dl[vml[key]] == dr[vmr[key]]
             @test dl[vml[key]] == exp[i, j]
         end
@@ -567,10 +563,10 @@ end
             @test (@allocated fl(dl, u0, p, 0.0)) == 0
         end
         # out[1,1] = Σ_{k,l} W(1,1,k,l)·q[k,l], so ∂/∂q[a,b] = W(1,1,a,b) for a,b∈1..M.
-        g(u) = (d = similar(u, eltype(u)); fl(d, u, p, 0.0); d[vml["out[1,1]"]])
+        g(u) = (d = similar(u, eltype(u)); fl(d, u, p, 0.0); d[vml["R.out[1,1]"]])
         J = ForwardDiff.gradient(g, u0)
         W11(a, b) = Float64((1 + 2 + 3a + 5b) % 7)
-        @test all(J[vml["q[$a,$b]"]] == ((1 <= a <= M && 1 <= b <= M) ? W11(a, b) : 0.0) for a in 1:3, b in 1:3)
+        @test all(J[vml["R.q[$a,$b]"]] == ((1 <= a <= M && 1 <= b <= M) ? W11(a, b) : 0.0) for a in 1:3, b in 1:3)
     end
 end
 
@@ -629,18 +625,13 @@ const _CL_NONSTRICT = _CL_ESS._plan_with(
 const _CL_NO_NEST = _CL_ESS._plan_with(_CL_ESS._compiler_plan(:native); array_contraction = false)
 function _cl_long_du(doc, n, compiler)
     return withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-        _CL_ESS._reset_cascade_tally!()
         kw = (;
-            initial_conditions = Dict("u[$i]" => 0.0 for i in 1:n),
-            param_arrays = Dict("F" => collect(1.0:n) ./ 3),
+            initial_conditions = Dict("M.u[$i]" => 0.0 for i in 1:n),
+            param_arrays = Dict("M.F" => collect(1.0:n) ./ 3),
         )
-        f!, u0, p, _, vm = compiler isa Symbol ?
-            _CL_ESS._build_evaluator(doc; compiler = compiler, kw...) :
-            _CL_ESS._with_compiler_plan(compiler) do
-                _CL_ESS._build_evaluator_dict(doc; compiler = compiler, kw...)
-        end
+        f!, u0, p, _, vm, rep = _CL_ESS.Internal.build(doc; compiler = compiler, kw...)
         du = similar(u0); f!(du, u0, p, 0.0)
-        ([du[vm["u[$i]"]] for i in 1:n], copy(_CL_ESS._CASCADE_TALLY))
+        ([du[vm["M.u[$i]"]] for i in 1:n], rep.counts)
     end
 end
 
@@ -659,21 +650,20 @@ end
         W = [1.0 + k / 8 for k in 1:2:(2K - 1)]
         @test all(dL[i] === foldl(+, (i / 3) * w for w in W; init = 0.0) for i in 1:n)
     end
-    @testset "a ⊕ the loop does not fold is refused by name, at any length" begin
-        for K in (10, 100_000)
+    @testset "an array-valued bool_and_or contraction is refused, at any length" begin
+        # ⊕ = `or` is index-set-producing: every numeric evaluator refuses it for
+        # an array-valued reduction (CONFORMANCE_SPEC §5.6.1), the interpreter
+        # included, before any tier is chosen.
+        for K in (10, 100_000), c in (_CL_NONSTRICT, :interpreter)
+            K == 100_000 && c === :interpreter && continue
             e = try
-                _cl_long_du(_cl_long_doc(n, K; orsr = true), n, _CL_NONSTRICT); nothing
+                _cl_long_du(_cl_long_doc(n, K; orsr = true), n, c); nothing
             catch err
                 err
             end
             @test e isa _CL_ESS.TreeWalkError &&
-                e.code == _CL_ESS.ERROR_CODES.COMPILER_REFUSED_RULE
-            @test occursin("per-cell contraction loop does not take it: its ⊕ is `or`", e.detail)
-            @test occursin("contraction of $K terms", e.detail)
-            @test occursin("compiler=:interpreter", e.detail)
+                e.code == "E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING"
         end
-        di, _ = _cl_long_du(_cl_long_doc(n, 10; orsr = true), n, :interpreter)
-        @test di == [Float64(i / 3 > 1.125) for i in 1:n]
     end
     @testset "strict native's refusal names the stepped range, not the ⊕" begin
         # Its ⊕ is `+`, which the affine run-time fold takes; the step of 2 on
@@ -689,9 +679,10 @@ end
         @test !occursin("this one is `+`", e.detail)
     end
     @testset "strict native's whole-array nest reads the live buffer, bit for bit" begin
-        for orsr in (false, true), K in (10, 1000)
-            dn, _ = _cl_long_du(_cl_long_doc(n, K; orsr), n, :native)
-            di, _ = _cl_long_du(_cl_long_doc(n, K; orsr), n, :interpreter)
+        # (An `or` contraction here is array-valued, so it is refused; see above.)
+        for K in (10, 1000)
+            dn, _ = _cl_long_du(_cl_long_doc(n, K), n, :native)
+            di, _ = _cl_long_du(_cl_long_doc(n, K), n, :interpreter)
             @test reinterpret(UInt64, dn) == reinterpret(UInt64, di)
         end
     end

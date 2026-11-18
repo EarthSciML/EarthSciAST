@@ -2,11 +2,9 @@
 # PLANAR spatial-index broad phase — conservative candidate generation.
 # =========================================================================== #
 #
-# Phase 3a of projection-pushdown. A reusable, deterministic broad-phase seam
-# that returns a CONSERVATIVE SUPERSET of the (query × cell) index pairs whose
-# 2D bounding boxes (envelopes) intersect. Phase 3b will consume this to replace
-# a uniform-grid bin-equality join gate (tree-walk `_join_admits`,
-# src/tree_walk/semiring.jl); here we deliver ONLY the primitive + its oracle.
+# A deterministic broad phase that returns a CONSERVATIVE SUPERSET of the
+# (query × cell) index pairs whose 2D bounding boxes (envelopes) intersect. The
+# `faq` overlap join's candidate set (tree_walk/setup_sweep.jl) is built on it.
 #
 # `broad_phase_candidates(query_envs, cell_envs; eps)` tests envelope
 # intersection pair by pair (with a uniform-grid binning above a size cutoff,
@@ -89,13 +87,13 @@ function broad_phase_candidates(
 end
 
 # =========================================================================== #
-# OVERLAP JOIN-GATE broad phase (projection-pushdown Phase 2a).
+# OVERLAP JOIN-GATE broad phase.
 #
 # The shared helper that turns two envelope FACTOR-ARRAYS into the candidate
 # `Set{(src_pos, tgt_pos)}` an OVERLAP join gate admits on. Built ONCE per gate
 # (cached on the resolved `_JoinGate` / `_ViJoinGate`), then consulted by
 # membership per contracted tuple in BOTH join paths — `_join_admits`
-# (tree_walk/semiring.jl) and `_vi_join_ok` (value_invention.jl). The narrow
+# (tree_walk/join_gates.jl) and `_vi_join_ok` (value_invention.jl). The narrow
 # phase (exact rectangle / polygon test) stays as the aggregate's `filter`; this
 # is ONLY the conservative broad phase.
 # =========================================================================== #
@@ -204,7 +202,8 @@ end
 function _envelope_vectors_from_cols(env_names::AbstractVector, cols::AbstractVector)
     k = length(env_names)
     _overlap_env_rank(k) === nothing && throw(
-        ArgumentError(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
             "overlap-join env must name 1 (rings), 2 (point [x,y]), or 4 " *
                 "(rect [xmin,ymin,xmax,ymax]) const-array factors; got $k"
         )
@@ -230,7 +229,8 @@ end
 # `_ring_xybbox`'s `(xmin, xmax, ymin, ymax)` to `(xmin, ymin, xmax, ymax)`.
 function _ring_envelopes(rings::AbstractArray)
     ndims(rings) == 3 || throw(
-        ArgumentError(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
             "overlap-join single-factor env expects a [pos, verts, coord] 3-D ring " *
                 "array; got a $(ndims(rings))-D factor"
         )
@@ -261,7 +261,7 @@ side and `tgt_env` the indexed cell side. The vector method takes the two
 envelope vectors directly; the name+registry method resolves envelope factor
 arrays out of `arrays` first (see [`_envelope_vectors`](@ref)).
 
-Uses the exported Phase-3a primitive [`broad_phase_candidates`](@ref), so the
+Uses the exported primitive [`broad_phase_candidates`](@ref), so the
 gate is deterministic.
 """
 function _overlap_candidate_set(
@@ -283,7 +283,7 @@ function _overlap_candidate_set(
 end
 
 # =========================================================================== #
-# CANDIDATE-DRIVEN ENUMERATION (projection-pushdown Wall #1) — the SHARED
+# CANDIDATE-DRIVEN ENUMERATION — the SHARED
 # driver policy behind BOTH overlap-gated enumeration paths.
 #
 # A gate that resolves its ENTIRE admissible pair set once — a `join.overlap`
@@ -300,7 +300,7 @@ end
 #     enumerates ranges LAZILY (a ragged `of` bound depends on its parent
 #     binding), so it recurses; BOTH gated symbols are contracted there.
 #   * the dense aggregate expansion (`_foreach_aggregate_term`,
-#     tree_walk/resolve.jl) unrolls `Iterators.product` over PRE-EXPANDED
+#     tree_walk/aggregate_expand.jl) unrolls `Iterators.product` over PRE-EXPANDED
 #     iterators once per output cell, and the output cell has usually already
 #     bound one of the two gated symbols.
 #
@@ -314,17 +314,14 @@ end
 # admitted leaf SET is identical either way.
 # =========================================================================== #
 
-# Instrumentation: number of leaf bindings an OVERLAP-GATED enumerator VISITED
-# (a tuple its callback was invoked on / a product tuple its unroll entered).
-# Reset by callers/tests; proves that an overlap-gated walk — the value-invention
-# producer and the dense aggregate expansion alike — visits
-# O(|candidates|·∏ungated) tuples, NOT the full O(∏ranges) product
-# (projection-pushdown Wall #1).
-#
-# Counted ONLY when an overlap gate is present, so every ungated / bin-equality
-# expansion (the overwhelming majority, and the engine's hottest loop) keeps its
-# exact current instruction stream.
-const _VI_ENUM_VISITS = Ref{Int}(0)
+# Engagement count `:vi_enum_visits` (`_count!`, compiler.jl): the leaf
+# bindings an OVERLAP-GATED enumerator visited (a tuple its callback was invoked
+# on / a product tuple its unroll entered). It shows that an overlap-gated walk
+# — the value-invention producer and the dense aggregate expansion alike —
+# visits O(|candidates|·∏ungated) tuples, not the full O(∏ranges) product.
+# Counted only when an overlap gate is present, so every ungated or
+# bin-equality expansion (the engine's hottest loop) keeps its instruction
+# stream.
 
 const _NO_PARTNERS = Int[]
 

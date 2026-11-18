@@ -3,7 +3,7 @@ Build-time value-invention front door
 (RFC semiring-faq-unified-ir §6.1 cadence-partition / §5.5 / §7.3).
 
 Sizes what the index-set resolver would otherwise refuse with
-`derived_index_set_unmaterialized` (tree_walk/resolve.jl). A
+`derived_index_set_unmaterialized` (tree_walk/index_sets.jl). A
 `kind:"derived"` index set whose `from_faq` names a `distinct` producer is
 materialised here, ONCE at setup, off the per-step hot path — the §6.1
 CONST/DISCRETE materialisation point. The producer's integer keys are evaluated
@@ -16,13 +16,8 @@ value-invention vocabulary (`id`, `distinct`, `key`, `join`, `ranges` — see
 `OPEXPR_FIELD_TABLE`, types.jl), so no raw-JSON walking is
 needed. The document-scoped index-set registry is passed alongside the model
 (esm-spec v0.8.0: `EsmFile.index_sets`), since a typed `Model` does not carry
-it. The cadence classification the §5.7 guard-2 checks need is derived here
-directly on the typed tree (`_vi_class`); the raw-JSON `Cadence` module remains
-only for the conformance fixtures, whose whole-document surroundings
-(`data_sources`, `index_sets`) never reach a typed expression. The
-`expect_cadence` annotation those fixtures assert against IS carried by the
-typed IR; it is simply not consulted here, because this classifier DERIVES a
-class rather than checking a declaration.
+it. The §5.7 guard 2 (no relational producer classifies `continuous`) uses the
+cadence classifier of cadence.jl, the one the cadence conformance pass runs.
 
 All diagnostics are raised as [`TreeWalkError`](@ref) carrying stable
 `E_TREEWALK_*` codes (`E_TREEWALK_VI_*` for the value-invention-specific
@@ -30,7 +25,7 @@ failures) so they are machine-checkable across bindings.
 """
 
 # Base variable name of a typed-IR LHS (`VarExpr` / `index` / `D`), used by
-# build_evaluator to drop value-invention equations from the ODE and by
+# _build_evaluator to drop value-invention equations from the ODE and by
 # `_vi_detect` below.
 function _vi_typed_lhs_base(expr)
     expr isa VarExpr && return expr.name
@@ -59,7 +54,7 @@ function _vi_node_kind(node)
     return :none
 end
 
-# Every (lhs, rhs) value-expression pair in a typed model. From esm 1.0.0 that
+# Every (lhs, rhs) value-expression pair in a typed model. That
 # is exactly the equation list: an observed unknown's defining right-hand side
 # IS an equation, so there is no variable-level `expression` to append.
 _vi_model_assignments(model::Model) =
@@ -85,8 +80,8 @@ end
 # binned broad phase bins on (`src_lon`/`tgt_lon`). Used by the build-time
 # binning-coordinate derivation to decide which build-time-constant coordinate
 # observeds to materialise into the value-invention `const_arrays` so
-# `index(src_lon,i)` resolves (RFC §8.6.1). Empty (byte-identical) for a model
-# without value invention.
+# `index(src_lon,i)` resolves (RFC §8.6.1). Empty for a model without value
+# invention.
 function _vi_index_targets(model::Model)
     det = _vi_detect(model)
     refs = Set{String}()
@@ -164,11 +159,8 @@ struct _ViCtx
     index_sets::Dict{String, IndexSet}
     variables::OrderedDict{String, ModelVariable}
     maps::Dict{String, Dict{Any, Any}}   # materialised join column → (output-index → value)
-    # Per-name cadence SEED, derived once from the model (esm-spec §6.3.1 /
-    # CONFORMANCE_SPEC §5.7.2). From esm 1.0.0 the seed cannot be read off a
-    # declared type, so it is computed by `_vi_seed_map` and carried here rather
-    # than re-derived at every leaf.
-    seeds::Dict{String, Int}
+    # Per-name cadence seed (`cadence_seeds`, cadence.jl), derived once.
+    seeds::Dict{String, CadenceClass}
 end
 
 # Coerce a build-time numeric to an exact integer relational key component
@@ -193,9 +185,9 @@ end
 function _vi_param(ctx::_ViCtx, name::AbstractString)
     # The sharpest structural read there is: a scalar parameter consumed HERE
     # decides an invented index set's EXTENT, i.e. `length(u)`. Record it (see
-    # `_PARAM_READS`, build.jl) before resolving — override or default, either
+    # `_record_param_read`, build_caller_data.jl) before resolving — override or default, either
     # way the value is baked into the materialized extent.
-    _PARAM_READS[] === nothing || _record_param_read(name)
+    _record_param_read(name)
     haskey(ctx.params, name) && return ctx.params[name]
     v = get(ctx.variables, name, nothing)
     if v !== nothing && v.default !== nothing
@@ -261,6 +253,8 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
     elseif node isa OpExpr
         op = node.op
         args = node.args
+        # The registry arity is normative here as on every evaluator.
+        _check_op_arity(Symbol(op), length(args))
         if op == "index"
             return _vi_index(node, ctx, bindings)
         elseif op == "true"
@@ -300,7 +294,7 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
         elseif op == "-"
             return length(args) == 1 ? -Float64(_vi_num(args[1], ctx, bindings)) :
                 Float64(_vi_num(args[1], ctx, bindings)) - Float64(_vi_num(args[2], ctx, bindings))
-        elseif op in ("<", ">", "<=", ">=", "==", "!=")
+        elseif _is_comparison_op(op)
             a = Float64(_vi_num(args[1], ctx, bindings))
             b = Float64(_vi_num(args[2], ctx, bindings))
             op == "<"  && return a < b
@@ -324,8 +318,9 @@ end
 # key template) stays a float so the key test downstream can name it.
 _vi_round(f, x::Float64) = isfinite(x) ? f(Int, x) : x
 
-# A build-time condition value: a Bool, or a number > 0 (NaN is false).
-_vi_truthy(v) = v isa Bool ? v : (v isa Real ? v > 0 : _vi_num_fail(v))
+# A build-time condition value: a Bool, or a number, true when `!= 0` as the
+# tree walk's `ifelse`/`and`/`or`/`not` test it (so NaN is true).
+_vi_truthy(v) = v isa Bool ? v : (v isa Real ? v != 0 : _vi_num_fail(v))
 _vi_num_fail(v) = throw(
     TreeWalkError(
         "E_TREEWALK_VI_SYMBOL",
@@ -392,7 +387,7 @@ function _vi_index(node::OpExpr, ctx::_ViCtx, bindings::AbstractDict)
     idxs = Tuple(Int(_vi_num(a, ctx, bindings)) for a in args[2:end])
     # A factor carrying a declared per-dimension boundary policy resolves an
     # out-of-range gather declaratively (periodic-wrap / edge-extend), exactly
-    # as the tree_walk const_array gather does (ess-gj4). Plain factors keep the
+    # as the tree_walk const_array gather does. Plain factors keep the
     # existing behavior, so genuine connectivity OOB still surfaces.
     if isa(arr, BoundedConstArray)
         ndims(arr) == length(idxs) ||
@@ -533,7 +528,7 @@ end
 
 # The index range symbol of a join-key variable within the producer's ranges:
 # the producer range whose `from` equals the variable's (1-D) shape index set.
-function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx)
+function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx, pick = :left)
     shape = _vi_join_var_shape(vname, ctx)
     length(shape) == 1 || throw(
         TreeWalkError(
@@ -541,7 +536,7 @@ function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx)
             "value-invention join key '$(vname)' must be a 1-D buffer; shape=$(shape)"
         )
     )
-    return _vi_range_sym_for_set(shape[1], vname, producer_ranges)
+    return _vi_range_sym_for_set(shape[1], vname, producer_ranges, pick)
 end
 
 # The range symbol an OVERLAP gate's env-factor list runs over. The list's
@@ -550,7 +545,7 @@ end
 # stack. A factor's first axis is its position axis in every form, so the first
 # factor's first shape index set names the range, as in the tree-walk's
 # `_overlap_env_sym`.
-function _vi_overlap_env_sym(env_names::AbstractVector, producer_ranges, ctx::_ViCtx)
+function _vi_overlap_env_sym(env_names::AbstractVector, producer_ranges, ctx::_ViCtx, pick = :left)
     rank = _overlap_env_rank(length(env_names))
     rank === nothing && throw(
         TreeWalkError(
@@ -581,26 +576,32 @@ function _vi_overlap_env_sym(env_names::AbstractVector, producer_ranges, ctx::_V
         )
     end
     fname = String(env_names[1])
-    return _vi_range_sym_for_set(_vi_join_var_shape(fname, ctx)[1], fname, producer_ranges)
+    return _vi_range_sym_for_set(_vi_join_var_shape(fname, ctx)[1], fname, producer_ranges, pick)
 end
 
-# The producer range whose `from` is index set `target`.
-function _vi_range_sym_for_set(target, vname, producer_ranges)
-    for (sym, spec) in producer_ranges
-        spec isa IndexSetRef && spec.from == target && return sym
-    end
-    throw(
+# The producer range a key column over index set `target` is read at, by the
+# rule the right-hand side's joins use (`_join_sym_for_key`, CONFORMANCE_SPEC
+# §5.5.8): `pick` is the clause's `syms` entry for this side, or `:left` /
+# `:right`, which take the earlier / later of two candidate ranges in canonical
+# range order. Three or more candidates without `syms` are refused, never
+# settled by hash order.
+function _vi_range_sym_for_set(target, vname, producer_ranges, pick = :left)
+    sym_to_set = Dict{String, String}(
+        String(s) => String(spec.from) for (s, spec) in producer_ranges if spec isa IndexSetRef
+    )
+    any(==(String(target)), values(sym_to_set)) || throw(
         TreeWalkError(
             "E_TREEWALK_VI_JOIN",
             "no producer range binds the index set '$(target)' of join key '$(vname)'"
         )
     )
+    return _join_sym_for_key(String(target), producer_ranges, sym_to_set, pick, nothing, :column)
 end
 
 # One resolved value-invention join gate (built ONCE per producer, not per
 # tuple). A bin-EQUALITY gate carries the two materialised column buffers
 # (`map_l`/`map_r`) and admits iff the buffer values are equal; an OVERLAP gate
-# (Phase 2a) carries `candidates`, the prebuilt broad-phase `(pos_l,pos_r)` set,
+# carries `candidates`, the prebuilt broad-phase `(pos_l,pos_r)` set,
 # and admits iff the binding's range positions are a member. A bin-equality
 # gate may carry `candidates` too: its key-equality match pairs
 # (`_vi_equality_candidates`), which only drive enumeration — admission still
@@ -631,8 +632,8 @@ function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
     gates = _ViJoinGate[]
     for clause in join
         if clause isa _OverlapJoinSpec
-            sym_l = _vi_overlap_env_sym(clause.src_env, producer_ranges, ctx)
-            sym_r = _vi_overlap_env_sym(clause.tgt_env, producer_ranges, ctx)
+            sym_l = _vi_overlap_env_sym(clause.src_env, producer_ranges, ctx, :left)
+            sym_r = _vi_overlap_env_sym(clause.tgt_env, producer_ranges, ctx, :right)
             cands = _overlap_candidate_set(
                 _vi_env_vectors(clause.src_env, ctx),
                 _vi_env_vectors(clause.tgt_env, ctx);
@@ -640,11 +641,13 @@ function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
             )
             push!(gates, _ViJoinGate(sym_l, sym_r, nothing, nothing, _OverlapIndex(cands)))
         else
+            syms = _clause_syms(clause)
+            pl, pr = syms === nothing ? (:left, :right) : syms
             for pair in clause
                 lname, rname = String(pair[1]), String(pair[2])
-                ls = _vi_join_index_sym(lname, producer_ranges, ctx)
-                rs = _vi_join_index_sym(rname, producer_ranges, ctx)
-                ml, mr = ctx.maps[lname], ctx.maps[rname]
+                ls = _vi_join_index_sym(lname, producer_ranges, ctx, pl)
+                rs = _vi_join_index_sym(rname, producer_ranges, ctx, pr)
+                ml, mr = _vi_join_column(ctx, lname), _vi_join_column(ctx, rname)
                 cands = _vi_equality_candidates(ls, ml, rs, mr, producer_ranges, ctx)
                 push!(gates, _ViJoinGate(ls, rs, ml, mr, cands))
             end
@@ -653,9 +656,24 @@ function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
     return gates
 end
 
+# A join key column's materialised buffer. Every column a producer's join names
+# is materialised before the producer (`_vi_detect` orders them), so a missing
+# one is a column the document never defines as a value-invention column.
+function _vi_join_column(ctx::_ViCtx, name::String)
+    m = get(ctx.maps, name, nothing)
+    m === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
+            "value-invention join key column '$(name)' is not a materialised join " *
+                "column: it must be a 1-D per-element `faq` over the joined index set"
+        )
+    )
+    return m
+end
+
 # The key-equality match pairs of a bin-equality gate, as the drive index for
-# `_vi_enumerate_join`, or `nothing` (the gate then filters the full product as
-# before). Built only where the driven walk provably visits a subset of what
+# `_vi_enumerate_join`, or `nothing` (the gate then filters the full product).
+# Built only where the driven walk provably visits a subset of what
 # the product visits and skips only tuples the gate rejects: both gated ranges
 # are interval or categorical (their values are the positions `1:n`), and each
 # buffer holds every one of those positions, so the product would never have
@@ -681,7 +699,7 @@ function _vi_position_extent(spec, ctx::_ViCtx)
     return nothing
 end
 
-# True iff every resolved join gate admits this binding (§5.3 / Phase 2a): a
+# True iff every resolved join gate admits this binding (§5.3): a
 # bin-equality gate compares materialised buffer values; an overlap gate tests
 # membership of the `(pos_l,pos_r)` range positions in the broad-phase set.
 function _vi_join_ok(gates::Vector{_ViJoinGate}, bindings::AbstractDict)
@@ -696,7 +714,7 @@ function _vi_join_ok(gates::Vector{_ViJoinGate}, bindings::AbstractDict)
 end
 
 # Enumerate an aggregate's `ranges`, DRIVING from a gate's prebuilt candidate
-# pairs when one carries them (Wall #1 fix): an OVERLAP gate's broad-phase set,
+# pairs when one carries them: an OVERLAP gate's broad-phase set,
 # or a bin-equality gate's key-equality matches (`_vi_equality_candidates`).
 # Instead of walking the full product over every range and testing each tuple —
 # O(∏ranges), e.g. O(N_query·N_cell) — the walk visits the ranges in the SAME
@@ -723,13 +741,19 @@ function _vi_enumerate_join(
         ranges, gates::Union{Vector{_ViJoinGate}, Nothing},
         ctx::_ViCtx, cb
     )
-    counted = bindings -> (_VI_ENUM_VISITS[] += 1; cb(bindings))
+    nvisit = Ref(0)
+    counted = bindings -> (nvisit[] += 1; cb(bindings))
     ov = _drivable_gate(gates)
-    ov === nothing && return _vi_enumerate(ranges, ctx, counted)   # full product
+    if ov === nothing
+        r = _vi_enumerate(ranges, ctx, counted)   # full product
+        _count!(:vi_enum_visits, nvisit[])
+        return r
+    end
     _vi_enumerate_driven(
         _vi_order_syms(ranges), ranges, ctx, Dict{String, Any}(), ov,
         counted
     )
+    _count!(:vi_enum_visits, nvisit[])
     return
 end
 
@@ -759,12 +783,13 @@ end
 
 # ---- Compiled column bodies -------------------------------------------------
 # A join column whose body is build-time arithmetic over its one range symbol
-# (the bin column `floor(lon[i] / dx)`) is evaluated once per cell. `_vi_eval` resolves every name through the bindings
-# dictionary and the const-array registry at each cell; this lowers the body
-# once into a small node tree whose names are already resolved (the range
-# symbol to the loop value, a parameter to its value, a gather to its array),
-# then evaluates it per cell with the same arms in the same order, so every key
-# is the one `_vi_eval` computes. A body with anything else (a ragged range, a
+# (the bin column `floor(lon[i] / dx)`) is evaluated once per cell. `_vi_eval`
+# resolves every name through the bindings dictionary and the const-array
+# registry at each cell; this lowers the body once into a small node tree whose
+# names are already resolved (the range symbol to the loop value, a parameter to
+# its value, a gather to its array) and compiles it to Julia code
+# (`_vic_kernel`) with the same arms in the same order, so every key is the one
+# `_vi_eval` computes. A body with anything else (a ragged range, a
 # gather from a bounded or non-Float64 array or from an upstream buffer, an
 # unresolved name) returns `nothing` and keeps `_vi_eval`. A producer's key
 # and filter over several interval / categorical ranges compile the same way
@@ -831,18 +856,9 @@ function _vi_compile_node(node, ctx::_ViCtx, syms::Vector{String})
         end
         op = get(_VIC_OPS, node.op, nothing)
         op === nothing && return nothing
-        nargs = length(args)
-        if op in (:vtrue, :vfalse)
-            nargs == 0 || return nothing
-        elseif op === :ifelse
-            nargs == 3 || return nothing
-        elseif op === :not
-            nargs == 1 || return nothing
-        elseif op in (:floor, :ceil, :-, :*, :+, :and, :or, :min, :max)
-            nargs >= 1 || return nothing
-        else
-            nargs >= 2 || return nothing
-        end
+        # An operand count outside the registry arity keeps `_vi_eval`, which
+        # refuses it.
+        length(args) in (_op_spec(node.op).arity::UnitRange{Int}) || return nothing
         sub = _ViC[]
         for a in args
             c = _vi_compile_node(a, ctx, syms)
@@ -854,83 +870,10 @@ function _vi_compile_node(node, ctx::_ViCtx, syms::Vector{String})
     return nothing
 end
 
-# A range symbol's value: `v` is the one symbol's value, or the binding vector.
-@inline _vic_sym(v::Int, ::Int) = v
-@inline _vic_sym(v::Vector{Int}, slot::Int) = @inbounds v[slot]
-
-# `_vi_eval` arm for arm (the `_vi_num` guards cannot fire: every compiled
-# value is a number or a Bool).
-function _vic_eval(n::_ViC, v::Union{Int, Vector{Int}})::Union{Int, Float64, Bool}
-    k = n.kind
-    k == _VIC_INT && return n.ival
-    k == _VIC_NUM && return n.fval
-    k == _VIC_SYM && return _vic_sym(v, n.ival)
-    a = n.args
-    if k == _VIC_GATHER
-        if length(a) == 1
-            return n.arr[Int(_vic_eval(a[1], v))]
-        end
-        return n.arr[(Int(_vic_eval(x, v)) for x in a)...]
-    end
-    op = n.op
-    if op === :vtrue
-        return true
-    elseif op === :vfalse
-        return false
-    elseif op === :ifelse
-        return _vic_eval(_vi_truthy(_vic_eval(a[1], v)) ? a[2] : a[3], v)
-    elseif op === :and
-        for x in a
-            _vi_truthy(_vic_eval(x, v)) || return false
-        end
-        return true
-    elseif op === :or
-        for x in a
-            _vi_truthy(_vic_eval(x, v)) && return true
-        end
-        return false
-    elseif op === :not
-        return !_vi_truthy(_vic_eval(a[1], v))
-    elseif op === :min || op === :max
-        # `minimum` / `maximum` of the operands: NaN wins, -0.0 < +0.0, in
-        # any order.
-        acc = Float64(_vic_eval(a[1], v))
-        for j in 2:length(a)
-            x = Float64(_vic_eval(a[j], v))
-            acc = op === :min ? min(acc, x) : max(acc, x)
-        end
-        return acc
-    elseif op === :floor
-        return _vi_round(floor, Float64(_vic_eval(a[1], v)))
-    elseif op === :ceil
-        return _vi_round(ceil, Float64(_vic_eval(a[1], v)))
-    elseif op === :/
-        return Float64(_vic_eval(a[1], v)) / Float64(_vic_eval(a[2], v))
-    elseif op === :* || op === :+
-        acc = Float64(_vic_eval(a[1], v))
-        for j in 2:length(a)
-            x = Float64(_vic_eval(a[j], v))
-            acc = op === :* ? acc * x : acc + x
-        end
-        return acc
-    elseif op === :-
-        return length(a) == 1 ? -Float64(_vic_eval(a[1], v)) :
-            Float64(_vic_eval(a[1], v)) - Float64(_vic_eval(a[2], v))
-    end
-    x = Float64(_vic_eval(a[1], v))
-    y = Float64(_vic_eval(a[2], v))
-    op === :< && return x < y
-    op === :> && return x > y
-    op === :<= && return x <= y
-    op === :>= && return x >= y
-    op === :(==) && return x == y
-    return x != y
-end
-
 # Materialise a plain per-element `join` column (see `_vi_detect`'s `columns`)
 # → Dict(output-index → exact integer). A NaN value is
 # `value_invention_key_out_of_range` naming the column. A body over one interval
-# or categorical range is compiled once (`_vi_compile_node`).
+# or categorical range is compiled once (`_vi_compile_node`, `_vic_kernel`).
 function _vi_materialize_column!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     sym = String(only(node.output_idx))
     body = node.expr_body
@@ -949,8 +892,11 @@ function _vi_materialize_column!(ctx::_ViCtx, vname::AbstractString, node::OpExp
         compiled = is !== nothing && is.kind in ("interval", "categorical") ?
             _vi_compile_node(body, ctx, sym) : nothing
         if compiled !== nothing
+            k = _vic_kernel(compiled)
+            vec = Int[0]
             for v in _vi_range_values(spec, ctx, Dict{String, Any}())
-                x = _vic_eval(compiled, v)
+                vec[1] = v
+                x = k(vec)
                 out[v] = x isa AbstractFloat && isnan(x) ?
                     _vi_key_checked(x, column, Dict{String, Any}(sym => v)) : _vi_key_int(x)
             end
@@ -978,9 +924,9 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     join = node.join
     # Resolve join gates ONCE (a `join.overlap` broad-phase candidate set is built
     # a single time here). An OVERLAP gate then DRIVES enumeration from its
-    # candidate pairs (`_vi_enumerate_join`, Wall #1) — O(|candidates|) rather than
+    # candidate pairs (`_vi_enumerate_join`) — O(|candidates|) rather than
     # O(∏ranges) with a per-tuple membership test; other gate kinds enumerate the
-    # full product exactly as before.
+    # full product.
     join_gates = join === nothing ? nothing : _vi_resolve_join(join, ranges, ctx)
     column = "the `key` of producer '$(something(node.id, ""))'"
     if join_gates === nothing && _setup_compile_once_enabled()
@@ -991,8 +937,7 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     _vi_enumerate_join(
         ranges, join_gates, ctx, bindings -> begin
             if filt !== nothing
-                fv = _vi_eval(filt, ctx, bindings)
-                (fv === true || (isa(fv, Real) && fv > 0)) || return
+                _vi_truthy(_vi_eval(filt, ctx, bindings)) || return
             end
             if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
                 return
@@ -1007,7 +952,7 @@ end
 # `filter` compiled once (`_vi_compile_node`, each range symbol a slot): the
 # keys `_vi_enumerate` would push, in its order (the first symbol outermost),
 # as a concretely typed vector. `nothing` when a range, the filter or the key
-# has no compiled form; the caller then enumerates as before.
+# has no compiled form; the caller then enumerates by tree walk.
 function _vi_producer_compiled(ctx::_ViCtx, ranges, filt, key, column)
     syms = _vi_order_syms(ranges)
     lens = Int[]
@@ -1027,7 +972,7 @@ function _vi_producer_compiled(ctx::_ViCtx, ranges, filt, key, column)
 end
 
 # A compiled node as Julia code, compiled once through RuntimeGeneratedFunctions
-# and called per binding as `k(v)`: `_vic_eval` arm for arm, the same
+# and called per binding as `k(v)`: `_vi_eval` arm for arm, the same
 # operations in the same order on the same value types (an `Int` literal or
 # range symbol stays an `Int`, a `floor` keeps `_vi_round`'s result, a
 # comparison is a `Bool`), so every value is the walker's.
@@ -1108,12 +1053,11 @@ function _vic_produce(lens::Vector{Int}, cf, k, syms, column)
     n == 0 && return out
     sizehint!(out, n)
     v = ones(Int, length(lens))
+    _count!(:vi_enum_visits, n)
     for _ in 1:n
-        _VI_ENUM_VISITS[] += 1
         keep = true
         if cf !== nothing
-            fv = cf(v)
-            keep = fv === true || (isa(fv, Real) && fv > 0)
+            keep = _vi_truthy(cf(v))
         end
         keep && push!(out, _vic_key(k, v, syms, column))
         # The last symbol runs fastest, as `_vi_enumerate`'s innermost loop.
@@ -1128,110 +1072,9 @@ function _vic_produce(lens::Vector{Int}, cf, k, syms, column)
     return out
 end
 
-# ---- Cadence classification on the typed IR (§5.7 guard 2) ------------------
-#
-# The lattice `const ⊏ discrete ⊏ continuous` as integer ranks; `class(node) =
-# max` over its children's classes, seeded from a leaf's declared variable kind
-# (CONFORMANCE_SPEC §5.7.2). This is the value-invention front door's OWN typed
-# classifier — the raw-JSON `Cadence` module is conformance-fixture-only. It
-# never consults `expect_cadence` (which the typed IR does carry): an assertion
-# is something to CHECK, and checking it is the conformance pass's job, not a
-# guard's.
-# Only the CONTINUOUS-vs-not distinction is observable here (every check below
-# compares against `continuous`), so the loader-temporal `discrete → const`
-# refinement of the conformance classifier — which never crosses the continuous
-# boundary — is deliberately not replicated.
-const _VI_CLASS_CONST = 0
-const _VI_CLASS_DISCRETE = 1
-const _VI_CLASS_CONTINUOUS = 2
-
 """
-    _vi_seed_map(model::Model) -> Dict{String,Int}
-
-The per-name cadence SEED of every variable in `model`, derived from the
-esm-spec §6.3.1 classification rather than from a declared type — the typed-IR
-twin of `Cadence.seed_leaf` (CONFORMANCE_SPEC §5.7.2):
-
-| Derived category | Seed |
-|---|---|
-| `ode_states`, `algebraic_unknowns` | CONTINUOUS |
-| `brownian_parameters` | CONTINUOUS (resampled every step) |
-| `observed_unknowns` | the class of its defining equation's RHS, transitively |
-| `discrete_parameters` | DISCRETE |
-| `sampled_parameters`, `constant_parameters` | CONST |
-
-The observed rule is the one that must not be shortcut: seeding every unknown
-CONTINUOUS would stop a state-free observed folding at bind — which is exactly
-what this build-time value-invention pass relies on — while seeding it CONST
-(the 0.x shortcut) would fold a value that reads a live state.
-"""
-function _vi_seed_map(model::Model)::Dict{String, Int}
-    seeds = Dict{String, Int}()
-    for n in ode_states(model)
-        seeds[n] = _VI_CLASS_CONTINUOUS
-    end
-    for n in algebraic_unknowns(model)
-        seeds[n] = _VI_CLASS_CONTINUOUS
-    end
-    for n in brownian_parameters(model)
-        seeds[n] = _VI_CLASS_CONTINUOUS
-    end
-    for n in discrete_parameters(model)
-        seeds[n] = _VI_CLASS_DISCRETE
-    end
-    for n in sampled_parameters(model)
-        seeds[n] = _VI_CLASS_CONST
-    end
-    for n in constant_parameters(model)
-        seeds[n] = _VI_CLASS_CONST
-    end
-    # Observed unknowns resolve through their defining equations, memoised, with
-    # a cycle guard (a cycle is a defect; it seeds CONTINUOUS, the conservative
-    # answer, and the acyclicity guard reports it).
-    defs = observed_definitions(model)
-    resolving = Set{String}()
-    function resolve(name)
-        haskey(seeds, name) && return seeds[name]
-        e = get(defs, name, nothing)
-        e === nothing && return _VI_CLASS_CONST
-        name in resolving && return _VI_CLASS_CONTINUOUS
-        push!(resolving, name)
-        cls = _VI_CLASS_CONST
-        for r in free_variables(e)
-            cls = max(cls, r == "t" ? _VI_CLASS_CONTINUOUS : resolve(r))
-        end
-        delete!(resolving, name)
-        seeds[name] = cls
-        return cls
-    end
-    for name in keys(defs)
-        resolve(name)
-    end
-    return seeds
-end
-
-function _vi_seed_class(name::AbstractString, seeds::Dict{String, Int})
-    name == "t" && return _VI_CLASS_CONTINUOUS   # the independent variable
-    # An unknown name is an index-set name or a bound index symbol (i, k, e,
-    # f) — const.
-    return get(seeds, name, _VI_CLASS_CONST)
-end
-
-# Derive a typed expression's cadence class: max over the generated child walk
-# (`foreach_child`, expression.jl — every expression-bearing `OpExpr` field).
-function _vi_class(expr::ASTExpr, seeds::Dict{String, Int})::Int
-    expr isa VarExpr && return _vi_seed_class(expr.name, seeds)
-    expr isa OpExpr || return _VI_CLASS_CONST    # IntExpr / NumExpr literals
-    cls = _VI_CLASS_CONST
-    foreach_child(expr) do c
-        cls = max(cls, _vi_class(c, seeds))
-    end
-    return cls
-end
-
-"""
-    materialize_value_invention(model::Model, index_sets, const_arrays, params)
-        -> NamedTuple
+    materialize_value_invention(model::Model, index_sets, const_arrays, params;
+                                independent_variable = "t") -> NamedTuple
 
 Run the build-time value-invention engine over a typed model. `index_sets` is
 the document-scoped registry (`EsmFile.index_sets`; esm-spec v0.8.0 — a typed
@@ -1252,12 +1095,14 @@ the document-scoped registry (`EsmFile.index_sets`; esm-spec v0.8.0 — a typed
 
 `const_arrays` supplies the build-time factor arrays (the connectivity / coords
 the keys are computed from); `params` supplies scalar parameter overrides. A
-producer that classifies CONTINUOUS is rejected (§5.7 guard 2).
+producer that classifies CONTINUOUS is rejected (§5.7 guard 2); the document's
+`independent_variable` seeds that classification as continuous.
 """
 function materialize_value_invention(
         model::Model, index_sets::AbstractDict,
         const_arrays::AbstractDict,
-        params::AbstractDict
+        params::AbstractDict;
+        independent_variable::AbstractString = "t"
     )
     det = _vi_detect(model)
     extents = Dict{String, Int}()
@@ -1280,7 +1125,7 @@ function materialize_value_invention(
         Dict{String, IndexSet}(String(k) => v for (k, v) in index_sets),
         model.variables,
         Dict{String, Dict{Any, Any}}(),
-        _vi_seed_map(model)
+        cadence_seeds(model; independent_variable = independent_variable)
     )
 
     # Plain join columns first (a producer's join may reference them). A column
@@ -1313,12 +1158,12 @@ function materialize_value_invention(
         haskey(faq_to_set, id) || continue   # no derived set names this producer
         # §5.7 guard 2: a relational node may not run on the hot path. The code is
         # the one structural validation reports for the same document.
-        _vi_class(node, ctx.seeds) == _VI_CLASS_CONTINUOUS &&
+        isempty(continuous_relational_nodes(node, ctx.seeds)) ||
             throw(
             TreeWalkError(
                 "relational_node_in_continuous",
                 "value-invention producer '$id' classifies CONTINUOUS — it may not run per " *
-                    "step (RFC §5.7 guard 2); its inputs must be CONST/DISCRETE"
+                    "step (CONFORMANCE_SPEC §5.7.6 guard 2); its inputs must be CONST/DISCRETE"
             )
         )
         # Any other failure leaves the derived set with no members to count, so it
@@ -1345,4 +1190,73 @@ function materialize_value_invention(
         extents = extents, members = members, vi_var_names = det.vi_var_names,
         maps = ctx.maps, map_sets = map_sets,
     )
+end
+
+# ============================================================================
+# Value-invention members fed back as const factors
+# ============================================================================
+
+# The const-array keys an authored bare factor name resolves to. Flatten
+# namespaces every variable (`<Component>.<name>`), while document-scoped
+# index-set fields (`member_factor`) and gate `applies_to` stay bare, so a bare
+# authored name is published under the bare key AND every model-variable key
+# whose final dotted segment matches it, which is the name a gather reads.
+function _const_factor_aliases(model, bare::AbstractString)
+    keys_out = Set{String}([String(bare)])
+    if model !== nothing
+        for k in keys(model.variables)
+            ks = String(k)
+            (
+                ks == bare || (
+                    occursin('.', ks) &&
+                        String(split(ks, '.')[end]) == bare
+                )
+            ) && push!(keys_out, ks)
+        end
+    end
+    return keys_out
+end
+
+# ---- Members fed back as a const factor -------------------------------------
+# Scan the document index-set registry for `kind:"derived"` sets that name a
+# `member_factor`; for each, surface its value-invention MEMBERS (the invented,
+# sorted-distinct, 1-based full-grid ids in `vi_members[from_faq]`) as a dense
+# 1-D Float64 const array keyed by the factor name (and its namespaced aliases,
+# see `_const_factor_aliases`). Returns a `name => vector` dict to merge into
+# `const_arrays`. A derived set with no `member_factor`, or whose producer did
+# not materialise, contributes nothing.
+function _feed_back_vi_members(index_sets, vi_members::AbstractDict, model)
+    out = Dict{String, Any}()
+    index_sets === nothing && return out
+    for (_, is) in index_sets
+        is isa IndexSet || continue
+        is.kind == "derived" || continue
+        mf = is.member_factor
+        (mf === nothing || is.from_faq === nothing) && continue
+        faq = String(is.from_faq)
+        haskey(vi_members, faq) || continue
+        mem = vi_members[faq]
+        # members are scalar integer keys (value_invention.jl).
+        vec = Vector{Float64}(undef, length(mem))
+        ok = true
+        for (i, m) in enumerate(mem)
+            if m isa Real
+                vec[i] = Float64(m)
+            else
+                ok = false
+                break
+            end
+        end
+        ok || throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_MEMBER_FACTOR",
+                "derived index set member_factor '$mf' requires SCALAR members; " *
+                    "got a non-numeric member for faq '$faq'"
+            )
+        )
+        for k in _const_factor_aliases(model, String(mf))
+            out[k] = vec
+        end
+    end
+    return out
 end

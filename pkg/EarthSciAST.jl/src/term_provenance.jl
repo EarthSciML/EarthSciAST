@@ -1,6 +1,6 @@
 """
 Per-term provenance through flatten (esm-libraries-spec §4.7.5, "Per-term
-provenance"; issue #539).
+provenance").
 
 Every flattened equation carries an ordered list of [`Contribution`](@ref)s: the
 summands of its right-hand side, each with the component or coupling entry that
@@ -200,6 +200,37 @@ function _rewrite_contributions(
 end
 
 """
+    _FlatEq(eq, contribs, owner = "")
+
+One equation of the pool `flatten` works on: the equation, the contributions
+whose left-fold sum is its body, and the top-level component that authored it
+(`""` for one a coupling entry wrote), which an `operator_compose` merge reads
+to tell A's equations from B's (esm-libraries-spec §4.7.1 step 4). The three
+travel together, so an equation moved, dropped or inserted keeps its
+contributions and its owner.
+"""
+struct _FlatEq
+    eq::Equation
+    contribs::Vector{Contribution}
+    owner::String
+end
+_FlatEq(eq::Equation, contribs::Vector{Contribution}) = _FlatEq(eq, contribs, "")
+
+# `f` with its equation rebuilt from `contribs` (and `lhs`), its owner kept.
+_with_contribs(f::_FlatEq, contribs::Vector{Contribution}; lhs::ASTExpr = f.eq.lhs) =
+    _FlatEq(_equation_from(f.eq, contribs; lhs = lhs), contribs, f.owner)
+
+# `f` with the rewrite `rw` applied inside each contribution
+# ([`_rewrite_contributions`](@ref)), its owner kept.
+function _rewrite_flat_eq(rw, f::_FlatEq, lifted::Bool)::_FlatEq
+    eq, cs = _rewrite_contributions(rw, f.eq, f.contribs, lifted)
+    return (eq === f.eq && cs === f.contribs) ? f : _FlatEq(eq, cs, f.owner)
+end
+
+# The equations of a pool, in order.
+_pool_equations(pool::AbstractVector{_FlatEq}) = Equation[f.eq for f in pool]
+
+"""
 The list a caller-built equation set gets when it carries no provenance: one
 contribution per equation, its body, with EMPTY origins ("author unknown").
 """
@@ -217,15 +248,11 @@ _unattributed_contributions(
         for eq in equations
 ]
 
-"""Structural equality of two expressions: identity, else their serialized forms."""
-_same_expr(a::ASTExpr, b::ASTExpr)::Bool =
-    a === b || _stable_json(serialize_expression(a)) == _stable_json(serialize_expression(b))
-
 """True when `contributions` still fold to `body` (the sum the equation carries now)."""
 function _folds_to(contributions::AbstractVector{Contribution}, body::ASTExpr)::Bool
-    length(contributions) == 1 && return _same_expr(contributions[1].expr, body)
+    length(contributions) == 1 && return _expr_equal(contributions[1].expr, body)
     _is_fold_of(contributions, body) && return true
-    return _same_expr(_fold_contributions(contributions), body)
+    return _expr_equal(_fold_contributions(contributions), body)
 end
 
 # The cheap check: `body` is the left fold `+(+(c1, c2), c3)` of these very

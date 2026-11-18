@@ -1,7 +1,7 @@
-# AD + out-of-place differential test for the affine access-kernel path (ess-affine).
+# AD + out-of-place differential test for the affine access-kernel path.
 #
-# Task #7 gate. Two properties the affine path must inherit from the per-cell one
-# now that `_eval_acc` is eltype-generic and `_make_rhs_oop` runs acc kernels:
+# Two properties the affine path must inherit from the per-cell one, given that
+# `_eval_acc` is eltype-generic and `_make_rhs_oop` runs acc kernels:
 #
 #   1. The ForwardDiff Jacobian of an AFFINE-built in-place `f!` is bit-identical
 #      to the per-cell reference's — over STATE and over a PARAMETER. Same primal
@@ -18,15 +18,17 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 # Build an evaluator under the (default) affine path or the byte-identical
-# per-cell reference (`compiler=:interpreter`). Returns (f, u0, p, vmap, diag);
+# per-cell reference (`compiler=:interpreter`). Returns (f, u0, p, vmap, stats),
+# `stats` being the build report's structural counts. The model is flattened
+# into component `M`, so state names are qualified; the undeclared const arrays
+# keep their spelling.
 function _affine_f(model, ics; affine::Bool, const_arrays = Dict())
-    f, u0, p, _tspan, vmap, diag =
-        ESM._build_evaluator_impl(
-        model; initial_conditions = ics,
+    f, u0, p, _tspan, vmap, rep = ESM.Internal.build(
+        model; initial_conditions = Dict("M.$k" => v for (k, v) in ics),
         const_arrays = const_arrays,
         compiler = affine ? :native : :interpreter
     )
-    return (f, u0, p, vmap, diag)
+    return (f, u0, p, vmap, rep.stats)
 end
 
 # Jacobian of an in-place RHS w.r.t. the state, and its `du` at a point.
@@ -99,7 +101,7 @@ function _ad_param_model(N; alpha = 0.5)
     )
 end
 
-@testset "affine access kernels: AD + out-of-place (ess-affine)" begin
+@testset "affine access kernels: AD + out-of-place" begin
 
     # ---- 1. State Jacobian: affine ≡ per-cell, bit-for-bit ----
     @testset "state Jacobian ≡ per-cell — 1D 2nd-diff (N=$N)" for N in (8, 24)
@@ -107,7 +109,6 @@ end
         f_aff, u0, p, _, d = _affine_f(_stencil_model(N), ics; affine = true)
         f_ref, _, _, _, _ = _affine_f(_stencil_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test _jac_u(f_aff, u0, p) == _jac_u(f_ref, u0, p)
     end
 
@@ -139,12 +140,12 @@ end
         f_ref, _, _, _, _ = _affine_f(_ad_param_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
         # differentiate du w.r.t. the scalar parameter α (u fixed at Float64, so
-        # only `p.alpha` goes Dual — the path `eltype(u)`-only sizing would break)
+        # only `M.alpha` goes Dual — the path `eltype(u)`-only sizing would break)
         jp(f!) = ForwardDiff.jacobian(
             a -> (
                 dd = similar(u0, eltype(a)); fill!(dd, 0);
-                f!(dd, u0, (; p..., alpha = a[1]), 0.0); dd
-            ), [p.alpha]
+                f!(dd, u0, merge(p, NamedTuple{(Symbol("M.alpha"),)}((a[1],))), 0.0); dd
+            ), [p[Symbol("M.alpha")]]
         )
         @test jp(f_aff) == jp(f_ref)
     end

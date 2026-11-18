@@ -1,5 +1,5 @@
 """
-MTK → ESM export scaffolder (Phase 1 migration tooling, gt-dod2).
+MTK → ESM export scaffolder (migration tooling).
 
 This file defines the public stubs for `mtk2esm`, the forward-direction
 serializer that walks a ModelingToolkit system and emits a schema-valid ESM
@@ -8,9 +8,6 @@ because they require those packages to be loaded — this file only declares
 the stubs, the `GapReport` type used to collect unsupported-construct
 warnings, and the MTK-independent formatting helpers shared by both
 extensions.
-
-See `scripts/roundtrip.jl` for the validator CLI that exercises this path
-as the EarthSciModels migration acceptance gate.
 """
 
 """
@@ -18,11 +15,13 @@ as the EarthSciModels migration acceptance gate.
 
 Structured record of schema-gap constructs encountered while exporting an
 MTK system to ESM. The migration tool uses these to attach `TODO_GAP`
-notes and to emit `@warn`s listing the gap IDs so callers know which
-downstream beads must land before their model can be migrated cleanly.
+notes and to emit `@warn`s listing the gaps, so callers know which constructs
+need hand migration.
 
 Each entry carries:
-- `bead_id`: the upstream bead tracking the gap (or `"unknown"`)
+- `bead_id`: the gap's category (`"pde_domain"`, `"sde_noise_eqs"`,
+  `"initialization_equations"`, `"unknown_operator"`, …; `"unknown"` for a
+  construct that failed to serialize)
 - `description`: human-readable one-liner (shown in warnings and JSON)
 - `location`: location hint (variable or equation index) for the user
 """
@@ -68,7 +67,7 @@ function mtk2esm end
 mtk2esm(sys; kwargs...) = throw(
     ArgumentError(
         "mtk2esm requires a package extension: load ModelingToolkit (plus " *
-            "Symbolics and DomainSets) to activate EarthSciASTMTKExt, or " *
+            "Symbolics) to activate EarthSciASTMTKExt, or " *
             "Catalyst to activate EarthSciASTCatalystExt, then retry"
     )
 )
@@ -86,7 +85,7 @@ function mtk2esm_gaps end
 mtk2esm_gaps(sys) = throw(
     ArgumentError(
         "mtk2esm_gaps requires a package extension: load ModelingToolkit (plus " *
-            "Symbolics and DomainSets) to activate EarthSciASTMTKExt, " *
+            "Symbolics) to activate EarthSciASTMTKExt, " *
             "then retry"
     )
 )

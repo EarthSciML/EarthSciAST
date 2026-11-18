@@ -206,7 +206,7 @@ needs them:
    uses `build_evaluator(load_path(path); model_name=...)` — per-model selection,
    the same shape the PDE-simulation adapter uses, with the document's index-set
    registry threaded in. It deliberately does NOT flatten the whole document
-   (`_prepare_run_doc`), which would evaluate every coupled model at once and
+   (`_prepare_run`), which would evaluate every coupled model at once and
    leave the `model` field meaning nothing. A fixture whose RHS only exists after
    coupling belongs to the `pde_simulation_pipeline` tier's shape, not this one.
 4. **`state_order` sequence.** It is the reference evaluator's flat layout. The

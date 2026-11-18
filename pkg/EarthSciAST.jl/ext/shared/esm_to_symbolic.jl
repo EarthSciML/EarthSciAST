@@ -3,42 +3,54 @@
 # This file is `include`d by BOTH EarthSciASTMTKExt and EarthSciASTCatalystExt
 # (each extension module compiles its own copy), so it may only reference
 # names both modules have in scope: the ESM expression types (via the
-# `EsmExpr` alias each module defines) and Base.
+# `EsmExpr` alias each module defines), Symbolics' `ifelse` (Base) and Base.
 #
-# The two extensions deliberately DIVERGE in policy and coverage, and those
-# divergences are live behavior — do not unify them here:
+# The scalar operator vocabulary is the operator registry's
+# (`EarthSciAST._SHAPED_OPS`, src/op_registry.jl): every shaped row whose meaning
+# on Symbolics values is its registry function lowers here, for both
+# extensions, after the registry arity check. The two extensions differ only
+# in policy, through the hooks:
 # - unknown-variable policy: the MTK lowering THROWS on a variable missing
 #   from its dictionaries, while the Catalyst rate lowering AUTO-CREATES a
 #   fresh symbol and caches it; hence the `resolve_var` hook.
 # - numeric-literal policy: the MTK lowering promotes whole-number NumExpr
 #   values to Int (so arrayop index expressions stay integer-typed), the
 #   Catalyst one passes them through untouched; hence the `number_value` hook.
-# - operator coverage: the Catalyst rate interpreter speaks only the scalar
-#   arithmetic/elementary vocabulary; everything else (calculus, arrays,
-#   comparisons, `ifelse`, `fn`, …) is routed to `extended_op`, which either
-#   lowers it (MTK) or throws that extension's error message (Catalyst).
+# - everything outside the scalar vocabulary (calculus, `Pre`, the array
+#   vocabulary, `const`) goes to `extended_op`, which lowers it (MTK) or throws
+#   that extension's error (Catalyst).
+
+# The registry shapes this core lowers. `and`/`or`/`not` are not among them: the
+# registry gives them the 1.0/0.0 truth-value convention, while a Symbolics
+# comparison is a symbolic Boolean, so no faithful lowering mixes the two.
+# `Pre` is the ModelingToolkit previous-value marker (its `extended_op`).
+const _SYMBOLIC_SHAPES = (
+    :fold, :minus, :negate, :binary, :unary, :atan, :minmax, :constant,
+    :compare, :select,
+)
+
+# Every operator name this core lowers.
+const _SYMBOLIC_SCALAR_OPS = Set{String}(
+    r.name for r in EarthSciAST._SHAPED_OPS if r.spec.shape in _SYMBOLIC_SHAPES
+)
 
 """
-    _esm_to_symbolic_core(expr, recurse; number_value, resolve_var,
-                          unary_ops, extended_op)
+    _esm_to_symbolic_core(expr, recurse; number_value, resolve_var, extended_op)
 
-Lower the extension-independent scalar arms of an ESM `ASTExpr` — integer /
-number / variable leaves; n-ary `+`/`-`/`*` and binary `/`/`^`; the
-mechanical unary elementwise ops in `unary_ops`; n-ary `min`/`max` — and
-recurse through children via `recurse(child)`. Every other `OpExpr` is
-delegated to `extended_op(op, expr)`.
+Lower an ESM `ASTExpr` to Symbolics: integer / number / variable leaves, and
+every registry operator of a shape in `_SYMBOLIC_SHAPES`, applying the row's
+scalar function (an n-ary `+`/`*`/`min`/`max` folds every operand; `atan(y, x)`
+keeps both). Children are lowered through `recurse(child)`; every other
+`OpExpr` is delegated to `extended_op(op, expr)`.
 
-Hooks (see the file header for why each is a policy point):
-- `number_value(v)`: NumExpr-literal policy.
-- `resolve_var(name)`: VarExpr resolution policy (throw vs auto-create).
-- `unary_ops`: op names lowered as `getfield(Base, Symbol(op))(arg)`.
-- `extended_op(op, expr)`: all remaining `OpExpr` arms.
+Every `OpExpr` is first checked against the operator registry's arity
+(`EarthSciAST._check_op_arity`): an operand count outside it raises
+`E_TREEWALK_ARITY`, the error the tree walk raises for the same node.
 """
 function _esm_to_symbolic_core(
         expr::EsmExpr, recurse::Function;
         number_value::Function,
         resolve_var::Function,
-        unary_ops,
         extended_op::Function
     )
     if expr isa IntExpr
@@ -49,41 +61,26 @@ function _esm_to_symbolic_core(
         return resolve_var(expr.name)
     elseif expr isa OpExpr
         op = expr.op
-        if op == "+"
-            args = [recurse(a) for a in expr.args]
-            return length(args) == 1 ? args[1] : sum(args)
-        elseif op == "-"
-            args = [recurse(a) for a in expr.args]
-            return length(args) == 1 ? -args[1] : args[1] - args[2]
-        elseif op == "*"
-            args = [recurse(a) for a in expr.args]
-            return length(args) == 1 ? args[1] : prod(args)
-        elseif op == "/"
-            l = recurse(expr.args[1])
-            r = recurse(expr.args[2])
-            return l / r
-        elseif op == "^"
-            l = recurse(expr.args[1])
-            r = recurse(expr.args[2])
-            return l^r
-        elseif op in unary_ops
-            arg = recurse(expr.args[1])
-            fn = getfield(Base, Symbol(op))
-            return fn(arg)
-        elseif op == "min" || op == "max"
-            length(expr.args) < 2 && throw(
-                ArgumentError(
-                    "$op requires at least 2 arguments (esm-spec §4.2)"
-                )
-            )
-            args = [recurse(a) for a in expr.args]
-            fn = op == "min" ? min : max
-            # Left fold, matching both pre-dedup copies (`foldl` in the MTK
-            # arm; `reduce` in the Catalyst arm — identical for a Vector).
-            return foldl(fn, args)
-        else
-            return extended_op(op, expr)
+        n = length(expr.args)
+        EarthSciAST._check_op_arity(Symbol(op), n)
+        op in _SYMBOLIC_SCALAR_OPS || return extended_op(op, expr)
+        s = EarthSciAST._op_spec(op)
+        sh = s.shape
+        sh === :constant && return s.value
+        args = [recurse(a) for a in expr.args]
+        if sh === :fold || sh === :minmax
+            return n == 1 ? args[1] : foldl(s.scalar_fn, args)
+        elseif sh === :minus
+            return n == 1 ? -args[1] : args[1] - args[2]
+        elseif sh === :negate
+            return -args[1]
+        elseif sh === :select
+            return ifelse(args[1], args[2], args[3])
+        elseif sh === :atan
+            return atan(args...)
         end
+        # :binary, :unary, :compare — the registry function on every operand.
+        return s.scalar_fn(args...)
     end
     error("Unknown expression type: $(typeof(expr))")
 end

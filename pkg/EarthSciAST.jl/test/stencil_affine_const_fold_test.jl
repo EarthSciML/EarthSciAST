@@ -44,7 +44,7 @@ function _cf_lane(arr, ix, n)
     )
 end
 
-@testset "LANE_CONST fold is index-derived, not value-sampled (ess-affine)" begin
+@testset "LANE_CONST fold is index-derived, not value-sampled" begin
     @testset "unit: corner-coinciding weights do NOT fold to a literal" begin
         # W[j] over j∈1:3 reads (1, 5, 1): the corners agree, the interior does not.
         r = _cf_lane([1.0, 5.0, 1.0], _v("j"), 3)
@@ -89,13 +89,14 @@ end
     # End-to-end: affine ≡ per-cell ≡ analytic.
     # -----------------------------------------------------------------------
     function _cf_build(model, ics, const_arrays; affine::Bool)
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
-            initial_conditions = ics, const_arrays = const_arrays,
+            initial_conditions = Dict("M.$k" => v for (k, v) in ics),
+            const_arrays = const_arrays,
             compiler = affine ? :native : :interpreter
         )
         du = zero(u0); f!(du, u0, p, 0.0)
-        return (du, vm, diag)
+        return (du, vm, rep.stats)
     end
 
     @testset "D(c[j]) = W[j]·c[j] with corner-coinciding W" begin
@@ -117,7 +118,7 @@ end
         du_r, _, _ = _cf_build(m, ics, Dict("W" => W); affine = false)
         @test d.n_acc_kernels >= 1          # affine path fired, not a silent fallback
         @test du_a == du_r                  # bit-identical to the per-cell oracle
-        @test [du_a[vm["c[$j]"]] for j in 1:N] == [1.0, 10.0, 3.0]   # analytic
+        @test [du_a[vm["M.c[$j]"]] for j in 1:N] == [1.0, 10.0, 3.0]   # analytic
     end
 
     @testset "regrid weight matrix D(y[j]) = Σ_i W[i,j]·x[i]" begin
@@ -146,7 +147,7 @@ end
         du_r, _, _ = _cf_build(m, ics, Dict("W" => W); affine = false)
         @test d.n_acc_kernels >= 1
         @test du_a == du_r
-        @test [du_a[vm["y[$j]"]] for j in 1:3] == want
+        @test [du_a[vm["M.y[$j]"]] for j in 1:3] == want
     end
 
     @testset "2-D coefficient K[i,j] coinciding at all four box corners" begin
@@ -171,6 +172,6 @@ end
         du_r, _, _ = _cf_build(m, ics, Dict("K" => K); affine = false)
         @test d.n_acc_kernels >= 1
         @test du_a == du_r
-        @test all(du_a[vm["u[$i,$j]"]] == K[i, j] * (10i + j) for i in 1:N, j in 1:N)
+        @test all(du_a[vm["M.u[$i,$j]"]] == K[i, j] * (10i + j) for i in 1:N, j in 1:N)
     end
 end

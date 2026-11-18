@@ -4,10 +4,10 @@
 #
 #     D(J[i]) = makearray([[1,N]], [[1,N]]; [0, faq_i( Σ_j body(i, j) )])
 #
-# Native used to refuse it: with the cell index symbolic the whole-array nest
-# could not pick the makearray's region. It now takes one equation per region
+# With the cell index symbolic the whole-array nest cannot pick the makearray's
+# region, so native takes one equation per region
 # (`_makearray_region_equations`), and the nest keeps the nested reduction as a
-# counted loop (`_NEST_SCALAR_LOOPS`) instead of unrolling one term per `j` into
+# counted loop (`_ResolveCtx.nest_loops`) instead of unrolling one term per `j` into
 # its one body. This pins, against `compiler=:interpreter` (the per-cell unroll):
 #
 #   * bit-identity, `===` per element, for one region, `[0, nested]` over the same
@@ -101,20 +101,19 @@ end
 # but the per-cell build's left-to-right one differs in whole units.
 _mnr_u(k) = isodd(k) ? 1.0e8 * (1 + k / 7) : -(1.0e8 - k / 3)
 _mnr_ics(N; u = _mnr_u) = merge(
-    Dict{String, Any}("u[$k]" => u(k) for k in 1:N),
-    Dict{String, Any}("J[$k]" => 0.0 for k in 1:N)
+    Dict{String, Any}("M.u[$k]" => u(k) for k in 1:N),
+    Dict{String, Any}("M.J[$k]" => 0.0 for k in 1:N)
 )
 
 function _mnr_build(doc, ics; compiler = :native)
-    _MNR._reset_cascade_tally!()
-    r = _MNR._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
-    return (r, copy(_MNR._CASCADE_TALLY))
+    r = _MNR.Internal.build(doc; initial_conditions = ics, compiler = compiler)
+    return (r, r.report.counts)
 end
 function _mnr_du(doc, ics; compiler = :native)
     (f!, u0, p, _, vm), tally = _mnr_build(doc, ics; compiler = compiler)
     du = similar(u0); f!(du, u0, p, 0.0)
-    N = count(k -> startswith(k, "J["), keys(vm))
-    return ([du[vm["J[$i]"]] for i in 1:N], tally)
+    N = count(k -> startswith(k, "M.J["), keys(vm))
+    return ([du[vm["M.J[$i]"]] for i in 1:N], tally)
 end
 _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex(a))
 
@@ -185,7 +184,7 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
             @test get(tally, :percell_acc, 0) == 0
             grads = map((:interpreter, :native)) do c
                 (f!, u0, p, _, vm), _ = _mnr_build(_mnr_doc(N, rhs), ics; compiler = c)
-                g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vm["J[3]"]])
+                g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vm["M.J[3]"]])
                 ForwardDiff.gradient(g, u0)
             end
             @test _mnr_same(grads[1], grads[2])
@@ -277,17 +276,15 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
                 ),
             ]
         )
-        insp = _MNR.BuildInspection()
-        _MNR._build_evaluator(
-            _mnr_doc(N, rhs); initial_conditions = _mnr_ics(N),
-            compiler = :native, inspect = insp
-        )
-        rows = [r for r in insp.compiler_report.rules if occursin("D(J)", r.rule)]
+        rep = _MNR.Internal.build(
+            _mnr_doc(N, rhs); initial_conditions = _mnr_ics(N), compiler = :native
+        ).report
+        rows = [r for r in rep.compiler_report.rules if occursin("D(M.J)", r.rule)]
         # Later regions win: 1 (region 1), 2..3, 4..11 and 13..24 (region 2,
         # which do not tile a box), 12 (region 3).
         @test length(rows) == 5
         pieces = map(rows) do r
-            m = match(r"^D\(J\)\[(\w+)=24\], makearray region (\d) \((\w+)=(\d+)\.\.(\d+)\)$", r.rule)
+            m = match(r"^D\(M\.J\)\[(\w+)=24\], makearray region (\d) \((\w+)=(\d+)\.\.(\d+)\)$", r.rule)
             m === nothing ? nothing :
                 (m[1] == m[3], parse(Int, m[2]), parse(Int, m[4]), parse(Int, m[5]))
         end
@@ -298,7 +295,7 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
         @test all(r -> r.kind === :equation, rows)
         @test all(r -> r.tier in (:affine, :array_contraction_codegen), rows)
         # The equation's own decline, before the split, heads every piece's.
-        @test all(r -> !isempty(r.declines) && r.declines[1].first === :affine, rows)
+        @test all(r -> !isempty(r.declines) && r.declines[1].tier === :affine, rows)
     end
 
     @testset "zero-allocation steady-state f!" begin
@@ -316,7 +313,7 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
         ics = _mnr_ics(N; u = k -> 0.25 * k + 0.5)
         grads = map((:interpreter, :native)) do c
             (f!, u0, p, _, vm), _ = _mnr_build(_mnr_doc(N, two_regions(N)), ics; compiler = c)
-            g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vm["J[3]"]])
+            g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vm["M.J[3]"]])
             ForwardDiff.gradient(g, u0)
         end
         @test _mnr_same(grads[1], grads[2])
@@ -324,14 +321,8 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
 
     @testset "node lowerings are flat in N" begin
         function nodes(N, rhs)
-            _MNR._bench_reset!()
-            _MNR._BENCH_ON[] = true
-            try
-                _MNR._build_evaluator(_mnr_doc(N, rhs); initial_conditions = _mnr_ics(N))
-            finally
-                _MNR._BENCH_ON[] = false
-            end
-            _MNR._BENCH_COMPILE_CALLS[]
+            r = _MNR.Internal.build(_mnr_doc(N, rhs); initial_conditions = _mnr_ics(N))
+            get(r.report.counts, :compile_calls, 0)
         end
         for mk in (one_region, two_regions)
             @test nodes(16, mk(16)) == nodes(256, mk(256)) == nodes(1024, mk(1024))

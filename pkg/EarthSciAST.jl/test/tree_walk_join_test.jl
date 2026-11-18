@@ -1,4 +1,4 @@
-# Tests for M2 value-equality joins + filter predicates (ess-my4.2.2).
+# Tests for M2 value-equality joins + filter predicates.
 #
 # `join.on` (RFC semiring-faq-unified-ir §5.3) is an inner equi-join that gates
 # which (output × contracted) index combinations of an aggregate contribute a
@@ -12,7 +12,7 @@
 # Semantics (FIXED, §5.3): inner-only; many-to-many = m·n terms; key types
 # int / categorical only (floats / nulls rejected at build); unmatched → 0̄;
 # output in DECLARED index order (permutation-invariant value). These mirror the
-# Python reference suite tests/test_numpy_interpreter_join.py (ess-my4.2.4) so the
+# Python reference suite tests/test_numpy_interpreter_join.py so the
 # two bindings agree value-for-value.
 #
 # RFC: docs/content/rfcs/semiring-faq-unified-ir.md §5.3 / §5.7 / §7.2.
@@ -23,7 +23,7 @@ using JSON3
 
 const ESMJ = EarthSciAST
 
-@testset "tree_walk join.on + filter (ess-my4.2.2)" begin
+@testset "tree_walk join.on + filter" begin
     # ---- Helpers (scoped to this testset) -----------------------------------
     _v(n) = VarExpr(String(n))
     _n(x) = NumExpr(Float64(x))
@@ -44,15 +44,15 @@ const ESMJ = EarthSciAST
             expr_body = body, ranges = ranges, join = join, filter = filter
         )
         model = ESMJ.Model(
-            Dict("u" => ModelVariable(UnknownVariable)),
+            Dict("u" => ModelVariable(UnknownVariable; default = 0.0)),
             [ESMJ.Equation(_op("D", _v("u"); wrt = "t"), rhs)]
         )
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
             model; index_sets = index_sets,
             const_arrays = const_arrays
         )
         du = similar(u0); f!(du, u0, p, 0.0)
-        return du[vmap["u"]]
+        return du[vmap["M.u"]]
     end
 
     # ---- Degenerate / positional join → byte-identical to the join-free node --
@@ -199,16 +199,16 @@ const ESMJ = EarthSciAST
             join = Any[[("i", "k")]]
         )
         model = ESMJ.Model(
-            Dict("o" => ModelVariable(UnknownVariable)),
+            Dict("o" => ModelVariable(UnknownVariable; default = 0.0)),
             [ESMJ.Equation(lhs, rhs)]
         )
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
             model; index_sets = isets,
             const_arrays = Dict("v" => [5.0 7.0; 8.0 9.0])
         )
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vmap["o[1]"]] == 5.0
-        @test du[vmap["o[2]"]] == 0.0
+        @test du[vmap["M.o[1]"]] == 5.0
+        @test du[vmap["M.o[2]"]] == 0.0
     end
 
     @testset "interval index sets equi-join on their integer index value" begin
@@ -370,24 +370,25 @@ const ESMJ = EarthSciAST
             ranges = Dict("i" => _R("county"), "j" => _R("county")), join = Any[[("i", "j")]],
         )
         mk(tag) = ESMJ.Model(
-            Dict("u" => ModelVariable(UnknownVariable)),
+            Dict("u" => ModelVariable(UnknownVariable; default = 0.0)),
             [ESMJ.Equation(_op("D", _v("u"); wrt = "t"), _op(tag; common...))]
         )
-        run1(m) = (r = EarthSciAST._build_evaluator(m; index_sets = isets, const_arrays = ca); du = similar(r[2]); r[1](du, r[2], r[3], 0.0); du[r[5]["u"]])
+        run1(m) = (r = EarthSciAST.Internal.build(m; index_sets = isets, const_arrays = ca); du = similar(r.u0); r.f!(du, r.u0, r.p, 0.0); du[r.var_map["M.u"]])
         @test run1(mk("faq")) == run1(mk("faq")) == 1.0 + 4.0
     end
 
     @testset "canonical join_filter.esm fixture (ESI MOVES contraction) evaluates" begin
         path = joinpath(@__DIR__, "..", "..", "..", "tests", "valid", "faq", "join_filter.esm")
         doc = JSON3.read(read(path, String), Dict{String, Any})
-        # The fixture's parameters declare no shape; only `esm_problem` adopts
-        # one from data (esm-spec §4.3.4), so declare it for this direct build.
-        for name in ("activity", "base_rate")
-            doc["models"]["EmissionsAggregate"]["variables"][name]["shape"] = ["sourceType"]
-        end
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-            doc; model_name = "EmissionsAggregate",
-            const_arrays = Dict("activity" => [10.0, 20.0], "base_rate" => [3.0, 5.0])
+        # The fixture's parameters declare no shape; the build adopts one from
+        # the data (esm-spec §4.3.4), as `esm_problem` does.
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
+            doc; const_arrays = Dict(
+                "EmissionsAggregate.activity" => [10.0, 20.0],
+                "EmissionsAggregate.base_rate" => [3.0, 5.0]
+            ),
+            # The fixture's state declares no default.
+            initial_conditions = Dict("EmissionsAggregate.emissions" => 0.0)
         )
         du = similar(u0); f!(du, u0, p, 0.0)
         k = first(key for key in keys(vmap) if endswith(String(key), "emissions"))

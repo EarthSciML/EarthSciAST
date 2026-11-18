@@ -1,4 +1,4 @@
-# Execution runner for inline `tests` blocks (schema gt-cc1).
+# Execution runner for inline `tests` blocks.
 #
 # The `tests/valid/tests_analyses_comprehensive.esm` fixture exists for
 # schema coverage of the inline `tests` / `analyses` surface — parsing and
@@ -99,7 +99,7 @@ end
 
 # Execute every inline `tests` block / `ReactionSystem` tests list inside
 # a single .esm fixture. Shared by the comprehensive fixture and the
-# tests/simulation/ physics fixtures (gt-l5b).
+# tests/simulation/ physics fixtures.
 function _execute_fixture_tests(fpath::AbstractString; label::AbstractString = basename(fpath))
     file = _ESM_TB.load_path(fpath)
     ran = false
@@ -144,9 +144,8 @@ end
     any_tests = _execute_fixture_tests(fixture_path; label = "tests_analyses_comprehensive")
     @test any_tests
 
-    # tests/simulation/ physics fixtures — gt-l5b migrated these from the
-    # filesystem-paired `.esm` + `reference_solutions/*.json` convention to
-    # inline `tests` blocks. Walk the directory so newly-migrated fixtures
+    # tests/simulation/ physics fixtures carry their references in inline
+    # `tests` blocks. Walk the directory so new fixtures
     # are picked up automatically without editing this runner.
     #
     # Known-broken fixtures exercise Julia-binding gaps rather than spec
@@ -164,10 +163,9 @@ end
         # the right zero-crossing equation, and that it FIRES.
         "bouncing_ball.esm" => "driven by the explicit J2 continuous-event testset below",
         # PDE fixtures (spatial independent variables) — the System()
-        # constructor routes to ModelingToolkit.PDESystem, which this
-        # ODE-only runner does not drive. A parallel PDE runner is out
-        # of scope for the inline tests-block contract; schema + other
-        # bindings still consume these fixtures.
+        # constructor refuses them and this binding has no PDE
+        # constructor; schema + other bindings still consume these
+        # fixtures.
         "spatial_diffusion.esm" => "PDE (no ODE runner path)",
         "spatial_limitation.esm" => "PDE (no ODE runner path)",
     )
@@ -205,26 +203,20 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# Audit 2026-07-14, finding J2 — MTK continuous events.
+# MTK continuous events.
 #
-# `ext/mtk_ext/variables.jl` handed `SymbolicContinuousCallback` the raw `Num`
-# that `_esm_to_symbolic` produces. MTK takes `conditions::Vector{Equation}` —
-# a vector of ZERO-CROSSING functions — so every model carrying a continuous
-# event died at System() construction with
+# MTK's `SymbolicContinuousCallback` takes `conditions::Vector{Equation}` — a
+# vector of ZERO-CROSSING functions — not the raw `Num` that `_esm_to_symbolic`
+# produces, so `ext/mtk_ext/variables.jl` must lower each event condition to a
+# root equation before handing it over.
 #
-#     MethodError: no method matching SymbolicContinuousCallback(::Num, ::Vector{Equation})
-#
-# making the whole `continuous_events` feature non-functional. It was invisible
-# because this file replaced the fixture with `@test_skip false` — a test that
-# can never pass, and therefore can only ever hide the bug it stands in for.
-#
-# This is the assertion that stands in its place. It is deliberately about the
-# things J2 is about — the event exists, it lowers to the right root equation,
-# and it FIRES — and NOT about `bouncing_ball.esm`'s inline `tests` block, whose
+# This testset is deliberately about the event itself — it exists, it lowers to
+# the right root equation, and it FIRES — and NOT about `bouncing_ball.esm`'s
+# inline `tests` block, whose
 # pinned reference trajectory disagrees with the exactly-computable analytic one
 # (it expects h(1.984081) = 4.882389; the closed form gives 4.71543).
 # ---------------------------------------------------------------------------
-@testset "continuous events fire (audit J2)" begin
+@testset "continuous events fire" begin
     fpath = joinpath(
         @__DIR__, "..", "..", "..", "..",
         "tests", "simulation", "bouncing_ball.esm"
@@ -232,8 +224,8 @@ end
     @test isfile(fpath)
     model = _ESM_TB.load_path(fpath).models["BallDynamics"]
 
-    # 1. It BUILDS. This alone is the J2 regression guard: before the fix this
-    #    line threw a MethodError for every model with a continuous event.
+    # 1. It BUILDS: System() construction must not throw a MethodError for a
+    #    model with a continuous event.
     sys = _MTK_TB.System(model)
     cevs = _MTK_TB.continuous_events(sys)
     @test length(cevs) == 1

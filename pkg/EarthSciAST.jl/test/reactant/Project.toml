@@ -1,0 +1,29 @@
+# Environment for the Reactant test suite (test/reactant/runtests.jl): every
+# test of the direct StableHLO emitter (EarthSciASTReactantExt) and of
+# `compiler = :xla`.
+#
+# Reactant bundles an XLA runtime, so it is kept out of the package's own test
+# target: a regular `Pkg.test()` neither resolves nor precompiles it. Only the
+# `julia-xla` job of .github/workflows/xla-backends.yml instantiates this
+# environment.
+#
+# Manifest.toml is gitignored repo-wide, so EarthSciAST is not pinned to a path
+# here: `Pkg.develop(path = "pkg/EarthSciAST.jl")` points the environment at the
+# checkout before the first run (see runtests.jl). A `[sources]` entry would do
+# the same, but Julia 1.10 ignores it.
+[deps]
+EarthSciAST = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+OrdinaryDiffEqRosenbrock = "43230ef6-c299-4910-a778-202eb28ce4ce"
+OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
+Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+JSON3 = "1"
+OrdinaryDiffEqRosenbrock = "1, 2"
+OrdinaryDiffEqTsit5 = "1, 2"
+Reactant = "0.2"
+SciMLBase = "2, 3"
+julia = "1.10"

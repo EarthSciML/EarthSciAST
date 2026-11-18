@@ -3,7 +3,7 @@
 # buffer is cut out of the per-step RHS into a cache buffer filled once per refresh,
 # gathered live by the hot RHS — instead of inlined + recomputed every step (which,
 # for a deep regrid->physics chain, collapses into an un-lowerable RHS). Opt-in via
-# the `materialize_out` sink; without it, the pre-cut inline path is byte-identical.
+# the `materialize_out` sink; without it, the field stays inlined.
 #
 # This is solver-free (builds the RHS, evaluates it directly): the fill/cache
 # semantics and the classification are the contract, not the integration.
@@ -20,82 +20,82 @@ _dm_k(offset) = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
 
 @testset "discrete-cadence materialization (DiscreteMaterializer)" begin
     file = _DM_ESS.load_path(_dm_fixture())
-    ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    ics = Dict{String, Float64}("M.c[1]" => 0.0, "M.c[2]" => 0.0, "M.c[3]" => 0.0)
 
     @testset "cut matches the inline baseline; only the param-tainted var is cached" begin
         # Inline baseline (no sink): g and k are both inlined into the state RHS.
         srcA = [1.0, 1.0]
-        f0!, u00, p0, _, vm0 = _DM_ESS._build_evaluator(
+        f0!, u00, p0, _, vm0 = _DM_ESS.Internal.build(
             file; initial_conditions = ics,
             const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => srcA)
         )
         du0 = zero(u00); f0!(du0, u00, p0, 0.0)
-        base = [du0[vm0["c[$j]"]] for j in 1:3]
+        base = [du0[vm0["M.c[$j]"]] for j in 1:3]
         @test base ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)   # offset default = 1.0
 
         # Cut (sink): g becomes a discrete cache; k (const-fed) stays inline.
         srcB = [1.0, 1.0]
         dm = _DM_ESS.DiscreteMaterializer()
-        f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+        f!, u0, p, _, vm = _DM_ESS.Internal.build(
             file; initial_conditions = ics,
             const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => srcB),
             materialize_out = dm
         )
-        @test haskey(dm.caches, "g")             # param-tainted, state-free -> cached
-        @test !haskey(dm.caches, "k")            # const-fed -> NOT cached (regression guard)
-        @test dm.caches["g"] == _dm_g([1.0, 1.0])
+        @test haskey(dm.caches, "M.g")             # param-tainted, state-free -> cached
+        @test !haskey(dm.caches, "M.k")            # const-fed -> NOT cached (regression guard)
+        @test dm.caches["M.g"] == _dm_g([1.0, 1.0])
         du = zero(u0); f!(du, u0, p, 0.0)
-        @test [du[vm["c[$j]"]] for j in 1:3] == base   # cut is numerically identical
+        @test [du[vm["M.c[$j]"]] for j in 1:3] == base   # cut is numerically identical
     end
 
     @testset "the cache is discrete: stale until materialize!, then tracks" begin
         srcB = [1.0, 1.0]
         dm = _DM_ESS.DiscreteMaterializer()
-        f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+        f!, u0, p, _, vm = _DM_ESS.Internal.build(
             file; initial_conditions = ics,
             const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => srcB),
             materialize_out = dm
         )
         du = zero(u0); f!(du, u0, p, 0.0)
-        initial = [du[vm["c[$j]"]] for j in 1:3]
+        initial = [du[vm["M.c[$j]"]] for j in 1:3]
 
         # Refresh the raw buffer in place but DON'T re-materialize: the RHS reads the
         # cache, so it must be STALE — it did NOT recompute g from the new src.
         srcB .= [2.0, 3.0]
         fill!(du, 0.0); f!(du, u0, p, 0.0)
-        @test [du[vm["c[$j]"]] for j in 1:3] == initial
+        @test [du[vm["M.c[$j]"]] for j in 1:3] == initial
 
         # Re-materialize (what the refresh callback's post_refresh hook does): the
         # cache updates and the RHS tracks.
         dm.materialize!()
-        @test dm.caches["g"] == _dm_g([2.0, 3.0])
+        @test dm.caches["M.g"] == _dm_g([2.0, 3.0])
         fill!(du, 0.0); f!(du, u0, p, 0.0)
-        @test [du[vm["c[$j]"]] for j in 1:3] ≈ _dm_g([2.0, 3.0]) .+ _dm_k(1.0)
+        @test [du[vm["M.c[$j]"]] for j in 1:3] ≈ _dm_g([2.0, 3.0]) .+ _dm_k(1.0)
     end
 
     @testset "no sink ⇒ no discrete cut (opt-in), build still succeeds" begin
-        # Without the sink the param-tainted g stays inlined — the pre-cut path.
+        # Without the sink the param-tainted g stays inlined.
         src = [1.0, 1.0]
-        f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+        f!, u0, p, _, vm = _DM_ESS.Internal.build(
             file; initial_conditions = ics,
             const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => src)
         )
         du = zero(u0); f!(du, u0, p, 0.0)
-        @test [du[vm["c[$j]"]] for j in 1:3] ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)
+        @test [du[vm["M.c[$j]"]] for j in 1:3] ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)
     end
 end
 
 # ════════════════════════════════════════════════════════════════════════════
-# The cadence CLASSIFIER must see a state reference wherever it hides (ess-5d1)
+# The cadence CLASSIFIER must see a state reference wherever it hides
 # ════════════════════════════════════════════════════════════════════════════
 # A discrete-cadence cache is filled with u = 0 / t = 0 and refilled only on a data
 # refresh, so a def that reaches a continuous state or `t` must NEVER be classified
 # discrete — it would freeze at u = 0 with no error. The classifier decides this with
-# a name-reachability closure over `_referenced_var_names`, which used to walk only
-# `args`/`expr_body`/`lower`/`upper`/`values`. A state read from an aggregate `filter`
-# predicate (a RUNTIME `ifelse(pred, term, 0̄)` guard — resolve.jl), a value-invention
-# `key` or an expression-valued dense `ranges`
-# bound was therefore INVISIBLE, and the def was silently frozen. Two layers now:
+# a name-reachability closure over `_referenced_var_names`. A state read from an
+# aggregate `filter` predicate (a RUNTIME `ifelse(pred, term, 0̄)` guard — resolve.jl),
+# a value-invention `key` or an expression-valued dense `ranges` bound is INVISIBLE
+# to a walk over only `args`/`expr_body`/`lower`/`upper`/`values`, and the def would
+# be silently frozen. Two layers:
 #   (a) the walker goes through the shared `child_exprs` enumeration → every field;
 #   (b) `_build_discrete_materializer!` CHECKS the compiled fill node for a state /
 #       `t` leaf, so a future classifier blind spot is a build error, not a wrong
@@ -116,7 +116,7 @@ _dmc_agg(; kw...) = _dmc_op(
 # Run the cadence split on a single def. Returns the discrete set.
 _dmc_split(rhs) = first(
     _DM_ESS._discrete_materialize_split(
-        _DM_ESS.Equation[_DM_ESS.Equation(_dmc_v("Fcache"), rhs)],
+        _DM_ESS._DefGraph(_DM_ESS.Equation[_DM_ESS.Equation(_dmc_v("Fcache"), rhs)]),
         Set(["Fcache"]),      # inline candidates (array observeds)
         Set{String}(),        # const-tier pool
         ["u"],                # continuous state var names
@@ -125,7 +125,7 @@ _dmc_split(rhs) = first(
     )
 )       # scalar params
 
-@testset "cadence classifier sees state refs in every expression field (ess-5d1)" begin
+@testset "cadence classifier sees state refs in every expression field" begin
     @testset "control: a state-free, param-tainted aggregate IS still cut" begin
         # The whole point of the tier — this must not regress. No state anywhere.
         @test _dmc_split(_dmc_agg()) == Set(["Fcache"])
@@ -198,20 +198,22 @@ end
 # refuses to compile a fill node that reads `u` or `t`. Drive it directly with a
 # deliberately mis-classified def — this is exactly the shape the old classifier let
 # through, and it is what turned a wrong trajectory into a loud failure.
-@testset "discrete fill kernels are CHECKED state-free at build (ess-5d1)" begin
+@testset "discrete fill kernels are CHECKED state-free at build" begin
     raw = [1.0, 2.0, 3.0, 4.0]
     mk(pgather) = _DM_ESS._build_discrete_materializer!(
         _DM_ESS.DiscreteMaterializer(),
         Set(["Fcache"]),
         Dict{String, _DM_ESS.ASTExpr}("Fcache" => pgather),
         Dict{String, _DM_ESS.ASTExpr}(),                                  # resolved_obs
-        Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),  # array_var_info
-        Dict{String, Int}("u[$j]" => j for j in 1:4),                     # var_map
-        Dict{String, Any}(),                                              # const_arrays
-        Dict{String, _DM_ESS._PGatherArray}(                              # live buffers
-            "raw" => _DM_ESS._PGatherArray(raw, [4])
-        ),
-        Set{Symbol}(), Dict{String, Any}(), nothing, 4
+        _DM_ESS._CompileScope(
+            Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),  # array_var_info
+            Dict{String, Int}("u[$j]" => j for j in 1:4),                     # var_map
+            Dict{String, Any}(),                                              # const_arrays
+            Dict{String, _DM_ESS._PGatherArray}(                              # live buffers
+                "raw" => _DM_ESS._PGatherArray(raw, [4])
+            ),
+            Dict{Symbol, Int}()
+        ), nothing, 4
     )
 
     @testset "a state-reading fill throws E_TREEWALK_DISCRETE_MATERIALIZE" begin
@@ -248,13 +250,15 @@ end
             Set(["Fcache"]),
             Dict{String, _DM_ESS.ASTExpr}("Fcache" => _dmc_agg()),
             Dict{String, _DM_ESS.ASTExpr}(),
-            Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),
-            Dict{String, Int}("u[$j]" => j for j in 1:4),
-            Dict{String, Any}(),
-            Dict{String, _DM_ESS._PGatherArray}(
-                "raw" => _DM_ESS._PGatherArray(raw, [4])
-            ),
-            Set{Symbol}(), Dict{String, Any}(), nothing, 4
+            _DM_ESS._CompileScope(
+                Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),
+                Dict{String, Int}("u[$j]" => j for j in 1:4),
+                Dict{String, Any}(),
+                Dict{String, _DM_ESS._PGatherArray}(
+                    "raw" => _DM_ESS._PGatherArray(raw, [4])
+                ),
+                Dict{Symbol, Int}()
+            ), nothing, 4
         )
         @test dm.caches["Fcache"] == raw       # initial fill reads the live buffer
         raw .= [9.0, 9.0, 9.0, 9.0]
@@ -332,16 +336,16 @@ _dmn_doc(N) = Dict{String, Any}(
 )
 
 function _dmn_build(N, compiler)
-    dm = _DM_ESS.DiscreteMaterializer(); insp = _DM_ESS.BuildInspection()
+    dm = _DM_ESS.DiscreteMaterializer()
     W = [sin(0.1 * i * j) for i in 1:2, j in 1:N]
-    ics = Dict{String, Float64}("c[$j]" => 0.0 for j in 1:N)
-    _DM_ESS._build_evaluator(
+    ics = Dict{String, Float64}("M.c[$j]" => 0.0 for j in 1:N)
+    b = _DM_ESS.Internal.build(
         _dmn_doc(N); initial_conditions = ics,
         const_arrays = Dict("W" => W),
-        param_arrays = Dict("src" => [0.7, -1.3], "F" => [cos(0.2j) for j in 1:N]),
-        materialize_out = dm, inspect = insp, compiler = compiler
+        param_arrays = Dict("M.src" => [0.7, -1.3], "M.F" => [cos(0.2j) for j in 1:N]),
+        materialize_out = dm, compiler = compiler
     )
-    return dm, insp.compiler_report
+    return dm, b.report.compiler_report
 end
 
 # Every RuntimeGeneratedFunction type reachable from `root` (the walk
@@ -383,7 +387,7 @@ end
 
 @testset "the compiled discrete fill is shared across N" begin
     (dmA, repA), (dmB, repB) = _dmn_build(16, :native), _dmn_build(160, :native)
-    tier(rep) = [(r.kind, r.tier) for r in rep.rules if r.rule == "g"]
+    tier(rep) = [(r.kind, r.tier) for r in rep.rules if r.rule == "M.g"]
     @test tier(repA) == tier(repB)
     @test only(tier(repA))[1] === :observed
     @test only(tier(repA))[2] in (:affine, :codegen, :array_contraction_codegen)
@@ -392,7 +396,7 @@ end
     @test tA == tB
     for (N, dm) in ((16, dmA), (160, dmB))
         dmi, repi = _dmn_build(N, :interpreter)
-        @test all(dm.caches["g"] .=== dmi.caches["g"])
+        @test all(dm.caches["M.g"] .=== dmi.caches["M.g"])
         @test tier(repi) == [(:observed, :discrete_percell)]
     end
 end
@@ -416,27 +420,27 @@ end
 _dmp_expected(src, offset) = _dm_g(src) .* offset .+ _dm_k(offset)
 
 @testset "a discrete fill that reads a parameter follows the call's p" begin
-    ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    ics = Dict{String, Float64}("M.c[1]" => 0.0, "M.c[2]" => 0.0, "M.c[3]" => 0.0)
     src = [1.0, 2.0]
     for compiler in (:native, :interpreter)
         @testset "$compiler" begin
             dm = _DM_ESS.DiscreteMaterializer()
-            f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+            f!, u0, p, _, vm = _DM_ESS.Internal.build(
                 _dmp_file(); compiler = compiler,
                 initial_conditions = ics, const_arrays = Dict("W" => _DM_W),
                 param_arrays = Dict("src" => src), materialize_out = dm
             )
-            @test haskey(dm.caches, "g")
+            @test haskey(dm.caches, "M.g")
             key = only(k for k in keys(p) if endswith(String(k), "offset"))
-            rhs(q) = (du = zero(u0); f!(du, u0, q, 0.0); [du[vm["c[$j]"]] for j in 1:3])
+            rhs(q) = (du = zero(u0); f!(du, u0, q, 0.0); [du[vm["M.c[$j]"]] for j in 1:3])
             @test rhs(p) ≈ _dmp_expected(src, 1.0)
             p2 = merge(p, NamedTuple{(key,)}((2.0,)))
             @test rhs(p2) ≈ _dmp_expected(src, 2.0)
-            @test dm.caches["g"] ≈ _dm_g(src) .* 2.0
+            @test dm.caches["M.g"] ≈ _dm_g(src) .* 2.0
             # A refresh with no `p` refills with the one the caches hold.
             src .= [3.0, 5.0]
             dm.materialize!()
-            @test dm.caches["g"] ≈ _dm_g(src) .* 2.0
+            @test dm.caches["M.g"] ≈ _dm_g(src) .* 2.0
             @test rhs(p) ≈ _dmp_expected(src, 1.0)          # and back again
             src .= [1.0, 2.0]
             dm.materialize!()
@@ -463,7 +467,7 @@ _dmp_expected(src, offset) = _dm_g(src) .* offset .+ _dm_k(offset)
     if VERSION >= v"1.12"
         @testset "a same-p call does not allocate" begin
             dm = _DM_ESS.DiscreteMaterializer()
-            f!, u0, p, _, _ = _DM_ESS._build_evaluator(
+            f!, u0, p, _, _ = _DM_ESS.Internal.build(
                 _dmp_file(); compiler = :native,
                 initial_conditions = ics, const_arrays = Dict("W" => _DM_W),
                 param_arrays = Dict("src" => copy(src)), materialize_out = dm
@@ -485,39 +489,39 @@ end
 # beside raw reads of the new one.
 using ForwardDiff
 @testset "an announced direct write reaches the discrete caches" begin
-    ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    ics = Dict{String, Float64}("M.c[1]" => 0.0, "M.c[2]" => 0.0, "M.c[3]" => 0.0)
     for compiler in (:native, :interpreter)
-        @testset "$compiler, build_evaluator" begin
+        @testset "$compiler, Internal.build" begin
             src = [1.0, 1.0]
             dm = _DM_ESS.DiscreteMaterializer()
-            f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+            f!, u0, p, _, vm = _DM_ESS.Internal.build(
                 _DM_ESS.load_path(_dm_fixture()); compiler = compiler, initial_conditions = ics,
                 const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => src),
                 materialize_out = dm
             )
-            @test haskey(dm.caches, "g")
-            rhs() = (du = zero(u0); f!(du, u0, p, 0.0); [du[vm["c[$j]"]] for j in 1:3])
+            @test haskey(dm.caches, "M.g")
+            rhs() = (du = zero(u0); f!(du, u0, p, 0.0); [du[vm["M.c[$j]"]] for j in 1:3])
             @test rhs() ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)
             src .= [2.0, 3.0]
-            _DM_ESS.notify_forcing_refresh!(src)                 # the buffer's builds
+            _DM_ESS.notify_forcing_refresh!(dm)                  # the build's materializer
             @test rhs() ≈ _dm_g([2.0, 3.0]) .+ _dm_k(1.0)
-            @test dm.caches["g"] ≈ _dm_g([2.0, 3.0])
+            @test dm.caches["M.g"] ≈ _dm_g([2.0, 3.0])
             src .= [5.0, 7.0]
-            _DM_ESS.notify_forcing_refresh!()                    # every build
+            _DM_ESS.notify_forcing_refresh!(dm)
             @test rhs() ≈ _dm_g([5.0, 7.0]) .+ _dm_k(1.0)
             # Refilled once per announcement, not on every call.
-            g = copy(dm.caches["g"]); src .= [0.0, 0.0]
+            g = copy(dm.caches["M.g"]); src .= [0.0, 0.0]
             @test rhs() ≈ _dm_g([5.0, 7.0]) .+ _dm_k(1.0)       # unannounced: stale, as before
-            @test dm.caches["g"] == g
+            @test dm.caches["M.g"] == g
             # `refresh!` is the same refill for a reader that is not `f!`: a
             # no-op while the caches are current, a refill after an announcement.
             e = dm.epoch[]
             dm.refresh!()
-            @test dm.epoch[] == e && dm.caches["g"] == g
+            @test dm.epoch[] == e && dm.caches["M.g"] == g
             src .= [3.0, 1.0]
-            _DM_ESS.notify_forcing_refresh!(src)
+            _DM_ESS.notify_forcing_refresh!(dm)
             dm.refresh!()
-            @test dm.caches["g"] ≈ _dm_g([3.0, 1.0])
+            @test dm.caches["M.g"] ≈ _dm_g([3.0, 1.0])
             e = dm.epoch[]
             @test rhs() ≈ _dm_g([3.0, 1.0]) .+ _dm_k(1.0)
             @test dm.epoch[] == e                               # f! found them current
@@ -536,7 +540,8 @@ using ForwardDiff
             f(x) = (du = zero(x); prob.f!(du, x, prob.p, 0.25); du)
             before = f(u)[cells]
             src .= [4.0, 9.0]
-            _DM_ESS.notify_forcing_refresh!(src)
+            _DM_ESS.notify_forcing_refresh!(prob, "src")
+            @test_throws ArgumentError _DM_ESS.notify_forcing_refresh!(prob, "nope")
             after = f(u)[cells]
             @test after ≈ before .+ (_dm_g([4.0, 9.0]) .- _dm_g([1.0, 2.0]))
             J = ForwardDiff.jacobian(f, u)
@@ -560,7 +565,7 @@ using ForwardDiff
         @test haskey(prob.dm.caches, "M.q")
         @test _DM_ESS.observed_field(prob, "M.q") == [0.0, 0.0, 0.0]
         G .= [1000 + 7a + 3i for a in 1:2, i in 1:3]
-        _DM_ESS.notify_forcing_refresh!(G)
+        _DM_ESS.notify_forcing_refresh!(prob)
         @test _DM_ESS.observed_field(prob, "M.q") == [7.0, 7.0, 7.0]
         @test _DM_ESS.observed_field(prob, "M.q") == [7.0, 7.0, 7.0]   # memo hit
         e = prob.dm.epoch[]

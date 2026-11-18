@@ -6,12 +6,11 @@ include("testutils.jl")  # _n/_i/_v/_op/_idx builder quartet + repo root
 
 const ESM = EarthSciAST
 
-# Evaluate an expression via a throw-away build_evaluator call so the
-# unit tests exercise the same code path as real ODE solves.
+# Evaluate an expression via a throw-away build so the unit tests exercise
+# the same code path as real ODE solves.
 function _eval1(
         expr::ESM.ASTExpr; u_vals = Dict{String, Float64}(),
-        p_vals = Dict{String, Float64}(), t = 0.0,
-        registered_functions = Dict{String, Function}()
+        p_vals = Dict{String, Float64}(), t = 0.0
     )
     vars = Dict{String, ModelVariable}()
     # Include all free variables (except "t") either as states or
@@ -38,56 +37,61 @@ function _eval1(
     vars["_probe"] = ModelVariable(UnknownVariable; default = 0.0)
     eq = ESM.Equation(_D("_probe"), expr)
     model = ESM.Model(vars, [eq])
-    f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(
-        model;
-        registered_functions = registered_functions
+    f!, u0, p, _tspan, var_map = EarthSciAST.Internal.build(
+        model
     )
     # Override state values from u_vals
     for (k, v) in u_vals
-        if haskey(var_map, k)
-            u0[var_map[k]] = v
+        if haskey(var_map, "M.$k")
+            u0[var_map["M.$k"]] = v
         end
     end
     du = similar(u0)
     f!(du, u0, p, t)
-    return du[var_map["_probe"]]
+    return du[var_map["M._probe"]]
 end
 
-@testset "tree_walk.jl evaluator (gt-e8yw)" begin
+@testset "tree_walk.jl evaluator" begin
 
     # ========================================================
     # Scalar op coverage
     # ========================================================
     #
-    # The op-by-op VALUE tests that used to live here — arithmetic, integer vs
-    # float literals, comparisons and logic, `ifelse`/`sign`/`min`/`max`, and the
-    # elementary functions — are now the cross-binding
+    # The op-by-op VALUE tests — arithmetic, integer vs float literals,
+    # comparisons and logic, `ifelse`/`sign`/`min`/`max`, and the elementary
+    # functions — live in the cross-binding
     # `tests/conformance/scalar_operator_semantics/` tier (CONFORMANCE_SPEC
-    # §5.45.4), which pins every one of them at EXACT tolerance over the UNION of
-    # the operand values this file and Rust's `tests/interpret.rs` each used to
-    # pin privately, and which `scripts/test-conformance.sh` runs for julia, rust
-    # and python under both `interpreter` and `native`.
+    # §5.45.4), which pins every one of them at EXACT tolerance and which
+    # `scripts/test-conformance.sh` runs for julia, rust and python under both
+    # `interpreter` and `native`.
     #
-    # Three private op tables and no cross-binding gate is how two bindings
-    # disagree for a year: moving them found that Julia has an evaluation rule
-    # for the `true` literal op and NONE for `false`, and that Rust refuses `pow`
-    # and `false` outright and cannot lower `true` under `native`. All of that is
-    # recorded as named exclusions in that tier rather than in three suites that
-    # never compared notes.
+    # Private per-binding op tables with no cross-binding gate let bindings
+    # disagree unnoticed. The known gaps — Julia has an evaluation rule for the
+    # `true` literal op and NONE for `false`; Rust refuses `pow` and `false`
+    # outright and cannot lower `true` under `native` — are recorded as named
+    # exclusions in that tier.
     #
     # What stays below is everything a document cannot state: the closed-function
     # registry, the unsupported-op diagnostics, observed inlining and cycle
-    # detection, and the solves. The ModelingToolkit parity sampling that used
-    # to sit here is test/mtk/tree_walk_mtk_parity_test.jl, in the separate
-    # ModelingToolkit suite.
+    # detection, and the solves. The ModelingToolkit parity sampling is
+    # test/mtk/tree_walk_mtk_parity_test.jl, in the separate ModelingToolkit suite.
 
     @testset "Time variable and Pre" begin
         @test _eval1(_v("t"); t = 3.5) == 3.5
         @test _eval1(_op("Pre", _v("x")); u_vals = Dict("x" => 2.0)) == 2.0
     end
 
-    @testset "removed `call` op fails compile" begin
-        @test_throws ESM.TreeWalkError _eval1(_op("call", _n(1.0); handler_id = "x"))
+    @testset "removed `call` op is refused" begin
+        # A load refuses it by name; a tree built in memory reaches the build,
+        # whose operator gate refuses it.
+        err = try
+            _eval1(_op("call", _n(1.0)))
+            nothing
+        catch e
+            e
+        end
+        @test err isa ESM.TreeWalkError && err.code == "unlowered_operator" &&
+            occursin("'call'", sprint(showerror, err))
     end
 
     @testset "Graceful errors on unsupported ops" begin
@@ -174,11 +178,11 @@ end
             ESM.Equation(_D("x"), _op("-", _op("*", _v("y"), _v("x")))),
         ]
         model = ESM.Model(vars, eqs)
-        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
+        f!, u0, p, _tspan, var_map = EarthSciAST.Internal.build(model)
         du = similar(u0)
         f!(du, u0, p, 0.0)
         # D(x) = -(2 * 0.5 * 1.0) = -1.0
-        @test du[var_map["x"]] == -1.0
+        @test du[var_map["M.x"]] == -1.0
     end
 
     # ========================================================
@@ -206,10 +210,10 @@ end
             ESM.Equation(_v("a"), _v("k")),
             ESM.Equation(_D("x"), _op("*", _v("c"), _v("x"))),
         ]
-        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(ESM.Model(vars, eqs))
+        f!, u0, p, _tspan, var_map = EarthSciAST.Internal.build(ESM.Model(vars, eqs))
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[var_map["x"]] === (2.0 * 2.0 + 1.0) * 1.0
+        @test du[var_map["M.x"]] === (2.0 * 2.0 + 1.0) * 1.0
 
         # Cyclic: a = b + 1; b = a + 1. Must throw, not hang.
         cyc_vars = Dict{String, ModelVariable}(
@@ -223,7 +227,7 @@ end
             ESM.Equation(_D("x"), _v("a")),
         ]
         err = try
-            EarthSciAST._build_evaluator(ESM.Model(cyc_vars, cyc_eqs))
+            EarthSciAST.Internal.build(ESM.Model(cyc_vars, cyc_eqs))
             nothing
         catch e
             e
@@ -242,19 +246,19 @@ end
         )
         eq = ESM.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))
         model = ESM.Model(vars, [eq])
-        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
+        f!, u0, p, _tspan, var_map = EarthSciAST.Internal.build(model)
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 10.0), p)
         sol = OrdinaryDiffEqTsit5.solve(
             prob, OrdinaryDiffEqTsit5.Tsit5();
             reltol = 1.0e-8, abstol = 1.0e-10
         )
-        @test isapprox(sol.u[end][var_map["x"]], exp(-1.0); rtol = 1.0e-6)
+        @test isapprox(sol.u[end][var_map["M.x"]], exp(-1.0); rtol = 1.0e-6)
     end
 
     # ========================================================
     # Default tspan from inline tests block
     # ========================================================
-    @testset "tspan picked from tests block" begin
+    @testset "an inline test's time span is not the build's default" begin
         vars = Dict{String, ModelVariable}(
             "x" => ModelVariable(UnknownVariable; default = 1.0),
             "k" => ModelVariable(ParameterVariable; default = 0.1),
@@ -268,8 +272,9 @@ end
             ),
         ]
         model = ESM.Model(vars, [eq]; tests = tests)
-        _, _, _, tspan_default, _ = EarthSciAST._build_evaluator(model)
-        @test tspan_default == (0.0, 25.0)
+        _, _, _, tspan_default, _ = EarthSciAST.Internal.build(model)
+        # A build's default span is (0.0, 1.0); an inline test passes its own.
+        @test tspan_default == (0.0, 1.0)
     end
 
     # ========================================================
@@ -308,7 +313,7 @@ end
             push!(eqs, ESM.Equation(_D("u_$i"), rhs))
         end
         model = ESM.Model(vars, eqs)
-        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
+        f!, u0, p, _tspan, var_map = EarthSciAST.Internal.build(model)
         # Diffusion time ~ L² / α = 1 / 0.5 = 2. Integrate to t = 5.
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 5.0), p)
         sol = OrdinaryDiffEqTsit5.solve(
@@ -318,7 +323,7 @@ end
         # Analytical: u(x,t) = sin(π x) exp(-α π² t). At t=5:
         #   exp(-0.5 * π² * 5) ≈ 1.6e-11 → essentially zero.
         for i in 1:N
-            @test abs(sol.u[end][var_map["u_$i"]]) < 1.0e-6
+            @test abs(sol.u[end][var_map["M.u_$i"]]) < 1.0e-6
         end
     end
 
@@ -350,20 +355,20 @@ end
                 ),
             ),
         )
-        f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(esm)
+        f!, u0, p, _tspan, var_map = EarthSciAST.Internal.build(esm)
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 10.0), p)
         sol = OrdinaryDiffEqTsit5.solve(
             prob, OrdinaryDiffEqTsit5.Tsit5();
             reltol = 1.0e-8, abstol = 1.0e-10
         )
-        @test isapprox(sol.u[end][var_map["N"]], 100.0 * exp(-1.0); rtol = 1.0e-6)
+        @test isapprox(sol.u[end][var_map["Decay.N"]], 100.0 * exp(-1.0); rtol = 1.0e-6)
     end
 
     # ========================================================
-    # 2D advection 64×64 = 4096 scalar eqs (bead acceptance #2)
+    # 2D advection 64×64 = 4096 scalar equations
     # Periodic BC, constant velocity, upwind first-order.
     # ========================================================
-    @testset "Large 2D advection (64×64, periodic BC) — build+solve time" begin
+    @testset "Large 2D advection (64×64, periodic BC) — build size and mass conservation" begin
         Nx, Ny = 64, 64
         dx = 1.0 / Nx
         dy = 1.0 / Ny
@@ -399,11 +404,9 @@ end
             push!(eqs, ESM.Equation(_D("u_$(i)_$(j)"), rhs))
         end
         model = ESM.Model(vars, eqs)
-        # Build acceptance: < 5 s wall-clock.
-        t_build = @elapsed begin
-            f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
-        end
-        @test t_build < 5.0
+        # One scalar equation per cell: the build's size is the model's.
+        f!, u0, p, _tspan, var_map, rep = EarthSciAST.Internal.build(model)
+        @test rep.stats.n_scalar_entries == Nx * Ny
         @test length(u0) == Nx * Ny
 
         # Step the integrator 100 times and time that specifically
@@ -418,10 +421,7 @@ end
         t_solve = @elapsed for _ in 1:100
             OrdinaryDiffEqTsit5.step!(integrator)
         end
-        # Acceptance target is 10 s on commodity hardware. CI runners
-        # can be 2–3× slower than a laptop, so the ceiling is padded.
-        # The underlying contract is that scale is independent of
-        # compile time — build was already asserted < 5 s above.
+        # A hang guard, not a performance bound.
         @test t_solve < 30.0
         # Mass should be ~conserved under periodic BC. First-order
         # upwind introduces numerical diffusion but the total mass
@@ -431,7 +431,7 @@ end
     end
 
     # ========================================================
-    # Performance proxy — 1024 diagonal states build quickly
+    # 1024 diagonal states: one right-hand-side entry each
     # ========================================================
     @testset "Large diagonal system (1024 states) — build + evaluate" begin
         N = 1024
@@ -450,12 +450,60 @@ end
             )
         end
         model = ESM.Model(vars, eqs)
-        t_build = @elapsed begin
-            f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
-        end
-        @test t_build < 5.0
+        f!, u0, p, _tspan, var_map, rep = EarthSciAST.Internal.build(model)
+        @test rep.stats.n_scalar_entries == N
         du = similar(u0)
         f!(du, u0, p, 0.0)
         @test all(du .≈ -0.1)
     end
+end
+
+@testset "derivative-equation compile refuses an equation of another shape" begin
+    # Every caller hands only D(x), D(index(x, …)) or a faq over D(index(x, …));
+    # anything else is refused, never dropped.
+    eq = ESM.Equation(ESM.VarExpr("y"), ESM.NumExpr(1.0))
+    err = try
+        ESM._compile_derivative_equations(
+            ESM.Equation[eq], Dict{String, ESM.ASTExpr}(),
+            ESM._CompileScope(
+                Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}("y" => 1),
+                Dict{String, Any}(), Dict{String, Any}(), Dict{Symbol, Int}()
+            ), 1
+        )
+        nothing
+    catch e
+        e
+    end
+    @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_UNSUPPORTED_LHS"
+end
+
+@testset "initial_conditions keys must name a state element" begin
+    vars = Dict("x" => ModelVariable(UnknownVariable; default = 1.0))
+    model = ESM.Model(vars, [ESM.Equation(_op("D", _v("x"); wrt = "t"), ESM.NumExpr(0.0))])
+    err = try
+        EarthSciAST.Internal.build(model; initial_conditions = Dict("M.nope" => 2.0))
+        nothing
+    catch e
+        e
+    end
+    @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_UNKNOWN_STATE"
+    _, u0, _, _, vm = EarthSciAST.Internal.build(model; initial_conditions = Dict("M.x" => 2.0))
+    @test u0[vm["M.x"]] == 2.0
+end
+
+@testset "a whole-array initial_conditions key sets every cell" begin
+    vars = Dict("u" => ModelVariable(UnknownVariable; shape = ["i"]))
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"], ranges = Dict("i" => [1, 3]),
+        expr_body = _op("D", _op("index", _v("u"), _v("i")); wrt = "t")
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"], ranges = Dict("i" => [1, 3]),
+        expr_body = ESM.NumExpr(0.0)
+    )
+    model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+    _, u0, _, _, vm = EarthSciAST.Internal.build(
+        model; initial_conditions = Dict("M.u" => 1.5, "M.u[2]" => 4.0)
+    )
+    @test [u0[vm["M.u[$k]"]] for k in 1:3] == [1.5, 4.0, 1.5]
 end

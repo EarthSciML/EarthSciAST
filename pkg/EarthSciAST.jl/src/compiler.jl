@@ -2,19 +2,16 @@
 # Choosing the compiler (API_SPEC §5.8, esm-libraries-spec §2.5.10)
 # ============================================================
 #
-# `compiler` names the strategy that builds a problem's right-hand side. The
-# vocabulary is closed and identical in every binding; this file holds Julia's
-# side of it: the vocabulary, the per-tier PLAN each value expands to, the
-# per-build REPORT that says which tier every rule landed on, and the refusal
-# helper the strict `native` compiler raises through.
+# `compiler` names the strategy that builds a problem's right-hand side, from a
+# closed vocabulary shared by every binding. This file holds the vocabulary, the
+# per-tier plan each value expands to, the per-build report of which tier every
+# rule landed on, and the refusal helper the strict `native` compiler raises
+# through.
 #
-# The plan is the ONLY place a tier reads its own on/off state from. No
-# environment variable selects an evaluation strategy: the vocabulary value is
-# the whole answer, so an environment and an argument have nothing to disagree
-# about (esm-libraries-spec §2.5.10). What survives in `ENV` is the tuning
-# thresholds — a node budget, a function-size cap, a threading floor, an
-# admission floor — each of which is a REFUSAL BOUNDARY under `native` rather
-# than a fallback trigger, and two experimental tiers that ship off.
+# The plan is the only place a tier reads its on/off state from; no environment
+# variable selects an evaluation strategy (esm-libraries-spec §2.5.10). The
+# tuning thresholds left in `ENV` are refusal boundaries under `native`, not
+# fallback triggers.
 
 """
     COMPILER_VOCABULARY
@@ -30,28 +27,17 @@ const COMPILER_VOCABULARY = (:interpreter, :native, :xla, :mtk, :sympy)
 # The plan: one Bool per tier, derived from the vocabulary value
 # ---------------------------------------------------------------------------
 #
-# Every field is "this tier may run". `native` has them all true; `interpreter`
-# has them all false. A field exists here for a tier only when turning it off
-# changes which evaluator runs — a tuning threshold (a node budget, a cell
-# floor) is a different thing and stays where it is, and so is MEMOIZATION.
-#
-# MEMOIZATION IS NOT A TIER. The load-time expansion memo
-# (`_expand_expr_refs`) and the reference-preserving template image
-# (`lower_expression_templates`) make the same program out of the same
-# document; what they save is build wall time, not a tree walk per cell. So
-# `interpreter` keeps both: an oracle that re-derives the program it is about
-# to compare against would be a slower way to build the SAME answer, and on the
-# documents it exists to run it is the difference between minutes and hours.
+# Every field is "this tier may run": all true for `native`, all false for
+# `interpreter`. A field exists only for a tier whose switch changes which
+# evaluator runs. Tuning thresholds are not plan fields, and neither is
+# memoization (the load-time expansion memo, `_expand_expr_refs`, and the
+# reference-preserving template image, `lower_expression_templates`), which
+# changes build time and not the program, so `interpreter` keeps it.
 struct CompilerPlan
     name::Symbol          # the vocabulary value this plan implements
     strict::Bool          # refuse a rule this compiler cannot express
     # ---- kernel emission ----
     codegen::Bool                 # the RuntimeGeneratedFunction emitter
-    dual_codegen::Bool            # its overflow (typemax-budget) second pass
-    f64_overflow::Bool            # …also serving Float64 calls
-    codegen_body_split::Bool
-    cg_foreign_scratch::Bool
-    cg_helper_dedup::Bool
     scalar_codegen::Bool          # the scalar equations and the prelude (scalar_codegen.jl)
     # The emitted contraction loop's algebraic rewrites (array_contraction.jl):
     # the indicator sum emitted as a count. Off, the loop is the plain fold.
@@ -64,18 +50,12 @@ struct CompilerPlan
     stencil::Bool                 # the affine stencil tier
     array_contraction::Bool
     contraction_loop::Bool
-    subtree_tbl::Bool
-    state_box::Bool
-    obsref::Bool
-    lane_affine_key::Bool
-    xeq_variant::Bool
     join_on_gate::Bool
     # ---- kernel assembly ----
-    oop_merge::Bool               # kernel-class merges (both spellings)
-    oop_merge_expand::Bool
-    oop_batch::Bool
-    direct_class_emit::Bool
-    cross_eq_class_emit::Bool
+    # Kernel-class merges: the per-cell entries of every equation pooled into
+    # classes, both class-merge rounds over the assembled kernels, and the
+    # out-of-place product's lane-batched scalar groups.
+    oop_merge::Bool
     xcse::Bool
     # ---- prelude cadence ----
     tiered::Bool                  # the const/time cadence tiers
@@ -87,25 +67,25 @@ struct CompilerPlan
     # compile-once sweeps behind them (those, and `seed_expression_ic!`). Off,
     # each takes its per-cell reference form.
     setup_map_compile_once::Bool
-    geom_sweep_specialize::Bool
     geom_overlap_gate::Bool
 end
 
-# Threading is deliberately NOT a plan field. A chunked kernel is
-# value-identical to the serial one by construction — the chunks write disjoint
-# slots — so it is not a choice of evaluator; how much work is worth a thread
-# dispatch is a tuning threshold (`ESS_THREADS_MIN_WORK`), read on the
-# right-hand-side call where the build's plan is no longer in scope.
+# Threading is not a plan field: a chunked kernel writes disjoint slots and is
+# value-identical to the serial one; its floor is the tuning threshold
+# `_Tuning.thread_min_work`.
 
-_plan_all(name::Symbol, strict::Bool, on::Bool) =
-    CompilerPlan(
-    name, strict,
-    on, on, on, on, on, on, on, on, on,
-    on, on, on, on, on, on, on, on, on,
-    on, on, on, on, on, on,
-    on, on,
-    on, on, on, on
-)
+# A plan by keyword: every tier flag defaults to `compiled` (all on for a
+# compiling plan, all off for the interpreter's). Tests and bisections switch
+# single tiers off by naming them.
+function CompilerPlan(name::Symbol; strict::Bool, compiled::Bool, tiers...)
+    flags = fieldnames(CompilerPlan)[3:end]
+    for k in keys(tiers)
+        k in flags || throw(ArgumentError("CompilerPlan: no tier flag `$k`"))
+    end
+    return CompilerPlan(name, strict, (Bool(get(tiers, f, compiled)) for f in flags)...)
+end
+
+_plan_all(name::Symbol, strict::Bool, on::Bool) = CompilerPlan(name; strict = strict, compiled = on)
 
 # `plan` with the named fields replaced.
 _plan_with(plan::CompilerPlan; kw...) =
@@ -119,42 +99,61 @@ _setup_compile_once_enabled() = _compiler_plan_now().setup_map_compile_once
 """
     _compiler_plan(compiler::Symbol) -> CompilerPlan
 
-Expand a vocabulary value into the tier plan that implements it. Raises for the
-values this binding does not provide, never substituting another one.
+Check that `compiler` is a vocabulary value this session can run
+(`_check_compiler`) and expand it into the tier plan that implements it
+(`_plan`). Raises for the values this binding does not provide, never
+substituting another one.
 """
-function _compiler_plan(compiler::Symbol)
-    if compiler === :native
-        return _plan_all(:native, true, true)
-    elseif compiler === :interpreter
-        return _plan_all(:interpreter, false, false)
+_compiler_plan(compiler::Symbol) = (_check_compiler(compiler); _plan(compiler))
+
+"""
+    _plan(compiler::Symbol) -> CompilerPlan
+
+The tier plan of a vocabulary value already checked by `_check_compiler`: a
+pure expansion, with no availability probe, for an evaluation on behalf of a
+problem that compiler built.
+"""
+function _plan(compiler::Symbol)
+    compiler === :native && return _plan_all(:native, true, true)
+    compiler === :interpreter && return _plan_all(:interpreter, false, false)
+    # `:xla`'s plan is `native`'s: the emitter lowers the compiled tree-walk
+    # intermediate representation, so the tiers that build it all run, and
+    # they run strictly — a rule `native` would refuse is a rule `:xla` has no
+    # program for either.
+    compiler === :xla && return _plan_all(:xla, true, true)
+    # `:mtk`: every right-hand-side tier is OFF, since this compiler emits
+    # nothing of this package's own; `strict` stays TRUE, so `:mtk` refuses a
+    # document it cannot express by name (`compiler_refused_rule`). The
+    # construction-time compile-once forms stay ON: ModelingToolkit owns the
+    # right-hand side, not the evaluations this package still performs for the
+    # problem (a `seed_ic!` hook's `seed_expression_ic!` above all), which run
+    # under this plan strictly and so need the compiled-once form.
+    compiler === :mtk &&
+        return CompilerPlan(:mtk; strict = true, compiled = false, setup_map_compile_once = true)
+    return _check_compiler(compiler)
+end
+
+"""
+    _check_compiler(compiler::Symbol)
+
+Raise `compiler_unknown` for a value outside the vocabulary and
+`compiler_unavailable` for one this session cannot run; return `nothing`
+otherwise.
+"""
+function _check_compiler(compiler::Symbol)
+    if compiler === :native || compiler === :interpreter
+        return nothing
     elseif compiler === :xla
-        # The specialty compiler that needs a HEAVY EXTERNAL DEPENDENCY: the
-        # direct StableHLO emitter, which exists only with Reactant in the
-        # session. `_xla_extension` raises `compiler_unavailable` when it is
-        # not, which is the right failure for a value that IS in the
-        # vocabulary, and the device is resolved to a client here too — a
-        # mistyped `EARTHSCI_JULIA_XLA_DEVICE` is an `ArgumentError`, a GPU
-        # this process does not have is `compiler_unavailable` — so neither
-        # waits for a load, a flatten and a build. Everything else about the
-        # lane is in compiler_xla.jl.
-        # The PLAN is `native`'s: the emitter lowers the compiled tree-walk
-        # intermediate representation, so the tiers that build it all run, and
-        # they run strictly — a rule `native` would refuse is a rule `:xla` has
-        # no program for either.
+        # Needs Reactant (`compiler_unavailable` without it). The device is
+        # resolved here too, so a mistyped `EARTHSCI_JULIA_XLA_DEVICE`
+        # (`ArgumentError`) or a missing GPU (`compiler_unavailable`) is reported
+        # before any load. The lane itself is in compiler_xla.jl.
         _xla_extension()
         _xla_client(_xla_device())
-        return _plan_all(:xla, true, true)
+        return nothing
     elseif compiler === :mtk
-        # VOCABULARY FIRST, AVAILABILITY SECOND. `:mtk` is a member of the
-        # closed vocabulary, so a session without ModelingToolkit hears
-        # `compiler_unavailable` naming what to load — never `compiler_unknown`,
-        # which would say the value does not exist.
-        #
-        # `:mtk` is a SPECIALTY compiler: it works only for some documents, and
-        # it is the one that runs EVENTS and IMPLICIT EQUATIONS (the constructs
-        # CONFORMANCE_SPEC §5.39 has every other evaluator refuse). `:native`
-        # remains the universally fast default with no heavy external
-        # dependency; `:interpreter` remains the simple oracle that checks them.
+        # A vocabulary value, so a session without ModelingToolkit hears
+        # `compiler_unavailable`, not `compiler_unknown`.
         Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) === nothing &&
             throw(
             SimulateError(
@@ -167,19 +166,7 @@ function _compiler_plan(compiler::Symbol)
                 ERROR_CODES.COMPILER_UNAVAILABLE
             )
         )
-        # Every right-hand-side tier is OFF: this compiler emits nothing of
-        # this package's own, so a tier flag would describe a cascade that
-        # never runs. `strict` stays TRUE — `:mtk` refuses a document it cannot
-        # express by name (`compiler_refused_rule`) rather than building part
-        # of it, which is what `_refuse_rule` reads off the plan in force.
-        #
-        # The construction-time compile-once forms stay ON. ModelingToolkit
-        # owns the right-hand side, not the evaluations this package still
-        # performs for the problem — a `seed_ic!` hook's `seed_expression_ic!`
-        # above all. Those run under this plan, strictly, so they need the
-        # compiled-once form `native` gives them: with it off every seed would
-        # take the per-cell route, which a strict plan refuses.
-        return _plan_with(_plan_all(:mtk, true, false); setup_map_compile_once = true)
+        return nothing
     elseif compiler === :sympy
         throw(
             SimulateError(
@@ -200,37 +187,150 @@ function _compiler_plan(compiler::Symbol)
     )
 end
 
-# The plan in force. Task-local so a nested build cannot leak its plan into the
-# caller's, with a process-wide default for the entry points that never go
-# through `_with_compiler_plan` (a direct `_compile` call in a test, say).
-# `Base.ScopedValues` would say this more directly but is 1.11+, and this
-# package supports 1.10. That default is NON-strict: outside a build there is
-# no `compiler` keyword to have been strict about, and a refusal raised there
-# would name a compiler nobody asked for.
-const _COMPILER_PLAN_KEY = :earthsci_compiler_plan
+# The plan in force is the build context's (below), with a process-wide default
+# for the entry points that never go through `_with_compiler_plan` (a direct
+# `_compile` call in a test, say). That default is NON-strict: outside a build
+# there is no `compiler` keyword to have been strict about, and a refusal raised
+# there would name a compiler nobody asked for.
 const _DEFAULT_COMPILER_PLAN = _plan_all(:native, false, true)
 
 _compiler_plan_now()::CompilerPlan =
-    get(task_local_storage(), _COMPILER_PLAN_KEY, _DEFAULT_COMPILER_PLAN)
+    (c = _build_ctx(); c === nothing ? _DEFAULT_COMPILER_PLAN : c.plan)
 
 _with_compiler_plan(f, plan::CompilerPlan) =
-    task_local_storage(f, _COMPILER_PLAN_KEY, plan)
+    _with_build_ctx(f, _ctx_with(_build_ctx(); plan = plan))
 
-# The plan a `compiler` keyword produces. The keyword has no "unset" value: a
-# caller who names nothing gets the strict `:native` a caller who names it
-# gets, because a default that was quietly more permissive than the same value
-# spelled out is the second way of saying the same thing that §2.5.10 exists to
-# remove.
+# The plan a `compiler` keyword produces; naming nothing is the strict `:native`.
 _plan_for(compiler::Symbol) = _compiler_plan(compiler)
-# The internal build entry (`_build_evaluator_impl`) also takes a plan itself,
-# so a test can build with a tier plan no vocabulary value names (a non-strict
-# `native`, to reach the per-cell build a strict one refuses). The public
-# entries take only the vocabulary.
+# The internal build entry (`_build_evaluator_impl`) also takes a plan, so a test
+# can build with one no vocabulary value names (a non-strict `native`, say).
 _plan_for(plan::CompilerPlan) = plan
 
 # ---------------------------------------------------------------------------
 # The report: which tier each rule landed on
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Declines: why a tier did not take a rule
+# ---------------------------------------------------------------------------
+#
+# A tier that does not take a rule says so in ONE way: it throws (or, from a
+# helper that tries a form and reports back, returns) a `_Decline` carrying a
+# reason from the closed vocabulary below and a free-text detail. The cascade's
+# driver catches it, files it against the rule with the tier's name
+# (`_note_decline!`), and offers the rule to the next tier; a strict refusal
+# then prints every decline the rule collected. Any other exception a tier
+# raises is not a decline and propagates.
+
+"""
+    _DECLINE_REASONS
+
+The closed vocabulary of decline reasons, `reason => meaning`, in the order
+the `CompilerRuleRecord` docstring and API_SPEC §5.8 list them. A `_Decline`
+with a reason outside it is a programming error.
+"""
+const _DECLINE_REASONS = (
+    # Admission: the shape of the equation is not the tier's.
+    :lhs_not_indexed_derivative => "the left-hand side is not `D(index(var, i…))`",
+    :lhs_subscript_count => "the left-hand side's subscripts do not match the output indices",
+    :no_output_index => "the equation has no output index",
+    :no_contracted_index => "the equation has no contracted index",
+    :range_not_unit_run => "an output range is empty or not a unit-step run",
+    :below_floor => "the contraction is shorter than the tier's length floor",
+    :tier_off => "the tier is off under this compiler",
+    # The contraction.
+    :gated_reduction => "a contraction with a join gate, whose terms vary per output cell",
+    :filtered_reduction => "a contraction with a filter the tier cannot guard",
+    :ragged_contraction => "a contracted range that is not a constant dense range",
+    :contracted_axis_cut => "a contracted axis the box cut splits, so one fold cannot walk it in one piece",
+    # The body.
+    :symbolic_body_did_not_lower => "the body does not resolve or compile with its indices kept symbolic",
+    :unsupported_op => "an operator the tier has no form for",
+    :unknown_kind => "a compiled node kind the tier has no form for",
+    :unknown_array => "a gather of a name that is not a known array",
+    :malformed_index => "an `index` node with no operand",
+    :subscript_rank_mismatch => "a gather whose subscript count is not the array's rank",
+    :subscript_not_static => "a subscript that is not an integer function of the loop indices and build-time tables",
+    :gathered_reduction_shape => "a gathered reduction whose output indices do not match its subscripts",
+    :region_value_shape => "a `makearray` region value whose rank does not match the region",
+    :region_multi_index => "a `makearray` region selected by a subscript of several loop indices",
+    :guarded_out_of_range => "a constant subscript out of range under a run-time guard",
+    :output_layout_not_affine => "the output cells' slots are not an affine function of the loop indices",
+    :subtree_table_declined => "a build-time-evaluable subtree that the compile-once evaluator declined",
+    # The one-pass equality scatter.
+    :scatter_too_many_pinned_cells => "the equality filter pins more output cells than the scatter takes",
+    :scatter_ragged_or_empty => "a scatter whose contracted range is ragged or empty",
+    :scatter_ragged_reads_output => "a ragged scatter whose body reads its own output",
+    # The code generator.
+    :budget => "the generated code would exceed its node budget",
+    :unsupported_desc => "an access descriptor the code generator has no form for",
+    :unsupported_bound => "a loop bound the code generator cannot write",
+    :foreign_scratch => "a read of a scratch buffer the generated function does not own",
+    :subcall_order => "a sub-kernel call emitted before its invariants are in scope",
+    :loopvar_out_of_scope => "a loop variable read outside the loop that binds it",
+    :loop_reentered => "a loop entered again inside its own body",
+    :lane_spec_on_scalar_spine => "a lane descriptor on a scalar spine",
+    :cached_scalar_slot => "a cached scalar slot the generated function cannot read",
+)
+
+const _DECLINE_MEANING = Dict{Symbol, String}(_DECLINE_REASONS)
+
+"""
+    _Decline(reason, detail = "")
+
+Why a tier did not take a rule: `reason` from [`_DECLINE_REASONS`](@ref), and
+`detail` naming the construct. Thrown by a tier (`_decline`), or returned by a
+helper whose caller decides; caught only by the cascade's driver and by the
+code generator's per-kernel transaction.
+"""
+struct _Decline <: EarthSciASTError
+    reason::Symbol
+    detail::String
+    function _Decline(reason::Symbol, detail::AbstractString = "")
+        haskey(_DECLINE_MEANING, reason) || throw(
+            ArgumentError("decline reason :$reason is outside the vocabulary (_DECLINE_REASONS)")
+        )
+        return new(reason, String(detail))
+    end
+end
+
+_decline(reason::Symbol, detail::AbstractString = "") = throw(_Decline(reason, detail))
+
+Base.showerror(io::IO, d::_Decline) =
+    print(io, d.reason, isempty(d.detail) ? "" : " ($(d.detail))")
+
+# A decline in words, for a refusal's sentence: its meaning, then its detail.
+_decline_words(d::_Decline) =
+    _DECLINE_MEANING[d.reason] * (isempty(d.detail) ? "" : " ($(d.detail))")
+
+# One row of `CompilerRuleRecord.declines`.
+const _DeclineRow = @NamedTuple{tier::Symbol, reason::Symbol, detail::String}
+
+_decline_row(tier::Symbol, d::_Decline) = _DeclineRow((tier, d.reason, d.detail))
+
+# A decline as a refusal prints it: `tier: reason (detail)`, the detail cut to
+# `width` characters.
+function _decline_text(r::_DeclineRow; width::Int = 200)
+    isempty(r.detail) && return "$(r.tier): $(r.reason)"
+    d = length(r.detail) > width ? first(r.detail, width) * "…" : r.detail
+    return "$(r.tier): $(r.reason) ($d)"
+end
+
+"""
+    _attempt(f, tier) -> f() | nothing
+
+Run one tier's offer. A `_Decline` it raises is filed against the open rule
+under `tier` and answered with `nothing`; anything else propagates.
+"""
+function _attempt(f, tier::Symbol)
+    try
+        return f()
+    catch err
+        err isa _Decline || rethrow()
+        _note_decline!(tier, err)
+        return nothing
+    end
+end
 
 """
     CompilerRuleRecord
@@ -272,15 +372,27 @@ landed on, and every decline it collected getting there.
   Under a strict compiler `:interpreter`, `:setup_percell`,
   `:discrete_percell` and `:output_percell` are refusals instead, and so is
   `:percell_build` in the in-place form, so a `native` report never shows them.
-* `declines` — `tier => reason` for every tier that looked at this rule and
-  passed, deepest reason last.
+* `declines` — one `(tier, reason, detail)` named tuple for every tier that
+  looked at this rule and passed, deepest last. `tier` names the tier
+  (`:equality_scatter`, `:affine`, `:array_contraction`, …), `reason` is one
+  of the closed vocabulary below, and `detail` is free text naming the
+  construct (the operator, the variable, the error the body raised); it is
+  `""` when the reason says it all. A strict refusal prints every decline
+  with its detail.
+
+Decline reasons (the closed vocabulary; [`_DECLINE_REASONS`] holds it with
+the same words):
+
+$(join(("  - `:$(k)` — $(v)" for (k, v) in _DECLINE_REASONS), "\n"))
 """
 struct CompilerRuleRecord
     rule::String
     kind::Symbol
     tier::Symbol
-    declines::Vector{Pair{Symbol, Symbol}}
+    declines::Vector{_DeclineRow}
 end
+CompilerRuleRecord(rule::AbstractString, kind::Symbol, tier::Symbol) =
+    CompilerRuleRecord(String(rule), kind, tier, _DeclineRow[])
 
 """
     CompilerReport
@@ -290,9 +402,8 @@ What a build did, per rule. [`compiler_report`](@ref) returns one.
 * `compiler` — the vocabulary value that built this problem.
 * `rules` — a [`CompilerRuleRecord`](@ref) per equation / observed / setup
   array, in build order.
-* `tally` — this build's cascade counters (the per-build twin of the
-  process-global `_CASCADE_TALLY`), for the counts a per-rule row does not
-  carry: emitted kernels, class merges, subtree-table rescues.
+* `tally` — this build's cascade counters, for the counts a per-rule row does
+  not carry: emitted kernels, class merges, subtree-table rescues.
 
 `tier_histogram(report)` folds `rules` into tier → count, which is what
 `show(::EsmProblem)` prints.
@@ -342,7 +453,7 @@ function Base.show(io::IO, ::MIME"text/plain", r::CompilerReport)
         isempty(rec.declines) ||
             print(
             io, "  [declined: ",
-            join(("$(t):$(why)" for (t, why) in rec.declines), ", "), "]"
+            join(("$(d.tier):$(d.reason)" for d in rec.declines), ", "), "]"
         )
         println(io)
     end
@@ -353,10 +464,9 @@ end
 # The per-build record
 # ---------------------------------------------------------------------------
 #
-# The process-global `_CASCADE_TALLY` cannot answer "what did THIS build do" —
-# two builds in one session add into the same Dict, and a caller holding two
-# problems cannot tell them apart. This record is per build: `build_evaluator`
-# installs one for the duration of the build and the problem keeps it.
+# What ONE build did. `_build_evaluator_impl` installs a record for the duration
+# of the build (task-local, so concurrent builds keep their own), and the
+# finished report goes to the build's products and its problem.
 mutable struct _BuildRecord
     plan::CompilerPlan
     rules::Vector{CompilerRuleRecord}
@@ -365,21 +475,312 @@ mutable struct _BuildRecord
     # deeper can name it. Empty between rules.
     current::String
     current_kind::Symbol
-    declines::Vector{Pair{Symbol, Symbol}}
+    declines::Vector{_DeclineRow}
 end
 _BuildRecord(plan::CompilerPlan) =
     _BuildRecord(
     plan, CompilerRuleRecord[], Dict{Symbol, Int}(), "", :equation,
-    Pair{Symbol, Symbol}[]
+    _DeclineRow[]
 )
 
-const _BUILD_RECORD_KEY = :earthsci_build_record
-
 _build_record()::Union{Nothing, _BuildRecord} =
-    get(task_local_storage(), _BUILD_RECORD_KEY, nothing)
+    (c = _build_ctx(); c === nothing ? nothing : c.record)
 
 _with_build_record(f, rec::_BuildRecord) =
-    task_local_storage(f, _BUILD_RECORD_KEY, rec)
+    _with_build_ctx(f, _ctx_with(_build_ctx(); record = rec))
+
+# ---------------------------------------------------------------------------
+# The build context
+# ---------------------------------------------------------------------------
+#
+# Everything that decides what ONE build produces and is not an argument: the
+# plan, the record, the build's mutable scratch (`_BuildState`), its tuning
+# (`_Tuning`, read from the environment once when the build starts) and the
+# settings a caller fixes for everything it starts (a range spec, a workspace
+# capture, the engagement-count sink, the merge re-check). It is installed
+# under one task-local key, so two builds on two tasks never share any of it;
+# concurrent builds are supported.
+#
+# The state is per build. `_build_evaluator_impl` starts every build with a
+# fresh one (`_new_build_ctx`); an output-time compile, which builds against a
+# layout of its own, starts a child (`_child_build_ctx`). Changing only the
+# plan, the record or a caller setting (`_with_compiler_plan`,
+# `_with_build_record`, `_with_range_spec`, …) keeps the state of the context it
+# narrows. A caller setting reaches every build and child started inside it.
+
+# A range-restricted program's spec (`_TileSpec`, `_LaneSpec`, `_CaptureSpec`;
+# src/range/, src/rhs_program.jl, tree_walk/range_hooks.jl).
+abstract type _RangeSpec end
+
+# What a program build records for its workspaces (src/rhs_program.jl). A
+# program's workspace is a private instance of its compiled right-hand side. The
+# instance needs, by identity, the arrays through which the build reads each
+# live buffer (its `_PGatherArray`s) and every array generated code writes at
+# run time besides `du` and the per-call state types (a build registers each as
+# scratch where it allocates it). A build with no capture open records nothing.
+struct _WsCapture
+    pgathers::Vector{Any}
+    scratch::IdDict{Any, Nothing}
+end
+_WsCapture() = _WsCapture(Any[], IdDict{Any, Nothing}())
+
+mutable struct _BuildState
+    # A state array's slot map (table, run base, strides), by array name
+    # (`_resolve_state_gather`). It depends on the layout the build resolves
+    # against.
+    slot_tables::Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}
+    # A reserved runtime loop variable's counter `Ref`, by name: written where
+    # the resolve keeps an index symbolic, read by `_compile(::VarExpr)`.
+    loopvars::Dict{Symbol, Base.RefValue{Int}}
+    # The counter that names those variables. A child state shares its parent's,
+    # so a name is unique across a build and everything it starts.
+    loopvar_count::Base.RefValue{Int}
+    # Depth of the array-equation per-cell resolve (`_compile_faq_percell!`);
+    # a scalar reduction nested inside one unrolls rather than loops.
+    array_cell_depth::Int
+    # The build-time parameter-read sink (`_with_param_reads`), or `nothing`.
+    param_reads::Union{Nothing, Set{String}}
+    # The kernels a shifted scatter's pieces compiled to, held out of the kernel
+    # class merge (scatter.jl); `nothing` outside a build, where nothing is held
+    # out.
+    scatter_keep::Union{Nothing, IdDict{Any, Nothing}}
+    # The scalar parameter values a join gate's computed key column reads while
+    # the gates resolve (`_with_join_params`, join_key_columns.jl); empty otherwise.
+    join_params::Dict{String, Float64}
+end
+_BuildState(
+    count::Base.RefValue{Int} = Ref(0);
+    scatter_keep::Union{Nothing, IdDict{Any, Nothing}} = nothing
+) = _BuildState(
+    Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}(),
+    Dict{Symbol, Base.RefValue{Int}}(), count, 0, nothing, scatter_keep,
+    Dict{String, Float64}()
+)
+
+"""
+    _Tuning
+
+The build's tuning thresholds, read from the environment once when a build
+starts (`_tuning_from_env`) and held on its `_BuildContext`, so every stage of
+one build sees one value of each and a section's first call reads no
+environment. None changes a computed value; the first two are refusal
+boundaries under `compiler = :native` (crossing one decides whether a rule is
+compiled or refused), the rest move work between equivalent forms.
+
+| Field | Variable | Default | Meaning |
+|---|---|---|---|
+| `node_budget` | `ESS_CODEGEN_NODE_BUDGET` | 64,000,000 | emitted nodes one generated section may hold; past it the section is refused (strict) or walked |
+| `contraction_loop_min` | `ESS_CONTRACTION_LOOP_MIN` | 8 | reduction length at and above which a scalar reduction loops at run time instead of unrolling |
+| `array_contraction_min` | `ESS_ARRAY_CONTRACTION_MIN` | 1024 | reduction length at and above which an out-of-place array einsum takes the whole-array contraction nest |
+| `fn_node_cap` | `ESS_CODEGEN_FN_NODE_CAP` | 20,000 | emitted nodes per generated sub-function before a body is split; 0 never splits |
+| `split_transport` | `ESS_CODEGEN_SPLIT_TRANSPORT` | `""` | `"value"` or `"definition"` forces how split sub-functions are carried; empty decides by size |
+| `by_value_min_nodes` | (`_CG_BY_VALUE_MIN_NODES[]`) | 100,000 | function size above which split sub-functions are carried by value |
+| `thread_min_work` | `ESS_THREADS_MIN_WORK` | 6,000 | least node evaluations per chunk of a threaded section |
+
+A non-numeric value falls back to the default; the two contraction floors
+also ignore values below 1.
+"""
+struct _Tuning
+    node_budget::Int
+    contraction_loop_min::Int
+    array_contraction_min::Int
+    fn_node_cap::Int
+    split_transport::String
+    by_value_min_nodes::Int
+    thread_min_work::Int
+end
+
+_env_int(name::String, default::Int) = something(tryparse(Int, get(ENV, name, "")), default)
+
+function _env_floor(name::String, default::Int)
+    n = tryparse(Int, get(ENV, name, ""))
+    return (n === nothing || n < 1) ? default : n
+end
+
+_tuning_from_env() = _Tuning(
+    _env_int("ESS_CODEGEN_NODE_BUDGET", 64_000_000),
+    _env_floor("ESS_CONTRACTION_LOOP_MIN", 8),
+    _env_floor("ESS_ARRAY_CONTRACTION_MIN", 1024),
+    _env_int("ESS_CODEGEN_FN_NODE_CAP", 20_000),
+    get(ENV, "ESS_CODEGEN_SPLIT_TRANSPORT", ""),
+    _CG_BY_VALUE_MIN_NODES[],
+    _env_int("ESS_THREADS_MIN_WORK", _THREAD_MIN_WORK_DEFAULT),
+)
+
+struct _BuildContext
+    plan::CompilerPlan
+    record::Union{Nothing, _BuildRecord}
+    state::_BuildState
+    tuning::_Tuning
+    # Caller settings, inherited by every context started inside this one.
+    range_spec::Union{Nothing, _RangeSpec}
+    ws_capture::Union{Nothing, _WsCapture}
+    # The engagement-count sink (`_with_counts`), or `nothing`.
+    counts::Union{Nothing, Dict{Symbol, Int}}
+    # Apply the kernel class merge twice and count what the second application
+    # merges (tests only; `_merge_acc_kernel_classes`).
+    merge_recheck::Bool
+end
+
+const _BUILD_CTX_KEY = :earthsci_build_context
+
+_build_ctx()::Union{Nothing, _BuildContext} =
+    get(task_local_storage(), _BUILD_CTX_KEY, nothing)
+
+_with_build_ctx(f, ctx::_BuildContext) = task_local_storage(f, _BUILD_CTX_KEY, ctx)
+
+# The open build's tuning, or the environment's now when no build is open.
+_tuning_now()::_Tuning = (c = _build_ctx(); c === nothing ? _tuning_from_env() : c.tuning)
+
+# A context over `state` with the tuning read now and `outer`'s caller
+# settings (none when `outer` is `nothing`).
+function _fresh_ctx(
+        plan::CompilerPlan, record::Union{Nothing, _BuildRecord}, state::_BuildState,
+        outer::Union{Nothing, _BuildContext}
+    )
+    return _BuildContext(
+        plan, record, state, _tuning_from_env(),
+        outer === nothing ? nothing : outer.range_spec,
+        outer === nothing ? nothing : outer.ws_capture,
+        outer === nothing ? nothing : outer.counts,
+        outer === nothing ? false : outer.merge_recheck
+    )
+end
+
+# `c` with its plan, record or a caller setting replaced, the state and tuning
+# kept; a fresh context when no build is open.
+function _ctx_with(
+        c::Union{Nothing, _BuildContext}; plan = nothing, record = nothing,
+        range_spec = nothing, ws_capture = nothing, counts = nothing,
+        merge_recheck = nothing
+    )
+    c === nothing && (
+        c = _fresh_ctx(something(plan, _DEFAULT_COMPILER_PLAN), record, _BuildState(), nothing)
+    )
+    return _BuildContext(
+        something(plan, c.plan), something(record, Some(c.record)), c.state, c.tuning,
+        something(range_spec, Some(c.range_spec)),
+        something(ws_capture, Some(c.ws_capture)),
+        something(counts, Some(c.counts)),
+        something(merge_recheck, c.merge_recheck)
+    )
+end
+
+# The context a build runs in: its plan and record, fresh state (with the
+# build's scatter set), the tuning read now. The loop-variable counter and the
+# caller settings continue the enclosing context's.
+function _new_build_ctx(plan::CompilerPlan, record::Union{Nothing, _BuildRecord})
+    outer = _build_ctx()
+    count = outer === nothing ? Ref(0) : outer.state.loopvar_count
+    return _fresh_ctx(
+        plan, record,
+        _BuildState(count; scatter_keep = IdDict{Any, Nothing}()), outer
+    )
+end
+
+# A compile against a layout of its own, inside or after a build: the current
+# plan, record, tuning and caller settings, fresh slot tables and loop registry,
+# no parameter-read sink. Inside a build it holds out the build's scatter set.
+function _child_build_ctx()
+    outer = _build_ctx()
+    outer === nothing && return _fresh_ctx(_DEFAULT_COMPILER_PLAN, nothing, _BuildState(), nothing)
+    return _BuildContext(
+        outer.plan, outer.record,
+        _BuildState(outer.state.loopvar_count; scatter_keep = outer.state.scatter_keep),
+        outer.tuning, outer.range_spec, outer.ws_capture, outer.counts, outer.merge_recheck
+    )
+end
+
+# Run `f` with slot tables of its own on the current build state, for a compile
+# inside a build against a layout of its own (a discrete materializer's fill);
+# the build's tables are back afterwards.
+function _with_own_slot_tables(f)
+    st = _build_state()
+    saved = st.slot_tables
+    st.slot_tables = Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}()
+    try
+        return f()
+    finally
+        st.slot_tables = saved
+    end
+end
+
+# The state a resolve or compile writes to: the open build's, else this task's
+# own (a resolve or compile called outside any build, as a test does), kept for
+# the life of the task.
+const _TASK_STATE_KEY = :earthsci_build_state
+
+function _build_state()::_BuildState
+    c = _build_ctx()
+    c === nothing || return c.state
+    return get!(_BuildState, task_local_storage(), _TASK_STATE_KEY)::_BuildState
+end
+
+# The caller settings, read and installed.
+_range_spec_now()::Union{Nothing, _RangeSpec} =
+    (c = _build_ctx(); c === nothing ? nothing : c.range_spec)
+_with_range_spec(f, spec::_RangeSpec) =
+    _with_build_ctx(f, _ctx_with(_build_ctx(); range_spec = spec))
+
+_ws_capture_now()::Union{Nothing, _WsCapture} =
+    (c = _build_ctx(); c === nothing ? nothing : c.ws_capture)
+_with_ws_capture(f, cap::_WsCapture) =
+    _with_build_ctx(f, _ctx_with(_build_ctx(); ws_capture = cap))
+
+_merge_recheck_on()::Bool = (c = _build_ctx(); c !== nothing && c.merge_recheck)
+_with_merge_recheck(f) = _with_build_ctx(f, _ctx_with(_build_ctx(); merge_recheck = true))
+
+# The open build's scatter set (scatter.jl), `nothing` outside a build.
+_scatter_keep_now()::Union{Nothing, IdDict{Any, Nothing}} =
+    (c = _build_ctx(); c === nothing ? nothing : c.state.scatter_keep)
+
+# ---------------------------------------------------------------------------
+# Engagement counts
+# ---------------------------------------------------------------------------
+#
+# How often a build path engaged: every cascade tally key, plus the counters
+# below that no `CompilerReport` row carries (a geometry sweep that took the
+# candidate drive, a setup map served by its fast path, a value-invention
+# binding visited). They are observations only; nothing reads them to decide
+# what to build. They land in the `Dict` that `Internal.counting` (or
+# `Internal.build`) puts on the build context, and nowhere when none is open, so
+# an `esm_problem` build pays one lookup per event and keeps nothing.
+#
+#   :geom_overlap_drive / :geom_overlap_gate_only / :geom_overlap_none
+#                          — an overlap-gated setup geometry sweep, by how its
+#                            candidate set was driven (setup_sweep.jl)
+#   :geom_eq_drive         — an equality-gated setup sweep driven by its key
+#   :setup_map_fastpath_hit / :setup_map_fastpath_miss
+#                          — a setup map compiled once / walked per cell
+#   :cellwise_fastpath_hit / :cellwise_fastpath_miss
+#                          — `_cellwise_compile_once` compiled / declined
+#   :vi_enum_visits        — one binding visited by a value-invention or
+#                            overlap-gated enumeration
+#   :compile_calls / :branch_templates / :body_variants
+#                          — node lowerings, stencil spine templates and
+#                            stencil body variants
+_counts_sink()::Union{Nothing, Dict{Symbol, Int}} =
+    (c = _build_ctx(); c === nothing ? nothing : c.counts)
+
+function _count!(k::Symbol, n::Int = 1)
+    c = _counts_sink()
+    c === nothing || (c[k] = get(c, k, 0) + n)
+    return nothing
+end
+
+# `(f(), counts)`: the value and every count `f` produced on this task. A nested
+# call also adds its counts into the enclosing one.
+function _with_counts(f)
+    outer = _counts_sink()
+    c = Dict{Symbol, Int}()
+    v = _with_build_ctx(f, _ctx_with(_build_ctx(); counts = c))
+    if outer !== nothing
+        for (k, n) in c
+            outer[k] = get(outer, k, 0) + n
+        end
+    end
+    return v, c
+end
 
 # Name the rule the cascade is about to work on. Declines recorded while it is
 # open attach to it; `_land_rule!` closes it.
@@ -392,12 +793,19 @@ function _open_rule!(rule::AbstractString, kind::Symbol)
     return nothing
 end
 
-function _note_decline!(tier::Symbol, reason::Symbol)
+# File a decline against the open rule.
+function _note_decline!(tier::Symbol, d::_Decline)
     rec = _build_record()
     rec === nothing && return nothing
-    push!(rec.declines, tier => reason)
+    push!(rec.declines, _decline_row(tier, d))
     return nothing
 end
+_note_decline!(tier::Symbol, reason::Symbol, detail::AbstractString = "") =
+    _note_decline!(tier, _Decline(reason, detail))
+_note_decline!(r::_DeclineRow) = _note_decline!(r.tier, r.reason, r.detail)
+
+# The declines the open rule has collected so far.
+_open_declines() = (rec = _build_record(); rec === nothing ? _DeclineRow[] : copy(rec.declines))
 
 function _land_rule!(tier::Symbol)
     rec = _build_record()
@@ -418,7 +826,7 @@ end
 # observed): one call, no open/close pair.
 function _record_rule!(
         rule::AbstractString, kind::Symbol, tier::Symbol;
-        declines::Vector{Pair{Symbol, Symbol}} = Pair{Symbol, Symbol}[]
+        declines::Vector{_DeclineRow} = _DeclineRow[]
     )
     rec = _build_record()
     rec === nothing && return nothing
@@ -455,9 +863,9 @@ end
 # ---------------------------------------------------------------------------
 #
 # `observed_field` files one report row per name, saying whether the read walked
-# per cell. That is a question about ONE CALL, which the process-global
-# `_CASCADE_TALLY` cannot answer: another task's evaluations add into it, and so
-# does an attempt the read made and then abandoned. So the read installs a
+# per cell. That is a question about ONE CALL: another task's evaluations must
+# not add into it, and neither may an attempt the read made and then abandoned.
+# So the read installs a
 # task-local counter, the per-cell cellwise route bumps it once it has SERVED a
 # value, and a caller that swallows a failed attempt drops what the attempt
 # counted (`_percell_mark` / `_percell_restore!`).
@@ -491,8 +899,13 @@ Raise `compiler_refused_rule` for the compiler in force. The message names the
 compiler, the rule (component-qualified) and the deepest reason, which is the
 shape §2.5.10 fixes and what the compiler-agreement tier reads back.
 """
-function _refuse_rule(rule::AbstractString, reason::AbstractString)
-    plan = _compiler_plan_now()
+_refuse_rule(rule::AbstractString, reason::AbstractString) =
+    _refuse_rule(_compiler_plan_now(), rule, reason)
+
+# The refusal under an explicit `plan`, for one raised after the build that
+# produced a problem has returned (the `:xla` emission works on the build's
+# product).
+function _refuse_rule(plan::CompilerPlan, rule::AbstractString, reason::AbstractString)
     throw(
         TreeWalkError(
             ERROR_CODES.COMPILER_REFUSED_RULE,

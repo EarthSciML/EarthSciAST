@@ -277,6 +277,43 @@ end
             msg = sprint(showerror, err)
             @test occursin("decoded as strings", msg)
             @test occursin("codes", msg)
+            @test occursin("provider_data_invalid", msg)
+        end
+    end
+
+    @testset "an unmapped code under unmapped = \"error\" is a data error" begin
+        mktempdir() do dir
+            doc = _lis_document(dir)
+            _lis_binding(doc, "Ingest.pollutant")["codes"]["unmapped"] = "error"
+            provs = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
+            err = try
+                EA_LIS.provider_sample(provs["Ingest.pollutant"], 0.0)
+                nothing
+            catch e
+                e
+            end
+            @test err !== nothing            # the CO record is not in the map
+            msg = sprint(showerror, err)
+            @test occursin("is not in its declared", msg)
+            @test occursin("provider_data_invalid", msg)
+        end
+    end
+
+    @testset "a codes map on a numeric column is a data error" begin
+        mktempdir() do dir
+            doc = _lis_document(dir)
+            _lis_binding(doc, "Ingest.lon")["codes"] = Dict("map" => Dict("A" => 1))
+            provs = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
+            err = try
+                EA_LIS.provider_sample(provs["Ingest.lon"], 0.0)
+                nothing
+            catch e
+                e
+            end
+            @test err !== nothing
+            msg = sprint(showerror, err)
+            @test occursin("a code map maps a TEXT", msg)
+            @test occursin("provider_data_invalid", msg)
         end
     end
 

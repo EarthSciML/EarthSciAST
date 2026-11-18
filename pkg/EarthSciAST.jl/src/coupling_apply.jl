@@ -149,18 +149,25 @@ transforms are exempt: `conversion_factor` declares the conversion explicitly;
 equivalence at the mapping site (units are still validated elsewhere).
 """
 function _check_variable_map_units(file::EsmFile)
-    isempty(file.coupling) && return
+    decls = _scoped_index(file)
     for entry in file.coupling
-        entry isa CouplingVariableMap || continue
-        entry.transform == "identity" || continue
-        src_units = _lookup_variable_units(file, entry.from)
-        tgt_units = _lookup_variable_units(file, entry.to)
-        (src_units === nothing || tgt_units === nothing) && continue
-        if src_units != tgt_units
-            throw(DomainUnitMismatchError(entry.from, src_units, tgt_units))
-        end
+        conflict = _variable_map_unit_conflict(decls, entry)
+        conflict === nothing || throw(DomainUnitMismatchError(entry.from, conflict...))
     end
     return
+end
+
+# The `(from_units, to_units)` of an `identity` `variable_map` entry whose two
+# endpoints both declare non-empty units that differ, else `nothing`. The one
+# statement of the esm-spec §4.7.6 rule, read by flatten and by `validate`.
+# `decls` are the document's declarations (`_scoped_index`).
+function _variable_map_unit_conflict(decls::_ScopedIndex, entry)
+    (entry isa CouplingVariableMap && entry.transform == "identity") || return nothing
+    src_units = _lookup_variable_units(decls, entry.from)
+    tgt_units = _lookup_variable_units(decls, entry.to)
+    (src_units === nothing || tgt_units === nothing) && return nothing
+    (isempty(src_units) || isempty(tgt_units) || src_units == tgt_units) && return nothing
+    return (src_units, tgt_units)
 end
 
 """
@@ -212,57 +219,13 @@ function _check_variable_map_endpoints(
 end
 
 """
-Look up a dot-qualified variable's declared units across models, subsystems,
-and reaction systems (species + parameters). Returns `nothing` when the
-variable is missing or carries no declared units.
+The declared units of the member a top-level scoped name names in the
+declarations `decls` (a model variable, a reaction-system species or parameter,
+at any depth); `nothing` when the member is missing or declares no units.
 """
-function _lookup_variable_units(file::EsmFile, qualified::String)::Union{String, Nothing}
-    parts = split(qualified, ".")
-    length(parts) >= 2 || return nothing
-    root = String(parts[1])
-    tail = String(join(parts[2:end], "."))
-
-    if file.models !== nothing && haskey(file.models, root)
-        return _lookup_model_units(file.models[root], tail)
-    end
-    if file.reaction_systems !== nothing && haskey(file.reaction_systems, root)
-        return _lookup_rsys_units(file.reaction_systems[root], tail)
-    end
-    return nothing
-end
-
-function _lookup_model_units(model::Model, name::String)::Union{String, Nothing}
-    if haskey(model.variables, name)
-        return model.variables[name].units
-    end
-    # Recurse into subsystems for nested names like "Inner.T".
-    dot = findfirst('.', name)
-    if dot !== nothing
-        head = String(SubString(name, 1, prevind(name, dot)))
-        rest = String(SubString(name, dot + 1))
-        if haskey(model.subsystems, head)
-            return _lookup_model_units(model.subsystems[head], rest)
-        end
-    end
-    return nothing
-end
-
-function _lookup_rsys_units(rsys::ReactionSystem, name::String)::Union{String, Nothing}
-    for sp in rsys.species
-        sp.name == name && return sp.units
-    end
-    for p in rsys.parameters
-        p.name == name && return p.units
-    end
-    dot = findfirst('.', name)
-    if dot !== nothing
-        head = String(SubString(name, 1, prevind(name, dot)))
-        rest = String(SubString(name, dot + 1))
-        if haskey(rsys.subsystems, head)
-            return _lookup_rsys_units(rsys.subsystems[head], rest)
-        end
-    end
-    return nothing
+function _lookup_variable_units(decls::_ScopedIndex, qualified::String)::Union{String, Nothing}
+    d = _resolve_declaration(decls, "", qualified)
+    return d === nothing ? nothing : d.decl.units
 end
 
 # ========================================
@@ -281,365 +244,66 @@ is_placeholder(name::AbstractString)::Bool =
     name == PLACEHOLDER_VAR || endswith(name, "." * PLACEHOLDER_VAR)
 
 """
-    _apply_operator_compose!(equations, contribs, entry, states, observeds, owners;
-                             components, renames = OrderedDict()) -> renames_made
+    _apply_operator_compose!(pool, entry, states, observeds; components, renames) -> renames_made
 
-Apply a `CouplingOperatorCompose` entry (esm-libraries-spec §4.7.1). For
-`"systems": [A, B, …]` every B system's equations are merged INTO A's: B's
-`_var` placeholder equations are expanded once per state variable of A
-(step 3), each B equation is then matched to A's equation for the same
-dependent variable — directly, through the `translate` map (step 2), or by the
-bare-name fallback — and a matched pair is summed as `rhs_A + factor * rhs_B`
-(step 4). A B equation that matches nothing survives unchanged (step 5) — and,
-since this issue, is REPORTED: an entry that merges nothing at all, or only some
-of what B authored, emits `operator_compose_no_merge` /
-`operator_compose_partial_merge`, and refuses outright when the entry declares
-`require_match`. Preserving an unmatched equation quietly is what made
-"merged everything" and "merged nothing" the same observable outcome.
+Apply a `CouplingOperatorCompose` entry (esm-libraries-spec §4.7.1): every
+equation of the B systems (`systems[2:end]`) is merged into A's (`systems[1]`)
+equation for the same quantity, `rhs_A + factor * rhs_B` (step 4).
 
-`components` is the document's component order, which places a merge
-reattributed to another component (see POSITION below). `renames` is the running
-document-wide map of names earlier merges deleted, through which `translate`
-endpoints are resolved; the renames this entry makes are returned (issue #230).
+1. Each B `_var` template is cloned once per state variable of A, in A's
+   declaration order, where it stands (step 3; [`_expand_placeholders`](@ref)).
+2. Each B equation is matched to an A equation, in precedence order: DIRECT
+   (same dependent variable), then `translate` (keyed by A's names, valued by
+   B's, each endpoint qualified against its system and retargeted through the
+   names earlier merges deleted, `renames`), then the BARE-NAME fallback (A's
+   equation for B's local name). [`_match_compose`](@ref) decides, and changes
+   nothing. Direct before `translate` is §10.2's redundancy rule: a `translate`
+   value of `"B._var"` must not redirect a clone placeholder expansion already
+   named.
+3. The merge is reported when it merged nothing or only part of what B
+   authored ([`_report_operator_compose_merge`](@ref), step 5).
+4. A match that renames the quantity deletes one spelling. The surviving one is
+   A's, except for a bare-name match, where ownership decides
+   ([`_bare_name_owner`](@ref)). Every reference to the deleted spelling, in
+   every equation, is retargeted, and its declaration pruned: a declared unknown
+   with no equation would be an algebraic unknown nobody defines.
+5. The merged equation keeps A's position and takes B's `D` left-hand side when
+   A's was a bare definition. It is owned by its dependent variable's component,
+   so a later entry finds it there; one now owned by another component than A
+   moves to the end of that component's equations
+   ([`_insert_into_component_blocks!`](@ref), §4.7.5 step 4 document order).
+   Unmatched B equations stay where they are.
 
-The bare-name fallback resolves its surviving spelling by OWNERSHIP rather than
-by `systems[1]`, and REFUSES the case where ownership is genuinely ambiguous —
-see [`_bare_name_owner`](@ref).
-
-Six properties here are load-bearing, and each of them has a way of failing
-SILENTLY — which is the one outcome a coupling mis-specification must not have:
-
-  * **`translate` direction.** The map is keyed by A's names and valued by B's
-    (§4.7.1 step 2, esm-spec §10.2). This loop walks B's equations, so it needs
-    the map the other way round; [`_inverse_translate`](@ref) builds it.
-    Indexing the authored map by B's dependent variable makes a correctly
-    spelled map match nothing at all and turns the whole entry into a no-op.
-
-  * **`translate` endpoints are matched NAMESPACED.** An endpoint is authored
-    either bare (`"O3"`) or fully scoped (`"ChemistrySystem.O3"`; esm-spec §10.2
-    admits both), but this loop matches against the NAMESPACED dependent
-    variable of a flattened equation. A bare endpoint therefore has to be
-    qualified first — a key against `systems[1]`, a value against `systems[2]`;
-    see [`_qualify_translate_endpoint`](@ref). This is the second half of the
-    direction rule and fails the same way: before it, every `translate` map in
-    the shared fixture tree was authored bare, missed, fell through to the
-    bare-name fallback (which searches A for B's SHORT name and misses too), and
-    silently no-op'd — so the direction fix above was necessary and not
-    sufficient, and step 4's rewrite below had never once run.
-
-  * **The merged-away name does not survive.** A match that RENAMES the
-    dependent variable — a translation match, or the bare-name fallback, which
-    is a name-based translation — has just consumed B's defining equation, so
-    B's declaration of that name constrains nothing: an unknown with no equation
-    is an ALGEBRAIC unknown (§6.3.1), i.e. a structurally singular system the
-    solver rejects instead of the coupling that caused it. The declaration is
-    dropped, and every surviving reference to it is retargeted at A's spelling
-    FIRST. The retarget is DOCUMENT-WIDE, not B-local — a third system may
-    reference `B.x` by its scoped name, and pruning the declaration while
-    leaving that reference dangling trades one broken system for another.
-
-  * **Direct match BEFORE translation match.** §10.2's redundancy invariant: a
-    `translate` value of `"B._var"` asks for something placeholder expansion
-    already does, and writing it MUST NOT change the result. Expansion has by
-    then rewritten `_var` to A's OWN variable name, so a map consulted on that
-    post-expansion name hits spuriously and redirects every composed species to
-    the same target — collapsing three transported species into one equation
-    and leaving the other two as unconstrained algebraic unknowns. That is
-    exactly what `tests/scoping/bare_reference_resolution.esm` used to produce.
-
-  * **The placeholder ranges over A's STATE VARIABLES**, not over "everything
-    with a defining equation". An observed unknown defined algebraically
-    (`Chemistry.deposition_flux ~ Chemistry.O3 * 1e-3`) is not transported and
-    must not collect an advection term.
-
-  * **The merged equation's POSITION follows its owner.** §4.7.5 step 4 makes
-    document order normative. A merge that stays A's keeps A's slot; one the
-    next bullet reattributes to another component moves to the end of that
-    component's equations (after the last equation of it and of every component
-    declared before it), each such merge trailing the ones before it.
-    `components`, the document's component order, is what places it. Leaving
-    it at A's slot puts it ahead of its owner's own equations when A is
-    declared first, and appending it to the end of the whole list puts it
-    after later components'; either reorders the flattened equation vector
-    against every other binding.
-
-  * **The merged equation is REATTRIBUTED to its dependent variable's system.**
-    A document may CHAIN compose entries over one state with the operator as A
-    (`["DepositionSink", "Chem"]`, then `["EmissionSource", "Chem"]`, then the
-    transport lift — `reseact.esm`'s shape; issue #172). The merge consumes
-    what was Chem's defining equation, and the NEXT entry's ownership gates
-    (`a_index`, `owner in b_names`) can only find the composed tendency again
-    if it is now owned by the variable's own system, not by the operator that
-    happened to author the surviving clone.
+`components` is the document's component order. Returns the renames this entry
+made, for the caller's document-wide record.
 """
 function _apply_operator_compose!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
+        pool::Vector{_FlatEq},
         entry::CouplingOperatorCompose,
         states::OrderedDict{String, ModelVariable},
-        observeds::OrderedDict{String, ModelVariable},
-        owners::Vector{String};
+        observeds::OrderedDict{String, ModelVariable};
         renames::AbstractDict = OrderedDict{String, String}(),
         components::Vector{String}
     )
     length(entry.systems) >= 2 || return OrderedDict{String, String}()
     a_name = entry.systems[1]
     b_names = Set{String}(entry.systems[2:end])
-    # `owners` is parallel to `equations` and records the COMPONENT THAT
-    # AUTHORED each one (see `_attribute_equations!`). It cannot be recovered
-    # from the equation itself: `tests/valid/advection_reaction_loaded_ic_bc.esm`
-    # has the operator component `Advection` write `D(Chemistry.O3, t) = …`
-    # directly — B's equation, A's variable name — and placeholder expansion
-    # produces exactly the same shape. Reading ownership off the dependent
-    # variable's prefix therefore mistakes B's equations for A's, silently
-    # dropping the merge (two equations for one state) or, where it does merge,
-    # summing `rhs_B + rhs_A` where §4.7.1 step 4 says `rhs_A + factor * rhs_B`.
-    while length(owners) < length(equations)
-        push!(owners, "")
-    end
-
-    # §4.7.1 step 3: A's state variables, in DECLARATION order — the order the
-    # placeholder clones are emitted in, and therefore the order any unmatched
-    # clone lands in the equation vector.
-    target_vars = String[k for k in keys(states) if _component_root(k) == a_name]
-
-    # Step 2, in the normative direction AND in namespaced form (see the
-    # docstring). `systems[2]` is the system a bare VALUE belongs to; §10.2
-    # spells the map over a two-system entry, so a further B system's variables
-    # have to be written scoped to be nameable at all.
-    # Both endpoints are rewritten off names an earlier merge in this document
-    # already deleted: an earlier entry may have consumed either the A-side or
-    # the B-side spelling this one names (issue #230).
     inv_translate = _retarget_translate(
         _inverse_translate(entry.translate, a_name, entry.systems[2]), renames
     )
-
-    # Step 3: expand each `_var` template where it stands, so that a clone which
-    # matches nothing keeps B's document position (step 5). Only a template
-    # owned by one of THIS entry's operator systems is expanded — a second
-    # `operator_compose` naming a different operator has its own template, and
-    # the first entry must not consume it. Ownership travels with the clones,
-    # which is the only way it survives: after substitution they carry A's
-    # variable names and are textually A's own equations.
-    # Each clone carries B's contributions with `_var` substituted inside each
-    # one, origins unchanged (B's component).
-    expanded = Equation[]
-    expanded_contribs = Vector{Contribution}[]
-    new_owners = String[]
-    for (i, eq) in enumerate(equations)
-        owner = owners[i]
-        # A template `ic(_var) ~ e` (a field initial condition on the operator)
-        # expands with its equation, so every state gets its own entry
-        # (esm-libraries-spec §4.7.1 step 3, §4.7.5 step 4 `field_ics`).
-        dep = something(lhs_dependent_variable(eq.lhs), _ic_lhs_variable(eq.lhs), Some(nothing))
-        if dep !== nothing && is_placeholder(dep) && owner in b_names
-            for var in target_vars
-                cs = Contribution[
-                    Contribution(
-                        _substitute_placeholder(c.expr, dep, var),
-                        c.origins
-                    ) for c in contribs[i]
-                ]
-                push!(
-                    expanded, _equation_from(
-                        eq, cs;
-                        lhs = _substitute_placeholder(eq.lhs, dep, var)
-                    )
-                )
-                push!(expanded_contribs, cs)
-                push!(new_owners, owner)
-            end
-        else
-            push!(expanded, eq)
-            push!(expanded_contribs, contribs[i])
-            push!(new_owners, owner)
-        end
-    end
-
-    # A's equations, indexed by dependent variable → position. First occurrence
-    # wins, which is the position §4.7.5 step 4 says the merge keeps.
-    a_index = Dict{String, Int}()
-    for (i, eq) in enumerate(expanded)
-        new_owners[i] == a_name || continue
-        dep = lhs_dependent_variable(eq.lhs)
-        dep === nothing && continue
-        haskey(a_index, dep) || (a_index[dep] = i)
-    end
-
-    # Step 3 (matching) + step 4 (summing). B's contributions are accumulated
-    # per target and appended to A's list at the end; the merged right-hand
-    # side is rebuilt from that list (the left fold, esm-libraries-spec §4.7.5).
-    extra = Dict{Int, Vector{Contribution}}()
-    # §4.7.1 step 4: "the final equation for variable x has the original LHS:
-    # D(x, t)". Where A defines the quantity by a bare equation and B gives it a
-    # tendency, the merged equation takes B's `D` left-hand side, spelled in
-    # A's name (the ownership rule below may still retarget it).
-    d_lhs = Dict{Int, ASTExpr}()
-    consumed = falses(length(expanded))
-    # B's dependent variable ⇒ A's, for every match that RENAMED it. Ordered so
-    # the retarget/prune below is deterministic.
-    merged_away = OrderedDict{String, String}()
-    # The subset of `merged_away` the BARE-NAME fallback produced. Its surviving
-    # spelling is settled by ownership below, not by which side was `systems[1]`.
-    bare_matches = OrderedDict{String, String}()
-    # §4.7.1 step 5's merge tally: how many equations the operator side authored
-    # that COULD match, and which of them did not. An equation with no extractable
-    # dependent variable is not a contribution and is exempt by construction.
-    authored = 0
-    unmatched = String[]
-    for (i, eq) in enumerate(expanded)
-        new_owners[i] in b_names || continue
-        b_dep = lhs_dependent_variable(eq.lhs)
-        b_dep === nothing && continue
-        authored += 1
-
-        # §4.7.1 step 3 lists the match kinds in PRECEDENCE order and the order
-        # is load-bearing (see the docstring): DIRECT, then TRANSLATION, then
-        # the bare-name fallback.
-        target = b_dep
-        factor = 1.0
-        is_bare_match = false
-        if haskey(a_index, b_dep)
-            # DIRECT match — tried first; `target` is already right.
-        elseif haskey(inv_translate, b_dep)
-            target, factor = inv_translate[b_dep]   # TRANSLATION match
-        else
-            # Bare-name fallback: A's equation for B's SHORT name, if any. This
-            # is a name-based translation, so a hit renames like one.
-            short = _strip_component_root(b_dep)
-            for (k, a_eq) in enumerate(expanded)
-                new_owners[k] == a_name || continue
-                a_dep = lhs_dependent_variable(a_eq.lhs)
-                a_dep === nothing && continue
-                if endswith(a_dep, "." * short)
-                    target = a_dep
-                    is_bare_match = true
-                    break
-                end
-            end
-        end
-        if !haskey(a_index, target)
-            push!(unmatched, b_dep)
-            continue
-        end
-
-        b_contribs = expanded_contribs[i]
-        if target != b_dep
-            # §4.7.1 step 4: on a translation match the pair names ONE physical
-            # quantity in two spellings, and B's spelling is about to lose its
-            # defining equation to the merge. Rewriting B's dependent variable —
-            # and ONLY it; B's parameters and observeds keep their names — is
-            # what keeps the merged system from carrying an unknown that nothing
-            # defines. On a direct or placeholder match this rewrite is the
-            # identity, which is why it is guarded rather than unconditional.
-            b_contribs = Contribution[
-                Contribution(
-                    _rename_variable(c.expr, b_dep, target),
-                    c.origins
-                ) for c in b_contribs
-            ]
-            merged_away[b_dep] = target
-            is_bare_match && (bare_matches[b_dep] = target)
-        end
-        if factor != 1.0
-            # One B contribution is scaled in place. Several COLLAPSE into one
-            # `factor * (b1 + b2 + …)` whose origins are their union: the
-            # factor multiplies the whole sum, and distributing it would change
-            # the arithmetic.
-            b_contribs = Contribution[
-                Contribution(
-                    OpExpr(
-                        "*", ASTExpr[
-                            NumExpr(factor),
-                            _fold_contributions(b_contribs),
-                        ]
-                    ),
-                    _union_origins(b_contribs)
-                ),
-            ]
-        end
-        append!(get!(extra, a_index[target], Contribution[]), b_contribs)
-        a_lhs = expanded[a_index[target]].lhs
-        if !(a_lhs isa OpExpr && a_lhs.op == "D") && eq.lhs isa OpExpr && eq.lhs.op == "D"
-            d_lhs[a_index[target]] = target == b_dep ? eq.lhs :
-                _rename_variable(eq.lhs, b_dep, target)
-        end
-        consumed[i] = true
-    end
-
+    expanded = _expand_placeholders(
+        pool, b_names, String[k for k in keys(states) if _component_root(k) == a_name]
+    )
+    matches, authored, unmatched = _match_compose(expanded, a_name, b_names, inv_translate)
     _report_operator_compose_merge(entry, a_name, entry.systems[2], authored, unmatched)
-
-    # §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
-    # asserts that A's `x` and B's `x` are one state under two spellings; the
-    # surviving spelling is the OWNER's, not `systems[1]`'s, so that flipping the
-    # entry's argument order cannot change which state name — and therefore which
-    # initial condition — comes out the far side.
-    inverted = OrderedDict{String, String}()
-    for (b_dep, target) in bare_matches
-        if _bare_name_owner(states, entry, a_name, entry.systems[2], b_dep, target) == b_dep
-            inverted[target] = b_dep
-            delete!(merged_away, b_dep)
-        end
-    end
-
-    if !isempty(extra)
-        for (j, b_contribs) in extra
-            eq = expanded[j]
-            merged = Contribution[expanded_contribs[j]; b_contribs]
-            expanded[j] = _equation_from(eq, merged; lhs = get(d_lhs, j, eq.lhs))
-            expanded_contribs[j] = merged
-            # A merged equation is no longer A's authored contribution — it is
-            # the composed tendency of its dependent variable, and a LATER
-            # coupling entry must be able to find it under that variable's own
-            # system, in either role. When A is the operator (`"systems":
-            # ["DepositionSink", "Chemistry"]`, with the sink authoring
-            # `D(Chemistry.X)` directly), keeping A's ownership makes the next
-            # entry's `owner in b_names` gate skip the equation entirely, so the
-            # chain leaves TWO equations claiming `D(Chemistry.X)` — a duplicate
-            # derivative three stages later in the tree walk instead of a merge
-            # here.
-            dep = lhs_dependent_variable(eq.lhs)
-            # Under an inverted bare-name match this equation's dependent
-            # variable is about to become the owner's spelling, so attribute it
-            # to the owner rather than to the name that is going away.
-            dep = dep === nothing ? nothing : get(inverted, dep, dep)
-            dep === nothing || (new_owners[j] = _component_root(dep))
-        end
-    end
-    # A merged equation now owned by another component than A moves to the
-    # end of that component's equations (see the POSITION note below).
-    moving = falses(length(expanded))
-    for j in keys(extra)
-        o = new_owners[j]
-        moving[j] = o != a_name && o in components
-    end
-
-    # Step 5: everything not consumed by a merge survives, in document order.
-    if any(consumed)
-        keep = findall(!, consumed)
-        kept_eqs = Equation[expanded[i] for i in keep]
-        kept_contribs = Vector{Contribution}[expanded_contribs[i] for i in keep]
-        kept_owners = String[new_owners[i] for i in keep]
-        expanded, expanded_contribs, new_owners = kept_eqs, kept_contribs, kept_owners
-        moving = moving[keep]
-    end
-
-    # §4.7.1 step 4, the merged-away name (see the docstring). Retarget FIRST,
-    # then prune: a reference rewritten after its declaration is gone is a
-    # reference to nothing, and the retarget is what makes the prune safe.
-    # `inverted` rides along in the same pass because it is the same operation
-    # pointed the other way — the loser of an ownership decision is merged away
-    # exactly like the loser of a translation match.
-    renames_made = isempty(inverted) ? merged_away :
-        OrderedDict{String, String}(merge(merged_away, inverted))
+    renames_made, inverted = _compose_renames(matches, states, entry, a_name)
+    merged = _merge_matches(expanded, matches, inverted, a_name, components)
     if !isempty(renames_made)
-        for (i, eq) in enumerate(expanded)
-            renamed, expanded_contribs[i] = _rewrite_contributions(
-                e -> _rename_variables(e, renames_made), eq, expanded_contribs[i], false
-            )
-            expanded[i] = Equation(
-                _rename_variables(eq.lhs, renames_made), renamed.rhs;
-                _comment = eq._comment
+        for (i, fe) in enumerate(merged)
+            renamed = _rewrite_flat_eq(e -> _rename_variables(e, renames_made), fe, false)
+            merged[i] = _FlatEq(
+                Equation(_rename_variables(fe.eq.lhs, renames_made), renamed.eq.rhs; _comment = fe.eq._comment),
+                renamed.contribs, fe.owner
             )
         end
         for gone in keys(renames_made)
@@ -647,39 +311,172 @@ function _apply_operator_compose!(
             delete!(observeds, gone)
         end
     end
-
-    # POSITION (esm-libraries-spec §4.7.1 step 4, §4.7.5 step 4). A merged
-    # equation whose owner is not A — A an operator that authored
-    # `D(Chem.X, t)` directly, `"systems": ["EmissionSource", "Chem"]` — is
-    # APPENDED to its owner's equations, after every equation of the owner and
-    # of the components before it, rather than left at A's slot. This is the
-    # order the reference (Python) and the Rust binding produce, where the
-    # block an equation sits in is its owner: each merge trails the ones
-    # before it. Leaving it at A's slot put such an equation ahead of the
-    # owner's own when A is declared first (reseact's NEI2016 emission source
-    # ahead of SuperFast), so the flattened equation order, which is
-    # observable, differed between the bindings.
-    if any(moving)
-        stay = findall(!, moving)
-        go = findall(moving)
-        moved = collect(zip(expanded[go], expanded_contribs[go], new_owners[go]))
-        expanded, expanded_contribs, new_owners = expanded[stay], expanded_contribs[stay], new_owners[stay]
-        _insert_into_component_blocks!(expanded, expanded_contribs, new_owners, moved, components)
-    end
-
-    empty!(equations); append!(equations, expanded)
-    empty!(contribs);  append!(contribs, expanded_contribs)
-    empty!(owners);    append!(owners, new_owners)
-    # Everything this entry DELETED, for the caller's running document-wide
-    # rename (issue #230). `inverted` is already folded in above: it is the same
-    # operation pointed the other way.
+    append!(empty!(pool), merged)
     return renames_made
+end
+
+# One B equation matched to the A equation it merges into: their positions in
+# the expanded pool, B's dependent variable and the A one it matched, the
+# `translate` factor, and whether the bare-name fallback found it.
+struct _ComposeMatch
+    b::Int
+    a::Int
+    b_dep::String
+    target::String
+    factor::Float64
+    bare::Bool
+end
+
+# esm-libraries-spec §4.7.1 step 3: each `_var` template a B system authored,
+# cloned once per variable of `target_vars` where it stands, with its
+# contributions; a template `ic(_var) ~ e` (a field initial condition) clones
+# with it. Only a template owned by one of this entry's B systems is expanded:
+# another `operator_compose` naming a different operator has its own.
+function _expand_placeholders(pool::Vector{_FlatEq}, b_names::Set{String}, target_vars::Vector{String})
+    out = _FlatEq[]
+    for fe in pool
+        dep = something(lhs_dependent_variable(fe.eq.lhs), _ic_lhs_variable(fe.eq.lhs), Some(nothing))
+        if dep === nothing || !is_placeholder(dep) || !(fe.owner in b_names)
+            push!(out, fe)
+            continue
+        end
+        for var in target_vars
+            cs = Contribution[
+                Contribution(_substitute_placeholder(c.expr, dep, var), c.origins)
+                    for c in fe.contribs
+            ]
+            push!(
+                out, _FlatEq(
+                    _equation_from(fe.eq, cs; lhs = _substitute_placeholder(fe.eq.lhs, dep, var)),
+                    cs, fe.owner
+                )
+            )
+        end
+    end
+    return out
+end
+
+# esm-libraries-spec §4.7.1 step 3: match each B equation of `pool` to an A
+# equation, DIRECT, then `translate`, then BARE-NAME, without changing
+# anything. A's equation for a quantity is its first one. Returns the matches,
+# the number of B equations with a dependent variable (`authored`), and the
+# dependent variables of those that matched nothing.
+function _match_compose(pool::Vector{_FlatEq}, a_name::String, b_names::Set{String}, inv_translate)
+    a_index = Dict{String, Int}()
+    for (i, fe) in enumerate(pool)
+        fe.owner == a_name || continue
+        dep = lhs_dependent_variable(fe.eq.lhs)
+        dep === nothing || haskey(a_index, dep) || (a_index[dep] = i)
+    end
+    matches = _ComposeMatch[]
+    authored = 0
+    unmatched = String[]
+    for (i, fe) in enumerate(pool)
+        fe.owner in b_names || continue
+        b_dep = lhs_dependent_variable(fe.eq.lhs)
+        b_dep === nothing && continue
+        authored += 1
+        target, factor, bare = b_dep, 1.0, false
+        if haskey(a_index, b_dep)
+        elseif haskey(inv_translate, b_dep)
+            target, factor = inv_translate[b_dep]
+        else
+            short = _strip_component_root(b_dep)
+            for a_fe in pool
+                a_fe.owner == a_name || continue
+                a_dep = lhs_dependent_variable(a_fe.eq.lhs)
+                if a_dep !== nothing && endswith(a_dep, "." * short)
+                    target, bare = a_dep, true
+                    break
+                end
+            end
+        end
+        if haskey(a_index, target)
+            push!(matches, _ComposeMatch(i, a_index[target], b_dep, target, factor, bare))
+        else
+            push!(unmatched, b_dep)
+        end
+    end
+    return matches, authored, unmatched
+end
+
+# esm-libraries-spec §4.7.1 step 4: the spelling each renaming match deletes,
+# decided before anything is rewritten. B's dependent variable gives way to
+# A's, except where a bare-name match's owner is B's spelling
+# (`_bare_name_owner`); those are returned again as `inverted`, A's spelling
+# => B's. Returns the whole map (renames to A first, in match order, then the
+# inverted ones) and `inverted`.
+function _compose_renames(matches::Vector{_ComposeMatch}, states, entry, a_name::String)
+    to_a = OrderedDict{String, String}()
+    bare = OrderedDict{String, String}()
+    for m in matches
+        m.target == m.b_dep && continue
+        to_a[m.b_dep] = m.target
+        m.bare && (bare[m.b_dep] = m.target)
+    end
+    inverted = OrderedDict{String, String}()
+    for (b_dep, target) in bare
+        _bare_name_owner(states, entry, a_name, entry.systems[2], b_dep, target) == b_dep || continue
+        inverted[target] = b_dep
+        delete!(to_a, b_dep)
+    end
+    made = isempty(inverted) ? to_a : OrderedDict{String, String}(merge(to_a, inverted))
+    return made, inverted
+end
+
+# esm-libraries-spec §4.7.1 step 4: each matched B equation's contributions
+# appended to its A equation's (one `factor * (b1 + b2 + …)` contribution, its
+# origins their union, when `translate` scales them), its `D` left-hand side
+# taken when A's equation is a bare definition, and the merged equation owned by
+# its dependent variable's component (B's spelling under `inverted`); the
+# matched B equations dropped; a merged equation now owned by a component other
+# than A moved to the end of that component's equations.
+function _merge_matches(
+        pool::Vector{_FlatEq}, matches::Vector{_ComposeMatch}, inverted::AbstractDict,
+        a_name::String, components::Vector{String}
+    )
+    extra = OrderedDict{Int, Vector{Contribution}}()
+    d_lhs = Dict{Int, ASTExpr}()
+    consumed = falses(length(pool))
+    for m in matches
+        b = pool[m.b]
+        cs = b.contribs
+        if m.factor != 1.0
+            cs = Contribution[
+                Contribution(
+                    OpExpr("*", ASTExpr[NumExpr(m.factor), _fold_contributions(cs)]),
+                    _union_origins(cs)
+                ),
+            ]
+        end
+        append!(get!(extra, m.a, Contribution[]), cs)
+        a_lhs = pool[m.a].eq.lhs
+        if !(a_lhs isa OpExpr && a_lhs.op == "D") && b.eq.lhs isa OpExpr && b.eq.lhs.op == "D"
+            d_lhs[m.a] = b.eq.lhs
+        end
+        consumed[m.b] = true
+    end
+    out = copy(pool)
+    moving = falses(length(pool))
+    for (j, cs) in extra
+        fe = pool[j]
+        contribs = Contribution[fe.contribs; cs]
+        dep = lhs_dependent_variable(fe.eq.lhs)
+        owner = dep === nothing ? fe.owner : _component_root(get(inverted, dep, dep))
+        out[j] = _FlatEq(_equation_from(fe.eq, contribs; lhs = get(d_lhs, j, fe.eq.lhs)), contribs, owner)
+        moving[j] = owner != a_name && owner in components
+    end
+    keep = findall(i -> !consumed[i] && !moving[i], eachindex(out))
+    any(moving) || return out[keep]
+    stay = out[keep]
+    _insert_into_component_blocks!(stay, out[findall(moving)], components)
+    return stay
 end
 
 """
     _compose_renames!(acc, made) -> acc
 
-Fold a merge's fresh rename map into the running document-wide one (issue #230).
+Fold a merge's fresh rename map into the running document-wide one.
 
 Renames CHAIN: if an earlier `operator_compose` merged `B.x` onto `A.x` and a
 later one merges `A.x` onto `C.x`, a document that still names `B.x` must land
@@ -716,7 +513,7 @@ end
 """
     _retarget_pending_entry(entry, renames) -> CouplingEntry
 
-Rewrite a not-yet-applied coupling entry's BY-NAME endpoints (issue #230).
+Rewrite a not-yet-applied coupling entry's BY-NAME endpoints.
 
 §4.7 applies every `operator_compose` before any `couple` or `variable_map`, and
 a renaming match DELETES the spelling it consumed. The document-wide retarget in
@@ -780,10 +577,9 @@ Which spelling owns the quantity a bare-name match unified (esm-libraries-spec
 
 A DIRECT match needs no decision (the two names are equal) and a `translate`
 match is the author naming the surviving spelling explicitly. The BARE-NAME
-fallback is the one that has to choose, and choosing `systems[1]` — what this
-binding did before — makes an `operator_compose` entry mean different things in
-its two argument orders: flipping `systems` silently swapped which state name,
-and which INITIAL CONDITION, came out the far side.
+fallback is the one that has to choose, and choosing `systems[1]` would make an
+`operator_compose` entry mean different things in its two argument orders:
+which state name, and which INITIAL CONDITION, comes out the far side.
 
 Ownership follows the variable's own namespace, the direction step 4's
 merged-equation reattribution (`_component_root`) already reaches in. The merge
@@ -792,14 +588,14 @@ deletes one of the two names, so the question is which of them survives:
   * **Both are STATES** — each carries its own initial condition, and nothing in
     the document says which one the merged tendency should integrate from.
     Refused ([`OperatorComposeAmbiguousBareNameError`](@ref)), because deciding
-    it here is exactly the silent choice issue #195 is about. The author says
+    it here would be a silent choice. The author says
     what they mean with `translate`, which names the surviving spelling
     outright, or with `require_match`.
   * **Exactly one is a state** — the other carries no initial condition, so
     there is nothing to lose by renaming onto the state. That one is the owner,
     in either argument order.
   * **Neither is** — no initial condition is at stake either way; the incumbent
-    (`systems[1]`'s spelling) stands, as before.
+    (`systems[1]`'s spelling) stands.
 """
 function _bare_name_owner(
         states::OrderedDict{String, ModelVariable},
@@ -892,40 +688,16 @@ function _report_operator_compose_merge(
             )
         )
     end
-    @warn "operator_compose_partial_merge: $(where) merged $(merged) of $(authored) " *
-        "equations '$(b_name)' authored; unmatched dependent variable(s): $(names). " *
-        "The unmatched equations are preserved unchanged (esm-libraries-spec " *
-        "§4.7.1 step 5), so they integrate DECOUPLED from '$(a_name)'. Set " *
-        "`require_match: true` if they were meant to be contributions, or " *
-        "`require_match: false` if they were not."
-    return
-end
-
-"""
-    _attribute_equations!(owners, equations, name)
-
-Extend `owners` so it is parallel to `equations` again, attributing every newly
-appended equation to component `name` (`""` for one no component authored — an
-equation a coupling rule itself introduced).
-
-Provenance is recorded here rather than derived later because it is genuinely
-NOT derivable: the flattener keeps one flat equation pool, and after namespacing
-an operator component's equation for a chemistry species is textually
-indistinguishable from the chemistry component's own. §4.7.1 step 4's
-`rhs_A + factor * rhs_B` needs to know which is which. Every mutation between
-collection and the compose either APPENDS (a `couple` connector equation, a
-`variable_map`'s derived-value definition) or replaces in place, so padding at
-the end is always the correct resync.
-"""
-function _attribute_equations!(
-        owners::Vector{String},
-        equations::Vector{Equation},
-        name::AbstractString
+    _flatten_warn(
+        "operator_compose_partial_merge",
+        "$(where) merged $(merged) of $(authored) " *
+            "equations '$(b_name)' authored; unmatched dependent variable(s): $(names). " *
+            "The unmatched equations are preserved unchanged (esm-libraries-spec " *
+            "§4.7.1 step 5), so they integrate DECOUPLED from '$(a_name)'. Set " *
+            "`require_match: true` if they were meant to be contributions, or " *
+            "`require_match: false` if they were not."
     )
-    while length(owners) < length(equations)
-        push!(owners, String(name))
-    end
-    return owners
+    return
 end
 
 """
@@ -1020,30 +792,10 @@ function _inverse_translate(
 end
 
 """
-    _rename_variable(expr, from, to) -> ASTExpr
-
-Every `VarExpr` named exactly `from` rewritten to `to`; everything else — other
-variables, operators, every non-expression field — untouched. This is §4.7.1
-step 4's dependent-variable rewrite, which is deliberately NOT a general
-substitution: B's parameters and observeds keep their own names.
-"""
-function _rename_variable(
-        expr::ASTExpr, from::AbstractString,
-        to::AbstractString
-    )::ASTExpr
-    if expr isa VarExpr
-        return expr.name == from ? VarExpr(String(to)) : expr
-    elseif expr isa OpExpr
-        return map_children(x -> _rename_variable(x, from, to), expr)
-    end
-    return expr
-end
-
-"""
     _rename_variables(expr, renames) -> ASTExpr
 
-[`_rename_variable`](@ref) over a whole map at once, applied to every `VarExpr`
-in ONE pass so a rename can never chain into another entry's target.
+Every `VarExpr` named by a key of `renames` rewritten to its value, in ONE pass
+so a rename can never chain into another entry's target.
 
 This is §4.7.1 step 4's document-wide retarget of the names an
 `operator_compose` merged away. Unlike the step-4 rewrite of B's own `rhs_B`,
@@ -1057,82 +809,15 @@ function _rename_variables(
         renames::AbstractDict{String, String}
     )::ASTExpr
     isempty(renames) && return expr
-    if expr isa VarExpr
-        to = get(renames, expr.name, nothing)
-        return to === nothing ? expr : VarExpr(to)
-    elseif expr isa OpExpr
-        # A relational `join` names its key COLUMNS and its overlap envelope
-        # factors as bare STRINGS rather than as `VarExpr` children, so
-        # `map_children` preserves them verbatim (that is what it is for) and
-        # this walk alone would leave a join pointing at a spelling the merge
-        # deleted. §4.7.5 step 2 namespaces those strings like any other
-        # reference, so §4.7.1 step 4 has to rename them like any other
-        # reference too (CONFORMANCE_SPEC §5.5.6, §5.35).
-        return _rename_join_clauses(
-            map_children(x -> _rename_variables(x, renames), expr),
-            renames
-        )
-    end
-    return expr
-end
-
-"""
-    _rename_event_names!(events, renames) -> events
-
-Apply §4.7.1 step 4's merged-away rename to a collected event, in place.
-
-Deliberately NOT `_lower_events!`: that one maps EXPRESSIONS, and an affect's
-`lhs` is a plain variable NAME string, not an expression. The `lhs` is precisely
-what a renaming merge deletes — an affect still writing `B.x` writes to an
-unknown the flattened system no longer declares, which the solver reports far
-downstream, if at all.
-"""
-function _rename_event_names!(
-        events::Vector{ContinuousEvent},
-        renames::AbstractDict{String, String}
+    # A relational `join` names its key columns and overlap envelope factors as
+    # bare strings, not `VarExpr` children, so each rebuilt node renames them
+    # too (§4.7.5 step 2 namespaces them like any reference; CONFORMANCE_SPEC
+    # §5.5.6, §5.35).
+    return _rewrite_expr(
+        (x, _) -> x isa VarExpr ? (t = get(renames, x.name, nothing); t === nothing ? x : VarExpr(t)) : x,
+        (n, _) -> _rename_join_clauses(n, renames), expr
     )
-    isempty(renames) && return events
-    for (i, ev) in enumerate(events)
-        events[i] = ContinuousEvent(
-            ASTExpr[_rename_variables(c, renames) for c in ev.conditions],
-            _rename_affects(ev.affects, renames);
-            affect_neg = (
-                ev.affect_neg === nothing ? nothing :
-                    _rename_affects(ev.affect_neg, renames)
-            ),
-            root_find = ev.root_find, reinitialize = ev.reinitialize,
-            description = ev.description, name = ev.name
-        )
-    end
-    return events
 end
-
-function _rename_event_names!(
-        events::Vector{DiscreteEvent},
-        renames::AbstractDict{String, String}
-    )
-    isempty(renames) && return events
-    for (i, ev) in enumerate(events)
-        # Only a `ConditionTrigger` carries an expression; a periodic / times
-        # trigger is pure data.
-        trigger = ev.trigger isa ConditionTrigger ?
-            ConditionTrigger(_rename_variables(ev.trigger.expression, renames)) :
-            ev.trigger
-        events[i] = DiscreteEvent(
-            trigger, _rename_affects(ev.affects, renames);
-            reinitialize = ev.reinitialize, description = ev.description, name = ev.name
-        )
-    end
-    return events
-end
-
-_rename_affects(affects::Vector{AffectEquation}, renames::AbstractDict{String, String}) =
-    AffectEquation[
-    AffectEquation(
-        get(renames, a.lhs, a.lhs),
-        _rename_variables(a.rhs, renames)
-    ) for a in affects
-]
 
 function _substitute_placeholder(
         expr::ASTExpr,
@@ -1140,23 +825,13 @@ function _substitute_placeholder(
         target::String
     )::ASTExpr
     placeholder === nothing && return expr
-    if expr isa NumExpr || expr isa IntExpr
-        return expr
-    elseif expr isa VarExpr
-        if is_placeholder(expr.name) || expr.name == placeholder
-            return VarExpr(target)
-        end
-        return expr
-    elseif expr isa OpExpr
-        # Recurse into EVERY expression-bearing field via the shared field-preserving
-        # rewrite and rebuild via `reconstruct`, which preserves all other fields
-        # (int_var, join, id, manifold, key, …) that a hand-listed
-        # keyword subset used to drop. `placeholder`/`target` are namespaced
-        # dependent-variable names, never node-local binders, so recursing into
-        # every field cannot capture a bound index or `int_var`.
-        return map_children(x -> _substitute_placeholder(x, placeholder, target), expr)
-    end
-    return expr
+    # `placeholder` and `target` are namespaced dependent-variable names, never
+    # node-local binders, so every child field is rewritten.
+    return _rewrite_expr(
+        (x, _) -> (x isa VarExpr && (is_placeholder(x.name) || x.name == placeholder)) ?
+            VarExpr(target) : x,
+        (n, _) -> n, expr
+    )
 end
 
 """
@@ -1174,17 +849,15 @@ A dict-shaped connector equation that is neither (no `transform`, and no parsed
 `ASTExpr` `lhs`/`rhs`) is NOT silently degraded into a bogus placeholder
 equation; it is recorded in `opaque_refs` (the `metadata.opaque_coupling_refs`
 channel used for the other couplings the flattener cannot lower) so callers can
-see the entry was skipped. The spec taxonomy (§4.7.6, 8 error types for
-cross-language parity) has no matching typed error, and adding a ninth is
-forbidden — the opaque-refs channel is the designated fallback.
+see the entry was skipped. The flatten error taxonomy (esm-libraries-spec
+§4.7.6) has no typed error for this case; the opaque-refs channel is the
+designated fallback.
 """
 function _apply_couple!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
+        pool::Vector{_FlatEq},
         entry::CouplingCouple,
         opaque_refs::Vector{String};
         index::Int,
-        owners::Vector{String},
         states::AbstractDict,
         components::Vector{String}
     )
@@ -1195,29 +868,24 @@ function _apply_couple!(
     origin = _coupling_origin(index)
     for item in raw
         if item isa Equation
-            push!(equations, item)
-            push!(contribs, _authored(item.rhs, origin))
-            push!(owners, "")
+            push!(pool, _FlatEq(item, _authored(item.rhs, origin)))
             continue
         end
         item isa AbstractDict || continue
         # A `{from, to, transform, expression}` connector-transform equation
         # (esm-spec §10.3) is discriminated by its `transform` key, which the
         # plain `{lhs, rhs}` form never carries.
-        if _has_field(item, :transform)
+        if _raw_haskey(item, "transform")
             _apply_connector_transform!(
-                equations, contribs, item, entry, opaque_refs;
-                origin = origin, owners = owners, states = states,
-                components = components
+                pool, item, entry, opaque_refs;
+                origin = origin, states = states, components = components
             )
             continue
         end
         lhs = get(item, "lhs", nothing)
         rhs = get(item, "rhs", nothing)
         if lhs isa ASTExpr && rhs isa ASTExpr
-            push!(equations, Equation(lhs, rhs; _comment = "couple"))
-            push!(contribs, _authored(rhs, origin))
-            push!(owners, "")
+            push!(pool, _FlatEq(Equation(lhs, rhs; _comment = "couple"), _authored(rhs, origin)))
         else
             push!(
                 opaque_refs, string(
@@ -1231,7 +899,7 @@ function _apply_couple!(
 end
 
 """
-    _apply_connector_transform!(equations, contribs, item, entry, opaque_refs; origin, owners, states, components)
+    _apply_connector_transform!(pool, item, entry, opaque_refs; origin, states, components)
 
 Apply one `{from, to, transform, expression}` connector-transform equation
 (esm-spec §10.3). The `transform` string selects how `expression` (parsed to an
@@ -1262,19 +930,17 @@ definition:
 rather than misapplied — the same fallback the plain-equation arm uses.
 """
 function _apply_connector_transform!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
+        pool::Vector{_FlatEq},
         item::AbstractDict,
         entry::CouplingCouple,
         opaque_refs::Vector{String};
         origin::TermOrigin,
-        owners::Vector{String},
         states::AbstractDict,
         components::Vector{String}
     )
-    transform_raw = _get_field(item, :transform, nothing)
-    to_raw = _get_field(item, :to, nothing)
-    expr_raw = _get_field(item, :expression, nothing)
+    transform_raw = _raw_get(item, "transform", nothing)
+    to_raw = _raw_get(item, "to", nothing)
+    expr_raw = _raw_get(item, "expression", nothing)
 
     if !(transform_raw isa AbstractString) || to_raw === nothing || expr_raw === nothing
         push!(
@@ -1291,17 +957,16 @@ function _apply_connector_transform!(
 
     if transform == "additive"
         _combine_tendency_term!(
-            equations, contribs, to, expression, "+", origin;
-            owners = owners, states = states, components = components
+            pool, to, expression, "+", origin; states = states, components = components
         )
     elseif transform == "multiplicative"
         _combine_tendency_term!(
-            equations, contribs, to, expression, "*", origin;
-            owners = owners, states = states, components = components
+            pool, to, expression, "*", origin; states = states, components = components
         )
     elseif transform == "replacement"
         throw(
-            ArgumentError(
+            FlattenRefusal(
+                ERROR_CODES.UNSUPPORTED_CONSTRUCT,
                 "couple connector transform 'replacement' (esm-spec §10.3) is not " *
                     "implemented: its \"replace the variable value entirely\" semantics is " *
                     "ambiguous between replacing '$(to)'s tendency and making it algebraic. " *
@@ -1311,7 +976,8 @@ function _apply_connector_transform!(
         )
     else
         throw(
-            ArgumentError(
+            FlattenRefusal(
+                ERROR_CODES.UNSUPPORTED_CONSTRUCT,
                 "invalid couple connector transform '$(transform)': must be one of " *
                     "additive, multiplicative, replacement (esm-spec §10.3)."
             )
@@ -1321,15 +987,14 @@ function _apply_connector_transform!(
 end
 
 """
-    _insert_into_component_blocks!(equations, contribs, owners, items, components)
+    _insert_into_component_blocks!(pool, items, components)
 
-Insert each `(equation, contributions, owner)` of `items` at the end of its
-owner's block of the equation list: after the last equation owned by the owner
-or by any component declared before it in `components` (document order). Items
-for one owner keep their order in `items`; items landing at the same slot come
-out in component order. `owners` is parallel to `equations`, and an owner that
-is not a component (`""`) belongs to no block. Every item's owner must be in
-`components`.
+Insert each equation of `items` at the end of its owner's block of `pool`:
+after the last equation owned by the owner or by any component declared before
+it in `components` (document order). Items for one owner keep their order in
+`items`; items landing at the same slot come out in component order. An owner
+that is not a component (`""`) belongs to no block. Every item's owner must be
+in `components`.
 
 This is the one placement rule for an equation that joins a component after
 collection: a `couple` term that becomes a tendency (§4.7.2) and an
@@ -1337,47 +1002,31 @@ collection: a `couple` term that becomes a tendency (§4.7.2) and an
 It is one pass over the list, however many items there are.
 """
 function _insert_into_component_blocks!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
-        owners::Vector{String},
-        items::AbstractVector{<:Tuple{Equation, Vector{Contribution}, String}},
-        components::Vector{String}
+        pool::Vector{_FlatEq}, items::AbstractVector{_FlatEq}, components::Vector{String}
     )
     isempty(items) && return
     rank = Dict{String, Int}(c => k for (k, c) in enumerate(components))
     # `upto[k]`: the last position owned by one of components[1:k], or 0.
     upto = zeros(Int, length(components))
-    for (i, o) in enumerate(owners)
-        k = get(rank, o, 0)
+    for (i, fe) in enumerate(pool)
+        k = get(rank, fe.owner, 0)
         k == 0 || (upto[k] = i)
     end
     for k in 2:length(upto)
         upto[k] = max(upto[k], upto[k - 1])
     end
     # Stable by component rank, which also sorts by slot: `upto` is monotone.
-    order = sortperm([rank[it[3]] for it in items])
-    out_eqs = Vector{Equation}(undef, length(equations) + length(items))
-    out_cs = Vector{Vector{Contribution}}(undef, length(out_eqs))
-    out_owners = Vector{String}(undef, length(out_eqs))
-    n = 0
+    order = sortperm([rank[it.owner] for it in items])
+    out = sizehint!(_FlatEq[], length(pool) + length(items))
     cursor = 1
     for j in order
-        eq, cs, o = items[j]
-        for i in cursor:upto[rank[o]]
-            n += 1
-            out_eqs[n], out_cs[n], out_owners[n] = equations[i], contribs[i], owners[i]
-        end
-        cursor = max(cursor, upto[rank[o]] + 1)
-        n += 1
-        out_eqs[n], out_cs[n], out_owners[n] = eq, cs, o
+        last = upto[rank[items[j].owner]]
+        append!(out, view(pool, cursor:last))
+        cursor = max(cursor, last + 1)
+        push!(out, items[j])
     end
-    for i in cursor:length(equations)
-        n += 1
-        out_eqs[n], out_cs[n], out_owners[n] = equations[i], contribs[i], owners[i]
-    end
-    copyto!(resize!(equations, n), out_eqs)
-    copyto!(resize!(contribs, n), out_cs)
-    copyto!(resize!(owners, n), out_owners)
+    append!(out, view(pool, cursor:length(pool)))
+    append!(empty!(pool), out)
     return
 end
 
@@ -1395,24 +1044,17 @@ end
 #                      a parameter, or a name no component owns, is skipped;
 #   * multiplicative — there is no existing tendency to scale, which is an error.
 function _combine_tendency_term!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
+        pool::Vector{_FlatEq},
         to::String, expression::ASTExpr, combine::String,
         origin::TermOrigin;
-        owners::Vector{String},
         states::AbstractDict,
         components::Vector{String}
     )
     if combine == "*"
-        idx = findlast(eq -> differential_lhs_variable(eq.lhs) == to, equations)
-        idx === nothing && throw(
-            ArgumentError(
-                "couple connector 'multiplicative' transform targets '$(to)', which " *
-                    "has no tendency (`D($(to))`) to multiply (esm-spec §10.3)."
-            )
-        )
+        idx = findlast(fe -> differential_lhs_variable(fe.eq.lhs) == to, pool)
+        idx === nothing && throw(CoupleMultiplicativeNoTendencyError(to))
     else
-        idx = findlast(eq -> lhs_dependent_variable(eq.lhs) == to, equations)
+        idx = findlast(fe -> lhs_dependent_variable(fe.eq.lhs) == to, pool)
     end
     if idx === nothing
         root = _component_root(to)
@@ -1423,24 +1065,22 @@ function _combine_tendency_term!(
             _comment = "couple:additive"
         )
         _insert_into_component_blocks!(
-            equations, contribs, owners,
-            [(eq, _authored(expression, origin), root)], components
+            pool, [_FlatEq(eq, _authored(expression, origin), root)], components
         )
         return
     end
-    existing = equations[idx]
+    existing = pool[idx]
     merged = if combine == "*"
         Contribution[
             Contribution(
-                OpExpr("*", ASTExpr[_fold_contributions(contribs[idx]), expression]),
-                _union_origins(contribs[idx], origin)
+                OpExpr("*", ASTExpr[_fold_contributions(existing.contribs), expression]),
+                _union_origins(existing.contribs, origin)
             ),
         ]
     else
-        Contribution[contribs[idx]; Contribution(expression, TermOrigin[origin])]
+        Contribution[existing.contribs; Contribution(expression, TermOrigin[origin])]
     end
-    equations[idx] = _equation_from(existing, merged)
-    contribs[idx] = merged
+    pool[idx] = _with_contribs(existing, merged)
     return
 end
 
@@ -1453,14 +1093,13 @@ When `transform` is an `ASTExpr` (esm-spec §10.4 expression transform), the tar
 parameter instead becomes an observed defined by the transform expression —
 see the expression arm below.
 
-From esm 1.0.0 a data source is not a coupling endpoint (esm-spec §8), so there
+A data source is not a coupling endpoint (esm-spec §8), so there
 is no loader-producer arm here any more: a loaded field IS a parameter of the
 consuming model, declared with its own `shape` and its own `update`, and needs
 no shape transfer from a `param_to_var` edge.
 """
 function _apply_variable_map!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
+        pool::Vector{_FlatEq},
         params::OrderedDict{String, ModelVariable},
         entry::CouplingVariableMap;
         observeds::Union{OrderedDict{String, ModelVariable}, Nothing} = nothing,
@@ -1468,10 +1107,10 @@ function _apply_variable_map!(
         shapeless::AbstractSet{String} = Set{String}()
     )
     if entry.transform isa ASTExpr
-        _apply_expression_transform!(equations, contribs, params, observeds, entry, index)
+        _apply_expression_transform!(pool, params, observeds, entry, index)
         return
     end
-    _substitute_variable_map!(equations, contribs, entry)
+    _substitute_variable_map!(pool, entry)
     _promote_variable_map_param!(params, entry, shapeless)
     return
 end
@@ -1486,8 +1125,7 @@ end
 # reference, so no namespacing is applied; the expression MUST reference
 # the entry's `from` variable — it is the data-flow edge the entry declares.
 function _apply_expression_transform!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
+        pool::Vector{_FlatEq},
         params::OrderedDict{String, ModelVariable},
         observeds::Union{OrderedDict{String, ModelVariable}, Nothing},
         entry::CouplingVariableMap,
@@ -1501,7 +1139,8 @@ function _apply_expression_transform!(
     # the reference check is not blind to nested aggregate transforms.
     if !contains(transform, from)
         throw(
-            ArgumentError(
+            FlattenRefusal(
+                ERROR_CODES.VARIABLE_MAP_TRANSFORM_MISSING_FROM,
                 "variable_map($(from) -> $(to)): expression transform does not " *
                     "reference the entry's 'from' variable '$(from)' (esm-spec §10.4)"
             )
@@ -1525,11 +1164,10 @@ function _apply_expression_transform!(
         )
     end
     # The defining equation (`to ~ transform`) is what MAKES `to` an observed
-    # unknown from esm 1.0.0 — the declaration carries no expression, so this
+    # unknown — the declaration carries no expression, so this
     # push is the whole definition rather than a duplicate of one. The coupling
     # entry wrote that expression, so it is the definition's only author.
-    push!(equations, Equation(VarExpr(to), transform))
-    push!(contribs, _authored(transform, _coupling_origin(index)))
+    push!(pool, _FlatEq(Equation(VarExpr(to), transform), _authored(transform, _coupling_origin(index))))
     return
 end
 
@@ -1537,18 +1175,14 @@ end
 # flattened equation. Every named transform is a replacement (§4.7.3), so the
 # substitution applies inside each contribution and adds no origin: it changes
 # an input of a term, not who wrote it.
-function _substitute_variable_map!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
-        entry::CouplingVariableMap
-    )
+function _substitute_variable_map!(pool::Vector{_FlatEq}, entry::CouplingVariableMap)
     bindings = Dict{String, ASTExpr}(entry.to => _variable_map_replacement(entry))
     rewrite = _variable_map_rewrite(entry)
-    for (i, eq) in enumerate(equations)
-        rewritten, contribs[i] = _rewrite_contributions(rewrite, eq, contribs[i], false)
-        equations[i] = Equation(
-            substitute(eq.lhs, bindings), rewritten.rhs;
-            _comment = eq._comment
+    for (i, fe) in enumerate(pool)
+        rewritten = _rewrite_flat_eq(rewrite, fe, false)
+        pool[i] = _FlatEq(
+            Equation(substitute(fe.eq.lhs, bindings), rewritten.eq.rhs; _comment = fe.eq._comment),
+            rewritten.contribs, fe.owner
         )
     end
     return
@@ -1557,12 +1191,9 @@ end
 # The expression replacing a reference to a named-transform `variable_map`'s
 # `to`: its `from`, scaled by `factor` when one is given.
 function _variable_map_replacement(entry::CouplingVariableMap)::ASTExpr
-    # Build replacement ASTExpr. `factor` is a scaling coefficient (schema restricts
-    # it to the scaling transforms — additive / multiplicative / conversion_factor;
-    # a bare param_to_var / identity may not carry one). Apply it uniformly here
-    # so all three bindings agree — Julia/Rust previously scaled only for
-    # `conversion_factor`, silently dropping it for additive/multiplicative while
-    # Python applied it. A factor of 1.0 is a no-op and left unwrapped.
+    # `factor` is a scaling coefficient (the schema allows it on additive,
+    # multiplicative and conversion_factor), applied whatever the transform. A
+    # factor of 1.0 is left unwrapped.
     replacement::ASTExpr = VarExpr(entry.from)
     if entry.factor !== nothing && entry.factor != 1.0
         replacement = OpExpr(
@@ -1671,9 +1302,8 @@ end
 """
     _data_fed_without_shape(file::EsmFile) -> Set{String}
 
-The scoped names of every data-fed parameter (a `kind: "data"` rule with a
-`from` binding) that declares no `shape`, in models at any subsystem depth and
-in reaction systems.
+The scoped names of every data-fed parameter ([`_is_data_fed`](@ref)) that
+declares no `shape`, in models and reaction systems at any subsystem depth.
 
 Absent and `[]` differ here, and only here: `[]` declares a scalar buffer,
 while an absent `shape` takes that of the `param_to_var` target the parameter
@@ -1683,41 +1313,30 @@ free to reshape.
 """
 function _data_fed_without_shape(file::EsmFile)
     names = Set{String}()
-    fed(update) = update !== nothing &&
-        any(r -> r.kind == "data" && r.from !== nothing, update)
-    function walk(model::Model, scope::String)
-        for (vname, var) in model.variables
-            (var.type == ParameterVariable && var.shape === nothing && fed(var.update)) &&
-                push!(names, "$scope.$vname")
-        end
-        for (sname, sub) in model.subsystems
-            sub isa Model && walk(sub, "$scope.$sname")
-        end
+    _for_each_data_param(file) do scope, name, var, _
+        var isa ModelVariable && var.type != ParameterVariable && return
+        (var.shape === nothing && _is_data_fed(var)) && push!(names, "$scope.$name")
         return
-    end
-    if file.models !== nothing
-        for (mname, model) in file.models
-            model isa Model && walk(model, String(mname))
-        end
-    end
-    if file.reaction_systems !== nothing
-        for (rname, rs) in file.reaction_systems
-            for p in rs.parameters
-                (p.shape === nothing && fed(p.update)) && push!(names, "$rname.$(p.name)")
-            end
-        end
     end
     return names
 end
 
-# True iff `v` carries a `kind: "data"` update WITH a `from` binding (esm-spec
-# §5.4/§8.5) — the predicate `_collect_loader_fields!` and `_collect_data_feeds!`
-# apply, so all three agree on which parameters are data-fed.
-_is_data_fed(v::ModelVariable) =
-    v.update !== nothing && any(rule -> rule.kind == "data" && rule.from !== nothing, v.update)
+"""
+    _is_data_fed(rule::ParameterUpdate) -> Bool
+    _is_data_fed(param) -> Bool
+
+A `kind: "data"` update rule with a `from` binding (esm-spec §5.4/§8.5); a
+parameter (a model variable or a reaction-system parameter) with such a rule.
+Whether the named source is declared is a separate question:
+`data_source_undefined` is the validator's finding, and the callers that need
+a declared source (`_loader_fields`) test `rule.source` themselves.
+"""
+_is_data_fed(rule::ParameterUpdate) = rule.kind == "data" && rule.from !== nothing
+_is_data_fed(v::Union{ModelVariable, Parameter}) =
+    v.update !== nothing && any(_is_data_fed, v.update)
 
 # ========================================
-# Coupling entry descriptions (unchanged from prior implementation)
+# Coupling entry descriptions
 # ========================================
 
 """

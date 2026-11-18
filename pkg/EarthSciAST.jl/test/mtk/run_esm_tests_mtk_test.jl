@@ -1,6 +1,5 @@
-# The run_esm_tests walker (src/run_tests.jl, esm-ol5qa) on runs that compile
-# a fixture: PASS/FAIL/exit_code paths, the model-relative fallback in
-# _resolve_handle (spec §10.7 subsystem refs), JUnit XML emission, and the
+# The run_esm_tests walker (src/run_tests.jl) on runs that compile a fixture:
+# PASS/FAIL/exit_code paths, §10.7 subsystem refs, JUnit XML emission, and the
 # per-test duration split. The runner compiles through ModelingToolkit, so this
 # half runs in the ModelingToolkit suite (test/mtk/runtests.jl); discovery and
 # the rest stay in test/run_esm_tests_test.jl.
@@ -11,7 +10,7 @@ import OrdinaryDiffEqTsit5
 
 const _inline_dir = joinpath(@__DIR__, "..", "fixtures", "inline_tests")
 
-@testset "run_esm_tests walker on compiled fixtures (esm-ol5qa)" begin
+@testset "run_esm_tests walker on compiled fixtures" begin
 
     @testset "passing fixture → all PASS" begin
         passing = joinpath(_inline_dir, "passing_decay.esm")
@@ -45,11 +44,9 @@ const _inline_dir = joinpath(@__DIR__, "..", "fixtures", "inline_tests")
         @test exit_code != 0
     end
 
-    @testset "subsystem-composed fixture → all PASS (esm-ol5qa)" begin
-        # Exercises the model-relative fallback in _resolve_handle: assertions
-        # and parameter_overrides use spec §10.7 fully-qualified refs of the
-        # form "ModelName.sub.var", which MTK exposes as the model-relative
-        # "sub_var" property (stripping the system-name prefix).
+    @testset "subsystem-composed fixture → all PASS" begin
+        # Assertions and parameter_overrides use spec §10.7 fully-qualified
+        # refs of the form "ModelName.sub.var".
         results, exit_code = run_esm_tests(
             [_inline_dir];
             verbose = false,
@@ -98,8 +95,8 @@ const _inline_dir = joinpath(@__DIR__, "..", "fixtures", "inline_tests")
         end
         @test !isempty(by_test)
         # Every assertion of one test carries the SAME even share of the
-        # test's wall time (the pre-fix code stamped cumulative elapsed time,
-        # strictly increasing across a test's assertions).
+        # test's wall time, not a cumulative elapsed time that increases
+        # across a test's assertions.
         for durations in values(by_test)
             @test all(d -> d == durations[1], durations)
             @test all(d -> d >= 0.0, durations)

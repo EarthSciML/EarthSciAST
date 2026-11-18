@@ -26,30 +26,20 @@ using JSON3
 using EarthSciAST
 import OrdinaryDiffEqTsit5
 
-include("testutils.jl")  # TESTUTILS_REPO_ROOT
+include("testutils.jl")  # conformance_manifest
 
-const _ANF_CAT_DIR = joinpath(
-    TESTUTILS_REPO_ROOT, "tests", "conformance",
-    "assertion_nonfinite"
-)
-const _ANF_MANIFEST = joinpath(_ANF_CAT_DIR, "manifest.json")
 
 _anf_class(v) = isnan(v) ? "nan" : (v == Inf ? "+inf" : (v == -Inf ? "-inf" : "finite"))
 
 @testset "Conformance: assertion_nonfinite (manifest-driven)" begin
-    @test isfile(_ANF_MANIFEST)
-    manifest = JSON3.read(read(_ANF_MANIFEST, String))
-    @test manifest.category == "assertion_nonfinite"
+    dir, manifest = conformance_manifest("assertion_nonfinite")
     @test String(manifest.reference_binding) == "julia"
-    @test "julia" in manifest.bindings_required
-    @test "python" in manifest.bindings_required
-    @test "rust" in manifest.bindings_required
     @test !isempty(manifest.fixtures)
 
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
-            esm_path = joinpath(_ANF_CAT_DIR, String(fixture.path))
+            esm_path = joinpath(dir, String(fixture.path))
             @test isfile(esm_path)
             results = run_inline_tests(
                 esm_path; model_name = String(fixture.model),

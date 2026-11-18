@@ -1,14 +1,12 @@
 # ========================================================================
-# tree_walk/stencil_affine.jl — part of the tree-walk evaluator (ess-affine).
+# tree_walk/stencil_affine.jl — part of the tree-walk evaluator.
 # Included by src/tree_walk.jl AFTER stencil.jl; see that file for the layout.
 #
 # The POLYHEDRAL affine build: turn a lowered `makearray` rule body into a small
 # set of `_AccKernel`s (access_kernel.jl) in O(#structural groups), NOT O(#cells).
-# This is the replacement for the per-cell / per-branch symbolic-stencil path
-# (stencil.jl), whose cost is O(#cells × body) and made the monotone-PPM build
-# take tens of minutes (see esd-ess-build-oom-memoless-substitution).
+# The per-cell path costs O(#cells × body).
 #
-# HOW IT WILL WORK (the box processor, built incrementally):
+# HOW IT WORKS (the box processor):
 #   1. Reuse `_build_branch_template` (stencil.jl) to compile ONE sentinel spine
 #      per structural signature — a `_Node` tree whose loop-var-dependent gather
 #      leaves are `_NK_STATE(idx = -k)` placeholders (lane k ↔ `recipes[k]`).
@@ -30,8 +28,14 @@
 # and each invariant fixed-slot leaf (`_NK_STATE idx≥0`, `_NK_PARAM_GATHER`)
 # becomes a fixed-read descriptor. Because the spine's OP structure is the exact
 # `_compile` output (only leaves are swapped), the arithmetic — operand order,
-# associativity, n-ary grouping — is byte-for-byte the per-cell path's, which is
-# what makes the emitted kernel bit-identical.
+# associativity, n-ary grouping — is the per-cell path's, which is what makes
+# the emitted kernel bit-identical.
+#
+# The tier rests on two invariants: (1) within a box every cell selects the same
+# makearray regions, which the cuts guarantee (it is not verified per box, so a
+# missed region boundary is a wrong answer); (2) within a box every lane's
+# lowering holds at every cell, which per-box verification guarantees (at the
+# corners for a structurally affine subscript, at every cell otherwise).
 # ========================================================================
 
 # Per-lane lowering decision, computed by the box processor from the recipe
@@ -53,10 +57,10 @@ end
 #   * `_NK_STATE(idx ≥ 0)`     invariant fixed state slot  → `_AccStateFixed`
 #   * `_NK_PARAM_GATHER`       invariant forcing gather    → `_AccArrFixed`
 #   * `_NK_LITERAL/PARAM/TIME`  pass through (the access evaluator handles them)
-# Anything not modelled (a contraction node) throws `_StencilFallback` so the
+# Anything not modelled (a contraction node) throws a `_Decline` so the
 # caller runs the per-cell path — never a wrong kernel.
 #
-# IDENTITY-MEMOIZED (ESS-0hh): the compiled template is a DAG (`_stencilize` /
+# IDENTITY-MEMOIZED: the compiled template is a DAG (`_stencilize` /
 # `_compile` preserve sharing via their identity memos), and the lowering is a
 # pure function of the node under one call's fixed `lane_repl`/`subcalls`, so
 # a shared template node lowers to ONE shared access node — the per-path
@@ -115,7 +119,7 @@ function _lower_to_access_node(
         push!(acc, _AccArrFixed(tmpl.payload::Vector{Float64}, tmpl.idx))
         return _acc(length(acc))
     elseif k === _NK_CONTRACTION
-        throw(_StencilFallback("affine lowering: contraction node in template"))
+        _decline(:unknown_kind, "a contraction node in a template")
     elseif k === _NK_OP
         # `payload` is carried through (`nothing` for every arithmetic op).
         ch = _Node[
@@ -124,7 +128,7 @@ function _lower_to_access_node(
         ]
         return _mknode(kind = _NK_OP, op = tmpl.op, children = ch, payload = tmpl.payload)
     end
-    throw(_StencilFallback("affine lowering: unhandled node kind $(Int(k))"))
+    return _decline(:unknown_kind, string(k))
 end
 
 # Lower one sub-kernel call site (compile-once template tier): slice the body's
@@ -143,7 +147,7 @@ function _lower_subcall(site::_SubCallSite, lane_repl::Vector{<:_LaneRepl})::_No
         raw = _lower_to_access(variant.tmpl, seg, a, variant.subcalls)
         sp, cse = _build_acc_cse(raw, a)
         _AccKernel(
-            _contig_cells(0), sp, a, _FixedBound(0), 0.0, cse,
+            _no_cells(), sp, a, cse,
             _collect_subkernels(sp, cse)
         )
     end
@@ -218,70 +222,200 @@ struct _FastKey
     c::Vector{Vector{Vector{Int}}}          # per state lane, subscript and loop dim
     base::Vector{Int}                       # per state lane, its affine slot map
     strides::Vector{Vector{Int}}
-    lane_affine_key_off::Bool               # `_lane_affine_key_disabled()` at build
 end
 
-# `(c0, c)` with `e == c0 + Σ_d c[d]·loop[d]` for every cell, by the same integer
-# arithmetic `_eval_const_int` does; `nothing` for anything but integer literals,
-# the loop names, `+`, `-`, `neg` and a `*` with at most one non-constant factor.
-function _affine_int_coeffs(e::ASTExpr, idx_names::Vector{String})
+# ---- Affine subscripts ----------------------------------------------------
+# One model of an integer subscript that is AFFINE in the loop indices:
+# `c0 + Σ_d c[d]·loop[d]`, computed by the same wrapping integer arithmetic
+# `_eval_const_int` does. The recognizer admits integer literals, the loop
+# names, `+`, `-` (one or two operands), `neg`, and `*` with at most one factor
+# that names a loop index; anything else (a clamp `max(k-1,1)`, a fold, a
+# `mod`, a gather through a const table, a division, a non-loop name, a
+# non-integer or non-finite literal) is not affine. It is the licence for
+# skipping a per-cell check (an affine subscript cannot deviate from its model
+# at any cell), so it errs only towards "not affine", which costs a per-cell
+# evaluation and never a wrong value.
+#
+# `single = true` also refuses any subexpression that moves with two different
+# loop indices (the LHS reading, `_lhs_index_affine`, which allows one).
+struct _AffineForm
+    c0::Int
+    c::Vector{Int}
+end
+
+# A subexpression names no loop index (it is a constant over the loop).
+_names_no_loop(e::ASTExpr, idx_names) =
+    e isa VarExpr ? !((e::VarExpr).name in idx_names) :
+    e isa OpExpr ? _allof(a -> _names_no_loop(a, idx_names), (e::OpExpr).args) : true
+
+function _affine_form(e::ASTExpr, idx_names::AbstractVector{String}; single::Bool = false)
     D = length(idx_names)
     if e isa IntExpr
-        return ((e::IntExpr).value, zeros(Int, D))
+        return _AffineForm(Int((e::IntExpr).value), zeros(Int, D))
     elseif e isa NumExpr
         v = (e::NumExpr).value
         (isfinite(v) && isinteger(v) && abs(v) < 9.0e18) || return nothing
-        return (Int(v), zeros(Int, D))
+        return _AffineForm(Int(v), zeros(Int, D))
     elseif e isa VarExpr
         d = findfirst(==((e::VarExpr).name), idx_names)
         d === nothing && return nothing
         c = zeros(Int, D); c[d] = 1
-        return (0, c)
+        return _AffineForm(0, c)
     end
     e isa OpExpr || return nothing
     o = e::OpExpr
-    _affine_idx_expr(o, idx_names) || return nothing
-    parts = Tuple{Int, Vector{Int}}[]
-    for a in o.args
-        r = _affine_int_coeffs(a, idx_names)
-        r === nothing && return nothing
-        push!(parts, r)
+    (
+        o.ranges === nothing && o.output_idx === nothing && o.bindings === nothing &&
+            o.expr_body === nothing && o.lower === nothing && o.upper === nothing &&
+            o.filter === nothing && o.key === nothing && o.values === nothing
+    ) || return nothing
+    n = length(o.args)
+    n >= 1 || return nothing
+    op = o.op
+    if op == "*"
+        # At most one factor names a loop index; the product of the others
+        # scales it.
+        count(a -> !_names_no_loop(a, idx_names), o.args) <= 1 || return nothing
+    elseif !(op == "+" || (op == "-" && n <= 2) || (op == "neg" && n == 1))
+        return nothing
     end
-    n = length(parts)
-    if o.op == "+" && n >= 1
-        c0 = parts[1][1]; c = copy(parts[1][2])
+    parts = Vector{_AffineForm}(undef, n)
+    for j in 1:n
+        r = _affine_form(o.args[j], idx_names; single = single)
+        r === nothing && return nothing
+        parts[j] = r
+    end
+    r = if op == "+"
+        c0 = parts[1].c0; c = copy(parts[1].c)
         for j in 2:n
-            c0 += parts[j][1]; c .+= parts[j][2]
+            c0 += parts[j].c0; c .+= parts[j].c
         end
-        return (c0, c)
-    elseif (o.op == "-" || o.op == "neg") && n == 1
-        return (-parts[1][1], -parts[1][2])
-    elseif o.op == "-" && n == 2
-        return (parts[1][1] - parts[2][1], parts[1][2] .- parts[2][2])
-    elseif o.op == "*" && n >= 1
-        # At most one factor moves with the loop (`_affine_idx_expr`); the
-        # product of the constant ones scales it.
+        _AffineForm(c0, c)
+    elseif n == 1                                   # `-` or `neg`
+        _AffineForm(-parts[1].c0, -parts[1].c)
+    elseif op == "-"
+        _AffineForm(parts[1].c0 - parts[2].c0, parts[1].c .- parts[2].c)
+    else                                            # `*`
         k = 1; var = nothing
-        for (c0, c) in parts
-            if any(!iszero, c)
-                var === nothing || return nothing
-                var = (c0, c)
+        for (j, p) in enumerate(parts)
+            if _names_no_loop(o.args[j], idx_names)
+                k *= p.c0
             else
-                k *= c0
+                var = p
             end
         end
-        var === nothing && return (k, zeros(Int, D))
-        return (k * var[1], k .* var[2])
+        var === nothing ? _AffineForm(k, zeros(Int, D)) : _AffineForm(k * var.c0, k .* var.c)
     end
-    return nothing
+    (single && count(!iszero, r.c) > 1) && return nothing
+    return r
+end
+
+# Whether a subscript is structurally affine in the loop indices `idx`.
+_affine_idx_expr(e::ASTExpr, idx::AbstractVector{String}) = _affine_form(e, idx) !== nothing
+_affine_idx_expr(e::ASTExpr, idx) = _affine_form(e, collect(String, idx)) !== nothing
+
+# One lane read's guards, outermost first: each a condition node of the branch
+# template and the truth value the read needs it to have.
+const _GuardPath = Vector{Tuple{_Node, Bool}}
+
+# A contraction the affine tier compiles as a loop rather than an unroll: its
+# contracted index names (kept symbolic in the body, as extra loop dims), their
+# ranges, the ⊕ and its 0̄. Every range is contiguous with unit step.
+struct _AffineReduce
+    names::Vector{String}
+    ranges::Vector{UnitRange{Int}}
+    op::Symbol
+    zerobar::Float64
+end
+
+# One equation of the affine build (`_try_affine_stencil`): its fixed inputs,
+# which every step of the cut scan and the box processor reads, and the caches
+# those steps share. One object per call, so a cache can never be paired with
+# another equation's inputs.
+#
+# Inputs: the loop dims `names` and their `ranges` (the output indices, then a
+# kept contraction's), the output dims' own ranges `out_ranges`, the body with
+# observeds inlined, the stencil walk context `ctx` (whose `idx_env` the keys
+# fill and whose `vsmemo` the branch-key walk shares with `_stencilize`), the
+# slot map, the constant arrays, the parameter names, the output variable and
+# its subscripts, the verified output map `oln = base + Σ loop[d]·strides[d]`
+# over every loop dim (stride 0 along a contracted one), the kept contraction
+# (`reduce`) and a tile's view (`view`, `nothing` for the whole domain).
+mutable struct _AffineEq{B, VM, CA, PS, V}
+    names::Vector{String}
+    ranges::Vector{UnitRange{Int}}
+    out_ranges::Vector{UnitRange{Int}}
+    body::B
+    ctx::_StencilCtx
+    var_map::VM
+    const_arrays::CA
+    param_sym_set::PS
+    lhs_var::String
+    lhs_idx_args::Vector{ASTExpr}
+    base::Int
+    strides::Vector{Int}
+    reduce::Union{Nothing, _AffineReduce}
+    view::V
+    # Per branch key (the region signature `_cell_bkey!` prints): its branch
+    # template; for every lane recipe, which of its index arguments are NOT
+    # structurally affine in the loop indices and therefore have to be
+    # differenced per keyed cell (classified once per branch, see
+    # `_lane_nonaffine_args!`); its number, the first entry of a scan key
+    # (`_cell_ckey!`); every lane's compiled evaluator for the box processor
+    # (`_box_lane_evals!`) and the state lanes' share of them for the scan
+    # (`_ckey_state_slots!`); and the guard paths each lane is read under
+    # (`_lane_guard_paths`), built only when a lane is out of range somewhere.
+    branch_cache::Dict{String, _StencilBranch}
+    lane_ref::Dict{String, Vector{Vector{Bool}}}
+    bkey_ids::Dict{String, Int}
+    box_evals::Dict{String, Vector{Union{Nothing, _LaneEval}}}
+    lane_evals::Dict{String, Any}
+    lane_guards::Dict{String, Vector{Vector{_GuardPath}}}
+    # Per body: whether it holds an indexed array producer (`makearray` or a
+    # `faq`), the only nodes `_branch_key!` prints. A body without one has the
+    # empty branch key at every cell.
+    bkey_sites::IdDict{Any, Bool}
+    # The equation's compiled output subscripts (`_lhs_ix_compile`), and each
+    # subscript expression's compiled form (`_lane_evaluator`'s `ixmemo`).
+    lhs_ix::Union{Nothing, Vector{Union{Nothing, _IdxNode}}}
+    ix_memo::IdDict{OpExpr, Any}
+    # The scan key in closed form (`_FastKey`), `false` where the body has none,
+    # `nothing` until the first keyed cell decides.
+    fast_key::Union{Nothing, Bool, _FastKey}
+    # The boxes' lowered spines by branch key and lane lowering, and the
+    # flattened constant arrays the lowerings read.
+    spine_cache::Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}
+    flat_cache::IdDict{Any, Vector{Float64}}
+    # Scratch reused across keyed cells: the branch-key text, the state lanes'
+    # slots, the backward probe, and the visited set `_branch_key!` clears.
+    bio::IOBuffer
+    state_scratch::Vector{Int}
+    back_scratch::Vector{Int}
+    bseen::_SeenSet
+end
+function _AffineEq(
+        names, ranges, out_ranges, body, ctx, var_map, const_arrays, param_sym_set,
+        lhs_var, lhs_idx_args, base, strides, reduce, view
+    )
+    return _AffineEq(
+        names, ranges, out_ranges, body, ctx, var_map, const_arrays, param_sym_set,
+        lhs_var, lhs_idx_args, base, strides, reduce, view,
+        Dict{String, _StencilBranch}(), Dict{String, Vector{Vector{Bool}}}(),
+        Dict{String, Int}(), Dict{String, Vector{Union{Nothing, _LaneEval}}}(),
+        Dict{String, Any}(), Dict{String, Vector{Vector{_GuardPath}}}(),
+        IdDict{Any, Bool}(), nothing, IdDict{OpExpr, Any}(), nothing,
+        Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}(),
+        IdDict{Any, Vector{Float64}}(), IOBuffer(), Int[], Int[], _SeenSet()
+    )
 end
 
 # The body's `_FastKey`, or `false`. `branch` is its one branch, `id` that
 # branch key's number.
-function _fast_key_model(sig, body, branch, id::Int, idx_names, idxset)
-    idx_names isa Vector{String} || return false
-    get(sig.bkey_sites, body, true) && return false
-    _tmpl, recipes, state_ks, _subcalls = branch
+function _fast_key_model(eq::_AffineEq, branch, id::Int)
+    idx_names = eq.names
+    idxset = eq.ctx.idxset
+    get(eq.bkey_sites, eq.body, true) && return false
+    recipes, state_ks = branch.recipes, branch.state_lanes
     for rec in recipes
         all(a -> _affine_idx_expr(a, idxset), rec.idx_args) || return false
         rec.kind == LANE_CONST && rec.arr isa BoundedConstArray && return false
@@ -296,14 +430,14 @@ function _fast_key_model(sig, body, branch, id::Int, idx_names, idxset)
         (length(rec.lo) == n && length(rec.hi) == n && length(aff[2]) == n) || return false
         c0 = Int[]; c = Vector{Int}[]
         for a in rec.idx_args
-            r = _affine_int_coeffs(a, idx_names)
+            r = _affine_form(a, idx_names)
             r === nothing && return false
-            push!(c0, r[1]); push!(c, r[2])
+            push!(c0, r.c0); push!(c, r.c)
         end
         push!(los, rec.lo); push!(his, rec.hi); push!(c0s, c0); push!(cs, c)
         push!(bases, aff[1]); push!(strs, aff[2])
     end
-    return _FastKey(id, los, his, c0s, cs, bases, strs, _lane_affine_key_disabled())
+    return _FastKey(id, los, his, c0s, cs, bases, strs)
 end
 
 # `_cell_ckey!`'s key from the closed form: the branch number, then per state
@@ -329,59 +463,6 @@ function _fast_ckey!(key::Vector{Int}, fk::_FastKey, loop::Vector{Int})
     end
     return key
 end
-
-# One lane read's guards, outermost first: each a condition node of the branch
-# template and the truth value the read needs it to have.
-const _GuardPath = Vector{Tuple{_Node, Bool}}
-
-# Reusable caches for the per-cell signature (branch template memo + a scratch
-# IOBuffer), shared across the whole equation's sweep. The branch-key walk's
-# loop-index memo is `ctx_proto.vsmemo` (see `_cell_bkey!`).
-mutable struct _AffineSig
-    branch_cache::Dict{String, _StencilBranch}
-    bio::IOBuffer
-    state_scratch::Vector{Int}   # reused per `_cell_ckey!` for the state-lane slots
-    # LANE-AFFINE key support, per branch key: for every lane recipe, which of
-    # its index arguments are NOT structurally affine in the loop indices and
-    # therefore have to be differenced per keyed cell. Classified once per
-    # branch; see `_lane_nonaffine_args!`.
-    lane_ref::Dict{String, Vector{Vector{Bool}}}
-    back_scratch::Vector{Int}    # reused per keyed cell for the backward probe
-    # Per branch key, each state lane's compiled evaluator (`_lane_evaluator`)
-    # or `nothing`, so a keyed cell does not walk the subscripts through the
-    # Dict environment; and the visited set `_branch_key!` clears per keyed cell.
-    lane_evals::Dict{String, Any}
-    bseen::_SeenSet
-    # Per body: whether it holds an indexed array producer (`makearray` or a
-    # `faq`), the only nodes `_branch_key!` prints. A body without one has the
-    # empty branch key at every cell.
-    bkey_sites::IdDict{Any, Bool}
-    # A number per branch key, the first entry of a scan key (`_cell_ckey!`).
-    bkey_ids::Dict{String, Int}
-    # Per branch key, every lane's compiled evaluator for the box processor
-    # (`_box_lane_evals!`); the equation's compiled output subscripts.
-    box_evals::Dict{String, Vector{Union{Nothing, _LaneEval}}}
-    lhs_ix::Union{Nothing, Vector{Union{Nothing, _IdxNode}}}
-    # The scan key in closed form (`_FastKey`), `false` where the body has none,
-    # `nothing` until the first keyed cell decides.
-    fast_key::Union{Nothing, Bool, _FastKey}
-    # Per branch key, the guard paths each lane is read under
-    # (`_lane_guard_paths`), built only when a lane is out of range somewhere.
-    lane_guards::Dict{String, Vector{Vector{_GuardPath}}}
-    # Each subscript expression's compiled form (`_lane_evaluator`'s `ixmemo`).
-    ix_memo::IdDict{OpExpr, Any}
-    # The `(idx_names, var_map, const_arrays)` that `box_evals`, `lane_evals`
-    # and `ix_memo` were compiled under; `nothing` before the first compile.
-    # Every caller of `_box_lane_evals!` is checked against it (`_sig_bind!`).
-    lane_bind::Union{Nothing, Tuple{Any, Any, Any}}
-end
-_AffineSig() = _AffineSig(
-    Dict{String, _StencilBranch}(), IOBuffer(), Int[],
-    Dict{String, Vector{Vector{Bool}}}(), Int[], Dict{String, Any}(),
-    _SeenSet(), IdDict{Any, Bool}(), Dict{String, Int}(),
-    Dict{String, Vector{Union{Nothing, _LaneEval}}}(), nothing, nothing,
-    Dict{String, Vector{Vector{_GuardPath}}}(), IdDict{OpExpr, Any}(), nothing
-)
 
 # Whether `e` reaches an `index` of a `makearray` or `faq` producer, through the
 # same children `_branch_key!` descends into.
@@ -411,8 +492,8 @@ end
 
 # ── LANE-AFFINE SIGNATURE (the cut key measures the LANE, not the output) ─────
 #
-# The gather key historically recorded, per STATE lane, `Δ = slot − oln` — the
-# lane's slot relative to the OUTPUT cell's slot. That is the right key only for
+# A gather key that recorded, per STATE lane, `Δ = slot − oln` — the lane's
+# slot relative to the OUTPUT cell's slot — would be the right key only for
 # a gather from an array laid out exactly like the output: a Cartesian stencil
 # neighbour. It is the WRONG key for a gather whose array has a DIFFERENT shape
 # from the output's — a lower-rank geometry column (`coslat_e[j]` read from an
@@ -429,7 +510,7 @@ end
 #     (branch key, corner verification, lane derivation, spine memo key) is paid
 #     once per box.
 #
-# The fix keys each lane by its SUBSCRIPTS' own local behaviour instead: a
+# So each lane is keyed by its SUBSCRIPTS' own local behaviour instead: a
 # subscript that is STRUCTURALLY affine in the loop indices (`+ - neg *` over
 # loop names and integer literals) can never open a cut and is skipped outright,
 # and any other subscript contributes its per-dim BACKWARD DIFFERENCE
@@ -440,51 +521,6 @@ end
 # deviation from an affine model derived at some probe cell silently poisons the
 # scan whenever that probe sits on the clamped side of the transition being
 # looked for. Ghost membership (a state slot resolving to 0) keeps its own bit.
-# Off, the signature is the Δ-keyed one.
-_lane_affine_key_disabled() = !_compiler_plan_now().lane_affine_key
-
-# Is this subscript expression an AFFINE function of the loop indices — a sum of
-# integer literals and loop-index terms with integer coefficients? Such an
-# expression cannot deviate from its own affine model at ANY cell, so it can
-# never open a cut and never has to be evaluated for the signature. Everything
-# else (a clamp `max(k-1,1)`, a fold, a `mod`, a gather through a const table, a
-# division, a registered function) is classified NON-affine and DOES get its
-# per-cell deviation keyed. Conservative in the safe direction: mis-classifying
-# an affine expression as non-affine only costs a per-cell evaluation, while the
-# reverse is impossible -- the recognizer admits nothing but `+ - neg *`.
-function _affine_idx_expr(e::ASTExpr, idxset)::Bool
-    e isa IntExpr && return true
-    e isa NumExpr && return (e::NumExpr).value == round((e::NumExpr).value)
-    e isa VarExpr && return ((e::VarExpr).name in idxset)
-    e isa OpExpr || return false
-    o = e::OpExpr
-    (
-        o.ranges === nothing && o.output_idx === nothing && o.bindings === nothing &&
-            o.expr_body === nothing && o.lower === nothing && o.upper === nothing &&
-            o.filter === nothing && o.key === nothing && o.values === nothing
-    ) || return false
-    if o.op == "+" || o.op == "-"
-        return _allof(a -> _affine_idx_expr(a, idxset), o.args)
-    elseif o.op == "neg"
-        return length(o.args) == 1 && _affine_idx_expr(o.args[1], idxset)
-    elseif o.op == "*"
-        nvar = 0
-        for a in o.args
-            _affine_idx_expr(a, idxset) || return false
-            _const_idx_expr(a, idxset) || (nvar += 1)
-        end
-        return nvar <= 1
-    end
-    return false
-end
-# Loop-index-free (hence constant over the loop) -- the multiplication guard.
-function _const_idx_expr(e::ASTExpr, idxset)::Bool
-    e isa IntExpr && return true
-    e isa NumExpr && return true
-    e isa VarExpr && return !((e::VarExpr).name in idxset)
-    e isa OpExpr || return false
-    return _allof(a -> _const_idx_expr(a, idxset), (e::OpExpr).args)
-end
 
 # Classify (and cache) one branch's lane subscripts: `true` for an argument that
 # is NOT structurally affine in the loop indices and therefore has to be
@@ -494,18 +530,16 @@ end
 # at a reference cell and keyed the deviation from it — which silently poisons
 # the scan when the reference happens to sit on the clamped side of the very
 # transition being looked for, and then keys a change at EVERY cell).
-function _lane_nonaffine_args!(
-        sig::_AffineSig, bkey::String,
-        recipes::Vector{_LaneRecipe}, idxset
-    )
-    cached = get(sig.lane_ref, bkey, nothing)
+function _lane_nonaffine_args!(eq::_AffineEq, bkey::String, recipes::Vector{_LaneRecipe})
+    idxset = eq.ctx.idxset
+    cached = get(eq.lane_ref, bkey, nothing)
     cached === nothing || return cached
     ref = Vector{Vector{Bool}}(undef, length(recipes))
     for k in eachindex(recipes)
         rec = recipes[k]
         ref[k] = Bool[!_affine_idx_expr(a, idxset) for a in rec.idx_args]
     end
-    sig.lane_ref[bkey] = ref
+    eq.lane_ref[bkey] = ref
     return ref
 end
 
@@ -532,11 +566,15 @@ function _oln_via_varmap(lhs_var, lhs_idx_args, idx_env, var_map)
     return slot
 end
 
-# Derive + VERIFY the affine map (loop indices → output slot): `oln = base +
-# Σ_d loop_d·strides[d]`. Strides come from unit steps off the range origin; the
-# map is then checked at every domain corner against var_map. A non-affine layout
-# (irregular / holey grid) fails here → whole-equation fallback.
+# The affine map loop indices → output slot, `oln = base + Σ_d loop_d·strides[d]`,
+# with stride 0 along a one-value range. Computed from the variable's layout
+# block when every LHS subscript is affine in one loop index and every corner
+# cell lies in the block (`_output_affine_from_block`); otherwise strides come
+# from unit steps off the range origin and the map is checked at every corner
+# against `var_map`, a non-affine layout declining the whole equation.
 function _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
+    got = _output_affine_from_block(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
+    got === nothing || return got
     D = length(idx_names)
     env = Dict{String, Int}()
     rep = Int[first(ranges[d]) for d in 1:D]
@@ -556,7 +594,42 @@ function _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map
         cl = collect(Int, corner)
         want = _box_oln(base, strides, cl, D)
         got = _oln_via_varmap(lhs_var, lhs_idx_args, _set_env!(env, idx_names, cl), var_map)
-        want == got || throw(_StencilFallback("output layout non-affine"))
+        want == got || _decline(:output_layout_not_affine, lhs_var)
+    end
+    return base, strides
+end
+
+# `_derive_output_affine`'s map from the block, or `nothing` when the block or
+# the subscript forms do not give it.
+function _output_affine_from_block(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
+    blk = _affine_block(var_map, lhs_var)
+    (blk !== nothing && length(blk.lo) == length(lhs_idx_args)) || return nothing
+    D = length(idx_names)
+    forms = Tuple{Int, Int, Int}[]
+    for a in lhs_idx_args
+        f = a isa ASTExpr ? _lhs_index_affine(a, idx_names) : nothing
+        f === nothing && return nothing
+        push!(forms, f)
+    end
+    cell = Vector{Int}(undef, length(forms))
+    for corner in Iterators.product(((first(ranges[d]), last(ranges[d])) for d in 1:D)...)
+        _lhs_affine_cell!(cell, forms, corner)
+        all(k -> blk.lo[k] <= cell[k] <= blk.hi[k], eachindex(cell)) || return nothing
+    end
+    full = zeros(Int, D)
+    base = blk.base
+    for (k, (pos, coef, c)) in enumerate(forms)
+        base += (c - blk.lo[k]) * blk.strides[k]
+        pos == 0 || (full[pos] += coef * blk.strides[k])
+    end
+    # A one-value range keeps stride 0, its contribution folded into `base`.
+    strides = zeros(Int, D)
+    for d in 1:D
+        if length(ranges[d]) >= 2
+            strides[d] = full[d]
+        else
+            base += first(ranges[d]) * full[d]
+        end
     end
     return base, strides
 end
@@ -577,37 +650,17 @@ function _recipe_const_lin(rec::_LaneRecipe, idx_env, const_arrays)
     return LinearIndices(size(arr))[inds...]
 end
 
-# Per-cell signature `bkey | gather_key` (region selection × gather pattern) plus
-# the branch it resolves to. Builds/caches ONE sentinel template per region
-# signature (the expensive step, bounded by #groups); cheap recipe evals give the
-# gather key.
-#
-# The gather key has TWO strengths, selected by `okey`:
-#   * `okey === nothing` — the historical ghost-bit key (in-bounds vs ghost per
-#     state lane). Used by `_process_affine_box!`, which only needs bkey+branch.
-#   * `okey = (base, strides)` (the VERIFIED output affine map) — each state
-#     lane's Δ = slot − oln (or 'G' for a ghost) enters the key, so a PERIODIC
-#     WRAP — where the slot legally jumps by ±N·stride with no region or ghost
-#     transition — produces a signature change and therefore a CUT, giving the
-#     wrap its own box exactly as the polyhedral design intends. Δ subsumes the
-#     ghost bit (a ghost is 'G', any in-bounds lane its Δ).
-# Const lanes with a declared BOUNDARY POLICY (BoundedConstArray) additionally
-# key their per-dim fold class (in-range / clamp-low / clamp-high / wrap count),
-# so a clamp/wrap transition of a const gather also produces a cut — within each
-# resulting segment the resolved const index is affine again.
-# Region signature (`bkey`) + its cached branch template — the part
-# `_process_affine_box!` needs. Split out of `_cell_ckey!` (perf) so the per-box
-# call skips the scan-only gather-delta key it would otherwise BUILD AND DISCARD
-# (the state-recipe evals of lines below + a second `String`).
-function _cell_bkey!(
-        sig::_AffineSig, loop, idx_names, body, ctx_proto,
-        var_map, param_sym_set, reg_funcs
-    )
+# Region signature (`bkey`) at cell `loop` + its cached branch template — the
+# part `_process_affine_box!` needs, without the scan-only gather key
+# (`_cell_ckey!`) and its state-recipe evals.
+function _cell_bkey!(eq::_AffineEq, loop)
+    ctx_proto = eq.ctx
+    body = eq.body
     env = ctx_proto.idx_env
     empty!(env)
-    _set_env!(env, idx_names, loop)
-    if get!(() -> _has_indexed_producer(body), sig.bkey_sites, body)
-        _seen_restart!(sig.bseen)
+    _set_env!(env, eq.names, loop)
+    if get!(() -> _has_indexed_producer(body), eq.bkey_sites, body)
+        _seen_restart!(eq.bseen)
         # The loop-index memo is the one every branch template's `_stencilize`
         # reads (`ctx_proto.vsmemo`): both ask `_refs_idxset` of the same nodes
         # under the same `idxset`. A nested walk that grows `idxset` takes a
@@ -615,15 +668,15 @@ function _cell_bkey!(
         # before returning, so this memo only ever holds answers for
         # `ctx_proto.idxset`.
         _branch_key!(
-            sig.bio, body, ctx_proto.idxset, env, ctx_proto.const_arrays,
-            ctx_proto.vsmemo, sig.bseen
+            eq.bio, body, ctx_proto.idxset, env, ctx_proto.const_arrays,
+            ctx_proto.vsmemo, eq.bseen
         )
     end
-    bkey = String(take!(sig.bio))
-    branch = get(sig.branch_cache, bkey, nothing)
+    bkey = String(take!(eq.bio))
+    branch = get(eq.branch_cache, bkey, nothing)
     if branch === nothing
-        branch = _build_branch_template(body, ctx_proto, var_map, param_sym_set, reg_funcs)
-        sig.branch_cache[bkey] = branch
+        branch = _build_branch_template(body, ctx_proto, eq.var_map, eq.param_sym_set)
+        eq.branch_cache[bkey] = branch
     end
     return bkey, branch
 end
@@ -631,23 +684,21 @@ end
 # where it answers (the same integer arithmetic and slot map as `_eval_recipe`),
 # `_eval_recipe` itself otherwise, so every error is the per-cell resolution's.
 function _ckey_state_slots!(
-        state_vals::Vector{Int}, sig::_AffineSig, bkey::String,
-        recipes, state_ks, loop, idx_names, env, var_map,
-        const_arrays
+        state_vals::Vector{Int}, eq::_AffineEq, bkey::String,
+        recipes, state_ks, loop, env
     )
-    evs = get!(sig.lane_evals, bkey) do
-        compiled = loop isa Vector{Int} && idx_names isa Vector{String}
+    var_map = eq.var_map
+    evs = get!(eq.lane_evals, bkey) do
+        compiled = loop isa Vector{Int}
         # The state lanes' evaluators are the box processor's
         # (`_box_lane_evals!`, the branch key's recipes under the equation's
         # context): compiled once per branch key for the scan and the boxes both.
-        all_evs = compiled ?
-            _box_lane_evals!(sig, bkey, idx_names, var_map, const_arrays) :
-            nothing
+        all_evs = compiled ? _box_lane_evals!(eq, bkey) : nothing
         Union{Nothing, _LaneEval{typeof(var_map)}}[
             compiled ? all_evs[k] : nothing for k in state_ks
         ]
     end
-    _ckey_fill_slots!(state_vals, evs, recipes, state_ks, loop, env, var_map, const_arrays)
+    _ckey_fill_slots!(state_vals, evs, recipes, state_ks, loop, env, var_map, eq.const_arrays)
     return state_vals
 end
 
@@ -669,47 +720,46 @@ function _ckey_fill_slots!(
     return state_vals
 end
 
-function _cell_ckey!(
-        key::Vector{Int}, sig::_AffineSig, loop, idx_names, body, ctx_proto,
-        var_map, param_sym_set, reg_funcs,
-        okey::Union{Nothing, Tuple{Int, Vector{Int}}} = nothing,
-        ranges::Union{Nothing, Vector{UnitRange{Int}}} = nothing
-    )
-    _BENCH_ON[] && (_BENCH_PHASE_N[:cell_ckey] = get(_BENCH_PHASE_N, :cell_ckey, 0) + 1)
-    # The closed form gives the same key wherever it applies; the lane-affine
-    # key off keys slot deltas instead, which it does not model.
-    fk = sig.fast_key
-    fk isa _FastKey && (okey === nothing || !fk.lane_affine_key_off) &&
-        loop isa Vector{Int} && return _fast_ckey!(key, fk, loop)
-    bkey, branch = _cell_bkey!(
-        sig, loop, idx_names, body, ctx_proto,
-        var_map, param_sym_set, reg_funcs
-    )
-    env = ctx_proto.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
-    _tmpl, recipes, state_ks, _subcalls = branch
+# Per-cell scan key: the branch key's number (region selection) followed by
+# the gather key, at cell `loop`. Builds/caches ONE sentinel template per region
+# signature (the expensive step, bounded by #groups); cheap recipe evals give the
+# gather key.
+#
+# The gather key has TWO strengths, selected by `strong`:
+#   * the ghost-bit key (in-bounds vs ghost per state lane), for the scans that
+#     need only the branch;
+#   * the lane-affine key (`strong`): the ghost bits, then each structurally
+#     non-affine lane subscript's backward difference along every dim
+#     (`_lane_nonaffine_args!`), so a clamp, fold or wrap of a gathered
+#     subscript changes the key at the cell where it engages and therefore
+#     opens a CUT there, giving it its own box.
+# Const lanes with a declared BOUNDARY POLICY (BoundedConstArray) additionally
+# key their per-dim fold class (in-range / clamp-low / clamp-high / wrap count),
+# so a clamp/wrap transition of a const gather also produces a cut — within each
+# resulting segment the resolved const index is affine again.
+function _cell_ckey!(key::Vector{Int}, eq::_AffineEq, loop; strong::Bool = false)
+    # The closed form gives the same key wherever it applies.
+    fk = eq.fast_key
+    fk isa _FastKey && loop isa Vector{Int} && return _fast_ckey!(key, fk, loop)
+    bkey, branch = _cell_bkey!(eq, loop)
+    idx_names = eq.names
+    ranges = eq.ranges
+    env = eq.ctx.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
+    recipes, state_ks = branch.recipes, branch.state_lanes
     # Only the STATE lanes feed the gather key; evaluate just those into a reused
     # Vector{Int} (no Vector{Any}, no boxing, and no wasted non-state recipe evals).
-    state_vals = sig.state_scratch
+    state_vals = eq.state_scratch
     resize!(state_vals, length(state_ks))
-    _ckey_state_slots!(
-        state_vals, sig, bkey, recipes, state_ks, loop, idx_names, env,
-        var_map, ctx_proto.const_arrays
-    )
+    _ckey_state_slots!(state_vals, eq, bkey, recipes, state_ks, loop, env)
     # The key is a vector of integers. Its first entry numbers the branch key;
     # everything after it has a length and a layout fixed by the branch (its
     # lanes, their subscripts, its policy-bearing const lanes), so two cells'
     # keys are equal exactly when the branch and every entry agree.
     empty!(key)
-    push!(key, get!(sig.bkey_ids, bkey, length(sig.bkey_ids) + 1))
-    if okey === nothing
+    push!(key, get!(eq.bkey_ids, bkey, length(eq.bkey_ids) + 1))
+    if !strong
         @inbounds for v in state_vals
             push!(key, v == 0 ? 1 : 0)
-        end
-    elseif _lane_affine_key_disabled()
-        base, strides = okey
-        oln = _box_oln(base, strides, loop, length(idx_names))
-        @inbounds for v in state_vals
-            v == 0 ? (push!(key, 0); push!(key, 0)) : (push!(key, 1); push!(key, v - oln))
         end
     else
         # LANE-AFFINE key (see `_lane_nonaffine_args!`): the ghost pattern, then
@@ -720,10 +770,10 @@ function _cell_ckey!(
         @inbounds for v in state_vals
             push!(key, v == 0 ? 1 : 0)
         end
-        ref = _lane_nonaffine_args!(sig, bkey, recipes, ctx_proto.idxset)
+        ref = _lane_nonaffine_args!(eq, bkey, recipes)
         D = length(idx_names)
-        ca = ctx_proto.const_arrays
-        back = sig.back_scratch
+        ca = eq.const_arrays
+        back = eq.back_scratch
         resize!(back, D)
         @inbounds for k in eachindex(recipes)
             rk = ref[k]
@@ -751,8 +801,7 @@ function _cell_ckey!(
                     # every lane, which costs nothing: `lo` is a segment start
                     # unconditionally, and the scan compares `lo` only against
                     # `lo + 1`.
-                    back[d] = ranges === nothing ? loop[d] - 1 :
-                        max(first(ranges[d]), loop[d] - 1)
+                    back[d] = max(first(ranges[d]), loop[d] - 1)
                     vb = _eval_const_int(a, _set_env!(env, idx_names, back), ca)
                     push!(key, v - vb)
                 end
@@ -760,14 +809,8 @@ function _cell_ckey!(
             end
         end
     end
-    _const_fold_key!(key, recipes, env, ctx_proto.const_arrays)
-    fk === nothing && (okey === nothing || !_lane_affine_key_disabled()) &&
-        (
-        sig.fast_key = _fast_key_model(
-            sig, body, branch, key[1], idx_names,
-            ctx_proto.idxset
-        )
-    )
+    _const_fold_key!(key, recipes, env, eq.const_arrays)
+    fk === nothing && (eq.fast_key = _fast_key_model(eq, branch, key[1]))
     return key
 end
 
@@ -840,17 +883,22 @@ end
 # Region selection reached through an elementwise producer (`index(a + b, i)`)
 # is followed into its operands, as `_stencilize_index` pushes the gather.
 #
-# Returns the candidate starts per dim and, per dim, whether every cell of it is
-# a candidate.
+# Returns the candidate starts per dim; per dim, whether every cell of it is a
+# candidate; and per dim, the starts the OTHER dims' scans must also probe
+# (`_scan_dim_cuts`). A region bounded in one axis of its makearray spans the
+# makearray's whole extent in every other axis, so any probe line inside that
+# extent crosses it: only a region bounded in two or more axes, and the extent's
+# own ends, add probe lines.
 function _region_cut_candidates(body, idx_names::Vector{String})
     D = length(idx_names)
     cands = [Set{Int}() for _ in 1:D]
+    probes = [Set{Int}() for _ in 1:D]
     full = falses(D)
     # What a name is in terms of the loop indices: `(d, c)` for `loop[d] + c`, a
     # `Vector{Int}` of the dims it depends on otherwise. A name absent from the
     # map depends on none (a constant, a contracted index, a variable).
     alias0 = Dict{String, Any}(idx_names[d] => (d, 0) for d in 1:D)
-    # Deduped per (node, alias map CONTENT) (ESS-0hh): a Set-collector over the
+    # Deduped per (node, alias map CONTENT): a Set-collector over the
     # region bounds is path-multiplicity-insensitive, so entering each distinct
     # node once per distinct binding collects exactly the same candidate sets,
     # and a template gathered along many paths at the same subscripts is walked
@@ -899,7 +947,7 @@ function _region_cut_candidates(body, idx_names::Vector{String})
         isempty(d) && return nothing
         return sort!(collect(d))
     end
-    function mark!(s, lo_hi)
+    function mark!(s, lo_hi, probe::Bool)
         s === nothing && return
         return if s isa Tuple
             d, c = s
@@ -908,16 +956,12 @@ function _region_cut_candidates(body, idx_names::Vector{String})
                 full[d] = true
             else
                 push!(cands[d], lo - c); push!(cands[d], hi + 1 - c)
+                probe && (push!(probes[d], lo - c); push!(probes[d], hi + 1 - c))
             end
         elseif length(s) == 1
             full[s[1]] = true
         else
-            throw(
-                _StencilFallback(
-                    "makearray region selected by a subscript of " *
-                        "several loop indices; no box cut describes it"
-                )
-            )
+            _decline(:region_multi_index, "no box cut describes it")
         end
     end
     # A producer gathered at subscripts `subs` (one analysis per axis).
@@ -930,29 +974,51 @@ function _region_cut_candidates(body, idx_names::Vector{String})
         return if pe.op == "makearray"
             regions = pe.regions === nothing ? Vector{Vector{Vector{Any}}}() : pe.regions
             values = pe.values === nothing ? ASTExpr[] : pe.values
+            # Per axis, the makearray's extent over its regions (`nothing` when a
+            # bound is not a literal): a region whose axis range is that extent
+            # spans the axis.
+            ext = map(eachindex(subs)) do j
+                lo = typemax(Int); hi = typemin(Int)
+                for region in regions
+                    (length(region) == length(subs) && length(region[j]) >= 2) || continue
+                    l = _ma_region_bound(region[j][1]); h = _ma_region_bound(region[j][2])
+                    (l === nothing || h === nothing) && return nothing
+                    lo = min(lo, l); hi = max(hi, h)
+                end
+                return lo <= hi ? (lo, hi) : nothing
+            end
+            spans(region, j) = ext[j] !== nothing &&
+                _ma_region_bound(region[j][1]) == ext[j][1] &&
+                _ma_region_bound(region[j][2]) == ext[j][2]
             for region in regions
                 length(region) == length(subs) || continue
-                for j in eachindex(subs)
-                    length(region[j]) >= 2 && mark!(subs[j], region[j])
+                axes = [j for j in eachindex(subs) if length(region[j]) >= 2]
+                probe = count(j -> !spans(region, j), axes) >= 2
+                for j in axes
+                    mark!(subs[j], region[j], probe)
                 end
+            end
+            # The extent's own ends are probed, so a probe line lies inside the
+            # makearray wherever the scanned dims' defaults fall outside it.
+            for j in eachindex(subs)
+                sj = subs[j]
+                (ext[j] !== nothing && sj isa Tuple) || continue
+                d, c = sj
+                push!(probes[d], ext[j][1] - c); push!(probes[d], ext[j][2] + 1 - c)
             end
             for (r, v) in enumerate(values)
                 if _is_array_producer(v)
                     ve = v::OpExpr
-                    rank = ve.op == "makearray" ?
-                        (
-                            (ve.regions === nothing || isempty(ve.regions)) ? 0 :
-                            length(ve.regions[1])
-                        ) :
-                        count(s -> s isa AbstractString, ve.output_idx)
+                    rank = _producer_rank(ve)
                     vs = subs
                     if rank != length(subs) && r <= length(regions)
                         reg = regions[r]
-                        ns = [
-                            j for j in eachindex(subs)
-                                if j <= length(reg) && reg[j][1] != reg[j][2]
+                        vs = subs[
+                            _region_value_axes(
+                                rank, length(subs),
+                                j -> !(j <= length(reg) && reg[j][1] != reg[j][2])
+                            ),
                         ]
-                        vs = subs[ns]
                     end
                     length(vs) == rank ? indexed!(ve, vs, alias) : walk(ve, alias)
                 else
@@ -1004,7 +1070,7 @@ function _region_cut_candidates(body, idx_names::Vector{String})
         return foreach(c -> walk(c, inner), child_exprs(o))
     end
     walk(body, alias0)
-    return cands, full
+    return cands, full, probes
 end
 
 # How many consecutive identical per-cell signatures certify that the interior of
@@ -1013,23 +1079,26 @@ end
 # boundary rows, ghost gathers), so once this many cells in a row share a
 # signature we are safely past every boundary layer. 8 covers the widest operator
 # on the grid (monotone PPM's 7-cell support → ≤3-cell boundary layers) with
-# generous margin; a hypothetical wider layer that slipped past would only produce
-# a box that spans a cut, which per-box corner verification catches → fallback.
+# margin. A wider lane transition that slipped past would give a box spanning a
+# cut, which per-box verification catches; a region boundary is not verified per
+# box and is found by the harvest instead (`_region_cut_candidates`).
 const _AFFINE_STABLE_GUARD = 8
 
-# Δ-keyed cut cap, per dim. State-Δ keying (see `_cell_ckey!`) exists to give
-# wrap/fold transitions their own boxes — a handful of segments, bounded by the
-# operator's half-width at each end. A GENUINELY UNSTRUCTURED gather (a slot
-# indirect through a connectivity permutation) changes Δ at every cell; carving a
-# box per cell would trade the O(#groups) build for O(#cells) kernels. So when a
-# dim's Δ-keyed scan opens more segments than this cap, that dim's cuts are
-# recomputed with the BASE key (region × ghost × const-fold) and the non-uniform
-# lane is left for the box processor's indirect-table derivation
-# (`_derive_lane_repl`), which materializes a per-box slot table instead.
+# Strong-key cut cap, per dim. The lane-affine key (see `_cell_ckey!`) gives a
+# clamp / fold / wrap transition its own box — a handful of segments, bounded by
+# the operator's half-width at each end. A GENUINELY UNSTRUCTURED gather (a
+# slot indirect through a connectivity permutation) deviates from its affine
+# model at every cell; carving a box per cell would trade the O(#groups) build
+# for O(#cells) kernels. So when a dim's strong-key scan opens more segments
+# than this cap, that dim's cuts are recomputed with the BASE key (region ×
+# ghost × const-fold) and the non-uniform lane is left for the box processor's
+# indirect-table derivation (`_derive_lane_repl`), which materializes a per-box
+# slot table instead.
 const _AFFINE_MAX_DELTA_SEGS = 16
 
 # Cut START indices per loop dim. For each dim, hold the OTHER dims at every
-# low/mid/high probe and record where the per-cell signature changes — but scan
+# low/mid/high probe (and at each of their region starts) and record where the
+# per-cell signature changes — but scan
 # INWARD FROM BOTH ENDS rather than across the whole range, stopping once the
 # signature has been stable for `_AFFINE_STABLE_GUARD` cells. Because a stencil
 # operator's transitions are all within its half-width of an end, this finds every
@@ -1038,37 +1107,42 @@ const _AFFINE_MAX_DELTA_SEGS = 16
 # millions of cells). The interior between the two converged fronts is a single
 # uniform segment. Mid-domain makearray REGION boundaries — which need not lie near
 # an end — are harvested structurally up front (`_region_cut_candidates`) and
-# probed explicitly, so they are never missed. Anything neither scan nor candidate
-# reaches is still caught by per-box verification in `_derive_lane_repl` (→ an
-# exact table): at the corners for a structurally affine subscript, at every cell
-# otherwise. Correctness depends on that verification being exact, never on cut
-# completeness, which only buys speed.
+# probed explicitly. A lane access neither scan nor candidate reaches is still
+# caught by per-box verification in `_derive_lane_repl` (→ an exact table): at
+# the corners for a structurally affine subscript, at every cell otherwise.
+# Region SELECTION is not verified per box — a box takes its first cell's
+# template (`_process_affine_box!`) — so the region cuts must be complete, which
+# is what the harvest and the region-start probe lines are for.
 #
-# `okey` is the verified output affine map; the first scan of each dim keys state
-# lanes by their Δ (wrap boxes), falling back to the base key when the Δ-keyed
-# segment count exceeds `_AFFINE_MAX_DELTA_SEGS` (unstructured gather → the
-# indirect-table derivation owns it instead).
-function _affine_cut_points(
-        sig::_AffineSig, body, idx_names, ranges, ctx_proto,
-        var_map, param_sym_set, reg_funcs,
-        okey::Union{Nothing, Tuple{Int, Vector{Int}}} = nothing
-    )
+# `strong` selects the strong (lane-affine) key for the first scan of each
+# dim, falling back to the base key when that scan's segment count exceeds
+# `_AFFINE_MAX_DELTA_SEGS` (unstructured gather → the indirect-table derivation
+# owns it instead).
+function _affine_cut_points(eq::_AffineEq; strong::Bool = false)
+    body = eq.body
+    idx_names = eq.names
+    ranges = eq.ranges
     D = length(idx_names)
     cuts = Vector{Vector{Int}}(undef, D)
-    region_cands, full = _region_cut_candidates(body, idx_names)
+    region_cands, full, region_probes = _region_cut_candidates(body, idx_names)
+    # A region bounded in several dims is seen on a dim's probe lines only if
+    # one of them crosses it, so the starts `_region_cut_candidates` names for
+    # probing join each dim's probe values when the other dims are scanned. A
+    # dim whose every cell is a candidate (`full`) adds none: its probe lines
+    # stay low / mid / high.
+    probe_extra = Vector{Vector{Int}}(undef, D)
+    for d in 1:D
+        rng = ranges[d]
+        probe_extra[d] = full[d] ? Int[] :
+            sort!(Int[c for c in region_probes[d] if first(rng) <= c <= last(rng)])
+    end
     for d in 1:D
         full[d] && union!(region_cands[d], (first(ranges[d]) + 1):last(ranges[d]))
     end
     for d in 1:D
-        starts = _scan_dim_cuts(
-            sig, body, idx_names, ranges, ctx_proto, var_map,
-            param_sym_set, reg_funcs, region_cands, d, okey
-        )
-        if okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS
-            starts = _scan_dim_cuts(
-                sig, body, idx_names, ranges, ctx_proto, var_map,
-                param_sym_set, reg_funcs, region_cands, d, nothing
-            )
+        starts = _scan_dim_cuts(eq, region_cands, d, strong, probe_extra)
+        if strong && length(starts) > _AFFINE_MAX_DELTA_SEGS
+            starts = _scan_dim_cuts(eq, region_cands, d, false, probe_extra)
         end
         cuts[d] = sort!(collect(starts))
     end
@@ -1076,27 +1150,31 @@ function _affine_cut_points(
 end
 
 # One dim's edge-inward signature scan (see `_affine_cut_points`). Returns the
-# set of segment-start indices for dim `d` under the signature strength `okey`.
+# set of segment-start indices for dim `d` under the signature strength `strong`.
 function _scan_dim_cuts(
-        sig::_AffineSig, body, idx_names, ranges, ctx_proto,
-        var_map, param_sym_set, reg_funcs, region_cands, d::Int,
-        okey::Union{Nothing, Tuple{Int, Vector{Int}}}
+        eq::_AffineEq, region_cands, d::Int, strong::Bool,
+        probe_extra::Vector{Vector{Int}} = [Int[] for _ in eq.names]
     )
-    D = length(idx_names)
+    ranges = eq.ranges
+    D = length(eq.names)
     rng = ranges[d]; lo, hi = first(rng), last(rng)
     starts = Set{Int}(); push!(starts, lo)
     otherdims = Int[dd for dd in 1:D if dd != d]
     probesets = isempty(otherdims) ? [()] :
-        collect(Iterators.product((_probe_values(ranges[dd]) for dd in otherdims)...))
+        collect(
+            Iterators.product(
+                (
+                    unique!(vcat(_probe_values(ranges[dd]), probe_extra[dd]))
+                    for dd in otherdims
+                )...
+            )
+        )
     loop = Vector{Int}(undef, D)
     # Two key buffers, alternated: `ck` fills the one `prev` does not hold.
     kb1 = Int[]; kb2 = Int[]
     ck(iv, prev) = (
         loop[d] = iv;
-        _cell_ckey!(
-            prev === kb1 ? kb2 : kb1, sig, loop, idx_names, body,
-            ctx_proto, var_map, param_sym_set, reg_funcs, okey, ranges
-        )
+        _cell_ckey!(prev === kb1 ? kb2 : kb1, eq, loop; strong = strong)
     )
     # Region boundaries in this dim, kept only where they open a real segment
     # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
@@ -1110,10 +1188,10 @@ function _scan_dim_cuts(
         for (ii, dd) in enumerate(otherdims)
             loop[dd] = probe[ii]
         end
-        # Over-cap early exit for a Δ-keyed scan: an unstructured gather changes
-        # Δ at EVERY cell, so without this the fronts would never stabilize and
+        # Over-cap early exit for a strong-key scan: an unstructured gather deviates
+        # from its affine model at EVERY cell, so without this the fronts would never stabilize and
         # the scan would walk the whole range before the caller's cap fallback.
-        overcap() = okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS
+        overcap() = strong && length(starts) > _AFFINE_MAX_DELTA_SEGS
         # Scan up from the low end: a change at `iv` opens a segment there.
         prev = nothing; stable = 0; iv = lo
         while iv <= mid
@@ -1148,9 +1226,9 @@ function _scan_dim_cuts(
         for C in cand_d
             (kc = ck(C - 1, nothing); ck(C, kc) != kc) && push!(starts, C)
         end
-        # A Δ-keyed scan past the cap is abandoned early — the caller redoes the
+        # A strong-key scan past the cap is abandoned early — the caller redoes the
         # dim with the base key, so finishing the sweep would be wasted work.
-        okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS && break
+        strong && length(starts) > _AFFINE_MAX_DELTA_SEGS && break
     end
     return starts
 end
@@ -1181,11 +1259,9 @@ end
 # ISBITS key (perf): a uniform `Tuple{UInt8,UInt64,Int,Int,Int,Int}` — `(tag, id,
 # a, b, c, d)` — instead of an allocated `String`. The leading `tag` disambiguates
 # the kinds (so e.g. a STATE_AFFINE and a LOOP_IDX with equal payload never
-# collide, exactly as the old "SA"/"LI" prefixes did), and the fixed shape means
+# collide), and the fixed shape means
 # `_acc_vn_key`'s per-ACCESS-node CSE key and `_lane_repl_key`'s per-lane key hash
-# with no per-node string materialization. Equality classes are identical to the
-# old strings: two descriptors map to the same tuple iff they mapped to the same
-# string.
+# with no per-node string materialization.
 function _desc_key(d::_AccDesc)
     k = d.kind
     k === _AK_STATE_AFFINE && return (0x01, UInt64(0), d.delta, d.idx, 0, 0)
@@ -1305,9 +1381,7 @@ end
 # one dense contiguous run per array variable (`_enumerate_array_cell_names`
 # lays cells out column-major, contiguously), so the table is the range
 # `lo0:hi0` itself, never materialized.
-#
-# Off, every lane gets the dense per-box table.
-_state_box_disabled() = !_compiler_plan_now().state_box
+
 
 _state_slot_identity(lo0::Int, hi0::Int) = lo0:hi0
 
@@ -1375,8 +1449,7 @@ function _fill_box_table_nt!(
     return tbl
 end
 
-# Materialize a NON-AFFINE state lane as a per-box slot table (Stage 2 of the
-# array-IR unification): one `_eval_recipe` per box cell — the SAME resolution
+# Materialize a NON-AFFINE state lane as a per-box slot table: one `_eval_recipe` per box cell — the SAME resolution
 # the per-cell fallback would run — stored densely in box-local layout, with 0
 # marking a ghost (fetched as the ghost literal 0.0). This is what an
 # unstructured gather (slot indirect through a connectivity const) lowers to;
@@ -1387,10 +1460,7 @@ function _materialize_state_tbl(
         rec::_LaneRecipe, idx_names, box, D,
         var_map, const_arrays, run = box
     )
-    _t0 = time_ns()
-    r = _materialize_state_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
-    _bench_phase!(:mat_state_tbl, _t0)
-    return r
+    return _materialize_state_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
 end
 function _materialize_state_tbl_inner(
         rec::_LaneRecipe, idx_names, box, D,
@@ -1400,21 +1470,13 @@ function _materialize_state_tbl_inner(
     return _AccRepl(_AccStateTblBox(tbl, s, off))
 end
 
-# Gate for the non-affine LIVE-forcing lane table lowering below (perf-plan A2,
-# prototypes/perf-gap-closure-plan.md). Off, the whole equation takes the
-# per-cell fallback — the differential oracle
-# (test/stencil_affine_pgather_tbl_test.jl).
-_obsref_disabled() = !_compiler_plan_now().obsref
-
 # Materialize a NON-AFFINE live-forcing (pgather) lane as a per-box INDEX table
-# into the ALIASED live buffer (perf-plan A2). The forcing chains that observed
+# into the ALIASED live buffer. The forcing chains that observed
 # inlining splices into stencil lanes gather their raw buffers with clamped
-# subscripts (`max(k-1,1)` / `min(k,NLEV)` at the column walls — the GEOS-FP
-# Mz/OMEGA pattern); the clamp makes the flat index non-affine across a box,
-# and — pgather transitions being invisible to the per-cell cut signature —
-# the corner verification then threw the WHOLE equation onto the per-cell
-# fallback — which on a real multi-level transport equation is a large fraction
-# of the whole warm build. Lowering the lane
+# subscripts (`max(k-1,1)` / `min(k,NLEV)` at the column walls); the clamp makes the flat index non-affine across a box,
+# and, since forcing-gather transitions are invisible to the per-cell cut
+# signature, the corner verification would send the whole equation to the
+# per-cell fallback. Lowering the lane
 # to `_AccArrTblBox` instead mirrors `_materialize_state_tbl`: one
 # `_eval_recipe` per box cell — the SAME index resolution the per-cell
 # fallback would run — stored densely in box-local layout. The table holds
@@ -1427,10 +1489,7 @@ function _materialize_pgather_tbl(
         rec::_LaneRecipe, idx_names, box, D,
         var_map, const_arrays, run = box
     )
-    _t0 = time_ns()
-    r = _materialize_pgather_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
-    _bench_phase!(:mat_pgather_tbl, _t0)
-    return r
+    return _materialize_pgather_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
 end
 function _materialize_pgather_tbl_inner(
         rec::_LaneRecipe, idx_names, box, D,
@@ -1459,10 +1518,7 @@ function _materialize_const_box(
         rec::_LaneRecipe, idx_names, box, D,
         var_map, const_arrays, run = box
     )
-    _t0 = time_ns()
-    r = _materialize_const_box_inner(rec, idx_names, box, D, var_map, const_arrays, run)
-    _bench_phase!(:mat_const_box, _t0)
-    return r
+    return _materialize_const_box_inner(rec, idx_names, box, D, var_map, const_arrays, run)
 end
 function _materialize_const_box_inner(
         rec::_LaneRecipe, idx_names, box, D,
@@ -1476,24 +1532,47 @@ function _materialize_const_box_inner(
     return _AccRepl(_AccConstBox(vals, s, off))
 end
 
-# Derive one lane's lowering for a box and VERIFY it is uniform across the box
-# corners (state Δ constant, ghost uniform, const/forcing index affine). A
-# non-uniform STATE lane (an unstructured/indirect gather, or a fold pattern
-# past the Δ-cut cap), a non-affine CONST index, and a non-affine LIVE-forcing
-# (pgather) index all MATERIALIZE per-box tables instead of declining — see
-# `_materialize_state_tbl` / `_materialize_const_box` /
-# `_materialize_pgather_tbl` (the pgather table holds indices into the aliased
-# live buffer, so it stays refresh-live; with that lowering off the whole
-# equation takes the per-cell fallback, the differential oracle). A live
-# forcing lane otherwise lowers to `_AccForcingBox` over the aliased buffer
-# (never folded to a literal, so it stays refresh-live).
-# `structural` is `_affine_idx_expr` over every one of the lane's subscripts.
-# Every corner-derived conclusion below (ghost fold, uniform Δ, affine const /
+# `(s, off)` with `index(l) == off + Σ_d (l[d]-1)·s[d]` on the whole box, or
+# `nothing`. The strides are finite differences of `index` across one step of
+# each non-thin dim from `rep`, checked at every corner. A corner check is a
+# PROOF only for a structurally affine subscript (`structural`, `_affine_form`:
+# such an index cannot leave its model anywhere inside the box once two
+# corners pin it); for any other subscript (a gather through connectivity
+# data, which can agree at the corners and differ in between) the map is
+# checked at every cell of the box (`_box_holds`, memoized under `key()`).
+function _affine_index_on_box(index_at, rep, corners, thin, D, structural::Bool, box, run, key)
+    i_rep = index_at(rep)
+    s = zeros(Int, max(D, 3))
+    for d in 1:D
+        if !thin[d]
+            l2 = copy(rep); l2[d] += 1
+            s[d] = index_at(l2) - i_rep
+        end
+    end
+    off = i_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
+    model(l) = off + sum((l[d] - 1) * s[d] for d in 1:D)
+    for cn in corners
+        model(cn) == index_at(cn) || return nothing
+    end
+    structural || _box_holds(l -> model(l) == index_at(l), box, run, D, key) || return nothing
+    return s, off
+end
+
+# Derive one lane's lowering for a box and VERIFY it holds on the whole box —
+# one method per lane kind (`_lane_repl`). A lane that does not reduce to a
+# literal or a box-addressed descriptor MATERIALIZES a per-box table instead of
+# declining (`_materialize_state_tbl` / `_materialize_const_box` /
+# `_materialize_pgather_tbl`; the pgather table holds indices into the aliased
+# live buffer, so it stays refresh-live). A live forcing lane otherwise lowers
+# to `_AccForcingBox` over the aliased buffer (never folded to a literal, so it
+# stays refresh-live).
+# `structural` is `_affine_idx_expr` over every one of the lane's subscripts:
+# every corner-derived conclusion below (ghost fold, uniform Δ, affine const /
 # forcing index) is a PROOF only when it holds; otherwise the conclusion is
-# re-checked at every cell of the box. It is a property of the EXPRESSION, not of
-# a cell or a box, so the box processor passes the per-branch classification
-# `_lane_nonaffine_args!` already memoizes; the default derives it for a direct
-# caller.
+# re-checked at every cell of the box (`_affine_index_on_box`). It is a
+# property of the EXPRESSION, not of a cell or a box, so the box processor
+# passes the per-branch classification `_lane_nonaffine_args!` already
+# memoizes; the default derives it for a direct caller.
 #
 # `le` is the lane's compiled evaluator (`_lane_evaluator`) or `nothing`; a STATE
 # lane is evaluated through it wherever it answers, which is the same slot
@@ -1508,240 +1587,184 @@ function _derive_lane_repl(
     )
     env = Dict{String, Int}()
     ev(loop) = _ev_lane(le, rec, loop, env, idx_names, var_map, const_arrays)
-    if rec.kind == LANE_STATE
-        slot_rep = ev(rep)
-        if slot_rep == 0                              # ghost → literal 0.0
-            for cn in corners
-                ev(cn) == 0 ||
-                    return _materialize_state_tbl(
-                    rec, idx_names, box, D,
-                    var_map, const_arrays, run
-                )
-            end
-            _ghost_box(
-                rec, idx_names, corners, structural, box, D, ev,
-                const_arrays, le, run
-            ) ||
-                return _materialize_state_tbl(
-                rec, idx_names, box, D,
-                var_map, const_arrays, run
-            )
-            return _LitRepl(0.0)
-        end
-        Δ = slot_rep - oln_rep
-        uniform = true
+    lp = _LaneProbe(rec, idx_names, rep, corners, thin, D, box, run, structural, var_map, const_arrays)
+    k = rec.kind
+    k == LANE_STATE && return _lane_repl_state(lp, ev, le, oln_rep, base, strides)
+    k == LANE_LOOPLIT && return _lane_repl_looplit(lp)
+    k == LANE_EXPRTBL && return _lane_repl_exprtbl(lp)
+    k == LANE_CONST && return _lane_repl_const(lp, ev, flat_cache)
+    return _lane_repl_pgather(lp, ev)
+end
+
+# What every lane lowering reads: the lane, the box (its representative cell,
+# corners, thin dims, rank, the run it is cut from) and the build's maps.
+struct _LaneProbe{RP, CN, TH, BX, RN, VM, CA}
+    rec::_LaneRecipe
+    idx_names::Any
+    rep::RP
+    corners::CN
+    thin::TH
+    D::Int
+    box::BX
+    run::RN
+    structural::Bool
+    var_map::VM
+    const_arrays::CA
+end
+
+_lane_tbl_state(lp::_LaneProbe) =
+    _materialize_state_tbl(lp.rec, lp.idx_names, lp.box, lp.D, lp.var_map, lp.const_arrays, lp.run)
+_lane_tbl_const(lp::_LaneProbe) =
+    _materialize_const_box(lp.rec, lp.idx_names, lp.box, lp.D, lp.var_map, lp.const_arrays, lp.run)
+_lane_tbl_pgather(lp::_LaneProbe) =
+    _materialize_pgather_tbl(lp.rec, lp.idx_names, lp.box, lp.D, lp.var_map, lp.const_arrays, lp.run)
+
+# A STATE lane: a ghost box (literal 0.0), a constant offset from the output
+# slot (`_AccStateAffine`), the lane's own affine map on its array's block
+# (`_AccStateTblBox` over the block's identity table), or a slot table.
+function _lane_repl_state(lp::_LaneProbe, ev, le, oln_rep, base, strides)
+    rec, idx_names, rep, corners, thin, D, box, run = lp.rec, lp.idx_names, lp.rep, lp.corners, lp.thin, lp.D, lp.box, lp.run
+    structural = lp.structural
+    slot_rep = ev(rep)
+    if slot_rep == 0                              # ghost → literal 0.0
         for cn in corners
-            sc = ev(cn)
-            if !(sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ)
-                uniform = false
-                break
-            end
+            ev(cn) == 0 || return _lane_tbl_state(lp)
         end
-        uniform && (
-            structural || _box_holds(
-                box, run, D,
-                () -> _lane_box_key(:offset, rec, idx_names, box)
-            ) do l
-                sc = ev(l)
-                sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
-            end
-        ) && return _AccRepl(_AccStateAffine(Δ))
-        # Not at a constant offset from the output slot. Before paying for a
-        # dense per-box table, try the lane's OWN affine map (see the LANE-AFFINE
-        # STATE BOX note above): finite-difference the slot across a unit step in
-        # each non-thin dim, then VERIFY at every corner — the same derivation
-        # the const / live-forcing branches below use. A ghost anywhere in the
-        # probe or the corners declines (the table's per-cell 0 sentinel is what
-        # models a ghost).
-        #
-        # GUARD — every subscript must be STRUCTURALLY affine in the output loop
-        # indices. Corner verification alone does NOT license this lowering: a
-        # 2^D-corner check cannot see the interior, and a state subscript can be
-        # arbitrary data (an unstructured `index(conn, i)` gather, whose slot map
-        # is affine at the corners and at `rep + e_d` whenever the connectivity
-        # happens to agree there). The `_derive_var_affine` slot map is affine in
-        # the SUBSCRIPT VALUES, so the composed map is affine in the loop exactly
-        # when the subscripts are — and `_affine_idx_expr` admits nothing but
-        # `+ - neg *` over loop names and integer literals, which is a proof, not
-        # a sample. Anything else keeps the exact per-box table it had before.
-        # (This is the same reasoning the LANE_CONST branch below spells out: its
-        # index affinity holds "BY CONSTRUCTION within a box", not by corner
-        # agreement.) The motivating shapes — a lower-rank geometry column, a
-        # staggered face field, a 2-D surface field — all pass this guard.
-        if !_state_box_disabled() && structural
-            blk = _state_slot_block(rec)
-            if blk !== nothing
-                lo0, hi0 = blk
-                ls = zeros(Int, max(D, 3))
-                ok = lo0 <= slot_rep <= hi0
-                if ok
-                    for d in 1:D
-                        thin[d] && continue
-                        l2 = copy(rep); l2[d] += 1
-                        v2 = ev(l2)
-                        if v2 == 0
-                            ok = false
-                            break
-                        end
-                        ls[d] = v2 - slot_rep
-                    end
-                end
-                if ok
-                    o = slot_rep - lo0 + 1
-                    @inbounds for d in 1:D
-                        o -= (rep[d] - 1) * ls[d]
-                    end
-                    for cn in corners
-                        sc = ev(cn)
-                        a = o
-                        @inbounds for d in 1:D
-                            a += (cn[d] - 1) * ls[d]
-                        end
-                        if !(sc != 0 && 1 <= a <= (hi0 - lo0 + 1) && lo0 + a - 1 == sc)
-                            ok = false
-                            break
-                        end
-                    end
-                end
-                ok && return _AccRepl(
-                    _AccStateTblBox(
-                        _state_slot_identity(lo0, hi0), ls, o
-                    )
-                )
-            end
+        _ghost_box(
+            rec, idx_names, corners, structural, box, D, ev,
+            lp.const_arrays, le, run
+        ) || return _lane_tbl_state(lp)
+        return _LitRepl(0.0)
+    end
+    Δ = slot_rep - oln_rep
+    uniform = true
+    for cn in corners
+        sc = ev(cn)
+        if !(sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ)
+            uniform = false
+            break
         end
-        return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays, run)
-    elseif rec.kind == LANE_LOOPLIT
-        dim = findfirst(==(rec.loop_name), idx_names)
-        dim === nothing && throw(_StencilFallback("loop-lit name not an output index"))
-        return thin[dim] ? _LitRepl(Float64(rep[dim])) : _AccRepl(_AccLoopIdx(dim))
-    elseif rec.kind == LANE_EXPRTBL
-        # Rescued build-time-evaluable SUBTREE (stencil.jl SUBTREE-TABLE
-        # RESCUE): the value is an arbitrary function of the loop indices, so
-        # there is no index-affine map to derive, and the LANE_CONST comment
-        # below forbids folding from sampled VALUES — so ALWAYS materialize
-        # the dense per-box value table. `_materialize_const_box` is generic
-        # over `_eval_recipe` (which routes this kind to its `_CellEval`),
-        # its exhaustive all-equal fold collapses a box-invariant subtree to
-        # a literal, and its cost is O(box cells) per lane — the same class
-        # as `_materialize_state_tbl` / `_materialize_pgather_tbl`. The
-        # resulting `_AccConstBox` keys by table object identity in
-        # `_desc_key`, exactly like every materialized const/state/pgather
-        # table: boxes never falsely SHARE a spine (over-split only), so
-        # spine memoization stays sound with no branch-key change — the lane
-        # is one sentinel leaf to the branch key, and its per-cell values are
-        # exact by exhaustive evaluation, never assumed uniform.
-        return _materialize_const_box(rec, idx_names, box, D, var_map, const_arrays, run)
-    elseif rec.kind == LANE_CONST
-        # Loop-invariance is derived from the INDEX, never sampled from the
-        # VALUES.  The historical fast path here compared `_eval_recipe`'s value
-        # at `rep` against its value at the 2^D box CORNERS and folded the lane
-        # to a literal when they agreed.  That is unsound: a const array is
-        # arbitrary data, so corner agreement says nothing about the interior —
-        # a regrid weight column reading (0, 0.5, 0) across a box coincides at
-        # both ends and folded to a literal 0.0, silently zeroing the interior
-        # cell with no error and no warning.  Nothing licenses interpolating
-        # between sampled data values; a denser sample would only make the wrong
-        # answer rarer, not impossible.
-        #
-        # The corner checks that REMAIN below are a different kind of test and
-        # stay: they verify the resolved LINEAR INDEX (`_recipe_const_lin`) is
-        # affine in the loop index, which it is BY CONSTRUCTION within a box when
-        # the subscripts are affine expressions of the loop names — every
-        # boundary-fold transition already forces a box cut (`_const_fold_key!`),
-        # so two corners pin the affine map exactly. A subscript that is NOT
-        # (a gather through connectivity data) has no such construction, so the
-        # derived map is checked at every cell of the box instead. Invariance
-        # then follows STRUCTURALLY: an all-zero stride vector means the index —
-        # hence the value — does not move over the box, and only then is the
-        # literal fold legal. That test cannot be fooled by adversarial data,
-        # and for an affine subscript it costs the same O(2^D) corner evals as
-        # before: no per-cell work is added on the fast path.
-        val_rep = ev(rep)
-        lenv = Dict{String, Int}()
-        clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), const_arrays)
-        lin_rep = clin(rep)
-        s = zeros(Int, max(D, 3))
-        for d in 1:D
-            if !thin[d]
-                l2 = copy(rep); l2[d] += 1
-                s[d] = clin(l2) - lin_rep
-            end
-        end
-        off = lin_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
-        for cn in corners
-            (off + sum((cn[d] - 1) * s[d] for d in 1:D)) == clin(cn) ||
-                return _materialize_const_box(
-                rec, idx_names, box, D,
-                var_map, const_arrays, run
-            )
-        end
+    end
+    uniform && (
         structural || _box_holds(
             box, run, D,
-            () -> _lane_box_key(:const, rec, idx_names, box)
+            () -> _lane_box_key(:offset, rec, idx_names, box)
         ) do l
-            (off + sum((l[d] - 1) * s[d] for d in 1:D)) == clin(l)
-        end || return _materialize_const_box(
-            rec, idx_names, box, D,
-            var_map, const_arrays, run
-        )
-        # Index verified affine over the box; a zero stride in every dim means it
-        # is the SAME element for every cell (thin dims contribute nothing — the
-        # box is one cell wide there), so the read is genuinely loop-invariant
-        # and folds to a literal. `flat[_recipe_const_lin(...)] ==
-        # _eval_recipe(...)` (see `_recipe_const_lin`), so `val_rep` is that
-        # element and the fold is bit-identical.
-        all(iszero, s) && return _LitRepl(Float64(val_rep))
-        arr_flat = get!(flat_cache, rec.arr) do;
-            _const_flat(rec.arr)
+            sc = ev(l)
+            sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
         end
-        return _AccRepl(_AccConstBox(arr_flat, s, off))
-    else  # LANE_PGATHER — LIVE forcing gather
-        # `_eval_recipe` returns the flat LINEAR INDEX into the forcing buffer (its
-        # own grid), so this is the LANE_CONST derivation applied to the INDEX, not
-        # the value: finite-difference across unit loop steps for the affine strides,
-        # then VERIFY at every corner. Two differences from LANE_CONST: (1) never
-        # fold to a literal even when the index is constant — the buffer contents are
-        # refreshed in place, so the read must stay live; (2) pass `pg.flat`
-        # (the aliased live buffer) straight through, NEVER a copy.
-        pg = rec.arr::_PGatherArray
-        lin_rep = ev(rep)
-        s = zeros(Int, max(D, 3))
-        for d in 1:D
-            if !thin[d]
-                l2 = copy(rep); l2[d] += 1
-                s[d] = ev(l2) - lin_rep
+    ) && return _AccRepl(_AccStateAffine(Δ))
+    # Not at a constant offset from the output slot. Before paying for a dense
+    # per-box table, try the lane's OWN affine map (see the LANE-AFFINE STATE
+    # BOX note above): finite-difference the slot across a unit step in each
+    # non-thin dim, then VERIFY at every corner. A ghost anywhere in the probe
+    # or the corners declines (the table's per-cell 0 sentinel is what models a
+    # ghost). Only a structurally affine subscript qualifies: the block's slot
+    # map is affine in the SUBSCRIPT VALUES, so the composed map is affine in
+    # the loop exactly when the subscripts are, and the corner check is then a
+    # proof (`_affine_index_on_box`).
+    if structural
+        blk = _state_slot_block(rec)
+        if blk !== nothing
+            lo0, hi0 = blk
+            ls = zeros(Int, max(D, 3))
+            ok = lo0 <= slot_rep <= hi0
+            if ok
+                for d in 1:D
+                    thin[d] && continue
+                    l2 = copy(rep); l2[d] += 1
+                    v2 = ev(l2)
+                    if v2 == 0
+                        ok = false
+                        break
+                    end
+                    ls[d] = v2 - slot_rep
+                end
             end
-        end
-        off = lin_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
-        for cn in corners
-            if (off + sum((cn[d] - 1) * s[d] for d in 1:D)) != ev(cn)
-                # Clamped/folded forcing subscript (non-affine across the box):
-                # materialize the per-box index table (perf-plan A2). The kill
-                # switch restores the pre-A2 whole-equation per-cell fallback.
-                _obsref_disabled() &&
-                    throw(_StencilFallback("pgather index non-affine in box"))
-                return _materialize_pgather_tbl(
-                    rec, idx_names, box, D,
-                    var_map, const_arrays, run
-                )
+            if ok
+                o = slot_rep - lo0 + 1
+                @inbounds for d in 1:D
+                    o -= (rep[d] - 1) * ls[d]
+                end
+                for cn in corners
+                    sc = ev(cn)
+                    a = o
+                    @inbounds for d in 1:D
+                        a += (cn[d] - 1) * ls[d]
+                    end
+                    if !(sc != 0 && 1 <= a <= (hi0 - lo0 + 1) && lo0 + a - 1 == sc)
+                        ok = false
+                        break
+                    end
+                end
             end
+            ok && return _AccRepl(_AccStateTblBox(_state_slot_identity(lo0, hi0), ls, o))
         end
-        if !structural && !_box_holds(
-                box, run, D,
-                () -> _lane_box_key(:forcing, rec, idx_names, box)
-            ) do l
-                (off + sum((l[d] - 1) * s[d] for d in 1:D)) == ev(l)
-            end
-            _obsref_disabled() &&
-                throw(_StencilFallback("pgather index non-affine in box"))
-            return _materialize_pgather_tbl(
-                rec, idx_names, box, D,
-                var_map, const_arrays, run
-            )
-        end
-        return _AccRepl(_AccForcingBox(pg.flat, s, off))
     end
+    return _lane_tbl_state(lp)
+end
+
+# The loop index itself: a literal on a thin dim, else a loop-index read.
+function _lane_repl_looplit(lp::_LaneProbe)
+    rec = lp.rec
+    dim = findfirst(==(rec.loop_name), lp.idx_names)
+    dim === nothing && _decline(:subscript_not_static, "loop literal '$(rec.loop_name)' is not an output index")
+    return lp.thin[dim] ? _LitRepl(Float64(lp.rep[dim])) : _AccRepl(_AccLoopIdx(dim))
+end
+
+# A rescued build-time-evaluable SUBTREE (stencil.jl SUBTREE-TABLE RESCUE):
+# its value is an arbitrary function of the loop indices, so there is no
+# index-affine map to derive and no value may be folded from samples — it is
+# always the dense per-box value table, which folds to a literal only when
+# every cell's value is equal, exhaustively.
+_lane_repl_exprtbl(lp::_LaneProbe) = _lane_tbl_const(lp)
+
+# A CONST lane. Loop-invariance is derived from the INDEX, never sampled from
+# the VALUES: a const array is arbitrary data, so agreement at the corners
+# says nothing about the interior (a regrid weight column reading (0, 0.5, 0)
+# across a box coincides at both ends). The resolved LINEAR INDEX
+# (`_recipe_const_lin`) is affine on the box when the subscripts are affine
+# expressions of the loop names — every boundary-fold transition already
+# forces a box cut (`_const_fold_key!`). An all-zero stride vector then means
+# the index — hence the value — does not move over the box, and only then is
+# the literal fold legal. `flat[_recipe_const_lin(...)] == _eval_recipe(...)`
+# (see `_recipe_const_lin`), so `val_rep` is that element and the fold is
+# bit-identical.
+function _lane_repl_const(lp::_LaneProbe, ev, flat_cache)
+    rec, idx_names = lp.rec, lp.idx_names
+    val_rep = ev(lp.rep)
+    lenv = Dict{String, Int}()
+    clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), lp.const_arrays)
+    aff = _affine_index_on_box(
+        clin, lp.rep, lp.corners, lp.thin, lp.D, lp.structural, lp.box, lp.run,
+        () -> _lane_box_key(:const, rec, idx_names, lp.box)
+    )
+    aff === nothing && return _lane_tbl_const(lp)
+    s, off = aff
+    all(iszero, s) && return _LitRepl(Float64(val_rep))
+    arr_flat = get!(flat_cache, rec.arr) do;
+        _const_flat(rec.arr)
+    end
+    return _AccRepl(_AccConstBox(arr_flat, s, off))
+end
+
+# A LIVE forcing (pgather) lane. `_eval_recipe` returns the flat LINEAR INDEX
+# into the forcing buffer (its own grid), so this is the CONST derivation
+# applied to the index, with two differences: it never folds to a literal even
+# when the index is constant (the buffer is refreshed in place, so the read
+# must stay live), and it passes `pg.flat` (the aliased live buffer) straight
+# through, never a copy. A clamped or folded subscript (non-affine across the
+# box) materializes the per-box index table.
+function _lane_repl_pgather(lp::_LaneProbe, ev)
+    rec = lp.rec
+    pg = rec.arr::_PGatherArray
+    aff = _affine_index_on_box(
+        ev, lp.rep, lp.corners, lp.thin, lp.D, lp.structural, lp.box, lp.run,
+        () -> _lane_box_key(:forcing, rec, lp.idx_names, lp.box)
+    )
+    aff === nothing && return _lane_tbl_pgather(lp)
+    s, off = aff
+    return _AccRepl(_AccForcingBox(pg.flat, s, off))
 end
 
 # One lane's `_eval_recipe` at `loop`, through its compiled evaluator `le` where
@@ -1856,7 +1879,7 @@ function _guard_at_cell(n::_Node, recipes, env, var_map, const_arrays)
         v = try
             _eval_recipe(rec, env, var_map, const_arrays)
         catch err
-            (err isa TreeWalkError || err isa _StencilFallback) && return nothing
+            (err isa TreeWalkError || err isa _Decline) && return nothing
             rethrow()
         end
         return _mknode(kind = _NK_LITERAL, literal = Float64(v))
@@ -1942,11 +1965,7 @@ function _guarded_lane_repl(
             _is_const_oob(err) || rethrow()
             g = _lane_guard_at(paths, recipes, env, var_map, const_arrays)
             g === :taken && rethrow()
-            g === :unknown && throw(
-                _StencilFallback(
-                    "a const subscript is out of range under a run-time guard"
-                )
-            )
+            g === :unknown && _decline(:guarded_out_of_range)
             unread[j] = true
             nothing
         end
@@ -2008,7 +2027,7 @@ function _guarded_box_repl(
             const_arrays, run
         )
     catch err
-        (err isa _StencilFallback && run === box && _range_memo_records(spec)) &&
+        (err isa _Decline && run === box && _range_memo_records(spec)) &&
             lock(() -> get!(memo.verdicts, key, err), memo.lock)
         rethrow()
     end
@@ -2121,50 +2140,37 @@ function _box_corners(box)
     return out
 end
 
-# A contraction the affine tier compiles as a loop rather than an unroll: its
-# contracted index names (kept symbolic in the body, as extra loop dims), their
-# ranges, the ⊕ and its 0̄. Every range is contiguous with unit step.
-struct _AffineReduce
-    names::Vector{String}
-    ranges::Vector{UnitRange{Int}}
-    op::Symbol
-    zerobar::Float64
-end
-
 # Emit one `_AccKernel` for a box: derive + verify every lane, then lower the
-# (memoized) sentinel template to a shared access spine.
+# (memoized) sentinel template to a shared access spine. `cbox` is the part of
+# the box the program runs (a tile's share; the whole box otherwise).
 #
-# With `reduce`, the box's trailing `length(reduce.names)` dims are the
-# contraction's (`idx_names` names them too, and `strides` is zero there, so a
-# corner's output slot ignores them): the lanes are derived over the whole
+# With `eq.reduce`, the box's trailing `length(reduce.names)` dims are the
+# contraction's (`eq.names` names them too, and `eq.strides` is zero there, so
+# a corner's output slot ignores them): the lanes are derived over the whole
 # box, and the kernel loops only the output dims, its spine the `_NK_AREDUCE`
 # fold of the lowered body over the contracted ones.
-function _process_affine_box!(
-        kernels, spine_cache, flat_cache, box, idx_names,
-        body, ctx_proto, var_map, const_arrays,
-        param_sym_set, reg_funcs, base, strides,
-        lhs_var, lhs_idx_args, sig::_AffineSig,
-        reduce::Union{Nothing, _AffineReduce} = nothing;
-        out_ranges = nothing, cbox = box, view = nothing
-    )
+function _process_affine_box!(kernels, eq::_AffineEq, box, cbox)
+    idx_names = eq.names
+    var_map = eq.var_map
+    const_arrays = eq.const_arrays
+    base, strides = eq.base, eq.strides
+    reduce, view = eq.reduce, eq.view
+    lhs_var, lhs_idx_args = eq.lhs_var, eq.lhs_idx_args
     D = length(box)
     nout = reduce === nothing ? D : D - length(reduce.names)
     rep = Int[first(box[d]) for d in 1:D]
     thin = Bool[length(box[d]) == 1 for d in 1:D]
     corners = _box_corners(box)
-    bkey, branch = _cell_bkey!(
-        sig, rep, idx_names, body, ctx_proto,
-        var_map, param_sym_set, reg_funcs
-    )
-    tmpl, recipes, _state_ks, subcalls = branch
+    bkey, branch = _cell_bkey!(eq, rep)
+    tmpl, recipes, subcalls = branch.tmpl, branch.recipes, branch.subcalls
 
     # verify the output slot map on this box against var_map (catches a bad omap)
     denv = Dict{String, Int}()
-    lhs_ix = _lhs_ix_compile(sig, lhs_idx_args, idx_names, const_arrays)
+    lhs_ix = _lhs_ix_compile(eq)
     for cn in corners
         _box_oln(base, strides, cn, D) ==
             _oln_via_ix(lhs_ix, lhs_var, lhs_idx_args, cn, denv, idx_names, var_map) ||
-            throw(_StencilFallback("box output slot ≠ var_map"))
+            _decline(:output_layout_not_affine, lhs_var)
     end
     oln_rep = _box_oln(base, strides, rep, D)
 
@@ -2172,25 +2178,25 @@ function _process_affine_box!(
     # (`_lane_nonaffine_args!`): what licenses a corner check as a proof rather
     # than a sample, so `_derive_lane_repl` re-verifies at every cell only where
     # it must. Classified once per branch, not once per box.
-    nonaff = _lane_nonaffine_args!(sig, bkey, recipes, ctx_proto.idxset)
+    nonaff = _lane_nonaffine_args!(eq, bkey, recipes)
     # A tile's per-box tables cover only the cells of the box it runs
     # (`_box_table_addr`).
     run = view === nothing ? box : cbox
-    evs = _box_lane_evals!(sig, bkey, idx_names, var_map, const_arrays)
+    evs = _box_lane_evals!(eq, bkey)
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
         lane_repl[k] = try
-            @_bench :lane_repl _derive_lane_repl(
+            _derive_lane_repl(
                 recipes[k], idx_names, rep, corners, thin,
                 oln_rep, base, strides, D, var_map,
-                const_arrays, flat_cache, box,
+                const_arrays, eq.flat_cache, box,
                 !any(nonaff[k]); le = evs[k], run = run
             )
         catch err
             (_is_const_oob(err) && recipes[k].kind in (LANE_CONST, LANE_STATE)) || rethrow()
             paths = get!(
                 () -> _lane_guard_paths(tmpl, length(recipes)),
-                sig.lane_guards, bkey
+                eq.lane_guards, bkey
             )[k]
             _guarded_box_repl(
                 recipes[k], paths, recipes, idx_names, box, D,
@@ -2200,7 +2206,7 @@ function _process_affine_box!(
     end
 
     view === nothing || _range_real_repls!(view, lane_repl, recipes)
-    spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
+    spine, acc, cse, subs = get!(eq.spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
         a = _AccDesc[]
         raw = _lower_to_access(tmpl, lane_repl, a, subcalls)
         if reduce !== nothing
@@ -2216,70 +2222,45 @@ function _process_affine_box!(
         cs_spine, cse = _build_acc_cse(raw, a)   # per-cell CSE (shared subtrees → scratch)
         (cs_spine, a, cse, _collect_subkernels(cs_spine, cse))
     end
-    slab = out_ranges === nothing ? Bool[] :
-        Bool[
-            length(box[d]) == 1 && (
-                first(box[d]) == first(out_ranges[d]) ||
+    out_ranges = eq.out_ranges
+    slab = Bool[
+        length(box[d]) == 1 && (
+            first(box[d]) == first(out_ranges[d]) ||
                 last(box[d]) == last(out_ranges[d])
-            )
+        )
             for d in 1:nout
-        ]
+    ]
     cs = _CellSet(
         Int[strides[d] for d in 1:nout],
         UnitRange{Int}[cbox[d] for d in 1:nout],
         base - (view === nothing ? 0 : view.shift), Int[], slab
     )
-    return push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
+    return push!(kernels, _AccKernel(cs, spine, acc, cse, subs))
 end
 
 # Every lane recipe's compiled evaluator (`nothing` where it has none), per
 # branch key: what `_derive_lane_repl` evaluates a state lane through, and the
 # scan key reads its state lanes from. The recipes are the branch key's own
-# (`sig.branch_cache`), and the context is checked to be the one every earlier
-# entry was compiled under, so the scan and the box processor cannot read each
-# other's evaluators under different inputs.
-function _box_lane_evals!(
-        sig::_AffineSig, bkey::String, idx_names, var_map, const_arrays
-    )
-    _sig_bind!(sig, idx_names, var_map, const_arrays)
-    return get!(sig.box_evals, bkey) do
-        recipes = sig.branch_cache[bkey][2]
-        compiled = idx_names isa Vector{String}
+# (`eq.branch_cache`), compiled under the equation's inputs.
+function _box_lane_evals!(eq::_AffineEq, bkey::String)
+    return get!(eq.box_evals, bkey) do
+        recipes = eq.branch_cache[bkey].recipes
         Union{Nothing, _LaneEval}[
-            compiled && rec.kind == LANE_STATE ?
-                _lane_evaluator(rec, idx_names, var_map, const_arrays, sig.ix_memo) : nothing
+            rec.kind == LANE_STATE ?
+                _lane_evaluator(rec, eq.names, eq.var_map, eq.const_arrays, eq.ix_memo) : nothing
                 for rec in recipes
         ]
     end::Vector{Union{Nothing, _LaneEval}}
 end
 
-# Fix the context `sig`'s compiled lane evaluators and subscripts belong to on
-# the first call; on every later one, require the same context. The sig lives
-# for one equation, whose loop index names, slot map and constant arrays are
-# fixed, so a mismatch is a broken caller, not a case to handle.
-function _sig_bind!(sig::_AffineSig, idx_names, var_map, const_arrays)
-    b = sig.lane_bind
-    if b === nothing
-        sig.lane_bind = (idx_names, var_map, const_arrays)
-    elseif !(isequal(b[1], idx_names) && b[2] === var_map && b[3] === const_arrays)
-        error(
-            "internal: an affine signature's lane evaluators were compiled " *
-                "under another equation context"
-        )
-    end
-    return sig
-end
-
 # The output subscripts compiled once per equation (`nothing` for one that has
 # no compiled form), for `_oln_via_ix`.
-function _lhs_ix_compile(sig::_AffineSig, lhs_idx_args, idx_names, const_arrays)
-    sig.lhs_ix === nothing || return sig.lhs_ix
+function _lhs_ix_compile(eq::_AffineEq)
+    eq.lhs_ix === nothing || return eq.lhs_ix
     ix = Union{Nothing, _IdxNode}[
-        idx_names isa Vector{String} ?
-            _ix_compile(a, idx_names, const_arrays) : nothing
-            for a in lhs_idx_args
+        _ix_compile(a, eq.names, eq.const_arrays) for a in eq.lhs_idx_args
     ]
-    sig.lhs_ix = ix
+    eq.lhs_ix = ix
     return ix
 end
 
@@ -2391,7 +2372,9 @@ function _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args,
 end
 
 # Compile an array equation via the affine polyhedral build.
-# Returns `Vector{_AccKernel}`, or `nothing` to fall back to the per-cell chain.
+# Returns `Vector{_AccKernel}`, or declines (`_Decline`) with `covered` untouched;
+# the cascade (`_AffineTier`, build_array_equation.jl) files the decline and
+# moves on.
 #
 # With `reduce` the equation is a contraction `⊕_{k…} rhs_body(i…, k…)` whose
 # contracted indices `reduce.names` stay symbolic: they join the output indices
@@ -2406,9 +2389,9 @@ function _try_affine_stencil(
         resolved_obs::Dict{String, ASTExpr},
         array_var_info, var_map::AbstractDict{String, Int},
         const_arrays::AbstractDict, pgather::AbstractDict,
-        param_sym_set, reg_funcs, covered::_Covered;
+        param_sym_set, covered::_Covered;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
-        # A3: the per-BUILD cross-equation store (variant +
+        # The per-BUILD cross-equation store (variant +
         # bound-body caches, shared obs-inline memo).
         # `nothing` is the per-equation caches
         # (cross-equation variants off / storeless callers).
@@ -2425,13 +2408,14 @@ function _try_affine_stencil(
             lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
             !isempty((lhs_body.args[1]::OpExpr).args) &&
             (lhs_body.args[1]::OpExpr).args[1] isa VarExpr
-    ) || return nothing
+    ) || _decline(:lhs_not_indexed_derivative)
 
     D = length(idx_names)
-    D >= 1 || return nothing
+    D >= 1 || _decline(:no_output_index)
     ranges = UnitRange{Int}[]
     for r in range_iters
-        (length(r) >= 1 && _is_unit_run(r)) || return nothing
+        (length(r) >= 1 && _is_unit_run(r)) ||
+            _decline(:range_not_unit_run)
         push!(ranges, first(r):last(r))
     end
 
@@ -2446,11 +2430,11 @@ function _try_affine_stencil(
     body = rhs_body
     sites = template_sites
     if !isempty(resolved_obs)
-        # A3: with a store, the substitution memo is shared across every
+        # With a store, the substitution memo is shared across every
         # equation of the build (bindings — `resolved_obs` — are one fixed Dict
         # per build, `_xeq_obs_memo` pins that), so a root shared by two
         # equations rewrites to the SAME object and the cross-equation variant
-        # key can hit. Without a store: a fresh per-call memo, as before.
+        # key can hit. Without a store: a fresh per-call memo.
         memo = xeq === nothing ? _SubMemo() : _xeq_obs_memo(xeq, resolved_obs)
         body = _sub_preserving(rhs_body, resolved_obs, memo)
         if sites !== nothing
@@ -2465,7 +2449,7 @@ function _try_affine_stencil(
     inner = lhs_body.args[1]::OpExpr
     lhs_var = (inner.args[1]::VarExpr).name
     lhs_idx_args = inner.args[2:end]
-    length(lhs_idx_args) == D || return nothing
+    length(lhs_idx_args) == D || _decline(:lhs_subscript_count)
     # The loop dims: the output's, then (for a contraction kept as a loop) the
     # contracted ones.
     all_names = reduce === nothing ? idx_names : vcat(idx_names, reduce.names)
@@ -2474,66 +2458,49 @@ function _try_affine_stencil(
 
     tctx = sites === nothing ? nothing :
         _TemplateCtx(
-            sites, var_map, param_sym_set, reg_funcs;
+            sites, var_map, param_sym_set;
             idxkey = _idxset_key(all_names), store = xeq
         )
     ctx_proto = _StencilCtx(
         Set{String}(all_names), _LaneRecipe[], Dict{String, Int}(),
         array_var_info, const_arrays, pgather, tctx
     )
-    sig = _AffineSig()
-    try
-        base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
-        # The output slot does not move along a contracted dim.
-        all_strides = reduce === nothing ? strides : vcat(strides, zeros(Int, Dall - D))
-        cuts = @_bench :affine_cuts _affine_cut_points(
-            sig, body, all_names, all_ranges, ctx_proto,
-            var_map, param_sym_set, reg_funcs,
-            (base, all_strides)
-        )
-        for d in (D + 1):Dall
-            length(cuts[d]) == 1 ||
-                throw(_StencilFallback("affine reduction: contracted axis is cut"))
-        end
-        segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
-        run = run_iters === nothing ? nothing :
-            UnitRange{Int}[first(r):last(r) for r in run_iters]
-        shift = view === nothing ? 0 : view.shift
-        kernels = _AccKernel[]
-        spine_cache = Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}()
-        flat_cache = IdDict{Any, Vector{Float64}}()
-        boxes = Vector{UnitRange{Int}}[]
-        for segtuple in Iterators.product(segs...)
-            box = UnitRange{Int}[segtuple[d] for d in 1:D]
-            reduce === nothing || append!(box, reduce.ranges)
-            # The cells of the box this program runs: all of them, or a tile's
-            # share (possibly none; the box is then derived and emitted all
-            # the same, and runs no cell).
-            cbox = run === nothing ? box :
-                UnitRange{Int}[
-                    d <= D ? _clip_run(box[d], run[d]) : box[d]
-                    for d in eachindex(box)
-                ]
-            @_bench :affine_box _process_affine_box!(
-                kernels, spine_cache, flat_cache, box, all_names,
-                body, ctx_proto, var_map, const_arrays,
-                param_sym_set, reg_funcs, base, all_strides,
-                lhs_var, lhs_idx_args, sig, reduce;
-                out_ranges = ranges, cbox = cbox, view = view
-            )
-            all(d -> !isempty(cbox[d]), 1:D) && push!(boxes, cbox[1:D])
-        end
-        # Only after every box is verified: mark covered (untouched on fallback).
-        for box in boxes
-            @_bench :mark_covered _mark_box_covered!(covered, box, base - shift, strides, D, lhs_var, lhs_idx_args, idx_names)
-        end
-        view === nothing || _range_real_fixed!(view, kernels)
-        return kernels
-    catch err
-        if err isa _StencilFallback
-            _note_decline!(:affine, Symbol(err.reason))
-            return nothing
-        end
-        rethrow()
+    base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
+    # The output slot does not move along a contracted dim.
+    all_strides = reduce === nothing ? strides : vcat(strides, zeros(Int, Dall - D))
+    eq = _AffineEq(
+        all_names, all_ranges, ranges, body, ctx_proto, var_map, const_arrays,
+        param_sym_set, lhs_var, lhs_idx_args, base, all_strides, reduce, view
+    )
+    cuts = _affine_cut_points(eq; strong = true)
+    for d in (D + 1):Dall
+        length(cuts[d]) == 1 ||
+            _decline(:contracted_axis_cut, all_names[d])
     end
+    segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
+    run = run_iters === nothing ? nothing :
+        UnitRange{Int}[first(r):last(r) for r in run_iters]
+    shift = view === nothing ? 0 : view.shift
+    kernels = _AccKernel[]
+    boxes = Vector{UnitRange{Int}}[]
+    for segtuple in Iterators.product(segs...)
+        box = UnitRange{Int}[segtuple[d] for d in 1:D]
+        reduce === nothing || append!(box, reduce.ranges)
+        # The cells of the box this program runs: all of them, or a tile's
+        # share (possibly none; the box is then derived and emitted all
+        # the same, and runs no cell).
+        cbox = run === nothing ? box :
+            UnitRange{Int}[
+                d <= D ? _clip_run(box[d], run[d]) : box[d]
+                for d in eachindex(box)
+            ]
+        _process_affine_box!(kernels, eq, box, cbox)
+        all(d -> !isempty(cbox[d]), 1:D) && push!(boxes, cbox[1:D])
+    end
+    # Only after every box is verified: mark covered (untouched on fallback).
+    for box in boxes
+        _mark_box_covered!(covered, box, base - shift, strides, D, lhs_var, lhs_idx_args, idx_names)
+    end
+    view === nothing || _range_real_fixed!(view, kernels)
+    return kernels
 end

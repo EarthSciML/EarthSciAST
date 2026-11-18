@@ -57,10 +57,8 @@
 #     exemption. esm-schema.json defines both (`element_type` ∈ {Float32,
 #     Float64}, `array_type` e.g. "CuArray") and they select real behaviour —
 #     precision and array backend for the assembled problem — and §4.7.5 step 4
-#     says `domain` is the file's section UNCHANGED. Both Julia AND the Python
-#     oracle used to drop them at load (each round-tripping the loss back out);
-#     both were fixed on 2026-08-24 and the corpus regenerated, so these are
-#     ordinary compared fields now. A corpus-INDEPENDENT test still pins the
+#     says `domain` is the file's section UNCHANGED, so these are ordinary
+#     compared fields. A corpus-INDEPENDENT test also pins the
 #     pass-through on tests/valid/model_only.esm, which declares Float32 and is
 #     not a corpus fixture.
 #
@@ -77,7 +75,7 @@ using JSON3
 using EarthSciAST
 
 # `testutils.jl` provides TESTUTILS_REPO_ROOT. `Test` must already be imported
-# before it is included (its guard block expands `@test_skip` at lowering time).
+# before it is included (its guard block expands `@test` at lowering time).
 if !isdefined(Main, :ESM_TESTUTILS_LOADED)
     include("testutils.jl")
 end
@@ -200,18 +198,7 @@ builds it, so every one of these cases is compared in full.
   about the field set: (i) the oracle NAMESPACES an aggregate's loop
   variables (`Advection.i`) and index-set references, which esm-spec v0.8.0 makes
   wrong — index sets are a document-scoped registry with plain names, and a loop
-  variable is body-local, not a component variable. A second, the oracle
-  printing the lift's range as its extent (`1:4`) where Julia printed the
-  index-set name (`lon`), is RESOLVED: every binding ranges a lifted loop over
-  its index set (esm-libraries-spec §4.7.5, "Pointwise lift: index sets"). A
-  third, the reaction-lowering coefficient rendering, is RESOLVED
-  (esm-libraries-spec §4.6.2, see above). A fourth used to sit here —
-  `operator_compose` summing the matched RHSs in the opposite order — and is
-  RESOLVED (2026-08-24): `Advection` writes `D(Chemistry.O3, t) = …` itself, so
-  after namespacing its equations are indistinguishable from the reaction
-  system's, and the merge was reading the A/B roles off the dependent variable's
-  prefix and getting them backwards. Provenance is now recorded at collection
-  (`_attribute_equations!`) and the sum is §4.7.1 step 4's `rhs_A + rhs_B`.
+  variable is body-local, not a component variable.
 * `equations` on `term_provenance_pointwise_lift` — difference (i) of
   `advection_reaction_loaded_ic_bc` above, and nothing else: the oracle
   namespaces the lift's loop variable (`Adv.i`) where Julia keeps `i`. The
@@ -258,17 +245,6 @@ both bindings now and every field is compared. The RULING itself no longer has a
 corpus case, so it is pinned locally below on a document built here — losing the
 refusal must not lose the diagnostic.)
 
-- `loader_fields` on a REACTION SYSTEM's data-bound parameter: classified, never
-  fetched. `_collect_loader_fields!` (src/flatten.jl) walks models and their
-  subsystems only, so a reaction system's parameter declaring
-  `update: {kind: "data", ...}` is reported in `discrete_parameters` — correctly,
-  per esm-spec §6.3.1 — while nothing emits a `LoaderField` to actually load it.
-  Rust does not share this gap: `collect_loader_fields` walks the flattened
-  parameter map, so it fetches these bindings and is the binding that is right.
-  Julia, Python and Go all need the same treatment before the corpus can record
-  it; until then Julia matches the corpus on `loader_fields` and the pin below
-  keeps the half-implemented path from drifting unnoticed.
-
 """
 const _FC_DIVERGENCES = Dict{String, Vector{String}}(
     "complete_coupling_types" => ["equations"],
@@ -289,6 +265,9 @@ const _FC_DIVERGENCES = Dict{String, Vector{String}}(
 const _FC_REFUSAL_TYPES = Dict{String, Type}(
     "VariableMapUnresolvedEndpointError" => EarthSciAST.VariableMapUnresolvedEndpointError,
     "VariableMapShapeConflictError" => EarthSciAST.VariableMapShapeConflictError,
+    "CoupleMultiplicativeNoTendencyError" => EarthSciAST.CoupleMultiplicativeNoTendencyError,
+    # Python's flatten raises a bare ValueError for a document with no component.
+    "ValueError" => EarthSciAST.FlattenRefusal,
 )
 
 _fc_skips(id) = get(_FC_DIVERGENCES, id, String[])
@@ -796,26 +775,19 @@ end
                 startswith(n, first(split(param, '.')) * ".") || continue
                 @test (fixture, n, _fc_update_kinds(other)) == (fixture, n, String[])
             end
-            # The other half of §8.5 is NOT implemented for reaction systems:
-            # `_collect_loader_fields!` walks models only, so this parameter is
-            # classified discrete but nothing fetches it. Pinned so the gap is
-            # visible here rather than only as a runtime surprise.
+            # ... and it is fetched: it has a `loader_fields` entry like a
+            # model's data-fed parameter (esm-libraries-spec §4.7.5 step 4).
             @test (
                 fixture, "loader_fields",
                 param in String[lf.name for lf in flat.loader_fields],
             ) ==
-                (fixture, "loader_fields", false)
+                (fixture, "loader_fields", true)
         end
     end
 
     @testset "domain element_type / array_type survive flatten" begin
-        # HISTORY: the corpus used to record BOTH as null for every case, because
-        # the Python oracle's `Domain` dataclass declared neither and dropped them
-        # at load (its round trip was lossy too). Julia had the SAME bug and it
-        # was fixed here in the same commit. The oracle was fixed on 2026-08-24
-        # and the corpus regenerated, so `element_type` / `array_type` are now
-        # compared per-case like any other field. §4.7.5 step 4: `domain` is the
-        # file's section UNCHANGED.
+        # `element_type` / `array_type` are compared per-case like any other
+        # field. §4.7.5 step 4: `domain` is the file's section UNCHANGED.
         #
         # What remains is the corpus-INDEPENDENT half.
         # tests/valid/model_only.esm declares `element_type: "Float32"`. It is not
@@ -832,11 +804,10 @@ end
     @testset "inert reaction species: no tendency, transported only" begin
         # `AtmosphericChemistry.OH` is declared as a species and touched by no
         # reaction, so its stoichiometric sum is EMPTY and esm-libraries-spec
-        # §4.6.1 emits no `D(OH,t)` for it. Julia used to emit `D(OH,t) = 0`
-        # instead, which made it a differential unknown that never moves; §6.3.1
-        # classifies by COMPLEMENT, so leaving the equation out is what makes it
-        # the ALGEBRAIC unknown it is. Julia was the 4-1 outlier here (Python,
-        # Rust, Go and TypeScript all omit) and §4.6.1 ruled against it.
+        # §4.6.1 emits no `D(OH,t)` for it. Emitting `D(OH,t) = 0` would make it
+        # a differential unknown that never moves; §6.3.1 classifies by
+        # COMPLEMENT, so leaving the equation out is what makes it the ALGEBRAIC
+        # unknown it is.
         #
         # `OH` does still get an equation in THIS document, from somewhere else:
         # it is a state, so §4.7.1 step 3's placeholder expansion gives it a
@@ -853,7 +824,7 @@ end
         eqs = flat.equations
         @test length(eqs) == 4
         # Position: OH FIRST, in `models` order ahead of the reaction system —
-        # agreeing with the corpus, where Julia used to have it last.
+        # agreeing with the corpus.
         @test _flhs(eqs) ==
             [canonical_expr_json(_fD("AtmosphericChemistry.$s")) for s in ("OH", "O3", "NO", "NO2")]
         # Transport alone, with no leading `0 +`.
@@ -869,9 +840,9 @@ end
                 _fe("*", "Transport.K_v", _fe("laplacian", oh; dim = "lev")),
             )
         )
-        # ... and every equation is the one the shared corpus records. The `-1 * rate` vs `-rate` rendering that used to separate O3
-        # and NO is gone: esm-libraries-spec §4.6.2 writes a loss of 1 as
-        # `-1 * rate` in every binding.
+        # ... and every equation is the one the shared corpus records:
+        # esm-libraries-spec §4.6.2 writes a loss of 1 as `-1 * rate` in every
+        # binding.
         corpus_case = first(
             c for c in JSON3.read(read(_FLATTEN_CORPUS_PATH, String)).cases
                 if String(c.id) == "full_coupled"
@@ -1053,10 +1024,10 @@ end
         # variable, so a bare endpoint has to be qualified first — a key against
         # `systems[1]`, a value against `systems[2]`.
         #
-        # This is not a hypothetical spelling: before the fix, every one of the
-        # eight `translate` maps in the shared fixture tree was authored bare and
-        # not one ever matched. The map missed, the bare-name fallback searched A
-        # for B's SHORT name and missed too, and the entry silently no-op'd.
+        # This is not a hypothetical spelling: the `translate` maps in the shared
+        # fixture tree are authored bare. Unqualified, the map misses, the
+        # bare-name fallback searches A for B's SHORT name and misses too, and
+        # the entry silently no-ops.
         doc(k, v) = """
         {"esm": "2.0.0",
          "metadata": {"name": "TranslateSpelling",
@@ -1321,10 +1292,6 @@ end
         # silently dropping the connector equation is the one outcome a coupling
         # mis-specification must not have — the document declares a coupling and
         # the flattened system carries no trace of it.
-        #
-        # This used to be pinned by `advanced_coupling`'s refusal. That fixture
-        # has been migrated to the §10.4 `variable_map` spelling, so the ruling
-        # would otherwise have lost its only test.
         doc = """
         {"esm": "2.0.0",
          "metadata": {"name": "MultiplicativeNoTendency",
@@ -1348,7 +1315,8 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa CoupleMultiplicativeNoTendencyError
+        @test err === nothing || error_code(err) == "couple_multiplicative_no_tendency"
         @test err === nothing || occursin("Surface.r", sprint(showerror, err))
         @test err === nothing || occursin("no tendency", sprint(showerror, err))
     end

@@ -32,9 +32,6 @@ include("zero_alloc_harness.jl")
 
 const _CF = EarthSciAST
 
-_cf_idx(a, s...) = Dict{String, Any}("op" => "index", "args" => Any[a, s...])
-_cf_op(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
-_cf_const(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 _cf_faq1(i, n, body) = Dict{String, Any}(
     "op" => "faq", "output_idx" => Any[i], "args" => Any[],
     "ranges" => Dict(i => Any[1, n]), "expr" => body
@@ -44,8 +41,8 @@ _cf_faq1(i, n, body) = Dict{String, Any}(
 _cf_axis(n) = [(k - 3) / 2 for k in 1:n]
 
 # The body of the count: `a` is the axis read at `k`, `x` the query.
-_cf_le(a, x) = _cf_op("ifelse", _cf_op("<=", a, x), 1, 0)
-_cf_ge(a, x) = _cf_op("ifelse", _cf_op(">=", x, a), 1, 0)
+_cf_le(a, x) = jop("ifelse", jop("<=", a, x), 1, 0)
+_cf_ge(a, x) = jop("ifelse", jop(">=", x, a), 1, 0)
 
 function _cf_count(n, body; reduce = "+", filter = nothing)
     c = Dict{String, Any}(
@@ -61,23 +58,23 @@ end
 # `:state` (an ODE state with zero tendency) or a vector (an inline constant
 # array with those entries).
 function _cf_doc(n; axis = :const, body = _cf_le, kw...)
-    av = axis isa AbstractVector ? _cf_const(axis) :
-        axis === :const ? _cf_const(_cf_axis(n)) : "zax"
+    av = axis isa AbstractVector ? jconst(axis) :
+        axis === :const ? jconst(_cf_axis(n)) : "zax"
     vars = Dict{String, Any}("q" => Dict("type" => "unknown", "shape" => Any["lev"]))
     eqs = Any[]
     if axis === :state
         vars["zax"] = Dict("type" => "unknown", "shape" => Any["lev"])
         push!(
             eqs, Dict(
-                "lhs" => _cf_faq1("lev", n, Dict("op" => "D", "args" => Any[_cf_idx("zax", "lev")], "wrt" => "t")),
+                "lhs" => _cf_faq1("lev", n, Dict("op" => "D", "args" => Any[jidx("zax", "lev")], "wrt" => "t")),
                 "rhs" => _cf_faq1("lev", n, 0.0)
             )
         )
     end
-    cnt = _cf_count(n, body(_cf_idx(av, "k"), _cf_idx("q", "lev")); kw...)
+    cnt = _cf_count(n, body(jidx(av, "k"), jidx("q", "lev")); kw...)
     push!(
         eqs, Dict(
-            "lhs" => _cf_faq1("lev", n, Dict("op" => "D", "args" => Any[_cf_idx("q", "lev")], "wrt" => "t")),
+            "lhs" => _cf_faq1("lev", n, Dict("op" => "D", "args" => Any[jidx("q", "lev")], "wrt" => "t")),
             "rhs" => _cf_faq1("lev", n, cnt)
         )
     )
@@ -106,15 +103,14 @@ end
 
 const _CF_NOFOLD = _CF._plan_with(_CF._compiler_plan(:native); count_fold = false)
 
-# `(f!, u0, p, vmap, tally)` under `compiler` (a vocabulary value or a plan).
+# `(f!, u0, p, vmap, counts)` under `compiler` (a vocabulary value or a plan).
+# The document's model is `M`; `ics` is keyed by its local names.
 function _cf_build(doc, ics, compiler)
-    _CF._reset_cascade_tally!()
-    f!, u0, p, _, vm = compiler isa Symbol ?
-        EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = compiler) :
-        _CF._with_compiler_plan(compiler) do
-            _CF._build_evaluator_dict(doc; initial_conditions = ics, compiler = compiler)
-    end
-    return (f!, u0, p, vm, copy(_CF._CASCADE_TALLY))
+    f!, u0, p, _, vm, rep = EarthSciAST.Internal.build(
+        doc; initial_conditions = Dict{String, Any}("M." * k => v for (k, v) in ics),
+        compiler = compiler
+    )
+    return (f!, u0, p, vm, rep.counts)
 end
 
 # `du` at the initial state, keyed by variable name so builds compare by name.
@@ -153,7 +149,7 @@ end
         # wrong answer.
         z = _cf_axis(N)
         @test all(
-            dn["q[$i]"] === Float64(count(<=(x), z))
+            dn["M.q[$i]"] === Float64(count(<=(x), z))
                 for (i, x) in enumerate(_cf_queries(N))
         )
     end
@@ -178,7 +174,7 @@ end
         tn, dn = _cf_agree(doc, ics)
         @test _cf_fired(tn) >= 1
         @test all(
-            dn["q[$i]"] === Float64(count(<=(x), ax))
+            dn["M.q[$i]"] === Float64(count(<=(x), ax))
                 for (i, x) in enumerate(_cf_queries(59))
         )
     end
@@ -191,7 +187,7 @@ end
         tn, dn = _cf_agree(doc, ics)
         @test get(tn, :count_fold_search, 0) >= 1
         @test all(
-            dn["q[$i]"] === Float64(count(<=(x), ax))
+            dn["M.q[$i]"] === Float64(count(<=(x), ax))
                 for (i, x) in enumerate(_cf_queries(59))
         )
     end
@@ -208,7 +204,7 @@ end
         ("x >= a", ">=", true, <=), ("x > a", ">", true, <),
         ("x <= a", "<=", true, >=), ("x < a", "<", true, >),
     )
-    _cf_rel(op, flip) = (a, x) -> _cf_op("ifelse", flip ? _cf_op(op, x, a) : _cf_op(op, a, x), 1, 0)
+    _cf_rel(op, flip) = (a, x) -> jop("ifelse", flip ? jop(op, x, a) : jop(op, a, x), 1, 0)
     @testset "relation $what, $axname axis" for (what, op, flip, f) in rels,
             (axname, ax, kind) in (
                 ("ascending", _cf_axis(59), :count_fold_search),
@@ -219,14 +215,14 @@ end
         tn, dn = _cf_agree(doc, ics)
         @test get(tn, kind, 0) >= 1
         @test all(
-            dn["q[$i]"] === Float64(count(v -> f(v, x), ax))
+            dn["M.q[$i]"] === Float64(count(v -> f(v, x), ax))
                 for (i, x) in enumerate(_cf_queries(59))
         )
     end
     # The branch values swapped, `ifelse(a REL x, 0, 1)`, count the entries
     # where the comparison FAILS — searchsorted's `not(>=)` form; a NaN query
     # fails every comparison, so it counts every entry.
-    _cf_nrel(op, flip) = (a, x) -> _cf_op("ifelse", flip ? _cf_op(op, x, a) : _cf_op(op, a, x), 0, 1)
+    _cf_nrel(op, flip) = (a, x) -> jop("ifelse", flip ? jop(op, x, a) : jop(op, a, x), 0, 1)
     @testset "swapped branches, relation $what, $axname axis" for (what, op, flip, f) in rels,
             (axname, ax, kind) in (
                 ("ascending", _cf_axis(59), :count_fold_search),
@@ -236,7 +232,7 @@ end
         tn, dn = _cf_agree(doc, ics)
         @test get(tn, kind, 0) >= 1
         @test all(
-            dn["q[$i]"] === Float64(count(v -> !f(v, x), ax))
+            dn["M.q[$i]"] === Float64(count(v -> !f(v, x), ax))
                 for (i, x) in enumerate(_cf_queries(59))
         )
     end
@@ -261,7 +257,7 @@ end
         eqs = Any[
             Dict(
                 "lhs" => Dict("op" => "D", "args" => Any["s$j"], "wrt" => "t"),
-                "rhs" => _cf_count(N, _cf_le(_cf_idx(_cf_const(ax), "k"), "s$j"))
+                "rhs" => _cf_count(N, _cf_le(jidx(jconst(ax), "k"), "s$j"))
             ) for j in 1:6
         ]
         doc = Dict{String, Any}(
@@ -271,20 +267,20 @@ end
         ics = Dict{String, Any}("s$j" => qs[j] for j in 1:6)
         tn, dn = _cf_agree(doc, ics)
         @test _cf_fired(tn) >= 1
-        @test all(dn["s$j"] === Float64(count(<=(qs[j]), ax)) for j in 1:6)
+        @test all(dn["M.s$j"] === Float64(count(<=(qs[j]), ax)) for j in 1:6)
     end
 
     # Every near miss keeps the fold: the rewrite does not fire, and the answer
     # is still the interpreter's.
     near = (
-        ("branch values 2/0", (a, x) -> _cf_op("ifelse", _cf_op("<=", a, x), 2, 0), (;)),
-        ("branch values 0/2", (a, x) -> _cf_op("ifelse", _cf_op("<=", a, x), 0, 2), (;)),
-        ("branch values 1/1", (a, x) -> _cf_op("ifelse", _cf_op("<=", a, x), 1, 1), (;)),
-        ("equality", (a, x) -> _cf_op("ifelse", _cf_op("==", a, x), 1, 0), (;)),
-        ("query reads k", (a, x) -> _cf_le(a, _cf_op("+", x, "k")), (;)),
-        ("bare comparison", (a, x) -> _cf_op("<=", a, x), (;)),
+        ("branch values 2/0", (a, x) -> jop("ifelse", jop("<=", a, x), 2, 0), (;)),
+        ("branch values 0/2", (a, x) -> jop("ifelse", jop("<=", a, x), 0, 2), (;)),
+        ("branch values 1/1", (a, x) -> jop("ifelse", jop("<=", a, x), 1, 1), (;)),
+        ("equality", (a, x) -> jop("ifelse", jop("==", a, x), 1, 0), (;)),
+        ("query reads k", (a, x) -> _cf_le(a, jop("+", x, "k")), (;)),
+        ("bare comparison", (a, x) -> jop("<=", a, x), (;)),
         ("max reducer", _cf_le, (; reduce = "max")),
-        ("filter", _cf_le, (; filter = _cf_op(">=", "k", 2))),
+        ("filter", _cf_le, (; filter = jop(">=", "k", 2))),
     )
     @testset "near miss declines: $what" for (what, body, kw) in near
         doc, ics = _cf_doc(59; body = body, kw...), _cf_ics(59)

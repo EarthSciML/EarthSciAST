@@ -24,8 +24,8 @@ module DJson
 using OrderedCollections: OrderedDict
 
 export JNull, JNULL, JNum, JInt, JDec, JArr, JObj, Kvs, Json, Chars,
-    EOFC, at, drop, starts, strip_prefix, chars, fieldeq, in_int64, look,
-    jstr, jint, sort_keys, keys_distinct, wfb
+    EOFC, at, drop, starts, strip_prefix, chars, str_of, fieldeq, in_int64, look,
+    sort_keys, keys_distinct, wfb
 
 # ## Character slices
 
@@ -60,6 +60,9 @@ strip_prefix(r::Chars, lit::AbstractString) =
 """A string's characters, as the input a reader takes."""
 chars(s::AbstractString) = collect(Char, s)
 chars(s::Chars) = s
+
+"""A character slice as a `String` (Lean `String.ofList`)."""
+str_of(cs) = String(collect(Char, cs))
 
 """Field-wise `==`, for the structs of the codecs whose fields hold vectors."""
 fieldeq(a::T, b::T) where {T} =
@@ -112,9 +115,6 @@ Base.hash(a::JObj, h::UInt) = hash(a.kvs, hash(:JObj, h))
 
 """A document value: `JNull`, `Bool`, `JNum`, `String`, `JArr` or `JObj`."""
 const Json = Any
-
-jstr(s::AbstractString) = String(s)
-jint(z::Integer) = JInt(Int128(z))
 
 # ## Numbers
 

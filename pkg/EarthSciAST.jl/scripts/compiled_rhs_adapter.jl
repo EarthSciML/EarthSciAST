@@ -33,7 +33,7 @@
 #
 # TWO ENGINES, ONE ADAPTER:
 #
-#   --engine interpreter  the MTK-free tree-walk evaluator (`build_evaluator` ->
+#   --engine interpreter  the MTK-free tree-walk evaluator (`Internal.build` ->
 #                         `f!(du, u, p, t)`). This is what mints the tier's
 #                         goldens and what the cross-binding gate compares.
 #   --engine compiled     direct StableHLO emission: the model's compiled
@@ -76,57 +76,31 @@
 # scripts/compiled_rhs_reactant_env, because Reactant bundles an XLA runtime and
 # the reference lane must not depend on it. Both self-bootstrap.
 
-# Self-contained environment bootstrap, identical in shape to
-# pde_simulation_adapter.jl. Which env depends on the ENGINE, so `--engine` is
-# read here, straight off ARGS, before anything is loaded: the interpreter lane
-# keeps the existing pde_sim_adapter project (EarthSciAST dev'd from ../.. +
-# JSON3), the compiled lane gets compiled_rhs_reactant_env (the same, plus
-# Reactant). Manifest.toml is gitignored repo-wide, so on a fresh checkout we
-# re-establish the local dev path then instantiate; on warm runs this is a fast
-# resolve check.
-import Pkg
-const ENGINE = let e = "interpreter"
-    for i in eachindex(ARGS)
-        ARGS[i] == "--engine" && i < length(ARGS) && (e = ARGS[i + 1])
-    end
-    e
-end
-let env = joinpath(
-        @__DIR__, ENGINE == "compiled" ? "compiled_rhs_reactant_env" :
-            "pde_sim_adapter"
-    ),
-        manifest = joinpath(env, "Manifest.toml")
-    bootstrap() = begin
-        Pkg.activate(env; io = devnull)
-        isfile(manifest) ||
-            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
-        Pkg.instantiate(; io = devnull)
-    end
-    try
-        bootstrap()
-    catch err
-        # A Manifest.toml is a machine-local CACHE that can lag a Project.toml
-        # that has moved on and then contradict it; one that cannot instantiate
-        # has no value, so rebuild rather than fail the gate. `Pkg.develop` only
-        # writes the Manifest here — EarthSciAST is already in the Project's
-        # [deps], so the tracked Project.toml is not touched.
-        @warn "$(basename(env)) env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force = true)
-        bootstrap()
-    end
-end
+# Which environment depends on the ENGINE, so `--engine` is read straight off
+# ARGS before anything is loaded: the interpreter lane uses the pde_sim_adapter
+# project (EarthSciAST developed from ../.. + JSON3), the compiled lane
+# compiled_rhs_reactant_env (the same, plus Reactant).
+include(joinpath(@__DIR__, "adapter_support.jl"))
+const ENGINE = flag_value(ARGS, "--engine", "interpreter")
+activate_adapter_env(
+    joinpath(
+        @__DIR__, ENGINE == "compiled" ? "compiled_rhs_reactant_env" : "pde_sim_adapter"
+    )
+)
 
 using EarthSciAST
 using JSON3
 
 const BINDING = "julia"
 
-# API_SPEC §5.8's closed vocabulary. `--compiler` is REQUIRED: a stage names the
-# compiler it runs (CONFORMANCE_SPEC §5.44.5), so this adapter never falls back
-# to the library default. Defaulting it would put the stage back in the position
-# the rule exists to prevent — a change of the library's default silently
-# changing what this tier measures.
-const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
+# `--compiler` is REQUIRED: a stage names the compiler it runs (CONFORMANCE_SPEC
+# §5.44.5), so this adapter never falls back to the library default. Defaulting
+# it would put the stage back in the position the rule exists to prevent — a
+# change of the library's default silently changing what this tier measures.
+
+# The value after the flag at `args[i]`; a flag at the end of the line has none.
+_flag_value(args, i) =
+    i < length(args) ? args[i + 1] : error("$(PROGRAM_FILE): $(args[i]) needs a value")
 
 function parse_args(args)
     manifest = nothing
@@ -136,15 +110,15 @@ function parse_args(args)
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
-            manifest = args[i + 1]; i += 2
+            manifest = _flag_value(args, i); i += 2
         elseif args[i] == "--output"
-            output = args[i + 1]; i += 2
+            output = _flag_value(args, i); i += 2
         elseif args[i] == "--engine"
-            engine = args[i + 1]; i += 2
+            engine = _flag_value(args, i); i += 2
         elseif args[i] == "--compiler"
-            compiler = args[i + 1]; i += 2
+            compiler = _flag_value(args, i); i += 2
         else
-            i += 1
+            error("$(PROGRAM_FILE): unrecognised argument $(repr(args[i]))")
         end
     end
     manifest === nothing && error("--manifest is required")
@@ -152,18 +126,9 @@ function parse_args(args)
     compiler === nothing && error("--compiler is required")
     engine in ("interpreter", "compiled") ||
         error("--engine must be 'interpreter' or 'compiled', got '$engine'")
-    compiler in COMPILER_VOCABULARY ||
-        error(
-        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-            ", got '$compiler'"
-    )
+    check_compiler(compiler, EarthSciAST.COMPILER_VOCABULARY)
     return (manifest, output, engine, compiler)
 end
-
-# Strip a leading `Model.` namespace so element names compare across bindings
-# (`AtmColumn.T[1]` -> `T[1]`). An un-namespaced name has no dot and passes
-# through; the bracketed index part never contains one.
-_bare(name::AbstractString) = occursin('.', name) ? String(split(name, '.'; limit = 2)[2]) : String(name)
 
 # Manifest `path` is relative to the repository's `tests/` directory. Every
 # adapter and the runner resolve it the same way: walk up from the manifest to
@@ -191,22 +156,20 @@ end
 function bare_var_map(var_map)
     out = Dict{String, Int}()
     for (name, idx) in var_map
-        out[_bare(String(name))] = idx
+        out[bare_name(String(name))] = idx
     end
     return out
 end
 
-# Apply the fixture's `parameters` overrides to the built parameter object.
-# Phase 1 manifests use empty maps only; the override path is implemented rather
-# than stubbed so a phase-2 manifest that starts using it does not need the
-# adapters re-opened.
-function apply_parameters(p, overrides)
+# Apply the fixture's `parameters` overrides (keyed by the component's local
+# parameter names) to the built parameter object, whose names are qualified.
+function apply_parameters(p, model, overrides)
     (overrides === nothing || isempty(overrides)) && return p
     p === nothing && error("fixture declares parameter overrides but the model has no parameters")
     names = Symbol[]
     vals = Float64[]
     for (k, v) in pairs(overrides)
-        sym = Symbol(String(k))
+        sym = Symbol("$model.$(String(k))")
         haskey(p, sym) || error("parameter override '$(String(k))' is not a parameter of this model")
         push!(names, sym)
         push!(vals, Float64(v))
@@ -214,13 +177,40 @@ function apply_parameters(p, overrides)
     return merge(p, NamedTuple{Tuple(names)}(Tuple(vals)))
 end
 
-function fixture_rhs(fx, base, compiler)
-    path = joinpath(base, String(fx.path))
-    file = load_path(path)
-    f!, u0, p, _, var_map = EarthSciAST._build_evaluator(
-        file; model_name = String(fx.model),
-        compiler = Symbol(compiler)
+# The fixture's document reduced to the one model the manifest names: the tier
+# measures that component's right-hand side on its own, so the document's other
+# components and the couplings between them are dropped before the build
+# flattens it.
+function component_document(path, model)
+    doc = JSON3.read(read(path, String), Dict{String, Any})
+    models = doc["models"]
+    haskey(models, model) || error("$(path) declares no model '$model'")
+    doc["models"] = Dict{String, Any}(model => models[model])
+    delete!(doc, "reaction_systems")
+    delete!(doc, "coupling")
+    return doc
+end
+
+# The tier evaluates the right-hand side at its probe states, so the build is
+# given the first probe's state as its start: a state the fixture declares no
+# default for has none of its own, and a build refuses it without one
+# (esm-spec §11.4). Every probe writes its own state before it is evaluated.
+function probe_start(fx)
+    isempty(fx.rhs_probes) && return Dict{String, Float64}()
+    model = String(fx.model)
+    return Dict{String, Float64}(
+        "$model.$(String(k))" => Float64(v) for (k, v) in pairs(first(fx.rhs_probes).state)
     )
+end
+
+build_component(fx, base, compiler; kw...) = EarthSciAST.Internal.build(
+    component_document(joinpath(base, String(fx.path)), String(fx.model));
+    base_path = dirname(joinpath(base, String(fx.path))),
+    compiler = Symbol(compiler), initial_conditions = probe_start(fx), kw...
+)
+
+function fixture_rhs(fx, base, compiler)
+    f!, u0, p, _, var_map = build_component(fx, base, compiler)
     slot = bare_var_map(var_map)
 
     order = [String(s) for s in fx.state_order]
@@ -237,7 +227,7 @@ function fixture_rhs(fx, base, compiler)
             "evaluator's state vector has $(length(u0))"
     )
 
-    p_fx = apply_parameters(p, get(fx, :parameters, nothing))
+    p_fx = apply_parameters(p, String(fx.model), get(fx, :parameters, nothing))
 
     rhs = Dict{String, Any}()
     for pr in fx.rhs_probes
@@ -357,13 +347,7 @@ function fixture_rhs_compiled(fx, base, compiler)
     ext = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
     ext === nothing && error("the Reactant extension did not load")
 
-    path = joinpath(base, String(fx.path))
-    file = load_path(path)
-    fo, u0, p, _, var_map = EarthSciAST._build_evaluator(
-        file; model_name = String(fx.model),
-        form = :oop,
-        compiler = Symbol(compiler)
-    )
+    fo, u0, p, _, var_map = build_component(fx, base, compiler; form = :oop)
     slot = bare_var_map(var_map)
 
     order = [String(s) for s in fx.state_order]
@@ -380,7 +364,7 @@ function fixture_rhs_compiled(fx, base, compiler)
             "evaluator's state vector has $(length(u0))"
     )
 
-    p_fx = apply_parameters(p, get(fx, :parameters, nothing))
+    p_fx = apply_parameters(p, String(fx.model), get(fx, :parameters, nothing))
 
     d = ext.direct_rhs(fo; var_map = var_map, client = XLA_CLIENT[])
     p_dev = ext.direct_params(d, p_fx)
@@ -478,23 +462,23 @@ function main()
         try
             fixtures[id] = fixture_rhs_compiled(fx, base, compiler)
         catch err
+            o = outcome(err)
             if err isa EarthSciAST.DirectEmitError
                 fixtures[id] = Dict(
                     "status" => "refused",
-                    "rule" => err.rule,
-                    "reason" => string(err.construct, ": ", err.detail)
+                    "rule" => o.rule,
+                    "reason" => string(err.construct, ": ", o.detail)
                 )
-            elseif err isa EarthSciAST.TreeWalkError &&
-                    err.code == EarthSciAST.ERROR_CODES.COMPILER_REFUSED_RULE &&
-                    !isempty(err.rule)
+            elseif o.code == EarthSciAST.ERROR_CODES.COMPILER_REFUSED_RULE &&
+                    !isempty(o.rule)
                 # The out-of-place product refused a rule by name before any
                 # emission (a causal recurrence, for one): the same hard-error
                 # ruling, reached one step earlier. A refusal that names no
                 # rule falls through to the failure arm below.
                 fixtures[id] = Dict(
                     "status" => "refused",
-                    "rule" => err.rule,
-                    "reason" => err.detail
+                    "rule" => o.rule,
+                    "reason" => o.detail
                 )
             else
                 failed = true

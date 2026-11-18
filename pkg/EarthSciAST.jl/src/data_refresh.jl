@@ -1,65 +1,41 @@
-# Discrete-cadence loader refresh — the EarthSciAST-Julia consumer surface
-# (ess-14f.4, JL-J1). Plan: mayor-dir esio-consumer-julia-plan-2026-06-26.md §1.
+# Discrete-cadence loader refresh: the consumer surface for provider-fed
+# forcing buffers.
 #
-# The companion to the JL-J0 engine touch (`param_arrays` / `_NK_PARAM_GATHER`,
-# ess-14f.3). J0 made a forcing buffer readable LIVE by the RHS: a dense
-# `Array{Float64}` bound through `_build_evaluator(...; param_arrays=...)` is
-# captured BY REFERENCE, so an in-place `buf .= …` shows through to `f!` with
-# zero reallocation. J1 builds the thing that DOES that in-place write at the
-# right times: a `PresetTimeCallback` whose `affect!` pulls fresh native arrays
-# from a data Provider, regrids them, and writes them into the SAME buffer
-# objects — once per cadence boundary, never on the hot per-step path.
+# This file owns two seams whose implementations live outside EarthSciAST:
 #
-# Principle `[[library-exposes-rhs-not-solver]]`: EarthSciAST returns the *pieces*
-# (`build_refresh_callback -> (cb, tstops)`); the USER attaches them to their own
-# `ODEProblem`/`solve`. EarthSciAST ships no `solve`, no `ODEProblem`, no solver. The
-# callback constructor itself lives in a package extension gated on
-# `DiffEqCallbacks` + `SciMLBase` (see ext/EarthSciASTDataRefreshExt.jl)
-# so the base library never pulls a solver-adjacent stack into `[deps]`.
+#   1. the Provider protocol (`provider_refresh_times`, `provider_is_const`,
+#      `provider_sample` and the selection, gate and extent generics), which the
+#      EarthSciIO extension or a test mock implements;
+#   2. `RefreshBuffers`, the live forcing buffers: the same dense
+#      `Array{Float64}` objects passed as `esm_problem`'s `param_arrays`, written
+#      in place at each cadence boundary (`_write_forcing!`).
 #
-# This file (core) owns two decoupled seams; concrete implementations live
-# outside EarthSciAST, exactly like the GridAccessor / AbstractGrid traits:
-#
-#   1. the Provider protocol  — `provider_refresh_times` / `provider_is_const` /
-#      `provider_sample`. Satisfied by the EarthSciIO Julia Provider
-#      (esio-9nb.5) via a thin adapter, or by a mock in tests. EarthSciAST never
-#      imports EarthSciIO; it calls these generics, which the data binding fills in.
-#   2. `RefreshBuffers` — the registry of live forcing buffers, the SAME dense
-#      `Array{Float64}` objects passed to `build_evaluator`'s `param_arrays`.
-#      `affect!` writes the freshly sampled native forcing straight into them
-#      (`_write_forcing!`); any native→sim regrid is an in-model coupling
-#      expression the RHS evaluates, not a refresh-time transform (the obsolete
-#      `RegridApplier` seam was removed in v0.8.0).
+# `build_refresh_callback` returns the callback and its tstops; its method lives in
+# ext/EarthSciASTCallbacksExt.jl so the core pulls in no solver stack.
 
 """
-    RefreshError(msg)
+    RefreshError(msg, code = "")
 
 Thrown by the data-refresh surface: an unimplemented Provider
 protocol method, a buffer that is not a dense `Array{Float64}`, a
 shape/length mismatch at refresh time, or a call to
 [`build_refresh_callback`](@ref) before the `DiffEqCallbacks` / `SciMLBase`
-extension is loaded.
+extension is loaded. Fields: `code` (an [`ERROR_CODES`](@ref) value, or `""`)
+and `msg`.
 """
 struct RefreshError <: EarthSciASTError
+    code::String
     msg::String
+    RefreshError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
 end
-Base.showerror(io::IO, e::RefreshError) = print(io, "RefreshError: ", e.msg)
 
 # --------------------------------------------------------------------------- #
 # Provider protocol (consumer-side; concrete impls live in the data binding)
 # --------------------------------------------------------------------------- #
 #
-# A "provider" is any object that supplies a loader's native-grid arrays on the
-# solver time axis. EarthSciAST owns the contract (these three generics) and calls
-# them; the EarthSciIO Julia Provider satisfies it via an adapter, e.g.
-#
-#     EarthSciAST.provider_refresh_times(p::EarthSciIO.Provider) = EarthSciIO.refresh_times(p)
-#     EarthSciAST.provider_sample(p::EarthSciIO.Provider, t)     = EarthSciIO.refresh(p, t)
-#
-# (`provider_is_const` then comes free from the default below). The provider's
-# `refresh_times`/`refresh` already speak `Float64` seconds on the SAME axis as
-# the integrator's `t` (esio-9nb.5), so J1 needs no wall-clock↔seconds mapping:
-# the times ARE the tstops.
+# A provider supplies a loader's native-grid arrays on the solver time axis.
+# Its refresh times are `Float64` seconds on the integrator's `t` axis, so they
+# are the tstops directly.
 
 """
     provider_refresh_times(provider) -> AbstractVector{Float64}
@@ -73,7 +49,8 @@ function provider_refresh_times end
 provider_refresh_times(p) = throw(
     RefreshError(
         "provider_refresh_times not implemented for $(typeof(p)); the data binding " *
-            "(EarthSciIO) or a mock must add a method"
+            "(EarthSciIO) or a mock must add a method",
+        ERROR_CODES.PROVIDER_METHOD_MISSING
     )
 )
 
@@ -81,7 +58,7 @@ provider_refresh_times(p) = throw(
     provider_is_const(provider) -> Bool
 
 True if `provider`'s data is time-invariant (no cadence). CONST providers are
-materialized once into `const_arrays` at `build_evaluator` time and are absent
+materialized once into `const_arrays` at `_build_evaluator` time and are absent
 from the refresh callback. Defaults to "no refresh times"; a concrete impl may
 override (e.g. EarthSciIO's `is_const`).
 """
@@ -93,12 +70,9 @@ provider_is_const(p) = isempty(provider_refresh_times(p))
 
 True if `provider` can honour a per-call `selection` (projection pushdown) in
 [`provider_sample`](@ref) — i.e. it reads only the requested slice of the
-native array rather than the whole thing. Defaults to `false`; the data binding
-overrides it (the EarthSciIO extension bridges to `EarthSciIO.supports_selection`,
-true for a store-backed zarr provider, false for a whole-file reader). A caller
-that wants to push a `selection` down MUST gate on this: handing a `selection`
-to a provider that returns `false` is a clear error (the fall-back-to-full-then-
-slice path, if any, belongs to the build side, not to `provider_sample`).
+native array rather than the whole thing. Defaults to `false`; the EarthSciIO
+extension bridges it to `EarthSciIO.supports_selection`. A `selection` may be
+handed only to a provider for which this is `true`.
 """
 function provider_supports_selection end
 provider_supports_selection(::Any) = false
@@ -107,16 +81,13 @@ provider_supports_selection(::Any) = false
     provider_gate_spec(provider) -> Union{Nothing,AbstractDict}
 
 The projection-pushdown GATE for a deferred provider, or `nothing` (the default)
-for an ordinary provider. A non-`nothing` gate marks `provider` as GATED: the
-eager const-materialization loop in [`esm_problem`](@ref) SKIPS it (it is not pulled
-whole), and the build defers its fetch until value-invention has materialised the
-gating derived set's members — then pushes that set down as a per-axis
-`selection` ([`provider_sample`](@ref)) and fetches only the compact slab.
+for an ordinary provider. A gated provider is not sampled whole by
+[`esm_problem`](@ref): its fetch waits until value invention has materialized
+the gating derived set's members, which are then passed as a per-axis
+`selection` ([`provider_sample`](@ref)) so only the compact slab is read.
 
-The gate is `Dict("axes"=>[…], "applies_to"=>[names…])`, mirroring the `.esm`
-`data_sources.<name>.metadata.x_esd.gated_select` field (which the runner reads
-to construct the gated provider — `format`/gating live at provider creation, not
-in the 0.8.0 source schema). Each entry of `axes` is one per NATIVE array axis:
+The gate is `Dict("axes"=>[…], "applies_to"=>[names…])`, with one `axes` entry
+per native array axis:
 
   * `"all"`                       → the whole axis;
   * `Dict("fixed"=>[i])`          → native 0-based index `i`, DROPPED (length-1);
@@ -126,12 +97,9 @@ in the 0.8.0 source schema). Each entry of `axes` is one per NATIVE array axis:
   * `Dict("gated_by"=>"<set>")`   → the derived index set's materialised members
                                     (1-based), in the set's canonical order.
 
-This is ONE vocabulary with the loader `select` of esm-spec §8.9.2 — the
-spelling an author writes and the spelling `desugar_pushdown` generates are the
-same thing (CONFORMANCE_SPEC §5.5). Only `gated_by` defers.
-
-`applies_to` names the fetched variables to merge into `const_arrays`. Defaults
-to `nothing`; a mock or the EarthSciIO binding overrides it.
+This is the loader `select` vocabulary of esm-spec §8.9.2, which
+[`desugar_pushdown`](@ref) also generates. Only `gated_by` defers.
+`applies_to` names the fetched variables to merge into `const_arrays`.
 """
 function provider_gate_spec end
 provider_gate_spec(::Any) = nothing
@@ -142,19 +110,14 @@ provider_gate_spec(::Any) = nothing
 The metaparameter this provider's own EXTENT binds (esm-spec §8.9.4), or
 `nothing` (the default) for a provider whose size the document already knows.
 
-A source whose record count is not knowable until it is read — an FF10 point
-inventory, whose surviving-row count depends on its own `codes` map and
-`record_filter` — declares `extent: {"metaparameter": "N_REC"}` on its loader.
-[`esm_problem`](@ref) then samples such a provider ONCE, BEFORE it closes
-metaparameters at the loader API (esm-spec §9.7.6 binding site 3), and the
-length of the delivered record axis binds that metaparameter — so an index set
-declared `size: "N_REC"` is sized by the data instead of by a caller who counted
-the rows and passed the number in.
-
-Every provider naming the same metaparameter MUST agree on the count; that
-agreement is also the alignment check across one table's columns. A caller
-binding of the same metaparameter that CONTRADICTS the discovered value is an
-error rather than a silent preference for either (CONFORMANCE_SPEC §5.5).
+A source whose record count is known only once it is read (a filtered record
+table, say) declares `extent: {"metaparameter": "N_REC"}` on its loader.
+[`esm_problem`](@ref) samples such a provider once, before it closes
+metaparameters (esm-spec §9.7.6), and the length of the delivered record axis
+binds that metaparameter, so an index set declared `size: "N_REC"` is sized by
+the data. Every provider naming the same metaparameter must report the same
+count, and a caller binding that contradicts it is an error (CONFORMANCE_SPEC
+§5.5).
 """
 function provider_extent_metaparameter end
 provider_extent_metaparameter(::Any) = nothing
@@ -164,89 +127,62 @@ provider_extent_metaparameter(::Any) = nothing
                             substitutions=Dict(), window=nothing,
                             records_per_sample=Dict()) -> Dict{String,Any}
 
-Construct the data providers a document DECLARES: one provider per data-fed
-PARAMETER, drawn from a `data_sources.<name>` entry carrying a
+Construct the data providers a document declares: one provider per data-fed
+parameter, drawn from a `data_sources.<name>` entry carrying a
 `metadata.esio_format` ("zarr", "ff10", …). Each source is read by EarthSciIO's
 `provider_from_esm` (EarthSciIO spec/esm-sources.md §3): its `url_template` and
-`mirrors` are esm templates expanded at each file anchor, and a source with a
-`temporal` block is time-varying on a calendar cadence (`P1M` is a calendar
-month).
+`mirrors` are expanded at each file anchor, and a source with a `temporal` block
+is time-varying on a calendar cadence (`P1M` is a calendar month). `doc` is a raw
+document `Dict`, an `EsmFile`, or a path.
 
-Every provider runs on the MODEL clock (esm-spec §2.2.7). Its time origin — the
-UTC instant of model time 0 — is, first match wins, the document's
-`domain.temporal.reference_time`, else its `domain.temporal.start` (each when a
-non-empty string; one that cannot be read raises `time_origin_invalid`, as
-[`time_origin`](@ref) does), else the start of `window`, else the POSIX epoch.
-A sample at model time `t` reads the instant `origin + t`, and
-[`provider_refresh_times`](@ref) reports the source's anchors in model seconds
-(`unix - origin`). With no `window`, the document's `solver.time_span`
-(converted as [`resolve_time_span`](@ref) does, counted from that origin)
-supplies one; with neither, a time-varying provider is bounded only by its own
-`temporal.end`.
+The result is keyed `"<ModelPath>.<param>"`, the consuming parameter's flattened
+name (a source declares no variables of its own; a model reads a field by
+declaring a parameter whose `update` names the source, esm-spec §8.5). These are
+the `providers` keys [`esm_problem`](@ref) takes.
 
-A source declaring a `record_filter` or `codes` is a record table decoded once
-per record anchor and shared by its parameters. A declared `select` names the
-source's native per-record axes; for a parameter receiving two records the
-delivered array carries an extra leading record axis of length 2, which the select takes
-whole. A time-varying source never pushes its select to the reader (the file's
-record axis is not one the select names): it reports
-`provider_supports_selection == false`, and the select is applied after the
-record is sliced.
+Every provider runs on the model clock (esm-spec §2.2.7). Its time origin, the
+UTC instant of model time 0, is the first of: the document's
+`domain.temporal.reference_time`, its `domain.temporal.start` (each when a
+non-empty string; an unreadable one raises `time_origin_invalid`, as
+[`time_origin`](@ref) does), the start of `window`, the POSIX epoch. A sample at
+model time `t` reads the instant `origin + t`, and
+[`provider_refresh_times`](@ref) reports anchors in model seconds. With no
+`window`, the document's `solver.time_span` (as [`resolve_time_span`](@ref)
+reads it) supplies one; with neither, a time-varying provider is bounded only by
+its own `temporal.end`.
 
-Keyed `"<ModelPath>.<param>"` — the CONSUMING parameter's flattened name, not
-`"<Loader>.<var>"`. esm 1.0.0 moved the binding from the source to the consumer:
-a source declares no variables of its own, so there is no loader-side name left
-to key on; a model reads a field by declaring a parameter whose `update` names
-the source and binds a `file_variable` (esm-spec §8.5). These are exactly the
-`providers` keys [`esm_problem`](@ref) consumes (and, with `pushdown_rewrite=true`,
-gates from the rewrite record). `doc` is a raw document `Dict`, an `EsmFile`, or
-a path.
+A source declaring a `record_filter` or `codes` is a record table decoded once per
+record anchor and shared by its parameters. A declared `select` names the
+source's native per-record axes; a time-varying source applies it after slicing
+the record and reports `provider_supports_selection == false`.
 
 Keywords:
-  * `cache_root` — filesystem root for the download cache (per-loader subdir).
-  * `loaders` — restrict to these loader names (`nothing` = every loader with
-    an `esio_format`). Lets a runner exclude a loader whose format the reader
-    stack cannot construct yet (the FF10-in-zip EGU case until Phase 2) and
-    slot it in later without an API change.
-  * `url_overrides` — loader name ⇒ URL template, replacing `source.url_template`
-    and its mirrors (e.g. a local mirror of a live store). An entry is honoured
-    whatever its value, so an empty one is an error.
+  * `cache_root` — root of the download cache (one subdirectory per loader).
+  * `loaders` — restrict to these loader names (`nothing` = every loader with an
+    `esio_format`).
+  * `url_overrides` — loader name ⇒ URL template, replacing `url_template` and
+    its mirrors. An empty entry is an error.
   * `substitutions` — loader name ⇒ `Dict(placeholder => value)`, binding the
-    custom `{name}` placeholders a mount's `url_substitutions` left (reseact's
-    NEI 2016 `{sector}`). An unbound one is an error, not a fetch.
-  * `window` — the run's `(start, stop)`: a 2-tuple whose entries are each a
-    `DateTime` (read as UTC) or a real number of Unix seconds, bounding each
-    time-varying provider's `provider_refresh_times`. Anything else is an
-    `ArgumentError`.
-  * `records_per_sample` — consuming parameter key ⇒ 1 or 2, a run-time
-    restatement of the document, not an override. How many records a parameter
-    receives is said by its record shape (esm-spec §8.5.1): two when its
-    declared `shape` (else the declared shape of its `param_to_var` targets in
-    the document's `coupling`) begins with an `interval` index set carrying
-    `"records": true`, else one. An entry equal to that count is accepted; a
-    different one is refused, because it would change the rank of the delivered
-    array away from the declared shape validation approved — change the shape
-    in the document instead. The deprecated `update.from.records_per_sample` /
-    `temporal.records_per_sample`, when written, must agree with the shape too
-    (and stand in for it only where the raw document cannot show the record
-    shape, e.g. a target that only a `coupling_import` brings). Every value, in
-    the document or here, must be the number 1 or 2 (`2.0` is 2; `1.5`, `"2"`
-    and `true` are refused). With 2 the provider returns the record at or
-    before `t` and the next one, stacked along the first dimension (the
-    two-record bracket a model interpolates between); 2 is refused on a source
-    with no `temporal.start` (it is time-invariant) and on one served as a
-    filtered or coded record table. Each consuming parameter has its own
-    provider, so two parameters may read one source with different values.
+    custom `{name}` placeholders a mount's `url_substitutions` left. An unbound
+    placeholder is an error.
+  * `window` — the run's `(start, stop)`, each a `DateTime` (UTC) or a finite
+    number of Unix seconds, bounding each time-varying provider's refresh times.
+    Anything else is an `ArgumentError`.
+  * `records_per_sample` — consuming parameter key ⇒ 1 or 2. The count is fixed
+    by the parameter's record shape (esm-spec §8.5.1): two when its declared
+    `shape` (else that of its `param_to_var` targets) begins with an `interval`
+    index set carrying `"records": true`, else one. An entry must equal that
+    count. The deprecated `update.from.records_per_sample` /
+    `temporal.records_per_sample` must agree with it too, and stand in for it
+    only where the raw document cannot show the record shape (a target brought
+    by a `coupling_import`). Every value must be the number 1 or 2 (`2.0` is 2;
+    `1.5`, `"2"` and `true` are refused). With 2 the provider returns the record
+    at or before `t` and the next one, stacked along the first dimension; 2 is
+    refused on a time-invariant source and on a record table.
 
-Implemented by the EarthSciIO extension — load `EarthSciIO` alongside
-EarthSciAST so the `EarthSciASTEarthSciIOExt` extension defines the method
-(without it the call is a `MethodError`; this generic deliberately carries no
-fallback so the extension's method is an addition, not an overwrite). The
-construction is format-agnostic: `esio_format` goes straight to EarthSciIO,
-whose format registry decides what is readable. Selection capability
-(projection pushdown) is the provider's own (`provider_supports_selection`), so
-a const zarr-store loader produced here is directly compatible with the
-gated-deferral path.
+Implemented by the `EarthSciASTEarthSciIOExt` extension: load `EarthSciIO`
+alongside EarthSciAST, or the call is a `MethodError`. `esio_format` goes
+straight to EarthSciIO, whose format registry decides what is readable.
 """
 function providers_from_document end
 
@@ -264,43 +200,36 @@ provider_is_gated(p) = provider_gate_spec(p) !== nothing
     provider_sample(provider, t::Real; selection=nothing) -> sample
 
 The native-grid data for `provider` at cadence tick `t` (solver seconds). The
-return value is opaque to EarthSciAST — it is handed straight to the forcing-write seam
-(`_write_forcing!`), which extracts a named variable from it.
-For the EarthSciIO provider this is `refresh(p, t)` returning a `NativeDataset`;
-for a mock it can be any per-variable container (e.g. a `Dict{String,Vector}`).
+return value is an `AbstractDict` keyed by variable name, a bare `AbstractArray`
+or a `Real` (a single-variable sample); see [`forcing_from_sample`](@ref).
 
-`selection` is an optional, provider-NEUTRAL per-axis projection pushdown: one
-positional entry per NATIVE axis of the gated array(s). `selection===nothing`
-(the default) samples the whole array — identical to the pre-pushdown behaviour,
-so every existing 2-arg caller is unchanged. When supplied each entry is:
+`selection` is an optional per-axis projection pushdown: one positional entry
+per native axis of the gated array(s). `nothing` (the default) samples the whole
+array. Otherwise each entry is:
 
   * `Colon()`                         → the whole axis;
   * an `Integer i` (1-BASED)          → the single fixed index `i`;
   * an `AbstractVector{<:Integer}` (1-BASED) → that ordered list of indices.
 
-The binding translates this to its native selection (the EarthSciIO extension
-maps 1-based → 0-based and calls the zarr reader's `select`), fetching ONLY the
-intersecting data. The gated axis of the returned array is ordered EXACTLY as the
-index vector (a permuted list yields permuted rows — order is load-bearing, not
-sorted). A `selection` may only be given to a provider whose
+The provider reads only the selected data. The gated axis of the returned array
+is ordered exactly as the index vector (a permuted list yields permuted rows). A
+`selection` may only be given to a provider whose
 [`provider_supports_selection`](@ref) is `true`; otherwise the binding errors.
 """
 function provider_sample end
 provider_sample(p, ::Real; selection = nothing) = throw(
     RefreshError(
         "provider_sample not implemented for $(typeof(p)); the data binding " *
-            "(EarthSciIO) or a mock must add a method"
+            "(EarthSciIO) or a mock must add a method",
+        ERROR_CODES.PROVIDER_METHOD_MISSING
     )
 )
 
 # --------------------------------------------------------------------------- #
-# Forcing-write seam — pull a freshly sampled field out of a provider sample and
-# write it into the live buffer IN PLACE. There is NO native→sim regrid here:
-# regridding is an ordinary in-model coupling expression over the native forcing
-# (the obsolete `RegridApplier` seam was removed in v0.8.0). The buffer aliases
-# the `param_arrays` storage the RHS reads live, so the write MUST mutate in
-# place (`copyto!`), never rebind — a fresh allocation would silently detach the
-# refresh from `f!`.
+# Forcing-write seam: a freshly sampled field written into its live buffer in
+# place. The buffer aliases the `param_arrays` storage the right-hand side reads,
+# so the write mutates it (`copyto!`) and never rebinds it. Regridding is an
+# in-model coupling expression, not part of the write.
 # --------------------------------------------------------------------------- #
 
 # Pull the field for `var` out of an opaque provider sample: an `AbstractDict`
@@ -308,7 +237,8 @@ provider_sample(p, ::Real; selection = nothing) = throw(
 _sample_field(sample::AbstractDict, var::AbstractString) = begin
     haskey(sample, var) || throw(
         RefreshError(
-            "provider sample has no variable '$var' (present: $(collect(keys(sample))))"
+            "provider sample has no variable '$var' (present: $(collect(keys(sample))))",
+            ERROR_CODES.UNDEFINED_VARIABLE
         )
     )
     sample[var]
@@ -318,7 +248,8 @@ _sample_field(sample::Real, ::AbstractString) = sample
 _sample_field(sample, var::AbstractString) = throw(
     RefreshError(
         "cannot extract '$var' from a provider sample of type $(typeof(sample)); " *
-            "supply an AbstractDict (var => field), a bare AbstractArray or a number"
+            "supply an AbstractDict (var => field), a bare AbstractArray or a number",
+        ERROR_CODES.INVALID_ARGUMENT
     )
 )
 
@@ -392,12 +323,8 @@ end
     _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample) -> buffer
 
 Write the freshly sampled `var` field (from a [`provider_sample`](@ref) result)
-into `buffer` IN PLACE and return it. The native field lands directly in the
-buffer — any regrid onto the sim grid is an in-model coupling expression the RHS
-evaluates downstream, not a refresh-time transform. The copy is
-column-major-linear, matching the `_NK_PARAM_GATHER` linearization; it
-mutates `buffer` (never rebinds), since the buffer aliases the `param_arrays`
-storage the RHS gathers live.
+into `buffer` in place (column-major linear copy) and return it. `buffer` aliases
+the `param_arrays` storage the right-hand side reads, so it is never rebound.
 """
 function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
     field = _sample_field(sample, var)
@@ -409,18 +336,57 @@ function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
             "forcing '$var': the provider field has size $(size(field)) but the buffer " *
                 "has size $(size(buffer)); the provider must deliver the native forcing on the " *
                 "buffer's grid, in the same dimension order (regridding is an in-model " *
-                "coupling, not a refresh-time transform)"
+                "coupling, not a refresh-time transform)",
+            ERROR_CODES.ARRAY_SHAPE_MISMATCH
         )
     )
     field isa Real ? (buffer[] = Float64(field)) : copyto!(buffer, field)
-    # The buffer just changed in place under the RHS's live gathers — invalidate the
-    # memoized time-cadence prelude slots (B3, tree_walk/const_tier.jl). A refresh
-    # callback fires AT its tstop, so the next RHS call may be at a `t` the t-tier
-    # stamp already holds; the epoch bump is what makes the refresh visible then.
-    # Only the builds that read this buffer are invalidated (cadence_stamp.jl).
-    _bump_buffer_epochs!(buffer)
     return buffer
 end
+
+"""
+    notify_forcing_refresh!(prob::EsmProblem)
+    notify_forcing_refresh!(prob::EsmProblem, name::AbstractString)
+    notify_forcing_refresh!(dm::DiscreteMaterializer)
+
+Announce that the contents of a live forcing buffer (a `param_arrays` buffer
+bound into the build) were mutated in place. The announcement goes to the
+buffer's owner: the Problem whose build reads it, or the
+[`DiscreteMaterializer`](@ref) that build filled (the same build's epoch). Two
+kinds of build product are derived from such a buffer, and both are brought up
+to the new contents by the owner's next in-place `f!` call (or
+[`observed_field`](@ref) read):
+
+* the memoized time-cadence prelude values that gather it, which `f!` refills
+  on the next call at a `t` it has already been called at (a later `t`
+  re-evaluates them anyway), and
+* every discrete-cadence cache ([`DiscreteMaterializer`](@ref)) of the build,
+  which `f!` refills on its next call at ANY `t`. Nothing but this
+  announcement (or a change of `p`) refills them, so a forcing write that is
+  not announced leaves `f!` reading derived fields built from the old forcing,
+  whatever `t` it is next called at.
+
+With `name`, the buffer must be one of `prob`'s live forcing buffers (a key of
+its `param_arrays` as the caller spelled it, or a discrete provider's
+variable); an unknown name raises `ArgumentError`. One build has one epoch, so
+both forms refill the same values. Builds of other Problems that alias the same
+array are not reached: announce the write to each owner.
+
+The problem's own refresh callback announces its writes itself, as does a
+[`build_refresh_callback`](@ref) given the problem as `owner`. Code that writes a
+forcing buffer directly (a hand-rolled callback doing `buf .= …`) calls this
+after every such write. A reader of [`forcing_buffers`](@ref) gets no refill
+from `f!`; it calls the [`DiscreteMaterializer`](@ref)'s `refresh!()` after the
+announcement.
+
+A spurious call gives no wrong number, but the next `f!` re-runs its
+time-cadence slots and its whole discrete-cadence stack. The refill happens
+inside `f!`, so one build's `f!` must still not be called from several threads
+at once.
+"""
+function notify_forcing_refresh! end
+
+notify_forcing_refresh!(dm::DiscreteMaterializer) = _bump_epoch!(dm.epoch)
 
 # --------------------------------------------------------------------------- #
 # RefreshBuffers — the live forcing buffers (the SAME objects as param_arrays)
@@ -430,15 +396,12 @@ end
     RefreshBuffers(buffers::AbstractDict)
     RefreshBuffers(pairs::Pair...)
 
-Registry mapping a forcing variable name to its live buffer — the dense
-`Array{Float64}` bound BY REFERENCE through
-`esm_problem(input, tspan; param_arrays = …)` (ess-14f.3). The refresh callback's
-`affect!` writes the freshly sampled forcing into these exact objects in place, so the RHS
-(which gathers the same aliased storage via `_NK_PARAM_GATHER`) sees the update
-on its next evaluation.
-
-Each value MUST be a dense `Array{Float64}`, matching the `param_arrays`
-invariant — pass the SAME dictionary you gave `param_arrays` (or its values) so
+Registry mapping a forcing variable name to its live buffer: the dense
+`Array{Float64}` bound by reference through
+`esm_problem(input, tspan; param_arrays = …)`. The refresh callback writes the
+sampled forcing into these objects in place, so the right-hand side sees it on
+its next evaluation. Each value must be a dense `Array{Float64}`
+(`RefreshError` otherwise); pass the same dictionary you gave `param_arrays` so
 the buffers are shared, not copied:
 
 ```julia
@@ -459,7 +422,8 @@ function RefreshBuffers(d::AbstractDict)
             RefreshError(
                 "RefreshBuffers['$k_str'] must be a dense Array{Float64} (the SAME object " *
                     "bound to `esm_problem`'s `param_arrays`, captured by reference for live " *
-                    "refresh), got $(typeof(v))"
+                    "refresh), got $(typeof(v))",
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
         out[k_str] = v
@@ -479,24 +443,22 @@ Base.length(b::RefreshBuffers) = length(b.buffers)
 # --------------------------------------------------------------------------- #
 
 """
-    build_refresh_callback(; providers, buffers,
+    build_refresh_callback(; providers, buffers, owner,
                            post_refresh = () -> nothing)
         -> (cb, tstops::Vector{Float64})
 
-Build the discrete-cadence loader-refresh callback and its tstops, WITHOUT
-embedding a solver (`[[library-exposes-rhs-not-solver]]`). The callback is a
-pure function of the `providers` and `buffers` registries — it never reads the
-model (the forcing names and cadences live entirely in those two arguments).
+Build the discrete-cadence loader-refresh callback and its tstops. The callback
+reads only the `providers` and `buffers` registries, never the model.
 `esm_problem(…; providers)` composes it for a document's own discrete providers;
-a caller who binds forcing buffers through `param_arrays` instead attaches it
-to the run:
+a caller who binds forcing buffers through `param_arrays` attaches it to the run:
 
 ```julia
 forcing = Dict("wind" => zeros(nx, ny))
 prob = esm_problem(doc, tspan; param_arrays = forcing, …)
 cb, tstops = build_refresh_callback(;
     providers = Dict("wind" => wind_provider),   # var name => data Provider
-    buffers   = RefreshBuffers(forcing))         # same array objects as param_arrays
+    buffers   = RefreshBuffers(forcing),         # same array objects as param_arrays
+    owner     = prob)                            # the build that reads them
 sol = solve(prob, Tsit5(); callback = cb, tstops = tstops)
 ```
 
@@ -504,29 +466,27 @@ sol = solve(prob, Tsit5(); callback = cb, tstops = tstops)
 [`provider_refresh_times`](@ref) / [`provider_is_const`](@ref) /
 [`provider_sample`](@ref) protocol). Several variables may share one provider
 object; it is then sampled once per cadence boundary. The provider delivers the
-native forcing on the buffer's grid; any native→sim regrid is an ordinary
-in-model coupling expression the RHS evaluates, not a refresh-time transform.
+forcing on the buffer's grid.
 
-* **DISCRETE** providers (non-empty `provider_refresh_times`) are refreshed at
-  each anchor: `affect!` samples and writes the buffer in place, then
-  calls `u_modified!(integrator, true)`. The forcing lives in `p`, so changing it
-  changes `f(u, p, t)` even though `u` is untouched; `true` forces an FSAL
-  integrator (Tsit5, …) to recompute its cached derivative from the refreshed
-  buffer instead of reusing the stale pre-refresh one for a stage. It does NOT
-  reset `u` or the trajectory — only the derivative cache. Dependent/observed
-  variables need no separate refresh — they are RHS expressions over the buffers,
-  so they recompute automatically on the next step.
-* **CONST** providers ([`provider_is_const`](@ref)) are materialized once into
-  `const_arrays` at build time; they contribute no tstops and are
+* Discrete providers (non-empty `provider_refresh_times`) are refreshed at each
+  anchor: `affect!` samples and writes the buffer in place, then calls
+  `u_modified!(integrator, true)` so an FSAL integrator recomputes its cached
+  derivative from the new forcing (`u` itself is untouched).
+* Const providers ([`provider_is_const`](@ref)) contribute no tstops and are
   absent from the callback.
 
-`post_refresh` is a `() -> nothing` hook the `affect!` calls at each boundary
-AFTER the raw forcing buffers are refreshed and BEFORE `u_modified!` — the
-discrete-cadence materialization seam (the middle phase of the `const ⊏ discrete
-⊏ continuous` cadence partition). [`esm_problem`](@ref) wires it to the
-[`DiscreteMaterializer`](@ref)'s `materialize!` so a state-free derived field (a
-regrid→physics stack over the forcing) is recomputed once per boundary into its
-cache buffer instead of on every continuous step. Defaults to a no-op.
+`owner` is the build that reads `buffers` (the Problem, or the
+[`DiscreteMaterializer`](@ref) its build filled); `affect!` announces each
+boundary's writes to it with [`notify_forcing_refresh!`](@ref) so its memoized
+values refill. With `owner = nothing` nothing is announced, and a value
+memoized from the old forcing stays until `t` moves (time-cadence values) or for
+good (discrete caches).
+
+`post_refresh` is a `() -> nothing` hook `affect!` calls at each boundary after
+the buffers are refreshed and announced and before `u_modified!`.
+[`esm_problem`](@ref) wires it to the [`DiscreteMaterializer`](@ref)'s
+`materialize!`, so a state-free derived field is recomputed once per boundary.
+Defaults to a no-op.
 
 `cb` is a `PresetTimeCallback`; `tstops` is the sorted, de-duplicated union of
 the DISCRETE providers' refresh times. Returns an empty-tstops no-op callback
@@ -543,39 +503,35 @@ build_refresh_callback(args...; kwargs...) = throw(
     RefreshError(
         "build_refresh_callback requires the DiffEqCallbacks + SciMLBase extension; " *
             "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
-            "EarthSciASTDataRefreshExt is active"
+            "EarthSciASTCallbacksExt is active",
+        ERROR_CODES.EXTENSION_UNAVAILABLE
     )
 )
 
 # --------------------------------------------------------------------------- #
-# sync_forcing! — mirror refreshed host buffers into a compiled RHS's argument
-# arrays (the B2 hook for the XLA/Reactant tier)
+# sync_forcing! — mirror refreshed host buffers into a compiled right-hand
+# side's argument arrays
 # --------------------------------------------------------------------------- #
 
 """
     sync_forcing!(dest::NamedTuple, src::NamedTuple) -> dest
 
 Copy every live forcing buffer in `src` into the same-named array of `dest`, in
-place (`copyto!` element copy — `dest`'s arrays are never rebound). The refresh
-hook for a compiled out-of-place RHS: when the RHS was `@compile`d through the
-explicit-buffers form (`direct_rhs_with_buffers`, in the Reactant extension)
-with device arrays (`Reactant.ConcreteRArray`s) as its buffers argument, those
-arrays are real XLA inputs, and a `copyto!` into them between calls IS seen by
-the already-compiled program — so mirroring the freshly refreshed host buffers
-into them at each cadence boundary keeps the compiled forcing live, with no
-retrace and no reallocation.
+place (`copyto!`; `dest`'s arrays are never rebound). When a right-hand side
+was compiled through `direct_rhs_with_buffers` (Reactant extension) with device
+arrays as its buffers argument, a `copyto!` into those arrays is seen by the
+compiled program, so mirroring the refreshed host buffers into them at each
+cadence boundary keeps the compiled forcing live without a retrace.
 
-Wire it through [`build_refresh_callback`](@ref)'s `post_refresh` hook, which
-runs at each cadence boundary AFTER the host buffers are refreshed (and after
-the [`DiscreteMaterializer`](@ref) caches are refilled, when `post_refresh`
-chains `materialize!` first):
+Wire it through [`build_refresh_callback`](@ref)'s `post_refresh` hook (after
+`materialize!`, when that is chained first):
 
 ```julia
 prob = esm_problem(doc, tspan; param_arrays = forcing)
 host = forcing_buffers(prob)                # aliased host buffers, stable order
 dev  = map(Reactant.ConcreteRArray, host)   # the compiled program's inputs
 cb, tstops = build_refresh_callback(;
-    providers, buffers = RefreshBuffers(forcing),
+    providers, buffers = RefreshBuffers(forcing), owner = prob,
     post_refresh = () -> sync_forcing!(dev, host))
 ```
 
@@ -584,23 +540,18 @@ A forcing write made outside that callback and announced with
 refills them, so call the [`DiscreteMaterializer`](@ref)'s `refresh!()` before
 `sync_forcing!` copies them.
 
-`src` is normally [`forcing_buffers`](@ref)`(prob)`; any NamedTuple pair works
-as long as every key of `src` is present in `dest` and shapes/lengths agree
-(`copyto!` enforces length). Missing keys throw [`RefreshError`](@ref).
-
-THE COMPILED SIDE OF THIS IS NOT WIRED TO `esm_problem` YET, which is why the
-snippet above stops at the buffers: `esm_problem(…; compiler = :xla)` REFUSES a
-document that binds live forcing, by name, rather than bake the build-time
-values into the program as constants. Composing that refresh — this
-`post_refresh` hook, chained after the [`DiscreteMaterializer`](@ref) fill — is
-what the refusal is waiting on.
+`src` is normally [`forcing_buffers`](@ref)`(prob)`; every key of `src` must be
+in `dest` (else [`RefreshError`](@ref)) and lengths must agree (`copyto!`
+enforces it). `esm_problem(…; compiler = :xla)` does not do this wiring: it
+refuses a document that binds live forcing.
 """
 function sync_forcing!(dest::NamedTuple, src::NamedTuple)
     for k in keys(src)
         haskey(dest, k) || throw(
             RefreshError(
                 "sync_forcing!: destination has no buffer '$k' (present: " *
-                    "$(collect(keys(dest)))); dest must be aligned with forcing_buffers(f)"
+                    "$(collect(keys(dest)))); dest must be aligned with forcing_buffers(f)",
+                ERROR_CODES.UNDEFINED_VARIABLE
             )
         )
         copyto!(getfield(dest, k), getfield(src, k))

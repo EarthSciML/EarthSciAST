@@ -1,5 +1,5 @@
 # The PARAMETER PARTITION — which parameters may be overridden at SOLVE time,
-# and which are a rebuild (differentiability plan §3 Phase 5).
+# and which are a rebuild.
 #
 # Every one of these is spelled `"type": "parameter"` in the document, so the
 # declared type is NOT the discriminator; WHERE THE VALUE IS CONSUMED is. Four
@@ -20,7 +20,7 @@
 #   :forcing      — bound to a live buffer a discrete provider rewrites.
 #
 # The classification is a record of what the build actually READ (the
-# `_PARAM_READS` seam), not a second static reading of the document — so the
+# `_record_param_read` seam), not a second static reading of the document — so the
 # test that matters most is the one below where the SAME parameter name is
 # structural in one document and numeric in another, differing only in whether
 # an `ic()` equation reads it.
@@ -34,9 +34,6 @@ const ESM_PC = EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
 
-_pc_D(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_pc_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
-_pc_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
 _pc_param(v; shape = nothing) = shape === nothing ?
     Dict{String, Any}("type" => "parameter", "default" => v) :
     Dict{String, Any}("type" => "parameter", "default" => v, "shape" => shape)
@@ -51,13 +48,13 @@ _pc_param(v; shape = nothing) = shape === nothing ?
 function _pc_doc(; fold_ic::Bool = true)
     eqs = Any[
         Dict{String, Any}(
-            "lhs" => _pc_D("y"),
-            "rhs" => _pc_o("*", "k", _pc_o("*", _pc_ix("dat", 1.0), _pc_ix("buf", 1.0)))
+            "lhs" => jD("y"),
+            "rhs" => jop("*", "k", jop("*", jidx("dat", 1.0), jidx("buf", 1.0)))
         ),
     ]
     fold_ic && push!(
         eqs, Dict{String, Any}(
-            "lhs" => _pc_o("ic", "y"), "rhs" => _pc_o("*", "y0", 2.0)
+            "lhs" => jop("ic", "y"), "rhs" => jop("*", "y0", 2.0)
         )
     )
     return Dict{String, Any}(
@@ -80,24 +77,21 @@ function _pc_doc(; fold_ic::Bool = true)
     )
 end
 
-# Both spellings: `EarthSciAST._build_evaluator(::Dict)` builds the document as authored (bare
-# names), while `esm_problem` FLATTENS first (`M.dat`). Same arrays either way.
-_pc_const() = Dict{String, Any}("dat" => [2.0, 0.0], "M.dat" => [2.0, 0.0])
-_pc_param_arrays() = Dict{String, Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0])
+# Every build flattens first, so the arrays are keyed by the qualified names.
+_pc_const() = Dict{String, Any}("M.dat" => [2.0, 0.0])
+_pc_param_arrays() = Dict{String, Any}("M.buf" => [5.0, 0.0])
 
 @testset "parameter classes" begin
     @testset "the four classes, derived from what the build read" begin
-        insp = BuildInspection()
-        f!, u0, p, _t, vm = ESM_PC._build_evaluator(
+        f!, u0, p, _t, vm, rep = ESM_PC.Internal.build(
             _pc_doc();
-            const_arrays = _pc_const(), param_arrays = _pc_param_arrays(),
-            inspect = insp
+            const_arrays = _pc_const(), param_arrays = _pc_param_arrays()
         )
-        cls = parameter_classes(insp)
-        @test cls["k"] === :numeric
-        @test cls["y0"] === :structural       # read by the ic() fold
-        @test cls["dat"] === :const_folded
-        @test cls["buf"] === :forcing
+        cls = rep.products.param_classes
+        @test cls["M.k"] === :numeric
+        @test cls["M.y0"] === :structural       # read by the ic() fold
+        @test cls["M.dat"] === :const_folded
+        @test cls["M.buf"] === :forcing
         # Every `:numeric` parameter is a slot of `p` — but NOT conversely: a
         # STRUCTURAL scalar still occupies its `p` slot (the RHS may read it at
         # runtime too), which is exactly why the class cannot be read off `p`.
@@ -105,27 +99,28 @@ _pc_param_arrays() = Dict{String, Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0
         # the value elsewhere, and the two would then disagree.
         pm = param_map(p)
         @test all(haskey(pm, n) for (n, c) in cls if c === :numeric)
-        @test haskey(pm, "y0") && cls["y0"] === :structural
+        @test haskey(pm, "M.y0") && cls["M.y0"] === :structural
         @test sort(collect(keys(pm))) ==
             sort([n for (n, c) in cls if c === :numeric || c === :structural])
         # The structural read actually happened: u0 = 2*y0.
-        @test u0[vm["y"]] ≈ 6.0
+        @test u0[vm["M.y"]] ≈ 6.0
     end
 
     @testset "the class follows CONSUMPTION, not the declared type" begin
         # Same variable, same declaration, one document with the `ic()` equation
         # and one without. Declared type cannot tell them apart; the build can.
+        # Read through the public record, one per build.
         i1 = BuildInspection(); i2 = BuildInspection()
-        ESM_PC._build_evaluator(
-            _pc_doc(fold_ic = true);
+        ESM_PC.esm_problem(
+            _pc_doc(fold_ic = true), (0.0, 1.0);
             const_arrays = _pc_const(), param_arrays = _pc_param_arrays(), inspect = i1
         )
-        ESM_PC._build_evaluator(
-            _pc_doc(fold_ic = false);
+        ESM_PC.esm_problem(
+            _pc_doc(fold_ic = false), (0.0, 1.0);
             const_arrays = _pc_const(), param_arrays = _pc_param_arrays(), inspect = i2
         )
-        @test parameter_classes(i1)["y0"] === :structural
-        @test parameter_classes(i2)["y0"] === :numeric
+        @test parameter_classes(i1)["M.y0"] === :structural
+        @test parameter_classes(i2)["M.y0"] === :numeric
     end
 
     @testset "the problem carries the partition" begin

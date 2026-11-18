@@ -11,12 +11,14 @@ loops without it.
 module STypst
 
 using ..DJson
+using ..DLimits: refused_at!
 import ..DMath
 import ..DTypstDict
 using ..MExpr: Sym, jwf, name_ok
 using ..DStrings: bare_key, is_ident, parse_quoted, quote_str, read_ident
 using ..SSkeleton
 using ..SItems
+using ..SItems: Seg, SegItem, SegProse, is_block, render_segs
 using ..SReaction: RSurf, after, id_char, id_ok, p_piece, p_side, side_ok, side_txt
 using ..SText: after_s, blank, has_sub, pre_s, split_line, string_of, take_while, sdrop
 
@@ -461,16 +463,6 @@ function item_t(it::RItem)
     return out
 end
 
-"""`Typ.eqnLabeled`: a display equation with a label after it."""
-function eqn_labeled(raw::AbstractString, label)
-    out = collect(Char, O_EQ)
-    append!(out, raw)
-    push!(out, ' ', '$')
-    append!(out, label)
-    push!(out, '\n')
-    return out
-end
-
 """`Typ.labelOK`: nothing, or `<id>`, with spaces around."""
 function label_ok(sl::Chars)
     _, t = take_while(sl, c -> c == ' ')
@@ -667,13 +659,13 @@ function lex(bol::Bool, s::Chars)
         c = s[1]
         if bol && block_open(s)
             x = block_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the block", s)
             push!(out, x[1])
             s = x[2]
             bol = true
         elseif decl_open(s)
             x = decl_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the declaration", s)
             push!(out, x[1])
             s = x[2]
             bol = false
@@ -703,36 +695,8 @@ rxn_ok(x::Rxn) =
 """`Typ.declOK`."""
 decl_ok(d::Decl) = name_ok(d.name) && !('$' in name_typ(d.name)) && all(arg_ok, d.attrs)
 
-"""`Typ.Seg`: a piece of a Typst document: a construct, a labelled equation or
-prose."""
-abstract type Seg end
-struct SegItem <: Seg
-    it::RItem
-end
-struct SegLabeled <: Seg
-    raw::String
-    label::Vector{Char}
-end
-struct SegProse <: Seg
-    p::Vector{Char}
-end
-
-"""`Typ.segText`."""
-seg_text(s::SegItem) = item_t(s.it)
-seg_text(s::SegLabeled) = eqn_labeled(s.raw, s.label)
-seg_text(s::SegProse) = s.p
-
 """`Typ.render`."""
-function render(segs)
-    out = Char[]
-    for s in segs
-        append!(out, seg_text(s))
-    end
-    return out
-end
-
-"""`Typ.isBlock`."""
-is_block(it::RItem) = it isa RDecl ? it.d.kind == D_SUB : true
+render(segs) = render_segs(item_t, segs)
 
 """`Typ.itemOK`: what each construct's content must satisfy for its text to
 read back."""

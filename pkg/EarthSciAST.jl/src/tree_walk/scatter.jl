@@ -40,7 +40,7 @@
 #
 # A RAGGED range whose parent is another contracted index (`{from: <ragged>,
 # of: [r]}`, `r` contracted) makes the box a nest, parent outer, not a product
-# (`_contract_nest`, resolve.jl). Both forms walk that nest in its own order:
+# (`_contract_nest`, aggregate_expand.jl). Both forms walk that nest in its own order:
 # the static form while it builds the table, the run-time form over a point
 # list the build walks once (only when no range reads an output index, so one
 # list serves every chunk).
@@ -50,17 +50,11 @@
 # bound reads an output index, or a term or key that does not resolve with its
 # indices symbolic.
 
-# The kernels a shifted scatter's pieces compiled to, held out of the kernel
-# class merge (`_merge_acc_kernel_classes`). One set per build, in the
-# building task's local storage for the length of the build
-# (`_with_scatter_keep`), so the set dies with the build and two builds on two
-# tasks never see each other's. Outside a build there is no set and nothing is
-# held out.
-const _SCATTER_KEEP_KEY = :earthsci_scatter_keep
-
-_scatter_keep_now()::Union{Nothing, IdDict{Any, Nothing}} =
-    get(task_local_storage(), _SCATTER_KEEP_KEY, nothing)
-_with_scatter_keep(f) = task_local_storage(f, _SCATTER_KEEP_KEY, IdDict{Any, Nothing}())
+# The kernels a shifted scatter's pieces compiled to are held out of the kernel
+# class merge (`_merge_acc_kernel_classes`) through one set per build, on the
+# build's state (`_scatter_keep_now`, compiler.jl), so the set dies with the
+# build and two builds on two tasks never see each other's. Outside a build
+# there is no set and nothing is held out.
 
 # The equality conjuncts that pin output indices, and the conjuncts left over.
 struct _ScatterSpec
@@ -89,7 +83,7 @@ function _detect_equality_scatter(
     agg_gates === nothing || return nothing
     isempty(contract_names) && return nothing
     isempty(idx_names) && return nothing
-    (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") || return nothing
+    _is_numeric_reducer(oplus) || return nothing
     conj = _scatter_conjuncts!(ASTExpr[], agg_filter)
     pins = Tuple{Int, ASTExpr}[]
     rest = ASTExpr[]
@@ -135,13 +129,7 @@ end
 
 # Whether a compiled key reads only build-time values: literals, loop counters
 # and `const` gathers of them, combined by plain operators.
-function _scatter_static_node(n::_Node)
-    k = n.kind
-    k === _NK_LITERAL && return true
-    k === _NK_LOOPVAR && return true
-    (k === _NK_CONST_GATHER || k === _NK_OP) || return false
-    return _allof(_scatter_static_node, n.children)
-end
+_scatter_static_node(n::_Node) = _node_reads_only(n)
 
 # A key's value as the `Float64` the naive filter compares the output index
 # with (`==` on a dual number compares its value).
@@ -548,14 +536,9 @@ function _try_codegen_scatter(
         points::Union{Nothing, Vector{Vector{Int}}} = nothing,
         consumer = nothing
     )
-    _codegen_disabled() && return :codegen_disabled
-    ctx = _CGCtx(_codegen_node_budget(); nst = nst)
-    cons = nothing
-    if consumer !== nothing
-        Kc, ix, delta = consumer
-        _cg_note_nest!(ctx, Kc)
-        cons = (K = Kc, ix = ix, delta = delta, store = true, invsyms = _cg_inv!(ctx, Kc))
-    end
+    _codegen_disabled() && return _Decline(:tier_off, "code generation")
+    ctx = _CGFunction(_codegen_node_budget(); nst = nst)
+    cons = _cg_consumer(ctx, consumer)
     kc = _CGScalarCtx()
     nd = length(out_refs)
     free = Int[d for d in 1:nd if !(d in pinpos)]
@@ -571,8 +554,8 @@ function _try_codegen_scatter(
     fnsym = try
         _cg_oplus_fn(op)
     catch err
-        err isa _CodegenDecline || rethrow()
-        return err.reason
+        err isa _Decline || rethrow()
+        return err
     end
     fc = _cg_name(ctx, "fc")
     rv = _cg_name(ctx, "r")
@@ -587,10 +570,9 @@ function _try_codegen_scatter(
         len = _cg_geo!(ctx, lens[d], (lens, d))
         st = _cg_geo!(ctx, steps[d], (steps, d), true)
         sd = _cg_geo!(ctx, stride[d], (stride, d), true)
-        push!(dec, :(local $qv = $rv % $len))
-        push!(dec, :(local $iv = $lo + $qv * $st))
-        push!(dec, :($base += $qv * $sd))
-        push!(dec, :($rv = div($rv, $len)))
+        _cg_decode_digit!(dec, rv, len; qv = qv) do q
+            Any[:(local $iv = $(_cg_axis_index(lo, q, st))), :($base += $q * $sd)]
+        end
     end
     # The pinned counters, bound per point from the keys.
     pinv = Symbol[]
@@ -655,8 +637,8 @@ function _try_codegen_scatter(
         push!(pbody, :(local $tv = $term))
         pbody
     catch err
-        err isa _CodegenDecline || rethrow()
-        return err.reason
+        err isa _Decline || rethrow()
+        return err
     end
     # The fold into the cell: onto the value it holds (`Float64` `du`), or
     # onto the `Float64` 0̄ when the cell is still unvisited.
@@ -677,8 +659,8 @@ function _try_codegen_scatter(
         try
             _cg_scan_consumer_cell(ctx, cons, olv, cxv)
         catch err
-            err isa _CodegenDecline || rethrow()
-            return err.reason
+            err isa _Decline || rethrow()
+            return err
         end
     end
     # The contracted loops' headers, the first contracted index innermost, or
@@ -721,8 +703,9 @@ function _try_codegen_scatter(
     for d in pinpos
         len = _cg_geo!(ctx, lens[d], (lens, d))
         sd = _cg_geo!(ctx, stride[d], (stride, d), true)
-        push!(pdec, :($po += ($pr % $len) * $sd))
-        push!(pdec, :($pr = div($pr, $len)))
+        _cg_decode_digit!(pdec, pr, len) do q
+            Any[:($po += $q * $sd)]
+        end
     end
     npinv = _cg_geo!(ctx, npin)
     init_plain = quote
@@ -760,8 +743,8 @@ function _try_codegen_scatter(
     dstore = oside === :x ? :du : :(_cg_dview(du, Val($(QuoteNode(oside)))))
     ln = LineNumberNode(0, Symbol("faq-equality-scatter"))
     whole = quote
-        $(ctx.geosink...)
-        $(cons === nothing ? nothing : Expr(:block, ctx.prologue...))
+        $(ctx.nest.sink...)
+        $(cons === nothing ? nothing : Expr(:block, ctx.prologue.stmts...))
         local $ov = $outsv
         $(colsets...)
         local $abv = _chunk_ordinals($nfreev, _cgci, _cgnc)
@@ -786,22 +769,8 @@ function _try_codegen_scatter(
             _scatter_seen_give!($poolv, $sv)
         end
     end
-    ngrp = length(ctx.tab_types)
-    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    ex = Expr(
-        :function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc),
-        Expr(
-            :block, grpstmts...,
-            :(local _cgT = _rhs_value_type(u, p, t)),
-            ctx.helpers...,
-            Expr(:macrocall, Symbol("@inbounds"), ln, whole),
-            :(return nothing)
-        )
-    )
-    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-        @__MODULE__, @__MODULE__, ex
-    )
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
+    f, fns = _cg_finish(ctx, _CG_SECTION_ARGS, Expr(:macrocall, Symbol("@inbounds"), ln, whole))
+    tabpack = _cg_tabpack(ctx, fns)
     npts = points === nothing ? prod(length, contract_ranges; init = 1) : length(points[1])
     kw = _node_work(body)
     for k in keys
@@ -940,65 +909,56 @@ function _scatter_shift_pieces(
 end
 
 # `e` resolved and compiled once with every index symbolic: `(output counters,
-# contracted counters, node)`, or `nothing` when it does not lower.
+# contracted counters, node)`, or its `_Decline` when it does not lower.
 function _scatter_symbolic(
         e::ASTExpr, resolved_obs, idx_names, contract_names, array_var_info,
-        var_map, const_registry, pgather, param_sym_set, reg_funcs
+        var_map, const_registry, pgather, param_sym_set
     )
     b = isempty(resolved_obs) ? e : _sub_preserving(e, resolved_obs)
     got = _resolve_array_contraction_term(
         b, idx_names, contract_names,
-        array_var_info, var_map, const_registry, pgather; nest_scalar_loops = true
+        _ResolveCtx(array_var_info, var_map, const_registry, pgather); nest_scalar_loops = true
     )
-    got === nothing && return nothing
+    got isa _Decline && return got
     nd = try
-        _compile(got[3], var_map, param_sym_set, reg_funcs)
+        _compile(got[3], var_map, param_sym_set)
     catch err
-        _is_resource_error(err) && rethrow()
-        return nothing
+        # Only a document-level refusal is a decline (see resolve_loops.jl).
+        err isa EarthSciASTError || rethrow()
+        return _Decline(:symbolic_body_did_not_lower, sprint(showerror, err))
     end
     return (got[1], got[2], nd)
 end
 
-# The whole-array nest's entry for a scatter (`_try_compile_array_contraction`
-# hands it a `_ScatterSpec`): the term guarded by the remaining conjuncts and
-# each key resolved once with every index symbolic, then the STATIC table or the
-# RUN-TIME pass. `nothing` with `covered` untouched for anything it cannot model.
-function _try_compile_scatter(
-        lhs_body::OpExpr, rhs_body::ASTExpr, covered::_Covered, sc::_ScatterSpec;
-        idx_names::Vector{String}, ranges_dict, range_iters,
-        contract_names::Vector{String}, contract_ranges, contract_const,
-        rhs_oplus::String, rhs_zerobar::Float64,
-        resolved_obs::Dict{String, ASTExpr}, array_var_info,
-        var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs, obs_nst::Int = 0
-    )
-    term = sc.rem === nothing ? rhs_body :
-        OpExpr("ifelse", ASTExpr[sc.rem, rhs_body, NumExpr(rhs_zerobar)])
+# The scatter tier's offer (`_ScatterTier`, build_array_equation.jl): the term
+# guarded by the remaining conjuncts and each key resolved once with every index
+# symbolic, then the STATIC table or the RUN-TIME pass. Declines (`_Decline`)
+# with `covered` untouched for anything it cannot model.
+function _try_compile_scatter(a, fs, sc::_ScatterSpec)
+    idx_names = a.idx_names
+    contract_names = a.contract_names
+    contract_ranges = a.contract_ranges
+    contract_const = a.contract_const
+    resolved_obs = fs.resolved_obs
+    covered = fs.covered
+    obs_nst = fs.obs_nst
+    term = sc.rem === nothing ? a.rhs_body :
+        OpExpr("ifelse", ASTExpr[sc.rem, a.rhs_body, NumExpr(a.zerobar)])
     sym(e) = _scatter_symbolic(
-        e, resolved_obs, idx_names, contract_names, array_var_info,
-        var_map, const_registry, pgather, param_sym_set, reg_funcs
+        e, resolved_obs, idx_names, contract_names, fs.cs.array_var_info,
+        fs.cs.var_map, fs.cs.const_registry, fs.cs.pgather, fs.cs.param_index
     )
     tgot = sym(term)
-    if tgot === nothing
-        _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
-        return nothing
-    end
+    tgot isa _Decline && throw(tgot)
     out_refs, contract_refs, node = tgot
     kgots = Any[]
     for (_, e) in sc.pins
         g = sym(e)
-        if g === nothing
-            _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
-            return nothing
-        end
+        g isa _Decline && throw(g)
         push!(kgots, g)
     end
     pinpos = Int[p for (p, _) in sc.pins]
-    rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
-    los = Int[first(r) for r in rngs]
-    stps = Int[step(r) for r in rngs]
-    lens = Int[length(r) for r in rngs]
+    los, stps, lens = _output_box(a)
     static = all(g -> _scatter_static_node(g[3]), kgots)
     if static
         keys = _ScatterKey[]
@@ -1008,13 +968,10 @@ function _try_compile_scatter(
         end
         fold = _scatter_table(
             contract_refs, contract_names, contract_ranges, contract_const, keys, pinpos,
-            idx_names, los, stps, lens, rhs_oplus, rhs_zerobar, const_registry
+            idx_names, los, stps, lens, a.oplus, a.zerobar, fs.cs.const_registry
         )
-        if fold === nothing
-            _note_decline!(:array_contraction, :scatter_too_many_pinned_cells)
-            return nothing
-        end
-        outs = _ac_claim_all_outs!(covered, lhs_body, idx_names, range_iters, var_map)
+        fold === nothing && _decline(:scatter_too_many_pinned_cells)
+        outs = _ac_claim_all_outs!(covered, a.lhs_body, idx_names, a.range_iters, fs.cs.var_map)
         emit = cons -> _try_codegen_array_contraction(
             out_refs, los, stps, lens, outs, node;
             fold = fold, nst = obs_nst, consumer = cons
@@ -1026,34 +983,33 @@ function _try_compile_scatter(
         points = nothing
         if deps === nothing
             for c in contract_const
-                (c isa AbstractRange && !isempty(c)) || (_note_decline!(:array_contraction, :scatter_ragged_or_empty); return nothing)
+                (c isa AbstractRange && !isempty(c)) || _decline(:scatter_ragged_or_empty)
                 push!(cranges, first(c):step(c):last(c))
             end
         else
             # A nest box: walked once here into a point list the pass runs
             # over, which must then be the same for every chunk.
             _scatter_box_shared(contract_ranges, contract_const, idx_names) ||
-                (_note_decline!(:array_contraction, :scatter_ragged_reads_output); return nothing)
+                _decline(:scatter_ragged_reads_output)
             points = _scatter_nest_points(
-                contract_names, contract_ranges, deps, Dict{String, Int}(), const_registry
+                contract_names, contract_ranges, deps, Dict{String, Int}(), fs.cs.const_registry
             ).cols
         end
-        outs = _ac_claim_all_outs!(covered, lhs_body, idx_names, range_iters, var_map)
+        outs = _ac_claim_all_outs!(covered, a.lhs_body, idx_names, a.range_iters, fs.cs.var_map)
         ktups = Tuple{_Node, Vector{Base.RefValue{Int}}, Vector{Base.RefValue{Int}}}[
             (g[3], g[2], g[1]) for g in kgots
         ]
         emit = cons -> _try_codegen_scatter(
             out_refs, los, stps, lens, outs, node, contract_refs, cranges, ktups,
-            pinpos, Symbol(rhs_oplus), rhs_zerobar; nst = obs_nst, points = points,
+            pinpos, Symbol(a.oplus), a.zerobar; nst = obs_nst, points = points,
             consumer = cons
         )
         tier = :equality_scatter_pass
     end
     gen = emit(nothing)
-    if gen isa Symbol
+    if gen isa _Decline
         _uncover!(covered, outs)
-        _note_decline!(:array_contraction, gen)
-        return nothing
+        throw(gen)
     end
     _tally_cascade!(tier)
     # On the two-buffer slot space an observed the scatter fills can take in

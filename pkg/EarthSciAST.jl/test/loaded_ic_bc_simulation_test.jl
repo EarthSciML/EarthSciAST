@@ -28,6 +28,7 @@
 # consumer gather. The reaction system's own inline `tests` block is the source
 # of truth: this runner executes every assertion in it.
 using Test
+include("testutils.jl")  # ConstProvider
 using EarthSciAST
 import SciMLBase
 import SciMLBase: solve, remake
@@ -47,11 +48,6 @@ const _ESS_IC = EarthSciAST
 # keyed by the CONSUMING PARAMETER's flattened name (`<Model>.<param>`) rather
 # than by `<Loader>.<var>` (esm-spec §8.5).
 # ---------------------------------------------------------------------------- #
-struct _StubLoaderProvider
-    fields::Dict{String, Array{Float64}}
-end
-_ESS_IC.provider_refresh_times(::_StubLoaderProvider) = Float64[]           # CONST
-_ESS_IC.provider_sample(p::_StubLoaderProvider, ::Real) = p.fields
 
 const _LOADED_PROVIDER_FIELDS = Dict{String, Array{Float64}}(
     # Initial-condition fields — RHS of the scoped-reference `ic` equations.
@@ -70,7 +66,7 @@ const _LOADED_PROVIDER_FIELDS = Dict{String, Array{Float64}}(
 # `providers` maps each source-fed parameter to the stub that serves it. One
 # stub object backs every variable; it is sampled once per variable at build time.
 function _loaded_providers()
-    stub = _StubLoaderProvider(_LOADED_PROVIDER_FIELDS)
+    stub = ConstProvider(_LOADED_PROVIDER_FIELDS)
     return Dict{String, Any}(k => stub for k in keys(_LOADED_PROVIDER_FIELDS))
 end
 
@@ -107,7 +103,7 @@ end
     @test !isempty(chem.tests)
 
     # Every loaded field is CONST — no field is injected by internal consumer name.
-    stub = _StubLoaderProvider(_LOADED_PROVIDER_FIELDS)
+    stub = ConstProvider(_LOADED_PROVIDER_FIELDS)
     @test _ESS_IC.provider_is_const(stub)
 
     for t in chem.tests

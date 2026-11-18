@@ -1,6 +1,6 @@
-# Spatial OVERLAP join-gate — Julia evaluator conformance (projection-pushdown
-# Phase 2a). The overlap gate replaces uniform-grid bin-EQUALITY (`join.on
-# [[l,r]]`) with envelope CANDIDACY built on the Phase-3a broad-phase primitive:
+# Spatial OVERLAP join-gate — Julia evaluator conformance (projection pushdown).
+# The overlap gate replaces uniform-grid bin-EQUALITY (`join.on [[l,r]]`) with
+# envelope CANDIDACY built on the broad-phase primitive:
 # the gate admits a contracted tuple iff its two range positions are in a
 # candidate `(src_pos, tgt_pos)` set computed ONCE from two envelope factor
 # arrays. Two end-to-end cases exercise BOTH join wirings:
@@ -19,22 +19,14 @@
 #       A_ij > atol`) the A_j / W_ij weights are tol-identical to the bin-gate
 #       golden — overlap gate + narrow phase == bin gate + narrow phase.
 
-# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
-# stay isolated from other test files' identically-named helpers in the shared
-# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
-# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
-# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
-module OverlapGateConformanceTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 import JSON3
 
 const ESS = EarthSciAST
 
 # ---- small JSON AST builders ----------------------------------------------
-_ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
-_op(o, args...) = Dict("op" => o, "args" => Any[args...])
 
 @testset "spatial OVERLAP join-gate (Phase 2a)" begin
 
@@ -64,17 +56,17 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     )
 
     # (X-W)(E-X)(Y-S)(N-Y) > 0 : strict rectangle interior narrow phase.
-    _pir_filter = _op(
+    _pir_filter = jop(
         ">",
-        _op(
+        jop(
             "*",
-            _op(
-                "*", _op("-", _ix("X", "i"), _ix("W", "j")),
-                _op("-", _ix("E", "j"), _ix("X", "i"))
+            jop(
+                "*", jop("-", jidx("X", "i"), jidx("W", "j")),
+                jop("-", jidx("E", "j"), jidx("X", "i"))
             ),
-            _op(
-                "*", _op("-", _ix("Y", "i"), _ix("S", "j")),
-                _op("-", _ix("N", "j"), _ix("Y", "i"))
+            jop(
+                "*", jop("-", jidx("Y", "i"), jidx("S", "j")),
+                jop("-", jidx("N", "j"), jidx("Y", "i"))
             )
         ),
         0.0
@@ -101,7 +93,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                 ),
                 "equations" => [
                     Dict(
-                        "lhs" => _ix("cell_present", "m"),
+                        "lhs" => jidx("cell_present", "m"),
                         "rhs" => Dict(
                             "op" => "faq",
                             "id" => "cells_with_points",
@@ -199,7 +191,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
             )
         ),
     ]
-    _filt = _op(">", _ix("A_ij", "i", "j"), "atol")
+    _filt = jop(">", jidx("A_ij", "i", "j"), "atol")
 
     _regrid_doc(eps) = Dict(
         "esm" => "2.0.0",
@@ -230,7 +222,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                     Dict(
                         "lhs" => Dict(
                             "op" => "faq", "args" => [], "output_idx" => ["j"],
-                            "expr" => Dict("op" => "D", "args" => [_ix("A_j", "j")], "wrt" => "t"),
+                            "expr" => Dict("op" => "D", "args" => [jidx("A_j", "j")], "wrt" => "t"),
                             "ranges" => Dict("j" => [1, 3])
                         ),
                         "rhs" => Dict(
@@ -245,13 +237,13 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                                 "A_ij", "src_W", "src_S", "src_E", "src_N",
                                 "tgt_W", "tgt_S", "tgt_E", "tgt_N",
                             ],
-                            "expr" => _ix("A_ij", "i", "j")
+                            "expr" => jidx("A_ij", "i", "j")
                         )
                     ),
                     Dict(
                         "lhs" => Dict(
                             "op" => "faq", "args" => [], "output_idx" => ["j"],
-                            "expr" => Dict("op" => "D", "args" => [_ix("F_tgt", "j")], "wrt" => "t"),
+                            "expr" => Dict("op" => "D", "args" => [jidx("F_tgt", "j")], "wrt" => "t"),
                             "ranges" => Dict("j" => [1, 3])
                         ),
                         "rhs" => Dict(
@@ -266,9 +258,9 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                                 "A_ij", "F_src", "dst_areas", "src_W", "src_S", "src_E",
                                 "src_N", "tgt_W", "tgt_S", "tgt_E", "tgt_N",
                             ],
-                            "expr" => _op(
-                                "/", _op("*", _ix("A_ij", "i", "j"), _ix("F_src", "i")),
-                                _ix("dst_areas", "j")
+                            "expr" => jop(
+                                "/", jop("*", jidx("A_ij", "i", "j"), jidx("F_src", "i")),
+                                jidx("dst_areas", "j")
                             )
                         )
                     ),
@@ -286,16 +278,18 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     function _regrid_eval(eps; atol = 1.0e-15)
         raw = JSON3.read(JSON3.write(_regrid_doc(eps)))
         ics = Dict(
-            "A_j[1]" => 0.0, "A_j[2]" => 0.0, "A_j[3]" => 0.0,
-            "F_tgt[1]" => 0.0, "F_tgt[2]" => 0.0, "F_tgt[3]" => 0.0
+            "RegridOverlap.A_j[1]" => 0.0, "RegridOverlap.A_j[2]" => 0.0,
+            "RegridOverlap.A_j[3]" => 0.0, "RegridOverlap.F_tgt[1]" => 0.0,
+            "RegridOverlap.F_tgt[2]" => 0.0, "RegridOverlap.F_tgt[3]" => 0.0
         )
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-            raw; model_name = "RegridOverlap", initial_conditions = ics,
-            const_arrays = _regrid_const, parameter_overrides = Dict("atol" => atol)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
+            raw; initial_conditions = ics,
+            const_arrays = Dict{String, Any}("RegridOverlap.$k" => v for (k, v) in _regrid_const),
+            parameter_overrides = Dict("RegridOverlap.atol" => atol)
         )
         du = similar(u0); f!(du, u0, p, 0.0)
-        A_j = [du[vmap["A_j[$j]"]] for j in 1:3]
-        F_tgt = [du[vmap["F_tgt[$j]"]] for j in 1:3]
+        A_j = [du[vmap["RegridOverlap.A_j[$j]"]] for j in 1:3]
+        F_tgt = [du[vmap["RegridOverlap.F_tgt[$j]"]] for j in 1:3]
         return A_j, F_tgt
     end
 
@@ -340,5 +334,3 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         end
     end
 end
-
-end # module OverlapGateConformanceTests

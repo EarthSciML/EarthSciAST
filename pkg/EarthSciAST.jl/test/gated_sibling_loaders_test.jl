@@ -7,14 +7,12 @@
 # `{"fixed": [layer]}` axis of their `gated_select`. They are three DIFFERENT
 # slabs told apart only by which loader they came from.
 #
-# Hook 2 used to publish each fetched slab under `_const_factor_aliases`, which
-# resolves a bare name against EVERY model variable with the same dotted TAIL.
-# All three providers therefore claimed all three keys, and whichever the
-# `gated` Dict happened to visit LAST silently won for all of them: every layer
-# of the model was contracted against one arbitrary sibling's slab. Hash order
-# picked a different winner per variable name, so the answer was wrong,
-# reproducible within a run, and raised nothing. Measured on isrm.esm at
-# ISRM_FIRSTN=200 it moved sum(deathsK) by 6.6%.
+# Hook 2 publishes each fetched slab under `_const_factor_aliases`, which
+# resolves a bare name against EVERY model variable with the same dotted TAIL,
+# so all three providers claim all three keys. If whichever the `gated` Dict
+# visits LAST won for all of them, every layer of the model would be contracted
+# against one arbitrary sibling's slab — wrong, hash-order dependent, and
+# silent.
 #
 # A provider owns an alias when it is the SOLE claimant, or when the alias IS
 # its own provider key. An alias several claim and none owns stays UNWRITTEN —
@@ -25,6 +23,9 @@ module GatedSiblingLoaderTests
 using Test
 using EarthSciAST
 const EA = EarthSciAST
+
+# A gated provider and its gate, as the build receives them.
+_gated(prov, gate) = EA._GatedProvider(prov, EA._GateSpec(gate, "test"))
 
 # A gated provider that slices its own [layer, src, rcv] block per selection.
 mutable struct SiblingMock
@@ -57,10 +58,10 @@ end
     model = (variables = Dict{String, Any}("SR_L$(L).SOA" => nothing for L in 0:2),)
 
     mocks = Dict(L => SiblingMock(copy(full), Any[]) for L in 0:2)
-    gated = Dict{String, Any}(
-        "SR_L$(L).SOA" => (
-            prov = mocks[L],
-            gate = Dict{String, Any}(
+    gated = Dict{String, EA._GatedProvider}(
+        "SR_L$(L).SOA" => _gated(
+            mocks[L],
+            Dict{String, Any}(
                 "axes" => Any[
                     Dict("fixed" => Any[L]),
                     Dict("gated_by" => "supp"), "all",
@@ -108,10 +109,10 @@ end
         extents = Dict{String, Int}("faq1" => 2),
     )
     model = (variables = Dict{String, Any}("Flattened.SR" => nothing),)
-    gated = Dict{String, Any}(
-        "L.SR" => (
-            prov = SiblingMock(copy(full), Any[]),
-            gate = Dict{String, Any}(
+    gated = Dict{String, EA._GatedProvider}(
+        "L.SR" => _gated(
+            SiblingMock(copy(full), Any[]),
+            Dict{String, Any}(
                 "axes" => Any[Dict("fixed" => Any[0]), Dict("gated_by" => "supp"), "all"],
                 "applies_to" => Any["SR"]
             ),
@@ -120,6 +121,36 @@ end
     out = EA._fetch_gated_providers(gated, idx, vi, 0.0, model)
     @test sort!(collect(keys(out))) == ["Flattened.SR", "SR"]
     @test out["SR"] == full[1, [1, 3], :]
+end
+
+# A provider that cannot take a selection is fetched whole and sliced by the
+# same per-axis selection; an `all` axis is a `Colon()` there too.
+mutable struct WholeOnlyMock
+    full::Array{Float64, 3}
+end
+EA.provider_supports_selection(::WholeOnlyMock) = false
+EA.provider_refresh_times(::WholeOnlyMock) = Float64[]
+EA.provider_sample(m::WholeOnlyMock, ::Real; selection = nothing) = m.full
+
+@testset "gated hook 2 — a provider without selection support is sliced whole" begin
+    full = reshape(collect(1.0:24.0), (2, 6, 2))
+    idx = Dict{String, Any}("supp" => EA.IndexSet("derived"; from_faq = "faq1"))
+    vi = (
+        members = Dict{String, Vector{Any}}("faq1" => Any[1, 3]),
+        extents = Dict{String, Int}("faq1" => 2),
+    )
+    model = (variables = Dict{String, Any}("L.SR" => nothing),)
+    gated = Dict{String, EA._GatedProvider}(
+        "L.SR" => _gated(
+            WholeOnlyMock(copy(full)),
+            Dict{String, Any}(
+                "axes" => Any[Dict("fixed" => Any[1]), Dict("gated_by" => "supp"), "all"],
+                "applies_to" => Any["SR"]
+            ),
+        )
+    )
+    out = EA._fetch_gated_providers(gated, idx, vi, 0.0, model)
+    @test out["L.SR"] == full[2, [1, 3], :]
 end
 
 end # module

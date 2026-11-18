@@ -1,24 +1,23 @@
-# End-to-end + zero-alloc + cadence loader-refresh tests (ess-14f.6, JL-J3).
+# End-to-end + zero-alloc + cadence loader-refresh tests.
 #
-# JL-J1 (ess-14f.4) built `build_refresh_callback` — the `PresetTimeCallback`
-# whose `affect!` samples a Provider and writes the live forcing buffer in place
-# (native forcing straight into the buffer; any native→sim regrid is an in-model
-# coupling the RHS evaluates, not a refresh-time transform — the obsolete
-# RegridApplier seam was removed in v0.8.0). J3 is the INTEGRATION layer: it
-# composes the library's exposed pieces — `build_evaluator` (the RHS) and
-# `build_refresh_callback` (the cadence callback + tstops) — into an honest
+# `build_refresh_callback` is the `PresetTimeCallback` whose `affect!` samples a
+# Provider and writes the live forcing buffer in place (native forcing straight
+# into the buffer; any native→sim regrid is an in-model coupling the RHS
+# evaluates, not a refresh-time transform). This file is the INTEGRATION layer:
+# it composes the build (`EarthSciAST.Internal.build`, the RHS) and
+# `build_refresh_callback` (the cadence callback + tstops) into an honest
 # `solve(prob, Tsit5(); callback, tstops)` over a loaded fixture, and asserts the
 # cadence contract end to end.
 #
 # It is the Julia sibling of the Rust driver-level harness `segmented_refresh_solve`
-# (ess-14f.11) and the Python e2e (ess-2fy). Julia's idiom differs: where the Rust
+# and the Python e2e. Julia's idiom differs: where the Rust
 # driver runs a manual segment-by-segment loop, Julia hands the user a single
 # `PresetTimeCallback` + tstops and runs ONE `solve` — the `affect!` fires the
 # refresh at each cadence anchor. So this file is, like the Rust one, a documented
 # integration test that exercises the consumer surface; it adds NO library API
 # (`[[library-exposes-rhs-not-solver]]` holds — the solver is a test-only dep).
 #
-# Acceptance clauses (bead ess-14f.6) and where each is pinned:
+# Acceptance clauses and where each is pinned:
 #   • e2e refresh over a fixture — a coupled, discretized, non-PDE forced model is
 #     LOADED from `fixtures/refresh/coupled_forced.esm`, wired to a Provider, and
 #     integrated; the coupled closed form is matched to solver tol
@@ -37,11 +36,11 @@
 
 using Test
 using EarthSciAST
-using DiffEqCallbacks            # loads EarthSciASTDataRefreshExt
+using DiffEqCallbacks            # loads EarthSciASTCallbacksExt
 using SciMLBase                  # ext co-trigger (u_modified!)
 import OrdinaryDiffEqTsit5 as ODE  # Tsit5 + ODEProblem + solve (test-only solver dep)
 
-include("testutils.jl")  # rhs_alloc_bytes (via zero_alloc_harness.jl) — the JL-J0 zero-alloc probe
+include("testutils.jl")  # rhs_alloc_bytes (via zero_alloc_harness.jl) — the zero-alloc probe
 
 const ESM = EarthSciAST
 
@@ -68,17 +67,19 @@ function ESM.provider_sample(p::_RefreshLogProvider, t::Real)
     return p.fields[tf]
 end
 
-# Scalar initial conditions over the coupled fixture's two 3-cell array states.
+# Scalar initial conditions over the coupled fixture's two 3-cell array states,
+# by their flattened names (the fixture's one component is `M`). `scale` and
+# `src` are not declared, so the arrays bound to them keep that spelling.
 function _coupled_ics()
     ics = Dict{String, Float64}()
     for k in 1:3
-        ics["c[$k]"] = 0.0
-        ics["d[$k]"] = 0.0
+        ics["M.c[$k]"] = 0.0
+        ics["M.d[$k]"] = 0.0
     end
     return ics
 end
 
-@testset "loader-refresh e2e + zero-alloc + cadence (ess-14f.6, JL-J3)" begin
+@testset "loader-refresh e2e + zero-alloc + cadence" begin
 
     @testset "e2e: coupled forced model over a fixture matches the closed form" begin
         # The fixture (loaded, not hand-built): two coupled states over i ∈ [1,3].
@@ -91,7 +92,7 @@ end
 
         scale = [1.0, 2.0, 3.0]          # CONST factor — materialized once at build
         srcbuf = [1.0, 1.0, 1.0]          # DISCRETE live buffer — the [0,1) segment value
-        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(
+        (f!, u0, p, _ts, vm) = b = EarthSciAST.Internal.build(
             file;
             initial_conditions = _coupled_ics(),
             const_arrays = Dict("scale" => scale),    # CONST: inlined once (no tstops)
@@ -105,6 +106,7 @@ end
             )
         )
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("src" => prov),
             buffers = RefreshBuffers(Dict("src" => srcbuf))
         )   # SAME buffer object as param_arrays
@@ -117,8 +119,8 @@ end
         # rate r_k = scale .* src_k:  r0=[1,2,3], r1=[2,4,6], r2=[3,6,9].
         #   c(3) = r0+r1+r2 = [6,12,18]                       (accumulated forced source)
         #   d(3) = 2.5·r0 + 1.5·r1 + 0.5·r2 = [7,14,21]       (coupled integral of c)
-        c = [sol.u[end][vm["c[$k]"]] for k in 1:3]
-        d = [sol.u[end][vm["d[$k]"]] for k in 1:3]
+        c = [sol.u[end][vm["M.c[$k]"]] for k in 1:3]
+        d = [sol.u[end][vm["M.d[$k]"]] for k in 1:3]
         @test isapprox(c, [6.0, 12.0, 18.0]; atol = 1.0e-7)
         @test isapprox(d, [7.0, 14.0, 21.0]; atol = 1.0e-7)   # dependent var recomputes from the refreshed buffer
         @test srcbuf == [3.0, 3.0, 3.0]                   # buffer holds the LAST refresh (in place, not realloc)
@@ -130,7 +132,7 @@ end
         model = file.models["M"]
         scale = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]
-        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(
+        (f!, u0, p, _ts, _vm) = b = EarthSciAST.Internal.build(
             file;
             initial_conditions = _coupled_ics(),
             const_arrays = Dict("scale" => scale),
@@ -153,6 +155,7 @@ end
         @test provider_is_const(const_scale)
 
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("src" => disc, "scale" => const_scale),
             buffers = RefreshBuffers(Dict("src" => srcbuf))
         )
@@ -180,7 +183,7 @@ end
         model = file.models["M"]
         scale = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]
-        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(
+        (f!, u0, p, _ts, _vm) = b = EarthSciAST.Internal.build(
             file;
             initial_conditions = _coupled_ics(),
             const_arrays = Dict("scale" => scale),
@@ -194,6 +197,7 @@ end
         # a real in-place refresh through the machinery, not a hand-poked buffer.
         prov = _RefreshLogProvider([1.0], Dict(1.0 => Dict("src" => [9.0, 9.0, 9.0])))
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("src" => prov),
             buffers = RefreshBuffers(Dict("src" => srcbuf))
         )

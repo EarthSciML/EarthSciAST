@@ -1,20 +1,14 @@
-# Regression: model-qualified-first scalar-slot / array-cell resolution in the
+# Regression: model-qualified scalar-slot / array-cell resolution in the
 # §6.6.5 inline-test runner (inline_tests.jl).
 #
 # Flattening qualifies every element with its owning model ("M1.k", "M2.k"), and
 # a coupled document routinely reuses the same BARE name across sibling
-# components (six reaction-rate coefficients all named `k`). The old
-# `_scalar_slot` / `_state_cells` did a single OR-pass that accepted a bare-name
-# match, so they returned whichever same-bare element came FIRST in `var_map`
-# iteration — reading/collecting the WRONG model's element. In Julia this is
-# worse than Python: `Dict` iteration is hash-ordered (NOT insertion-ordered),
-# so which wrong element wins is non-deterministic across key sets.
-#
-# The fix is two passes: an exact qualified / exact-bare match first, then a
-# bare-suffix fallback (reached only for a bare-keyed single-model build). These
-# tests are written to catch the bug INDEPENDENTLY of `Dict` iteration order by
-# asserting BOTH models' elements — the single-pass code returns the same
-# (hash-first) element for both models, so at least one assertion must fail.
+# components (six reaction-rate coefficients all named `k`). An unscoped
+# assertion reads only the component under test: the model-qualified name, or
+# the bare name in a bare-keyed single-model build. A same-named element of
+# another component is never read; the assertion is refused and names it. The
+# tests assert BOTH models' elements so they do not depend on `Dict` iteration
+# order.
 
 using Test
 using EarthSciAST
@@ -31,10 +25,13 @@ const _SSC_ESS = EarthSciAST
         # BOTH models, so one of these two catches it regardless of hash order.
         @test _SSC_ESS._scalar_slot(vm, "k", "M1") == 1
         @test _SSC_ESS._scalar_slot(vm, "k", "M2") == 2
-        # Bare-suffix fallback still resolves a single-model bare-keyed build.
+        # A bare-keyed single-model build resolves by the bare name.
         @test _SSC_ESS._scalar_slot(Dict("k" => 7), "k", "M2") == 7
-        # Absent name → 0 sentinel (unchanged).
+        # Absent name → 0 sentinel.
         @test _SSC_ESS._scalar_slot(vm, "z", "M2") == 0
+        # Another component's same-named state is never returned.
+        @test _SSC_ESS._scalar_slot(Dict("M1.k" => 1), "k", "M3") == 0
+        @test _SSC_ESS._assertion_candidates(vm, "k") == ["M1.k", "M2.k"]
     end
 
     # ---- `_state_cells`: only the asserted model's cells (array analog) -------
@@ -49,9 +46,12 @@ const _SSC_ESS = EarthSciAST
         c2 = _SSC_ESS._state_cells(vm, "u", "M2")
         @test [cell for (cell, _) in c2] == [[1], [2]]
         @test [slot for (_, slot) in c2] == [3, 4]
-        # Bare-suffix fallback: a single-model bare-keyed build still collects.
+        # A single-model bare-keyed build collects by the bare stem.
         cb = _SSC_ESS._state_cells(Dict("u[1]" => 1, "u[2]" => 2), "u", "M9")
         @test [slot for (_, slot) in cb] == [1, 2]
+        # Another component's same-named field is never collected.
+        @test isempty(_SSC_ESS._state_cells(Dict("M1.u[1]" => 1), "u", "M3"))
+        @test _SSC_ESS._assertion_candidates(vm, "u") == ["M1.u", "M2.u"]
     end
 
     # ---- End-to-end: run_inline_tests over a 2-model doc (the Julia mirror of the
@@ -141,5 +141,42 @@ const _SSC_ESS = EarthSciAST
         # M1's k is read from M1's OWN slot (2·10), not shadowed by M2's `k`.
         @test by[("M1", "m1_base")].actual ≈ 20.0 rtol = 1.0e-9
         @test all(r.passed for r in results)
+
+        # A component with no `k` of its own: its unscoped assertion on `k` is
+        # refused and names the other components' `k`, instead of reading one.
+        doc3 = deepcopy(doc)
+        doc3["models"]["M3"] = Dict{String, Any}(
+            "variables" => Dict{String, Any}(
+                "z" => Dict("type" => "unknown", "units" => "1", "default" => 0.0)
+            ),
+            "equations" => Any[
+                Dict(
+                    "lhs" => Dict("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                    "rhs" => 1.0
+                ),
+            ],
+            "tests" => Any[
+                Dict(
+                    "id" => "m3_k",
+                    "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                    "assertions" => Any[
+                        Dict(
+                            "variable" => "k", "time" => 1.0,
+                            "expected" => 20.0, "tolerance" => Dict("rel" => 1.0e-9)
+                        ),
+                    ]
+                ),
+            ]
+        )
+        file3 = _SSC_ESS.load_string(IOBuffer(JSON3.write(doc3)))
+        r3 = only(
+            r for r in run_inline_tests(
+                    file3; alg = OrdinaryDiffEqTsit5.Tsit5(),
+                    reltol = 1.0e-12, abstol = 1.0e-14
+                ) if r.model == "M3"
+        )
+        @test !r3.passed
+        @test occursin("not found in component 'M3'", r3.message)
+        @test occursin("M1.k, M2.k", r3.message)
     end
 end

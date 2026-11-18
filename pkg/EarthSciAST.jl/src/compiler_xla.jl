@@ -113,28 +113,6 @@ caller reach.
 function _xla_client end
 
 """
-    _xla_refuse(rule, reason) -> never returns
-
-`compiler_refused_rule` for the `:xla` compiler, in the exact message shape
-`_refuse_rule` produces — `compiler=:xla refuses '<rule>': <reason>` — which is
-what esm-libraries-spec §2.5.10 fixes and what the compiler-agreement adapter
-reads back.
-
-It is spelled here rather than through `_refuse_rule` because these refusals are
-raised AFTER the build's plan has gone out of scope (the emission happens on the
-build's product, not inside it), and a refusal that read the ambient plan there
-would name `:native` for a run the caller asked to be `:xla`.
-"""
-_xla_refuse(rule::AbstractString, reason::AbstractString) =
-    throw(
-    TreeWalkError(
-        ERROR_CODES.COMPILER_REFUSED_RULE,
-        "compiler=:xla refuses '$rule': $reason",
-        String(rule)
-    )
-)
-
-"""
     _xla_check_form(compiler, form)
 
 `compiler = :xla` builds ONE thing: the out-of-place compiled intermediate
@@ -162,7 +140,8 @@ end
 # verbatim rather than an anonymous failure. Nothing here retries, demotes or
 # falls back: `:xla` either runs the whole document or names what it refused.
 function _xla_refuse_emit(err::DirectEmitError)
-    return _xla_refuse(
+    return _refuse_rule(
+        _plan(:xla),
         err.rule,
         "the direct StableHLO emitter cannot lower $(err.construct): $(err.detail)"
     )
@@ -190,7 +169,8 @@ function _xla_compile_rhs end
 # result to say so, so it is a named refusal instead.
 function _xla_refuse_live_buffers(names)
     ns = sort!(String.(collect(names)))
-    return _xla_refuse(
+    return _refuse_rule(
+        _plan(:xla),
         "live forcing buffers (" * join(ns, ", ") * ")",
         "this document binds $(length(ns)) live forcing buffer(s), which a " *
             "compiled program must receive as arguments and have re-synced to the " *
@@ -309,8 +289,7 @@ function _xla_record!(
         report.rules,
         CompilerRuleRecord(
             "the right-hand side", :rhs_program,
-            Symbol("xla_direct_", device),
-            Pair{Symbol, Symbol}[]
+            Symbol("xla_direct_", device)
         )
     )
     for (k, v) in stats
@@ -420,3 +399,62 @@ function _ode_derivatives(prob)
     n = length(prob.u0)
     return (jac = _XlaFdJacobian(prob.f!, n), tgrad = _XlaFdTgrad(prob.f!, n))
 end
+
+# ---- the direct emitter's own entry points -----------------------------------
+#
+# `esm_problem(…; compiler = :xla)` is the stable route. These are for a caller
+# who needs the emitted callable itself (to shard the state across devices, or
+# to compose the right-hand side into a larger traced program): unexported,
+# declared here so they are reachable as `EarthSciAST.direct_rhs` and
+# documented without `Base.get_extension`, and implemented by the Reactant
+# extension (ext/reactant_direct/api.jl, device.jl). Without Reactant loaded
+# they have no methods.
+
+"""
+    direct_rhs(f; var_map = nothing, client = nothing, sharding = nothing, options) -> DirectRHS
+
+Wrap the out-of-place build product `f` (`Internal.build(doc; form = :oop).f!`)
+in the direct StableHLO emitter; compile the result with `Reactant.@compile`.
+Needs Reactant loaded. See docs/src/compiled-backend-devices.md.
+"""
+function direct_rhs end
+
+"""
+    direct_rhs_with_buffers(d) / direct_rhs_with_buffers(f; kwargs...)
+
+The form of [`direct_rhs`](@ref) that takes a model's live forcing buffers as a
+fourth argument. Needs Reactant loaded.
+"""
+function direct_rhs_with_buffers end
+
+"""
+    direct_state(d, u) / direct_params(d, p) / direct_time(d, t) / direct_buffers(d, bufs)
+
+Device inputs for the wrapper `d`, on its client and, when it is sharded, with
+its cell-axis sharding. Need Reactant loaded.
+"""
+function direct_state end
+"See [`direct_state`](@ref)."
+function direct_params end
+"See [`direct_state`](@ref)."
+function direct_time end
+"See [`direct_state`](@ref)."
+function direct_buffers end
+
+"""
+    direct_client(spec) / direct_client(d) / direct_devices(client; count) /
+    direct_shard(d) / direct_devicecount(d) / direct_platform(d)
+
+Device choice and placement for the direct emitter: resolve a client
+(`nothing`, `:cpu`, `:gpu`, or a client), list its devices, and read back where
+a wrapper `d` runs. Need Reactant loaded.
+"""
+function direct_client end
+"See [`direct_client`](@ref)."
+function direct_devices end
+"See [`direct_client`](@ref)."
+function direct_shard end
+"See [`direct_client`](@ref)."
+function direct_devicecount end
+"See [`direct_client`](@ref)."
+function direct_platform end

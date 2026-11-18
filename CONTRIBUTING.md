@@ -271,6 +271,21 @@ julia --project=pkg/EarthSciAST.jl/test/mtk pkg/EarthSciAST.jl/test/mtk/mtk_expo
 A new test that needs ModelingToolkit, Catalyst or Symbolics goes in
 `test/mtk/` (and in `test/mtk/runtests.jl`), not in `test/`.
 
+Reactant is kept out the same way. The direct StableHLO emitter's tests and
+`compiler = :xla` live in `test/reactant/`, with its own environment
+(`test/reactant/Project.toml`), which CI runs in the `julia-xla` job of
+`.github/workflows/xla-backends.yml`:
+
+```bash
+julia --project=pkg/EarthSciAST.jl/test/reactant -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.instantiate()'
+julia --project=pkg/EarthSciAST.jl/test/reactant pkg/EarthSciAST.jl/test/reactant/runtests.jl
+```
+
+`test/environments_test.jl` checks that every environment beside the package
+that installs ModelingToolkit restates the package's holdback caps, and that
+every package a script environment lists is imported by a script that
+activates it.
+
 ### TypeScript (@earthsciml/ast)
 
 - **Standards**: Strict TypeScript (`npm run typecheck`), ESLint + Prettier
@@ -389,7 +404,7 @@ deliberate:
 |---|---|---|
 | Runs on | every push/PR touching `pkg/**`, `tests/**`, `scripts/**` | only pushes/PRs touching the Rust crate, the Julia package, `tests/conformance/compiled_rhs/**` or `tests/conformance/compiler_agreement/**`, either tier runner, `scripts/test-conformance.sh`, or the fetch script |
 | `xla` cargo feature | **never** — every `--features` list there names its features explicitly and omits `xla` (and `--all-features` is likewise avoided) | `conformance-adapters,xla`, with `XLA_EXTENSION_DIR` exported from a cached fetch |
-| Reactant | never — `ESM_TEST_REACTANT` is unset, which skips both the `reactant_*_test.jl` files in `runtests.jl` and the julia compiled stage of `test-conformance.sh` | `ESM_TEST_REACTANT=1`, job-wide |
+| Reactant | never — the Reactant test suite (`test/reactant/`) is not run, and `ESM_TEST_REACTANT` is unset, which skips the julia compiled stage of `test-conformance.sh` | the Reactant test suite, and `ESM_TEST_REACTANT=1` job-wide |
 | `compiled-RHS compiled producer` stages | **skip visibly** | required: `scripts/assert-compiled-rhs-available.py` fails the job unless the binding's status in the report JSON is `ok` |
 | `compiler-agreement <compiler> producer` stages | `interpreter` and `native` only | additionally `xla`, via `./scripts/test-conformance.sh --compiler-agreement-only xla` in the `rust-xla` job. Rust is `bindings_required` for `xla`, so no assert step is needed: the runner's own exit code is non-zero on an `unavailable`. Julia is `bindings_optional` and skips visibly, that job having no Julia |
 | Cost | minutes | a 144 MB XLA download (cached per pinned version), a full `xla`-feature crate build, and a Reactant precompile — the Julia job budgets 120 minutes |
@@ -411,9 +426,8 @@ adapter's compiled lane self-bootstraps
 *lists* Reactant — so `Pkg.instantiate()` installs it, `using Reactant`
 succeeds, and the adapter (which reserves `unavailable` for Reactant failing to
 load) runs for real. `test-conformance.sh` therefore gates the julia compiled
-stage on `ESM_TEST_REACTANT=1`, the same opt-in the package's own Reactant tests
-use. If you run `./scripts/test-conformance.sh` locally and want that stage,
-export it.
+stage on `ESM_TEST_REACTANT=1`. If you run `./scripts/test-conformance.sh`
+locally and want that stage, export it.
 
 Running the same commands locally:
 
@@ -441,8 +455,9 @@ python3 scripts/assert-compiled-rhs-available.py \
 # --- what the julia-xla job does ----------------------------------------
 renv=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env
 julia --project=$renv -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.instantiate(); Pkg.precompile()'
-ESM_TEST_REACTANT=1 julia --project=$renv \
-  -e 'cd("pkg/EarthSciAST.jl/test"); include("reactant_direct_emit_test.jl")'
+tenv=pkg/EarthSciAST.jl/test/reactant
+julia --project=$tenv -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.instantiate()'
+julia --project=$tenv $tenv/runtests.jl
 
 EARTHSCI_COMPILED_RHS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/compiled_rhs_adapter.jl --compiler native" \
   python3 scripts/run-compiled-rhs-conformance.py --bindings julia --engine compiled \

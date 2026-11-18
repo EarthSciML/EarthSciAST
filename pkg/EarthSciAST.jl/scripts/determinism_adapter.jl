@@ -15,34 +15,11 @@
 # distinct set). Keep this thin — the contract
 # lives in src/relational.jl, not here.
 
+include(joinpath(@__DIR__, "adapter_support.jl"))
+
 using EarthSciAST
 const R = EarthSciAST.Relational
 import JSON3
-
-function parse_args(argv)
-    manifest = nothing
-    output = nothing
-    i = 1
-    while i <= length(argv)
-        a = argv[i]
-        if a == "--manifest"
-            manifest = argv[i + 1]; i += 2
-        elseif a == "--output"
-            output = argv[i + 1]; i += 2
-        else
-            error("determinism_adapter: unknown argument $(repr(a))")
-        end
-    end
-    (manifest === nothing || output === nothing) &&
-        error("determinism_adapter: --manifest and --output are required")
-    return manifest, output
-end
-
-# Recursively convert JSON3 values to native Dict/Vector so the relational
-# primitives see plain Julia Int/String/Bool (not lazy JSON3 views).
-to_native(x::JSON3.Object) = Dict{String, Any}(string(k) => to_native(v) for (k, v) in x)
-to_native(x::JSON3.Array) = Any[to_native(v) for v in x]
-to_native(x) = x
 
 # Directed component lists for one payload: faces (consecutive vertices with
 # wraparound) or pre-built tuples — mirrors the runner's reference shaping.
@@ -115,20 +92,16 @@ function compute_fixture(fx)
 end
 
 function main(argv)
-    manifest_path, output_path = parse_args(argv)
-    manifest = to_native(JSON3.read(read(manifest_path, String)))
-
+    args = parse_cli(argv; required = ("--manifest", "--output"))
+    manifest = to_native(JSON3.read(read(args["--manifest"], String)))
     fixtures = Dict{String, Any}()
     for fx in manifest["fixtures"]
         fixtures[fx["id"]] = compute_fixture(fx)
     end
-
-    result = Dict{String, Any}("binding" => "julia", "fixtures" => fixtures)
-    mkpath(dirname(abspath(output_path)))
-    open(output_path, "w") do io
-        JSON3.write(io, result)
-        write(io, "\n")
-    end
+    write_report(
+        args["--output"],
+        JSON3.write(Dict{String, Any}("binding" => "julia", "fixtures" => fixtures))
+    )
     return 0
 end
 

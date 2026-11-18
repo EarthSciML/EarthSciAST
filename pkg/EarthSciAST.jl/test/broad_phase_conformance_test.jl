@@ -1,4 +1,4 @@
-# Planar spatial-index broad phase — conformance (projection-pushdown Phase 3a).
+# Planar spatial-index broad phase — conformance (projection pushdown).
 #
 # `broad_phase_candidates(query_envs, cell_envs; eps)` (src/broad_phase.jl)
 # returns a CONSERVATIVE SUPERSET of the (query × cell) index pairs whose 2D

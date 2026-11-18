@@ -68,7 +68,7 @@ function _bc_doc(name, vars, eqs; sets = _BC_SETS)
         push!(eqs, _bc_eq(vn, pop!(v, _BC_DEFKEY)))
     end
     return Dict{String, Any}(
-        "esm" => "0.6.0",
+        "esm" => E.SCHEMA_VERSION,
         "metadata" => Dict{String, Any}("name" => name),
         "index_sets" => Dict{String, Any}(
             k => Dict{String, Any}("kind" => "interval", "size" => v) for (k, v) in sets
@@ -81,9 +81,9 @@ function _bc_doc(name, vars, eqs; sets = _BC_SETS)
     )
 end
 
-# RHS at t = 0 from the built evaluator, as a name → value map.
+# RHS at t = 0 from the built evaluator, as a (qualified) name → value map.
 function _bc_rhs(doc::AbstractDict)
-    f!, u0, p, _t, vm = E._build_evaluator(doc)
+    f!, u0, p, _t, vm = E.Internal.build(doc)
     du = similar(u0)
     f!(du, u0, p, 0.0)
     return Dict{String, Float64}(k => du[i] for (k, i) in vm)
@@ -91,11 +91,6 @@ end
 
 _bc_validate(doc::AbstractDict) = E.validate(E.coerce_esm_file(JSON3.read(JSON3.write(doc))))
 _bc_types(res) = sort!(String[e.error_type for e in res.structural_errors])
-_bc_err(f) = try
-    f(); nothing
-catch e
-    e
-end
 
 # The §4.3.4 fixture family from GitHub #100: a 3×2×2 `[lon,lat,lev]` state fed
 # by lower-rank observeds. `w1[lat] = 10j`, `w2[lon,lat] = i + 10j`,
@@ -158,7 +153,7 @@ _bc_oracle(name, body) = _bc_model(
             )
             plain = _bc_doc("P", vars, Any[_bc_eq(_bc_D("x"), _bc_op(f, "x"))])
             bcast = _bc_doc("P", vars, Any[_bc_eq(_bc_D("x"), _bc_bcast(f, "x"))])
-            @test _bc_rhs(bcast)["x"] === _bc_rhs(plain)["x"]
+            @test _bc_rhs(bcast)["P.x"] === _bc_rhs(plain)["P.x"]
         end
         # #101 end to end: `dp' = broadcast(fn="-",[div_h])` with `div_h = a*dp`,
         # a = -0.3 — the case Rust/Python answered with exp(-0.3). The RHS at t=0
@@ -174,8 +169,8 @@ _bc_oracle(name, body) = _bc_model(
         bc = _bc_rhs(_bc_doc("N", vars, Any[_bc_eq(_bc_D("dp"), _bc_bcast("-", "div_h"))]))
         pl = _bc_rhs(_bc_doc("N", vars, Any[_bc_eq(_bc_D("dp"), _bc_op("-", "div_h"))]))
         @test bc == pl
-        @test bc["dp[1,1,1]"] ≈ 0.3
-        @test bc["dp[3,2,2]"] ≈ 0.3
+        @test bc["N.dp[1,1,1]"] ≈ 0.3
+        @test bc["N.dp[3,2,2]"] ≈ 0.3
     end
 
     @testset "n-ary broadcast ≡ the same n-ary scalar op" begin
@@ -196,7 +191,7 @@ _bc_oracle(name, body) = _bc_model(
             ]
             plain = _bc_doc("P", vars, Any[_bc_eq(_bc_D("x"), _bc_op(f, args...))])
             bcast = _bc_doc("P", vars, Any[_bc_eq(_bc_D("x"), _bc_bcast(f, args...))])
-            @test _bc_rhs(bcast)["x"] === _bc_rhs(plain)["x"]
+            @test _bc_rhs(bcast)["P.x"] === _bc_rhs(plain)["P.x"]
         end
         # `broadcast(fn:"+",[1])` — the exact shape of tests/property_corpus/
         # expressions/expr_039.json — lowers to `+(1)` and validates clean.
@@ -228,8 +223,8 @@ _bc_oracle(name, body) = _bc_model(
         @test bare == oracle
         # dp[i,j,k] = 10·j for every i,k (the values Rust reports as correct).
         for i in 1:3, k in 1:2
-            @test bare["dp[$i,1,$k]"] ≈ 10.0
-            @test bare["dp[$i,2,$k]"] ≈ 20.0
+            @test bare["A.dp[$i,1,$k]"] ≈ 10.0
+            @test bare["A.dp[$i,2,$k]"] ≈ 20.0
         end
     end
 
@@ -245,15 +240,15 @@ _bc_oracle(name, body) = _bc_model(
         bare = _bc_rhs(_bc_model("B", _bc_op("*", "w2", "z1")))
         @test bare == oracle
         # (i + 10j)·100k — the reference values Rust and Python also produce.
-        @test bare["dp[1,1,1]"] ≈ 1100.0
-        @test bare["dp[2,1,1]"] ≈ 1200.0
-        @test bare["dp[3,1,1]"] ≈ 1300.0
-        @test bare["dp[1,2,1]"] ≈ 2100.0
-        @test bare["dp[2,2,1]"] ≈ 2200.0
-        @test bare["dp[3,2,1]"] ≈ 2300.0
-        @test bare["dp[1,1,2]"] ≈ 2200.0
-        @test bare["dp[2,1,2]"] ≈ 2400.0
-        @test bare["dp[3,1,2]"] ≈ 2600.0
+        @test bare["B.dp[1,1,1]"] ≈ 1100.0
+        @test bare["B.dp[2,1,1]"] ≈ 1200.0
+        @test bare["B.dp[3,1,1]"] ≈ 1300.0
+        @test bare["B.dp[1,2,1]"] ≈ 2100.0
+        @test bare["B.dp[2,2,1]"] ≈ 2200.0
+        @test bare["B.dp[3,2,1]"] ≈ 2300.0
+        @test bare["B.dp[1,1,2]"] ≈ 2200.0
+        @test bare["B.dp[2,1,2]"] ≈ 2400.0
+        @test bare["B.dp[3,1,2]"] ≈ 2600.0
     end
 
     @testset "case C: equal-rank NAME-PERMUTED operand transposes, not reinterprets" begin
@@ -265,9 +260,9 @@ _bc_oracle(name, body) = _bc_model(
         @test bare == oracle
         # wT[j,i] = i + 10j, so dp[i,j,k] = i + 10j. Under the OLD positional
         # gather dp[2,1,k] would have read wT[2,1] = 1 + 20 = 21.
-        @test bare["dp[2,1,1]"] ≈ 12.0
-        @test bare["dp[3,1,2]"] ≈ 13.0
-        @test bare["dp[1,2,1]"] ≈ 21.0
+        @test bare["C.dp[2,1,1]"] ≈ 12.0
+        @test bare["C.dp[3,1,2]"] ≈ 13.0
+        @test bare["C.dp[1,2,1]"] ≈ 21.0
     end
 
     @testset "operand over an index set ABSENT from the result is a hard error" begin
@@ -294,7 +289,7 @@ _bc_oracle(name, body) = _bc_model(
         @test hit.details["index_set"] == "qux"
         @test hit.path == "/models/X/equations/0/rhs"
 
-        err = _bc_err(() -> E._build_evaluator(doc))
+        err = caught(() -> E.Internal.build(doc))
         @test err isa E.TreeWalkError
         @test err.code == "E_TREEWALK_ARRAY_SHAPE_MISMATCH"
     end
@@ -352,8 +347,7 @@ _bc_oracle(name, body) = _bc_model(
         end
         # The contract is enforced in NESTED positions too. From esm 1.0.0 an
         # observed unknown's body IS an equation, so the finding is reported at that
-        # equation's RHS rather than at a `variables/y/expression` that no longer
-        # exists. `_bc_doc` appends the lifted definition after the authored
+        # equation's RHS. `_bc_doc` appends the lifted definition after the authored
         # equations, so it is equations/1.
         nested = _bc_doc(
             "F", Dict{String, Any}(
@@ -383,7 +377,9 @@ _bc_oracle(name, body) = _bc_model(
                 (_bc_bcast("/", "x"), "E_TREEWALK_BROADCAST_FN"),
                 (_bc_bcast("min", "x"), "E_TREEWALK_BROADCAST_FN"),
             ]
-            err = _bc_err(() -> E._build_evaluator(mk(node)))
+            # Coerced without the loader's schema check, which would refuse
+            # most of these first: the subject is the build's own refusal.
+            err = caught(() -> E.Internal.build(E.coerce_esm_file(mk(node))))
             @test err isa E.TreeWalkError
             @test err.code == code
         end
@@ -400,22 +396,22 @@ _bc_oracle(name, body) = _bc_model(
 
     @testset "reshape / transpose / concat are refused with unevaluable_operator" begin
         vars = Dict("u" => ESS.ModelVariable(ESS.UnknownVariable))
-        ics = Dict("u" => 1.0)
+        ics = Dict("M.u" => 1.0)
         for node in [
                 _op("reshape", _v("u"); shape = Any[1, 1]),
                 _op("transpose", _v("u"); perm = Any[0]),
                 _op("concat", _v("u"), _v("u"); axis = 0),
             ]
             m = ESS.Model(vars, [ESS.Equation(_D("u"), node)])
-            err = _bc_err(() -> E._build_evaluator(m; initial_conditions = ics))
+            err = caught(() -> E.Internal.build(m; initial_conditions = ics))
             @test err isa E.TreeWalkError
             @test err.code == "unevaluable_operator"
         end
         # …while a typed `broadcast` node with a legal `fn` now LOWERS and runs.
         m = ESS.Model(vars, [ESS.Equation(_D("u"), _op("broadcast", _v("u"); fn = "-"))])
-        f!, u0, p, _t, vm = E._build_evaluator(m; initial_conditions = ics)
+        f!, u0, p, _t, vm = E.Internal.build(m; initial_conditions = ics)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vm["u"]] == -1.0
+        @test du[vm["M.u"]] == -1.0
     end
 
     @testset "explicit over-subscription still hits the ndim guard" begin
@@ -423,7 +419,7 @@ _bc_oracle(name, body) = _bc_model(
         # with the wrong number of subscripts is still a hard error (the guards were
         # narrowed to their real job, not widened into acceptance).
         doc = _bc_oracle("G", _bc_idx("w1", "i", "j", "k"))   # 3 subscripts into 1-D w1
-        err = _bc_err(() -> E._build_evaluator(doc))
+        err = caught(() -> E.Internal.build(doc))
         @test err isa E.TreeWalkError
         @test err.code == "E_TREEWALK_INDEX_NDIM"
     end

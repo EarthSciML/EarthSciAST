@@ -24,7 +24,7 @@
 # trajectory is analytic and exact.
 using Test
 using EarthSciAST
-using DiffEqCallbacks            # loads EarthSciASTDataRefreshExt
+using DiffEqCallbacks            # loads EarthSciASTCallbacksExt
 using SciMLBase                  # ext co-trigger (u_modified!)
 import OrdinaryDiffEqTsit5 as ODE  # Tsit5 + ODEProblem + solve (test-only solver dep)
 using JSON3
@@ -47,7 +47,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
     golden_path = joinpath(root, "golden", "discrete_materialize_contraction.json")
     if _require_fixture(fixture) && _require_fixture(golden_path)
         golden = JSON3.read(read(golden_path, String))
-        ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+        ics = Dict{String, Float64}("M.c[1]" => 0.0, "M.c[2]" => 0.0, "M.c[3]" => 0.0)
         anchors = sort!(
             Float64[
                 parse(Float64, String(k))
@@ -75,25 +75,25 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # interpreter's per-cell fill is the oracle it must equal bit for bit.
         srcbuf = copy(src_at(0.0))
         dm = _ESS_DM.DiscreteMaterializer()
-        f!, u0, p, _ts, vm = _ESS_DM._build_evaluator(
-            _ESS_DM.load_path(fixture);
-            initial_conditions = ics, param_arrays = Dict("src" => srcbuf),
+        (f!, u0, p, _ts, vm) = b = _ESS_DM.Internal.build(
+            fixture;
+            initial_conditions = ics, param_arrays = Dict("M.src" => srcbuf),
             materialize_out = dm
         )
         srcbuf_i = copy(src_at(0.0))
         dm_i = _ESS_DM.DiscreteMaterializer()
-        _ESS_DM._build_evaluator(
-            _ESS_DM.load_path(fixture);
-            initial_conditions = ics, param_arrays = Dict("src" => srcbuf_i),
+        _ESS_DM.Internal.build(
+            fixture;
+            initial_conditions = ics, param_arrays = Dict("M.src" => srcbuf_i),
             compiler = :interpreter, materialize_out = dm_i
         )
-        @test haskey(dm.caches, "g")     # forcing-tainted, state-free -> DISCRETE cache
-        @test !haskey(dm.caches, "k")    # const/parameter-fed -> CONST-cadence (regression guard)
+        @test haskey(dm.caches, "M.g")     # forcing-tainted, state-free -> DISCRETE cache
+        @test !haskey(dm.caches, "M.k")    # const/parameter-fed -> CONST-cadence (regression guard)
         for t in anchors
             srcbuf .= src_at(t); srcbuf_i .= src_at(t)
             dm.materialize!(); dm_i.materialize!()
-            @test vec(Float64.(dm.caches["g"])) ≈ g_at(t) atol = field_atol
-            @test all(dm.caches["g"] .=== dm_i.caches["g"])
+            @test vec(Float64.(dm.caches["M.g"])) ≈ g_at(t) atol = field_atol
+            @test all(dm.caches["M.g"] .=== dm_i.caches["M.g"])
         end
 
         # (c) trajectory band: ONE solve over a refresh callback whose `affect!`
@@ -102,14 +102,15 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # frozen per segment -> RHS pure -> closed form matched to solver tol.
         srcbuf2 = copy(src_at(0.0))
         dm2 = _ESS_DM.DiscreteMaterializer()
-        f2!, u02, p2, _ts2, vm2 = _ESS_DM._build_evaluator(
-            _ESS_DM.load_path(fixture);
-            initial_conditions = ics, param_arrays = Dict("src" => srcbuf2),
+        (f2!, u02, p2, _ts2, vm2) = b = _ESS_DM.Internal.build(
+            fixture;
+            initial_conditions = ics, param_arrays = Dict("M.src" => srcbuf2),
             materialize_out = dm2
         )
         interior = [t for t in anchors if t > 0.0]
         prov = _DMConfProvider(interior, Dict(t => Dict("src" => src_at(t)) for t in interior))
         cb, tstops = _ESS_DM.build_refresh_callback(;
+            owner = b,
             providers = Dict("src" => prov),
             buffers = _ESS_DM.RefreshBuffers(Dict("src" => srcbuf2)),  # SAME buffer object
             post_refresh = dm2.materialize!
@@ -134,7 +135,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
             @test ti !== nothing
             for (jj, cell) in enumerate(("M.c[1]", "M.c[2]", "M.c[3]"))
                 want = Float64(traj[tk][Symbol(cell)])
-                @test isapprox(sol.u[ti][vm2["c[$jj]"]], want; rtol = rtol, atol = atol)
+                @test isapprox(sol.u[ti][vm2[cell]], want; rtol = rtol, atol = atol)
             end
         end
     end

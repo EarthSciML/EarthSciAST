@@ -24,15 +24,17 @@ include("testutils.jl")
         @test EarthSciASTError <: Exception
     end
 
-    # Walk the module (and its two namespaced submodules) for concrete Exception
+    # Walk the module (and its namespaced submodule) for concrete Exception
     # types and assert every one of them is under the root. `all=true` reaches
-    # the unexported internals — the control-flow signals (`_CodegenDecline`,
-    # `_StencilFallback`, …) are covered deliberately, so the rule "every
-    # exception in this package is an EarthSciASTError" has no exceptions.
+    # the unexported internals — the control-flow signals (`_Decline`,
+    # `_DiagnosticCap`, …) are covered deliberately. The one exception is
+    # `_HaloDone` (src/range/tile.jl), which leaves a build at the range seam
+    # and is kept outside the root on purpose, so that no `catch` of an
+    # `EarthSciASTError` between the seam and its handler can swallow it.
     @testset "every exception type in the package subtypes it" begin
         strays = String[]
         found = 0
-        for mod in (EarthSciAST, EarthSciAST.Cadence, EarthSciAST.Relational)
+        for mod in (EarthSciAST, EarthSciAST.Relational)
             for n in names(mod; all = true)
                 v = try
                     getfield(mod, n)
@@ -48,7 +50,7 @@ include("testutils.jl")
         # Guard the scan: a reflection change that found nothing would pass the
         # subset check vacuously.
         @test found >= 30
-        @test isempty(strays)
+        @test strays == ["EarthSciAST._HaloDone"]
     end
 
     @testset "a single catch clause covers the surface" begin
@@ -114,6 +116,80 @@ include("testutils.jl")
             k -> string(k) == uppercase(getproperty(ERROR_CODES, k)),
             keys(ERROR_CODES)
         )
+    end
+
+    @testset "every exported error type leads with `code` and prints one way" begin
+        exported = [
+            getfield(EarthSciAST, n) for n in names(EarthSciAST)
+                if (v = getfield(EarthSciAST, n); v isa DataType && v <: EarthSciASTError && isconcretetype(v))
+        ]
+        # Guard the scan against a reflection change that finds nothing.
+        @test length(exported) >= 25
+        @test isempty([T for T in exported if fieldname(T, 1) !== :code || fieldtype(T, 1) !== String])
+        @test fieldname(EarthSciAST.Relational.FloatKeyError, 1) === :code
+        # The types' own `showerror` methods are gone: one method serves them all.
+        @test isempty([T for T in exported if which(showerror, Tuple{IO, T}).sig !== Tuple{typeof(showerror), IO, EarthSciASTError}])
+
+        e = ParseError("bad", nothing; code = "removed_op", path = "/models/M", file = "/a/b.esm")
+        @test (error_code(e), error_message(e), error_path(e), error_file(e)) ==
+            ("removed_op", "bad", "/models/M", "/a/b.esm")
+        @test sprint(showerror, e) == "ParseError [removed_op]: bad (at /models/M in /a/b.esm)"
+        @test sprint(showerror, ParseError("bad")) == "ParseError: bad"
+        e = SimulateError("no such key", "unknown_override_key")
+        @test (error_code(e), error_message(e), error_path(e)) == ("unknown_override_key", "no such key", "")
+        @test sprint(showerror, e) == "SimulateError [unknown_override_key]: no such key"
+        e = TreeWalkError("E_TREEWALK_ARITY", "op '+' takes 2 operands")
+        @test sprint(showerror, e) == "TreeWalkError [E_TREEWALK_ARITY]: op '+' takes 2 operands"
+        e = ConflictingDerivativeError(["A.x"], "both an equation and a reaction")
+        @test error_code(e) == "conflicting_derivative"
+        @test startswith(sprint(showerror, e), "ConflictingDerivativeError [conflicting_derivative]: ")
+        @test error_message(e) == sprint(showerror, e)[(length("ConflictingDerivativeError [conflicting_derivative]: ") + 1):end]
+    end
+
+    @testset "every local E_ code literal is listed" begin
+        # The Julia-evaluator codes stay out of ERROR_CODES (not a cross-binding
+        # contract); this is their typo guard.
+        root = joinpath(@__DIR__, "..")
+        seen = Set{String}()
+        for dir in ("src", "ext"), (d, _, fs) in walkdir(joinpath(root, dir)), f in fs
+            endswith(f, ".jl") || continue
+            for m in eachmatch(r"\"(E_[A-Z0-9_]+)\"", read(joinpath(d, f), String))
+                push!(seen, String(m.captures[1]))
+            end
+        end
+        @test length(seen) >= 50
+        @test isempty(setdiff(seen, Set(EarthSciAST._LOCAL_ERROR_CODES)))
+        @test isempty(intersect(Set(EarthSciAST._LOCAL_ERROR_CODES), Set(error_code_names())))
+    end
+
+    @testset "every SimulateError and RefreshError raise passes a code" begin
+        # The one-argument constructor leaves `code` empty; every raise site
+        # names a registered code instead.
+        root = joinpath(@__DIR__, "..")
+        uncoded = String[]
+        function scan(ex, name, file, line)
+            if ex isa LineNumberNode
+                return ex.line
+            elseif ex isa Expr
+                if ex.head == :call && ex.args[1] === name
+                    pos = [a for a in ex.args[2:end] if !(a isa Expr && a.head in (:kw, :parameters))]
+                    typed = any(a -> a isa Expr && a.head == :(::), pos)
+                    (length(pos) < 2 && !typed) && push!(uncoded, "$file:$line")
+                end
+                for a in ex.args
+                    l = scan(a, name, file, line)
+                    l isa Int && (line = l)
+                end
+            end
+            return nothing
+        end
+        for (name, dirs) in ((:SimulateError, ("src", "ext")), (:RefreshError, ("src", "ext"))),
+                dir in dirs, (d, _, fs) in walkdir(joinpath(root, dir)), f in fs
+            endswith(f, ".jl") || continue
+            p = joinpath(d, f)
+            scan(Meta.parseall(read(p, String); filename = p), name, relpath(p, root), 0)
+        end
+        @test isempty(uncoded)
     end
 
     @testset "the corpus-pinned codes are registered" begin

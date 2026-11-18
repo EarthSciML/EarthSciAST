@@ -2,10 +2,11 @@
 # tree_walk/scalar_codegen.jl — the Julia CODEGEN tier for the scalar
 # equation list and the cached prelude.
 #
-# The in-place `f!` (`_make_rhs`, acc_merge.jl) evaluates the scalar equations
-# (`rhs_list`) and the three cadence tiers of the shared-subexpression prelude
-# (const_tier.jl) by walking each `_Node` tree with `_eval_node`, once per
-# equation or slot, on every call. This tier emits them as Julia code instead,
+# Without this tier the in-place `f!` (`_StateScalars`, rhs_assembly.jl) evaluates the
+# scalar equations (`rhs_list`) and the three cadence tiers of the
+# shared-subexpression prelude (const_tier.jl) by walking each `_Node` tree with
+# `_eval_node`, once per equation or slot, on every call. This tier emits them
+# as Julia code instead,
 # compiled once through RuntimeGeneratedFunctions, as the access-kernel tier
 # (codegen_kernel.jl) does for array kernels.
 #
@@ -120,149 +121,190 @@ const _SC_CUT_UNIT_NODES = 2048
 # A dynamic slot at least this large is a cut point in such a unit.
 const _SC_CUT_SLOT_NODES = 64
 
-# Union-find over the dynamic slots and the equations: an equation or a slot
-# joins every dynamic slot it reads. Returns the units, plus the positions
-# (slots and equations) that cannot be emitted because a tree reads a foreign
-# scratch — those components stay on the walker whole.
-#
-# A component of at least `_SC_CUT_UNIT_NODES` nodes with no such position is
-# then cut: a read of one of its slots of at least `_SC_CUT_SLOT_NODES` nodes
-# does not join the reader to the slot. The reader's unit runs after the
-# slot's (`level`, one more than the deepest unit it reads that way) and the
-# slot is stored to the cache (`cut`). Units that would read each other's cut
-# slots both ways are joined again. Returns `(good, resid, level, cut)`, `good`
-# ordered by level.
-function _sc_dynamic_units(
+# The read graph over the dynamic slots and the equations. Positions
+# `1:nslots` are the dynamic slots (in `dyn_slots` order), the rest the
+# equations. `rd[x]` lists the dynamic-slot positions position `x` reads;
+# `bad[x]` is set when its tree reads another section's scratch, which keeps its
+# whole component on the walker; `sizes[x]` is its tree's node count.
+struct _ScReadGraph
+    rd::Vector{Vector{Int}}
+    bad::BitVector
+    sizes::Vector{Int}
+    nslots::Int
+end
+
+function _sc_read_graph(
         rhs_list, n_rhs::Int, prelude::AbstractVector{_Node},
-        cache::_CSECache, dyn_slots::AbstractVector{Int}; cuts::Bool = true
+        cache::_CSECache, dyn_slots::AbstractVector{Int}
     )
     nd_ = length(dyn_slots)
     N = nd_ + n_rhs
-    pos = Dict{Int, Int}()                     # dynamic slot -> union-find node
-    for (i, s) in enumerate(dyn_slots)
-        pos[s] = i
-    end
+    pos = Dict{Int, Int}(s => i for (i, s) in enumerate(dyn_slots))
     bad = falses(N)
-    # Each position's reads of dynamic slots, as union-find nodes.
     rd = Vector{Vector{Int}}(undef, N)
+    sizes = Vector{Int}(undef, N)
     reads = Int[]
     for x in 1:N
         empty!(reads)
         tree = x <= nd_ ? prelude[dyn_slots[x]] : rhs_list[x - nd_][2]
         _sc_cache_reads!(reads, tree, cache) || (bad[x] = true)
-        r = Int[]
-        for s in reads
-            j = get(pos, s, 0)
-            j == 0 || push!(r, j)
+        rd[x] = Int[j for j in (get(pos, s, 0) for s in reads) if j != 0]
+        sizes[x] = _cg_node_tree_size(tree)
+    end
+    return _ScReadGraph(rd, bad, sizes, nd_)
+end
+
+# Union-find with path halving; a union keeps the smaller root.
+struct _UnionFind
+    parent::Vector{Int}
+end
+_UnionFind(n::Int) = _UnionFind(collect(1:n))
+function _uf_find(uf::_UnionFind, x::Int)
+    parent = uf.parent
+    while parent[x] != x
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    end
+    return x
+end
+function _uf_unite!(uf::_UnionFind, a::Int, b::Int)
+    ra = _uf_find(uf, a)
+    rb = _uf_find(uf, b)
+    ra == rb || (uf.parent[max(ra, rb)] = min(ra, rb))
+    return nothing
+end
+
+# The units: every position joined to each dynamic slot it reads, except
+# across a read of a cut slot (`cutpt`). Units whose cut reads form a cycle
+# are joined until none does, so the unit graph over cut reads is acyclic.
+function _sc_partition(g::_ScReadGraph, cutpt::BitVector)
+    N = length(g.rd)
+    uf = _UnionFind(N)
+    for x in 1:N, j in g.rd[x]
+        cutpt[j] || _uf_unite!(uf, x, j)
+    end
+    any(cutpt) || return uf
+    while true
+        roots = unique!(Int[_uf_find(uf, x) for x in 1:N])
+        idx = Dict{Int, Int}(r => i for (i, r) in enumerate(roots))
+        succ = [Set{Int}() for _ in roots]
+        for x in 1:N, j in g.rd[x]
+            cutpt[j] || continue
+            a, b = idx[_uf_find(uf, x)], idx[_uf_find(uf, j)]
+            a == b || push!(succ[a], b)
         end
-        rd[x] = r
+        merged = false
+        for grp in values(_sc_scc(succ))
+            length(grp) > 1 || continue
+            for k in grp
+                _uf_unite!(uf, roots[grp[1]], roots[k])
+            end
+            merged = true
+        end
+        merged || return uf
     end
-    parent = collect(1:N)
-    find(x) = (
-        while parent[x] != x
-            parent[x] = parent[parent[x]]; x = parent[x]
-        end; x
-    )
-    unite(a, b) = (ra = find(a); rb = find(b); ra == rb || (parent[max(ra, rb)] = min(ra, rb)); nothing)
-    for x in 1:N, j in rd[x]
-        unite(x, j)
-    end
-    # ---- Cut the large components at their large slots ----
-    cutpt = falses(N)
-    size_of(x) = _cg_node_tree_size(x <= nd_ ? prelude[dyn_slots[x]] : rhs_list[x - nd_][2])
-    sizes = Int[size_of(x) for x in 1:N]
+    return
+end
+
+# The cut points of the uncut partition `uf`: a dynamic slot of at least
+# `_SC_CUT_SLOT_NODES` nodes in a component of at least `_SC_CUT_UNIT_NODES`
+# nodes with no walker-bound position.
+function _sc_cut_points(g::_ScReadGraph, uf::_UnionFind)
+    N = length(g.rd)
     comp_nodes = Dict{Int, Int}()
     comp_bad = Set{Int}()
     for x in 1:N
-        r = find(x)
-        comp_nodes[r] = get(comp_nodes, r, 0) + sizes[x]
-        bad[x] && push!(comp_bad, r)
+        r = _uf_find(uf, x)
+        comp_nodes[r] = get(comp_nodes, r, 0) + g.sizes[x]
+        g.bad[x] && push!(comp_bad, r)
     end
-    for x in 1:nd_
-        cuts || break
-        r = find(x)
-        (sizes[x] >= _SC_CUT_SLOT_NODES && comp_nodes[r] >= _SC_CUT_UNIT_NODES && !(r in comp_bad)) &&
-            (cutpt[x] = true)
+    cutpt = falses(N)
+    for x in 1:g.nslots
+        r = _uf_find(uf, x)
+        (
+            g.sizes[x] >= _SC_CUT_SLOT_NODES && comp_nodes[r] >= _SC_CUT_UNIT_NODES &&
+                !(r in comp_bad)
+        ) && (cutpt[x] = true)
     end
-    if any(cutpt)
-        parent .= 1:N
-        for x in 1:N, j in rd[x]
-            cutpt[j] || unite(x, j)
+    return cutpt
+end
+
+# Each unit's level (a unit reading a cut slot of another runs one level after
+# it; longest path over the acyclic unit graph) and the cut slots some other
+# unit reads, which must be stored to the cache. `unit_of[r]` is the unit of
+# union-find root `r`.
+function _sc_levels(
+        g::_ScReadGraph, uf::_UnionFind, unit_of::Dict{Int, Int}, nunits::Int,
+        cutpt::BitVector, dyn_slots::AbstractVector{Int}
+    )
+    lvl = ones(Int, nunits)
+    cut = Set{Int}()
+    any(cutpt) || return lvl, cut
+    succ = [Set{Int}() for _ in 1:nunits]   # producer -> readers
+    indeg = zeros(Int, nunits)
+    for x in 1:length(g.rd), j in g.rd[x]
+        cutpt[j] || continue
+        a, b = unit_of[_uf_find(uf, j)], unit_of[_uf_find(uf, x)]
+        a == b && continue
+        if !(b in succ[a])
+            push!(succ[a], b)
+            indeg[b] += 1
         end
-        # Join the units on a cycle of cut reads (Tarjan over the unit graph).
-        while true
-            roots = unique!(Int[find(x) for x in 1:N])
-            idx = Dict{Int, Int}(r => i for (i, r) in enumerate(roots))
-            nU = length(roots)
-            succ = [Set{Int}() for _ in 1:nU]
-            for x in 1:N, j in rd[x]
-                cutpt[j] || continue
-                a, b = idx[find(x)], idx[find(j)]
-                a == b || push!(succ[a], b)
-            end
-            comp = _sc_scc(succ)
-            merged = false
-            for grp in values(comp)
-                length(grp) > 1 || continue
-                for g in grp
-                    unite(roots[grp[1]], roots[g])
-                end
-                merged = true
-            end
-            merged || break
+        push!(cut, dyn_slots[j])
+    end
+    q = Int[u for u in 1:nunits if indeg[u] == 0]
+    while !isempty(q)
+        a = pop!(q)
+        for b in succ[a]
+            lvl[b] = max(lvl[b], lvl[a] + 1)
+            indeg[b] -= 1
+            indeg[b] == 0 && push!(q, b)
         end
     end
-    roots = Dict{Int, Int}()
+    return lvl, cut
+end
+
+# The units of the dynamic slots and the equations, from the read graph `g`.
+# With `cuts`, a large component is cut at its large slots (`_sc_cut_points`):
+# a read of a cut slot does not join the reader to it, the reader's unit runs
+# at a later level and the slot is stored to the cache (`cut`). Returns
+# `(good, resid, level, cut)`: the emittable units ordered by level, the units
+# that stay on the walker (a position reads a foreign scratch), each good
+# unit's level, and the cut slots.
+function _sc_dynamic_units(g::_ScReadGraph, dyn_slots::AbstractVector{Int}; cuts::Bool = true)
+    N = length(g.rd)
+    cutpt = falses(N)
+    uf = _sc_partition(g, cutpt)
+    if cuts
+        cutpt = _sc_cut_points(g, uf)
+        any(cutpt) && (uf = _sc_partition(g, cutpt))
+    end
+    unit_of = Dict{Int, Int}()
     units = _ScUnit[]
     badroot = Set{Int}()
     for x in 1:N
-        bad[x] && push!(badroot, find(x))
-    end
-    for x in 1:N
-        r = find(x)
-        u = get(roots, r, 0)
+        r = _uf_find(uf, x)
+        g.bad[x] && push!(badroot, r)
+        u = get(unit_of, r, 0)
         if u == 0
             push!(units, _ScUnit(Int[], Int[]))
-            u = roots[r] = length(units)
+            u = unit_of[r] = length(units)
         end
-        x <= nd_ ? push!(units[u].slots, dyn_slots[x]) : push!(units[u].outs, x - nd_)
+        x <= g.nslots ? push!(units[u].slots, dyn_slots[x]) : push!(units[u].outs, x - g.nslots)
     end
-    # Levels: a unit reading a cut slot of another runs after it. The unit graph
-    # is acyclic here, so a longest-path walk in topological order settles it.
-    lvl = ones(Int, length(units))
-    cut = Set{Int}()
-    if any(cutpt)
-        succ = [Set{Int}() for _ in 1:length(units)]   # producer -> readers
-        indeg = zeros(Int, length(units))
-        for x in 1:N, j in rd[x]
-            cutpt[j] || continue
-            a, b = roots[find(j)], roots[find(x)]
-            a == b && continue
-            if !(b in succ[a])
-                push!(succ[a], b); indeg[b] += 1
-            end
-            push!(cut, dyn_slots[j])
-        end
-        q = Int[u for u in eachindex(units) if indeg[u] == 0]
-        while !isempty(q)
-            a = pop!(q)
-            for b in succ[a]
-                lvl[b] = max(lvl[b], lvl[a] + 1)
-                indeg[b] -= 1
-                indeg[b] == 0 && push!(q, b)
-            end
-        end
-    end
+    lvl, cut = _sc_levels(g, uf, unit_of, length(units), cutpt, dyn_slots)
     good = _ScUnit[]
     goodlvl = Int[]
     resid = _ScUnit[]
-    for (r, u) in roots
+    for (r, u) in unit_of
         U = units[u]
-        sort!(U.slots); sort!(U.outs)
+        sort!(U.slots)
+        sort!(U.outs)
         if r in badroot
             push!(resid, U)
         else
-            push!(good, U); push!(goodlvl, lvl[u])
+            push!(good, U)
+            push!(goodlvl, lvl[u])
         end
     end
     # Deterministic order: by level, then the unit's first equation, then its
@@ -405,7 +447,7 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
             _sc_sig!(S, c)
         end
     elseif k === _NK_CACHED
-        nd.payload === S.cache || throw(_CodegenDecline(:foreign_scratch))
+        nd.payload === S.cache || _decline(:foreign_scratch)
         lp = get(S.localpos, nd.idx, 0)
         if lp != 0
             push!(sig, 7, lp)
@@ -447,7 +489,7 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
         end
     elseif k === _NK_LOOPVAR
         d = findfirst(r -> r === nd.payload, S.loops)
-        d === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))
+        d === nothing && _decline(:loopvar_out_of_scope)
         push!(sig, 10, d)
     elseif k === _NK_CONTRACTION_LOOP
         spec = nd.payload::_ContractLoop
@@ -459,7 +501,7 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
         _sc_sig!(S, nd.children[1])
         pop!(S.loops)
     else
-        throw(_CodegenDecline(:unknown_kind))
+        _decline(:unknown_kind, string(nd.kind))
     end
     return nothing
 end
@@ -516,7 +558,7 @@ function _sc_classes(
         try
             _sc_unit_sig!(S, U, rhs_list, prelude, ext)
         catch err
-            err isa _CodegenDecline || rethrow()
+            err isa _Decline || rethrow()
             push!(declined, ui)
             continue
         end
@@ -566,11 +608,11 @@ _CGUnitCtx(holes, locals, loops, share) = _CGUnitCtx(
 )
 
 # The member's array where it differs between members.
-_cg_cga(ctx::_CGCtx, kc::_CGUnitCtx, cg) =
+_cg_cga(ctx::_CGFunction, kc::_CGUnitCtx, cg) =
     (v = get(kc.objs, cg, nothing); v === nothing ? _cg_tab!(ctx, cg) : v)
 
 # The counted axis of each member, when the array differs between members.
-function _cg_count_axis(ctx::_CGCtx, kc::_CGUnitCtx, a::_Node, spec::_ContractLoop)
+function _cg_count_axis(ctx::_CGFunction, kc::_CGUnitCtx, a::_Node, spec::_ContractLoop)
     col = a.kind === _NK_CONST_GATHER ? get(kc.ocols, a.payload, nothing) : nothing
     col === nothing && return _cg_count_axis(ctx, nothing, a, spec)
     axes = Vector{Vector{Float64}}(undef, length(col))
@@ -584,13 +626,13 @@ function _cg_count_axis(ctx::_CGCtx, kc::_CGUnitCtx, a::_Node, spec::_ContractLo
     return (:($(_cg_tab!(ctx, axes))[$(kc.member)]), asc)
 end
 
-_cg_boxaddr(::_CGCtx, ::_CGUnitCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
-    throw(_CodegenDecline(:lane_spec_on_scalar_spine))
+_cg_boxaddr(::_CGFunction, ::_CGUnitCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
+    _decline(:lane_spec_on_scalar_spine)
 
 # A repeated sub-tree (array_contraction.jl, "A repeated sub-tree computed
 # once"): a unit's node is keyed by its hole where it has one, since that is
 # what it reads for each member of the class.
-_cg_emit_region(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
+_cg_emit_region(ctx::_CGFunction, kc::_CGUnitCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
 function _cg_share_leaf(K::_CGShareKeys, kc::_CGUnitCtx, nd::_Node)
     k = nd.kind
     if k === _NK_LITERAL || k === _NK_STATE
@@ -618,7 +660,7 @@ function _cg_span_literal(kc::_CGUnitCtx, nd::_Node)
     return h isa Float64 ? h : nothing
 end
 
-function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
+function _cg_emit(ctx::_CGFunction, kc::_CGUnitCtx, nd::_Node)
     _cg_budget!(ctx)
     shared = get(kc.loops, nd, nothing)
     shared === nothing || return shared
@@ -656,7 +698,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
         return _cg_state_gather(ctx, kc, nd)
     elseif k === _NK_LOOPVAR
         s = get(kc.loops, nd.payload, nothing)
-        s === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))
+        s === nothing && _decline(:loopvar_out_of_scope)
         return :(Float64($s))
     elseif k === _NK_CONTRACTION_LOOP
         # The range is part of the class signature (`_sc_sig!`), so its bounds
@@ -664,7 +706,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
         spec = nd.payload::_ContractLoop
         return _cg_contraction_loop(ctx, kc, nd, spec.lo, spec.step, spec.hi)
     end
-    throw(_CodegenDecline(:unknown_kind))
+    return _decline(:unknown_kind, string(nd.kind))
 end
 
 # One emitted item: a loop over a class's members running some of its
@@ -807,7 +849,7 @@ end
 # Emit one item: a `let` block looping over this chunk's share of the class's
 # members. `stored[s]` (local mode) says a slot must also be stored to the cache.
 function _sc_emit_item!(
-        ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
+        ctx::_CGFunction, it::_ScItem, C::_ScClass, L::_ScLayout,
         U::_ScUnit, cachemode::Bool, S::_ScSigCtx, rhs_list, prelude,
         ext::Set{Int}, alwaysstore::Bool
     )
@@ -952,7 +994,7 @@ function _sc_build_gen(
         items::AbstractVector{_ScItem}, classes, layouts, units, cachemode,
         S::_ScSigCtx, rhs_list, prelude, ext::Set{Int}, alwaysstore::Bool
     )
-    ctx = _CGCtx(typemax(Int), nothing)
+    ctx = _CGFunction(typemax(Int), nothing)
     loops = Any[]
     for it in items
         C = classes[it.class]
@@ -965,8 +1007,6 @@ function _sc_build_gen(
         )
     end
     ln = LineNumberNode(0, Symbol("ess-scalar-codegen"))
-    ngrp = length(ctx.tab_types)
-    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
     # No alias scope, as in the kernel section. This function stores cache
     # slots and reads them back (a class in cache mode, a tier slot that reads
     # an earlier one), and inside `Base.Experimental.@aliasscope` Julia 1.11 to
@@ -974,21 +1014,10 @@ function _sc_build_gen(
     # same element (JuliaLang/julia#63129), such as in the members loop here:
     # the read-back then sees the previous call's value.
     run = Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, loops...))
-    body = Expr(
-        :block, grpstmts...,
-        :(local _cgT = _rhs_value_type(u, p, t)),
-        ctx.geosink...,
-        ctx.helpers...,
-        run,
-        :(return nothing)
+    f, fns = _cg_finish(
+        ctx, (:du, :u, :p, :t, :_cgcache, :tabs, :_cgci, :_cgnc), run; pre = ctx.nest.sink
     )
-    ex = Expr(
-        :function,
-        Expr(:tuple, :du, :u, :p, :t, :_cgcache, :tabs, :_cgci, :_cgnc), body
-    )
-    ex, fns = _cg_split_transport(ex, ngrp)
-    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
-    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
+    tabpack = _cg_tabpack(ctx, fns)
     return _ScGen(f, tabpack)
 end
 
@@ -1025,9 +1054,8 @@ end
     _run_scgens!(b.gens, args[1], args[2], args[3], args[4], b.cache, c, nc)
 
 @inline function (sp::_ScalarProgram)(du, u, p, t, cache, ::Type{T}) where {T}
-    if sp.threaded && _threads_available() &&
-            _sec_prep_threads!(sp.tcache).state == 1
-        _run_chunked!(sp.tcache, _ScChunk(sp.gens, cache), (du, u, p, t))
+    if sp.threaded
+        _run_section!(sp.tcache, _ScChunk(sp.gens, cache), (du, u, p, t))
     else
         _run_scgens!(sp.gens, du, u, p, t, cache, 1, 1)
     end
@@ -1079,12 +1107,12 @@ function _sc_program(
                     )
                     break
                 catch err
-                    err isa _CodegenDecline || rethrow()
+                    err isa _Decline || rethrow()
                     # Find the declining class by emitting each alone.
                     bad = findfirst(run) do it
                         try
                             _sc_emit_item!(
-                                _CGCtx(typemax(Int), nothing), it,
+                                _CGFunction(typemax(Int), nothing), it,
                                 classes[it.class], layouts[it.class],
                                 units[classes[it.class].rep],
                                 cachemode[it.class], S, rhs_list, prelude,
@@ -1092,7 +1120,7 @@ function _sc_program(
                             )
                             false
                         catch e2
-                            e2 isa _CodegenDecline || rethrow()
+                            e2 isa _Decline || rethrow()
                             true
                         end
                     end
@@ -1233,30 +1261,10 @@ function _scalar_walk_license(
     )
 end
 
-# The operator arities the registry declares (esm-spec §4.2), by node op.
-const _SC_OP_ARITY = Dict{Symbol, UnitRange{Int}}(
-    Symbol(s.name) => s.arity for s in _OP_TABLE if s.arity !== nothing
-)
-
 # Throw the walker's `E_TREEWALK_ARITY` for the first operator node in `nd`
-# whose child count the registry does not allow.
+# whose child count the registry does not allow (`_check_op_arity`).
 function _sc_check_arity(nd::_Node)
-    if nd.kind === _NK_OP
-        ar = get(_SC_OP_ARITY, nd.op, nothing)
-        n = length(nd.children)
-        if ar !== nothing && !(n in ar)
-            want = first(ar) == last(ar) ? "$(first(ar))" :
-                last(ar) == typemax(Int) ? "at least $(first(ar))" :
-                last(ar) == first(ar) + 1 ? "$(first(ar)) or $(last(ar))" :
-                "$(first(ar)) to $(last(ar))"
-            throw(
-                TreeWalkError(
-                    "E_TREEWALK_ARITY",
-                    "$(nd.op) expects $want args, got $n"
-                )
-            )
-        end
-    end
+    nd.kind === _NK_OP && _check_op_arity(nd.op, length(nd.children))
     foreach(_sc_check_arity, nd.children)
     return nothing
 end
@@ -1340,12 +1348,13 @@ function _build_scalar_section(
     for K in acc_kernels
         _sc_kernel_reads!(ext, K, cache, seen)
     end
-    good, bad, level, cut = _sc_dynamic_units(rhs_list, n_rhs, prelude, cache, dyn_slots)
+    graph = _sc_read_graph(rhs_list, n_rhs, prelude, cache, dyn_slots)
+    good, bad, level, cut = _sc_dynamic_units(graph, dyn_slots)
     dynp, emitted, resid = _sc_dyn_program(good, level, rhs_list, prelude, cache, union(ext, cut))
     if !isempty(cut) && !isempty(resid)
         # A unit left on the walker runs after every emitted one, so no emitted
         # unit may read it: emit the uncut units instead.
-        good, bad, level, cut = _sc_dynamic_units(rhs_list, n_rhs, prelude, cache, dyn_slots; cuts = false)
+        good, bad, level, cut = _sc_dynamic_units(graph, dyn_slots; cuts = false)
         dynp, emitted, resid = _sc_dyn_program(good, level, rhs_list, prelude, cache, ext)
     end
     resid_units = vcat(bad, good[resid])
@@ -1399,67 +1408,22 @@ function _retier_scalar_rules!(var_map, rhs_list, sec::_ScalarSection)
     return nothing
 end
 
-# ---- The right-hand side with a scalar section ---------------------------
-# `_make_rhs`'s `f!` (acc_merge.jl) with the scalar walk replaced by the
-# section's programs. Same order of sections, same cadence stamps: the const
-# tier refills only when `p` moved, the time tier when `(p, t, forcing epoch)`
-# moved, the dynamic units every call; then whatever the section left on the
-# walker; then the kernels, the scan folds and the contractions. The walked
-# prelude is captured only when something is still walked, so a fully emitted
-# build carries no tree.
-function _make_rhs_scalar_cg(
-        sec::_ScalarSection, full_prelude::AbstractVector{_Node},
-        cse_cache::_CSECache,
-        acc_kernels::AbstractVector{_AccKernel},
-        const_slots::AbstractVector{Int},
-        time_slots::AbstractVector{Int},
-        scan_section::_ScanSection,
-        array_contractions; nst::Int = 0
+# The scalar section that leaves every prelude slot and scalar equation on the
+# walker: what `_make_rhs` runs when the build made no scalar section.
+function _walked_scalar_section(
+        rhs_list::AbstractVector{Tuple{Int, _Node}}, prelude::AbstractVector{_Node},
+        const_slots::AbstractVector{Int}, time_slots::AbstractVector{Int},
+        dyn_slots::AbstractVector{Int}
     )
-    kernel_section = _make_kernel_section(acc_kernels; shared_cache = cse_cache, nst = nst)
-    constp = sec.constp
-    timep = sec.timep
-    dynp = sec.dynp
-    resid_dyn = sec.resid_dyn
-    resid_rhs = sec.resid_rhs
-    walks_prelude = (constp === nothing && !isempty(const_slots)) ||
-        (timep === nothing && !isempty(time_slots)) || !isempty(resid_dyn)
-    # Named as `_make_rhs`'s capture is, so the walked prelude is introspectable
-    # the same way whichever builder made `f!`.
-    cse_prelude = walks_prelude ? collect(_Node, full_prelude) : _Node[]
-    const_walk = constp === nothing ? collect(Int, const_slots) : Int[]
-    time_walk = timep === nothing ? collect(Int, time_slots) : Int[]
-    walk = sec.walk
-    has_const = !isempty(const_slots)
-    has_time = !isempty(time_slots)
-    function f!(du, u, p, t)
-        _reject_float32_state(u)
-        T = _rhs_value_type(u, p, t)
-        cache = _cse_buf(cse_cache, T)
-        if has_const && _cse_const_stale(cse_cache, T, p)
-            if constp === nothing
-                _walk_prelude_slots!(walk, cache, const_walk, cse_prelude, u, p, t, T)
-            else
-                constp(du, u, p, t, cache, T)
-            end
-            _cse_mark_const!(cse_cache, T, p)
-        end
-        if has_time && _cse_t_stale(cse_cache, T, p, t)
-            if timep === nothing
-                _walk_prelude_slots!(walk, cache, time_walk, cse_prelude, u, p, t, T)
-            else
-                timep(du, u, p, t, cache, T)
-            end
-            _cse_mark_t!(cse_cache, T, p, t)
-        end
-        dynp(du, u, p, t, cache, T)
-        _walk_prelude_slots!(walk, cache, resid_dyn, cse_prelude, u, p, t, T)
-        _walk_scalar_rhs!(walk, du, resid_rhs, u, p, t, T)
-        kernel_section(du, u, p, t, T)
-        isempty(scan_section) || _apply_scan_folds!(du, u, p, t, scan_section)
-        isempty(array_contractions) ||
-            _apply_array_contractions!(du, u, p, t, array_contractions, T)
-        return nothing
-    end
-    return f!
+    n_slots = length(const_slots) + length(time_slots) + length(dyn_slots)
+    walk = _scalar_walk_license(
+        n_slots + length(rhs_list) > 0,
+        isempty(rhs_list) ? "the scalar prelude" : "state slot $(rhs_list[1][1])",
+        "$(length(rhs_list)) scalar equations and $n_slots shared-subexpression slots",
+        () -> vcat(_Node[nd for (_, nd) in rhs_list], prelude)
+    )
+    return _ScalarSection(
+        nothing, nothing, _ScalarLevels(()), collect(Int, dyn_slots),
+        collect(Tuple{Int, _Node}, rhs_list), Int[], walk
+    )
 end

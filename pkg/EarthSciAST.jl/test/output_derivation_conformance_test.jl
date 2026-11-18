@@ -3,7 +3,7 @@
 #
 # The derivation turns (.esm document + flat state element names + a caller-named
 # observed subset) into the dimension-labeled, CF-annotated plan a Zarr writer is
-# handed. It lives in two languages — `src/data_output.jl` here and
+# handed. It lives in two languages — `src/output_plan.jl` here and
 # `pkg/earthsci-ast-rs/src/data_output.rs` there — and until this corpus there was
 # NO cross-language gate on it at any level: EarthSciIO's `conformance/write_spec.json`
 # is an ALREADY-DERIVED schema (`dims`/`time_dim`/`coords`/`vars`/`chunk_shape`/
@@ -162,8 +162,8 @@ end
     end
 
     # Density: a hole or a double-covered cell is refused, not written out as if it
-    # were right (the Julia derivation used to derive the shape from the max index
-    # and never check coverage).
+    # were right (deriving the shape from the max index alone would not check
+    # coverage).
     @testset "an incomplete or double-covered grid is refused" begin
         @test_throws OutputError derive_output_gridding(
             Dict("u[1,1]" => 1, "u[2,1]" => 2, "u[1,2]" => 3)
@@ -176,4 +176,30 @@ end
         )
         @test_throws OutputError derive_output_gridding(Dict("u[0]" => 1))
     end
+end
+
+@testset "derive_output_meta leaves its document unchanged" begin
+    doc = Dict{String, Any}(
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "meta"),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "x" => Dict{String, Any}("type" => "unknown"),
+                    "y" => Dict{String, Any}("type" => "unknown"),
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                        "rhs" => "y",
+                    ),
+                    Dict{String, Any}("lhs" => "y", "rhs" => 1.0),
+                ],
+            ),
+        ),
+    )
+    before = deepcopy(doc)
+    meta = derive_output_meta(doc)
+    @test meta.var_types["M.y"] == "observed"
+    @test meta.var_types["M.x"] == "unknown"
+    @test doc == before
 end

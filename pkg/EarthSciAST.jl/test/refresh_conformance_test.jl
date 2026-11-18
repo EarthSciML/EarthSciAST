@@ -22,7 +22,7 @@
 # regridded fields (`F_tgt`/`scale_tgt`) and the integrated trajectory.
 using Test
 using EarthSciAST
-using DiffEqCallbacks            # loads EarthSciASTDataRefreshExt
+using DiffEqCallbacks            # loads EarthSciASTCallbacksExt
 using SciMLBase                  # ext co-trigger (u_modified!)
 import OrdinaryDiffEqTsit5 as ODE  # Tsit5 + ODEProblem + solve (test-only solver dep)
 using JSON3
@@ -77,7 +77,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
 
         ics = Dict{String, Float64}()
         for s in ("c", "d"), j in 1:3
-            ics["$s[$j]"] = 0.0
+            ics["M.$s[$j]"] = 0.0
         end
 
         # (a) build: F_src -> param_arrays (DISCRETE, live buffer), scale_src ->
@@ -85,7 +85,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         # cache; scale_tgt reads only const data -> build-once.
         fsrc_buf = copy(fsrc_anchor(0.0))
         dm = _ESS_RG.DiscreteMaterializer()
-        f!, u0, p, _ts, vm = _ESS_RG._build_evaluator(
+        (f!, u0, p, _ts, vm) = b = _ESS_RG.Internal.build(
             sim_doc;
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
@@ -95,7 +95,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         # The interpreter's per-cell fill: the oracle the compiled one must equal.
         fsrc_buf_i = copy(fsrc_anchor(0.0))
         dm_i = _ESS_RG.DiscreteMaterializer()
-        _ESS_RG._build_evaluator(
+        _ESS_RG.Internal.build(
             sim_doc; initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf_i),
@@ -104,21 +104,21 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
 
         # (b) regrid band — the in-model regrid reproduces the golden regridded
         # fields. F_tgt (DISCRETE cache) at each anchor; scale_tgt (CONST) once.
-        @test haskey(dm.caches, "F_tgt")          # forcing-tainted -> discrete cache
-        @test !haskey(dm.caches, "scale_tgt")     # const-fed -> build-once/inlined (not a cache)
+        @test haskey(dm.caches, "M.F_tgt")          # forcing-tainted -> discrete cache
+        @test !haskey(dm.caches, "M.scale_tgt")     # const-fed -> build-once/inlined (not a cache)
         for t in anchors
             fsrc_buf .= fsrc_anchor(t); fsrc_buf_i .= fsrc_anchor(t)
             dm.materialize!(); dm_i.materialize!()
-            @test vec(Float64.(dm.caches["F_tgt"])) ≈ ftgt_anchor(t) atol = field_atol
-            @test all(dm.caches["F_tgt"] .=== dm_i.caches["F_tgt"])
+            @test vec(Float64.(dm.caches["M.F_tgt"])) ≈ ftgt_anchor(t) atol = field_atol
+            @test all(dm.caches["M.F_tgt"] .=== dm_i.caches["M.F_tgt"])
         end
         # scale_tgt is CONST (inlined into the RHS, not a named cache): recover it
         # from the derivative. At anchor 0, F_tgt = [1,1,1], so
         # du[c] = scale_tgt .* F_tgt = scale_tgt — the const in-model regrid.
         fsrc_buf .= fsrc_anchor(0.0); dm.materialize!()
-        @test vec(Float64.(dm.caches["F_tgt"])) ≈ [1.0, 1.0, 1.0] atol = field_atol
+        @test vec(Float64.(dm.caches["M.F_tgt"])) ≈ [1.0, 1.0, 1.0] atol = field_atol
         du0 = zero(u0); f!(du0, u0, p, 0.0)
-        @test [du0[vm["c[$j]"]] for j in 1:3] ≈ scale_tgt_want atol = field_atol
+        @test [du0[vm["M.c[$j]"]] for j in 1:3] ≈ scale_tgt_want atol = field_atol
 
         # (c) trajectory band — ONE solve over a refresh callback that refreshes
         # F_src at each interior anchor and fires post_refresh = dm.materialize!
@@ -126,7 +126,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         # provider, no tstop). Forcing frozen per segment -> closed form to tol.
         fsrc_buf2 = copy(fsrc_anchor(0.0))
         dm2 = _ESS_RG.DiscreteMaterializer()
-        f2!, u02, p2, _ts2, vm2 = _ESS_RG._build_evaluator(
+        (f2!, u02, p2, _ts2, vm2) = b = _ESS_RG.Internal.build(
             sim_doc;
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
@@ -136,6 +136,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         interior = [t for t in anchors if t > 0.0]
         prov = _RGConfProvider(interior, Dict(t => Dict("F_src" => fsrc_anchor(t)) for t in interior))
         cb, tstops = _ESS_RG.build_refresh_callback(;
+            owner = b,
             providers = Dict("F_src" => prov),
             buffers = _ESS_RG.RefreshBuffers(Dict("F_src" => fsrc_buf2)),  # SAME buffer object
             post_refresh = dm2.materialize!
@@ -160,7 +161,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
             @test ti !== nothing
             for s in ("c", "d"), j in 1:3
                 want = Float64(traj[tk][Symbol("M.$s[$j]")])
-                @test isapprox(sol.u[ti][vm2["$s[$j]"]], want; rtol = rtol, atol = atol)
+                @test isapprox(sol.u[ti][vm2["M.$s[$j]"]], want; rtol = rtol, atol = atol)
             end
         end
     end

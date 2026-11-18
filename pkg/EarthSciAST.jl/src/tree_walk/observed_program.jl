@@ -30,23 +30,20 @@
 # and its recurrence sweeps in their walked form (`_obs_reaches_recurrence`).
 
 # Everything a program build needs from the build that produced the problem.
-# Captured by `_build_compile_evaluator` into the problem's `BuildInspection`,
+# Captured by `_build_compile_evaluator` into the problem's `BuildProducts`,
 # bound to the problem when `esm_problem` publishes it, and holding the
 # problem's programs as they are built.
 mutable struct _ObsProgramCtx
-    model::Any
-    cls::Any
-    parts::Any
+    model::Model
+    cls::_VariableClasses
+    parts::_EquationPartition
     index_sets::AbstractDict
-    var_map::Any                         # the ODE layout (a `StateLayout`)
-    array_var_info::Any
+    # The build's state-only scope: the ODE layout, its const arrays, live
+    # buffers (discrete caches included) and parameter positions.
+    scope::_CompileScope
     n_states::Int
     p::Any                               # the parameter NamedTuple the build bound (the fallback)
-    param_sym_set::Any
-    const_registry::AbstractDict
-    pgather::AbstractDict
-    reg_funcs::AbstractDict
-    template_sites::Any
+    template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}}
     discrete_caches::Dict{String, Array{Float64}}
     # Every observed definition the build's split published (inlined and
     # materialized), by build name, as authored after lowering.
@@ -146,30 +143,15 @@ function _observed_program!(ctx::_ObsProgramCtx, name::String)
     end
 end
 
-# A compile against a layout of its own must not share the build-scoped state
-# slot tables (`_STATE_SLOT_TABLES`, keyed by array name) with any other
-# layout: a program's extended layout places the materialized observeds
-# differently from the right-hand side's and from another program's, so a table
-# cached under one layout reads the wrong slots under the next. `f` runs with
-# an empty table, and the caller's tables are put back afterwards. One compile
-# at a time, since the table is process-wide.
-const _OWN_SLOT_TABLES_LOCK = ReentrantLock()
-
-function _with_own_state_slot_tables(f)
-    return lock(_OWN_SLOT_TABLES_LOCK) do
-        saved = copy(_STATE_SLOT_TABLES)
-        empty!(_STATE_SLOT_TABLES)
-        try
-            return f()
-        finally
-            empty!(_STATE_SLOT_TABLES)
-            merge!(_STATE_SLOT_TABLES, saved)
-        end
-    end
-end
-
+# A compile against a layout of its own must not share the state slot tables
+# (keyed by array name) with any other layout: a program's extended layout
+# places the materialized observeds differently from the right-hand side's and
+# from another program's, so a table cached under one layout reads the wrong
+# slots under the next. So each program compiles in a child build context
+# (`_child_build_ctx`, compiler.jl) with tables, loop registry and parameter-read
+# sink of its own.
 _build_observed_program(ctx::_ObsProgramCtx, name::String) =
-    _with_own_state_slot_tables(() -> _build_observed_program_impl(ctx, name))
+    _with_build_ctx(() -> _build_observed_program_impl(ctx, name), _child_build_ctx())
 
 function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     model = ctx.model
@@ -211,10 +193,13 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     # this program does not read included: a self-reference has no inlined form
     # (the right-hand side's build already materialized each of them).
     shaped_vars = Set{String}(n for (n, vv) in model.variables if _is_array_shape(vv.shape))
-    _, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
-        parts.equations, parts.observed_names, cls.geom_setup_vars, cls.geom_inline_vars, cls.array_inline_vars,
+    split = _split_observed_and_derivatives(
+        parts.equations, parts.observed_names, cls,
         union(mat, _recurrence_names(ctx.defs, shaped_vars)), shaped_vars
     )
+    resolved_obs = split.resolved
+    raw_obs = split.raw
+    mat_defs = split.materialized
     # The extended layout: the state, then one block per materialized observed.
     mat_dims = Dict{String, Vector{Int}}()
     for m in mat_vars
@@ -224,13 +209,12 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
                 ctx.index_sets, parts.derived_extents
             )
     end
-    avi = copy(ctx.array_var_info)
-    blocks = Pair{String, Tuple{Vector{Int}, Vector{Int}}}[]
-    for m in sort(mat_vars)
-        avi[m] = (ones(Int, length(mat_dims[m])), copy(mat_dims[m]))
-        push!(blocks, m => avi[m])
-    end
-    vm = _layout_extend(ctx.var_map, blocks)
+    cs = _extend_scope(
+        ctx.scope, Pair{String, Tuple{Vector{Int}, Vector{Int}}}[
+            m => (ones(Int, length(mat_dims[m])), copy(mat_dims[m])) for m in sort(mat_vars)
+        ]
+    )
+    vm = cs.var_map
     n_total = length(vm)
     # Whether the program reads the state or `t`: a property of every body it
     # evaluates, each with the non-materialized observeds substituted in.
@@ -246,59 +230,24 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     levels = Any[]
     if !isempty(mat_vars)
         recur_names = _recurrence_names(mat_defs, mat)
+        # The same sweep the right-hand side's fill levels run
+        # (recurrence_sweep.jl), against this program's layout.
+        recurrence = m -> m in recur_names ? _with_open_rule_label(
+                () -> _compile_recurrence_sweep(
+                    m, mat_defs[m], mat_dims[m],
+                    get(model.variables, m, nothing), resolved_obs, cs
+                ), m
+            ) : nothing
+        fill = m -> _materialized_fill_equations(m, mat_defs[m], mat_dims[m])
         for lvl in _materialized_obs_levels(mat_defs, mat, raw_obs)
-            lvl_scalars = Tuple{Int, _Node}[]
-            lvl_kernels = _AccKernel[]
-            lvl_scans = _ScanFold[]
-            lvl_acs = _ArrayContraction[]
-            lvl_recurs = Any[]
-            for m in lvl
-                if m in recur_names
-                    # The same sweep the right-hand side's fill levels run
-                    # (recurrence_sweep.jl), against this program's layout.
-                    push!(
-                        lvl_recurs, _with_open_rule_label(m) do
-                            _compile_recurrence_sweep(
-                                m, mat_defs[m], mat_dims[m],
-                                get(model.variables, m, nothing), resolved_obs, avi, vm,
-                                ctx.const_registry, ctx.pgather, ctx.param_sym_set,
-                                ctx.reg_funcs
-                            )
-                        end
-                    )
-                    continue
-                end
-                feqs = _materialized_fill_equations(m, mat_defs[m], mat_dims[m])
-                se, pcs, aks, sfs, acs = _with_rule_alias(m, m) do
-                    _compile_derivative_equations(
-                        feqs, resolved_obs, avi, vm,
-                        ctx.const_registry, ctx.pgather, ctx.param_sym_set,
-                        ctx.reg_funcs, n_total; template_sites = ctx.template_sites
-                    )
-                end
-                for (slot, ex) in se
-                    push!(
-                        lvl_scalars, (
-                            slot, _compile(
-                                ex, vm, ctx.param_sym_set,
-                                ctx.reg_funcs
-                            ),
-                        )
-                    )
-                end
-                append!(lvl_scalars, pcs)
-                append!(lvl_kernels, aks)
-                append!(lvl_scans, sfs)
-                append!(lvl_acs, acs)
-            end
-            merged, _ = _merge_acc_kernel_classes(lvl_kernels)
-            section = _with_open_rule_label(name) do
-                _make_kernel_section(merged)
-            end
+            lv = _compile_fill_level(
+                lvl, :dynamic, fill, recurrence, resolved_obs, cs, n_total;
+                label_by_name = true, template_sites = ctx.template_sites
+            )
             push!(
-                levels, (
-                    lvl_scalars, section, lvl_scans,
-                    _make_contraction_section(lvl_acs), Tuple(lvl_recurs),
+                levels, _inplace_fill_level(
+                    lv.scalars, lv.kernels, lv.scans, lv.contractions, lv.recurrences;
+                    section_label = f -> _with_open_rule_label(f, name)
                 )
             )
         end
@@ -314,10 +263,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
         body === nothing && return nothing
         s1, t1 = _def_state_time_refs(body, ctx.state_names)
         st |= s1; tm |= t1
-        scalar = _compile(
-            _resolve_indices(body, avi, vm, ctx.const_registry, ctx.pgather),
-            vm, ctx.param_sym_set, ctx.reg_funcs
-        )
+        scalar = _compile_in(cs, _resolve_in(cs, body))
     end
     return _ObservedProgram(
         name, dims, cells, Tuple(levels), scalar, nothing,
@@ -413,7 +359,8 @@ function _run_observed_program(
         throw(
             SimulateError(
                 "observed_field: `u` has $(length(u)) elements but the " *
-                    "problem's state vector has $(prog.n_states)"
+                    "problem's state vector has $(prog.n_states)",
+                ERROR_CODES.ARRAY_SHAPE_MISMATCH
             )
         )
     end
@@ -442,10 +389,7 @@ end
 
 # The program context `prob`'s own build captured, or `nothing` for a problem
 # whose build captured none (a compiler that builds its own program).
-_obs_ctx(prob) = lock(
-    () -> get(prob.inspection.observed_ctxs, prob.run_file, nothing),
-    prob.inspection.observed_lock
-)
+_obs_ctx(prob) = prob.build.products.observed_ctx
 
 # Whether a read was served by a compiled observed program: the output-time
 # row's tier says so. Task-local, like the per-cell count beside it

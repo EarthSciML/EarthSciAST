@@ -1,4 +1,4 @@
-# Named scalar-observed prelude slots (ess-obs-slots).
+# Named scalar-observed prelude slots.
 #
 # A SCALAR observed compiles ONCE as a NAMED PRELUDE DEF (an `_NK_CACHED` slot
 # evaluated in dependency order before the equations) instead of being spliced
@@ -28,7 +28,7 @@ _obs_v(n) = VarExpr(n)
 _obs_op(op, args...; kw...) = OpExpr(op, ESM.ASTExpr[args...]; kw...)
 _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
 
-@testset "scalar observeds compile as named prelude slots (ess-obs-slots)" begin
+@testset "scalar observeds compile as named prelude slots" begin
 
     # ----------------------------------------------------------------
     # The basic slot: one observed, several readers — one named def, zero
@@ -47,15 +47,15 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
             ESM.Equation(_obs_D("x"), _obs_op("neg", _obs_v("flux"))),
             ESM.Equation(_obs_D("y"), _obs_op("+", _obs_v("flux"), _obs_op("sin", _obs_v("flux")))),
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_obs_slots == 1
-        @test diag.n_obs_inlined == 0
-        @test diag.n_cse_slots == 0          # the name subsumed the sharing
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_obs_slots == 1
+        @test rep.stats.n_obs_inlined == 0
+        @test rep.stats.n_cse_slots == 0          # the name subsumed the sharing
         fluxv = 0.7 * 0.4 * 1.1
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["x"]] === -fluxv
-        @test du[vm["y"]] === fluxv + sin(fluxv)
+        @test du[vm["M.x"]] === -fluxv
+        @test du[vm["M.y"]] === fluxv + sin(fluxv)
     end
 
     # ----------------------------------------------------------------
@@ -78,12 +78,12 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
             ESM.Equation(_obs_v("a"), _obs_v("k")),
             ESM.Equation(_obs_D("x"), _obs_op("*", _obs_v("c"), _obs_v("x"))),
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_obs_slots == 2      # b and c; a is a leaf alias
-        @test diag.n_obs_inlined == 1
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_obs_slots == 2      # b and c; a is a leaf alias
+        @test rep.stats.n_obs_inlined == 1
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["x"]] === (2.0 * 2.0 + 1.0) * 1.0
+        @test du[vm["M.x"]] === (2.0 * 2.0 + 1.0) * 1.0
     end
 
     # ----------------------------------------------------------------
@@ -107,12 +107,12 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
                 )
             ),
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_obs_slots == 0
-        @test diag.n_obs_inlined == 1
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_obs_slots == 0
+        @test rep.stats.n_obs_inlined == 1
         du = similar(u0)
         f!(du, u0, p, 0.0)     # must NOT throw
-        @test du[vm["a"]] === 0.0
+        @test du[vm["M.a"]] === 0.0
     end
 
     # ----------------------------------------------------------------
@@ -137,12 +137,12 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
                 )
             ),                       # guarded
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_obs_slots == 1
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_obs_slots == 1
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["z"]] === sqrt(2.25)
-        @test du[vm["a"]] === sqrt(2.25)
+        @test du[vm["M.z"]] === sqrt(2.25)
+        @test du[vm["M.a"]] === sqrt(2.25)
     end
 
     # ----------------------------------------------------------------
@@ -168,12 +168,12 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
                 )
             ),
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_obs_slots == 0
-        @test diag.n_obs_inlined == 2
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_obs_slots == 0
+        @test rep.stats.n_obs_inlined == 2
         du = similar(u0)
         f!(du, u0, p, 0.0)     # must NOT throw (sqrt(-4) never evaluated)
-        @test du[vm["a"]] === 0.0
+        @test du[vm["M.a"]] === 0.0
     end
 
     # ----------------------------------------------------------------
@@ -204,15 +204,15 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
                 )
             )
         end
-        ics = Dict{String, Float64}("u[1]" => 10.0, "u[2]" => 20.0, "u[3]" => 30.0)
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
+        ics = Dict{String, Float64}("M.u[1]" => 10.0, "M.u[2]" => 20.0, "M.u[3]" => 30.0)
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(
             ESM.Model(vars, eqs); initial_conditions = ics
         )
-        @test diag.n_obs_slots == 0
-        @test diag.n_obs_inlined == 1
+        @test rep.stats.n_obs_slots == 0
+        @test rep.stats.n_obs_inlined == 1
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["z"]] === 20.0     # u[1+1] — folded at build time, as before
+        @test du[vm["M.z"]] === 20.0     # u[1+1] — folded at build time, as before
     end
 
     # ----------------------------------------------------------------
@@ -232,14 +232,14 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
             ESM.Equation(_obs_v("p2"), body()),
             ESM.Equation(_obs_D("x"), _obs_op("+", _obs_v("p1"), _obs_v("p2"))),
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_obs_slots == 2               # two NAMED slots …
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_obs_slots == 2               # two NAMED slots …
         # … sharing anonymous CSE defs (the whole body, and — nested hoisting —
         # its `2*x` child get their own slots; both names alias the body's).
-        @test 1 <= diag.n_cse_slots <= 2
+        @test 1 <= rep.stats.n_cse_slots <= 2
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["x"]] === exp(2.0 * 0.9) + exp(2.0 * 0.9)
+        @test du[vm["M.x"]] === exp(2.0 * 0.9) + exp(2.0 * 0.9)
     end
 
     # ----------------------------------------------------------------
@@ -262,13 +262,13 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
             ESM.Equation(_obs_v("sc"), _obs_op("*", _obs_v("arr"), _obs_v("x"))),
             ESM.Equation(_obs_D("x"), _obs_op("neg", _obs_v("sc"))),
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_obs_slots == 2
-        @test diag.n_const_slots >= 1     # `arr` (and nothing forces more)
-        @test diag.n_dynamic_slots >= 1   # `sc` reads state
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_obs_slots == 2
+        @test rep.stats.n_const_slots >= 1     # `arr` (and nothing forces more)
+        @test rep.stats.n_dynamic_slots >= 1   # `sc` reads state
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["x"]] === -(3.0 * exp(-0.5) * 1.0)
+        @test du[vm["M.x"]] === -(3.0 * exp(-0.5) * 1.0)
     end
 
     # ----------------------------------------------------------------
@@ -287,7 +287,7 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
             ESM.Equation(_obs_D("x"), _obs_op("neg", _obs_v("flux"))),
             ESM.Equation(_obs_D("y"), _obs_v("flux")),
         ]
-        f!, u0, p, _ts, _vm, _diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
+        f!, u0, p, _ts, _vm, _rep = ESM.Internal.build(ESM.Model(vars, eqs))
         du = similar(u0)
         @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0
     end
@@ -320,13 +320,13 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
             ),
         ]
         model = ESM.Model(vars, eqs)
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(model)
-        @test diag.n_obs_slots == 1
-        fun, _u2, _p2, _ts2, _vm2, d2 = ESM._build_evaluator_impl(
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(model)
+        @test rep.stats.n_obs_slots == 1
+        fun, _u2, _p2, _ts2, _vm2, d2 = ESM.Internal.build(
             model;
             compiler = :interpreter
         )
-        @test d2.n_const_slots == 0 && d2.n_time_slots == 0
+        @test d2.stats.n_const_slots == 0 && d2.stats.n_time_slots == 0
 
         # Analytic: du/dx of (-kx² + sin(kx²)) = -2kx + cos(kx²)·2kx
         k, x = 1.3, 0.8
@@ -338,8 +338,8 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
         g = ForwardDiff.derivative(
             kk -> begin
                 du = zeros(typeof(kk), 1)
-                f!(du, u0, (; k = kk), 0.0)
-                du[vm["x"]]
+                f!(du, u0, (; var"M.k" = kk), 0.0)
+                du[vm["M.x"]]
             end, k
         )
         gref = -x^2 + cos(k * x^2) * x^2
@@ -391,14 +391,14 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
             ESM.Equation(_obs_D("T"), _obs_op("*", _obs_n(-0.01), _obs_v("rh"))),
             ESM.Equation(_obs_D("q"), _obs_op("*", _obs_n(-1.0e-6), _obs_v("es"))),
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_obs_slots == 2
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_obs_slots == 2
         T, q = 300.0, 0.01
         es = 610.78 * exp(17.27 * (T - 273.15) / (T - 35.85))
         rh = q * 1.0e5 / (0.622 * es)
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["T"]] === -0.01 * rh
-        @test du[vm["q"]] === -1.0e-6 * es
+        @test du[vm["M.T"]] === -0.01 * rh
+        @test du[vm["M.q"]] === -1.0e-6 * es
     end
 end

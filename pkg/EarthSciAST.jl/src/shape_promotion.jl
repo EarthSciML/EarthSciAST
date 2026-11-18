@@ -20,323 +20,67 @@
 #  - PROPAGATE: an operand's shape flows to the result through elementwise ops;
 #    a `faq` with a contracting `output_idx` is a PROMOTION
 #    BOUNDARY (a genuine reduction stays scalar), and an `index` gather is scalar.
-#  - CONFLICT: all array sources must resolve to one grid shape; a genuine
-#    mismatch is an error (the caller picks the target grid).
+#  - UNION: operands over different index sets give the union of their index
+#    sets (the outer product), in order of first appearance.
 
-# Output shape (vector of index-set / dim names; empty = scalar) of an expression
-# under the current per-variable shape map.
-function _infer_expr_shape(
-        expr::ASTExpr,
-        shapes::Dict{String, Vector{String}},
-        ctx = nothing
-    )::Vector{String}
-    if expr isa NumExpr || expr isa IntExpr
-        return String[]
-    elseif expr isa VarExpr
-        return get(shapes, expr.name, String[])
-    elseif expr isa OpExpr
-        op = expr.op
-        # A template application (a reference, or an expansion made at load)
-        # is elementwise in the arrays its expansion reads in value positions
-        # (esm-spec §9.6.11); the tables and axes it reads whole do not shape
-        # the result. Without `ctx`, an application is scalar, as before.
-        site_operands = ctx !== nothing &&
-            (op == "apply_expression_template" || expr.template_origin !== nothing) ?
-            _application_operands(expr, shapes, ctx) : nothing
-        site = site_operands !== nothing && !isempty(site_operands)
-        if !site && op == "index"
-            # A gather selects one element (or a fixed slice) — scalar output for
-            # promotion purposes (the level-set already indexes its own field).
-            return String[]
-        elseif !site && op in _ARRAY_PRODUCER_OPS
-            # Output is exactly the uncontracted axes named in output_idx, each
-            # named by the index set its range draws `{from}`. An output symbol
-            # is a node-local loop name, not an index set; one ranging over an
-            # inline interval (or a literal singleton axis) names no index set,
-            # so the producer is ANONYMOUS here: its variable takes its extent
-            # from those ranges in the build (esm-spec §6.3) rather than being
-            # promoted onto a named shape.
-            expr.output_idx === nothing && return String[]
-            names = String[]
-            for x in expr.output_idx
-                x isa AbstractString || return String[]
-                r = expr.ranges === nothing ? nothing : get(expr.ranges, String(x), nothing)
-                r isa IndexSetRef || return String[]
-                push!(names, r.from)
-            end
-            return names
-        else
-            # Elementwise: broadcast over the operands' index-set NAMES
-            # (esm-spec §4.3.4). Operand shapes are compared as name SETS, not
-            # positionally: an operand whose index sets are a SUBSET of another's
-            # broadcasts along the missing axes, so the result takes the SUPERSET
-            # shape; two shapes naming the same sets in a different ORDER are the
-            # same shape (the leaf-indexing rewrite below aligns them by name, so
-            # this is a transpose, not a conflict). Only genuinely incomparable
-            # name sets — neither a subset of the other — are a conflict.
-            # `lower`/`upper` (integral bounds) and `filter` don't shape the
-            # elementwise result.
-            operands = site ? site_operands :
-                op == "apply_expression_template" ? ASTExpr[] : expr.args
-            sh = String[]
-            for a in operands
-                s = _infer_expr_shape(a, shapes, ctx)
-                isempty(s) && continue
-                if isempty(sh)
-                    sh = s
-                elseif sh != s
-                    ssh = Set(sh); ss = Set(s)
-                    if issubset(ss, ssh)
-                        # `s` broadcasts into `sh` (including the equal-set,
-                        # permuted-order case: the FIRST operand's axis order
-                        # wins, deterministically).
-                    elseif issubset(ssh, ss)
-                        sh = s                      # widen to the superset
-                    else
-                        # Typed error from the flatten taxonomy (§4.7.6): a shape
-                        # conflict is a failed dimension promotion, not a generic
-                        # argument error.
-                        throw(
-                            DimensionPromotionError(
-                                "shape-promotion: conflicting operand shapes $(sh) vs $(s) " *
-                                    "in op '$(op)' — neither operand's index sets are a subset " *
-                                    "of the other's, so no broadcast result shape exists"
-                            )
-                        )
-                    end
-                end
-            end
-            return sh
+# The index sets `expr`'s value spans under the current per-variable shape map
+# (empty for a scalar, and for an expression the inference leaves undecided):
+# the one inference, `_expr_axes` (expr_axes.jl). Elementwise operands over
+# different index sets give the union, in order of first appearance
+# (esm-spec §4.3.4). With `ctx`, a template application is elementwise over the
+# arrays its expansion reads in value positions (esm-spec §9.6.11).
+_infer_expr_shape(
+    expr::ASTExpr, shapes::Dict{String, Vector{String}}, ctx = nothing
+)::Vector{String} = something(
+    _expr_axes(_ShapeEnv(shapes; unknown = String[], ctx = ctx), expr), String[]
+)
+
+# The bare-left-hand-side definitions `x = rhs` of `equations`, in equation
+# order. A name defined twice is an unbalanced system the validator and the
+# build refuse; the first definition is the one read here.
+function _bare_definitions(equations)::OrderedDict{String, ASTExpr}
+    defs = OrderedDict{String, ASTExpr}()
+    for eq in equations
+        eq.lhs isa VarExpr && get!(defs, (eq.lhs::VarExpr).name, eq.rhs)
+    end
+    return defs
+end
+
+# Extend `shapes` to a fixed point (esm-spec §4.3.4, §9.6.11): each name `defs`
+# defines and `shapes` gives no array shape takes the shape its definition
+# infers, until no shape changes. A name in `declared_scalar` (an explicit
+# `shape: []`) whose definition infers an array is a conflict.
+function _infer_shapes!(
+        shapes::Dict{String, Vector{String}}, defs, ctx;
+        declared_scalar = Set{String}()
+    )
+    changed = true
+    while changed
+        changed = false
+        for (name, rhs) in defs
+            isempty(get(shapes, name, String[])) || continue
+            inferred = _infer_expr_shape(rhs, shapes, ctx)
+            isempty(inferred) && continue
+            name in declared_scalar &&
+                _throw_declared_scalar_conflict(name, inferred, "its defining expression")
+            shapes[name] = inferred
+            changed = true
         end
     end
-    return String[]
+    return shapes
 end
 
-# Op-class memberships for the array rewrites below and in pointwise_lift.jl,
-# derived from the registry flags (src/op_registry.jl); memberships are
-# pinned literal-for-literal by test/op_registry_test.jl.
-#
-# Nodes that PRODUCE an array (subject to `output_idx` emptiness for the
-# reductions — see `_is_array_producer`).
-const _ARRAY_PRODUCER_OPS = _ops_with(:array_producer)
-# Nodes that carry their own indexing (the array producers plus an `index`
-# gather): the leaf-indexing rewrites never descend into them.
-const _SELF_INDEXED_OPS = _ops_with(:self_indexed)
-
-"""
-    _AxisAlign
-
-Name-based broadcast alignment context for the leaf-indexing rewrites
-(esm-spec §4.3.4). `axes` are the RESULT's declared index-set names, positionally
-parallel to the rewrite's `loops`; `var_shapes` maps a variable name to its
-DECLARED index-set names.
-
-An operand leaf whose declared index sets are a SUBSET of `axes` is gathered at
-the loop bound to each of ITS OWN axis names — so a `[lat]` operand in a
-`[lon,lat,lev]` result replicates along `lon`/`lev`, and a `[lat,lon]` operand in
-a `[lon,lat]` result TRANSPOSES rather than being reinterpreted positionally. An
-operand naming an axis absent from `axes` is unalignable and raises
-`E_TREEWALK_ARRAY_SHAPE_MISMATCH` (the build-time twin of `validate()`'s
-`array_shape_mismatch`, esm-spec §4.3.4 "Broadcast compatibility").
-
-Alignment is NAME-based only where names exist. Nodes with an ANONYMOUS shape —
-an `index`-wrapped producer (`makearray`, a `faq` whose
-`output_idx` symbols are node-local, `reshape`/`transpose`/`concat`, a literal
-array) and any variable with no recorded declared shape — keep the historical
-POSITIONAL gather over all `loops`. `nothing` (or an unusable context, see
-[`_usable_align`](@ref)) disables name alignment entirely, restoring the
-pre-alignment behaviour exactly.
-"""
-struct _AxisAlign
-    axes::Vector{String}
-    var_shapes::Dict{String, Vector{String}}
-end
-
-# An alignment context is USABLE only when its axis names are positionally
-# parallel to `loops` and mutually DISTINCT: a result that names the same index
-# set on two axes (`[x,x]`, a square operator field) has no unambiguous
-# name→axis map, so such a rewrite stays positional.
-function _usable_align(
-        align::Union{Nothing, _AxisAlign},
-        loops::Vector{String}
-    )::Union{Nothing, _AxisAlign}
-    align === nothing && return nothing
-    length(align.axes) == length(loops) || return nothing
-    allunique(align.axes) || return nothing
-    return align
-end
-
-# Shared typed bare-array-reference rewrite: wrap array references in
-# `index(ref, loops…)` gathers. A `VarExpr` leaf naming a variable in
-# `arrayvars` is wrapped; an `OpExpr` for which `wrap_node` is true is wrapped
-# WHOLE (checked before `stop_node`); an `OpExpr` for which `stop_node` is true
-# is returned untouched (it is self-contained / carries its own indexing);
-# every other `OpExpr` recurses into `args` only (elementwise position) and is
-# rebuilt field-preservingly. Its typed caller is `_index_array_leaves`
-# (below); the pointwise lift's `_lift_rhs_to_cell` (pointwise_lift.jl) is a
-# separate walk, because it aligns by name in every position rather than only
-# under element-wise operators. The raw-JSON dict twin
-# of this rewrite is `_index_bare` (below), which walks a discretized native
-# document instead of typed Exprs.
-# IDENTITY-MEMOIZED (ESS-0hh): the rewrite is a pure function of the node —
-# `arrayvars`, `loops`, and both predicates are fixed within one call — so a
-# shared node rewrites to ONE shared output node. Without the memo the
-# per-path `reconstruct` re-inflated a structurally-shared input DAG (e.g. a
-# folded elementwise array-observed chain, whose sharing `_substitute_shared`
-# deliberately preserves) into an exponentially large output TREE. The memo
-# is fresh per top-level call; only `OpExpr` nodes are memoized (leaves are
-# immutable, childless, and O(1) to re-handle). The memo is SPLIT by alignment
-# state (`_WrapMemo`): the rewrite of a shared node differs between element-wise
-# position (name-aligned) and the interior of a non-element-wise op (positional),
-# so one memo would let the first visit's answer leak into the other context.
-struct _WrapMemo
-    aligned::IdDict{OpExpr, ASTExpr}
-    plain::IdDict{OpExpr, ASTExpr}
-end
-_WrapMemo() = _WrapMemo(IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, ASTExpr}())
-_wrap_memo(m::_WrapMemo, align) = align === nothing ? m.plain : m.aligned
-
-function _wrap_bare_array_refs(
-        expr::ASTExpr, arrayvars::Set{String},
-        loops::Vector{String};
-        wrap_node, stop_node,
-        align::Union{Nothing, _AxisAlign} = nothing
-    )::ASTExpr
-    return _wrap_bare_array_refs(
-        expr, arrayvars, loops, wrap_node, stop_node,
-        _WrapMemo(), _usable_align(align, loops)
-    )
-end
-function _wrap_bare_array_refs(
-        expr::ASTExpr, arrayvars::Set{String},
-        loops::Vector{String}, wrap_node, stop_node,
-        memo::_WrapMemo,
-        align::Union{Nothing, _AxisAlign} = nothing
-    )::ASTExpr
-    if expr isa VarExpr
-        expr.name in arrayvars || return expr
-        return _index_wrap_var(expr, loops, align)
-    elseif expr isa OpExpr
-        tbl = _wrap_memo(memo, align)
-        cached = get(tbl, expr, nothing)
-        cached === nothing || return cached
-        result = if wrap_node(expr)
-            _index_wrap(expr, loops)
-        elseif stop_node(expr)
-            expr
-        else
-            # Name-based alignment applies in ELEMENT-WISE position only: a
-            # scalar operator lifted over the grid. Any other op — an unlowered
-            # rewrite target (`div`/`grad`/a user op) — consumes WHOLE
-            # arrays under its own contract, not name-aligned cells, so its
-            # operands keep the historical positional gather.
-            inner = _is_scalar_op(expr.op) ? align : nothing
-            new_args = ASTExpr[
-                _wrap_bare_array_refs(
-                    a, arrayvars, loops,
-                    wrap_node, stop_node, memo, inner
-                )
-                    for a in expr.args
-            ]
-            reconstruct(expr; args = new_args)
-        end
-        tbl[expr] = result
-        return result
-    end
-    return expr
-end
-
-# `index(node, loops…)`: gather `node`'s element at the current cell, positionally.
-_index_wrap(node::ASTExpr, loops::Vector{String})::OpExpr =
-    OpExpr("index", ASTExpr[node, (VarExpr(l) for l in loops)...])
-
-# Gather an array VARIABLE leaf at the current cell, aligning its DECLARED
-# index-set names against the result axes when a usable `_AxisAlign` is in scope
-# (esm-spec §4.3.4). Falls back to the positional whole-loop gather for a
-# variable with no declared shape, a shape identical to the result's, or a shape
-# that repeats an index set (no unambiguous name→axis map).
-function _index_wrap_var(
-        v::VarExpr, loops::Vector{String},
-        align::Union{Nothing, _AxisAlign}
-    )::OpExpr
-    align === nothing && return _index_wrap(v, loops)
-    vs = get(align.var_shapes, v.name, nothing)
-    (vs === nothing || isempty(vs) || vs == align.axes || !allunique(vs)) &&
-        return _index_wrap(v, loops)
-    subs = Vector{ASTExpr}(undef, length(vs) + 1)
-    subs[1] = v
-    for (d, ax) in enumerate(vs)
-        p = findfirst(isequal(ax), align.axes)
-        p === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_ARRAY_SHAPE_MISMATCH",
-                "Operand '$(v.name)' of an array-level expression is declared over " *
-                    "index set '$(ax)' (shape $(vs)), which the result shape " *
-                    "$(align.axes) is not shaped over (esm-spec §4.3.4)"
-            )
-        )
-        subs[d + 1] = VarExpr(loops[p])
-    end
-    return OpExpr("index", subs)
-end
-
-# Replace each VarExpr leaf naming a promoted ARRAY variable with `index(v, loops…)`,
-# leaving scalar leaves (params, constants, reductions' results) untouched. Does
-# not descend into nested faq bodies — those carry their own indexing.
-#
-# An ARRAY-PRODUCING node in elementwise position (a `makearray`, or an
-# `faq` with non-empty `output_idx`) gets the same broadcast
-# treatment as an array variable leaf: it is wrapped in `index(node, loops…)` so
-# the per-cell expansion gathers this cell's element. This is the whole-array
-# broadcast semantics of esm-spec §9.6.8 — a discretization rule lowers
-# `D(u, x)` to a `makearray`, and the surrounding equation (`rhs = -c * D(u,x)`)
-# multiplies that array elementwise. A genuine scalar reduction (empty
-# `output_idx`) and an `index` gather stay untouched — they are already scalar.
-#
-# `align` (optional) turns the array-VARIABLE gathers name-based (esm-spec
-# §4.3.4 / [`_AxisAlign`](@ref)); without it every leaf is gathered positionally
-# over all `loops`, the pre-alignment behaviour.
-function _index_array_leaves(
-        expr::ASTExpr,
-        arrayvars::Set{String}, loops::Vector{String};
-        align::Union{Nothing, _AxisAlign} = nothing
-    )::ASTExpr
-    return _wrap_bare_array_refs(
-        expr, arrayvars, loops;
-        wrap_node = _is_array_producer,
-        stop_node = e -> e.op in _SELF_INDEXED_OPS,
-        align = align
-    )
-end
-
-# True iff `expr` is an array-PRODUCING node: a `makearray`, or an
-# `faq` with a non-empty `output_idx` (a scalar reduction has an
-# empty `output_idx` and produces a scalar).
-function _is_array_producer(expr::ASTExpr)::Bool
-    expr isa OpExpr || return false
-    expr.op == "makearray" && return true
-    # The remaining producers (faq) are array-valued only with a
-    # non-empty `output_idx` — a scalar reduction has an empty one.
-    expr.op in _ARRAY_PRODUCER_OPS || return false
-    expr.output_idx === nothing && return false
-    return any(s -> s isa AbstractString, expr.output_idx)
-end
-
-# Wrap a (formerly scalar) defining expression in a faq producing `shape`.
-# Loop vars are fresh simple names following the shape-promotion synthetic-name
-# convention `_p<k>` (zero-based: `_p0`, `_p1`, …) — NOT the index-set names,
-# which may be dotted/namespaced. Each shape axis ranges over the index set it
-# names (`{from: …}`); dimension sizes are declared via `index_sets` since the
-# removal of the Domain.spatial spec, so the domain contributes none here.
+# Wrap a (formerly scalar) defining expression in the `faq` producing `shape`:
+# its array operands read at the cell (`_index_array_leaves`, aligned by
+# index-set name, esm-spec §4.3.4), each loop (`_fresh_loops`) ranging over the
+# index set its axis names.
 #
 # `bounds` replaces those index-set references with RESOLVED `[1, extent]`
 # literals, one per axis, for a caller lifting a body it is about to evaluate
 # rather than to store: the §6.6.5 assertion path
 # ([`_authored_observed_body`](@ref)) has the extents in hand and no index-set
-# registry at the evaluator. Everything else about the lift — the loop-name
-# convention, the §4.3.4 name alignment, the faq wrapper — MUST stay shared
-# with the build's own promotion, which is why this takes a keyword instead of
-# being copied.
+# registry at the evaluator. Everything else about the lift is the build's own
+# promotion, which is why this takes a keyword instead of being copied.
 function _lift_to_faq(
         expr::ASTExpr, shape::Vector{String},
         arrayvars::Set{String},
@@ -344,22 +88,14 @@ function _lift_to_faq(
             Dict{String, Vector{String}}();
         bounds::Union{Nothing, Vector{Int}} = nothing
     )::OpExpr
-    n = bounds === nothing ? length(shape) : length(bounds)
-    loops = String["_p$(i - 1)" for i in 1:n]
-    ranges = bounds === nothing ?
-        Dict{String, Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape)) :
+    loops = _fresh_loops(expr, bounds === nothing ? length(shape) : length(bounds))
+    ranges = bounds === nothing ? _cell_ranges(loops, shape) :
         Dict{String, Any}(loops[i] => Any[1, bounds[i]] for i in eachindex(bounds))
-    # `_AxisAlign` self-disables (`_usable_align`) when its axes are not
-    # positionally parallel to `loops`, so a shape/bounds length mismatch
-    # degrades to the historical positional gather rather than misaligning.
-    body = _index_array_leaves(
-        expr, arrayvars, loops;
-        align = _AxisAlign(shape, var_shapes)
-    )
-    return OpExpr(
-        "faq", ASTExpr[];
-        output_idx = Any[l for l in loops], ranges = ranges, expr_body = body
-    )
+    # `_AxisAlign` is unusable (`_usable_align`) when its axes are not
+    # positionally parallel to `loops`, so a shape/bounds length mismatch reads
+    # positionally rather than misaligning.
+    body = _index_array_leaves(expr, arrayvars, loops; align = _AxisAlign(shape, var_shapes))
+    return _cell_faq(body, loops, ranges)
 end
 
 """
@@ -375,7 +111,7 @@ authored as states (Rothermel R, midflame U, EMC, …) the same as expression-de
 observeds. Returns a new system; the input is untouched.
 
 A name carrying BOTH forms stays a state here and keeps both of its equations,
-but no run reaches that state: `build_evaluator` refuses such a document at its
+but no run reaches that state: `_build_evaluator` refuses such a document at its
 entry with `equation_count_mismatch`, because esm-spec §4.9.4 counts an equation
 whichever form its LHS takes and the system is therefore unbalanced — which is
 what `validate` reports for the same file.
@@ -395,7 +131,7 @@ function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
     new_obs = OrderedDict{String, ModelVariable}(flat.observed_variables)
     for (k, v) in flat.state_variables
         if (k in alg_defined) && !(k in diff_states)
-            # Both sides are `unknown` from esm 1.0.0; the move between the
+            # Both sides are `unknown`; the move between the
             # FlattenedSystem's state and observed buckets IS the reclassification
             # (an algebraically-defined name is observed, esm-spec §6.3.1), so the
             # declared type is already right and the variable copies across as-is.
@@ -407,91 +143,6 @@ function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
     return FlattenedSystem(
         flat; state_variables = new_states,
         observed_variables = new_obs
-    )
-end
-
-"""
-    inline_elementwise_array_observeds(flat::FlattenedSystem) -> FlattenedSystem
-
-Substitute away every ARRAY-shaped observed that is defined by a BARE *elementwise*
-equation (`v = expr` where `expr` is not a `faq`/`makearray`), folding
-it into the equations that read it and dropping it from the system.
-
-The tree-walk evaluator inlines an array observed only when it is defined by a
-`faq` (per-cell index beta-reduction) or is a geometry clip ring; an array observed
-authored as a plain elementwise expression over the spatial field (a level-set's
-`grad_mag = sqrt(psi_x^2 + psi_y^2)`, `U_n = …`, `S_n = R_0·(1+phi_W+phi_S)`, …) has no
-such per-cell form and is otherwise rejected. Rather than require every such component
-to be re-authored as `faq` nodes, this pass performs the feed-forward topological
-substitution a driver would otherwise do by hand (the level-set fold), in dependency
-order, so the spatial state equation `D(psi,t) = …` carries the fully-inlined RHS and
-`discretize` then lowers its `grad`s. Genuine reductions/gathers (`faq`, `faq`,
-`makearray`) are left intact — they ARE inlinable and define their own indexing. A no-op
-when no elementwise array observed exists. Returns a new system; the input is untouched.
-"""
-function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSystem
-    function is_array_obs(nm)
-        haskey(flat.observed_variables, nm) || return false
-        v = flat.observed_variables[nm]
-        return v.shape !== nothing && !isempty(v.shape)
-    end
-    is_elementwise(rhs) = !(rhs isa OpExpr && (rhs::OpExpr).op in _ARRAY_PRODUCER_OPS)
-    targets = Dict{String, ASTExpr}()
-    for eq in flat.equations
-        eq.lhs isa VarExpr || continue
-        nm = (eq.lhs::VarExpr).name
-        if is_array_obs(nm) && is_elementwise(eq.rhs)
-            targets[nm] = eq.rhs
-        end
-    end
-    isempty(targets) && return flat
-
-    # Dependency order (the chain is feed-forward; a cycle is a real authoring
-    # error). `free_variables` walks the shared `child_exprs` traversal, so a
-    # dependency nested in an aggregate body / filter / bound is seen too.
-    order = String[]
-    done = Set{String}()
-    while length(order) < length(targets)
-        progressed = false
-        for (nm, rhs) in targets
-            nm in done && continue
-            if all(d -> d in done, intersect(free_variables(rhs), keys(targets)))
-                push!(order, nm)
-                push!(done, nm)
-                progressed = true
-            end
-        end
-        progressed || throw(
-            DimensionPromotionError(
-                "inline_elementwise_array_observeds: cyclic elementwise " *
-                    "array-observed dependency among $(sort!(collect(setdiff(keys(targets), done))))"
-            )
-        )
-    end
-    resolved = Dict{String, ASTExpr}()
-    for nm in order
-        resolved[nm] = substitute(targets[nm], resolved)
-    end
-
-    new_obs = OrderedDict{String, ModelVariable}(
-        k => v for (k, v) in flat.observed_variables if !haskey(targets, k)
-    )
-    # The substitution applies inside each contribution; a dropped definition
-    # leaves with its contributions (esm-libraries-spec §4.7.5).
-    new_eqs = Equation[]
-    new_contribs = Vector{Contribution}[]
-    for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
-        (eq.lhs isa VarExpr && haskey(targets, (eq.lhs::VarExpr).name)) && continue  # drop the def
-        rewritten, new_cs = _rewrite_contributions(
-            e -> substitute(e, resolved), eq, cs,
-            _is_lifted(eq, flat.lifted_shapes)
-        )
-        push!(new_eqs, rewritten)
-        push!(new_contribs, new_cs)
-    end
-    return FlattenedSystem(
-        flat; observed_variables = new_obs, equations = new_eqs,
-        equation_contributions = new_contribs
     )
 end
 
@@ -518,19 +169,14 @@ rewritten to an `index(var, <loops>)` gather bound in that body's own loop
 scope — name-aligned against the enclosing `ranges`' index sets where possible,
 positionally over the enclosing producer's `output_idx` otherwise (see
 [`_index_promoted_consumer_refs`](@ref)). A reference in SCALAR position (the
-un-discretized spatial state equation) is left bare deliberately: its loops do
-not exist until `discretize` lowers the equation, and `index_promoted_refs!`
-closes it post-discretize. `index_consumer_refs=false` disables the consumer
-rewrite (the pre-fix behaviour, kept as a regression kill switch).
+un-discretized spatial state equation) is left bare: its loops do not exist
+until `discretize` lowers the equation.
 
 `index_sets` for the grid axes must already be declared (the loop ranges resolve
 against them); supply them on the FlattenedSystem before calling. Returns a new
 FlattenedSystem; the input is untouched.
 """
-function promote_downstream_shapes(
-        flat::FlattenedSystem;
-        index_consumer_refs::Bool = true
-    )::FlattenedSystem
+function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
     # Current shapes from declarations (scalar = []). An ABSENT `shape` may be
     # inferred below; an explicit `shape: []` DECLARES a scalar and is never
     # promoted (esm-spec §4.3.4) — a definition that infers an array for one is
@@ -550,13 +196,9 @@ function promote_downstream_shapes(
     # §9.6.11).
     ew = _ElementwiseContext(flat.template_registry)
 
-    # Index the ALGEBRAIC defining equations (bare `x = expr`). State equations
+    # The ALGEBRAIC defining equations (bare `x = expr`). State equations
     # (`D(x,t) = …`) don't define x's shape (x keeps its declared shape).
-    defs = Dict{String, ASTExpr}()
-    for eq in flat.equations
-        eq.lhs isa VarExpr || continue
-        defs[(eq.lhs::VarExpr).name] = eq.rhs
-    end
+    defs = _bare_definitions(flat.equations)
 
     # A variable defined by a `faq` whose output indices range over inline
     # intervals takes its shape from those ranges (esm-spec §6.3): each axis is
@@ -582,33 +224,19 @@ function promote_downstream_shapes(
                 push!(names, sym)
             else
                 anon = string(name, "__", sym)
-                if !haskey(index_sets, anon)
-                    added || (index_sets = OrderedDict{String, IndexSet}(index_sets); added = true)
-                    index_sets[anon] = IndexSet("interval"; size = n)
-                end
+                added || (index_sets = OrderedDict{String, IndexSet}(index_sets); added = true)
+                _register_synthetic_index_set!(
+                    index_sets, anon, n, "shape promotion: '$(name)'", "output index '$(sym)'"
+                )
                 push!(names, anon)
             end
         end
         shapes[name] = names
     end
 
-    # Fixed-point shape inference: a scalar var whose defining expression infers
-    # an array shape is promoted. Repeat until stable (acyclic chain ⇒ converges).
-    changed = true
-    while changed
-        changed = false
-        for (name, rhs) in defs
-            cur = get(shapes, name, String[])
-            isempty(cur) || continue                     # already array — leave it
-            inferred = _infer_expr_shape(rhs, shapes, ew)
-            if !isempty(inferred)
-                name in declared_scalar &&
-                    _throw_declared_scalar_conflict(name, inferred, "its defining expression")
-                shapes[name] = inferred
-                changed = true
-            end
-        end
-    end
+    # A scalar variable whose defining expression infers an array shape is
+    # promoted.
+    _infer_shapes!(shapes, defs, ew; declared_scalar = declared_scalar)
 
     # The set of variables that are now array-shaped (for leaf indexing).
     arrayvars = Set{String}(k for (k, s) in shapes if !isempty(s))
@@ -659,8 +287,8 @@ function promote_downstream_shapes(
     # consumer rewrite, a pointwise-lifted state ODE — whose lift indexed only
     # the operands that carried a shape AT FLATTEN TIME — ships a bare scalar
     # name for a now-array variable, and the evaluator fails to bind it
-    # (`E_TREEWALK_UNBOUND_VARIABLE`). Scalar-position references are left for
-    # the post-discretize `index_promoted_refs!` companion, as before.
+    # (`E_TREEWALK_UNBOUND_VARIABLE`). Scalar-position references are left
+    # bare.
     #
     # Per-term provenance (esm-libraries-spec §4.7.5): the consumer rewrite
     # applies inside each contribution (a lifted equation's in its `faq` loop
@@ -683,12 +311,10 @@ function promote_downstream_shapes(
                 out = _equation_from(eq, out_cs)
             end
         end
-        if index_consumer_refs
-            out, out_cs = _rewrite_contributions(
-                e -> _index_promoted_consumer_refs(e, newly_promoted, shapes), out, out_cs,
-                _is_lifted(out, flat.lifted_shapes)
-            )
-        end
+        out, out_cs = _rewrite_contributions(
+            e -> _index_promoted_consumer_refs(e, newly_promoted, shapes), out, out_cs,
+            _is_lifted(out, flat.lifted_shapes)
+        )
         push!(new_eqs, out)
         push!(new_contribs, out_cs)
     end
@@ -741,26 +367,6 @@ function _check_declared_producer_extents(
 end
 
 """
-    promoted_array_names(flat, promoted) -> Set{String}
-
-The names of variables that `promote_downstream_shapes` turned from scalar into an
-array shape — i.e. those whose shape grew. Useful to drive `index_promoted_refs!`
-on a discretized document. `flat` is the ORIGINAL system, `promoted` the result.
-"""
-function promoted_array_names(flat::FlattenedSystem, promoted::FlattenedSystem)::Set{String}
-    out = Set{String}()
-    for part in (:state_variables, :parameters, :observed_variables)
-        before = getfield(flat, part); after = getfield(promoted, part)
-        for (k, v) in after
-            (v.shape === nothing || isempty(v.shape)) && continue
-            b = get(before, k, nothing)
-            (b !== nothing && b.shape === nothing) && push!(out, k)
-        end
-    end
-    return out
-end
-
-"""
     _index_promoted_consumer_refs(expr, promoted, var_shapes) -> ASTExpr
 
 Consumer-side companion of the promoted-definition rewrite: replace a BARE
@@ -773,10 +379,9 @@ scalar-authored photolysis chain (Fast-JX): the lift indexed only operands that
 carried a shape AT FLATTEN TIME, so the j-rate — promoted only later, by
 `promote_downstream_shapes` — survives as a bare name inside the per-cell
 `faq` body, and the evaluator fails to bind it
-(`E_TREEWALK_UNBOUND_VARIABLE`). The post-discretize `index_promoted_refs!`
-cannot close this either: it takes ONE `spatial_loops` list, while each consumer
-equation iterates its OWN loop names (the lift's `["i","j","k"]` vs a promoted
-definition's `["_p0","_p1","_p2"]`).
+(`E_TREEWALK_UNBOUND_VARIABLE`). Each consumer equation iterates its OWN loop
+names (the lift's `["i","j","k"]` vs a promoted definition's
+`["_p0","_p1","_p2"]`), so the gather is bound per scope.
 
 Loop resolution, innermost scope winning:
 - NAME-ALIGNED (preferred): every `ranges` entry of an enclosing producer whose
@@ -788,16 +393,13 @@ Loop resolution, innermost scope winning:
   same producer is ambiguous and poisons name alignment for that axis.
 - POSITIONAL fallback: when name alignment cannot resolve every axis, and the
   INNERMOST enclosing producer has an all-symbolic `output_idx` whose rank
-  equals the variable's, gather positionally over those loops (the historical
-  `_index_bare` convention).
+  equals the variable's, gather positionally over those loops.
 - Otherwise the reference is left bare (the status-quo diagnostic fires).
 
 A reference in scalar position (no enclosing producer) is always left bare —
-its loops do not exist until `discretize` runs (`index_promoted_refs!` owns
-that case). References already under an `index` node are self-contained: the
+its loops do not exist until `discretize` runs. References already under an `index` node are self-contained: the
 gathered operand (arg 1) is never rewrapped. Pure; returns `expr` itself
-(`===`) when nothing changes. IDENTITY-MEMOIZED per loop scope (the ESS-0hh
-convention of `_wrap_bare_array_refs`): within one scope the rewrite is a pure
+(`===`) when nothing changes. Memoized by node identity per loop scope: within one scope the rewrite is a pure
 function of the node, so a structurally-shared input DAG rewrites to a shared
 output DAG instead of re-inflating into an exponential tree; entering a
 producer opens a fresh scope (and memo), since the same node can legally
@@ -829,14 +431,10 @@ function _index_promoted_in_scope(
         vs = get(var_shapes, expr.name, String[])
         isempty(vs) && return expr
         if allunique(vs)
-            loops = String[]
-            for ax in vs
-                l = get(env, ax, nothing)
-                l === nothing && (empty!(loops); break)
-                push!(loops, l)
-            end
-            (length(loops) == length(vs) && allunique(loops)) &&
-                return _index_wrap(expr, loops)
+            axes = String[ax for (ax, l) in env if l !== nothing]
+            r = _gather_by_name(expr, vs, axes, String[env[ax] for ax in axes])
+            (r isa OpExpr && allunique(String[(a::VarExpr).name for a in view(r.args, 2:length(r.args))])) &&
+                return r
         end
         (poslocal !== nothing && length(poslocal) == length(vs)) &&
             return _index_wrap(expr, poslocal)
@@ -862,8 +460,8 @@ function _index_promoted_opexpr(
         memo::IdDict{OpExpr, ASTExpr}
     )::ASTExpr
     if expr.op == "index"
-        # The gathered operand keeps its own indexing (`_index_bare` twin);
-        # only the subscript expressions recurse.
+        # The gathered operand keeps its own indexing; only the subscript
+        # expressions recurse.
         length(expr.args) <= 1 && return expr
         changed = false
         new_args = Vector{ASTExpr}(undef, length(expr.args))
@@ -909,79 +507,6 @@ function _index_promoted_opexpr(
     )
 end
 
-"""
-    index_promoted_refs!(doc, arrayvars; spatial_loops=["i","j"]) -> doc
-
-Post-discretize pass: replace a BARE reference to a promoted array variable with
-`index(var, <loops>)`, so the evaluator's index beta-reduction collapses it to the
-var's per-cell value. Inside a nested `faq` the loops are its own `output_idx`;
-in the spatial state equation (`D(psi,t) = expr(i,j)`, which `discretize` lowers
-with the grad-rule grid loops — only AFTER `promote_downstream_shapes`) the loops
-are `spatial_loops`. The `spatial_loops` default `["i","j"]` is a convention pin:
-it matches the literal grid-loop names the `discretize` grad-rule lowering emits
-for a 2-D spatial state equation. Mutates and returns the native `doc`. This
-generalizes the driver's hand `couple_fields` bare→index rewrite.
-"""
-function index_promoted_refs!(
-        doc::AbstractDict, arrayvars;
-        spatial_loops::Vector{String} = ["i", "j"]
-    )::AbstractDict
-    av = Set{String}(String(x) for x in arrayvars)
-    isempty(av) && return doc
-    models = get(doc, "models", nothing)
-    models isa AbstractDict || return doc
-    for (_, m) in models
-        eqs = get(m, "equations", nothing)
-        eqs isa AbstractVector || continue
-        for eq in eqs
-            haskey(eq, "rhs") && (eq["rhs"] = _index_bare(eq["rhs"], av, spatial_loops))
-        end
-    end
-    return doc
-end
-
-# Single loop-tracking walk: `loops` is the iteration context for bare promoted
-# refs. A `faq` switches the context to its own output_idx for its body; an
-# `index` node keeps its array operand (arg 1) and recurses only the index exprs.
-# This is the raw-JSON dict twin of the typed `_wrap_bare_array_refs` rewrite
-# above (same leaf test + `index(ref, loops…)` wrap); it stays separate because
-# it walks a discretized NATIVE document (string leaves, `{"op": …}` dicts,
-# loop-context switching at `faq`) rather than typed Exprs.
-function _index_bare(node, av::Set{String}, loops::Vector{String})
-    if node isa AbstractString
-        return node in av ? Dict{String, Any}("op" => "index", "args" => Any[node, loops...]) : node
-    elseif node isa AbstractVector
-        return Any[_index_bare(x, av, loops) for x in node]
-    elseif node isa AbstractDict
-        op = get(node, "op", "")
-        nm = get(node, "name", nothing)
-        if op == "" && nm isa AbstractString && String(nm) in av
-            return Dict{String, Any}("op" => "index", "args" => Any[node, loops...])
-        elseif op == "faq"
-            inner = String[String(x) for x in get(node, "output_idx", Any[])]
-            out = Dict{String, Any}()
-            for (k, v) in node
-                out[String(k)] = (k == "expr" && !isempty(inner)) ?
-                    _index_bare(v, av, inner) : _index_bare(v, av, loops)
-            end
-            return out
-        elseif op == "index"
-            a = get(node, "args", nothing)
-            a isa AbstractVector || return node
-            out = copy(node)
-            out["args"] = Any[i == 1 ? a[1] : _index_bare(a[i], av, loops) for i in eachindex(a)]
-            return out
-        else
-            out = Dict{String, Any}()
-            for (k, v) in node
-                out[String(k)] = _index_bare(v, av, loops)
-            end
-            return out
-        end
-    end
-    return node
-end
-
 # True iff `name` was authored with NO declared shape in the original system —
 # the only declarations promotion may grow. An explicit `shape: []` is a declared
 # scalar (`_declares_scalar`), never promoted.
@@ -1006,7 +531,7 @@ function _throw_declared_scalar_conflict(name, inferred, source::AbstractString)
     )
 end
 
-# Return a copy of a ModelVariable with a new (array) shape. From esm 1.0.0 the
+# Return a copy of a ModelVariable with a new (array) shape. The
 # rewritten `faq` EQUATION is the ONLY source of truth for a promoted
 # variable's definition — there is no scalar `expression` on the declaration
 # left to clear, so this is a shape change and nothing else.

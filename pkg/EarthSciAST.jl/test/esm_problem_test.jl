@@ -2,7 +2,7 @@
 # (esm-libraries-spec §2.5, API_SPEC §5.8).
 #
 # `esm_problem(input, tspan; …)` runs everything deterministic-per-document ONCE
-# (load → flatten → shape transforms → build_evaluator → seed → callbacks);
+# (load → flatten → shape transforms → build → seed → callbacks);
 # `solve(prob, alg)` skips it entirely, and `remake(prob; …)` substitutes without
 # redoing any of it. Pinned here:
 #   • SNAPSHOT + NO RE-DERIVATION — after construction, mutating the input Dict
@@ -20,7 +20,7 @@
 #     anchor (no double seeding).
 using Test
 using EarthSciAST
-using DiffEqCallbacks            # loads EarthSciASTDataRefreshExt (discrete runs)
+using DiffEqCallbacks            # loads EarthSciASTCallbacksExt (discrete runs)
 using SciMLBase                  # ext co-trigger (u_modified!) + solve/remake/retcodes
 include("testutils.jl")         # TESTUTILS_REPO_ROOT
 import SciMLBase: successful_retcode   # defined, not exported

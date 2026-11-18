@@ -88,10 +88,10 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test length(recovered.reactions) == 1
     end
 
-    @testset "Fractional stoichiometry survives Catalyst → ESM reverse (gt-3ai5)" begin
+    @testset "Fractional stoichiometry survives Catalyst → ESM reverse" begin
         # Catalyst ReactionSystems with fractional stoichiometry (e.g.
         # CH3O2+CH3O2 -> 2.0 CH2O + 0.8 HO2) must reverse-convert without
-        # Int() truncation. Prior to the fix, Int(0.8) raised InexactError.
+        # Int() truncation (Int(0.8) raises InexactError).
         species = [
             EarthSciAST.Species("CH3O2"),
             EarthSciAST.Species("CH2O"),
@@ -120,7 +120,7 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test EarthSciAST.get_products_dict(rxn)["HO2"] ≈ 0.8
     end
 
-    @testset "Reservoir species (constant=true) maps to isconstantspecies (gt-ertm)" begin
+    @testset "Reservoir species (constant=true) maps to isconstantspecies" begin
         # Reservoir species must flow through Catalyst as parameters with the
         # isconstantspecies=true metadata (modern Catalyst rejects this
         # metadata on @species). The reverse direction recovers them as ESM
@@ -171,10 +171,10 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test length(recovered.parameters) == 1
     end
 
-    @testset "Rate AST emission: species refs and numeric Constants (esm-edt)" begin
-        # Regression for esm-edt: _catalyst_rate_to_esm previously emitted
+    @testset "Rate AST emission: species refs and numeric Constants" begin
+        # _catalyst_rate_to_esm must not emit
         #   (1) a species `S` used inside a rate as {op: "S", args: ["t"]}
-        #       (registered-function call shape), and
+        #       (registered-function call shape), or
         #   (2) literal numeric values that surface as BasicSymbolic Const
         #       nodes (the same shape MTK Constants substitution produces)
         #       as STRING args like {op: "*", args: ["300.0", ...]}.
@@ -264,10 +264,8 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test !occursin("\"300\"", json_str)
     end
 
-    @testset "Rate AST: max/min round-trip (esm-70t)" begin
-        # Regression for esm-70t: _esm_to_symbolic previously rejected
-        # `max` and `min` rate operators with
-        #   "Unsupported operator in rate expression: max"
+    @testset "Rate AST: max/min round-trip" begin
+        # _esm_to_symbolic must accept `max` and `min` rate operators.
         # The geoschem_fullchem .esm uses 64 instances of the
         # max(expr, 0.0) clamp pattern common in atmospheric chemistry to
         # enforce non-negative rate constants. Both operators must
@@ -319,10 +317,9 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test _has_op(recovered.reactions[2].rate, "min")
     end
 
-    @testset "NumExpr above Int64 range stays Float (esm-6z5)" begin
-        # Regression for esm-6z5: _esm_to_symbolic previously called
-        # `Int(v)` on every integer-valued NumExpr, which raises
-        # InexactError for values above Int64.max (e.g. Avogadro's
+    @testset "NumExpr above Int64 range stays Float" begin
+        # _esm_to_symbolic must not call `Int(v)` on an integer-valued
+        # NumExpr above Int64.max, which raises InexactError (e.g. Avogadro's
         # number 6.022e23 used in atmospheric chemistry rate constants).
         species = [
             EarthSciAST.Species("A"),
@@ -352,5 +349,90 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         # Should not raise InexactError.
         cat_rsys = Catalyst.ReactionSystem(esm_rsys; name = :AvogadroRate)
         @test occursin("ReactionSystem", string(typeof(cat_rsys)))
+    end
+
+    @testset "mass-action rate has no combinatorial factor and defaults are attached" begin
+        # esm-spec §7.4: 2A → B at rate k proceeds at k·A², so dA/dt = -2·k·A².
+        # With Catalyst's combinatorial rate law it would be -2·k·A²/2!.
+        esm_rsys = EarthSciAST.ReactionSystem(
+            [EarthSciAST.Species("A"; default = 2.0), EarthSciAST.Species("B"; default = 0.0)],
+            EarthSciAST.Reaction[
+                EarthSciAST.Reaction(Dict("A" => 2), Dict("B" => 1), VarExpr("k")),
+            ];
+            parameters = [EarthSciAST.Parameter("k", 1.5)]
+        )
+        csys = ModelingToolkit.complete(Catalyst.ReactionSystem(esm_rsys; name = :Dimer))
+        @test Catalyst.get_combinatoric_ratelaws(csys) == false
+        # No initial values or parameters passed: the declared defaults supply them.
+        prob = ModelingToolkit.ODEProblem(csys, Dict{Any, Float64}(), (0.0, 1.0))
+        du = prob.f(prob.u0, prob.p, 0.0)
+        names = [string(u) for u in ModelingToolkit.unknowns(prob.f.sys)]
+        ia = findfirst(n -> startswith(n, "A"), names)
+        ib = findfirst(n -> startswith(n, "B"), names)
+        @test du[ia] ≈ -2 * 1.5 * 2.0^2
+        @test du[ib] ≈ 1.5 * 2.0^2
+    end
+
+    @testset "constructs it cannot lower are refused, not dropped" begin
+        sp = [EarthSciAST.Species("A"), EarthSciAST.Species("B")]
+        rx = EarthSciAST.Reaction[
+            EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k")),
+        ]
+        ps = [EarthSciAST.Parameter("k", 1.0)]
+        with_constraint = EarthSciAST.ReactionSystem(
+            sp, rx; parameters = ps,
+            constraint_equations = [EarthSciAST.Equation(VarExpr("B"), NumExpr(0.0))]
+        )
+        err = try
+            Catalyst.ReactionSystem(with_constraint; name = :C)
+            nothing
+        catch e
+            e
+        end
+        @test err isa SimulateError
+        @test occursin("constraint_equations", err.msg)
+
+        nested = EarthSciAST.ReactionSystem(
+            sp, rx; parameters = ps,
+            subsystems = Dict("Inner" => EarthSciAST.ReactionSystem(sp, rx; parameters = ps))
+        )
+        @test_throws SimulateError Catalyst.ReactionSystem(nested; name = :N)
+
+        null_rx = EarthSciAST.ReactionSystem(
+            sp, EarthSciAST.Reaction[EarthSciAST.Reaction("r0", nothing, nothing, VarExpr("k"))];
+            parameters = ps
+        )
+        err = try
+            Catalyst.ReactionSystem(null_rx; name = :Null)
+            nothing
+        catch e
+            e
+        end
+        @test err isa SimulateError && error_code(err) == "null_reaction"
+        @test occursin("null_reaction", err.msg)
+    end
+
+    @testset "rate lowering checks operator arity instead of truncating" begin
+        sp = [EarthSciAST.Species("A"), EarthSciAST.Species("B")]
+        ps = [EarthSciAST.Parameter("k", 1.0)]
+        for rate in (
+                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(1.0), NumExpr(2.0)]),
+                OpExpr("/", EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(1.0), NumExpr(2.0)]),
+                OpExpr("exp", EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(1.0)]),
+            )
+            rsys = EarthSciAST.ReactionSystem(
+                sp,
+                EarthSciAST.Reaction[EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1), rate)];
+                parameters = ps
+            )
+            err = try
+                Catalyst.ReactionSystem(rsys; name = :Arity)
+                nothing
+            catch e
+                e
+            end
+            @test err isa EarthSciAST.TreeWalkError
+            @test err.code == "E_TREEWALK_ARITY"
+        end
     end
 end

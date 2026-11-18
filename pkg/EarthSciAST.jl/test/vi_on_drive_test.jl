@@ -2,7 +2,7 @@
 # (`_vi_equality_candidates` / `_vi_enumerate_driven`, value_invention.jl).
 #
 # A `join.on [[src_bx, tgt_bx]]` producer — the regridder's candidate set over
-# integer bin columns — used to test the gate on every tuple of the full
+# integer bin columns — must not test the gate on every tuple of the full
 # product. The driven walk visits the ranges in the product's
 # order and restricts the second gated symbol to the first one's partners, so
 # the admitted tuples are the same ones in the same order. Every case compares
@@ -11,15 +11,13 @@
 # driven walk's allocation is bounded too: linear in the first gated range and
 # the candidates, never a list of the second range per binding of the first.
 
-module ViOnDriveTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 import JSON3
 const EA = EarthSciAST
 
 _ix(a...) = Dict{String, Any}("op" => "index", "args" => Any[a...])
-_op(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 
 # The regridder's candidate set over `n` source and `n` target cells: a bin
 # column `floor(lon / dx)` per grid, and a `distinct` producer over (i, j)
@@ -30,7 +28,7 @@ function _regrid(n)
         "rhs" => Dict{String, Any}(
             "op" => "faq", "semiring" => "sum_product", "output_idx" => Any[sym],
             "ranges" => Dict{String, Any}(sym => Dict{String, Any}("from" => cells)),
-            "args" => Any[coord, step], "expr" => _op("floor", _op("/", _ix(coord, sym), step))
+            "args" => Any[coord, step], "expr" => jop("floor", jop("/", _ix(coord, sym), step))
         )
     )
     par(shape) = Dict{String, Any}("type" => "parameter", "shape" => Any[shape...])
@@ -54,8 +52,8 @@ function _regrid(n)
                 ),
                 "join" => Any[Dict{String, Any}("on" => Any[Any["src_bx", "tgt_bx"]])],
                 "args" => Any["src_bx", "tgt_bx"],
-                "key" => _op("+", _op("*", _op("-", "i", 1), n), _op("-", "j", 1)),
-                "expr" => _op("true")
+                "key" => jop("+", jop("*", jop("-", "i", 1), n), jop("-", "j", 1)),
+                "expr" => jop("true")
             )
         ),
     ]
@@ -77,7 +75,7 @@ function _ctx(m, isets, ca, params)
     ctx = EA._ViCtx(
         Dict{String, Any}(ca), Dict{String, Float64}(params),
         Dict{String, EA.IndexSet}(isets), m.variables,
-        Dict{String, Dict{Any, Any}}(), EA._vi_seed_map(m)
+        Dict{String, Dict{Any, Any}}(), EA.cadence_seeds(m)
     )
     for (v, node) in EA._vi_detect(m).columns
         EA._vi_materialize_column!(ctx, v, node)
@@ -97,7 +95,6 @@ _lcg(n, seed, scale) = let s = UInt64(seed)
     ]
 end
 
-
 @testset "value-invention bin-equality drive" begin
 
     @testset "regrid candidate-set producer" begin
@@ -108,12 +105,12 @@ end
             "src_lon" => _lcg(n, 1, 6.0), "tgt_lon" => _lcg(n, 2, 6.0)
         )
         params = Dict("dx" => 1.0)
-        EA._VI_ENUM_VISITS[] = 0
-        vi = EA.materialize_value_invention(m, isets, ca, params)
-        driven = EA._VI_ENUM_VISITS[]
-        EA._VI_ENUM_VISITS[] = 0
-        ref = _interp(() -> EA.materialize_value_invention(m, isets, ca, params))
-        full = EA._VI_ENUM_VISITS[]
+        vi, dc = EA.Internal.counting(() -> EA.materialize_value_invention(m, isets, ca, params))
+        driven = get(dc, :vi_enum_visits, 0)
+        ref, fc = EA.Internal.counting(
+            () -> _interp(() -> EA.materialize_value_invention(m, isets, ca, params))
+        )
+        full = get(fc, :vi_enum_visits, 0)
         @test isequal(vi.members["candidate_set"], ref.members["candidate_set"])
         @test length(vi.members["candidate_set"]) > n     # several pairs per bin
         @test full == n * n
@@ -155,9 +152,9 @@ end
             gs = EA._vi_resolve_join(node.join, ranges, ctx)
             cb = _ -> nothing
             EA._vi_enumerate_join(ranges, gs, ctx, cb)          # compile
-            EA._VI_ENUM_VISITS[] = 0
             bytes = @allocated EA._vi_enumerate_join(ranges, gs, ctx, cb)
-            return bytes, EA._VI_ENUM_VISITS[]
+            _, c = EA.Internal.counting(() -> EA._vi_enumerate_join(ranges, gs, ctx, cb))
+            return bytes, get(c, :vi_enum_visits, 0)
         end
         small, v_small = regrid_walk(500)
         big, v_big = regrid_walk(2000)
@@ -168,5 +165,3 @@ end
         @test big < 2 * 2000^2
     end
 end
-
-end # module

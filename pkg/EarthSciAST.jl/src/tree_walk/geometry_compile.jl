@@ -1,19 +1,15 @@
 # ========================================================================
 # tree_walk/geometry_compile.jl — part of the tree-walk evaluator.
-# Included by src/tree_walk.jl AFTER compile.jl (the spec structs below carry
+# Included by src/tree_walk.jl AFTER node.jl (the spec structs below carry
 # `_Node` fields, so they need the IR type at include time). Section 2c:
 # the COMPILED setup-time geometry path.
 #
-# WHY A COMPILER. Geometry setup once had its own raw-AST interpreter — string
-# -compared ops, per-node Dict lookups, a hand-mirrored scalar ladder — re-run
-# once per output cell × contraction tuple, which made it the dominant build cost
-# of a conservative regrid. `_geo_compile` instead lowers a geometry body ONCE per
-# materialization sweep into the SAME `_Node` IR the runtime walkers evaluate, and
-# the per-cell work is a single `_eval_node` walk over a small `Vector{Float64}`
-# loop-index frame. The scalar vocabulary therefore evaluates through
-# `_eval_node_op`'s registry-generated arms; there is no mirrored geometry ladder.
+# `_geo_compile` lowers a setup-time geometry body ONCE per materialization
+# sweep into the `_Node` IR the runtime walkers evaluate; the per-cell work is
+# one `_eval_node` walk over a small `Vector{Float64}` loop-index frame, and the
+# scalar vocabulary evaluates through `_eval_node_op`'s registry-generated arms.
 #
-# HOW THE PIECES MAP (interpreter arm → compiled form):
+# How the language maps onto the IR:
 #   * loop indices          → `_NK_STATE` slots in the per-sweep frame `u`
 #                             (nested aggregates allocate FRESH slots, so
 #                             lexical shadowing is by construction);
@@ -27,29 +23,19 @@
 #   * nested scalar aggregates → `:geo_agg` nodes, evaluated by
 #                             `_eval_geo_op` — the cold tail arm of
 #                             `_eval_node_op`;
-#   * scalar ops            → plain `_NK_OP` nodes (the registry-generated
-#                             `_eval_node_op` arms), gated at COMPILE time by
-#                             `_GEO_SCALAR_OPS` so an op outside the geometry
-#                             vocabulary still fails with the historical
-#                             E_TREEWALK_GEOMETRY_SETUP code.
+#   * scalar ops            → plain `_NK_OP` nodes, gated at COMPILE time by
+#                             `_GEO_SCALAR_OPS`: an op outside the geometry
+#                             vocabulary raises E_TREEWALK_GEOMETRY_SETUP.
 #
-# Evaluation ORDER is replicated exactly — the same `Iterators.product`
-# nesting, the same join-gate-then-filter gating, the same sequential `+=` /
-# fold accumulation — so materialized arrays are bit-identical to the
-# interpreted originals. Two knowing deviations, both strictly-lazier/safer:
-# `ifelse` is lazy here (the interpreter's 3-ary apply evaluated all three
-# arms before selecting — values identical, but a guarded domain error now
-# cannot fire), and a ≥4-ary `-` folds left (`((a-b)-c)-d`) instead of the
-# interpreter's `a - sum(rest)` (identical for the ≤3-ary forms actually
-# emitted; differs only in FP rounding beyond that).
+# Evaluation order: `Iterators.product` nesting in range-key order, the join
+# gate then the filter, and a sequential fold, so a materialized array is
+# bit-identical to the per-tuple reference. `ifelse` evaluates only the arm it
+# selects.
 # ========================================================================
 
-# The scalar-op vocabulary of the setup-time geometry language: exactly the
-# arms the retired `_geo_apply_scalar/1/2/3` ladder carried — `_GEO_EVAL_OPS`
-# (op_registry.jl, flag `:geo_eval`) minus the structurally-compiled ops.
-# Compile-time membership gating preserves the interpreter's failure mode: an
-# op outside this set throws E_TREEWALK_GEOMETRY_SETUP (not the runtime
-# ladder's unevaluable_operator).
+# The scalar-op vocabulary of the setup-time geometry language: `_GEO_EVAL_OPS`
+# (op_registry.jl, flag `:geo_eval`) minus the structurally-compiled ops. An op
+# outside it raises E_TREEWALK_GEOMETRY_SETUP at compile time.
 const _GEO_STRUCTURAL_OPS = Set{String}(
     [
         "index", "true", "false", "faq",
@@ -62,7 +48,7 @@ const _GEO_SCALAR_OPS = setdiff(_GEO_EVAL_OPS, _GEO_STRUCTURAL_OPS)
 # A build-time ring reference: a source array partially indexed by per-cell
 # leading subscripts; the tail dims stay whole. Resolved per cell to a `view`
 # (no data copy — the const source outlives every walk and is never mutated;
-# read-only consumers only), exactly the interpreter's partial-index behavior.
+# read-only consumers only).
 # `src` is an `AbstractArray` or another `_GeoRingRef`.
 struct _GeoRingRef
     src::Any
@@ -121,9 +107,8 @@ _geo_newslot!(g::_GeoCompileCtx) = (g.nslots[] += 1)
 # ---- The compiler -----------------------------------------------------------
 
 # Lower a setup-time geometry expression to a `_Node` against the lexical
-# `g.scope`/`g.setof`. Covers exactly the language the interpreter spoke;
-# anything else throws the same E_TREEWALK_GEOMETRY_SETUP diagnostics it
-# threw — just at compile (before the sweep) instead of at the first cell.
+# `g.scope`/`g.setof`. Anything outside the geometry language raises
+# E_TREEWALK_GEOMETRY_SETUP here, before the sweep.
 function _geo_compile(expr, g::_GeoCompileCtx)::_Node
     expr isa OpExpr || return _geo_compile_uncached(expr, g)
     key = (expr, g.scope)
@@ -144,10 +129,10 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
         # A scalar `env` entry folded to a literal is the setup-time geometry's
         # read of a model parameter (`atol`, `dx`, a projection constant) — the
         # value is baked into the materialized array, so the name is STRUCTURAL.
-        # See `_PARAM_READS` (build.jl); the sink is `nothing` outside a
+        # See `_record_param_read` (build_caller_data.jl); the sink is `nothing` outside a
         # build-time evaluation scope.
         if v isa Real
-            _PARAM_READS[] === nothing || _record_param_read(expr.name)
+            _record_param_read(expr.name)
             return _mknode(kind = _NK_LITERAL, literal = Float64(v))
         end
         v === nothing && throw(
@@ -185,19 +170,8 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
             return _mknode(kind = _NK_LITERAL, literal = 0.0)
         elseif op == "faq"
             return _geo_compile_agg(expr, g)
-        elseif op == "-" && length(expr.args) >= 3
-            # The interpreter's variadic `-`: left fold `((a-b)-c)…`, matching
-            # its 3-ary arm exactly. The runtime ladder's `-` is 1-or-2-ary
-            # (esm-spec), so the fold happens here at compile.
-            node = _geo_compile(expr.args[1], g)
-            for k in 2:length(expr.args)
-                node = _mknode(
-                    kind = _NK_OP, op = :-,
-                    children = _Node[node, _geo_compile(expr.args[k], g)]
-                )
-            end
-            return node
         elseif op in _GEO_SCALAR_OPS
+            _check_op_arity(Symbol(op), length(expr.args))
             children = _Node[_geo_compile(a, g) for a in expr.args]
             return _mknode(kind = _NK_OP, op = Symbol(op), children = children)
         end
@@ -258,8 +232,8 @@ _geo_source_rank(a::AbstractArray) = ndims(a)
 _geo_source_rank(r::_GeoRingRef) = _geo_source_rank(r.src) - length(r.idx)
 
 # Nested scalar aggregate → `:geo_agg`. Loop vars come from `ranges` in key
-# order (the interpreter's `collect(keys(...))` order — it fixes the product
-# nesting and therefore the accumulation order, so keep it); each gets a fresh
+# order (`collect(keys(...))`, which fixes the product nesting and therefore the
+# accumulation order); each gets a fresh
 # frame slot in an EXTENDED lexical scope, under which the gate/filter/body
 # compile.
 function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
@@ -282,7 +256,7 @@ function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
     filt = expr.filter === nothing ? nothing : _geo_compile(expr.filter, inner)
     body = _geo_compile(expr.expr_body, inner)
     oplus, zero = _aggregate_oplus_identity(expr.semiring, expr.reduce)
-    oplus in ("+", "*", "max", "min") || throw(
+    _is_numeric_reducer(oplus) || throw(
         TreeWalkError(
             "E_TREEWALK_GEOMETRY_SETUP",
             "a nested `faq` reducing with '$(oplus)' has no setup-time geometry form"
@@ -384,9 +358,9 @@ function _geo_count_value(sp::_GeoCountSpec, x::Float64)::Float64
 end
 
 # Resolve a node's `join` to slot-addressed gates: `_resolve_geo_join_gates`
-# does the name-level work (faithfully replaying the interpreter's skip
-# semantics — an unresolvable pair never gates), then the loop-var names map
-# through the lexical scope. `nothing` ⇒ the node has no join arm.
+# does the name-level work (a pair it cannot resolve gates nothing), then the
+# loop-var names map through the lexical scope. `nothing` ⇒ the node has no
+# join arm.
 function _geo_slot_gates(expr, g::_GeoCompileCtx)
     rg = _resolve_geo_join_gates(expr, g.ctx, g.setof)
     rg === nothing && return nothing
@@ -415,9 +389,8 @@ end
     Int(round(_eval_node(nd, u, p, t, T)::Float64))
 
 # Resolve a compiled ring/array source at the current frame. A partial index
-# resolves to a `view` for the ranks the geometry FAQ uses (matching the
-# interpreter's fast paths); the general fallback materializes a dense slice,
-# as before.
+# resolves to a `view` for the ranks the geometry FAQ uses; the general fallback
+# materializes a dense slice.
 _geo_ring_value(a::AbstractArray, u, p, t, ::Type{T}) where {T} = a
 function _geo_ring_value(r::_GeoRingRef, u, p, t, ::Type{T}) where {T}
     # `r.src` is typed `Any` (an array or another `_GeoRingRef`), so resolving and slicing it IN THIS FRAME would leave `base`
@@ -429,7 +402,7 @@ function _geo_ring_value(r::_GeoRingRef, u, p, t, ::Type{T}) where {T}
     # Two `isa` ladders keep even the barrier call static: the first for a source
     # that already IS the dense ring stack (where `_geo_ring_value` is the
     # identity, so the match skips a dispatch and a call), the second for one that
-    # had to be resolved. Anything else takes the same generic call as before.
+    # had to be resolved. Anything else takes the generic call.
     src = r.src
     ix = r.idx
     if src isa Array{Float64, 3}
@@ -464,8 +437,7 @@ function _geo_ring_slice(base, ix::Vector{_Node}, u, p, t, ::Type{T}) where {T}
 end
 
 # Full-rank scalar gather (`:geo_gather`): resolve the source, round each
-# subscript, read. Ranks 1–3 are unrolled (no splat) exactly as the
-# interpreter's fast paths were; bounds stay CHECKED, as before.
+# subscript, read. Ranks 1–3 are unrolled (no splat); bounds stay CHECKED.
 function _geo_gather_value(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     # `_Node.payload` is `Any` (one struct serves every node kind), so reading the
     # source array THROUGH IT costs two dynamic dispatches per gather — one to
@@ -474,13 +446,13 @@ function _geo_gather_value(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     # the payload as an ARGUMENT to a barrier method lands the one remaining
     # dispatch on a specialization where the source type, and hence `arr`'s, is
     # known, so the reads in `_geo_gather_from` are ordinary typed array indexing.
-    # Same order, same reads, same values; bounds stay CHECKED as before.
+    # Bounds stay checked.
     #
     # A concrete `isa` then narrows `pl` to the shapes a geometry sweep actually
     # reads — a dense `Array{Float64,1..3}`, which is what every const/materialized
     # `env` entry is — making the barrier call static. Anything else (a
     # bounded-const wrapper, a `_GeoRingRef`, a non-Float64 or
-    # higher-rank array) falls to the same generic call as before.
+    # higher-rank array) takes the generic call.
     pl = n.payload
     if pl isa Array{Float64, 1}
         return _geo_gather_from(pl, n.children, u, p, t, T)
@@ -517,8 +489,8 @@ function _geo_gather_from(src, c::Vector{_Node}, u, p, t, ::Type{T})::Float64 wh
     return Float64(arr[idxs...])
 end
 
-# Nested scalar aggregate (`:geo_agg`): the interpreter's product loop,
-# verbatim — write the loop slots, join-gate then filter, sum the body.
+# Nested scalar aggregate (`:geo_agg`): the product loop — write the loop
+# slots, join-gate then filter, fold the body.
 function _geo_eval_agg(spec::_GeoAggSpec, u, p, t, ::Type{T})::Float64 where {T}
     acc = spec.zero
     op = spec.op
@@ -544,7 +516,7 @@ function _geo_eval_agg(spec::_GeoAggSpec, u, p, t, ::Type{T})::Float64 where {T}
             _eval_node(filt, u, p, t, T) != 0.0 || continue
         end
         v = _eval_node(body, u, p, t, T)
-        acc = op === :+ ? acc + v : op === :max ? max(acc, v) : op === :min ? min(acc, v) : acc * v
+        acc = _oplus_numeric(op, acc, v)
     end
     return acc
 end
@@ -666,7 +638,7 @@ end
 # fields) are compared at their concrete types.
 _geo_slot_eq(a, b, i::Int, j::Int) = a[i] == b[j]
 
-# The `:geo_*` dispatch — the cold tail arm of `_eval_node_op` (compile.jl).
+# The `:geo_*` dispatch — the cold tail arm of `_eval_node_op` (scalar_walk.jl).
 # Only setup-time compiled trees carry these ops, so the RHS hot path never
 # reaches here; `::Float64` keeps the ladder's inferred union small.
 function _eval_geo_op(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
@@ -712,7 +684,6 @@ const _GEO_CG_BINARY = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _BINARY_EL
 const _GEO_CG_CMP = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _COMPARISON_ELEMENTWISE_OPS)
 const _GEO_CG_MINMAX = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _NARY_MINMAX_OPS)
 
-struct _GeoCGDecline <: EarthSciASTError end
 
 mutable struct _GeoCG
     refs::_NodeMap{Int}
@@ -758,7 +729,8 @@ function _geo_cg_scan!(g::_GeoCG, n::_Node, depth::Int)
         bits = UInt64(1) << get(g.slot_level, n.idx, 0)
     elseif n.kind == _NK_OP && n.op === :geo_agg
         sp = n.payload::_GeoAggSpec
-        (sp.gates === nothing && depth + 1 < 64) || throw(_GeoCGDecline())
+        sp.gates === nothing || _decline(:gated_reduction, "a nested geometry reduction")
+        depth + 1 < 64 || _decline(:budget, "geometry reductions nested 64 deep")
         for s in sp.slots
             g.slot_level[s] = depth + 1
         end
@@ -828,7 +800,7 @@ end
 function _geo_cg_raw(g::_GeoCG, n::_Node)
     n.kind == _NK_LITERAL && return n.literal
     n.kind == _NK_STATE && return :(u[$(n.idx)])
-    n.kind == _NK_OP || throw(_GeoCGDecline())
+    n.kind == _NK_OP || _decline(:unknown_kind, string(n.kind))
     op = n.op
     c = n.children
     em(x) = _geo_cg(g, x)
@@ -842,13 +814,13 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         return acc
     elseif op === :- || op === :neg
         length(c) == 1 && return :(-$(em(c[1])))
-        length(c) == 2 || throw(_GeoCGDecline())
+        length(c) == 2 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return :($(em(c[1])) - $(em(c[2])))
     elseif haskey(_GEO_CG_BINARY, op)
-        length(c) == 2 || throw(_GeoCGDecline())
+        length(c) == 2 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return Expr(:call, _GEO_CG_BINARY[op], em(c[1]), em(c[2]))
     elseif haskey(_GEO_CG_CMP, op)
-        length(c) == 2 || throw(_GeoCGDecline())
+        length(c) == 2 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return :($(Expr(:call, _GEO_CG_CMP[op], em(c[1]), em(c[2]))) ? 1.0 : 0.0)
     elseif op === :and || op === :or
         # Operands emit in evaluation order: the first always runs, each later
@@ -865,17 +837,17 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         end
         return acc
     elseif op === :not
-        length(c) == 1 || throw(_GeoCGDecline())
+        length(c) == 1 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return :($(em(c[1])) == 0 ? 1.0 : 0.0)
     elseif op === :ifelse
-        length(c) == 3 || throw(_GeoCGDecline())
+        length(c) == 3 || _decline(:unsupported_op, "ifelse with $(length(c)) operands")
         cond = em(c[1])
         return :($cond != 0 ? $(_geo_cg_branch(g, c[2])) : $(_geo_cg_branch(g, c[3])))
     elseif haskey(_GEO_CG_UNARY, op)
-        length(c) == 1 || throw(_GeoCGDecline())
+        length(c) == 1 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return Expr(:call, _GEO_CG_UNARY[op], em(c[1]))
     elseif haskey(_GEO_CG_MINMAX, op)
-        length(c) >= 2 || throw(_GeoCGDecline())
+        length(c) >= 2 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         acc = em(c[1])
         for i in 2:length(c)
             acc = Expr(:call, _GEO_CG_MINMAX[op], acc, em(c[i]))
@@ -884,7 +856,7 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
     elseif op === :geo_gather
         src = n.payload
         (src isa Array{Float64} && 1 <= ndims(src) <= 3 && ndims(src) == length(c)) ||
-            throw(_GeoCGDecline())
+            _decline(:unknown_array, "a geometry source that is not a Float64 array of rank 1 to 3")
         k = get!(g.src_ix, src) do
             push!(g.srcs, src)
             length(g.srcs)
@@ -900,7 +872,7 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         end
         return :(_geo_count_value(srcs[$k], $(em(c[1]))::Float64))
     end
-    throw(_GeoCGDecline())
+    return _decline(:unsupported_op, String(op))
 end
 
 function _geo_cg_agg(g::_GeoCG, n::_Node)
@@ -923,8 +895,8 @@ function _geo_cg_agg(g::_GeoCG, n::_Node)
         push!(resets, :($(Symbol(m, :_set)) = false))
     end
     sets = Any[:(u[$(sp.slots[i])] = Float64($(ks[i]))) for i in eachindex(ks)]
-    fold = sp.op === :+ ? :($acc = $acc + _v) : sp.op === :max ? :($acc = max($acc, _v)) :
-        sp.op === :min ? :($acc = min($acc, _v)) : :($acc = $acc * _v)
+    _is_numeric_reducer(sp.op) || _decline(:unsupported_op, "⊕ = $(sp.op)")
+    fold = :($acc = $(_reducer_fnsym(sp.op))($acc, _v))
     inner = quote
         $(sets...)
         $(resets...)
@@ -1009,7 +981,7 @@ function _geo_shape_key(body::_Node)
 end
 
 # The native kernel of a setup body, or `nothing` (keep the walker). Only under
-# the share_subtrees plan flag, so the interpreter oracle walks.
+# the share_subtrees plan flag, so `compiler = :interpreter`, the oracle, walks.
 function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothing)
     _compiler_plan_now().share_subtrees || return nothing
     g = _GeoCG(
@@ -1034,8 +1006,11 @@ function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothi
         _tally_cascade!(:geo_kernel)
         return _GeoKernel(f, Tuple(g.srcs))
     catch err
-        err isa _GeoCGDecline && return nothing
-        _is_resource_error(err) && rethrow()
+        # A shape the emitter has no form for declines, and so does a body that
+        # raises a document-level refusal while it is emitted; the caller walks
+        # it instead. Anything else (a programming error, a resource error)
+        # propagates.
+        err isa EarthSciASTError || rethrow()
         return nothing
     end
 end

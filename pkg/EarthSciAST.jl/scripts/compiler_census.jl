@@ -3,23 +3,19 @@
 # compiler_census.jl — which tier does every equation of every corpus document
 # land on, and does any kernel still walk the tree per cell at RHS-call time?
 #
-# Phase 0 of the compiler-selection work: the `native` compiler refuses a
-# document whose RHS still runs `_run_acc_kernel!` (the per-cell interpreter),
-# so the census has to separate three things a cascade tally alone conflates:
+# The `native` compiler refuses a document whose RHS still runs
+# `_run_acc_kernel!` (the per-cell interpreter), so the census separates two
+# things a cascade tally alone conflates:
 #
 #   * per-cell BUILD  — `:percell_loop` / `:percell_acc` / `:percell_disabled`.
 #     The faq equation declined every whole-array tier and was scalarized one
 #     output cell at a time. That is a BUILD-time fact; the resulting access
 #     kernels are then offered to the codegen tier.
-#   * codegen decline — `codegen_decline_<reason>`. The PRIMARY (Float64)
-#     RuntimeGeneratedFunction emission declined that kernel. With
-#     `ESS_F64_OVERFLOW_CODEGEN` on (the default) the dual/overflow emission
-#     below still serves it compiled at Float64, so a primary decline alone
-#     does NOT mean the interpreter runs.
-#   * dual decline    — `dual_codegen_decline_<reason>`. The overflow emission
-#     declined it too. THESE are the kernels in `_KernelSection.dual_resid`,
-#     the ones `_run_acc_kernel!` walks per cell on every RHS call, under every
-#     element type. This count is the census's headline.
+#   * codegen decline — `codegen_decline_<reason>`. The
+#     RuntimeGeneratedFunction emission declined that kernel. THESE are the
+#     kernels in `_KernelSection.kernels`, the ones `_run_acc_kernel!` walks
+#     per cell on every RHS call, under every element type. This count is the
+#     census's headline.
 #
 # Every build names its compiler: `--compiler native` (the default) or
 # `--compiler interpreter`, carried to the worker processes as the
@@ -133,76 +129,66 @@ function _census_one(M, path::AbstractString)
     err_code = nothing
     err_msg = nothing
 
-    M._reset_cascade_tally!()
     t0 = time()
-    try
-        redirect_stderr(errio) do
-            with_logger(ConsoleLogger(errio)) do
-                # Front door first: `esm_problem` flattens, resolves coupling and
-                # runs the same tree-walk build, so it exercises the cascade the
-                # way a simulation does. `tspan` is the only argument it needs
-                # that a document does not carry.
-                try
-                    prob = M.esm_problem(String(path), (0.0, 1.0); compiler = CENSUS_COMPILER)
-                    entry = "esm_problem"
-                    ok = true
+    _, counts = M.Internal.counting() do
+        try
+            redirect_stderr(errio) do
+                with_logger(ConsoleLogger(errio)) do
+                    # Front door first: `esm_problem` flattens, resolves coupling and
+                    # runs the same tree-walk build, so it exercises the cascade the
+                    # way a simulation does. `tspan` is the only argument it needs
+                    # that a document does not carry.
                     try
-                        tiers = Dict{String, Int}(String(k) => v for (k, v) in M.tier_histogram(M.compiler_report(prob)))
-                    catch
+                        prob = M.esm_problem(String(path), (0.0, 1.0); compiler = CENSUS_COMPILER)
+                        entry = "esm_problem"
+                        ok = true
+                        try
+                            tiers = Dict{String, Int}(String(k) => v for (k, v) in M.tier_histogram(M.compiler_report(prob)))
+                        catch
+                        end
+                        nstate = length(prob.u0)
+                        try
+                            du = similar(prob.u0); fill!(du, 0.0)
+                            t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_first = time() - t1
+                            t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_second = time() - t1
+                            rhs_ok = true
+                        catch er
+                            # A stack overflow or an out-of-memory error in the
+                            # right-hand side is that call failing, and is recorded
+                            # as such; only an interrupt stops the census.
+                            er isa InterruptException && rethrow()
+                            rhs_ok = false
+                            rhs_err = first(sprint(showerror, er), 400)
+                        end
+                    catch e1
+                        M._is_resource_error(e1) && rethrow()
+                        err1_type = string(typeof(e1))
+                        err1_code = hasproperty(e1, :code) ? string(getproperty(e1, :code)) : nothing
+                        err1_msg = first(sprint(showerror, e1), 600)
+                        # A document `esm_problem` refuses for want of providers or
+                        # metaparameters still reaches the tree-walk build through
+                        # the internal build entry.
+                        M.Internal.build(String(path); compiler = CENSUS_COMPILER)
+                        entry = "Internal.build"
+                        ok = true
                     end
-                    nstate = length(prob.u0)
-                    try
-                        du = similar(prob.u0); fill!(du, 0.0)
-                        t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_first = time() - t1
-                        t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_second = time() - t1
-                        rhs_ok = true
-                    catch er
-                        # A stack overflow or an out-of-memory error in the
-                        # right-hand side is that call failing, and is recorded
-                        # as such; only an interrupt stops the census.
-                        er isa InterruptException && rethrow()
-                        rhs_ok = false
-                        rhs_err = first(sprint(showerror, er), 400)
-                    end
-                catch e1
-                    M._is_resource_error(e1) && rethrow()
-                    err1_type = string(typeof(e1))
-                    err1_code = hasproperty(e1, :code) ? string(getproperty(e1, :code)) : nothing
-                    err1_msg = first(sprint(showerror, e1), 600)
-                    # Documents that need providers, metaparameters or a model
-                    # selection `esm_problem` cannot guess still reach the
-                    # tree-walk build through the typed entry point.
-                    M._reset_cascade_tally!()
-                    file = M.load_path(String(path))
-                    names = file.models === nothing ? String[] :
-                        sort!(String[String(k) for k in keys(file.models)])
-                    if length(names) <= 1
-                        M._build_evaluator(file; compiler = CENSUS_COMPILER)
-                    else
-                        M._build_evaluator(file; model_name = names[1], compiler = CENSUS_COMPILER)
-                    end
-                    entry = "_build_evaluator"
-                    ok = true
                 end
             end
+        catch err
+            err_type = string(typeof(err))
+            err_code = hasproperty(err, :code) ? string(getproperty(err, :code)) : nothing
+            err_msg = first(sprint(showerror, err), 600)
         end
-    catch err
-        err_type = string(typeof(err))
-        err_code = hasproperty(err, :code) ? string(getproperty(err, :code)) : nothing
-        err_msg = first(sprint(showerror, err), 600)
     end
     t_build = time() - t0
     close(errio)
 
-    tally = Dict{String, Int}(String(k) => v for (k, v) in M._CASCADE_TALLY)
+    tally = Dict{String, Int}(String(k) => v for (k, v) in counts)
 
     percell_build = sum(get(tally, k, 0) for k in PERCELL_BUILD_KEYS)
     cg_decl = Dict{String, Int}()
-    dual_decl = Dict{String, Int}()
     for (k, v) in tally
-        if startswith(k, "dual_codegen_decline_")
-            dual_decl[k[(length("dual_codegen_decline_") + 1):end]] = v
-        elseif startswith(k, "codegen_decline_")
+        if startswith(k, "codegen_decline_")
             cg_decl[k[(length("codegen_decline_") + 1):end]] = v
         end
     end
@@ -237,13 +223,11 @@ function _census_one(M, path::AbstractString)
     rec["tally"] = tally
     rec["percell_build"] = percell_build
     rec["codegen_kernels"] = get(tally, "codegen_kernel", 0)
-    rec["dual_codegen_kernels"] = get(tally, "dual_codegen_kernel", 0)
     rec["codegen_declines"] = cg_decl
-    rec["dual_declines"] = dual_decl
     rec["n_codegen_decline"] = isempty(cg_decl) ? 0 : sum(values(cg_decl))
-    # THE headline: kernels neither emission covered, i.e. `dual_resid` —
+    # THE headline: kernels the emission did not cover —
     # `_run_acc_kernel!` walks these per cell on every RHS call.
-    rec["n_interp_at_rhs"] = isempty(dual_decl) ? 0 : sum(values(dual_decl))
+    rec["n_interp_at_rhs"] = rec["n_codegen_decline"]
     # The whole-array contraction tier. Its nest is EMITTED (array_contraction.jl),
     # so an equation landing here carries no tree walk at RHS-call time; it is
     # counted separately anyway because it is a different unit — these are
@@ -312,7 +296,6 @@ function _warmup(M)
             first(sprint(showerror, err), 200)
         )
     end
-    M._reset_cascade_tally!()
     return nothing
 end
 

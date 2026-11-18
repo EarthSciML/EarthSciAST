@@ -2,49 +2,28 @@
 # ext/reactant_direct/batch.jl — the LANE-BATCHED scalar surface.
 # ========================================================================
 #
-# WHY THIS FILE EXISTS. A scalar surface — the `rhs_list` entries a state
-# equation lowers to when it declines the kernel path, and a materialized
-# observed level's per-column `scalars` — is a list of (slot, tree) entries that
-# are per-cell INSTANTIATIONS OF ONE EXPRESSION: same tree, same ops, same loop
-# ranges, differing only in the baked-in cell data (state slots, forcing
-# offsets, gather subscripts, inlined per-cell constants). Walking them one at a
-# time emits the tree once per cell, and every state leaf of every instance is
-# its own ONE-ELEMENT read.
+# A scalar surface (the `rhs_list` entries of an equation that declines the kernel
+# path, and a materialized observed level's per-column `scalars`) is a list of
+# (slot, tree) entries that are per-cell instances of one expression, differing
+# only in baked-in cell data. `_oop_batch_scalars` (src/tree_walk/oop.jl) groups
+# them by a structural signature that wildcards exactly the lane-varying leaves,
+# lowers each group once to a lane-batched tree (`_OopBatchNode`) and leaves the
+# ungroupable entries in `rest`. This file emits each group as whole-lane
+# operations landing through one scatter, so a varying state leaf is one gather
+# of L slots rather than L one-element slices (the read population the
+# post-differentiation `enzyme-hlo-opt` pass is quadratic in).
 #
-# The `:oop` build already groups them: `_oop_batch_scalars` (src/tree_walk/
-# oop.jl, ess-oop-batch) buckets the entries by a canonical structural signature
-# that wildcards exactly the lane-varying leaves, lowers each bucket ONCE to a
-# lane-batched tree (`_OopBatchNode`) and leaves everything it could not group
-# in `rest`. The interpreter runs a group as whole-lane operations over its lane
-# axis, landing through one scatter. This file is the emission twin: the same
-# groups, the same lane axis, `stablehlo` ops instead of broadcasts — so a state
-# leaf is ONE gather of L slots instead of L one-element slices, and the emitted
-# program is O(tree) per group rather than O(tree × cells).
+# BIT-IDENTITY. Every arm performs, per lane, the operations the scalar walk
+# performs for that lane's entry, in the same order: `_de_fold_terms` keeps the
+# seeded ⊕-fold and the ascending-k accumulate, a ghost state-gather reads the
+# same structural zero, a literal exponent stays a literal (the signature pins
+# it), and a subtree that is host data in every lane is folded per lane by the
+# same `_de_hostval` the scalar walk uses. With scalar batching off every entry
+# is in `rest` and this file emits nothing.
 #
-# WHAT IT BUYS, AND WHY IT IS THE SHAPE THAT MATTERS. The single-position slice
-# is the op the post-differentiation `enzyme-hlo-opt` pass is quadratic in: its
-# `cse_slice` pattern compares slices pairwise, Enzyme's reverse of a slice is a
-# pad-and-add, and the adjoint of a stencil transport half carries one for
-# every cell of every neighbour read. Every other lever against that population (the read cost
-# model, the gather base budget, emitter-side CSE, pass exclusion) works on
-# reads the emitter had already decided to SHATTER; this one removes the
-# shattering, because a group's varying state leaf is a lane VECTOR and a lane
-# vector is one gather. See reseact.esm's COMPILE_COST.md section 6.
-#
-# BIT-IDENTITY. Every arm below performs, per lane, the operations the scalar
-# walk performs for that lane's own entry, in the same order: `_de_fold_terms`
-# keeps the contraction's seeded ⊕-fold and the loop's ascending-k accumulate,
-# a ghost state-gather reads the same structural zero, a literal exponent stays
-# a literal (the signature pins it, so a group never blends the power rule), and
-# a subtree that is host data in every lane is folded on host by the SAME
-# `_de_hostval` the scalar walk uses — per lane, so the folded constant is the
-# scalar walk's constant. With scalar batching off every entry is in `rest` and
-# this file emits nothing at all.
-#
-# ORDER. `rest` first, then the groups, exactly as the grouping's own order
-# runs them. The reorder is sound for the reason stated at the ess-oop-batch
-# section header: entries within one surface write DISJOINT slots and never read
-# each other, so it moves only writes.
+# ORDER. `rest` first, then the groups, as the grouping orders them. Entries of
+# one surface write disjoint slots and never read each other (see
+# `_oop_batch_scalars`), so the reorder moves only writes.
 
 # ---- the per-lane host fold --------------------------------------------------
 #
@@ -84,14 +63,7 @@ function _de_bstatic_uncached(ctx::_DECtx, b::_E._OopBatchNode)::Bool
     elseif k === _E._NK_CONTRACTION_LOOP
         return _de_bstatic(ctx, b.children[1])
     elseif k === _E._NK_OP
-        (
-            haskey(_DE_UNARY, b.op) || haskey(_DE_COMPARE, b.op) ||
-                haskey(_DE_UNARY_CHLO, b.op) ||
-                b.op in (
-                :+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
-                :and, :or, :pi, :π, :e, :Pre, :atan, :atan2, :log10,
-            )
-        ) || return false
+        _de_foldable_op(b.op) || return false
         return all(c -> _de_bstatic(ctx, c), b.children)
     end
     return false
@@ -111,13 +83,13 @@ function _de_bhostval(ctx::_DECtx, b::_E._OopBatchNode, l::Int)::Float64
         return _de_hostval(ctx, b.nodes[l])
     elseif k === _E._NK_CONTRACTION
         s = b.literal
-        g = _de_semiring_jl(b.op)
+        g = _de_semiring_jl(ctx, b.op)
         for c in b.children
             s = g(s, _de_bhostval(ctx, c, l))
         end
         return s
     elseif k === _E._NK_CONTRACTION_LOOP
-        g = _de_semiring_jl(b.op)
+        g = _de_semiring_jl(ctx, b.op)
         s = b.literal
         body = b.children[1]
         r = b.refs[l]
@@ -128,7 +100,7 @@ function _de_bhostval(ctx::_DECtx, b::_E._OopBatchNode, l::Int)::Float64
         return s
     end
     c = Any[_de_bhostval(ctx, ch, l) for ch in b.children]
-    return Float64(_E._scalar_op(b.op, c, Float64))
+    return _E._scalar_op(b.op, c)
 end
 
 function _de_btry_fold(ctx::_DECtx, b::_E._OopBatchNode, L::Int)::Union{Nothing, _DEVal}
@@ -170,6 +142,7 @@ function _de_batch(
     elseif k === _E._NK_CACHED
         (1 <= b.idx <= length(cache)) ||
             _de_refuse(
+            ctx,
             "a lane-batched `_NK_CACHED` read",
             "the group references CSE slot $(b.idx) on a surface emitted " *
                 "without a CSE cache."
@@ -190,6 +163,7 @@ function _de_batch(
         # `_de_btry_fold` above already took every case where the subscripts are
         # host data, which is every case `_NK_CONST_GATHER` can be in.
         _de_refuse(
+            ctx,
             "a lane-batched const gather with non-host subscripts",
             "a `_NK_CONST_GATHER` subscript is loop-counter and literal " *
                 "arithmetic by construction; this one did not resolve on host."
@@ -202,18 +176,11 @@ function _de_batch(
         srcs = Vector{_DESlot}(undef, length(nds))
         @inbounds for l in eachindex(nds)
             nd = nds[l]
-            sg = nd.payload::_E._StateGather
-            off = 0
-            ghost = false
-            for d in eachindex(nd.children)
-                sub = _de_index_int(nd.children[d])
-                if !(sg.lo[d] <= sub <= sg.hi[d])
-                    ghost = true
-                    break
-                end
-                off += (sub - sg.lo[d]) * sg.strides[d]
-            end
-            srcs[l] = ghost ? nothing : _de_src(ctx, ctx.ue, sg.slot_flat[off + 1])
+            slot = _E._state_gather_slot(
+                nd.payload::_E._StateGather, length(nd.children),
+                d -> _de_index_int(nd.children[d])
+            )
+            srcs[l] = slot == 0 ? nothing : _de_src(ctx, ctx.ue, slot)
         end
         return _de_emit_runs(ctx, srcs)
     elseif k === _E._NK_CONTRACTION_LOOP
@@ -246,6 +213,7 @@ function _de_batch(
         return _de_op(ctx, b.op, c)
     end
     return _de_refuse(
+        ctx,
         "the lane-batched node kind $(_de_kindname(k))",
         "no arm of `_de_batch` lowers it. The batch lowering " *
             "(`_oop_batch_lower`) and this walk must cover the same kinds; a kind " *
@@ -265,13 +233,14 @@ function _de_scalar_surface!(
         what::AbstractString
     )
     for (slot, nd) in sb.rest
-        _de_rule!("$what for $(_de_slotname(ctx, slot))") do
+        _de_rule!(ctx, "$what for $(_de_slotname(ctx, slot))") do
             _de_write!(ctx, out, Int[slot], _de_scalar(ctx, nd, cache))
         end
     end
     for g in sb.groups
         slots = g.slots
         _de_rule!(
+            ctx,
             "$what for the lane-batched group writing " *
                 "$(_de_slotsname(ctx, slots))"
         ) do

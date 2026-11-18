@@ -2,13 +2,13 @@
 # from the axis NAMES its operator's operands are declared on, not from a
 # size lookup.
 #
-# `_pointwise_lift_axes` used to map each makearray dimension to a declared
-# index set purely by matching that dimension's EXTENT. Sizes collide readily —
-# a square domain (NLON == NLAT), a vertical axis the same length as some other
-# model's node axis, or a second grid mounted in the same document (a regridder's
-# target ring is `NLON` long BY CONSTRUCTION, so it aliases `lon` at EVERY grid) —
-# and on a collision the lift gave up and promoted the species to a SYNTHETIC
-# dense axis `_liftdim<d>_<extent>` instead of an index-set reference.
+# Matching a makearray dimension to a declared index set purely by EXTENT is
+# not enough. Sizes collide readily — a square domain (NLON == NLAT), a
+# vertical axis the same length as some other model's node axis, or a second
+# grid mounted in the same document (a regridder's target ring is `NLON` long
+# BY CONSTRUCTION, so it aliases `lon` at EVERY grid) — and on a collision a
+# size-only lift has to promote the species to a SYNTHETIC dense axis
+# `_liftdim<d>_<extent>` instead of an index-set reference.
 #
 # The names are already present: every operand gathered inside the operator's
 # makearray is indexed at the lift's own loop variables and declares an index set
@@ -21,7 +21,7 @@
 # candidate index set's size to equal the dimension's cell extent rejects exactly
 # the staggered operands. It also makes the pass a strict refinement of the size
 # match: where only one index set has the dimension's size, any extent-agreeing
-# name IS that index set, so nothing that used to resolve can change.
+# name IS that index set, so nothing the size match resolves can change.
 
 using Test
 using EarthSciAST
@@ -89,7 +89,8 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
 
         gaxes, ranges = ESM._pointwise_lift_axes(
             ma, loops, size_to_names, "sp", 3;
-            mas = [ma], var_shapes = var_shapes, index_sets = index_sets, reg = nothing
+            mas = [ma], var_shapes = var_shapes, index_sets = index_sets, reg = nothing,
+            registry = copy(index_sets)
         )
         @test gaxes == ["lon", "lat", "lev"]
         @test !any(a -> startswith(a, "_liftdim"), gaxes)
@@ -129,7 +130,8 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         # dimension while naming the other two.
         gaxes, _ = ESM._pointwise_lift_axes(
             ma2, loops, size_to_names, "sp", 3;
-            mas = [ma2], var_shapes = shapes2, index_sets = index_sets, reg = nothing
+            mas = [ma2], var_shapes = shapes2, index_sets = index_sets, reg = nothing,
+            registry = copy(index_sets)
         )
         @test gaxes == ["_liftdim1_6", "lat", "lev"]
     end
@@ -142,12 +144,9 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         gaxes, _ = ESM._pointwise_lift_axes(
             bare, loops, size_to_names, "sp", 3;
             mas = [bare], var_shapes = Dict{String, Vector{String}}(),
-            index_sets = index_sets, reg = nothing
+            index_sets = index_sets, reg = nothing, registry = copy(index_sets)
         )
         @test gaxes == ["_liftdim1_6", "_liftdim2_6", "_liftdim3_8"]
-        # And the un-keyworded call (no name evidence available) is unchanged.
-        gaxes0, _ = ESM._pointwise_lift_axes(bare, loops, size_to_names, "sp", 3)
-        @test gaxes0 == gaxes
     end
 
     @testset "a repeated loop name is not resolved from a diagonal gather" begin
@@ -204,8 +203,7 @@ function _lift_2d(wrap, shapes::Vector{<:Pair})
         values = ESM.ASTExpr[_op("index", _v("C"), _v("i"), _v("j"))]
     )
     rhs = wrap(ma)
-    equations = ESM.Equation[ESM.Equation(_D("C"), rhs)]
-    contribs = [ESM.Contribution[ESM.Contribution(rhs, ESM.TermOrigin[])]]
+    pool = [ESM._FlatEq(ESM.Equation(_D("C"), rhs), ESM.Contribution[ESM.Contribution(rhs, ESM.TermOrigin[])])]
     states = OrderedDict{String, ESM.ModelVariable}(
         "C" => ESM.ModelVariable(ESM.UnknownVariable)
     )
@@ -217,11 +215,9 @@ function _lift_2d(wrap, shapes::Vector{<:Pair})
         "x" => _iset(2), "y" => _iset(3), "z" => _iset(4)
     )
     coupling = [ESM.CouplingOperatorCompose(["M", "Op"]; lifting = "pointwise")]
-    ESM._apply_pointwise_lift!(
-        equations, contribs, states, params, observeds, index_sets, coupling
-    )
+    ESM._apply_pointwise_lift!(pool, states, params, observeds, index_sets, coupling)
     @test states["C"].shape == ["x", "y"]
-    new_rhs = equations[1].rhs
+    new_rhs = pool[1].eq.rhs
     @test new_rhs isa ESM.OpExpr && new_rhs.op == "faq"
     return new_rhs.expr_body
 end
@@ -274,4 +270,46 @@ end
         @test occursin("'m'", msg)
         @test occursin("'reshape'", msg)
     end
+end
+
+# A template application in a lifted right-hand side counts as its expansion
+# (esm-spec §9.6.4 rule 4): an array bound to a parameter the body reads per
+# value is gathered at the cell, not left bare inside the lifted `faq`.
+@testset "a lifted template application reads its array argument per cell" begin
+    doc = """
+    {"esm": "2.3.0", "metadata": {"name": "lift_app"},
+     "index_sets": {"x": {"kind": "interval", "size": 3}},
+     "models": {"C": {
+       "expression_templates": {"twice": {"params": ["f"], "body": {"op": "*", "args": [2, "f"]}}},
+       "variables": {
+         "a": {"type": "unknown", "units": "1", "default": 0.0},
+         "b": {"type": "unknown", "units": "1", "default": 0.0},
+         "u": {"type": "parameter", "units": "1/s", "default": [1.0, 2.0, 3.0], "shape": ["x"]}},
+       "equations": [
+         {"lhs": {"op": "D", "args": ["a"], "wrt": "t"}, "rhs": "u"},
+         {"lhs": {"op": "D", "args": ["b"], "wrt": "t"},
+          "rhs": {"op": "apply_expression_template", "args": [], "name": "twice", "bindings": {"f": "u"}}}]}}}
+    """
+    prob = ESM.esm_problem(ESM.load_string(doc), (0.0, 1.0))
+    du = zeros(length(prob.u0))
+    prob.f!(du, prob.u0, prob.p, 0.0)
+    @test sort(du) == [1.0, 2.0, 2.0, 3.0, 4.0, 6.0]
+end
+
+# The independent variable is a scalar to the lift's shape inference under the
+# name the document gives it (esm-spec §11.3), so `s * u` over `u :: [x]` is an
+# array and lifts its state.
+@testset "the lift reads a renamed independent variable as a scalar" begin
+    doc = """
+    {"esm": "2.3.0", "metadata": {"name": "lift_iv"},
+     "domain": {"independent_variable": "s"},
+     "index_sets": {"x": {"kind": "interval", "size": 2}},
+     "models": {"C": {
+       "variables": {
+         "a": {"type": "unknown", "units": "1", "default": 0.0},
+         "u": {"type": "parameter", "units": "1/s^2", "default": [1.0, 2.0], "shape": ["x"]}},
+       "equations": [{"lhs": {"op": "D", "args": ["a"], "wrt": "t"}, "rhs": {"op": "*", "args": ["s", "u"]}}]}}}
+    """
+    flat = ESM.flatten(ESM.load_string(doc))
+    @test flat.state_variables["C.a"].shape == ["x"]
 end

@@ -12,7 +12,7 @@
 # nothing else.
 #
 # WHERE IT RUNS. A recurrence observed is always a materialized observed — a
-# buffer block above the state in the extended value vector (build.jl,
+# buffer block above the state in the extended value vector (build_classify.jl,
 # "FACTORED array observeds") — under every compiler, and its fill is a sweep
 # instead of the fill equation the other materialized observeds compile. Every
 # route that fills an observed buffer builds its sweep through
@@ -25,11 +25,11 @@
 # THE BODY. The cell's value is the `faq` restricted to that cell (§4.3.1.1 point
 # 2): its term resolved and compiled ONCE with every index symbolic — the output
 # indices and the contracted ones as loop counters, exactly the term the
-# whole-array contraction tier builds (`_resolve_array_contraction_term`) — and
+# whole-array contraction tier builds (`_compile_cell_program`) — and
 # its reduction the same `_ACFold` that tier folds with: one accumulator seeded
 # from the Float64 0̄, the contracted tuples in `Iterators.product` order (the
 # first contracted index fastest), a filter as the term's `ifelse(filter, term,
-# 0̄)` guard. A self-read in the term is a `_NK_RECUR_GATHER` (compile.jl): it
+# 0̄)` guard. A self-read in the term is a `_NK_RECUR_GATHER` (node.jl): it
 # reads the observed's own buffer, and only a cell the sweep has already
 # published — any other position is `E_TREEWALK_RECUR_UNAVAILABLE`, never the
 # zero ghost a state gather reads out of range (§5.19.4).
@@ -114,17 +114,15 @@ function _collect_self_read_args!(out::Vector{Vector{ASTExpr}}, e::ASTExpr, name
 end
 
 # The recurrence axis of `name`'s definition `def` (a `faq` whose output indices
-# are `idx_names`), decided the way the validator decides it (recurrence.jl) but
-# against the RESOLVED ranges the build holds, which prove at least as much. A
-# document that skipped `validate()` still cannot reach the sweep with a
-# self-read that is not well founded: it is refused here with the validator's
-# code.
+# are `idx_names`): its self-reads decided by the validator's own rules
+# (`_recurrence_reads_verdict`, recurrence.jl), against the RESOLVED ranges the
+# build holds, which prove at least as much. A document that skipped
+# `validate()` still cannot reach the sweep with a self-read that is not well
+# founded: it is refused here with the validator's code.
 #
-# Returns `(axis, max_lag, lag_proven)`: the largest upper bound on the lag along
-# the axis over the reads whose lag HAS a static bound (a read with none adds
-# nothing, so the value bounds every read only when `lag_proven`), and whether
-# every read was proved strictly earlier. Both are reported, never used to
-# evaluate: an unproven read is ruled out at run time by the fail-closed
+# Returns `(axis, max_lag, lag_proven)` (see `_RecurrenceAxis`). The lag bound
+# and whether every read was proved strictly earlier are reported, never used
+# to evaluate: an unproven read is ruled out at run time by the fail-closed
 # self-read.
 function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
     env = Dict{String, Tuple{Int, Int}}()
@@ -138,12 +136,6 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
     body = def.expr_body
     body === nothing || _collect_self_read_args!(reads, body, name)
     def.filter === nothing || _collect_self_read_args!(reads, def.filter, name)
-    bad(msg) = throw(
-        TreeWalkError(
-            ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-            "'$name': $msg (esm-spec §4.3.1.1)"
-        )
-    )
     isempty(reads) && throw(
         TreeWalkError(
             ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
@@ -151,65 +143,32 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
                 "self-read must sit in the body a cell evaluates (esm-spec §4.3.1.1)"
         )
     )
-    axis = 0
-    max_lag = 0
-    lag_proven = true
-    for args in reads
-        length(args) == length(idx_names) ||
-            bad(
-            "a causal self-read supplies $(length(args)) indices but the frame " *
-                "has $(length(idx_names)) axes"
-        )
-        lagged = 0
-        for (d, arg) in enumerate(args)
-            # The member axis of a stacked recurrence group (esm-spec §4.3.1.2,
-            # recurrence_group.jl): a read SELECTS a member with a constant —
-            # the one non-identity index admitted off the recurrence axis.
-            if idx_names[d] == RECURRENCE_MEMBER_SYM
-                arg isa IntExpr && continue
-                bad("a read of the stacked recurrence group does not select a member with a constant")
-            end
-            aff = _recurrence_affine_in_sym(arg, idx_names[d], env)
-            aff === nothing &&
-                bad(
-                "index $(d - 1) of a causal self-read is not affine in its frame " *
-                    "symbol '$(idx_names[d])'"
-            )
-            coef, konst = aff
-            coef == 1 ||
-                bad(
-                "index $(d - 1) of a causal self-read carries its frame symbol with " *
-                    "coefficient $coef, not 1"
-            )
-            if konst !== nothing
-                lag_lo, lag_hi = -konst[2], -konst[1]
-                (lag_lo == 0 && lag_hi == 0) && continue
-                lag_hi <= 0 &&
-                    bad(
-                    "a causal self-read names the cell being written, or a later " *
-                        "one, on axis '$(idx_names[d])'"
-                )
-                lag_proven &= lag_lo >= 1
-                max_lag = max(max_lag, lag_hi)
-            else
-                lag_proven = false
-            end
-            lagged == 0 || bad("a causal self-read is offset on more than one axis")
-            lagged = d
-        end
-        # A stacked group's same-cell read of an EARLIER member (esm-spec
-        # §4.3.1.2 rule 1): published in within-cell order, so the fail-closed
-        # read admits it exactly when that member precedes this one.
-        lagged == 0 && RECURRENCE_MEMBER_SYM in idx_names && continue
-        lagged == 0 && bad("a causal self-read is at the same cell on every axis")
-        axis == 0 && (axis = lagged)
-        axis == lagged ||
-            bad(
-            "the causal self-reads disagree on the recurrence axis " *
-                "('$(idx_names[axis])' and '$(idx_names[lagged])')"
-        )
-    end
-    return axis, max_lag, lag_proven
+    noenv = Dict{String, Tuple{Int, Int}}()
+    v = _recurrence_reads_verdict(
+        (_RecurrenceSelfRead(args, noenv, false, name) for args in reads), name, idx_names, env;
+        member_sym = RECURRENCE_MEMBER_SYM
+    )
+    v isa _RecurrenceProblem && throw(_recurrence_build_error(v, name))
+    return v.axis, v.max_lag, v.lag_proven
+end
+
+# The build's error for problem `p` in the definition of `name`, with the
+# validator's code (`_recurrence_problem_code`) and, outside the two short
+# forms below, the validator's message.
+function _recurrence_build_error(p::_RecurrenceProblem, name::AbstractString)
+    k = p.kind
+    idx_names = p.idx_names
+    code = _recurrence_problem_code(p)
+    k === :lag && return TreeWalkError(code, _lag_defect_message(p.lag::_LagDefect, name))
+    k === :same_cell && return TreeWalkError(
+        code, "'$name': a causal self-read is at the same cell on every axis (esm-spec §4.3.1.1)"
+    )
+    k === :axes_disagree && return TreeWalkError(
+        code,
+        "'$name': the causal self-reads disagree on the recurrence axis " *
+            "('$(idx_names[p.axis])' and '$(idx_names[p.axis2])') (esm-spec §4.3.1.1)"
+    )
+    return TreeWalkError(code, first(_recurrence_problem_message(p, name)))
 end
 
 # What `BuildInspection.recurrences` reports for the recurrence `name`, read off
@@ -248,7 +207,7 @@ end
 # Replace every self-read `index(name, …)` in `e` by the `__recur_read` marker
 # that `_compile` lowers to `_NK_RECUR_GATHER`, with the subscripts as its args.
 function _mark_self_reads(
-        e::ASTExpr, name::String, ref::_RecurGatherRef,
+        e::ASTExpr, name::String, ref::_Lowered,
         memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
     )
     e isa OpExpr || return e
@@ -271,12 +230,11 @@ end
 # ---- Build: one recurrence → its sweep ---------------------------------------
 #
 # `name` is the materialized observed, `def` its definition, `dims` its frame
-# (each axis `1…dims[d]`), and the rest the resolve/compile context the fill
-# route compiles against, with `var_map`/`array_var_info` the EXTENDED layout
-# that carries the buffer block.
+# (each axis `1…dims[d]`), and `cs` the scope the fill route compiles against,
+# whose layout is the EXTENDED one that carries the buffer block.
 #
 # The block is the whole frame except in a range-restricted program
-# (range_restricted.jl), where it may cover only the cells the program needs.
+# (src/range/), where it may cover only the cells the program needs.
 # The sweep runs over the block: every self-read has lag 0 off the recurrence
 # axis, so off that axis a cell of the block reads only cells of the block, and
 # a block starting at position 1 of the recurrence axis (the whole axis, or a
@@ -289,10 +247,9 @@ end
 # (`E_TREEWALK_RECUR_UNAVAILABLE`, `_eval_recur_gather`).
 function _compile_recurrence_sweep(
         name::String, def::ASTExpr, dims::Vector{Int},
-        var, resolved_obs::Dict{String, ASTExpr}, array_var_info,
-        var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs
+        var, resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope
     )
+    var_map = cs.var_map
     _check_recurrence_precision(name, var)
     (
         def isa OpExpr && _is_faq_op((def::OpExpr).op) &&
@@ -333,62 +290,36 @@ function _compile_recurrence_sweep(
         blk.base, copy(blk.strides), Ref(0)
     )
 
-    # The cell body: the `faq`'s term, its filter as the term's guard, the
-    # observeds this build inlines substituted, every self-read marked.
+    # The cell program: the `faq`'s term, its filter as the term's guard, the
+    # observeds this build inlines substituted, every self-read marked, and its
+    # fold; the table form indexes each cell by its position in
+    # `Iterators.product` order over the block's output ranges — dimension 1
+    # fastest, which for the dense block is the buffer offset.
     ranges = _ranges_dict(dop)
     oplus, zerobar = _aggregate_oplus_identity(dop.semiring, dop.reduce)
     contract_names = _contracted_index_names(ranges, idx_names)
-    term = dop.expr_body::ASTExpr
-    dop.filter === nothing ||
-        (term = OpExpr("ifelse", ASTExpr[dop.filter, term, NumExpr(zerobar)]))
-    isempty(resolved_obs) || (term = _sub_preserving(term, resolved_obs))
-    term = _mark_self_reads(term, name, _RecurGatherRef(rg))
-    got = _resolve_array_contraction_term(
-        term, idx_names, contract_names,
-        array_var_info, var_map, const_registry, pgather
+    contract_ranges = Vector{Any}[_as_type(Vector{Any}, collect(ranges[n])) for n in contract_names]
+    contract_const = Union{Vector{Int}, Nothing}[
+        _is_const_int_range(r) ? collect(_expand_int_range(r)) : nothing
+            for r in contract_ranges
+    ]
+    prog = _compile_cell_program(
+        dop.expr_body::ASTExpr, idx_names, [collect(lo[d]:blk.hi[d]) for d in 1:rank],
+        contract_names, contract_ranges, contract_const, dop.join_gates, dop.filter,
+        oplus, zerobar,
+        (; resolved_obs, cs);
+        prepare = t -> _mark_self_reads(t, name, _Lowered(_NK_RECUR_GATHER, rg))
     )
-    got === nothing && throw(
+    prog isa _Decline && throw(
         TreeWalkError(
             "E_TREEWALK_UNSUPPORTED_RECURRENCE",
             "the body of recurrence '$name' does not resolve with its indices kept " *
                 "symbolic (a read this build can only resolve at a concrete cell, such as a " *
-                "live forcing buffer gathered at a loop index), so it has no sweep"
+                "live forcing buffer gathered at a loop index), so it has no sweep: " *
+                prog.detail
         )
     )
-    out_refs, contract_refs, resolved = got
-    body = _compile(resolved, var_map, param_sym_set, reg_funcs)
-    fold = nothing
-    if !isempty(contract_names)
-        contract_ranges = Vector{Any}[_as_type(Vector{Any}, collect(ranges[n])) for n in contract_names]
-        contract_const = Union{Vector{Int}, Nothing}[
-            _is_const_int_range(r) ? collect(_expand_int_range(r)) : nothing
-                for r in contract_ranges
-        ]
-        rev = _reverse_window(dop.filter, contract_names, idx_names)
-        fold = if dop.join_gates !== nothing || rev || any(c -> c === nothing, contract_const)
-            # Per-cell admitted tuples, indexed by the cell's position in
-            # `Iterators.product` order over the block's output ranges —
-            # dimension 1 fastest, which for the dense block is the buffer
-            # offset.
-            _array_contraction_table(
-                contract_refs, idx_names,
-                [collect(lo[d]:blk.hi[d]) for d in 1:rank], contract_names,
-                contract_ranges, contract_const, dop.join_gates, oplus, zerobar,
-                const_registry; reverse = rev
-            )
-        else
-            _ACFold(
-                contract_refs, Symbol(oplus), zerobar,
-                StepRange{Int, Int}[
-                    (
-                        r = _expand_int_range(c);
-                        first(r):step(r):last(r)
-                    )
-                        for c in contract_ranges
-                ]
-            )
-        end
-    end
+    body, fold, out_refs = prog.body, prog.fold, prog.out_refs
     ncells = prod(ext)
     draft = _RecurrenceSweep(
         name, nothing, (), body, fold, out_refs, rg.cur,
@@ -404,39 +335,31 @@ function _compile_recurrence_sweep(
         )
     end
     gen = _try_codegen_recurrence(draft)
-    if gen isa Symbol
+    if gen isa _Decline
         return _walked_recurrence(
             draft, _percell_license(
                 name,
                 "the emitter for its ordered recurrence sweep (esm-spec §4.3.1.1) " *
-                    "declined ($(gen)), and the walked form evaluates the body as a tree per " *
+                    "declined ($(sprint(showerror, gen))), and the walked form evaluates the body as a tree per " *
                     "cell. Build with compiler=:interpreter to run it"
             )
         )
     end
-    _note_recurrence!(:recurrence_sweep)
+    _tally_cascade!(:recurrence_sweep)
     return gen
 end
 
 # The walked form of a drafted sweep: the interpreter's, so it carries a license.
 function _walked_recurrence(d::_RecurrenceSweep{Nothing}, lic::_PerCellLicense)
-    _note_recurrence!(:recurrence_walk)
+    _tally_cascade!(:recurrence_walk)
     return _RecurrenceSweep(
         d.name, lic, (), d.body, d.fold, d.out_refs, d.cur,
         d.order, d.lo, d.dims, d.base, d.strides, d.ncells
     )
 end
 
-# The cascade tally and the compiler report row for one recurrence: `native`'s
-# emitted sweep is its own tier; the walked form is the interpreter's.
-function _note_recurrence!(k::Symbol)
-    lock(_CASCADE_TALLY_LOCK) do
-        _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
-    end
-    rec = _build_record()
-    rec === nothing || (rec.tally[k] = get(rec.tally, k, 0) + 1)
-    return nothing
-end
+# The compiler report row for one recurrence: `native`'s emitted sweep is its
+# own tier; the walked form is the interpreter's.
 _recurrence_tier(sw::_RecurrenceSweep) =
     sw.gen isa _PerCellLicense ? :interpreter : :recurrence_sweep
 
@@ -495,15 +418,7 @@ function _walk_recurrence!(
     return nothing
 end
 
-@inline _recur_oplus(op::Symbol, a, b) =
-    op === :+ ? a + b : op === :* ? a * b : op === :max ? max(a, b) :
-    op === :min ? min(a, b) : op === :or ? _or_combine(a, b) :
-    throw(
-        TreeWalkError(
-            "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
-            "no fold for the reduction '$op' in a recurrence body"
-        )
-    )
+@inline _recur_oplus(op::Symbol, a, b) = _oplus(op, a, b)
 
 # The cell's reduction, as `_cg_fold` (array_contraction.jl) emits it: one
 # accumulator seeded from the Float64 0̄, the TABLE form's entries for the cell at
@@ -542,9 +457,9 @@ end
 # The walked form's loop written as code. `c` is the sweep position; the output
 # indices decode from it exactly as `_walk_recurrence!` decodes them, and a
 # self-read compares its own position against `c` (`_cg_recur_gather`). Returns a
-# `_RecurrenceSweep` carrying the function, or the emitter's decline reason.
+# `_RecurrenceSweep` carrying the function, or the emitter's `_Decline`.
 function _try_codegen_recurrence(sw::_RecurrenceSweep)
-    ctx = _CGCtx(_codegen_node_budget())
+    ctx = _CGFunction(_codegen_node_budget())
     kc = _CGScalarCtx()
     cv = _cg_name(ctx, "c")
     kc.loops[sw.cur] = cv
@@ -559,8 +474,9 @@ function _try_codegen_recurrence(sw::_RecurrenceSweep)
         ax = sw.order[j]
         len = _cg_geo!(ctx, sw.dims[ax], (sw.dims, ax))
         lo = _cg_geo!(ctx, sw.lo[ax], (sw.lo, ax))
-        push!(seek, :(local $(isyms[ax]) = $lo + $rv % $len))
-        push!(seek, :($rv = div($rv, $len)))
+        _cg_decode_digit!(seek, rv, len) do q
+            Any[:(local $(isyms[ax]) = $(_cg_axis_index(lo, q, nothing)))]
+        end
     end
     offv = _cg_name(ctx, "off")
     off = Any[0]
@@ -583,36 +499,22 @@ function _try_codegen_recurrence(sw::_RecurrenceSweep)
         term = _cg_emit(ctx, kc, sw.body)
         sw.fold === nothing ? term : _cg_fold(ctx, sw.fold, pcv, kvs, term)
     catch err
-        err isa _CodegenDecline || rethrow()
-        return err.reason
+        err isa _Decline || rethrow()
+        return err
     end
     base = _cg_geo!(ctx, sw.base, (sw, :base))
     ncells = _cg_geo!(ctx, sw.ncells, (sw, :ncells))
     ln = LineNumberNode(0, Symbol("ess-recurrence-sweep"))
     loop = quote
-        $(ctx.geosink...)
+        $(ctx.nest.sink...)
         for $cv in 0:($ncells - 1)
             $(seek...)
             local $pcv = $offv + 1
             u[$base + $offv] = $cell
         end
     end
-    ngrp = length(ctx.tab_types)
-    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    ex = Expr(
-        :function, Expr(:tuple, :u, :p, :t, :tabs),
-        Expr(
-            :block, grpstmts...,
-            :(local _cgT = _rhs_value_type(u, p, t)),
-            ctx.helpers...,
-            Expr(:macrocall, Symbol("@inbounds"), ln, loop),
-            :(return nothing)
-        )
-    )
-    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-        @__MODULE__, @__MODULE__, ex
-    )
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
+    f, fns = _cg_finish(ctx, (:u, :p, :t, :tabs), Expr(:macrocall, Symbol("@inbounds"), ln, loop))
+    tabpack = _cg_tabpack(ctx, fns)
     return _RecurrenceSweep(
         sw.name, f, tabpack, sw.body, sw.fold, sw.out_refs, sw.cur,
         sw.order, sw.lo, sw.dims, sw.base, sw.strides, sw.ncells
@@ -623,10 +525,10 @@ end
 # range-checked in dimension order, the later ones not evaluated once one is out
 # of the frame; then the read is served only from a cell whose sweep position is
 # before the current one, `c`.
-function _cg_recur_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+function _cg_recur_gather(ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node)
     rg = nd.payload::_RecurGather
     cv = get(kc.loops, rg.cur, nothing)
-    cv === nothing && throw(_CodegenDecline(:recur_cursor_out_of_scope))
+    cv === nothing && _decline(:loopvar_out_of_scope, "the recurrence cursor")
     rgv = _cg_name(ctx, "rga")
     base = _cg_geo!(ctx, rg.base, (rg, :base))
     inner = _cg_recur_gather_dim(ctx, kc, nd, rg, rgv, cv, 1, Any[0], Any[base], Symbol[])
@@ -634,7 +536,7 @@ function _cg_recur_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
 end
 
 function _cg_recur_gather_dim(
-        ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node, rg::_RecurGather,
+        ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node, rg::_RecurGather,
         rgv::Symbol, cv::Symbol, d::Int, ord::Vector{Any},
         slot::Vector{Any}, subs::Vector{Symbol}
     )

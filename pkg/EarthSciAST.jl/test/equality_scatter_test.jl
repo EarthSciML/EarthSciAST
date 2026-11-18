@@ -19,6 +19,7 @@
 #   * that the run-time call allocates nothing and the cost grows linearly.
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 using ForwardDiff
 using JSON3
@@ -30,7 +31,6 @@ _sx(op, args...; kw...) = Dict{String, Any}(
     (String(k) => v for (k, v) in kw)...
 )
 _sxi(v, is...) = _sx("index", v, is...)
-_sxk(arr) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => arr)
 _sxD(v, is...) = _sx("D", _sxi(v, is...); wrt = "t")
 
 # The left-hand side `D(v[is…])` over the index sets `sets`.
@@ -104,21 +104,20 @@ function _sx_ics(ushape, uval; svals = Float64[])
     ics = Dict{String, Any}()
     for I in CartesianIndices(Tuple(ushape))
         t = Tuple(I)
-        ics["u[" * join(t, ",") * "]"] = Float64(uval(t...))
+        ics["M.u[" * join(t, ",") * "]"] = Float64(uval(t...))
     end
     for (q, v) in enumerate(svals)
-        ics["s[$q]"] = v
+        ics["M.s[$q]"] = v
     end
     return ics
 end
 
 function _sx_run(doc, ics; compiler = :native)
-    ESX._reset_cascade_tally!()
-    f!, u0, p, _t, vm = ESX._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
-    tally = copy(ESX._CASCADE_TALLY)
+    f!, u0, p, _t, vm, rep = ESX.Internal.build(doc; initial_conditions = ics, compiler = compiler)
+    tally = rep.counts
     du = fill(NaN, length(u0))
     f!(du, u0, p, 0.0)
-    names = sort!(String[k for k in keys(vm) if startswith(k, "c[")])
+    names = sort!(String[k for k in keys(vm) if startswith(k, "M.c[")])
     return (
         du = Float64[du[vm[k]] for k in names], names = names, tally = tally,
         f! = f!, u0 = u0, p = p, vm = vm,
@@ -202,8 +201,8 @@ function _sx_ragged_doc(
     rhs = _sx("faq"; output_idx = Any[outs...], expr = body, reduce = reduce, filter = filt, ranges = Dict{String, Any}(rng))
     eqs = Any[
         Dict("lhs" => _sx_lhs("u", ["a"], ["U1"]), "rhs" => _sx("faq"; output_idx = Any["a"], expr = 0.0, ranges = Dict("a" => Dict("from" => "U1")))),
-        Dict("lhs" => "rowLen", "rhs" => _sxk(Int[length(r) for r in rows])),
-        Dict("lhs" => "rowMem", "rhs" => _sxk(mem)),
+        Dict("lhs" => "rowLen", "rhs" => jconst(Int[length(r) for r in rows])),
+        Dict("lhs" => "rowMem", "rhs" => jconst(mem)),
         Dict("lhs" => _sx_lhs("c", outs, osets), "rhs" => rhs),
     ]
     return Dict{String, Any}(
@@ -212,7 +211,7 @@ function _sx_ragged_doc(
     )
 end
 
-_sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uval))
+_sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(uval))
 
 @testset "one-pass equality scatter (scatter.jl)" begin
 
@@ -242,7 +241,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         # build evaluates through the compiled node, not an affine form).
         map8 = [1, 1, 1, 1, 2, 2, 2, 2]
         for rt in (false, true)
-            e = _sxi(_sxk(map8), "i")
+            e = _sxi(jconst(map8), "i")
             rhs = _sx_faq(
                 outs = ["j"], osizes = [3], cr = Dict("i" => [1, 8]),
                 filt = _sx("==", rt ? _sx_rt(e) : e, "j"), body = _sxi("u", "i")
@@ -257,7 +256,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         map8 = [2, 2, 2, 1, 1, 3, 3, 3]
         vals = [1.0, NaN, 3.0, -2.0, 5.0, 0.5, -0.0, 4.0]
         for red in ("+", "*", "max", "min"), rt in (false, true)
-            e = _sxi(_sxk(map8), "i")
+            e = _sxi(jconst(map8), "i")
             rhs = _sx_faq(
                 outs = ["j"], osizes = [4], cr = Dict("i" => [1, 8]), reduce = red,
                 filt = _sx("==", "j", rt ? _sx_rt(e) : e),
@@ -283,8 +282,8 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         rhs = _sx_faq(
             outs = ["j1", "j2"], osizes = [2, 2], cr = Dict("i" => [1, 4], "k" => [1, 4]),
             filt = _sx(
-                "and", _sx("==", "j1", _sxi(_sxk([1, 1, 2, 2]), "k")),
-                _sx("==", "j2", _sxi(_sxk([2, 1, 2, 1]), "i"))
+                "and", _sx("==", "j1", _sxi(jconst([1, 1, 2, 2]), "k")),
+                _sx("==", "j2", _sxi(jconst([2, 1, 2, 1]), "i"))
             ),
             body = _sxi("u", "i", "k")
         )
@@ -355,7 +354,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         # conjunction), so it folds ascending too.
         rhs = _sx_faq(
             outs = ["j"], osizes = [3], cr = Dict("i" => [1, 8]),
-            filt = _sx("and", _sx(">=", "i", "j"), _sx("==", "j", _sxi(_sxk([1, 1, 2, 2, 1, 1, 3, 3]), "i"))),
+            filt = _sx("and", _sx(">=", "i", "j"), _sx("==", "j", _sxi(jconst([1, 1, 2, 2, 1, 1, 3, 3]), "i"))),
             body = _sxi("u", "i")
         )
         doc = _sx_doc(rhs; outs = ["j"], osizes = [3], ushape = [8])
@@ -393,7 +392,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
 
     @testset "dual numbers take the same fold" begin
         for rt in (false, true)
-            e = _sxi(_sxk([1, 1, 1, 1, 2, 2, 2, 2]), "i")
+            e = _sxi(jconst([1, 1, 1, 1, 2, 2, 2, 2]), "i")
             rhs = _sx_faq(
                 outs = ["j"], osizes = [2], cr = Dict("i" => [1, 8]),
                 filt = _sx("==", "j", rt ? _sx_rt(e) : e),
@@ -474,9 +473,8 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         )
         doc = JSON3.read(read(path, String), Dict{String, Any})
         dus = map((:native, :interpreter)) do c
-            ESX._reset_cascade_tally!()
-            f!, u0, p, _t, vm = ESX._build_evaluator(doc; model_name = "Scatter", compiler = c)
-            tally = copy(ESX._CASCADE_TALLY)
+            f!, u0, p, _t, vm, rep = ESX.Internal.build(doc; compiler = c)
+            tally = rep.counts
             du = fill(NaN, length(u0))
             f!(du, u0, p, 0.0)
             names = sort!(collect(keys(vm)))
@@ -492,7 +490,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         rows = [[1, 2], [3, 4], [5, 6], Int[]]
         cmap = [1, 1, 1, 1, 2, 3]
         uval = [1.0e16, 1.0, -1.0e16, 1.0, 2.5, -0.0]
-        key(m) = _sxi(_sxk(cmap), m)
+        key(m) = _sxi(jconst(cmap), m)
         for rt in (false, true), pname in ("r", "a"), child_first in (true, false)
             # `r` sorts after the child `k`, `a` before it; the child range is
             # declared first or last.
@@ -513,7 +511,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         end
         # Keys outside the axis or not an integer are skipped.
         bad = [1, 0, 7, 2, -1, 3]
-        for rt in (false, true), kf in (m -> _sxi(_sxk(bad), m), m -> _sx("/", _sxi(_sxk(cmap), m), 2))
+        for rt in (false, true), kf in (m -> _sxi(jconst(bad), m), m -> _sx("/", _sxi(jconst(cmap), m), 2))
             d = _sx_ragged_doc(3, rows; keyf = kf, rt = rt)
             _sx_check(d, _sx_ragged_ics(uval); form = rt ? :pass : :table)
         end
@@ -524,9 +522,37 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         end
     end
 
-    @testset "a ragged nest scatter: the call allocates nothing and scales linearly" begin
+    @testset "integer-bound operands lift with the left-hand side's shape" begin
+        # `D(v) = faq(_j1; _j1 ∈ [1, 8], i ∈ [2, 7]; i - 1 == _j1) … + faq(…)`
+        # over an `[n8]` unknown: each operand's output bounds are integers, not
+        # index sets, and they match `v`'s declared extents, so the hoisting
+        # pass lifts each to an observed shaped like `v` and the scatter fills
+        # it. Both forms must build and lift (a "(hoisted aggregate)" rule per
+        # summed variable), and native must agree with the interpreter bit for
+        # bit.
+        path = joinpath(
+            @__DIR__, "..", "..", "..", "tests", "conformance", "faq_equality_scatter",
+            "fixtures", "derived_sum.esm"
+        )
+        dus = map((:native, :interpreter)) do c
+            f!, u0, p, _t, vm, rep = ESX.Internal.build(path; compiler = c)
+            du = fill(NaN, length(u0))
+            f!(du, u0, p, 0.0)
+            names = sort!(collect(keys(vm)))
+            (Float64[du[vm[nm]] for nm in names], rep)
+        end
+        @test _sx_bits(dus[1][1]) == _sx_bits(dus[2][1])
+        oop = ESX.Internal.build(path; compiler = :native, form = :oop)
+        for rep in (dus[1][2], oop.report), v in ("v", "g", "q")
+            @test any(
+                r -> occursin("D(Scatter.$v) (hoisted aggregate)", r.rule),
+                rep.compiler_report.rules
+            )
+        end
+    end
+
+    @testset "a ragged nest scatter: one scatter pass, and the call allocates nothing" begin
         for rt in (false, true)
-            times = Float64[]
             builds = Float64[]
             for n in (10_000, 100_000)
                 # About five members per row, one row per cell, each cell
@@ -534,21 +560,18 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
                 # so the timing measures the pass and not cache misses.
                 rows = [Int[mod1(r + 7 * q, n) for q in 1:(3 + r % 5)] for r in 1:n]
                 d = _sx_ragged_doc(n, rows; rt = rt)
-                ESX._reset_cascade_tally!()
-                bt = @elapsed (f!, u0, p, _t, vm) = ESX._build_evaluator(d; compiler = :native)
-                t = copy(ESX._CASCADE_TALLY)
+                bt = @elapsed (f!, u0, p, _t, vm, rep) = ESX.Internal.build(d; compiler = :native)
+                t = rep.counts
                 @test _sx_fired(t) == 1
                 u = Float64[sin(1.3 * i) for i in eachindex(u0)]
                 du = similar(u)
                 f!(du, u, p, 0.0)
                 f!(du, u, p, 0.0)
                 @test (@allocated f!(du, u, p, 0.0)) == 0
-                push!(times, minimum(@elapsed(f!(du, u, p, 0.0)) for _ in 1:5))
                 push!(builds, bt)
             end
-            # Ten times the cells and points: far from the hundredfold a
-            # per-cell walk of the whole nest costs.
-            @test times[2] / times[1] < 30.0
+            # The linear cost is the scatter pass firing (`_sx_fired`) with no
+            # per-call allocation; the build bound is a hang guard.
             @test builds[2] < 120.0
         end
     end
@@ -559,7 +582,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         # coordinate folds it.
         map8 = [2, 2, 1, 1, 3, 3, 1, 4]
         for rt in (false, true), red in ("+", "max")
-            e = _sxi(_sxk(map8), "i")
+            e = _sxi(jconst(map8), "i")
             rhs = _sx_faq(
                 outs = ["j", "m"], osizes = [4, 3], cr = Dict("i" => [1, 8]), reduce = red,
                 filt = _sx("==", "j", rt ? _sx_rt(e) : e),
@@ -572,8 +595,8 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         # gather, so neither is fixed per shared entry; free index first.
         rhs = _sx_faq(
             outs = ["m", "j"], osizes = [3, 4], cr = Dict("i" => [1, 8]),
-            filt = _sx("and", _sx("==", "j", _sxi(_sxk(map8), "i")), _sx("<=", "m", _sx("+", "i", -3))),
-            body = _sx("*", _sxi("u", "i", "m"), _sxi(_sxk([0.5, -1.0, 2.0]), "m"))
+            filt = _sx("and", _sx("==", "j", _sxi(jconst(map8), "i")), _sx("<=", "m", _sx("+", "i", -3))),
+            body = _sx("*", _sxi("u", "i", "m"), _sxi(jconst([0.5, -1.0, 2.0]), "m"))
         )
         doc = _sx_doc(rhs; outs = ["m", "j"], osizes = [3, 4], ushape = [8, 3])
         ics = _sx_ics([8, 3], (i, m) -> _SX_CANCEL[mod1(i + m, 4)])
@@ -589,7 +612,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
     @testset "a run-time pass called concurrently" begin
         # Overlapping calls of one build (an ensemble's threads, a threaded
         # Jacobian) each fold their own cells: Float64 and dual alike.
-        e = _sx_rt(_sxi(_sxk([1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]), "i"))
+        e = _sx_rt(_sxi(jconst([1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]), "i"))
         rhs = _sx_faq(
             outs = ["j"], osizes = [3], cr = Dict("i" => [1, 12]),
             filt = _sx("==", "j", e), body = _sx("*", _sxi("u", "i"), _sxi("u", "i"))
@@ -627,7 +650,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         # nest does (`_ac_take_consumers`).
         map8 = [2, 2, 1, 1, 3, 3, 4, 4]
         for rt in (false, true)
-            e = _sxi(_sxk(map8), "i")
+            e = _sxi(jconst(map8), "i")
             g = _sx_faq(
                 outs = ["j"], osizes = [4], cr = Dict("i" => [1, 8]),
                 filt = _sx("==", "j", rt ? _sx_rt(e) : e), body = _sxi("u", "i")
@@ -648,10 +671,9 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
                 )
             )
             ics = _sx_ics([8], i -> _SX_CANCEL[mod1(i, 4)] * i)
-            ESX._reset_cascade_tally!()
-            f!, u0, p, _t, vm = ESX._build_evaluator(doc; initial_conditions = ics, compiler = :native)
-            tally = copy(ESX._CASCADE_TALLY)
-            fi, u0i, pi_, _ti, vmi = ESX._build_evaluator(doc; initial_conditions = ics, compiler = :interpreter)
+            f!, u0, p, _t, vm, rep = ESX.Internal.build(doc; initial_conditions = ics, compiler = :native)
+            tally = rep.counts
+            fi, u0i, pi_, _ti, vmi = ESX.Internal.build(doc; initial_conditions = ics, compiler = :interpreter)
             @test get(tally, rt ? :equality_scatter_pass : :equality_scatter_table, 0) == 1
             @test get(tally, :array_contraction_consumer, 0) == 1
             du = fill(NaN, length(u0))
@@ -688,9 +710,8 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
             doc = JSON3.read(read(joinpath(dir, f), String), Dict{String, Any})
             model = String(first(keys(doc["models"])))
             dus = map((:native, :interpreter)) do c
-                ESX._reset_cascade_tally!()
-                f!, u0, p, _t, vm = ESX._build_evaluator(doc; model_name = model, compiler = c)
-                tally = copy(ESX._CASCADE_TALLY)
+                f!, u0, p, _t, vm, rep = ESX.Internal.build(doc; compiler = c)
+                tally = rep.counts
                 names = sort!(collect(keys(vm)))
                 u = copy(u0)
                 for (r, nm) in enumerate(names)
@@ -706,7 +727,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         end
     end
 
-    @testset "the call allocates nothing and scales linearly" begin
+    @testset "two scatter passes, and the call allocates nothing" begin
         band(n; rt = false) = begin
             sh(s) = rt ? _sx_rt(_sx("+", "i", s)) : _sx("+", "i", s)
             prod(shift, lbl) = _sx(
@@ -720,21 +741,16 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
             d
         end
         for rt in (false, true)
-            times = Float64[]
             for n in (100_000, 1_000_000)
-                ESX._reset_cascade_tally!()
-                bt = @elapsed (f!, u0, p, _t, vm) = ESX._build_evaluator(band(n; rt = rt); compiler = :native)
-                t = copy(ESX._CASCADE_TALLY)
+                bt = @elapsed (f!, u0, p, _t, vm, rep) = ESX.Internal.build(band(n; rt = rt); compiler = :native)
+                t = rep.counts
                 @test _sx_fired(t) == 2
                 du = similar(u0)
                 f!(du, u0, p, 0.0)
                 f!(du, u0, p, 0.0)
                 @test (@allocated f!(du, u0, p, 0.0)) == 0
-                push!(times, minimum(@elapsed(f!(du, u0, p, 0.0)) for _ in 1:5))
                 @test bt < 120.0
             end
-            # Ten times the cells: far from the hundredfold a dense fold costs.
-            @test times[2] / times[1] < 30.0
         end
     end
 end

@@ -46,32 +46,13 @@
 # A refusal is never a fallback: nothing here retries a refused fixture under
 # another compiler, and nothing here weakens an assertion to make one pass.
 
-# Self-contained environment bootstrap, the shape compiler_agreement_adapter.jl
-# uses. This adapter reuses THAT tier's project rather than adding a third:
-# it needs exactly the same four packages (EarthSciAST, JSON3, Tsit5 for the
-# ordinary arm and Rosenbrock for a document whose §2.2 `solver` block declares
+# The environment is compiler_agreement_adapter.jl's: this adapter needs exactly
+# the same four packages (EarthSciAST, JSON3, Tsit5 for the ordinary arm and
+# Rosenbrock for a document whose §2.2 `solver` block declares
 # `stiffness: "high"`), and a second env carrying the same list would be one
 # more Manifest to keep alive for no coverage.
-import Pkg
-let env = normpath(joinpath(@__DIR__, "compiler_agreement_env")),
-        manifest = joinpath(env, "Manifest.toml")
-    bootstrap() = begin
-        Pkg.activate(env; io = devnull)
-        isfile(manifest) ||
-            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
-        Pkg.instantiate(; io = devnull)
-    end
-    try
-        bootstrap()
-    catch err
-        # A Manifest.toml is a machine-local CACHE that can lag a Project.toml
-        # that has moved on and then contradict it; one that cannot instantiate
-        # has no value, so rebuild rather than fail the gate.
-        @warn "compiler_agreement_env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force = true)
-        bootstrap()
-    end
-end
+include(joinpath(@__DIR__, "adapter_support.jl"))
+activate_adapter_env(normpath(joinpath(@__DIR__, "compiler_agreement_env")))
 
 using EarthSciAST
 using JSON3
@@ -80,44 +61,32 @@ import OrdinaryDiffEqRosenbrock
 
 const BINDING = "julia"
 
-# API_SPEC §5.8's closed vocabulary, checked here as well as in the runner. A
-# value outside it is a broken invocation rather than a compiler this binding
-# happens not to have, and the two must not arrive at the same answer.
-const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
-
-# The coded diagnostics a refusal can carry. A message naming one of these is
-# this binding declining to evaluate the document, which the tier gates as a
-# REFUSAL — a named exclusion only where the fixture's ledger admits it, never
-# a wrong answer and never a silent skip. Anything else is an ordinary
-# assertion failure.
-const REFUSAL_CODES = (
-    "compiler_refused_rule", "compiler_unavailable",
-    "unevaluable_operator", "unlowered_operator",
-    "unsupported_construct", "float32_unsupported",
-)
-
 # `--manifest <m> --output <o>` may repeat: each `--output` belongs to the
 # `--manifest` before it, and every pair is run in this ONE process under the
 # one `--compiler`. Most of a launch is compiling the build-and-solve path on
 # first call, which a second process pays all over again, so
 # `scripts/test-conformance.sh` hands every tier to one launch per compiler
 # (CONFORMANCE_SPEC.md §5.45.5).
+# The value after the flag at `args[i]`; a flag at the end of the line has none.
+_flag_value(args, i) =
+    i < length(args) ? args[i + 1] : error("$(PROGRAM_FILE): $(args[i]) needs a value")
+
 function parse_args(args)
     pairs = Vector{Vector{Union{Nothing, String}}}()
     compiler = nothing
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
-            push!(pairs, [args[i + 1], nothing]); i += 2
+            push!(pairs, [_flag_value(args, i), nothing]); i += 2
         elseif args[i] == "--output"
             isempty(pairs) && error("--output must follow the --manifest it belongs to")
             pairs[end][2] === nothing ||
                 error("--manifest $(pairs[end][1]) was given two --output paths")
-            pairs[end][2] = args[i + 1]; i += 2
+            pairs[end][2] = _flag_value(args, i); i += 2
         elseif args[i] == "--compiler"
-            compiler = args[i + 1]; i += 2
+            compiler = _flag_value(args, i); i += 2
         else
-            i += 1
+            error("$(PROGRAM_FILE): unrecognised argument $(repr(args[i]))")
         end
     end
     isempty(pairs) && error("--manifest is required")
@@ -125,11 +94,7 @@ function parse_args(args)
         o === nothing && error("--output is required (for --manifest $m)")
     end
     compiler === nothing && error("--compiler is required")
-    compiler in COMPILER_VOCABULARY ||
-        error(
-        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-            ", got '$compiler'"
-    )
+    check_compiler(compiler, EarthSciAST.COMPILER_VOCABULARY)
     return ([(String(m), String(o)) for (m, o) in pairs], compiler)
 end
 
@@ -153,18 +118,6 @@ function fixture_path(manifest_path, fx)
     local_path = normpath(joinpath(dirname(abspath(manifest_path)), rel))
     isfile(local_path) && return local_path
     return normpath(joinpath(tests_root(manifest_path), rel))
-end
-
-# The code a message names, or nothing. Matched against the closed list above
-# plus the `E_TREEWALK_*` family, so an ordinary numeric failure — whose message
-# names no code — can never be mistaken for a refusal.
-function refusal_code(message::AbstractString)
-    for code in REFUSAL_CODES
-        occursin(code, message) && return code
-    end
-    m = match(r"\bE_TREEWALK_[A-Z0-9_]+", message)
-    m === nothing || return m.match
-    return nothing
 end
 
 # The algorithm this fixture integrates with. esm-spec §2.2's `solver` block is
@@ -239,13 +192,15 @@ function run_fixture(manifest, fx, manifest_path, compiler)
         ) for r in results
     ]
 
-    # A run in which EVERY assertion failed carrying ONE coded diagnostic is
-    # this compiler declining the document, not this compiler getting every
-    # number wrong. Reporting it as failures would put a refusal in the same
-    # bucket as a numeric defect, which is the one conflation §5.45.3 forbids.
-    codes = [refusal_code(r.message) for r in results if !r.passed]
+    # A run in which EVERY assertion failed carrying ONE refusal code (the
+    # result's `code`, read off the error) is this compiler declining the
+    # document, not this compiler getting every number wrong. Reporting it as
+    # failures would put a refusal in the same bucket as a numeric defect, which
+    # is the one conflation §5.45.3 forbids.
+    codes = [r.code for r in results if !r.passed]
     if length(codes) == length(results) && !isempty(codes) &&
-            all(c -> c !== nothing, codes) && length(unique(codes)) == 1
+            all(c -> c == "compiler_unavailable" || is_refusal_code(c), codes) &&
+            length(unique(codes)) == 1
         codes[1] == "compiler_unavailable" &&
             throw(CompilerUnavailable(results[1].message))
         return Dict{String, Any}(
@@ -257,13 +212,7 @@ function run_fixture(manifest, fx, manifest_path, compiler)
     return Dict{String, Any}("assertions" => entries)
 end
 
-function write_payload(output_path, payload)
-    mkpath(dirname(abspath(output_path)))
-    return open(output_path, "w") do io
-        JSON3.write(io, payload)
-        write(io, "\n")
-    end
-end
+write_payload(output_path, payload) = write_report(output_path, JSON3.write(payload))
 
 function main(argv)
     pairs, compiler = parse_args(argv)
@@ -299,8 +248,8 @@ function run_manifest(manifest_path, output_path, compiler)
         entry = try
             run_fixture(manifest, fx, manifest_path, compiler)
         catch err
-            if err isa CompilerUnavailable ||
-                    (err isa SimulateError && err.code == ERROR_CODES.COMPILER_UNAVAILABLE)
+            o = outcome(err)
+            if err isa CompilerUnavailable || o.kind === :unavailable
                 # A fact about the BINDING, not about a document: it is the
                 # whole output and the remaining fixtures are not attempted.
                 why = err isa CompilerUnavailable ? err.reason : sprint(showerror, err)
@@ -308,10 +257,9 @@ function run_manifest(manifest_path, output_path, compiler)
                 return 0
             end
             msg = sprint(showerror, err)
-            code = refusal_code(msg)
-            if code !== nothing
+            if o.kind === :refused
                 Dict{String, Any}(
-                    "status" => "refused", "code" => code,
+                    "status" => "refused", "code" => o.code,
                     "reason" => first(msg, 400)
                 )
             else

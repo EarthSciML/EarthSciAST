@@ -176,7 +176,7 @@ function _namespace_join(
             s
         end
     end
-    # A `join.overlap` clause (Phase 2a) namespaces its envelope FACTOR names the
+    # A `join.overlap` clause namespaces its envelope FACTOR names the
     # same way (a component-local coord/rect buffer gets the prefix); `eps` is a
     # scalar and never rewrites. A bin-equality clause namespaces its key columns.
     nsclause(clause::_OverlapJoinSpec) = _OverlapJoinSpec(
@@ -253,14 +253,13 @@ function _namespace_expr(
     end
     # Recurse into EVERY variable-bearing sub-expression via the shared
     # field-preserving rewrite so prefix rewrites reach faq / makearray
-    # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
+    # bodies, filter predicates (RFC §7.2), integral bounds (`lower`/`upper`),
     # makearray `values`, value-invention
     # `key`, expression-valued dense `ranges` bounds, AND expression-template
     # `bindings` values (esm-spec §9.6.4 rule 7 / §10.7: template `params` —
     # the map's KEYS — never namespace, they are the template's formal
     # parameters; the argument expressions bound TO them do, and `map_children`
-    # rewrites exactly the values). An explicit `bindings` carve-out used to
-    # live here because `map_children` skipped that field. `map_children`
+    # rewrites exactly the values). `map_children`
     # routes through `reconstruct`, preserving all non-expression fields
     # (semiring, output_idx, int_var, join/join_gates, manifold, …).
     result = map_children(
@@ -273,10 +272,9 @@ function _namespace_expr(
     # `map_children` recurses into expression-bearing fields only. One field
     # carries plain-name identifiers that also need namespacing: a `join.on` key
     # column may name a component-local bin buffer (see `_namespace_join`).
-    # `join` is `nothing` for models without a value-equality join, so those are
-    # byte-identical to before (and skip the reconstruct copy). Index-set
-    # identifier fields (`id`, `ranges[*].from`) are document-scoped (v0.8.0)
-    # and never prefixed.
+    # `join` is `nothing` for models without a value-equality join, which skip
+    # the reconstruct copy. Index-set identifier fields (`id`, `ranges[*].from`)
+    # are document-scoped and never prefixed.
     nj = expr.join === nothing ? nothing :
         _namespace_join(expr.join, _join_binders(expr), prefix, local_names)
     res = nj === expr.join ? result : reconstruct(result; join = nj)
@@ -288,35 +286,39 @@ end
 # Per-system collection
 # ========================================
 
-"""
-    _namespace_variable_update(var, _ns) -> ModelVariable
-
-Rewrite the expression-bearing fields of a parameter's `update` rules (§5.4)
-through the namespacing map `_ns`, returning `var` unchanged when it declares
-no update. `when` and `expression` are ordinary expression positions whose free
-names resolve in the DECLARING component's scope, so they must follow the same
-renaming every equation does — otherwise a condition-triggered parameter stops
-seeing the state it watches once its model is flattened under a prefix.
-"""
-function _namespace_variable_update(var::ModelVariable, _ns)::ModelVariable
-    var.update === nothing && return var
-    rules = ParameterUpdate[]
-    changed = false
-    for r in var.update
-        nw = r.when === nothing ? nothing : _ns(r.when)
-        ne = r.expression === nothing ? nothing : _ns(r.expression)
-        (nw !== r.when || ne !== r.expression) && (changed = true)
-        push!(
-            rules, ParameterUpdate(
-                r.kind; times = r.times, interval = r.interval,
-                initial_offset = r.initial_offset, when = nw, direction = r.direction,
-                source = r.source, hook = r.hook, expression = ne, from = r.from,
-                handler = r.handler
-            )
-        )
+# Namespace a component's events onto `st.continuous_events` and
+# `st.discrete_events` (the flatten state, or any holder of the two vectors). Shared by
+# `_collect_model!` and `_collect_reaction_system!` so a model and a reaction
+# system carry their events into the flattened system by the SAME rule.
+#
+# `ns` namespaces an expression in the component's scope. An affect LHS is a
+# NAME, not an expression, so it does not travel through `ns` and needs the
+# placeholder carve-out spelled out here. esm-spec §6.4: `_var` is not a
+# variable of this component (or of any component) — it stands for whichever
+# state `operator_compose` expands it to — so it must survive namespacing
+# untouched, exactly as `namespace_expr` already leaves it alone inside the
+# CONDITION (it is in no component's `local_names`).
+function _collect_events!(
+        st,
+        component_continuous::Vector{ContinuousEvent},
+        component_discrete::Vector{DiscreteEvent},
+        prefix::String, ns
+    )
+    # A dotted target is qualified by `ns` exactly as a read of the same name
+    # is: prefixed when its head is one of this component's subsystem keys,
+    # left alone when it is already qualified.
+    ns_target(lhs) = is_placeholder(lhs) ? lhs :
+        occursin('.', lhs) ? (ns(VarExpr(lhs))::VarExpr).name : "$(prefix).$(lhs)"
+    for ev in component_continuous
+        push!(st.continuous_events, _rename_affect_targets(ns_target, _map_event_exprs(ns, ev)))
     end
-    return changed ? reconstruct(var; update = rules) : var
+    for ev in component_discrete
+        push!(st.discrete_events, _rename_affect_targets(ns_target, _map_event_exprs(ns, ev)))
+    end
+    return nothing
 end
+_collect_events!(cv::Vector{ContinuousEvent}, dv::Vector{DiscreteEvent}, ccv, cdv, prefix, ns) =
+    _collect_events!((continuous_events = cv, discrete_events = dv), ccv, cdv, prefix, ns)
 
 """
 Collect a Model's variables and equations into the flattener accumulators,
@@ -337,80 +339,8 @@ applies identically to … references" §10.7 mandates — and is threaded uncha
 into subsystems, whose templates merged into their owner's registry at load.
 `nothing` (the common case: no collision) skips the rewrite entirely.
 """
-# Namespace a component's events into the flatten accumulators. Shared by
-# `_collect_model!` and `_collect_reaction_system!` so a model and a reaction
-# system carry their events into the flattened system by the SAME rule — a
-# reaction system's events used to be dropped here, and an evaluator that never
-# saw them ran the document without them (issues #264, #356).
-#
-# `ns` namespaces an expression in the component's scope. An affect LHS is a
-# NAME, not an expression, so it does not travel through `ns` and needs the
-# placeholder carve-out spelled out here. esm-spec §6.4: `_var` is not a
-# variable of this component (or of any component) — it stands for whichever
-# state `operator_compose` expands it to — so it must survive namespacing
-# untouched, exactly as `namespace_expr` already leaves it alone inside the
-# CONDITION (it is in no component's `local_names`). Prefixing only the affect
-# half produced `Transport._var = 1e-3` beside a condition still reading
-# `_var`: one placeholder spelled two ways in one event, which is the
-# partial-rename fingerprint this fixture family was cleaned up to remove.
-function _collect_events!(
-        continuous_events::Vector{ContinuousEvent},
-        discrete_events::Vector{DiscreteEvent},
-        component_continuous::Vector{ContinuousEvent},
-        component_discrete::Vector{DiscreteEvent},
-        prefix::String, ns
-    )
-    # A dotted target is qualified by `ns` exactly as a read of the same name
-    # is: prefixed when its head is one of this component's subsystem keys,
-    # left alone when it is already qualified.
-    ns_target(lhs) = is_placeholder(lhs) ? lhs :
-        occursin('.', lhs) ? (ns(VarExpr(lhs))::VarExpr).name : "$(prefix).$(lhs)"
-    ns_affects(affects) = AffectEquation[
-        AffectEquation(ns_target(a.lhs), ns(a.rhs)) for a in affects
-    ]
-    for ev in component_continuous
-        push!(
-            continuous_events,
-            ContinuousEvent(
-                ASTExpr[ns(c) for c in ev.conditions],
-                ns_affects(ev.affects);
-                affect_neg = ev.affect_neg === nothing ? nothing :
-                    ns_affects(ev.affect_neg),
-                root_find = ev.root_find,
-                reinitialize = ev.reinitialize,
-                description = ev.description,
-                name = ev.name
-            )
-        )
-    end
-
-    for ev in component_discrete
-        new_trigger = if ev.trigger isa ConditionTrigger
-            ConditionTrigger(ns(ev.trigger.expression))
-        else
-            ev.trigger
-        end
-        push!(
-            discrete_events,
-            DiscreteEvent(
-                new_trigger, ns_affects(ev.affects);
-                reinitialize = ev.reinitialize,
-                description = ev.description, name = ev.name
-            )
-        )
-    end
-    return nothing
-end
-
 function _collect_model!(
-        states::OrderedDict{String, ModelVariable},
-        params::OrderedDict{String, ModelVariable},
-        observeds::OrderedDict{String, ModelVariable},
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
-        continuous_events::Vector{ContinuousEvent},
-        discrete_events::Vector{DiscreteEvent},
-        model::Model, prefix::String;
+        st, model::Model, prefix::String;
         tpl_rename::Union{Nothing, AbstractDict{String, String}} = nothing,
         tpl_captures::_TplCaptures = _NO_CAPTURES
     )
@@ -428,9 +358,9 @@ function _collect_model!(
             namespace_expr(e, prefix, local_names; captures = tpl_captures), tpl_rename
         )
 
-    # esm-spec v0.8.0: index sets are a single document-scoped registry (seeded
-    # once by `flatten` from the top-level object) with plain names shared by every
-    # component — no longer per-`Model` and no longer namespaced. So index-set
+    # Index sets are a single document-scoped registry (seeded once by `flatten`
+    # from the top-level object) with plain names shared by every component, never
+    # namespaced. So index-set
     # references (an array variable's `shape` entries, `ranges[*]` `{from}`,
     # producer `id`s and their `from_faq` edges) stay as plain document-level
     # names and must NOT be rewritten to a `<prefix>.` form; only ordinary
@@ -448,22 +378,22 @@ function _collect_model!(
     # Every parameter — constant, sampled, or discrete-cadence — partitions with
     # the parameters, because a parameter is never differentiated. A
     # discrete-cadence one is the forcing buffer the update machinery writes;
-    # its `update` block travels with it, so `flattened_to_esm` re-emits it
-    # losslessly.
+    # its `update` block travels with it into the run file.
     _observed_here = Set(observed_unknowns(model))
     _inlineable_here = _inlineable_observed_unknowns(model)
     for (name, var) in model.variables
         namespaced = "$(prefix).$(name)"
-        # A bound reference is namespaced exactly as an equation's reference is
-        # (esm-libraries-spec §4.7.5, "Bounds follow the renaming").
-        v = _map_variable_bounds(_namespace_variable_update(var, _ns), _ns)
+        # A variable's update rules and bounds are namespaced exactly as an
+        # equation's references are (esm-libraries-spec §4.7.5, "Bounds follow
+        # the renaming"): they resolve in the declaring component's scope.
+        v = _map_variable_sites(_ns, var)
         if v.type == ParameterVariable
-            params[namespaced] = v
+            st.params[namespaced] = v
         elseif name in _observed_here
-            name in _inlineable_here || (states[namespaced] = v)
-            observeds[namespaced] = v
+            name in _inlineable_here || (st.states[namespaced] = v)
+            st.observeds[namespaced] = v
         else
-            states[namespaced] = v
+            st.states[namespaced] = v
         end
     end
 
@@ -473,32 +403,34 @@ function _collect_model!(
     for eq in model.equations
         lhs = _ns(eq.lhs)
         rhs = _ns(eq.rhs)
-        push!(equations, Equation(lhs, rhs; _comment = eq._comment))
-        push!(contribs, _authored(rhs, _component_origin(prefix)))
+        push!(
+            st.equations, _FlatEq(
+                Equation(lhs, rhs; _comment = eq._comment),
+                _authored(rhs, _component_origin(prefix)), _component_root(prefix)
+            )
+        )
+    end
+    # Initialization equations (esm-spec §6.2) resolve in the same scope and
+    # take the same renaming as the equations.
+    for eq in model.initialization_equations
+        push!(st.init_equations, Equation(_ns(eq.lhs), _ns(eq.rhs); _comment = eq._comment))
     end
 
-    # esm 1.0.0: an observed unknown's defining equation is an ORDINARY entry of
-    # `model.equations`, already namespaced and pushed above. There is nothing
-    # left to synthesize from a variable-level `expression`, which no longer
-    # exists (esm-spec §6.3).
+    # An observed unknown's defining equation is an ORDINARY entry of
+    # `model.equations`, already namespaced and pushed above (esm-spec §6.3).
 
-    _collect_events!(
-        continuous_events, discrete_events,
-        model.continuous_events, model.discrete_events, prefix, _ns
-    )
+    _collect_events!(st, model.continuous_events, model.discrete_events, prefix, _ns)
 
     for (sub_name, sub_model) in model.subsystems
-        # esm 1.0.0: a data source is a document-scoped registry entry, not a
-        # subsystem, so there is no loader arm here any more. A model that reads
+        # A data source is a document-scoped registry entry, not a subsystem,
+        # so there is no loader arm here. A model that reads
         # external data declares an ordinary PARAMETER whose `update` names the
         # source (esm-spec §8.5); it is collected into `params` above under its
         # own namespaced key, and the bound value reaches the RHS through the
         # const/refresh array registry keyed by that same name.
         sub_model isa Model || continue
         _collect_model!(
-            states, params, observeds, equations, contribs,
-            continuous_events, discrete_events,
-            sub_model, "$(prefix).$(sub_name)";
+            st, sub_model, "$(prefix).$(sub_name)";
             tpl_rename = tpl_rename, tpl_captures = tpl_captures
         )
     end
@@ -520,13 +452,7 @@ law. Were it left a state with no equation instead, it would sit in `u` with a
 permanently-zero derivative — a zero row in the chemistry Jacobian block.
 """
 function _collect_reaction_system!(
-        states::OrderedDict{String, ModelVariable},
-        params::OrderedDict{String, ModelVariable},
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
-        continuous_events::Vector{ContinuousEvent},
-        discrete_events::Vector{DiscreteEvent},
-        rsys::ReactionSystem, prefix::String;
+        st, rsys::ReactionSystem, prefix::String;
         templates = nothing
     )
     local_names = Set{String}()
@@ -540,26 +466,12 @@ function _collect_reaction_system!(
         push!(local_names, sub_name)
     end
 
-    for sp in rsys.species
-        namespaced = "$(prefix).$(sp.name)"
-        target = sp.constant === true ? params : states
-        target[namespaced] = ModelVariable(
-            sp.constant === true ? ParameterVariable : UnknownVariable;
-            default = sp.default, description = sp.description, units = sp.units
-        )
-    end
-    for p in rsys.parameters
-        namespaced = "$(prefix).$(p.name)"
-        # The §6.3 value model travels with the parameter. `update` above all:
-        # it is the only channel binding a parameter to a data source
-        # (esm-spec §5.4), so leaving it behind here would flatten a
-        # data-driven parameter into a constant.
-        params[namespaced] = ModelVariable(
-            ParameterVariable;
-            default = p.default, description = p.description, units = p.units,
-            default_units = p.default_units, shape = p.shape,
-            distribution = p.distribution, update = p.update
-        )
+    # A parameter's update rules resolve in this system's scope, so they are
+    # namespaced like a rate.
+    ns(e) = namespace_expr(e, prefix, local_names)
+    for (name, v) in reaction_variables(rsys)
+        target = v.type == ParameterVariable ? st.params : st.states
+        target["$(prefix).$(name)"] = _map_variable_sites(ns, v)
     end
 
     # v0.8.0: every component shares the document's single `domain`; a system
@@ -585,8 +497,12 @@ function _collect_reaction_system!(
         rhs0 = templates === nothing ? eq.rhs : _expand_expr_refs(eq.rhs, templates)
         lhs = namespace_expr(eq.lhs, prefix, local_names)
         rhs = namespace_expr(rhs0, prefix, local_names)
-        push!(equations, Equation(lhs, rhs; _comment = eq._comment))
-        push!(contribs, _authored(rhs, _component_origin(prefix)))
+        push!(
+            st.equations, _FlatEq(
+                Equation(lhs, rhs; _comment = eq._comment),
+                _authored(rhs, _component_origin(prefix)), _component_root(prefix)
+            )
+        )
     end
 
     # A reaction system's events are collected on the same footing as a model's
@@ -599,16 +515,11 @@ function _collect_reaction_system!(
         templates === nothing ? e :
             _expand_expr_refs(e, templates), prefix, local_names
     )
-    _collect_events!(
-        continuous_events, discrete_events,
-        rsys.continuous_events, rsys.discrete_events, prefix, _ns_event
-    )
+    _collect_events!(st, rsys.continuous_events, rsys.discrete_events, prefix, _ns_event)
 
     for (sub_name, sub_rsys) in rsys.subsystems
         _collect_reaction_system!(
-            states, params, equations, contribs,
-            continuous_events, discrete_events,
-            sub_rsys, "$(prefix).$(sub_name)"; templates = templates
+            st, sub_rsys, "$(prefix).$(sub_name)"; templates = templates
         )
     end
     return

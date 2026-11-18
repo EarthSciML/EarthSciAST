@@ -1,4 +1,4 @@
-# Vectorized array-kernel RHS property tests (ess-dhq).
+# Vectorized array-kernel RHS property tests.
 #
 # Verifies that the tree-walk runner evaluates discretized `faq` derivative
 # equations as WHOLE-ARRAY kernels whose compiled-node count is independent of
@@ -57,36 +57,32 @@ function _fieldic_model(N)
     )
 end
 
-@testset "tree_walk vectorized array-kernel RHS (ess-dhq)" begin
+@testset "tree_walk vectorized array-kernel RHS" begin
 
     @testset "N-independent compiled-kernel count (two+ grid sizes)" begin
         diags = map((8, 16, 64)) do N
-            ics = Dict("u[$k]" => 0.0 for k in 1:N)
-            _, u0, _, _, _, d = ESM._build_evaluator_impl(
+            ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
+            _, u0, _, _, _, d = ESM.Internal.build(
                 _stencil_model(N);
                 initial_conditions = ics
             )
             @test length(u0) == N                 # state DOES grow with N …
             d
         end
-        # … but the compiled array-kernel structure does NOT. Affine access kernels
-        # are the default path, so count array kernels of either flavour (vec + acc)
-        # — the intent, "one whole-array kernel per structural box, N-independent",
-        # holds whichever path owns the equation.
-        akerns(d) = d.n_vec_kernels + d.n_acc_kernels
+        # … but the compiled array-kernel structure does NOT: one whole-array
+        # access kernel per structural box, N-independent.
+        akerns(d) = d.stats.n_acc_kernels
         @test akerns(diags[1]) == akerns(diags[2]) == akerns(diags[3])
-        @test diags[1].template_node_count ==
-            diags[2].template_node_count == diags[3].template_node_count
         @test akerns(diags[1]) >= 1
         # The array equation produced ZERO per-cell scalar RHS entries: it is a
         # whole-array kernel, not an O(N) scalar node list.
-        @test all(d -> d.n_scalar_entries == 0, diags)
+        @test all(d -> d.stats.n_scalar_entries == 0, diags)
     end
 
     @testset "numeric identity vs analytic stencil (rtol 1e-12)" begin
         for N in (8, 32)
-            ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+            ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+            f!, u0, p, _, vmap = EarthSciAST.Internal.build(
                 _stencil_model(N);
                 initial_conditions = ics
             )
@@ -94,7 +90,7 @@ end
             uv(k) = (1 <= k <= N) ? (sin(0.3k) + 0.1k) : 0.0   # ghost → 0
             for i in 1:N
                 expected = uv(i - 1) - 2 * uv(i) + uv(i + 1)
-                @test isapprox(du[vmap["u[$i]"]], expected; rtol = 1.0e-12, atol = 1.0e-12)
+                @test isapprox(du[vmap["M.u[$i]"]], expected; rtol = 1.0e-12, atol = 1.0e-12)
             end
         end
     end
@@ -113,24 +109,21 @@ end
         m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("y", _v("i")), "i", 1, 2), rhs)])
         A = [1.0 2.0 3.0; 4.0 5.0 6.0]
         ics = Dict(
-            "y[1]" => 0.0, "y[2]" => 0.0,
-            "x[1]" => 1.0, "x[2]" => 1.0, "x[3]" => 1.0
+            "M.y[1]" => 0.0, "M.y[2]" => 0.0,
+            "M.x[1]" => 1.0, "M.x[2]" => 1.0, "M.x[3]" => 1.0
         )
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        f!, u0, p, _, vmap, rep = EarthSciAST.Internal.build(
             m; initial_conditions = ics,
             const_arrays = Dict("A" => A)
         )
-        _, _, _, _, _, d = ESM._build_evaluator_impl(
-            m; initial_conditions = ics,
-            const_arrays = Dict("A" => A)
-        )
+        d = rep.stats
         # A constant-bound contraction is unrolled onto the affine path by default
         # (acc kernel); either array-kernel flavour satisfies the whole-array intent.
-        @test d.n_vec_kernels + d.n_acc_kernels >= 1
+        @test d.n_acc_kernels >= 1
         @test d.n_scalar_entries == 0
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["y[1]"]], 6.0; rtol = 1.0e-12)
-        @test isapprox(du[vmap["y[2]"]], 15.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.y[1]"]], 6.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["M.y[2]"]], 15.0; rtol = 1.0e-12)
     end
 end
 
@@ -139,7 +132,7 @@ end
 # nodes on `rhs_list`, evaluated by `_eval_node` with no merge machinery).
 @testset "array kernels ≡ per-cell scalar reference (differential)" begin
     _build(model, ics, disable) =
-        EarthSciAST._build_evaluator(
+        EarthSciAST.Internal.build(
         model; initial_conditions = ics,
         compiler = disable ? :interpreter : :native
     )
@@ -147,7 +140,7 @@ end
     # Bit-identical du across interior + ghost-boundary kernels, every grid size.
     @testset "bit-identical du (N=$N)" for N in (8, 32, 64)
         model = _stencil_model(N)
-        ics = Dict("u[$k]" => sin(0.7k) - 0.05k for k in 1:N)
+        ics = Dict("M.u[$k]" => sin(0.7k) - 0.05k for k in 1:N)
         fsym, u0, p, = _build(model, ics, false)
         ffb, _, _, = _build(model, ics, true)
         for trial in 0:5
@@ -164,7 +157,7 @@ end
     @testset "fast path fires (fewer build allocations)" begin
         N = 128
         model = _stencil_model(N)
-        ics = Dict("u[$k]" => 0.0 for k in 1:N)
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
         _build(model, ics, false); _build(model, ics, true)   # warm up both
         a_sym = @allocated _build(model, ics, false)
         a_fb = @allocated _build(model, ics, true)
@@ -172,18 +165,18 @@ end
     end
 end
 
-# The compile-once field-ic fast path (ess-perf) compiles a coordinate ic's
+# The compile-once field-ic fast path compiles a coordinate ic's
 # closed-form body ONCE with the loop indices bound as parameters, deriving each
 # cell's u0 by re-evaluation instead of a per-cell _index_at_cell→resolve→compile
 # rebuild. `_eval_node` computes every leaf in Float64, so an index bound as a
 # param equals that index folded to a literal — the u0 field must be bit-identical
 # to the forced per-cell path. `compiler=:interpreter` forces that per-cell path.
-@testset "compile-once field-ic ≡ per-cell fallback (u0, ess-perf)" begin
+@testset "compile-once field-ic ≡ per-cell fallback (u0)" begin
     _build_u0(N, disable) =
-        EarthSciAST._build_evaluator(
+        EarthSciAST.Internal.build(
         _fieldic_model(N);
         compiler = disable ? :interpreter : :native
-    )[2]   # u0 is 2nd
+    ).u0
 
     @testset "bit-identical u0 (N=$N)" for N in (4, 16, 32)
         u0_fast = _build_u0(N, false)
@@ -206,7 +199,8 @@ end
 # generic op arm it read as an n-ary `+` over three children, so two distinct
 # ragged loops, or a ragged loop and a plain three-way sum, shared a signature.
 @testset "a ragged loop's merge signature is its own" begin
-    sig(n) = String(take!(ESM._struct_sig!(IOBuffer(), n)))
+    intern = ESM._SigIntern()
+    sig(n) = ESM._struct_sig_id(n, intern)
     st(i) = ESM._mknode(kind = ESM._NK_STATE, idx = i)
     lit(x) = ESM._mknode(kind = ESM._NK_LITERAL, literal = x)
     ragged(lo, hi) = ESM._mknode(

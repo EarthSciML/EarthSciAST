@@ -1,6 +1,6 @@
-# Reusable zero-allocation harness for the tree-walk PDE RHS (ess-9cc).
+# Reusable zero-allocation harness for the tree-walk PDE RHS.
 #
-# `build_evaluator` returns an in-place `f!(du, u, p, t)` that an ODE integrator
+# A build returns an in-place `f!(du, u, p, t)` that an ODE integrator
 # calls every Runge–Kutta stage. For the runner to scale to large grids it must
 # allocate NOTHING per call in steady state (after the first, compiling call) —
 # otherwise every stage triggers GC pressure proportional to the grid size N.
@@ -10,9 +10,10 @@
 # and assert the returned byte count is 0. They depend only on the built-in
 # `@allocated`, so they add no test dependencies.
 #
-# Include guard (mirrors testutils.jl): normally pulled in once via
-# `include("testutils.jl")`, but a direct include stays harmless.
-if !isdefined(Main, :ESM_ZERO_ALLOC_HARNESS_LOADED)
+# Include guard, per including module as in testutils.jl: normally pulled in
+# once via `include("testutils.jl")`, but a direct include stays harmless, and a
+# test file wrapped in a `module` gets its own copy.
+if !isdefined(@__MODULE__, :ESM_ZERO_ALLOC_HARNESS_LOADED)
 
     const ESM_ZERO_ALLOC_HARNESS_LOADED = true
 
@@ -42,13 +43,13 @@ if !isdefined(Main, :ESM_ZERO_ALLOC_HARNESS_LOADED)
     """
         built_rhs_alloc_bytes(model; t=0.0, kwargs...) -> Int
 
-    Build `model`'s evaluator with `EarthSciAST._build_evaluator(model; kwargs...)` and return the
+    Build `model`'s evaluator with `EarthSciAST.Internal.build(model; kwargs...)` and return the
     steady-state per-call allocation of its RHS (see [`rhs_alloc_bytes`](@ref)). The
     state is the model's own initial condition; `kwargs` are forwarded verbatim
-    (`initial_conditions`, `const_arrays`, …).
+    (`initial_conditions`, `const_arrays`, …), with flattened names (`"M.u[1]"`).
     """
     function built_rhs_alloc_bytes(model; t = 0.0, kwargs...)
-        f!, u0, p, _tspan, _vmap = EarthSciAST._build_evaluator(model; kwargs...)
+        f!, u0, p, _tspan, _vmap = EarthSciAST.Internal.build(model; kwargs...)
         du = similar(u0)
         return rhs_alloc_bytes(f!, du, u0, p, t)
     end

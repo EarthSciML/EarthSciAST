@@ -236,6 +236,62 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
         @test terrs[1].error_type == "recurrence_not_wellfounded"
     end
 
+    # A build that skipped `validate()` refuses group members that fold along
+    # different axes with the validator's code, not as a disagreement inside
+    # the stacked recurrence.
+    @testset "group axis mismatch: the build's code is the validator's" begin
+        manifest_path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance",
+            "recurrence", "rejections.json"
+        )
+        if _require_fixture(manifest_path)
+            manifest = JSON3.read(read(manifest_path, String))
+            case = only(c for c in manifest.cases if c.id == "group_axis_mismatch")
+            file = load_string(JSON3.write(case.document))
+            model = only(values(file.models))
+            err = try
+                EarthSciAST._stack_recurrence_groups(model, file.index_sets)
+                nothing
+            catch e
+                e
+            end
+            @test err isa EarthSciAST.TreeWalkError
+            @test err.code == "recurrence_group_axis_mismatch"
+        end
+    end
+
+    # The build decides a group's members as the validator does
+    # (`_recurrence_equation_frame`, `_recurrence_group_verdict`): every
+    # rejection-corpus group the build would stack is refused with the code
+    # the validator reports for it.
+    @testset "group rejections: the build's codes are the validator's" begin
+        manifest_path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance",
+            "recurrence", "rejections.json"
+        )
+        if _require_fixture(manifest_path)
+            manifest = JSON3.read(read(manifest_path, String))
+            nstacked = 0
+            for case in manifest.cases
+                startswith(String(case.id), "group_") || continue
+                file = load_string(JSON3.write(case.document))
+                model = only(values(file.models))
+                isempty(EarthSciAST.recurrence_groups(model)) && continue
+                nstacked += 1
+                err = try
+                    EarthSciAST._stack_recurrence_groups(model, file.index_sets)
+                    nothing
+                catch e
+                    e
+                end
+                @test err isa EarthSciAST.TreeWalkError
+                err isa EarthSciAST.TreeWalkError &&
+                    @test err.code == String(case.expected_code)
+            end
+            @test nstacked >= 4
+        end
+    end
+
     # ── The SHARED rejection corpus ────────────────────────────────────────
     #
     # `tests/conformance/recurrence/rejections.json` drives every binding with
@@ -308,10 +364,10 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
     # ── The self-edge is not a cycle ───────────────────────────────────────
     #
     # esm-spec §4.3.1.1: "A recurrence definition is NOT a cyclic algebraic
-    # system." The tree-walk build used to disagree — `_resolve_observed`
-    # substitutes observed bodies to a fixed point, a self-reference never
-    # converges, and the iteration cap surfaced as `E_TREEWALK_OBSERVED_CYCLE`.
-    # These two testsets pin the distinction from both sides.
+    # system." Substituting observed bodies to a fixed point never converges on
+    # a self-reference, so `_resolve_observed` must not treat one as an
+    # `E_TREEWALK_OBSERVED_CYCLE`. These two testsets pin the distinction from
+    # both sides.
     @testset "a legal recurrence is not reported as a cycle" begin
         # It builds, under both compilers, and its sweep is what the report
         # shows for it (recurrence_sweep_test.jl pins the values).
@@ -321,9 +377,8 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
         )
         if _require_fixture(path)
             for c in (:native, :interpreter)
-                insp = EarthSciAST.BuildInspection()
-                EarthSciAST._build_evaluator(load_path(path); compiler = c, inspect = insp)
-                rows = [r for r in insp.compiler_report.rules if endswith(r.rule, "r")]
+                rep = EarthSciAST.Internal.build(load_path(path); compiler = c).report
+                rows = [r for r in rep.compiler_report.rules if endswith(r.rule, "r")]
                 @test length(rows) == 1
                 @test only(rows).tier === (c === :native ? :recurrence_sweep : :interpreter)
             end
@@ -345,7 +400,7 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
             ESM_R.Equation(_D("x"), _v("a")),
         ]
         err = try
-            EarthSciAST._build_evaluator(ESM_R.Model(vars, eqs))
+            EarthSciAST.Internal.build(ESM_R.Model(vars, eqs))
             nothing
         catch e
             e
@@ -367,7 +422,7 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
             ESM_R.Equation(_D("x"), _v("y")),
         ]
         err = try
-            EarthSciAST._build_evaluator(ESM_R.Model(vars, eqs))
+            EarthSciAST.Internal.build(ESM_R.Model(vars, eqs))
             nothing
         catch e
             e

@@ -1,7 +1,6 @@
 # Differential test for LIVE-forcing (pgather) gathers on the affine access-kernel
-# path (ess-affine). A per-cell forcing read `index(forcing, i…)` whose index
-# varies with the loop used to force a whole-equation fallback (`_derive_lane_repl`
-# threw on LANE_PGATHER). It is now lowered to `_AccForcingBox` over the *aliased*
+# path. A per-cell forcing read `index(forcing, i…)` whose index varies with the
+# loop is lowered to `_AccForcingBox` over the *aliased*
 # `_PGatherArray.flat` buffer: the flat linear index is finite-differenced across
 # unit loop steps and verified affine at every box corner, exactly like a const
 # box, EXCEPT the value is never folded to a literal (the buffer is refreshed in
@@ -21,12 +20,12 @@ const ESM = EarthSciAST
 function _pg_build_both(model, ics, buf)
     out = Dict{Symbol, Any}()
     for (tag, compiler) in ((:aff, :native), (:ref, :interpreter))
-        f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _t, _vm, rep = ESM.Internal.build(
             model;
             initial_conditions = ics, param_arrays = Dict("forcing" => buf),
             compiler = compiler
         )
-        out[tag] = (f!, u0, p, diag)
+        out[tag] = (f!, u0, p, rep.stats)
     end
     return out
 end
@@ -92,14 +91,13 @@ function _pg_2d_model(N)
     return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
-@testset "affine live-forcing pgather ≡ per-cell (differential, ess-affine)" begin
+@testset "affine live-forcing pgather ≡ per-cell (differential)" begin
     @testset "pure forcing D(u[i])=forcing[i] (N=$N)" for N in (8, 32)
         buf = Float64[0.5 + 0.2k for k in 1:N]
-        ics = Dict("u[$k]" => 0.0 for k in 1:N)
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
         b = _pg_build_both(_pg_pure_model(N), ics, buf)
         du_a = _pg_eval(b[:aff]); du_r = _pg_eval(b[:ref])
         @test b[:aff][4].n_acc_kernels >= 1
-        @test b[:aff][4].n_vec_kernels == 0
         @test du_a == du_r
         buf .= Float64[-2.0 + 0.9k for k in 1:N]          # in-place refresh
         du_a2 = _pg_eval(b[:aff]); du_r2 = _pg_eval(b[:ref])
@@ -109,11 +107,10 @@ end
 
     @testset "forcing + Laplacian, ghost boxes (N=$N)" for N in (8, 32, 64)
         buf = Float64[0.5 + 0.2k for k in 1:N]
-        ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+        ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
         b = _pg_build_both(_pg_1d_model(N), ics, buf)
         du_a = _pg_eval(b[:aff]); du_r = _pg_eval(b[:ref])
         @test b[:aff][4].n_acc_kernels >= 1
-        @test b[:aff][4].n_vec_kernels == 0
         @test du_a == du_r
         buf .= Float64[-3.0 + 0.7k for k in 1:N]
         du_a2 = _pg_eval(b[:aff]); du_r2 = _pg_eval(b[:ref])
@@ -124,7 +121,7 @@ end
     @testset "forcing kernel count N-independent" begin
         counts = map((8, 32, 128)) do N
             buf = Float64[0.2k for k in 1:N]
-            ics = Dict("u[$k]" => 0.1k for k in 1:N)
+            ics = Dict("M.u[$k]" => 0.1k for k in 1:N)
             _pg_build_both(_pg_1d_model(N), ics, buf)[:aff][4].n_acc_kernels
         end
         @test all(==(counts[1]), counts)
@@ -132,11 +129,10 @@ end
 
     @testset "2-D forcing[i,j] + 5-point Laplacian (N=$N)" for N in (5, 16)
         buf = Float64[0.1i + 0.3j for i in 1:N, j in 1:N]
-        ics = Dict("u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) for i in 1:N, j in 1:N)
+        ics = Dict("M.u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) for i in 1:N, j in 1:N)
         b = _pg_build_both(_pg_2d_model(N), ics, buf)
         du_a = _pg_eval(b[:aff]); du_r = _pg_eval(b[:ref])
         @test b[:aff][4].n_acc_kernels >= 1
-        @test b[:aff][4].n_vec_kernels == 0
         @test du_a == du_r
         buf .= Float64[-1.0 + 0.05i * j for i in 1:N, j in 1:N]   # in-place refresh
         du_a2 = _pg_eval(b[:aff]); du_r2 = _pg_eval(b[:ref])

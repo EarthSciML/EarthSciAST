@@ -1,11 +1,11 @@
-# Allocation tests for the tree-walk PDE RHS (ess-9cc).
+# Allocation tests for the tree-walk PDE RHS.
 #
-# The codebase's FIRST allocation test. It pins the hard property that the
-# in-place RHS `f!(du, u, p, t)` built by `build_evaluator` allocates NOTHING per
+# It pins the hard property that the
+# in-place RHS `f!(du, u, p, t)` the build returns allocates NOTHING per
 # call in steady state — at two+ grid sizes, so the property is N-independent
 # (no per-cell allocation hiding behind a small absolute number). This guards the
-# zero-allocation discipline of the vectorized array-kernel runner (ess-dhq +
-# ess-9cc): `@views`/gather slices, preallocated per-node scratch buffers, fused
+# zero-allocation discipline of the vectorized array-kernel runner:
+# `@views`/gather slices, preallocated per-node scratch buffers, fused
 # in-place broadcasts, in-place semiring folds, and an explicit `du` scatter
 # (never `du[slots] .= …`, whose `dotview` allocates a SubArray).
 #
@@ -15,7 +15,7 @@
 # THREADED TIER, and why this file pins the SERIAL path explicitly.
 # The codegen tier can run a section's cell axis as static chunks on
 # Polyester's worker pool (`_run_cg_maybe_threaded!`, codegen_kernel.jl;
-# the dispatch is thread_dispatch.jl's, and allocates nothing either).
+# the dispatch is threading.jl's, and allocates nothing either).
 #
 # The tier arms itself whenever Julia runs with more than one thread, so
 # whether these measurements see the serial or the threaded path depends on
@@ -26,9 +26,9 @@
 # slices, preallocated scratch, fused in-place broadcasts, in-place semiring
 # folds, explicit `du` scatter) is a property of the kernels themselves, so the
 # testsets below pin the serial path and keep asserting EXACTLY 0 — via
-# `ESS_THREADS_MIN_CELLS`, which `_sec_prep_threads!` reads ONCE per section
-# and caches. A gate re-read on EVERY call could not be used here at all: the
-# `get(ENV, …)` itself allocates a String per call once the variable is set.
+# `ESS_THREADS_MIN_WORK`, which a build reads once into its tuning and each
+# section keeps. A gate re-read on EVERY call could not be used here at all:
+# the `get(ENV, …)` itself allocates a String per call once the variable is set.
 #
 # The threaded dispatch is then covered on its own terms by the final testset.
 
@@ -56,7 +56,7 @@ end
 
 # 1-D periodic centered-advection document: discretizes to a faq whose RHS
 # is (u[i+1]-u[i-1])/(2·dx) — exercises PARAM (dx) + the `/` and `-` OP arms in a
-# REALISTIC parse→discretize→build_evaluator pipeline.
+# REALISTIC parse→discretize→build pipeline.
 function _advection_esm(n)
     dx = 1.0 / n
     return Dict{String, Any}(
@@ -119,9 +119,9 @@ function _advection_esm(n)
 end
 
 
-# Live forcing gather (ess-14f.3): D(u[i]) = forcing[i] + u[i]. `forcing` is a
+# Live forcing gather: D(u[i]) = forcing[i] + u[i]. `forcing` is a
 # refreshable buffer bound BY REFERENCE via `param_arrays` and read through the
-# new `_VK_PGATHER` kernel — the zero-alloc dual of a frozen const-array gather.
+# `_VK_PGATHER` kernel — the zero-alloc dual of a frozen const-array gather.
 # Pins that a discrete-cadence forcing read stays allocation-free and
 # N-independent: the only Float64 arrays are the captured flat buffer and the
 # preallocated gather `slots`/`buf`, none allocated per call.
@@ -135,11 +135,10 @@ _forcing_gather_model(N) = ESM.Model(
     ]
 )
 
-# Scalar CSE over a LIVE forcing buffer (ess-qic): `F[1]*k` occurs three times
-# across two scalar equations, so it is now hoisted into the CSE prelude — whose
-# slot is filled by a live `_NK_PARAM_GATHER` read. Before ess-qic the gather's
-# un-canonicalizable payload made `_cse_key` decline, so this shape never reached
-# the prelude at all; pin that hoisting it keeps `f!` at 0 bytes (the prelude
+# Scalar CSE over a LIVE forcing buffer: `F[1]*k` occurs three times
+# across two scalar equations, so it is hoisted into the CSE prelude — whose
+# slot is filled by a live `_NK_PARAM_GATHER` read. Pin that hoisting it keeps
+# `f!` at 0 bytes (the prelude
 # scratch is preallocated at build; the gather is a bare indexed load into the
 # aliased flat buffer).
 #   D(x) = sin(F[1]*k) + cos(F[1]*k);   D(y) = F[1]*k
@@ -182,98 +181,112 @@ end
 
 # Force the SERIAL path for every exact-zero measurement below, so the numbers
 # are a property of the kernels rather than of whichever packages a previously
-# included test file happened to load. `_sec_prep_threads!` reads this once per
-# section and caches the verdict, so it costs no per-call allocation of its own
-# (see the header note).
-const _SERIAL_PIN = ("ESS_THREADS_MIN_CELLS" => string(typemax(Int)),)
+# included test file happened to load. A build reads this once and its sections
+# keep it, so it costs no per-call allocation of its own (see the header note).
+const _SERIAL_PIN = ("ESS_THREADS_MIN_WORK" => string(typemax(Int)),)
 
-withenv(_SERIAL_PIN...) do
-    @testset "tree_walk PDE RHS is allocation-free (ess-9cc)" begin
+# Set in the two-thread child the threaded testset below launches from a
+# one-thread session: the child runs only that testset.
+const _TWALLOC_CHILD = get(ENV, "ESS_TWALLOC_CHILD", "") == "1"
 
-        @testset "vectorized stencil RHS: 0 bytes, N-independent" begin
-            # Two+ grid sizes — the steady-state allocation must be EXACTLY 0 at
-            # every size (a per-cell leak would grow the byte count with N).
-            for N in (64, 256, 1024, 2500)
-                ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-                @test built_rhs_alloc_bytes(_stencil_model(N); initial_conditions = ics) == 0
-            end
-        end
+if !_TWALLOC_CHILD
+    withenv(_SERIAL_PIN...) do
+        @testset "tree_walk PDE RHS is allocation-free" begin
 
-        @testset "vectorized reduction (sum_product) RHS: 0 bytes" begin
-            for M in (3, 16, 64)
-                A = reshape(collect(1.0:(2.0 * M)), 2, M)
-                ics = Dict{String, Float64}("y[1]" => 0.0, "y[2]" => 0.0)
-                for k in 1:M
-                    ics["x[$k]"] = 0.5k
+            @testset "vectorized stencil RHS: 0 bytes, N-independent" begin
+                # Two+ grid sizes — the steady-state allocation must be EXACTLY 0 at
+                # every size (a per-cell leak would grow the byte count with N).
+                for N in (64, 256, 1024, 2500)
+                    ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+                    @test built_rhs_alloc_bytes(_stencil_model(N); initial_conditions = ics) == 0
                 end
+            end
+
+            @testset "vectorized reduction (sum_product) RHS: 0 bytes" begin
+                for M in (3, 16, 64)
+                    A = reshape(collect(1.0:(2.0 * M)), 2, M)
+                    ics = Dict{String, Float64}("M.y[1]" => 0.0, "M.y[2]" => 0.0)
+                    for k in 1:M
+                        ics["M.x[$k]"] = 0.5k
+                    end
+                    @test built_rhs_alloc_bytes(
+                        _contraction_model(M);
+                        initial_conditions = ics, const_arrays = Dict("A" => A)
+                    ) == 0
+                end
+            end
+
+            @testset "vectorized forcing gather (param_arrays) RHS: 0 bytes, N-independent" begin
+                # Two+ grid sizes — the per-RHS allocation must be EXACTLY 0 at every size
+                # (a per-cell leak in the live forcing read would grow with N). Mirrors the
+                # stencil/reduction cases but exercises the `_VK_PGATHER` kernel.
+                for N in (64, 256, 1024)
+                    ics = Dict("M.u[$k]" => 0.1k for k in 1:N)
+                    forcing = collect(1.0:Float64(N))
+                    @test built_rhs_alloc_bytes(
+                        _forcing_gather_model(N);
+                        initial_conditions = ics, param_arrays = Dict("forcing" => forcing)
+                    ) == 0
+                end
+            end
+
+            @testset "CSE'd scalar forcing gather RHS: 0 bytes" begin
+                # The CSE prelude now hoists expressions built over a live forcing buffer.
+                # The hoisted slot is filled from a `_NK_PARAM_GATHER` read every call, so the
+                # zero-allocation discipline has to hold through the prelude too.
                 @test built_rhs_alloc_bytes(
-                    _contraction_model(M);
-                    initial_conditions = ics, const_arrays = Dict("A" => A)
+                    _cse_forcing_scalar_model();
+                    param_arrays = Dict("F" => [5.0, 6.0])
                 ) == 0
             end
-        end
 
-        @testset "vectorized forcing gather (param_arrays) RHS: 0 bytes, N-independent (ess-14f.3)" begin
-            # Two+ grid sizes — the per-RHS allocation must be EXACTLY 0 at every size
-            # (a per-cell leak in the live forcing read would grow with N). Mirrors the
-            # stencil/reduction cases but exercises the `_VK_PGATHER` kernel.
-            for N in (64, 256, 1024)
-                ics = Dict("u[$k]" => 0.1k for k in 1:N)
-                forcing = collect(1.0:Float64(N))
-                @test built_rhs_alloc_bytes(
-                    _forcing_gather_model(N);
-                    initial_conditions = ics, param_arrays = Dict("forcing" => forcing)
-                ) == 0
+            @testset "scalar contraction :+ fold is allocation-free (line fix)" begin
+                # Directly pin the scalar `_eval_contraction` `:+` arm (the old
+                # `@tullio s = …` site, ~80 B/reduced cell): a hand-built
+                # `_NK_CONTRACTION` node summed via `_eval_node` must be 0-alloc and
+                # equal to the seeded fold, bit-identical to the prior Tullio sum.
+                # Two lengths, so the property is fold-length-independent the way the
+                # rest of this file is grid-size-independent.
+                for n in (6, 600)
+                    bytes, got, want = _contract_fold_alloc(n)
+                    @test got == want
+                    @test bytes == 0
+                end
             end
         end
-
-        @testset "CSE'd scalar forcing gather RHS: 0 bytes (ess-qic)" begin
-            # The CSE prelude now hoists expressions built over a live forcing buffer.
-            # The hoisted slot is filled from a `_NK_PARAM_GATHER` read every call, so the
-            # zero-allocation discipline has to hold through the prelude too.
-            @test built_rhs_alloc_bytes(
-                _cse_forcing_scalar_model();
-                param_arrays = Dict("F" => [5.0, 6.0])
-            ) == 0
-        end
-
-        @testset "scalar contraction :+ fold is allocation-free (line fix)" begin
-            # Directly pin the scalar `_eval_contraction` `:+` arm (the old
-            # `@tullio s = …` site, ~80 B/reduced cell): a hand-built
-            # `_NK_CONTRACTION` node summed via `_eval_node` must be 0-alloc and
-            # equal to the seeded fold, bit-identical to the prior Tullio sum.
-            # Two lengths, so the property is fold-length-independent the way the
-            # rest of this file is grid-size-independent.
-            for n in (6, 600)
-                bytes, got, want = _contract_fold_alloc(n)
-                @test got == want
-                @test bytes == 0
-            end
-        end
-    end
-end  # withenv(_SERIAL_PIN...)
+    end  # withenv(_SERIAL_PIN...)
+end  # if !_TWALLOC_CHILD
 
 # The chunked cell axis on its own terms. Only reachable when the threaded tier
-# is actually armed (`nthreads() > 1`), so it is skipped in a one-thread run
-# of this file.
+# is armed (`nthreads() > 1`), so a one-thread session runs this testset in a
+# two-thread child process of this file.
 #
 # A threaded call allocates nothing, exactly like a serial one, at every N.
-@testset "threaded cell axis: a threaded call allocates nothing (ess-9cc)" begin
+@testset "threaded cell axis: a threaded call allocates nothing" begin
     if !EarthSciAST._threads_available()
-        @info "skipping threaded-tier allocation test: threaded tier not armed " *
-            "(needs nthreads() > 1; nthreads=$(Threads.nthreads()))"
+        @test !_TWALLOC_CHILD   # the child was started with two threads
+        if !_TWALLOC_CHILD
+            env = copy(ENV)
+            for k in collect(keys(env))
+                startswith(k, "ESS_") && delete!(env, k)
+            end
+            env["ESS_TWALLOC_CHILD"] = "1"
+            env["JULIA_PROJECT"] = Base.active_project()
+            cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 2 $(@__FILE__)`, env)
+            @test success(run(pipeline(ignorestatus(cmd); stdout = stdout, stderr = stderr)))
+        end
     else
         # Small min-cells so every N below genuinely chunks; read once per
-        # section and cached, so it adds no per-call allocation.
-        withenv("ESS_THREADS_MIN_CELLS" => "256") do
+        # build, so it adds no per-call allocation.
+        withenv("ESS_THREADS_MIN_WORK" => "256") do
             bytes = map((1024, 4096, 16384)) do N
-                ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+                ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
                 built_rhs_alloc_bytes(_stencil_model(N); initial_conditions = ics)
             end
             VERSION >= v"1.12" && @test all(==(0), bytes)
 
             fbytes = map((1024, 16384)) do N
-                ics = Dict("u[$k]" => 0.1k for k in 1:N)
+                ics = Dict("M.u[$k]" => 0.1k for k in 1:N)
                 built_rhs_alloc_bytes(
                     _forcing_gather_model(N);
                     initial_conditions = ics,

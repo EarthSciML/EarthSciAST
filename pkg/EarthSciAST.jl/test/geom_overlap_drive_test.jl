@@ -1,12 +1,11 @@
 # The OVERLAP broad phase at SETUP — candidate-DRIVEN enumeration, and the
 # behaviour change it does and does not make.
 #
-# `_resolve_geo_join_gates` used to skip every Phase-2a `overlap` clause, so a
-# setup-materialized aggregate — which has no other resolver — never applied its
-# broad phase. `conservative_overlap_A_ij_gated`, whose contract is "one polygon
-# clip per CANDIDATE pair … O(#candidates) build cost", ran the full
-# `#src × #tgt` product instead. `_materialize_geom_array` now resolves the
-# clause and hands it to the SHARED planner (`_overlap_drive_plan`,
+# A setup-materialized aggregate has no resolver other than
+# `_resolve_geo_join_gates`, so that is where its `overlap` clause must apply
+# its broad phase: `conservative_overlap_A_ij_gated`'s contract is "one polygon
+# clip per CANDIDATE pair … O(#candidates) build cost", not the full
+# `#src × #tgt` product. `_materialize_geom_array` resolves the clause and hands it to the SHARED planner (`_overlap_drive_plan`,
 # src/broad_phase.jl — the same one `_vi_enumerate_join` and
 # `_foreach_aggregate_term` use), which drives enumeration from the candidate
 # set rather than filtering the full product.
@@ -43,15 +42,12 @@
 # stopped driving would compare the dense path against itself and pass, so each
 # case asserts which path it took.
 
-module GeomOverlapDriveTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 const EA = EarthSciAST
 
 # ---- small JSON AST builders ----
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
 function _agg(output_idx, ranges, expr; kw...)
     d = Dict{String, Any}(
         "op" => "faq", "output_idx" => collect(output_idx),
@@ -77,12 +73,12 @@ _ovj(src, tgt; eps = 1.0e-9) = Any[
 # and NE (vertex 3) corners: the product of the two axes' interval overlaps,
 # each clamped at `+0.0`, so a disjoint pair is exactly `+0.0`. `a` and `b` are
 # `index(ring_stack, cell)` slices.
-_corner(slice, v, c) = _ix(slice["args"]..., v, c)
-_axis_overlap(a, b, c) = _op(
+_corner(slice, v, c) = jidx(slice["args"]..., v, c)
+_axis_overlap(a, b, c) = jop(
     "max", 0.0,
-    _op("-", _op("min", _corner(a, 3, c), _corner(b, 3, c)), _op("max", _corner(a, 1, c), _corner(b, 1, c)))
+    jop("-", jop("min", _corner(a, 3, c), _corner(b, 3, c)), jop("max", _corner(a, 1, c), _corner(b, 1, c)))
 )
-_pia(a, b) = _op("*", _axis_overlap(a, b, 1), _axis_overlap(a, b, 2))
+_pia(a, b) = jop("*", _axis_overlap(a, b, 1), _axis_overlap(a, b, 2))
 
 # One axis-aligned square ring at `(x, y)` with side `w`, CCW from the SW corner.
 function sq!(R, p, x, y, w)
@@ -118,31 +114,27 @@ const ENV0 = Dict{String, Any}(
     "kk" => Float64[1.0, 2.0, 3.0]
 )
 
+# How the overlap-gated sweeps of one call were driven: (driven, gated per
+# tuple, no gate), from the call's engagement counts.
+_drives(c) = (
+    get(c, :geom_overlap_drive, 0), get(c, :geom_overlap_gate_only, 0),
+    get(c, :geom_overlap_none, 0),
+)
+
 # Materialize `json` under `native` and, separately, under
 # `compiler=:interpreter` (the dense sweep, gated per tuple).
-# Returns (native, interpreter, Δdrive, Δgate_only, Δnone), the counters
-# for the native sweep.
+# Returns (native, interpreter, drive, gate_only, none), the counts for the
+# native sweep.
 function both_ways(json, env = ENV0, idx = IDX)
     rhs = EA.expression_from_json(json)
-    d0, g0, n0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
-        EA._GEOM_OVERLAP_NONE[]
-    got = EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
-    dd = EA._GEOM_OVERLAP_DRIVE[] - d0
-    dg = EA._GEOM_OVERLAP_GATE_ONLY[] - g0
-    dn = EA._GEOM_OVERLAP_NONE[] - n0
+    got, counts = EA.Internal.counting() do
+        EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
+    end
+    dd, dg, dn = _drives(counts)
     ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
         EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
     end
     return got, ref, dd, dg, dn
-end
-
-# Bitwise array agreement — the correctness bar.
-function bitsame(a, b)
-    size(a) == size(b) || return false
-    for i in eachindex(a)
-        isequal(a[i], b[i]) || return false
-    end
-    return true
 end
 
 # Does dropping the `join` clause change this document's values? A pruned
@@ -162,7 +154,7 @@ end
 
 const A_IJ = _agg(
     ["i", "j"], ["i" => "S", "j" => "T"],
-    _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+    _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
     join = _ovj(["src_poly"], ["tgt_poly"])
 )
 
@@ -193,13 +185,13 @@ const A_IJ = _agg(
                 )
             )
         )
-        body = _op(
-            "/", _op("*", _ix("A_ij", "i", "j"), _ix("F_src", "i")),
-            _ix("A_j", "j")
+        body = jop(
+            "/", jop("*", jidx("A_ij", "i", "j"), jidx("F_src", "i")),
+            jidx("A_j", "j")
         )
         for (nm, extra) in (
                 "filtered" => Dict{String, Any}(
-                    "filter" => _op(">", _ix("A_ij", "i", "j"), "atol")
+                    "filter" => jop(">", jidx("A_ij", "i", "j"), "atol")
                 ),
                 "unfiltered" => Dict{String, Any}(),
             )
@@ -225,7 +217,7 @@ const A_IJ = _agg(
             )
             j = _agg(
                 ["j"], ["i" => "S", "j" => "T"],
-                _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+                _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
                 join = _ovj(["src_poly"], ["tgt_poly"])
             )
             merge!(j, extra)
@@ -247,7 +239,7 @@ const A_IJ = _agg(
         for (nm, red) in ("min" => "min", "prod" => "prod")
             j = _agg(
                 ["j"], ["i" => "S", "j" => "T"],
-                _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+                _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
                 join = _ovj(["src_poly"], ["tgt_poly"])
             )
             j["reduce"] = red
@@ -270,14 +262,15 @@ const A_IJ = _agg(
 
     @testset "the interpreter gates the dense sweep per tuple, never drives" begin
         rhs = EA.expression_from_json(A_IJ)
-        d0, g0, n0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
-            EA._GEOM_OVERLAP_NONE[]
-        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
+        _, counts = EA.Internal.counting() do
+            EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
+                EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
+            end
         end
-        @test EA._GEOM_OVERLAP_DRIVE[] - d0 == 0
-        @test EA._GEOM_OVERLAP_GATE_ONLY[] - g0 == 1   # resolved, tested per tuple
-        @test EA._GEOM_OVERLAP_NONE[] - n0 == 0
+        dd, dg, dn = _drives(counts)
+        @test dd == 0
+        @test dg == 1   # resolved, tested per tuple
+        @test dn == 0
     end
 
     @testset "a shape the planner declines is GATED, not driven" begin
@@ -289,17 +282,18 @@ const A_IJ = _agg(
         # ungated sweep.
         j = _agg(
             ["k"], ["i" => "S", "j" => "T", "k" => "K"],
-            _op(
-                "*", _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j")),
-                _ix("kk", "k")
+            jop(
+                "*", _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j")),
+                jidx("kk", "k")
             );
             join = _ovj(["src_poly"], ["tgt_poly"])
         )
         rhs = EA.expression_from_json(j)
-        d0, g0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[]
-        got = EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
-        @test EA._GEOM_OVERLAP_DRIVE[] - d0 == 0
-        @test EA._GEOM_OVERLAP_GATE_ONLY[] - g0 == 1
+        got, counts = EA.Internal.counting() do
+            EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
+        end
+        @test _drives(counts)[1] == 0
+        @test _drives(counts)[2] == 1
         # Total overlap area is 4 × 0.04; scaled by kk = [1,2,3].
         total = sum(
             EA._materialize_geom_array(
@@ -315,7 +309,7 @@ const A_IJ = _agg(
         # Envelope factor not in `env` ⇒ no gate at all, and the historic values.
         j = _agg(
             ["i", "j"], ["i" => "S", "j" => "T"],
-            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+            _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
             join = _ovj(["not_a_factor"], ["tgt_poly"])
         )
         got, ref, dd, dg, dn = both_ways(j)
@@ -324,31 +318,28 @@ const A_IJ = _agg(
         # ... and so does a factor whose shape names no loop var of this sweep.
         j2 = _agg(
             ["i", "j"], ["i" => "S", "j" => "T"],
-            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+            _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
             join = _ovj(["kk"], ["tgt_poly"])
         )
         got2, ref2, dd2, dg2, dn2 = both_ways(j2)
         @test (dd2, dg2, dn2) == (0, 0, 1)
         @test bitsame(got2, ref2)
         # ... and so does a single env factor of the WRONG RANK. A 1-name env is
-        # a `[pos, verts, coord]` ring stack; handing the Phase-3a primitive a
-        # 1-D array there would throw, so the gate declines instead and a
-        # document that used to build still builds.
+        # a `[pos, verts, coord]` ring stack; handing the broad-phase primitive
+        # a 1-D array there would throw, so the gate declines instead and the
+        # document still builds.
         env3 = merge(copy(ENV0), Dict{String, Any}("flat_src" => Float64[1, 2, 3, 4]))
         sh3 = copy(SHAPES); sh3["flat_src"] = ["S"]
         j3 = _agg(
             ["i", "j"], ["i" => "S", "j" => "T"],
-            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+            _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
             join = _ovj(["flat_src"], ["tgt_poly"])
         )
         rhs3 = EA.expression_from_json(j3)
-        d3, g3, n3 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
-            EA._GEOM_OVERLAP_NONE[]
-        got3 = EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
-        @test (
-            EA._GEOM_OVERLAP_DRIVE[] - d3, EA._GEOM_OVERLAP_GATE_ONLY[] - g3,
-            EA._GEOM_OVERLAP_NONE[] - n3,
-        ) == (0, 0, 1)
+        got3, counts3 = EA.Internal.counting() do
+            EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
+        end
+        @test _drives(counts3) == (0, 0, 1)
         ref3 = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
         end
@@ -358,7 +349,7 @@ const A_IJ = _agg(
     @testset "a document with no overlap clause is untouched" begin
         j = _agg(
             ["i", "j"], ["i" => "S", "j" => "T"],
-            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"))
+            _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"))
         )
         got, ref, dd, dg, dn = both_ways(j)
         @test (dd, dg, dn) == (0, 0, 1)   # resolution declines before it starts
@@ -383,7 +374,4 @@ const A_IJ = _agg(
         @test c.pairs == a.pairs
     end
 
-
 end
-
-end # module

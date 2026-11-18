@@ -17,22 +17,10 @@ import ..DNumber
 import ..DStrings
 using ..MParse: atom_start, units_of_raw
 using ..MPrint: char_digit_nat, char_of_nat, dig3, esc_t, key_special, raw_b, unesc_t
-using ..MSurface: drop_p, is_bin, lex_signed, sci_split
+using ..MSurface: drop_p, is_bin, lex_signed, render_toks, sci_split
 using ..MExpr: is_dig, is_greek, is_letter, let_run
 
 # ## Spelling
-
-"""`Latex.specials`: characters of a JSON string written as a hex escape."""
-const SPECIALS = ('%', '$', '#', '{', '}')
-
-"""`Latex.escCharB`: the JSON escape of one character, with the specials as hex
-escapes."""
-function esc_char_b(c::Char)
-    if c in SPECIALS
-        return Char['\\', 'u', DStrings.hex4(UInt32(c))...]
-    end
-    return DStrings.esc_char(false, c, Char[])
-end
 
 """`Latex.fixUs`: undo the `\\_` of `escCharL` up to the closing quote."""
 function fix_us(cs::Chars)
@@ -248,36 +236,21 @@ sp(p, t1::Tok, t2::Tok) = need_space(t1, t2) || pretty(p, t1, t2)
 
 """`Latex.render`: the LaTeX spelling of a token list (`renderAux`), as
 characters."""
-function render(ts)
-    out = Char[]
-    n = length(ts)
-    for i in 1:n
-        t = ts[i]
-        append!(out, tok_chars(t))
-        if i < n
-            p = i == 1 ? nothing : ts[i - 1]
-            sp(p, t, ts[i + 1]) && push!(out, ' ')
-        end
-    end
-    return out
-end
+render(ts) = render_toks(tok_chars, sp, ts)
 
 # ## Lexing
 
 """`Latex.ctrlKw`: control words that are keywords, with the variants read on
-input."""
-const CTRL_KW = Dict{String, Kw}(
-    "ne" => KNe, "neq" => KNe, "le" => KLe, "leq" => KLe, "ge" => KGe, "geq" => KGe,
-    "land" => KLand, "lor" => KLor, "lnot" => KLnot, "cdot" => KCdot, "times" => KTimes,
-    "frac" => KFrac, "sqrt" => KSqrt, "exp" => KExp, "ln" => KLn, "log" => KLog,
-    "sin" => KSin, "cos" => KCos, "tan" => KTan, "arcsin" => KAsin, "arccos" => KAcos,
-    "arctan" => KAtan, "sinh" => KSinh, "cosh" => KCosh, "tanh" => KTanh, "min" => KMin,
-    "max" => KMax, "lfloor" => KLfloor, "rfloor" => KRfloor, "lceil" => KLceil,
-    "rceil" => KRceil, "partial" => KPdiff, "dot" => KDotacc, "sum" => KSum,
-    "prod" => KProd, "in" => KInn, "substack" => KSubstack, "limits" => KLimitsL,
-)
+input. Derived from `KW_CHARS`: every spelling that is a backslash and letters,
+plus the three input variants `\\neq`, `\\leq`, `\\geq`."""
+const CTRL_KW = let d = Dict{String, Kw}("neq" => KNe, "leq" => KLe, "geq" => KGe)
+    for (k, w) in KW_CHARS
+        (length(w) >= 2 && w[1] == '\\' && all(isletter, w[2:end])) && (d[w[2:end]] = k)
+    end
+    d
+end
 
-"""`Latex.arrayCols`: after `\\begin`: `{array}{` and one or more `c`, then
+"""Not in Lean: after `\\begin`: `{array}{` and one or more `c`, then
 `}`: the opener of a wide constant matrix, with its column count."""
 function array_cols(r::Chars)
     r2 = drop_p("{array}{", r)
@@ -400,11 +373,8 @@ function unit_tok(r::Chars)
     return l === nothing ? nothing : (l, r2)
 end
 
-const PUNCT = Dict{Char, Kw}(
-    '+' => KPlus, '-' => KMinus, '=' => KEq, '<' => KLt, '>' => KGt, '/' => KSlash,
-    '^' => KCaret, '_' => KUs, '(' => KLp, ')' => KRp, '{' => KLb, '}' => KRb, '[' => KLbk,
-    ']' => KRbk, ',' => KComma, ';' => KSemi, ':' => KColon, '&' => KAmp, '.' => KSdot,
-)
+# The one-character spellings of `KW_CHARS`, inverted.
+const PUNCT = Dict{Char, Kw}(only(w) => k for (k, w) in KW_CHARS if length(w) == 1)
 
 """`Latex.punct`."""
 punct(c::Char) = get(PUNCT, c, nothing)

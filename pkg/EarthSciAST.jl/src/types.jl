@@ -41,6 +41,20 @@ function _allof(f::F, xs) where {F}
 end
 
 """
+    _as_int64(x::Real) -> Union{Int64, Nothing}
+
+The exact `Int64` value of `x` when `x` is integral and in `Int64` range, else
+`nothing`: CONFORMANCE_SPEC §5.5.3.1 rule 1, "an integral JSON number in
+`Int64` range is an integer, however it was spelled". `-0.0` is the integer
+`0`. A `Bool` is an `Integer` here; a caller that refuses booleans screens
+them first.
+"""
+_as_int64(x::Int64) = x
+_as_int64(x::Integer) = typemin(Int64) <= x <= typemax(Int64) ? Int64(x) : nothing
+_as_int64(x::AbstractFloat) = isinteger(x) && -0x1p63 <= x < 0x1p63 ? Int64(x) : nothing
+_as_int64(x::Real) = _as_int64(Float64(x))
+
+"""
     SCHEMA_VERSION
 
 The `.esm` FORMAT version (semver string) this implementation targets — the
@@ -49,11 +63,8 @@ from disk keep whatever version they declare; this constant is only the default
 for documents the library itself creates (flatten wrappers, MTK/Catalyst
 export). Must track the version on the first line of `esm-spec.md` and in the
 bundled schema's `\$id`, which the `SCHEMA_VERSION tracks the bundled schema`
-test enforces.
-
-Spelled `ESM_FORMAT_VERSION` until the bindings converged: TypeScript, Rust and
-Go all called this `SCHEMA_VERSION`, and Julia was the only one that did not.
-NOT the version of this PACKAGE — that is [`LIBRARY_VERSION`](@ref).
+test enforces. NOT the version of this PACKAGE — that is
+[`LIBRARY_VERSION`](@ref).
 """
 const SCHEMA_VERSION = "2.3.0"
 
@@ -166,7 +177,7 @@ Base.isempty(oi::_OverlapIndex) = isempty(oi.pairs)
 # to its bucket code. A bin-EQUALITY combination is admitted iff
 # `codes_l[pos_l] == codes_r[pos_r]` for every gate. Defined HERE — ahead of
 # `OpExpr` — so the internal `OpExpr.join_gates` field can name this concrete
-# element type; it is BUILT and CONSUMED in tree_walk/semiring.jl
+# element type; it is BUILT and CONSUMED in tree_walk/join_gates.jl
 # (`_resolve_join_gates_for` / `_join_admits`), never parsed or serialized.
 #
 # The two fields answer two DIFFERENT questions, and a gate may carry both.
@@ -178,7 +189,7 @@ Base.isempty(oi::_OverlapIndex) = isempty(oi.pairs)
 # `candidates` is the prebuilt `(pos_l, pos_r)` index, and it is an ENUMERATION
 # EXTENT: the gate that carries one can DRIVE enumeration instead of being
 # tested per tuple (`_overlap_drive_plan` / `_drivable_gate`, broad_phase.jl).
-# An OVERLAP gate's index is the Phase-3a broad-phase candidate set
+# An OVERLAP gate's index is the broad-phase candidate set
 # (`_overlap_candidate_set`), and for it the index IS also the admission test.
 # An `on` gate's index is the §5.5.8 match set (`_on_gate_match_pairs`), and
 # there it is purely an extent — `_join_admits` still tests the codes, so the
@@ -191,8 +202,7 @@ struct _JoinGate
     codes_r::Dict{Int, Int}
     candidates::Union{_OverlapIndex, Nothing}
 end
-# Bin-equality gate convenience ctor (candidates ≡ nothing) — keeps the historic
-# 4-arg construction and any external callers working unchanged.
+# Bin-equality gate convenience ctor (candidates ≡ nothing).
 _JoinGate(sym_l, sym_r, codes_l, codes_r) = _JoinGate(sym_l, sym_r, codes_l, codes_r, nothing)
 
 # A parsed value-equality (`on`) join clause: the `[left, right]` key-column
@@ -232,7 +242,7 @@ _clause_syms(::Any) = nothing
 _with_pairs(c::_OnJoinSpec, pairs) = _OnJoinSpec(pairs, c.syms)
 _with_pairs(::Any, pairs) = pairs
 
-# A parsed OVERLAP join clause (Phase 2a) — the spatial-index-backed broad-phase
+# A parsed OVERLAP join clause — the spatial-index-backed broad-phase
 # gate that replaces uniform-grid bin equality with envelope candidacy. It names
 # CONST-ARRAY FACTORS interpreted as per-position envelopes:
 #   4 names → rectangles [xmin, ymin, xmax, ymax] (e.g. ISRM cells [W,S,E,N]),
@@ -265,21 +275,11 @@ print a node carrying one in the escape form.
 """
 const EXPRESSION_NODE_ANNOTATIONS = ("id", "expect_cadence")
 
-# `mutable struct` (not `struct`) is a deliberate PERFORMANCE choice, not a
-# licence to mutate: the build path treats `OpExpr` as an immutable value and only
-# ever copies-with-changes through `reconstruct` (fields are never assigned after
-# construction). Mutability buys true POINTER-IDENTITY for the build-time
-# memoization `IdDict{OpExpr,…}` caches (`_BuildMemo` in tree_walk/compile.jl and
-# the template-lowering caches in tree_walk/stencil.jl). With an *immutable*
-# `OpExpr`, `IdDict` falls back to `objectid`/`===`, which for an immutable struct
-# are STRUCTURAL — every memo probe would re-hash the `op` String and walk all ~35
-# fields. A mutable struct makes `objectid`/`===` (hence `IdDict` and the
-# `r !== args[i]` "did this subtree change" identity checks throughout the tree
-# walk) pointer-based, so the memos are O(1) identity caches. No custom
-# `==`/`hash` is defined: `OpExpr` is never a *value*-keyed `Dict`/`Set` key
-# anywhere (only ever an `IdDict` key), and structural `==` on trees would not
-# hold anyway — two distinct-but-equal `OpExpr`s hold `args` `Vector`s that differ
-# by identity.
+# `mutable struct` for POINTER IDENTITY, not to be mutated: fields are never
+# assigned after construction (copies go through `reconstruct`). Identity makes
+# `objectid`/`===` O(1), so the build's `IdDict{OpExpr,…}` memos and the
+# `r !== args[i]` "did this subtree change" checks do not hash ~35 fields. No
+# custom `==`/`hash`: an `OpExpr` is only ever an `IdDict` key.
 """
     OpExpr(op::String, args::Vector{ASTExpr}; kwargs...)
     OpExpr(op::String, args::AbstractVector; kwargs...)
@@ -301,14 +301,13 @@ an optional keyword (default `nothing`) that only some operators use. The
   field is not confused with Julia's own `Core.Expr`.
 - `reduce`: for `faq`, the reduction operator applied to
   contracted indices (one of "+", "*", "max", "min"; default "+"). Names the
-  semiring ⊕ only; it is the shorthand retained for files that omit `semiring`
-  (RFC semiring-faq-unified-ir §5.1).
+  semiring ⊕ only, for files that omit `semiring`.
 - `semiring`: for `faq`, the named semiring `(⊕, ⊗)` with
   normative identity elements that parameterizes the reduction (closed registry:
   "sum_product", "max_product", "min_sum", "max_sum", "bool_and_or"). Absent ⇒
   "sum_product", the ordinary einsum semantics. When present it supersedes
-  `reduce`; the ⊕/⊗ operators and BOTH identities come from the registry table,
-  never the file (RFC §5.1).
+  `reduce`; the ⊕/⊗ operators and both identities come from the registry table,
+  never the file.
 - `ranges`: for `faq`, map from index symbol name to iteration range
   (vector of 2 or 3 ints `[start, stop]` / `[start, step, stop]`).
 - `regions`: for `makearray`, list of sub-region boxes, each a list of
@@ -371,8 +370,8 @@ mutable struct OpExpr <: ASTExpr
     # const (esm 1.2.0): the declared unit `value` is in (esm-spec §4.8.5).
     units::Union{String, Nothing}
 
-    # ── M2: value-equality joins + filter predicates on faq ──
-    # (RFC semiring-faq-unified-ir §5.3 / §7.2; schema bead ess-my4.2.1).
+    # ── value-equality joins + filter predicates on faq ──
+    # (RFC semiring-faq-unified-ir §5.3 / §7.2).
     #
     # `join`   — the parsed join clauses, an inner equi-join of factors by key
     #            columns. Each clause is a `Vector{Tuple{String,String}}` of
@@ -414,7 +413,7 @@ mutable struct OpExpr <: ASTExpr
     # `bindings` — for `apply_expression_template`, the parameter→argument-expression
     #              map (esm-spec §9.6). Templates are normally lowered before typed
     #              parsing, but the node is renderable directly so the pretty-printer
-    #              can emit `name⟨p=e, …⟩` byte-identically to the other bindings.
+    #              can emit `name⟨p=e, …⟩` as the other bindings do.
     bindings::Union{Dict{String, ASTExpr}, Nothing}
 
     # ── Author annotations: carried verbatim, never interpreted here ──
@@ -469,12 +468,7 @@ mutable struct OpExpr <: ASTExpr
         id = nothing,
         distinct = nothing, key = nothing,
         bindings = nothing,
-        expect_cadence = nothing, attrs = nothing, template_origin = nothing,
-        # `handler_id` was the v0.2.x field for the now-removed `call`
-        # op (esm-spec §9.2 closure). Accept and ignore on construction
-        # so internal helpers that still pass it through don't break
-        # mid-migration; the field is no longer stored or serialized.
-        handler_id = nothing
+        expect_cadence = nothing, attrs = nothing, template_origin = nothing
     ) =
         _new_typed(
         OpExpr, op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
@@ -494,177 +488,6 @@ end
 # positional form drops the per-node NamedTuple allocation entirely. The
 # arguments are all fields in struct-field order.
 _def_new_typed(OpExpr)
-
-"""
-    OPEXPR_FIELD_TABLE
-
-THE `OpExpr` field-spec table — the single source of truth for what each of
-the struct's fields IS, from which every field-generic consumer is derived
-(by `@eval` metaprogramming or direct table lookup):
-
-- the wire contract [`OPEXPR_WIRE_KEYS`](@ref) (parse + serialize key set),
-- `_parse_op_optional_fields` (parse.jl, generated field extraction),
-- `_serialize_opexpr_field` (serialize.jl, per-kind wire encoding),
-- [`reconstruct(::OpExpr)`](@ref) (generated below),
-- the expression walkers `child_exprs` / `foreach_child` /
-  `_foreach_subexpr_children` / `map_children` / `foreach_child_with_path`
-  (expression.jl, generated), and validate.jl's `_expr_children`.
-
-One row per struct field, in exact struct-field order (asserted at load).
-Columns:
-
-- `wire`: the JSON key the field is parsed from / serialized to (`nothing`
-  for an internal, never-serialized field). Two fields are spelled
-  differently on the wire: `int_var` ↔ `var` and `expr_body` ↔ `expr`.
-- `kind`: the field's shape class, which determines BOTH its wire encoding
-  and whether/how the expression walkers traverse it:
-    - `:expr`      — optional nested `ASTExpr` (traversed),
-    - `:expr_vec`  — `Vector{ASTExpr}` (traversed; `args` is the one
-                     required instance, the rest are optional),
-    - `:expr_map`  — `Dict{String,ASTExpr}` (values traversed in sorted-key
-                     order). NOTE: `bindings` (template parameter →
-                     argument-expression map) IS traversed like any other
-                     expression-bearing field — historically `child_exprs`
-                     skipped it (while validate's `_expr_children` skipped
-                     `ranges`), leaving `free_variables`/`substitute`/
-                     `contains` blind to names inside binding values.
-    - `:ranges`    — the `ranges` map: `IndexSetRef` or dense bound vectors
-                     whose entries MAY be expression-valued (only those
-                     `ASTExpr` entries are traversed),
-    - `:join`      — the parsed join clauses (column-NAME strings, no
-                     sub-expressions; bespoke wire encoding),
-    - `:scalar`    — plain data (strings/ints/JSON), identity-encoded on the
-                     wire, never traversed,
-    - `:internal`  — build-time only; never parsed, serialized or traversed.
-- `parse`: for `:scalar` fields, the parse-recipe tag `_parse_op_optional_fields`
-  dispatches on (`:string`, `:int`, `:int_vec`, `:bool`, `:json`,
-  `:output_idx`, `:regions`, `:shape`, `:attrs`); `nothing`
-  when the `kind` alone determines parsing.
-- `binds_scope`: `true` for the one field whose KEYS validate's
-  `_bound_index_symbols` credits into reference-check scope (`bindings` —
-  template formal-parameter names). A legitimate consumer DIFFERENCE, not a
-  traversal property: `free_variables`' binder subtraction (`_bound_symbols`,
-  expression.jl) deliberately does NOT use it.
-
-Adding an `OpExpr` field without a row here fails the load-time assert below;
-`round_trip_regression_test.jl` then pins its real parse/serialize behavior.
-"""
-const OPEXPR_FIELD_TABLE = (
-    op = (wire = :op, kind = :scalar, parse = nothing, binds_scope = false),
-    args = (wire = :args, kind = :expr_vec, parse = nothing, binds_scope = false),
-    wrt = (wire = :wrt, kind = :scalar, parse = :string, binds_scope = false),
-    dim = (wire = :dim, kind = :scalar, parse = :string, binds_scope = false),
-    int_var = (wire = :var, kind = :scalar, parse = :string, binds_scope = false),
-    lower = (wire = :lower, kind = :expr, parse = nothing, binds_scope = false),
-    upper = (wire = :upper, kind = :expr, parse = nothing, binds_scope = false),
-    output_idx = (wire = :output_idx, kind = :scalar, parse = :output_idx, binds_scope = false),
-    expr_body = (wire = :expr, kind = :expr, parse = nothing, binds_scope = false),
-    reduce = (wire = :reduce, kind = :scalar, parse = :string, binds_scope = false),
-    semiring = (wire = :semiring, kind = :scalar, parse = :string, binds_scope = false),
-    ranges = (wire = :ranges, kind = :ranges, parse = nothing, binds_scope = false),
-    regions = (wire = :regions, kind = :scalar, parse = :regions, binds_scope = false),
-    values = (wire = :values, kind = :expr_vec, parse = nothing, binds_scope = false),
-    shape = (wire = :shape, kind = :scalar, parse = :shape, binds_scope = false),
-    perm = (wire = :perm, kind = :scalar, parse = :int_vec, binds_scope = false),
-    axis = (wire = :axis, kind = :scalar, parse = :int, binds_scope = false),
-    fn = (wire = :fn, kind = :scalar, parse = :string, binds_scope = false),
-    name = (wire = :name, kind = :scalar, parse = :string, binds_scope = false),
-    value = (wire = :value, kind = :scalar, parse = :json, binds_scope = false),
-    units = (wire = :units, kind = :scalar, parse = :string, binds_scope = false),
-    join = (wire = :join, kind = :join, parse = nothing, binds_scope = false),
-    filter = (wire = :filter, kind = :expr, parse = nothing, binds_scope = false),
-    join_gates = (wire = nothing, kind = :internal, parse = nothing, binds_scope = false),
-    id = (wire = :id, kind = :scalar, parse = :string, binds_scope = false),
-    distinct = (wire = :distinct, kind = :scalar, parse = :bool, binds_scope = false),
-    key = (wire = :key, kind = :expr, parse = nothing, binds_scope = false),
-    bindings = (wire = :bindings, kind = :expr_map, parse = nothing, binds_scope = true),
-    expect_cadence = (wire = :expect_cadence, kind = :scalar, parse = :string, binds_scope = false),
-    attrs = (wire = :attrs, kind = :scalar, parse = :attrs, binds_scope = false),
-    template_origin = (wire = nothing, kind = :internal, parse = nothing, binds_scope = false),
-)
-
-# The table must cover EXACTLY the struct's fields, in struct-field order —
-# the walkers/parse/serialize generators iterate it in this order.
-@assert keys(OPEXPR_FIELD_TABLE) == fieldnames(OpExpr) "OPEXPR_FIELD_TABLE rows must match fieldnames(OpExpr) exactly, in order"
-
-"""
-    OPEXPR_WIRE_KEYS
-
-The `OpExpr` field ↔ wire (JSON) key contract, DERIVED from
-[`OPEXPR_FIELD_TABLE`](@ref): every field with a non-`nothing` `wire` column,
-mapped to its JSON key. `join_gates` is the one struct field deliberately
-absent: it is a build-time artifact, never parsed or serialized. Consumed by
-`serialize_expression`'s emit loop and pinned field-by-field by
-`round_trip_regression_test.jl`.
-"""
-const OPEXPR_WIRE_KEYS = (;
-    (
-        f => spec.wire for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-            if spec.wire !== nothing
-    )...,
-)
-
-# Accept any AbstractVector of ASTExpr-subtypes (e.g. Vector{VarExpr},
-# Vector{OpExpr}, mixed Any arrays) and widen to Vector{ASTExpr}. This keeps
-# call sites terse — callers don't need to annotate `ASTExpr[...]` when they
-# construct a homogeneous argument list.
-function OpExpr(op::String, args::AbstractVector; kwargs...)
-    widened = Vector{ASTExpr}(undef, length(args))
-    for (i, a) in enumerate(args)
-        widened[i] = a
-    end
-    return OpExpr(op, widened; kwargs...)
-end
-
-# GENERATED from `fieldnames(OpExpr)` (see OPEXPR_FIELD_TABLE): one kwarg per
-# struct field, each defaulting to the corresponding field of `e`, forwarded
-# positionally (NamedTuple-free on the hot path) to `_new_typed` in
-# struct-field order — so a newly added field is copied by default and can
-# never be silently dropped.
-@eval function reconstruct(
-        e::OpExpr;
-        op::String = e.op,
-        args = e.args,
-        $(
-            (
-                Expr(:kw, f, :(e.$f)) for f in fieldnames(OpExpr)
-                    if f !== :op && f !== :args
-            )...
-        )
-    )
-    # Positional (NamedTuple-free) construction on the hot path. `args` defaults to
-    # the `Vector{ASTExpr}` field and callers overwrite it with `Vector{ASTExpr}`s, so the
-    # `isa` fast path is the norm; the widening branch preserves the historical
-    # acceptance of any `AbstractVector` of `ASTExpr` (matching the keyword ctor's
-    # `OpExpr(op, args::AbstractVector)` widening overload).
-    argv = args isa Vector{ASTExpr} ? args : Vector{ASTExpr}(args)
-    return _new_typed(
-        OpExpr, op, argv,
-        $((f for f in fieldnames(OpExpr) if f !== :op && f !== :args)...)
-    )
-end
-
-@doc """
-    reconstruct(e::OpExpr; op=…, args=…, <any OpExpr field>=…) -> OpExpr
-
-Rebuild an `OpExpr`, copying EVERY field from `e` by default and overriding only
-the keywords explicitly passed. This is the ONE canonical, field-preserving way
-to reconstruct a node after a structural rewrite (substitution, namespacing,
-simplification, canonicalization, …).
-
-It exists because `OpExpr` carries ~25 optional fields (aggregate
-`semiring`/`ranges`/`output_idx`/`expr_body`/`reduce`, relational
-`join`/`filter`/`join_gates`/`distinct`/`key`, `int_var`/`lower`/`upper`, …) and
-hand-listed reconstruction sites each drop whatever they forget, which makes
-`flatten`/`substitute`/`namespace_expr` lossy. Routing every rewrite through `reconstruct` makes
-field preservation the default and a drop an explicit, visible choice — and the
-method is GENERATED from `fieldnames(OpExpr)`, so a newly added field is
-preserved automatically.
-
-Callers that transform sub-expressions should pass the already-transformed
-result for the relevant field, e.g. `reconstruct(e; args=new_args)` or
-`reconstruct(e; expr_body=new_body, filter=new_filter)`.
-""" reconstruct
 
 # ========================================
 # 2. Equation Types
@@ -726,18 +549,20 @@ struct ConditionTrigger <: DiscreteEventTrigger
 end
 
 """
-    PeriodicTrigger(period::Float64, phase::Float64)
+    PeriodicTrigger(period::Float64; phase = nothing)
 
 Trigger that fires periodically.
-- `period`: time interval between triggers
-- `phase`: time offset for first trigger
+- `period`: the wire `interval`, the time between firings
+- `phase`: the wire `initial_offset`, the time offset of the first firing;
+  `nothing` when the document does not write it (the schema default is 0), so
+  an authored `0` is written back and an absent key stays absent
 """
 struct PeriodicTrigger <: DiscreteEventTrigger
     period::Float64
-    phase::Float64
+    phase::Union{Float64, Nothing}
 
-    # Constructor with optional phase
-    PeriodicTrigger(period::Float64; phase = 0.0) = new(period, phase)
+    PeriodicTrigger(period::Float64; phase = nothing) =
+        new(period, phase === nothing ? nothing : Float64(phase))
 end
 
 """
@@ -939,87 +764,6 @@ struct DataSourceBinding
 end
 
 """
-    _written_records_per_sample(binding::DataSourceBinding, source) -> Union{Int, Nothing}
-    _written_records_per_sample(coerce, from::AbstractDict, source) -> Union{Int, Nothing}
-
-The deprecated `records_per_sample` WRITTEN for a `data` rule (esm-spec
-§8.5.1): the binding's own `from.records_per_sample`, else the source's
-`temporal.records_per_sample`, else `nothing`. It no longer decides how many
-records the parameter receives — its record shape does (see
-[`_record_axis_verdict`](@ref)) — and a written value that disagrees with the
-shape is `records_per_sample_invalid`.
-
-The typed form takes the rule's `DataSourceBinding` and the `DataSource` it
-names (or `nothing`). The raw form takes the rule's `from` object and the
-source's `data_sources` entry (or `nothing`) as parsed JSON, and passes each
-value present through `coerce(value, origin)` before the rule picks one;
-`origin` is `:from` or `:temporal`. `coerce` returns the value as an `Int` or
-throws, so the caller decides how strictly a raw value is read.
-"""
-function _written_records_per_sample(binding::DataSourceBinding, source)
-    t = source === nothing ? nothing : source.temporal
-    own = binding.records_per_sample
-    return own !== nothing ? own : t === nothing ? nothing : t.records_per_sample
-end
-
-function _written_records_per_sample(coerce, from::AbstractDict, source)
-    own = get(from, "records_per_sample", nothing)
-    t = source isa AbstractDict ? get(source, "temporal", nothing) : nothing
-    inherited = t isa AbstractDict ? get(t, "records_per_sample", nothing) : nothing
-    own === nothing || (own = coerce(own, :from)::Int)
-    inherited === nothing || (inherited = coerce(inherited, :temporal)::Int)
-    return own !== nothing ? own : inherited
-end
-
-"""
-    _record_shapes(own_shape, targets, target_shape) -> (shapes, mapped)
-
-The record shapes of a data-fed parameter (esm-spec §8.5.1), whatever carries
-the document. `own_shape` is the parameter's declared `shape` (`nothing` when it
-declares none); a declared shape, `[]` included, is THE record shape. Otherwise
-each `t` in `targets` (the `to` of every `param_to_var` `variable_map` entry
-whose `from` is the parameter) contributes `target_shape(t)`: its declared
-shape (`[]` when it declares none), or `nothing` when the declaration cannot be
-reached (not found, or behind a `ref` not yet mounted), which is skipped, never
-read as empty. `mapped` is whether there was a declared shape or any target at
-all; a shapeless parameter that is the `from` of no such entry has an empty
-record shape, which the caller supplies when no target may still arrive.
-
-Shared by validation, `flatten`, `loader_fields` and the EarthSciIO provider
-extension, so the precedence is stated once.
-"""
-function _record_shapes(own_shape, targets, target_shape)
-    own_shape === nothing || return (Vector{String}[collect(String, own_shape)], true)
-    shapes = Vector{String}[]
-    mapped = false
-    for t in targets
-        mapped = true
-        s = target_shape(t)
-        s === nothing || push!(shapes, collect(String, s))
-    end
-    return shapes, mapped
-end
-
-"""
-    _record_axis_verdict(shapes, is_record_axis) -> (misplaced::Bool, records::Int)
-
-esm-spec §8.5.1 over a data-fed parameter's record shapes: `records` is 2 when
-a record shape begins with a record axis (`is_record_axis(name)`), else 1;
-`misplaced` (`record_axis_misplaced`) is whether some shape names a record axis
-anywhere but first, or some shapes begin with one while others do not.
-"""
-function _record_axis_verdict(shapes, is_record_axis)
-    misplaced = false
-    leading = 0
-    for s in shapes
-        any(is_record_axis, Iterators.drop(s, 1)) && (misplaced = true)
-        (!isempty(s) && is_record_axis(first(s))) && (leading += 1)
-    end
-    0 < leading < length(shapes) && (misplaced = true)
-    return misplaced, leading > 0 ? 2 : 1
-end
-
-"""
     PARAMETER_UPDATE_KINDS
 
 The closed set of `update.kind` values (esm-spec §5.4). `wiener` takes no value
@@ -1136,8 +880,7 @@ ParameterVariable
     MODEL_VARIABLE_TYPE_TABLE
 
 The bidirectional `ModelVariableType` ↔ string vocabulary — one row per enum
-member, the single source of truth for every kind-string mapping (previously
-three hand-maintained parallel ladders). It lives here, next to the enum it
+member, the single source of truth for every kind-string mapping. It lives here, next to the enum it
 maps, following the [`OPEXPR_FIELD_TABLE`](@ref) precedent (op_registry.jl is
 scoped to the `OpExpr.op` operator vocabulary; a variable-kind enum is not an
 op). Columns:
@@ -1289,8 +1032,7 @@ end
 _coerce_variable_bound(::Nothing) = nothing
 _coerce_variable_bound(x::Bool) =
     throw(ArgumentError("a variable bound is a number or a variable name, got $(x)"))
-_coerce_variable_bound(x::Integer) =
-    typemin(Int64) <= x <= typemax(Int64) ? Int64(x) : Float64(x)
+_coerce_variable_bound(x::Integer) = something(_as_int64(x), Float64(x))
 _coerce_variable_bound(x::Real) = Float64(x)
 _coerce_variable_bound(x::AbstractString) = String(x)
 _coerce_variable_bound(x::ASTExpr) = x
@@ -1332,13 +1074,13 @@ function _fill_inline_array!(A::Array{Float64}, v, idx::Tuple, dims::Vector{Int}
     depth = length(idx)
     if v isa AbstractArray
         depth < length(dims) || throw(
-            ArgumentError(
+            ParseError(
                 "inline array data is ragged: an array appears where a number is expected " *
                     "(esm-spec §6.3)"
             )
         )
         length(v) == dims[depth + 1] || throw(
-            ArgumentError(
+            ParseError(
                 "inline array data is ragged: axis $(depth + 1) has both $(dims[depth + 1]) " *
                     "and $(length(v)) elements (esm-spec §6.3)"
             )
@@ -1348,7 +1090,7 @@ function _fill_inline_array!(A::Array{Float64}, v, idx::Tuple, dims::Vector{Int}
         end
     else
         depth == length(dims) || throw(
-            ArgumentError(
+            ParseError(
                 "inline array data is ragged: a number appears at nesting depth $(depth) " *
                     "where an array of $(dims[depth + 1]) elements is expected (esm-spec §6.3)"
             )
@@ -1426,52 +1168,17 @@ the array form.
 
 A diagnostic pointer must address the document **as written**. Julia's typed
 model normalizes a scalar `update` into a one-element `Vector` at parse time
-(see [`_coerce_update_vector`](@ref)), and the three passes that walk update
-rules used to interpolate that synthetic index unconditionally — so a document
-writing `update: {...}` was told about `/update/0/from/unit_conversion`, a
-pointer resolving to nothing in its own source. The corpus pin and the
-TypeScript, Python and Go bindings all say `/update/from/unit_conversion`.
+(see [`_coerce_update_vector`](@ref)), so the index is written only for the
+array form: a document writing `update: {...}` is addressed as
+`/update/from/unit_conversion`, as the corpus pin and the other bindings say.
 """
 _update_rule_path(base::AbstractString, rules::AbstractVector, ri::Integer) =
-    _update_is_scalar_form(rules) ? "$base/update" : "$base/update/$(ri - 1)"
-
-"""
-    reconstruct(v::ModelVariable; <any ModelVariable field>=…) -> ModelVariable
-
-Rebuild a `ModelVariable`, copying every field from `v` by default and
-overriding only the keywords explicitly passed. The `ModelVariable` analogue of
-[`reconstruct(::OpExpr)`](@ref): route all copy-with-changes sites through this
-helper so a newly added field is preserved by default instead of silently
-dropped by a hand-listed subset.
-"""
-function reconstruct(
-        v::ModelVariable;
-        type::ModelVariableType = v.type,
-        default = v.default,
-        description = v.description,
-        units = v.units,
-        default_units = v.default_units,
-        shape = v.shape,
-        location = v.location,
-        distribution = v.distribution,
-        update = v.update,
-        element_type = v.element_type,
-        lb = v.lb,
-        ub = v.ub
-    )
-    return ModelVariable(
-        type;
-        default = default, description = description,
-        units = units, default_units = default_units, shape = shape,
-        location = location, distribution = distribution, update = update,
-        element_type = element_type, lb = lb, ub = ub
-    )
-end
+    _update_is_scalar_form(rules) ? _pointer(base, "update") : _pointer(base, "update", ri)
 
 """
     TimeSpan(start::Float64, stop::Float64)
 
-Simulation time interval for inline model tests and analyses (§gt-cc1).
+Simulation time interval for inline model tests and analyses (esm-spec §6.6).
 """
 struct TimeSpan
     start::Float64
@@ -1555,7 +1262,7 @@ end
 
 A scalar `(variable, time, expected)` check used inside a `InlineTest`.
 
-PDE-aware variants (gt-vzwk):
+PDE-aware variants:
 - `coords`: pin a spatial point as `dim => coordinate` (mutually exclusive with `reduce`).
 - `reduce`: collapse the spatial field to a scalar — one of `integral`, `mean`,
   `max`, `min`, `L2_error`, `Linf_error`. Mutually exclusive with `coords`.
@@ -1603,14 +1310,14 @@ end
 """
     InlineTest(id, time_span, assertions; description, initial_conditions, parameter_overrides, tolerance)
 
-Inline validation test for a Model (schema gt-cc1). Defines the run
+Inline validation test for a Model (esm-spec §6.6). Defines the run
 configuration — initial conditions, parameter overrides, simulation time
 span — and a list of scalar assertions that must hold.
 """
 # NAMING: this struct is spelled `InlineTest` (not `Test`) so it does NOT
 # collide with the `Test` STANDARD-LIBRARY MODULE that every test suite brings
 # in via `using Test`. It is the schema's inline-validation-test construct
-# (`models.*.tests`, gt-cc1; esm-spec §6.6); not exported — reach it qualified
+# (`models.*.tests`, esm-spec §6.6); not exported — reach it qualified
 # as `EarthSciAST.InlineTest`.
 struct InlineTest
     id::String
@@ -1683,17 +1390,15 @@ struct IndexSet
     # least one member is non-string (float / null / boolean / integer). Lets the
     # join-key validator (RFC §5.3) reject keys whose equality is not portable
     # across bindings — float and null members — which `members` (always coerced
-    # to `String`) can no longer distinguish. `nothing` for ordinary string-only
-    # sets, so they stay byte-identical to before.
+    # to `String`) cannot distinguish. `nothing` for ordinary string-only sets.
     members_raw::Union{Vector{Any}, Nothing}
-    # PROJECTION-PUSHDOWN Phase 2b (members-fed-back-as-const-factor). For a
+    # Projection pushdown, members fed back as a const factor. For a
     # `kind:"derived"` set, names a model `parameter` const factor that the build
     # fills with this set's materialised value-invention MEMBERS (the invented
     # 1-based full-grid ids, `vi.members[from_faq]`) — so an in-model gather
     # `index(W, index(<member_factor>, c))` can pull the full-grid rows the
     # compact derived axis selects. There is no `member(set,c)` IR op; this
-    # feedback IS the mechanism. `nothing` for every non-feedback set (byte-
-    # identical round-trip).
+    # feedback IS the mechanism. `nothing` for every non-feedback set.
     member_factor::Union{String, Nothing}
     # esm-spec §8.5.1: `true` makes an `interval` of size 2 a RECORD AXIS — a
     # data-fed parameter whose record shape begins with it receives two records
@@ -1735,9 +1440,9 @@ end
 Common supertype of the legal `Model.subsystems` values: a child `Model` or —
 only until references are resolved — a `SubsystemRef`. Exists so
 `Model.subsystems` can be concretely typed `Dict{String,SubsystemNode}` even
-though `SubsystemRef` is declared later in this file than `Model`. From esm
-1.0.0 a data source is an ingest registry entry, not a component, so it is not
-a `SubsystemNode`.
+though `SubsystemRef` is declared later in this file than `Model`. A data
+source is an ingest registry entry, not a component, so it is not a
+`SubsystemNode`.
 """
 abstract type SubsystemNode end
 
@@ -1812,9 +1517,8 @@ field is typed by their shared supertype, `OrderedDict{String,SubsystemNode}`.
 `variables` and `subsystems` are `OrderedDict`s, and the parser populates them in
 DOCUMENT ORDER. That is not a convenience: esm-libraries-spec §4.7.5 step 4 makes
 the flattened system's ordering normative (variables in the order their component
-declares them), and a flattener can only inherit an order the IR preserved. A
-plain `Dict` here leaked its hash order all the way out to `flatten`'s
-`parameters`, which a consumer reads POSITIONALLY as the parameter vector.
+declares them), and a flattener can only inherit an order the IR preserved:
+`flatten`'s `parameters` is read POSITIONALLY as the parameter vector.
 """
 struct Model <: SubsystemNode
     variables::OrderedDict{String, ModelVariable}
@@ -1832,31 +1536,9 @@ struct Model <: SubsystemNode
     initialization_equations::Vector{Equation}
     guesses::Dict{String, Union{Float64, ASTExpr}}
     system_kind::Union{String, Nothing}
-    # The component's own citation (schema `Model.reference`). It was the
-    # most-dropped field in the corpus — most `tests/valid` fixtures carry one
-    # and every one of them lost it — and nothing could notice, because the
-    # `RECORD_FIELD_TABLES` fieldnames assert pins table rows to the STRUCT: a
-    # field missing from both is missing from both wire directions in silence.
+    # The component's own citation (schema `Model.reference`).
     reference::Union{Reference, Nothing}
 
-    # Primary constructor with separate event arrays
-    Model(
-        variables::AbstractDict{String, ModelVariable}, equations::Vector{Equation},
-        discrete_events::Vector{DiscreteEvent}, continuous_events::Vector{ContinuousEvent},
-        subsystems::AbstractDict{String};
-        tolerance = nothing, tests = InlineTest[], analyses = Any[],
-        initialization_equations = Equation[],
-        guesses = Dict{String, Union{Float64, ASTExpr}}(),
-        system_kind = nothing, reference = nothing
-    ) =
-        new(
-        OrderedDict{String, ModelVariable}(variables), equations,
-        discrete_events, continuous_events, OrderedDict{String, SubsystemNode}(subsystems),
-        tolerance, tests, _dynamic(Vector{Any}, analyses)::Vector{Any},
-        initialization_equations, guesses, system_kind, reference
-    )
-
-    # Convenience constructor with optional event arrays and subsystems.
     Model(
         variables::AbstractDict{String, ModelVariable}, equations::Vector{Equation};
         discrete_events = DiscreteEvent[],
@@ -1877,6 +1559,16 @@ struct Model <: SubsystemNode
         initialization_equations, guesses, system_kind, reference
     )
 end
+
+# The positional form: events and subsystems in field order.
+Model(
+    variables::AbstractDict{String, ModelVariable}, equations::Vector{Equation},
+    discrete_events::Vector{DiscreteEvent}, continuous_events::Vector{ContinuousEvent},
+    subsystems::AbstractDict{String}; kwargs...
+) = Model(
+    variables, equations; discrete_events = discrete_events,
+    continuous_events = continuous_events, subsystems = subsystems, kwargs...
+)
 
 """
     Species
@@ -2022,8 +1714,8 @@ struct CouplingVariableMap <: CouplingEntry
         )
         # SINGLE enforcement point for the "expression transform takes no
         # factor" invariant. The parser (`coerce_variable_map`, parse.jl) does
-        # not pre-check; it catches this ArgumentError and rebrands it as a
-        # ParseError so `load` keeps its historical error type/message.
+        # not pre-check; it catches this ArgumentError and raises it as a
+        # ParseError with the same message.
         if transform isa ASTExpr && factor !== nothing
             throw(ArgumentError("variable_map: an expression `transform` takes no `factor` (fold the scaling into the expression)"))
         end
@@ -2258,24 +1950,15 @@ system is required to reproduce "the file's `domain` section, unchanged"
 """
 struct Domain
     # The name of the independent (time) variable, `"t"` unless the document
-    # renames it. It was parsed by NOBODY: the field is in esm-schema.json (with
-    # `additionalProperties: false`, so it is the only spelling), yet `Domain`
-    # did not carry it — so `load` silently DROPPED it and a round-trip through
-    # Julia rewrote a `tau`-based document as a `t`-based one. Validation needs
-    # it too: the independent variable is implicitly declared (finding (a)), and
-    # the check for it used to be a literal `name == "t"`, which both accepted a
-    # bare `t` in a document that renamed it and rejected the real name.
+    # renames it. Validation reads it: the independent variable is implicitly
+    # declared under this name and no other.
     independent_variable::String
     temporal::Union{Dict{String, Any}, Nothing}
     # Floating-point precision and array backend (esm-schema.json `Domain`:
     # `element_type` ∈ {"Float32","Float64"}, `array_type` e.g. "Array" /
-    # "CuArray"). Carried for the same reason `independent_variable` is: the
-    # schema defines them, `tests/valid/model_only.esm` declares
-    # `element_type: "Float32"`, and `Domain` used not to hold them — so `load`
-    # silently DROPPED them and a round trip rewrote a Float32 document as one
-    # with no precision declared at all. They also decide real behaviour
-    # downstream (Float32 vs Float64 for the assembled problem, host vs GPU
-    # arrays), and esm-libraries-spec §4.7.5 step 4 says a `FlattenedSystem`
+    # "CuArray"). They decide behaviour downstream (Float32 vs Float64 for the
+    # assembled problem, host vs GPU arrays), and esm-libraries-spec §4.7.5
+    # step 4 says a `FlattenedSystem`
     # carries "the file's `domain` section, UNCHANGED". `nothing` means the
     # document declared none — absence is preserved rather than replaced by the
     # schema default, so emit round-trips byte-for-byte.
@@ -2478,16 +2161,9 @@ struct EsmFile
     # PRESERVED VERBATIM (raw JSON) across parse → emit.
     #
     # Option A expands CALL SITES; it does not delete DECLARATIONS (esm-spec
-    # §9.6.4 rule 5). These two are peers of `index_sets`, not
-    # `apply_expression_template` invocations — but the loader treated the
-    # registry as if it were a call site and dropped it, so a pure template
-    # LIBRARY (a file whose only payload is `expression_templates`) re-emitted as
-    # `{esm, metadata, index_sets}`: no payload key at all, which the top-level
-    # `anyOf` correctly rejects. The file was legal on disk and illegal the
-    # instant it was loaded and written back — and since §9.6.4 rule 4 runs
-    # schema validation on the POST-EXPANSION form, a conforming library file was
-    # literally unrepresentable (tests/valid/template_import_lib.esm,
-    # template_import_rename_lib.esm).
+    # §9.6.4 rule 5): a template library (a file whose only payload is
+    # `expression_templates`, tests/valid/template_import_lib.esm) emits to
+    # itself, and so passes the post-expansion schema validation of rule 4.
     #
     # They are kept raw rather than typed because nothing in the pipeline reads
     # them back after lowering — their only job is to survive the round trip so a
@@ -2521,11 +2197,8 @@ struct EsmFile
     #
     # Presence of this key is the SOLE positive identifier of the
     # coupling-library file kind (`_is_coupling_library_doc`,
-    # coupling_imports.jl, tests it and nothing else). Dropping it therefore did
-    # not lose an annotation — it destroyed a coupling library's identity on
-    # round trip: the file was a library on disk and an ordinary document the
-    # instant it was loaded and written back. That is the same defect already
-    # fixed for the top-level `expression_templates` registry above.
+    # coupling_imports.jl, tests it and nothing else), so it must survive a
+    # round trip for a coupling library to stay one.
     coupling_roles::Union{Dict{String, Any}, Nothing}
 
     # Document-scoped, OPTIONAL and purely ADVISORY solver hints (esm-spec
@@ -2545,6 +2218,13 @@ struct EsmFile
     # at call time.
     document_base::Union{String, Nothing}
 
+    # The directory a relative `coupling_import` ref resolves against (esm-spec
+    # §10.10 -> §4.7: "relative to the directory of the referencing file"),
+    # recorded at load only when the caller gave a base (`load_path` always
+    # has one) and the document has a `coupling_import`. `nothing` leaves
+    # `flatten`'s `base_path` in charge. NOT a wire field; never emitted.
+    coupling_import_base::Union{String, Nothing}
+
     # Constructor with optional parameters
     EsmFile(
         esm::String, metadata::Metadata;
@@ -2561,7 +2241,8 @@ struct EsmFile
         coordinates = nothing,
         coupling_roles = nothing,
         solver = nothing,
-        document_base = nothing
+        document_base = nothing,
+        coupling_import_base = nothing
     ) =
         new(
         esm, metadata,
@@ -2574,935 +2255,6 @@ struct EsmFile
         expression_templates, metaparameters,
         component_templates === nothing ? nothing :
             OrderedDict{String, Any}(component_templates),
-        coordinates, coupling_roles, solver, document_base
+        coordinates, coupling_roles, solver, document_base, coupling_import_base
     )
-end
-
-# ========================================
-# 8. Reference Resolution System
-# ========================================
-
-"""
-    QualifiedReferenceError
-
-Exception thrown when qualified reference resolution fails.
-Contains detailed error information.
-"""
-struct QualifiedReferenceError <: EarthSciASTError
-    message::String
-    reference::String
-    path::Vector{String}
-end
-
-Base.showerror(io::IO, e::QualifiedReferenceError) =
-    print(io, "QualifiedReferenceError: ", e.message, " (reference: '", e.reference, "')")
-
-"""
-    ReferenceResolution
-
-Result of qualified reference resolution containing the resolved variable
-and its location information.
-"""
-struct ReferenceResolution
-    variable_name::String
-    system_path::Vector{String}
-    system_type::Symbol  # :model | :reaction_system
-    resolved_system::Union{Model, ReactionSystem}
-end
-
-"""
-    resolve_qualified_reference(esm_file::EsmFile, reference::String) -> ReferenceResolution
-
-Resolve a qualified reference string using hierarchical dot notation.
-
-The reference string is split on dots to produce segments [s₁, s₂, …, sₙ].
-The final segment sₙ is the variable name. The preceding segments [s₁, …, sₙ₋₁]
-form a path through the subsystem hierarchy.
-
-## Algorithm
-1. Split reference on "." to get segments
-2. First segment must match a top-level system (models, reaction_systems)
-3. Each subsequent segment must match a key in the parent system's subsystems map
-4. Final segment is the variable name to resolve
-
-## Examples
-- `"SuperFast.O3"` → Variable `O3` in top-level model `SuperFast`
-- `"SuperFast.GasPhase.O3"` → Variable `O3` in subsystem `GasPhase` of model `SuperFast`
-- `"Atmosphere.Chemistry.FastChem.NO2"` → Variable `NO2` in nested subsystems
-
-## Throws
-- `QualifiedReferenceError` if reference cannot be resolved
-"""
-function resolve_qualified_reference(esm_file::EsmFile, reference::String)::ReferenceResolution
-    if isempty(reference)
-        throw(QualifiedReferenceError("Empty reference string", reference, String[]))
-    end
-
-    segments = split(reference, ".")
-    if length(segments) < 1
-        throw(QualifiedReferenceError("Invalid reference format", reference, String[]))
-    end
-
-    # Extract variable name (last segment) and system path
-    variable_name = String(segments[end])
-    system_path = String.(segments[1:(end - 1)])
-
-    # Handle bare references (no dot)
-    if length(system_path) == 0
-        throw(QualifiedReferenceError("Bare references not supported without system context", reference, String[]))
-    end
-
-    # Resolve the system path
-    top_level_name = system_path[1]
-    remaining_path = system_path[2:end]
-
-    # Find top-level system
-    system, system_type = find_top_level_system(esm_file, top_level_name)
-    if system === nothing
-        throw(QualifiedReferenceError("Top-level system '$(top_level_name)' not found", reference, system_path[1:1]))
-    end
-
-    # Traverse subsystem hierarchy
-    current_system = system
-    traversed_path = [top_level_name]
-
-    for segment in remaining_path
-        push!(traversed_path, segment)
-        current_system = find_subsystem(current_system, segment)
-        if current_system === nothing
-            throw(QualifiedReferenceError("Subsystem '$(segment)' not found in path", reference, traversed_path))
-        end
-    end
-
-    # Validate that the variable exists in the final system
-    if !variable_exists_in_system(current_system, variable_name)
-        throw(QualifiedReferenceError("Variable '$(variable_name)' not found in system", reference, system_path))
-    end
-
-    return ReferenceResolution(variable_name, system_path, system_type, current_system)
-end
-
-"""
-    find_top_level_system(esm_file::EsmFile, name::String) -> (Union{Model,ReactionSystem,Nothing}, Symbol)
-
-Find a top-level system by name in models or reaction_systems.
-Returns the system and its type, or (nothing, :none) if not found.
-
-`data_sources` is deliberately NOT searched: from esm 1.0.0 a data source is an
-ingest registry entry, not a component, so it can never be the root of a scoped
-reference (esm-spec §8).
-"""
-function find_top_level_system(esm_file::EsmFile, name::String)
-    # Check models
-    if esm_file.models !== nothing && haskey(esm_file.models, name)
-        return (esm_file.models[name], :model)
-    end
-
-    # Check reaction_systems
-    if esm_file.reaction_systems !== nothing && haskey(esm_file.reaction_systems, name)
-        return (esm_file.reaction_systems[name], :reaction_system)
-    end
-
-    return (nothing, :none)
-end
-
-"""
-    find_subsystem(system::Union{Model,ReactionSystem}, name::String) -> Union{Model,ReactionSystem,Nothing}
-
-Find a subsystem by name within a Model or ReactionSystem.
-Returns the subsystem or nothing if not found.
-
-From esm 1.0.0 a subsystem is always a component (a `Model` or a
-`ReactionSystem`): a data source is a registry entry and can no longer be
-declared as one.
-"""
-function find_subsystem(system::Model, name::String)::Union{Model, ReactionSystem, Nothing}
-    return get(system.subsystems, name, nothing)
-end
-
-function find_subsystem(system::ReactionSystem, name::String)::Union{ReactionSystem, Nothing}
-    return get(system.subsystems, name, nothing)
-end
-
-"""
-    variable_exists_in_system(system, variable_name::String) -> Bool
-
-Check if a variable exists in the given system.
-"""
-function variable_exists_in_system(system::Model, variable_name::String)::Bool
-    return haskey(system.variables, variable_name)
-end
-
-function variable_exists_in_system(system::ReactionSystem, variable_name::String)::Bool
-    # Check species
-    for species in system.species
-        if species.name == variable_name
-            return true
-        end
-    end
-
-    # Check parameters
-    for param in system.parameters
-        if param.name == variable_name
-            return true
-        end
-    end
-
-    return false
-end
-
-"""
-    validate_reference_syntax(reference::String) -> Bool
-
-Validate that a reference string follows proper dot notation syntax.
-"""
-function validate_reference_syntax(reference::String)::Bool
-    if isempty(reference)
-        return false
-    end
-
-    # No leading or trailing dots
-    if startswith(reference, ".") || endswith(reference, ".")
-        return false
-    end
-
-    # No consecutive dots
-    if occursin("..", reference)
-        return false
-    end
-
-    # All segments should be valid identifiers
-    segments = split(reference, ".")
-    for segment in segments
-        if isempty(segment) || !is_valid_identifier(String(segment))
-            return false
-        end
-    end
-
-    return true
-end
-
-"""
-    is_valid_identifier(name::String) -> Bool
-
-Check if a string is a valid identifier (letters, numbers, underscores, no leading digit).
-"""
-function is_valid_identifier(name::String)::Bool
-    if isempty(name)
-        return false
-    end
-
-    # Must start with letter or underscore. Iterate by character (not byte
-    # index): `name[2:end]` byte-indexes and throws `StringIndexError` when the
-    # identifier starts with a multi-byte (non-ASCII) letter.
-    first_char = first(name)
-    if !isletter(first_char) && first_char != '_'
-        return false
-    end
-
-    # Rest can be letters, digits, or underscores
-    for c in Iterators.drop(name, 1)
-        if !isletter(c) && !isdigit(c) && c != '_'
-            return false
-        end
-    end
-
-    return true
-end
-
-# ========================================
-# 9. Backward Compatibility Helpers
-# ========================================
-
-"""
-    dict_to_stoichiometry_entries(dict::AbstractDict{String,<:Real}) -> Vector{StoichiometryEntry}
-
-Convert old-style species→coefficient dict format to new StoichiometryEntry vector format.
-Accepts any numeric coefficient type (`Int`, `Float64`, …) — fractional stoichiometries
-are supported by the v0.2.x schema.
-"""
-function dict_to_stoichiometry_entries(dict::AbstractDict{String, <:Real})::Vector{StoichiometryEntry}
-    return [StoichiometryEntry(species, stoichiometry) for (species, stoichiometry) in dict]
-end
-
-"""
-    stoichiometry_entries_to_dict(entries::Vector{StoichiometryEntry}) -> Dict{String,Float64}
-
-Convert new StoichiometryEntry vector format to species→coefficient dict.
-"""
-function stoichiometry_entries_to_dict(entries::Vector{StoichiometryEntry})::Dict{String, Float64}
-    return Dict(entry.species => entry.stoichiometry for entry in entries)
-end
-
-# Deterministic 64-bit FNV-1a hash. Used for content-derived ids; unlike
-# `Base.hash`, its value is stable across Julia versions and sessions.
-function _fnv1a64(s::AbstractString)::UInt64
-    h = 0xcbf29ce484222325
-    for b in codeunits(s)
-        h = (h ⊻ UInt64(b)) * 0x00000100000001b3
-    end
-    return h
-end
-
-# Render a JSON-compatible value (as produced by `serialize_expression`) to a
-# deterministic string: object keys are emitted in sorted order, so the result
-# depends only on content, never on Dict iteration order.
-_stable_json(x::AbstractDict) =
-    "{" * join(
-    sort!(
-        [
-            string(repr(String(string(k))), ":", _stable_json(v))
-                for (k, v) in pairs(x)
-        ]
-    ), ","
-) * "}"
-_stable_json(x::AbstractVector) = "[" * join([_stable_json(v) for v in x], ",") * "]"
-_stable_json(x::AbstractString) = repr(String(x))
-_stable_json(x) = string(x)
-
-"""
-    Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::ASTExpr; reversible=false) -> Reaction
-
-Convenience constructor that creates a reaction with an
-auto-generated, content-derived id: the same reactants, products, and rate
-always produce the same id (deterministic across sessions and Julia versions,
-unlike `Base.hash`).
-"""
-function Reaction(reactants::AbstractDict{String, <:Real}, products::AbstractDict{String, <:Real}, rate::ASTExpr; reversible = false)
-    # Content-derived id: sorted species:stoichiometry lists plus a
-    # deterministic rendering of the rate AST, digested with FNV-1a.
-    fmt(d) = join(sort!(["$(k):$(Float64(v))" for (k, v) in d]), ",")
-    content = fmt(reactants) * "=>" * fmt(products) * "|" *
-        _stable_json(serialize_expression(rate))
-    id = "reaction_" * string(_fnv1a64(content), base = 16, pad = 16)
-
-    substrates = isempty(reactants) ? nothing : dict_to_stoichiometry_entries(reactants)
-    products_vec = isempty(products) ? nothing : dict_to_stoichiometry_entries(products)
-
-    return Reaction(id, substrates, products_vec, rate)
-end
-
-"""
-    get_reactants_dict(reaction::Reaction) -> Dict{String,Float64}
-
-Get reactants as dictionary for backward compatibility.
-"""
-function get_reactants_dict(reaction::Reaction)::Dict{String, Float64}
-    # Ordered field via `raw_substrates`, collapsed to the unordered Dict view.
-    substrates_field = raw_substrates(reaction)
-    if substrates_field === nothing
-        return Dict{String, Float64}()
-    else
-        return stoichiometry_entries_to_dict(substrates_field)
-    end
-end
-
-"""
-    get_products_dict(reaction::Reaction) -> Dict{String,Float64}
-
-Get products as dictionary for backward compatibility.
-"""
-function get_products_dict(reaction::Reaction)::Dict{String, Float64}
-    # Ordered field via `raw_products`, collapsed to the unordered Dict view.
-    products_field = raw_products(reaction)
-    if products_field === nothing
-        return Dict{String, Float64}()
-    else
-        return stoichiometry_entries_to_dict(products_field)
-    end
-end
-
-"""
-    raw_substrates(r::Reaction) -> Union{Vector{StoichiometryEntry},Nothing}
-    raw_products(r::Reaction)  -> Union{Vector{StoichiometryEntry},Nothing}
-
-The `substrates` / `products` fields as stored: the ORDERED
-`Vector{StoichiometryEntry}` (or `nothing` for a source/sink reaction, ∅ → X /
-X → ∅). Named accessors for the raw fields so ordered author-entry access reads
-the same at every call site (equivalent to `r.substrates` / `r.products` now
-that the `getproperty` shim is gone). For the unordered `Dict{String,Float64}`
-species→coefficient view, use [`get_reactants_dict`](@ref) /
-[`get_products_dict`](@ref).
-"""
-raw_substrates(r::Reaction) = getfield(r, :substrates)
-raw_products(r::Reaction) = getfield(r, :products)
-
-# NOTE: `Reaction` has no `getproperty` override — plain `r.substrates` /
-# `r.products` reach the stored ORDERED `Vector{StoichiometryEntry}` fields
-# directly. Use `raw_substrates` / `raw_products` for that ordered view and
-# `get_reactants_dict` / `get_products_dict` for the unordered
-# `Dict{String,Float64}` species→coefficient view. (A legacy shim that mapped
-# `.reactants` / `.products` to the Dict view, and `.reversible` to `false`,
-# was removed.)
-
-# NOTE: `Model` has no `getproperty` override — the legacy `model.events`
-# combined-vector shim was removed; use `model.discrete_events` /
-# `model.continuous_events` directly.
-# ========================================
-# 15. Record wire-mapping tables
-# ========================================
-
-"""
-    RECORD_FIELD_TABLES
-
-The per-type field-spec tables for the REGULAR record types — the single
-source of truth from which BOTH wire directions are generated
-(`coerce_<fn>` in parse.jl, `serialize_<fn>` in serialize.jl), following the
-[`OPEXPR_FIELD_TABLE`](@ref) precedent. One entry per type:
-
-- `T`: the struct's name (a `Symbol`; resolved in this module).
-- `fn`: the coercer/serializer name suffix (`coerce_<fn>` / `serialize_<fn>`).
-- `tag`: for a coupling-entry type, the `"type"` discriminator string the
-  serializer emits first (`nothing`/absent otherwise; the parse side never
-  reads it — `coerce_coupling_entry` dispatches on it before calling in).
-- `injected`: `true` when the record's `name` is the KEY of an enclosing
-  name-keyed map, injected as the coercer's first argument and never
-  read from or emitted to the record's own wire body (Species, Parameter).
-- `rows`: one row per struct field, in HISTORICAL PARSE ORDER (which pins
-  ParseError precedence on multiply-invalid nodes; emission follows the same
-  order — JSON object equality, the round-trip contract, is key-order
-  agnostic). Row columns:
-    - `f`: struct field name == constructor keyword name.
-    - `wire`: the JSON key (renames live here: `stop` ↔ `"end"`).
-    - `kind`: the value class, naming the coercion/encoding pair —
-      `:string` (`string(v)`/identity), `:string_strict` (`String(v)`),
-      `:float`, `:int`, `:bool`, `:number_or_string`, `:number_or_expr`,
-      `:variable_bound` (number kept as authored, or a name; esm-spec §6.3.2),
-      `:expr`, `:expr_vec`, `:string_vec` (`string.()` each),
-      `:string_vec_strict` (`Vector{String}(v)`), `:float_map`,
-      `:value_map` (scalar-or-inline-array map, esm-spec §6.6.2),
-      `:inline_value` (scalar-or-inline-array, esm-spec §6.3),
-      `:str_keyed_copy` (string-keyed shallow `Dict{String,Any}` copy),
-      `:raw` (`_to_native_json` verbatim passthrough), `:raw_vec`,
-      `:model_variable_type`, `:record`/`:record_vec`/`:record_map`
-      (nested `coerce_<of>`/`serialize_<of>`; `T` names the element type),
-      `:custom` (`parse_fn` on the fetched value; `emit_fn` on the struct).
-    - `mode`: parse-side fetch policy — `:req` (`data[wire]`, KeyError when
-      missing, exactly as the historical direct index), `:req_err`
-      (`_has_field` guard throwing the PINNED `req_err` message; a JSON
-      `null` value then flows to the converter — or to `default` when the
-      row has one — matching each historical site), `:req_nullerr`
-      (null-or-absent throws `req_err`), `:opt` (absent/null → `nothing`),
-      `:opt_empty` (absent/null → `default`), `:default` (absent/null →
-      `default`, present → converted), `:force` (fetch null-as-absent and
-      convert unconditionally, so the converter's own error surfaces).
-    - `emit`: serialize-side omission policy — `:always`, `:nonnothing`,
-      `:nonempty`, `:nondefault` (against `default`), `:custom`
-      (`emit_fn(x)`, `nothing` skips the key), `:never`.
-    - `pos`: `true` for the constructor's positional arguments (in row
-      order); all other rows pass as keywords.
-
-The IRREGULAR residue deliberately stays hand-written and is NOT here:
-discriminated-union sniffing (`coerce_coupling_entry`, `coerce_trigger` /
-`serialize_trigger`, `_coerce_subsystem_entry` / `_serialize_subsystem`),
-name-keyed-map↔vector conversions with injected names (`ReactionSystem`),
-`Reaction` (null-vs-absent substrates/products + `_emit_stoich`),
-`CouplingVariableMap` (transform union + constructor-error rebranding),
-`coerce_enums` (enum-name-context-threaded ParseError messages), and the
-`EsmFile` orchestrator.
-
-A load-time assert (below) pins each entry's rows to `fieldnames(T)` exactly;
-`round_trip_regression_test.jl` / `conformance_round_trip_test.jl` pin the
-wire behavior.
-"""
-const RECORD_FIELD_TABLES = (
-    (
-        T = :Reference, fn = :reference, rows = (
-            (f = :doi, wire = "doi", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :citation, wire = "citation", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :url, wire = "url", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :notes, wire = "notes", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :Metadata, fn = :metadata, rows = (
-            (f = :name, wire = "name", kind = :string, mode = :req, emit = :always, pos = true),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :authors, wire = "authors", kind = :string_vec, mode = :opt_empty, default = :(String[]), emit = :nonempty),
-            (f = :license, wire = "license", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :created, wire = "created", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :modified, wire = "modified", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :tags, wire = "tags", kind = :string_vec, mode = :opt_empty, default = :(String[]), emit = :nonempty),
-            (
-                f = :references, wire = "references", kind = :record_vec, of = :reference, eltype = :Reference,
-                mode = :opt_empty, default = :(Reference[]), emit = :nonempty,
-            ),
-            # `discretize()` diagnostics (RFC §12) and the reserved `x_esd`
-            # extension point — all four kept VERBATIM, never interpreted here.
-            (f = :system_class, wire = "system_class", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :dae_info, wire = "dae_info", kind = :raw, mode = :opt, emit = :nonnothing),
-            (f = :discretized_from, wire = "discretized_from", kind = :raw, mode = :opt, emit = :nonnothing),
-            (f = :x_esd, wire = "x_esd", kind = :raw, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :Tolerance, fn = :tolerance, rows = (
-            (f = :abs, wire = "abs", kind = :float, mode = :opt, emit = :nonnothing),
-            (f = :rel, wire = "rel", kind = :float, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :TimeSpan, fn = :time_span, rows = (
-            (f = :start, wire = "start", kind = :float, mode = :req, emit = :always, pos = true),
-            (f = :stop, wire = "end", kind = :float, mode = :req, emit = :always, pos = true),
-        ),
-    ),
-    (
-        T = :Species, fn = :species, injected = true, rows = (
-            (f = :units, wire = "units", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :default, wire = "default", kind = :float, mode = :opt, emit = :nonnothing),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :default_units, wire = "default_units", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :constant, wire = "constant", kind = :bool, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :Parameter, fn = :parameter, injected = true, rows = (
-            # `default` is OPTIONAL: esm-schema.json's `Parameter` declares no
-            # `required` list, so a parameter valued by a `distribution` (or wholly
-            # by a data-source `update`) legally carries none. `mode = :req` here
-            # made such a document a hard `KeyError` at load — not a drop, a
-            # rejection of a conforming file.
-            (f = :default, wire = "default", kind = :float, mode = :opt, emit = :nonnothing, pos = true),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :units, wire = "units", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :default_units, wire = "default_units", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :shape, wire = "shape", kind = :string_vec, mode = :opt, emit = :nonnothing),
-            # The §6.3 value model, shared verbatim with `ModelVariable`: both name
-            # the same hand-written hook pairs (per-kind distribution spelling; the
-            # object-or-array `update` union).
-            (
-                f = :distribution, wire = "distribution", kind = :custom,
-                parse_fn = :coerce_distribution, mode = :opt,
-                emit = :custom, emit_fn = :_emit_distribution,
-            ),
-            (
-                f = :update, wire = "update", kind = :custom,
-                parse_fn = :_coerce_parameter_update_spec, mode = :opt,
-                emit = :custom, emit_fn = :_emit_parameter_update_spec,
-            ),
-        ),
-    ),
-    (
-        T = :Equation, fn = :equation, rows = (
-            (f = :lhs, wire = "lhs", kind = :expr, mode = :req, emit = :always, pos = true),
-            (f = :rhs, wire = "rhs", kind = :expr, mode = :req, emit = :always, pos = true),
-            (f = :_comment, wire = "_comment", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :AffectEquation, fn = :affect_equation, rows = (
-            (f = :lhs, wire = "lhs", kind = :string, mode = :default, default = "", emit = :always, pos = true),
-            (f = :rhs, wire = "rhs", kind = :expr, mode = :force, emit = :always, pos = true),
-        ),
-    ),
-    (
-        T = :Domain, fn = :domain, rows = (
-            (
-                f = :independent_variable, wire = "independent_variable", kind = :string,
-                mode = :default, default = "t", emit = :nondefault,
-            ),
-            (f = :temporal, wire = "temporal", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
-            (f = :element_type, wire = "element_type", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :array_type, wire = "array_type", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :DataSourceLocation, fn = :data_source_location, rows = (
-            (f = :url_template, wire = "url_template", kind = :string, mode = :req, emit = :always, pos = true),
-            (f = :mirrors, wire = "mirrors", kind = :string_vec, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :DataSourceTemporal, fn = :data_source_temporal, rows = (
-            (f = :start, wire = "start", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :stop, wire = "end", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :file_period, wire = "file_period", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :frequency, wire = "frequency", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :records_per_file, wire = "records_per_file", kind = :number_or_string, mode = :opt, emit = :nonnothing),
-            (f = :time_variable, wire = "time_variable", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :records_per_sample, wire = "records_per_sample", kind = :int, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :DataSourceDeterminism, fn = :data_source_determinism, rows = (
-            (f = :endian, wire = "endian", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :float_format, wire = "float_format", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :integer_width, wire = "integer_width", kind = :int, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :DataSource, fn = :data_source, rows = (
-            (f = :kind, wire = "kind", kind = :string, mode = :req, emit = :always, pos = true),
-            (f = :source, wire = "source", kind = :record, of = :data_source_location, mode = :req, emit = :always, pos = true),
-            (f = :temporal, wire = "temporal", kind = :record, of = :data_source_temporal, mode = :opt, emit = :nonnothing),
-            # Emit-side residue AS A COLUMN: determinism is emitted only when
-            # present AND its serialized dict is non-empty (the historical
-            # `isempty(det_dict) ||` guard) — a cross-field-free but
-            # doubly-conditional policy, so it names a hand-written hook.
-            (
-                f = :determinism, wire = "determinism", kind = :record, of = :data_source_determinism, mode = :opt,
-                emit = :custom, emit_fn = :_emit_data_source_determinism,
-            ),
-            # The decode / slice / filter blocks, kept VERBATIM: nothing in this
-            # package reads them back — their job is to reach the format reader
-            # that does, unchanged (esm-spec §8).
-            (f = :reader_options, wire = "reader_options", kind = :raw, mode = :opt, emit = :nonnothing),
-            (f = :select, wire = "select", kind = :raw, mode = :opt, emit = :nonnothing),
-            (f = :record_filter, wire = "record_filter", kind = :raw, mode = :opt, emit = :nonnothing),
-            (f = :extent, wire = "extent", kind = :raw, mode = :opt, emit = :nonnothing),
-            (f = :reference, wire = "reference", kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
-            (f = :metadata, wire = "metadata", kind = :raw, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :CouplingImport, fn = :coupling_import, tag = "coupling_import", rows = (
-            (
-                f = :ref, wire = "ref", kind = :string_strict, mode = :req_err,
-                req_err = "coupling_import requires 'ref' field", emit = :always, pos = true,
-            ),
-            (
-                f = :bind, wire = "bind", kind = :custom, parse_fn = :_coerce_coupling_import_bind,
-                mode = :opt_empty, default = :(Dict{String, String}()),
-                emit = :custom, emit_fn = :_emit_coupling_import_bind, pos = true,
-            ),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :CouplingOperatorCompose, fn = :operator_compose, tag = "operator_compose", rows = (
-            (
-                f = :systems, wire = "systems", kind = :string_vec_strict, mode = :req_err,
-                req_err = "operator_compose requires 'systems' field", emit = :always, pos = true,
-            ),
-            (f = :translate, wire = "translate", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :lifting, wire = "lifting", kind = :string, mode = :opt, emit = :nonnothing),
-            # esm-libraries-spec §4.7.1 step 5. TRI-STATE, so `:opt`/`:nonnothing`
-            # rather than a defaulted bool: an ABSENT key and an explicit `false`
-            # mean different things, and an explicit `false` must survive the round
-            # trip — dropping it as "the default" would silently re-arm the
-            # zero-merge refusal on every document that opted out.
-            (
-                f = :require_match, wire = "require_match", kind = :bool,
-                mode = :opt, emit = :nonnothing,
-            ),
-        ),
-    ),
-    (
-        T = :CouplingCouple, fn = :couple, tag = "couple", rows = (
-            (
-                f = :systems, wire = "systems", kind = :string_vec_strict, mode = :req_err,
-                req_err = "couple requires 'systems' field", emit = :always, pos = true,
-            ),
-            (
-                f = :connector, wire = "connector", kind = :str_keyed_copy, mode = :req_err,
-                req_err = "couple requires 'connector' field", emit = :always, pos = true,
-            ),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :lifting, wire = "lifting", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :CouplingOperatorApply, fn = :operator_apply, tag = "operator_apply", rows = (
-            (
-                f = :operator, wire = "operator", kind = :string_strict, mode = :req_err,
-                req_err = "operator_apply requires 'operator' field", emit = :always, pos = true,
-            ),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :CouplingCallback, fn = :callback, tag = "callback", rows = (
-            (
-                f = :callback_id, wire = "callback_id", kind = :string_strict, mode = :req_err,
-                req_err = "callback requires 'callback_id' field", emit = :always, pos = true,
-            ),
-            (f = :config, wire = "config", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :CouplingEvent, fn = :coupling_event, tag = "event", rows = (
-            (
-                f = :event_type, wire = "event_type", kind = :string_strict, mode = :req_err,
-                req_err = "event requires 'event_type' field", emit = :always, pos = true,
-            ),
-            (f = :name, wire = "name", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :conditions, wire = "conditions", kind = :expr_vec, mode = :opt, emit = :nonnothing),
-            (f = :trigger, wire = "trigger", kind = :record, of = :trigger, mode = :opt, emit = :nonnothing),
-            (
-                f = :affects, wire = "affects", kind = :record_vec, of = :affect_equation,
-                eltype = :AffectEquation, mode = :req_err,
-                req_err = "event requires 'affects' field", emit = :always, pos = true,
-            ),
-            (
-                f = :affect_neg, wire = "affect_neg", kind = :record_vec, of = :affect_equation,
-                eltype = :AffectEquation, mode = :opt, emit = :nonnothing,
-            ),
-            (f = :root_find, wire = "root_find", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :reinitialize, wire = "reinitialize", kind = :bool, mode = :opt, emit = :nonnothing),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :IndexSet, fn = :index_set, rows = (
-            (
-                f = :kind, wire = "kind", kind = :string, mode = :req_nullerr,
-                req_err = "index_sets entry requires a `kind` field", emit = :always, pos = true,
-            ),
-            (f = :size, wire = "size", kind = :int, mode = :opt, emit = :nonnothing),
-            # ONE wire key, TWO struct fields (the §5.3 representation policy):
-            # `members` is the stringified convenience view; `members_raw` retains
-            # the originally-typed values only when some member is non-string, and
-            # is what round-trips back to the wire `members` key when present.
-            (
-                f = :members, wire = "members", kind = :custom, parse_fn = :_coerce_index_set_members,
-                mode = :opt, emit = :custom, emit_fn = :_emit_index_set_members,
-            ),
-            (
-                f = :members_raw, wire = "members", kind = :custom,
-                parse_fn = :_coerce_index_set_members_raw, mode = :opt, emit = :never,
-            ),
-            (f = :of, wire = "of", kind = :string_vec, mode = :opt, emit = :nonnothing),
-            (f = :offsets, wire = "offsets", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :values, wire = "values", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :from_faq, wire = "from_faq", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :member_factor, wire = "member_factor", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :records, wire = "records", kind = :bool, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :ModelVariable, fn = :model_variable, rows = (
-            (f = :type, wire = "type", kind = :model_variable_type, mode = :req, emit = :always, pos = true),
-            # Scalar, or INLINE ARRAY DATA for a shaped variable (esm-spec §6.3).
-            (f = :default, wire = "default", kind = :inline_value, mode = :opt, emit = :nonnothing),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :units, wire = "units", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :default_units, wire = "default_units", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :shape, wire = "shape", kind = :string_vec, mode = :opt, emit = :nonnothing),
-            (f = :location, wire = "location", kind = :string, mode = :opt, emit = :nonnothing),
-            # The two parameter value fields of esm 1.0.0 (§6.3). `distribution`
-            # spells its parameters differently per kind and `update` is an
-            # object-or-array union, so both name hand-written hook pairs rather
-            # than a column shape the table can express.
-            (
-                f = :distribution, wire = "distribution", kind = :custom,
-                parse_fn = :coerce_distribution, mode = :opt,
-                emit = :custom, emit_fn = :_emit_distribution,
-            ),
-            (
-                f = :update, wire = "update", kind = :custom,
-                parse_fn = :_coerce_parameter_update_spec, mode = :opt,
-                emit = :custom, emit_fn = :_emit_parameter_update_spec,
-            ),
-            (f = :element_type, wire = "element_type", kind = :string, mode = :opt, emit = :nonnothing),
-            # esm-spec §6.3.2: a number or a variable name, emitted as authored.
-            (f = :lb, wire = "lb", kind = :variable_bound, mode = :opt, emit = :nonnothing),
-            (f = :ub, wire = "ub", kind = :variable_bound, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :FunctionalUpdate, fn = :functional_update, rows = (
-            (
-                f = :handler_id, wire = "handler_id", kind = :string_strict, mode = :req_err,
-                req_err = "update handler requires a 'handler_id' field", emit = :always, pos = true,
-            ),
-            (f = :read_vars, wire = "read_vars", kind = :string_vec, mode = :opt, emit = :nonnothing),
-            (f = :read_params, wire = "read_params", kind = :string_vec, mode = :opt, emit = :nonnothing),
-            (f = :config, wire = "config", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :DataSourceBinding, fn = :data_source_binding, rows = (
-            (
-                f = :file_variable, wire = "file_variable", kind = :string_strict, mode = :req_err,
-                req_err = "update 'from' requires a 'file_variable' field", emit = :always, pos = true,
-            ),
-            (f = :unit_conversion, wire = "unit_conversion", kind = :number_or_expr, mode = :opt, emit = :nonnothing),
-            (f = :codes, wire = "codes", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
-            (f = :select, wire = "select", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
-            (f = :records_per_sample, wire = "records_per_sample", kind = :int, mode = :opt, emit = :nonnothing),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :reference, wire = "reference", kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :ParameterUpdate, fn = :parameter_update, rows = (
-            (
-                f = :kind, wire = "kind", kind = :string_strict, mode = :req_nullerr,
-                req_err = "parameter update requires a 'kind' field", emit = :always, pos = true,
-            ),
-            (f = :times, wire = "times", kind = :float_vec, mode = :opt, emit = :nonnothing),
-            (f = :interval, wire = "interval", kind = :float, mode = :opt, emit = :nonnothing),
-            (f = :initial_offset, wire = "initial_offset", kind = :float, mode = :opt, emit = :nonnothing),
-            (f = :when, wire = "when", kind = :expr, mode = :opt, emit = :nonnothing),
-            (f = :direction, wire = "direction", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :source, wire = "source", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :hook, wire = "hook", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :expression, wire = "expression", kind = :expr, mode = :opt, emit = :nonnothing),
-            (f = :from, wire = "from", kind = :record, of = :data_source_binding, mode = :opt, emit = :nonnothing),
-            (f = :handler, wire = "handler", kind = :record, of = :functional_update, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :ContinuousEvent, fn = :continuous_event, rows = (
-            (
-                f = :conditions, wire = "conditions", kind = :expr_vec, mode = :req_err,
-                req_err = "ContinuousEvent requires 'conditions' field", default = :(ASTExpr[]),
-                emit = :always, pos = true,
-            ),
-            (
-                f = :affects, wire = "affects", kind = :record_vec, of = :affect_equation,
-                eltype = :AffectEquation, mode = :opt_empty, default = :(AffectEquation[]),
-                emit = :always, pos = true,
-            ),
-            (
-                f = :affect_neg, wire = "affect_neg", kind = :record_vec, of = :affect_equation,
-                eltype = :AffectEquation, mode = :opt, emit = :nonnothing,
-            ),
-            (f = :root_find, wire = "root_find", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :reinitialize, wire = "reinitialize", kind = :bool, mode = :opt, emit = :nonnothing),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :name, wire = "name", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :DiscreteEvent, fn = :discrete_event, rows = (
-            (
-                f = :trigger, wire = "trigger", kind = :record, of = :trigger, mode = :req_err,
-                req_err = "DiscreteEvent requires 'trigger' field", emit = :always, pos = true,
-            ),
-            # esm 1.0.0: `affects` is the only affect channel. The
-            # `functional_affect` descriptor and the `discrete_parameters` list are
-            # gone — a handler now lives on the parameter it writes
-            # (`update.handler`), and an `affects` LHS naming a parameter is
-            # `event_affects_parameter`.
-            # `:custom` names a hand-written hook on BOTH sides. Parse keeps the
-            # per-entry lhs/rhs presence check; emit must name a hook too, because
-            # `_record_emit_expr` has no `:custom` case and would otherwise emit the
-            # `AffectEquation` structs verbatim — a JSON3 field dump carrying `wrt`,
-            # `label`, `output`, … that no longer validates against the schema.
-            (
-                f = :affects, wire = "affects", kind = :custom, parse_fn = :_coerce_discrete_affects,
-                mode = :opt_empty, default = :(AffectEquation[]),
-                emit = :custom, emit_fn = :_emit_discrete_event_affects, pos = true,
-            ),
-            (f = :reinitialize, wire = "reinitialize", kind = :bool, mode = :opt, emit = :nonnothing),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :name, wire = "name", kind = :string, mode = :opt, emit = :nonnothing),
-        ),
-    ),
-    (
-        T = :Assertion, fn = :assertion, rows = (
-            (f = :variable, wire = "variable", kind = :string, mode = :req, emit = :always, pos = true),
-            (f = :time, wire = "time", kind = :float, mode = :req, emit = :always, pos = true),
-            (f = :expected, wire = "expected", kind = :float, mode = :req, emit = :always, pos = true),
-            (f = :tolerance, wire = "tolerance", kind = :record, of = :tolerance, mode = :opt, emit = :nonnothing),
-            (f = :coords, wire = "coords", kind = :float_map, mode = :opt, emit = :nonnothing),
-            (f = :reduce, wire = "reduce", kind = :string, mode = :opt, emit = :nonnothing),
-            # from_file-vs-Expression discriminated union (spec §6.6.5): the
-            # `type` field — not dict-ness — routes to the verbatim from_file
-            # shape; anything else parses as an Expression AST.
-            (
-                f = :reference, wire = "reference", kind = :custom, parse_fn = :_coerce_assertion_reference,
-                mode = :opt, emit = :custom, emit_fn = :_emit_assertion_reference,
-            ),
-        ),
-    ),
-    (
-        T = :InlineTest, fn = :test, rows = (
-            (f = :id, wire = "id", kind = :string, mode = :req, emit = :always, pos = true),
-            (
-                f = :time_span, wire = "time_span", kind = :record, of = :time_span, mode = :req,
-                emit = :always, pos = true,
-            ),
-            (
-                f = :assertions, wire = "assertions", kind = :record_vec, of = :assertion,
-                eltype = :Assertion, mode = :req, emit = :always, pos = true,
-            ),
-            (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-            (
-                f = :initial_conditions, wire = "initial_conditions", kind = :value_map,
-                mode = :opt_empty, default = :(Dict{String, Any}()), emit = :nonempty,
-            ),
-            (
-                f = :parameter_overrides, wire = "parameter_overrides", kind = :value_map,
-                mode = :opt_empty, default = :(Dict{String, Any}()), emit = :nonempty,
-            ),
-            (f = :tolerance, wire = "tolerance", kind = :record, of = :tolerance, mode = :opt, emit = :nonnothing),
-            # esm-spec §9.7.10 form C: a test's injected imports are authored
-            # per-run config and DO survive parse → emit (unlike a component's
-            # own imports, which the load-time fixpoint consumes).
-            (
-                f = :expression_template_imports, wire = "expression_template_imports", kind = :raw_vec,
-                mode = :opt_empty, default = :(Any[]), emit = :nonempty,
-            ),
-        ),
-    ),
-    (
-        T = :Model, fn = :model, rows = (
-            (
-                f = :variables, wire = "variables", kind = :record_map, of = :model_variable,
-                eltype = :ModelVariable, mode = :req, emit = :always, pos = true,
-            ),
-            (
-                f = :equations, wire = "equations", kind = :record_vec, of = :equation,
-                eltype = :Equation, mode = :req, emit = :always, pos = true,
-            ),
-            (
-                f = :discrete_events, wire = "discrete_events", kind = :record_vec, of = :discrete_event,
-                eltype = :DiscreteEvent, mode = :opt_empty, default = :(DiscreteEvent[]), emit = :nonempty,
-            ),
-            (
-                f = :continuous_events, wire = "continuous_events", kind = :record_vec, of = :continuous_event,
-                eltype = :ContinuousEvent, mode = :opt_empty, default = :(ContinuousEvent[]), emit = :nonempty,
-            ),
-            (
-                f = :initialization_equations, wire = "initialization_equations", kind = :record_vec,
-                of = :equation, eltype = :Equation, mode = :opt_empty, default = :(Equation[]),
-                emit = :nonempty,
-            ),
-            # number-or-Expression solver guesses (gt-ebuq) — a per-value union,
-            # so a hand-written hook pair.
-            (
-                f = :guesses, wire = "guesses", kind = :custom, parse_fn = :_coerce_model_guesses,
-                mode = :opt_empty, default = :(Dict{String, Union{Float64, ASTExpr}}()),
-                emit = :custom, emit_fn = :_emit_model_guesses,
-            ),
-            (f = :system_kind, wire = "system_kind", kind = :string, mode = :opt, emit = :nonnothing),
-            (f = :tolerance, wire = "tolerance", kind = :record, of = :tolerance, mode = :opt, emit = :nonnothing),
-            (
-                f = :tests, wire = "tests", kind = :record_vec, of = :test, eltype = :InlineTest,
-                mode = :opt_empty, default = :(InlineTest[]), emit = :nonempty,
-            ),
-            # Inline analyses, carried VERBATIM (nothing here runs them).
-            (
-                f = :analyses, wire = "analyses", kind = :raw_vec, mode = :opt_empty,
-                default = :(Any[]), emit = :nonempty,
-            ),
-            (
-                f = :reference, wire = "reference", kind = :record, of = :reference,
-                mode = :opt, emit = :nonnothing,
-            ),
-            # schema §4.7 subsystems: per-entry oneOf [Model, SubsystemRef],
-            # sniffed by the hand-written union hooks. A data source is a registry
-            # entry from 1.0.0 and can no longer be a subsystem.
-            (
-                f = :subsystems, wire = "subsystems", kind = :custom, parse_fn = :_coerce_model_subsystems,
-                mode = :opt_empty, default = :(Dict{String, SubsystemNode}()),
-                emit = :custom, emit_fn = :_emit_model_subsystems,
-            ),
-        ),
-    ),
-)
-
-# Each entry's rows (plus the injected map-key name, when marked) must cover
-# EXACTLY the struct's fields — a new field without a row fails at load, the
-# same guarantee `OPEXPR_FIELD_TABLE` gives `OpExpr`.
-for spec in RECORD_FIELD_TABLES
-    T = getfield(@__MODULE__, spec.T)
-    covered = Set{Symbol}(row.f for row in spec.rows)
-    get(spec, :injected, false) && push!(covered, :name)
-    @assert covered == Set(fieldnames(T)) "RECORD_FIELD_TABLES.$(spec.T) rows must cover fieldnames($(spec.T)) exactly"
 end
