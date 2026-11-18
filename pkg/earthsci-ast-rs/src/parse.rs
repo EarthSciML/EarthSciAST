@@ -851,7 +851,7 @@ fn schema_keyword_for_kind(kind: &ValidationErrorKind) -> &'static str {
 const SCHEMA_DESCENT_CAP: usize = 16;
 
 /// Validate `json_value` against the ESM schema and return **one
-/// [`SchemaError`] per violation** (CONFORMANCE_SPEC.md §7.1.2), instead of the
+/// [`SchemaError`](crate::validate::SchemaError) per violation** (CONFORMANCE_SPEC.md §7.1.2), instead of the
 /// single `"; "`-joined blob [`validate_schema`] produces for the load path.
 ///
 /// Each record carries the RFC-6901 JSON Pointer of the offending node (the

@@ -759,7 +759,8 @@ pub(super) struct Window<'a> {
     pub(super) hi: usize,
     /// 0 for a plain window.
     pub(super) period: usize,
-    /// [`node_elems`] of the group's schedule.
+    /// [`node_elems`](crate::simulate_array::tape::prepared::node_elems) of the
+    /// group's schedule.
     pub(super) node_elems: &'a [usize],
 }
 

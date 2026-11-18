@@ -677,7 +677,7 @@ pub(super) fn negate(v: Value) -> Value {
 /// (scalar OR array). An ARRAY `cond` SELECTS elementwise — `a`/`b` (scalar or
 /// array) are broadcast to the common shape and chosen per cell — so a per-cell
 /// fuel-model lookup `ifelse(and(code>=1, code<=13), lookup, default)`
-/// materializes at `code`'s [x,y] shape instead of collapsing to a scalar. A
+/// materializes at `code`'s `[x,y]` shape instead of collapsing to a scalar. A
 /// true select (not a `cond*a + (1-cond)*b` blend) keeps a `NaN` in the
 /// *unchosen* branch — e.g. an out-of-table lookup — from contaminating the
 /// result.
@@ -1611,12 +1611,11 @@ mod kernel_equivalence_tests {
 
 /// Evaluate a strictly-binary op (`atan2`, the comparisons).
 ///
-/// The arity guard is not decoration: this function used to index `args[0]` and
-/// `args[1]` unconditionally, so `{"op":"atan2","args":[1.0]}` — a
-/// *schema-valid* document, since the schema puts no lower bound on `args` —
-/// **panicked** with an index-out-of-bounds. [`crate::op_registry`] now rejects
-/// that node at the compile gate, but `eval_expression` is a public entry point
-/// that bypasses the gate, so the guard stays as the backstop that makes a panic
+/// The arity guard is not decoration: `{"op":"atan2","args":[1.0]}` is
+/// *schema-valid* (the schema puts no lower bound on `args`), and indexing
+/// `args[1]` on it would panic. [`crate::op_registry`] rejects that node at
+/// the compile gate, but `eval_expression` is a public entry point that
+/// bypasses the gate, so the guard is the backstop that makes a panic
 /// unreachable rather than merely unlikely.
 pub(super) fn eval_binary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
     let ([a_expr, b_expr] | [a_expr, b_expr, ..]) = args else {
@@ -1954,10 +1953,10 @@ pub(crate) fn recur_unavailable_message(name: &str, raw: &[i64]) -> String {
 ///
 /// `index(x)` with no subscript is the identity and never reaches here; this is
 /// `index(x, i, …)` where `x` turned out to be 0-D, so the subscripts name
-/// nothing there is to name. The alternative is the NaN this used to return,
-/// and a NaN is laundered by any `max(x, 0)`, `ifelse` or comparison the body
-/// goes on to apply — the document then reports a number that was never
-/// computed.
+/// nothing there is to name. It latches a fault rather than returning NaN,
+/// because a NaN is laundered by any `max(x, 0)`, `ifelse` or comparison the
+/// body goes on to apply — the document would then report a number that was
+/// never computed.
 fn latch_index_on_scalar(base: &Expr, subscripts: usize) {
     latch_fault(
         fault_code::INDEX_ON_SCALAR,
@@ -3403,8 +3402,8 @@ struct CacheEntry<V> {
 /// than the whole budget. Two gates on ONE aggregate cannot trigger the former
 /// (both are resolved, and so both `in_use`, before either is consulted), and a
 /// steady-state repeated node whose index FITS never evicts at all.
-/// [`gate_cache_pair_budget`] is the escape hatch if a document finds a shape
-/// that does.
+/// [`gate_cache_pair_budget`](crate::broad_phase::gate_cache_pair_budget) is
+/// the escape hatch if a document finds a shape that does.
 struct GateCache<K, V> {
     entries: HashMap<K, CacheEntry<V>>,
     clock: u64,
@@ -3583,12 +3582,9 @@ fn overlap_cache_key(ov: &crate::types::OverlapClause, eps: f64, ctx: &EvalCtx) 
 /// `on` clause (§5.5.8) — and return them ordered MOST SELECTIVE FIRST
 /// (§5.24).
 ///
-/// This used to return the FIRST resolvable clause and stop, which made the
-/// node's cost a function of the order the author happened to type the clauses
-/// in: measured on the four-clause NONROAD roll-up `tech_fraction`, the best
-/// and worst orderings of one unchanged document differ by 47× in wall clock
-/// (moves.esm `docs/findings/README.md` F17). Resolving them all costs one
-/// equijoin per clause — each `O(|L|+|R|+|matches|)`, memoised across
+/// Resolving every clause, rather than stopping at the first resolvable one,
+/// keeps the node's cost independent of the order the author typed the
+/// clauses in. Resolving them all costs one equijoin per clause — each `O(|L|+|R|+|matches|)`, memoised across
 /// evaluations by [`EQ_GATE_CACHE`] — and buys two things: the driver picks by
 /// SELECTIVITY rather than by position, and, because the gates compose by
 /// conjunction, [`reduce_contraction_gated`] can INTERSECT their partner sets
@@ -3694,8 +3690,8 @@ pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<Join
     // gets built needs the same keys again — so keeping them is worth a whole
     // `side_keys` pass over a multi-million-row column (issue #418's remaining
     // per-fact-row term). Keeping EVERY candidate's, though, makes a node's
-    // peak the SUM of its clauses' key columns where it used to be the largest
-    // single one, and a `Key` is 32 B per row before a composite adds a `Vec`
+    // peak the SUM of its clauses' key columns rather than the largest single
+    // one, and a `Key` is 32 B per row before a composite adds a `Vec`
     // per row. So exactly one is retained, and it is the cheapest: `priced` is
     // resolved in ascending `matches`, so that candidate sorts first, is the
     // one a decline can never reach while `gates` is empty, and is therefore
@@ -5185,7 +5181,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     if regions.is_empty() || values.len() != regions.len() {
         return Value::Scalar(f64::NAN);
     }
-    // Two region shapes used to PANIC here rather than being rejected: a ragged
+    // Two region shapes would PANIC below if they reached it: a ragged
     // `regions` list (rank taken from `regions[0]`, then `lo[d]`/`hi[d]` indexed
     // for every `d` of every region) and an inverted pair like `[5, 2]` (extent
     // `-2`, cast `as usize`, capacity-overflow in `ArrayD::zeros`). The registry
@@ -5263,14 +5259,10 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
             if region_shape.contains(&0) {
                 continue;
             }
-            // Whole-region slice assign. This used to be a `CartesianTuples`
-            // walk that built TWO `Vec<usize>` index tuples per cell and wrote
-            // through `ArrayD`'s bounds-checked, dynamic-stride `Index`/
-            // `IndexMut` — two heap allocations and two `stride_offset_checked`
-            // computations per element, for what is a straight sub-block copy.
-            // `assign` moves the same values to the same places (both arrays are
-            // in the evaluator's row-major layout and the shapes were just
-            // checked equal), so the result is bit-identical.
+            // Whole-region slice assign: a straight sub-block copy, with no
+            // per-cell index tuples. Both arrays are in the evaluator's
+            // row-major layout and the shapes were just checked equal, so
+            // every value lands at its region cell.
             arr.slice_each_axis_mut(|ax| {
                 let d = ax.axis.index();
                 let s0 = (ranges[d].0 - origin[d]) as usize;
@@ -5402,14 +5394,7 @@ pub(super) fn eval_concat(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 /// `broadcast` (esm-spec §4.3.4): apply the scalar operator named in `fn`
 /// element-wise to the operands in `args`.
 ///
-/// The whole implementation is one delegation, and that is the fix for issue
-/// #101. It used to left-fold `args` through the BINARY kernel table, which
-/// made a one-operand `broadcast` the IDENTITY: `broadcast(fn = "-", [x])`
-/// returned `x`, unnegated, with no error — and so did `fn: "neg"`,
-/// `fn: "log"`, and even `fn: "not_a_real_op"`, because a missing kernel simply
-/// never got the chance to run. A missing `fn` silently became `"+"`.
-///
-/// Delegating to [`eval_op_named`] makes `broadcast(fn = F, args)` evaluate
+/// The whole implementation is one delegation. Delegating to [`eval_op_named`] makes `broadcast(fn = F, args)` evaluate
 /// through EXACTLY the arm that evaluates `{"op": F, "args": args}` — unary
 /// maps, `neg`, `ifelse` and the n-ary folds alike — so the two spellings agree
 /// bit for bit and cannot drift.
@@ -5527,7 +5512,7 @@ mod evaluability_gate_tests {
     }
 
     /// An unlowered rewrite-target sugar op reaching evaluation is reported,
-    /// where it used to yield the NaN sentinel.
+    /// not answered with the NaN sentinel.
     #[test]
     fn unlowered_spatial_op_is_rejected_not_nan() {
         let err = eval_it(&node("grad", vec![Expr::Variable("c".into())]))
@@ -5548,9 +5533,9 @@ mod evaluability_gate_tests {
         node(op, (0..n).map(|_| Expr::Variable("x".into())).collect())
     }
 
-    /// The gap this closes: ops the REGISTRY calls legal (`is_core_op`) but this
-    /// evaluator has no arm for, because an earlier pipeline stage was supposed
-    /// to eliminate them. They used to fall through to `_ => NaN`.
+    /// Ops the REGISTRY calls legal (`is_core_op`) but this evaluator has no
+    /// arm for, because an earlier pipeline stage eliminates them, are
+    /// reported rather than answered with `NaN`.
     #[test]
     fn registry_legal_but_unevaluable_ops_are_rejected_not_nan() {
         for op in ["distinct", "ic", "enum"] {
@@ -6067,17 +6052,15 @@ mod gate_cache_budget_tests {
 /// A join gate is PRICED before it is built, and one that cannot pay for
 /// itself is declined (issue #418 follow-up).
 ///
-/// [`resolve_join_gates`] used to build an index for every clause and only then
-/// consult §5.24's selectivity estimate to pick a driver. A clause whose key is
-/// low-cardinality matches enormously — six distinct fuel types against a
-/// 1.4-million-row table is 167 million pairs — so a sibling clause that has
-/// already cut that table to seven rows does not save the memory: the pairs are
-/// materialised first and the selectivity is consulted second.
-///
-/// Now [`crate::relational::equijoin_match_count`] reads what a gate WOULD cost
-/// in `O(|L| + |R|)` without writing a pair, gates are resolved cheapest-first,
-/// and one that would materialise more pairs than the tuples it could prune is
-/// declined.
+/// A clause whose key is low-cardinality matches enormously — six distinct
+/// fuel types against a 1.4-million-row table is 167 million pairs — so
+/// building every clause's index before consulting §5.24's selectivity
+/// estimate would materialise those pairs even when a sibling clause has
+/// already cut the table to seven rows. [`resolve_join_gates`] therefore reads
+/// what a gate WOULD cost with [`crate::relational::equijoin_match_count`]
+/// (`O(|L| + |R|)`, no pair written), resolves gates cheapest-first, and
+/// declines one that would materialise more pairs than the tuples it could
+/// prune.
 ///
 /// These run INSIDE the crate rather than from `tests/`, so the planner's
 /// knobs and counters stay `pub(crate)`: an integration test would have to be

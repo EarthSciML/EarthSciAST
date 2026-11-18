@@ -202,8 +202,7 @@ fn index_on_a_scalar_parameter_faults() {
 /// `faq` and two boundary faces whose values are aggregates over the face's
 /// one free axis — the leading-singleton face `[[1,1],[1,m]]` holding an
 /// `[m]` value, and the trailing-singleton face `[[1,n],[1,1]]` an `[n]`
-/// one. The oracle used to poison such a makearray with `NaN`; esm-spec
-/// §4.3.2 places the value over the non-singleton axes.
+/// one. Esm-spec §4.3.2 places the value over the non-singleton axes.
 #[test]
 fn makearray_lower_rank_region_values() {
     let (n, m) = (5i64, 4i64);

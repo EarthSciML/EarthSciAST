@@ -3078,7 +3078,7 @@ pub(crate) struct RuleInfo {
 /// There is no program. The instruction set has no way to hand a rule to the
 /// per-cell oracle, so a model with a rule the tape cannot express has no
 /// tape at all: a strict compiler refuses it at construction, and the
-/// historical routing runs the whole model on the legacy evaluator. The
+/// interpreter runs the whole model per cell. The
 /// lowering still runs to the end so that every rule's cadence, and every
 /// declined rule's reason, is known to the compiler report.
 #[derive(Clone, Debug)]
