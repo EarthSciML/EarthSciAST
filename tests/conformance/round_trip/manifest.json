@@ -200,7 +200,7 @@
     { "id": "valid/advection_reaction_loaded_ic_bc", "path": "valid/advection_reaction_loaded_ic_bc.esm", "tags": ["expression_templates", "transforming"],
       "load_transforms": [
         { "transform": "eager_template_expansion", "spec": "esm-spec 9.6.4 rule 3",
-          "detail": "the `grad` templates are TARGET-BEARING, so their call sites expand before emit. All five bindings perform it." },
+          "detail": "the spatial-`D` (`grad_lon_inflow`) templates are TARGET-BEARING, so their call sites expand before emit. All five bindings perform it." },
         { "transform": "match_only_registry_drop", "spec": "esm-spec 9.6.4 rule 5",
           "detail": "the component's `match`-only expression_templates block — consumed by the 9.6.3 fixpoint, invocable by nothing — is REQUIRED to be dropped from the emitted component." }
       ] },

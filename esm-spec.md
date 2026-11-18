@@ -1,6 +1,19 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 2.3.0**
+**EarthSciML Abstract Syntax Tree Format — Version 3.0.0**
+
+> **3.0.0 is a break that only removes.** The open-tier sugar ops `grad`,
+> `div` and `laplacian` are removed. A spatial derivative is written with
+> spatial `D`, one per axis: `grad(f, dim: x)` is `D(f, wrt: x)`, `div(F)` is
+> Σᵢ `D(Fᵢ, wrt: xᵢ)`, and `laplacian(u)` is Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`. A
+> scheme that is not written per axis (a finite-volume divergence on an
+> unstructured mesh, for example) is a user op lowered by a rewrite rule
+> (§9.6.8). A loader rejects a document using any of the three with
+> `removed_op`, whatever `esm` it declares (§4.2, "Removed ops"); there is no
+> codemod (`MIGRATION.md`, "esm 3.0.0"). Spatial `D`, `integral` and user ops
+> are unchanged. A 1.x or 2.x document that uses no removed construct still
+> loads, on its own and as a mounted or referenced document of a 3.0.0 root,
+> and the version gates of its own release still apply.
 
 > **2.3.0 is additive.** The JSON form does not change. The word spellings
 > `neg` and `pow` are deprecated: a loader rewrites them to unary `-` and `^`
@@ -110,7 +123,7 @@ source document is a lossless spelling of it.
 
 ```json
 {
-  "esm": "2.3.0",
+  "esm": "3.0.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
@@ -690,8 +703,8 @@ Every `op` string belongs to one of **two tiers**:
   set is closed: adding one is a spec change, and each binding pins it as its evaluator's op
   registry.
 - **Rewrite-target (open).** Any other `op` identifier — a spatial `D` on a right-hand
-  side, the sugar ops `grad`/`div`/`laplacian`/`integral`, or a user op such as
-  `godunov_hamiltonian`. A rewrite-target op has **no** evaluator; it MUST be eliminated by
+  side, `integral`, or a user op such as `godunov_hamiltonian` — except the removed
+  ops below. A rewrite-target op has **no** evaluator; it MUST be eliminated by
   a rewrite rule (§9.6) before evaluation. Loading is permissive — a file MAY load with
   rewrite-target ops still present (e.g. a coupling or scoping example that never simulates)
   — but one that reaches evaluation/compilation without having been lowered is rejected with
@@ -718,22 +731,27 @@ the document would fail much later as `unlowered_operator`, or never. The list:
 | `argmin`, `argmax` | 2.0.0 | the `argmin` / `argmax` / `argmin_where` / `argmax_where` templates (`lib/relational.esm`) |
 | `polygon_intersection_area` | 2.0.0 | `overlap_area_planar` / `overlap_area_spherical` (`lib/geometry.esm`, §8.6.1) |
 | `intersect_polygon` | 2.0.0 | none |
+| `grad` | 3.0.0 | spatial `D`: `grad(f, dim: x)` is `D(f, wrt: x)` |
+| `div` | 3.0.0 | spatial `D`, one per axis: `div(F)` is Σᵢ `D(Fᵢ, wrt: xᵢ)`; a scheme not written per axis is a user op lowered by a rewrite rule (§9.6.8) |
+| `laplacian` | 3.0.0 | spatial `D`, one per axis: `laplacian(u)` is Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`; or a user op lowered by a rewrite rule |
 
 The `function_tables` block is a field, not an op, and is rejected with the same code.
 The diagnostic names the op or field and the path of the first node carrying it, and
 for a 2.0.0 removal it names the 2.0.0 codemod (`MIGRATION.md`), which rewrites a 1.x
-document into the replacement column. A loader carries no rewrite of its own: it never
-loads a removed op by translating it.
+document into the replacement column. The 3.0.0 removals have no codemod: the diagnostic
+points at `MIGRATION.md` ("esm 3.0.0"), and the author writes the replacement. A loader
+carries no rewrite of its own: it never loads a removed op by translating it.
 
-**1.x documents (normative).** A binding implementing 2.0.0 MUST load a document
-declaring `esm` 1.0.0 through 1.3.0 that uses no removed op or field, both on its own
-and as a mounted (§4.7) or imported (§9.7.2, §10.10) document of a 2.0.0 root; it
-MUST NOT refuse a document because its major version is 1. A removed op or field
-anywhere in such a document is `removed_op`, as in a 2.0.0 one. The version gates
-of the 1.x releases stay live — `faq_version_too_old`, `solver_version_too_old`,
+**1.x and 2.x documents (normative).** A binding implementing 3.0.0 MUST load a
+document declaring `esm` 1.0.0 through 1.3.0 or 2.0.0 through 2.3.0 that uses no removed
+op or field, both on its own and as a mounted (§4.7) or imported (§9.7.2, §10.10)
+document of a 3.0.0 root; it MUST NOT refuse a document because its major version is 1
+or 2. A removed op or field anywhere in such a document is `removed_op`, as in a 3.0.0
+one: a 2.3.0 document that writes `grad` is refused like a 3.0.0 one. The version gates
+of the 1.x and 2.x releases stay live — `faq_version_too_old`, `solver_version_too_old`,
 `solver_external_version_too_old`, `solver_time_span_version_too_old`,
-`const_units_version_too_old` and the rest — and each file is held to its own
-declared version (§4.7).
+`const_units_version_too_old`, `variable_bounds_version_too_old` and the rest — and
+each file is held to its own declared version (§4.7).
 
 #### Arithmetic
 
@@ -898,23 +916,28 @@ A `D` in a **`match` pattern** is subject to exactly the same rule: a pattern
 `{"op":"D","args":[...],"wrt":"t"}` is a structural time derivative and must be unary, while a
 pattern with a spatial (or parameter-valued) `wrt` may carry trailing wildcards.
 
-`grad`, `div`, `laplacian`, and `integral` are **not** built-in operators — they are optional
-**rewrite-target sugar** (open tier, §4.2). `grad(f, dim:x)` is just `D(f, wrt:x)`;
-`div`/`laplacian` are sums/compositions of `D` (`div(F)=ΣᵢD(Fᵢ,xᵢ)`,
-`laplacian(u)=ΣᵢD(D(u,xᵢ),xᵢ)`); `integral` is a PIDE term. This format ships **no** rewrite
-rules for them — the discretization std-lib lives in
-[EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations). See §9.6.8.
+**Spatial operators are written with `D`.** The format has no gradient, divergence or
+Laplacian operator: `grad`, `div` and `laplacian` were removed at esm 3.0.0 ("Removed ops"
+above). A gradient component is `D(f, wrt: x)`; a Cartesian divergence is Σᵢ
+`D(Fᵢ, wrt: xᵢ)`; a Laplacian is Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`, which the bounded fixpoint
+(§9.6.3) lowers inner `D` first. A scheme that is not a sum of per-axis derivatives — a
+finite-volume divergence on an unstructured mesh, a metric Laplacian discretized as one
+stencil — is a user op (any non-core identifier) lowered by a rewrite rule. `integral` is
+not a built-in operator either: it is an open-tier rewrite target for a PIDE term. This
+format ships **no** rewrite rules for spatial `D` or `integral` — the discretization std-lib
+lives in [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations).
+See §9.6.8.
 
-As open-tier rewrite targets these sugar ops (and every user rewrite-target op) carry **no**
-privilege of any kind over the enclosing evaluator, checker, or flattener. Specifically: their
-result dimension is UNDETERMINABLE until they are lowered — they have **no** dimensional rule
-(§4.8.3 "any other op"), so a checker MUST report their dimension as `unknown` and skip the
-enclosing check (§4.8.4), never inventing a coordinate-divided dimension; their `dim`/`var`
-fields are ordinary axis-naming scalar fields resolved **structurally by field, not by op name**
-(§4.9.1); and system dimensionality / independent variables are derived from variable shapes over
-`index_sets` (§11.2), never from the presence of these op names. A binding MUST NOT single these
-names out — `grad`/`div`/`laplacian`/`curl`/`integral` are matched, lowered, and checked by the
-same machinery as any other rewrite-target op.
+`integral` and every user rewrite-target op carry **no** privilege of any kind over the
+enclosing evaluator, checker, or flattener. Specifically: their result dimension is
+UNDETERMINABLE until they are lowered — they have **no** dimensional rule (§4.8.3 "any other
+op"), so a checker MUST report their dimension as `unknown` and skip the enclosing check
+(§4.8.4), never inventing a coordinate-divided dimension; their `dim`/`var` fields are
+ordinary axis-naming scalar fields resolved **structurally by field, not by op name**
+(§4.9.1); and system dimensionality / independent variables are derived from variable shapes
+over `index_sets` (§11.2), never from the presence of an op name. A binding MUST NOT single
+these names out — `integral`, `curl` or any other open-tier name is matched, lowered, and
+checked by the same machinery as any other rewrite-target op.
 
 The `integral` op encodes a spatial partial integral for use in partial integro-differential equations (PIDEs).
 `args[0]` is the integrand expression; `var` names the spatial dimension variable being integrated over;
@@ -3210,8 +3233,8 @@ holds:
 | 3 | no time-derivative equation at all | `"nonlinear"` |
 | 4 | otherwise | `"ode"` |
 
-A **spatial derivative** is a `D` node whose `wrt` is present and is not `"t"`,
-or one of the `grad` / `div` / `laplacian` sugar ops (§4.2). It is detected
+A **spatial derivative** is a `D` node whose `wrt` is present and is not `"t"`
+(§4.2). It is detected
 anywhere in an equation's LHS or RHS, and the walk descends every Expression
 child, not just `args` (§4.9.5).
 
@@ -3226,7 +3249,7 @@ to each binding to guess:
   wording could not implement the `"pde"` branch at all. The differential
   operators in the equations are the whole signal.
 - **The order puts `"pde"` before `"nonlinear"`.** A steady-state PDE
-  (`laplacian(u) ~ f`, no ∂/∂t) has no time-derivative equation and would
+  (`D(D(u, wrt: x), wrt: x) ~ f`, no ∂/∂t) has no time-derivative equation and would
   otherwise fall through to `"nonlinear"`. It is a PDE, and MTK's `PDESystem`
   is what it maps to. `"sde"` still wins over `"pde"`: there is no
   `SPDESystem` constructor to select, so a model that is both is assembled as
@@ -3405,11 +3428,11 @@ Advection is a model like any other — fully specified:
           "args": [
             { "op": "*", "args": [
                 { "op": "-", "args": ["u_wind"] },
-                { "op": "grad", "args": ["_var"], "dim": "x" }
+                { "op": "D", "args": ["_var"], "wrt": "x" }
             ]},
             { "op": "*", "args": [
                 { "op": "-", "args": ["v_wind"] },
-                { "op": "grad", "args": ["_var"], "dim": "y" }
+                { "op": "D", "args": ["_var"], "wrt": "y" }
             ]}
           ]
         }
@@ -3717,7 +3740,7 @@ Worked example — 1-D heat equation `u_t = α u_xx` on `x ∈ [0, 1]` with `u(x
 
 #### 6.6.6 Running a discretization-agnostic PDE component (test injection)
 
-A reusable PDE leaf is written against the operator sugar (`grad`, `div`, `laplacian`, spatial `D`) and deliberately imports **no** discretization, so it can be composed under different schemes (§9.7.10). Such a component is un-runnable in isolation — its rewrite-targets have no `match` rule to lower them (`unlowered_operator`, §9.6.3 constraint 6) — so its inline tests could not run against any concrete scheme. A `Test` therefore MAY carry an `expression_template_imports` array (§9.7.2 shape) naming the discretization library to lower the enclosing component under, **for that test's run only**:
+A reusable PDE leaf is written against spatial `D` (and user rewrite-target ops) and deliberately imports **no** discretization, so it can be composed under different schemes (§9.7.10). Such a component is un-runnable in isolation — its rewrite-targets have no `match` rule to lower them (`unlowered_operator`, §9.6.3 constraint 6) — so its inline tests could not run against any concrete scheme. A `Test` therefore MAY carry an `expression_template_imports` array (§9.7.2 shape) naming the discretization library to lower the enclosing component under, **for that test's run only**:
 
 ```json
 {
@@ -3725,7 +3748,7 @@ A reusable PDE leaf is written against the operator sugar (`grad`, `div`, `lapla
   "description": "Saint-Venant runoff under central differences at n = 64.",
   "time_span": { "start": 0.0, "end": 100.0 },
   "expression_template_imports": [
-    { "ref": "esd://cartesian/central_grad_zero_grad_bc.esm",
+    { "ref": "esd://cartesian/central_D_zero_grad_bc.esm",
       "bindings": { "NX": 64, "NY": 64 } }
   ],
   "assertions": [
@@ -4316,12 +4339,12 @@ temporal:
   frequency:   ISO8601 duration   # spacing between samples within a file
   records_per_file: integer | "auto"
   time_variable: string        # name of the time coord inside the file
-  records_per_sample: 1 | 2    # DEPRECATED, removed at esm 3.0.0 (§8.5.1)
+  records_per_sample: 1 | 2    # DEPRECATED, removed in a later major version (§8.5.1)
 ```
 
 Both **static declaration** (`records_per_file` + `frequency`) and **runtime discovery** (`time_variable`) are allowed. If both are present, the static declaration wins and `time_variable` acts as a fallback. `records_per_file: "auto"` explicitly defers to runtime discovery.
 
-`records_per_sample` is **deprecated** and is removed at esm 3.0.0. How many
+`records_per_sample` is **deprecated** and is removed in a later major version. How many
 records a parameter drawing from the source receives at each query time is
 said by the parameter's record shape: two when its first axis is a record axis,
 one otherwise (§8.5.1). The field no longer decides anything. It is still
@@ -4357,7 +4380,7 @@ consumer, and the units are declared once — on the parameter — instead of tw
       unit_conversion: number | Expression   # optional
       codes: DataSourceCodes       # optional; text column -> numbers (§8.9.1)
       select: DataSourceSelect     # optional; overrides the source default (§8.9.2)
-      records_per_sample: 1 | 2    # DEPRECATED, removed at esm 3.0.0; checked against the shape (§8.5.1)
+      records_per_sample: 1 | 2    # DEPRECATED, removed in a later major version; checked against the shape (§8.5.1)
       description: string
       reference: Reference
 ```
@@ -4509,7 +4532,7 @@ first exists.
 axis, the count was written separately, as `from.records_per_sample` on the
 rule or `temporal.records_per_sample` on the source (§8.3), each `1` or `2`,
 and it was obeyed: a `2` over any first axis of exactly two members delivered
-the pair. Both fields are now **deprecated** and are **removed at esm 3.0.0**,
+the pair. Both fields are now **deprecated** and are **removed in a later major version**,
 and they are **no longer obeyed**. This is a breaking change, made together
 with the esm 2.0.0 break, and there is no compatibility reading of an older
 document: the record shape alone decides the count. Until removal a document
@@ -4538,7 +4561,7 @@ So a document written before the record axis, with `records_per_sample: 2` and
 a plain size-2 first axis, which used to deliver the pair, is now refused with
 `records_per_sample_invalid`. It migrates by adding `"records": true` to that
 axis and deleting the `records_per_sample` fields (which, kept, are only
-checked, until their removal at esm 3.0.0). `temporal.records_per_sample: 2` applies
+checked, until their removal in a later major version). `temporal.records_per_sample: 2` applies
 to every parameter of the source that writes no value of its own, so it is
 only ever agreeable when every such parameter is shaped over a record axis
 first; that is why the flag sits on the consumer's shape instead.
@@ -5046,9 +5069,9 @@ An `expression_templates` entry is a **rewrite rule**: a set of metavariable `pa
 |---|---|---|
 | **Variable substitution** | a bare metavariable | binding a name → AST |
 | **Named template expansion** | *absent* | an explicit `apply_expression_template` node |
-| **Operator lowering** (e.g. `grad`, `div`, `laplacian`) | an operator pattern like `{op:"grad", args:["f"], dim:"d"}` | auto-applied wherever the pattern matches |
+| **Operator lowering** (e.g. a spatial `D`, `integral`, a user op) | an operator pattern like `{op:"D", args:["f"], wrt:"x"}` | auto-applied wherever the pattern matches |
 
-The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary rewrite rule** that lowers a rewrite-target op (a spatial `D` on a right-hand side, or the `grad`/`div`/`laplacian` sugar, §4.2) into a `faq` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
+The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary rewrite rule** that lowers a rewrite-target op (a spatial `D` on a right-hand side, `integral`, or a user op, §4.2) into a `faq` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
 
 #### 9.6.1 The `expression_templates` block
 
@@ -5114,7 +5137,7 @@ Required fields:
 3. **Typed signatures (positional-by-name).** Bindings MUST cover every entry of the template's `params` exactly — no missing keys, no extras.
 4. **Component-local scope.** Templates declared inside — or imported into (§9.7.2) — one `model` / `reaction_system` are visible only within that component's expression positions.
 5. **Pure syntactic substitution.** Every parameter occurrence in `body` — a bare parameter-name string in a variable-reference position, or the string value of a scalar Expression-node field (§9.6.1) — is replaced by the bound argument's AST in source order. Substitution is position-blind and purely syntactic: a declared parameter name shadows any coincident field literal or index symbol inside `body`, no evaluation occurs, and no field-specific admissibility is checked at substitution time — a value substituted into a scalar-field position MUST be a literal admissible for that field, enforced by the §9.6.9 validation discharge, never by the substitution engine. Expansion MUST NOT depend on argument evaluation. Parameter substitution applies inside the `bindings` values of nested `apply_expression_template` references exactly as in any other Expression position; the `name` field is never a substitution site; params shadow as above. If instantiation introduces an eager reference into the tree (a rule body referencing a target-bearing template), the engine expands it immediately as part of the same rewrite (§9.6.4 rules 3–4).
-6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry `grad`/`div`/`laplacian`/spatial-`D` as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, and a right-hand-side structural `D` that §4.2's total-derivative resolution left standing (an operand outside its closed set, a name it cannot resolve, or a cyclic chain) — is rejected with diagnostic `unlowered_operator` (naming the op and node path). This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
+6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry spatial `D`, `integral` or user ops as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, and a right-hand-side structural `D` that §4.2's total-derivative resolution left standing (an operand outside its closed set, a name it cannot resolve, or a cyclic chain) — is rejected with diagnostic `unlowered_operator` (naming the op and node path). This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
 
 #### 9.6.4 Round-trip — Option B (reference-preserving)
 
@@ -5410,8 +5433,8 @@ The import-renaming RFC adds (see `docs/content/rfcs/template-import-renaming.md
 
 The match-scoping RFC adds (see `docs/content/rfcs/match-pattern-scoping-constraints.md`):
 
-- `constrained_match_scope/` — one document, one shape-constrained `div` rule, two shaped variables: only the conforming variable's `div` is rewritten; the other survives lowering intact (positive + negative in one expanded golden).
-- `two_div_two_meshes/` — two equal-priority `div` rules, each `where`-scoped to its own mesh's edge set: each `div` lowers by its own mesh's rule, with no `priority` games (the pre-`where` engine would have sent both to the first-declared rule).
+- `constrained_match_scope/` — one document, one shape-constrained spatial-`D` rule, two shaped variables: only the conforming variable's `D` is rewritten; the other survives lowering intact (positive + negative in one expanded golden).
+- `two_div_two_meshes/` — two equal-priority rules on the user op `fv_div` (an unstructured-mesh divergence, not a per-axis `D`), each `where`-scoped to its own mesh's edge set: each `fv_div` lowers by its own mesh's rule, with no `priority` games (the pre-`where` engine would have sent both to the first-declared rule).
 - `per_variable_scheme_literal_args/` — the sanctioned ground-pattern per-variable selector: an upwind rule matching literal `u` (priority 10) and a generic central rule capturing everything else, mixed schemes on one axis.
 - `constraint_unknown_index_set/` — invalid: a `shape` constraint naming an undeclared index set → `template_constraint_unknown_index_set` at load.
 
@@ -5490,24 +5513,14 @@ matched by a rule that binds them as ordinary `args` wildcards and consumes them
 
 This is still "no boundary-condition declaration anywhere in the format": the closure lives in the rule, and the trailing operands are only the *data* the rule reads, written at the site the derivative is taken so that the rule can bind them structurally. They have no evaluator semantics (a spatial `D` is never evaluated), their count is unbounded, and their meaning is positional and defined solely by the consuming `match`. Because `args` arrays match elementwise at equal length (§9.6.1), a rule written for the bare `D(U*q, wrt:"lon")` does not fire on the three-operand node and the closed-boundary rule does not fire on the bare one — the closure is part of the rule's identity, and an unmatched node is caught by the ordinary `unlowered_operator` gate rather than silently losing its boundary data. The **structural** time derivative (`wrt:"t"`) admits none of this and stays strictly unary.
 
-**Scoping a rule = constraining or grounding its match** (§9.6.1). A rule that matches only on `(op, wrt)` — or, like a finite-volume `div` rule, on the bare op — fires on *every* such node in the importing component, so two grids each contributing a `div` scheme, or two different schemes on one axis, would otherwise collide. Two orthogonal, fully static selectors close this:
+**Scoping a rule = constraining or grounding its match** (§9.6.1). A rule that matches only on `(op, wrt)` — or, like a finite-volume divergence written as a user op (say `fv_div`), on the bare op — fires on *every* such node in the importing component, so two grids each contributing a divergence scheme, or two different schemes on one axis, would otherwise collide. Two orthogonal, fully static selectors close this:
 
-- **Mesh/shape scoping (`where`)**: the rule declares which index sets its operand must be declared over — e.g. an MPAS finite-volume divergence adds `"where": {"F": {"shape": ["edges"]}}`, so it lowers `div` only of edge-fields of its own mesh; a second mesh's rule, constrained to its own (possibly import-renamed) edge set, coexists in the same component with no `priority` arbitration. An unrelated consumer variable that merely reuses an axis *name* from some other grid is not captured unless it is literally declared over that registry entry.
+- **Mesh/shape scoping (`where`)**: the rule declares which index sets its operand must be declared over — e.g. an MPAS finite-volume divergence adds `"where": {"F": {"shape": ["edges"]}}`, so it lowers `fv_div` only of edge-fields of its own mesh; a second mesh's rule, constrained to its own (possibly import-renamed) edge set, coexists in the same component with no `priority` arbitration. An unrelated consumer variable that merely reuses an axis *name* from some other grid is not captured unless it is literally declared over that registry entry.
 - **Per-variable selection (ground `args`)**: a non-parameter string in an `args` position matches only that exact variable reference, so `{"op": "D", "args": ["u"], "wrt": "x"}` is the upwind-for-`u` rule and a generic `{"op": "D", "args": ["f"], "wrt": "x"}` rule (declared alongside, out-ranked via `priority`) carries every other variable — mixed schemes on one axis without touching the engine.
 
-Both selectors filter **before** the §9.6.3 priority/declaration-order selection, and both compose with the `unlowered_operator` gate unchanged: if the only candidate rule for a spatial `D`/`div` is constraint-excluded (or ground-mismatched), the node is simply not rewritten, the fixpoint converges with the rewrite-target intact, and the pre-evaluation gate rejects it exactly as if no rule had been imported at all. An unsatisfied constraint is never itself an error.
+Both selectors filter **before** the §9.6.3 priority/declaration-order selection, and both compose with the `unlowered_operator` gate unchanged: if the only candidate rule for a spatial `D` or a user op is constraint-excluded (or ground-mismatched), the node is simply not rewritten, the fixpoint converges with the rewrite-target intact, and the pre-evaluation gate rejects it exactly as if no rule had been imported at all. An unsatisfied constraint is never itself an error.
 
-**`grad`/`div`/`laplacian` are not privileged** — they are not evaluable-core ops and this format ships no rules for them. They exist only as *optional author sugar*, definable by a one-line rewrite rule, e.g.:
-
-```json
-"grad_is_Dx": {
-  "params": ["f"],
-  "match": { "op": "grad", "args": ["f"], "dim": "x" },
-  "body":  { "op": "D",    "args": ["f"], "wrt": "x" }
-}
-```
-
-after which the ordinary `D`-discretization rules apply. `div`/`laplacian` are sugar for sums/compositions of `D`; the bounded fixpoint (§9.6.3) lowers the resulting nested `D`s on subsequent passes. A rule author MAY instead match `laplacian` directly and emit a one-shot 5-point stencil — the open namespace (§4.2) permits either.
+**Gradient, divergence and Laplacian are written with `D`.** The `grad`, `div` and `laplacian` sugar ops were removed at esm 3.0.0 (§4.2, "Removed ops"). A gradient component is `D(f, wrt: x)`, a Cartesian divergence Σᵢ `D(Fᵢ, wrt: xᵢ)`, and a Laplacian Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`; the ordinary `D`-discretization rules apply to each term, and the bounded fixpoint (§9.6.3) lowers nested `D`s on subsequent passes. A rule author who wants a one-shot multi-axis stencil (a 5-point Laplacian, an unstructured-mesh divergence) declares a user op for it and matches that op — the open namespace (§4.2) permits it, and the user op carries no privilege.
 
 **Determinism.** Lowering is the outermost-first, priority-ordered, bounded-fixpoint rewrite of §9.6.3. Two bindings expanding the same file MUST produce byte-identical post-lowering ASTs (or the same non-convergence / `unlowered_operator` rejection).
 
@@ -5938,7 +5951,7 @@ The coupling section defines how models and reaction systems connect to form a `
 }
 ```
 
-Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier drafts expressed as `operator_apply` coupling entries are now expressed via `grad`/`div`/`laplacian` PDE operators in the model equations, lowered by discretization rewrite rules (§9.6.8).
+Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier drafts expressed as `operator_apply` coupling entries are now expressed as spatial `D` terms (or user rewrite-target ops) in the model equations, lowered by discretization rewrite rules (§9.6.8).
 
 ### 10.1 Coupling Types
 
@@ -6144,11 +6157,11 @@ A coupling entry mounts PDE components into an assembly, and — like a §4.7 su
   "systems": ["SimpleOzone", "Advection"],
   "expression_template_imports": {
     "Advection": [
-      { "ref": "esd://latlon/central_grad_zero_grad_bc.esm",
+      { "ref": "esd://latlon/central_D_zero_grad_bc.esm",
         "bindings": { "NLON": 144, "NLAT": 91 } }
     ]
   },
-  "description": "Compose chemistry onto advection; lower Advection's grad with central differences."
+  "description": "Compose chemistry onto advection; lower Advection's spatial D with central differences."
 }
 ```
 
@@ -6210,7 +6223,7 @@ after binding, the `to` target is a real component whose registry is in scope, s
 no `index_sets` or templates of its own. Because a library edge's transform templates expand at
 flatten (§10.4 carve-out, §10.10.3) — after the §9.6.3 fixpoint — a library transform MUST expand
 to an already-lowered form; a transform template that would introduce a rewrite-target operator
-(`grad` / `div` / spatial `D`) is rejected with `coupling_library_illegal_payload`.
+(a spatial `D`, `integral` or a user op) is rejected with `coupling_library_illegal_payload`.
 
 **Role-scoped reference resolution.** In an ordinary document a coupling edge's top-level segment
 must resolve to a top-level `models` / `reaction_systems` key (§4.6). A library
@@ -6681,9 +6694,9 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
         "dy": { "type": "parameter", "units": "m", "default": 27750.0, "description": "Northward grid spacing" }
       },
       "expression_templates": {
-        "central_grad_lon_zero_grad_bc": {
+        "central_D_lon_zero_grad_bc": {
           "params": ["f"],
-          "match": { "op": "grad", "args": ["f"], "dim": "lon" },
+          "match": { "op": "D", "args": ["f"], "wrt": "lon" },
           "body": {
             "op": "makearray",
             "regions": [ [[2, 143], [1, 91]], [[1, 1], [1, 91]], [[144, 144], [1, 91]] ],
@@ -6704,9 +6717,9 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
             ]
           }
         },
-        "central_grad_lat_zero_grad_bc": {
+        "central_D_lat_zero_grad_bc": {
           "params": ["f"],
-          "match": { "op": "grad", "args": ["f"], "dim": "lat" },
+          "match": { "op": "D", "args": ["f"], "wrt": "lat" },
           "body": {
             "op": "makearray",
             "regions": [ [[1, 144], [2, 90]], [[1, 144], [1, 1]], [[1, 144], [91, 91]] ],
@@ -6733,8 +6746,8 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
           "lhs": { "op": "D", "args": ["_var"], "wrt": "t" },
           "rhs": {
             "op": "+", "args": [
-              { "op": "*", "args": [{ "op": "-", "args": ["u_wind"] }, { "op": "grad", "args": ["_var"], "dim": "lon" }] },
-              { "op": "*", "args": [{ "op": "-", "args": ["v_wind"] }, { "op": "grad", "args": ["_var"], "dim": "lat" }] }
+              { "op": "*", "args": [{ "op": "-", "args": ["u_wind"] }, { "op": "D", "args": ["_var"], "wrt": "lon" }] },
+              { "op": "*", "args": [{ "op": "-", "args": ["v_wind"] }, { "op": "D", "args": ["_var"], "wrt": "lat" }] }
             ]
           }
         },
@@ -6774,7 +6787,7 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
 }
 ```
 
-The spatial axes (`lon`, `lat`) are `index_sets`; the `Advection` model's variables are shaped over them, and `grad` is lowered by the in-file `central_grad_*_zero_grad_bc` rewrite rules (§9.6.8) — each a `makearray` that combines the interior central-difference `faq` with the two boundary-face regions encoding the zero-gradient condition. The boundary conditions live **inside** the discretization rule; there is no separate boundary-condition declaration. Wind and temperature come from the `GEOSFP` source as ordinary data-fed parameters — declared on the models that use them, with a `data` update naming the source. Note what is *absent* from the `coupling` block as a result: the three `variable_map` edges that used to wire loader fields into the two models are gone, because the parameter now *is* the loaded field.
+The spatial axes (`lon`, `lat`) are `index_sets`; the `Advection` model's variables are shaped over them, and each spatial `D` is lowered by the in-file `central_D_*_zero_grad_bc` rewrite rules (§9.6.8) — each a `makearray` that combines the interior central-difference `faq` with the two boundary-face regions encoding the zero-gradient condition. The boundary conditions live **inside** the discretization rule; there is no separate boundary-condition declaration. Wind and temperature come from the `GEOSFP` source as ordinary data-fed parameters — declared on the models that use them, with a `data` update naming the source. Note what is *absent* from the `coupling` block as a result: the three `variable_map` edges that used to wire loader fields into the two models are gone, because the parameter now *is* the loaded field.
 
 **Note:** Every component shares the single `domain`; there is no per-model domain field. A model is spatial if its variables are shaped over index sets, 0-D otherwise.
 
@@ -6797,7 +6810,7 @@ and **update handlers** (§5.5), which run control logic at update time. (A sour
 is pure I/O — it does not regrid; transferring its fields onto a model's target
 grid is a model concern, §8.) The `.esm` file declares *what* they provide and
 *what* they need, but delegates *how* to the runtime. Everything else is math in
-the file. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed via `grad`/`div`/`laplacian` PDE operators in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are expression templates (§9.6), most from the standard library (§9.7.1), whose bodies are trees of §4.2 operators.
+the file. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed as spatial `D` terms (or user rewrite-target ops) in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are expression templates (§9.6), most from the standard library (§9.7.1), whose bodies are trees of §4.2 operators.
 
 ### Expression AST over string math
 

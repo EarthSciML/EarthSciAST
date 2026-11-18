@@ -75,7 +75,7 @@ Based on libraries spec Section 3.4:
 ### High Priority Missing (Blocks Phase 1)
 
 1. **Operator Coverage** (Section 4.2): Missing test fixtures for:
-   - `div`, `laplacian` (spatial operators)
+   - spatial `D` (a spatial `wrt`; `grad`/`div`/`laplacian` were removed at esm 3.0.0)
    - `and`, `or`, `not` (logical operators)
    - `atan2`, `min`, `max`, `floor`, `ceil` (functions)
 

@@ -790,7 +790,7 @@ def operators(g):
     )
 
     # Open operators.
-    E("open_op", "An open (rewrite-target) operator prints in the call form.", op("grad", "x"))
+    E("open_op", "An open (rewrite-target) operator prints in the call form.", op("fv_div", "x"))
     E(
         "open_op_no_operands",
         "An open operator with no operands keeps its parentheses, apart from a bare template.",
@@ -1672,7 +1672,7 @@ def documents(g):
                         "upwind": {
                             "params": ["f"],
                             "match": op("D", "f", wrt="x"),
-                            "body": op("grad", "f"),
+                            "body": op("upwind_diff", "f"),
                             "priority": 1,
                         }
                     }

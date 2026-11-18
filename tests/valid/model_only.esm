@@ -164,11 +164,11 @@
                     ]
                   },
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "u"
                     ],
-                    "dim": "x"
+                    "wrt": "x"
                   }
                 ]
               },
@@ -182,11 +182,11 @@
                     ]
                   },
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "u"
                     ],
-                    "dim": "y"
+                    "wrt": "y"
                   }
                 ]
               },
@@ -206,11 +206,11 @@
                     ]
                   },
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "p"
                     ],
-                    "dim": "x"
+                    "wrt": "x"
                   }
                 ]
               },
@@ -219,9 +219,34 @@
                 "args": [
                   "nu",
                   {
-                    "op": "laplacian",
+                    "op": "+",
                     "args": [
-                      "u"
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "u"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "u"
+                            ],
+                            "wrt": "y"
+                          }
+                        ],
+                        "wrt": "y"
+                      }
                     ]
                   }
                 ]
@@ -257,11 +282,11 @@
                     ]
                   },
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "v"
                     ],
-                    "dim": "x"
+                    "wrt": "x"
                   }
                 ]
               },
@@ -275,11 +300,11 @@
                     ]
                   },
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "v"
                     ],
-                    "dim": "y"
+                    "wrt": "y"
                   }
                 ]
               },
@@ -299,11 +324,11 @@
                     ]
                   },
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "p"
                     ],
-                    "dim": "y"
+                    "wrt": "y"
                   }
                 ]
               },
@@ -312,9 +337,34 @@
                 "args": [
                   "nu",
                   {
-                    "op": "laplacian",
+                    "op": "+",
                     "args": [
-                      "v"
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "v"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "v"
+                            ],
+                            "wrt": "y"
+                          }
+                        ],
+                        "wrt": "y"
+                      }
                     ]
                   }
                 ]
@@ -371,18 +421,18 @@
                 "op": "+",
                 "args": [
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "u"
                     ],
-                    "dim": "x"
+                    "wrt": "x"
                   },
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "v"
                     ],
-                    "dim": "y"
+                    "wrt": "y"
                   }
                 ]
               }
@@ -410,11 +460,11 @@
                     ]
                   },
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "T"
                     ],
-                    "dim": "x"
+                    "wrt": "x"
                   }
                 ]
               },
@@ -428,11 +478,11 @@
                     ]
                   },
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "T"
                     ],
-                    "dim": "y"
+                    "wrt": "y"
                   }
                 ]
               },
@@ -441,9 +491,34 @@
                 "args": [
                   "alpha",
                   {
-                    "op": "laplacian",
+                    "op": "+",
                     "args": [
-                      "T"
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "T"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "T"
+                            ],
+                            "wrt": "y"
+                          }
+                        ],
+                        "wrt": "y"
+                      }
                     ]
                   }
                 ]
@@ -536,9 +611,34 @@
                     ]
                   },
                   {
-                    "op": "laplacian",
+                    "op": "+",
                     "args": [
-                      "phi"
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "phi"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "phi"
+                            ],
+                            "wrt": "y"
+                          }
+                        ],
+                        "wrt": "y"
+                      }
                     ]
                   }
                 ]
@@ -662,9 +762,34 @@
                 "args": [
                   "D_prey",
                   {
-                    "op": "laplacian",
+                    "op": "+",
                     "args": [
-                      "prey"
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "prey"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "prey"
+                            ],
+                            "wrt": "y"
+                          }
+                        ],
+                        "wrt": "y"
+                      }
                     ]
                   }
                 ]
@@ -709,9 +834,34 @@
                 "args": [
                   "D_predator",
                   {
-                    "op": "laplacian",
+                    "op": "+",
                     "args": [
-                      "predator"
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "predator"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "predator"
+                            ],
+                            "wrt": "y"
+                          }
+                        ],
+                        "wrt": "y"
+                      }
                     ]
                   }
                 ]

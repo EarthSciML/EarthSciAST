@@ -1,6 +1,6 @@
 ---
 title: "Calculus"
-description: "D, ic, and the rewrite-target sugar grad / div / laplacian / integral."
+description: "D, ic, and the rewrite target integral; gradient, divergence and Laplacian written with D."
 ---
 
 ## `D` — derivative
@@ -112,43 +112,42 @@ C(t_{0}) = \exp(-x^{2})
 A variable's `default` and an `ic` equation both set an initial value; `ic` is
 the one that can carry an expression.
 
-## `grad`, `div`, `laplacian` — sugar, not operators
+## Gradient, divergence and Laplacian — written with `D`
 
-These are **not** built-in operators. They are optional rewrite-target sugar,
-and they mean exactly what their `D` expansions mean:
+The format has no gradient, divergence or Laplacian operator. The sugar ops
+`grad`, `div` and `laplacian` were removed at esm 3.0.0, and a document that
+uses one is rejected at load with `removed_op`, whatever `esm` it declares.
+Write each with a spatial `D`, one per axis:
 
-| Sugar | Expansion |
+| Removed | Write instead |
 |---|---|
 | `grad(f, dim: x)` | `D(f, wrt: x)` |
 | `div(F)` | `Σᵢ D(Fᵢ, wrt: xᵢ)` |
 | `laplacian(u)` | `Σᵢ D(D(u, wrt: xᵢ), wrt: xᵢ)` |
 
-**LaTeX**
-```latex
-\operatorname{laplacian}(u)
-```
+A two-dimensional Laplacian, for example:
+
 **JSON**
 ```json
-{ "op": "laplacian", "args": ["u"] }
+{ "op": "+", "args": [
+  { "op": "D", "args": [{ "op": "D", "args": ["u"], "wrt": "x" }], "wrt": "x" },
+  { "op": "D", "args": [{ "op": "D", "args": ["u"], "wrt": "y" }], "wrt": "y" }
+] }
 ```
 
-The axis-carrying form puts the axis name in `dim`, an ordinary scalar field
-with no privileged status:
-
-```json
-{ "op": "grad", "args": ["f"], "dim": "x" }
-```
-
-This format ships **no** rewrite rules for any of them. The discretization
-standard library lives in
+A scheme that is not a sum of per-axis derivatives — a finite-volume
+divergence on an unstructured mesh, or a metric Laplacian discretized as one
+stencil — is an operator you invent (any non-core name), lowered by a
+[template rewrite](../templates/). This format ships **no** rewrite rules for
+spatial `D` or for any invented operator. The discretization standard library
+lives in
 [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations).
 
-As open-tier rewrite targets they get no privileges: their result dimension is
-undeterminable until lowered, so a checker reports it as `unknown` and skips the
-enclosing check rather than inventing a coordinate-divided dimension. A binding
-must not single these names out — they are matched, lowered, and checked by the
-same machinery as any operator you invent yourself. A custom operator carries
-its scheme parameters in `attrs`.
+An invented operator gets no privileges: its result dimension is undeterminable
+until lowered, so a checker reports it as `unknown` and skips the enclosing
+check rather than inventing a coordinate-divided dimension. An axis name it
+needs can go in `dim`, an ordinary scalar field with no privileged status, and
+other scheme parameters in `attrs`.
 
 ## `integral`
 
