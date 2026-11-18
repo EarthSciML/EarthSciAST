@@ -4107,8 +4107,11 @@ fn analyze_equation_mismatch(
         }
     }
 
-    let extra_equations_for: Vec<_> = lhs_vars.difference(&state_vars_set).cloned().collect();
-    let missing_equations_for: Vec<_> = state_vars_set.difference(&lhs_vars).cloned().collect();
+    // Sorted, so a report names them in the same order on every run.
+    let mut extra_equations_for: Vec<_> = lhs_vars.difference(&state_vars_set).cloned().collect();
+    let mut missing_equations_for: Vec<_> = state_vars_set.difference(&lhs_vars).cloned().collect();
+    extra_equations_for.sort_unstable();
+    missing_equations_for.sort_unstable();
 
     (extra_equations_for, missing_equations_for)
 }
