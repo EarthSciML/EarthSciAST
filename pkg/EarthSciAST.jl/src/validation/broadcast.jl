@@ -8,8 +8,8 @@ Array broadcast semantics (esm-spec §4.3.4), document-wide. Two families:
 **The `broadcast.fn` contract.** `fn` is parsed as an opaque string, so a
 `broadcast` naming a nonexistent operator (`"not_a_real_op"`), naming a
 STRUCTURAL operator (`faq`, `index`, `makearray`, `grad`, …), carrying no
-`fn` at all, or handing its operator the wrong number of operands used to
-validate clean and only fail (if at all) at evaluation. The contract itself is
+`fn` at all, or handing its operator the wrong number of operands is reported
+here rather than at evaluation. The contract itself is
 [`_broadcast_fn_problem`](@ref) (op_registry.jl) — the same predicate the
 tree-walk build lowering and the MTK exporter enforce, and the rule is simply
 "`broadcast(fn: F, args)` is legal exactly when `{op: F, args}` is legal".

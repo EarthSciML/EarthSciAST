@@ -251,7 +251,7 @@ Where:
 | BEHAV-04-G-004 | Spatial coordinate names (`x`, `y`, `z`, `lon`, `lat`, `lev`) are NOT reserved: they resolve as coordinates only in a coordinate position (§11.4), and `tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary position variable | esm-spec.md §11.4 | Yes | validation |
 
 > **Binding status (2026-09-06)**: implemented in **all five** bindings — Julia
-> (`validate.jl::_check_reserved_declaration_names!`), Python
+> (`validation/declarations.jl::_check_reserved_declaration_names!`), Python
 > (`structural_checks.py::_check_reserved_declaration_names`), TypeScript
 > (`validate/model-checks.ts::validateReservedDeclarationNames`), Rust
 > (`structural.rs::check_reserved_declaration_names`) and Go
@@ -296,7 +296,7 @@ Where:
 | BEHAV-04-H-002 | The rule covers both declared types (`parameter`, `unknown`) and the `variables` of every inline subsystem, at any depth; the same data on a SHAPED variable stays valid | esm-spec.md §6.3, §4.7 | Yes | validation |
 
 > **Binding status (2026-09-14)**: implemented in **all five** bindings as a structural
-> check — Julia (`validate.jl::_check_array_defaults_have_shape!`), Python
+> check — Julia (`validation/declarations.jl::_check_array_defaults_have_shape!`), Python
 > (`structural_checks.py::_check_array_default_without_shape`), TypeScript
 > (`validate/model-checks.ts::validateArrayDefaultsHaveShape`), Rust
 > (`structural.rs::check_array_defaults_have_shape`) and Go

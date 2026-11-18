@@ -56,10 +56,8 @@ name (esm-spec §4.9.1.1).
 The declaration never wins: the independent variable and `_var` are implicitly
 declared in every component's expression scope (§4.9.1) and are resolved BY NAME
 ahead of the declaration maps, so the implicit symbol shadows the declaration
-rather than the other way round. That is why this is a hard error and not a lint
-(issue #200) — the reported document validated clean, and a build with a
-subsystem mounted handed every reader of `t` the simulation clock in place of a
-fuel time-lag constant.
+rather than the other way round, which is why this is a hard error and not a
+lint: every reader of the name would get the implicit symbol.
 
 `names` is walked in sorted order: `Model.variables` is ordered but a reaction
 system's species and parameters are vectors, and sorted is the ordering every

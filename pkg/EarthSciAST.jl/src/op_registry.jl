@@ -102,7 +102,7 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:mtk_known`          → `_KNOWN_OPS`                    (ext/mtk_ext/export.jl)
 - `:array_producer`     → `_ARRAY_PRODUCER_OPS`           (shape_promotion.jl)
 - `:self_indexed`       → `_SELF_INDEXED_OPS`             (shape_promotion.jl)
-- `:builtin_fn`         → `_BUILTIN_FUNCTION_NAMES`       (validate.jl)
+- `:builtin_fn`         → `_BUILTIN_FUNCTION_NAMES`       (validation/references.jl)
 - `:xcse_expensive`     → `_XCSE_EXPENSIVE_OPS`           (tree_walk/xcse.jl)
 - `:shape_remap`        → `_SHAPE_REMAP_OPS`              (tree_walk/resolve.jl) and
                           `_LIFT_WHOLE_ARRAY_OPS`         (pointwise_lift.jl): the ops
@@ -137,7 +137,7 @@ hand:
   array-producing nodes for the shape-promotion / pointwise-lift rewrites,
   and the nodes that carry their own indexing (the producers plus `index`),
   which the leaf-indexing rewrites never descend into.
-- `_BUILTIN_FUNCTION_NAMES` (src/validate.jl) — bare names the reference
+- `_BUILTIN_FUNCTION_NAMES` (src/validation/references.jl) — bare names the reference
   checker excuses as always-in-scope builtins (mirrors Rust
   `is_builtin_function`, structural.rs).
 - `_XCSE_EXPENSIVE_OPS` (src/tree_walk/xcse.jl) — ops at least as expensive
@@ -719,7 +719,7 @@ Two consequences are deliberate, not accidents of the table:
 - a 2-operand `sin` is an ERROR (arity `1:1`) rather than a silent NaN.
 
 This is the SINGLE source of the contract, shared by the `validate()` finding
-`invalid_broadcast_fn` (validate.jl), the build-time lowering
+`invalid_broadcast_fn` (validation/broadcast.jl), the build-time lowering
 `E_TREEWALK_BROADCAST_FN` (tree_walk/build_helpers.jl), and the MTK exporter's
 `_build_broadcast` (ext/mtk_ext/lowering.jl) — so a document `validate()`
 accepts is exactly one both back ends lower. `kind` distinguishes the four

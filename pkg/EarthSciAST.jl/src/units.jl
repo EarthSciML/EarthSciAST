@@ -715,7 +715,7 @@ end
 # ---------------------------------------------------------------------------
 # The dimensional engine.
 #
-# THE CENTRAL INVARIANT (bug audit 2026-07-14, finding J1): a dimensional rule
+# THE CENTRAL INVARIANT: a dimensional rule
 # has THREE possible outcomes, and the first two must never be conflated:
 #
 #   * a known dimension        → the `Unitful.Units` value
@@ -1217,8 +1217,8 @@ end
 # `NoDims` (esm-spec §4.8.1 makes it an axis, and the other four bindings carry
 # it as one), so this binding cannot tell an angle from a pure number by
 # DIMENSION and must read the unit's own symbol. `:Steradian` is deliberately
-# absent: `sr` is `rad^2`, and the circular argument is now CONVERTED to radians
-# (issue #409) — multiplying by `scale` where `scale^2` was meant would be
+# absent: `sr` is `rad^2`, and the circular argument is CONVERTED to radians —
+# multiplying by `scale` where `scale^2` was meant would be
 # silently wrong. `sr` is NOT thereby admitted as a pure number either; see
 # `_ANGLE_AXIS_UNIT_NAMES` / `_is_angle_bearing` below, which is the same symbol
 # read widened to the whole axis.
@@ -1290,7 +1290,7 @@ _is_angle_free_number(u)::Bool =
 # Is `u` dimensionless **at scale 1** — a PURE NUMBER?
 #
 # This is what esm-spec §4.8.3's "the argument MUST be dimensionless" means for
-# a strict transcendental (issue #409): `ppm` and `percent` are dimensionless
+# a strict transcendental: `ppm` and `percent` are dimensionless
 # too, and `log(x [ppm])` has two defensible readings — the log of the ppm
 # NUMBER, or the log of the mole fraction — that differ by `ln(1e-6) =
 # 13.8155…`. Dimension alone cannot tell them apart, so the checker refuses
@@ -1342,7 +1342,7 @@ end
     angle_normalization_factor(u) -> Union{Float64, Nothing}
 
 The factor that brings a quantity in `u` to RADIANS, when `u` is a plane angle
-at a scale other than 1 (esm-spec §4.8.3, issue #409).
+at a scale other than 1 (esm-spec §4.8.3).
 
 `nothing` for anything else — a pure number, a `rad`, a dimensional unit — so a
 document that declares no scaled angle is rewritten not at all.
@@ -1488,7 +1488,7 @@ function _power_rule(expr, var_units, findings)
     base_dim = _expr_dimensions!(findings, expr.args[1], var_units)
 
     # The exponent is read by VALUE off the AST, not through the engine: the
-    # engine reports every literal as indeterminate (fabrication #1), and a
+    # engine reports every literal as indeterminate (esm-spec §4.8.4), and a
     # literal exponent is precisely the case that makes `^` computable. A
     # CONSTANT EXPRESSION over literals (`3/2`, `-(1)`, a unitless `const`)
     # folds to the exact rational it denotes and is used exactly as that
@@ -1532,7 +1532,7 @@ end
 
 # "sqrt": halves the dimension. NOT a transcendental — `sqrt(area)` is a
 # perfectly ordinary dimensional operation, and treating it as requiring a
-# dimensionless argument (as this module used to) manufactures false positives.
+# dimensionless argument manufactures false positives.
 function _sqrt_rule(expr, var_units, findings)
     length(expr.args) == 1 || return nothing
     base_dim = _expr_dimensions!(findings, expr.args[1], var_units)
@@ -1572,7 +1572,7 @@ function _dimensionless_arg_rule(expr, var_units, findings)
         )
         return nothing
     end
-    # "Dimensionless" means dimensionless AT SCALE 1 (issue #409): `ppm` and
+    # "Dimensionless" means dimensionless AT SCALE 1: `ppm` and
     # `percent` pass every dimension-only test, and the two readings of
     # `log(x [ppm])` differ by `ln(1e-6)`.
     if arg_dim !== nothing && !_is_pure_number(arg_dim)
@@ -1620,8 +1620,7 @@ function _circular_arg_rule(expr, var_units, findings)
     # An ANGLE is admitted WHATEVER its scale, because `deg` → `rad` is exact and
     # has no second reading: `_normalize_angle_arguments!` converts it on the
     # flatten path before anything evaluates it. Dimensionless at a scale OTHER
-    # than 1 (`percent`) is REFUSED, for the same reason `log(x [ppm])` is
-    # (issue #409).
+    # than 1 (`percent`) is REFUSED, for the same reason `log(x [ppm])` is.
     if arg_dim !== nothing && !_is_plane_angle(arg_dim) && !_is_pure_number(arg_dim)
         push!(findings, _scaled_argument_message(expr.op, arg_dim))
         return nothing
@@ -1666,7 +1665,7 @@ function _inverse_circular_rule(expr, var_units, findings)
         return nothing
     end
     # A dimensionless RATIO is a PURE NUMBER, not a `percent` whose reading is
-    # unstated (issue #409).
+    # unstated.
     if arg_dim !== nothing && !_is_pure_number(arg_dim)
         push!(findings, _scaled_argument_message(expr.op, arg_dim))
         return nothing
@@ -2023,8 +2022,8 @@ function _expr_dimensions!(
         var_units::AbstractDict
     )::Union{Unitful.Units, Nothing}
     if expr isa NumExpr || expr isa IntExpr
-        # A bare number's dimension is INDETERMINATE, not dimensionless — see
-        # the implicit-units note (fabrication #1). The three positions where a
+        # A bare number's dimension is INDETERMINATE, not dimensionless
+        # (esm-spec §4.8.4). The three positions where a
         # literal's meaning IS determined are handled by their own rules. Under
         # the esm-spec §4.8.6 switch a nonzero one is dimensionless instead.
         return _literal_unit(expr.value, var_units)
@@ -2058,8 +2057,7 @@ function _expr_dimensions!(
 end
 
 # Affine units (°C, °F) cannot take part in unit ARITHMETIC — `u"°C" * u"kg"`
-# throws `Unitful.AffineError`, which used to escape `validate()` as an
-# uncaught exception on two valid fixtures. The engine only ever needs a unit's
+# throws `Unitful.AffineError`. The engine only ever needs a unit's
 # DIMENSION, so normalise an affine unit to its absolute counterpart (°C → K)
 # on the way in. Note this is deliberately confined to the engine:
 # `parse_units` still returns the affine unit, because
@@ -2567,7 +2565,7 @@ end
 Validate dimensions for all reactions in a reaction system.
 
 Enforces the mass-action dimensional constraint from spec §7.4 by delegating
-to [`validate_reaction_rate_units`](@ref) in validate.jl — the single shared
+to [`validate_reaction_rate_units`](@ref) in validation/unit_checks.jl — the single shared
 implementation of the rule (also used by `validate_structural`) — so the two
 entry points cannot drift apart. Each finding is logged as a warning; returns
 `true` when no dimensional inconsistencies are found.
@@ -2663,7 +2661,7 @@ function _nonzero_literals(exprs)::Vector{String}
 end
 
 # The esm-spec §4.8.6 warnings of a `validate` pass, as `(pointer, message)`
-# pairs: the warning half of the units checker (`_unit_check!`, validate.jl).
+# pairs: the warning half of the units checker (`_unit_check!`, validation/unit_checks.jl).
 _dimensionless_literal_findings(units)::Vector{Tuple{String, String}} =
     _unit_check!(units).warnings
 

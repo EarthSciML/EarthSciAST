@@ -216,7 +216,7 @@ end
 # is deferred there, mirroring §9.6.1's standalone exemption for
 # `template_constraint_unknown_index_set`; a name still unresolved once
 # injection has run is rejected by the evaluating bindings' resolvers
-# (`E_REF_UNDECLARED_INDEX_SET` / `E_TREEWALK_UNDECLARED_INDEX_SET`; issue #185).
+# (`E_REF_UNDECLARED_INDEX_SET` / `E_TREEWALK_UNDECLARED_INDEX_SET`).
 function _check_undefined_index_set!(
         errors::Vector{StructuralError}, agg::OpExpr,
         anchor::String, registry::Set{String}
@@ -243,7 +243,7 @@ end
 """
     faq_bare_array_operands(expr, var_shapes) -> Vector{Tuple{String,String,Vector{String}}}
 
-`faq_bare_array_operand` (esm-spec §4.3.1, issue #441): every
+`faq_bare_array_operand` (esm-spec §4.3.1): every
 `(field, name, shape)` where a `faq` node's `expr` or `filter` reads a variable
 declared with a non-empty `shape` by BARE name in an elementwise position.
 
@@ -390,7 +390,7 @@ function _contains_template_reference(expr::ASTExpr)
     return found
 end
 
-# esm-spec §4.3.1 "Ragged ranges" (issue #259): a range over a `kind: "ragged"`
+# esm-spec §4.3.1 "Ragged ranges": a range over a `kind: "ragged"`
 # index set binds the POSITION k in 1..offsets[parent], never a member, so a
 # body (`expr` / `filter`) that never reads the set's `values` array reads
 # positions where the author meant members. One finding per such range.

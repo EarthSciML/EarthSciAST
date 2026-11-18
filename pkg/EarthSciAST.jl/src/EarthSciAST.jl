@@ -69,8 +69,8 @@ include("expression_sites.jl")
 include("classification.jl")
 # Operator-vocabulary registry — single source of truth for the derived op
 # sets (tree-walk fold/CSE/stencil/geometry whitelists, the MTK-ext known-op
-# set, validate.jl's builtin names, and units.jl's dimensional-rule classes).
-# Pure data, no AST dependency; must precede validate.jl, units.jl and
+# set, the validator's builtin names, and units.jl's dimensional-rule classes).
+# Pure data, no AST dependency; must precede src/validation/, units.jl and
 # tree_walk.jl, whose derived consts are computed at include time.
 include("op_registry.jl")
 include("validation/records.jl")

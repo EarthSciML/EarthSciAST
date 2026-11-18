@@ -87,9 +87,8 @@ function validate_reaction_consistency(
         # cross-system reference and belongs to the qualified-reference resolver,
         # not here — but a BARE name that is neither a declared parameter, a
         # declared species, the time variable, nor a builtin function can never
-        # resolve to anything, so it is flagged. (This was previously skipped
-        # wholesale, on the strength of the qualified-reference argument, which
-        # let `tests/invalid/undefined_parameter.esm` validate clean.)
+        # resolve to anything, so it is flagged
+        # (`tests/invalid/undefined_parameter.esm`).
         for name in sort!(collect(_referenced_var_names(reaction.rate)))
             # (d) A DOTTED name is a SCOPED reference (`Meteo.T`) — a rate may
             # legitimately reach into another system, and it is the

@@ -34,7 +34,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("test_file_prelude_test.jl")
 
     # ---- Core types, parse, validate (src/types.jl, parse.jl,
-    #      validate.jl, graph.jl) ----
+    #      validation/, graph.jl) ----
     include("types_test.jl")
     include("solver_block_test.jl")
     include("classification_test.jl")

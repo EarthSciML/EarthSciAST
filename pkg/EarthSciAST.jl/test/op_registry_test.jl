@@ -162,7 +162,7 @@ const ESM = EarthSciAST
     end
 
     @testset "_BUILTIN_FUNCTION_NAMES membership (pre-registry literal)" begin
-        # validate.jl's reference-checker excused names, now derived from the
+        # The reference checker's excused names, now derived from the
         # registry's `builtin_fn` flag (the :elementary rows + ifelse/Pre).
         # Mirrors Rust `is_builtin_function` (structural.rs) — a drift here is
         # a cross-binding divergence, not just a Julia one.
