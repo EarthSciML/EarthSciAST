@@ -257,14 +257,11 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
     end
 
     # Smoke: the real SuperFast component (v0.8.0, no coupletype) mounts by ref.
-    # Lives in the sibling EarthSciModels repo; skipped cleanly when absent.
+    # It lives in the EarthSciModels repository (`earthscimodels_root()`: the
+    # `ESM_EARTHSCIMODELS` checkout, else this repository's sibling); a missing
+    # checkout fails the testset, naming the path it looked at.
     @testset "smoke: SuperFast mounts by ref" begin
-        superfast = normpath(
-            joinpath(
-                TESTUTILS_REPO_ROOT, "..", "EarthSciModels",
-                "components", "gaschem", "superfast.esm"
-            )
-        )
+        superfast = joinpath(earthscimodels_root(), "components", "gaschem", "superfast.esm")
         if _require_fixture(superfast)
             tmp = mktempdir()
             try
