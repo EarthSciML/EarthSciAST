@@ -141,10 +141,10 @@ end
 # 2.0.0 removed means the same thing under 2.0.0 (a removed one is refused by
 # name at load, `removed_op`), so the major version alone never refuses it.
 function _refuse_unsupported_major_version(version)
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(version))
-    m === nothing && return nothing
-    supported = parse(Int, match(r"^(\d+)\.", SCHEMA_VERSION).captures[1])
-    major = parse(Int, m.captures[1])
+    parsed = _parse_esm_version(string(version))
+    parsed === nothing && return nothing
+    supported = _parse_esm_version(SCHEMA_VERSION)[1]
+    major = parsed[1]
     (major == supported || major == 1) || throw(
         ParseError(
             "Unsupported major version $major. This library supports major versions " *

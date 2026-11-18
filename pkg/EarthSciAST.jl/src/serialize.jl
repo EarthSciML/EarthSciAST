@@ -823,20 +823,8 @@ See `docs/content/rfcs/faq-node-rename.md` §5.5.
 """
 function _raise_faq_esm_floor!(doc)
     doc isa AbstractDict || return doc
-    esm = nothing
-    key_found = nothing
-    for key in (:esm, "esm")
-        if haskey(doc, key)
-            esm = get(doc, key, nothing); key_found = key; break
-        end
-    end
-    esm isa AbstractString || return doc
-    parts = split(String(esm), '.')
-    length(parts) >= 2 || return doc
-    major = tryparse(Int, parts[1]); minor = tryparse(Int, parts[2])
-    (major === nothing || minor === nothing) && return doc
-    if (major, minor) < (1, 1) && _contains_faq(doc)
-        doc[key_found] = "1.1.0"
-    end
+    version = _esm_version(doc)
+    (version === nothing || version >= (1, 1, 0)) && return doc
+    _contains_faq(doc) && (doc["esm"] = "1.1.0")
     return doc
 end
