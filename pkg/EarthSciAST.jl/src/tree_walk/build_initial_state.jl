@@ -517,11 +517,7 @@ function _build_u0(
     n_scalar = length(scalar_names)
     covered = isempty(deferred) ? nothing : falses(length(u0))
     mark = s -> (valued[s] = true; covered === nothing || (covered[s] = true); nothing)
-    fold_fields!((s, v) -> (s == 0 || (u0[s] = v; mark(s)); nothing))
-    _apply_ics_by_slot!(
-        (s, v) -> (s > n_scalar && (u0[s] = Float64(v); mark(s)); nothing),
-        layout, initial_conditions
-    )
+    _overlay_array_ics!((s, v) -> (u0[s] = v; mark(s); nothing), layout, initial_conditions, fold_fields!)
     for b in deferred
         idxs = Vector{Int}(undef, length(b.lo))
         for s in (b.base):(b.base + b.len - 1)
@@ -542,6 +538,20 @@ function _build_u0(
         end
     end
     return u0
+end
+
+# The array part of the initial-state precedence, over whatever the cells hold:
+# the field-`ic` values (`fold_fields!(set)` hands each to `set(slot, value)`),
+# then the caller's explicit array cells over them, each written through
+# `set!(slot, value)`. Construction (`_build_u0`) and a re-seed at another start
+# (`_IcReseed`) both apply it.
+function _overlay_array_ics!(set!, layout::StateLayout, initial_conditions::AbstractDict, fold_fields!)
+    fold_fields!((s, v) -> (s == 0 || set!(s, v); nothing))
+    n_scalar = length(_layout_scalar_names(layout))
+    _apply_ics_by_slot!(
+        (s, v) -> (s > n_scalar && set!(s, Float64(v)); nothing), layout, initial_conditions
+    )
+    return nothing
 end
 
 # Every explicit `initial_conditions` key must name a state element of the
@@ -778,9 +788,9 @@ end
 
 # The build's initial state at another start of the run (`remake` with a new
 # `tspan`, esm-spec §11.4.2): the `ic` right-hand sides evaluated there
-# (`_IcPlan`), written over the state construction seeded, with the caller's
-# initial conditions on top again, as `_build_u0` orders them. Holds what that
-# needs and no more of the build.
+# (`_IcPlan`), written over the state construction seeded, in the precedence
+# `_build_u0` applies (a scalar `ic` where no explicit value names the slot, then
+# `_overlay_array_ics!`). Holds what that needs and no more of the build.
 struct _IcReseed{L, I}
     plan::_IcPlan
     # The seeded state at construction; a slot no `ic` sets keeps its value.
@@ -821,14 +831,10 @@ function (r::_IcReseed)(t0::Float64, data::AbstractDict)
     for (name, slot) in r.scalar_slots
         u0[slot] = eqi[name]
     end
-    _fold_field_ics!(
-        (slot, v) -> (slot == 0 || (u0[slot] = v); nothing), fics, r.cells, r.layout,
-        s.scalars, _ic_field_arrays(r.const_arrays, s)
-    )
-    n_scalar = length(_layout_scalar_names(r.layout))
-    _apply_ics_by_slot!(
-        (slot, v) -> (slot > n_scalar && (u0[slot] = Float64(v)); nothing),
-        r.layout, r.initial_conditions
+    arrays = _ic_field_arrays(r.const_arrays, s)
+    _overlay_array_ics!(
+        (slot, v) -> (u0[slot] = v; nothing), r.layout, r.initial_conditions,
+        set -> _fold_field_ics!(set, fics, r.cells, r.layout, s.scalars, arrays)
     )
     return u0
 end
