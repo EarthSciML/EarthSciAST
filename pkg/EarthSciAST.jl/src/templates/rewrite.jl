@@ -904,14 +904,11 @@ reject_expression_templates_pre_v04(raw_data) =
 """
     _int64_narrowable(v) -> Bool
 
-True iff `v` is a `Float64` whose value is an integer exactly representable in
-`Int64` (CONFORMANCE_SPEC §5.5.3.1 rule 1 / rule 3). This is the SAME predicate
-`expression_from_json` applies at the AST-literal boundary (`parse.jl`), so the two
-narrowing sites stay uniform. Booleans are excluded (`Bool <: Integer`).
+True iff `v` is a float whose value is an integer in `Int64` range
+([`_as_int64`](@ref), CONFORMANCE_SPEC §5.5.3.1 rule 1), the rule
+`expression_from_json` applies at the AST-literal boundary.
 """
-_int64_narrowable(v) =
-    (v isa AbstractFloat) && !(v isa Bool) && isfinite(v) && isinteger(v) &&
-    typemin(Int64) <= v <= typemax(Int64) && Float64(Int64(v)) == v
+_int64_narrowable(v) = v isa AbstractFloat && _as_int64(v) !== nothing
 
 """
     _narrow_arg_literals!(x)

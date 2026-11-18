@@ -21,9 +21,8 @@
 #
 # Like the Python and Rust bindings, this pass operates on the **raw parsed
 # document** (a nested `AbstractDict`/`AbstractVector`, e.g. the JSON3 object or
-# a `Dict{String,Any}`) rather than the typed `OpExpr`/`Model` structs: the
-# typed layer deliberately drops `index_sets`, node `id`, `ranges[*].from` and
-# `join`, so the references live only in the raw document. The pass is
+# a `Dict{String,Any}`) rather than the typed `OpExpr`/`Model` structs: its
+# public signature takes a raw document in every binding. The pass is
 # self-contained and additive — a document using none of these features yields
 # an empty-but-valid graph.
 #
@@ -172,44 +171,8 @@ closes the cycle), or `nothing` if the graph is acyclic. Three-color DFS over
 the dependency edges, deterministic (sorted vertices, sorted neighbours).
 """
 function detect_cycle(g::ReferenceGraph)
-    # Three-color (WHITE/GRAY/BLACK) DFS, iterative, over a materialized graph.
-    # This is the ONE cycle detector: `Cadence.assert_acyclic_index_sets`
-    # (cadence.jl) materializes its implicit set→node→set relation into a small
-    # `ReferenceGraph` and routes through here rather than carrying a twin.
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color = Dict{String, Int}(k => WHITE for k in keys(g.vertices))
-    # Precompute sorted adjacency once: the DFS revisits each vertex's
-    # neighbour list once per outgoing edge, and re-sorting per visit was
-    # needless repeated work.
     sorted_out = Dict{String, Vector{String}}(k => sort(v) for (k, v) in g.out)
-    for start in sort(collect(keys(g.vertices)))
-        get(color, start, WHITE) == WHITE || continue
-        stack = Tuple{String, Int}[(start, 1)]   # (vertex, 1-based neighbour index)
-        path = String[start]
-        color[start] = GRAY
-        while !isempty(stack)
-            node, i = stack[end]
-            neigh = get(sorted_out, node, String[])
-            if i <= length(neigh)
-                stack[end] = (node, i + 1)
-                nxt = neigh[i]
-                c = get(color, nxt, WHITE)
-                if c == GRAY
-                    idx = findfirst(==(nxt), path)
-                    return vcat(path[idx:end], String[nxt])
-                elseif c == WHITE
-                    color[nxt] = GRAY
-                    push!(stack, (nxt, 1))
-                    push!(path, nxt)
-                end
-            else
-                color[node] = BLACK
-                pop!(stack)
-                pop!(path)
-            end
-        end
-    end
-    return nothing
+    return _find_cycle(sorted_out, sort(collect(keys(g.vertices))))
 end
 
 """
@@ -251,33 +214,18 @@ function topological_order(g::ReferenceGraph)
     return emitted
 end
 
-# --- raw-document accessor helpers (String- or Symbol-keyed dicts) ----------
+# --- raw-document access ------------------------------------------------------
 #
-# NOTE(idiom): these `_get` / `_haskey` / `_str_keys` accessors tolerate
-# String- OR Symbol-keyed dicts IN PLACE (no copy of the parsed document),
-# threaded through every walk below. The Cadence classifier (cadence.jl) —
-# conformance-only, like this pass — instead converts each (small) fixture
-# model to native `Dict{String,Any}` up front (`Cadence.to_native`); the
-# production build path parses straight into the typed IR and runs neither
-# idiom.
+# The public entry points normalize their argument once (`_to_ordered_shared`:
+# string keys whatever the carrier, Symbol-keyed dicts and JSON3 objects
+# included), so the walks below read it through the shared `_raw_get` /
+# `_raw_haskey` (json_walk.jl).
 
 const _AGGREGATE_OPS = ("faq",)
 
 _node_key(addr::AbstractString) = string(REF_VERTEX_NODE, ":", addr)
 _index_set_key(name::AbstractString) = string(REF_VERTEX_INDEX_SET, ":", name)
 _factor_key(name::AbstractString) = string(REF_VERTEX_FACTOR, ":", name)
-
-# Look up a string key in an AbstractDict that may be keyed by String or Symbol.
-function _get(d::AbstractDict, k::AbstractString)
-    haskey(d, k) && return d[k]
-    sk = Symbol(k)
-    haskey(d, sk) && return d[sk]
-    return nothing
-end
-_get(::Any, ::AbstractString) = nothing
-
-_haskey(d::AbstractDict, k::AbstractString) = haskey(d, k) || haskey(d, Symbol(k))
-_haskey(::Any, ::AbstractString) = false
 
 # Sorted, so the walk visits object keys in one order whatever the Dict type: a
 # plain `Dict` hashes `rhs` before `lhs`, which made Julia report a different
@@ -292,7 +240,7 @@ function _nonempty_str(x)
     return (s !== nothing && !isempty(s)) ? s : nothing
 end
 
-_is_node(x) = x isa AbstractDict && _haskey(x, "op")
+_is_node(x) = x isa AbstractDict && _raw_haskey(x, "op")
 
 # Which binder class a `join` name resolves to, or `nothing`.
 #
@@ -324,25 +272,25 @@ function _join_binder_class(
     (name === nothing || isempty(name)) && return nothing
     nm = String(name)
     # 1. node-local binders (these shadow a same-named variable)
-    ranges = _as_dict(_get(node, "ranges"))
-    ranges !== nothing && _haskey(ranges, nm) && return "range"
-    oi = _as_vec(_get(node, "output_idx"))
+    ranges = _as_dict(_raw_get(node, "ranges"))
+    ranges !== nothing && _raw_haskey(ranges, nm) && return "range"
+    oi = _as_vec(_raw_get(node, "output_idx"))
     if oi !== nothing
         for o in oi
             _as_str(o) == nm && return "output_idx"
         end
     end
     # 2. node-local string factor args
-    args = _as_vec(_get(node, "args"))
+    args = _as_vec(_raw_get(node, "args"))
     if args !== nothing
         for a in args
             _as_str(a) == nm && return "arg"
         end
     end
     # 3. the model's variable registry — where a bin buffer lives
-    variables !== nothing && _haskey(variables, nm) && return "variable"
+    variables !== nothing && _raw_haskey(variables, nm) && return "variable"
     # 4. the document-scoped index-set registry
-    index_sets !== nothing && _haskey(index_sets, nm) && return "index_set"
+    index_sets !== nothing && _raw_haskey(index_sets, nm) && return "index_set"
     return nothing
 end
 
@@ -385,8 +333,8 @@ function _register_and_process!(
         variables::Union{Nothing, AbstractDict},
         id_to_addr::OrderedDict{String, _RefNode}
     )
-    op = _as_str(_get(node, "op"))
-    nid = _nonempty_str(_get(node, "id"))
+    op = _as_str(_raw_get(node, "op"))
+    nid = _nonempty_str(_raw_get(node, "id"))
     is_agg = op !== nothing && op in _AGGREGATE_OPS
     # only aggregate / FAQ nodes and any node carrying an explicit id become
     # addressable vertices.
@@ -411,13 +359,13 @@ function _register_and_process!(
     _ensure_vertex!(g, ReferenceVertex(key, REF_VERTEX_NODE, addr, op, nid, String(path)))
 
     # ranges[*].from -> index set
-    ranges = _as_dict(_get(node, "ranges"))
+    ranges = _as_dict(_raw_get(node, "ranges"))
     if ranges !== nothing
         for idx_name in _str_keys(ranges)
-            spec = _as_dict(_get(ranges, idx_name))
-            (spec !== nothing && _haskey(spec, "from")) || continue
-            target = _as_str(_get(spec, "from"))
-            declared = index_sets !== nothing && target !== nothing && _haskey(index_sets, target)
+            spec = _as_dict(_raw_get(ranges, idx_name))
+            (spec !== nothing && _raw_haskey(spec, "from")) || continue
+            target = _as_str(_raw_get(spec, "from"))
+            declared = index_sets !== nothing && target !== nothing && _raw_haskey(index_sets, target)
             if target === nothing || isempty(target) || !declared
                 throw(
                     ReferenceResolutionError(
@@ -432,7 +380,7 @@ function _register_and_process!(
     end
 
     # join[*].on[*] -> factor
-    join_clauses = _as_vec(_get(node, "join"))
+    join_clauses = _as_vec(_raw_get(node, "join"))
     if join_clauses !== nothing
         for clause in join_clauses
             cld = _as_dict(clause)
@@ -442,10 +390,10 @@ function _register_and_process!(
             # just like a bin-equality key column. CONFORMANCE_SPEC §5.5.6 makes
             # these ALWAYS factor variables, so the variable registry (class 3)
             # is what resolves them.
-            ov = _as_dict(_get(cld, "overlap"))
+            ov = _as_dict(_raw_get(cld, "overlap"))
             if ov !== nothing
                 for envkey in ("src_env", "tgt_env")
-                    names = _as_vec(_get(ov, envkey))
+                    names = _as_vec(_raw_get(ov, envkey))
                     names === nothing && continue
                     for nm in names
                         ref = _as_str(nm)
@@ -463,7 +411,7 @@ function _register_and_process!(
                 end
                 continue
             end
-            on = _as_vec(_get(cld, "on"))
+            on = _as_vec(_raw_get(cld, "on"))
             on === nothing && continue
             for pair in on
                 pv = _as_vec(pair)
@@ -512,7 +460,7 @@ function _walk!(
             _register_and_process!(g, value, path, model_name, index_sets, variables, id_to_addr)
         for k in _str_keys(value)
             _walk!(
-                g, _get(value, k), string(path, "/", k), model_name, index_sets, variables,
+                g, _raw_get(value, k), string(path, "/", k), model_name, index_sets, variables,
                 id_to_addr
             )
         end
@@ -532,7 +480,7 @@ function _collect_ids!(
     )
     if value isa AbstractDict
         if _is_node(value)
-            nid = _nonempty_str(_get(value, "id"))
+            nid = _nonempty_str(_raw_get(value, "id"))
             if nid !== nothing
                 qualified = string("models/", model_name, "/", path)
                 if haskey(nodes, nid)
@@ -544,11 +492,11 @@ function _collect_ids!(
                         )
                     )
                 end
-                nodes[nid] = _RefNode(nid, qualified, _as_str(_get(value, "op")))
+                nodes[nid] = _RefNode(nid, qualified, _as_str(_raw_get(value, "op")))
             end
         end
         for k in _str_keys(value)
-            _collect_ids!(nodes, _get(value, k), string(path, "/", k), model_name)
+            _collect_ids!(nodes, _raw_get(value, k), string(path, "/", k), model_name)
         end
     elseif value isa AbstractVector
         for (i, v) in enumerate(value)
@@ -574,13 +522,13 @@ DOCUMENT-wide requirement: a duplicate `id` anywhere in the document is
 """
 function _collect_document_node_ids(document::AbstractDict)
     nodes = OrderedDict{String, _RefNode}()
-    models = _as_dict(_get(document, "models"))
+    models = _as_dict(_raw_get(document, "models"))
     models === nothing && return nodes
     for name in _str_keys(models)
-        model = _as_dict(_get(models, name))
+        model = _as_dict(_raw_get(models, name))
         model === nothing && continue
         for root in _WALK_ROOTS
-            v = _get(model, root)
+            v = _raw_get(model, root)
             v === nothing || _collect_ids!(nodes, v, root, name)
         end
     end
@@ -598,10 +546,10 @@ function _merge_index_sets(
     model_sets === nothing && return doc_sets
     merged = OrderedDict{String, Any}()
     for k in _str_keys(doc_sets)
-        merged[k] = _get(doc_sets, k)
+        merged[k] = _raw_get(doc_sets, k)
     end
     for k in _str_keys(model_sets)
-        merged[k] = _get(model_sets, k)
+        merged[k] = _raw_get(model_sets, k)
     end
     return merged
 end
@@ -640,7 +588,8 @@ function build_reference_graph(
         model::AbstractDict, model_name::AbstractString = "",
         index_sets::Union{Nothing, AbstractDict} = nothing
     )
-    return _build_reference_graph(model, model_name, index_sets, nothing)
+    sets = index_sets === nothing ? nothing : _to_ordered_shared(index_sets)
+    return _build_reference_graph(_to_ordered_shared(model), model_name, sets, nothing)
 end
 
 # `build_reference_graph`, plus the document-wide `from_faq` scope.
@@ -657,7 +606,7 @@ function _build_reference_graph(
     # Go. For a schema-valid 1.0.0 document only one of the two is ever
     # non-empty, so the merge is observationally the same as Python's
     # "document registry, else the model key" fallback.
-    index_sets = _merge_index_sets(_as_dict(_get(model, "index_sets")), index_sets)
+    index_sets = _merge_index_sets(_as_dict(_raw_get(model, "index_sets")), index_sets)
 
     # Pass 1 — register declared index sets as vertices.
     if index_sets !== nothing
@@ -677,11 +626,11 @@ function _build_reference_graph(
     # declared component-local variable — a value-invention bin buffer written by
     # an earlier equation — one of the three binder classes esm-spec §4.9.5 makes
     # an `on` column polymorphic over. See `_join_binder_class`.
-    variables = _as_dict(_get(model, "variables"))
+    variables = _as_dict(_raw_get(model, "variables"))
 
     id_to_addr = OrderedDict{String, _RefNode}()
     for root in _WALK_ROOTS
-        v = _get(model, root)
+        v = _raw_get(model, root)
         v === nothing || _walk!(g, v, root, model_name, index_sets, variables, id_to_addr)
     end
 
@@ -691,10 +640,10 @@ function _build_reference_graph(
     faq_scope = document_nodes === nothing ? id_to_addr : document_nodes
     if index_sets !== nothing
         for name in _str_keys(index_sets)
-            entry = _as_dict(_get(index_sets, name))
+            entry = _as_dict(_raw_get(index_sets, name))
             entry === nothing && continue
-            _as_str(_get(entry, "kind")) == "derived" || continue
-            faq = _as_str(_get(entry, "from_faq"))
+            _as_str(_raw_get(entry, "kind")) == "derived" || continue
+            faq = _as_str(_raw_get(entry, "from_faq"))
             if faq === nothing || !haskey(faq_scope, faq)
                 throw(
                     ReferenceResolutionError(
@@ -737,13 +686,14 @@ Node ids are collected from EVERY model first, so a derived index set's
 id anywhere in the document is an error.
 """
 function resolve_references(document::AbstractDict)
+    document = _to_ordered_shared(document)
     out = OrderedDict{String, ReferenceGraph}()
-    models = _as_dict(_get(document, "models"))
+    models = _as_dict(_raw_get(document, "models"))
     models === nothing && return out
-    doc_index_sets = _as_dict(_get(document, "index_sets"))
+    doc_index_sets = _as_dict(_raw_get(document, "index_sets"))
     document_nodes = _collect_document_node_ids(document)
     for name in _str_keys(models)
-        model = _as_dict(_get(models, name))
+        model = _as_dict(_raw_get(models, name))
         model === nothing && continue
         g = _build_reference_graph(model, name, doc_index_sets, document_nodes)
         cyc = detect_cycle(g)

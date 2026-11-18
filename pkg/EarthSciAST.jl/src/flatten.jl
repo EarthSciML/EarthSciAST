@@ -484,37 +484,21 @@ set there made `[t, y, x]` out of a document that writes `x` before `y`.
 """
 function spatial_dims_in_expr(expr::ASTExpr)::Vector{Symbol}
     dims = Symbol[]
-    _collect_spatial_dims!(dims, expr, IdDict{OpExpr, Nothing}())
-    return dims
-end
-
-# `seen` visits each unique node once: a structurally-shared expression DAG
-# (template expansion) hangs the same subtree under exponentially many paths,
-# and this is a pure query of the node.
-function _collect_spatial_dims!(
-        dims::Vector{Symbol}, expr::ASTExpr,
-        seen::IdDict{OpExpr, Nothing}
-    )
-    return if expr isa OpExpr
-        haskey(seen, expr) && return
-        seen[expr] = nothing
-        # A `dim` scalar field names a spatial axis regardless of the op
-        # carrying it (grad/div sugar or any user rewrite-target op). A spatial
-        # `D` names its axis via `wrt` — the independent variable `t` is
-        # temporal, not spatial, and `D`'s structural time-derivative handling
-        # is untouched; only a spatial `wrt` contributes an axis here.
-        if expr.dim !== nothing
-            d = Symbol(expr.dim)
+    # Each unique node once: template expansion hangs one subtree under many
+    # paths. A `dim` field names a spatial axis whatever op carries it; a `D`
+    # names its axis by `wrt`, and `t` is temporal, not spatial.
+    foreach_subexpr_once(expr) do x
+        x isa OpExpr || return
+        if x.dim !== nothing
+            d = Symbol(x.dim)
             (d in dims) || push!(dims, d)
         end
-        if expr.op == "D" && expr.wrt !== nothing && expr.wrt != "t"
-            d = Symbol(expr.wrt)
+        if x.op == "D" && x.wrt !== nothing && x.wrt != "t"
+            d = Symbol(x.wrt)
             (d in dims) || push!(dims, d)
-        end
-        for a in expr.args
-            _collect_spatial_dims!(dims, a, seen)
         end
     end
+    return dims
 end
 
 # ========================================

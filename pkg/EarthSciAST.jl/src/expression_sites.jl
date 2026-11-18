@@ -28,15 +28,6 @@ function _reconstruct_fields(x::T; kwargs...) where {T}
 end
 
 """
-    reconstruct(r::ParameterUpdate; <any ParameterUpdate field>=…) -> ParameterUpdate
-
-Rebuild a `ParameterUpdate`, copying every field from `r` and overriding only
-the keywords passed. The `ParameterUpdate` analogue of
-[`reconstruct(::ModelVariable)`](@ref).
-"""
-reconstruct(r::ParameterUpdate; kwargs...) = _reconstruct_fields(r; kwargs...)
-
-"""
     EXPRESSION_SITE_KINDS
 
 The kinds of expression site [`foreach_expression`](@ref) reports, one per

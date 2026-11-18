@@ -271,6 +271,19 @@ end
         @test_throws ESS.EditError remove_equation(m2, bogus)
     end
 
+    @testset "_expr_equal: one structural equality for expressions" begin
+        eq = ESS._expr_equal
+        mk(x) = OpExpr("+", ESS.ASTExpr[VarExpr("a"), x])
+        @test eq(mk(IntExpr(1)), mk(IntExpr(1)))
+        @test !eq(mk(IntExpr(1)), mk(NumExpr(1.0)))
+        @test !eq(mk(NumExpr(0.0)), mk(NumExpr(-0.0)))
+        @test !eq(OpExpr("D", ESS.ASTExpr[VarExpr("x")], wrt = "t"), OpExpr("D", ESS.ASTExpr[VarExpr("x")], wrt = "s"))
+        @test !eq(OpExpr("+", ESS.ASTExpr[VarExpr("a")], id = "n1"), OpExpr("+", ESS.ASTExpr[VarExpr("a")]))
+        body(x) = OpExpr("faq", ESS.ASTExpr[]; expr_body = x, semiring = "sum_product")
+        @test eq(body(mk(IntExpr(2))), body(mk(IntExpr(2))))
+        @test !eq(body(mk(IntExpr(2))), body(mk(IntExpr(3))))
+    end
+
     @testset "substitute_in_equations rewrites expression trees" begin
         m = _make_model()  # D(x) = 2*x
         bindings = Dict{String, ESS.ASTExpr}("x" => NumExpr(42.0))

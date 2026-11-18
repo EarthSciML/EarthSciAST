@@ -386,7 +386,9 @@ math for `typst`. `names` plays the part of the names a component declares
 (its variables, species and parameters, and the document's index sets): a name
 in it prints in its declared shape and the printer avoids spellings that would
 collide with it. No template is in scope. The golden set's `math` field is
-`print_math` of the case's equation under its model's names.
+`print_math` of the case's equation under its model's names. Julia's
+`print_math` and `expression_names` also take a typed expression or equation,
+which they read through its serialized form.
 
 `parse_math(text, names, format)` is its inverse:
 `parse_math(print_math(e, names, f), names, f) == canonicalize_document(e)`. It

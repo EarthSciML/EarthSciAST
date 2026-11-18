@@ -113,16 +113,10 @@ Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.ms
 # (`_pd_matvec_factors`) are the SAME ones the pushdown auto-rewrite (`_pd_detect`,
 # pushdown_rewrite.jl) fires on — factored there and shared here, not duplicated.
 
-# Collect every faq node reachable in `e` (walking `args` and
-# `expr_body`), so the accelerator can require EXACTLY ONE reduction.
-function _blas_collect_aggregates!(acc::Vector{OpExpr}, e)
-    if e isa OpExpr
-        _is_faq_op(e.op) && push!(acc, e)
-        for a in e.args
-            _blas_collect_aggregates!(acc, a)
-        end
-        e.expr_body === nothing || _blas_collect_aggregates!(acc, e.expr_body)
-    end
+# Collect every faq node reachable in `e`, so the accelerator can require
+# EXACTLY ONE reduction.
+function _blas_collect_aggregates!(acc::Vector{OpExpr}, e::ASTExpr)
+    foreach_subexpr(x -> x isa OpExpr && _is_faq_op(x.op) && push!(acc, x), e)
     return acc
 end
 

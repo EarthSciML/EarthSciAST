@@ -30,8 +30,8 @@ module DLimits
 
 using ..DJson: JArr, JObj
 
-export MAX_NESTING, MAX_JSON_DEPTH, Findings, reading, nested, shallow, json_depth,
-    too_deep!, removed_op!
+export MAX_NESTING, MAX_JSON_DEPTH, Findings, Refusal, reading, nested, shallow, json_depth,
+    too_deep!, removed_op!, refused!, refused_at!
 
 """The most constructs a reader holds open at once."""
 const MAX_NESTING = 128
@@ -41,12 +41,22 @@ const MAX_NESTING = 128
 too)."""
 const MAX_JSON_DEPTH = 127
 
+"""Where a read gave up, for its diagnostic: `what` the reader could not read,
+and `rest_newlines`, the line breaks in the text after that point (`-1` when
+the point has no place in the text, as for a math entry read from the
+skeleton)."""
+struct Refusal
+    what::String
+    rest_newlines::Int
+end
+
 mutable struct State
     depth::Int
     too_deep::Bool
     removed_op::Union{Nothing, String}
+    refused::Union{Nothing, Refusal}
 end
-State() = State(0, false, nothing)
+State() = State(0, false, nothing, nothing)
 
 # The state of the read running on this task (Rust keeps it per thread).
 const KEY = :EarthSciAST_DocumentFormats_limits
@@ -56,10 +66,12 @@ state() = get!(State, task_local_storage(), KEY)::State
 """What one read ran into, besides its result: `too_deep`, a construct nested
 past [`MAX_NESTING`](@ref) or a value deeper than [`MAX_JSON_DEPTH`](@ref);
 `removed_op`, the first removed operator (esm-spec §4.2) the math parser met
-in a call or escape form, or `nothing`."""
+in a call or escape form, or `nothing`; `refused`, the first construct the
+document readers gave up on ([`Refusal`](@ref)), or `nothing`."""
 struct Findings
     too_deep::Bool
     removed_op::Union{Nothing, String}
+    refused::Union{Nothing, Refusal}
 end
 
 """Run one read, `f()`, and return its result with its [`Findings`](@ref)."""
@@ -70,7 +82,7 @@ function reading(f)
     tls[KEY] = st
     try
         out = f()
-        return out, Findings(st.too_deep, st.removed_op)
+        return out, Findings(st.too_deep, st.removed_op, st.refused)
     finally
         if saved === nothing
             delete!(tls, KEY)
@@ -88,6 +100,27 @@ function removed_op!(op::String)
     st = state()
     st.removed_op === nothing && (st.removed_op = op)
     return nothing
+end
+
+"""Record where the read gave up (the first one is kept): `what` it could not
+read, and the unread text `rest` (or `nothing` when the point has no place in
+the text)."""
+function refused!(what::String, rest)
+    st = state()
+    st.refused === nothing &&
+        (st.refused = Refusal(what, rest === nothing ? -1 : count(==('\n'), rest)))
+    return nothing
+end
+
+"""[`refused!`](@ref) for a construct that starts the unread text `rest`, named
+by the start of its line."""
+function refused_at!(kind::String, rest)
+    line = Char[]
+    for c in rest
+        (c == '\n' || length(line) == 40) && break
+        push!(line, c)
+    end
+    return refused!(string(kind, " `", String(line), "`"), rest)
 end
 
 """`f(args...)` with one more construct open: `nothing`, recorded as

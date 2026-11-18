@@ -153,11 +153,11 @@ Whether `raw` still carries an unresolved §4.7 mount — a top-level
 function _document_has_unresolved_mount(raw)::Bool
     _is_object(raw) || return false
     for (_, _, comp) in _components(raw)
-        _has_field(comp, :ref) && return true
+        _raw_haskey(comp, "ref") && return true
         subs = _raw_get(comp, "subsystems")
         (subs !== nothing && _is_object(subs)) || continue
         for (_, sub) in pairs(subs)
-            (_is_object(sub) && _has_field(sub, :ref)) && return true
+            (_is_object(sub) && _raw_haskey(sub, "ref")) && return true
         end
     end
     return false
@@ -415,7 +415,7 @@ function apply_mount_index_set_rename(
     (rename_raw === nothing || !_is_object(doc)) && return doc
     requested = _name_map(rename_raw, "index_set_rename", where)
 
-    isets = _get_field(doc, :index_sets, nothing)
+    isets = _raw_get(doc, "index_sets", nothing)
     # `nested_contributed` names the index sets that reached this registry ONLY
     # through a mount nested inside the referenced document. esm-spec §4.7 scopes
     # this edge to "what THIS referenced document declares and imports", so they
@@ -557,10 +557,10 @@ function _root_metaparameter_env(
         api_meta::AbstractDict{String, <:Integer}
     )::Dict{String, Int}
     env = Dict{String, Int}()
-    decls = _get_field(raw_data, :metaparameters, nothing)
-    if _is_json_object(decls)
+    decls = _raw_get(raw_data, "metaparameters", nothing)
+    if _is_object(decls)
         for (n, d) in pairs(decls)
-            dv = _get_field(d, :default, nothing)
+            dv = _raw_get(d, "default", nothing)
             (dv isa Integer && !(dv isa Bool)) || continue
             env[string(n)] = Int(dv)
         end
@@ -668,8 +668,8 @@ end
 The names a raw document's top-level `metaparameters` block declares.
 """
 function _declared_metaparameter_names(raw)
-    md = _get_field(raw, :metaparameters, nothing)
-    return _is_json_object(md) ? Set{String}(string(k) for k in keys(md)) : Set{String}()
+    md = _raw_get(raw, "metaparameters", nothing)
+    return _is_object(md) ? Set{String}(string(k) for k in keys(md)) : Set{String}()
 end
 
 """
@@ -779,21 +779,21 @@ Whether any `models.<M>` in `doc` mounts a `subsystems.<S>` `{ref}` at any
 depth.
 """
 function _document_has_subsystem_refs(doc)::Bool
-    models = _get_field(doc, :models, nothing)
-    _is_json_object(models) || return false
+    models = _raw_get(doc, "models", nothing)
+    _is_object(models) || return false
     has(m) = begin
-        subs = _get_field(m, :subsystems, nothing)
-        _is_json_object(subs) || return false
+        subs = _raw_get(m, "subsystems", nothing)
+        _is_object(subs) || return false
         for (_, sub) in pairs(subs)
-            _is_json_object(sub) || continue
-            r = _get_field(sub, :ref, nothing)
+            _is_object(sub) || continue
+            r = _raw_get(sub, "ref", nothing)
             r isa AbstractString && return true
             has(sub) && return true
         end
         false
     end
     for (_, m) in pairs(models)
-        _is_json_object(m) && has(m) && return true
+        _is_object(m) && has(m) && return true
     end
     return false
 end
@@ -1167,10 +1167,10 @@ end
 # Whether `doc` has a mount for `_inline_mounts!` to inline.
 function _document_has_mount(doc)::Bool
     for form in _TOPLEVEL_MOUNT_FORMS
-        block = _get_field(doc, Symbol(form.block), nothing)
-        _is_json_object(block) || continue
+        block = _raw_get(doc, String(form.block), nothing)
+        _is_object(block) || continue
         any(values(block)) do c
-            _is_json_object(c) && _has_field(c, :ref) && !_has_field(c, Symbol(form.body_key))
+            _is_object(c) && _raw_haskey(c, "ref") && !_raw_haskey(c, String(form.body_key))
         end && return true
     end
     return _document_has_subsystem_refs(doc)

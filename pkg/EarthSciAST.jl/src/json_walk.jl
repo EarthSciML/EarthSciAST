@@ -54,17 +54,23 @@ function _leaves_only(x::AbstractVector)
 end
 
 """
-    _raw_get(x, key::String)
+    _raw_get(x, key::String[, default])
     _raw_haskey(x, key::String) -> Bool
 
-String-keyed access over a raw JSON object. Post-wire trees are string-keyed
+The access layer over raw JSON. Post-wire trees are string-keyed
 (`_to_ordered`), and a `JSON3.Object` — the only pre-normalization carrier a
 wire-boundary gate still sees — resolves string keys natively, so one plain
-`get`/`haskey` covers every carrier. `_raw_get` reports an absent key as
-`nothing`.
+`get`/`haskey` covers every carrier. `_raw_get` reads an absent key, a JSON
+`null` and a non-object `x` alike as `nothing` (or `default`); `_raw_haskey` is
+the one way to tell a present `null` from an absent key, and is `false` for a
+non-object.
 """
-_raw_get(x, key::String) = get(x, key, nothing)
-_raw_haskey(x, key::String) = haskey(x, key)
+_raw_get(x, key::AbstractString) = _is_object(x) ? get(x, key, nothing) : nothing
+function _raw_get(x, key::AbstractString, default)
+    v = _raw_get(x, key)
+    return v === nothing ? default : v
+end
+_raw_haskey(x, key::AbstractString) = _is_object(x) && haskey(x, key)
 
 """
     _components(root)
@@ -187,11 +193,10 @@ _json3_to_ordered(x) = x
 # except an array's numbers after its first non-integral one, which stay
 # floats as JSON3 keeps them. (An integer literal above 2^53 has already been
 # rounded by then; JSON3 would have re-read its text.)
-_json3_int(v::Float64) = isinteger(v) && -9.223372036854775808e18 <= v < 9.223372036854775808e18
 function _json3_reint(x::JSON3.Object)
     out = OrderedDict{String, Any}()
     for (k, v) in pairs(x)
-        out[string(k)] = v isa Float64 ? (_json3_int(v) ? unsafe_trunc(Int64, v) : v) :
+        out[string(k)] = v isa Float64 ? something(_as_int64(v), v) :
             (v isa JSON3.Object || v isa JSON3.Array) ? _json3_reint(v) : v
     end
     return out
@@ -201,8 +206,9 @@ function _json3_reint(x::JSON3.Array)
     floated = false
     for (i, v) in enumerate(x)
         if v isa Float64
-            if !floated && _json3_int(v)
-                out[i] = unsafe_trunc(Int64, v)
+            i64 = floated ? nothing : _as_int64(v)
+            if i64 !== nothing
+                out[i] = i64
             else
                 out[i] = v
                 floated = true

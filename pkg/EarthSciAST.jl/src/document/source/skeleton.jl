@@ -146,10 +146,6 @@ struct Doc
     comps::Vector{Comp}
 end
 
-for T in (:Decl, :Eqn, :Term, :Rxn, :Tm, :MxEq, :MxRxn, :MxPlot, :MxTm, :Comp, :Doc)
-    @eval Base.:(==)(a::$T, b::$T) = fieldeq(a, b)
-end
-
 """`Comp.mapMath`: `f(c, m)` for every math entry."""
 map_math(c::Comp, f) =
     Comp(c.kind, c.name, c.desc, c.decls, Any[f(c, m) for m in c.math], c.math_blocks, c.blocks)

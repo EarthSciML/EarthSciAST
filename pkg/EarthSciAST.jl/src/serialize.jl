@@ -12,7 +12,9 @@ using JSON3
 Emit a stoichiometric coefficient as an integer when the value is exact, else as
 its Float64 form. Integer exactness keeps existing integer-only fixtures
 byte-identical across a parse/re-emit cycle, while fractional values (e.g.
-`0.87 CH2O`, `1.86 CH3O2`) survive untouched.
+`0.87 CH2O`, `1.86 CH3O2`) survive untouched. The bound is 2^53, not the
+`Int64` range of [`_as_int64`](@ref): above it a binary64 coefficient need not
+be the integer the author wrote.
 """
 function _emit_stoich(x::Real)
     if isinteger(x) && isfinite(x) && abs(x) < 2.0^53
@@ -73,8 +75,7 @@ end
 # `100`); a `const` built in memory can hold `Float64`s and would otherwise
 # write `100.0`, unlike a reload of the same document and unlike every other
 # binding.
-_canonical_value_numbers(x::AbstractFloat) =
-    (isfinite(x) && isinteger(x) && _int64_exactly_representable(Float64(x))) ? Int64(x) : x
+_canonical_value_numbers(x::AbstractFloat) = something(_as_int64(x), x)
 _canonical_value_numbers(x::AbstractVector) = Any[_canonical_value_numbers(e) for e in x]
 _canonical_value_numbers(x::AbstractDict) =
     Dict{String, Any}(string(k) => _canonical_value_numbers(e) for (k, e) in pairs(x))
@@ -177,9 +178,7 @@ function serialize_trigger(trigger::DiscreteEventTrigger)::Dict{String, Any}
         return Dict("type" => "condition", "expression" => serialize_expression(trigger.expression))
     elseif isa(trigger, PeriodicTrigger)
         result = Dict("type" => "periodic", "interval" => trigger.period)
-        if trigger.phase != 0.0
-            result["initial_offset"] = trigger.phase
-        end
+        trigger.phase === nothing || (result["initial_offset"] = trigger.phase)
         return result
     elseif isa(trigger, PresetTimesTrigger)
         return Dict("type" => "preset_times", "times" => trigger.times)
@@ -319,12 +318,6 @@ function serialize_reaction_system(rs::ReactionSystem)::Dict{String, Any}
     return result
 end
 
-
-# NOTE: `serialize_operator` / `serialize_registered_function` were removed
-# along with the `operators` / `registered_functions` emit path (esm-spec
-# v0.3.0 §9 closure): `serialize_esm_file` now refuses to write those blocks,
-# so the per-entry serializers had no remaining callers. The `Operator` /
-# `RegisteredFunction` types themselves remain exported for in-memory use.
 
 """
     serialize_coupling_entry(entry::CouplingEntry) -> Dict{String,Any}
@@ -795,9 +788,7 @@ Does `node` contain an `"op" => "faq"` anywhere?
 """
 function _contains_faq(node)::Bool
     if node isa AbstractDict
-        for key in (:op, "op")
-            haskey(node, key) && get(node, key, nothing) == "faq" && return true
-        end
+        _raw_get(node, "op") == "faq" && return true
         for v in values(node)
             _contains_faq(v) && return true
         end
@@ -825,20 +816,8 @@ See `docs/content/rfcs/faq-node-rename.md` §5.5.
 """
 function _raise_faq_esm_floor!(doc)
     doc isa AbstractDict || return doc
-    esm = nothing
-    key_found = nothing
-    for key in (:esm, "esm")
-        if haskey(doc, key)
-            esm = get(doc, key, nothing); key_found = key; break
-        end
-    end
-    esm isa AbstractString || return doc
-    parts = split(String(esm), '.')
-    length(parts) >= 2 || return doc
-    major = tryparse(Int, parts[1]); minor = tryparse(Int, parts[2])
-    (major === nothing || minor === nothing) && return doc
-    if (major, minor) < (1, 1) && _contains_faq(doc)
-        doc[key_found] = "1.1.0"
-    end
+    version = _esm_version(doc)
+    (version === nothing || version >= (1, 1, 0)) && return doc
+    _contains_faq(doc) && (doc["esm"] = "1.1.0")
     return doc
 end

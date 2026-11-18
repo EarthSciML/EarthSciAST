@@ -97,7 +97,7 @@ function validate_recurrence_semantics(file::EsmFile)::Vector{StructuralError}
             mismatch && continue
             # Rule 1: the same-cell reads between members must admit an order.
             adj = Dict{String, Vector{String}}(f[2] => f[3][4] for f in members)
-            cycle = _first_observed_cycle(adj)
+            cycle = _find_cycle(adj, sort!(collect(keys(adj))))
             if cycle !== nothing
                 at = members[findfirst(f -> f[2] in cycle, members)]
                 push!(

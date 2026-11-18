@@ -10,6 +10,7 @@ constructs separated by blank lines).
 module SMarkdownDoc
 
 using ..DJson
+using ..DLimits: refused_at!
 import ..DMath
 import ..DYaml
 import ..MLatex
@@ -18,12 +19,12 @@ using ..MExpr: Sym, name_ok
 using ..DStrings: esc_char, is_ident
 using ..SEquation: eq_expr, eq_sides
 using ..SSkeleton
-using ..SSkeleton: of_doc, to_doc
+using ..SSkeleton: to_doc
 import ..SSkeleton: front_key, desc, comp_name, decl_name, attr, eqn, rxn, plot, tm
 using ..SItems
-using ..SItems: ck_mx, cook_doc, items, pr_mx, raw_doc, unitems
+using ..SItems: canon_segs, ck_mx, cook_doc, items, parse_items, pr_mx, raw_doc, unitems
 using ..SLines: decode_text
-using ..SMarkdown: DASHES, FENCE, SegItem, SegProse, attr_ok, is_block, item_ok, lex,
+using ..SMarkdown: DASHES, FENCE, attr_ok, item_ok, lex,
     name_latex, render, rxn_ok, tm_lex
 using ..SMultiLine: cook_rows
 using ..SText: blank, no_stop, split_line, string_of, until_stop
@@ -185,19 +186,6 @@ function front_md(front)
     return out
 end
 
-"""`Md.canonSegs`: each construct after a blank line, a declaration on a line of
-its own."""
-function canon_segs(its)
-    out = Any[]
-    for it in its
-        block = is_block(it)
-        push!(out, SegProse(Char['\n']))
-        push!(out, SegItem(it))
-        block || push!(out, SegProse(Char['\n']))
-    end
-    return out
-end
-
 """`Md.printMd`: print a document as Markdown."""
 function print_md(d)
     doc = to_doc(CapsMd(), d)
@@ -208,13 +196,13 @@ end
 
 """`Md.lexDoc`: read the front matter and the constructs."""
 function lex_doc(s::Chars)
-    starts(s, "---\n") || return nothing
+    starts(s, "---\n") || return refused_at!("the front matter", s)
     x = until_stop(DASHES, drop(s, 4))
-    x === nothing && return nothing
+    x === nothing && return refused_at!("the front matter", s)
     body, sl, rest = x
-    blank(sl) || return nothing
+    blank(sl) || return refused_at!("the front matter", s)
     v = DYaml.decode(body)
-    v isa JObj || return nothing
+    v isa JObj || return refused_at!("the front matter", s)
     its = lex(true, rest)
     its === nothing && return nothing
     return v.kvs, its
@@ -228,12 +216,6 @@ function parse_md(s::AbstractString)
 end
 
 """`Md.parseItemsMd`."""
-function parse_items_md(front::Kvs, its)
-    r = unitems(front, its)
-    r === nothing && return nothing
-    d = cook_doc(ck_mdx, r)
-    d === nothing && return nothing
-    return of_doc(d)
-end
+parse_items_md(front::Kvs, its) = parse_items(ck_mdx, front, its)
 
 end # module SMarkdownDoc

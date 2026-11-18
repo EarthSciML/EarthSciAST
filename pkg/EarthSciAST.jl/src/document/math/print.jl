@@ -29,7 +29,8 @@ using ..MToken
 using ..MUnits: Factor
 import ..MUnits
 import ..DNumber
-using ..MExpr: REMOVED_OPS, Sym, is_e, is_formula, is_id_char, is_id_start, is_single,
+import ..DStrings
+using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, Sym, is_e, is_formula, is_id_char, is_id_start, is_single,
     keys_sorted, name_ok, pieces, seg_ok, split_dots, sub_parts, num_ok
 
 # The package the document module sits in: its unit grammar reads a units
@@ -47,7 +48,7 @@ function tc(parts...)
     return out
 end
 
-s_of(cs) = String(collect(Char, cs))
+const s_of = str_of
 
 # ## Text pieces
 
@@ -114,8 +115,8 @@ end
 digit)."""
 char_digit_nat(c::Char) = UInt64(max(Int64(UInt32(c)) - 48, 0))
 
-"""Lean's `Char.ofNat`: an invalid code point is `'\\0'`."""
-char_of_nat(n::Integer) = (n > 0x0010ffff || 0xd800 <= n <= 0xdfff) ? '\0' : Char(n)
+"""Lean's `Char.ofNat`: an invalid code point is `'\\0'` (`DStrings.char_of`)."""
+const char_of_nat = DStrings.char_of
 
 """`Math.unescK`: undo [`esc_k`](@ref)."""
 function unesc_k(cs)
@@ -290,7 +291,7 @@ const FIELD_CALL_OPS =
 """`Math.reservedOpn`: names `\\operatorname{…}` never means a template or an
 open operator by."""
 reserved_opn(n::AbstractString) =
-    n in CALL_OPS || n in ("D", "neg", "pow") || n in REMOVED_OPS
+    n in CALL_OPS || n == "D" || n in DEPRECATED_OPS || n in REMOVED_OPS
 
 """`Math.coreOps` (`coreOpNames` of `Notation`)."""
 const CORE_OPS = Set{String}(
@@ -547,7 +548,6 @@ struct Out
     toks::Vector{Tok}
     crow::Vector{Tok}
 end
-Base.:(==)(a::Out, b::Out) = fieldeq(a, b)
 
 """`Math.mkOut`."""
 function mk_out(l::Int, t::Vector{Tok})
@@ -829,7 +829,6 @@ struct AForm
     ns::Vector{JNum}
     rs::Vector{Vector{JNum}}
 end
-Base.:(==)(a::AForm, b::AForm) = fieldeq(a, b)
 
 """`Math.arrForm`: a constant array printed natively."""
 function arr_form(j)
@@ -940,7 +939,6 @@ struct FaqForm
     filter::Any
     set::Vector{String}
 end
-Base.:(==)(a::FaqForm, b::FaqForm) = fieldeq(a, b)
 
 """`Math.FaqForm.args`: the `args` of a native `faq`."""
 faq_args(f::FaqForm) = f.marked ? Any[s for s in bases(f.expr)] : Any[s for s in f.set]
@@ -1200,7 +1198,6 @@ struct MkForm
     regions::Vector{Vector{Tuple{Any, Any}}}
     values::Vector{Any}
 end
-Base.:(==)(a::MkForm, b::MkForm) = fieldeq(a, b)
 
 """`Math.regionJson`."""
 region_json(r) = JArr(Any[JArr(Any[p[1], p[2]]) for p in r])

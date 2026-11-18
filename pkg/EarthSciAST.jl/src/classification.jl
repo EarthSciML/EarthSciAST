@@ -357,16 +357,6 @@ constant_parameters(model::Model)::Vector{String} =
 
 # ── System kind ─────────────────────────────────────────────────────────────
 
-"""True iff any node of `e` (descending EVERY expression-bearing field, not
-just `args`) satisfies `pred`."""
-function _any_subexpr(pred, e::ASTExpr)::Bool
-    pred(e) && return true
-    for c in child_exprs(e)
-        _any_subexpr(pred, c) && return true
-    end
-    return false
-end
-
 _equation_has(pred, eq::Equation)::Bool =
     _any_subexpr(pred, eq.lhs) || _any_subexpr(pred, eq.rhs)
 

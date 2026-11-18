@@ -49,18 +49,18 @@ the raw JSON document, ahead of coercion, so the rejection can carry the
 offending document path.
 """
 function _reject_ic_in_reaction_system(raw_data)
-    rss = _get_field(raw_data, :reaction_systems, nothing)
+    rss = _raw_get(raw_data, "reaction_systems", nothing)
     rss === nothing && return
     for (rs_name, rs) in pairs(rss)
-        ce = _get_field(rs, :constraint_equations, nothing)
+        ce = _raw_get(rs, "constraint_equations", nothing)
         ce === nothing && continue
         for (i, eq) in enumerate(ce)
-            lhs = _get_field(eq, :lhs, nothing)
+            lhs = _raw_get(eq, "lhs", nothing)
             # Only operator-node LHSs carry an `op`; a bare-string / numeric LHS
             # (e.g. an algebraic constraint `"O3" ~ <value>`) is not an ic.
-            _is_json_object(lhs) || continue
-            _get_field(lhs, :op, nothing) == "ic" || continue
-            args = _get_field(lhs, :args, nothing)
+            _is_object(lhs) || continue
+            _raw_get(lhs, "op", nothing) == "ic" || continue
+            args = _raw_get(lhs, "args", nothing)
             species = (args !== nothing && length(args) >= 1 && args[1] isa AbstractString) ?
                 String(args[1]) : ""
             throw(
@@ -108,12 +108,12 @@ end
 # at the root or on a model / reaction system)?
 function _has_template_imports(doc)::Bool
     _is_object(doc) || return false
-    _get_field(doc, :expression_template_imports, nothing) === nothing || return true
-    for section in (:models, :reaction_systems)
-        comps = _get_field(doc, section, nothing)
+    _raw_get(doc, "expression_template_imports", nothing) === nothing || return true
+    for section in ("models", "reaction_systems")
+        comps = _raw_get(doc, section, nothing)
         _is_object(comps) || continue
         for (_, comp) in pairs(comps)
-            _get_field(comp, :expression_template_imports, nothing) === nothing || return true
+            _raw_get(comp, "expression_template_imports", nothing) === nothing || return true
         end
     end
     return false
@@ -336,7 +336,7 @@ gates.
 """
 function _esm_version(doc)
     _is_object(doc) || return nothing
-    v = _get_field(doc, :esm, nothing)
+    v = _raw_get(doc, "esm", nothing)
     v isa AbstractString || return nothing
     return _parse_esm_version(v)
 end
@@ -497,7 +497,7 @@ construct; `nothing` otherwise.
 function _check_version_gate(gate::_VersionGate, doc)
     offs = _version_gate_offences(gate, doc)
     isempty(offs) && return nothing
-    throw(gate.refusal(string(_get_field(doc, :esm, nothing)), offs))
+    throw(gate.refusal(string(_raw_get(doc, "esm", nothing)), offs))
 end
 
 """
@@ -602,9 +602,9 @@ function _lower_and_coerce(
         mount_declared::Union{Nothing, AbstractSet{String}} = nothing,
         source::_DocumentSource = _DocumentSource()
     )::EsmFile
-    raw_templates = _verbatim_decl(raw_data, :expression_templates)
-    raw_metaparams = _verbatim_decl(raw_data, :metaparameters)
-    raw_coordinates = _verbatim_decl(raw_data, :coordinates)
+    raw_templates = _verbatim_decl(raw_data, "expression_templates")
+    raw_metaparams = _verbatim_decl(raw_data, "metaparameters")
+    raw_coordinates = _verbatim_decl(raw_data, "coordinates")
 
     injected_root = apply_scope_injections(raw_data, Any[])
     machinery_input = injected_root === nothing ? raw_data : injected_root
@@ -648,8 +648,8 @@ end
 # Plain `Dict`/`Vector`/scalars only (`_to_native_json`) — the snapshot lives
 # on the typed `EsmFile` and is re-emitted verbatim by `serialize_esm_file`,
 # whose byte surface has always been the plain-Dict one.
-function _verbatim_decl(raw_data, key::Symbol)
-    v = _get_field(raw_data, key, nothing)
+function _verbatim_decl(raw_data, key::String)
+    v = _raw_get(raw_data, key, nothing)
     v === nothing && return nothing
     d = _to_native_json(v)
     return d isa AbstractDict ? d : nothing
@@ -683,13 +683,10 @@ Emit an `@warn` for each `domains.<d>.boundary_conditions` encountered: the
 deprecated v0.1.0 spelling of `models.<M>.boundary_conditions` (RFC §9).
 """
 function _warn_deprecated_domain_bc(raw_data)
-    # Through `_get_field` / `_has_field`, not a symbol-keyed `get`: the document
-    # also arrives here as a string-keyed native dict (`load_document`),
-    # for which a symbol lookup silently finds nothing and skips the check.
-    domains = _get_field(raw_data, :domains, nothing)
+    domains = _raw_get(raw_data, "domains", nothing)
     domains === nothing && return
     for (domain_name, domain) in domains
-        if _has_field(domain, :boundary_conditions)
+        if _raw_haskey(domain, "boundary_conditions")
             @warn string(
                 "[E_DEPRECATED_DOMAIN_BC] domains.", domain_name,
                 ".boundary_conditions is deprecated in ESM v0.2.0; migrate ",
@@ -859,6 +856,22 @@ const _REMOVED_2_0_0_HINT =
     "to rewrite the document onto the `esm:std/*.esm` expression templates"
 
 """
+    _REMOVED_OPS
+
+Every op spelling the format removed (esm-spec §4.2 "Removed ops"): `arrayop`
+(esm 0.8.0) and [`_REMOVED_OPS_2_0_0`](@ref). The document formats refuse the
+same tuple (`DocumentFormats.MExpr.REMOVED_OPS` is this object).
+"""
+const _REMOVED_OPS = ("arrayop", _REMOVED_OPS_2_0_0...)
+
+# What replaces a removed op, for its diagnostic.
+_removed_op_hint(op::AbstractString) =
+    op == "arrayop" ?
+    "removed at esm 0.8.0; use `\"op\": \"faq\"` (the Functional Aggregate Query " *
+    "node), see docs/content/rfcs/faq-node-rename.md" :
+    _REMOVED_2_0_0_HINT
+
+"""
     _removed_2_0_0_finding(doc) -> Union{Nothing, Tuple{String, String}}
 
 `(name, path)` of the first construct esm 2.0.0 removed that `doc` uses: an
@@ -872,7 +885,7 @@ function _removed_2_0_0_finding(doc)
         haskey(doc, key) && return ("function_tables", "/function_tables")
     end
     for section in ("models", "reaction_systems")
-        comps = _get_field(doc, Symbol(section), nothing)
+        comps = _raw_get(doc, String(section), nothing)
         _is_object(comps) || continue
         for (cname, comp) in pairs(comps)
             _is_object(comp) || continue
@@ -882,15 +895,15 @@ function _removed_2_0_0_finding(doc)
             end
         end
     end
-    hit = n -> (op = _get_field(n, :op, nothing); op isa AbstractString && op in _REMOVED_OPS_2_0_0)
+    hit = n -> (op = _raw_get(n, "op", nothing); op isa AbstractString && op in _REMOVED_OPS_2_0_0)
     segs = _find_json_segs(hit, doc)
     segs === nothing && return nothing
     path = string((string("/", s) for s in Iterators.reverse(segs))...)
     node = doc
     for s in Iterators.reverse(segs)
-        node = s isa Integer ? node[s + 1] : _get_field(node, Symbol(s), nothing)
+        node = s isa Integer ? node[s + 1] : _raw_get(node, String(s), nothing)
     end
-    return (String(_get_field(node, :op, "")), path)
+    return (String(_raw_get(node, "op", "")), path)
 end
 
 """

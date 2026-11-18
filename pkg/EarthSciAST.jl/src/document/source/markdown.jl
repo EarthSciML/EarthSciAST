@@ -14,11 +14,12 @@ module SMarkdown
 using ..DJson
 import ..DMath
 import ..DYaml
-using ..DLimits: nested
+using ..DLimits: nested, refused_at!
 using ..MExpr: Sym, name_ok, jwf
 using ..DStrings: esc_char, hex4, is_ident, parse_key, parse_quoted, print_key, read_ident
 using ..SSkeleton
 using ..SItems
+using ..SItems: Seg, SegItem, SegProse, is_block, render_segs
 using ..SReaction: RSurf, id_char, id_ok, p_piece, p_side, side_ok, side_txt
 using ..SText: after_s, blank, has_sub, no_stop, pre, pre_s, split_line, string_of, take_while,
     until_stop, sdrop
@@ -645,22 +646,22 @@ decl_open(s::Chars) = pre_s(":var[", s) || pre_s(":param[", s) || pre_s(":specie
 
 """`Md.blockAt`: read the block construct that starts here."""
 function block_at(s::Chars)
-    pre_s(FENCE_ESM, s) && return fence_at(sdrop(s, 7))
-    pre_s(D_RXN, s) && return rxn_at(sdrop(s, 6))
-    pre_s(DD, s) && return math_at(sdrop(s, 2))
-    pre_s(D_MODEL, s) && return dir_at(K_MODEL, sdrop(s, 8))
-    pre_s(D_PLOT, s) && return plot_at(sdrop(s, 7))
-    pre_s(D_SUBSYS, s) && return sub_at(sdrop(s, 12))
-    pre_s(D_TMPL, s) && return tm_cont_at(sdrop(s, 12))
-    pre_s(D_RULE_C, s) && return tm_cont_at(sdrop(s, 8))
-    return dir_at(K_RS, sdrop(s, 18))
+    pre_s(FENCE_ESM, s) && return fence_at(sdrop(s, length(FENCE_ESM)))
+    pre_s(D_RXN, s) && return rxn_at(sdrop(s, length(D_RXN)))
+    pre_s(DD, s) && return math_at(sdrop(s, length(DD)))
+    pre_s(D_MODEL, s) && return dir_at(K_MODEL, sdrop(s, length(D_MODEL)))
+    pre_s(D_PLOT, s) && return plot_at(sdrop(s, length(D_PLOT)))
+    pre_s(D_SUBSYS, s) && return sub_at(sdrop(s, length(D_SUBSYS)))
+    pre_s(D_TMPL, s) && return tm_cont_at(sdrop(s, length(D_TMPL)))
+    pre_s(D_RULE_C, s) && return tm_cont_at(sdrop(s, length(D_RULE_C)))
+    return dir_at(K_RS, sdrop(s, length(D_RS)))
 end
 
 """`Md.declAt`: read the declaration that starts here."""
 function decl_at(s::Chars)
-    pre_s(":var[", s) && return decl_body(D_VAR, sdrop(s, 5))
-    pre_s(":param[", s) && return decl_body(D_PARAM, sdrop(s, 7))
-    return decl_body(D_SPECIES, sdrop(s, 9))
+    pre_s(":var[", s) && return decl_body(D_VAR, sdrop(s, length(":var[")))
+    pre_s(":param[", s) && return decl_body(D_PARAM, sdrop(s, length(":param[")))
+    return decl_body(D_SPECIES, sdrop(s, length(":species[")))
 end
 
 # ## The declarations table (an accepted input variant)
@@ -804,30 +805,30 @@ function lex(bol::Bool, s::Chars)
         c = s[1]
         if bol && block_open(s)
             x = block_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the block", s)
             push!(out, x[1])
             s = x[2]
             bol = true
         elseif decl_open(s)
             x = decl_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the declaration", s)
             push!(out, x[1])
             s = x[2]
             bol = false
         elseif bol && pre_s(TABLE_OPEN, s)
             x = table_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the declarations table", s)
             append!(out, x[1])
             s = x[2]
             bol = true
         elseif bol && cont_open(s)
             x = cont_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the container", s)
             append!(out, x[1])
             s = x[2]
             bol = true
         elseif bol && rate_table(s)
-            return nothing
+            return refused_at!("a reaction table, which the format does not read,", s)
         elseif c == '`'
             s = skip_code(s)
             bol = false
@@ -948,31 +949,8 @@ function item_md(it::RItem)
     return out
 end
 
-"""`Md.Seg`: a piece of a Markdown document: a construct or prose. The Lean
-type's labelled-equation and code-span cases are never built here."""
-abstract type Seg end
-struct SegItem <: Seg
-    it::RItem
-end
-struct SegProse <: Seg
-    p::Vector{Char}
-end
-
-"""`Md.segText`."""
-seg_text(s::SegItem) = item_md(s.it)
-seg_text(s::SegProse) = s.p
-
 """`Md.render`: the text of a document body."""
-function render(segs)
-    out = Char[]
-    for s in segs
-        append!(out, seg_text(s))
-    end
-    return out
-end
-
-"""`Md.isBlock`: a construct that must start a line (all but declarations)."""
-is_block(it::RItem) = it isa RDecl ? it.d.kind == D_SUB : true
+render(segs) = render_segs(item_md, segs)
 
 with_nl(s::AbstractString) = push!(collect(Char, s), '\n')
 
