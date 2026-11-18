@@ -69,7 +69,7 @@ _codegen_node_budget() =
 
 # Emitted-node size of a tree: a node shared by several parents is counted
 # once per parent, as the emitter writes it once per use.
-_cg_node_tree_size(n::_Node) = 1 + sum(_cg_node_tree_size, n.children; init = 0)
+_cg_node_tree_size(n::_Node) = _node_tree_size(n)
 
 # ---- Dual overflow tier (ess-dualfp) ----------------------------------------
 # Kernels the primary emission declines — in practice on the node BUDGET, which
@@ -1321,16 +1321,11 @@ function _cg_fuse_leading(K::_AccKernel)
             a.dim <= 2 && return K
         end
     end
-    ok = Ref(true)
-    function scan(n::_Node)
-        ok[] || return
-        n.kind === _NK_SUBCALL && (ok[] = false; return)
-        return foreach(scan, n.children)
-    end
-    scan(K.spine)
-    foreach(scan, K.cse.recipes)
-    foreach(scan, K.cse.inv_recipes)
-    ok[] || return K
+    is_sub(n) = n.kind === _NK_SUBCALL
+    (
+        _node_any(is_sub, K.spine) || _anyof(r -> _node_any(is_sub, r), K.cse.recipes) ||
+            _anyof(r -> _node_any(is_sub, r), K.cse.inv_recipes)
+    ) && return K
     j0 = first(cs.ranges[2])
     shift(s1, s2, s3, sx) = (
         s1, s3, isempty(sx) ? 0 : sx[1],
@@ -1642,20 +1637,19 @@ function _cg_reduce_strides_favor_cells(K::_AccKernel, body::_Node, rdim::Int)
     stride(a::_AccDesc, d::Int) = d == 1 ? a.s1 : d == 2 ? a.s2 : d == 3 ? a.s3 :
         (d - 3 <= length(a.sx) ? a.sx[d - 3] : 0)
     near(s) = s == 0 || s == 1
-    function visit(n::_Node)
-        if n.kind === _NK_ACCESS
-            a = K.acc[n.idx]
-            if _ak_box_addressed(a.kind)
-                so = stride(a, 1)
-                sk = stride(a, rdim)
-                near(so) && !near(sk) && (gain += 1)
-                near(sk) && !near(so) && (gain -= 1)
-            end
-        end
-        foreach(visit, n.children)
-        return nothing
+    # Each read counts once per path that reaches it, as the emitted nest
+    # performs it once per use.
+    order, pos = _dag_postorder(body, _dag_children, _dag_every)
+    paths, _ = _dag_path_counts(order, pos, _dag_children, _dag_every, _dag_strict)
+    for (p, n) in enumerate(order)
+        n.kind === _NK_ACCESS || continue
+        a = K.acc[n.idx]
+        _ak_box_addressed(a.kind) || continue
+        so = stride(a, 1)
+        sk = stride(a, rdim)
+        near(so) && !near(sk) && (gain += paths[p])
+        near(sk) && !near(so) && (gain -= paths[p])
     end
-    visit(body)
     return gain > 0
 end
 
@@ -1969,14 +1963,11 @@ function _acc_kernel_work(K::_AccKernel)
     end
     return max(w, 1)
 end
-function _acc_node_work(nd::_Node, K::_AccKernel)
+_acc_node_work(root::_Node, K::_AccKernel) =
+    _node_fold(root, Int) do nd, kids
     nd.kind === _NK_SUBCALL && nd.payload isa _AccKernel &&
         return 1 + _acc_kernel_work(nd.payload::_AccKernel)
-    s = 0
-    for c in nd.children
-        s += _acc_node_work(c, K)
-    end
-    return 1 + s * _node_loop_reach(nd)
+    return 1 + sum(kids; init = 0) * _node_loop_reach(nd)
 end
 
 # The iterations a looping node runs its body for (1 for any other node).
@@ -1997,13 +1988,8 @@ function _node_loop_reach(nd::_Node)
 end
 
 # A scalar spine's work in node evaluations, loops counted per iteration.
-function _node_work(nd::_Node)
-    s = 0
-    for c in nd.children
-        s += _node_work(c)
-    end
-    return 1 + s * _node_loop_reach(nd)
-end
+_node_work(root::_Node) =
+    _node_fold((nd, kids) -> 1 + sum(kids; init = 0) * _node_loop_reach(nd), root, Int)
 
 # Per-generated-FUNCTION emitted-node cap. The node budget above bounds total
 # AST size; this bounds the size of any ONE compiled function, because LLVM's

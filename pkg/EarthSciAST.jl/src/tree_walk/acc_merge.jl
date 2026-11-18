@@ -36,8 +36,7 @@
 
 # Does this spine carry an op whose scalar evaluation is lazy?
 _acc_node_has_lazy(n::_Node) =
-    (n.kind === _NK_OP && _op_lazy_from(n.op) > 0) ||
-    _anyof(_acc_node_has_lazy, n.children)
+    _node_any(m -> m.kind === _NK_OP && _op_lazy_from(m.op) > 0, n)
 
 # ---- DIRECT CLASS EMISSION switch
 #
