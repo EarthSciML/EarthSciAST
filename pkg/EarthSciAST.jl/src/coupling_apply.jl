@@ -518,7 +518,7 @@ end
 """
     _compose_renames!(acc, made) -> acc
 
-Fold a merge's fresh rename map into the running document-wide one (issue #230).
+Fold a merge's fresh rename map into the running document-wide one.
 
 Renames CHAIN: if an earlier `operator_compose` merged `B.x` onto `A.x` and a
 later one merges `A.x` onto `C.x`, a document that still names `B.x` must land
@@ -555,7 +555,7 @@ end
 """
     _retarget_pending_entry(entry, renames) -> CouplingEntry
 
-Rewrite a not-yet-applied coupling entry's BY-NAME endpoints (issue #230).
+Rewrite a not-yet-applied coupling entry's BY-NAME endpoints.
 
 §4.7 applies every `operator_compose` before any `couple` or `variable_map`, and
 a renaming match DELETES the spelling it consumed. The document-wide retarget in
@@ -619,10 +619,9 @@ Which spelling owns the quantity a bare-name match unified (esm-libraries-spec
 
 A DIRECT match needs no decision (the two names are equal) and a `translate`
 match is the author naming the surviving spelling explicitly. The BARE-NAME
-fallback is the one that has to choose, and choosing `systems[1]` — what this
-binding did before — makes an `operator_compose` entry mean different things in
-its two argument orders: flipping `systems` silently swapped which state name,
-and which INITIAL CONDITION, came out the far side.
+fallback is the one that has to choose, and choosing `systems[1]` would make an
+`operator_compose` entry mean different things in its two argument orders:
+which state name, and which INITIAL CONDITION, comes out the far side.
 
 Ownership follows the variable's own namespace, the direction step 4's
 merged-equation reattribution (`_component_root`) already reaches in. The merge
@@ -631,14 +630,14 @@ deletes one of the two names, so the question is which of them survives:
   * **Both are STATES** — each carries its own initial condition, and nothing in
     the document says which one the merged tendency should integrate from.
     Refused ([`OperatorComposeAmbiguousBareNameError`](@ref)), because deciding
-    it here is exactly the silent choice issue #195 is about. The author says
+    it here would be a silent choice. The author says
     what they mean with `translate`, which names the surviving spelling
     outright, or with `require_match`.
   * **Exactly one is a state** — the other carries no initial condition, so
     there is nothing to lose by renaming onto the state. That one is the owner,
     in either argument order.
   * **Neither is** — no initial condition is at stake either way; the incumbent
-    (`systems[1]`'s spelling) stands, as before.
+    (`systems[1]`'s spelling) stands.
 """
 function _bare_name_owner(
         states::OrderedDict{String, ModelVariable},
@@ -1276,12 +1275,9 @@ end
 # The expression replacing a reference to a named-transform `variable_map`'s
 # `to`: its `from`, scaled by `factor` when one is given.
 function _variable_map_replacement(entry::CouplingVariableMap)::ASTExpr
-    # Build replacement ASTExpr. `factor` is a scaling coefficient (schema restricts
-    # it to the scaling transforms — additive / multiplicative / conversion_factor;
-    # a bare param_to_var / identity may not carry one). Apply it uniformly here
-    # so all three bindings agree — Julia/Rust previously scaled only for
-    # `conversion_factor`, silently dropping it for additive/multiplicative while
-    # Python applied it. A factor of 1.0 is a no-op and left unwrapped.
+    # `factor` is a scaling coefficient (the schema allows it on additive,
+    # multiplicative and conversion_factor), applied whatever the transform. A
+    # factor of 1.0 is left unwrapped.
     replacement::ASTExpr = VarExpr(entry.from)
     if entry.factor !== nothing && entry.factor != 1.0
         replacement = OpExpr(

@@ -76,8 +76,7 @@ end
 # search see THROUGH surviving `apply_expression_template` region values: the
 # interior gather lives inside the referenced template body, so the walk peeks
 # at the body's expansion — ANALYSIS ONLY, the equation tree is never rewritten,
-# and the compile-once build still receives the reference-preserving form. With
-# `reg === nothing` (no surviving references) the walk is exactly the old one.
+# and the compile-once build still receives the reference-preserving form.
 function _detect_lift_loops(
         ma::OpExpr, lifted::Set{String}, rank::Int,
         reg = nothing
@@ -582,9 +581,8 @@ function _pointwise_lift_operands(
     return arrayvars
 end
 
-# Grid axis for a makearray dimension is the declared index set whose size
-# matches that dimension's extent (the `index_sets` map is unordered, so this
-# matches by size rather than key order).
+# The declared index sets of each size, for matching a makearray dimension to
+# the index set of its extent.
 function _index_sets_by_size(index_sets::OrderedDict{String, IndexSet})::Dict{Int, Vector{String}}
     size_to_names = Dict{Int, Vector{String}}()
     for (name, iset) in index_sets
@@ -642,9 +640,8 @@ end
 # dimension's cell extent rejects exactly the staggered operands and keeps the
 # cell-centred ones. It also makes this pass a STRICT REFINEMENT of the size
 # match it precedes: when only one declared index set has the dimension's size,
-# any extent-agreeing name IS that index set, so a previously-unambiguous
-# resolution can never change. Only the ambiguous cases — which used to degrade
-# to a synthetic dense axis — can now resolve.
+# any extent-agreeing name IS that index set, so it decides only the dimensions
+# the size match leaves ambiguous.
 #
 # Walks THROUGH surviving `apply_expression_template` references (analysis only,
 # exactly as `_detect_lift_loops` does): with a monotone rule stack the interior

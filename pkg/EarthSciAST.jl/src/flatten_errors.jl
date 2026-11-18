@@ -153,7 +153,7 @@ _flatten_message(io::IO, e::OperatorComposeAmbiguousBareNameError) =
 Raised when a `variable_map` endpoint names nothing the flattened system
 carries (esm-spec §4.6, §10.4).
 
-Both halves of the entry are load-bearing and both used to fail SILENTLY. A
+Both halves of the entry are load-bearing, and neither may fail silently. A
 `to` that resolves to no parameter is simply never promoted
 (`_promote_variable_map_param!` returns on `haskey(params, entry.to) ||
 return`): the document declares a coupling, the target keeps its declared

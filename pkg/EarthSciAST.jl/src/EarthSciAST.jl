@@ -116,9 +116,8 @@ include("templates/expand_typed.jl")
 include("templates/emit.jl")
 include("templates/flat_registry.jl")
 # Flattening pipeline (reactions → equations, subsystem flattening, shapes).
-# flatten()'s stages live in sibling files: error taxonomy, namespacing +
-# per-system collection, coupling application, pointwise lift, orchestrator,
-# and the standalone array-shape-inference pass.
+# flatten()'s stages live in sibling files (listed in flatten.jl's header).
+# They load after the template files, whose types their signatures name.
 include("reactions.jl")
 include("flatten_errors.jl")
 include("term_provenance.jl")

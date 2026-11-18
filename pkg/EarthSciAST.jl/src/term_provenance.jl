@@ -1,6 +1,6 @@
 """
 Per-term provenance through flatten (esm-libraries-spec §4.7.5, "Per-term
-provenance"; issue #539).
+provenance").
 
 Every flattened equation carries an ordered list of [`Contribution`](@ref)s: the
 summands of its right-hand side, each with the component or coupling entry that

@@ -18,6 +18,8 @@ pieces of the pipeline:
 - `expr_axes.jl` — the one inference of an expression's index sets;
 - `namespacing.jl` — dot-namespacing + per-system collection (steps 1+2);
 - `coupling_apply.jl` — preflight checks + coupling-rule application (step 3);
+- `term_provenance.jl` — per-term provenance and the equation record `_FlatEq`;
+- `cell_read.jl` — reading an array expression at one cell, shared by the lifts;
 - `pointwise_lift.jl` — the §10.5 pointwise spatial lift (step 3b);
 - `shape_promotion.jl`, `elementwise_lift.jl` — shape promotion and the
   elementwise template lift;
@@ -47,7 +49,7 @@ Fields:
   for `operator_apply` and `callback` couplings.
 - `merged_variable_renames::OrderedDict{String,String}`: every state spelling an
   `operator_compose` renaming match DELETED, mapped onto the survivor it was
-  folded into (issue #230). The flattener's own retarget reaches equation ASTs;
+  folded into. The flattener's own retarget reaches equation ASTs;
   this is the map a CONSUMER that addresses a state by name needs — a
   `parameter_overrides` / `initial_conditions` key, an output selection — to
   resolve a spelling the merge moved out from under it. Empty for a document
@@ -444,11 +446,9 @@ field (esm-spec §4.9.1(ii)): the value of a `dim` field on ANY Expression node
 a spatial `wrt` (a `wrt` naming an axis other than the independent variable) on
 a `D` node. No op name is privileged.
 
-Returned in FIRST-ENCOUNTER order, deduplicated. This used to return a
-`Set{Symbol}`, whose iteration order is the host hash's — and it feeds
-`independent_variables`, which §4.7.5 step 4 requires to be in document order and
-which downstream consumers read POSITIONALLY as the system's axes. A
-set there made `[t, y, x]` out of a document that writes `x` before `y`.
+Returned in FIRST-ENCOUNTER order, deduplicated: it feeds
+`independent_variables`, which §4.7.5 step 4 requires in document order and
+which consumers read positionally as the system's axes.
 """
 function spatial_dims_in_expr(expr::ASTExpr)::Vector{Symbol}
     dims = Symbol[]
@@ -505,23 +505,13 @@ end
 Step 3c of [`flatten`]: rewrite every right-hand-side STRUCTURAL time derivative
 into the tendency this system already defines for it (esm-spec §4.2).
 
-`D` on an equation's LEFT-hand side is structural: it is what makes the equation
-differential, and system assembly consumes it. On a RIGHT-hand side there is no
-such consumer, so an observed written `dxdt ~ D(x, t)` — the standard shape for
-asserting a species tendency at `t = 0` (§6.6.2, "instantaneous-derivative test
-shape") — was unrunnable: the tree-walk runner's `unlowered_operator` gate
-refused it, and the Rust binding silently evaluated it to `0`.
-
-Neither answer was right, because everything needed is already in the system.
-`D(x, t)` over a STATE is `x`'s own `D(x)/dt ~ f`; `D(y, t)` over an OBSERVED is
-the total derivative of `y`'s defining equation, which is that equation's
-right-hand side differentiated by the same rule one level down. So the whole
-rule is the one recursive walk [`_deriv`](@ref), and it runs HERE — the layer
-that qualifies names, applies coupling and lowers a reaction network to its
-mass-action ODEs — so no evaluator ever meets a right-hand-side `D` and every
-consumer of the flattened system answers alike. It is what lets a sibling
-model's `D(Chem.O3, t)` resolve to the mechanism's tendency (§7.4) with no
-runner learning anything about reactions.
+`D` on an equation's LEFT-hand side is structural: it makes the equation
+differential, and system assembly consumes it. On a RIGHT-hand side,
+`D(x, t)` over a STATE is `x`'s own tendency, and `D(y, t)` over an OBSERVED is
+the total derivative of `y`'s defining right-hand side, by the same rule one
+level down: the one recursive walk [`_deriv`](@ref). It runs here, after
+coupling and reaction lowering, so no evaluator meets a right-hand-side `D` and
+a sibling model's `D(Chem.O3, t)` resolves to the mechanism's tendency (§7.4).
 
 What `_deriv` covers, and nothing else: a STATE (its tendency, with any `D`
 inside that tendency resolved in turn, so a chained
@@ -539,8 +529,7 @@ rewritten.
 
 The tendency and definition tables are built straight from the equations' LHS
 FORMS, never from a classification set: §6.3.1 derives an unknown's role from the
-equations, and `inlined_unknowns` in particular is the strict `y ~ f(…)` inlining
-set, not the classification (the substitution PR #250 unpicked).
+equations.
 
 The resolved expression replaces the `D` node INSIDE the referencing
 contribution, which keeps its origins; `x`'s own contributions are not spliced

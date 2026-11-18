@@ -259,8 +259,7 @@ function _namespace_expr(
     # `bindings` values (esm-spec §9.6.4 rule 7 / §10.7: template `params` —
     # the map's KEYS — never namespace, they are the template's formal
     # parameters; the argument expressions bound TO them do, and `map_children`
-    # rewrites exactly the values). An explicit `bindings` carve-out used to
-    # live here because `map_children` skipped that field. `map_children`
+    # rewrites exactly the values). `map_children`
     # routes through `reconstruct`, preserving all non-expression fields
     # (semiring, output_idx, int_var, join/join_gates, manifold, …).
     result = map_children(

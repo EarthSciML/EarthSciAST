@@ -399,8 +399,7 @@ Loop resolution, innermost scope winning:
 A reference in scalar position (no enclosing producer) is always left bare —
 its loops do not exist until `discretize` runs. References already under an `index` node are self-contained: the
 gathered operand (arg 1) is never rewrapped. Pure; returns `expr` itself
-(`===`) when nothing changes. IDENTITY-MEMOIZED per loop scope (the ESS-0hh
-convention of `_wrap_bare_array_refs`): within one scope the rewrite is a pure
+(`===`) when nothing changes. Memoized by node identity per loop scope: within one scope the rewrite is a pure
 function of the node, so a structurally-shared input DAG rewrites to a shared
 output DAG instead of re-inflating into an exponential tree; entering a
 producer opens a fresh scope (and memo), since the same node can legally
