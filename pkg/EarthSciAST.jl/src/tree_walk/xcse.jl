@@ -83,7 +83,7 @@
 # `_CSECache` this pass's kernel-side reads would consult, so rewritten kernels
 # would read unfilled slots there. `:oop` kernels are left byte-identical; the
 # traced tier removes its own redundancy at EMISSION instead, by value-numbering
-# emitted SSA values (ess-oop-gvn, tree_walk/oop.jl).
+# emitted SSA values (tree_walk/oop.jl).
 #
 # `compiler=:interpreter` skips the pass entirely. Fixture-level differential
 # oracles (test/tree_walk_xcse_test.jl) compare the two compilers bit for bit.
