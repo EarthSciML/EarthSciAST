@@ -149,7 +149,7 @@ end
             _tp_check_invariant(flat, eq, cs; label = f)
                 for (eq, cs) in zip(flat.equations, equation_contributions(flat))
         ]
-        # Only `grad` without a discretization is out of the evaluator's reach.
+        # Only a spatial `D` without a discretization is out of the evaluator's reach.
         f == "placeholder_expansion.esm" || @test (f, all(first, results)) == (f, true)
         # With three or more contributions the check must be able to see the order.
         for ((ok, disc), cs) in zip(results, equation_contributions(flat))

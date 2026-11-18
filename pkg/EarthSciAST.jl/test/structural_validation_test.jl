@@ -608,7 +608,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "Invalid fixture units_gradient_operator_mismatch.esm: only the bad_sum finding" begin
             # The reconciled corpus pins ONLY the genuine `m + kg` addition
-            # mismatch at .../variables/bad_sum; the grad over the units-less
+            # mismatch at .../variables/bad_sum; the user op over the units-less
             # coordinate 'x' MUST NOT be flagged (a binding that emits it is now
             # the one regressing — CONFORMANCE_SPEC §7.1.2 note).
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_gradient_operator_mismatch.esm")

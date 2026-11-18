@@ -332,13 +332,13 @@ end
     end
 
     @testset "nested-derivative fixpoint converges across passes" begin
-        # laplacian -> D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D ->
+        # lap_xy -> D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D ->
         # stencil (pass 2). Exercises the bounded fixpoint: a produced body is
         # re-scanned only in a SUBSEQUENT pass.
         out = _lower_conf("fixpoint_nested_deriv")
         @test _lowered_model(out) == _expanded_model("fixpoint_nested_deriv")
         expr_json = JSON3.write(_et_defrhs(out["models"]["m"], "lap"))
-        @test !occursin("laplacian", expr_json)
+        @test !occursin("lap_xy", expr_json)
         @test !occursin("\"D\"", expr_json)
     end
 
@@ -590,15 +590,15 @@ end
     @testset "constrained_match_scope: positive + negative in one document" begin
         out = _lower2("constrained_match_scope")
         @test _lowered2(out) == _golden_model("constrained_match_scope")
-        # div(F_edge) rewritten; div(F_cell) constraint-excluded, survives.
+        # D(F_edge, x) rewritten; D(F_cell, x) constraint-excluded, survives.
         @test _et_defrhs(out["models"]["m"], "div_edge")["op"] == "*"
-        @test _et_defrhs(out["models"]["m"], "div_cell")["op"] == "div"
+        @test _et_defrhs(out["models"]["m"], "div_cell")["op"] == "D"
     end
 
     @testset "two_div_two_meshes: identical patterns, disjoint shape scopes" begin
         out = _lower2("two_div_two_meshes")
         @test _lowered2(out) == _golden_model("two_div_two_meshes")
-        # Each div lowered by ITS mesh's rule — not both by the
+        # Each fv_div lowered by ITS mesh's rule — not both by the
         # first-declared rule (the pre-`where` declaration-order behavior).
         @test _et_defrhs(out["models"]["m"], "div_a")["args"][1] == "inv_area_a"
         @test _et_defrhs(out["models"]["m"], "div_b")["args"][1] == "inv_area_b"
