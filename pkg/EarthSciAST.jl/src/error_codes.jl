@@ -50,6 +50,28 @@ const ERROR_CODES = (
     ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch",
     CIRCULAR_DEPENDENCY = "circular_dependency",
     CONFLICTING_DERIVATIVE = "conflicting_derivative",
+    # ── Flatten refusals (esm-libraries-spec §4.7.5, §4.7.6; `FlattenError`).
+    #    Each named flatten error type carries the snake_case of its name;
+    #    the operator_compose and couple codes are shared with TypeScript,
+    #    Python and Go. ─────────────────────────────────────────────────────
+    COUPLE_MULTIPLICATIVE_NO_TENDENCY = "couple_multiplicative_no_tendency",
+    CYCLIC_PROMOTION = "cyclic_promotion",
+    DIMENSION_PROMOTION = "dimension_promotion",
+    DOMAIN_EXTENT_MISMATCH = "domain_extent_mismatch",
+    # A document with no `models` and no `reaction_systems` (a template
+    # library) has nothing to flatten.
+    NOTHING_TO_FLATTEN = "nothing_to_flatten",
+    OPERATOR_COMPOSE_AMBIGUOUS_BARE_NAME = "operator_compose_ambiguous_bare_name",
+    OPERATOR_COMPOSE_NO_MERGE = "operator_compose_no_merge",
+    OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED = "operator_compose_require_match_unmatched",
+    SLICE_OUT_OF_DOMAIN = "slice_out_of_domain",
+    UNMAPPED_DOMAIN = "unmapped_domain",
+    UNSUPPORTED_MAPPING = "unsupported_mapping",
+    VARIABLE_MAP_SHAPE_CONFLICT = "variable_map_shape_conflict",
+    # A `variable_map` expression `transform` that does not read the entry's
+    # `from` variable (esm-spec §10.4).
+    VARIABLE_MAP_TRANSFORM_MISSING_FROM = "variable_map_transform_missing_from",
+    VARIABLE_MAP_UNRESOLVED_ENDPOINT = "variable_map_unresolved_endpoint",
     DATA_SOURCE_UNDEFINED = "data_source_undefined",
     # esm-spec §8.5.1: the deprecated `from.records_per_sample` on a non-`data`
     # rule, or a written `records_per_sample` (the rule's own, else its source's
@@ -162,6 +184,11 @@ const ERROR_CODES = (
     # esm-spec §6.6.2: an inline test's `initial_conditions` / `parameter_overrides`
     # key that matches no declared name under the override-key rules.
     UNKNOWN_OVERRIDE_KEY = "unknown_override_key",
+    # esm-spec §6.6.2 on a caller's keys (`p`, `u0`, `initial_conditions`,
+    # `const_arrays`, `providers`): a key several declared names carry as a
+    # suffix, and two keys (or two surfaces) that supply one name.
+    OVERRIDE_KEY_AMBIGUOUS = "override_key_ambiguous",
+    OVERRIDE_KEY_CONFLICT = "override_key_conflict",
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref",
     # A coupling event affect target that resolves to no variable (validation/references.jl).
     UNRESOLVED_AFFECT_TARGET = "unresolved_affect_target",
@@ -446,3 +473,129 @@ cross-binding vocabulary diffs and for asserting in tests that a raise site
 uses a registered code.
 """
 error_code_names()::Vector{String} = sort!(collect(String, values(ERROR_CODES)))
+
+
+"""
+    _LOCAL_ERROR_CODES
+
+The diagnostic codes this binding raises that are NOT in [`ERROR_CODES`](@ref):
+the `E_TREEWALK_*` codes of the tree-walk evaluator ([`TreeWalkError`](@ref)),
+`E_CANONICAL_*` ([`CanonicalizeError`](@ref)), `E_REF_*`
+([`ReferenceResolutionError`](@ref)) and `E_DIRECT_*` ([`DirectEmitError`](@ref)).
+They name failures of Julia's own evaluators and are not a cross-binding
+contract, so they stay out of the shared registry. Raise sites write them as
+literals; `test/error_hierarchy_test.jl` checks that every `"E_…"` literal in
+`src` and `ext` is listed here, which is the typo guard the registry gives the
+shared codes.
+"""
+const _LOCAL_ERROR_CODES = (
+    # CANONICAL
+    "E_CANONICAL_BAD_CONST",
+    "E_CANONICAL_BAD_NODE",
+    "E_CANONICAL_DIVBY_ZERO",
+    "E_CANONICAL_NONFINITE",
+    "E_CANONICAL_UNSUPPORTED_FIELD",
+    # DIRECT
+    "E_DIRECT_EMIT_UNSUPPORTED",
+    # REF
+    "E_REF_CYCLE",
+    "E_REF_DUPLICATE_NODE_ID",
+    "E_REF_UNDECLARED_INDEX_SET",
+    "E_REF_UNKNOWN_FAQ_NODE",
+    "E_REF_UNRESOLVED_JOIN_FACTOR",
+    # TREEWALK
+    "E_TREEWALK_ACC_BAD_DESC",
+    "E_TREEWALK_ACC_UNSUPPORTED_OP",
+    "E_TREEWALK_AMBIGUOUS_MODEL",
+    "E_TREEWALK_ARITY",
+    "E_TREEWALK_ARRAYOP_INDEX_NDIM",
+    "E_TREEWALK_ARRAYOP_MALFORMED_LHS",
+    "E_TREEWALK_ARRAYOP_NO_BODY",
+    "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
+    "E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING",
+    "E_TREEWALK_ARRAY_SHAPE_MISMATCH",
+    "E_TREEWALK_BROADCAST_FN",
+    "E_TREEWALK_BROADCAST_SHAPE",
+    "E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
+    "E_TREEWALK_CONSTARRAY_BOUNDARY_KIND",
+    "E_TREEWALK_CONSTARRAY_BOUNDARY_NDIM",
+    "E_TREEWALK_CONSTARRAY_NDIM",
+    "E_TREEWALK_CONSTARRAY_OOB",
+    "E_TREEWALK_CONTRACTION_LOOP_INTERNAL",
+    "E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
+    "E_TREEWALK_DERIVED_NO_FAQ",
+    "E_TREEWALK_DISCRETE_MATERIALIZE",
+    "E_TREEWALK_DUPLICATE_DERIVATIVE",
+    "E_TREEWALK_DYNAMIC_RANGE",
+    "E_TREEWALK_FLOAT32_STATE",
+    "E_TREEWALK_GATED_OBSERVED",
+    "E_TREEWALK_GEOMETRY_SETUP",
+    "E_TREEWALK_IC_IN_RHS",
+    "E_TREEWALK_INDEX_EMPTY",
+    "E_TREEWALK_INDEX_NDIM",
+    "E_TREEWALK_INDEX_NOT_ARRAY",
+    "E_TREEWALK_INDEX_NOT_CONST",
+    "E_TREEWALK_INDEX_SET_INCOMPLETE",
+    "E_TREEWALK_INEXACT_SUBSCRIPT",
+    "E_TREEWALK_INTEGRAL_EMPTY",
+    "E_TREEWALK_INTEGRAL_NDIM",
+    "E_TREEWALK_INTEGRAL_NO_INTVAR",
+    "E_TREEWALK_INTERNAL",
+    "E_TREEWALK_JOIN_AMBIGUOUS_KEY",
+    "E_TREEWALK_JOIN_FLOAT_KEY",
+    "E_TREEWALK_JOIN_KEY_KIND",
+    "E_TREEWALK_JOIN_KEY_TYPE",
+    "E_TREEWALK_JOIN_NULL_KEY",
+    "E_TREEWALK_JOIN_OVERLAP",
+    "E_TREEWALK_JOIN_SYMS_CONFLICT",
+    "E_TREEWALK_JOIN_SYMS_UNKNOWN",
+    "E_TREEWALK_JOIN_UNKNOWN_KEY",
+    "E_TREEWALK_MAKEARRAY_MISMATCH",
+    "E_TREEWALK_MAKEARRAY_NDIM",
+    "E_TREEWALK_MAKEARRAY_VALUE_RANK",
+    "E_TREEWALK_MISSING_CELL",
+    "E_TREEWALK_MISSING_DATA",
+    "E_TREEWALK_MISSING_INITIAL_VALUE",
+    "E_TREEWALK_NO_MODEL",
+    "E_TREEWALK_OBSERVED_CYCLE",
+    "E_TREEWALK_OOP_NOT_EVALUABLE",
+    "E_TREEWALK_PARAM_ARRAY_TYPE",
+    "E_TREEWALK_PARAM_UNSTAMPABLE",
+    "E_TREEWALK_PGATHER_KEY_COLLISION",
+    "E_TREEWALK_PGATHER_NDIM",
+    "E_TREEWALK_PGATHER_OOB",
+    "E_TREEWALK_RAGGED_NO_PARENTS",
+    "E_TREEWALK_RANGE_ARITY",
+    "E_TREEWALK_RECUR_UNAVAILABLE",
+    "E_TREEWALK_SCAN_EMPTY_RANGE",
+    "E_TREEWALK_SCAN_UNKNOWN_OPLUS",
+    "E_TREEWALK_SHAPE_OP",
+    "E_TREEWALK_TRACED_SUBSCRIPT",
+    "E_TREEWALK_UNBOUND_LOOP_VAR",
+    "E_TREEWALK_UNBOUND_VARIABLE",
+    "E_TREEWALK_UNDECLARED_INDEX_SET",
+    "E_TREEWALK_UNKNOWN_FORM",
+    "E_TREEWALK_UNKNOWN_INDEX_SET_KIND",
+    "E_TREEWALK_UNKNOWN_NODE_KIND",
+    "E_TREEWALK_UNKNOWN_SEMIRING",
+    "E_TREEWALK_UNKNOWN_STATE",
+    "E_TREEWALK_UNRESOLVED_TEMPLATE_REF",
+    "E_TREEWALK_UNSUPPORTED_EQUATION",
+    "E_TREEWALK_UNSUPPORTED_LHS",
+    "E_TREEWALK_UNSUPPORTED_OP",
+    "E_TREEWALK_UNSUPPORTED_RECURRENCE",
+    "E_TREEWALK_UNSUPPORTED_SHAPE",
+    "E_TREEWALK_VI_FLOAT_KEY",
+    "E_TREEWALK_VI_INDEX",
+    "E_TREEWALK_VI_JOIN",
+    "E_TREEWALK_VI_KEY",
+    "E_TREEWALK_VI_MAP",
+    "E_TREEWALK_VI_MEMBER_FACTOR",
+    "E_TREEWALK_VI_NODE",
+    "E_TREEWALK_VI_OP",
+    "E_TREEWALK_VI_PARAM",
+    "E_TREEWALK_VI_PRODUCER",
+    "E_TREEWALK_VI_RANGE",
+    "E_TREEWALK_VI_RANGE_CYCLE",
+    "E_TREEWALK_VI_SYMBOL",
+)

@@ -110,7 +110,7 @@ function _resolve_lowering_var(name::String, L::_Lowering)
     elseif name == "t"
         return L.t
     else
-        throw(ArgumentError("Variable '$(name)' not found in variable dictionary"))
+        throw(SimulateError("Variable '$(name)' not found in variable dictionary", ERROR_CODES.UNDEFINED_VARIABLE))
     end
 end
 
@@ -134,10 +134,11 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr, L::_Lowering)
         # that a discretization rule must replace before a system is built.
         wrt_name = expr.wrt === nothing ? "t" : expr.wrt
         wrt_name == "t" || throw(
-            ArgumentError(
+            SimulateError(
                 "D(wrt = \"$(wrt_name)\") is a spatial derivative with no " *
                     "ModelingToolkit lowering: discretize it (a `faq` stencil over " *
-                    "an index set) before building the system"
+                    "an index set) before building the system",
+                ERROR_CODES.UNLOWERED_OPERATOR
             )
         )
         return Differential(L.t)(_esm_to_symbolic(expr.args[1], L))
@@ -168,13 +169,14 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr, L::_Lowering)
         expr.value isa Real && return expr.value
         expr.value isa AbstractVector && return EarthSciAST._const_op_to_array(expr.value)
         throw(
-            ArgumentError(
+            SimulateError(
                 "`const` with a $(typeof(expr.value)) value has no " *
-                    "MTK lowering (esm-spec §9.2)"
+                    "MTK lowering (esm-spec §9.2)",
+                ERROR_CODES.UNSUPPORTED_CONSTRUCT
             )
         )
     else
-        throw(ArgumentError("Unsupported operator: $op"))
+        throw(SimulateError("Unsupported operator: $op", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
     end
 end
 
@@ -206,17 +208,17 @@ end
 function _build_makearray(
         expr::OpExpr, L::_Lowering
     )
-    expr.regions === nothing && throw(ArgumentError("makearray node missing 'regions'"))
-    expr.values === nothing && throw(ArgumentError("makearray node missing 'values'"))
+    expr.regions === nothing && throw(SimulateError("makearray node missing 'regions'", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
+    expr.values === nothing && throw(SimulateError("makearray node missing 'values'", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
     length(expr.regions) == length(expr.values) ||
-        throw(ArgumentError("makearray regions and values length mismatch"))
+        throw(SimulateError("makearray regions and values length mismatch", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
 
     nd = length(expr.regions[1])
     sz = fill(0, nd)
     for region in expr.regions
-        length(region) == nd || throw(ArgumentError("makearray regions must all share ndims"))
+        length(region) == nd || throw(SimulateError("makearray regions must all share ndims", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
         for (axis, pair) in enumerate(region)
-            pair[1] >= 1 || throw(ArgumentError("makearray regions must be 1-based"))
+            pair[1] >= 1 || throw(SimulateError("makearray regions must be 1-based", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
             sz[axis] = max(sz[axis], pair[2])
         end
     end
@@ -246,9 +248,10 @@ function _fill_makearray_region!(result, region_axes, v)
     squeeze(dims) = filter(!=(1), collect(dims))
     region_size = map(length, region_axes)
     squeeze(size(vals)) == squeeze(region_size) || throw(
-        ArgumentError(
+        SimulateError(
             "makearray region of size $(region_size) cannot take an " *
-                "array value of size $(size(vals))"
+                "array value of size $(size(vals))",
+            ERROR_CODES.ARRAY_SHAPE_MISMATCH
         )
     )
     for (idx, val) in zip(Iterators.product(region_axes...), vals)
@@ -337,8 +340,9 @@ function _build_const_gather(
         n = Symbolics.value(v)
         if n isa Real
             isinteger(n) || throw(
-                ArgumentError(
-                    "index argument must be an integer, got $(n)"
+                SimulateError(
+                    "index argument must be an integer, got $(n)",
+                    ERROR_CODES.UNSUPPORTED_CONSTRUCT
                 )
             )
             v = Int(n)
@@ -354,9 +358,10 @@ function _build_const_gather(
         return table[resolved...]
     end
     ndims(table) <= 3 || throw(
-        ArgumentError(
+        SimulateError(
             "MTK lowering gathers a const array of at most 3 dimensions at a " *
-                "run-time index; '$(name)' has $(ndims(table))"
+                "run-time index; '$(name)' has $(ndims(table))",
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT
         )
     )
     return _esm_const_gather(table, name, idxs...)
@@ -376,7 +381,8 @@ function _mtk_is_array_shaped(x)
     (x isa AbstractArray || x isa Symbolics.Arr) && return true
     st = try
         SymUtils.symtype(Symbolics.unwrap(x))
-    catch
+    catch err
+        EarthSciAST._is_resource_error(err) && rethrow()
         return false
     end
     return st <: AbstractArray
@@ -389,8 +395,9 @@ function _push_lowered_equation!(eqs::AbstractVector, lhs, rhs)
     # `Array{Num}` (`Num <: Real`) and keeps its whole-array equation.
     if rhs isa Array{Float64}
         size(lhs) == size(rhs) || throw(
-            ArgumentError(
-                "`const` array of size $(size(rhs)) defines a variable of size $(size(lhs))"
+            SimulateError(
+                "`const` array of size $(size(rhs)) defines a variable of size $(size(lhs))",
+                ERROR_CODES.ARRAY_SHAPE_MISMATCH
             )
         )
         for I in CartesianIndices(rhs)
@@ -454,8 +461,9 @@ function _build_index(
             # anything fractional is a malformed index, so fail with a
             # descriptive error instead of an InexactError from Int().
             isinteger(a.value) || throw(
-                ArgumentError(
-                    "index argument must be an integer, got $(a.value)"
+                SimulateError(
+                    "index argument must be an integer, got $(a.value)",
+                    ERROR_CODES.UNSUPPORTED_CONSTRUCT
                 )
             )
             push!(idxs, Int(a.value))
@@ -503,10 +511,10 @@ function _build_broadcast(
     # unregistered / structural `fn`, or an operand count outside the named op's
     # registry arity, is rejected before any operand is lowered.
     prob = EarthSciAST._broadcast_fn_problem(expr.fn, length(expr.args))
-    prob === nothing || throw(ArgumentError(prob.message))
+    prob === nothing || throw(SimulateError(prob.message, ERROR_CODES.INVALID_BROADCAST_FN))
     fn_name = String(expr.fn)
     fn = get(_BROADCAST_FNS, fn_name, nothing)
-    fn === nothing && throw(ArgumentError("Unsupported broadcast fn: $fn_name"))
+    fn === nothing && throw(SimulateError("Unsupported broadcast fn: $fn_name", ERROR_CODES.INVALID_BROADCAST_FN))
     operands = [_esm_to_symbolic(a, L) for a in expr.args]
     return Base.materialize(Base.broadcasted(fn, operands...))
 end
@@ -514,14 +522,14 @@ end
 function _build_reshape(
         expr::OpExpr, L::_Lowering
     )
-    expr.shape === nothing && throw(ArgumentError("reshape node missing 'shape'"))
+    expr.shape === nothing && throw(SimulateError("reshape node missing 'shape'", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
     arr = _esm_to_symbolic(expr.args[1], L)
     dims = Int[]
     for entry in expr.shape
         if entry isa Integer
             push!(dims, Int(entry))
         else
-            throw(ArgumentError("reshape currently only supports integer shape entries, got $(entry)"))
+            throw(SimulateError("reshape currently only supports integer shape entries, got $(entry)", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
         end
     end
     return Symbolics.reshape(arr, dims...)
@@ -542,7 +550,7 @@ end
 function _build_concat(
         expr::OpExpr, L::_Lowering
     )
-    expr.axis === nothing && throw(ArgumentError("concat node missing 'axis'"))
+    expr.axis === nothing && throw(SimulateError("concat node missing 'axis'", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
     arrs = [_esm_to_symbolic(a, L) for a in expr.args]
     return cat(arrs...; dims = expr.axis + 1)
 end

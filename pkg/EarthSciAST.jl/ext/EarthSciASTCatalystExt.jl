@@ -65,8 +65,9 @@ function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String, Any})
         number_value = identity,
         resolve_var = name -> _resolve_rate_var(name, var_dict),
         extended_op = (op, _) -> throw(
-            ArgumentError(
-                "Unsupported operator in rate expression: $op"
+            SimulateError(
+                "Unsupported operator in rate expression: $op",
+                ERROR_CODES.UNSUPPORTED_CONSTRUCT
             )
         )
     )
@@ -130,9 +131,9 @@ The system is built with `combinatoric_ratelaws = false`: esm-spec §7.4 gives a
 reaction the mass-action rate `k · ∏ Sᵢ^nᵢ` with no `1/nᵢ!` factor, which is
 what `src/reactions.jl` derives. Species and parameter `default`s are attached
 to their symbols. A system carrying `constraint_equations`, events or
-`subsystems`, which this constructor has no lowering for, is refused with an
-`ArgumentError` naming the field, as is a reaction with neither substrates nor
-products (`null_reaction`).
+`subsystems`, which this constructor has no lowering for, is refused with a
+`SimulateError` naming the field (code `unsupported_construct`), as is a
+reaction with neither substrates nor products (code `null_reaction`).
 """
 function Catalyst.ReactionSystem(
         rsys::EarthSciAST.ReactionSystem;
@@ -146,11 +147,12 @@ function Catalyst.ReactionSystem(
             ("subsystems", !isempty(rsys.subsystems)),
         )
         present && throw(
-            ArgumentError(
+            SimulateError(
                 "Catalyst.ReactionSystem: the reaction system declares " *
                     "`$(field)`, which this constructor has no lowering for; " *
                     "flatten the document and build a ModelingToolkit.System " *
-                    "(or call esm_problem) instead"
+                    "(or call esm_problem) instead",
+                ERROR_CODES.UNSUPPORTED_CONSTRUCT
             )
         )
     end
@@ -192,9 +194,10 @@ function Catalyst.ReactionSystem(
         reactant_stoich = Real[]
         for (spname, st) in get_reactants_dict(esm_rxn)
             haskey(species_dict, spname) || throw(
-                ArgumentError(
+                SimulateError(
                     "reaction reactant '$(spname)' is not declared in the " *
-                        "reaction system's species list"
+                        "reaction system's species list",
+                    ERROR_CODES.UNDEFINED_SPECIES
                 )
             )
             push!(reactants_syms, species_dict[spname])
@@ -205,9 +208,10 @@ function Catalyst.ReactionSystem(
         product_stoich = Real[]
         for (spname, st) in get_products_dict(esm_rxn)
             haskey(species_dict, spname) || throw(
-                ArgumentError(
+                SimulateError(
                     "reaction product '$(spname)' is not declared in the " *
-                        "reaction system's species list"
+                        "reaction system's species list",
+                    ERROR_CODES.UNDEFINED_SPECIES
                 )
             )
             push!(products_syms, species_dict[spname])
@@ -215,9 +219,10 @@ function Catalyst.ReactionSystem(
         end
 
         isempty(reactants_syms) && isempty(products_syms) && throw(
-            ArgumentError(
+            SimulateError(
                 "null_reaction: reaction '$(esm_rxn.id)' has neither " *
-                    "substrates nor products"
+                    "substrates nor products",
+                ERROR_CODES.NULL_REACTION
             )
         )
         push!(
@@ -258,6 +263,7 @@ function EarthSciAST.ReactionSystem(rs::Catalyst.ReactionSystem)
         )
         v isa Number ? Float64(v) : nothing
     catch e
+        EarthSciAST._is_resource_error(e) && rethrow()
         @debug "ReactionSystem export: default metadata unreadable for $(sym)" exception = (e, catch_backtrace())
         nothing
     end
@@ -349,6 +355,7 @@ function mtk2esm(rs::Catalyst.ReactionSystem; metadata = (;))
     esm_rs = try
         EarthSciAST.ReactionSystem(rs)
     catch e
+        EarthSciAST._is_resource_error(e) && rethrow()
         push!(
             gaps, GapReport(
                 "unknown",

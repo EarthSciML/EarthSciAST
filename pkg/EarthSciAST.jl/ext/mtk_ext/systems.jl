@@ -22,11 +22,12 @@ function _assert_no_spatial_ops(flat::FlattenedSystem)
         for side in (eq.lhs, eq.rhs)
             spatial_op = _find_spatial_op(side)
             spatial_op === nothing || throw(
-                ArgumentError(
+                SimulateError(
                     "UnreachableSpatialOperatorError: encountered '$(spatial_op)' " *
                         "node in simulation evaluation. Spatial operators must be " *
                         "rewritten by ESD discretization rules before reaching the " *
-                        "simulator. Pipeline contract violated."
+                        "simulator. Pipeline contract violated.",
+                    ERROR_CODES.UNLOWERED_OPERATOR
                 )
             )
         end
@@ -50,8 +51,9 @@ function _split_ic_equations(flat::FlattenedSystem, L::_Lowering)
     # they seed silently fall back to their bare `default`.
     for (vn, rhs) in flat.field_ics
         haskey(L.vars, vn) || throw(
-            ArgumentError(
-                "ic($(vn)) targets unknown variable '$(vn)'"
+            SimulateError(
+                "ic($(vn)) targets unknown variable '$(vn)'",
+                ERROR_CODES.UNDEFINED_VARIABLE
             )
         )
         push!(ic_values, (vn, _esm_to_symbolic(rhs, L)))
@@ -60,11 +62,12 @@ function _split_ic_equations(flat::FlattenedSystem, L::_Lowering)
         if eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic"
             lop = eq.lhs::OpExpr
             (length(lop.args) == 1 && lop.args[1] isa VarExpr) ||
-                throw(ArgumentError("ic(...) LHS must name a single state variable"))
+                throw(SimulateError("ic(...) LHS must name a single state variable", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
             vn = (lop.args[1]::VarExpr).name
             haskey(L.vars, vn) || throw(
-                ArgumentError(
-                    "ic($(vn)) targets unknown variable '$(vn)'"
+                SimulateError(
+                    "ic($(vn)) targets unknown variable '$(vn)'",
+                    ERROR_CODES.UNDEFINED_VARIABLE
                 )
             )
             push!(
@@ -207,9 +210,11 @@ end
     ModelingToolkit.System(flat::FlattenedSystem; name=:anonymous, kwargs...)
 
 Build a `ModelingToolkit.System` (an ODE system) from a flattened ESM system.
-Raises an `ArgumentError` when the flattened system has a continuous spatial
-independent variable: this binding has no PDE constructor, so a spatial
-document must be discretized (a `faq` stencil over an index set) first.
+Raises a `SimulateError` (code `unsupported_construct`) when the flattened
+system has a continuous spatial independent variable: this binding has no PDE
+constructor, so a spatial document must be discretized (a `faq` stencil over
+an index set) first. Every other document construct the lowering cannot
+express is a `SimulateError` with a code as well.
 """
 function ModelingToolkit.System(
         flat::FlattenedSystem;
@@ -222,7 +227,7 @@ function ModelingToolkit.System(
     # here. No-op for a reference-free system.
     flat = expand_flattened_refs(flat)
     _has_spatial_ivs(flat) &&
-        throw(ArgumentError(_spatial_system_msg(flat, "ModelingToolkit.System")))
+        throw(SimulateError(_spatial_system_msg(flat, "ModelingToolkit.System"), ERROR_CODES.UNSUPPORTED_CONSTRUCT))
 
     _assert_no_spatial_ops(flat)
 

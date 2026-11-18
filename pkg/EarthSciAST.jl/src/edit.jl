@@ -11,18 +11,20 @@ throw [`EditError`](@ref) instead of silently returning the input unchanged.
 """
 
 """
-    EditError(msg)
+    EditError(msg, code = "")
 
 Exception thrown when an editing operation cannot be applied — e.g. removing
 a variable, equation, reaction, event, or coupling entry that does not exist,
 or extracting a missing component. Throwing (rather than warning and
 returning the input unchanged) makes failed edits visible programmatically.
+Fields: `code` (`""` for every edit failure today: each is a misuse of the
+editing call, not a finding about the document) and `msg`.
 """
 struct EditError <: EarthSciASTError
+    code::String
     msg::String
+    EditError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
 end
-
-Base.showerror(io::IO, e::EditError) = print(io, "EditError: ", e.msg)
 
 # Variable operations (Section 4.1)
 

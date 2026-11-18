@@ -161,15 +161,13 @@ AssertionResult(
     message, duration_s, reduce, rtol, atol, nothing
 )
 
-"""
-    error_code(err) -> Union{String,Nothing}
-
-The diagnostic code an exception carries in its `code` field (every coded
-`EarthSciASTError`), or `nothing` when it has none or it is empty.
-"""
-function error_code(err)
-    c = hasproperty(err, :code) ? getproperty(err, :code) : nothing
-    return c isa AbstractString && !isempty(c) ? String(c) : nothing
+# The code an `AssertionResult` records for the error behind an ERROR row: the
+# error's [`error_code`](@ref), `nothing` when it is empty or the error is not
+# one of this package's.
+function _result_code(err)
+    err isa EarthSciASTError || return nothing
+    c = error_code(err)
+    return isempty(c) ? nothing : c
 end
 
 # Backcompat virtual properties: `r.passed` predates the `status` field on the
@@ -444,13 +442,13 @@ end
 # ---------------------------------------------------------------------------
 
 # A test whose execution failed: the message every assertion of it reports, and
-# the failing error's diagnostic code (`error_code`).
+# the failing error's diagnostic code (`_result_code`).
 struct _EngineFailure
     message::String
     code::Union{String, Nothing}
 end
 _EngineFailure(prefix::AbstractString, err) =
-    _EngineFailure(prefix * sprint(showerror, err), error_code(err))
+    _EngineFailure(prefix * sprint(showerror, err), _result_code(err))
 
 # One assertion's evaluated outcome, buffered until the whole test's wall time
 # is known (see the timing comment in `_run_test_frame!`) and only then
@@ -512,10 +510,11 @@ function _run_test_frame!(
                     )
                 end
             catch err
+                _is_resource_error(err) && rethrow()
                 actual_val = nothing
                 status = ERROR
                 msg = _engine_error_message(engine, err)
-                code = error_code(err)
+                code = _result_code(err)
             end
 
             push!(

@@ -72,6 +72,7 @@ function _symbolic_to_esm_with_gaps(
     try
         return _symbolic_to_esm_export(expr, known_vars, strip_ns)
     catch e
+        EarthSciAST._is_resource_error(e) && rethrow()
         push!(
             gaps, GapReport(
                 "unknown",
@@ -307,6 +308,7 @@ function _get_default_or(var, default)
         val isa Number && return Float64(val)
         return default
     catch e
+        EarthSciAST._is_resource_error(e) && rethrow()
         # `getdefault` throws when the symbol carries no default metadata —
         # an expected miss, but log it so genuine failures stay diagnosable.
         @debug "mtk2esm: no readable default for $(var)" exception = (e, catch_backtrace())
@@ -339,6 +341,7 @@ function _get_units_str(var)
             m !== nothing && return String(m.captures[1])
         end
     catch e
+        EarthSciAST._is_resource_error(e) && rethrow()
         @debug "mtk2esm: units metadata unreadable for $(var)" exception = (e, catch_backtrace())
     end
     return nothing
@@ -355,6 +358,7 @@ function _get_description_str(var)
             return isempty(stripped) ? nothing : String(stripped)
         end
     catch e
+        EarthSciAST._is_resource_error(e) && rethrow()
         @debug "mtk2esm: description metadata unreadable for $(var)" exception = (e, catch_backtrace())
     end
     return nothing
@@ -388,6 +392,7 @@ function _continuous_cb_to_esm(
         end
         return ContinuousEvent(esm_conds, esm_affs)
     catch e
+        EarthSciAST._is_resource_error(e) && rethrow()
         push!(
             gaps, GapReport(
                 "unknown",
@@ -428,6 +433,7 @@ function _discrete_cb_to_esm(
         end
         return DiscreteEvent(trigger, esm_affs)
     catch e
+        EarthSciAST._is_resource_error(e) && rethrow()
         push!(
             gaps, GapReport(
                 "unknown",
@@ -458,6 +464,7 @@ function _affect_to_esm(
         )
         return AffectEquation(lhs_name, rhs_esm)
     catch e
+        EarthSciAST._is_resource_error(e) && rethrow()
         push!(
             gaps, GapReport(
                 "unknown",

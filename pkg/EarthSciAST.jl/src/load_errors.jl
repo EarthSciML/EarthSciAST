@@ -53,8 +53,6 @@ ParseError(
     Dict{String, Any}(details), original_error
 )
 
-Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
-
 """
     ExpressionTemplateError <: EarthSciASTError
 
@@ -85,9 +83,6 @@ ExpressionTemplateError(
 ) = ExpressionTemplateError(
     String(code), String(message), String(path), String(file), Dict{String, Any}(details)
 )
-
-Base.showerror(io::IO, e::ExpressionTemplateError) =
-    print(io, "[$(e.code)] $(e.message)")
 
 """
     SubsystemRefError <: EarthSciASTError
@@ -124,9 +119,6 @@ SubsystemRefError(
     Dict{String, Any}(details), String(ref), String(subsystem), String(parent_model)
 )
 
-Base.showerror(io::IO, e::SubsystemRefError) =
-    print(io, "SubsystemRefError: ", e.message)
-
 """
     EnumLoweringError <: EarthSciASTError
 
@@ -153,9 +145,6 @@ EnumLoweringError(
 ) = EnumLoweringError(
     String(code), String(message), String(path), String(file), Dict{String, Any}(details)
 )
-
-Base.showerror(io::IO, e::EnumLoweringError) =
-    print(io, "EnumLoweringError(", e.code, "): ", e.message)
 
 """
     _at(e; path = "", file = "") -> typeof(e)

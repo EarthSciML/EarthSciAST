@@ -45,29 +45,27 @@ final_state(sol) = isempty(sol.u) ? Float64[] : Vector{Float64}(sol.u[end])
 
 
 """
-    SimulateError(msg::AbstractString)
-    SimulateError(msg::String, code::String)
+    SimulateError(msg, code = "")
 
 Exception thrown when a simulation Problem cannot be built or run (API_SPEC
 §5.8): [`esm_problem`](@ref) given a missing file or an unsupported input, an
-override in `p` / `u0` that names no variable or collides with another, a
-document with no models, a provider or compiler that cannot serve the request,
-an [`observed_field`](@ref) read of a name that is not an evaluable observed,
-or `solve` called without the solver extension loaded.
+override in `p` / `u0` that names no variable, is ambiguous or collides with
+another, a document with no models, a provider or compiler that cannot serve
+the request, an [`observed_field`](@ref) read of a name that is not an
+evaluable observed, or `solve` called without the solver extension loaded. The
+ModelingToolkit and Catalyst constructors (`ModelingToolkit.System`,
+`Catalyst.ReactionSystem`) raise it too, for a document construct they cannot
+lower.
 
-`msg` is the human-readable description. `code` is the [`ERROR_CODES`](@ref)
-value when the failure has one, such as `"compiler_unknown"` or
-`"compiler_unavailable"` for a `compiler =` selection that cannot be honoured,
-and `""` otherwise. `showerror` prints `SimulateError: <code>: <msg>`, omitting
-the code when it is empty.
+Fields: `code`, the [`ERROR_CODES`](@ref) value when the failure has one (such
+as `compiler_unknown`, `override_key_ambiguous` or `unsupported_construct`) and
+`""` otherwise, then `msg`, the human-readable description.
 """
 struct SimulateError <: EarthSciASTError
-    msg::String
     code::String
+    msg::String
+    SimulateError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
 end
-SimulateError(msg::AbstractString) = SimulateError(String(msg), "")
-Base.showerror(io::IO, e::SimulateError) =
-    print(io, "SimulateError: ", isempty(e.code) ? "" : e.code * ": ", e.msg)
 
 # --------------------------------------------------------------------------- #
 # Default solver tolerances. Shared with the SciMLBase solve extension
@@ -265,7 +263,7 @@ function _apply_initial_conditions!(
             r = resolve_key(table, key)
             r.how === :ambiguous && throw(
                 SimulateError(
-                    _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state")
+                    _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state"), ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
                 )
             )
             r.name === nothing || return r, space
@@ -298,7 +296,7 @@ function _apply_initial_conditions!(
             SimulateError(
                 _override_collision_message(
                     "initial_conditions", "state", name, sort!(claimed[name])
-                )
+                ), ERROR_CODES.OVERRIDE_KEY_CONFLICT
             )
         )
     end
@@ -554,7 +552,8 @@ function _refuse_provider_registry_overlap(
     overlap(label, pk, rk, name) = throw(
         SimulateError(
             "providers['$(pk)'] and $(label)['$(rk)'] both supply the parameter " *
-                "'$(name)'; pass one of them (esm-spec §6.6.2)"
+                "'$(name)'; pass one of them (esm-spec §6.6.2)",
+            ERROR_CODES.OVERRIDE_KEY_CONFLICT
         )
     )
     for (label, reg) in registries
@@ -564,7 +563,7 @@ function _refuse_provider_registry_overlap(
         normalized, _, ambiguous, collisions = canonicalize_keys(Any, table, asked)
         for (k, cands) in sort!(collect(ambiguous), by = first)
             any(c -> haskey(fed, c), cands) &&
-                throw(SimulateError(_override_ambiguous_message(label, k, cands)))
+                throw(SimulateError(_override_ambiguous_message(label, k, cands), ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS))
         end
         for (name, rk) in sort!(collect(normalized), by = first)
             haskey(fed, name) && overlap(label, fed[name], rk, name)
@@ -1099,7 +1098,7 @@ function _adopt_data_shapes(flat::FlattenedSystem, registries...)
         k in cands || !_declares(flat, k) || continue
         r = resolve_key(table, k)
         r.how === :ambiguous && throw(
-            SimulateError(_override_ambiguous_message("const_arrays", k, r.candidates))
+            SimulateError(_override_ambiguous_message("const_arrays", k, r.candidates), ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS)
         )
         name = r.name
         name === nothing && continue
@@ -2140,7 +2139,7 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
             _override_collision_message(
                 "remake(prob; p)", "parameter",
                 first(sort!(collect(collisions), by = first))...
-            )
+            ), ERROR_CODES.OVERRIDE_KEY_CONFLICT
         )
     )
     isempty(unknown) || throw(
@@ -2161,7 +2160,8 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
                         for (k, v) in sort(collect(ambiguous), by = first)
                 ), "; "
             ) *
-                "; spell the namespaced name."
+                "; spell the namespaced name.",
+            ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
         )
     )
     syms = Symbol[]

@@ -62,6 +62,6 @@ include("../testutils.jl")  # _v/_op builders
             ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u"), _v("u")]; fn = "sin"),
             ESS.OpExpr("broadcast", ESS.ASTExpr[_v("u")]; fn = "min"),
         ]
-        @test_throws ArgumentError MTKExt._build_broadcast(bad, L)
+        @test_throws SimulateError MTKExt._build_broadcast(bad, L)
     end
 end

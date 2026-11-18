@@ -38,12 +38,10 @@ call to [`build_output_callback`](@ref) before the `DiffEqCallbacks` /
 the failures that carry one, and `""` otherwise.
 """
 struct OutputError <: EarthSciASTError
-    msg::String
     code::String
+    msg::String
+    OutputError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
 end
-OutputError(msg::AbstractString) = OutputError(String(msg), "")
-Base.showerror(io::IO, e::OutputError) =
-    print(io, "OutputError: ", isempty(e.code) ? "" : "[$(e.code)] ", e.msg)
 
 # --------------------------------------------------------------------------- #
 # AbstractSink — an optional supertype for concrete sinks. Sinks need NOT subtype
