@@ -766,12 +766,13 @@ end
 # scalar-slot plan (`_plan_observed_slots`) can compile each observed once as a
 # named prelude def instead of splicing the resolved chain into every reader.
 function _split_observed_and_derivatives(
-        equations::Vector{Equation},
-        observed_names::Vector{String}, geom_setup_vars::Set{String}, geom_inline_vars::Set{String},
-        array_inline_vars::Set{String},
-        mat_array_vars = _EMPTY_NAME_SET,
-        array_shaped_vars = _EMPTY_NAME_SET
+        equations::Vector{Equation}, observed_names::Vector{String},
+        cls::_VariableClasses, mat_array_vars::AbstractSet{String},
+        array_shaped_vars::AbstractSet{String}
     )
+    geom_setup_vars = cls.geom_setup_vars
+    geom_inline_vars = cls.geom_inline_vars
+    array_inline_vars = cls.array_inline_vars
     observed_exprs = Dict{String, ASTExpr}()
     # FACTORED array observeds are pulled OUT of the substitution map: their
     # readers gather the buffer by name (`index(obs, i…)` → a slot read), so
@@ -877,8 +878,6 @@ function _decline_unmaterialized_recurrences(
     end
     return nothing
 end
-
-const _EMPTY_NAME_SET = Set{String}()
 
 # ---- Stage: scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
 #

@@ -607,9 +607,7 @@ function _build_compile_evaluator(
     mat_vars = Set{String}(keys(layout.mat_dims))
 
     split = _split_observed_and_derivatives(
-        parts.equations,
-        parts.observed_names, cls.geom_setup_vars,
-        cls.geom_inline_vars, cls.array_inline_vars, mat_vars,
+        parts.equations, parts.observed_names, cls, mat_vars,
         Set{String}(n for (n, v) in model.variables if _is_array_shape(v.shape))
     )
     const_registry = _register_const_arrays(
