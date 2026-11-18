@@ -608,11 +608,11 @@ _CGUnitCtx(holes, locals, loops, share) = _CGUnitCtx(
 )
 
 # The member's array where it differs between members.
-_cg_cga(ctx::_CGCtx, kc::_CGUnitCtx, cg) =
+_cg_cga(ctx::_CGFunction, kc::_CGUnitCtx, cg) =
     (v = get(kc.objs, cg, nothing); v === nothing ? _cg_tab!(ctx, cg) : v)
 
 # The counted axis of each member, when the array differs between members.
-function _cg_count_axis(ctx::_CGCtx, kc::_CGUnitCtx, a::_Node, spec::_ContractLoop)
+function _cg_count_axis(ctx::_CGFunction, kc::_CGUnitCtx, a::_Node, spec::_ContractLoop)
     col = a.kind === _NK_CONST_GATHER ? get(kc.ocols, a.payload, nothing) : nothing
     col === nothing && return _cg_count_axis(ctx, nothing, a, spec)
     axes = Vector{Vector{Float64}}(undef, length(col))
@@ -626,13 +626,13 @@ function _cg_count_axis(ctx::_CGCtx, kc::_CGUnitCtx, a::_Node, spec::_ContractLo
     return (:($(_cg_tab!(ctx, axes))[$(kc.member)]), asc)
 end
 
-_cg_boxaddr(::_CGCtx, ::_CGUnitCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
+_cg_boxaddr(::_CGFunction, ::_CGUnitCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
     _decline(:lane_spec_on_scalar_spine)
 
 # A repeated sub-tree (array_contraction.jl, "A repeated sub-tree computed
 # once"): a unit's node is keyed by its hole where it has one, since that is
 # what it reads for each member of the class.
-_cg_emit_region(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
+_cg_emit_region(ctx::_CGFunction, kc::_CGUnitCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
 function _cg_share_leaf(K::_CGShareKeys, kc::_CGUnitCtx, nd::_Node)
     k = nd.kind
     if k === _NK_LITERAL || k === _NK_STATE
@@ -660,7 +660,7 @@ function _cg_span_literal(kc::_CGUnitCtx, nd::_Node)
     return h isa Float64 ? h : nothing
 end
 
-function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
+function _cg_emit(ctx::_CGFunction, kc::_CGUnitCtx, nd::_Node)
     _cg_budget!(ctx)
     shared = get(kc.loops, nd, nothing)
     shared === nothing || return shared
@@ -849,7 +849,7 @@ end
 # Emit one item: a `let` block looping over this chunk's share of the class's
 # members. `stored[s]` (local mode) says a slot must also be stored to the cache.
 function _sc_emit_item!(
-        ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
+        ctx::_CGFunction, it::_ScItem, C::_ScClass, L::_ScLayout,
         U::_ScUnit, cachemode::Bool, S::_ScSigCtx, rhs_list, prelude,
         ext::Set{Int}, alwaysstore::Bool
     )
@@ -994,7 +994,7 @@ function _sc_build_gen(
         items::AbstractVector{_ScItem}, classes, layouts, units, cachemode,
         S::_ScSigCtx, rhs_list, prelude, ext::Set{Int}, alwaysstore::Bool
     )
-    ctx = _CGCtx(typemax(Int), nothing)
+    ctx = _CGFunction(typemax(Int), nothing)
     loops = Any[]
     for it in items
         C = classes[it.class]
@@ -1015,7 +1015,7 @@ function _sc_build_gen(
     # the read-back then sees the previous call's value.
     run = Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, loops...))
     f, fns = _cg_finish(
-        ctx, (:du, :u, :p, :t, :_cgcache, :tabs, :_cgci, :_cgnc), run; pre = ctx.geosink
+        ctx, (:du, :u, :p, :t, :_cgcache, :tabs, :_cgci, :_cgnc), run; pre = ctx.nest.sink
     )
     tabpack = _cg_tabpack(ctx, fns)
     return _ScGen(f, tabpack)
@@ -1112,7 +1112,7 @@ function _sc_program(
                     bad = findfirst(run) do it
                         try
                             _sc_emit_item!(
-                                _CGCtx(typemax(Int), nothing), it,
+                                _CGFunction(typemax(Int), nothing), it,
                                 classes[it.class], layouts[it.class],
                                 units[classes[it.class].rep],
                                 cachemode[it.class], S, rhs_list, prelude,

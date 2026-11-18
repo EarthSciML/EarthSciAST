@@ -260,6 +260,38 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
         end
     end
 
+    # The build decides a group's members as the validator does
+    # (`_recurrence_equation_frame`, `_recurrence_group_verdict`): every
+    # rejection-corpus group the build would stack is refused with the code
+    # the validator reports for it.
+    @testset "group rejections: the build's codes are the validator's" begin
+        manifest_path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance",
+            "recurrence", "rejections.json"
+        )
+        if _require_fixture(manifest_path)
+            manifest = JSON3.read(read(manifest_path, String))
+            nstacked = 0
+            for case in manifest.cases
+                startswith(String(case.id), "group_") || continue
+                file = load_string(JSON3.write(case.document))
+                model = only(values(file.models))
+                isempty(EarthSciAST.recurrence_groups(model)) && continue
+                nstacked += 1
+                err = try
+                    EarthSciAST._stack_recurrence_groups(model, file.index_sets)
+                    nothing
+                catch e
+                    e
+                end
+                @test err isa EarthSciAST.TreeWalkError
+                err isa EarthSciAST.TreeWalkError &&
+                    @test err.code == String(case.expected_code)
+            end
+            @test nstacked >= 4
+        end
+    end
+
     # ── The SHARED rejection corpus ────────────────────────────────────────
     #
     # `tests/conformance/recurrence/rejections.json` drives every binding with

@@ -173,7 +173,7 @@ _cg_slot_run(tbl::AbstractVector{Int}) =
     !isempty(tbl) && all(k -> @inbounds(tbl[k]) == @inbounds(tbl[1]) + k - 1, eachindex(tbl))
 
 # ---- Scalar spine node → expression (mirrors `_eval_node`) ------------------
-function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+function _cg_emit(ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node)
     _cg_budget!(ctx)
     # A subtree a ragged loop computed once ahead of its row (`_cg_ragged_loop`).
     hoisted = get(kc.loops, nd, nothing)
@@ -183,7 +183,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         return nd.literal
     elseif k === _NK_STATE
         return _cg_uread(
-            _cg_slot_side(ctx.nst, nd.idx, nd.idx),
+            _cg_slot_side(ctx.space.nst, nd.idx, nd.idx),
             _cg_geo!(ctx, nd.idx, (nd, :idx))
         )
     elseif k === _NK_PARAM
@@ -252,7 +252,7 @@ end
 # A subtree of the body that does not read the row's counter (`u[i]`, a
 # parameter, `area[i]`) is computed once per non-empty row, ahead of the loop
 # (`_ragged_hoists`): the same value every term would compute.
-function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+function _cg_ragged_loop(ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node)
     spec = nd.payload::_RaggedLoop
     ch = nd.children
     haskey(kc.loops, spec.ref) && _decline(:loop_reentered, "a ragged loop")
@@ -384,10 +384,10 @@ end
 
 # Emit `nd` as a region of its own. Emission contexts without a scalar spine
 # emit it as it stands.
-_cg_emit_region(ctx::_CGCtx, kc, nd::_Node) = _cg_emit(ctx, kc, nd)
-_cg_emit_region(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
+_cg_emit_region(ctx::_CGFunction, kc, nd::_Node) = _cg_emit(ctx, kc, nd)
+_cg_emit_region(ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
 
-function _cg_emit_shared(ctx::_CGCtx, kc, nd::_Node)
+function _cg_emit_shared(ctx::_CGFunction, kc, nd::_Node)
     groups = _compiler_plan_now().share_subtrees ? _cg_share_groups(kc, nd) : nothing
     groups === nothing && return _cg_emit(ctx, kc, nd)
     pre = Any[]
@@ -561,7 +561,7 @@ end
 # fold's term, when a bound reads anything but the cell's output counters and
 # build constants, or when a bound does not evaluate at some cell (the call
 # then evaluates it, and raises its error, only where it is reached).
-function _ac_ragged_entries(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+function _ac_ragged_entries(ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node)
     (kc.nest === nothing || kc.entry !== nothing) && return nothing
     nest = kc.nest
     spec = nd.payload::_RaggedLoop
@@ -647,7 +647,7 @@ _cg_oplus_fn(op::Symbol) = _reducer_fnsym(op)
 # the range's bounds as the caller emits them; `span`, when given, is the
 # counter's least and greatest value, which lets a gather the counter
 # subscripts drop its range test.
-function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span = nothing)
+function _cg_contraction_loop(ctx::_CGFunction, kc, nd::_Node, lo, st, hi; span = nothing)
     spec = nd.payload::_ContractLoop
     haskey(kc.loops, spec.ref) && _decline(:loop_reentered, "a contraction loop")
     if _compiler_plan_now().count_fold
@@ -706,7 +706,7 @@ end
 # `nothing` declines to it.
 const _COUNT_MIRROR = Dict{Symbol, Symbol}(:<= => :>=, :< => :>, :>= => :<=, :> => :<)
 
-function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
+function _cg_count_loop(ctx::_CGFunction, kc, nd::_Node, lo, st, hi, span)
     spec = nd.payload::_ContractLoop
     (nd.op === :+ && nd.literal === 0.0 && length(nd.children) == 1) || return nothing
     isempty(spec.lo:spec.step:spec.hi) && return nothing
@@ -816,14 +816,14 @@ end
 # The counted axis as an emitted table read, and whether it ascends, or
 # `nothing` (`_count_const_axis`). The scalar tier's class emission has its
 # own method, for an array that differs between members.
-function _cg_count_axis(ctx::_CGCtx, kc, a::_Node, spec::_ContractLoop)
+function _cg_count_axis(ctx::_CGFunction, kc, a::_Node, spec::_ContractLoop)
     f = _count_const_axis(a, spec)
     f === nothing && return nothing
     return (_cg_tab!(ctx, f[1]), f[2])
 end
 
 # A constant gather's array as the emitted code reads it.
-_cg_cga(ctx::_CGCtx, kc, cg) = _cg_tab!(ctx, cg)
+_cg_cga(ctx::_CGFunction, kc, cg) = _cg_tab!(ctx, cg)
 
 # Whether a subtree reads the loop counter `ref`.
 _reads_counter(n::_Node, ref) =
@@ -861,7 +861,7 @@ end
 # A scalar reduction nested in a nest's term (`_ResolveCtx.nest_loops`). Its bounds
 # are build-time integers read through the geometry tables, and its counter's
 # span is known.
-function _cg_nest_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+function _cg_nest_contraction_loop(ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node)
     spec = nd.payload::_ContractLoop
     rng = spec.lo:spec.step:spec.hi
     isempty(rng) && return nd.literal
@@ -882,7 +882,7 @@ end
 # `_NK_LIVE_GATHER` is the same read of a live buffer; under a TABLE fold its
 # per-entry column holds the OFFSETS (fixed per entry), never the values, which
 # the buffer supplies at each call.
-function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
+function _cg_const_gather(ctx::_CGFunction, kc, nd::_Node)
     cg = nd.payload::_ConstGatherArray
     children = nd.children
     if kc isa _CGScalarCtx
@@ -1093,7 +1093,7 @@ end
 # evaluated. Nested conditionals reproduce that exactly — a flat guard chain
 # would evaluate every subscript first, which a subscript that throws out of
 # range would turn into a different program.
-function _cg_state_gather(ctx::_CGCtx, kc, nd::_Node)
+function _cg_state_gather(ctx::_CGFunction, kc, nd::_Node)
     sg = nd.payload::_StateGather
     children = nd.children
     if kc isa _CGScalarCtx
@@ -1101,7 +1101,7 @@ function _cg_state_gather(ctx::_CGCtx, kc, nd::_Node)
         if pre !== nothing
             col = _ac_entry_local(ctx, pre, kc.entry)
             ev = (kc.entry::_ACEntries).ev
-            side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, pre)...)
+            side = _cg_slot_side(ctx.space.nst, _cg_table_extent(ctx, pre)...)
             all(!=(0), pre) && return _cg_uread(side, :($col[$ev]))
             sv = _cg_name(ctx, "esl")
             return :(
@@ -1120,13 +1120,13 @@ function _cg_state_gather(ctx::_CGCtx, kc, nd::_Node)
 end
 
 function _cg_state_gather_dim(
-        ctx::_CGCtx, kc, nd::_Node,
+        ctx::_CGFunction, kc, nd::_Node,
         sg::_StateGather, sgv::Symbol, d::Int, off::Vector{Any}
     )
     children = nd.children
     if d > length(children)
         if sg.run_base != 0
-            side = _cg_slot_side(ctx.nst, sg.run_base, sg.run_base + sg.len - 1)
+            side = _cg_slot_side(ctx.space.nst, sg.run_base, sg.run_base + sg.len - 1)
             return _cg_uread(
                 side, :(
                     $(_cg_geo!(ctx, sg.run_base, (sg.slot_flat, :run))) +
@@ -1134,7 +1134,7 @@ function _cg_state_gather_dim(
                 )
             )
         end
-        side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, sg.slot_flat)...)
+        side = _cg_slot_side(ctx.space.nst, _cg_table_extent(ctx, sg.slot_flat)...)
         return _cg_uread(side, :($sgv.slot_flat[$(_cg_foldl(:+, off)) + 1]))
     end
     sd = _cg_name(ctx, "sgs")
@@ -1313,22 +1313,22 @@ end
 
 # A per-entry column bound to a local ahead of the cell loop; under a
 # compacting entry context, its compacted copy (paired with the original).
-function _ac_entry_local(ctx::_CGCtx, col, en = nothing)
+function _ac_entry_local(ctx::_CGFunction, col, en = nothing)
     s = _cg_name(ctx, "ecol")
     if en isa _ACEntries && en.compact[]
         so = _cg_name(ctx, "ecol")
-        push!(ctx.geosink, :(local $so = $(_cg_tab!(ctx, col))))
-        push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, _ws_scratch!(copy(col))))))
+        push!(ctx.nest.sink, :(local $so = $(_cg_tab!(ctx, col))))
+        push!(ctx.nest.sink, :(local $s = $(_cg_tab!(ctx, _ws_scratch!(copy(col))))))
         push!(en.pairs, (so, s))
         return s
     end
-    push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, col))))
+    push!(ctx.nest.sink, :(local $s = $(_cg_tab!(ctx, col))))
     return s
 end
 
 # Box addressing is a kernel-only concern; a scalar spine declines it rather
 # than letting a `MethodError` escape the emitter's decline protocol.
-_cg_boxaddr(::_CGCtx, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
+_cg_boxaddr(::_CGFunction, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
     _decline(:lane_spec_on_scalar_spine)
 
 function _try_codegen_array_contraction(
@@ -1338,7 +1338,7 @@ function _try_codegen_array_contraction(
         nst::Int = 0, consumer = nothing
     )
     _codegen_disabled() && return _Decline(:tier_off, "code generation")
-    ctx = _CGCtx(_codegen_node_budget(); nst = nst)
+    ctx = _CGFunction(_codegen_node_budget(); nst = nst)
     cons = _cg_consumer(ctx, consumer)
     entries = fold !== nothing && _acfold_is_table(fold) ?
         _ACEntries(
@@ -1367,13 +1367,14 @@ function _try_codegen_array_contraction(
         lo = _cg_geo!(ctx, los[d], (los, d))
         len = _cg_geo!(ctx, lens[d], (lens, d))
         st = _cg_geo!(ctx, steps[d], (steps, d), true)
-        push!(seek, :(local $iv = $lo + ($rv % $len) * $st))
-        push!(seek, :($rv = div($rv, $len)))
+        _cg_decode_digit!(seek, rv, len) do q
+            Any[:(local $iv = $(_cg_axis_index(lo, q, st)))]
+        end
         qv = _cg_name(ctx, "q")
         push!(qs, qv)
-        push!(start, :(local $qv = $rv % $len))
-        push!(start, :(local $iv = $lo + $qv * $st))
-        push!(start, :($rv = div($rv, $len)))
+        _cg_decode_digit!(start, rv, len; qv = qv) do q
+            Any[:(local $iv = $(_cg_axis_index(lo, q, st)))]
+        end
         push!(stepper, (qv, iv, lo, len, st))
         lens[d] >= 1 && (
             kc.spans[refs[d]] =
@@ -1469,7 +1470,7 @@ function _try_codegen_array_contraction(
     dstore = oside === :x ? :du : :(_cg_dview(du, Val($(QuoteNode(oside)))))
     loop = if cons === nothing
         quote
-            $(ctx.geosink...)
+            $(ctx.nest.sink...)
             local $ov = $outsv
             local $tv = _chunk_ordinals($ncells, _cgci, _cgnc)
             local $av = $tv[1]
@@ -1496,8 +1497,8 @@ function _try_codegen_array_contraction(
             return err
         end
         quote
-            $(ctx.geosink...)
-            $(ctx.prologue...)
+            $(ctx.nest.sink...)
+            $(ctx.prologue.stmts...)
             local $ov = $outsv
             local $tv = _chunk_ordinals($ncells, _cgci, _cgnc)
             local $av = $tv[1]
@@ -1529,7 +1530,7 @@ function _try_codegen_array_contraction(
             Expr(
                 :macrocall, Symbol("@inbounds"), ln,
                 quote
-                    $(ctx.geosink...)
+                    $(ctx.nest.sink...)
                     $maskloop
                 end
             );
@@ -1569,7 +1570,7 @@ end
 # with the term alone, and the returned mask loop refills `segc` and every
 # compacted column from the gate, entry by entry in table order.
 function _ac_emit_gated(
-        ctx::_CGCtx, kc::_CGScalarCtx, entries::_ACEntries,
+        ctx::_CGFunction, kc::_CGScalarCtx, entries::_ACEntries,
         gate::_Node, term::_Node, cv::Symbol, kvs::Vector{Symbol},
         seek::Vector{Any}, ncells::Int
     )
@@ -1664,7 +1665,7 @@ end
 # carries the term's partials exactly, where a seed converted to the value type
 # would add zero partials to them and turn a `-0.0` partial into `0.0`.
 function _cg_fold(
-        ctx::_CGCtx, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, term,
+        ctx::_CGFunction, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, term,
         ev::Union{Nothing, Symbol} = nothing
     )
     fnsym = _cg_oplus_fn(fold.op)
