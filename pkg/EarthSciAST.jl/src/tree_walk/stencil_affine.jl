@@ -1,14 +1,12 @@
 # ========================================================================
-# tree_walk/stencil_affine.jl — part of the tree-walk evaluator (ess-affine).
+# tree_walk/stencil_affine.jl — part of the tree-walk evaluator.
 # Included by src/tree_walk.jl AFTER stencil.jl; see that file for the layout.
 #
 # The POLYHEDRAL affine build: turn a lowered `makearray` rule body into a small
 # set of `_AccKernel`s (access_kernel.jl) in O(#structural groups), NOT O(#cells).
-# This is the replacement for the per-cell / per-branch symbolic-stencil path
-# (stencil.jl), whose cost is O(#cells × body) and made the monotone-PPM build
-# take tens of minutes (see esd-ess-build-oom-memoless-substitution).
+# The per-cell path costs O(#cells × body).
 #
-# HOW IT WILL WORK (the box processor, built incrementally):
+# HOW IT WORKS (the box processor):
 #   1. Reuse `_build_branch_template` (stencil.jl) to compile ONE sentinel spine
 #      per structural signature — a `_Node` tree whose loop-var-dependent gather
 #      leaves are `_NK_STATE(idx = -k)` placeholders (lane k ↔ `recipes[k]`).
@@ -56,7 +54,7 @@ end
 # Anything not modelled (a contraction node) throws a `_Decline` so the
 # caller runs the per-cell path — never a wrong kernel.
 #
-# IDENTITY-MEMOIZED (ESS-0hh): the compiled template is a DAG (`_stencilize` /
+# IDENTITY-MEMOIZED: the compiled template is a DAG (`_stencilize` /
 # `_compile` preserve sharing via their identity memos), and the lowering is a
 # pure function of the node under one call's fixed `lane_repl`/`subcalls`, so
 # a shared template node lowers to ONE shared access node — the per-path
@@ -445,8 +443,8 @@ end
 
 # ── LANE-AFFINE SIGNATURE (the cut key measures the LANE, not the output) ─────
 #
-# The gather key historically recorded, per STATE lane, `Δ = slot − oln` — the
-# lane's slot relative to the OUTPUT cell's slot. That is the right key only for
+# A gather key that recorded, per STATE lane, `Δ = slot − oln` — the lane's
+# slot relative to the OUTPUT cell's slot — would be the right key only for
 # a gather from an array laid out exactly like the output: a Cartesian stencil
 # neighbour. It is the WRONG key for a gather whose array has a DIFFERENT shape
 # from the output's — a lower-rank geometry column (`coslat_e[j]` read from an
@@ -463,7 +461,7 @@ end
 #     (branch key, corner verification, lane derivation, spine memo key) is paid
 #     once per box.
 #
-# The fix keys each lane by its SUBSCRIPTS' own local behaviour instead: a
+# So each lane is keyed by its SUBSCRIPTS' own local behaviour instead: a
 # subscript that is STRUCTURALLY affine in the loop indices (`+ - neg *` over
 # loop names and integer literals) can never open a cut and is skipped outright,
 # and any other subscript contributes its per-dim BACKWARD DIFFERENCE
@@ -572,8 +570,8 @@ end
 # gather key.
 #
 # The gather key has TWO strengths, selected by `okey`:
-#   * `okey === nothing` — the historical ghost-bit key (in-bounds vs ghost per
-#     state lane). Used by `_process_affine_box!`, which only needs bkey+branch.
+#   * `okey === nothing` — the ghost-bit key (in-bounds vs ghost per state
+#     lane), for the scans that need only the branch.
 #   * `okey = (base, strides)` (the VERIFIED output affine map) — each state
 #     lane's Δ = slot − oln (or 'G' for a ghost) enters the key, so a PERIODIC
 #     WRAP — where the slot legally jumps by ±N·stride with no region or ghost
@@ -830,7 +828,7 @@ function _region_cut_candidates(body, idx_names::Vector{String})
     # `Vector{Int}` of the dims it depends on otherwise. A name absent from the
     # map depends on none (a constant, a contracted index, a variable).
     alias0 = Dict{String, Any}(idx_names[d] => (d, 0) for d in 1:D)
-    # Deduped per (node, alias map CONTENT) (ESS-0hh): a Set-collector over the
+    # Deduped per (node, alias map CONTENT): a Set-collector over the
     # region bounds is path-multiplicity-insensitive, so entering each distinct
     # node once per distinct binding collects exactly the same candidate sets,
     # and a template gathered along many paths at the same subscripts is walked
@@ -1177,11 +1175,9 @@ end
 # ISBITS key (perf): a uniform `Tuple{UInt8,UInt64,Int,Int,Int,Int}` — `(tag, id,
 # a, b, c, d)` — instead of an allocated `String`. The leading `tag` disambiguates
 # the kinds (so e.g. a STATE_AFFINE and a LOOP_IDX with equal payload never
-# collide, exactly as the old "SA"/"LI" prefixes did), and the fixed shape means
+# collide), and the fixed shape means
 # `_acc_vn_key`'s per-ACCESS-node CSE key and `_lane_repl_key`'s per-lane key hash
-# with no per-node string materialization. Equality classes are identical to the
-# old strings: two descriptors map to the same tuple iff they mapped to the same
-# string.
+# with no per-node string materialization.
 function _desc_key(d::_AccDesc)
     k = d.kind
     k === _AK_STATE_AFFINE && return (0x01, UInt64(0), d.delta, d.idx, 0, 0)
@@ -1369,8 +1365,7 @@ function _fill_box_table_nt!(
     return tbl
 end
 
-# Materialize a NON-AFFINE state lane as a per-box slot table (Stage 2 of the
-# array-IR unification): one `_eval_recipe` per box cell — the SAME resolution
+# Materialize a NON-AFFINE state lane as a per-box slot table: one `_eval_recipe` per box cell — the SAME resolution
 # the per-cell fallback would run — stored densely in box-local layout, with 0
 # marking a ghost (fetched as the ghost literal 0.0). This is what an
 # unstructured gather (slot indirect through a connectivity const) lowers to;
@@ -1392,10 +1387,9 @@ function _materialize_state_tbl_inner(
 end
 
 # Materialize a NON-AFFINE live-forcing (pgather) lane as a per-box INDEX table
-# into the ALIASED live buffer (perf-plan A2). The forcing chains that observed
+# into the ALIASED live buffer. The forcing chains that observed
 # inlining splices into stencil lanes gather their raw buffers with clamped
-# subscripts (`max(k-1,1)` / `min(k,NLEV)` at the column walls — the GEOS-FP
-# Mz/OMEGA pattern); the clamp makes the flat index non-affine across a box,
+# subscripts (`max(k-1,1)` / `min(k,NLEV)` at the column walls); the clamp makes the flat index non-affine across a box,
 # and — pgather transitions being invisible to the per-cell cut signature —
 # the corner verification then threw the WHOLE equation onto the per-cell
 # fallback — which on a real multi-level transport equation is a large fraction
@@ -1613,9 +1607,9 @@ function _derive_lane_repl(
         return _materialize_const_box(rec, idx_names, box, D, var_map, const_arrays, run)
     elseif rec.kind == LANE_CONST
         # Loop-invariance is derived from the INDEX, never sampled from the
-        # VALUES.  The historical fast path here compared `_eval_recipe`'s value
-        # at `rep` against its value at the 2^D box CORNERS and folded the lane
-        # to a literal when they agreed.  That is unsound: a const array is
+        # VALUES. Comparing `_eval_recipe`'s value at `rep` against its value at
+        # the 2^D box CORNERS and folding the lane to a literal when they agree
+        # would be unsound: a const array is
         # arbitrary data, so corner agreement says nothing about the interior —
         # a regrid weight column reading (0, 0.5, 0) across a box coincides at
         # both ends and folded to a literal 0.0, silently zeroing the interior

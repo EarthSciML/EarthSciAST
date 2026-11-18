@@ -1,5 +1,5 @@
 # ========================================================================
-# tree_walk/stencil.jl — part of the tree-walk evaluator (gt-e8yw).
+# tree_walk/stencil.jl — part of the tree-walk evaluator.
 # Included by src/tree_walk.jl; see that file for the full layout and
 # include order. Section 4c: the symbolic STENCILIZER — one sentinel spine
 # template per structural group, with per-lane recipe evaluation. This is the
@@ -181,7 +181,7 @@ _idxset_key(idx_names::Vector{String}) = join(sort(idx_names), '\0')
 # `OpExpr` in the obs-inlined RHS, by identity) to its originating apply node
 # (documentary — the template name for diagnostics). `variants` memoizes
 # compiled bodies by `(root identity, loop-index-set key, body branch key)` —
-# PER BUILD when an `_XEqStore` is threaded in (the A3 hoist; `variants` /
+# PER BUILD when an `_XEqStore` is threaded in (`variants` /
 # `bound_bodies` then alias the store's dicts), per equation otherwise
 # (cross-equation variants off, or a caller without a store). `gmemo` is the
 # shared `_refs_idxset` guard memo (per-equation: its answers depend on this
@@ -252,8 +252,7 @@ end
 # `index(makearray)` regions — every cell sharing a branch resolves to the same
 # regions), and the three read-only variable registries the gather recipes
 # consult. All six are invariant across one walk (only `recipes` is mutated, by
-# push!); previously they were threaded as positional args with `_, _, _, _`
-# leaf placeholders. Build-time-only path — one small struct per branch is fine.
+# push!). Build-time-only path — one small struct per branch is fine.
 struct _StencilCtx
     idxset::Set{String}
     recipes::Vector{_LaneRecipe}
@@ -390,7 +389,7 @@ end
 # (`_materialize_const_box`'s exhaustive per-cell evaluation, all-equal fold
 # included), and the rest of the equation stays on the affine path.
 #
-# Evaluation reuses the wall2 Phase C compile-once machinery
+# Evaluation reuses the compile-once machinery
 # (`_cellwise_compile_once_impl` + `_CellEval`, tree_walk/cellwise.jl) — the
 # existing evaluator for "a scalar expression at a loop-index environment over
 # const arrays": the subtree is resolved+compiled ONCE with the loop indices
@@ -560,7 +559,7 @@ function _stencilize_shared(
     )
     _branch_key!(tctx.bio, node, ctx.idxset, ctx.idx_env, ctx.const_arrays, tctx.gmemo)
     bodykey = String(take!(tctx.bio))
-    # (root identity ≡ structure after A1 interning, loop-index-set key, region
+    # (root identity ≡ structure after interning, loop-index-set key, region
     # class): the full variant key — shared per BUILD when the A3 store is
     # threaded in, per equation otherwise. See the _XEqStore purity note above.
     vkey = (objectid(node), tctx.idxkey, bodykey)
@@ -991,7 +990,7 @@ end
 # substitution — so a shared signature guarantees a shared template. `memo` caches
 # per-node variable sets across cells so the invariant guard costs O(|idxset|).
 #
-# IDENTITY-DEDUPED traversal (ESS-0hh): `seen` (fresh per top-level call, i.e.
+# IDENTITY-DEDUPED traversal: `seen` (fresh per top-level call, i.e.
 # per cell/site keying) enters each distinct `OpExpr` once, so keying a
 # structurally-shared spine (the obs-inlined body is a compact DAG by
 # `_sub_preserving` construction) is O(distinct nodes), not once per PATH.
