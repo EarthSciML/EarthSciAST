@@ -257,4 +257,58 @@ function ck_mx(ck_e, ck_r, s::Sym, m::MxTm)
     return Any[MxTm(Tm(t.name, t.params, lhs, body, t.attrs))]
 end
 
+# ## Shared by the two containers
+#
+# What the Markdown and Typst containers write identically, under one name
+# here; each container keeps its Lean-named forwards (`Md.render`,
+# `Typ.canonSegs`, …).
+
+"""A piece of a document body: a construct or prose (Lean `Md.Seg` and
+`Typ.Seg`, whose labelled-equation and code-span cases are never built
+here)."""
+abstract type Seg end
+struct SegItem <: Seg
+    it::RItem
+end
+struct SegProse <: Seg
+    p::Vector{Char}
+end
+
+# The text of a document body, each construct through the container's
+# `item_text` (`Md.render`, `Typ.render`).
+function render_segs(item_text::F, segs) where {F}
+    out = Char[]
+    for s in segs
+        append!(out, s isa SegItem ? item_text(s.it) : s.p)
+    end
+    return out
+end
+
+"""`Md.isBlock`: a construct that must start a line (all but declarations);
+`Typ.isBlock` is the same."""
+is_block(it::RItem) = it isa RDecl ? it.d.kind == D_SUB : true
+
+"""`Md.canonSegs`: each construct after a blank line, a declaration on a line of
+its own; `Typ.canonSegs` is the same."""
+function canon_segs(its)
+    out = Seg[]
+    for it in its
+        block = is_block(it)
+        push!(out, SegProse(Char['\n']))
+        push!(out, SegItem(it))
+        block || push!(out, SegProse(Char['\n']))
+    end
+    return out
+end
+
+# Read a construct sequence and its front matter into a document, the
+# container's math read by `ck` (`Md.parseItemsMd`, `Typ.parseItemsT`).
+function parse_items(ck, front::Kvs, its)
+    r = unitems(front, its)
+    r === nothing && return nothing
+    d = cook_doc(ck, r)
+    d === nothing && return nothing
+    return SSkeleton.of_doc(d)
+end
+
 end # module SItems

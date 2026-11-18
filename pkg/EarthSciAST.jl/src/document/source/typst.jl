@@ -17,6 +17,7 @@ using ..MExpr: Sym, jwf, name_ok
 using ..DStrings: bare_key, is_ident, parse_quoted, quote_str, read_ident
 using ..SSkeleton
 using ..SItems
+using ..SItems: Seg, SegItem, SegProse, is_block, render_segs
 using ..SReaction: RSurf, after, id_char, id_ok, p_piece, p_side, side_ok, side_txt
 using ..SText: after_s, blank, has_sub, pre_s, split_line, string_of, take_while, sdrop
 
@@ -693,31 +694,8 @@ rxn_ok(x::Rxn) =
 """`Typ.declOK`."""
 decl_ok(d::Decl) = name_ok(d.name) && !('$' in name_typ(d.name)) && all(arg_ok, d.attrs)
 
-"""`Typ.Seg`: a piece of a Typst document: a construct or prose. The Lean
-type's labelled-equation case is never built here."""
-abstract type Seg end
-struct SegItem <: Seg
-    it::RItem
-end
-struct SegProse <: Seg
-    p::Vector{Char}
-end
-
-"""`Typ.segText`."""
-seg_text(s::SegItem) = item_t(s.it)
-seg_text(s::SegProse) = s.p
-
 """`Typ.render`."""
-function render(segs)
-    out = Char[]
-    for s in segs
-        append!(out, seg_text(s))
-    end
-    return out
-end
-
-"""`Typ.isBlock`."""
-is_block(it::RItem) = it isa RDecl ? it.d.kind == D_SUB : true
+render(segs) = render_segs(item_t, segs)
 
 """`Typ.itemOK`: what each construct's content must satisfy for its text to
 read back."""

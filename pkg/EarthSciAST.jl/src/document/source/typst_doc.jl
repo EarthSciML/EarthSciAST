@@ -16,15 +16,15 @@ using ..MExpr: Sym, name_ok
 using ..DStrings: bare_key
 using ..SEquation: eq_expr, eq_sides
 using ..SSkeleton
-using ..SSkeleton: of_doc, to_doc
+using ..SSkeleton: to_doc
 import ..SSkeleton: front_key, desc, comp_name, decl_name, attr, eqn, rxn, plot, tm
 using ..SItems
-using ..SItems: ck_mx, cook_doc, items, pr_mx, raw_doc, unitems
+using ..SItems: canon_segs, ck_mx, cook_doc, items, parse_items, pr_mx, raw_doc, unitems
 using ..SLines: decode_text
 using ..SMarkdownDoc: comment_ok, with_comment
 using ..SMultiLine: cook_rows
 using ..SText: pre, pre_s, split_line, string_of
-using ..STypst: HEADER, SegItem, SegProse, arg_ok, args_first_t, is_block, item_ok, lex,
+using ..STypst: HEADER, arg_ok, args_first_t, item_ok, lex,
     line_end, name_typ, p_args_first, render, rxn_ok, tm_lex_t
 
 """`Typ.typOf`: an equation's Typst math under the symbol table `s`."""
@@ -102,18 +102,6 @@ function header_t(front)
     return out
 end
 
-"""`Typ.canonSegs`: each construct after a blank line."""
-function canon_segs(its)
-    out = Any[]
-    for it in its
-        block = is_block(it)
-        push!(out, SegProse(Char['\n']))
-        push!(out, SegItem(it))
-        block || push!(out, SegProse(Char['\n']))
-    end
-    return out
-end
-
 """`Typ.printTyp`: print a document as Typst."""
 function print_typ(d)
     doc = to_doc(CapsT(), d)
@@ -143,12 +131,6 @@ function parse_typ(s::AbstractString)
 end
 
 """`Typ.parseItemsT`."""
-function parse_items_t(front::Kvs, its)
-    r = unitems(front, its)
-    r === nothing && return nothing
-    d = cook_doc(ck_tx, r)
-    d === nothing && return nothing
-    return of_doc(d)
-end
+parse_items_t(front::Kvs, its) = parse_items(ck_tx, front, its)
 
 end # module STypstDoc
