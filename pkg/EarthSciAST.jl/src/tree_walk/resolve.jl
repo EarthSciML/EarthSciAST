@@ -144,54 +144,19 @@ function _resolve_one_index_set_ref(
     )
 end
 
-# True iff any node in the subtree carries a `ranges` entry that is an IndexSetRef.
-# Every expression-bearing field is searched (`filter` and an expression-valued
-# range bound included), as `_resolve_isr` rewrites them all.
-# Identity-deduped (ESS-0hh): a pure existence predicate over a possibly
-# structurally-shared tree — the per-path recursion was exponential on a DAG.
-_has_index_set_ref(expr::OpExpr) = _has_index_set_ref(expr, IdDict{OpExpr, Nothing}())
-function _has_index_set_ref(expr::OpExpr, seen::IdDict{OpExpr, Nothing})
-    haskey(seen, expr) && return false
-    seen[expr] = nothing
-    if expr.ranges !== nothing
-        for v in values(expr.ranges)
-            v isa IndexSetRef && return true
-            if v isa AbstractVector
-                for b in v
-                    b isa OpExpr && _has_index_set_ref(b, seen) && return true
-                end
-            end
-        end
-    end
-    expr.filter isa OpExpr && _has_index_set_ref(expr.filter::OpExpr, seen) && return true
-    for a in expr.args
-        a isa OpExpr && _has_index_set_ref(a, seen) && return true
-    end
-    expr.expr_body isa OpExpr && _has_index_set_ref(expr.expr_body::OpExpr, seen) && return true
-    if expr.values !== nothing
-        for v in expr.values
-            v isa OpExpr && _has_index_set_ref(v, seen) && return true
-        end
-    end
-    expr.lower isa OpExpr && _has_index_set_ref(expr.lower::OpExpr, seen) && return true
-    expr.upper isa OpExpr && _has_index_set_ref(expr.upper::OpExpr, seen) && return true
-    return false
-end
-_has_index_set_ref(::ASTExpr) = false
+# True iff any node in the subtree carries a `ranges` entry that is an
+# IndexSetRef, in any expression-bearing field (the generated walk).
+_ranges_hold_isr(e::ASTExpr) =
+    e isa OpExpr && (e::OpExpr).ranges !== nothing &&
+    any(v -> v isa IndexSetRef, values((e::OpExpr).ranges))
+_has_index_set_ref(expr::ASTExpr) = _any_subexpr_once(_ranges_hold_isr, expr)
 _has_index_set_ref(eq::Equation) = _has_index_set_ref(eq.lhs) || _has_index_set_ref(eq.rhs)
 
 # Rewrite every IndexSetRef in the subtree's ranges to its resolved concrete
-# form, rebuilding OpExpr nodes while preserving all fields.
-#
-# IDENTITY-MEMOIZED and IDENTITY-PRESERVING (ESS-0hh): the rewrite is a pure
-# function of the node under one call's fixed registries, so a shared node
-# resolves to ONE shared output node, and a node with no IndexSetRef anywhere
-# below is returned VERBATIM instead of reconstruct-copied. The unconditional
-# per-path rebuild both did exponential work on a structurally-shared
-# equation (e.g. a folded array-observed chain) and re-inflated the DAG into
-# an exponentially large tree for every stage downstream. Identity
-# preservation also keeps `_translate_equation_sites!` cheap: its lockstep
-# walk short-circuits on `old === new`.
+# form, in every expression-bearing field (`map_children`). Memoized by
+# identity and identity-preserving: a shared node resolves to one shared output
+# node, and a node with no IndexSetRef below it is returned as it is, so a
+# shared expression is neither walked once per path nor re-inflated into a tree.
 function _resolve_isr(
         expr::OpExpr, index_sets::AbstractDict,
         derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
@@ -200,43 +165,17 @@ function _resolve_isr(
     )
     cached = get(memo, expr, nothing)
     cached === nothing || return cached
-    changed = false
-    res(x) = begin
-        r = _resolve_isr(x, index_sets, derived_extents, factor_scope, memo)
-        r === x || (changed = true)
-        r
-    end
-    new_args = ASTExpr[res(a) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing : res(expr.expr_body)
-    new_values = expr.values === nothing ? nothing : ASTExpr[res(v) for v in expr.values]
-    new_lower = expr.lower === nothing ? nothing : res(expr.lower)
-    new_upper = expr.upper === nothing ? nothing : res(expr.upper)
-    new_filter = expr.filter === nothing ? nothing : res(expr.filter)
-    new_ranges = expr.ranges
-    if expr.ranges !== nothing
-        # A range bound may itself be an expression holding a reference; `res`
-        # marks `changed` when it rewrites one.
+    e = map_children(x -> _resolve_isr(x, index_sets, derived_extents, factor_scope, memo), expr)
+    if _ranges_hold_isr(e)
         resolved = Dict{String, Any}()
-        for (k, v) in expr.ranges
-            resolved[k] = if v isa IndexSetRef
-                changed = true
-                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope)
-            elseif v isa AbstractVector && any(b -> b isa OpExpr, v)
-                Any[b isa OpExpr ? res(b) : b for b in v]
-            else
-                v
-            end
+        for (k, v) in (e::OpExpr).ranges
+            resolved[k] = v isa IndexSetRef ?
+                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope) : v
         end
-        changed && (new_ranges = resolved)
+        e = reconstruct(e::OpExpr; ranges = resolved)
     end
-    result = changed ?
-        reconstruct(
-            expr; args = new_args, expr_body = new_body,
-            values = new_values, lower = new_lower, upper = new_upper,
-            filter = new_filter, ranges = new_ranges
-        ) : expr
-    memo[expr] = result
-    return result
+    memo[expr] = e
+    return e
 end
 _resolve_isr(
     expr::ASTExpr, ::AbstractDict, ::AbstractDict = _EMPTY_DERIVED_EXTENTS,
@@ -542,9 +481,14 @@ end
 _contracted_index_names(ranges_dict, output_idx) =
     sort!(String[n for n in keys(ranges_dict) if !(n in output_idx)])
 
-_ast_reads(e, name::AbstractString) =
-    e isa VarExpr ? (e::VarExpr).name == name :
-    e isa OpExpr ? _anyof(a -> _ast_reads(a, name), (e::OpExpr).args) : false
+# `pred` holds for `e` or a node under it reached through `args` alone. The
+# walk for a subscript or a range bound, which is integer arithmetic over names
+# with no expression-bearing field but its operands.
+_args_any(pred::P, e::ASTExpr) where {P} =
+    pred(e)::Bool || (e isa OpExpr && _anyof(a -> _args_any(pred, a), (e::OpExpr).args))
+
+_ast_reads(e::ASTExpr, name::AbstractString) =
+    _args_any(x -> x isa VarExpr && (x::VarExpr).name == name, e)
 
 # For each contracted index, the other contracted indices its range reads, or
 # `nothing` when no range reads one (the common case: a product).
@@ -1091,15 +1035,9 @@ function _resolve_index_of_makearray_symbolic(
     )
 end
 
-# Whether `e` reads one of `syms` as a free name.
-function _reads_bound_sym(e::ASTExpr, syms::Set{String})::Bool
-    e isa VarExpr && return (e::VarExpr).name in syms
-    e isa OpExpr || return false
-    for a in (e::OpExpr).args
-        _reads_bound_sym(a, syms) && return true
-    end
-    return false
-end
+# Whether the subscript `e` reads one of `syms` as a free name.
+_reads_bound_sym(e::ASTExpr, syms::Set{String})::Bool =
+    _args_any(x -> x isa VarExpr && (x::VarExpr).name in syms, e)
 
 # A subscript whose value is the same in integer and in floating-point
 # arithmetic: integers and names under `+`, `-` and `*`.
@@ -1957,8 +1895,7 @@ function _const_subscript_int(a::ASTExpr, const_arrays::AbstractDict)
     _holds_faq(a) && (a = _fold_faq_terms(a, const_arrays, IdDict{OpExpr, ASTExpr}()))
     return _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
 end
-_holds_faq(::ASTExpr) = false
-_holds_faq(e::OpExpr) = _is_faq_op(e.op) || _anyof(_holds_faq, e.args)
+_holds_faq(e::ASTExpr) = _args_any(x -> x isa OpExpr && _is_faq_op((x::OpExpr).op), e)
 
 # `e` with each `faq` sub-term replaced by the literal it evaluates to; the
 # nodes above one are copied, every other node is `e`'s own. Memoized by
@@ -1973,11 +1910,7 @@ function _fold_faq_terms(e::ASTExpr, const_arrays::AbstractDict, memo::IdDict{Op
         )
         NumExpr(_eval_node(_compile(t, Dict{String, Int}(), Set{Symbol}()), Float64[], NamedTuple(), 0.0))
     else
-        c = OpExpr(e.op, ASTExpr[_fold_faq_terms(x, const_arrays, memo) for x in e.args])
-        for f in fieldnames(OpExpr)
-            f === :args || setfield!(c, f, getfield(e, f))
-        end
-        c
+        reconstruct(e; args = ASTExpr[_fold_faq_terms(x, const_arrays, memo) for x in e.args])
     end
     return memo[e] = r
 end
@@ -2019,16 +1952,13 @@ function _intern_new_const(vals, name::String, const_arrays::AbstractDict)
     return vals, name
 end
 
-# True iff `e` references a runtime contraction LOOP variable (a reserved
-# `__esm_lv_*` name — `_LOOPVAR_PREFIX`). This is the SOLE trigger for lowering a
-# state-array read to a runtime `_NK_STATE_GATHER` (ess-runtime-contraction):
-# those names appear ONLY when `_try_build_contraction_loop` keeps a contracted
-# index symbolic, so a state gather is never emitted on the normal RHS build or the
-# compile-once cellwise path (whose bound symbols use different names). Distinct
-# from `_reads_bound_sym`, which fires for ANY symbol in a caller-supplied set.
-_refs_loopvar(e::VarExpr) = startswith(e.name, _LOOPVAR_PREFIX)
-_refs_loopvar(e::OpExpr) = _anyof(_refs_loopvar, e.args)
-_refs_loopvar(::ASTExpr) = false
+# True iff the subscript `e` references a runtime contraction LOOP variable (a
+# reserved `__esm_lv_*` name — `_LOOPVAR_PREFIX`); such names appear only where
+# a contraction is kept as a run-time loop. One of the triggers for lowering a
+# state-array read to a runtime `_NK_STATE_GATHER`. Distinct from
+# `_reads_bound_sym`, which fires for ANY symbol in a caller-supplied set.
+_refs_loopvar(e::ASTExpr) =
+    _args_any(x -> x isa VarExpr && startswith((x::VarExpr).name, _LOOPVAR_PREFIX), e)
 
 # Lower a STATE-array read whose subscripts depend on a contraction loop variable
 # (`q[donor(i,k)]`, ess-runtime-contraction) to a runtime `_NK_STATE_GATHER`. The
