@@ -167,8 +167,8 @@ def test_bare_template_name_refused_when_in_scope_with_no_parameters():
 
 
 @pytest.mark.parametrize("name", ["grad", "div", "laplacian"])
-def test_ops_removed_at_3_0_0_are_reserved(name):
-    """esm 3.0.0 removed `grad`, `div` and `laplacian`: like every removed op,
+def test_ops_removed_at_2_4_0_are_reserved(name):
+    """esm 2.4.0 removed `grad`, `div` and `laplacian`: like every removed op,
     the name is reserved — never read as a template or an open operator."""
     assert reserved_opn(name)
     assert name in REMOVED_SET

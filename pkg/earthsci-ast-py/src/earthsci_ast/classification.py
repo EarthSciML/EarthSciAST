@@ -50,7 +50,7 @@ The order is normative. ``pde`` precedes ``nonlinear`` so a steady-state PDE
 ``sde`` precedes ``pde`` because there is no SPDESystem constructor to select. A
 spatial derivative is a ``D`` whose ``wrt`` is present and is not ``"t"``. (The
 ``grad`` / ``div`` / ``laplacian`` ops that once also counted were removed at
-esm 3.0.0.)
+esm 2.4.0.)
 
 Dual representation
 ===================

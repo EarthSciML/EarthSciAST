@@ -178,9 +178,8 @@ def _count_top_level_systems(parsed) -> int:
 # `data_sources` ingest registry, which is not a component. None of that is
 # expressible in a 0.x reader, and none of the 0.x spellings survive.
 #
-# 3.0.0 removes the `grad`, `div` and `laplacian` ops (`removed_op` at the wire
-# boundary, whatever `esm` a document declares) and nothing else, so majors 1
-# and 2 still load.
+# 2.4.0 removes the `grad`, `div` and `laplacian` ops (`removed_op` at the wire
+# boundary, whatever `esm` a document declares) and nothing else.
 #
 # Prior steps, for the record: 0.9.0 made template references survive
 # parse->emit (§9.6.4); 0.8.0 replaced the bespoke spatial-grid / discretization
@@ -197,15 +196,10 @@ def _count_top_level_systems(parsed) -> int:
 #: loads, and its own 1.x version gates (``faq_version_too_old``, …) still apply.
 _LAST_1X_MINOR = 3
 
-#: The last minor of the esm 2.x line. 3.0.0 removed ``grad``, ``div`` and
-#: ``laplacian`` and changed nothing else, so a 2.x document that uses none of
-#: them still loads, with its own version gates, exactly like a 1.x one.
-_LAST_2X_MINOR = 3
-
 
 def _newest_minor_by_major() -> dict[int, int]:
     """The supported majors, each with the newest minor this library knows."""
-    newest = {1: _LAST_1X_MINOR, 2: _LAST_2X_MINOR}
+    newest = {1: _LAST_1X_MINOR}
     newest[_CURRENT_VERSION[0]] = _CURRENT_VERSION[1]
     return newest
 
@@ -213,7 +207,7 @@ def _newest_minor_by_major() -> dict[int, int]:
 def _check_version_compatibility(version_string: str) -> None:
     """Check ESM version compatibility, raising errors or warnings as appropriate.
 
-    Majors 1 and 2 and the current major load; any other major is refused. A minor
+    Major 1 and the current major load; any other major is refused. A minor
     newer than the newest this library knows for its major loads with a
     warning."""
     import warnings
@@ -3475,7 +3469,7 @@ def _pointer_token(name: object) -> str:
 
 def deprecated_records_per_sample_sites(file: EsmFile) -> list[str]:
     """The JSON pointers at which a loaded document writes the deprecated
-    ``records_per_sample`` (esm-spec §8.3, §8.5.1; removed in a later major version),
+    ``records_per_sample`` (esm-spec §8.3, §8.5.1; removed at esm 3.0.0),
     sorted by plain string order:
     ``/data_sources/<S>/temporal/records_per_sample`` and
     ``/models/<M>[/subsystems/<S>...]/variables/<v>/update[/<i>]/from/records_per_sample``
@@ -3532,7 +3526,7 @@ def _warn_deprecated_records_per_sample(file: EsmFile) -> None:
         return
     warnings.warn(
         "deprecated_records_per_sample: `records_per_sample` is deprecated and is "
-        "removed in a later major version; the number of records a data-fed parameter receives is "
+        "removed at esm 3.0.0; the number of records a data-fed parameter receives is "
         "said by its record shape, two when its first axis is an interval index set "
         'with "records": true (esm-spec §8.5.1). Written at: ' + ", ".join(sites) + ".",
         EsmDeprecationWarning,
@@ -3540,13 +3534,13 @@ def _warn_deprecated_records_per_sample(file: EsmFile) -> None:
     )
 
 
-#: Ops removed at esm 2.0.0 and 3.0.0, each with the version that removed it,
+#: Ops removed at esm 2.0.0 and 2.4.0, each with the version that removed it,
 #: rejected BY NAME with ``removed_op``. Each is a well-formed identifier, so the
 #: open rewrite-target tier (esm-spec §4.2) would otherwise admit it and the
 #: document would fail much later as ``unlowered_operator``. (``arrayop``,
 #: removed at 0.8.0, has its own message in :func:`reject_removed_constructs`.)
 _REMOVED_OPS_SINCE_2_0_0: dict[str, str] = {
-    op: version for op, version in op_registry.REMOVED_OPS.items() if version in ("2.0.0", "3.0.0")
+    op: version for op, version in op_registry.REMOVED_OPS.items() if version in ("2.0.0", "2.4.0")
 }
 
 #: The codemod a ``removed_op`` message points at.
@@ -3585,7 +3579,7 @@ def reject_removed_constructs(data: object) -> None:
     first op or field ``data`` spells that the format has removed: ``arrayop``
     (esm 0.8.0); the 2.0.0 ops in :data:`_REMOVED_OPS_SINCE_2_0_0` and the
     ``function_tables`` block (esm 2.0.0); ``grad``, ``div`` and ``laplacian``
-    (esm 3.0.0). The message names the op or field and its node path, and
+    (esm 2.4.0). The message names the op or field and its node path, and
     whatever ``esm`` the document declares, it is refused."""
     path = _find_op(data, "arrayop")
     if path is not None:
@@ -3605,24 +3599,24 @@ def reject_removed_constructs(data: object) -> None:
     raise err
 
 
-#: How a ``removed_op`` message for a 3.0.0 removal says what to write instead.
+#: How a ``removed_op`` message for a 2.4.0 removal says what to write instead.
 #: There is no codemod for these: the replacement depends on the axes.
 _SPATIAL_OP_HINT = (
     "write the derivative with spatial `D`, one `D` per axis (`grad(f, dim: x)` is "
     "`D(f, wrt: x)`), or with a user op lowered by a rewrite rule "
-    '(MIGRATION.md, "esm 3.0.0").'
+    '(MIGRATION.md, "esm 2.4.0").'
 )
 
 
 def removed_construct_message(kind: str, name: str, at: str) -> str:
     """The ``removed_op`` message for one removed construct found by
     :func:`_find_removed` (``kind`` ``"op"`` or ``"field"``). A 2.0.0 removal
-    points at the 2.0.0 codemod; a 3.0.0 removal (``grad``, ``div``,
+    points at the 2.0.0 codemod; a 2.4.0 removal (``grad``, ``div``,
     ``laplacian``) points at spatial ``D`` and MIGRATION.md, not the codemod."""
     what = f'\'"op": "{name}"\'' if kind == "op" else f"the `{name}` block"
     version = _REMOVED_OPS_SINCE_2_0_0.get(name, "2.0.0") if kind == "op" else "2.0.0"
-    if version == "3.0.0":
-        return f"removed_op at {at or '/'}: {what} was removed at esm 3.0.0; {_SPATIAL_OP_HINT}"
+    if version == "2.4.0":
+        return f"removed_op at {at or '/'}: {what} was removed at esm 2.4.0; {_SPATIAL_OP_HINT}"
     return f"removed_op at {at or '/'}: {what} was removed at esm 2.0.0. {_CODEMOD_HINT}"
 
 
@@ -3694,7 +3688,7 @@ def prepare_document_ops(data: object) -> None:
        2.0.0 the ``aggregate`` alias of ``faq``, ``fn``, ``table_lookup``,
        ``skolem``, ``rank``,
        ``intersect_polygon``, ``polygon_intersection_area``, ``argmin``,
-       ``argmax`` and the ``function_tables`` block, and at esm 3.0.0
+       ``argmax`` and the ``function_tables`` block, and at esm 2.4.0
        ``grad``, ``div`` and ``laplacian``. Each op is a well-formed
        identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
        rewrite-target op: the document would load silently and fail much later
