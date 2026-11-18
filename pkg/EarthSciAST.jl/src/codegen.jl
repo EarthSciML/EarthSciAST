@@ -320,7 +320,7 @@ function generate_data_source_placeholder(name::String, data_source::DataSource)
     push!(lines, "# Data source: $name")
     push!(lines, "#   Kind: $(data_source.kind)")
     push!(lines, "#   Source: $(data_source.source.url_template)")
-    # A source exposes no variables of its own from esm 1.0.0 — the consuming
+    # A source exposes no variables of its own — the consuming
     # parameters name it through their `update` (esm-spec §8).
     return lines
 end

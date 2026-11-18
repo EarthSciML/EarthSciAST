@@ -54,7 +54,7 @@ function _vi_node_kind(node)
     return :none
 end
 
-# Every (lhs, rhs) value-expression pair in a typed model. From esm 1.0.0 that
+# Every (lhs, rhs) value-expression pair in a typed model. That
 # is exactly the equation list: an observed unknown's defining right-hand side
 # IS an equation, so there is no variable-level `expression` to append.
 _vi_model_assignments(model::Model) =

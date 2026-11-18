@@ -241,7 +241,7 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
 
     # `data_sources` contributes NO node. esm-libraries-spec §4.8.1 is
     # explicit: "A `data_sources` entry is not a component and is NOT a node:
-    # from 1.0.0 external data is a parameter of the consuming model, so it is
+    # external data is a parameter of the consuming model, so it is
     # an attribute of an existing node rather than a node of its own". A model
     # reaches a source through a parameter whose `update` names it (esm-spec
     # §8.5), and that parameter is already a variable of an existing node.

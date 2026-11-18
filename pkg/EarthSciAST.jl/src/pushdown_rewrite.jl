@@ -182,7 +182,7 @@ end
 
 [`observed_definitions`](@ref) with every surviving `apply_expression_template`
 reference EXPANDED against `reg` — the `Expand(tree)` view the pattern matcher
-must see (§9.6.4 rule 2). From esm 1.0.0 an observed unknown's body is its
+must see (§9.6.4 rule 2). An observed unknown's body is its
 defining EQUATION's right-hand side, so this — not the variable table — is what
 the detector matches against; `_pd_detect` still reads `model.variables` for the
 shapes and types beside it. Returns the definition map UNCHANGED (no copy) when
@@ -493,7 +493,7 @@ end
 #
 # Returns `(c_sym, r_sym, C, R, out_is_cell, src_env, tgt_env)` or `nothing`.
 # `agg` is the observed unknown's DEFINING EQUATION RHS (esm-spec §6.3.1),
-# supplied by the caller from `observed_definitions`: from esm 1.0.0 a variable
+# supplied by the caller from `observed_definitions`: a variable
 # carries no expression of its own, so a non-observed variable simply has no
 # definition to pass and never reaches here.
 # The shape every pushdown read starts from: a `+`-semiring `faq` (0̄ = 0) with

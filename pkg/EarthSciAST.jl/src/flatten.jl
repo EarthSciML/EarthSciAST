@@ -91,7 +91,7 @@ FlattenMetadata(
 A data-fed PARAMETER lowered to a flattened array input (esm-spec §8.5), and one
 entry of [`FlattenedSystem`](@ref)'s `loader_fields`.
 
-From esm 1.0.0 a data source is NOT a component: there is no loader subsystem and
+A data source is NOT a component: there is no loader subsystem and
 no coupling edge. A model consumes a source by declaring a parameter whose
 `update` is `{kind: "data", source: <key>, from: {file_variable: ...}}` — the
 parameter IS the loaded field and it owns the units. Flatten records one

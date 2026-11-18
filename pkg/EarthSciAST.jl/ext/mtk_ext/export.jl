@@ -90,8 +90,8 @@ end
 # Export states / parameters / observed / brownian variables from `sys` into
 # `esm_vars`, registering every exported name in `known_vars` (used by the
 # expression walk to disambiguate callable-symbolic states from op calls).
-# `observed_eqs` receives one `oname ~ rhs` equation per MTK observed: from esm
-# 1.0.0 the bare-variable-LHS equation is what MAKES a variable observed
+# `observed_eqs` receives one `oname ~ rhs` equation per MTK observed: the
+# bare-variable-LHS equation is what MAKES a variable observed
 # (esm-spec §6.3.1), so the export has to emit it alongside the declaration.
 function _export_variables!(
         esm_vars::AbstractDict{String, ModelVariable},
@@ -136,14 +136,14 @@ function _export_variables!(
             "observed[$oname].rhs"; strip_ns = strip_ns
         )
         # Declaration + defining equation: the bare-variable LHS is what makes
-        # it observed from esm 1.0.0 (esm-spec §6.3.1).
+        # it observed (esm-spec §6.3.1).
         esm_vars[oname] = ModelVariable(UnknownVariable)
         push!(observed_eqs, Equation(VarExpr(oname), rhs_esm))
     end
 
     # Brownian variables (SDE noise sources). A Brownian noise source is a
-    # PARAMETER with a unit-normal distribution and a `wiener` update from esm
-    # 1.0.0 (esm-spec §5.4); `brownian_parameters` derives it back, and its
+    # PARAMETER with a unit-normal distribution and a `wiener` update
+    # (esm-spec §5.4); `brownian_parameters` derives it back, and its
     # presence is what makes `system_kind` "sde".
     brownians = ModelingToolkit.has_brownians(sys) ? ModelingToolkit.brownians(sys) : []
     for b in brownians

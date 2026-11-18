@@ -191,7 +191,7 @@ end
     _serialize_subsystem(v) -> Dict{String,Any}
 
 Serialize a single model subsystem value: a child `Model`, or an unresolved
-`SubsystemRef` (which round-trips back to `{"ref": ...}`). From esm 1.0.0 a
+`SubsystemRef` (which round-trips back to `{"ref": ...}`). A
 data source is a registry entry, not a component, so it never appears here.
 """
 function _serialize_subsystem(v)::Dict{String, Any}

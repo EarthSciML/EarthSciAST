@@ -1093,7 +1093,7 @@ When `transform` is an `ASTExpr` (esm-spec §10.4 expression transform), the tar
 parameter instead becomes an observed defined by the transform expression —
 see the expression arm below.
 
-From esm 1.0.0 a data source is not a coupling endpoint (esm-spec §8), so there
+A data source is not a coupling endpoint (esm-spec §8), so there
 is no loader-producer arm here any more: a loaded field IS a parameter of the
 consuming model, declared with its own `shape` and its own `update`, and needs
 no shape transfer from a `param_to_var` edge.
@@ -1164,7 +1164,7 @@ function _apply_expression_transform!(
         )
     end
     # The defining equation (`to ~ transform`) is what MAKES `to` an observed
-    # unknown from esm 1.0.0 — the declaration carries no expression, so this
+    # unknown — the declaration carries no expression, so this
     # push is the whole definition rather than a duplicate of one. The coupling
     # entry wrote that expression, so it is the definition's only author.
     push!(pool, _FlatEq(Equation(VarExpr(to), transform), _authored(transform, _coupling_origin(index))))

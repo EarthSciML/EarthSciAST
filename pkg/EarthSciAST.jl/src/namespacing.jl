@@ -422,8 +422,8 @@ function _collect_model!(
     _collect_events!(st, model.continuous_events, model.discrete_events, prefix, _ns)
 
     for (sub_name, sub_model) in model.subsystems
-        # esm 1.0.0: a data source is a document-scoped registry entry, not a
-        # subsystem, so there is no loader arm here any more. A model that reads
+        # A data source is a document-scoped registry entry, not a subsystem,
+        # so there is no loader arm here. A model that reads
         # external data declares an ordinary PARAMETER whose `update` names the
         # source (esm-spec §8.5); it is collected into `params` above under its
         # own namespaced key, and the bound value reaches the RHS through the

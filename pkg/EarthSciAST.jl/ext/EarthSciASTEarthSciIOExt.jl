@@ -6,7 +6,7 @@ Wires the EarthSciIO Julia `Provider` into EarthSciAST's data-provider seam
 automatically whenever `EarthSciIO` is in the session alongside
 EarthSciAST: `esm_problem(...; providers = Dict("<ModelPath>.<param>" => provider))`
 accepts an EarthSciIO provider with no per-script glue. The key is the CONSUMING
-PARAMETER's flattened name: from esm 1.0.0 a data source declares no variables of
+PARAMETER's flattened name: a data source declares no variables of
 its own, so the parameter IS the loaded field (esm-spec §8.5).
 
 DELIBERATELY THIN. EarthSciAST is agnostic to dimension order: the provider sample is
@@ -351,7 +351,7 @@ function _table_columns(t::RecordTable, u::Float64)
     end
     nrec < 0 && (nrec = 0)
 
-    # `require_finite` names FILE variables (esm-spec §8.9): from 1.0.0 a source
+    # `require_finite` names FILE variables (esm-spec §8.9): a source
     # declares no variables of its own, so the filter is stated in the reader's
     # vocabulary. Resolve it there — through a bound parameter's already-decoded
     # column when one reads it, and straight from the reader otherwise, since a

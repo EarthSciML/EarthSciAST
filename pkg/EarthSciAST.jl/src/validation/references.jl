@@ -289,7 +289,7 @@ function _document_declared_names(file::EsmFile)::Set{String}
             end
         end
     end
-    # esm 1.0.0: a data source declares no variables of its own — the consuming
+    # A data source declares no variables of its own — the consuming
     # PARAMETER does, and it is already collected from its model above
     # (esm-spec §8).
     return names

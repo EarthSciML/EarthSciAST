@@ -606,11 +606,9 @@ const RECORD_FIELD_TABLES = (
                 f = :trigger, wire = "trigger", kind = :record, of = :trigger, mode = :req_err,
                 req_err = "DiscreteEvent requires 'trigger' field", emit = :always, pos = true,
             ),
-            # esm 1.0.0: `affects` is the only affect channel. The
-            # `functional_affect` descriptor and the `discrete_parameters` list are
-            # gone — a handler now lives on the parameter it writes
-            # (`update.handler`), and an `affects` LHS naming a parameter is
-            # `event_affects_parameter`.
+            # `affects` is the only affect channel; a handler lives on the
+            # parameter it writes (`update.handler`), and an `affects` LHS naming
+            # a parameter is `event_affects_parameter`.
             # `:custom` names a hand-written hook on BOTH sides. Parse keeps the
             # per-entry lhs/rhs presence check; emit must name a hook too, because
             # `_record_emit_expr` has no `:custom` case and would otherwise emit the

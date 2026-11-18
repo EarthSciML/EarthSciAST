@@ -344,7 +344,7 @@ function derive_output_meta(file::EsmFile)
             v.units === nothing || (a["units"] = v.units)
             v.description === nothing || (a["description"] = v.description)
             # The kind recorded here is the DERIVED role, not the declared type
-            # (esm-spec §6.3.1). From esm 1.0.0 every solved-for quantity
+            # (esm-spec §6.3.1). Every solved-for quantity
             # declares `type: "unknown"`, so gating observed output on the
             # declared string would gate on a constant and write every observed
             # unconditionally. An unknown DEFINED by a bare-variable-LHS

@@ -76,7 +76,7 @@ include("expression_sites.jl")
 include("digraph.jl")
 # Derived variable classification (esm-spec §6.3.1). Must follow types.jl (it
 # is stated over `Model`) and precede every consumer, which is nearly all of
-# them: from esm 1.0.0 there are only two declared variable types, so ODE
+# them: there are only two declared variable types, so ODE
 # state / observed / algebraic / brownian / discrete / sampled / constant are
 # all questions only this module may answer.
 include("classification.jl")

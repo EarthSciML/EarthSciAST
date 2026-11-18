@@ -1441,9 +1441,9 @@ end
 Common supertype of the legal `Model.subsystems` values: a child `Model` or —
 only until references are resolved — a `SubsystemRef`. Exists so
 `Model.subsystems` can be concretely typed `Dict{String,SubsystemNode}` even
-though `SubsystemRef` is declared later in this file than `Model`. From esm
-1.0.0 a data source is an ingest registry entry, not a component, so it is not
-a `SubsystemNode`.
+though `SubsystemRef` is declared later in this file than `Model`. A data
+source is an ingest registry entry, not a component, so it is not a
+`SubsystemNode`.
 """
 abstract type SubsystemNode end
 
