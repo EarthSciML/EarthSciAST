@@ -41,8 +41,9 @@ include("testutils.jl")
 const TSIT5 = OrdinaryDiffEqTsit5.Tsit5()
 
 # A fixture's declared assertions name the same variable and expected value as
-# the run reports for them.
-function declared_match(fixture, by_key, _; reduce::Bool = false)
+# the run reports for them. The tolerance argument is unused; it is named
+# because Julia 1.10 rejects `_` before keyword arguments.
+function declared_match(fixture, by_key, tol; reduce::Bool = false)
     for decl in fixture.assertions
         r = by_key[Int(decl.assertion_idx)]
         @test r.variable == String(decl.variable)
