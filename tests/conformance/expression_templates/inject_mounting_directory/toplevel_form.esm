@@ -1,0 +1,24 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "inject_mounting_directory_toplevel_form",
+    "description": "esm-spec §9.7.10 form A at the top-level `models.<k>` mount form. The edge's injected `expression_template_imports` ref is relative and is written by THIS document, so it is resolved against this document's directory (esm-spec §4.7 \"Relative path ... resolved relative to the directory of the referencing file\", §9.7.10), never against the mounted leaf's: the leaf sits in leaves/, where ../inject_subsystem_ref/ does not exist. Loading MUST succeed and lower the leaf's D(c, wrt: lon) with the injected rule."
+  },
+  "models": {
+    "Runoff": {
+      "ref": "./leaves/leaf.esm",
+      "expression_template_imports": [
+        {
+          "ref": "../inject_subsystem_ref/central_D_lon_zero_grad_bc.esm",
+          "only": [
+            "central_D_lon_zero_grad_bc"
+          ],
+          "bindings": {
+            "NLON": 288,
+            "NLAT": 181
+          }
+        }
+      ]
+    }
+  }
+}

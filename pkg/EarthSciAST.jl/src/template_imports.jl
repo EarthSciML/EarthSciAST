@@ -1653,8 +1653,13 @@ function _resolve_import_entry(
     end
 
     raw, target_dir = load_ref(ref, base_dir, origin)
+    # Version gates on the target, judged against the library's own `esm`
+    # (esm-spec §9.6.5, §4.7 "Each file is held to its own declared `esm`
+    # version"): the template-machinery constructs, and declared `units` on an
+    # expression node in a template body (§4.8.5 item 6).
     reject_expression_templates_pre_v04(raw)
     reject_template_imports_pre_v08(raw)
+    reject_const_units_pre_v12(raw)
 
     # Library purity (esm-spec §9.7.1): the two reference mechanisms are
     # disjoint — a component/subsystem file, and a coupling-library file, are

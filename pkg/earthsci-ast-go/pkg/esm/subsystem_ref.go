@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -648,6 +649,50 @@ var (
 		selector: "reaction_system", kindNoun: "reaction system"}
 )
 
+// anchorInjectedImports returns a mount edge's injected
+// `expression_template_imports` entries (esm-spec §9.7.10 form A) with each
+// relative `ref` anchored at mountingBase, the directory of the document that
+// carries the edge. That document wrote the entries, so it is the referencing
+// file whose directory a relative ref resolves against (esm-spec §4.7); the
+// leaf's directory, where the injected entries are resolved once they join the
+// leaf's scope, is not. `${VAR}` tokens are expanded first, as at every ref
+// read, so an expanded absolute path is not anchored as a relative one. A
+// relative ref inside a bundled file becomes the sibling standard-library ref
+// it names. URL, absolute and standard-library refs are kept as written. The
+// entries are copied; the edge itself is not changed.
+func anchorInjectedImports(entries []any, mountingBase string) []any {
+	out := make([]any, len(entries))
+	for i, e := range entries {
+		out[i] = e
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref, ok := m["ref"].(string)
+		if !ok || ref == "" {
+			continue
+		}
+		anchored := ref
+		if identity, valid, isStd := classifyStdRef(ref, mountingBase); isStd {
+			if valid {
+				anchored = identity
+			}
+		} else if expanded := expandRefEnv(ref); !isRemoteRef(expanded) && !filepath.IsAbs(expanded) {
+			anchored = canonicalRefPath(expanded, mountingBase)
+		}
+		if anchored == ref {
+			continue
+		}
+		cp := make(map[string]any, len(m))
+		for k, v := range m {
+			cp[k] = v
+		}
+		cp["ref"] = anchored
+		out[i] = cp
+	}
+	return out
+}
+
 // resolveSubsystemMap resolves references in a single subsystems map.
 // Each value in the map is either already-resolved content (left as-is) or a
 // reference object with a "ref" key (resolved by loading the referenced file).
@@ -699,11 +744,13 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// inject a discretization into the REFERENCED component's own scope. Kept
 		// as raw §9.7.2 entries and threaded into the referenced document's load,
 		// where the §9.6.3 fixpoint lowers its rewrite-targets before the mounted
-		// form is inlined (so the field does not survive parse → emit).
+		// form is inlined (so the field does not survive parse → emit). The
+		// entries are written by THIS document, so their relative refs are
+		// anchored at its directory before they join the leaf's scope.
 		var injected []any
 		if m, ok := value.(map[string]any); ok {
 			if inj, ok := m["expression_template_imports"].([]any); ok {
-				injected = inj
+				injected = anchorInjectedImports(inj, basePath)
 			}
 		}
 

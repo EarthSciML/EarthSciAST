@@ -482,6 +482,14 @@ mod tests {
                 .is_some_and(|e| e.to_string().contains(codes::CONST_UNITS_VERSION_TOO_OLD));
             assert_eq!(gated, refused, "{lib}");
         }
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/invalid/version_gate_library_older_const_units.esm");
+        let e = crate::load_path(&fixture).expect_err("the shared fixture is refused");
+        assert!(
+            e.to_string().contains(codes::CONST_UNITS_VERSION_TOO_OLD),
+            "{e}"
+        );
     }
 
     #[test]

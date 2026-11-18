@@ -52,6 +52,7 @@ import { expandRefEnv, isRemoteRef, normalizeRef, readFileSyncNode } from './pat
 import { STDLIB_BASE, classifyStdRef, readStdRef } from './stdlib.js'
 import { ERROR_CODES } from './errors.js'
 import { prepareDocumentOps } from './parse.js'
+import { rejectConstUnitsPreV12 } from './solver.js'
 
 type Json = unknown
 type JsonObject = Record<string, unknown>
@@ -1537,9 +1538,13 @@ function resolveImportEntry(
   }
 
   const { raw, dir: targetDir } = loadImportRaw(ref, baseDir, origin, opts)
-  // Version gates on the target (esm-spec §9.6.5).
+  // Version gates on the target, judged against the library's own `esm`
+  // (esm-spec §9.6.5, §4.7 "Each file is held to its own declared `esm`
+  // version"): the template-machinery constructs, and declared `units` on an
+  // expression node in a template body (§4.8.5 item 6).
   rejectExpressionTemplatesPreV04(raw)
   rejectTemplateImportsPreV08(raw)
+  rejectConstUnitsPreV12(raw)
 
   // Library purity (esm-spec §9.7.1): the reference mechanisms are disjoint —
   // a component/subsystem file, and a coupling-library file, are not importable

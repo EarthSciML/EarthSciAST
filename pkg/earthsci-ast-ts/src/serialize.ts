@@ -40,6 +40,7 @@ import {
   stripNumericLiterals,
 } from './numeric-literal.js'
 import { needsVariableBoundsVersionFloor } from './variable-bounds.js'
+import { needsConstUnitsVersionFloor } from './solver.js'
 
 /** Optional behavior controls for {@link toJson} / {@link writePath}. */
 export interface ToJsonOptions {
@@ -77,11 +78,10 @@ export interface ToJsonOptions {
 export function toJson(file: EsmFile, options?: ToJsonOptions): string {
   const indent = options?.indent ?? 2
   let view = withoutNonSchemaFields(file)
-  // A 2.0.0 document given bounds in memory is emitted at 2.1.0, the version
-  // that admits them, so it reads back (esm-spec §6.3.2). The caller's object
-  // keeps its declared version.
-  if (needsVariableBoundsVersionFloor(view)) view = { ...view, esm: '2.1.0' }
-  raiseFaqEsmFloor(view)
+  // The emitted `esm` covers every construct the document contains, so it
+  // reads back; the caller's object keeps its declared version.
+  const floor = emitVersionFloor(view)
+  if (floor !== null) view = { ...view, esm: floor }
   if (options?.canonical === true) {
     return emitCanonical(view, indent)
   }
@@ -198,18 +198,33 @@ function containsFaq(node: unknown): boolean {
   return false
 }
 
-/**
- * Raise an emitted document's declared `esm` to 1.1.0 when it CONTAINS a `faq`
- * node but declares less.
- *
- * Like the §9.6.4 rule-8 template stamp this is a FLOOR — it only ever raises. A document can come to CONTAIN `faq` without ever spelling it: a 1.0.0 parent that mounts a subsystem whose child uses `faq` has the child inlined at load, and emitting that as 1.0.0 writes a document the `faq_version_too_old` gate then refuses to read back. The load-time gate cannot catch it — the parent's AUTHORED bytes are legal — so the stamp closes it here. See docs/content/rfcs/faq-node-rename.md §5.5.
- */
-function raiseFaqEsmFloor(view: unknown): void {
-  if (view === null || typeof view !== 'object') return
-  const obj = view as Record<string, unknown>
-  const esm = obj.esm
-  if (typeof esm !== 'string') return
+/** Whether `doc` CONTAINS a `faq` node but declares an `esm` below 1.1.0. */
+function needsFaqVersionFloor(doc: unknown): boolean {
+  if (doc === null || typeof doc !== 'object') return false
+  const esm = (doc as Record<string, unknown>).esm
+  if (typeof esm !== 'string') return false
   const [major, minor] = esm.split('.').map((x) => Number.parseInt(x, 10))
-  if (Number.isNaN(major) || Number.isNaN(minor)) return
-  if ((major < 1 || (major === 1 && minor < 1)) && containsFaq(obj)) obj.esm = '1.1.0'
+  if (Number.isNaN(major) || Number.isNaN(minor)) return false
+  return (major < 1 || (major === 1 && minor < 1)) && containsFaq(doc)
+}
+
+/**
+ * The `esm` an emitted document must declare to cover every version-gated
+ * construct it contains, or `null` when its declared version already does:
+ * 2.1.0 for a variable bound (esm-spec §6.3.2), 1.2.0 for declared `units` on
+ * an expression node (§4.8.5), 1.1.0 for a `faq` node. The highest applies.
+ *
+ * A FLOOR, like the §9.6.4 rule-8 template stamp: it only ever raises. A
+ * document can come to CONTAIN such a construct without ever spelling it: a
+ * 1.0.0 parent that mounts a 1.2.0 leaf carrying a unit-bearing `const` has the
+ * leaf inlined at load, and emitting that as 1.0.0 writes a document the
+ * `const_units_version_too_old` gate then refuses to read back. The load-time
+ * gate cannot catch it — the parent's AUTHORED bytes are legal — so the floor
+ * closes it here. See docs/content/rfcs/faq-node-rename.md §5.5.
+ */
+function emitVersionFloor(view: unknown): string | null {
+  if (needsVariableBoundsVersionFloor(view)) return '2.1.0'
+  if (needsConstUnitsVersionFloor(view)) return '1.2.0'
+  if (needsFaqVersionFloor(view)) return '1.1.0'
+  return null
 }

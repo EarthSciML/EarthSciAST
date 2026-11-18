@@ -2003,50 +2003,15 @@ mod tests {
     /// esm-spec §9.7.10 form A at both mount forms: a RELATIVE ref in an
     /// edge's injected `expression_template_imports` is authored by the
     /// document carrying the edge, so it resolves against THAT document's
-    /// directory, never the mounted leaf's. The leaf sits in a subdirectory
-    /// and the injected library beside the mounting document, so resolving
-    /// against the leaf's directory would not find the library.
+    /// directory, never the mounted leaf's. The shared fixture keeps the leaf
+    /// in a subdirectory, where the injected relative ref names nothing.
     #[test]
     fn injected_template_imports_resolve_against_the_mounting_directory() {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/conformance/expression_templates/inject_subsystem_ref");
-        let dir = TempDir::new().unwrap();
-        for f in [
-            "central_D_lon_interior.esm",
-            "central_D_lon_zero_grad_bc.esm",
-            "grid_latlon.esm",
-        ] {
-            std::fs::copy(src.join(f), dir.path().join(f)).unwrap();
-        }
-        std::fs::create_dir(dir.path().join("leaves")).unwrap();
-        std::fs::copy(src.join("leaf.esm"), dir.path().join("leaves/leaf.esm")).unwrap();
-        let edge = json!({
-            "ref": "./leaves/leaf.esm",
-            "expression_template_imports": [{
-                "ref": "./central_D_lon_zero_grad_bc.esm",
-                "only": ["central_D_lon_zero_grad_bc"],
-                "bindings": { "NLON": 288, "NLAT": 181 }
-            }]
-        });
-        let subsystem_form = json!({
-            "esm": "1.1.0",
-            "metadata": { "name": "subsystem_form" },
-            "models": { "Assembly": {
-                "variables": { "total": { "type": "unknown", "units": "kg/m^3", "default": 0.0 } },
-                "equations": [{ "lhs": { "op": "D", "args": ["total"], "wrt": "t" }, "rhs": 0.0 }],
-                "subsystems": { "Runoff": edge.clone() }
-            } }
-        });
-        let toplevel_form = json!({
-            "esm": "1.1.0",
-            "metadata": { "name": "toplevel_form" },
-            "models": { "Runoff": edge }
-        });
-        for (name, doc) in [("subsystem", subsystem_form), ("top-level", toplevel_form)] {
-            let path = dir.path().join(format!("{}.esm", name.replace('-', "_")));
-            std::fs::write(&path, doc.to_string()).unwrap();
-            crate::load_path(&path).unwrap_or_else(|e| {
-                panic!("{name} form: the injected library resolves beside the assembly: {e}")
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/conformance/expression_templates/inject_mounting_directory");
+        for name in ["subsystem_form.esm", "toplevel_form.esm"] {
+            crate::load_path(dir.join(name)).unwrap_or_else(|e| {
+                panic!("{name}: the injected library resolves beside the mounting document: {e}")
             });
         }
     }
