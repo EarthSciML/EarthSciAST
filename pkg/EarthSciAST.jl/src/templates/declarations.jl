@@ -1,6 +1,32 @@
 # Expression-template declarations (esm-spec §9.6.1, §9.7.3): validation of a
 # component's `expression_templates` block and the template body-reference graph.
 
+"""
+    _TemplateDecl(raw)
+
+One `expression_templates` entry as every pass after validation reads it: its
+`params` in declaration order, and its raw `body`, `match` and `where`
+(expression trees stay JSON, and a registry keeps the raw entry, which is
+emitted verbatim). `params` holds the string entries of the authored list;
+[`_validate_templates`](@ref) refuses a list with any other entry. Read once
+per use from the raw entry, so no pass rebuilds the parameter list itself.
+"""
+struct _TemplateDecl
+    params::Vector{String}
+    body::Any
+    match::Any
+    where_::Any
+end
+function _TemplateDecl(raw)
+    _is_object(raw) || return _TemplateDecl(String[], nothing, nothing, nothing)
+    p = _raw_get(raw, "params")
+    params = (p === nothing || !_is_array(p)) ? String[] :
+        String[String(x) for x in p if x isa AbstractString]
+    return _TemplateDecl(
+        params, _raw_get(raw, "body"), _raw_get(raw, "match"), _raw_get(raw, "where")
+    )
+end
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------

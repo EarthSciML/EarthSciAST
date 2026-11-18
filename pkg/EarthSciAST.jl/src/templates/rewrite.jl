@@ -148,9 +148,7 @@ function _resolve_apply_site(
             "$scope: apply_expression_template '$name' missing 'bindings' object"
         )
     )
-    decl_params_raw = _raw_get(decl, "params")
-    decl_params = decl_params_raw === nothing ? String[] :
-        String[string(p) for p in decl_params_raw]
+    decl_params = _TemplateDecl(decl).params
     declared = Set(decl_params)
     provided = Set{String}([string(k) for (k, _) in pairs(bindings_raw)])
     for p in decl_params
@@ -1047,14 +1045,11 @@ function lower_expression_templates(raw_data)
             for (tname, decl) in templates
                 decl_index += 1
                 named[tname] = decl
-                m = _raw_get(decl, "match")
+                td = _TemplateDecl(decl)
+                m = td.match
                 if m !== nothing
-                    params_raw = _raw_get(decl, "params")
-                    params = Set{String}(
-                        string(p) for p in
-                            something(params_raw, String[])
-                    )
-                    body = _raw_get(decl, "body")
+                    params = Set{String}(td.params)
+                    body = td.body
                     # `where` registration: normalize constraints and
                     # resolve every referenced index-set name against the
                     # consuming document's registry (esm-spec §9.6.1;

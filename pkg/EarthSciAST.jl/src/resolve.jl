@@ -828,7 +828,7 @@ function _rewrite_deprecated_ops_walk!(node, at::String, sites::Vector{String}, 
         end
         for (k, v) in pairs(node)
             _is_json_leaf(v) && continue
-            _rewrite_deprecated_ops_walk!(v, string(at, "/", _ptr_escape(string(k))), sites, seen)
+            _rewrite_deprecated_ops_walk!(v, _pointer(at, string(k)), sites, seen)
         end
     elseif _is_array(node)
         _may_hold_object(node) || return nothing

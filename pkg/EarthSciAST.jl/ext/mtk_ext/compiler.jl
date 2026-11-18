@@ -589,7 +589,8 @@ function _mtk_resolve_overrides(flat::FlattenedSystem, overrides::AbstractDict)
             EarthSciAST._override_collision_message(
                 "esm_problem(...; compiler = :mtk, p)", "parameter",
                 first(sort!(collect(collisions), by = first))...
-            )
+            ),
+            ERROR_CODES.OVERRIDE_KEY_CONFLICT
         )
     )
     isempty(unknown) || throw(
@@ -597,7 +598,8 @@ function _mtk_resolve_overrides(flat::FlattenedSystem, overrides::AbstractDict)
             "esm_problem(...; compiler = :mtk, p): no parameter named " *
                 join(("'" * k * "'" for k in sort(unknown)), ", ") *
                 " in the flattened document (keys may be local or namespaced). Known: " *
-                EarthSciAST._elide_names(sort(collect(names)))
+                EarthSciAST._elide_names(sort(collect(names))),
+            ERROR_CODES.UNKNOWN_OVERRIDE_KEY
         )
     )
     isempty(ambiguous) || throw(
@@ -609,7 +611,8 @@ function _mtk_resolve_overrides(flat::FlattenedSystem, overrides::AbstractDict)
                         for (k, v) in sort(collect(ambiguous), by = first)
                 ), "; "
             ) *
-                "; spell the namespaced name."
+                "; spell the namespaced name.",
+            ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
         )
     )
     out = Dict{String, Any}()
@@ -984,7 +987,8 @@ function EarthSciAST._backend_observed_field(
         sym === nothing && throw(
             SimulateError(
                 "observed_field: '$name' resolved to '$nm', which the compiled " *
-                    "ModelingToolkit system does not carry"
+                    "ModelingToolkit system does not carry",
+                ERROR_CODES.OBSERVED_FIELD_UNAVAILABLE
             )
         )
         # Given a state, the observed is read AT it, as under `:native`.
@@ -994,7 +998,8 @@ function EarthSciAST._backend_observed_field(
                 "observed_field: '$name' is not a BUILD-TIME field — the compiled " *
                     "system's observed equation for it depends on the state '$dep', so " *
                     "its value is a function of the trajectory. Read it off a solution " *
-                    "instead"
+                    "instead",
+                ERROR_CODES.OBSERVED_FIELD_UNAVAILABLE
             )
         )
         push!(syms, sym)
@@ -1064,7 +1069,8 @@ function _mtk_resolve_field_name(
                 SimulateError(
                     "observed_field: '$spelled' is a bare name and this problem has " *
                         "$(length(comps)) components ($(join(sort!(collect(comps)), ", "))); " *
-                        "qualify it as one of: $(join(cands, ", "))"
+                        "qualify it as one of: $(join(cands, ", "))",
+                    ERROR_CODES.AMBIGUOUS_OUTPUT_NAME
                 )
             )
         end
@@ -1074,7 +1080,8 @@ function _mtk_resolve_field_name(
             "observed_field: '$spelled' is not a build-time-evaluable observed of " *
                 "the prepared document. compiler=:mtk answers out of the compiled " *
                 "ModelingToolkit system's OBSERVED equations; this name is not one of " *
-                "them (a state the system integrates is read off the solution, not here)"
+                "them (a state the system integrates is read off the solution, not here)",
+            ERROR_CODES.OBSERVED_FIELD_UNAVAILABLE
         )
     )
 end

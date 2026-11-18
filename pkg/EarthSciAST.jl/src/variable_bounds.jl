@@ -31,14 +31,14 @@ function _first_raw_bound(model, at::String)
         for (vname, v) in pairs(vars)
             _is_object(v) || continue
             for field in ("lb", "ub")
-                _raw_haskey(v, field) && return "$at/variables/$(vname)/$field"
+                _raw_haskey(v, field) && return _pointer(at, "variables", vname, field)
             end
         end
     end
     subs = _raw_get(model, "subsystems")
     if subs !== nothing && _is_object(subs)
         for (sname, sub) in pairs(subs)
-            p = _first_raw_bound(sub, "$at/subsystems/$(sname)")
+            p = _first_raw_bound(sub, _pointer(at, "subsystems", sname))
             p === nothing || return p
         end
     end
@@ -71,7 +71,7 @@ end
 # ============================================================================
 
 """
-    validate_variable_bounds(file::EsmFile; toplevel=nothing) -> Vector{StructuralError}
+    validate_variable_bounds(file::EsmFile; toplevel=nothing, index=nothing) -> Vector{StructuralError}
 
 The validity rules of esm-spec §6.3.2 over every variable of every model and
 inline subsystem, at `/models/M[/subsystems/S…]/variables/v`:
@@ -91,13 +91,20 @@ graph [`validate_coupling_cycles`](@ref) uses (`_scoped_observed_graph`), so the
 two walks cannot disagree about what a name means or where a definition stops.
 An unresolved reference is not checked against rules 2 and 3.
 """
-function validate_variable_bounds(file::EsmFile; toplevel = nothing)::Vector{StructuralError}
+function validate_variable_bounds(
+        file::EsmFile; toplevel = nothing, index = nothing
+    )::Vector{StructuralError}
     errors = StructuralError[]
     file.models === nothing && return errors
     _any_bound(file) || return errors
+    index === nothing && (index = _scoped_index(file))
     g = _scoped_observed_graph(file; toplevel = toplevel)
     for name in sort!(collect(keys(file.models)))
-        _check_variable_bounds!(errors, file, g, file.models[name], String(name), "/models/$name")
+        _foreach_component(
+            file.models[name], _pointer("", "models", name); scope = name, sorted = true
+        ) do m, p, _, s
+            _check_variable_bounds!(errors, index, g, m, s, p)
+        end
     end
     return errors
 end
@@ -108,17 +115,18 @@ function _any_bound(file::EsmFile)
     return any(has, values(file.models))
 end
 
+# The bounds of one component's own variables (not its subsystems').
 function _check_variable_bounds!(
-        errors::Vector{StructuralError}, file::EsmFile, g,
+        errors::Vector{StructuralError}, index::_ScopedIndex, g,
         model::Model, scoped_path::String, pointer::String
     )
     for vname in sort!(collect(keys(model.variables)))
         var = model.variables[vname]
-        vpointer = "$pointer/variables/$vname"
+        vpointer = _pointer(pointer, "variables", vname)
         for (field, bound) in (("lb", var.lb), ("ub", var.ub))
             bound isa String || continue
             _check_bound_reference!(
-                errors, file, g, var, vname, scoped_path, field, bound, "$vpointer/$field"
+                errors, index, g, var, vname, scoped_path, field, bound, _pointer(vpointer, field)
             )
         end
         if var.lb isa Real && var.ub isa Real && var.lb > var.ub
@@ -130,16 +138,11 @@ function _check_variable_bounds!(
             )
         end
     end
-    for (sub, node) in sort!(collect(model_subsystems(model)); by = first)
-        _check_variable_bounds!(
-            errors, file, g, node, "$scoped_path.$sub", "$pointer/subsystems/$sub"
-        )
-    end
     return errors
 end
 
 function _check_bound_reference!(
-        errors::Vector{StructuralError}, file::EsmFile, g, var::ModelVariable,
+        errors::Vector{StructuralError}, index::_ScopedIndex, g, var::ModelVariable,
         vname::String, scoped_path::String, field::String, ref::String, pointer::String
     )
     # Rule 1: the reference resolves as an expression's free variable would.
@@ -158,7 +161,7 @@ function _check_bound_reference!(
     # Rule 2: declared shapes, compared by index-set name. A reaction-system
     # species declares no shape and reads as scalar.
     own_shape = var.shape === nothing ? String[] : collect(String, var.shape)
-    ref_shape = something(_declared_shape_of(file, target), String[])
+    ref_shape = something(_declared_shape_of(index, target), String[])
     if !isempty(ref_shape) && ref_shape != own_shape
         show_shape(s) = isempty(s) ? "(scalar)" : "[" * join(s, ", ") * "]"
         _report!(

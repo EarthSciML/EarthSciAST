@@ -124,12 +124,7 @@ function _lower_template_body_enums(templates, enums)
     out = OrderedDict{String, Any}()
     for (name, decl) in pairs(templates)
         if _is_object(decl) && _raw_haskey(decl, "body")
-            params_raw = _raw_get(decl, "params")
-            params = Set{String}(
-                String(p) for p in
-                    (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
-                    if p isa AbstractString
-            )
+            params = Set{String}(_TemplateDecl(decl).params)
             lowered = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl))
             lowered["body"] = _lower_raw_enum_ops(_raw_get(decl, "body"), enums, params)
             out[string(name)] = lowered

@@ -1185,7 +1185,7 @@ array form: a document writing `update: {...}` is addressed as
 `/update/from/unit_conversion`, as the corpus pin and the other bindings say.
 """
 _update_rule_path(base::AbstractString, rules::AbstractVector, ri::Integer) =
-    _update_is_scalar_form(rules) ? "$base/update" : "$base/update/$(ri - 1)"
+    _update_is_scalar_form(rules) ? _pointer(base, "update") : _pointer(base, "update", ri)
 
 """
     TimeSpan(start::Float64, stop::Float64)

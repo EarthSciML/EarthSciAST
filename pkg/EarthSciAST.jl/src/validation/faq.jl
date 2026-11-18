@@ -29,7 +29,7 @@ function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{St
             model = file.models[model_name]
             _check_model_aggregates!(
                 errors, file, model,
-                "/models/$model_name", registry
+                _pointer("", "models", model_name), registry
             )
             # A template parameter may stand for a range's `from` (esm-spec §9.6.1),
             # so the index-set name a call binds is checked on the expansion; the
@@ -38,14 +38,14 @@ function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{St
             view === model && continue
             reg = get(file.component_templates, "models.$model_name", nothing)
             reg === nothing && continue
-            _check_template_index_sets!(errors, model, view, "/models/$model_name", registry, reg)
+            _check_template_index_sets!(errors, model, view, _pointer("", "models", model_name), registry, reg)
         end
     end
     if file.reaction_systems !== nothing
         for rs_name in sort!(collect(keys(file.reaction_systems)))
             _check_reaction_system_aggregates!(
                 errors, file, file.reaction_systems[rs_name],
-                "/reaction_systems/$rs_name", registry
+                _pointer("", "reaction_systems", rs_name), registry
             )
         end
     end
@@ -55,7 +55,7 @@ function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{St
     no_shapes = Dict{String, Vector{String}}()
     for (i, entry) in enumerate(file.coupling)
         _check_site_aggregates!(
-            errors, file, entry, "/coupling/$(i - 1)", no_names, registry, no_shapes
+            errors, file, entry, _pointer("", "coupling", i), no_names, registry, no_shapes
         )
     end
     return errors

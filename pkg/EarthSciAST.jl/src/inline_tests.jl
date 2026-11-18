@@ -341,10 +341,8 @@ function _array_scope_names(regs...)::Set{String}
     return out
 end
 
-# The independent (time) variable, as an expression spells it.
-const _TIME_VARIABLE = "t"
-
-# The refusal for a §6.6.5 analytic `reference` that mentions `t`.
+# The refusal for a §6.6.5 analytic `reference` that mentions the independent
+# variable.
 #
 # esm-spec §6.6.5 says what a reference may read: the asserted field's DIMENSION
 # NAMES, free, plus the model's PARAMETERS. The independent variable is neither.
@@ -353,14 +351,17 @@ const _TIME_VARIABLE = "t"
 # `t` would answer with the expression at the start of the span and report a
 # plausible wrong number. Refusing names the mistake instead.
 #
-# The text is BYTE-IDENTICAL in Rust (`REFERENCE_MENTIONS_TIME`) and Python
-# (`REFERENCE_MENTIONS_TIME`); the three bindings must reject the same document
-# with the same sentence.
+# For the independent variable `t` the text is BYTE-IDENTICAL in Rust
+# (`REFERENCE_MENTIONS_TIME`) and Python (`REFERENCE_MENTIONS_TIME`); the three
+# bindings must reject the same document with the same sentence. A document
+# that renames its independent variable gets the same sentence with its name.
 const _REFERENCE_MENTIONS_TIME = "inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a reference's free variables are the field's dimension names, and its other names are the model's parameters. A reference is evaluated at build time, where the independent variable has no value, so `t` would silently read 0 rather than the asserted time."
+_reference_mentions_time(iv::AbstractString) =
+    iv == "t" ? _REFERENCE_MENTIONS_TIME : replace(_REFERENCE_MENTIONS_TIME, "`t`" => "`$iv`")
 
 """
     bind_dimension_names(expr, dims, scope=Dict{String,Float64}(),
-                         arrays=Set{String}()) -> ASTExpr
+                         arrays=Set{String}(); independent_variable="t") -> ASTExpr
 
 esm-spec §6.6.5: an inline `reference`'s free variables are the domain DIMENSION
 NAMES. For a field shaped over index sets those are the asserted variable's
@@ -397,9 +398,11 @@ checking only the parameter half would rebind it to the cell index in silence.
 function bind_dimension_names(
         expr::ASTExpr, dims::AbstractVector{<:AbstractString},
         scope::AbstractDict = Dict{String, Float64}(),
-        arrays = Set{String}()
+        arrays = Set{String}();
+        independent_variable::AbstractString = "t"
     )::ASTExpr
-    # esm-spec §6.6.5 names what a reference may read, and `t` is not on the
+    # esm-spec §6.6.5 names what a reference may read, and the independent
+    # variable (`independent_variable`, `t` unless the document renames it) is not on the
     # list. Reaching the evaluator with it is not an error there — the
     # build-time evaluator has a time slot and it holds `0.0` — so without this
     # check a `t`-dependent reference would answer with its value at the start
@@ -408,8 +411,9 @@ function bind_dimension_names(
     # statement: there `t` IS a dimension name, §6.6.5 admits it, and it binds
     # to the cell index below. Checked BEFORE the `isempty(dims)` exit, so a
     # reference on an unshaped target is refused too.
-    (_TIME_VARIABLE in dims || !_mentions_free(expr, _TIME_VARIABLE)) ||
-        throw(InlineTestError(_REFERENCE_MENTIONS_TIME))
+    iv = String(independent_variable)
+    (iv in dims || !_mentions_free(expr, iv)) ||
+        throw(InlineTestError(_reference_mentions_time(iv)))
     isempty(dims) && return expr
     mentioned = String[String(d) for d in dims if _mentions_free(expr, String(d))]
     isempty(mentioned) && return expr
@@ -782,7 +786,10 @@ function _evaluate_assertion(
             # the test's own answer key would be refusing nothing of the model's.
             ref = _with_compiler_plan(_plan(:interpreter)) do
                 evaluate_cellwise(
-                    bind_dimension_names(a.reference, dims, scope, arrays),
+                    bind_dimension_names(
+                        a.reference, dims, scope, arrays;
+                        independent_variable = _indep_var(eval_file)
+                    ),
                     cell_tuples;
                     const_arrays = insp.const_arrays, params = scope
                 )
@@ -875,6 +882,9 @@ struct SimulateTestEngine
     # could not name one could only ever exercise the default, which is the
     # single compiler a compiler-agreement fixture has no need to re-check.
     compiler::Symbol
+    # `file` loaded, checked and flattened once for every test that runs
+    # against it (`_prepare_tests_document`), or why that failed.
+    prep::Union{PreparedRun, _EngineFailure}
 end
 
 # Per-test handle: the successful simulation plus the build-observability sink
@@ -1017,18 +1027,32 @@ function _scope_to_component(overrides, mname, scope)
     return out
 end
 
-function _test_name_scope(target::EsmFile)
-    flat = try
-        flatten(target)
+function _test_name_scope(target::Union{EsmFile, PreparedRun, _EngineFailure})
+    target isa _EngineFailure && return nothing
+    flat = target isa PreparedRun ? target.flat : try
+            flatten(target)
     catch err
-        err isa EarthSciASTError || rethrow()
-        return nothing
+            err isa EarthSciASTError || rethrow()
+            return nothing
     end
     known = union(
         Set{String}(String(n) for n in keys(flat.parameters)),
         Set{String}(String(n) for n in keys(flat.state_variables))
     )
     return (known, flat.metadata.merged_variable_renames)
+end
+
+# `file` loaded, checked and flattened once for all of its tests: the
+# document-level refusals and `flatten`, without a compiler's own refusals,
+# which each test's `esm_problem` applies to the prepared run. A failure is
+# every such test's failure, reported as its build would have reported it.
+function _prepare_tests_document(file::EsmFile)
+    return try
+        _prepare_run(file; refuse_file = (_, _) -> nothing, refuse_flat = _ -> nothing)
+    catch err
+        _is_resource_error(err) && rethrow()
+        _EngineFailure("simulation failed: ", err)
+    end
 end
 
 function _engine_setup(e::SimulateTestEngine, t)
@@ -1041,9 +1065,16 @@ function _engine_setup(e::SimulateTestEngine, t)
         u0 = _seeded_overrides(e.seed_u0, t.initial_conditions)
         # The target is flattened for the scope only when a key needs one.
         scope = (isempty(something(p, ())) && isempty(something(u0, ()))) ? nothing :
-            _test_name_scope(target)
+            _test_name_scope(target === e.file ? e.prep : target)
+        # A test with no injection runs against the document prepared once.
+        if target === e.file
+            e.prep isa _EngineFailure && return e.prep
+            input = e.prep
+        else
+            input = target
+        end
         prob = esm_problem(
-            target, (t.time_span.start, t.time_span.stop);
+            input, (t.time_span.start, t.time_span.stop);
             p = _overrides_or_empty(_scope_to_component(p, e.mname, scope)),
             u0 = _scope_to_component(u0, e.mname, scope),
             compiler = e.compiler
@@ -1404,11 +1435,12 @@ function _run_document_tests!(
     # made the failures of a document inconsistent with each other.
     source = document isa AbstractString ? String(document) : ""
     d_compiler = _opt_or(o, :compiler, compiler)
+    prep = _prepare_tests_document(file)
     for (mname, kind, component) in components
         engine = SimulateTestEngine(
             file, document, mname, resolved_base,
             d_alg, d_reltol, d_abstol, seed_p, seed_u0,
-            d_compiler
+            d_compiler, prep
         )
         _run_test_frame!(
             results, engine, source, kind, mname,

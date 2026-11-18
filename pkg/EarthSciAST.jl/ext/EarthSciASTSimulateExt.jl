@@ -209,7 +209,8 @@ end
 _need_alg(alg) = alg === nothing && throw(
     SimulateError(
         "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
-            "(and `using OrdinaryDiffEqTsit5`)"
+            "(and `using OrdinaryDiffEqTsit5`)",
+        EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
     )
 )
 
@@ -280,7 +281,7 @@ end
 _split_alg(alg, args) = isempty(args) ? (alg, ()) :
     (
         alg === nothing ? (first(args), Base.tail(args)) :
-        throw(SimulateError("`alg` was passed both positionally and by keyword"))
+        throw(SimulateError("`alg` was passed both positionally and by keyword", EarthSciAST.ERROR_CODES.INVALID_ARGUMENT))
     )
 
 # --------------------------------------------------------------------------- #

@@ -477,7 +477,7 @@ function _front_door(
         _with_param_reads(_preads) do
             materialize_value_invention(
                 model, file.index_sets,
-                _vi_ca, _params
+                _vi_ca, _params; independent_variable = _indep_var(file)
             )
     end
 

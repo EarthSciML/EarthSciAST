@@ -229,3 +229,38 @@ include("testutils.jl")
     end
 
 end
+
+@testset "diagnostic pointers and scoped declarations" begin
+    P = EarthSciAST._pointer
+    # Keys are escaped (RFC 6901), positions are 1-based in and 0-based out.
+    @test P("", "models", "a/b~c", "equations", 1, "lhs") == "/models/a~1b~0c/equations/0/lhs"
+    @test P("/models/M", :variables) == "/models/M/variables"
+    file = EarthSciAST.load_document(
+        Dict(
+            "esm" => "1.0.0", "metadata" => Dict("name" => "ix"),
+            "models" => Dict(
+                "M" => Dict(
+                    "variables" => Dict(
+                        "k" => Dict("type" => "parameter", "default" => 1.0),
+                        "x" => Dict("type" => "unknown", "default" => 0.0)
+                    ),
+                    "equations" => Any[Dict("lhs" => Dict("op" => "D", "args" => Any["x"]), "rhs" => "k")],
+                    "subsystems" => Dict(
+                        "S" => Dict(
+                            "variables" => Dict("y" => Dict("type" => "parameter", "default" => 2.0)),
+                            "equations" => Any[]
+                        )
+                    )
+                )
+            )
+        )
+    )
+    ix = EarthSciAST._scoped_index(file)
+    R = EarthSciAST._resolve_declaration
+    @test R(ix, "M", "k").kind === :variable
+    @test R(ix, "M", "S.y").decl.default == 2.0          # relative path
+    @test R(ix, "M.S", "M.k") !== nothing                # top-level path
+    @test R(ix, "M.S", "M.k"; absolute = false) === nothing
+    @test R(ix, "M", "k"; kinds = (:species,)) === nothing
+    @test ix.complete && "M.S" in ix.components
+end

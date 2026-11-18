@@ -83,8 +83,8 @@ const _EXPRESSION_SITE_FIELDS = Dict{Tuple{DataType, Symbol}, Tuple{Vararg{Symbo
     (CouplingCouple, :connector) => (:connector_expression,),
 )
 
-_ptr(::Nothing, parts...) = nothing
-_ptr(path::String, parts...) = string(path, parts...)
+_ptr(::Nothing, segs...) = nothing
+_ptr(path::String, segs...) = _pointer(path, segs...)
 
 _rule_ptr(::Nothing, rules, ri) = nothing
 _rule_ptr(base::String, rules, ri) = _update_rule_path(base, rules, ri)
@@ -102,9 +102,9 @@ _rule_ptr(base::String, rules, ri) = _update_rule_path(base, rules, ri)
 
 function _walk_equations!(g::G, eqs::Vector{Equation}, path, lk::Symbol, rk::Symbol) where {G}
     for (i, eq) in enumerate(eqs)
-        p = _ptr(path, "/", i - 1)
-        l = g(eq.lhs, _ptr(p, "/lhs"), lk)
-        r = g(eq.rhs, _ptr(p, "/rhs"), rk)
+        p = _ptr(path, i)
+        l = g(eq.lhs, _ptr(p, "lhs"), lk)
+        r = g(eq.rhs, _ptr(p, "rhs"), rk)
         (l === eq.lhs && r === eq.rhs) || (eqs[i] = _reconstruct_fields(eq; lhs = l, rhs = r))
     end
     return eqs
@@ -115,12 +115,12 @@ function _walk_rules(g::G, rules, base) where {G}
     out = nothing
     for (ri, r) in enumerate(rules)
         p = _rule_ptr(base, rules, ri)
-        w = r.when === nothing ? nothing : g(r.when, _ptr(p, "/when"), :update_when)
+        w = r.when === nothing ? nothing : g(r.when, _ptr(p, "when"), :update_when)
         e = r.expression === nothing ? nothing :
-            g(r.expression, _ptr(p, "/expression"), :update_expression)
+            g(r.expression, _ptr(p, "expression"), :update_expression)
         from = r.from
         if from !== nothing && from.unit_conversion isa ASTExpr
-            uc = g(from.unit_conversion, _ptr(p, "/from/unit_conversion"), :update_unit_conversion)
+            uc = g(from.unit_conversion, _ptr(p, "from", "unit_conversion"), :update_unit_conversion)
             uc === from.unit_conversion || (from = _reconstruct_fields(from; unit_conversion = uc))
         end
         w === r.when && e === r.expression && from === r.from && continue
@@ -144,8 +144,8 @@ end
 
 function _walk_variable(g::G, v::ModelVariable, path) where {G}
     update = _walk_rules(g, v.update, path)
-    lb = _walk_bound(g, v.lb, _ptr(path, "/lb"), :lower_bound)
-    ub = _walk_bound(g, v.ub, _ptr(path, "/ub"), :upper_bound)
+    lb = _walk_bound(g, v.lb, _ptr(path, "lb"), :lower_bound)
+    ub = _walk_bound(g, v.ub, _ptr(path, "ub"), :upper_bound)
     update === v.update && lb === v.lb && ub === v.ub && return v
     return _reconstruct_fields(v; update = update, lb = lb, ub = ub)
 end
@@ -154,7 +154,7 @@ function _walk_affects(g::G, affects, path, kind::Symbol) where {G}
     affects === nothing && return affects
     out = nothing
     for (j, a) in enumerate(affects)
-        r = g(a.rhs, _ptr(path, "/", j - 1, "/rhs"), kind)
+        r = g(a.rhs, _ptr(path, j, "rhs"), kind)
         r === a.rhs && continue
         out === nothing && (out = copy(affects))
         out[j] = _reconstruct_fields(a; rhs = r)
@@ -166,7 +166,7 @@ function _walk_conditions(g::G, conds, path) where {G}
     conds === nothing && return conds
     out = nothing
     for (j, c) in enumerate(conds)
-        r = g(c, _ptr(path, "/", j - 1), :event_condition)
+        r = g(c, _ptr(path, j), :event_condition)
         r === c && continue
         out === nothing && (out = copy(conds))
         out[j] = r
@@ -176,31 +176,31 @@ end
 
 _walk_trigger(g, t::DiscreteEventTrigger, path) = t
 function _walk_trigger(g::G, t::ConditionTrigger, path) where {G}
-    e = g(t.expression, _ptr(path, "/trigger/expression"), :event_trigger)
+    e = g(t.expression, _ptr(path, "trigger", "expression"), :event_trigger)
     return e === t.expression ? t : ConditionTrigger(e)
 end
 _walk_trigger(g, ::Nothing, path) = nothing
 
 function _walk_event(g::G, ev::ContinuousEvent, path) where {G}
-    c = _walk_conditions(g, ev.conditions, _ptr(path, "/conditions"))
-    a = _walk_affects(g, ev.affects, _ptr(path, "/affects"), :affect)
-    n = _walk_affects(g, ev.affect_neg, _ptr(path, "/affect_neg"), :affect_neg)
+    c = _walk_conditions(g, ev.conditions, _ptr(path, "conditions"))
+    a = _walk_affects(g, ev.affects, _ptr(path, "affects"), :affect)
+    n = _walk_affects(g, ev.affect_neg, _ptr(path, "affect_neg"), :affect_neg)
     c === ev.conditions && a === ev.affects && n === ev.affect_neg && return ev
     return _reconstruct_fields(ev; conditions = c, affects = a, affect_neg = n)
 end
 
 function _walk_event(g::G, ev::DiscreteEvent, path) where {G}
     t = _walk_trigger(g, ev.trigger, path)
-    a = _walk_affects(g, ev.affects, _ptr(path, "/affects"), :affect)
+    a = _walk_affects(g, ev.affects, _ptr(path, "affects"), :affect)
     t === ev.trigger && a === ev.affects && return ev
     return _reconstruct_fields(ev; trigger = t, affects = a)
 end
 
 function _walk_event(g::G, ev::CouplingEvent, path) where {G}
-    c = _walk_conditions(g, ev.conditions, _ptr(path, "/conditions"))
+    c = _walk_conditions(g, ev.conditions, _ptr(path, "conditions"))
     t = _walk_trigger(g, ev.trigger, path)
-    a = _walk_affects(g, ev.affects, _ptr(path, "/affects"), :affect)
-    n = _walk_affects(g, ev.affect_neg, _ptr(path, "/affect_neg"), :affect_neg)
+    a = _walk_affects(g, ev.affects, _ptr(path, "affects"), :affect)
+    n = _walk_affects(g, ev.affect_neg, _ptr(path, "affect_neg"), :affect_neg)
     c === ev.conditions && t === ev.trigger && a === ev.affects && n === ev.affect_neg &&
         return ev
     return _reconstruct_fields(ev; conditions = c, trigger = t, affects = a, affect_neg = n)
@@ -208,7 +208,7 @@ end
 
 function _walk_events!(g::G, events::Vector, path) where {G}
     for (i, ev) in enumerate(events)
-        nev = _walk_event(g, ev, _ptr(path, "/", i - 1))
+        nev = _walk_event(g, ev, _ptr(path, i))
         nev === ev || (events[i] = nev)
     end
     return events
@@ -220,7 +220,7 @@ function _walk_tests!(g::G, tests::Vector{InlineTest}, path) where {G}
         for (j, a) in enumerate(t.assertions)
             a.reference isa ASTExpr || continue
             r = g(
-                a.reference, _ptr(path, "/", i - 1, "/assertions/", j - 1, "/reference"),
+                a.reference, _ptr(path, i, "assertions", j, "reference"),
                 :test_reference
             )
             r === a.reference && continue
@@ -233,30 +233,30 @@ function _walk_tests!(g::G, tests::Vector{InlineTest}, path) where {G}
 end
 
 function _walk_sites!(g::G, m::Model, path, recurse::Bool) where {G}
-    _walk_equations!(g, m.equations, _ptr(path, "/equations"), :equation_lhs, :equation_rhs)
+    _walk_equations!(g, m.equations, _ptr(path, "equations"), :equation_lhs, :equation_rhs)
     _walk_equations!(
-        g, m.initialization_equations, _ptr(path, "/initialization_equations"),
+        g, m.initialization_equations, _ptr(path, "initialization_equations"),
         :initialization_lhs, :initialization_rhs
     )
     if !isempty(m.guesses)
         for name in sort!(collect(keys(m.guesses)))
             v = m.guesses[name]
             v isa ASTExpr || continue
-            nv = g(v, _ptr(path, "/guesses/", name), :guess)
+            nv = g(v, _ptr(path, "guesses", name), :guess)
             nv === v || (m.guesses[name] = nv)
         end
     end
     for (name, v) in m.variables
-        nv = _walk_variable(g, v, _ptr(path, "/variables/", name))
+        nv = _walk_variable(g, v, _ptr(path, "variables", name))
         nv === v || (m.variables[name] = nv)
     end
-    _walk_events!(g, m.continuous_events, _ptr(path, "/continuous_events"))
-    _walk_events!(g, m.discrete_events, _ptr(path, "/discrete_events"))
-    _walk_tests!(g, m.tests, _ptr(path, "/tests"))
+    _walk_events!(g, m.continuous_events, _ptr(path, "continuous_events"))
+    _walk_events!(g, m.discrete_events, _ptr(path, "discrete_events"))
+    _walk_tests!(g, m.tests, _ptr(path, "tests"))
     if recurse
         for (name, sub) in m.subsystems
             sub isa Model || continue
-            _walk_sites!(g, sub, _ptr(path, "/subsystems/", name), true)
+            _walk_sites!(g, sub, _ptr(path, "subsystems", name), true)
         end
     end
     return m
@@ -264,23 +264,23 @@ end
 
 function _walk_sites!(g::G, rs::ReactionSystem, path, recurse::Bool) where {G}
     for (i, r) in enumerate(rs.reactions)
-        nr = g(r.rate, _ptr(path, "/reactions/", i - 1, "/rate"), :rate)
+        nr = g(r.rate, _ptr(path, "reactions", i, "rate"), :rate)
         nr === r.rate || (rs.reactions[i] = _reconstruct_fields(r; rate = nr))
     end
     for (i, p) in enumerate(rs.parameters)
-        rules = _walk_rules(g, p.update, _ptr(path, "/parameters/", p.name))
+        rules = _walk_rules(g, p.update, _ptr(path, "parameters", p.name))
         rules === p.update || (rs.parameters[i] = _reconstruct_fields(p; update = rules))
     end
     _walk_equations!(
-        g, rs.constraint_equations, _ptr(path, "/constraint_equations"),
+        g, rs.constraint_equations, _ptr(path, "constraint_equations"),
         :constraint_lhs, :constraint_rhs
     )
-    _walk_events!(g, rs.continuous_events, _ptr(path, "/continuous_events"))
-    _walk_events!(g, rs.discrete_events, _ptr(path, "/discrete_events"))
-    _walk_tests!(g, rs.tests, _ptr(path, "/tests"))
+    _walk_events!(g, rs.continuous_events, _ptr(path, "continuous_events"))
+    _walk_events!(g, rs.discrete_events, _ptr(path, "discrete_events"))
+    _walk_tests!(g, rs.tests, _ptr(path, "tests"))
     if recurse
         for (name, sub) in rs.subsystems
-            _walk_sites!(g, sub, _ptr(path, "/subsystems/", name), true)
+            _walk_sites!(g, sub, _ptr(path, "subsystems", name), true)
         end
     end
     return rs
@@ -289,7 +289,7 @@ end
 _walk_coupling(g, ce::CouplingEntry, path) = ce
 function _walk_coupling(g::G, ce::CouplingVariableMap, path) where {G}
     ce.transform isa ASTExpr || return ce
-    t = g(ce.transform, _ptr(path, "/transform"), :variable_map_transform)
+    t = g(ce.transform, _ptr(path, "transform"), :variable_map_transform)
     return t === ce.transform ? ce : _reconstruct_fields(ce; transform = t)
 end
 _walk_coupling(g, ce::CouplingEvent, path) = _walk_event(g, ce, path)
@@ -301,7 +301,7 @@ function _walk_coupling(g::G, ce::CouplingCouple, path) where {G}
         item isa AbstractDict || continue
         e = get(item, "expression", nothing)
         e isa ASTExpr || continue
-        ne = g(e, _ptr(path, "/connector/equations/", j - 1, "/expression"), :connector_expression)
+        ne = g(e, _ptr(path, "connector", "equations", j, "expression"), :connector_expression)
         ne === e && continue
         out === nothing && (out = Any[x for x in eqs])
         nitem = Dict{String, Any}(String(k) => v for (k, v) in item)
@@ -317,16 +317,16 @@ end
 function _walk_sites!(g::G, file::EsmFile, path, recurse::Bool) where {G}
     if file.models !== nothing
         for (name, m) in file.models
-            _walk_sites!(g, m, _ptr(path, "/models/", name), recurse)
+            _walk_sites!(g, m, _ptr(path, "models", name), recurse)
         end
     end
     if file.reaction_systems !== nothing
         for (name, rs) in file.reaction_systems
-            _walk_sites!(g, rs, _ptr(path, "/reaction_systems/", name), recurse)
+            _walk_sites!(g, rs, _ptr(path, "reaction_systems", name), recurse)
         end
     end
     for (i, ce) in enumerate(file.coupling)
-        nce = _walk_coupling(g, ce, _ptr(path, "/coupling/", i - 1))
+        nce = _walk_coupling(g, ce, _ptr(path, "coupling", i))
         nce === ce || (file.coupling[i] = nce)
     end
     return file

@@ -11,7 +11,7 @@ what to load.
 """
 module EarthSciASTCallbacksExt
 
-using EarthSciAST: RefreshBuffers, RefreshError, OutputError, StateSnapshot,
+using EarthSciAST: ERROR_CODES, RefreshBuffers, RefreshError, OutputError, StateSnapshot,
     provider_is_const, provider_refresh_times, provider_sample, _write_forcing!,
     notify_forcing_refresh!, sink_output_times, sink_write!, sink_flush!, _union_tstops
 import EarthSciAST: build_refresh_callback, build_output_callback,
@@ -46,7 +46,8 @@ function _group_discrete_providers(providers::AbstractDict, buffers::RefreshBuff
         haskey(buffers, var) || throw(
             RefreshError(
                 "build_refresh_callback: no buffer for refreshed variable '$var'; add it to " *
-                    "`buffers` (the same Array{Float64} passed to `esm_problem`'s `param_arrays`)"
+                    "`buffers` (the same Array{Float64} passed to `esm_problem`'s `param_arrays`)",
+                ERROR_CODES.UNDEFINED_VARIABLE
             )
         )
         i = get(slot, prov, 0)
