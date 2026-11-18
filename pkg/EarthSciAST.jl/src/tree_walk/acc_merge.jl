@@ -100,10 +100,79 @@ _cross_eq_class_emit_enabled() =
 # materialised to a `String` exactly ONCE per top-level node (see the reusable
 # buffer in `_acc_from_cell_entries`). The earlier `string(…, join(…), …)` form
 # allocated an intermediate `String` at every interior node and re-copied every
-# descendant's bytes at each level up the tree — O(nodes × depth) garbage. The
-# emitted bytes are unchanged, so the grouping is identical.
-function _struct_sig!(io::IOBuffer, n::_Node)
+# descendant's bytes at each level up the tree — O(nodes × depth) garbage.
+#
+# A PER-CELL NODE IS A DAG, NOT A TREE. A template expansion (an interpolation's
+# index count, a calendar term) references one subexpression object from several
+# places, and the references nest, so a walk that descends into every reference
+# is exponential in the nesting depth. The signature therefore writes an
+# interior node in full the FIRST time the walk meets it and as a back-reference
+# (`#` + its first-visit ordinal) every time after. `seen` holds the ordinals
+# and is emptied per top-level node, so they are relative to the cell and
+# comparable across cells. Two cells then share a signature iff they have the
+# same shape AND reference their shared subexpressions from the same places —
+# which is exactly what lets `_acc_merge_nodes` build a shared subexpression
+# once (see there). A cell without shared interior nodes has no back-reference
+# and writes the bytes it always did.
+#
+# WHICH CONSTANT TABLE. A const-array read at a computed subscript
+# (`_NK_CONST_GATHER`) carries its table in `payload`, and the merge keeps the
+# FIRST cell's payload for the whole group. Two cells that differ only in which
+# table they read must therefore not share a signature: the operator token
+# carries the table's id from `tables` (`_const_table_id!`).
+
+# Kinds `_acc_merge_nodes` lowers as LEAVES. Every other kind is an interior
+# node: back-referenced in the signature and built once per merge.
+_acc_merge_leaf_kind(k::UInt8) =
+    k === _NK_LITERAL || k === _NK_STATE || k === _NK_PARAM || k === _NK_TIME ||
+    k === _NK_PARAM_GATHER
+
+# Ids for the constant tables one grouping pass meets, equal iff the tables are
+# equal in CONTENT (values, strides, dims, boundary policy): exact comparison
+# through the `Dict`s, never a bare hash. Content and not identity, because a
+# const array that is not a dense `Float64` array is converted per gather node
+# (`_const_gather_node`), so the cells of one equation each hold their own copy
+# of the same table. A dense one is aliased by every gather into it, and
+# `flatid` answers for it by buffer identity, so its values are hashed once per
+# pass and not once per node. The registry name is not compared: it only words
+# an out-of-range error. One instance per pass — ids are only ever compared
+# within the pass that minted them, which is why no signature function makes
+# its own.
+struct _ConstTableIds
+    flatid::IdDict{Vector{Float64}, Int}     # value buffer (by identity) -> values id
+    flatcontent::Dict{Vector{Float64}, Int}  # value buffer (by content)  -> values id
+    byshape::Dict{Tuple{Int, Vector{Int}, Vector{Int}, Vector{Symbol}}, Int}
+end
+_ConstTableIds() = _ConstTableIds(
+    IdDict{Vector{Float64}, Int}(), Dict{Vector{Float64}, Int}(),
+    Dict{Tuple{Int, Vector{Int}, Vector{Int}, Vector{Symbol}}, Int}()
+)
+
+# 0 for a payload that is not a constant table (nothing is written for it).
+function _const_table_id!(ids::_ConstTableIds, payload)::Int
+    payload isa _ConstGatherArray || return 0
+    flat = payload.flat
+    fid = get(ids.flatid, flat, 0)
+    if fid == 0
+        fid = get!(ids.flatcontent, flat, length(ids.flatcontent) + 1)
+        ids.flatid[flat] = fid
+    end
+    key = (fid, payload.strides, payload.dims, payload.boundary)
+    return get!(ids.byshape, key, length(ids.byshape) + 1)
+end
+
+function _struct_sig!(
+        io::IOBuffer, n::_Node, seen::_NodeMap{Int}, tables::_ConstTableIds
+    )
     k = n.kind
+    if !_acc_merge_leaf_kind(k)
+        id = get(seen, n, 0)
+        if id != 0
+            print(io, '#', id)
+            return io
+        end
+        seen[n] = length(seen) + 1
+    end
     if k === _NK_STATE
         print(io, 'S')
     elseif k === _NK_LITERAL
@@ -120,7 +189,7 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         print(io, 'T')
     elseif k === _NK_CONTRACTION
         print(io, "C:", n.op, '(')
-        _sig_children!(io, n.children)
+        _sig_children!(io, n.children, seen, tables)
         print(io, ')')
     elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP ||
             k === _NK_LIVE_GATHER
@@ -133,21 +202,25 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         # codegen emitter then declines it and the cell falls back to the
         # per-cell scalar walk.
         print(io, "CL:", objectid(n))
-    else  # _NK_OP
+    else  # _NK_OP, and a const gather (which the merge carries as an op)
         print(io, "O:", n.op)
+        tk = _const_table_id!(tables, n.payload)
+        tk == 0 || print(io, '@', tk)
         print(io, '(')
-        _sig_children!(io, n.children)
+        _sig_children!(io, n.children, seen, tables)
         print(io, ')')
     end
     return io
 end
 
-function _sig_children!(io::IOBuffer, children)
+function _sig_children!(
+        io::IOBuffer, children, seen::_NodeMap{Int}, tables::_ConstTableIds
+    )
     first = true
     for ch in children
         first || print(io, ',')
         first = false
-        _struct_sig!(io, ch)
+        _struct_sig!(io, ch, seen, tables)
     end
     return io
 end
@@ -164,9 +237,27 @@ end
 #   OP        children merged
 # The ordinal tables use box-local addressing `s1=1, off=1` — the outs runner
 # threads the cell ordinal through `midx[1]`.
-function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})::_Node
+#
+# `memo` (one per top-level merge) maps an interior node of the FIRST cell to
+# the spine node already built for it, so a subexpression the cells reference
+# from several places is merged once and the spine keeps the cells' sharing
+# instead of unfolding it. The first cell's node alone is a sound key because
+# the group shares a signature: `_struct_sig!` back-references exactly the kinds
+# memoized here (`_acc_merge_leaf_kind`), in the same walk order, so wherever the
+# first cell repeats a node every other cell repeats its own node too. A leaf is
+# never reused — its sharing is not in the signature.
+_acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc}) =
+    _acc_merge_nodes(nodes, len, acc, _NodeMap{_Node}())
+function _acc_merge_nodes(
+        nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc},
+        memo::_NodeMap{_Node}
+    )::_Node
     n1 = nodes[1]
     k = n1.kind
+    if !_acc_merge_leaf_kind(k)
+        hit = get(memo, n1, nothing)
+        hit === nothing || return hit
+    end
     if k === _NK_LITERAL
         v1 = n1.literal
         all(isequal(nd.literal, v1) for nd in nodes) && return n1
@@ -199,21 +290,25 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})
     elseif k === _NK_CONTRACTION
         m = length(n1.children)
         ch = _Node[
-            _acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len, acc)
+            _acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len, acc, memo)
                 for c in 1:m
         ]
-        return _mknode(
+        out = _mknode(
             kind = _NK_CONTRACTION, op = n1.op, literal = n1.literal,
             children = ch
         )
+        memo[n1] = out
+        return out
     else  # _NK_OP
         pay = n1.payload
         m = length(n1.children)
         ch = _Node[
-            _acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len, acc)
+            _acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len, acc, memo)
                 for c in 1:m
         ]
-        return _mknode(kind = _NK_OP, op = n1.op, payload = pay, children = ch)
+        out = _mknode(kind = _NK_OP, op = n1.op, payload = pay, children = ch)
+        memo[n1] = out
+        return out
     end
 end
 
@@ -225,8 +320,11 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int, _Node}})::Vector{_Acc
     order = String[]
     groups = Dict{String, Tuple{Vector{Int}, Vector{_Node}}}()
     sigbuf = IOBuffer()
+    seen = _NodeMap{Int}()
+    tables = _ConstTableIds()
     for (slot, node) in entries
-        sig = String(take!(_struct_sig!(sigbuf, node)))
+        empty!(seen)
+        sig = String(take!(_struct_sig!(sigbuf, node, seen, tables)))
         if !haskey(groups, sig)
             groups[sig] = (Int[], _Node[])
             push!(order, sig)
@@ -240,7 +338,7 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int, _Node}})::Vector{_Acc
         slots, nds = groups[sig]
         len = length(slots)
         acc = _AccDesc[]
-        spine = _acc_merge_nodes(nds, len, acc)
+        spine = _acc_merge_nodes(nds, len, acc, _NodeMap{_Node}())
         # CSE + invariant hoisting on the merged spine — skipped on a
         # lazy-bearing one (see the header) so the SCALAR reference stays lazy.
         spine, cse = _acc_node_has_lazy(spine) ? (spine, _ACC_NO_CSE) :

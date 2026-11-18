@@ -100,6 +100,46 @@ vocabulary; the rule comes from `_DE_RULE`.
 _de_refuse(construct::AbstractString, detail::AbstractString) =
     throw(_E.DirectEmitError(construct, _DE_RULE[], detail))
 
+# ---- keys of the access-kernel emission memo (emit.jl, `_de_acck`) -------------
+
+# The STRUCTURAL CLASS of an access-kernel node: its own fields, with `payload`
+# by identity and each child by its class number. Exact comparison — the class
+# numbers are minted by a `Dict` over this key, not by a hash.
+struct _DEVNKey
+    kind::UInt8
+    op::Symbol
+    literal::UInt64             # the literal's bit pattern
+    idx::Int
+    sym::Symbol
+    payload::Any
+    children::Vector{Int}
+end
+Base.:(==)(a::_DEVNKey, b::_DEVNKey) =
+    a.kind === b.kind && a.op === b.op && a.literal === b.literal &&
+    a.idx === b.idx && a.sym === b.sym && a.payload === b.payload &&
+    a.children == b.children
+Base.isequal(a::_DEVNKey, b::_DEVNKey) = a == b
+Base.hash(k::_DEVNKey, h::UInt) = hash(
+    k.children,
+    hash(objectid(k.payload), hash(k.op, hash(k.idx, hash(k.literal, hash(k.kind, hash(k.sym, h))))))
+)
+
+# One node class IN ONE LANE CONTEXT: the kernel whose descriptors it reads, the
+# lane plan it is emitted under (a reduce body runs under the kernel's E-lane
+# plan, the rest under its cell plan), and the cell-tier value vector its cache
+# reads resolve against (one per kernel and per sub-kernel of a kernel run; the
+# invariant tier is paired with it). Held by reference and compared by identity.
+struct _DEAcckKey
+    vn::Int
+    K::_E._AccKernel
+    plan::_E._OopAccPlan
+    cellvals::Vector{_DEVal}
+end
+Base.:(==)(a::_DEAcckKey, b::_DEAcckKey) =
+    a.vn == b.vn && a.cellvals === b.cellvals && a.plan === b.plan && a.K === b.K
+Base.isequal(a::_DEAcckKey, b::_DEAcckKey) = a == b
+Base.hash(k::_DEAcckKey, h::UInt) = hash(k.vn, hash(objectid(k.cellvals), h))
+
 # ---- the emission context ----------------------------------------------------
 
 mutable struct _DECtx
@@ -150,6 +190,12 @@ mutable struct _DECtx
     # kernel, a scan, the output assembly. Purely a tally key for the read
     # attribution below; nothing reads it back and nothing branches on it.
     site::Symbol
+    # The access-kernel emission memo (`_de_acck`, emit.jl): node -> structural
+    # class number, the classes, and (class, lane context) -> the value already
+    # emitted for it in the kernel being run.
+    vn_ids::_E._NodeMap{Int}
+    vn_keys::Dict{_DEVNKey, Int}
+    acck::Dict{_DEAcckKey, _DEVal}
 end
 
 function _DECtx(
@@ -174,7 +220,8 @@ function _DECtx(
         Dict{Vector{_MLIR.IR.Value}, _DEVal}(),
         Dict{Tuple{_MLIR.IR.Value, Vector{Int}}, _DEVal}(),
         Dict{Tuple{Int, Vector{Int}}, _MLIR.IR.Value}(),
-        Dict{Symbol, Int}(), Int32(0), :none
+        Dict{Symbol, Int}(), Int32(0), :none,
+        _E._NodeMap{Int}(), Dict{_DEVNKey, Int}(), Dict{_DEAcckKey, _DEVal}()
     )
 end
 

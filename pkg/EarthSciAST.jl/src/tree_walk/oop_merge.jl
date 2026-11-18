@@ -71,79 +71,133 @@ _oop_mergeable_acc_kind(k) =
 # forcing), not exact kind: the clone tables every member of a family
 # identically, so an interior AFFINE cell and a boundary TBL_BOX cell of the
 # same equation share a class.
-function _oop_merge_sig!(
-        io::IOBuffer, n::_Node, K::_AccKernel, parentsubs,
-        why::Base.RefValue{Symbol}
-    )
+#
+# An operator's `payload` is NOT free: the clone keeps the representative's. The
+# one payload an operator carries here is the constant table of a const-array
+# read at a computed subscript (`_ConstGatherArray`), so the operator's key names
+# the table (`_const_table_id!`, acc_merge.jl: equal iff equal in content) —
+# kernels that differ only in which table they read are different classes.
+#
+# WRITTEN OVER NODE CLASSES, NOT AS TEXT. A kernel's trees are DAGs (a template
+# expansion is referenced from several places, and the references nest), and a
+# signature that writes each node's text writes the UNFOLDED tree: time and
+# bytes exponential in the nesting. Instead each node gets a CLASS: the id a
+# `Dict` assigns to its key — what the text token said about the node itself,
+# plus the classes of its children. Two nodes share a class iff their unfolded
+# signatures agree (exact: ids are interned, never hashed; and unlike the
+# concatenated text, a key cannot be ambiguous about where one child ends), and
+# a kernel's signature is the classes of its roots. A node is classified once
+# per tree family (`seen`); the classes are the merge round's (`_OopSigClasses`),
+# shared by every kernel signature it compares.
+struct _OopSigKey
+    tag::UInt8                 # which arm of `_oop_merge_class!` wrote it
+    op::Symbol
+    a::UInt64                  # arm-specific: buffer identity / literal bits / tier / table id
+    b::Int                     # arm-specific: cache slot / sub position / node kind
+    children::Vector{Int}      # the children's classes, in order
+end
+Base.:(==)(x::_OopSigKey, y::_OopSigKey) =
+    x.tag === y.tag && x.op === y.op && x.a === y.a && x.b === y.b &&
+    x.children == y.children
+Base.isequal(x::_OopSigKey, y::_OopSigKey) = x == y
+Base.hash(k::_OopSigKey, h::UInt) =
+    hash(k.children, hash(k.b, hash(k.a, hash(k.op, hash(k.tag, h)))))
+
+struct _OopSigClasses
+    tables::_ConstTableIds
+    ids::Dict{_OopSigKey, Int}
+end
+_OopSigClasses() = _OopSigClasses(_ConstTableIds(), Dict{_OopSigKey, Int}())
+
+const _OOP_SIG_LEAF = Int[]            # a leaf key's (shared, never mutated) children
+_oop_sig_leaf(tag::UInt8; op::Symbol = Symbol(""), a::UInt64 = UInt64(0), b::Int = 0) =
+    _OopSigKey(tag, op, a, b, _OOP_SIG_LEAF)
+
+function _oop_merge_class!(
+        n::_Node, K::_AccKernel, parentsubs, why::Base.RefValue{Symbol},
+        cls::_OopSigClasses, seen::_NodeMap{Int}
+    )::Int
+    id = get(seen, n, 0)
+    id != 0 && return id
     k = n.kind
+    local key::_OopSigKey
     if k === _NK_ACCESS
         a = K.acc[n.idx]
         _oop_mergeable_acc_kind(a.kind) || (why[] = :acc_kind)
         if a.kind in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED)
-            print(io, "AS")
+            key = _oop_sig_leaf(0x01)
         elseif a.kind in (_AK_ARR_FIXED, _AK_FORCING_BOX, _AK_ARR_TBL_BOX)
-            print(io, "AF", "b", objectid(a.arr))
+            key = _oop_sig_leaf(0x02; a = UInt64(objectid(a.arr)))
         else
-            print(io, "AC")
+            key = _oop_sig_leaf(0x03)
         end
     elseif k === _NK_LITERAL
-        print(io, "L")                     # value free (tabled if varying)
+        key = _oop_sig_leaf(0x04)          # value free (tabled if varying)
     elseif k === _NK_PARAM
-        print(io, "P", n.sym)
+        key = _oop_sig_leaf(0x05; op = n.sym)
     elseif k === _NK_TIME
-        print(io, "T")
+        key = _oop_sig_leaf(0x06)
     elseif k === _NK_CACHED
-        print(io, "C", n.payload === K.cse.scratch ? "c" : "i", n.idx)
+        key = _oop_sig_leaf(
+            0x07; a = UInt64(n.payload === K.cse.scratch), b = n.idx
+        )
     elseif k === _NK_CONTRACTION
-        print(io, "K", n.op, "s", n.literal, "(")
-        for c in n.children
-            _oop_merge_sig!(io, c, K, parentsubs, why)
-        end
-        print(io, ")")
+        ch = Int[_oop_merge_class!(c, K, parentsubs, why, cls, seen) for c in n.children]
+        # the seed by value, as the text printed it (every NaN is one seed)
+        seed = isnan(n.literal) ? reinterpret(UInt64, NaN) : reinterpret(UInt64, n.literal)
+        key = _OopSigKey(0x08, n.op, seed, 0, ch)
     elseif k === _NK_SUBCALL
         pos = findfirst(s -> s === n.payload, parentsubs)
-        pos === nothing && (why[] = :subcall_unknown; return)
-        print(io, "S", pos)
+        pos === nothing && (why[] = :subcall_unknown)
+        key = _oop_sig_leaf(0x09; b = pos === nothing ? 0 : pos)
     elseif k === _NK_REDUCE
-        why[] = :reduce; print(io, "X")
+        why[] = :reduce
+        key = _oop_sig_leaf(0x0a)
     elseif k === _NK_OP
-        print(io, "O", n.op)
-        print(io, "(")
-        for c in n.children
-            _oop_merge_sig!(io, c, K, parentsubs, why)
-        end
-        print(io, ")")
+        ch = Int[_oop_merge_class!(c, K, parentsubs, why, cls, seen) for c in n.children]
+        key = _OopSigKey(
+            0x0b, n.op, UInt64(_const_table_id!(cls.tables, n.payload)), 0, ch
+        )
     else
-        why[] = :node_kind; print(io, "?", Int(k))
+        why[] = :node_kind
+        key = _oop_sig_leaf(0x0c; b = Int(k))
     end
-    return io
+    id = get!(cls.ids, key, length(cls.ids) + 1)
+    seen[n] = id
+    return id
 end
 
-function _oop_merge_trees_sig!(io::IOBuffer, K::_AccKernel, parentsubs, why)
+function _oop_merge_trees_sig!(
+        io::IOBuffer, K::_AccKernel, parentsubs, why, cls::_OopSigClasses
+    )
+    seen = _NodeMap{Int}()
     print(io, "z", K.zerobar, "|")
-    _oop_merge_sig!(io, K.spine, K, parentsubs, why); print(io, "|I")
+    print(io, _oop_merge_class!(K.spine, K, parentsubs, why, cls, seen), "|I")
     for r in K.cse.inv_recipes
-        _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";")
+        print(io, _oop_merge_class!(r, K, parentsubs, why, cls, seen), ";")
     end
     print(io, "|R")
     for r in K.cse.recipes
-        _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";")
+        print(io, _oop_merge_class!(r, K, parentsubs, why, cls, seen), ";")
     end
     return io
 end
 
-_oop_merge_kernel_sig(K::_AccKernel, plan::_OopAccPlan) =
-    _oop_merge_kernel_sig(K, plan.vectorizable, !isempty(plan.red_seg))
-function _oop_merge_kernel_sig(K::_AccKernel, vectorizable::Bool, reduce::Bool)
+# Signatures are comparable only when written against the SAME `cls`.
+_oop_merge_kernel_sig(K::_AccKernel, plan::_OopAccPlan, cls::_OopSigClasses) =
+    _oop_merge_kernel_sig(K, plan.vectorizable, !isempty(plan.red_seg), cls)
+function _oop_merge_kernel_sig(
+        K::_AccKernel, vectorizable::Bool, reduce::Bool, cls::_OopSigClasses
+    )
     why = Ref(:ok)
     vectorizable || (why[] = :unvectorizable)
     reduce && (why[] = :reduce)
     io = IOBuffer()
-    _oop_merge_trees_sig!(io, K, K.subs, why)
+    _oop_merge_trees_sig!(io, K, K.subs, why, cls)
     for (si, S) in enumerate(K.subs)
         isempty(S.subs) || (why[] = :nested_sub_subs)
         print(io, "|SUB", si, ":")
-        _oop_merge_trees_sig!(io, S, K.subs, why)
+        _oop_merge_trees_sig!(io, S, K.subs, why, cls)
     end
     return why[] === :ok ? String(take!(io)) : nothing, why[]
 end
@@ -177,6 +231,26 @@ function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
     else # _NK_ACCESS / _NK_SUBCALL / anything else: decline, fold to cell
         return false
     end
+end
+
+# One aligned member tuple (`clone`'s argument in `_oop_merge_group`) as a `Dict`
+# key: equal iff the tuples hold the SAME node objects, member by member.
+struct _NodeTupleKey
+    nodes::Vector{_Node}
+end
+function Base.:(==)(a::_NodeTupleKey, b::_NodeTupleKey)
+    length(a.nodes) == length(b.nodes) || return false
+    @inbounds for i in eachindex(a.nodes)
+        a.nodes[i] === b.nodes[i] || return false
+    end
+    return true
+end
+Base.isequal(a::_NodeTupleKey, b::_NodeTupleKey) = a == b
+function Base.hash(k::_NodeTupleKey, h::UInt)
+    for n in k.nodes
+        h = hash(_NodeKey(n), h)
+    end
+    return h
 end
 
 # Merge one class of lockstep-identical kernels (indices `js` into
@@ -215,7 +289,27 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
         )
         newscr = _AccScratch(keep ? n_cell : n_inv + n_cell)
         invscr = _AccScratch(keep ? n_inv : 0)
+        # THE MEMBERS' TREES ARE DAGS. A member references one subexpression
+        # object from several places, and a clone that descends into every
+        # reference unfolds them: 162 distinct subtrees became 1.9 million
+        # nodes. `cloned` maps an aligned member tuple to the node already
+        # built for it, so a subexpression the members share at the same places
+        # is cloned once and stays shared. The key is the WHOLE tuple, by
+        # identity: this round's signature does not record sharing, so the
+        # representative repeating a node says nothing about the others. A
+        # repeated tuple names the same descriptors and literals in every
+        # member, so the node built for it — including a lane table, which the
+        # repeat now reads instead of minting a copy — holds the same values.
+        cloned = Dict{_NodeTupleKey, _Node}()
         function clone(nodes::Vector{_Node})::_Node
+            key = _NodeTupleKey(nodes)
+            hit = get(cloned, key, nothing)
+            hit === nothing || return hit
+            out = clone_new(nodes)
+            cloned[key] = out
+            return out
+        end
+        function clone_new(nodes::Vector{_Node})::_Node
             r = nodes[1]; k = r.kind
             if k === _NK_LITERAL
                 vals = Float64[n.literal for n in nodes]
@@ -476,10 +570,11 @@ function _merge_oop_acc_kernels(
 
     groups = Dict{String, Vector{Int}}()
     passthrough = Int[]
+    classes = _OopSigClasses()
     for j in eachindex(kernels)
         s, _why = _oop_merge_kernel_sig(
             kernels[j], _plan_vecable(plans, j),
-            _plan_reduce(plans, j)
+            _plan_reduce(plans, j), classes
         )
         s === nothing ? push!(passthrough, j) : push!(get!(groups, s, Int[]), j)
     end

@@ -253,7 +253,58 @@ end
 
 # ---- access kernels ----------------------------------------------------------
 
+# The structural class number of an access-kernel node (`_DEVNKey`), memoized by
+# node identity. Context-free: the lane context is the rest of `_DEAcckKey`.
+function _de_vn(ctx::_DECtx, nd::_E._Node)::Int
+    id = get(ctx.vn_ids, nd, 0)
+    id != 0 && return id
+    ch = Int[_de_vn(ctx, c) for c in nd.children]
+    key = _DEVNKey(
+        nd.kind, nd.op, reinterpret(UInt64, nd.literal), nd.idx, nd.sym,
+        nd.payload, ch
+    )
+    id = get!(ctx.vn_keys, key, length(ctx.vn_keys) + 1)
+    ctx.vn_ids[nd] = id
+    return id
+end
+
+# ONE VALUE PER SUBEXPRESSION AND LANE CONTEXT. A kernel's trees are DAGs — a
+# template expansion (an interpolation's index count, a calendar term) is
+# referenced from several places, or repeated as structurally identical
+# subtrees — and a walk that emits every reference emits the unfolded tree: a
+# program many times the size of the expression, which the pipeline then has to
+# find the duplicates in pairwise, on the forward program and again on every
+# derivative of it. An interior node is therefore emitted once per (structural
+# class, lane context) of the kernel being run and its value reused after.
+#
+# Why that cannot change a value: within one kernel run the walk is a pure
+# function of the node's structure and of its context — the kernel's descriptor
+# table and lane plan, and the two CSE tiers, each slot of which is assigned one
+# value (a subcall site re-assigns its sub-kernel's cell tier, to the values this
+# memo already holds or to re-emitted leaves equal to them). The slot map a
+# state read resolves against is not written until the kernel's one write, at
+# the end of its run, and the memo is emptied at the start of the next one.
+# A reduce body is emitted under the E-lane plan and so never takes a value
+# emitted under the cell plan.
+#
+# A leaf or a cache read is one interned constant, one read, or a tier slot:
+# nothing to save, so it goes straight to the walk.
 function _de_acck(
+        ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan,
+        invvals::Vector{_DEVal}, cellvals::Vector{_DEVal},
+        sub::_DESubRT
+    )::_DEVal
+    (isempty(nd.children) || nd.kind === _E._NK_CACHED) &&
+        return _de_acck_emit(ctx, nd, K, plan, invvals, cellvals, sub)
+    key = _DEAcckKey(_de_vn(ctx, nd), K, plan, cellvals)
+    v = get(ctx.acck, key, nothing)
+    v === nothing || return v
+    v = _de_acck_emit(ctx, nd, K, plan, invvals, cellvals, sub)
+    ctx.acck[key] = v
+    return v
+end
+
+function _de_acck_emit(
         ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan,
         invvals::Vector{_DEVal}, cellvals::Vector{_DEVal},
         sub::_DESubRT
@@ -392,6 +443,7 @@ function _de_run_kernel!(
             "(an unsupported descriptor kind or an unbounded reduce) and lower " *
             "that instead."
     )
+    empty!(ctx.acck)
     sub = _de_build_subrt(plan)
     for j in eachindex(sub.subs)
         S = sub.subs[j]
