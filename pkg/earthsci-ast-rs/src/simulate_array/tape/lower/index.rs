@@ -7,8 +7,9 @@ use super::*;
 impl<'m> TapeBuilder<'m> {
     // -- index (gather) -------------------------------------------------------
 
-    /// Compile-time mirror of `eval_vec_index`, reusing the overlay's OWN axis
-    /// classifier. Everything is static except the source data.
+    /// Lower an `index` gather, classifying each axis with the shared axis
+    /// analyses ([`classify_axis_role`]). Everything is static except the
+    /// source data.
     pub(super) fn lower_index(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         if bx.tuple != 0 {
             return self.lower_tuple_index(node, bx);
@@ -33,8 +34,7 @@ impl<'m> TapeBuilder<'m> {
         if let Some(v) = self.lower_index_of_makearray(node, bx)? {
             return Ok(v);
         }
-        // See the same guard in `eval_vec_index`: a const-array gather may not
-        // use the ghost-0 fill (§5.5.5).
+        // A const-array gather may not use the ghost-0 fill (§5.5.5).
         let const_base = self.const_arrays.is_const_base(&node.args[0]);
         // An inline array literal as the base is read whole, as the oracle's
         // gather reads it (the payload's own array): one CONST-section literal. It
@@ -182,7 +182,7 @@ impl<'m> TapeBuilder<'m> {
             return Ok(self.emit_load_elem(&arg0, &fixed));
         }
 
-        // Per-axis copy segments, verbatim from `eval_vec_index`.
+        // Per-axis copy segments.
         let mut axis_segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = SmallVec::new();
         for a in 0..out_ndim {
             let Some((orig_d, ax)) = &mapped[a] else {
@@ -1223,7 +1223,7 @@ impl<'m> TapeBuilder<'m> {
     /// Emit one [`Instr::Gather`] of `src` into the box `shape`@`origin`.
     /// `mapped_src[j]` is the source dim the `j`-th mapped output axis reads;
     /// the reduction schedule — fixed axes descending, then the permutation of
-    /// the mapped source axes into output order — is `eval_vec_index`'s.
+    /// the mapped source axes into output order — is [`GatherPlan`]'s.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_gather(
         &mut self,

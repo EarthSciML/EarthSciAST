@@ -21,8 +21,8 @@
 //! precompiled constant-shift gathers, whose sources are always values
 //! defined OUTSIDE the group), so element iteration order cannot change any
 //! output bit. `Select` keeps evaluate-both semantics (both operands are
-//! computed per element, then picked), exactly like the vectorized
-//! `vec_select`.
+//! computed per element, then picked), exactly like the unfused
+//! instruction.
 //!
 //! ## Soundness of the reordering
 //!

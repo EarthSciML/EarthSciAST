@@ -115,26 +115,20 @@ pub(super) fn scalar_combine_op(reduce: ReduceKind) -> BinCode {
     }
 }
 
-/// An operator resolved to the [`eval_vec_op`] arm that handles it, plus (for
-/// the kernel families) the element kernel's code.
+/// An operator resolved to the whole-array family that handles it, plus (for
+/// the kernel families) the element kernel's code. The tape lowering
+/// (`TapeBuilder::lower_op`) and the oracle's `nested_faq_box` dispatch on
+/// this code, so an operator name is matched once per AST node.
 ///
-/// `eval_vec_op` used to select its arm with `match node.op.as_str()` — a chain
-/// of string comparisons run on EVERY node visit, and the enclosed kernel
-/// families then re-matched the same name one to three more times
-/// (`vec_combine`, `binary_kernel`, `scalar_compare`). A perf profile of the
-/// solve put ~2.5% in that chain (`__memcmp_evex_movbe` 1.14% self, plus the
-/// inlined `str PartialEq::eq` under `eval_vec_op`). Commit 857c2768 removed the
-/// per-ELEMENT case; this removes the per-NODE case.
-///
-/// The mapping is pinned to the arm structure it replaces by
+/// The mapping is pinned operator by operator by
 /// `vec_op_code_matches_the_dispatch_arms`, and each kernel code is pinned to
 /// the per-cell oracle's `apply_binary`/`apply_unary` by the equivalence tests
 /// in [`super::eval`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum VecOp {
-    /// `+ - * / ^ min max atan2 and or` — n-ary left fold through [`vec_combine`].
+    /// `+ - * / ^ min max atan2 and or` — n-ary left fold of the binary kernel.
     Arith(BinCode),
-    /// `== != < <= > >=` — strictly binary, same [`vec_combine`] kernel.
+    /// `== != < <= > >=` — strictly binary, through the same binary kernels.
     Cmp(BinCode),
     /// The 21 unary transcendental/rounding maps plus `not`.
     Unary(UnCode),
@@ -149,12 +143,13 @@ pub(super) enum VecOp {
     Broadcast,
     /// The precision-boundary marker (`crate::precision_infer::MARKER_OP`).
     Precision,
-    /// Everything the overlay does not vectorize (→ per-cell oracle).
+    /// Everything with no whole-array family here: the tape declines it, and
+    /// the per-cell oracle evaluates it.
     Unsupported,
 }
 
-/// Resolve an operator name to its [`eval_vec_op`] arm. ONE string match per AST
-/// node; every dispatch below it is on the returned code.
+/// Resolve an operator name to its [`VecOp`]. ONE string match per AST node;
+/// every dispatch below it is on the returned code.
 pub(super) fn vec_op_code(op: &str) -> VecOp {
     use crate::op_registry::{CoreOp, OtherOp as O};
     let Some(core) = CoreOp::from_name(op) else {
@@ -222,7 +217,7 @@ pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
 
 /// The enclosing binding, if any, that a nested `faq` genuinely depends
 /// on — the precondition for hoisting it out of the enclosing per-cell loop
-/// (see [`eval_vec_nested_aggregate`]). `None` means the hoist is sound.
+/// (the tape's `lower_nested_aggregate`). `None` means the hoist is sound.
 ///
 /// An enclosing name that the nested aggregate REBINDS with one of its own
 /// binders (its `output_idx` symbols or its contracted indices) is *shadowed*:
@@ -230,10 +225,10 @@ pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
 /// index, never the enclosing one, so evaluating the node exactly once over its
 /// own box computes precisely what the per-cell oracle computes. The oracle
 /// agrees by construction — [`eval_faq`] saves and rebinds exactly
-/// `idx_names ∪ contract_names` around its body walk (`saved_binds`) — and both
-/// whole-array resolvers ([`eval_vec_variable`] and the tape's `resolve_var`)
-/// consult the aggregate's own box symbols / contraction binds BEFORE any
-/// state, observed or parameter of the same name.
+/// `idx_names ∪ contract_names` around its body walk (`saved_binds`) — and
+/// the tape's whole-array resolver (`resolve_var`) consults the aggregate's
+/// own box symbols / contraction binds BEFORE any state, observed or
+/// parameter of the same name.
 ///
 /// Every NON-shadowed name still disqualifies the hoist, and that half is
 /// load-bearing: the nested box drops the enclosing symbols entirely, so such a
@@ -300,7 +295,7 @@ pub(super) fn region_value_view<'v>(
 }
 
 /// How a single `index(...)` axis expression maps output positions to source
-/// positions along that axis, for the vectorized path.
+/// positions along that axis, for a whole-array gather.
 pub(super) enum AxisIndex {
     /// `sym ± k` with unit coefficient and a constant integer offset `k`
     /// (bound contraction indices folded in): a shifted slice. Out-of-extent
@@ -364,9 +359,8 @@ pub(super) fn classify_axis_index(expr: &Expr, sym: &str, bx: &VecBox) -> Option
 /// Parse `expr` as `1·sym + k` and return the integer offset `k`. Sub-terms not
 /// mentioning `sym` must fold to integer constants — literals and bound
 /// contraction indices ([`VecBox::cbind`]). `None` if `expr` is not affine in
-/// `sym` with unit coefficient and an integer constant part. Generalizes the
-/// former literal-only `sym ± int` parser so an einsum offset `(i+1)+k` folds
-/// the bound `k` into the shift.
+/// `sym` with unit coefficient and an integer constant part. An einsum offset
+/// `(i+1)+k` thus folds the bound `k` into the shift.
 pub(super) fn affine_offset_in(expr: &Expr, sym: &str, bx: &VecBox) -> Option<i64> {
     let (coeff, konst) = affine_terms(expr, sym, bx)?;
     if coeff == 1 { Some(konst) } else { None }
@@ -399,26 +393,22 @@ pub(super) enum AxisRole {
 /// single walk: which output symbol (if any) it is affine in, and with what
 /// shift — or that it is a constant select.
 ///
-/// [`eval_vec_index`] used to ask [`classify_axis_index`] once per (source axis
-/// × not-yet-claimed output symbol) pair and then [`const_index_value`] once
-/// more, so a rank-3 box re-walked the same axis expression up to four times,
-/// each walk comparing every variable leaf against one candidate name. That
-/// re-derivation was ~9% of a vectorized RHS profile (`affine_terms`), and it is
-/// the same answer every RHS call. Resolving the symbol *from* the expression
-/// instead of guessing it does one walk regardless of rank.
-///
-/// Equivalent to the old search, arm for arm:
+/// Resolving the symbol *from* the expression does one walk regardless of
+/// rank, where a per-candidate search — `classify_axis_index` against each
+/// not-yet-claimed output symbol, then `const_index_value` — re-walks the
+/// expression once per candidate. The two are equivalent, arm for arm, and
+/// the `axis_classifier_equivalence` tests pin it:
 ///   * an expression affine in `syms[a]` with unit coefficient mentions no other
-///     output symbol (the old walk returned `None` the moment it met an unbound
-///     one), so the old search could only ever have claimed `a` — and it stopped
+///     output symbol (the per-candidate walk returns `None` the moment it meets
+///     an unbound one), so the search can only ever claim `a` — and it stops
 ///     at the first success, which is that one;
-///   * an expression affine in an ALREADY-claimed symbol failed for every other
-///     candidate and then failed `const_index_value` too (a bare output symbol
-///     is not a bound contraction index), i.e. it bailed — as it does here;
+///   * an expression affine in an ALREADY-claimed symbol fails for every other
+///     candidate and then fails `const_index_value` too (a bare output symbol
+///     is not a bound contraction index), i.e. it bails — as it does here;
 ///   * a wrap expression is an `ifelse`, for which the affine walk returns
 ///     `None`, so trying affine first and wrap second is order-independent;
 ///   * a constant / bound-contraction axis has coefficient 0 in every symbol, so
-///     it never classified as a map under either rule.
+///     it never classifies as a map under either rule.
 pub(super) fn classify_axis_role(expr: &Expr, bx: &VecBox) -> Option<AxisRole> {
     if let Some((sym, coeff, konst)) = affine_terms_any(expr, bx) {
         return match (sym, coeff) {
@@ -503,7 +493,7 @@ pub(super) fn affine_terms_any(expr: &Expr, bx: &VecBox) -> Option<(Option<usize
                     } else {
                         // A coefficient factor that itself mentions a symbol
                         // (`(i - i)·u`) is not linear in that symbol; the
-                        // per-symbol walk folded it to the constant 0 with the
+                        // per-symbol walk folds it to the constant 0 with the
                         // symbol already accounted, so keep the same reading:
                         // only its constant part multiplies.
                         if s.is_some() {
@@ -522,10 +512,10 @@ pub(super) fn affine_terms_any(expr: &Expr, bx: &VecBox) -> Option<(Option<usize
     }
 }
 
-/// [`parse_wrap_axis`] with the symbol resolved from the expression: the wrapped
+/// `parse_wrap_axis` with the symbol resolved from the expression: the wrapped
 /// `inner` decides which output axis the roll applies to, and every other branch
 /// of the idiom must agree with it. See [`classify_axis_role`] for why deriving
-/// the symbol matches the old per-candidate search exactly.
+/// the symbol matches the per-candidate search exactly.
 pub(super) fn parse_wrap_axis_any(expr: &Expr, bx: &VecBox) -> Option<(usize, AxisIndex)> {
     /// `expr` must be `1·syms[a] + k`; returns `k`. Mirrors
     /// [`affine_offset_in`]'s unit-coefficient requirement.
@@ -704,13 +694,12 @@ fn const_index_value(e: &Expr, bx: &VecBox) -> Option<i64> {
 #[cfg(test)]
 mod axis_classifier_equivalence {
     //! [`classify_axis_role`] resolves an `index(...)` axis expression's role in
-    //! ONE walk, where [`eval_vec_index`] used to try [`classify_axis_index`]
-    //! against each not-yet-claimed output symbol in turn and then
-    //! [`const_index_value`]. The replacement rests on an argument (an
-    //! expression affine in one output symbol cannot classify against any
-    //! other), not on the compiler — so pin it: over a corpus of axis
-    //! expressions and every subset of already-claimed output axes, the two
-    //! classifiers must agree exactly.
+    //! ONE walk, equivalent to trying [`classify_axis_index`] against each
+    //! not-yet-claimed output symbol in turn and then [`const_index_value`].
+    //! The equivalence rests on an argument (an expression affine in one
+    //! output symbol cannot classify against any other), not on the compiler
+    //! — so pin it: over a corpus of axis expressions and every subset of
+    //! already-claimed output axes, the two classifiers must agree exactly.
     use super::*;
     use serde_json::json;
 
@@ -734,7 +723,7 @@ mod axis_classifier_equivalence {
         }
     }
 
-    /// The superseded search: try each UNCLAIMED output symbol in order
+    /// The per-candidate search: try each UNCLAIMED output symbol in order
     /// (affine, then wrap), then fall back to a constant select.
     fn old_role(e: &Expr, bx: &VecBox, claimed: &[bool]) -> Role {
         let hit = (0..bx.syms.len()).find_map(|a| {
@@ -752,7 +741,7 @@ mod axis_classifier_equivalence {
         }
     }
 
-    /// The single-walk classifier, read through [`eval_vec_index`]'s own
+    /// The single-walk classifier, read through the gather lowering's
     /// acceptance rule (a map onto an already-claimed axis is a bail).
     fn new_role(e: &Expr, bx: &VecBox, claimed: &[bool]) -> Role {
         match classify_axis_role(e, bx) {
@@ -910,18 +899,13 @@ mod axis_classifier_equivalence {
 
 #[cfg(test)]
 mod op_dispatch_equivalence {
-    //! [`eval_vec_op`] used to select its arm by matching the operator NAME
-    //! against a chain of string patterns; it now resolves the name once with
-    //! [`vec_op_code`] and matches on the resulting [`VecOp`]. An
-    //! operator-dispatch rework is exactly the kind of change that silently
-    //! drops an arm — a dropped operator would not fail loudly, it would merely
-    //! bail to the per-cell oracle and make the model slower — so pin the
-    //! mapping against a literal transcription of the pattern lists the match
-    //! arms used to carry.
+    //! [`vec_op_code`] resolves an operator name to its [`VecOp`] family. A
+    //! dropped operator would not fail loudly — it would merely decline to
+    //! the per-cell oracle and make the model slower — so pin the mapping
+    //! against literal lists of the operators each family covers.
     use super::*;
 
-    /// The `match node.op.as_str()` arm lists, verbatim from the pre-refactor
-    /// `eval_vec_op` (git 1a96da9a), in arm order.
+    /// The operators of each kernel family.
     #[rustfmt::skip]
     const ARITH: &[&str] = &["+", "-", "*", "/", "^", "min", "max", "atan2", "and", "or"];
     #[rustfmt::skip]
@@ -933,8 +917,7 @@ mod op_dispatch_equivalence {
         "acosh", "atanh", "not",
     ];
 
-    /// Every operator the old arm list routed somewhere lands in the same arm
-    /// now, and its kernel code resolves to the same element kernel the per-cell
+    /// Every listed operator lands in its family, and its kernel code resolves to the same element kernel the per-cell
     /// oracle uses (`binary_kernel`/`unary_kernel` delegate to the `*_of`
     /// tables, which `binary_kernels_match_apply_binary` /
     /// `unary_kernels_match_apply_unary` pin to `apply_binary`/`apply_unary`).
@@ -976,8 +959,8 @@ mod op_dispatch_equivalence {
         assert_eq!(vec_op_code("broadcast"), VecOp::Broadcast);
     }
 
-    /// The catch-all arm: everything the overlay never vectorized must still
-    /// bail, so the per-cell oracle stays in charge of it. A code accidentally
+    /// The catch-all arm: everything with no whole-array family must stay
+    /// `Unsupported`, so the per-cell oracle stays in charge of it. A code accidentally
     /// added here would route an unsupported construct into a kernel arm.
     #[test]
     fn unvectorized_operators_still_bail() {

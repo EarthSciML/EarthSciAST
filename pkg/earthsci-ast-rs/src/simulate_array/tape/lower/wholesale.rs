@@ -692,8 +692,8 @@ impl<'m> TapeBuilder<'m> {
 
     /// `eval_faq` mirror (a standalone aggregate evaluated wholesale):
     /// prefix scans get the running-fold lowering, rank-0 reductions the
-    /// scalar-reduction lowering, everything else goes through the same overlay
-    /// entry as the compiled rules.
+    /// scalar-reduction lowering, a drivable join gate the tuple-list form, and
+    /// everything else the same [`Self::lower_faq`] as the compiled rules.
     pub(super) fn lower_wholesale_aggregate(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
         let level = self.enter_fault_level(None);
         let v = self.lower_wholesale_aggregate_in_level(node);
@@ -1088,10 +1088,9 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// `eval_makearray` mirror (wholesale): the bounding-box assembly around
-    /// region writes, with the gate production applies before routing to the
-    /// overlay (`shape` non-empty). A region value production sweeps as a
-    /// prefix scan (where it declines the overlay) lowers to the same running
-    /// fold, through [`Self::lower_faq`].
+    /// region writes; an empty bounding-box axis declines to the per-cell
+    /// path. A region value that is a prefix scan lowers to the running fold,
+    /// through [`Self::lower_faq`].
     pub(super) fn lower_wholesale_makearray(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
         let regions: &[Vec<[crate::types::RegionBound; 2]>] =
             node.regions.as_deref().unwrap_or(&[]);

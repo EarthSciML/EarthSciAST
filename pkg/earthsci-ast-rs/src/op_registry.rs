@@ -835,7 +835,7 @@ mod tests {
         assert!(matches!(e, OpError::Arity { got: 0, .. }));
     }
 
-    /// R2: the empty `neg` that panicked on the vectorized path.
+    /// An empty `neg` is an arity error before any evaluator sees it.
     #[test]
     fn empty_neg_is_an_arity_error() {
         assert!(matches!(

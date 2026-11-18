@@ -4,8 +4,8 @@
 //! unflattening, a scalar subscript computed at run time.
 //!
 //! Every case builds with NO fallback rule and is compared bit for bit, with
-//! the fault it latches, against the per-cell oracle and the whole-array
-//! overlay, on both executors, fused and unfused ([`ab`]).
+//! the fault it latches, against the per-cell oracle, on both executors,
+//! fused and unfused ([`ab`]).
 
 use super::taped;
 use super::test_support::{

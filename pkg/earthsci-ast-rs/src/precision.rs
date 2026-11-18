@@ -37,8 +37,9 @@
 //! A thread-local, set by an RAII [`PrecisionGuard`] at each entry point that
 //! has a document (and re-armed from the compiled artifact at each run entry,
 //! so a compiled model carries its own precision). The kernels read it where
-//! they resolve an operator, which is once per AST node on the vectorized and
-//! taped paths and once per cell on the oracle — the same place the operator
+//! they resolve an operator, which is once per AST node on the taped path
+//! and on the oracle's whole-array walks, and once per cell on its per-cell
+//! walks — the same place the operator
 //! name is already being matched.
 //!
 //! # Per-variable overrides

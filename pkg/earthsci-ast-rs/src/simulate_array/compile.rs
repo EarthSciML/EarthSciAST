@@ -4644,8 +4644,7 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
 /// (no contraction, no filter) is replaced by its body with each output
 /// symbol renamed to the enclosing loop symbol. This turns the discretized
 /// `makearray([interior], [aggregate_i(stencil)])` form a §9.6.3 rewrite rule
-/// emits into the scalar-region-value form the vectorized whole-array kernel
-/// consumes directly (the build-time `index(faq, …)` collapse the Julia
+/// emits into the scalar-region-value form the tape lowers directly (the build-time `index(faq, …)` collapse the Julia
 /// reference performs). Values that do not match are left untouched.
 pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) -> ExpressionNode {
     let (Some(regions), Some(values)) = (&node.regions, &node.values) else {
