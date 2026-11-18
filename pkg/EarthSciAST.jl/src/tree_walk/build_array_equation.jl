@@ -200,6 +200,22 @@ function _compile_fill_level(
     return lv
 end
 
+"""
+    _OopFillLevel
+
+One level of materialized-observed fills in the out-of-place product: the
+scalar entries `(extended slot, node)`, the class-merged kernels and one
+vectorization plan per kernel, the prefix folds and the whole-array
+contractions writing the level's slots. A level reads only the levels before it.
+"""
+struct _OopFillLevel
+    scalars::Vector{Tuple{Int, _Node}}
+    kernels::Vector{_AccKernel}
+    plans::Vector{_OopAccPlan}
+    scans::Vector{_ScanFold}
+    contractions::Vector{_ArrayContraction}
+end
+
 # One in-place fill level (`_FillLevel`) as `_fill_obs_levels!` runs it, the
 # kernels class-merged first. The kernel section's emission refuses what it
 # cannot generate, naming the rule open at the time; `section_label` (a

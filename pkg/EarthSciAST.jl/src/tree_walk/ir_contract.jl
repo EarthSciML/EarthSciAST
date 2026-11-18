@@ -50,21 +50,6 @@ _access_kind_name(k::UInt8) = get(_ACCESS_KIND_NAMES, k, "access descriptor kind
 # `_CompiledIR.mat_levels` is a tuple of `_OopFillLevel`s in fill order; a level
 # reads only the levels before it. A backend reads a level through the
 # accessors below.
-"""
-    _OopFillLevel
-
-One level of materialized-observed fills in the out-of-place product: the
-scalar entries `(extended slot, node)`, the class-merged kernels and one
-vectorization plan per kernel, the prefix folds and the whole-array
-contractions writing the level's slots. A level reads only the levels before it.
-"""
-struct _OopFillLevel
-    scalars::Vector{Tuple{Int, _Node}}
-    kernels::Vector{_AccKernel}
-    plans::Vector{_OopAccPlan}
-    scans::Vector{_ScanFold}
-    contractions::Vector{_ArrayContraction}
-end
 
 _mat_scalars(lvl::_OopFillLevel) = lvl.scalars
 _mat_kernels(lvl::_OopFillLevel) = lvl.kernels
