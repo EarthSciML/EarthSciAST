@@ -777,7 +777,7 @@ _scatter_keep_now()::Union{Nothing, IdDict{Any, Nothing}} =
 #
 #   :geom_overlap_drive / :geom_overlap_gate_only / :geom_overlap_none
 #                          — an overlap-gated setup geometry sweep, by how its
-#                            candidate set was driven (geometry_setup.jl)
+#                            candidate set was driven (setup_sweep.jl)
 #   :geom_eq_drive         — an equality-gated setup sweep driven by its key
 #   :setup_map_fastpath_hit / :setup_map_fastpath_miss
 #                          — a setup map compiled once / walked per cell

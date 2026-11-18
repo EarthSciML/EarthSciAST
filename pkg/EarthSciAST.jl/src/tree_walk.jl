@@ -52,7 +52,10 @@ include("tree_walk/cadence_stamp.jl")    #      parameter stamps + the per-build
 include("tree_walk/state_layout.jl")     #      the flat state layout (`StateLayout`)
 include("tree_walk/node.jl")             # §3   the `_Node` IR and its payload types
 include("tree_walk/dag.jl")              #      unique-node walks over a shared DAG
-include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materialization
+include("tree_walk/setup_select.jl")     # §2   which array observeds are setup arrays
+include("tree_walk/setup_sweep.jl")      #      the compiled setup sweep of a build-once faq
+include("tree_walk/setup_materialize.jl") #     materializing the setup arrays
+include("tree_walk/setup_frontdoor.jl")  #      binning coordinates, overlap envelope factors
 include("tree_walk/build_helpers.jl")    #      sentinels, claimed-slot set, small utilities
 include("tree_walk/bounded_const_array.jl") #    const-array boundary policy
 include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk

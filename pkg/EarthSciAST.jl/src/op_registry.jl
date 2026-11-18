@@ -98,7 +98,7 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:ws4_foldable`       → `_WS4_FOLDABLE_ELEMENTWISE_OPS` (tree_walk/build_helpers.jl)
 - `:cse_opaque`         → `_CSE_OPAQUE_OPS`               (tree_walk/scalar_cse.jl)
 - `:stencil_elementwise`→ `_STENCIL_ELEMENTWISE_OPS`      (tree_walk/stencil.jl)
-- `:geo_eval`           → `_GEO_EVAL_OPS`                 (tree_walk/geometry_setup.jl)
+- `:geo_eval`           → `_GEO_EVAL_OPS`                 (tree_walk/setup_materialize.jl)
 - `:mtk_known`          → `_KNOWN_OPS`                    (ext/mtk_ext/export.jl)
 - `:array_producer`     → `_ARRAY_PRODUCER_OPS`           (shape_promotion.jl)
 - `:self_indexed`       → `_SELF_INDEXED_OPS`             (shape_promotion.jl)
@@ -128,7 +128,7 @@ hand:
   specially; CSE never hoists through them.
 - `_STENCIL_ELEMENTWISE_OPS` (src/tree_walk/stencil.jl) — pure-elementwise ops
   the symbolic stencil fast path whitelists.
-- `_GEO_EVAL_OPS` (src/tree_walk/geometry_setup.jl) — the exact vocabulary of
+- `_GEO_EVAL_OPS` (src/tree_walk/setup_materialize.jl) — the exact vocabulary of
   the setup-time geometry language (compiled by `_geo_compile`,
   src/tree_walk/geometry_compile.jl).
 - `_KNOWN_OPS` (ext/mtk_ext/export.jl) — ops the MTK exporter recognizes;

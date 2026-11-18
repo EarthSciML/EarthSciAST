@@ -4,7 +4,7 @@
 #
 # A deterministic broad phase that returns a CONSERVATIVE SUPERSET of the
 # (query × cell) index pairs whose 2D bounding boxes (envelopes) intersect. The
-# `faq` overlap join's candidate set (tree_walk/geometry_setup.jl) is built on it.
+# `faq` overlap join's candidate set (tree_walk/setup_sweep.jl) is built on it.
 #
 # `broad_phase_candidates(query_envs, cell_envs; eps)` tests envelope
 # intersection pair by pair (with a uniform-grid binning above a size cutoff,

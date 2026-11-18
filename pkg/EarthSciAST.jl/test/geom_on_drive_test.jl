@@ -1,7 +1,7 @@
 # The bin-EQUALITY broad phase at SETUP — a `join.on` key pair drives the
 # geometry sweep from its key-equality matches instead of testing every tuple
 # of the output × contracted product (`_geo_equality_drive`,
-# tree_walk/geometry_setup.jl; `_equality_match_index`, src/broad_phase.jl).
+# tree_walk/setup_sweep.jl; `_equality_match_index`, src/broad_phase.jl).
 #
 # The driver is a pure optimization: the driven sweeps still apply the gate to
 # every tuple they visit, a MAP writes the same cells, and a contraction folds

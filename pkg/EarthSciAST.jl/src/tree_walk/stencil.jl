@@ -245,7 +245,7 @@ function _select_region(m::OpExpr, kvals::Vector{Int})
 end
 
 # Loop-invariant context for the `_stencilize` walk (the `_GeoCtx` precedent,
-# tree_walk/geometry_setup.jl): the output loop-index names, the lane-recipe
+# tree_walk/setup_sweep.jl): the output loop-index names, the lane-recipe
 # accumulator (appended in traversal order — recipe k IS lane sentinel k), the
 # REPRESENTATIVE cell's index environment (consulted ONLY to pick
 # `index(makearray)` regions — every cell sharing a branch resolves to the same
