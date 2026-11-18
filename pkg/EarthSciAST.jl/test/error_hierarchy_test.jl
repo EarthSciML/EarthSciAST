@@ -164,8 +164,7 @@ include("testutils.jl")
 
     @testset "every SimulateError and RefreshError raise passes a code" begin
         # The one-argument constructor leaves `code` empty; every raise site
-        # names a registered code instead. The data-binding extension's own
-        # RefreshErrors are outside this guard.
+        # names a registered code instead.
         root = joinpath(@__DIR__, "..")
         uncoded = String[]
         function scan(ex, name, file, line)
@@ -184,7 +183,7 @@ include("testutils.jl")
             end
             return nothing
         end
-        for (name, dirs) in ((:SimulateError, ("src", "ext")), (:RefreshError, ("src",))),
+        for (name, dirs) in ((:SimulateError, ("src", "ext")), (:RefreshError, ("src", "ext"))),
                 dir in dirs, (d, _, fs) in walkdir(joinpath(root, dir)), f in fs
             endswith(f, ".jl") || continue
             p = joinpath(d, f)
