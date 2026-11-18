@@ -686,7 +686,7 @@ function _make_rhs_oop(
     # fields — a group count of zero means everything runs the scalar path.
     rhs_batches = _oop_batch_scalars(rhs_list)
     mat_batches = map(
-        lvl -> _oop_batch_scalars(lvl[1]::Vector{Tuple{Int, _Node}}),
+        lvl -> _oop_batch_scalars(lvl.scalars),
         mat_levels
     )
     # The buffers container: every live forcing buffer this build registered —

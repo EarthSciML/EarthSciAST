@@ -44,19 +44,17 @@ const _SETUP_FILL_TIERS = (:affine, :scan, :array_contraction_codegen)
 """
     _SetupFill
 
-A compiled fill over the box `lo:hi` (inclusive, per dimension): the kernel
-section, the prefix-scan post-passes and the whole-array contraction section
-the cascade produced for the fill equation, and the parameter tuple they read.
+A compiled fill over the box `lo:hi` (inclusive, per dimension): the fill
+level (`_FillLevel`) the cascade produced for the fill equation, and the
+parameter tuple it reads.
 [`_run_setup_fill`](@ref) runs it once and returns the buffer, column-major
 over the box (first index fastest).
 """
-struct _SetupFill{S, C, P}
+struct _SetupFill{L <: _FillLevel, P}
     lo::Vector{Int}
     hi::Vector{Int}
     n::Int
-    section::S
-    scans::Vector{_ScanFold}
-    contractions::C
+    level::L
     p::P
     # The cascade tier the fill equation landed on (`_SETUP_FILL_TIERS`).
     tier::Symbol
@@ -129,17 +127,18 @@ function _compile_setup_fill(
     rec = _BuildRecord(_compiler_plan_now())
     return _with_build_record(rec) do
         try
-            ce = _compile_derivative_equations(Equation[eq], Dict{String, ASTExpr}(), cs, n)
-            (isempty(ce.scalar_entries) && isempty(ce.percell)) || return nothing
+            lv = _compile_fill_level(
+                (_SETUP_FILL_NAME,), :dynamic, _ -> Equation[eq], _ -> nothing,
+                Dict{String, ASTExpr}(), cs, n
+            )
+            isempty(lv.scalars) || return nothing
             tiers = Symbol[r.tier for r in rec.rules]
             (length(tiers) == 1 && tiers[1] in _SETUP_FILL_TIERS) || return nothing
-            merged, _ = _merge_acc_kernel_classes(ce.kernels)
-            section = _make_kernel_section(merged)
-            _section_interprets(section) && return nothing
-            return _SetupFill(
-                box[1], box[2], n, section, ce.scan_folds,
-                _make_contraction_section(ce.contractions), p, tiers[1]
+            level = _inplace_fill_level(
+                lv.scalars, lv.kernels, lv.scans, lv.contractions, lv.recurrences
             )
+            _section_interprets(level.section) && return nothing
+            return _SetupFill(box[1], box[2], n, level, p, tiers[1])
         catch err
             # A document-level refusal (an `EarthSciASTError`, a strict
             # compiler's refusal among them) is a decline, and the caller's
@@ -169,9 +168,7 @@ function _run_setup_fill(sf::_SetupFill)
     buf = zeros(Float64, sf.n)
     # The fill reads no state, so its `u` is the buffer itself, as an observed
     # fill level's is.
-    sf.section(buf, buf, sf.p, 0.0, Float64)
-    isempty(sf.scans) || _apply_scan_folds!(buf, sf.scans)
-    _apply_array_contractions!(buf, buf, sf.p, 0.0, sf.contractions, Float64)
+    _fill_obs_levels!((sf.level,), buf, sf.p, 0.0, Float64)
     return buf
 end
 

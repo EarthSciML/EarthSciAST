@@ -200,9 +200,8 @@ function _compile_fill_level(
     return lv
 end
 
-# One in-place fill level as `_fill_obs_levels!` runs it:
-# `(scalars, kernel section, scans, contraction section, recurrence sweeps)`,
-# the kernels class-merged first. The kernel section's emission refuses what it
+# One in-place fill level (`_FillLevel`) as `_fill_obs_levels!` runs it, the
+# kernels class-merged first. The kernel section's emission refuses what it
 # cannot generate, naming the rule open at the time; `section_label` (a
 # function of the build, `f -> …`) opens the right one around it.
 function _inplace_fill_level(
@@ -211,8 +210,8 @@ function _inplace_fill_level(
     )
     merged, _ = _merge_acc_kernel_classes(kernels)
     section = section_label(() -> _make_kernel_section(merged; nst = nst))
-    return (
-        scalars, section, scans, _make_contraction_section(contractions), Tuple(recurrences),
+    return _FillLevel(
+        scalars, section, scans, _make_contraction_section(contractions), Tuple(recurrences)
     )
 end
 

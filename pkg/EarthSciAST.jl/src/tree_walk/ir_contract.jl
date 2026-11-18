@@ -47,23 +47,30 @@ _access_kind_name(k::UInt8) = get(_ACCESS_KIND_NAMES, k, "access descriptor kind
 
 # ---- one materialization level -----------------------------------------------
 #
-# `_CompiledIR.mat_levels` is a tuple of levels in fill order; a level reads only
-# the levels before it. Each level is the 5-tuple the build assembles
-# (build_pipeline.jl, `form === :oop`):
-#
-#   1. scalars       `Vector{Tuple{Int, _Node}}`: (extended slot, spine) entries
-#   2. kernels       `Vector{_AccKernel}`, class-merged
-#   3. plans         `Vector{_OopAccPlan}`, aligned with `kernels`
-#   4. scans         prefix folds (`_ScanFold`) writing this level's slots
-#   5. contractions  whole-array contractions writing this level's slots
-#
-# Read a level through these accessors rather than by position.
+# `_CompiledIR.mat_levels` is a tuple of `_OopFillLevel`s in fill order; a level
+# reads only the levels before it. A backend reads a level through the
+# accessors below.
+"""
+    _OopFillLevel
 
-_mat_scalars(lvl) = lvl[1]
-_mat_kernels(lvl) = lvl[2]
-_mat_plans(lvl) = lvl[3]
-_mat_scans(lvl) = lvl[4]
-_mat_contractions(lvl) = lvl[5]
+One level of materialized-observed fills in the out-of-place product: the
+scalar entries `(extended slot, node)`, the class-merged kernels and one
+vectorization plan per kernel, the prefix folds and the whole-array
+contractions writing the level's slots. A level reads only the levels before it.
+"""
+struct _OopFillLevel
+    scalars::Vector{Tuple{Int, _Node}}
+    kernels::Vector{_AccKernel}
+    plans::Vector{_OopAccPlan}
+    scans::Vector{_ScanFold}
+    contractions::Vector{_ArrayContraction}
+end
+
+_mat_scalars(lvl::_OopFillLevel) = lvl.scalars
+_mat_kernels(lvl::_OopFillLevel) = lvl.kernels
+_mat_plans(lvl::_OopFillLevel) = lvl.plans
+_mat_scans(lvl::_OopFillLevel) = lvl.scans
+_mat_contractions(lvl::_OopFillLevel) = lvl.contractions
 
 # ---- the gather rules ----------------------------------------------------------
 

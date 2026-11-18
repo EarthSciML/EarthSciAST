@@ -1186,14 +1186,14 @@ end
         @test dgO.n_scan_folds == 1
         @test isempty(getfield(rO, :scan_folds))
         matO = getfield(rO, :mat_levels)
-        @test sum(length(lvl[4]) for lvl in matO) == 1
+        @test sum(length(lvl.scans) for lvl in matO) == 1
         # The uncovered slot: the fold's last position in its (single) lane, and
         # no fill kernel of the level lists it as an output.
-        SO = first(lvl for lvl in matO if !isempty(lvl[4]))[4][1]
+        SO = first(lvl for lvl in matO if !isempty(lvl.scans)).scans[1]
         @test SO.len == n + 1 && length(SO.slots) == n + 1 && !SO.inclusive
         lastslot = SO.slots[end]
         @test lastslot > getfield(rO, :n_states)
-        @test !any(lastslot in pl.out_slots for lvl in matO for pl in lvl[3])
+        @test !any(lastslot in pl.out_slots for lvl in matO for pl in lvl.plans)
         samples = [(copy(u0O), 0.0), (u0O .* 0.7 .+ 0.11, 9.5)]
         _de_compare("scan_staggered_obs", foO, fiO!, pO, samples; census = false)
     end

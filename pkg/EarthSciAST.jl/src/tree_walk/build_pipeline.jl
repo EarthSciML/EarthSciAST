@@ -892,10 +892,10 @@ function _build_compile_evaluator(
             merged, _ = _merge_acc_kernel_classes(lv.kernels)
             push!(
                 mat_levels_oop,
-                (
+                _OopFillLevel(
                     lv.scalars, merged,
                     _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
-                    lv.scans, lv.contractions,
+                    lv.scans, lv.contractions
                 )
             )
         else
