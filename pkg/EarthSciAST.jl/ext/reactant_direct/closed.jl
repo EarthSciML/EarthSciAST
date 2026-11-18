@@ -35,7 +35,7 @@
 # runtime contraction (`_NK_CONTRACTION`) and, unrolled at build, an n-ary `+`
 # whose first operand is the `+0.0` seed. A fold of any other shape — another
 # seed, ⊕, body, branch literal or comparison, a key that is not host data, a
-# query that differs between terms — is not this shape and lowers as before.
+# query that differs between terms — is not this shape and lowers generically.
 
 # ---- interval walk -----------------------------------------------------------
 

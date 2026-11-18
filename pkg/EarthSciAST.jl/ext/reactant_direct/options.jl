@@ -31,10 +31,9 @@ they exist as measurement levers and negative controls.
   ext/reactant_knot_count.jl.
 
 `DirectEmitOptions(env)` reads `ESM_DIRECT_EMIT_READ`,
-`ESM_DIRECT_GATHER_MAX_PIECES`, `ESM_DIRECT_GATHER_BASE_MAX`,
-`ESM_DIRECT_GATHER_INDEX_BITS`, `ESM_DIRECT_EMIT_REDUCE_MIN`, `ESS_RX_LOCATE` and
-`ESS_RX_LOCATE_LADDER_MAX` from `env` (normally `ENV`); an unset variable keeps
-the default. This is the only place the emitter reads the environment. A value
+`ESM_DIRECT_GATHER_INDEX_BITS`, `ESS_RX_LOCATE` and `ESS_RX_LOCATE_LADDER_MAX`
+from `env` (normally `ENV`); an unset variable keeps the default, and the other
+fields take their defaults. This is the only place the emitter reads the environment. A value
 that does not parse, or names no mode, raises `DirectEmitError`.
 """
 Base.@kwdef struct DirectEmitOptions
@@ -90,18 +89,9 @@ function DirectEmitOptions(env::AbstractDict)
     d = DirectEmitOptions()
     return DirectEmitOptions(;
         read = something(_de_env_sym(env, "ESM_DIRECT_EMIT_READ"), d.read),
-        gather_max_pieces = something(
-            _de_env_int(env, "ESM_DIRECT_GATHER_MAX_PIECES", "gather_max_pieces"),
-            d.gather_max_pieces
-        ),
-        gather_base_max = _de_env_int(env, "ESM_DIRECT_GATHER_BASE_MAX", "gather_base_max"),
         gather_index_bits = something(
             _de_env_int(env, "ESM_DIRECT_GATHER_INDEX_BITS", "gather_index_bits"),
             d.gather_index_bits
-        ),
-        reduce_min = something(
-            _de_env_int(env, "ESM_DIRECT_EMIT_REDUCE_MIN", "reduce_min"),
-            d.reduce_min
         ),
         locate = something(_de_env_sym(env, "ESS_RX_LOCATE"), d.locate),
         locate_ladder_max = something(

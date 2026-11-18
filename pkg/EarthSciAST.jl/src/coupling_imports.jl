@@ -176,9 +176,9 @@ function _rewrite_entry!(entry::AbstractDict, structfn, exprfn)
                 haskey(trig, "expression")
             trig["expression"] = _rewrite_expr!(trig["expression"], exprfn)
         end
-        # esm 1.0.0: an event carries neither a `functional_affect` handler
-        # descriptor nor a `discrete_parameters` list — both moved onto the
-        # parameter they write (esm-spec §5.4, §5.5).
+        # An event carries neither a `functional_affect` handler descriptor nor
+        # a `discrete_parameters` list — both live on the parameter they write
+        # (esm-spec §5.4, §5.5).
     end
     return entry
 end
@@ -268,7 +268,7 @@ _node_subsystems(::Any) = nothing
 
 Resolve a `bind` value as a component path (esm-spec §10.10.1) — a system node,
 walking `models`/`reaction_systems` then nested `subsystems`, never terminating
-on a variable. A data source is a registry entry from 1.0.0, not a component,
+on a variable. A data source is a registry entry, not a component,
 so it can never be bound to a role.
 """
 function _resolves_to_component(file::EsmFile, value::AbstractString)::Bool

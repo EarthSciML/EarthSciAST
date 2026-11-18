@@ -12,7 +12,7 @@
 # its own ONE-ELEMENT read.
 #
 # The `:oop` build already groups them: `_oop_batch_scalars` (src/tree_walk/
-# oop.jl, ess-oop-batch) buckets the entries by a canonical structural signature
+# oop.jl) buckets the entries by a canonical structural signature
 # that wildcards exactly the lane-varying leaves, lowers each bucket ONCE to a
 # lane-batched tree (`_OopBatchNode`) and leaves everything it could not group
 # in `rest`. This file emits each group as whole-lane operations over its lane
@@ -41,8 +41,8 @@
 # this file emits nothing at all.
 #
 # ORDER. `rest` first, then the groups, exactly as the grouping's own order
-# runs them. The reorder is sound for the reason stated at the ess-oop-batch
-# section header: entries within one surface write DISJOINT slots and never read
+# runs them. The reorder is sound for the reason stated at `_oop_batch_scalars`:
+# entries within one surface write DISJOINT slots and never read
 # each other, so it moves only writes.
 
 # ---- the per-lane host fold --------------------------------------------------

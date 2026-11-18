@@ -289,7 +289,7 @@ function _document_declared_names(file::EsmFile)::Set{String}
             end
         end
     end
-    # esm 1.0.0: a data source declares no variables of its own — the consuming
+    # A data source declares no variables of its own — the consuming
     # PARAMETER does, and it is already collected from its model above
     # (esm-spec §8).
     return names
@@ -534,8 +534,8 @@ sidecar fields (integral `lower`/`upper` bounds, a faq body
 `expr`, a `filter` predicate, `makearray` `values`, an aggregate grouping `key`, and `apply_expression_template` `bindings` values),
 matching Rust `for_each_child` / Go `validateExprNodeChildren`:
 
-1. `operator_apply` operator names are always flagged (the top-level
-   `operators` block was removed in esm-spec v0.3.0 §9, so they never resolve).
+1. `operator_apply` operator names are always flagged (the format has no
+   top-level `operators` block, esm-spec §9, so they never resolve).
 
 2. When `scope` is supplied, each bare (non-dotted) `VarExpr` that is not in
    scope is reported as `undefined_variable`. In scope = a name in `scope`
@@ -856,8 +856,8 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         end
 
     elseif isa(coupling_entry, CouplingOperatorApply)
-        # The top-level `operators` block was removed in esm-spec v0.3.0 (§9
-        # closure), so the referenced operator can never resolve — flag it.
+        # The format has no top-level `operators` block (esm-spec §9 closure),
+        # so the referenced operator can never resolve — flag it.
         _report!(
             errors, ERROR_CODES.UNDEFINED_OPERATOR,
             "$path/operator",

@@ -102,12 +102,10 @@ const BINDING = "julia"
 # which then raises the `compiler_unavailable` this adapter reports verbatim.
 #
 # CALLED AT TOP LEVEL, not from `main`. A package loaded by `@eval` defines its
-# methods in a NEW world age, and a frame that is already running cannot call
-# them — from inside `main` every fixture failed with "method too new to be
-# called from this world context" naming the extension's own entry point, which
-# reads as a broken binding rather than as this file calling too early. Each
-# top-level statement gets the current world, so loading here and calling `main`
-# on the next line is what makes the extension visible.
+# methods in a NEW world age, which a frame that is already running cannot call
+# ("method too new to be called from this world context"). Each top-level
+# statement gets the current world, so loading here and calling `main` on the
+# next line is what makes the extension visible.
 function load_compiler_runtime(compiler)
     if compiler == "mtk"
         @eval begin
@@ -244,7 +242,7 @@ end
 # against the whole flattened document, where that locality is gone. A key whose
 # `<model>.<key>` form names a real variable of the flattened system is rewritten
 # to it, and one that does not passes through untouched so `esm_problem` reports
-# on it exactly as it would have. This is what `_scope_to_component` does for the
+# on it. This is what `_scope_to_component` does for the
 # library's own inline-test runner, so both paths resolve a test's keys the same
 # way.
 function scope_to_model(overrides, known, mname)

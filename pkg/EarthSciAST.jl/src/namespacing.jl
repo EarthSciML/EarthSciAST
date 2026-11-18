@@ -176,7 +176,7 @@ function _namespace_join(
             s
         end
     end
-    # A `join.overlap` clause (Phase 2a) namespaces its envelope FACTOR names the
+    # A `join.overlap` clause namespaces its envelope FACTOR names the
     # same way (a component-local coord/rect buffer gets the prefix); `eps` is a
     # scalar and never rewrites. A bin-equality clause namespaces its key columns.
     nsclause(clause::_OverlapJoinSpec) = _OverlapJoinSpec(
@@ -253,7 +253,7 @@ function _namespace_expr(
     end
     # Recurse into EVERY variable-bearing sub-expression via the shared
     # field-preserving rewrite so prefix rewrites reach faq / makearray
-    # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
+    # bodies, filter predicates (RFC §7.2), integral bounds (`lower`/`upper`),
     # makearray `values`, value-invention
     # `key`, expression-valued dense `ranges` bounds, AND expression-template
     # `bindings` values (esm-spec §9.6.4 rule 7 / §10.7: template `params` —
@@ -272,10 +272,9 @@ function _namespace_expr(
     # `map_children` recurses into expression-bearing fields only. One field
     # carries plain-name identifiers that also need namespacing: a `join.on` key
     # column may name a component-local bin buffer (see `_namespace_join`).
-    # `join` is `nothing` for models without a value-equality join, so those are
-    # byte-identical to before (and skip the reconstruct copy). Index-set
-    # identifier fields (`id`, `ranges[*].from`) are document-scoped (v0.8.0)
-    # and never prefixed.
+    # `join` is `nothing` for models without a value-equality join, which skip
+    # the reconstruct copy. Index-set identifier fields (`id`, `ranges[*].from`)
+    # are document-scoped and never prefixed.
     nj = expr.join === nothing ? nothing :
         _namespace_join(expr.join, _join_binders(expr), prefix, local_names)
     res = nj === expr.join ? result : reconstruct(result; join = nj)
@@ -359,9 +358,9 @@ function _collect_model!(
             namespace_expr(e, prefix, local_names; captures = tpl_captures), tpl_rename
         )
 
-    # esm-spec v0.8.0: index sets are a single document-scoped registry (seeded
-    # once by `flatten` from the top-level object) with plain names shared by every
-    # component — no longer per-`Model` and no longer namespaced. So index-set
+    # Index sets are a single document-scoped registry (seeded once by `flatten`
+    # from the top-level object) with plain names shared by every component, never
+    # namespaced. So index-set
     # references (an array variable's `shape` entries, `ranges[*]` `{from}`,
     # producer `id`s and their `from_faq` edges) stay as plain document-level
     # names and must NOT be rewritten to a `<prefix>.` form; only ordinary
@@ -417,16 +416,14 @@ function _collect_model!(
         push!(st.init_equations, Equation(_ns(eq.lhs), _ns(eq.rhs); _comment = eq._comment))
     end
 
-    # esm 1.0.0: an observed unknown's defining equation is an ORDINARY entry of
-    # `model.equations`, already namespaced and pushed above. There is nothing
-    # left to synthesize from a variable-level `expression`, which no longer
-    # exists (esm-spec §6.3).
+    # An observed unknown's defining equation is an ORDINARY entry of
+    # `model.equations`, already namespaced and pushed above (esm-spec §6.3).
 
     _collect_events!(st, model.continuous_events, model.discrete_events, prefix, _ns)
 
     for (sub_name, sub_model) in model.subsystems
-        # esm 1.0.0: a data source is a document-scoped registry entry, not a
-        # subsystem, so there is no loader arm here any more. A model that reads
+        # A data source is a document-scoped registry entry, not a subsystem,
+        # so there is no loader arm here. A model that reads
         # external data declares an ordinary PARAMETER whose `update` names the
         # source (esm-spec §8.5); it is collected into `params` above under its
         # own namespaced key, and the bound value reaches the RHS through the

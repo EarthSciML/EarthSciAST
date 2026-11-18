@@ -1017,15 +1017,13 @@ what that observed's own published body computes at that index, and the reductio
 order WITHIN each aggregate is untouched. What can move is the order BETWEEN them:
 a consumer that would inline `a + b + c` and instead reads three buffers is summing
 the same three numbers, but the un-inlined and the fully substituted bodies are
-not always the same expression tree, and float addition does not associate. So
-materializing a producer that previously could not be materialized may move a
-downstream field in its last bits — observed at 5e-15 on the ISRM point document
-when the `observed_exprs` fallback below was added. Nothing semantic changes, and
+not always the same expression tree, and float addition does not associate, so
+a downstream field may move in its last bits. Nothing semantic changes, and
 nothing about WHICH terms are summed.
 
 Returns `base` ITSELF (by identity, which is how the caller detects the no-op)
 when there is nothing to materialize, so models whose observeds are scalar or
-independent keep the previous behaviour and cost.
+independent pay nothing.
 """
 function _materialized_obs_scope(
         insp::BuildProducts, file::EsmFile,
@@ -1136,7 +1134,7 @@ function _materialized_obs_scope(
         # it cannot resolve. Both compute the same number: the substituted form
         # is literally what the consumer would otherwise have recomputed inline.
         # A producer neither form can evaluate here (one reading STATE, say) just
-        # stays un-materialized, and its readers inline it exactly as before.
+        # stays un-materialized, and its readers inline it.
         # Under a compiler that runs the array cascade, the producer's own
         # compiled observed program first (`program_read`): one pass, no per-cell
         # resolve.
