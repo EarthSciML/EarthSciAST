@@ -396,7 +396,7 @@ end
 # included), and the rest of the equation stays on the affine path.
 #
 # Evaluation reuses the wall2 Phase C compile-once machinery
-# (`_cellwise_compile_once_impl` + `_CellEval`, tree_walk/cellwise.jl) — the
+# (`_cell_evaluator` + `_CellEval`, tree_walk/cellwise.jl) — the
 # existing evaluator for "a scalar expression at a loop-index environment over
 # const arrays": the subtree is resolved+compiled ONCE with the loop indices
 # bound as Float64 parameters, and each cell only rebinds them. `_eval_node`
@@ -428,7 +428,7 @@ end
 # non-inlined observeds, and — explicitly, since `_compile` maps the NAME "t"
 # to `_NK_TIME` and `_CellEval` evaluates at t=0.0, which would be SILENTLY
 # wrong — anything called "t". Over-acceptance is safe: the compile attempt in
-# `_cellwise_compile_once_impl` is wrapped in try/catch and any failure
+# `_cell_evaluator` is wrapped in try/catch and any failure
 # restores the original whole-equation decline. Field coverage mirrors
 # `_scan_refs_idxset` (args / lower / upper / expr_body / filter / key /
 # values / ranges bounds), so nothing an expression can carry
@@ -529,10 +529,8 @@ function _attach_exprtbl_evals!(
         r.kind == LANE_EXPRTBL || continue
         spec = r.arr::_ExprTblSpec
         spec.ce === nothing || continue
-        ce = _cellwise_compile_once_impl(
-            spec.expr, length(spec.idx_names),
-            const_arrays, _EMPTY_PARAMS;
-            bind_syms = spec.idx_names
+        ce = _cell_evaluator(
+            spec.expr, spec.idx_names, const_arrays, _EMPTY_PARAMS; index_outputs = true
         )
         ce === nothing && throw(
             _StencilFallback(

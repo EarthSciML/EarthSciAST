@@ -151,15 +151,12 @@ function _ic_body_is_closed_form(e)::Bool
     return true
 end
 
-# Compile-once fast path for a coordinate-field ic: a `faq` over
-# the output loop indices whose body is pure closed-form (see above). The body is
-# compiled a SINGLE time with the loop indices bound as parameters; each cell then
-# only rebinds the index values and re-evaluates — replacing the per-cell
-# `_index_at_cell → _resolve_indices → _compile` rebuild that dominated
-# `_resolve_field_ic` for large grids. Result is bit-identical to the per-cell
-# path: `_eval_node` computes every leaf in `Float64`, so a loop index bound as a
-# `Float64` param equals that index folded to a `Float64` literal. Returns a
-# `(cell) -> Float64` closure, or `nothing` to signal the per-cell fallback.
+# Compile-once fast path for a coordinate-field ic: a `faq` over the output
+# loop indices whose body is closed form (see above), compiled once with the
+# loop indices bound as parameters (`_cell_evaluator`) instead of resolved and
+# compiled per cell. A loop index bound as a `Float64` parameter equals that
+# index folded to a literal, so the values are the per-cell path's. Returns the
+# `_CellEval` (called with the cell), or `nothing` for the per-cell fallback.
 function _try_field_ic_fastpath(
         rhs, params::AbstractDict, const_arrays
     )
@@ -176,42 +173,6 @@ function _try_field_ic_fastpath(
     # index would need reduction, not a single per-cell value).
     ranges = rhs.ranges === nothing ? Dict{String, Any}() : rhs.ranges
     all(n -> n in oi, keys(ranges)) || return nothing
-    # A loop index must not collide with a scalar-param name or the time symbol.
-    for nm in oi
-        (nm == "t" || haskey(params, nm)) && return nothing
-    end
     _ic_body_is_closed_form(body) || return nothing
-
-    pkeys = collect(keys(params))
-    psyms = Symbol[Symbol(k) for k in pkeys]
-    for nm in oi
-        push!(psyms, Symbol(nm))
-    end
-    node = try
-        _compile(body, Dict{String, Int}(), Set{Symbol}(psyms))
-    catch err
-        _is_resource_error(err) && rethrow()
-        return nothing   # anything the closed-form guard missed → per-cell fallback
-    end
-    pbase = Float64[Float64(params[k]) for k in pkeys]
-    npar = length(pbase)
-    nidx = length(oi)
-    symtup = Tuple(psyms)
-    return function (cell::AbstractVector{<:Integer})
-        length(cell) == nidx || throw(
-            TreeWalkError(
-                "E_TREEWALK_UNSUPPORTED_EQUATION",
-                "field-ic fast path: cell rank $(length(cell)) ≠ output rank $nidx"
-            )
-        )
-        vals = Vector{Float64}(undef, npar + nidx)
-        @inbounds for d in 1:npar
-            vals[d] = pbase[d]
-        end
-        @inbounds for d in 1:nidx
-            vals[npar + d] = Float64(cell[d])
-        end
-        p_nt = NamedTuple{symtup}(Tuple(vals))
-        return _eval_node(node, _NO_STATE_U, p_nt, 0.0)
-    end
+    return _cell_evaluator(body, oi, const_arrays, params; index_outputs = false)
 end
