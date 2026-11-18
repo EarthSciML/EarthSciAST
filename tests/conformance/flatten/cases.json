@@ -1032,7 +1032,7 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["Chemistry.O3"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-0.1, "Chemistry.O3", "Chemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.wind_speed"]}, {"op": "grad", "args": ["Chemistry.O3"], "dim": "x"}]}, {"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["Chemistry.O3"]}]}]}]}, {"op": "*", "args": [{"op": "-", "args": ["Surface.deposition_velocity"]}, "Chemistry.O3"]}]},
+          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-0.1, "Chemistry.O3", "Chemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.wind_speed"]}, {"op": "D", "args": ["Chemistry.O3"], "wrt": "x"}]}, {"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["Chemistry.O3"], "wrt": "x"}], "wrt": "x"}]}]}]}, {"op": "*", "args": [{"op": "-", "args": ["Surface.deposition_velocity"]}, "Chemistry.O3"]}]},
           "source_system": "Chemistry",
           "contributions": [
             {
@@ -1044,7 +1044,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.wind_speed"]}, {"op": "grad", "args": ["Chemistry.O3"], "dim": "x"}]}, {"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["Chemistry.O3"]}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.wind_speed"]}, {"op": "D", "args": ["Chemistry.O3"], "wrt": "x"}]}, {"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["Chemistry.O3"], "wrt": "x"}], "wrt": "x"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -1063,7 +1063,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["Chemistry.NO"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [-0.1, "Chemistry.O3", "Chemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.wind_speed"]}, {"op": "grad", "args": ["Chemistry.NO"], "dim": "x"}]}, {"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["Chemistry.NO"]}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-0.1, "Chemistry.O3", "Chemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.wind_speed"]}, {"op": "D", "args": ["Chemistry.NO"], "wrt": "x"}]}, {"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["Chemistry.NO"], "wrt": "x"}], "wrt": "x"}]}]}]},
           "source_system": "Chemistry",
           "contributions": [
             {
@@ -1075,7 +1075,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.wind_speed"]}, {"op": "grad", "args": ["Chemistry.NO"], "dim": "x"}]}, {"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["Chemistry.NO"]}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.wind_speed"]}, {"op": "D", "args": ["Chemistry.NO"], "wrt": "x"}]}, {"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["Chemistry.NO"], "wrt": "x"}], "wrt": "x"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -1367,11 +1367,11 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "grad", "args": ["AtmosphericChemistry.OH"], "dim": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "grad", "args": ["AtmosphericChemistry.OH"], "dim": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "grad", "args": ["AtmosphericChemistry.OH"], "dim": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "laplacian", "args": ["AtmosphericChemistry.OH"], "dim": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "laplacian", "args": ["AtmosphericChemistry.OH"], "dim": "lev"}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lon"}], "wrt": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lev"}], "wrt": "lev"}]}]},
           "source_system": "Transport",
           "contributions": [
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "grad", "args": ["AtmosphericChemistry.OH"], "dim": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "grad", "args": ["AtmosphericChemistry.OH"], "dim": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "grad", "args": ["AtmosphericChemistry.OH"], "dim": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "laplacian", "args": ["AtmosphericChemistry.OH"], "dim": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "laplacian", "args": ["AtmosphericChemistry.OH"], "dim": "lev"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lon"}], "wrt": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.OH"], "wrt": "lev"}], "wrt": "lev"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -1382,7 +1382,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}, "AtmosphericChemistry.M"]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "laplacian", "args": ["AtmosphericChemistry.O3"], "dim": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "laplacian", "args": ["AtmosphericChemistry.O3"], "dim": "lev"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}, "AtmosphericChemistry.M"]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lon"}], "wrt": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lev"}], "wrt": "lev"}]}]}]},
           "source_system": "AtmosphericChemistry",
           "contributions": [
             {
@@ -1394,7 +1394,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "laplacian", "args": ["AtmosphericChemistry.O3"], "dim": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "laplacian", "args": ["AtmosphericChemistry.O3"], "dim": "lev"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lon"}], "wrt": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "lev"}], "wrt": "lev"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -1405,7 +1405,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}, "AtmosphericChemistry.M"]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "laplacian", "args": ["AtmosphericChemistry.NO"], "dim": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "laplacian", "args": ["AtmosphericChemistry.NO"], "dim": "lev"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}, "AtmosphericChemistry.M"]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lon"}], "wrt": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lev"}], "wrt": "lev"}]}]}]},
           "source_system": "AtmosphericChemistry",
           "contributions": [
             {
@@ -1417,7 +1417,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "laplacian", "args": ["AtmosphericChemistry.NO"], "dim": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "laplacian", "args": ["AtmosphericChemistry.NO"], "dim": "lev"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lon"}], "wrt": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "lev"}], "wrt": "lev"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -1428,7 +1428,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}, "AtmosphericChemistry.M"]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "laplacian", "args": ["AtmosphericChemistry.NO2"], "dim": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "laplacian", "args": ["AtmosphericChemistry.NO2"], "dim": "lev"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}, "AtmosphericChemistry.M"]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lon"}], "wrt": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lev"}], "wrt": "lev"}]}]}]},
           "source_system": "AtmosphericChemistry",
           "contributions": [
             {
@@ -1440,7 +1440,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "laplacian", "args": ["AtmosphericChemistry.NO2"], "dim": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "laplacian", "args": ["AtmosphericChemistry.NO2"], "dim": "lev"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Transport.u"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lon"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.v"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lat"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.w"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lev"}]}, {"op": "*", "args": ["Transport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lon"}], "wrt": "lon"}]}, {"op": "*", "args": ["Transport.K_v", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "lev"}], "wrt": "lev"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -1500,13 +1500,6 @@
           "owner": "Transport",
           "source": "MeteoData",
           "file_variable": "v",
-          "cadence": "const"
-        },
-        {
-          "name": "AtmosphericChemistry.T",
-          "owner": "AtmosphericChemistry",
-          "source": "MeteoData",
-          "file_variable": "T",
           "cadence": "const"
         }
       ],
@@ -1815,11 +1808,11 @@
         },
         {
           "lhs": {"op": "D", "args": ["AdvectionTransport.u"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "grad", "args": ["AdvectionTransport.u"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "grad", "args": ["AdvectionTransport.u"], "dim": "y"}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "D", "args": ["AdvectionTransport.u"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "D", "args": ["AdvectionTransport.u"], "wrt": "y"}]}]},
           "source_system": "AdvectionTransport",
           "contributions": [
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "grad", "args": ["AdvectionTransport.u"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "grad", "args": ["AdvectionTransport.u"], "dim": "y"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "D", "args": ["AdvectionTransport.u"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "D", "args": ["AdvectionTransport.u"], "wrt": "y"}]}]},
               "origins": [
                 {
                   "component": "AdvectionTransport"
@@ -2575,11 +2568,11 @@
         },
         {
           "lhs": {"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.u_wind"]}, {"op": "grad", "args": ["AtmosphericTransport.u"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.v_wind"]}, {"op": "grad", "args": ["AtmosphericTransport.u"], "dim": "y"}]}, {"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.w_wind"]}, {"op": "grad", "args": ["AtmosphericTransport.u"], "dim": "z"}]}, {"op": "*", "args": ["AtmosphericTransport.K_h", {"op": "laplacian", "args": ["AtmosphericTransport.u"], "dim": "x"}]}, {"op": "*", "args": ["AtmosphericTransport.K_z", {"op": "laplacian", "args": ["AtmosphericTransport.u"], "dim": "z"}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.u_wind"]}, {"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.v_wind"]}, {"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "y"}]}, {"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.w_wind"]}, {"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "z"}]}, {"op": "*", "args": ["AtmosphericTransport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": ["AtmosphericTransport.K_z", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "z"}], "wrt": "z"}]}]},
           "source_system": "AtmosphericTransport",
           "contributions": [
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.u_wind"]}, {"op": "grad", "args": ["AtmosphericTransport.u"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.v_wind"]}, {"op": "grad", "args": ["AtmosphericTransport.u"], "dim": "y"}]}, {"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.w_wind"]}, {"op": "grad", "args": ["AtmosphericTransport.u"], "dim": "z"}]}, {"op": "*", "args": ["AtmosphericTransport.K_h", {"op": "laplacian", "args": ["AtmosphericTransport.u"], "dim": "x"}]}, {"op": "*", "args": ["AtmosphericTransport.K_z", {"op": "laplacian", "args": ["AtmosphericTransport.u"], "dim": "z"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.u_wind"]}, {"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.v_wind"]}, {"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "y"}]}, {"op": "*", "args": [{"op": "-", "args": ["AtmosphericTransport.w_wind"]}, {"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "z"}]}, {"op": "*", "args": ["AtmosphericTransport.K_h", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": ["AtmosphericTransport.K_z", {"op": "D", "args": [{"op": "D", "args": ["AtmosphericTransport.u"], "wrt": "z"}], "wrt": "z"}]}]},
               "origins": [
                 {
                   "component": "AtmosphericTransport"
@@ -3119,7 +3112,7 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["SimpleOzone.O3"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "SimpleOzone.T"]}]}, "SimpleOzone.M"]}, "SimpleOzone.NO", "SimpleOzone.O3"]}]}, {"op": "*", "args": ["SimpleOzone.jNO2", "SimpleOzone.NO2"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "grad", "args": ["SimpleOzone.O3"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "grad", "args": ["SimpleOzone.O3"], "dim": "y"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "SimpleOzone.T"]}]}, "SimpleOzone.M"]}, "SimpleOzone.NO", "SimpleOzone.O3"]}]}, {"op": "*", "args": ["SimpleOzone.jNO2", "SimpleOzone.NO2"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "D", "args": ["SimpleOzone.O3"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "D", "args": ["SimpleOzone.O3"], "wrt": "y"}]}]}]},
           "source_system": "SimpleOzone",
           "contributions": [
             {
@@ -3131,7 +3124,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "grad", "args": ["SimpleOzone.O3"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "grad", "args": ["SimpleOzone.O3"], "dim": "y"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "D", "args": ["SimpleOzone.O3"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "D", "args": ["SimpleOzone.O3"], "wrt": "y"}]}]},
               "origins": [
                 {
                   "component": "Advection"
@@ -3142,7 +3135,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["SimpleOzone.NO"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "SimpleOzone.T"]}]}, "SimpleOzone.M"]}, "SimpleOzone.NO", "SimpleOzone.O3"]}]}, {"op": "*", "args": ["SimpleOzone.jNO2", "SimpleOzone.NO2"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "grad", "args": ["SimpleOzone.NO"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "grad", "args": ["SimpleOzone.NO"], "dim": "y"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "SimpleOzone.T"]}]}, "SimpleOzone.M"]}, "SimpleOzone.NO", "SimpleOzone.O3"]}]}, {"op": "*", "args": ["SimpleOzone.jNO2", "SimpleOzone.NO2"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "D", "args": ["SimpleOzone.NO"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "D", "args": ["SimpleOzone.NO"], "wrt": "y"}]}]}]},
           "source_system": "SimpleOzone",
           "contributions": [
             {
@@ -3154,7 +3147,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "grad", "args": ["SimpleOzone.NO"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "grad", "args": ["SimpleOzone.NO"], "dim": "y"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "D", "args": ["SimpleOzone.NO"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "D", "args": ["SimpleOzone.NO"], "wrt": "y"}]}]},
               "origins": [
                 {
                   "component": "Advection"
@@ -3165,7 +3158,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["SimpleOzone.NO2"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "SimpleOzone.T"]}]}, "SimpleOzone.M"]}, "SimpleOzone.NO", "SimpleOzone.O3"]}, {"op": "*", "args": [-1, {"op": "*", "args": ["SimpleOzone.jNO2", "SimpleOzone.NO2"]}]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "grad", "args": ["SimpleOzone.NO2"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "grad", "args": ["SimpleOzone.NO2"], "dim": "y"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "SimpleOzone.T"]}]}, "SimpleOzone.M"]}, "SimpleOzone.NO", "SimpleOzone.O3"]}, {"op": "*", "args": [-1, {"op": "*", "args": ["SimpleOzone.jNO2", "SimpleOzone.NO2"]}]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "D", "args": ["SimpleOzone.NO2"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "D", "args": ["SimpleOzone.NO2"], "wrt": "y"}]}]}]},
           "source_system": "SimpleOzone",
           "contributions": [
             {
@@ -3177,7 +3170,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "grad", "args": ["SimpleOzone.NO2"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "grad", "args": ["SimpleOzone.NO2"], "dim": "y"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Advection.u_wind"]}, {"op": "D", "args": ["SimpleOzone.NO2"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Advection.v_wind"]}, {"op": "D", "args": ["SimpleOzone.NO2"], "wrt": "y"}]}]},
               "origins": [
                 {
                   "component": "Advection"
@@ -3221,13 +3214,6 @@
           "owner": "Advection",
           "source": "GEOSFP",
           "file_variable": "v",
-          "cadence": "const"
-        },
-        {
-          "name": "SimpleOzone.T",
-          "owner": "SimpleOzone",
-          "source": "GEOSFP",
-          "file_variable": "T",
           "cadence": "const"
         }
       ],
@@ -3349,7 +3335,7 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}]}, {"op": "*", "args": ["AtmosphericChemistry.jNO2", "AtmosphericChemistry.NO2"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "y"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}]}, {"op": "*", "args": ["AtmosphericChemistry.jNO2", "AtmosphericChemistry.NO2"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "y"}]}]}]},
           "source_system": "AtmosphericChemistry",
           "contributions": [
             {
@@ -3361,7 +3347,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.O3"], "dim": "y"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.O3"], "wrt": "y"}]}]},
               "origins": [
                 {
                   "component": "AdvectionTransport"
@@ -3372,7 +3358,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}]}, {"op": "*", "args": ["AtmosphericChemistry.jNO2", "AtmosphericChemistry.NO2"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "y"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}]}, {"op": "*", "args": ["AtmosphericChemistry.jNO2", "AtmosphericChemistry.NO2"]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "y"}]}]}]},
           "source_system": "AtmosphericChemistry",
           "contributions": [
             {
@@ -3384,7 +3370,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO"], "dim": "y"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.NO"], "wrt": "y"}]}]},
               "origins": [
                 {
                   "component": "AdvectionTransport"
@@ -3395,7 +3381,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}, {"op": "*", "args": [-1, {"op": "*", "args": ["AtmosphericChemistry.jNO2", "AtmosphericChemistry.NO2"]}]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "y"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [{"op": "const", "args": [], "value": -1370, "units": "K"}, "AtmosphericChemistry.T"]}]}]}, "AtmosphericChemistry.NO", "AtmosphericChemistry.O3"]}, {"op": "*", "args": [-1, {"op": "*", "args": ["AtmosphericChemistry.jNO2", "AtmosphericChemistry.NO2"]}]}]}, {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "y"}]}]}]},
           "source_system": "AtmosphericChemistry",
           "contributions": [
             {
@@ -3407,7 +3393,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "grad", "args": ["AtmosphericChemistry.NO2"], "dim": "y"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.u_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionTransport.v_wind"]}, {"op": "D", "args": ["AtmosphericChemistry.NO2"], "wrt": "y"}]}]},
               "origins": [
                 {
                   "component": "AdvectionTransport"
@@ -3452,13 +3438,6 @@
           "source": "MeteorologicalData",
           "file_variable": "v",
           "cadence": "const"
-        },
-        {
-          "name": "AtmosphericChemistry.T",
-          "owner": "AtmosphericChemistry",
-          "source": "MeteorologicalData",
-          "file_variable": "T",
-          "cadence": "const"
         }
       ],
       "lifted_shapes": {}
@@ -3469,7 +3448,8 @@
       "fixture": "scoping/bare_reference_resolution.esm",
       "system_kind": "pde",
       "independent_variables": [
-        "t"
+        "t",
+        "x"
       ],
       "state_variables": [
         {
@@ -3613,7 +3593,7 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["SimpleChemistry.O3"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["SimpleChemistry.k_rate"]}, "SimpleChemistry.O3", "SimpleChemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["SimpleChemistry.O3"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "grad", "args": ["SimpleChemistry.O3"]}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["SimpleChemistry.k_rate"]}, "SimpleChemistry.O3", "SimpleChemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["SimpleChemistry.O3"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "D", "args": ["SimpleChemistry.O3"], "wrt": "x"}]}]}]},
           "source_system": "SimpleChemistry",
           "contributions": [
             {
@@ -3625,7 +3605,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["SimpleChemistry.O3"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "grad", "args": ["SimpleChemistry.O3"]}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["SimpleChemistry.O3"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "D", "args": ["SimpleChemistry.O3"], "wrt": "x"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -3636,7 +3616,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["SimpleChemistry.NO"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["SimpleChemistry.k_rate"]}, "SimpleChemistry.O3", "SimpleChemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["SimpleChemistry.NO"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "grad", "args": ["SimpleChemistry.NO"]}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["SimpleChemistry.k_rate"]}, "SimpleChemistry.O3", "SimpleChemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["SimpleChemistry.NO"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "D", "args": ["SimpleChemistry.NO"], "wrt": "x"}]}]}]},
           "source_system": "SimpleChemistry",
           "contributions": [
             {
@@ -3648,7 +3628,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["SimpleChemistry.NO"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "grad", "args": ["SimpleChemistry.NO"]}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["SimpleChemistry.NO"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "D", "args": ["SimpleChemistry.NO"], "wrt": "x"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -3659,7 +3639,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["SimpleChemistry.NO2"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": ["SimpleChemistry.k_rate", "SimpleChemistry.O3", "SimpleChemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["SimpleChemistry.NO2"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "grad", "args": ["SimpleChemistry.NO2"]}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["SimpleChemistry.k_rate", "SimpleChemistry.O3", "SimpleChemistry.NO"]}, {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["SimpleChemistry.NO2"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "D", "args": ["SimpleChemistry.NO2"], "wrt": "x"}]}]}]},
           "source_system": "SimpleChemistry",
           "contributions": [
             {
@@ -3671,7 +3651,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["SimpleChemistry.NO2"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "grad", "args": ["SimpleChemistry.NO2"]}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["SimpleChemistry.NO2"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "D", "args": ["SimpleChemistry.NO2"], "wrt": "x"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -3682,7 +3662,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["SimpleChemistry.Photochemistry.NO2_photo"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["SimpleChemistry.Photochemistry.photolysis_rate"]}, "SimpleChemistry.Photochemistry.NO2_photo", {"op": "cos", "args": ["SimpleChemistry.Photochemistry.solar_zenith"]}]}, {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["SimpleChemistry.Photochemistry.NO2_photo"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "grad", "args": ["SimpleChemistry.Photochemistry.NO2_photo"]}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["SimpleChemistry.Photochemistry.photolysis_rate"]}, "SimpleChemistry.Photochemistry.NO2_photo", {"op": "cos", "args": ["SimpleChemistry.Photochemistry.solar_zenith"]}]}, {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["SimpleChemistry.Photochemistry.NO2_photo"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "D", "args": ["SimpleChemistry.Photochemistry.NO2_photo"], "wrt": "x"}]}]}]},
           "source_system": "SimpleChemistry.Photochemistry",
           "contributions": [
             {
@@ -3694,7 +3674,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "laplacian", "args": ["SimpleChemistry.Photochemistry.NO2_photo"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "grad", "args": ["SimpleChemistry.Photochemistry.NO2_photo"]}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": ["Transport.diffusivity", {"op": "D", "args": [{"op": "D", "args": ["SimpleChemistry.Photochemistry.NO2_photo"], "wrt": "x"}], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["Transport.velocity"]}, {"op": "D", "args": ["SimpleChemistry.Photochemistry.NO2_photo"], "wrt": "x"}]}]},
               "origins": [
                 {
                   "component": "Transport"
@@ -3909,7 +3889,7 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, "ChemistrySystem.k1", "ChemistrySystem.O3"]}, {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.O3"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "z"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, "ChemistrySystem.k1", "ChemistrySystem.O3"]}, {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "D", "args": [{"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "z"}], "wrt": "z"}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "z"}]}]}]},
           "source_system": "ChemistrySystem",
           "contributions": [
             {
@@ -3921,7 +3901,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.O3"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "z"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "D", "args": [{"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "z"}], "wrt": "z"}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "z"}]}]},
               "origins": [
                 {
                   "component": "DiffusionSystem"
@@ -3932,7 +3912,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": ["ChemistrySystem.k2", "ChemistrySystem.NO2"]}, {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.NO"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "z"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["ChemistrySystem.k2", "ChemistrySystem.NO2"]}, {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "D", "args": [{"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "z"}], "wrt": "z"}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "z"}]}]}]},
           "source_system": "ChemistrySystem",
           "contributions": [
             {
@@ -3944,7 +3924,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.NO"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "z"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "D", "args": [{"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "z"}], "wrt": "z"}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "z"}]}]},
               "origins": [
                 {
                   "component": "DiffusionSystem"
@@ -3970,11 +3950,11 @@
         },
         {
           "lhs": {"op": "D", "args": ["AdvectionSystem.u"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionSystem.u"]}, {"op": "grad", "args": ["AdvectionSystem.u"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionSystem.v"]}, {"op": "grad", "args": ["AdvectionSystem.u"], "dim": "y"}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionSystem.u"]}, {"op": "D", "args": ["AdvectionSystem.u"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionSystem.v"]}, {"op": "D", "args": ["AdvectionSystem.u"], "wrt": "y"}]}]},
           "source_system": "AdvectionSystem",
           "contributions": [
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionSystem.u"]}, {"op": "grad", "args": ["AdvectionSystem.u"], "dim": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionSystem.v"]}, {"op": "grad", "args": ["AdvectionSystem.u"], "dim": "y"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["AdvectionSystem.u"]}, {"op": "D", "args": ["AdvectionSystem.u"], "wrt": "x"}]}, {"op": "*", "args": [{"op": "-", "args": ["AdvectionSystem.v"]}, {"op": "D", "args": ["AdvectionSystem.u"], "wrt": "y"}]}]},
               "origins": [
                 {
                   "component": "AdvectionSystem"
@@ -5195,7 +5175,8 @@
       "fixture": "coupling/chained_operator_compose.esm",
       "system_kind": "pde",
       "independent_variables": [
-        "t"
+        "t",
+        "x"
       ],
       "state_variables": [
         {
@@ -5293,7 +5274,7 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["Chem.NO"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Sink.kd"]}, "Chem.NO"]}, {"op": "*", "args": [{"op": "-", "args": ["Chem.k2"]}, "Chem.NO"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "grad", "args": ["Chem.NO"]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Sink.kd"]}, "Chem.NO"]}, {"op": "*", "args": [{"op": "-", "args": ["Chem.k2"]}, "Chem.NO"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "D", "args": ["Chem.NO"], "wrt": "x"}]}]},
           "source_system": "Sink",
           "contributions": [
             {
@@ -5313,7 +5294,7 @@
               ]
             },
             {
-              "rhs": {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "grad", "args": ["Chem.NO"]}]},
+              "rhs": {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "D", "args": ["Chem.NO"], "wrt": "x"}]},
               "origins": [
                 {
                   "component": "Adv"
@@ -5324,7 +5305,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["Chem.O3"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "+", "args": ["Src.e", {"op": "*", "args": [{"op": "-", "args": ["Sink.kd"]}, "Chem.O3"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Chem.k1"]}, "Chem.O3"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "grad", "args": ["Chem.O3"]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "+", "args": [{"op": "+", "args": ["Src.e", {"op": "*", "args": [{"op": "-", "args": ["Sink.kd"]}, "Chem.O3"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Chem.k1"]}, "Chem.O3"]}]}, {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "D", "args": ["Chem.O3"], "wrt": "x"}]}]},
           "source_system": "Src",
           "contributions": [
             {
@@ -5352,7 +5333,7 @@
               ]
             },
             {
-              "rhs": {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "grad", "args": ["Chem.O3"]}]},
+              "rhs": {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "D", "args": ["Chem.O3"], "wrt": "x"}]},
               "origins": [
                 {
                   "component": "Adv"
@@ -9764,7 +9745,8 @@
       "fixture": "conformance/term_provenance/fixtures/placeholder_expansion.esm",
       "system_kind": "pde",
       "independent_variables": [
-        "t"
+        "t",
+        "x"
       ],
       "state_variables": [
         {
@@ -9838,7 +9820,7 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["Chem.O3"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Chem.k1"]}, "Chem.O3"]}, {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "grad", "args": ["Chem.O3"]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Chem.k1"]}, "Chem.O3"]}, {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "D", "args": ["Chem.O3"], "wrt": "x"}]}]},
           "source_system": "Chem",
           "contributions": [
             {
@@ -9850,7 +9832,7 @@
               ]
             },
             {
-              "rhs": {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "grad", "args": ["Chem.O3"]}]},
+              "rhs": {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "D", "args": ["Chem.O3"], "wrt": "x"}]},
               "origins": [
                 {
                   "component": "Adv"
@@ -9861,7 +9843,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["Chem.NO"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Chem.k2"]}, "Chem.NO"]}, {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "grad", "args": ["Chem.NO"]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [{"op": "-", "args": ["Chem.k2"]}, "Chem.NO"]}, {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "D", "args": ["Chem.NO"], "wrt": "x"}]}]},
           "source_system": "Chem",
           "contributions": [
             {
@@ -9873,7 +9855,7 @@
               ]
             },
             {
-              "rhs": {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "grad", "args": ["Chem.NO"]}]},
+              "rhs": {"op": "*", "args": [{"op": "-", "args": ["Adv.wind"]}, {"op": "D", "args": ["Chem.NO"], "wrt": "x"}]},
               "origins": [
                 {
                   "component": "Adv"
