@@ -68,11 +68,12 @@ function _scalar_overrides_over_supplied(
         a = _scalar_supplied_data(name, const_arrays, param_arrays)
         a === nothing && continue
         a === get(param_arrays, name, nothing) && throw(
-            ArgumentError(
+            SimulateError(
                 "parameter_overrides: '$(name)' is fed by a live forcing buffer (a " *
                     "discrete provider or a `param_arrays` entry) that the run rewrites at " *
                     "each refresh, so an override of it cannot hold; pass one or the other " *
-                    "(esm-spec §6.6.2)"
+                    "(esm-spec §6.6.2)",
+                ERROR_CODES.OVERRIDE_KEY_CONFLICT
             )
         )
         out === nothing && (out = Dict{String, Any}(String(k) => x for (k, x) in const_arrays))
@@ -419,7 +420,7 @@ function _normalize_const_array_keys(model::Model, const_arrays::AbstractDict)
         r = resolve_key(table, k)
         r.how === :unknown && continue             # designates no shaped parameter
         r.how === :ambiguous && throw(
-            SimulateError(_override_ambiguous_message("const_arrays", k, r.candidates))
+            SimulateError(_override_ambiguous_message("const_arrays", k, r.candidates), ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS)
         )
         haskey(const_arrays, r.name) && continue   # the exact key wins
         push!(get!(claims, r.name, String[]), k)
@@ -430,7 +431,7 @@ function _normalize_const_array_keys(model::Model, const_arrays::AbstractDict)
         ks = claims[name]
         length(ks) == 1 || throw(
             SimulateError(
-                _override_collision_message("const_arrays", "parameter", name, sort!(ks))
+                _override_collision_message("const_arrays", "parameter", name, sort!(ks)), ERROR_CODES.OVERRIDE_KEY_CONFLICT
             )
         )
         merged[name] = merged[ks[1]]

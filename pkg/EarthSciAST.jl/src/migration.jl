@@ -58,14 +58,12 @@ for an unsupported version pair, `removed_op` for a removed construct, whose
 `path` it names.
 """
 struct MigrationError <: EarthSciASTError
-    message::String
     code::String
+    message::String
     path::String
     MigrationError(message::AbstractString; code::AbstractString = "", path::AbstractString = "") =
-        new(String(message), String(code), String(path))
+        new(String(code), String(message), String(path))
 end
-
-Base.showerror(io::IO, e::MigrationError) = print(io, "MigrationError: ", e.message)
 
 # Parsed semantic-version components, or `nothing` for a malformed string.
 # Strict `major.minor.patch`: a prerelease suffix or a two-component string is

@@ -60,7 +60,7 @@ import JSON3
 
 # The package-wide exception root (`src/errors.jl`); `FloatKeyError` below
 # subtypes it so a caller can catch every EarthSciAST failure with one clause.
-using ..EarthSciAST: EarthSciASTError
+using ..EarthSciAST: EarthSciASTError, ERROR_CODES
 
 export FloatKeyError,
     distinct,
@@ -81,11 +81,13 @@ export FloatKeyError,
 Thrown when a relational key contains a floating-point component, violating
 `CONFORMANCE_SPEC.md` §5.5.1 rule 1 ("floats are forbidden in keys"). Normalise
 the value to an integer / categorical ID before the build-time pre-pass.
+Fields: `code` (always `join_key_invalid_type`) and `msg`.
 """
 struct FloatKeyError <: EarthSciASTError
+    code::String
     msg::String
+    FloatKeyError(msg::AbstractString) = new(ERROR_CODES.JOIN_KEY_INVALID_TYPE, String(msg))
 end
-Base.showerror(io::IO, e::FloatKeyError) = print(io, "FloatKeyError: ", e.msg)
 
 @inline _has_float(::AbstractFloat) = true
 @inline _has_float(::Integer) = false        # Bool <: Integer ⇒ allowed

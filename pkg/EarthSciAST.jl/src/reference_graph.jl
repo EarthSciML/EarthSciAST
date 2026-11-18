@@ -68,9 +68,6 @@ end
 ReferenceResolutionError(code::AbstractString, message::AbstractString) =
     ReferenceResolutionError(String(code), String(message), nothing)
 
-Base.showerror(io::IO, e::ReferenceResolutionError) =
-    print(io, "ReferenceResolutionError(", e.code, "): ", e.message)
-
 """
     ReferenceVertex
 

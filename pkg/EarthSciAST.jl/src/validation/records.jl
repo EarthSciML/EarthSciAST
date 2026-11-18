@@ -175,7 +175,3 @@ SchemaValidationError(
     ERROR_CODES.SCHEMA_VALIDATION_ERROR, String(message), String(path), String(file),
     Dict{String, Any}(details), Vector{SchemaError}(errors)
 )
-
-# `message` is already the rendered multi-line list (`_format_schema_errors`).
-Base.showerror(io::IO, e::SchemaValidationError) =
-    print(io, "SchemaValidationError: ", e.message)

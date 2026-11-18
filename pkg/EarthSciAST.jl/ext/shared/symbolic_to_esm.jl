@@ -59,7 +59,8 @@ function _op_matches(op, target)
     op == target && return true
     name = try
         nameof(op)
-    catch
+    catch err
+        EarthSciAST._is_resource_error(err) && rethrow()
         return false
     end
     return string(name) == string(nameof(target))
@@ -100,7 +101,8 @@ function _symbolic_to_esm(
         # simplification produces for `-k*x`) are neither symbols nor calls.
         const_lit = try
             _symbolic_const_to_esm(raw)
-        catch
+        catch err
+            EarthSciAST._is_resource_error(err) && rethrow()
             nothing
         end
         const_lit === nothing || return const_lit
@@ -127,7 +129,8 @@ function _symbolic_to_esm(
             else
                 opname = try
                     strip_ns(_strip_time(string(Symbolics.getname(op))))
-                catch
+                catch err
+                    EarthSciAST._is_resource_error(err) && rethrow()
                     ""
                 end
                 !isempty(opname) && opname in known_vars && return VarExpr(opname)
@@ -138,7 +141,8 @@ function _symbolic_to_esm(
         esm_op === nothing || return OpExpr(esm_op, esm_args)
         opname = try
             string(nameof(op))
-        catch
+        catch err
+            EarthSciAST._is_resource_error(err) && rethrow()
             string(op)
         end
         return OpExpr(opname, esm_args)

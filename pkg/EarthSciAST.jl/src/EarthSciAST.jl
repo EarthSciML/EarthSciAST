@@ -214,6 +214,7 @@ export
     # pins them.
     # Errors: the root of the hierarchy and the registry of code strings.
     EarthSciASTError, ERROR_CODES, error_code_names,
+    error_code, error_message, error_path, error_file,
     deprecated_records_per_sample_sites,
     # Reference resolution (RFC §6.1). The graph queries (`dependencies`,
     # `dependents`, `detect_cycle`, `topological_order`, `edges_of_kind`) are
@@ -265,6 +266,7 @@ export
     StrippedConstructs, stripped, is_stripped, compile_kernels, Kernel, KernelSet,
     KernelBlock, KernelWorkspace, kernel!, kernel_layout, kernel_workspace, z_layout,
     # Flatten errors, named as in the other bindings
+    FlattenError, CoupleMultiplicativeNoTendencyError,
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
     UnsupportedMappingError, DomainUnitMismatchError,
     DomainExtentMismatchError, SliceOutOfDomainError, CyclicPromotionError,

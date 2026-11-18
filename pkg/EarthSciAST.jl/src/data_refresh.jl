@@ -29,18 +29,20 @@
 #      expression the RHS evaluates, not a refresh-time transform.
 
 """
-    RefreshError(msg)
+    RefreshError(msg, code = "")
 
 Thrown by the data-refresh surface: an unimplemented Provider
 protocol method, a buffer that is not a dense `Array{Float64}`, a
 shape/length mismatch at refresh time, or a call to
 [`build_refresh_callback`](@ref) before the `DiffEqCallbacks` / `SciMLBase`
-extension is loaded.
+extension is loaded. Fields: `code` (an [`ERROR_CODES`](@ref) value, or `""`)
+and `msg`.
 """
 struct RefreshError <: EarthSciASTError
+    code::String
     msg::String
+    RefreshError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
 end
-Base.showerror(io::IO, e::RefreshError) = print(io, "RefreshError: ", e.msg)
 
 # --------------------------------------------------------------------------- #
 # Provider protocol (consumer-side; concrete impls live in the data binding)

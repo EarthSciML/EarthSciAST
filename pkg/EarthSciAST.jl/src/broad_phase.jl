@@ -204,7 +204,8 @@ end
 function _envelope_vectors_from_cols(env_names::AbstractVector, cols::AbstractVector)
     k = length(env_names)
     _overlap_env_rank(k) === nothing && throw(
-        ArgumentError(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
             "overlap-join env must name 1 (rings), 2 (point [x,y]), or 4 " *
                 "(rect [xmin,ymin,xmax,ymax]) const-array factors; got $k"
         )
@@ -230,7 +231,8 @@ end
 # `_ring_xybbox`'s `(xmin, xmax, ymin, ymax)` to `(xmin, ymin, xmax, ymax)`.
 function _ring_envelopes(rings::AbstractArray)
     ndims(rings) == 3 || throw(
-        ArgumentError(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
             "overlap-join single-factor env expects a [pos, verts, coord] 3-D ring " *
                 "array; got a $(ndims(rings))-D factor"
         )

@@ -37,8 +37,7 @@ struct TreeWalkError <: EarthSciASTError
 end
 TreeWalkError(code, detail) = TreeWalkError(code, detail, "")
 
-Base.showerror(io::IO, e::TreeWalkError) =
-    print(io, "$(e.code): $(e.detail)")
+error_message(e::TreeWalkError) = e.detail
 
 # ============================================================
 # 2. Direct StableHLO emission (ext/reactant_direct/)
@@ -99,8 +98,6 @@ DirectEmitError(construct::AbstractString, rule::AbstractString, detail::Abstrac
     String(detail)
 )
 
-Base.showerror(io::IO, e::DirectEmitError) =
-    print(
-    io, e.code, ": direct StableHLO emission cannot lower ", e.construct,
-    " (from ", e.rule, "): ", e.detail
+error_message(e::DirectEmitError) = string(
+    "direct StableHLO emission cannot lower ", e.construct, " (from ", e.rule, "): ", e.detail
 )

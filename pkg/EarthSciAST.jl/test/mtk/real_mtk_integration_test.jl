@@ -98,7 +98,7 @@ import Symbolics
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa SimulateError
         @test occursin("no PDE constructor", err.msg)
         @test !occursin("PDESystem", err.msg)
     end
@@ -312,7 +312,7 @@ import Symbolics
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa SimulateError
         @test occursin("a_b_c", err.msg)
 
         # An event affect whose target is not a variable is refused, not dropped.
@@ -328,7 +328,7 @@ import Symbolics
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa SimulateError
         @test occursin("D1.nope", err.msg)
     end
 end

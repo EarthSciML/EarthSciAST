@@ -118,6 +118,50 @@ include("testutils.jl")
         )
     end
 
+    @testset "every exported error type leads with `code` and prints one way" begin
+        exported = [
+            getfield(EarthSciAST, n) for n in names(EarthSciAST)
+                if (v = getfield(EarthSciAST, n); v isa DataType && v <: EarthSciASTError && isconcretetype(v))
+        ]
+        # Guard the scan against a reflection change that finds nothing.
+        @test length(exported) >= 25
+        @test isempty([T for T in exported if fieldname(T, 1) !== :code || fieldtype(T, 1) !== String])
+        @test fieldname(EarthSciAST.Relational.FloatKeyError, 1) === :code
+        # The types' own `showerror` methods are gone: one method serves them all.
+        @test isempty([T for T in exported if which(showerror, Tuple{IO, T}).sig !== Tuple{typeof(showerror), IO, EarthSciASTError}])
+
+        e = ParseError("bad", nothing; code = "removed_op", path = "/models/M", file = "/a/b.esm")
+        @test (error_code(e), error_message(e), error_path(e), error_file(e)) ==
+            ("removed_op", "bad", "/models/M", "/a/b.esm")
+        @test sprint(showerror, e) == "ParseError [removed_op]: bad (at /models/M in /a/b.esm)"
+        @test sprint(showerror, ParseError("bad")) == "ParseError: bad"
+        e = SimulateError("no such key", "unknown_override_key")
+        @test (error_code(e), error_message(e), error_path(e)) == ("unknown_override_key", "no such key", "")
+        @test sprint(showerror, e) == "SimulateError [unknown_override_key]: no such key"
+        e = TreeWalkError("E_TREEWALK_ARITY", "op '+' takes 2 operands")
+        @test sprint(showerror, e) == "TreeWalkError [E_TREEWALK_ARITY]: op '+' takes 2 operands"
+        e = ConflictingDerivativeError(["A.x"], "both an equation and a reaction")
+        @test error_code(e) == "conflicting_derivative"
+        @test startswith(sprint(showerror, e), "ConflictingDerivativeError [conflicting_derivative]: ")
+        @test error_message(e) == sprint(showerror, e)[(length("ConflictingDerivativeError [conflicting_derivative]: ") + 1):end]
+    end
+
+    @testset "every local E_ code literal is listed" begin
+        # The Julia-evaluator codes stay out of ERROR_CODES (not a cross-binding
+        # contract); this is their typo guard.
+        root = joinpath(@__DIR__, "..")
+        seen = Set{String}()
+        for dir in ("src", "ext"), (d, _, fs) in walkdir(joinpath(root, dir)), f in fs
+            endswith(f, ".jl") || continue
+            for m in eachmatch(r"\"(E_[A-Z0-9_]+)\"", read(joinpath(d, f), String))
+                push!(seen, String(m.captures[1]))
+            end
+        end
+        @test length(seen) >= 50
+        @test isempty(setdiff(seen, Set(EarthSciAST._LOCAL_ERROR_CODES)))
+        @test isempty(intersect(Set(EarthSciAST._LOCAL_ERROR_CODES), Set(error_code_names())))
+    end
+
     @testset "the corpus-pinned codes are registered" begin
         # Spot-check across every family, so a family dropped wholesale is caught.
         for c in (
