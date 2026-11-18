@@ -359,9 +359,31 @@ end
 # Emit and compile the fused scan of fold `S` over its term kernel `K`, or
 # return `nothing` when the emitter declines the kernel. `consumer` is
 # `nothing` or a `_ScanConsumer` (see above).
+# The fold's ⊕ as the emitted call's function symbol, or `nothing` for a
+# reducer the scans do not emit.
+_scan_opsym(S::_ScanFold) = _is_numeric_reducer(S.oplus) ? _reducer_fnsym(S.oplus) : nothing
+
+# A scan section's generated function: the invariant prologue, then the nest
+# `blk`, under `@inbounds` and with no alias scope, as in the kernel section
+# (JuliaLang/julia#63129). With a consumer the section writes the state part
+# of `du`, so the two-buffer bindings are off. `file` names the section in
+# the emitted line numbers.
+function _scan_section_fn(ctx::_CGCtx, K::_AccKernel, blk, consumer, nst::Int, file::Symbol)
+    ln = LineNumberNode(0, file)
+    run = Expr(
+        :let, _cg_section_bindings(consumer === nothing ? nst : 0, _AccKernel[K]),
+        Expr(
+            :block,
+            Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, ctx.prologue...)),
+            Expr(:macrocall, Symbol("@inbounds"), ln, blk)
+        )
+    )
+    f, fns = _cg_finish(ctx, _CG_SECTION_ARGS, run)
+    return f, _cg_tabpack(ctx, fns)
+end
+
 function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer = nothing)
-    op = S.oplus
-    opsym = _is_numeric_reducer(op) ? _reducer_fnsym(op) : nothing
+    opsym = _scan_opsym(S)
     opsym === nothing && return nothing
     ctx = _CGCtx(_codegen_node_budget(); nst = nst)
     acc = _cg_name(ctx, "acc")
@@ -401,25 +423,8 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
         _tally_cascade!(Symbol(:scan_fused_decline_, err.reason))
         return nothing
     end
-    ln = LineNumberNode(0, Symbol("ess-scan-fused"))
-    # No alias scope, as in the kernel section (JuliaLang/julia#63129). The
-    # term reads no slot the scan writes (a level's `(ue, ue)` call included).
-    run = Expr(
-        :let, _cg_section_bindings(
-            consumer === nothing ? nst : 0,
-            _AccKernel[K]
-        ),
-        Expr(
-            :block,
-            Expr(
-                :macrocall, Symbol("@inbounds"), ln,
-                Expr(:block, ctx.prologue...)
-            ),
-            Expr(:macrocall, Symbol("@inbounds"), ln, blk)
-        )
-    )
-    f, fns = _cg_finish(ctx, _CG_SECTION_ARGS, run)
-    tabpack = _cg_tabpack(ctx, fns)
+    # The term reads no slot the scan writes (a level's `(ue, ue)` call included).
+    f, tabpack = _scan_section_fn(ctx, K, blk, consumer, nst, Symbol("ess-scan-fused"))
     nlanes = div(length(S.slots), S.len)
     _tally_cascade!(:scan_fused)
     if consumer !== nothing
@@ -664,8 +669,7 @@ end
 # `nothing` when the emitter declines a kernel. `consumer` is `nothing` or
 # `(K, reads, store)` from `_colscan_consumer`.
 function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer = nothing)
-    op = S.oplus
-    opsym = _is_numeric_reducer(op) ? _reducer_fnsym(op) : nothing
+    opsym = _scan_opsym(S)
     opsym === nothing && return nothing
     ctx = _CGCtx(_codegen_node_budget(); nst = nst)
     nlanes = length(sh.r1)
@@ -698,25 +702,8 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer 
         _tally_cascade!(Symbol(:scan_colscan_decline_, err.reason))
         return nothing
     end
-    ln = LineNumberNode(0, Symbol("ess-scan-column"))
-    # No alias scope, as in the kernel section (JuliaLang/julia#63129): the
-    # per-lane buffer is stored and read back level after level.
-    run = Expr(
-        :let, _cg_section_bindings(
-            consumer === nothing ? nst : 0,
-            _AccKernel[K]
-        ),
-        Expr(
-            :block,
-            Expr(
-                :macrocall, Symbol("@inbounds"), ln,
-                Expr(:block, ctx.prologue...)
-            ),
-            Expr(:macrocall, Symbol("@inbounds"), ln, blk)
-        )
-    )
-    f, fns = _cg_finish(ctx, _CG_SECTION_ARGS, run)
-    tabpack = _cg_tabpack(ctx, fns)
+    # The per-lane buffer is stored and read back level after level.
+    f, tabpack = _scan_section_fn(ctx, K, blk, consumer, nst, Symbol("ess-scan-column"))
     _tally_cascade!(:scan_colscan)
     if consumer !== nothing
         _tally_cascade!(:scan_colscan_consumer)
