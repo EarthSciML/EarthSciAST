@@ -65,8 +65,7 @@ const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an E
 #   * `_NK_CONTRACTION_LOOP` — `_ContractLoop`; `_NK_RAGGED_LOOP` — `_RaggedLoop`;
 #     `_NK_STATE_GATHER` — `_StateGather`; `_NK_RECUR_GATHER` — the recurrence's
 #     gather; `_NK_LOOPVAR` — the loop counter's `Base.RefValue{Int}`.
-#   * the access-kernel kinds (access_kernel.jl): `_NK_REDUCE` — a `_Bound`,
-#     `_NK_SUBCALL` — an `_AccKernel`, `_NK_AREDUCE` — an `_AReduceSpec`.
+#   * the access-kernel kinds (access_kernel.jl): `_NK_SUBCALL` — an `_AccKernel`, `_NK_AREDUCE` — an `_AReduceSpec`.
 #   * `_NK_OP` — `nothing`, except the setup-time geometry operators
 #     (`:geo_gather`, `:geo_agg`, `:geo_count`, `:geomemo`, `:cellmemo`), which exist
 #     only in build-time geometry bodies and carry their source or spec.

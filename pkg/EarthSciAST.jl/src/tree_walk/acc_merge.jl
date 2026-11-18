@@ -260,10 +260,7 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int, _Node}})::Vector{_Acc
         spine, cse = _acc_node_has_lazy(spine) ? (spine, _ACC_NO_CSE) :
             _build_acc_cse(spine, acc)
         push!(
-            kernels, _AccKernel(
-                _outs_cells(slots), spine, acc,
-                _FixedBound(0), 0.0, cse
-            )
+            kernels, _AccKernel(_outs_cells(slots), spine, acc, cse)
         )
     end
     return kernels

@@ -143,7 +143,7 @@ function _lower_subcall(site::_SubCallSite, lane_repl::Vector{<:_LaneRepl})::_No
         raw = _lower_to_access(variant.tmpl, seg, a, variant.subcalls)
         sp, cse = _build_acc_cse(raw, a)
         _AccKernel(
-            _contig_cells(0), sp, a, _FixedBound(0), 0.0, cse,
+            _no_cells(), sp, a, cse,
             _collect_subkernels(sp, cse)
         )
     end
@@ -2207,7 +2207,7 @@ function _process_affine_box!(
         UnitRange{Int}[cbox[d] for d in 1:nout],
         base - (view === nothing ? 0 : view.shift), Int[], slab
     )
-    return push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
+    return push!(kernels, _AccKernel(cs, spine, acc, cse, subs))
 end
 
 # Every lane recipe's compiled evaluator (`nothing` where it has none), per

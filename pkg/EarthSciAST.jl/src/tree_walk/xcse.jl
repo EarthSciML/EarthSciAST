@@ -31,8 +31,8 @@
 #   2. every kernel's `inv_recipes` defs (top-level kernels + their transitive
 #      template-body `subs`) are value-numbered in the same table, with
 #      `_NK_ACCESS` leaves NORMALIZED to their scalar-node equivalents
-#      (`_AK_STATE_FIXED` ≡ `_NK_STATE`, `_AK_ARR_FIXED` ≡ `_NK_PARAM_GATHER`,
-#      `_AK_SCALAR` ≡ `_NK_LITERAL`) so a kernel-side `u[5]` matches a
+#      (`_AK_STATE_FIXED` ≡ `_NK_STATE`, `_AK_ARR_FIXED` ≡ `_NK_PARAM_GATHER`)
+#      so a kernel-side `u[5]` matches a
 #      prelude-side `u[5]`;
 #   3. a value number seen by ≥ 2 kernel defs whose body is at least as
 #      expensive as a transcendental (the `:xcse_expensive` registry gate —
@@ -251,13 +251,6 @@ function _xnode_vn_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
                     Symbol(""), pay, Int[],
                 ), false
             )
-        elseif ak === _AK_SCALAR
-            return _xintern!(
-                ctx, (
-                    _NK_LITERAL, Symbol(""), reinterpret(UInt64, a.v),
-                    0, Symbol(""), 0, Int[],
-                ), false
-            )
         end
         return _XVN_NONE
     end
@@ -272,7 +265,7 @@ function _xnode_vn_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
         # has drifted from what this key models: decline rather than key past it.
         n.payload === nothing || return _XVN_NONE
     else
-        return _XVN_NONE    # _NK_REDUCE / _NK_SUBCALL / geometry / future kinds
+        return _XVN_NONE    # _NK_SUBCALL / _NK_AREDUCE / geometry / future kinds
     end
     kids = Vector{Int}(undef, length(n.children))
     for i in eachindex(n.children)
@@ -290,8 +283,7 @@ end
 #
 # Kernel-only leaves become their scalar equivalents (the SAME memory read, so
 # the value is bit-identical): `_AK_STATE_FIXED` → `_NK_STATE`, `_AK_ARR_FIXED`
-# → a live `_NK_PARAM_GATHER` over the aliased buffer, `_AK_SCALAR` →
-# `_NK_LITERAL`. A ref to a lower inv slot becomes a ref to that def's SHARED
+# → a live `_NK_PARAM_GATHER` over the aliased buffer. A ref to a lower inv slot becomes a ref to that def's SHARED
 # slot (`slot_of_vn` — the dependency was slotted first; see the sweep).
 # Returns `nothing` when anything is not translatable — the caller then simply
 # declines to hoist this def (fail closed, never a build error).
@@ -308,8 +300,6 @@ function _xcse_translate(
             return _mknode(kind = _NK_STATE, idx = a.idx)
         elseif a.kind === _AK_ARR_FIXED
             return _mknode(kind = _NK_PARAM_GATHER, idx = a.idx, payload = a.arr)
-        elseif a.kind === _AK_SCALAR
-            return _mknode(kind = _NK_LITERAL, literal = a.v)
         end
         return nothing
     elseif k === _NK_CACHED

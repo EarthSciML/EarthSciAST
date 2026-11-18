@@ -474,12 +474,14 @@ else
             U = ESM._cellsets_outs_unique
             @test U([ESM._outs_cells([4, 9, 2])])
             @test !U([ESM._outs_cells([4, 9, 4])])
-            # contig vs box overlap ACROSS sets (the case a per-kernel check
-            # would never see): contig 1:6, then a stride-2 box hitting slot 4.
-            @test !U([ESM._outs_cells([4, 9, 2]), ESM._contig_cells(6)])
+            # listed slots vs box overlap ACROSS sets (the case a per-kernel
+            # check would never see): a unit box over slots 1:6, then a
+            # stride-2 box hitting slot 4.
+            run(n) = ESM._CellSet([1], [UnitRange{Int}(1, n)], 0)  # slots 1..n
+            @test !U([ESM._outs_cells([4, 9, 2]), run(6)])
             box = ESM._CellSet([2], [UnitRange{Int}(1, 3)], 2)  # slots 4, 6, 8
-            @test !U([ESM._contig_cells(6), box])
-            @test U([ESM._contig_cells(3), box])                # 1..3 vs 4,6,8
+            @test !U([run(6), box])
+            @test U([run(3), box])                              # 1..3 vs 4,6,8
             # Boxes of one layout map (a 10x10 column-major block at slot 1):
             # decided box against box, with no slot enumerated.
             b2(r1, r2) = ESM._CellSet([1, 10], [r1, r2], -10)

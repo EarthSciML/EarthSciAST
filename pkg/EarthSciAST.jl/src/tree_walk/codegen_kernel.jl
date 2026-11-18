@@ -15,7 +15,7 @@
 # `_eval_acc_op` (and through them `_eval_node_op`) operation for operation:
 #   * same operand order and the same LEFT-nested fold for n-ary `+`/`*`/
 #     `min`/`max` (`((c1 ⊕ c2) ⊕ c3)…`), the same 0̄-seeded fold for
-#     `_NK_CONTRACTION`/`_NK_REDUCE` (`((0̄ ⊕ c1) ⊕ c2)…`);
+#     `_NK_CONTRACTION`/`_NK_AREDUCE` (`((0̄ ⊕ c1) ⊕ c2)…`);
 #   * NO `@simd`, NO `@fastmath`, NO `muladd`, NO reassociation of any kind
 #     (`@inbounds` only — indices were validated at build);
 #   * LAZY guard semantics preserved verbatim: `ifelse` emits a ternary (only
@@ -152,8 +152,8 @@ _cg_foreign_scratch_disabled() = !_compiler_plan_now().cg_foreign_scratch
 
 # ---- Emission context (one per generated function) --------------------------
 mutable struct _CGCtx
-    # Runtime objects the generated code needs (const arrays, connectivity /
-    # valence tables, outs vectors), GROUPED BY CONCRETE TYPE into
+    # Runtime objects the generated code needs (const arrays, slot tables,
+    # outs vectors), GROUPED BY CONCRETE TYPE into
     # homogeneous containers (ess-iip-tabgroup). The generated code indexes a
     # concrete-element container — `_cggrpG[pos]` — so its element type infers in
     # O(1); the runtime `tabs` argument is a small tuple of those containers, one
@@ -379,8 +379,6 @@ end
 # call by the prologue, as `_fill_invariant!` does).
 struct _CGKernCtx
     K::_AccKernel
-    c::Any        # cell ordinal
-    n::Any        # neighbour index (0 outside a reduction)
     oln::Any      # output linear slot
     mi1::Any      # loop multi-index, padded with literal 1s
     mi2::Any
@@ -392,8 +390,8 @@ struct _CGKernCtx
     # interpreter's padded `midx` does.
     mix::Vector{Any}
 end
-_CGKernCtx(K, c, n, oln, mi1, mi2, mi3, cellsyms, invsyms) =
-    _CGKernCtx(K, c, n, oln, mi1, mi2, mi3, cellsyms, invsyms, Any[])
+_CGKernCtx(K, oln, mi1, mi2, mi3, cellsyms, invsyms) =
+    _CGKernCtx(K, oln, mi1, mi2, mi3, cellsyms, invsyms, Any[])
 
 _cg_mi(kc::_CGKernCtx, d::Int) =
     d == 1 ? kc.mi1 : d == 2 ? kc.mi2 : d == 3 ? kc.mi3 :
@@ -418,7 +416,7 @@ function _cg_with_mi(kc::_CGKernCtx, d::Int, v)
         mix[d - 3] = v
     end
     return _CGKernCtx(
-        kc.K, kc.c, kc.n, kc.oln, mi1, mi2, mi3, kc.cellsyms,
+        kc.K, kc.oln, mi1, mi2, mi3, kc.cellsyms,
         kc.invsyms, mix
     )
 end
@@ -554,7 +552,6 @@ _cg_slab_literal(cs::_CellSet, d::Int) =
 function _cg_oln_extent(cs::_CellSet)
     any(isempty, cs.ranges) && return (1, 0)
     _is_outs(cs) && return extrema(cs.outs)
-    _is_contig(cs) && return (first(cs.ranges[1]), last(cs.ranges[1]))
     lo = hi = cs.base
     for d in eachindex(cs.strides)
         a = cs.strides[d] * first(cs.ranges[d])
@@ -615,11 +612,8 @@ function _cg_side(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc)
         return _cg_slot_side(ctx.nst, a.idx, a.idx)
     elseif k === _AK_STATE_TBL_BOX && a.idx > 0
         return _cg_slot_side(ctx.nst, a.idx, a.idx)
-    elseif k === _AK_STATE_INDIRECT || k === _AK_STATE_INDIRECT_COL ||
-            k === _AK_STATE_TBL_BOX
+    elseif k === _AK_STATE_TBL_BOX
         lo, hi = _cg_table_extent(ctx, a.conn)
-        # An indirect table has no ghost entry; one that did would read slot 0.
-        k !== _AK_STATE_TBL_BOX && lo > hi && return :x
         return _cg_slot_side(ctx.nst, lo, hi)
     end
     return :x
@@ -638,17 +632,6 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key = nothing)
             _cg_side(ctx, kc, a),
             _cg_offset(kc.oln, _cg_geo!(ctx, a.delta, _cg_gkey(key, :delta), true))
         )
-    elseif k === _AK_CONST_AFFINE
-        return :(
-            $(_cg_tab!(ctx, a.arr))[
-                $(
-                    _cg_offset(
-                        kc.oln,
-                        _cg_geo!(ctx, a.delta, _cg_gkey(key, :delta), true)
-                    )
-                ),
-            ]
-        )
     elseif k === _AK_CONST_BOX || k === _AK_FORCING_BOX
         # FORCING_BOX's arr is the aliased LIVE buffer — passing the reference
         # through `tabs` keeps every in-place refresh visible.
@@ -666,26 +649,8 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key = nothing)
         return _cg_uread(_cg_side(ctx, kc, a), _cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))
     elseif k === _AK_LOOP_IDX
         return :(Float64($(_cg_mi(kc, a.dim))))
-    elseif k === _AK_SCALAR
-        return a.v
-    elseif k === _AK_CONST_CELL
-        return :($(_cg_tab!(ctx, a.arr))[$(kc.c)])
-    elseif k === _AK_CONST_EDGE
-        return :($(_cg_tab!(ctx, a.arr))[($(kc.c) - 1) * $(a.width) + $(kc.n)])
     elseif k === _AK_ARR_FIXED
         return :($(_cg_tab!(ctx, a.arr))[$(_cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))])
-    elseif k === _AK_STATE_INDIRECT
-        ctx.tblread = true
-        return _cg_uread(
-            _cg_side(ctx, kc, a),
-            :($(_cg_tabh!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(kc.n)])
-        )
-    elseif k === _AK_STATE_INDIRECT_COL
-        ctx.tblread = true
-        return _cg_uread(
-            _cg_side(ctx, kc, a),
-            :($(_cg_tabh!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(a.col)])
-        )
     elseif k === _AK_STATE_TBL_BOX
         s = _cg_name(ctx, "s")
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
@@ -801,28 +766,6 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             return :(_cse_read($(_cg_tab!(ctx, pl)), $(nd.idx), _cgT))
         end
         _decline(:foreign_scratch)
-    elseif k === _NK_REDUCE
-        # `s = K.zerobar; for m in 1:cnt; s += ev(body @ n=m); end` — the
-        # `_eval_acc` REDUCE arm verbatim (the ⊕ is always `+`, seeded from
-        # the kernel's 0̄).
-        b = kc.K.bound
-        cnt = b isa _FixedBound ? b.k :
-            b isa _VarBound ? :($(_cg_tab!(ctx, b.valence))[$(kc.c)]) :
-            _decline(:unsupported_bound)
-        s = _cg_name(ctx, "r")
-        m = _cg_name(ctx, "m")
-        inner = _CGKernCtx(
-            kc.K, kc.c, m, kc.oln, kc.mi1, kc.mi2, kc.mi3,
-            kc.cellsyms, kc.invsyms, kc.mix
-        )
-        body = _cg_emit(ctx, inner, nd.children[1])
-        return quote
-            local $s = $(kc.K.zerobar)
-            for $m in 1:$cnt
-                $s += $body
-            end
-            $s
-        end
     elseif k === _NK_AREDUCE
         return _cg_emit_areduce(ctx, kc, nd)
     elseif k === _NK_CONTRACTION
@@ -910,7 +853,7 @@ function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     invsyms === nothing && _decline(:subcall_order)
     ctx.subks[S] = true
     inner = _CGKernCtx(
-        S, kc.c, kc.n, kc.oln, kc.mi1, kc.mi2, kc.mi3,
+        S, kc.oln, kc.mi1, kc.mi2, kc.mi3,
         Symbol[], invsyms, kc.mix
     )
     stmts = _cg_emit_recipes!(Any[], ctx, inner)
@@ -984,14 +927,14 @@ end
 # ---- Invariant tier → prologue locals (mirrors `_fill_invariant!`) ----------
 # Emitted once per kernel OBJECT (a sub-kernel shared by several parents is
 # recomputed-identical, so one fill is the same values). The dummy cell
-# context (c=1, n=0, oln=1, midx=(1,1,1)) is `_fill_invariant!`'s — invariant
+# context (oln=1, midx=(1,1,1)) is `_fill_invariant!`'s — invariant
 # recipes contain no cell-varying access, so it is never consulted, but a
 # hand-built kernel that violates that reproduces the interpreter's reads.
 function _cg_inv!(ctx::_CGCtx, K::_AccKernel)
     syms = get(ctx.invdone, K, nothing)
     syms === nothing || return syms
     syms = Symbol[]
-    kc = _CGKernCtx(K, 1, 0, 1, 1, 1, 1, Symbol[], syms)
+    kc = _CGKernCtx(K, 1, 1, 1, 1, Symbol[], syms)
     ctx.invdone[K] = syms
     push!(ctx.invlog, K)
     # Geometry an invariant recipe reads (a fixed slot) is read into the
@@ -1104,7 +1047,7 @@ function _cg_scan_consumer_cell(ctx::_CGCtx, cons, oln::Symbol, xv::Symbol)
     Kc = cons.K
     oc = _cg_name(ctx, "oc")
     d = _cg_geo!(ctx, cons.delta, (Kc, :scan_consumer_delta))
-    kc = _CGKernCtx(Kc, oc, 0, oc, 1, 1, 1, Symbol[], cons.invsyms)
+    kc = _CGKernCtx(Kc, oc, 1, 1, 1, Symbol[], cons.invsyms)
     stmts = Any[:(local $oc = $oln - $d)]
     ctx.subst = (Kc, cons.ix, xv)
     try
@@ -1199,7 +1142,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
         outs = _cg_tab!(ctx, cs.outs)
         c = _cg_name(ctx, "c")
         oln = _cg_name(ctx, "o")
-        kc = _CGKernCtx(K, c, 0, oln, c, 1, 1, Symbol[], invsyms)
+        kc = _CGKernCtx(K, oln, c, 1, 1, Symbol[], invsyms)
         ctx.tblread = false
         body = cellbody(kc)
         tv1 = _cg_tblread!(ctx)
@@ -1211,23 +1154,10 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                 $(tv1...)
             end
         end
-    elseif _is_contig(cs)
-        c0 = geo(first(cs.ranges[1]), (1, :first))
-        c = _cg_name(ctx, "c")
-        kc = _CGKernCtx(K, c, 0, c, c, 1, 1, Symbol[], invsyms)
-        ctx.tblread = false
-        body = cellbody(kc)
-        tv1 = _cg_tblread!(ctx)
-        return quote
-            $(hdr...)
-            for $c in ($c0 + $av):($c0 + $bv - 1)
-                $(body...)
-                $(tv1...)
-            end
-        end
     end
+    _is_cellless(cs) && error("_cg_emit_kernel_nest!: a sub-kernel has no loop nest of its own")
     # Strided Cartesian box, rank ≤ 3, in `_run_box_kernel!`'s exact iteration
-    # order (k-outer, i-inner). c == oln for a box. The flat cell ordinal `o`
+    # order (k-outer, i-inner). The flat cell ordinal `o`
     # of `(i, j, k)` is `(i-i0) + ni·((j-j0) + nj·(k-k0))` — exactly the serial
     # enumeration position — and a chunk `[a, b)` is walked as whole i-ROWS
     # with the FIRST and LAST row's i-range clamped to the chunk boundary
@@ -1243,7 +1173,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     olnexpr = :($(geo(cs.base, :base)) + $iv * $(st[1]))
     nd >= 2 && (olnexpr = :($olnexpr + $jv * $(st[2])))
     nd >= 3 && (olnexpr = :($olnexpr + $kv * $(st[3])))
-    kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invsyms)
+    kc = _CGKernCtx(K, oln, iv, jv, kv, Symbol[], invsyms)
     ctx.tblread = false
     body = cellbody(kc)
     # The innermost loop's own annotation: kept scalar when it gathers through
@@ -1373,7 +1303,7 @@ end
 # template sub-kernel.
 function _cg_fuse_leading(K::_AccKernel)
     cs = K.cells
-    (_is_outs(cs) || _is_contig(cs)) && return K
+    (_is_outs(cs) || _is_cellless(cs)) && return K
     # Whether a box spans whole rows depends on the cells a tile owns, so a
     # tile that shares its code never fuses.
     _range_shared_code(_range_spec_now()) && return K
@@ -1411,19 +1341,9 @@ function _cg_fuse_leading(K::_AccKernel)
         k = a.kind
         if _ak_box_addressed(k)
             n1, n2, n3, nx = shift(a.s1, a.s2, a.s3, a.sx)
-            push!(
-                acc, _AccDesc(
-                    a.kind, a.arr, a.conn, a.delta, a.idx, a.width, a.col,
-                    a.dim, n1, n2, n3, a.off + (j0 - 1) * a.s2, a.v, nx
-                )
-            )
+            push!(acc, _acc_with_box(a; s1 = n1, s2 = n2, s3 = n3, off = a.off + (j0 - 1) * a.s2, sx = nx))
         elseif k === _AK_LOOP_IDX
-            push!(
-                acc, _AccDesc(
-                    a.kind, a.arr, a.conn, a.delta, a.idx, a.width, a.col,
-                    a.dim - 1, a.s1, a.s2, a.s3, a.off, a.v, a.sx
-                )
-            )
+            push!(acc, _acc_with_box(a; dim = a.dim - 1))
         else
             push!(acc, a)
         end
@@ -1453,7 +1373,7 @@ function _cg_fuse_leading(K::_AccKernel)
     strides = Int[cs.strides[1]; cs.strides[3:end]]
     slab = length(cs.slab) >= 2 ? Bool[false; cs.slab[3:end]] : Bool[]
     cells = _CellSet(strides, ranges, cs.base + j0 * cs.strides[2], Int[], slab)
-    return _cg_fuse_leading(_AccKernel(cells, spine, acc, K.bound, K.zerobar, cse, K.subs))
+    return _cg_fuse_leading(_AccKernel(cells, spine, acc, cse, K.subs))
 end
 
 # ---- Row-fused box kernels ---------------------------------------------------
@@ -1560,7 +1480,7 @@ function _cg_emit_rowgroup_nest!(
         iv = _cg_name(ctx, "i")
         oln = _cg_name(ctx, "o")
         _cg_note_nest!(ctx, K)
-        kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invs[m])
+        kc = _CGKernCtx(K, oln, iv, jv, kv, Symbol[], invs[m])
         ctx.tblread = false
         rec = _cg_emit_recipes!(Any[], ctx, kc)
         val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
@@ -1914,7 +1834,7 @@ function _cg_emit_box_rank_n(
         rowexpr = :($rowexpr + $(ovs[d]) * $(st[d]))
     end
     kc = _CGKernCtx(
-        K, oln, 0, oln, ovs[1], ovs[2], ovs[3], Symbol[], _cg_inv!(ctx, K),
+        K, oln, ovs[1], ovs[2], ovs[3], Symbol[], _cg_inv!(ctx, K),
         Any[ovs[d] for d in 4:nd]
     )
     ctx.tblread = false
@@ -2039,8 +1959,7 @@ end
 
 # One cell's work in a kernel, in node evaluations: every node of the spine and
 # of the per-cell CSE recipes counts one, a loop's body counts once per
-# iteration (a neighbour reduction's mean valence, an affine reduction's or a
-# contraction loop's range), and a template sub-kernel counts its own work.
+# iteration (an affine reduction's or a contraction loop's range), and a template sub-kernel counts its own work.
 # The loop-invariant recipes run once per call and do not count. A rough cost,
 # used only to decide whether a section is worth a thread dispatch.
 function _acc_kernel_work(K::_AccKernel)
@@ -2057,16 +1976,7 @@ function _acc_node_work(nd::_Node, K::_AccKernel)
     for c in nd.children
         s += _acc_node_work(c, K)
     end
-    if nd.kind === _NK_REDUCE
-        b = K.bound
-        reach = b isa _FixedBound ? b.k :
-            b isa _VarBound && !isempty(b.valence) ?
-            cld(sum(b.valence), length(b.valence)) : 1
-        s *= max(reach, 1)
-    else
-        s *= _node_loop_reach(nd)
-    end
-    return 1 + s
+    return 1 + s * _node_loop_reach(nd)
 end
 
 # The iterations a looping node runs its body for (1 for any other node).
@@ -2518,7 +2428,7 @@ function _cg_is_spill_call(ex)
     return f isa Symbol && startswith(String(f::Symbol), "_cgh")
 end
 
-# A head that introduces its own scope / bindings (a `_NK_REDUCE`/subcall body is
+# A head that introduces its own scope / bindings (an `_NK_AREDUCE`/subcall body is
 # a `quote` block with a `local` accumulator and a `for` loop var). Partitioning
 # must treat such a node ATOMICALLY — never hoist a sub-expression out of it,
 # since that sub-expression may reference a name bound INSIDE it — so it is

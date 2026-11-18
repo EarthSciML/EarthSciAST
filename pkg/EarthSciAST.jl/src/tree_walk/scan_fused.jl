@@ -66,9 +66,8 @@ function _cellset_is_shifted(cs::_CellSet, slots::Vector{Int}, delta::Int)
     _cellset_ncells(cs) == length(slots) || return false
     if _is_outs(cs)
         return all(k -> cs.outs[k] + delta == slots[k], eachindex(slots))
-    elseif _is_contig(cs)
-        r = cs.ranges[1]
-        return all(k -> r[k] + delta == slots[k], eachindex(slots))
+    elseif _is_cellless(cs)
+        return isempty(slots)
     end
     return _box_is_shifted(cs.base, Tuple(cs.strides), Tuple(cs.ranges), slots, delta)
 end
@@ -96,14 +95,10 @@ end
 # The descriptor kinds a consumer's body may read: each is addressed by `oln`
 # (or nothing), so the body can run at the scan's cell with `oln` = the scan's
 # slot minus `delta`.
-const _SCAN_CONSUMER_KINDS = (
-    _AK_SCALAR, _AK_STATE_AFFINE, _AK_CONST_AFFINE,
-    _AK_STATE_FIXED, _AK_ARR_FIXED,
-)
+const _SCAN_CONSUMER_KINDS = (_AK_STATE_AFFINE, _AK_STATE_FIXED, _AK_ARR_FIXED)
 
 # Whether a consumer's spine (or recipe) uses only leaves and plain operators:
-# nothing addressed by the cell ordinal or the loop index, no reduction, no
-# sub-kernel.
+# nothing addressed by the loop index, no reduction, no sub-kernel.
 function _scan_consumer_node_ok(nd::_Node)
     k = nd.kind
     if k === _NK_OP
@@ -129,8 +124,7 @@ function _scan_desc_extent(a::_AccDesc, olnext)
         return (olnext[1] + a.delta, olnext[2] + a.delta)
     elseif k === _AK_STATE_FIXED
         return (a.idx, a.idx)
-    elseif k === _AK_STATE_INDIRECT || k === _AK_STATE_INDIRECT_COL ||
-            k === _AK_STATE_TBL_BOX
+    elseif k === _AK_STATE_TBL_BOX
         isempty(a.conn) && return nothing
         lo, hi = typemax(Int), typemin(Int)
         for s in a.conn
@@ -423,7 +417,7 @@ end
 # not a column scan of this kernel.
 function _colscan_shape(S::_ScanFold, K::_AccKernel)
     cs = K.cells
-    (_is_outs(cs) || _is_contig(cs) || length(cs.strides) != 2) && return nothing
+    (_is_outs(cs) || _is_cellless(cs) || length(cs.strides) != 2) && return nothing
     (cs.strides[1] == 1 && S.lstride == 1 && S.kstride != 0) || return nothing
     r1, r2 = cs.ranges
     S2 = cs.strides[2]
@@ -485,7 +479,7 @@ function _colscan_consumer(
     Kc = found
     isempty(Kc.subs) || return nothing
     cc = Kc.cells
-    (_is_outs(cc) || _is_contig(cc) || length(cc.strides) != 2) && return nothing
+    (_is_outs(cc) || _is_cellless(cc) || length(cc.strides) != 2) && return nothing
     (cc.strides == K.cells.strides && cc.ranges == K.cells.ranges) || return nothing
     olnext = _cg_oln_extent(cc)
     (1 <= olnext[1] && olnext[2] <= nst) || return nothing
@@ -543,9 +537,7 @@ end
 function _cellset_foreach_slot(f, cs::_CellSet)
     if _is_outs(cs)
         foreach(f, cs.outs)
-    elseif _is_contig(cs)
-        foreach(f, cs.ranges[1])
-    else
+    elseif !_is_cellless(cs)
         _box_foreach_slot(f, cs.base, Tuple(cs.strides), Tuple(cs.ranges))
     end
     return nothing
@@ -679,7 +671,7 @@ function _colscan_nest(
     acc = _cg_name(ctx, "acc")
     function cell(first::Bool, f64::Bool)
         oln = _cg_name(ctx, "o")
-        kc = _CGKernCtx(K, oln, 0, oln, iv, jv, 1, Symbol[], invsyms)
+        kc = _CGKernCtx(K, oln, iv, jv, 1, Symbol[], invsyms)
         st = Any[:(local $oln = $base + $iv + $jv * $S2)]
         _cg_emit_recipes!(st, ctx, kc)
         val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
@@ -710,7 +702,7 @@ function _colscan_nest(
                 sub[ix] = off == po ? xp : xn
             end
             oc = _cg_name(ctx, "oc")
-            kcc = _CGKernCtx(Kc, oc, 0, oc, iv, jv, 1, Symbol[], cinv)
+            kcc = _CGKernCtx(Kc, oc, iv, jv, 1, Symbol[], cinv)
             push!(st, :(local $oc = $basec + $iv + $jv * $S2))
             ctx.subst = (Kc, sub)
             try

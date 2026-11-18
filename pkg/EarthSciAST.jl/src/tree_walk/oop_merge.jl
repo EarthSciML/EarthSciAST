@@ -56,8 +56,6 @@
 # The name is historical (the pass landed :oop-only); it runs for BOTH emitters.
 _oop_merge_disabled() = !_compiler_plan_now().oop_merge
 
-_oop_mergeable_acc_kind(k) = (a = _ak_addr(k); a !== :edge && a !== :conn)
-
 # Signature equal for two kernels iff they can be evaluated in LOCKSTEP: same
 # tree shape and op/payload structure, with per-lane-varying leaves (state
 # slots, const values, literals, forcing indices) left free — those become
@@ -72,7 +70,6 @@ function _oop_merge_sig!(
     k = n.kind
     if k === _NK_ACCESS
         a = K.acc[n.idx]
-        _oop_mergeable_acc_kind(a.kind) || (why[] = :acc_kind)
         if _oop_x_statefam(a.kind)
             print(io, "AS")
         elseif _oop_x_forcfam(a.kind)
@@ -98,8 +95,6 @@ function _oop_merge_sig!(
         pos = findfirst(s -> s === n.payload, parentsubs)
         pos === nothing && (why[] = :subcall_unknown; return)
         print(io, "S", pos)
-    elseif k === _NK_REDUCE
-        why[] = :reduce; print(io, "X")
     elseif k === _NK_OP
         # The clone takes an op's payload from the class representative, so a
         # payload the signature cannot compare keeps the kernel out of the merge.
@@ -117,7 +112,6 @@ function _oop_merge_sig!(
 end
 
 function _oop_merge_trees_sig!(io::IOBuffer, K::_AccKernel, parentsubs, why)
-    print(io, "z", K.zerobar, "|")
     _oop_merge_sig!(io, K.spine, K, parentsubs, why); print(io, "|I")
     for r in K.cse.inv_recipes
         _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";")
@@ -130,11 +124,10 @@ function _oop_merge_trees_sig!(io::IOBuffer, K::_AccKernel, parentsubs, why)
 end
 
 _oop_merge_kernel_sig(K::_AccKernel, plan::_OopAccPlan) =
-    _oop_merge_kernel_sig(K, plan.vectorizable, !isempty(plan.red_seg))
-function _oop_merge_kernel_sig(K::_AccKernel, vectorizable::Bool, reduce::Bool)
+    _oop_merge_kernel_sig(K, plan.vectorizable)
+function _oop_merge_kernel_sig(K::_AccKernel, vectorizable::Bool)
     why = Ref(:ok)
     vectorizable || (why[] = :unvectorizable)
-    reduce && (why[] = :reduce)
     io = IOBuffer()
     _oop_merge_trees_sig!(io, K, K.subs, why)
     for (si, S) in enumerate(K.subs)
@@ -272,19 +265,11 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                         q += lk
                     end
                     push!(accvec, _AccStateTblBox(tbl, 1, 0, 0, 1))
-                elseif akind in (
-                        _AK_SCALAR, _AK_CONST_AFFINE, _AK_CONST_BOX,
-                        _AK_CONST_CELL, _AK_LOOP_IDX,
-                    )
+                elseif akind === _AK_CONST_BOX || akind === _AK_LOOP_IDX
                     tbl = Vector{Float64}(undef, L); q = 0
                     for i in 1:m
                         lk = Ls[i]; idx = nodes[i].idx
-                        a = Kof(i).acc[idx]; pl = Pof(i)
-                        if a.kind === _AK_SCALAR
-                            tbl[(q + 1):(q + lk)] .= a.v
-                        else
-                            tbl[(q + 1):(q + lk)] .= pl.consts[idx]
-                        end
+                        tbl[(q + 1):(q + lk)] .= Pof(i).consts[idx]
                         q += lk
                     end
                     push!(accvec, _AccConstBox(tbl, 1, 0, 0, 1))
@@ -353,7 +338,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
         )
         repsub = rep.subs[si]
         merged_subs[si] = _AccKernel(
-            repsub.cells, msp_, mav_, repsub.bound, repsub.zerobar,
+            repsub.cells, msp_, mav_,
             _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)),
             _AccKernel[]
         )
@@ -364,13 +349,13 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     )
     outs = reduce(vcat, (plans[j].out_slots for j in js))
     return _AccKernel(
-        _outs_cells(outs), msp_, mav_, rep.bound, rep.zerobar,
+        _outs_cells(outs), msp_, mav_,
         _AccCSE(mrc_, msc_, minv_, mis_), merged_subs
     )
 end
 
 # The class merge's per-kernel lane plans, built on first use. Grouping reads
-# only whether a kernel vectorizes and whether it carries a reduce, and the
+# only whether a kernel vectorizes, and the
 # global out-slot check reads only its cell set, so a full plan (its per-lane
 # tables) is built only for a kernel whose class actually merges.
 #
@@ -407,10 +392,6 @@ function _plan_vecable(v::_LazyOopPlans, j::Int)
     return v.vecable[j] == 1
 end
 _plan_vecable(v::AbstractVector{_OopAccPlan}, j::Int) = v[j].vectorizable
-# A vectorized plan carries CSR reduce segments exactly when the spine reduces.
-_plan_reduce(v::_LazyOopPlans, j::Int) =
-    _plan_vecable(v, j) && _acc_has_reduce(v.kernels[j].spine)
-_plan_reduce(v::AbstractVector{_OopAccPlan}, j::Int) = !isempty(v[j].red_seg)
 
 _plans_empty(v::_LazyOopPlans) =
     _LazyOopPlans(_AccKernel[], Union{Nothing, _OopAccPlan}[], Int8[], v.outs_unique)
@@ -474,10 +455,7 @@ function _merge_oop_acc_kernels(
     groups = Dict{String, Vector{Int}}()
     passthrough = Int[]
     for j in eachindex(kernels)
-        s, _why = _oop_merge_kernel_sig(
-            kernels[j], _plan_vecable(plans, j),
-            _plan_reduce(plans, j)
-        )
+        s, _why = _oop_merge_kernel_sig(kernels[j], _plan_vecable(plans, j))
         s === nothing ? push!(passthrough, j) : push!(get!(groups, s, Int[]), j)
     end
 
@@ -582,10 +560,9 @@ end
 _oop_merge_expand_disabled() = !_compiler_plan_now().oop_merge_expand
 
 # The lockstep-mergeable kinds by what they read (`_ak_source`).
-_oop_x_statefam(k) = _oop_mergeable_acc_kind(k) && _ak_source(k) === :state
-_oop_x_forcfam(k) = _oop_mergeable_acc_kind(k) && _ak_source(k) === :forcing
-_oop_x_constfam(k) = _oop_mergeable_acc_kind(k) &&
-    (s = _ak_source(k); s === :const || s === :value || s === :loop)
+_oop_x_statefam(k) = _ak_source(k) === :state
+_oop_x_forcfam(k) = _ak_source(k) === :forcing
+_oop_x_constfam(k) = (s = _ak_source(k); s === :const || s === :loop)
 
 # Resolve a node through the OWNING kernel's CSE tiers: an own-scratch
 # `_NK_CACHED` read IS its recipe, structurally. Foreign-scratch reads (xcse
@@ -640,9 +617,6 @@ function _oop_x_sig(
         pos = findfirst(s -> s === n.payload, parentsubs)
         pos === nothing && (why[] = :subcall_unknown)
         r = hash((:S, pos === nothing ? 0 : pos), UInt(0x55ee))
-    elseif k === _NK_REDUCE
-        why[] = :reduce
-        r = hash(:X, UInt(0x66ff))
     elseif k === _NK_OP || k === _NK_CONTRACTION
         pl = n.payload
         paytok = if pl === nothing
@@ -669,19 +643,16 @@ function _oop_x_sig(
 end
 
 _oop_x_kernel_sig(K::_AccKernel, plan::_OopAccPlan) =
-    _oop_x_kernel_sig(K, plan.vectorizable, !isempty(plan.red_seg))
-function _oop_x_kernel_sig(K::_AccKernel, vectorizable::Bool, reduce::Bool)
+    _oop_x_kernel_sig(K, plan.vectorizable)
+function _oop_x_kernel_sig(K::_AccKernel, vectorizable::Bool)
     why = Ref(:ok)
     vectorizable || (why[] = :unvectorizable)
-    reduce && (why[] = :reduce)
     memo = IdDict{_Node, UInt}()
-    h = hash(reinterpret(UInt64, K.zerobar), UInt(0xaa33))
-    h = hash(_oop_x_sig(K.spine, K, K.subs, memo, why), h)
+    h = hash(_oop_x_sig(K.spine, K, K.subs, memo, why), UInt(0xaa33))
     for (si, S) in enumerate(K.subs)
         isempty(S.subs) || (why[] = :nested_sub_subs)
         smemo = IdDict{_Node, UInt}()
-        hs = hash(reinterpret(UInt64, S.zerobar), UInt(0xbb44))
-        hs = hash(_oop_x_sig(S.spine, S, K.subs, smemo, why), hs)
+        hs = hash(_oop_x_sig(S.spine, S, K.subs, smemo, why), UInt(0xbb44))
         h = hash((si, hs), h)
     end
     return (why[] === :ok ? h : nothing), why[]
@@ -833,20 +804,14 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                 )
                 # VALUE leaf group: literal and frozen-const members mix — each
                 # lane's table entry is exactly the value that member's leaf
-                # reads (a literal's value, a scalar's v, or the plan-resolved
-                # per-lane const). All-equal ⇒ stays a scalar literal.
+                # reads (a literal's value or the plan-resolved per-lane const). All-equal ⇒ stays a scalar literal.
                 tbl = Vector{Float64}(undef, L); q = 0
                 for i in 1:m
                     lk = Ls[i]; nd = nodes[i]
                     if nd.kind === _NK_LITERAL
                         tbl[(q + 1):(q + lk)] .= nd.literal
                     else
-                        a = Kof(i).acc[nd.idx]
-                        if a.kind === _AK_SCALAR
-                            tbl[(q + 1):(q + lk)] .= a.v
-                        else
-                            tbl[(q + 1):(q + lk)] .= Pof(i).consts[nd.idx]
-                        end
+                        tbl[(q + 1):(q + lk)] .= Pof(i).consts[nd.idx]
                     end
                     q += lk
                 end
@@ -907,8 +872,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
         )
         repsub = rep.subs[si]
         merged_subs[si] = _AccKernel(
-            repsub.cells, msp_, mav_, repsub.bound,
-            repsub.zerobar,
+            repsub.cells, msp_, mav_,
             _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)),
             _AccKernel[]
         )
@@ -916,7 +880,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
     msp_, mrc_, mav_, msc_ = merge_trees(i -> kernels[js[i]], i -> plans[js[i]])
     outs = reduce(vcat, (plans[j].out_slots for j in js))
     return _AccKernel(
-        _outs_cells(outs), msp_, mav_, rep.bound, rep.zerobar,
+        _outs_cells(outs), msp_, mav_,
         _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)), merged_subs
     )
 end
@@ -939,10 +903,7 @@ function _merge_oop_x_kernels(
     groups = Dict{UInt, Vector{Int}}()
     passthrough = Int[]
     for j in eachindex(kernels)
-        s, _why = _oop_x_kernel_sig(
-            kernels[j], _plan_vecable(plans, j),
-            _plan_reduce(plans, j)
-        )
+        s, _why = _oop_x_kernel_sig(kernels[j], _plan_vecable(plans, j))
         s === nothing ? push!(passthrough, j) : push!(get!(groups, s, Int[]), j)
     end
 
@@ -1011,8 +972,8 @@ _affine_keep_max() =
 
 _affine_keep_kind(k) =
     k in (
-    _AK_STATE_AFFINE, _AK_CONST_AFFINE, _AK_CONST_BOX, _AK_STATE_FIXED,
-    _AK_LOOP_IDX, _AK_SCALAR, _AK_ARR_FIXED, _AK_FORCING_BOX,
+    _AK_STATE_AFFINE, _AK_CONST_BOX, _AK_STATE_FIXED,
+    _AK_LOOP_IDX, _AK_ARR_FIXED, _AK_FORCING_BOX,
 )
 
 # The number of axes along which `K`'s box is more than one cell thick, or 0
