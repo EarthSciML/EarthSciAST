@@ -150,21 +150,21 @@
         "file_version": "0.1.0",
         "expected_behavior": "reject",
         "description": "Major version 0.x.x - rejected by a 1.x.x library; esm 1.0.0 is a clean break with no deprecation path",
-        "error": "Unsupported major version 0. This library supports major versions 1, 2."
+        "error": "Unsupported major version 0. This library supports major versions 1, 2, 3."
       },
       {
         "file": "version_0_0_1_pre_break.esm",
         "file_version": "0.0.1",
         "expected_behavior": "reject",
         "description": "The oldest published version - rejected for its major like every other 0.x document",
-        "error": "Unsupported major version 0. This library supports major versions 1, 2."
+        "error": "Unsupported major version 0. This library supports major versions 1, 2, 3."
       },
       {
         "file": "version_0_9_0_last_pre_break.esm",
         "file_version": "0.9.0",
         "expected_behavior": "reject",
         "description": "The release immediately preceding the break - rejected too, because there is no deprecation window",
-        "error": "Unsupported major version 0. This library supports major versions 1, 2."
+        "error": "Unsupported major version 0. This library supports major versions 1, 2, 3."
       },
       {
         "file": "version_2_5_1_major_rejection.esm",
@@ -187,7 +187,7 @@
         "file_version": "12.34.56",
         "expected_behavior": "reject",
         "description": "Large major version - should be rejected",
-        "error": "Unsupported major version 12. This library supports major versions 1, 2."
+        "error": "Unsupported major version 12. This library supports major versions 1, 2, 3."
       },
       {
         "file": "invalid_version_string.esm",
