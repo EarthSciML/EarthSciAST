@@ -584,11 +584,12 @@ end
 # F-6 check: a `distinct` (value-invention / relational) aggregate whose
 # key / body / filter reads a declared STATE variable classifies CONTINUOUS
 # (class = max over inputs; a state input is continuous), and a relational engine
-# may not run on the per-step hot path (§5.7 guard 2). Mirrors the flatten-time
-# `Cadence.assert_no_continuous_relational` guard, restricted here to the
-# `key`/`expr`/`filter` subtrees (a state read there is the value-invention
-# input) so a `distinct` set former over CONST mesh/parameter literals — e.g.
-# tests/valid/cadence/pure_topology.esm — stays valid.
+# may not run on the per-step hot path (§5.7 guard 2). This is the direct-read
+# form the other bindings' validators share: a state read in the
+# `key`/`expr`/`filter` subtrees. The build applies the transitive form
+# (`continuous_relational_nodes`, cadence.jl), which also follows observed
+# definitions and `t`. A `distinct` set former over CONST mesh/parameter literals
+# (tests/valid/cadence/pure_topology.esm) stays valid under both.
 function _check_relational_in_continuous!(
         errors::Vector{StructuralError}, agg::OpExpr,
         anchor::String, state_vars::Set{String}

@@ -77,7 +77,7 @@ function _ctx(m, isets, ca, params)
     ctx = EA._ViCtx(
         Dict{String, Any}(ca), Dict{String, Float64}(params),
         Dict{String, EA.IndexSet}(isets), m.variables,
-        Dict{String, Dict{Any, Any}}(), EA._vi_seed_map(m)
+        Dict{String, Dict{Any, Any}}(), EA.cadence_seeds(m)
     )
     for (v, node) in EA._vi_detect(m).columns
         EA._vi_materialize_column!(ctx, v, node)

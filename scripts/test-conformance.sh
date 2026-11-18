@@ -550,8 +550,8 @@ run_cadence_conformance_self_test() {
 }
 
 # Drive the REAL Julia partition pass (ess-my4.3.7) through the cadence harness:
-# the adapter (pkg/EarthSciAST.jl/scripts/cadence_adapter.jl) runs
-# EarthSciAST.Cadence over the three §6.1 fixtures and the runner
+# the adapter (pkg/EarthSciAST.jl/scripts/cadence_adapter.jl) runs the
+# package's cadence classifier (src/cadence.jl) over the fixtures and the runner
 # asserts its class map, materialization set, and CONST-folded buffers are
 # byte-identical to the golden. Julia is `bindings_optional` in the manifest, so
 # a missing adapter (no julia) is skipped, but a MISMATCH fails. Rust/Python

@@ -16,13 +16,8 @@ value-invention vocabulary (`id`, `distinct`, `key`, `join`, `ranges` — see
 `OPEXPR_FIELD_TABLE`, types.jl), so no raw-JSON walking is
 needed. The document-scoped index-set registry is passed alongside the model
 (esm-spec v0.8.0: `EsmFile.index_sets`), since a typed `Model` does not carry
-it. The cadence classification the §5.7 guard-2 checks need is derived here
-directly on the typed tree (`_vi_class`); the raw-JSON `Cadence` module remains
-only for the conformance fixtures, whose whole-document surroundings
-(`data_sources`, `index_sets`) never reach a typed expression. The
-`expect_cadence` annotation those fixtures assert against IS carried by the
-typed IR; it is simply not consulted here, because this classifier DERIVES a
-class rather than checking a declaration.
+it. The §5.7 guard 2 (no relational producer classifies `continuous`) uses the
+cadence classifier of cadence.jl, the one the cadence conformance pass runs.
 
 All diagnostics are raised as [`TreeWalkError`](@ref) carrying stable
 `E_TREEWALK_*` codes (`E_TREEWALK_VI_*` for the value-invention-specific
@@ -164,11 +159,8 @@ struct _ViCtx
     index_sets::Dict{String, IndexSet}
     variables::OrderedDict{String, ModelVariable}
     maps::Dict{String, Dict{Any, Any}}   # materialised join column → (output-index → value)
-    # Per-name cadence SEED, derived once from the model (esm-spec §6.3.1 /
-    # CONFORMANCE_SPEC §5.7.2). From esm 1.0.0 the seed cannot be read off a
-    # declared type, so it is computed by `_vi_seed_map` and carried here rather
-    # than re-derived at every leaf.
-    seeds::Dict{String, Int}
+    # Per-name cadence seed (`cadence_seeds`, cadence.jl), derived once.
+    seeds::Dict{String, CadenceClass}
 end
 
 # Coerce a build-time numeric to an exact integer relational key component
@@ -1080,107 +1072,6 @@ function _vic_produce(lens::Vector{Int}, cf, k, syms, column)
     return out
 end
 
-# ---- Cadence classification on the typed IR (§5.7 guard 2) ------------------
-#
-# The lattice `const ⊏ discrete ⊏ continuous` as integer ranks; `class(node) =
-# max` over its children's classes, seeded from a leaf's declared variable kind
-# (CONFORMANCE_SPEC §5.7.2). This is the value-invention front door's OWN typed
-# classifier — the raw-JSON `Cadence` module is conformance-fixture-only. It
-# never consults `expect_cadence` (which the typed IR does carry): an assertion
-# is something to CHECK, and checking it is the conformance pass's job, not a
-# guard's.
-# Only the CONTINUOUS-vs-not distinction is observable here (every check below
-# compares against `continuous`), so the loader-temporal `discrete → const`
-# refinement of the conformance classifier — which never crosses the continuous
-# boundary — is deliberately not replicated.
-const _VI_CLASS_CONST = 0
-const _VI_CLASS_DISCRETE = 1
-const _VI_CLASS_CONTINUOUS = 2
-
-"""
-    _vi_seed_map(model::Model) -> Dict{String,Int}
-
-The per-name cadence SEED of every variable in `model`, derived from the
-esm-spec §6.3.1 classification rather than from a declared type — the typed-IR
-twin of `Cadence.seed_leaf` (CONFORMANCE_SPEC §5.7.2):
-
-| Derived category | Seed |
-|---|---|
-| `ode_states`, `algebraic_unknowns` | CONTINUOUS |
-| `brownian_parameters` | CONTINUOUS (resampled every step) |
-| `observed_unknowns` | the class of its defining equation's RHS, transitively |
-| `discrete_parameters` | DISCRETE |
-| `sampled_parameters`, `constant_parameters` | CONST |
-
-The observed rule is the one that must not be shortcut: seeding every unknown
-CONTINUOUS would stop a state-free observed folding at bind — which is exactly
-what this build-time value-invention pass relies on — while seeding it CONST
-(the 0.x shortcut) would fold a value that reads a live state.
-"""
-function _vi_seed_map(model::Model)::Dict{String, Int}
-    seeds = Dict{String, Int}()
-    for n in ode_states(model)
-        seeds[n] = _VI_CLASS_CONTINUOUS
-    end
-    for n in algebraic_unknowns(model)
-        seeds[n] = _VI_CLASS_CONTINUOUS
-    end
-    for n in brownian_parameters(model)
-        seeds[n] = _VI_CLASS_CONTINUOUS
-    end
-    for n in discrete_parameters(model)
-        seeds[n] = _VI_CLASS_DISCRETE
-    end
-    for n in sampled_parameters(model)
-        seeds[n] = _VI_CLASS_CONST
-    end
-    for n in constant_parameters(model)
-        seeds[n] = _VI_CLASS_CONST
-    end
-    # Observed unknowns resolve through their defining equations, memoised, with
-    # a cycle guard (a cycle is a defect; it seeds CONTINUOUS, the conservative
-    # answer, and the acyclicity guard reports it).
-    defs = observed_definitions(model)
-    resolving = Set{String}()
-    function resolve(name)
-        haskey(seeds, name) && return seeds[name]
-        e = get(defs, name, nothing)
-        e === nothing && return _VI_CLASS_CONST
-        name in resolving && return _VI_CLASS_CONTINUOUS
-        push!(resolving, name)
-        cls = _VI_CLASS_CONST
-        for r in free_variables(e)
-            cls = max(cls, r == "t" ? _VI_CLASS_CONTINUOUS : resolve(r))
-        end
-        delete!(resolving, name)
-        seeds[name] = cls
-        return cls
-    end
-    for name in keys(defs)
-        resolve(name)
-    end
-    return seeds
-end
-
-function _vi_seed_class(name::AbstractString, seeds::Dict{String, Int})
-    name == "t" && return _VI_CLASS_CONTINUOUS   # the independent variable
-    # An unknown name is an index-set name or a bound index symbol (i, k, e,
-    # f) — const.
-    return get(seeds, name, _VI_CLASS_CONST)
-end
-
-# Derive a typed expression's cadence class: max over the generated child walk
-# (`foreach_child`, expression.jl — every expression-bearing `OpExpr` field).
-function _vi_class(expr::ASTExpr, seeds::Dict{String, Int})::Int
-    expr isa VarExpr && return _vi_seed_class(expr.name, seeds)
-    expr isa OpExpr || return _VI_CLASS_CONST    # IntExpr / NumExpr literals
-    cls = _VI_CLASS_CONST
-    foreach_child(expr) do c
-        cls = max(cls, _vi_class(c, seeds))
-    end
-    return cls
-end
-
 """
     materialize_value_invention(model::Model, index_sets, const_arrays, params)
         -> NamedTuple
@@ -1232,7 +1123,7 @@ function materialize_value_invention(
         Dict{String, IndexSet}(String(k) => v for (k, v) in index_sets),
         model.variables,
         Dict{String, Dict{Any, Any}}(),
-        _vi_seed_map(model)
+        cadence_seeds(model)
     )
 
     # Plain join columns first (a producer's join may reference them). A column
@@ -1265,7 +1156,7 @@ function materialize_value_invention(
         haskey(faq_to_set, id) || continue   # no derived set names this producer
         # §5.7 guard 2: a relational node may not run on the hot path. The code is
         # the one structural validation reports for the same document.
-        _vi_class(node, ctx.seeds) == _VI_CLASS_CONTINUOUS &&
+        isempty(continuous_relational_nodes(node, ctx.seeds)) ||
             throw(
             TreeWalkError(
                 "relational_node_in_continuous",
