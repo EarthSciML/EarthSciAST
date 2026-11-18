@@ -79,13 +79,11 @@ function validate_single_event_consistency(
         # `event_var_undeclared` at the affect's `lhs` field (§7.1 / §7.1.3(h)).
         for (j, affect) in enumerate(event.affects)
             _is_declared_event_target(model, affect.lhs, is_coupled) && continue
-            push!(
-                errors, StructuralError(
-                    "$event_path/affects/$(j - 1)/lhs",
-                    "Variable '$(affect.lhs)' in event affects is not declared",
-                    ERROR_CODES.EVENT_VAR_UNDECLARED,
-                    Dict{String, Any}("variable" => affect.lhs)
-                )
+            _report!(
+                errors, ERROR_CODES.EVENT_VAR_UNDECLARED,
+                "$event_path/affects/$(j - 1)/lhs",
+                "Variable '$(affect.lhs)' in event affects is not declared",
+                Dict{String, Any}("variable" => affect.lhs)
             )
         end
         _check_event_affects_unknowns!(errors, model, event, event_path, "continuous")
@@ -95,13 +93,11 @@ function validate_single_event_consistency(
         # `event_var_undeclared` at the affect's `lhs` field.
         for (j, affect) in enumerate(event.affects)
             _is_declared_event_target(model, affect.lhs, is_coupled) && continue
-            push!(
-                errors, StructuralError(
-                    "$event_path/affects/$(j - 1)/lhs",
-                    "Variable '$(affect.lhs)' in event affects is not declared",
-                    ERROR_CODES.EVENT_VAR_UNDECLARED,
-                    Dict{String, Any}("variable" => affect.lhs)
-                )
+            _report!(
+                errors, ERROR_CODES.EVENT_VAR_UNDECLARED,
+                "$event_path/affects/$(j - 1)/lhs",
+                "Variable '$(affect.lhs)' in event affects is not declared",
+                Dict{String, Any}("variable" => affect.lhs)
             )
         end
         _check_event_affects_unknowns!(errors, model, event, event_path, "discrete")
@@ -145,14 +141,12 @@ function _check_event_affects_unknowns!(
         tkind = _event_trigger_kind(event)
         tkind === nothing || (details["trigger_type"] = tkind)
         subject = ename === nothing ? "Event" : "Event '$(ename)'"
-        push!(
-            errors, StructuralError(
-                "$event_path/affects/$(j - 1)",
-                "$(subject) affects '$(affect.lhs)', which is a parameter; " *
-                    "an event may affect unknowns only",
-                ERROR_CODES.EVENT_AFFECTS_PARAMETER,
-                details
-            )
+        _report!(
+            errors, ERROR_CODES.EVENT_AFFECTS_PARAMETER,
+            "$event_path/affects/$(j - 1)",
+            "$(subject) affects '$(affect.lhs)', which is a parameter; " *
+                "an event may affect unknowns only",
+            details
         )
     end
     return errors

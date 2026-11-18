@@ -28,24 +28,20 @@ function validate_reaction_consistency(
         if substrates_field !== nothing
             for (j, entry) in enumerate(substrates_field)
                 if entry.species ∉ species_names
-                    push!(
-                        errors, StructuralError(
-                            "$reaction_path/substrates/$(j - 1)/species",
-                            "Species '$(entry.species)' not declared",
-                            ERROR_CODES.UNDEFINED_SPECIES,
-                            Dict{String, Any}("species" => entry.species)
-                        )
+                    _report!(
+                        errors, ERROR_CODES.UNDEFINED_SPECIES,
+                        "$reaction_path/substrates/$(j - 1)/species",
+                        "Species '$(entry.species)' not declared",
+                        Dict{String, Any}("species" => entry.species)
                     )
                 end
 
                 # Check positive stoichiometry
                 if entry.stoichiometry <= 0
-                    push!(
-                        errors, StructuralError(
-                            "$reaction_path/substrates/$(j - 1)/species",
-                            "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
-                            ERROR_CODES.INVALID_STOICHIOMETRY
-                        )
+                    _report!(
+                        errors, ERROR_CODES.INVALID_STOICHIOMETRY,
+                        "$reaction_path/substrates/$(j - 1)/species",
+                        "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)"
                     )
                 end
             end
@@ -57,24 +53,20 @@ function validate_reaction_consistency(
         if products_field !== nothing
             for (j, entry) in enumerate(products_field)
                 if entry.species ∉ species_names
-                    push!(
-                        errors, StructuralError(
-                            "$reaction_path/products/$(j - 1)/species",
-                            "Species '$(entry.species)' not declared",
-                            ERROR_CODES.UNDEFINED_SPECIES,
-                            Dict{String, Any}("species" => entry.species)
-                        )
+                    _report!(
+                        errors, ERROR_CODES.UNDEFINED_SPECIES,
+                        "$reaction_path/products/$(j - 1)/species",
+                        "Species '$(entry.species)' not declared",
+                        Dict{String, Any}("species" => entry.species)
                     )
                 end
 
                 # Check positive stoichiometry
                 if entry.stoichiometry <= 0
-                    push!(
-                        errors, StructuralError(
-                            "$reaction_path/products/$(j - 1)/species",
-                            "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
-                            ERROR_CODES.INVALID_STOICHIOMETRY
-                        )
+                    _report!(
+                        errors, ERROR_CODES.INVALID_STOICHIOMETRY,
+                        "$reaction_path/products/$(j - 1)/species",
+                        "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)"
                     )
                 end
             end
@@ -84,12 +76,10 @@ function validate_reaction_consistency(
         has_substrates = substrates_field !== nothing && !isempty(substrates_field)
         has_products = products_field !== nothing && !isempty(products_field)
         if !has_substrates && !has_products
-            push!(
-                errors, StructuralError(
-                    reaction_path,
-                    "Reaction has no reactants or products (null-null reaction)",
-                    ERROR_CODES.NULL_REACTION
-                )
+            _report!(
+                errors, ERROR_CODES.NULL_REACTION,
+                reaction_path,
+                "Reaction has no reactants or products (null-null reaction)"
             )
         end
 
@@ -107,13 +97,11 @@ function validate_reaction_consistency(
             occursin('.', name) && continue
             (name == indep || name in _BUILTIN_FUNCTION_NAMES) && continue
             (name in species_names || name in param_names) && continue
-            push!(
-                errors, StructuralError(
-                    "$reaction_path/rate",
-                    "Parameter '$name' referenced in rate expression is not declared",
-                    ERROR_CODES.UNDEFINED_PARAMETER,
-                    Dict{String, Any}("variable" => name)
-                )
+            _report!(
+                errors, ERROR_CODES.UNDEFINED_PARAMETER,
+                "$reaction_path/rate",
+                "Parameter '$name' referenced in rate expression is not declared",
+                Dict{String, Any}("variable" => name)
             )
         end
     end

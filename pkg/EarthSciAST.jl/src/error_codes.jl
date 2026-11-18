@@ -163,6 +163,8 @@ const ERROR_CODES = (
     # key that matches no declared name under the override-key rules.
     UNKNOWN_OVERRIDE_KEY = "unknown_override_key",
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref",
+    # A coupling event affect target that resolves to no variable (validate.jl).
+    UNRESOLVED_AFFECT_TARGET = "unresolved_affect_target",
 
     # ── Units (units.jl §4.8.4). Both are HARD errors: `UNIT_INCONSISTENCY`
     #    is a PROVABLE dimensional mismatch, `UNIT_PARSE_ERROR` a declared

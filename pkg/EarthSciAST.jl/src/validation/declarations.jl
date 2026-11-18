@@ -11,14 +11,12 @@ function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path
     declared = declared_system_kind(model)
     derived = system_kind(model)
     if declared !== nothing && declared != derived
-        push!(
-            errors, StructuralError(
-                "$path/system_kind",
-                "Model declares system_kind '$declared' but its equations and " *
-                    "parameters derive '$derived'",
-                ERROR_CODES.SYSTEM_KIND_MISMATCH,
-                Dict{String, Any}("declared" => declared, "derived" => derived)
-            )
+        _report!(
+            errors, ERROR_CODES.SYSTEM_KIND_MISMATCH,
+            "$path/system_kind",
+            "Model declares system_kind '$declared' but its equations and " *
+                "parameters derive '$derived'",
+            Dict{String, Any}("declared" => declared, "derived" => derived)
         )
     end
     for (subsys_name, subsys) in model_subsystems(model)
@@ -79,13 +77,11 @@ function _check_reserved_declaration_names!(
         why === nothing && continue
         role = why == "independent_variable" ? "the document's independent variable" :
             "the operator-model placeholder"
-        push!(
-            errors, StructuralError(
-                "$container_path/$name",
-                "$owner declares a $kind named '$name', which is $role",
-                ERROR_CODES.RESERVED_VARIABLE_NAME,
-                Dict{String, Any}("name" => name, "reserved_as" => why)
-            )
+        _report!(
+            errors, ERROR_CODES.RESERVED_VARIABLE_NAME,
+            "$container_path/$name",
+            "$owner declares a $kind named '$name', which is $role",
+            Dict{String, Any}("name" => name, "reserved_as" => why)
         )
     end
     return errors
@@ -171,16 +167,14 @@ function _check_array_defaults_have_shape!(
         var = model.variables[name]
         is_inline_array(var.default) || continue
         (var.shape === nothing || isempty(var.shape)) || continue
-        push!(
-            errors, StructuralError(
-                "$path/variables/$name/default",
-                "$owner variable '$name' has inline array data as its default but declares " *
-                    "no shape; inline array data is a shaped variable's value (esm-spec §6.3)",
-                ERROR_CODES.ARRAY_DEFAULT_WITHOUT_SHAPE,
-                Dict{String, Any}(
-                    "variable" => name,
-                    "variable_type" => _variable_type_word(var.type)
-                )
+        _report!(
+            errors, ERROR_CODES.ARRAY_DEFAULT_WITHOUT_SHAPE,
+            "$path/variables/$name/default",
+            "$owner variable '$name' has inline array data as its default but declares " *
+                "no shape; inline array data is a shaped variable's value (esm-spec §6.3)",
+            Dict{String, Any}(
+                "variable" => name,
+                "variable_type" => _variable_type_word(var.type)
             )
         )
     end
@@ -232,16 +226,14 @@ function validate_variable_map_units(file::EsmFile)::Vector{StructuralError}
         conflict = _variable_map_unit_conflict(file, entry)
         conflict === nothing && continue
         src_units, tgt_units = conflict
-        push!(
-            errors, StructuralError(
-                "/coupling/$(i - 1)",
-                "variable_map identity coupling from '$(entry.from)' ($src_units) to " *
-                    "'$(entry.to)' ($tgt_units) connects variables with different declared units",
-                ERROR_CODES.DOMAIN_UNIT_MISMATCH,
-                Dict{String, Any}(
-                    "from" => entry.from, "to" => entry.to,
-                    "from_units" => src_units, "to_units" => tgt_units
-                )
+        _report!(
+            errors, ERROR_CODES.DOMAIN_UNIT_MISMATCH,
+            "/coupling/$(i - 1)",
+            "variable_map identity coupling from '$(entry.from)' ($src_units) to " *
+                "'$(entry.to)' ($tgt_units) connects variables with different declared units",
+            Dict{String, Any}(
+                "from" => entry.from, "to" => entry.to,
+                "from_units" => src_units, "to_units" => tgt_units
             )
         )
     end

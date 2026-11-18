@@ -95,13 +95,11 @@ function _check_inline_tests!(
                 for key in sort!(collect(keys(overrides)))
                     bare_key, _ = _strip_element_suffix(key)
                     _override_key_matches(bare_key, names, namespaces) && continue
-                    push!(
-                        errors, StructuralError(
-                            "$base/$field/$(_ptr_escape(key))",
-                            "Override key \"$key\" in $field matches no declared name",
-                            ERROR_CODES.UNKNOWN_OVERRIDE_KEY,
-                            Dict{String, Any}("key" => key, "field" => field)
-                        )
+                    _report!(
+                        errors, ERROR_CODES.UNKNOWN_OVERRIDE_KEY,
+                        "$base/$field/$(_ptr_escape(key))",
+                        "Override key \"$key\" in $field matches no declared name",
+                        Dict{String, Any}("key" => key, "field" => field)
                     )
                 end
             end
@@ -111,13 +109,11 @@ function _check_inline_tests!(
             occursin('.', bare) && continue
             pointer = "$base/assertions/$(ai - 1)"
             if !haskey(shapes, bare)
-                push!(
-                    errors, StructuralError(
-                        "$pointer/variable",
-                        "Variable \"$bare\" referenced in assertion variable but not declared",
-                        ERROR_CODES.UNDEFINED_VARIABLE,
-                        Dict{String, Any}("variable" => bare)
-                    )
+                _report!(
+                    errors, ERROR_CODES.UNDEFINED_VARIABLE,
+                    "$pointer/variable",
+                    "Variable \"$bare\" referenced in assertion variable but not declared",
+                    Dict{String, Any}("variable" => bare)
                 )
                 continue
             end
@@ -125,22 +121,18 @@ function _check_inline_tests!(
             shape = shapes[bare]
             selects = assertion.coords !== nothing || assertion.reduce !== nothing
             if !isempty(shape) && !selects
-                push!(
-                    errors, StructuralError(
-                        pointer,
-                        "Assertion on shaped variable \"$bare\" selects no scalar (give coords, reduce, or an element name)",
-                        ERROR_CODES.ASSERTION_RANK_MISMATCH,
-                        Dict{String, Any}("variable" => bare, "shape" => shape)
-                    )
+                _report!(
+                    errors, ERROR_CODES.ASSERTION_RANK_MISMATCH,
+                    pointer,
+                    "Assertion on shaped variable \"$bare\" selects no scalar (give coords, reduce, or an element name)",
+                    Dict{String, Any}("variable" => bare, "shape" => shape)
                 )
             elseif isempty(shape) && selects
-                push!(
-                    errors, StructuralError(
-                        pointer,
-                        "Assertion on scalar variable \"$bare\" carries coords or reduce",
-                        ERROR_CODES.ASSERTION_RANK_MISMATCH,
-                        Dict{String, Any}("variable" => bare, "shape" => String[])
-                    )
+                _report!(
+                    errors, ERROR_CODES.ASSERTION_RANK_MISMATCH,
+                    pointer,
+                    "Assertion on scalar variable \"$bare\" carries coords or reduce",
+                    Dict{String, Any}("variable" => bare, "shape" => String[])
                 )
             end
         end

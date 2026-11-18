@@ -60,16 +60,14 @@ function _check_update_sources!(
             rule.kind == "data" || continue
             src = rule.source
             (src === nothing || src in available) && continue
-            push!(
-                errors, StructuralError(
-                    "$path/variables/$name/update",
-                    "Parameter update names data source '$src', which the document " *
-                        "does not declare",
-                    ERROR_CODES.DATA_SOURCE_UNDEFINED,
-                    Dict{String, Any}(
-                        "variable" => name, "source" => src,
-                        "available_sources" => available
-                    )
+            _report!(
+                errors, ERROR_CODES.DATA_SOURCE_UNDEFINED,
+                "$path/variables/$name/update",
+                "Parameter update names data source '$src', which the document " *
+                    "does not declare",
+                Dict{String, Any}(
+                    "variable" => name, "source" => src,
+                    "available_sources" => available
                 )
             )
         end
@@ -292,15 +290,13 @@ function _check_record_axes!(errors::Vector{StructuralError}, file::EsmFile)
         iset = file.index_sets[name]
         iset.records === true || continue
         (iset.size === nothing || iset.size == 2) && continue
-        push!(
-            errors, StructuralError(
-                "/index_sets/$name",
-                "Index set '$name' is a record axis (\"records\": true), so its " *
-                    "size must be 2 (the record at or before the query time and the " *
-                    "next); it is $(iset.size)",
-                ERROR_CODES.RECORD_AXIS_INVALID,
-                Dict{String, Any}("index_set" => name, "size" => iset.size)
-            )
+        _report!(
+            errors, ERROR_CODES.RECORD_AXIS_INVALID,
+            "/index_sets/$name",
+            "Index set '$name' is a record axis (\"records\": true), so its " *
+                "size must be 2 (the record at or before the query time and the " *
+                "next); it is $(iset.size)",
+            Dict{String, Any}("index_set" => name, "size" => iset.size)
         )
     end
     return errors
@@ -331,15 +327,13 @@ function _check_record_shapes!(errors::Vector{StructuralError}, file::EsmFile)
             at = _update_rule_path("$declpath/$name", rules, ri)
             if rule.kind != "data"
                 rule.from.records_per_sample === nothing && continue
-                push!(
-                    errors, StructuralError(
-                        at,
-                        "Parameter '$name' sets from.records_per_sample on a " *
-                            "'$(rule.kind)' rule; only a 'data' rule names a source " *
-                            "to read records from",
-                        ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
-                        Dict{String, Any}("variable" => name, "kind" => rule.kind)
-                    )
+                _report!(
+                    errors, ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+                    at,
+                    "Parameter '$name' sets from.records_per_sample on a " *
+                        "'$(rule.kind)' rule; only a 'data' rule names a source " *
+                        "to read records from",
+                    Dict{String, Any}("variable" => name, "kind" => rule.kind)
                 )
                 continue
             end
@@ -351,7 +345,12 @@ function _check_record_shapes!(errors::Vector{StructuralError}, file::EsmFile)
                 defer_empty = defer_empty, refs_pending = refs_pending
             )
             for (code, msg, details) in findings
-                push!(errors, StructuralError(at, msg, code, details))
+                _report!(
+                    errors, code,
+                    at,
+                    msg,
+                    details
+                )
             end
         end
         return

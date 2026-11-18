@@ -229,14 +229,12 @@ function _check_undefined_index_set!(
         from = rv.from
         (from in registry || from in reported) && continue
         push!(reported, from)
-        push!(
-            errors, StructuralError(
-                anchor,
-                "aggregate range '$sym' references index set '$from', which is not " *
-                    "declared in the document `index_sets` registry",
-                ERROR_CODES.UNDEFINED_INDEX_SET,
-                Dict{String, Any}("index_set" => from, "range" => sym)
-            )
+        _report!(
+            errors, ERROR_CODES.UNDEFINED_INDEX_SET,
+            anchor,
+            "aggregate range '$sym' references index set '$from', which is not " *
+                "declared in the document `index_sets` registry",
+            Dict{String, Any}("index_set" => from, "range" => sym)
         )
     end
     return errors
@@ -362,12 +360,11 @@ function _check_faq_bare_array_operands!(
         expr, var_shapes; exclude = defined, opaque_applications = true
     )
     for (field, name, shape) in found
-        push!(
-            errors, StructuralError(
-                anchor, faq_bare_array_operand_message(field, name, shape),
-                ERROR_CODES.FAQ_BARE_ARRAY_OPERAND,
-                Dict{String, Any}("field" => field, "variable" => name, "shape" => shape)
-            )
+        _report!(
+            errors, ERROR_CODES.FAQ_BARE_ARRAY_OPERAND,
+            anchor,
+            faq_bare_array_operand_message(field, name, shape),
+            Dict{String, Any}("field" => field, "variable" => name, "shape" => shape)
         )
     end
     return errors
@@ -422,16 +419,14 @@ function _check_ragged_values_gathered!(
         values = iset.values::String
         any(r -> r == values || endswith(r, "." * values), refs) && continue
         parent = isempty(rv.of) ? "<parent>" : join(rv.of, ", ")
-        push!(
-            errors, StructuralError(
-                anchor,
-                "faq range '$sym' iterates ragged index set '$(rv.from)', so it binds the " *
-                    "POSITION k in 1..$(something(iset.offsets, "offsets"))[$parent], not a " *
-                    "member; the body never reads the set's `values` array '$values'. Gather " *
-                    "the member explicitly: index($values, $parent, $sym)",
-                ERROR_CODES.RAGGED_VALUES_NOT_GATHERED,
-                Dict{String, Any}("range" => sym, "index_set" => rv.from, "values" => values)
-            )
+        _report!(
+            errors, ERROR_CODES.RAGGED_VALUES_NOT_GATHERED,
+            anchor,
+            "faq range '$sym' iterates ragged index set '$(rv.from)', so it binds the " *
+                "POSITION k in 1..$(something(iset.offsets, "offsets"))[$parent], not a " *
+                "member; the body never reads the set's `values` array '$values'. Gather " *
+                "the member explicitly: index($values, $parent, $sym)",
+            Dict{String, Any}("range" => sym, "index_set" => rv.from, "values" => values)
         )
     end
     return errors
@@ -481,16 +476,14 @@ function _check_join_sides!(
         if csyms !== nothing
             for cs in csyms
                 haskey(ranges, cs) && continue
-                push!(
-                    errors, StructuralError(
-                        anchor,
-                        "aggregate join `syms` names '$cs', which is not a range symbol of " *
-                            "this aggregate; both entries must name one of its `ranges`",
-                        ERROR_CODES.JOIN_SYMS_UNKNOWN_SYMBOL,
-                        Dict{String, Any}(
-                            "join_syms_entry" => cs,
-                            "declared_ranges" => sort!(String[String(k) for k in keys(ranges)])
-                        )
+                _report!(
+                    errors, ERROR_CODES.JOIN_SYMS_UNKNOWN_SYMBOL,
+                    anchor,
+                    "aggregate join `syms` names '$cs', which is not a range symbol of " *
+                        "this aggregate; both entries must name one of its `ranges`",
+                    Dict{String, Any}(
+                        "join_syms_entry" => cs,
+                        "declared_ranges" => sort!(String[String(k) for k in keys(ranges)])
                     )
                 )
                 return errors
@@ -522,14 +515,14 @@ function _check_join_sides!(
                     "aggregate join key '$key' names an index set that $(length(cands)) range " *
                     "symbols of this aggregate draw; reference the range symbol directly, or " *
                     "name the clause's two sides with `syms`"
-                push!(
-                    errors, StructuralError(
-                        anchor, msg, ERROR_CODES.JOIN_SIDE_AMBIGUOUS,
-                        Dict{String, Any}(
-                            "join_key" => key, "side" => side,
-                            "index_set" => set_name,
-                            "candidate_range_symbols" => cands
-                        )
+                _report!(
+                    errors, ERROR_CODES.JOIN_SIDE_AMBIGUOUS,
+                    anchor,
+                    msg,
+                    Dict{String, Any}(
+                        "join_key" => key, "side" => side,
+                        "index_set" => set_name,
+                        "candidate_range_symbols" => cands
                     )
                 )
                 return errors
@@ -563,15 +556,13 @@ function _check_join_key_type!(
         iset = get(file.index_sets, rv.from, nothing)
         iset === nothing && continue
         _index_set_has_nonportable_key(iset) || continue
-        push!(
-            errors, StructuralError(
-                anchor,
-                "aggregate join key column '$sym' ranges over categorical index set " *
-                    "'$(rv.from)', whose members include a non-portable float/null key " *
-                    "(value-equality join keys must be integers or strings)",
-                ERROR_CODES.JOIN_KEY_INVALID_TYPE,
-                Dict{String, Any}("index_set" => rv.from, "column" => sym)
-            )
+        _report!(
+            errors, ERROR_CODES.JOIN_KEY_INVALID_TYPE,
+            anchor,
+            "aggregate join key column '$sym' ranges over categorical index set " *
+                "'$(rv.from)', whose members include a non-portable float/null key " *
+                "(value-equality join keys must be integers or strings)",
+            Dict{String, Any}("index_set" => rv.from, "column" => sym)
         )
         return errors   # one finding per aggregate is enough
     end
@@ -610,15 +601,13 @@ function _check_relational_in_continuous!(
     hits = intersect(refs, state_vars)
     isempty(hits) && return errors
     hit = first(sort!(collect(hits)))
-    push!(
-        errors, StructuralError(
-            anchor,
-            "distinct/value-invention aggregate reads state variable '$hit' in its " *
-                "key/body, classifying it CONTINUOUS — a relational node may not run on " *
-                "the per-step hot path (§5.7 guard 2)",
-            ERROR_CODES.RELATIONAL_NODE_IN_CONTINUOUS,
-            Dict{String, Any}("variable" => hit)
-        )
+    _report!(
+        errors, ERROR_CODES.RELATIONAL_NODE_IN_CONTINUOUS,
+        anchor,
+        "distinct/value-invention aggregate reads state variable '$hit' in its " *
+            "key/body, classifying it CONTINUOUS — a relational node may not run on " *
+            "the per-step hot path (§5.7 guard 2)",
+        Dict{String, Any}("variable" => hit)
     )
     return errors
 end

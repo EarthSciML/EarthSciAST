@@ -100,7 +100,11 @@ function validate_model_unit_consistency(
     _foreach_unit_component(model, path) do c, p
         c isa Model || return
         for f in model_unit_findings(c; toplevel, indep)
-            push!(errors, StructuralError("$p/$(f.subpath)", f.message, f.code))
+            _report!(
+                errors, f.code,
+                "$p/$(f.subpath)",
+                f.message
+            )
         end
     end
     return errors
@@ -140,7 +144,11 @@ function _unit_check!(units::_UnitsInputs)
         env = _component_unit_env(c, units.toplevel; indep = units.indep)
         _component_unit_findings!(errs, warns, c, p, env)
         for f in errs
-            push!(errors, StructuralError("$p/$(f.subpath)", f.message, f.code))
+            _report!(
+                errors, f.code,
+                "$p/$(f.subpath)",
+                f.message
+            )
         end
         for f in warns
             push!(warnings, ("$p/$(f.subpath)", f.message))
@@ -264,14 +272,12 @@ function validate_reaction_rate_units(
             first_sp = substrates_field[1].species
             first_sp_units = get(species_units, first_sp, get(scoped, first_sp, ""))
             order_str = isinteger(total_order) ? string(Int(total_order)) : string(total_order)
-            push!(
-                errors, StructuralError(
-                    "$path/reactions/$(i - 1)",
-                    "Reaction $(reaction.id) rate '$rate_name' units '$rate_units_str' " *
-                        "incompatible with order-$order_str reaction for species units " *
-                        "'$first_sp_units' (expected rate*substrates to have dimensions of species/time)",
-                    ERROR_CODES.UNIT_INCONSISTENCY,
-                )
+            _report!(
+                errors, ERROR_CODES.UNIT_INCONSISTENCY,
+                "$path/reactions/$(i - 1)",
+                "Reaction $(reaction.id) rate '$rate_name' units '$rate_units_str' " *
+                    "incompatible with order-$order_str reaction for species units " *
+                    "'$first_sp_units' (expected rate*substrates to have dimensions of species/time)"
             )
         end
     end
@@ -360,14 +366,12 @@ function validate_physical_constant_units(model::Model, path::String)::Vector{St
         end
         target = usage_name === nothing ? constant_name : usage_name
 
-        push!(
-            errors, StructuralError(
-                "$path/variables/$target",
-                "Physical constant used with incorrect dimensional analysis " *
-                    "(constant '$constant_name' ($description) declared with units '$declared_str', " *
-                    "expected dimensions compatible with '$canonical')",
-                ERROR_CODES.UNIT_INCONSISTENCY,
-            )
+        _report!(
+            errors, ERROR_CODES.UNIT_INCONSISTENCY,
+            "$path/variables/$target",
+            "Physical constant used with incorrect dimensional analysis " *
+                "(constant '$constant_name' ($description) declared with units '$declared_str', " *
+                "expected dimensions compatible with '$canonical')"
         )
     end
 
@@ -449,14 +453,12 @@ function validate_conversion_factor_consistency(model::Model, path::String)::Vec
         (factor === nothing || factor == 0) && continue
         abs(numeric - factor) <= 1.0e-9 * max(abs(factor), 1.0) && continue
 
-        push!(
-            errors, StructuralError(
-                "$path/variables/$vname",
-                "Unit conversion factor is incorrect for specified unit transformation " *
-                    "(variable '$vname', declared_units='$lhs_units', source_units='$src_units', " *
-                    "declared_factor=$numeric, expected_factor=$factor)",
-                ERROR_CODES.UNIT_INCONSISTENCY,
-            )
+        _report!(
+            errors, ERROR_CODES.UNIT_INCONSISTENCY,
+            "$path/variables/$vname",
+            "Unit conversion factor is incorrect for specified unit transformation " *
+                "(variable '$vname', declared_units='$lhs_units', source_units='$src_units', " *
+                "declared_factor=$numeric, expected_factor=$factor)"
         )
     end
 

@@ -46,6 +46,25 @@ struct StructuralError
         new(String(path), String(message), String(error_type), Dict{String, Any}(details))
 end
 
+# The set of codes a finding may carry: the values of `ERROR_CODES`.
+const _FINDING_CODES = Set{String}(values(ERROR_CODES))
+
+"""
+    _report!(out, code, path, message, details = Dict()) -> out
+
+Push the structural finding `code` at JSON pointer `path` onto `out`: the one
+way a check reports a finding. `code` must be a value of
+[`ERROR_CODES`](@ref).
+"""
+function _report!(
+        out::Vector{StructuralError}, code::AbstractString, path::AbstractString,
+        message::AbstractString, details::AbstractDict = Dict{String, Any}()
+    )
+    code in _FINDING_CODES || throw(ArgumentError("finding code '$code' is not in ERROR_CODES"))
+    push!(out, StructuralError(path, message, code, details))
+    return out
+end
+
 """
     UnitWarning
 

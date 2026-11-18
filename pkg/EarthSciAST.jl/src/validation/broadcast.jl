@@ -126,14 +126,14 @@ function _walk_broadcast_fns!(
         if prob !== nothing
             # ONE cross-binding diagnostic code (esm-spec §9.6.6) for all four
             # defects; `details["reason"]` carries which one.
-            push!(
-                errors, StructuralError(
-                    anchor, prob.message, ERROR_CODES.INVALID_BROADCAST_FN,
-                    Dict{String, Any}(
-                        "fn" => expr.fn === nothing ? "" : String(expr.fn),
-                        "reason" => String(prob.kind),
-                        "operands" => length(expr.args)
-                    )
+            _report!(
+                errors, ERROR_CODES.INVALID_BROADCAST_FN,
+                anchor,
+                prob.message,
+                Dict{String, Any}(
+                    "fn" => expr.fn === nothing ? "" : String(expr.fn),
+                    "reason" => String(prob.kind),
+                    "operands" => length(expr.args)
                 )
             )
         end
@@ -194,20 +194,18 @@ function _check_broadcast_axes!(
             for ax in vs
                 (ax in axset || ((e::VarExpr).name, ax) in reported) && continue
                 push!(reported, ((e::VarExpr).name, ax))
-                push!(
-                    errors, StructuralError(
-                        anchor,
-                        "Operand '$((e::VarExpr).name)' of the array-level expression " *
-                            "for '$target' is declared over index set '$ax', which " *
-                            "'$target' is not shaped over (esm-spec §4.3.4)",
-                        ERROR_CODES.ARRAY_SHAPE_MISMATCH,
-                        Dict{String, Any}(
-                            "variable" => (e::VarExpr).name,
-                            "target" => target,
-                            "index_set" => ax,
-                            "operand_shape" => vs,
-                            "result_shape" => axes
-                        )
+                _report!(
+                    errors, ERROR_CODES.ARRAY_SHAPE_MISMATCH,
+                    anchor,
+                    "Operand '$((e::VarExpr).name)' of the array-level expression " *
+                        "for '$target' is declared over index set '$ax', which " *
+                        "'$target' is not shaped over (esm-spec §4.3.4)",
+                    Dict{String, Any}(
+                        "variable" => (e::VarExpr).name,
+                        "target" => target,
+                        "index_set" => ax,
+                        "operand_shape" => vs,
+                        "result_shape" => axes
                     )
                 )
             end

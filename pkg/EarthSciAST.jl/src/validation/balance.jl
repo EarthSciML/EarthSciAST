@@ -133,28 +133,24 @@ function validate_model_balance(
     if report
         details = Dict{String, Any}("unknowns" => unknown_list, "equations" => n_eqs)
         isempty(missing_for) || (details["missing_equations_for"] = missing_for)
-        push!(
-            errors, StructuralError(
-                path,
-                "Number of equations ($n_eqs) does not match number of unknowns ($n_unknowns)",
-                ERROR_CODES.EQUATION_COUNT_MISMATCH,
-                details
-            )
+        _report!(
+            errors, ERROR_CODES.EQUATION_COUNT_MISMATCH,
+            path,
+            "Number of equations ($n_eqs) does not match number of unknowns ($n_unknowns)",
+            details
         )
     elseif !has_subsystems && !isempty(missing_for)
         # Square by COUNT but not by assignment: some unknown has nothing
         # crediting it while some equation credits a name the model does not
         # declare. Same defect class, same code — the count alone cannot say it.
-        push!(
-            errors, StructuralError(
-                path,
-                "Model declares unknown '$(first(missing_for))' but has no defining " *
-                    "equation for it",
-                ERROR_CODES.EQUATION_COUNT_MISMATCH,
-                Dict{String, Any}(
-                    "unknowns" => unknown_list, "equations" => n_eqs,
-                    "missing_equations_for" => missing_for
-                )
+        _report!(
+            errors, ERROR_CODES.EQUATION_COUNT_MISMATCH,
+            path,
+            "Model declares unknown '$(first(missing_for))' but has no defining " *
+                "equation for it",
+            Dict{String, Any}(
+                "unknowns" => unknown_list, "equations" => n_eqs,
+                "missing_equations_for" => missing_for
             )
         )
     end
