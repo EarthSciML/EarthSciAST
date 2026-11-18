@@ -1373,7 +1373,7 @@ end
         @test isapprox(a, _de_ip(fi!, u, p, 0.25); rtol = 1.0e-12, atol = 0.0)
 
         pv2 = copy(pv0)
-        pv2[findfirst(==(Symbol("RD.k_diff")), collect(syms))] *= 2.0
+        pv2[findfirst(==(Symbol("M.k_diff")), collect(syms))] *= 2.0
         b = Array(xla(ur, _de_dev(nt(pv2)), tr))           # no recompile
         # It MOVED (so it was not frozen) …
         @test !isapprox(a, b; rtol = 1.0e-12)
