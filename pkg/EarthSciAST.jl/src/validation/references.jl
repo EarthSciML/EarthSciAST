@@ -183,10 +183,12 @@ end
 
 The document's independent (time) variable — `domain.independent_variable`, or
 `"t"` when the document does not say. Never hard-code `"t"`: a document may
-rename it (`tau`, `depth`).
+rename it (`tau`, `depth`). Also takes a `Domain` (or `nothing`) and, in
+flatten.jl, a `FlattenedSystem`.
 """
-_indep_var(file::EsmFile)::String =
-    file.domain === nothing ? "t" : file.domain.independent_variable
+_indep_var(domain::Union{Domain, Nothing})::String =
+    domain === nothing ? "t" : domain.independent_variable
+_indep_var(file::EsmFile)::String = _indep_var(file.domain)
 
 # The spatial coordinate names every document may reference WITHOUT declaring
 # them. v0.8.0 removed `Domain.spatial`, so a coordinate has no declaration site

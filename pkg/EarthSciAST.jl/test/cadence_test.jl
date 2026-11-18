@@ -87,6 +87,11 @@ end
         # An analytic forcing in `t` is continuous, not discrete.
         omega = typed(jdoc(Dict("omega" => Dict("type" => "parameter")), Any[]))
         @test cadence_class(jexpr(jop("*", "omega", "t")), seeds_of(omega)) === CadenceContinuous
+        # A renamed independent variable is the continuous one; `t` is then an
+        # ordinary name.
+        renamed = cadence_seeds(omega.models["M"]; independent_variable = "s")
+        @test cadence_class(jexpr(jop("*", "omega", "s")), renamed) === CadenceContinuous
+        @test cadence_class(jexpr(jop("*", "omega", "t")), renamed) === CadenceConst
     end
 
     @testset "source-seeded cadence: temporal -> discrete, no temporal -> const (§5.7.2)" begin

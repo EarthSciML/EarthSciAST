@@ -29,7 +29,7 @@ cadence_name(c::CadenceClass) =
     c === CadenceConst ? "const" : c === CadenceDiscrete ? "discrete" : "continuous"
 
 """
-    cadence_seeds(model::Model; data_sources = nothing) -> Dict{String,CadenceClass}
+    cadence_seeds(model::Model; data_sources = nothing, independent_variable = "t") -> Dict{String,CadenceClass}
 
 The cadence seed of every variable of `model` (CONFORMANCE_SPEC §5.7.2), from
 the esm-spec §6.3.1 classification rather than a declared type:
@@ -42,17 +42,20 @@ the esm-spec §6.3.1 classification rather than a declared type:
 | `discrete_parameters` | discrete, or const when its `data` update's source declares no `temporal` block |
 | `sampled_parameters`, `constant_parameters` | const |
 
-A name absent from the result (an index-set name, a bound index) is `const`;
-the independent variable `t` is `continuous` ([`cadence_class`](@ref) applies
-both). `data_sources` is the document's `data_sources` table; without it no
+The independent variable (`independent_variable`, the document's
+`domain.independent_variable`) seeds `continuous`. A name absent from the
+result (an index-set name, a bound index) is `const` ([`cadence_class`](@ref)
+applies that). `data_sources` is the document's `data_sources` table; without it no
 source can be resolved and every discrete parameter seeds `discrete`, which
 moves no value across the `continuous` boundary.
 
 An observed definition cycle is refused (`observed_cycle`): a cycle has no
 class to resolve to.
 """
-function cadence_seeds(model::Model; data_sources = nothing)::Dict{String, CadenceClass}
-    seeds = Dict{String, CadenceClass}()
+function cadence_seeds(
+        model::Model; data_sources = nothing, independent_variable::AbstractString = "t"
+    )::Dict{String, CadenceClass}
+    seeds = Dict{String, CadenceClass}(String(independent_variable) => CadenceContinuous)
     for n in solver_unknowns(model)
         seeds[n] = CadenceContinuous
     end
@@ -108,8 +111,8 @@ end
 """
     cadence_class(expr::ASTExpr, seeds[, memo]) -> CadenceClass
 
-The class of `expr`: a variable's seed (`t` is `continuous`, a name `seeds` does
-not hold is `const`), a literal `const`, an operator node the `max` over its
+The class of `expr`: a variable's seed (a name `seeds` does not hold is
+`const`; [`cadence_seeds`](@ref) seeds the independent variable `continuous`), a literal `const`, an operator node the `max` over its
 children. `memo` (an `IdDict{OpExpr,CadenceClass}`) caches operator nodes when
 one tree is classified repeatedly.
 """
@@ -117,7 +120,7 @@ cadence_class(expr::ASTExpr, seeds::AbstractDict{String, CadenceClass}, memo = n
     _cadence_walk(expr, n -> get(seeds, n, CadenceConst), memo)
 
 function _cadence_walk(expr::ASTExpr, seed, memo)::CadenceClass
-    expr isa VarExpr && return expr.name == "t" ? CadenceContinuous : seed(expr.name)
+    expr isa VarExpr && return seed(expr.name)
     expr isa OpExpr || return CadenceConst
     if memo !== nothing
         hit = get(memo, expr, nothing)

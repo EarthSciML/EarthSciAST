@@ -453,6 +453,9 @@ end
 # The seed's expression compiled once with the dimension names as parameters:
 # a `_CellEval` whose "cell" is the vector of coordinate values, or `nothing`
 # when a name collides with the time symbol or the expression does not compile.
+# The time symbol is the build compiler's (`_compile` reads the name `"t"` as
+# time whatever the document's independent variable), so a dimension spelled
+# `"t"` could not be read as a parameter.
 function _seed_expression_compile(expr::ASTExpr, dims::Vector{String})
     any(==("t"), dims) && return nothing
     allunique(dims) || return nothing

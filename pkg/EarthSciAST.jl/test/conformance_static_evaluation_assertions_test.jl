@@ -268,4 +268,14 @@ end
         expr_body = EarthSciAST.VarExpr("t")
     )
     @test EarthSciAST.bind_dimension_names(bound, ["x"]) === bound
+    # A document that renames its independent variable refuses that name
+    # instead, and `t` is then an ordinary name.
+    sref = EarthSciAST.VarExpr("s")
+    err = try
+        EarthSciAST.bind_dimension_names(sref, String[]; independent_variable = "s")
+    catch e
+        e
+    end
+    @test err isa EarthSciAST.InlineTestError && occursin("mentions `s`", sprint(showerror, err))
+    @test EarthSciAST.bind_dimension_names(tref, String[]; independent_variable = "s") === tref
 end

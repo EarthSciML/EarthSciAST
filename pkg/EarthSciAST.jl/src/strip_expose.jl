@@ -899,7 +899,7 @@ end
 # Every name `e` reads resolves: time, a declared variable, or an index set.
 function _kresolve_names(cx::_KernelCx, e, what)
     for n in free_variables(e)
-        (n == "t" || _declared_sets(n, cx.flat) !== nothing || haskey(cx.flat.index_sets, n)) &&
+        (n == _indep_var(cx.flat) || _declared_sets(n, cx.flat) !== nothing || haskey(cx.flat.index_sets, n)) &&
             continue
         throw(_kunresolved(cx, "$what reads '$n', which"))
     end

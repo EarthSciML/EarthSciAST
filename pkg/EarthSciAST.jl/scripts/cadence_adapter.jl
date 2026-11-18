@@ -39,7 +39,10 @@ module CadenceConformanceAdapter
         file = load_path(path)
         haskey(file.models, model_name) || error("$path: model $(repr(model_name)) not found")
         model = file.models[model_name]
-        seeds = cadence_seeds(model; data_sources = file.data_sources)
+        seeds = cadence_seeds(
+            model; data_sources = file.data_sources,
+            independent_variable = EarthSciAST._indep_var(file)
+        )
         return Partition(model, file, seeds, IdDict{OpExpr, CadenceClass}())
     end
 

@@ -1073,8 +1073,8 @@ function _vic_produce(lens::Vector{Int}, cf, k, syms, column)
 end
 
 """
-    materialize_value_invention(model::Model, index_sets, const_arrays, params)
-        -> NamedTuple
+    materialize_value_invention(model::Model, index_sets, const_arrays, params;
+                                independent_variable = "t") -> NamedTuple
 
 Run the build-time value-invention engine over a typed model. `index_sets` is
 the document-scoped registry (`EsmFile.index_sets`; esm-spec v0.8.0 — a typed
@@ -1095,12 +1095,14 @@ the document-scoped registry (`EsmFile.index_sets`; esm-spec v0.8.0 — a typed
 
 `const_arrays` supplies the build-time factor arrays (the connectivity / coords
 the keys are computed from); `params` supplies scalar parameter overrides. A
-producer that classifies CONTINUOUS is rejected (§5.7 guard 2).
+producer that classifies CONTINUOUS is rejected (§5.7 guard 2); the document's
+`independent_variable` seeds that classification as continuous.
 """
 function materialize_value_invention(
         model::Model, index_sets::AbstractDict,
         const_arrays::AbstractDict,
-        params::AbstractDict
+        params::AbstractDict;
+        independent_variable::AbstractString = "t"
     )
     det = _vi_detect(model)
     extents = Dict{String, Int}()
@@ -1123,7 +1125,7 @@ function materialize_value_invention(
         Dict{String, IndexSet}(String(k) => v for (k, v) in index_sets),
         model.variables,
         Dict{String, Dict{Any, Any}}(),
-        cadence_seeds(model)
+        cadence_seeds(model; independent_variable = independent_variable)
     )
 
     # Plain join columns first (a producer's join may reference them). A column

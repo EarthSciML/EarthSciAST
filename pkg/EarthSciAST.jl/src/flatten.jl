@@ -290,6 +290,9 @@ struct FlattenedSystem
     end
 end
 
+# The flattened system's independent (time) variable, as its expressions spell it.
+_indep_var(flat::FlattenedSystem)::String = _indep_var(flat.domain)
+
 # The ordered maps are `OrderedDict`s, and Julia's implicit conversion from a
 # plain `Dict` is refused as order-losing. A hand-built caller may still pass a
 # `Dict`, whose iteration order is the only order it has; an ordered map passes

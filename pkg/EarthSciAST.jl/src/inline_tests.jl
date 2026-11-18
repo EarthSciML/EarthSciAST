@@ -341,10 +341,8 @@ function _array_scope_names(regs...)::Set{String}
     return out
 end
 
-# The independent (time) variable, as an expression spells it.
-const _TIME_VARIABLE = "t"
-
-# The refusal for a §6.6.5 analytic `reference` that mentions `t`.
+# The refusal for a §6.6.5 analytic `reference` that mentions the independent
+# variable.
 #
 # esm-spec §6.6.5 says what a reference may read: the asserted field's DIMENSION
 # NAMES, free, plus the model's PARAMETERS. The independent variable is neither.
@@ -353,14 +351,17 @@ const _TIME_VARIABLE = "t"
 # `t` would answer with the expression at the start of the span and report a
 # plausible wrong number. Refusing names the mistake instead.
 #
-# The text is BYTE-IDENTICAL in Rust (`REFERENCE_MENTIONS_TIME`) and Python
-# (`REFERENCE_MENTIONS_TIME`); the three bindings must reject the same document
-# with the same sentence.
+# For the independent variable `t` the text is BYTE-IDENTICAL in Rust
+# (`REFERENCE_MENTIONS_TIME`) and Python (`REFERENCE_MENTIONS_TIME`); the three
+# bindings must reject the same document with the same sentence. A document
+# that renames its independent variable gets the same sentence with its name.
 const _REFERENCE_MENTIONS_TIME = "inline `reference` mentions `t`, which esm-spec §6.6.5 does not admit: a reference's free variables are the field's dimension names, and its other names are the model's parameters. A reference is evaluated at build time, where the independent variable has no value, so `t` would silently read 0 rather than the asserted time."
+_reference_mentions_time(iv::AbstractString) =
+    iv == "t" ? _REFERENCE_MENTIONS_TIME : replace(_REFERENCE_MENTIONS_TIME, "`t`" => "`$iv`")
 
 """
     bind_dimension_names(expr, dims, scope=Dict{String,Float64}(),
-                         arrays=Set{String}()) -> ASTExpr
+                         arrays=Set{String}(); independent_variable="t") -> ASTExpr
 
 esm-spec §6.6.5: an inline `reference`'s free variables are the domain DIMENSION
 NAMES. For a field shaped over index sets those are the asserted variable's
@@ -397,9 +398,11 @@ checking only the parameter half would rebind it to the cell index in silence.
 function bind_dimension_names(
         expr::ASTExpr, dims::AbstractVector{<:AbstractString},
         scope::AbstractDict = Dict{String, Float64}(),
-        arrays = Set{String}()
+        arrays = Set{String}();
+        independent_variable::AbstractString = "t"
     )::ASTExpr
-    # esm-spec §6.6.5 names what a reference may read, and `t` is not on the
+    # esm-spec §6.6.5 names what a reference may read, and the independent
+    # variable (`independent_variable`, `t` unless the document renames it) is not on the
     # list. Reaching the evaluator with it is not an error there — the
     # build-time evaluator has a time slot and it holds `0.0` — so without this
     # check a `t`-dependent reference would answer with its value at the start
@@ -408,8 +411,9 @@ function bind_dimension_names(
     # statement: there `t` IS a dimension name, §6.6.5 admits it, and it binds
     # to the cell index below. Checked BEFORE the `isempty(dims)` exit, so a
     # reference on an unshaped target is refused too.
-    (_TIME_VARIABLE in dims || !_mentions_free(expr, _TIME_VARIABLE)) ||
-        throw(InlineTestError(_REFERENCE_MENTIONS_TIME))
+    iv = String(independent_variable)
+    (iv in dims || !_mentions_free(expr, iv)) ||
+        throw(InlineTestError(_reference_mentions_time(iv)))
     isempty(dims) && return expr
     mentioned = String[String(d) for d in dims if _mentions_free(expr, String(d))]
     isempty(mentioned) && return expr
@@ -782,7 +786,10 @@ function _evaluate_assertion(
             # the test's own answer key would be refusing nothing of the model's.
             ref = _with_compiler_plan(_plan(:interpreter)) do
                 evaluate_cellwise(
-                    bind_dimension_names(a.reference, dims, scope, arrays),
+                    bind_dimension_names(
+                        a.reference, dims, scope, arrays;
+                        independent_variable = _indep_var(eval_file)
+                    ),
                     cell_tuples;
                     const_arrays = insp.const_arrays, params = scope
                 )
