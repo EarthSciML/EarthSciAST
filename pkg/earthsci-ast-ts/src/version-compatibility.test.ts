@@ -10,24 +10,24 @@ import {
   SchemaValidationError,
   loadPath,
 } from './index.js'
-import { LAST_V1_VERSION, LAST_V2_VERSION } from './parse.js'
+import { LAST_V1_VERSION } from './parse.js'
 import { fixturePath, readFixture } from './test-helpers.js'
 
 /**
- * Version gating for esm 3.0.0.
+ * Version gating for esm 2.0.0.
  *
- * The library implements major version 3 and still LOADS majors 1 and 2 (user
- * ruling): 2.0.0 and 3.0.0 only removed ops and blocks, so a 1.x or 2.x
- * document that uses none of them loads as it is, under its own version gates,
- * and one that uses one is refused with `removed_op` by name, never by its
- * major. Any other major is rejected outright (`ParseError`), and a minor newer
- * than the newest release of its major loads with a warning. 1.0.0 was a clean
- * break, so every 0.x document is on the rejected side. `migrate()` relabels a
- * 1.x or 2.x document to the current version.
+ * The library implements major version 2 and still LOADS major 1 (user
+ * ruling): 2.0.0 only removed ops and blocks, so a 1.x document that uses none
+ * of them loads as it is, under its own 1.x version gates, and one that uses
+ * one is refused with `removed_op` by name, never by its major. Any other major
+ * is rejected outright (`ParseError`), and a minor newer than the newest
+ * release of its major loads with a warning. 1.0.0 was a clean break, so every
+ * 0.x document is on the rejected side. `migrate()` relabels a 1.x document to
+ * the current version.
  *
  * The suite reads the current major from `SCHEMA_VERSION` rather than spelling
  * it, so it states the same rules whichever major the embedded schema declares;
- * only the literal pin at the end names 3.0.0.
+ * only the literal pin at the end names 2.4.0.
  *
  * Most cases apply the version under test to a base document IN MEMORY rather
  * than reading a per-version fixture: the gate is a function of the version
@@ -195,26 +195,6 @@ describe('Version Compatibility', () => {
     })
   })
 
-  describe('The 2.x line', () => {
-    it('loads every 2.x release without a version warning', () => {
-      for (const version of ['2.0.0', '2.0.5', '2.1.0', '2.2.0', '2.3.0']) {
-        const { result, warnings } = captureWarnings(() => loadString(atVersion(version)))
-        expect(result.esm).toBe(version)
-        expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
-      }
-    })
-
-    it('warns on a 2.x minor newer than the last 2.x release', () => {
-      const { result, warnings } = captureWarnings(() => loadString(atVersion('2.5.1')))
-      expect(result.esm).toBe('2.5.1')
-      expect(
-        warnings.some((w) =>
-          w.includes(`2.5.1 is newer than the current library version ${LAST_V2_VERSION}`),
-        ),
-      ).toBe(true)
-    })
-  })
-
   describe('Major Version Rejection', () => {
     // 1.0.0 is a clean break: a 0.x document is not "an older file that still
     // loads", it is a file written to a format this parser no longer speaks.
@@ -250,7 +230,7 @@ describe('Version Compatibility', () => {
   describe('Migration', () => {
     // A migration is a pure version-MARKER bump, sound along an additive line
     // and, for a document that uses none of the removed constructs, across the
-    // 2.0.0 and 3.0.0 breaks. Nothing crosses the 1.0.0 boundary: the variable-model
+    // 2.0.0 break. Nothing crosses the 1.0.0 boundary: the variable-model
     // collapse, the observed-expression relocation and the data_sources rename
     // all RESHAPE the document, so a 0.x source has no supported target at all
     // rather than a bump that would leave a file claiming 1.0.0 while still
@@ -261,31 +241,25 @@ describe('Version Compatibility', () => {
       expect(canMigrate('0.9.0', '1.0.0')).toBe(false)
     })
 
-    it.runIf(MAJOR === 3)(
-      'canMigrate reports the 1.x and 2.x relabel to the current version',
-      () => {
-        expect(canMigrate('1.0.0', SCHEMA_VERSION)).toBe(true)
-        expect(canMigrate('2.3.0', SCHEMA_VERSION)).toBe(true)
-        // Only the CURRENT version is offered as a target, never an arbitrary
-        // intermediate one.
-        expect(canMigrate('1.0.0', '1.0.1')).toBe(false)
-      },
-    )
+    it.runIf(MAJOR === 2)('canMigrate reports the 1.x relabel to the current version', () => {
+      expect(canMigrate('1.0.0', SCHEMA_VERSION)).toBe(true)
+      // Only the CURRENT version is offered as a target, never an arbitrary
+      // intermediate one.
+      expect(canMigrate('1.0.0', '1.0.1')).toBe(false)
+    })
 
-    it.runIf(MAJOR === 3)('migrate relabels a 1.x or 2.x document, which then loads', () => {
-      for (const version of ['1.0.0', '2.3.0']) {
-        const source = atVersion(version)
+    it.runIf(MAJOR === 2)('migrate relabels a 1.x document, which then loads', () => {
+      const source = atVersion('1.0.0')
 
-        const migrated = migrate(source, SCHEMA_VERSION)
-        expect(migrated.esm).toBe(SCHEMA_VERSION)
-        // Input is not mutated
-        expect(source.esm).toBe(version)
-        expect(loadDocument(migrated).esm).toBe(SCHEMA_VERSION)
-      }
+      const migrated = migrate(source, SCHEMA_VERSION)
+      expect(migrated.esm).toBe(SCHEMA_VERSION)
+      // Input is not mutated
+      expect(source.esm).toBe('1.0.0')
+      expect(loadDocument(migrated).esm).toBe(SCHEMA_VERSION)
     })
 
     it('migrate throws for unsupported version pairs', () => {
-      expect(() => migrate(atVersion('1.0.0'), '4.0.0')).toThrow(MigrationError)
+      expect(() => migrate(atVersion('1.0.0'), '3.0.0')).toThrow(MigrationError)
       expect(() => migrate(atVersion('0.9.0'), SCHEMA_VERSION)).toThrow(MigrationError)
     })
   })
@@ -302,13 +276,13 @@ describe('Version Compatibility', () => {
       // (esm-spec §6.3.2), then 2.1.0 -> 2.2.0 with the widened pointwise lift
       // (esm-spec §10.5), then 2.2.0 -> 2.3.0 with the deprecated `neg` / `pow`
       // (esm-spec §4.2), the canonical unit spelling (§4.8.2) and the document
-      // source formats (§1.2), then 2.3.0 -> 3.0.0 with the removal of `grad`,
+      // source formats (§1.2), then 2.3.0 -> 2.4.0 with the removal of `grad`,
       // `div` and `laplacian` (esm-spec §4.2 "Removed ops").
       // The literal is the point of the test: SCHEMA_VERSION is DERIVED from the
       // embedded schema `$id`, so this pins that the derivation still reads the
       // schema rather than a stale copy, and it is expected to be updated by
       // hand on each format bump.
-      expect(SCHEMA_VERSION).toBe('3.0.0')
+      expect(SCHEMA_VERSION).toBe('2.4.0')
     })
 
     it('exposes the package version separately, under its own name', () => {

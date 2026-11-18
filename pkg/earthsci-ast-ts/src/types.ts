@@ -318,7 +318,7 @@ export interface DataSourceBinding {
   codes?: DataSourceCodes
   select?: DataSourceSelect
   /**
-   * @deprecated Removed in a later major version (esm-spec §8.3, §8.5.1). The number of
+   * @deprecated Removed at esm 3.0.0 (esm-spec §8.3, §8.5.1). The number of
    * records a parameter receives is said by its record shape: two when its
    * first axis is a record axis (an `interval` index set with
    * `"records": true`), else one. Until removal it loads with the

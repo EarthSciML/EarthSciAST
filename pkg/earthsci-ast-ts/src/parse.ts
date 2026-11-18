@@ -242,34 +242,23 @@ function parseSemanticVersion(
 const CURRENT_VERSION = parseSemanticVersion(SCHEMA_VERSION)!
 
 /**
- * The last release of the esm 1.x line. A 1.x document loads at 2.0.0 and
- * later (user ruling): 2.0.0 removed ops and blocks and changed nothing else,
- * so a 1.x document that uses none of them means what it meant, and one that
- * does is refused with `removed_op` by name, not by its version. The 1.x
- * version gates stay live for it.
+ * The last release of the esm 1.x line. A 1.x document loads at 2.0.0 (user
+ * ruling): 2.0.0 removed ops and blocks and changed nothing else, so a 1.x
+ * document that uses none of them means what it meant, and one that does is
+ * refused with `removed_op` by name, not by its version. The 1.x version gates
+ * stay live for it.
  */
 export const LAST_V1_VERSION = '1.3.0'
 const LAST_V1 = parseSemanticVersion(LAST_V1_VERSION)!
-
-/**
- * The last release of the esm 2.x line. A 2.x document loads at 3.0.0 on the
- * same terms: 3.0.0 removed the `grad`, `div` and `laplacian` ops and changed
- * nothing else, so a 2.x document that uses none of them loads as written, and
- * one that does is refused with `removed_op` by name. The 2.x version gates stay
- * live for it.
- */
-export const LAST_V2_VERSION = '2.3.0'
-const LAST_V2 = parseSemanticVersion(LAST_V2_VERSION)!
 
 /** The newest release of each major this build loads, keyed by major. */
 const NEWEST_BY_MAJOR: ReadonlyMap<number, { major: number; minor: number; patch: number }> =
   new Map([
     [LAST_V1.major, LAST_V1],
-    [LAST_V2.major, LAST_V2],
     [CURRENT_VERSION.major, CURRENT_VERSION],
   ])
 
-/** The supported majors, for messages: `major versions 1, 2, 3`. */
+/** The supported majors, for messages: `major versions 1, 2`. */
 const SUPPORTED_MAJORS_TEXT =
   (NEWEST_BY_MAJOR.size > 1 ? 'major versions ' : 'major version ') +
   [...NEWEST_BY_MAJOR.keys()].sort().join(', ')
@@ -967,19 +956,22 @@ const REMOVED_OPS_V2: ReadonlyMap<string, string> = new Map([
 ])
 
 /**
- * Ops removed at esm 3.0.0, each with how its derivative is written now. Like
+ * Ops removed at esm 2.4.0, each with how its derivative is written now. Like
  * {@link REMOVED_OPS_V2} they are rejected BY NAME at the wire boundary, on
  * every document whatever `esm` it declares. There is no codemod for them: the
- * message points at MIGRATION.md, "esm 3.0.0".
+ * message points at MIGRATION.md, "esm 2.4.0".
  */
-const REMOVED_OPS_V3: ReadonlyMap<string, string> = new Map([
+const REMOVED_OPS_V24: ReadonlyMap<string, string> = new Map([
   ['grad', '`grad(f, dim: x)` is `D(f, wrt: x)`'],
   ['div', '`div(F)` is the sum over axes of `D(F_i, wrt: x_i)`'],
   ['laplacian', '`laplacian(u)` is the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)`'],
 ])
 
 /** Every removed op name, for one pre-order search. */
-const REMOVED_OPS_ALL: ReadonlyMap<string, string> = new Map([...REMOVED_OPS_V2, ...REMOVED_OPS_V3])
+const REMOVED_OPS_ALL: ReadonlyMap<string, string> = new Map([
+  ...REMOVED_OPS_V2,
+  ...REMOVED_OPS_V24,
+])
 
 /** Where a removed construct's message sends the author. */
 const MIGRATE_HINT = 'Convert the document with the codemod: `python -m earthsci_ast.migrate`.'
@@ -1043,8 +1035,8 @@ function findFunctionTables(doc: unknown): string | null {
  * The first removed construct `doc` uses, as its JSON path and `removed_op`
  * message, or `null` when it uses none: `"op": "arrayop"` (removed at esm
  * 0.8.0), then the `function_tables` block, then the ops in
- * {@link REMOVED_OPS_V2} (removed at 2.0.0) and {@link REMOVED_OPS_V3} (removed
- * at 3.0.0) in pre-order. The message names the construct, where
+ * {@link REMOVED_OPS_V2} (removed at 2.0.0) and {@link REMOVED_OPS_V24} (removed
+ * at 2.4.0) in pre-order. The message names the construct, where
  * it sits, and what replaces it. Shared by the load-time rejection,
  * `validate()` and `migrate()`, which refuses to relabel such a 1.x document.
  */
@@ -1070,14 +1062,14 @@ export function findRemovedConstruct(doc: unknown): { path: string; message: str
     }
   }
   const hit = findFirstOp(doc, REMOVED_OPS_ALL)
-  if (hit !== null && REMOVED_OPS_V3.has(hit.op)) {
+  if (hit !== null && REMOVED_OPS_V24.has(hit.op)) {
     return {
       path: hit.path,
       message:
-        `removed_op at ${hit.path}: \`"op": "${hit.op}"\` was removed at esm 3.0.0; ` +
+        `removed_op at ${hit.path}: \`"op": "${hit.op}"\` was removed at esm 2.4.0; ` +
         `write the derivative with spatial \`D\`, one \`D\` per axis ` +
-        `(${REMOVED_OPS_V3.get(hit.op)}), or with a user op lowered by a rewrite rule ` +
-        `(MIGRATION.md, "esm 3.0.0").`,
+        `(${REMOVED_OPS_V24.get(hit.op)}), or with a user op lowered by a rewrite rule ` +
+        `(MIGRATION.md, "esm 2.4.0").`,
     }
   }
   if (hit !== null) {
@@ -1260,7 +1252,7 @@ export interface PrepareDocumentOpsOptions {
  * Three steps, in this order:
  *
  * 1. `arrayop` (removed at esm 0.8.0), the ops removed at esm 2.0.0 (the
- *    `aggregate` alias of `faq` among them), the ops removed at esm 3.0.0
+ *    `aggregate` alias of `faq` among them), the ops removed at esm 2.4.0
  *    (`grad`, `div`, `laplacian`) and the `function_tables` block are
  *    rejected BY NAME with `removed_op`. Each op is a well-formed identifier, so
  *    esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op: the

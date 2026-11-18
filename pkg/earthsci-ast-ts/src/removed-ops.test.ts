@@ -1,6 +1,6 @@
 /**
- * The esm 2.0.0 and 3.0.0 removals are refused at the wire boundary with
- * `removed_op`. (`grad`, `div` and `laplacian`, removed at 3.0.0, are covered
+ * The esm 2.0.0 and 2.4.0 removals are refused at the wire boundary with
+ * `removed_op`. (`grad`, `div` and `laplacian`, removed at 2.4.0, are covered
  * in their own block below: their message points at spatial `D`, not at a
  * codemod.)
  *
@@ -115,23 +115,23 @@ describe('removed_op: ops removed at esm 2.0.0', () => {
   })
 })
 
-describe('removed_op: ops removed at esm 3.0.0', () => {
-  const V3_NODES: [string, Record<string, unknown>][] = [
+describe('removed_op: ops removed at esm 2.4.0', () => {
+  const REMOVED_AT_2_4_0: [string, Record<string, unknown>][] = [
     ['grad', { op: 'grad', args: ['p'], dim: 'x' }],
     ['div', { op: 'div', args: ['p'] }],
     ['laplacian', { op: 'laplacian', args: ['p'] }],
   ]
-  for (const [op, node] of V3_NODES) {
+  for (const [op, node] of REMOVED_AT_2_4_0) {
     for (const esm of [SCHEMA_VERSION, '2.3.0', '1.3.0']) {
       it(`refuses \`${op}\` by name in a ${esm} document, pointing at spatial D`, () => {
         const err = loadError({ ...docWithRhs({ op: '*', args: ['p', node] }), esm })
         expect(err.code).toBe('removed_op')
         expect(err.message).toContain(`removed_op at /models/M/equations/0/rhs/args/1:`)
         expect(err.message).toContain(`"op": "${op}"`)
-        expect(err.message).toContain('removed at esm 3.0.0')
+        expect(err.message).toContain('removed at esm 2.4.0')
         expect(err.message).toContain('spatial `D`')
-        expect(err.message).toContain('MIGRATION.md, "esm 3.0.0"')
-        // No codemod for the 3.0.0 removals.
+        expect(err.message).toContain('MIGRATION.md, "esm 2.4.0"')
+        // No codemod for the 2.4.0 removals.
         expect(err.message).not.toContain('earthsci_ast.migrate')
       })
     }
@@ -141,7 +141,7 @@ describe('removed_op: ops removed at esm 3.0.0', () => {
     const err = loadError(
       docWithRhs({
         op: '+',
-        args: [V3_NODES[0][1], REMOVED_NODES[3][1]],
+        args: [REMOVED_AT_2_4_0[0][1], REMOVED_NODES[3][1]],
       }),
     )
     expect(err.message).toContain('"op": "grad"')

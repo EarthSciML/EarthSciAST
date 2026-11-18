@@ -722,7 +722,7 @@ describe('Schema Edge Cases', () => {
 
     it('should reject major version mismatches', () => {
       const majorVersionUpgrade = {
-        esm: '4.0.0', // Major version mismatch - should be rejected
+        esm: '3.0.0', // Major version mismatch - should be rejected
         metadata: { name: 'test' },
         models: {
           test: {
@@ -739,21 +739,17 @@ describe('Schema Edge Cases', () => {
 
       // Load function should also reject due to major version mismatch
       expect(() => loadDocument(majorVersionUpgrade)).toThrow(ParseError)
-      expect(() => loadDocument(majorVersionUpgrade)).toThrow('Unsupported major version 4')
+      expect(() => loadDocument(majorVersionUpgrade)).toThrow('Unsupported major version 3')
 
       // A 0.x document is refused the same way: 1.0.0 has no deprecation path.
       const legacy = { ...majorVersionUpgrade, esm: '0.8.0' }
       expect(validateSchema(legacy)[0]?.keyword).toBe('major_version_mismatch')
       expect(() => loadDocument(legacy)).toThrow('Unsupported major version 0')
 
-      // Majors 1 and 2 are NOT a mismatch: 1.x and 2.x documents load beside
-      // 3.0.0 ones.
+      // Major 1 is NOT a mismatch: a 1.x document loads beside 2.0.0 ones.
       const v1 = { ...majorVersionUpgrade, esm: '1.3.0' }
       expect(validateSchema(v1)).toEqual([])
       expect(loadDocument(v1).esm).toBe('1.3.0')
-      const v2 = { ...majorVersionUpgrade, esm: '2.3.0' }
-      expect(validateSchema(v2)).toEqual([])
-      expect(loadDocument(v2).esm).toBe('2.3.0')
     })
 
     it('should fail with invalid version format', () => {

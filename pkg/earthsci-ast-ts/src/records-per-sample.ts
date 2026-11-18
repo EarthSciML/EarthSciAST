@@ -453,8 +453,8 @@ export function deprecatedRecordsPerSampleSites(esmFile: EsmFile): string[] {
 /** The load-time `deprecated_records_per_sample` warning naming `sites`. */
 export function deprecatedRecordsPerSampleWarning(sites: readonly string[]): string {
   return (
-    'deprecated_records_per_sample: `records_per_sample` is deprecated and is removed in ' +
-    'a later major version; the number of records a data-fed parameter receives is said by its record ' +
+    'deprecated_records_per_sample: `records_per_sample` is deprecated and is removed at ' +
+    'esm 3.0.0; the number of records a data-fed parameter receives is said by its record ' +
     'shape, two when its first axis is an interval index set with "records": true ' +
     `(esm-spec §8.5.1). Written at: ${sites.join(', ')}.`
   )
