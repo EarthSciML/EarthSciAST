@@ -1,5 +1,5 @@
 # ========================================================================
-# tree_walk/oop_merge.jl — part of the tree-walk evaluator (array-IR B).
+# tree_walk/oop_merge.jl — part of the tree-walk evaluator.
 # Included by src/tree_walk.jl AFTER oop.jl (`_OopAccPlan`,
 # `_build_oop_acc_plan`) and acc_merge.jl. Owns the KERNEL-CLASS merge: a build-time pass
 # (`_merge_acc_kernel_classes`, called from `_build_evaluator_impl` phase 4

@@ -1498,7 +1498,7 @@ function _build_evaluator_impl_inner(
             )
     end
 
-    # ---- The parameter partition (differentiability plan §3 Phase 5) ----
+    # ---- The parameter partition ----
     # Every build-time consumer has now run, so the read set is complete.
     # Published to whichever sinks the caller supplied; never changes the build.
     if _param_classes !== nothing || products !== nothing
