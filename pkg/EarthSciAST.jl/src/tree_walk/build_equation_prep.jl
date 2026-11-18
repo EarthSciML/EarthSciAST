@@ -95,63 +95,9 @@ function _lower_broadcast_memoized(
     return out
 end
 
-# Lower every `broadcast` node in a Model's expression-bearing fields
-# (equations, initialization equations, guesses) and, recursively, in its Model
-# subsystems. Returns the SAME model object when nothing changed. Shaped after
-# `_intern_model` (src/intern.jl).
-#
-# esm 1.0.0 removed the variable-level `expression`, so an observed unknown's
-# body is reached through the equations like any other.
-function _lower_broadcast_model(model::Model)::Model
-    vars = model.variables
-    nvars = vars
-    lower_eqs(eqs) = begin
-        out = eqs
-        for (i, eq) in enumerate(eqs)
-            nl = _lower_broadcast(eq.lhs)
-            nr = _lower_broadcast(eq.rhs)
-            if nl !== eq.lhs || nr !== eq.rhs
-                out === eqs && (out = copy(eqs))
-                out[i] = Equation(nl, nr; _comment = eq._comment)
-            end
-        end
-        out
-    end
-    eqs = lower_eqs(model.equations)
-    ieqs = lower_eqs(model.initialization_equations)
-    guesses = model.guesses
-    ng = guesses
-    for (k, g) in guesses
-        g isa ASTExpr || continue
-        r = _lower_broadcast(g)
-        if r !== g
-            ng === guesses && (ng = copy(guesses))
-            ng[k] = r
-        end
-    end
-    subs = model.subsystems
-    nsubs = subs
-    for (k, s) in subs
-        s isa Model || continue
-        ns = _lower_broadcast_model(s)
-        if ns !== s
-            nsubs === subs && (nsubs = copy(subs))
-            nsubs[k] = ns
-        end
-    end
-    (
-        nvars === vars && eqs === model.equations &&
-            ieqs === model.initialization_equations && ng === guesses &&
-            nsubs === subs
-    ) && return model
-    return Model(
-        nvars, eqs, model.discrete_events, model.continuous_events,
-        nsubs; tolerance = model.tolerance, tests = model.tests,
-        analyses = model.analyses,
-        initialization_equations = ieqs, guesses = ng,
-        system_kind = model.system_kind, reference = model.reference
-    )
-end
+# Lower every `broadcast` node at every expression site of a Model and of its
+# Model subsystems.
+_lower_broadcast_model(model::Model)::Model = map_expressions(_lower_broadcast, model)
 
 # ---- Indexed observed-LHS normalization (esm-spec §6.3.1) ---------------------
 # esm-spec §6.3.1 admits TWO LHS spellings for the equation that DEFINES an

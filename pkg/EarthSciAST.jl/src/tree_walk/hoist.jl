@@ -540,12 +540,7 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
     isempty(hc.eqs) && return model, index_sets, hc.owner
     vars = OrderedDict{String, ModelVariable}(model.variables)
     merge!(vars, hc.vars)
-    m = Model(
-        vars, vcat(eqs, hc.eqs), model.discrete_events, model.continuous_events,
-        model.subsystems; tolerance = model.tolerance, tests = model.tests,
-        analyses = model.analyses, initialization_equations = model.initialization_equations,
-        guesses = model.guesses, system_kind = model.system_kind, reference = model.reference
-    )
+    m = reconstruct(model; variables = vars, equations = vcat(eqs, hc.eqs))
     isets = index_sets
     if any(v -> v.shape == [_HOIST_ONE_SET], values(hc.vars))
         isets = copy(index_sets)
