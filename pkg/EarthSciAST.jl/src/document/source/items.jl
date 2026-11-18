@@ -50,8 +50,6 @@ end
 struct RTm <: RItem
     t::Tm
 end
-Base.:(==)(a::T, b::T) where {T <: RItem} = fieldeq(a, b)
-Base.:(==)(a::RItem, b::RItem) = false
 
 """`Source.mItem`: the construct of a math entry."""
 m_item(m::MxEq) = m.role == R_EQN ? REqn(m.a) : REqx(m.role, m.a)

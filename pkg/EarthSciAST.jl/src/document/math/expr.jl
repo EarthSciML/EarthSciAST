@@ -257,6 +257,5 @@ struct Sym
     templates::Vector{Tuple{String, Vector{String}}}
 end
 Sym() = Sym(String[], Tuple{String, Vector{String}}[])
-Base.:(==)(a::Sym, b::Sym) = a.names == b.names && a.templates == b.templates
 
 end # module MExpr

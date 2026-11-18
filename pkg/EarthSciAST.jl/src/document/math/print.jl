@@ -547,7 +547,6 @@ struct Out
     toks::Vector{Tok}
     crow::Vector{Tok}
 end
-Base.:(==)(a::Out, b::Out) = fieldeq(a, b)
 
 """`Math.mkOut`."""
 function mk_out(l::Int, t::Vector{Tok})
@@ -829,7 +828,6 @@ struct AForm
     ns::Vector{JNum}
     rs::Vector{Vector{JNum}}
 end
-Base.:(==)(a::AForm, b::AForm) = fieldeq(a, b)
 
 """`Math.arrForm`: a constant array printed natively."""
 function arr_form(j)
@@ -940,7 +938,6 @@ struct FaqForm
     filter::Any
     set::Vector{String}
 end
-Base.:(==)(a::FaqForm, b::FaqForm) = fieldeq(a, b)
 
 """`Math.FaqForm.args`: the `args` of a native `faq`."""
 faq_args(f::FaqForm) = f.marked ? Any[s for s in bases(f.expr)] : Any[s for s in f.set]
@@ -1200,7 +1197,6 @@ struct MkForm
     regions::Vector{Vector{Tuple{Any, Any}}}
     values::Vector{Any}
 end
-Base.:(==)(a::MkForm, b::MkForm) = fieldeq(a, b)
 
 """`Math.regionJson`."""
 region_json(r) = JArr(Any[JArr(Any[p[1], p[2]]) for p in r])
