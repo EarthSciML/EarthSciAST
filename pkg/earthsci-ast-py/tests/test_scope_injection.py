@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 
+import pytest
 from conftest import CONFORMANCE_DIR
 
 from earthsci_ast.esm_types import Model
@@ -59,6 +60,21 @@ def test_form_a_subsystem_ref_injection():
     # Round-trip golden: the resolved+lowered assembly; the injection field is
     # gone (form A does not survive parse → emit).
     assert _serialize_esm_file(f) == _read_json(_conf("inject_subsystem_ref", "expanded.esm"))
+
+
+@pytest.mark.parametrize("fname", ["subsystem_form.esm", "toplevel_form.esm"])
+def test_form_a_injected_ref_resolves_against_the_mounting_directory(fname):
+    # esm-spec §4.7 / §9.7.10: the edge's injected import ref is written by the
+    # mounting document, so it resolves against THAT document's directory at
+    # both mount forms. The leaf sits in leaves/, where the ref names nothing.
+    f = load_path(_conf("inject_mounting_directory", fname))
+    if fname == "subsystem_form.esm":
+        runoff = f.models["Assembly"].subsystems["Runoff"]
+    else:
+        runoff = f.models["Runoff"]
+    assert isinstance(runoff, Model)
+    assert runoff.equations[0].rhs.args[1].op == "makearray"
+    assert f.index_sets["lon"]["size"] == 288
 
 
 def test_form_a_leaf_loads_standalone_with_d_intact():
