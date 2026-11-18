@@ -146,7 +146,7 @@ if get(ENV, "ESS_CR_CHILD", "") == "1"
 else
     @testset "cadence refresh kinds" begin
         @testset "serial" begin
-            withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+            withenv("ESS_THREADS_MIN_WORK" => string(typemax(Int))) do
                 _cr_refresh_sequence(16)
             end
         end
@@ -240,7 +240,7 @@ else
                 startswith(k, "ESS_") && delete!(env, k)
             end
             env["ESS_CR_CHILD"] = "1"
-            env["ESS_THREADS_MIN_CELLS"] = "8"
+            env["ESS_THREADS_MIN_WORK"] = "8"
             env["JULIA_PROJECT"] = Base.active_project()
             cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 2 $(@__FILE__)`, env)
             proc = run(pipeline(ignorestatus(cmd); stdout = stdout, stderr = stderr))

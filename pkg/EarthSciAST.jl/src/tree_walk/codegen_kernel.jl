@@ -87,11 +87,9 @@ _cg_node_tree_size(n::_Node) = _node_tree_size(n)
 # build_observed_fills.jl, hand-built test sections) pass `shared_cache = nothing` and keep
 # today's decline — as does ANY payload that is not that one cache object.
 #
-# Off, every such read is an unconditional `:foreign_scratch` decline.
 # Build tally: `:cg_foreign_scratch_emit` — one bump per kernel that COMPILED
 # carrying at least one shared-prelude read (a kernel that later declines for
 # another reason is not counted).
-_cg_foreign_scratch_disabled() = !_compiler_plan_now().cg_foreign_scratch
 
 # A kernel the emitter cannot model declines through `_Decline` (compiler.jl);
 # the per-kernel transaction in `_build_codegen_rhs` catches it and the kernel
@@ -194,8 +192,6 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int 
     IdDict{Any, Tuple{Int, Int}}(), nothing,
     Dict{Any, Symbol}(), Dict{Any, Symbol}(), Tuple{Int, Bool, Any}[]
 )
-
-_cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup
 
 _cg_name(ctx::_CGCtx, base::String) = Symbol("_cg", base, ctx.nname += 1)
 
@@ -701,8 +697,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             return kc.cellsyms[nd.idx]
         elseif pl === cse.inv_scratch && nd.idx <= length(kc.invsyms)
             return kc.invsyms[nd.idx]
-        elseif pl === ctx.shared_cache && pl isa _CSECache &&
-                !_cg_foreign_scratch_disabled()
+        elseif pl === ctx.shared_cache && pl isa _CSECache
             # Shared scalar-prelude slot (xcse.jl rewrite; ess-cgfsc). Emit the
             # interpreter's exact read — `_cse_read` selects `f64` at Float64
             # and the `alt::Vector{T}` buffer under any other `T`, both filled
@@ -2423,10 +2418,8 @@ function _cg_spill!(ctx::_CGCtx, sub)
     # it. Only the CALL is re-emitted; the compiled function is shared. Value-exact
     # and laziness-preserving — a call in place of the sub-expression evaluates
     # exactly when the sub-expression would.
-    dedup = !_cg_helper_dedup_disabled()
-    key = dedup ? string(sub) : ""
-    if dedup
-        got = get(ctx.helper_dedup, key, nothing)
+    key = string(sub)
+    let got = get(ctx.helper_dedup, key, nothing)
         if got !== nothing
             _tally_cascade!(:cg_helper_deduped)
             return Expr(:call, got, params...)
@@ -2439,7 +2432,7 @@ function _cg_spill!(ctx::_CGCtx, sub)
     fname = _cg_name(ctx, "h")
     fdef = Expr(:function, Expr(:call, fname, params...), Expr(:block, stmts...))
     push!(ctx.helpers, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
-    dedup && (ctx.helper_dedup[key] = fname)
+    ctx.helper_dedup[key] = fname
     return Expr(:call, fname, params...)
 end
 
@@ -2489,7 +2482,6 @@ end
 # byte. Off, it is the no-op: one flat body per kernel, which is the
 # differential oracle and what reproduces the OOM.
 function _cg_bound_body!(ctx::_CGCtx, ex)
-    _compiler_plan_now().codegen_body_split || return ex
     cap = _codegen_fn_node_cap()
     cap <= 0 && return ex
     _cg_expr_size(ex) <= cap && return ex

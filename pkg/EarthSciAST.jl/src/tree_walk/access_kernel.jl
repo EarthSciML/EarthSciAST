@@ -849,9 +849,7 @@ _reset_thread_tally!() = lock(() -> (empty!(_THREAD_TALLY); nothing), _THREAD_TA
 # one empty fork-join of Polyester's pool over the cost of one node evaluation
 # in the cheapest generated loops (array_contraction.jl, codegen_kernel.jl),
 # both measured on a 4-thread run: a chunk below it would spend about as long
-# being dispatched as computing. Override with ESS_THREADS_MIN_WORK
-# (ESS_THREADS_MIN_CELLS, the floor's earlier name, is read when it is unset):
-# a tuning threshold, not a refusal boundary — both sides of it evaluate the
+# being dispatched as computing. Override with ESS_THREADS_MIN_WORK: a tuning threshold, not a refusal boundary — both sides of it evaluate the
 # same bits, so no compiler refuses a rule for crossing it.
 const _THREAD_MIN_WORK_DEFAULT = 6000
 
@@ -863,9 +861,7 @@ const _THREAD_MIN_WORK_DEFAULT = 6000
 # still leaves it, and set past a section's work still forces it serial.
 const _THREAD_MIN_RMW_CELLS = 512
 function _thread_min_work()
-    v = tryparse(Int, get(ENV, "ESS_THREADS_MIN_WORK", ""))
-    v === nothing && (v = tryparse(Int, get(ENV, "ESS_THREADS_MIN_CELLS", "")))
-    return something(v, _THREAD_MIN_WORK_DEFAULT)
+    return something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_WORK", "")), _THREAD_MIN_WORK_DEFAULT)
 end
 
 @inline _threads_available() = Threads.nthreads() > 1

@@ -167,7 +167,7 @@ _cgt_alloc(f!, du, u, p, t) = (f!(du, u, p, t); f!(du, u, p, t); @allocated f!(d
 # route. It has to be a fresh build — the verdict caches on a section's first
 # call, so moving the floor afterwards changes nothing.
 _cgt_serial(model, ics; env...) =
-    withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+    withenv("ESS_THREADS_MIN_WORK" => string(typemax(Int))) do
     _cgt_build(model, ics; env...)
 end
 _cgt_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
@@ -234,7 +234,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             # ... and a lowered threshold flips the SAME model to threaded.
             ESM._reset_thread_tally!()
             fT, uT, pT, _ = _cgt_build(_cgt_1d_model(48), _cgt_1d_ics(48))
-            duT = withenv("ESS_THREADS_MIN_CELLS" => "8") do
+            duT = withenv("ESS_THREADS_MIN_WORK" => "8") do
                 _cgt_du(fT, uT, pT, 0.3)
             end
             @test getfield(getfield(fT, :kernel_section), :tcache).state == 1
@@ -306,7 +306,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                     Dict(k => du[i] for (k, i) in prob.var_map if i <= length(du))
                 end
             end
-            du_ser = rhs(:native, "ESS_THREADS_MIN_CELLS" => "100000000")
+            du_ser = rhs(:native, "ESS_THREADS_MIN_WORK" => "100000000")
             ESM._reset_thread_tally!()
             du_thr = rhs(:native)
             # The contraction chunks, with the state kernel that consumes its
@@ -358,7 +358,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                 ]
                 dthr = similar(ud); dser = similar(ud)
                 Base.invokelatest(fA, dthr, ud, pA, 0.7)
-                withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+                withenv("ESS_THREADS_MIN_WORK" => string(typemax(Int))) do
                     Base.invokelatest(fS, dser, ud, pS, 0.7)
                 end
                 @test getfield(getfield(fA, :kernel_section), :tcache).state == 1

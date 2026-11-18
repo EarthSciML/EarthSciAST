@@ -90,7 +90,7 @@
 # levels — the level scheduler's invariant), so emitting groups after the
 # leftover singles reorders only WRITES to disjoint slots, never a
 # read-after-write.
-_oop_batch_enabled() = _compiler_plan_now().oop_batch
+_oop_batch_enabled() = !_oop_merge_disabled()
 
 # One position of a lane-batched tree. `kind` mirrors the `_NK_*` of every
 # lane's node at this position; which fields are live depends on it:

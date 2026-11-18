@@ -158,11 +158,9 @@ _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
 
     @testset "the compiler gates the stage (white-box)" begin
         @test ESM._cross_eq_class_emit_enabled()
-        # The interpreter stands the whole class-emission chain down at once:
-        # this stage, the per-equation emitter beneath it, and the class merge.
+        # The interpreter stands the stage down with the class merge.
         ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             @test !ESM._cross_eq_class_emit_enabled()
-            @test !ESM._direct_class_emit_enabled()
             @test ESM._oop_merge_disabled()
         end
     end

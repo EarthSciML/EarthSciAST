@@ -47,9 +47,6 @@ struct CompilerPlan
     strict::Bool          # refuse a rule this compiler cannot express
     # ---- kernel emission ----
     codegen::Bool                 # the RuntimeGeneratedFunction emitter
-    codegen_body_split::Bool
-    cg_foreign_scratch::Bool
-    cg_helper_dedup::Bool
     scalar_codegen::Bool          # the scalar equations and the prelude (scalar_codegen.jl)
     # The emitted contraction loop's algebraic rewrites (array_contraction.jl):
     # the indicator sum emitted as a count. Off, the loop is the plain fold.
@@ -64,11 +61,10 @@ struct CompilerPlan
     contraction_loop::Bool
     join_on_gate::Bool
     # ---- kernel assembly ----
-    oop_merge::Bool               # kernel-class merges (both spellings)
-    oop_merge_expand::Bool
-    oop_batch::Bool
-    direct_class_emit::Bool
-    cross_eq_class_emit::Bool
+    # Kernel-class merges: the per-cell entries of every equation pooled into
+    # classes, both class-merge rounds over the assembled kernels, and the
+    # out-of-place product's lane-batched scalar groups.
+    oop_merge::Bool
     xcse::Bool
     # ---- prelude cadence ----
     tiered::Bool                  # the const/time cadence tiers
@@ -92,9 +88,9 @@ end
 _plan_all(name::Symbol, strict::Bool, on::Bool) =
     CompilerPlan(
     name, strict,
-    on, on, on, on, on, on, on,
     on, on, on, on,
-    on, on, on, on, on, on,
+    on, on, on, on,
+    on, on,
     on, on,
     on, on, on
 )

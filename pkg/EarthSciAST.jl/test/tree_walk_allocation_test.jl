@@ -26,7 +26,7 @@
 # slices, preallocated scratch, fused in-place broadcasts, in-place semiring
 # folds, explicit `du` scatter) is a property of the kernels themselves, so the
 # testsets below pin the serial path and keep asserting EXACTLY 0 — via
-# `ESS_THREADS_MIN_CELLS`, which `_sec_prep_threads!` reads ONCE per section
+# `ESS_THREADS_MIN_WORK`, which `_sec_prep_threads!` reads ONCE per section
 # and caches. A gate re-read on EVERY call could not be used here at all: the
 # `get(ENV, …)` itself allocates a String per call once the variable is set.
 #
@@ -185,7 +185,7 @@ end
 # included test file happened to load. `_sec_prep_threads!` reads this once per
 # section and caches the verdict, so it costs no per-call allocation of its own
 # (see the header note).
-const _SERIAL_PIN = ("ESS_THREADS_MIN_CELLS" => string(typemax(Int)),)
+const _SERIAL_PIN = ("ESS_THREADS_MIN_WORK" => string(typemax(Int)),)
 
 # Set in the two-thread child the threaded testset below launches from a
 # one-thread session: the child runs only that testset.
@@ -280,7 +280,7 @@ end  # if !_TWALLOC_CHILD
     else
         # Small min-cells so every N below genuinely chunks; read once per
         # section and cached, so it adds no per-call allocation.
-        withenv("ESS_THREADS_MIN_CELLS" => "256") do
+        withenv("ESS_THREADS_MIN_WORK" => "256") do
             bytes = map((1024, 4096, 16384)) do N
                 ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
                 built_rhs_alloc_bytes(_stencil_model(N); initial_conditions = ics)

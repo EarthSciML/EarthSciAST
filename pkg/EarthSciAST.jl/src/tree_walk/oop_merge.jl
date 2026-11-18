@@ -557,8 +557,6 @@ end
 # the gate below disables round 2 only.
 # ============================================================================
 
-_oop_merge_expand_disabled() = !_compiler_plan_now().oop_merge_expand
-
 # The lockstep-mergeable kinds by what they read (`_ak_source`).
 _oop_x_statefam(k) = _ak_source(k) === :state
 _oop_x_forcfam(k) = _ak_source(k) === :forcing
@@ -957,7 +955,7 @@ end
 # left alone; what the merge buys there is fewer kernels, which matters only
 # when the count is large. So `keep_affine` (the in-place build, with the
 # emitter on) holds back every box kernel of rank 2 or more that reads only
-# through affine, fixed or box-addressed descriptors and spans more than one cell along at least one axis, up to `_affine_keep_max()`
+# through affine, fixed or box-addressed descriptors and spans more than one cell along at least one axis, up to `_AFFINE_KEEP_MAX`
 # kernels (by the number of such axes, then build order, both independent of
 # the grid size); the merge runs on the rest. Corner boxes (one cell along
 # every axis) are merged as before: they are a handful of cells whatever the
@@ -967,8 +965,7 @@ end
 # (the compiled backends' input) and the interpreter runner keep the full
 # merge. Keeping a kernel out of a merge never changes a value: each cell
 # evaluates the same op sequence either way.
-_affine_keep_max() =
-    something(tryparse(Int, get(ENV, "ESS_AFFINE_KEEP_MAX_KERNELS", "")), 256)
+const _AFFINE_KEEP_MAX = 256
 
 _affine_keep_kind(k) =
     k in (
@@ -991,8 +988,7 @@ end
 # Sorted indices of the kernels `keep_affine` holds back (see above).
 function _affine_boxes_to_keep(kernels::AbstractVector{_AccKernel})
     (_codegen_disabled() || _codegen_node_budget() <= 0) && return Int[]
-    cap = _affine_keep_max()
-    cap <= 0 && return Int[]
+    cap = _AFFINE_KEEP_MAX
     rk = [_affine_box_rank(K) for K in kernels]
     cand = [j for j in eachindex(kernels) if rk[j] > 0]
     sort!(cand; by = j -> (-rk[j], j))
@@ -1076,7 +1072,7 @@ function _merge_acc_kernel_classes(
             kernels, plans,
             :direct_classmerge_round1_merge
         )
-        if !_oop_merge_expand_disabled() && length(kernels) > 1
+        if length(kernels) > 1
             kernels, plans, dxdiag = _merge_oop_x_kernels(
                 kernels, plans,
                 :direct_classmerge_round2_merge
@@ -1093,7 +1089,7 @@ function _merge_acc_kernel_classes(
     # per-class fallback posture; with round 2 off the round-1 output stands
     # byte for byte.
     rxdiag = nothing
-    if !_oop_merge_expand_disabled() && length(merged) > 1
+    if length(merged) > 1
         merged, mplans, rxdiag = _merge_oop_x_kernels(merged, mplans)
     end
 

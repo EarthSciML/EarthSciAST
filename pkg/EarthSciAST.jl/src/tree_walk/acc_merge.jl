@@ -38,24 +38,13 @@
 _acc_node_has_lazy(n::_Node) =
     _node_any(m -> m.kind === _NK_OP && _op_lazy_from(m.op) > 0, n)
 
-# ---- DIRECT CLASS EMISSION switch
-#
-# The umbrella switch the cross-equation stage below requires. It stands down
-# whenever the class merge is off: that means "no lane-batched class kernels in
-# this build".
-_direct_class_emit_disabled() = !_compiler_plan_now().direct_class_emit
-_direct_class_emit_enabled() =
-    !_direct_class_emit_disabled() && !_oop_merge_disabled()
-
 # CROSS-EQUATION + AFFINE-BOX direct class emission — the two class families
-# the per-equation emitter above cannot see, folded into direct emission:
+# a per-equation grouping cannot see, folded into direct emission:
 #
 #   1. CROSS-EQUATION per-cell classes. The scalarizer's grouping runs per
-#      `_acc_from_cell_entries` call, and that call used to be per EQUATION —
-#      so structurally identical cells arising in DIFFERENT equations (twin
-#      species balances, per-band photolysis equations) always split into one
-#      kernel per equation and reached a class only through the post-hoc
-#      repair pass. Under this switch `_compile_derivative_equations`
+#      `_acc_from_cell_entries` call. So that structurally identical cells
+#      arising in DIFFERENT equations (twin species balances, per-band
+#      photolysis equations) share a kernel, `_compile_derivative_equations`
 #      (build_array_equation.jl) POOLS every per-cell equation's cell entries and calls
 #      `_acc_from_cell_entries` ONCE, above the equation loop — the same
 #      emitter, the same shape-keyed signature, one global grouping. Out-slot
@@ -81,12 +70,8 @@ _direct_class_emit_enabled() =
 #      clone instead of writing a parallel box-level emitter keeps the
 #      bit-identity argument exactly the one the repair pass already carries.
 #
-# Off, the build is the per-equation emitter + repair-only pipeline byte for
-# byte. The stage also stands down whenever per-equation direct emission itself
-# is off, or the class merge is (`_direct_class_emit_enabled` folds both in).
-_cross_eq_class_emit_disabled() = !_compiler_plan_now().cross_eq_class_emit
-_cross_eq_class_emit_enabled() =
-    !_cross_eq_class_emit_disabled() && _direct_class_emit_enabled()
+# The stage runs whenever the class merge does.
+_cross_eq_class_emit_enabled() = !_oop_merge_disabled()
 
 # ---- Structural grouping signature ------------------------------------------
 
