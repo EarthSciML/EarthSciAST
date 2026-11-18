@@ -8,6 +8,7 @@ Port of `formal/Esm/Document/Source/TypstDoc.lean` (Rust
 module STypstDoc
 
 using ..DJson
+using ..DLimits: refused_at!
 import ..DMath
 import ..DTypstDict
 import ..MTypst
@@ -112,12 +113,12 @@ end
 
 """`Typ.lexDoc`: read the header and the constructs."""
 function lex_doc(s::Chars)
-    pre_s(HEADER, s) || return nothing
+    pre_s(HEADER, s) || return refused_at!("the header", s)
     x = p_args_first(drop(s, length(HEADER)))
-    x === nothing && return nothing
+    x === nothing && return refused_at!("the header", s)
     front, r = x
     r1 = line_end(r)
-    r1 === nothing && return nothing
+    r1 === nothing && return refused_at!("the header", s)
     its = lex(true, r1)
     its === nothing && return nothing
     return front, its

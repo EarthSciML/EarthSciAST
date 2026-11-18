@@ -10,6 +10,7 @@ constructs separated by blank lines).
 module SMarkdownDoc
 
 using ..DJson
+using ..DLimits: refused_at!
 import ..DMath
 import ..DYaml
 import ..MLatex
@@ -195,13 +196,13 @@ end
 
 """`Md.lexDoc`: read the front matter and the constructs."""
 function lex_doc(s::Chars)
-    starts(s, "---\n") || return nothing
+    starts(s, "---\n") || return refused_at!("the front matter", s)
     x = until_stop(DASHES, drop(s, 4))
-    x === nothing && return nothing
+    x === nothing && return refused_at!("the front matter", s)
     body, sl, rest = x
-    blank(sl) || return nothing
+    blank(sl) || return refused_at!("the front matter", s)
     v = DYaml.decode(body)
-    v isa JObj || return nothing
+    v isa JObj || return refused_at!("the front matter", s)
     its = lex(true, rest)
     its === nothing && return nothing
     return v.kvs, its

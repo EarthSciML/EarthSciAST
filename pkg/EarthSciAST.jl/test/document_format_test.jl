@@ -605,3 +605,41 @@ end
     @test sprint(show, e) == print_math(e, expression_names(e), :typst)
     @test_throws ArgumentError print_math(raw, ["a"], :latex)
 end
+
+@testset "a refused document says where" begin
+    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "expression_templates_arrhenius.esm")
+    doc = JSON.parse(read(path, String))
+    for (fmt, decl) in ((:markdown, ":var["), (:typst, "#var("))
+        lines = split(print_document(doc, fmt), '\n')
+        i = findfirst(l -> occursin(decl, l), lines)
+        @test i !== nothing
+        bad = copy(lines)
+        bad[i] = replace(bad[i], decl => decl * "\"")
+        err = try
+            parse_document(join(bad, '\n'), fmt)
+            nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.ParseError
+        @test err.code == "parse_error"
+        @test get(err.details, "line", nothing) == i
+        @test occursin("line $i:", sprint(showerror, err))
+        # CRLF line ends and a byte-order mark move no line.
+        err2 = try
+            parse_document("﻿" * join(bad, "\r\n"), fmt)
+            nothing
+        catch e
+            e
+        end
+        @test get(err2.details, "line", nothing) == i
+    end
+    # A refusal past the constructs (math that does not read) names the math.
+    err = try
+        parse_markdown("---\nesm: \"2.3.0\"\n---\n\n\$\$\n\\frac{\n\$\$\n")
+        nothing
+    catch e
+        e
+    end
+    @test err isa EarthSciAST.ParseError && err.code == "parse_error"
+end

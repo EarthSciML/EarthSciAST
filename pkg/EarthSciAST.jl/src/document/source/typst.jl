@@ -11,6 +11,7 @@ loops without it.
 module STypst
 
 using ..DJson
+using ..DLimits: refused_at!
 import ..DMath
 import ..DTypstDict
 using ..MExpr: Sym, jwf, name_ok
@@ -658,13 +659,13 @@ function lex(bol::Bool, s::Chars)
         c = s[1]
         if bol && block_open(s)
             x = block_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the block", s)
             push!(out, x[1])
             s = x[2]
             bol = true
         elseif decl_open(s)
             x = decl_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the declaration", s)
             push!(out, x[1])
             s = x[2]
             bol = false

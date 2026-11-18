@@ -14,7 +14,7 @@ module SMarkdown
 using ..DJson
 import ..DMath
 import ..DYaml
-using ..DLimits: nested
+using ..DLimits: nested, refused_at!
 using ..MExpr: Sym, name_ok, jwf
 using ..DStrings: esc_char, hex4, is_ident, parse_key, parse_quoted, print_key, read_ident
 using ..SSkeleton
@@ -805,30 +805,30 @@ function lex(bol::Bool, s::Chars)
         c = s[1]
         if bol && block_open(s)
             x = block_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the block", s)
             push!(out, x[1])
             s = x[2]
             bol = true
         elseif decl_open(s)
             x = decl_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the declaration", s)
             push!(out, x[1])
             s = x[2]
             bol = false
         elseif bol && pre_s(TABLE_OPEN, s)
             x = table_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the declarations table", s)
             append!(out, x[1])
             s = x[2]
             bol = true
         elseif bol && cont_open(s)
             x = cont_at(s)
-            x === nothing && return nothing
+            x === nothing && return refused_at!("the container", s)
             append!(out, x[1])
             s = x[2]
             bol = true
         elseif bol && rate_table(s)
-            return nothing
+            return refused_at!("a reaction table, which the format does not read,", s)
         elseif c == '`'
             s = skip_code(s)
             bol = false

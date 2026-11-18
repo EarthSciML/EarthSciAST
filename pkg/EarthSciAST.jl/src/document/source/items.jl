@@ -11,6 +11,7 @@ Math entries are held as the container's math text at this layer;
 module SItems
 
 using ..DJson
+import ..DLimits
 using ..MExpr: Sym
 using ..SSkeleton
 using ..SSkeleton: is_math_field, sym_for, top_sym, map_math, scope, mscope
@@ -193,10 +194,19 @@ function cook_comp(ck, d::Doc, c::Comp)
     math = Any[]
     for m in c.math
         x = ck(s, m)
-        x === nothing && return nothing
+        x === nothing && return refused_math!(" in `$(c.name)`", m)
         append!(math, x)
     end
     return Comp(c.kind, c.name, c.desc, c.decls, math, c.math_blocks, c.blocks)
+end
+
+# Record a math entry of a component (`where`) that does not read, for the
+# diagnostic; returns `nothing`.
+function refused_math!(where::String, m)
+    text = m isa MxEq ? m.a : m isa MxRxn ? m.x.rate : m isa MxTm ? m.t.body : ""
+    text = text isa AbstractString ? text : ""
+    short = length(text) > 60 ? first(text, 60) * "…" : text
+    return DLimits.refused!("the math `$short`$where", nothing)
 end
 
 """`Source.cookDoc`: read every math entry of a skeleton."""
@@ -205,7 +215,7 @@ function cook_doc(ck, d::Doc)
     rm = Any[]
     for m in d.math
         x = ck(ts, m)
-        x === nothing && return nothing
+        x === nothing && return refused_math!("", m)
         append!(rm, x)
     end
     cs = Comp[]
@@ -303,7 +313,7 @@ end
 # container's math read by `ck` (`Md.parseItemsMd`, `Typ.parseItemsT`).
 function parse_items(ck, front::Kvs, its)
     r = unitems(front, its)
-    r === nothing && return nothing
+    r === nothing && return DLimits.refused!("the order of the constructs", nothing)
     d = cook_doc(ck, r)
     d === nothing && return nothing
     return SSkeleton.of_doc(d)

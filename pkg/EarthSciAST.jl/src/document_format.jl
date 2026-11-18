@@ -208,7 +208,8 @@ end
 # the specification: a removed operator the math writes in the call form or
 # the escape form is refused by name (CONFORMANCE §7.1), a text past a bound of
 # the reader or holding a number beyond binary64 is a parse error, and so is
-# everything else that is not `what`.
+# everything else that is not `what`; the message names the first construct
+# the reader gave up on, when it recorded one.
 function _checked_read(read::F, text::AbstractString, format::Symbol, what::String) where {F}
     DF = DocumentFormats
     DL = DF.DLimits
@@ -232,7 +233,21 @@ function _checked_read(read::F, text::AbstractString, format::Symbol, what::Stri
                 code = ERROR_CODES.REMOVED_OP
             )
         )
-        throw(ParseError("not $what"; code = ERROR_CODES.PARSE_ERROR))
+        r = found.refused
+        r === nothing && throw(ParseError("not $what"; code = ERROR_CODES.PARSE_ERROR))
+        # A refused construct names itself, and its line when it has one in
+        # the text (line breaks before the unread rest; a byte-order mark or
+        # CRLF line ends change no count).
+        if r.rest_newlines < 0
+            throw(ParseError("not $what: $(r.what) does not read"; code = ERROR_CODES.PARSE_ERROR))
+        end
+        line = 1 + count(==('\n'), str) - r.rest_newlines
+        throw(
+            ParseError(
+                "not $what: line $line: $(r.what) does not read";
+                code = ERROR_CODES.PARSE_ERROR, details = Dict{String, Any}("line" => line)
+            )
+        )
     end
     return try
         DF.DJson.to_value(v)
