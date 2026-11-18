@@ -98,7 +98,10 @@ SKIP
 Outcome of one `(file, container, test, assertion_idx)` evaluation, as
 [`run_inline_tests`](@ref) and [`run_esm_tests`](@ref) report it.
 
-`message` carries the diff or error text for non-`PASS` results.
+`message` carries the diff or error text for non-`PASS` results; `code` is the
+diagnostic code of the error behind an `ERROR` result (the error's own `code`
+field, see [`error_code`](@ref)), `nothing` when it carried none or for any
+other status.
 `duration_s` is this assertion's even share of its test's wall time (solve +
 all samples), so summing `duration_s` over a test's assertions recovers the
 test's duration (the JUnit testcase `time`).
@@ -107,8 +110,9 @@ test's duration (the JUnit testcase `time`).
 for a plain scalar assertion);
 `rtol`/`atol` are the RESOLVED §6.6.4 tolerances the pass predicate used
 (`0.0`/`0.0` on results synthesized before tolerance resolution, e.g. a
-parse/compile failure). The trailing three fields have defaults, so a
-12-argument positional construction that omits them is accepted.
+parse/compile failure). The trailing four fields have defaults, so a
+12-argument positional construction that omits them is accepted, as is a
+15-argument one that omits `code`.
 
 Virtual properties: `r.passed` (`status == PASS`) and `r.model` (alias of
 `container_name`).
@@ -129,10 +133,11 @@ struct AssertionResult
     reduce::Union{String, Nothing}
     rtol::Float64
     atol::Float64
+    code::Union{String, Nothing}
 end
 
-# Historical 12-argument construction (pre-unification field set) — the §6.6.5
-# fields default to "no reduction declared / tolerance never resolved".
+# The 12-argument construction: no reduction declared, tolerance never
+# resolved, no diagnostic code.
 AssertionResult(
     file, container_kind::Symbol, container_name, test_id,
     assertion_idx::Integer, variable, time::Real, expected::Real,
@@ -141,8 +146,29 @@ AssertionResult(
     AssertionResult(
     file, container_kind, container_name, test_id,
     assertion_idx, variable, time, expected, actual, status,
-    message, duration_s, nothing, 0.0, 0.0
+    message, duration_s, nothing, 0.0, 0.0, nothing
 )
+# The 15-argument construction: no diagnostic code.
+AssertionResult(
+    file, container_kind::Symbol, container_name, test_id,
+    assertion_idx::Integer, variable, time::Real, expected::Real,
+    actual, status::AssertionStatus, message, duration_s::Real,
+    reduce, rtol::Real, atol::Real
+) =
+    AssertionResult(
+    file, container_kind, container_name, test_id,
+    assertion_idx, variable, time, expected, actual, status,
+    message, duration_s, reduce, rtol, atol, nothing
+)
+
+# The code an `AssertionResult` records for the error behind an ERROR row: the
+# error's [`error_code`](@ref), `nothing` when it is empty or the error is not
+# one of this package's.
+function _result_code(err)
+    err isa EarthSciASTError || return nothing
+    c = error_code(err)
+    return isempty(c) ? nothing : c
+end
 
 # Backcompat virtual properties: `r.passed` predates the `status` field on the
 # PDE runner's results, and `r.model` was that runner's name for
@@ -404,16 +430,25 @@ end
 # with an even wall-time split, and `AssertionResult` construction, over an
 # execution ENGINE (`SimulateTestEngine`, inline_tests.jl) implementing:
 #
-#   _engine_setup(engine, t) -> handle::Any | String
+#   _engine_setup(engine, t) -> handle::Any | _EngineFailure
 #       Execute test `t` (solve/simulate). Returns an opaque per-test handle
-#       on success, or a `String` failure message — the frame then records one
-#       ERROR result per assertion carrying that message.
+#       on success, or an `_EngineFailure` — the frame then records one ERROR
+#       result per assertion carrying its message and code.
 #   _engine_actual(engine, handle, a) -> Real
 #       The assertion's actual value (scalar sample or §6.6.5 field
 #       reduction). May throw; the frame records an ERROR result formatted by:
 #   _engine_error_message(engine, err) -> String
 #       Engine-specific formatting of a per-assertion evaluation error.
 # ---------------------------------------------------------------------------
+
+# A test whose execution failed: the message every assertion of it reports, and
+# the failing error's diagnostic code (`_result_code`).
+struct _EngineFailure
+    message::String
+    code::Union{String, Nothing}
+end
+_EngineFailure(prefix::AbstractString, err) =
+    _EngineFailure(prefix * sprint(showerror, err), _result_code(err))
 
 # One assertion's evaluated outcome, buffered until the whole test's wall time
 # is known (see the timing comment in `_run_test_frame!`) and only then
@@ -425,6 +460,7 @@ const _AssertionOutcome = @NamedTuple{
     actual::Union{Float64, Nothing},
     rtol::Float64, atol::Float64,
     status::AssertionStatus, message::String,
+    code::Union{String, Nothing},
 }
 
 function _run_test_frame!(
@@ -447,13 +483,13 @@ function _run_test_frame!(
                 container_tolerance, t.tolerance,
                 a.tolerance
             )
-            if handle isa String   # engine setup failed for this test
+            if handle isa _EngineFailure   # engine setup failed for this test
                 push!(
                     outcomes, (
                         idx = i, variable = a.variable, time = a.time,
                         reduce = a.reduce, expected = a.expected,
                         actual = nothing, rtol = rtol, atol = atol,
-                        status = ERROR, message = handle,
+                        status = ERROR, message = handle.message, code = handle.code,
                     )
                 )
                 continue
@@ -462,6 +498,7 @@ function _run_test_frame!(
             local actual_val::Union{Float64, Nothing} = nothing
             local status::AssertionStatus = FAIL
             local msg::String = ""
+            local code::Union{String, Nothing} = nothing
             try
                 actual_val = Float64(_engine_actual(engine, handle, a))
                 if _check_assertion(actual_val, a.expected, rtol, atol)
@@ -477,6 +514,7 @@ function _run_test_frame!(
                 actual_val = nothing
                 status = ERROR
                 msg = _engine_error_message(engine, err)
+                code = _result_code(err)
             end
 
             push!(
@@ -484,7 +522,7 @@ function _run_test_frame!(
                     idx = i, variable = a.variable, time = a.time,
                     reduce = a.reduce, expected = a.expected,
                     actual = actual_val, rtol = rtol, atol = atol,
-                    status = status, message = msg,
+                    status = status, message = msg, code = code,
                 )
             )
         end
@@ -495,7 +533,7 @@ function _run_test_frame!(
                 results, AssertionResult(
                     String(file), container_kind, String(container_name), t.id,
                     o.idx, o.variable, o.time, o.expected, o.actual, o.status,
-                    o.message, duration_share, o.reduce, o.rtol, o.atol
+                    o.message, duration_share, o.reduce, o.rtol, o.atol, o.code
                 )
             )
         end

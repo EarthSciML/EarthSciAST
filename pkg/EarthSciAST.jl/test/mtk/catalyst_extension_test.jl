@@ -88,10 +88,10 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test length(recovered.reactions) == 1
     end
 
-    @testset "Fractional stoichiometry survives Catalyst → ESM reverse (gt-3ai5)" begin
+    @testset "Fractional stoichiometry survives Catalyst → ESM reverse" begin
         # Catalyst ReactionSystems with fractional stoichiometry (e.g.
         # CH3O2+CH3O2 -> 2.0 CH2O + 0.8 HO2) must reverse-convert without
-        # Int() truncation. Prior to the fix, Int(0.8) raised InexactError.
+        # Int() truncation (Int(0.8) raises InexactError).
         species = [
             EarthSciAST.Species("CH3O2"),
             EarthSciAST.Species("CH2O"),
@@ -120,7 +120,7 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test EarthSciAST.get_products_dict(rxn)["HO2"] ≈ 0.8
     end
 
-    @testset "Reservoir species (constant=true) maps to isconstantspecies (gt-ertm)" begin
+    @testset "Reservoir species (constant=true) maps to isconstantspecies" begin
         # Reservoir species must flow through Catalyst as parameters with the
         # isconstantspecies=true metadata (modern Catalyst rejects this
         # metadata on @species). The reverse direction recovers them as ESM
@@ -171,10 +171,10 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test length(recovered.parameters) == 1
     end
 
-    @testset "Rate AST emission: species refs and numeric Constants (esm-edt)" begin
-        # Regression for esm-edt: _catalyst_rate_to_esm previously emitted
+    @testset "Rate AST emission: species refs and numeric Constants" begin
+        # _catalyst_rate_to_esm must not emit
         #   (1) a species `S` used inside a rate as {op: "S", args: ["t"]}
-        #       (registered-function call shape), and
+        #       (registered-function call shape), or
         #   (2) literal numeric values that surface as BasicSymbolic Const
         #       nodes (the same shape MTK Constants substitution produces)
         #       as STRING args like {op: "*", args: ["300.0", ...]}.
@@ -264,10 +264,8 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test !occursin("\"300\"", json_str)
     end
 
-    @testset "Rate AST: max/min round-trip (esm-70t)" begin
-        # Regression for esm-70t: _esm_to_symbolic previously rejected
-        # `max` and `min` rate operators with
-        #   "Unsupported operator in rate expression: max"
+    @testset "Rate AST: max/min round-trip" begin
+        # _esm_to_symbolic must accept `max` and `min` rate operators.
         # The geoschem_fullchem .esm uses 64 instances of the
         # max(expr, 0.0) clamp pattern common in atmospheric chemistry to
         # enforce non-negative rate constants. Both operators must
@@ -319,10 +317,9 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         @test _has_op(recovered.reactions[2].rate, "min")
     end
 
-    @testset "NumExpr above Int64 range stays Float (esm-6z5)" begin
-        # Regression for esm-6z5: _esm_to_symbolic previously called
-        # `Int(v)` on every integer-valued NumExpr, which raises
-        # InexactError for values above Int64.max (e.g. Avogadro's
+    @testset "NumExpr above Int64 range stays Float" begin
+        # _esm_to_symbolic must not call `Int(v)` on an integer-valued
+        # NumExpr above Int64.max, which raises InexactError (e.g. Avogadro's
         # number 6.022e23 used in atmospheric chemistry rate constants).
         species = [
             EarthSciAST.Species("A"),

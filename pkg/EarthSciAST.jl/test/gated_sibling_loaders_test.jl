@@ -7,14 +7,12 @@
 # `{"fixed": [layer]}` axis of their `gated_select`. They are three DIFFERENT
 # slabs told apart only by which loader they came from.
 #
-# Hook 2 used to publish each fetched slab under `_const_factor_aliases`, which
-# resolves a bare name against EVERY model variable with the same dotted TAIL.
-# All three providers therefore claimed all three keys, and whichever the
-# `gated` Dict happened to visit LAST silently won for all of them: every layer
-# of the model was contracted against one arbitrary sibling's slab. Hash order
-# picked a different winner per variable name, so the answer was wrong,
-# reproducible within a run, and raised nothing. Measured on isrm.esm at
-# ISRM_FIRSTN=200 it moved sum(deathsK) by 6.6%.
+# Hook 2 publishes each fetched slab under `_const_factor_aliases`, which
+# resolves a bare name against EVERY model variable with the same dotted TAIL,
+# so all three providers claim all three keys. If whichever the `gated` Dict
+# visits LAST won for all of them, every layer of the model would be contracted
+# against one arbitrary sibling's slab — wrong, hash-order dependent, and
+# silent.
 #
 # A provider owns an alias when it is the SOLE claimant, or when the alias IS
 # its own provider key. An alias several claim and none owns stays UNWRITTEN —

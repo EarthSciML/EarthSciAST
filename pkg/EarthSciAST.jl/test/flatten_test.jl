@@ -622,11 +622,6 @@ end
         # additive term against an absent tendency is well defined, because zero
         # is the additive identity." So D(Chem.A) ~ (-Sink.k) * Chem.A exactly,
         # with no summation node.
-        #
-        # This testset used to assert a `+` here, because Julia emitted a vacuous
-        # `D(Chem.A) = 0` for the inert species and the connector summed onto it.
-        # The `+` was pinning that artifact, not the coupling behaviour under
-        # test; §4.6.1 removed the artifact and §4.7.2's own rule is what is left.
         rsys = EarthSciAST.ReactionSystem(
             [EarthSciAST.Species("A", default = 2.0)], EarthSciAST.Reaction[]
         )

@@ -24,15 +24,17 @@ include("testutils.jl")
         @test EarthSciASTError <: Exception
     end
 
-    # Walk the module (and its two namespaced submodules) for concrete Exception
+    # Walk the module (and its namespaced submodule) for concrete Exception
     # types and assert every one of them is under the root. `all=true` reaches
     # the unexported internals — the control-flow signals (`_Decline`,
-    # `_DiagnosticCap`, …) are covered deliberately, so the rule "every
-    # exception in this package is an EarthSciASTError" has no exceptions.
+    # `_DiagnosticCap`, …) are covered deliberately. The one exception is
+    # `_HaloDone` (src/range/tile.jl), which leaves a build at the range seam
+    # and is kept outside the root on purpose, so that no `catch` of an
+    # `EarthSciASTError` between the seam and its handler can swallow it.
     @testset "every exception type in the package subtypes it" begin
         strays = String[]
         found = 0
-        for mod in (EarthSciAST, EarthSciAST.Cadence, EarthSciAST.Relational)
+        for mod in (EarthSciAST, EarthSciAST.Relational)
             for n in names(mod; all = true)
                 v = try
                     getfield(mod, n)
@@ -52,7 +54,7 @@ include("testutils.jl")
         # Guard the scan: a reflection change that found nothing would pass the
         # subset check vacuously.
         @test found >= 30
-        @test isempty(strays)
+        @test strays == ["EarthSciAST._HaloDone"]
     end
 
     @testset "a single catch clause covers the surface" begin
@@ -128,9 +130,7 @@ include("testutils.jl")
         # Guard the scan against a reflection change that finds nothing.
         @test length(exported) >= 25
         @test isempty([T for T in exported if fieldname(T, 1) !== :code || fieldtype(T, 1) !== String])
-        for T in (EarthSciAST.Cadence.CadenceError, EarthSciAST.Relational.FloatKeyError)
-            @test fieldname(T, 1) === :code
-        end
+        @test fieldname(EarthSciAST.Relational.FloatKeyError, 1) === :code
         # The types' own `showerror` methods are gone: one method serves them all.
         @test isempty([T for T in exported if which(showerror, Tuple{IO, T}).sig !== Tuple{typeof(showerror), IO, EarthSciASTError}])
 

@@ -23,16 +23,13 @@
 # consuming PARAMETER carries `update: {kind: data, source, from.file_variable}`
 # and the provider is keyed by that parameter's flattened name (`ISRM.SR_SOA`).
 
-module PreparePushdownRecordGateTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 
 const EA = EarthSciAST
 
 # ---- small JSON AST builders (shared spelling with the sibling tests) -------
-_ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
-_op(o, args...) = Dict("op" => o, "args" => Any[args...])
 
 # The defining right-hand side of the observed unknown `name` — where esm 1.0.0
 # keeps what 0.x wrote in `variables[name]["expression"]` (esm-spec §6.3.1).
@@ -84,11 +81,6 @@ function _lcc_inv(x, y, c)
 end
 
 # ---- provider mocks — NO provider_gate_spec anywhere ------------------------
-struct MockConstP1
-    arr::Any
-end
-EA.provider_refresh_times(::MockConstP1) = Float64[]
-EA.provider_sample(m::MockConstP1, ::Real; selection = nothing) = m.arr
 
 mutable struct MockGatedP1
     full::Array{Float64, 3}          # native [layer, src, rcv]
@@ -182,57 +174,57 @@ end
     ]
 
     # ---- the AUTHORED document: loaders + coupling + clean model ------------
-    _latr(e) = _op("*", _ix("emis_lat", e), "lcc_d2r")
-    _lonr(e) = _op("*", _ix("emis_lon", e), "lcc_d2r")
-    _rho(e) = _op(
+    _latr(e) = jop("*", jidx("emis_lat", e), "lcc_d2r")
+    _lonr(e) = jop("*", jidx("emis_lon", e), "lcc_d2r")
+    _rho(e) = jop(
         "/", "lcc_rf",
-        _op("^", _op("tan", _op("+", "lcc_qp", _op("/", _latr(e), 2.0))), "lcc_n")
+        jop("^", jop("tan", jop("+", "lcc_qp", jop("/", _latr(e), 2.0))), "lcc_n")
     )
-    _theta(e) = _op("*", "lcc_n", _op("-", _lonr(e), "lcc_lam0"))
-    _Xbody(e) = _op("*", _rho(e), _op("sin", _theta(e)))
-    _Ybody(e) = _op("-", "lcc_rho0", _op("*", _rho(e), _op("cos", _theta(e))))
+    _theta(e) = jop("*", "lcc_n", jop("-", _lonr(e), "lcc_lam0"))
+    _Xbody(e) = jop("*", _rho(e), jop("sin", _theta(e)))
+    _Ybody(e) = jop("-", "lcc_rho0", jop("*", _rho(e), jop("cos", _theta(e))))
     _proj_obs(bodyfn) = _agg(
         ["e"], Dict("e" => Dict("from" => "emis_records")),
         bodyfn("e"); args = ["emis_lon", "emis_lat"]
     )
 
-    _contain = _op(
+    _contain = jop(
         "and",
-        _op("<=", _ix("src_W", "c"), _ix("X", "r")), _op("<", _ix("X", "r"), _ix("src_E", "c")),
-        _op("<=", _ix("src_S", "c"), _ix("Y", "r")), _op("<", _ix("Y", "r"), _ix("src_N", "c"))
+        jop("<=", jidx("src_W", "c"), jidx("X", "r")), jop("<", jidx("X", "r"), jidx("src_E", "c")),
+        jop("<=", jidx("src_S", "c"), jidx("Y", "r")), jop("<", jidx("Y", "r"), jidx("src_N", "c"))
     )
     _E_agg(is_p) = _agg(
         ["c"],
         Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
-        _op(
-            "*", _op("ifelse", _contain, 1.0, 0.0),
-            _op("*", _ix("emis_annual", "r"), _ix(is_p, "r"))
+        jop(
+            "*", jop("ifelse", _contain, 1.0, 0.0),
+            jop("*", jidx("emis_annual", "r"), jidx(is_p, "r"))
         );
         reduce = "+", args = ["src_W", "src_S", "src_E", "src_N", "X", "Y", "emis_annual", is_p]
     )
     _conc_agg(SRname, Ename) = _agg(
         ["rcv"],
         Dict("s" => Dict("from" => "src_cells"), "rcv" => Dict("from" => "rcv_cells")),
-        _op("*", _ix(SRname, "s", "rcv"), _ix(Ename, "s"));
+        jop("*", jidx(SRname, "s", "rcv"), jidx(Ename, "s"));
         reduce = "+", args = [SRname, Ename]
     )
     _deaths(rr) = _agg(
         ["rcv"], Dict("rcv" => Dict("from" => "rcv_cells")),
-        _op(
-            "*", _op(
-                "*", _op(
+        jop(
+            "*", jop(
+                "*", jop(
                     "*",
-                    _op(
-                        "-", _op(
-                            "exp", _op(
+                    jop(
+                        "-", jop(
+                            "exp", jop(
                                 "*",
-                                _op("/", _op("log", rr), 10), _ix("TotalPM25", "rcv")
+                                jop("/", jop("log", rr), 10), jidx("TotalPM25", "rcv")
                             )
                         ), 1
                     ),
-                    _op("*", _ix("TotalPop", "rcv"), "pop_scale")
+                    jop("*", jidx("TotalPop", "rcv"), "pop_scale")
                 ),
-                _op("/", _ix("MortalityRate", "rcv"), 100000)
+                jop("/", jidx("MortalityRate", "rcv"), 100000)
             ), "mort_scale"
         );
         args = ["TotalPM25", "TotalPop", "MortalityRate"]
@@ -287,11 +279,11 @@ end
             obs_eqs, "TotalPM25", ["rcv_cells"], _agg(
                 ["rcv"],
                 Dict("rcv" => Dict("from" => "rcv_cells")),
-                _op(
-                    "*", "fact", _op(
-                        "+", _ix("conc_SOA", "rcv"), _ix("conc_pNO3", "rcv"),
-                        _ix("conc_pNH4", "rcv"), _ix("conc_pSO4", "rcv"),
-                        _ix("conc_PrimaryPM25", "rcv")
+                jop(
+                    "*", "fact", jop(
+                        "+", jidx("conc_SOA", "rcv"), jidx("conc_pNO3", "rcv"),
+                        jidx("conc_pNH4", "rcv"), jidx("conc_pSO4", "rcv"),
+                        jidx("conc_PrimaryPM25", "rcv")
                     )
                 );
                 args = ["conc_SOA", "conc_pNO3", "conc_pNH4", "conc_pSO4", "conc_PrimaryPM25"]
@@ -362,13 +354,13 @@ end
     #      "<Loader>.<var>" endpoint to key on) ------------------------------
     gmocks = Dict(v => MockGatedP1(fullSR[v], Any[]) for v in LVARS)
     providers = Dict{String, Any}(
-        "ISRM.TotalPop" => MockConstP1(TotalPop),
-        "ISRM.MortalityRate" => MockConstP1(MortalityRate),
-        "ISRM.emis_lon" => MockConstP1(lon), "ISRM.emis_lat" => MockConstP1(lat),
-        "ISRM.emis_annual" => MockConstP1(emis_annual),
-        "ISRM.is_VOC" => MockConstP1(is_VOC), "ISRM.is_NOx" => MockConstP1(is_NOx),
-        "ISRM.is_NH3" => MockConstP1(is_NH3), "ISRM.is_SOx" => MockConstP1(is_SOx),
-        "ISRM.is_PM25" => MockConstP1(is_PM25)
+        "ISRM.TotalPop" => ConstProvider(TotalPop),
+        "ISRM.MortalityRate" => ConstProvider(MortalityRate),
+        "ISRM.emis_lon" => ConstProvider(lon), "ISRM.emis_lat" => ConstProvider(lat),
+        "ISRM.emis_annual" => ConstProvider(emis_annual),
+        "ISRM.is_VOC" => ConstProvider(is_VOC), "ISRM.is_NOx" => ConstProvider(is_NOx),
+        "ISRM.is_NH3" => ConstProvider(is_NH3), "ISRM.is_SOx" => ConstProvider(is_SOx),
+        "ISRM.is_PM25" => ConstProvider(is_PM25)
     )
     for v in LVARS
         providers["ISRM.SR_$v"] = gmocks[v]
@@ -421,19 +413,19 @@ end
     @testset "same run with the E bodies factored through a template" begin
         tdoc = deepcopy(doc)
         tm = tdoc["models"]["ISRM"]
-        tpl_contain = _op(
+        tpl_contain = jop(
             "and",
-            _op("<=", _ix("xmin", "c"), _ix("ptx", "r")),
-            _op("<", _ix("ptx", "r"), _ix("xmax", "c")),
-            _op("<=", _ix("ymin", "c"), _ix("pty", "r")),
-            _op("<", _ix("pty", "r"), _ix("ymax", "c"))
+            jop("<=", jidx("xmin", "c"), jidx("ptx", "r")),
+            jop("<", jidx("ptx", "r"), jidx("xmax", "c")),
+            jop("<=", jidx("ymin", "c"), jidx("pty", "r")),
+            jop("<", jidx("pty", "r"), jidx("ymax", "c"))
         )
         tm["expression_templates"] = Dict{String, Any}(
             "bin_emissions" => Dict{String, Any}(
                 "params" => Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "tot", "frac"],
-                "body" => _op(
-                    "*", _op("ifelse", tpl_contain, 1.0, 0.0),
-                    _op("*", _ix("tot", "r"), _ix("frac", "r"))
+                "body" => jop(
+                    "*", jop("ifelse", tpl_contain, 1.0, 0.0),
+                    jop("*", jidx("tot", "r"), jidx("frac", "r"))
                 )
             )
         )
@@ -504,5 +496,3 @@ end
         @test EA.observed_field(prep2, "deathsL") ≈ oracle_deaths(RR_L)
     end
 end
-
-end # module PreparePushdownRecordGateTests

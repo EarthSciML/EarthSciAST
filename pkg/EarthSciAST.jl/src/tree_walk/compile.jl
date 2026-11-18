@@ -16,7 +16,7 @@ end
 _register_loopvar!(name::AbstractString, ref::Base.RefValue{Int}) =
     (_build_state().loopvars[Symbol(name)] = ref; nothing)
 
-# ── Per-equation build memo (ess-perf: compile one representative per group) ──
+# ── Per-equation build memo (compile one representative per group) ──
 # Within one array equation's cell loop every cell resolves/compiles against the
 # SAME resolve context (array_var_info / var_map / const_arrays / pgather) and
 # compile context (var_map / param_syms), so `_resolve_indices` and
@@ -95,7 +95,7 @@ function _compile(expr::VarExpr, var_map, param_syms, memo::_MaybeMemo = nothing
         _record_param_read(name)
         return _mknode(kind = _NK_PARAM, sym = sym, idx = _param_index(param_syms, sym))
     end
-    # A reserved runtime-contraction loop variable (ess-runtime-contraction):
+    # A reserved runtime-contraction loop variable:
     # `_resolve_scalar_faq` kept the contracted index symbolic and registered
     # its shared counter `Ref` here. Lower to an `_NK_LOOPVAR` leaf that reads the
     # ref at eval time (the enclosing `_NK_CONTRACTION_LOOP` writes it per iteration).
@@ -127,7 +127,7 @@ _unevaluable_operator(op, why::AbstractString) = TreeWalkError(
 
 function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
     op_sym = Symbol(expr.op)
-    # Runtime contraction loop marker (ess-runtime-contraction): the loop body is
+    # Runtime contraction loop marker: the loop body is
     # the single child arg, compiled ONCE here; the loop metadata rides on `.value`.
     # Compiles iff the (unrolled) body would compile — the only leaf difference is a
     # loop-var `VarExpr` (→ `_NK_LOOPVAR`) where the unroll puts an `IntExpr`, and no
@@ -150,7 +150,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
             payload = _RaggedLoop(lb.ref, lb.step, lb.reach), children = kids
         )
     end
-    # Runtime state gather (ess-runtime-contraction): a state read at a
+    # Runtime state gather: a state read at a
     # loop-var-dependent slot. The subscript `args` compile as children (a loop
     # var → `_NK_LOOPVAR`, an indirect const-connectivity subscript → a nested
     # `_NK_CONST_GATHER`); the slot table + bounds ride on `.value`.
@@ -263,7 +263,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
             )
         )
     elseif op_sym === :index
-        # A forcing gather over a live `param_arrays` buffer (ess-14f.3): the
+        # A forcing gather over a live `param_arrays` buffer: the
         # `index` branch of `_resolve_indices` already bounds-checked and
         # linearized it, stashing a `_PGatherRef` in `value` (the `index` op is
         # CSE-opaque, so the gather is never HOISTED; `_cse_key` still keys its
@@ -272,12 +272,12 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
         # live-read `_NK_PARAM_GATHER` instead of the const-fold a frozen
         # `const_arrays` entry would get. This is the binding-time reroute of an
         # EXISTING gather by its cadence class — no new IR op (the wire op is still
-        # `index`); see the JL-J0 feasibility-gate note in `_build_evaluator_impl`.
+        # `index`).
         if expr.value isa _PGatherRef
             ref = expr.value::_PGatherRef
             return _mknode(kind = _NK_PARAM_GATHER, idx = ref.lin, payload = ref.flat)
         end
-        # A const/provider-array read at a RUNTIME-computed offset (wall2 Phase C).
+        # A const/provider-array read at a RUNTIME-computed offset.
         # `_resolve_indices` (const-array branch) stashed a `_ConstGatherRef` in
         # `value` and kept the subscripts as `args`; the generic `children` compile
         # above already lowered each subscript (a constant → `_NK_LITERAL`, a bound

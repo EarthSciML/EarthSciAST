@@ -1,4 +1,4 @@
-# Tests for faq evaluation in tree_walk (ess-evm).
+# Tests for faq evaluation in tree_walk.
 #
 # Verifies that the build (`EarthSciAST.Internal.build`) handles:
 #   1. D(index(var, k)) — indexed scalar derivative
@@ -25,7 +25,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     ranges = Dict(i => [ilo, ihi], j => [jlo, jhi])
 )
 
-@testset "tree_walk faq (ess-evm)" begin
+@testset "tree_walk faq" begin
 
     # ------------------------------------------------------------------
     # 1. D(index(u, k)) — indexed scalar derivatives
@@ -222,7 +222,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 9. Fixture 18 — two-domain interface BC (ess-x76)
+    # 9. Fixture 18 — two-domain interface BC
     # ------------------------------------------------------------------
     @testset "9. Fixture 18: two-domain interface BC" begin
         path = joinpath(
@@ -250,7 +250,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 10. Fixture 19 — generalized einsum: contracted stencil index (ess-trq)
+    # 10. Fixture 19 — generalized einsum: contracted stencil index
     # ------------------------------------------------------------------
     @testset "10. Fixture 19: einsum 1D stencil (contracted index)" begin
         path = joinpath(
@@ -278,7 +278,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 11. Fixture 20 — embedded faq contraction (ess-n0w)
+    # 11. Fixture 20 — embedded faq contraction
     #     Scalar faq (empty output_idx) as scalar equation RHS,
     #     plus index(faq(...), k) for a 1D output faq with
     #     contracted index.
@@ -305,7 +305,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 12. Fixture 09 — makearray block assembly (ess-n0w)
+    # 12. Fixture 09 — makearray block assembly
     #     index(makearray(regions, values), i, j) resolved at build time.
     # ------------------------------------------------------------------
     @testset "12. Fixture 09: makearray block assembly" begin
@@ -334,7 +334,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 13. Scalar faq over state variables — runner numeric test (ess-n0w)
+    # 13. Scalar faq over state variables — runner numeric test
     #     D(z) = sum_{j=1}^{3} x[j]  via contracted faq (reduce="+")
     #     D(w) = max_{j=1}^{3} x[j]  via contracted faq (reduce="max")
     #     x[j] are state variables (constant D=0).
@@ -376,7 +376,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 14. Scalar faq max/min reducers (ess-n0w)
+    # 14. Scalar faq max/min reducers
     #     D(z_max) = max_{j=1}^{5} j = 5
     #     D(z_min) = min_{j=1}^{5} j = 1
     # ------------------------------------------------------------------
@@ -409,12 +409,12 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 16. Fixture 24 — makearray region dispatch in faq body (ess-e9l)
+    # 16. Fixture 24 — makearray region dispatch in faq body
     #     Pins _resolve_index_of_makearray (tree_walk.jl:1114) through the
     #     LHS-faq unrolling path: RHS body contains
     #     index(makearray(regions,values),i,j) where i,j are the loop vars.
     # ------------------------------------------------------------------
-    @testset "16. Fixture 24: makearray region dispatch in faq body (ess-e9l)" begin
+    @testset "16. Fixture 24: makearray region dispatch in faq body" begin
         path = joinpath(
             _REPO_ROOT, "tests", "fixtures", "faq",
             "24_faq_makearray_region_dispatch.esm"
@@ -440,7 +440,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 15. makearray interior+boundary regions (later-overwrite, ess-n0w)
+    # 15. makearray interior+boundary regions (later-overwrite)
     #     A 1D 5-cell domain where:
     #       region 1 [1,5] = 1.0  (border default)
     #       region 2 [2,4] = 2.0  (interior overwrites)
@@ -473,12 +473,11 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 17. Fixture 23 — pure matvec contraction (ess-zmm / ess-6ny)
+    # 17. Fixture 23 — pure matvec contraction
     #     D(y[i])/dt = sum_{j=1..3} i*j  →  y[1]=6, y[2]=12 at t=1
     #     D(w[i])/dt = max_{j=1..3}(i+j) →  w[1]=4, w[2]=5  at t=1
-    #     Flips the ess-zmm tree-walk Julia xfail to pass.
     # ------------------------------------------------------------------
-    @testset "17. Fixture 23: pure matvec contraction (ess-zmm)" begin
+    @testset "17. Fixture 23: pure matvec contraction" begin
         path = joinpath(
             _REPO_ROOT, "tests", "fixtures", "faq",
             "23_faq_pure_matvec_contraction.esm"
@@ -504,7 +503,7 @@ _faq2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr(
     end
 
     # ------------------------------------------------------------------
-    # 18. Mesh reduction: 3-cell nn_diffusion with padded connectivity (ess-6ny)
+    # 18. Mesh reduction: 3-cell nn_diffusion with padded connectivity
     #     D(u[c]) = sum_k coeff[c,k] * (u[cells_on_cell[c,k]] - u[c])
     #     3-cell fully-connected mesh, coeff=0.5, u=[1,2,3] at t=0.
     #     Expected: du[1]=1.5, du[2]=0.0, du[3]=-1.5

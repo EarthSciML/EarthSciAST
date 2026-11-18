@@ -10,11 +10,13 @@ JSONSchema = "7d188eb4-7ad8-530c-ae41-71a32a6d4692"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 Polyester = "f517fe37-dbe3-4b94-8317-1923a5111588"
+PolyesterWeave = "1d0040c9-8b98-4ee7-8388-3f51789ca0ad"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 RuntimeGeneratedFunctions = "7e49a35a-f44a-4d26-94aa-eba1b4ca6b47"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+ThreadingUtilities = "8290d209-cae3-49c0-8002-c8c24d57dab5"
 Tullio = "bc48ee85-29a4-5162-ae0b-a64e1601d4bc"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
@@ -64,6 +66,7 @@ ModelingToolkit = "11"
 ModelingToolkitBase = "1 - 1.42"
 OrderedCollections = "1, 2"
 Polyester = "0.7"
+PolyesterWeave = "0.2"
 PrecompileTools = "1"
 OrdinaryDiffEqRosenbrock = "1, 2"
 OrdinaryDiffEqTsit5 = "1, 2"
@@ -87,6 +90,7 @@ Symbolics = "7"
 # entry remains a legal compat entry; the environment that installs
 # ModelingToolkit for tests, test/mtk/Project.toml, restates the cap.
 SymbolicUtils = "4 - 4.45"
+ThreadingUtilities = "0.5"
 Tullio = "0.3.9"
 Unitful = "1.28.0"
 julia = "1.10"
@@ -112,7 +116,6 @@ DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 OrdinaryDiffEqRosenbrock = "43230ef6-c299-4910-a778-202eb28ce4ce"
 OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 SymbolicUtils = "d1185830-fcd6-423d-90d6-eec64667417b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
@@ -122,5 +125,6 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 # test that needs them is in test/mtk/, a separate suite with its own
 # environment (test/mtk/Project.toml) that .github/workflows/mtk-compiler.yml
 # runs. Adding one of them back here would make every `Pkg.test()` resolve and
-# precompile the SciML symbolic stack again.
-test = ["Test", "Logging", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Random", "Reactant", "SciMLBase", "EarthSciIO", "Blosc", "JSON", "SnoopCompileCore", "ZipFile"]
+# precompile the SciML symbolic stack again. Reactant likewise: its tests are in
+# test/reactant/, with its own environment, run by .github/workflows/xla-backends.yml.
+test = ["Test", "Logging", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Random", "SciMLBase", "EarthSciIO", "Blosc", "JSON", "SnoopCompileCore", "ZipFile"]

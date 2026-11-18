@@ -1,4 +1,4 @@
-# Tests for the semiring-parameterized FAQ evaluator changes (ess-my4.1.2):
+# Tests for the semiring-parameterized FAQ evaluator:
 #   (a) semiring parameterization of _combine_with_reducer / _NK_CONTRACTION,
 #       with the §5.1 normative empty-reduction identities (0̄);
 #   (b) op:aggregate accepted identically to op:faq (§5.6);
@@ -17,7 +17,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
 
-@testset "tree_walk semiring + index-set registry + aggregate (ess-my4.1.2)" begin
+@testset "tree_walk semiring + index-set registry + aggregate" begin
     # Helpers (scoped local to this testset so they don't clobber siblings).
     _n(x) = NumExpr(Float64(x))
     _i(x) = IntExpr(Int64(x))

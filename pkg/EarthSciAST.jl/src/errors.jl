@@ -37,8 +37,7 @@ load-time lowering passes (`ExpressionTemplateError`, `EnumLoweringError`),
 flattening (the `flatten_errors.jl` types, under [`FlattenError`](@ref)), units
 (`UnitConversionError`), evaluation and simulation (`TreeWalkError`,
 `SimulateError`, `RefreshError`, `OutputError`), editing (`EditError`), and
-the two namespaced submodules (`Cadence.CadenceError`,
-`Relational.FloatKeyError`).
+the namespaced submodule `Relational` (`Relational.FloatKeyError`).
 
 Every exported subtype stores its diagnostic code in its first field, `code`,
 and all of them are read with the same four accessors ([`error_code`](@ref),
@@ -50,8 +49,10 @@ diagnostics — `EarthSciAST`-private types whose names begin with `_`
 (`_CanonFail`, `_Decline`,
 `_BroadcastBudgetExceeded`). They are caught by their concrete type at the
 throw's immediate call site and never escape the package; they subtype this
-root only so the rule "every exception in the package is an
-`EarthSciASTError`" has no exceptions.
+root so that every exception the package raises is an `EarthSciASTError`. The
+one signal outside the root is `_HaloDone` (range/tile.jl), which leaves a
+build at the range seam: no `catch` of an `EarthSciASTError` between the seam
+and its handler may swallow it.
 """
 abstract type EarthSciASTError <: Exception end
 

@@ -1,5 +1,5 @@
 # ========================================================================
-# tree_walk/scan.jl — cumulative (prefix) reductions in O(N)  (ess-scan)
+# tree_walk/scan.jl — cumulative (prefix) reductions in O(N)
 #
 # A cumulative sum is an ordinary `faq` whose `filter` admits the
 # monotone window `j <= i` (esm-spec §4.3.1, "Cumulative (prefix)
@@ -50,13 +50,12 @@
 # from all three tiers (codegen, affine-interpreted, per-cell reference) and
 # from a bare accumulator.
 #
-# FORWARD ONLY. `j >= i` / `j > i` keep the triangular path. The accumulation
-# order the spec fixes is ascending `j` for EVERY variant, so a reverse scan
-# folds its suffix from the low end upward and consecutive reverse cells
-# share no partial result; accumulating one right-to-left would re-associate
-# the fold, which is not a no-op in floating point. The mirrored spellings
-# `i >= j` / `i > j` ARE forward scans and are recognized as such. This
-# matches the Rust and Python ports exactly.
+# BOTH DIRECTIONS. `j <= i` / `j < i` (and their mirrors `i >= j` / `i > j`)
+# are forward scans. `j >= i` / `j > i` are reverse scans, which esm-spec
+# §4.3.1 folds descending: the running accumulator walks the axis from the
+# top, so a reverse scan is the forward fold over the lane's cells in reverse
+# order (`_detect_prefix_scan`, `_build_scan_fold`), with a negative level
+# stride.
 #
 # STAGGERED OUTPUT. The output axis may also be the term axis plus one trailing
 # cell — the shape a cumulative flux takes on a staggered grid, where the

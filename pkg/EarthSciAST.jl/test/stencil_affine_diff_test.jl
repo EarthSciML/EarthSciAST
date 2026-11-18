@@ -1,4 +1,4 @@
-# End-to-end differential test for the affine polyhedral build (ess-affine).
+# End-to-end differential test for the affine polyhedral build.
 # Build the SAME model two ways and require bit-identical du:
 #   * default build       → the affine access-kernel path (_try_affine_stencil)
 #   * `compiler=:interpreter` → the byte-identical per-cell reference path
@@ -177,7 +177,7 @@ function _affine_build(model, ics; affine::Bool, form = :inplace, const_arrays =
     return (du, u0, vmap, rep.stats)
 end
 
-@testset "affine stencil ≡ per-cell (differential, ess-affine)" begin
+@testset "affine stencil ≡ per-cell (differential)" begin
 
     @testset "1D second-difference stencil (N=$N)" for N in (8, 32, 64)
         ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)

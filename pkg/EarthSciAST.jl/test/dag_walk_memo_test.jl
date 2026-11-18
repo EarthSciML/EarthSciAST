@@ -1,19 +1,18 @@
-# Regression test for the exponential-path DAG walk (ESS-1p5).
+# DAG walks are linear in distinct nodes, not in root-to-leaf paths.
 #
 # `_resolve_observed` (tree_walk/build_classify.jl) inlines observed-into-observed
 # with IDENTITY-PRESERVING substitution (`_sub_preserving`), so resolved
 # bodies are compact DAGs: O(n) distinct nodes for a depth-n chain, but
 # exponentially many root-to-leaf PATHS when each level references its
-# predecessor more than once. `_referenced_var_names` used to walk PATHS
-# (plain `foreach_subexpr`), and `_resolve_observed` calls it inside its own
-# fixed-point loop — a depth-32 doubling chain (o_k = o_{k-1} + o_{k-1}) cost
-# ~2^31 node visits, an effective hang. The fix (`foreach_subexpr_once`,
-# expression.jl) memoizes on `OpExpr` identity so the walk is O(distinct
-# nodes + edges). These tests pin BOTH properties: memoization must not
-# change the collected name set, and the trigger must complete instantly
-# (asserted with a wall-clock bound generous enough that machine load can
-# never flake it while an exponential regression still trips it: pre-fix the
-# depth-32 resolve alone extrapolates to well over 4 minutes).
+# predecessor more than once. `_resolve_observed` calls `_referenced_var_names`
+# inside its own fixed-point loop, so a walk over PATHS would cost a depth-32
+# doubling chain (o_k = o_{k-1} + o_{k-1}) ~2^31 node visits, an effective hang.
+# `foreach_subexpr_once` (expression.jl) memoizes on `OpExpr` identity so the
+# walk is O(distinct nodes + edges). These tests pin BOTH properties:
+# memoization must not change the collected name set, and the trigger must
+# complete instantly (asserted with a wall-clock bound generous enough that
+# machine load can never flake it while an exponential regression still trips
+# it).
 
 using Test
 using EarthSciAST
@@ -43,12 +42,12 @@ function _doubling_dag(leaf::ESM.ASTExpr, depth::Int)
     return e
 end
 
-# The elementwise ARRAY-observed trigger (ESS-0hh): a spatial state psi[c] with
+# The elementwise ARRAY-observed trigger: a spatial state psi[c] with
 # an elementwise array observed a = psi + psi and a second array observed b
 # whose RAW body is a depth-`depth` doubling DAG over `a`. Both fold via
-# `_fold_elementwise_array_observeds` (WS4), so D(psi) = b detonates the
-# fold's per-path `free_variables` dependency scan and its sharing-destroying
-# `substitute` pre-fix — and every downstream build stage post-fold.
+# `_fold_elementwise_array_observeds`, so D(psi) = b drives the fold's
+# `free_variables` dependency scan and its `substitute` — and every downstream
+# build stage after the fold — over a DAG with 2^depth paths.
 # b = 2^depth · a = 2^(depth+1) · psi, so the RHS value is exactly checkable.
 function _elemwise_array_chain_model(depth::Int)
     vars = Dict{String, ModelVariable}(
@@ -67,7 +66,7 @@ end
 const _CHAIN_INDEX_SETS = Dict("c" => ESM.IndexSet("interval"; size = 3))
 const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
 
-@testset "DAG-memoized subexpression walk (ESS-1p5)" begin
+@testset "DAG-memoized subexpression walk" begin
 
     @testset "foreach_subexpr_once semantics on a shared DAG" begin
         # One shared OpExpr referenced twice; `z` is reachable ONLY through it.
@@ -103,15 +102,15 @@ const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
         obs = _doubling_chain(32)
         resolved = Dict{String, ESM.ASTExpr}()
         t = @elapsed (resolved = ESM._resolve_observed(obs))
-        @test t < 30   # pre-fix: ~2^31 visits, minutes-to-hang; post-fix: ms
+        @test t < 30   # a per-path walk is ~2^31 visits
         # Fully collapsed: every observed body bottoms out on the state alone.
         @test ESM._referenced_var_names(resolved["o32"]) == Set(["x"])
         @test ESM._referenced_var_names(resolved["o1"]) == Set(["x"])
     end
 
     @testset "depth-32 doubling chain through the build" begin
-        # Same trigger driven through the full build path that previously
-        # detonated inside `_split_observed_and_derivatives`. o32 = 2^32 · x,
+        # Same trigger driven through the full build path, including
+        # `_split_observed_and_derivatives`. o32 = 2^32 · x,
         # so the RHS value is exactly checkable.
         depth = 32
         vars = Dict{String, ModelVariable}(
@@ -138,12 +137,12 @@ const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
             f!(du, u0, p, 0.0)
             du_val = du[var_map["M.x"]]
         end
-        @test t < 120  # generous: post-fix ~3 s (mostly first-call JIT)
+        @test t < 120  # generous: mostly first-call JIT
         @test du_val === 2.0^depth
     end
 
     # ================================================================
-    # ESS-0hh: the remaining exposed walks.
+    # The other walks a shared DAG reaches.
     # ================================================================
 
     @testset "small-depth probe: the array trigger reaches the WS4 fold" begin
@@ -167,21 +166,19 @@ const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
 
     @testset "_lower_broadcast is DAG-safe (the build-entry rewrite)" begin
         # `_lower_broadcast` runs over EVERY equation at the entry to
-        # the build. `map_children` already declined to REBUILD an
+        # the build. `map_children` declines to REBUILD an
         # unchanged node — which keeps a shared DAG shared on the way OUT — but
-        # the walk itself was per-PATH, so a node reachable by 2^d paths was
-        # re-entered 2^d times even when nothing changed. That single pass was
-        # 6245 of 6255 profiler samples on the depth-28 chain below, and the
-        # whole of the depth-32 build's 457 s.
+        # a per-PATH walk would still re-enter a node reachable by 2^d paths
+        # 2^d times even when nothing changes.
         #
-        # The fix is NOT an unconditional identity memo: that cost 2.6× on trees
-        # with no sharing, which is what an ordinary model's equations are. The
+        # An unconditional identity memo is not the answer either: it is slower
+        # on trees with no sharing, which is what an ordinary model's equations are. The
         # walk runs un-memoized under a visit BUDGET and only re-runs memoized if
         # the budget is exhausted, so the two paths below are both live and must
         # agree.
         deep = _doubling_dag(_op("*", _v("x"), _v("y")), 34)
         t = @elapsed r = ESM._lower_broadcast(deep)
-        @test t < 10                    # pre-fix: 2^34 visits
+        @test t < 10                    # a per-path walk is 2^34 visits
         # No broadcast node anywhere ⇒ the rewrite is the identity, and
         # identity-preservation holds on BOTH paths (this one trips the budget).
         @test r === deep
@@ -231,8 +228,8 @@ const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
     @testset "_hoist_operand_walk is DAG-safe (the filtered-operand lift)" begin
         # The build lifts a filtered array aggregate reached through elementwise
         # arithmetic to its own observed, walking EVERY plain equation's body.
-        # Per-path, that walk alone took the depth-32 array chain above past
-        # its bound. The leaf here is such an operand, so the lift fires and
+        # Per-path, that walk alone would take the depth-32 array chain above
+        # past its bound. The leaf here is such an operand, so the lift fires and
         # the rewrite must keep the DAG shared on the way out.
         scan = ESM.OpExpr(
             "faq", ESM.ASTExpr[]; output_idx = Any["k"],
@@ -254,7 +251,7 @@ const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
         )
         isets = Dict("lev" => ESM.IndexSet("interval"; size = 3))
         t = @elapsed m, _isets, owner = ESM._hoist_nested_reductions(model, isets)
-        @test t < 10                    # pre-fix: 2^34 visits
+        @test t < 10                    # a per-path walk is 2^34 visits
         @test length(m.equations) == 2  # one lift, shared by every path
         @test collect(values(owner)) == ["F"]
         rhs = m.equations[1].rhs::ESM.OpExpr

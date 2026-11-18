@@ -1,9 +1,8 @@
-# Foundation test for the unified access-kernel IR (ess-affine): hand-build a
-# structured (affine, periodic) and an unstructured (indirect, variable-valence)
-# kernel and check the evaluator is BIT-IDENTICAL to a per-cell reference.
-# Exercises _eval_acc / _run_acc_kernel! and every access descriptor + bound
-# kind, plus the codegen tier (the compiled runner that replaced the retired
-# Float64 lane tape) on the same hand-built kernels.
+# Foundation test for the access-kernel IR: hand-build structured (affine,
+# periodic, const-box, slot-table) kernels and check the evaluator is
+# BIT-IDENTICAL to a per-cell reference. Exercises _eval_acc / _run_acc_kernel!
+# and the access descriptor kinds, plus the codegen tier (the compiled runner)
+# on the same hand-built kernels.
 using Test
 using EarthSciAST
 const E = EarthSciAST
@@ -19,7 +18,7 @@ function _akf_cg_run!(du, u, p, t, kernels::Vector{E._AccKernel})
     return du
 end
 
-@testset "access-kernel IR foundation (ess-affine)" begin
+@testset "access-kernel IR foundation" begin
 
     # ---------- STRUCTURED: 3-wide periodic stencil D(q[i,j,k]) = (qW - 2qC) + qE ----------
     @testset "structured affine periodic ≡ per-cell (N=$N1×$N2×$N3)" for (N1, N2, N3) in ((7, 7, 7), (16, 5, 3), (32, 8, 4))
@@ -49,15 +48,15 @@ end
         # interior box i∈2:N1-1, j,k full : deltas -1, 0, +1
         if N1 >= 3
             sp, acc = mkspine(-1, 0, +1)
-            push!(kernels, E._AccKernel(box(2:(N1 - 1)), sp, acc, E._FixedBound(0), 0.0))
+            push!(kernels, E._AccKernel(box(2:(N1 - 1)), sp, acc))
         end
         # left box {i=1}: qW wraps -> delta -1 + N1
         let (sp, acc) = mkspine(-1 + N1, 0, +1)
-            push!(kernels, E._AccKernel(box(1:1), sp, acc, E._FixedBound(0), 0.0))
+            push!(kernels, E._AccKernel(box(1:1), sp, acc))
         end
         # right box {i=N1}: qE wraps -> delta +1 - N1
         let (sp, acc) = mkspine(-1, 0, +1 - N1)
-            push!(kernels, E._AccKernel(box(N1:N1), sp, acc, E._FixedBound(0), 0.0))
+            push!(kernels, E._AccKernel(box(N1:N1), sp, acc))
         end
 
         du = zeros(ncell)
@@ -114,16 +113,16 @@ end
         kernels = E._AccKernel[]
         # bottom k=1: qD collapses to self (delta 0)
         let (sp, acc) = mkspine(dU, 0)
-            push!(kernels, E._AccKernel(kbox(1:1), sp, acc, E._FixedBound(0), 0.0))
+            push!(kernels, E._AccKernel(kbox(1:1), sp, acc))
         end
         # interior 2:N3-1
         if N3 >= 3
             sp, acc = mkspine(dU, dD)
-            push!(kernels, E._AccKernel(kbox(2:(N3 - 1)), sp, acc, E._FixedBound(0), 0.0))
+            push!(kernels, E._AccKernel(kbox(2:(N3 - 1)), sp, acc))
         end
         # top k=N3: qU collapses to self (delta 0)
         let (sp, acc) = mkspine(0, dD)
-            push!(kernels, E._AccKernel(kbox(N3:N3), sp, acc, E._FixedBound(0), 0.0))
+            push!(kernels, E._AccKernel(kbox(N3:N3), sp, acc))
         end
 
         du = zeros(ncell)
@@ -137,59 +136,6 @@ end
         du_t = zeros(ncell)
         _akf_cg_run!(du_t, u, nothing, 0.0, kernels)
         @test du_t == ref
-    end
-
-    # ---------- UNSTRUCTURED: variable-valence FV divergence ----------
-    #   D(q[c]) = ( Σ_{n=1}^{val[c]} efl[c,n]*0.5*(q[c]+q[noc[c,n]]) ) / area[c]
-    @testset "unstructured variable-valence indirect ≡ per-cell (ncell=$Nc)" for Nc in (343, 5000)
-        maxval = 8
-        rng = 987654321
-        nextr() = (rng = (1103515245 * rng + 12345) & 0x7fffffff; rng)
-        val = Vector{Int}(undef, Nc); noc = zeros(Int, Nc * maxval); efl = zeros(Nc * maxval)
-        for c in 1:Nc
-            v = 3 + nextr() % (maxval - 2); val[c] = v
-            for n in 1:v
-                noc[(c - 1) * maxval + n] = 1 + nextr() % Nc
-                efl[(c - 1) * maxval + n] = 0.5 + (nextr() % 100) / 100
-            end
-        end
-        area = Float64[1.0 + (c % 7) / 3 for c in 1:Nc]
-        u = Float64[sin(0.11c) + 0.2cos(0.007c^2) for c in 1:Nc]
-
-        # reference
-        ref = zeros(Nc)
-        for c in 1:Nc
-            s = 0.0
-            for n in 1:val[c]
-                s += efl[(c - 1) * maxval + n] * 0.5 * (u[c] + u[noc[(c - 1) * maxval + n]])
-            end
-            ref[c] = s / area[c]
-        end
-
-        # ONE kernel, VarBound valence, indirect neighbour gather. Build is O(1).
-        # descriptors: 1=q[c] (self, affine Δ0), 2=q[noc[c,n]] (indirect),
-        #              3=efl[c,n] (edge const), 4=area[c] (cell const)
-        acc = E._AccDesc[
-            E._AccStateAffine(0),                # q[c]  (self; oln==c for contiguous)
-            E._AccStateIndirect(noc, maxval),    # q[noc[c,n]]
-            E._AccConstEdge(efl, maxval),        # efl[c,n]
-            E._AccConstCell(area),               # area[c]
-        ]
-        qc = E._acc(1); qn = E._acc(2); e = E._acc(3); ar = E._acc(4)
-        body = E._aop(:*, E._aop(:*, e, E._alit(0.5)), E._aop(:+, qc, qn))  # (efl*0.5)*(qc+qn)
-        spine = E._aop(:/, E._areduce(body), ar)                            # Σ / area
-        K = E._AccKernel(E._contig_cells(Nc), spine, acc, E._VarBound(val), 0.0)
-
-        du = zeros(Nc)
-        E._run_acc_kernel!(du, u, nothing, 0.0, K)
-        @test du == ref                        # bit-identical
-
-        # The codegen tier compiles variable-valence indirect kernels too
-        # (the emitted reduce loop reads the valence table per cell) and must
-        # match the scalar walk bit for bit.
-        du_c = zeros(Nc)
-        _akf_cg_run!(du_c, u, nothing, 0.0, E._AccKernel[K])
-        @test du_c == ref
     end
 
     # ---------- UNSTRUCTURED slot-table gather (_AK_STATE_TBL_BOX, stage 2) ----------
@@ -207,8 +153,7 @@ end
         ]
         sp = E._aop(:-, E._acc(1), E._aop(:*, E._alit(0.5), E._acc(2)))
         K = E._AccKernel(
-            E._CellSet([1], UnitRange{Int}[1:N], 0), sp, acc,
-            E._FixedBound(0), 0.0
+            E._CellSet([1], UnitRange{Int}[1:N], 0), sp, acc
         )
         ref = Float64[(perm[i] == 0 ? 0.0 : u[perm[i]]) - 0.5 * u[i] for i in 1:N]
         du = zeros(N)
@@ -277,10 +222,10 @@ end
         # alternating sign so ~half the cells are OUT of every guarded domain
         u = Float64[(-1.0)^i * (0.05 + 0.03i) for i in 1:N]
         @test any(<(0), u) && any(>(0), u)
-        cells = E._CellSet([1], UnitRange{Int}[1:N], 0)     # contiguous 1:N
+        cells = E._CellSet([1], UnitRange{Int}[1:N], 0)     # a 1-D box over 1:N
         mkK(spine) = E._AccKernel(
             cells, spine,
-            E._AccDesc[E._AccStateAffine(0)], E._FixedBound(0), 0.0
+            E._AccDesc[E._AccStateAffine(0)]
         )
 
         # each spine reads u[oln] through _acc(1); guards protect a singular op

@@ -1,8 +1,8 @@
-# Automatic projection-pushdown DESUGAR — Phase 4.
+# Automatic projection-pushdown DESUGAR.
 #
-# The Phase-2b `pushdown_edge_test.jl` HAND-AUTHORS four constructs (a derived
+# `pushdown_edge_test.jl` HAND-AUTHORS four constructs (a derived
 # IndexSet, a `distinct` producer, a `member_factor` const var, and a gated
-# provider). This test proves Phase 4: the author writes a CLEAN, full-domain
+# provider). This test proves the automatic path: the author writes a CLEAN, full-domain
 # model — full-domain provider-backed `SR[src_cells, rcv]`, `E` as the binning
 # aggregate, and NO derived set / NO producer / NO gated_select / NO
 # member_factor — and `desugar_pushdown` RECOGNISES the `+`-aggregate /
@@ -16,22 +16,14 @@
 # fetch; (4) conc / TotalPM25 / deaths == the L1 oracle to machine precision.
 # NEGATIVE: the same model with a `max`-semiring conc leaves the rewrite unfired.
 
-# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
-# stay isolated from other test files' identically-named helpers in the shared
-# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
-# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
-# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
-module AutoPushdownRewriteTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 import JSON3
 
 const EA = EarthSciAST
 
 # ---- small JSON AST builders (shared spelling with the sibling pushdown tests) --
-_ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
-_op(o, args...) = Dict("op" => o, "args" => Any[args...])
 function _agg(output_idx, ranges, expr; reduce = nothing, args = String[], extra...)
     d = Dict{String, Any}(
         "op" => "faq", "output_idx" => collect(output_idx),
@@ -148,17 +140,17 @@ end
     # ---- CLEAN model — NO derived set / producer / gated_select / member_factor.
     # `conc_semiring` lets the negative test flip to a `max`-semiring aggregate.
     function clean_doc(; conc_semiring = nothing)
-        _contain = _op(
+        _contain = jop(
             "and",
-            _op("<=", _ix("W", "c"), _ix("X", "r")), _op("<", _ix("X", "r"), _ix("E", "c")),
-            _op("<=", _ix("S", "c"), _ix("Y", "r")), _op("<", _ix("Y", "r"), _ix("N", "c"))
+            jop("<=", jidx("W", "c"), jidx("X", "r")), jop("<", jidx("X", "r"), jidx("E", "c")),
+            jop("<=", jidx("S", "c"), jidx("Y", "r")), jop("<", jidx("Y", "r"), jidx("N", "c"))
         )
         _E_agg(is_p) = _agg(
             ["c"],
             Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
-            _op(
-                "*", _op("ifelse", _contain, 1.0, 0.0),
-                _op("*", _ix("emis_annual", "r"), _ix(is_p, "r"))
+            jop(
+                "*", jop("ifelse", _contain, 1.0, 0.0),
+                jop("*", jidx("emis_annual", "r"), jidx(is_p, "r"))
             );
             reduce = "+", args = ["W", "S", "E", "N", "X", "Y", "emis_annual", is_p]
         )
@@ -166,28 +158,28 @@ end
         _conc_agg(SRname, Ename) = _agg(
             ["rcv"],
             Dict("s" => Dict("from" => "src_cells"), "rcv" => Dict("from" => "rcv_cells")),
-            _op("*", _ix(SRname, "s", "rcv"), _ix(Ename, "s"));
+            jop("*", jidx(SRname, "s", "rcv"), jidx(Ename, "s"));
             (conc_semiring === nothing ? (reduce = "+",) : (semiring = conc_semiring,))...,
             args = [SRname, Ename]
         )
 
         _deaths(rr) = _agg(
             ["rcv"], Dict("rcv" => Dict("from" => "rcv_cells")),
-            _op(
-                "*", _op(
-                    "*", _op(
+            jop(
+                "*", jop(
+                    "*", jop(
                         "*",
-                        _op(
-                            "-", _op(
-                                "exp", _op(
+                        jop(
+                            "-", jop(
+                                "exp", jop(
                                     "*",
-                                    _op("/", _op("log", rr), 10), _ix("TotalPM25", "rcv")
+                                    jop("/", jop("log", rr), 10), jidx("TotalPM25", "rcv")
                                 )
                             ), 1
                         ),
-                        _op("*", _ix("TotalPop", "rcv"), "pop_scale")
+                        jop("*", jidx("TotalPop", "rcv"), "pop_scale")
                     ),
-                    _op("/", _ix("MortalityRate", "rcv"), 100000)
+                    jop("/", jidx("MortalityRate", "rcv"), 100000)
                 ), "mort_scale"
             );
             args = ["TotalPM25", "TotalPop", "MortalityRate"]
@@ -229,11 +221,11 @@ end
                 obs_eqs, "TotalPM25", ["rcv_cells"], _agg(
                     ["rcv"],
                     Dict("rcv" => Dict("from" => "rcv_cells")),
-                    _op(
-                        "*", "fact", _op(
-                            "+", _ix("conc_SOA", "rcv"), _ix("conc_pNO3", "rcv"),
-                            _ix("conc_pNH4", "rcv"), _ix("conc_pSO4", "rcv"),
-                            _ix("conc_PrimaryPM25", "rcv")
+                    jop(
+                        "*", "fact", jop(
+                            "+", jidx("conc_SOA", "rcv"), jidx("conc_pNO3", "rcv"),
+                            jidx("conc_pNH4", "rcv"), jidx("conc_pSO4", "rcv"),
+                            jidx("conc_PrimaryPM25", "rcv")
                         )
                     );
                     args = ["conc_SOA", "conc_pNO3", "conc_pNH4", "conc_pSO4", "conc_PrimaryPM25"]
@@ -297,7 +289,7 @@ end
     @test tvars[MF]["type"] == "parameter"
     @test tvars[MF]["shape"] == [SET]
     @test haskey(tvars, MEMV)
-    # esm 1.0.0 (§5.4): "state" is no longer a declarable type — the producer's
+    # esm 1.0.0 (§5.4): "state" is not a declarable type — the producer's
     # member variable is an `unknown`, made a state/observed by its equation.
     @test tvars[MEMV]["type"] == "unknown"
 
@@ -421,5 +413,3 @@ end
         @test !haskey(get(td_max["metadata"], "x_esd", Dict()), "pushdown")
     end
 end
-
-end # module AutoPushdownRewriteTests

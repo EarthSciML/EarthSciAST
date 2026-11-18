@@ -1,5 +1,4 @@
-# Type-constructor unit tests for the core src/types.jl surface
-# (extracted from the inline testsets that used to live in runtests.jl).
+# Type-constructor unit tests for the core src/types.jl surface.
 
 using Test
 using EarthSciAST

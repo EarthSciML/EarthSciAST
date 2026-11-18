@@ -16,15 +16,12 @@
 # pointing at the full grid while the axis is compact: full-grid values read at
 # support positions, wrong numbers, no diagnostic anywhere.
 
-module PushdownCellGeometryTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 
 const EA = EarthSciAST
 
-_ix(f, idx...) = Dict{String, Any}("op" => "index", "args" => Any[f, idx...])
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
 _param(shape) = Dict{String, Any}(
     "type" => "parameter", "default" => 0.0,
     "shape" => Any[shape...]
@@ -46,12 +43,12 @@ const SR = [1.0 0.5; 2.0 0.25; 3.0 0.125; 4.0 0.0625]
 # record 2's 0.36; cell 3 is met by nothing.
 const EXPECT_E = [10.0 * 0.25, 10.0 * 0.25, 0.0, 4.0 * 0.36]
 
-_env_overlap() = _op(
+_env_overlap() = jop(
     "and",
-    _op("<=", _ix("src_W", "c"), _ix("rec_xmax", "r")),
-    _op("<=", _ix("rec_xmin", "r"), _ix("src_E", "c")),
-    _op("<=", _ix("src_S", "c"), _ix("rec_ymax", "r")),
-    _op("<=", _ix("rec_ymin", "r"), _ix("src_N", "c"))
+    jop("<=", jidx("src_W", "c"), jidx("rec_xmax", "r")),
+    jop("<=", jidx("rec_xmin", "r"), jidx("src_E", "c")),
+    jop("<=", jidx("src_S", "c"), jidx("rec_ymax", "r")),
+    jop("<=", jidx("rec_ymin", "r"), jidx("src_N", "c"))
 )
 
 # The overlap area of `cell_ring[c]` and `rec_ring[r]` (5 vertex slots each,
@@ -87,14 +84,14 @@ function _doc()
     v["E_PM25"] = Dict{String, Any}("type" => "unknown", "shape" => Any["src_cells"])
     v["conc_PM25"] = Dict{String, Any}("type" => "unknown", "shape" => Any["rcv_cells"])
 
-    E_body = _op(
+    E_body = jop(
         "*",
-        _op("ifelse", _env_overlap(), 1.0, 0.0),
-        _op(
-            "*", _ix("emis_annual", "r"),
-            _op(
+        jop("ifelse", _env_overlap(), 1.0, 0.0),
+        jop(
+            "*", jidx("emis_annual", "r"),
+            jop(
                 "/", _overlap(),
-                _ix("cell_area", "c")
+                jidx("cell_area", "c")
             )
         )
     )
@@ -122,7 +119,7 @@ function _doc()
                     "s" => Dict("from" => "src_cells")
                 ),
                 "args" => Any["SR_PM25", "E_PM25"],
-                "expr" => _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s"))
+                "expr" => jop("*", jidx("SR_PM25", "s", "rcv"), jidx("E_PM25", "s"))
             )
         ),
     ]
@@ -153,12 +150,11 @@ function _doc()
     )
 end
 
-# The plain public read. It used to be unusable on this document: a body
-# carrying a geometry weight is materialized into `insp.setup_arrays` at setup,
-# and so, transitively, is everything downstream of it, so `observed_field`
-# refused every observed here with "not a build-time-evaluable observed" while
-# the build had computed all of them. `observed_field` now falls back to the
-# build's own materialized arrays; this alias is what pins that it does.
+# The plain public read. A body carrying a geometry weight is materialized into
+# `insp.setup_arrays` at setup, and so, transitively, is everything downstream
+# of it, so none of the observeds here is "build-time-evaluable".
+# `observed_field` falls back to the build's own materialized arrays; this
+# alias is what pins that it does.
 _field(prep, name::AbstractString) = EA.observed_field(prep, name)
 
 _defs(out) = Dict(
@@ -275,7 +271,7 @@ end
     # ungated fetch, and emitting anyway would be wrong numbers.
     doc = _doc()
     body = doc["models"]["Binned"]["equations"][1]["rhs"]["expr"]
-    body["args"][2]["args"][2]["args"][2] = _ix("cell_area", _op("+", "c", 1))
+    body["args"][2]["args"][2]["args"][2] = jidx("cell_area", jop("+", "c", 1))
     err = try
         EA.desugar_pushdown(doc; model_name = "Binned")
         nothing
@@ -299,7 +295,7 @@ end
     m["variables"]["temperature"] = _param(["all_cells"])
     rhs = m["equations"][1]["rhs"]
     push!(rhs["args"], "temperature")
-    rhs["expr"] = _op("*", rhs["expr"], _ix("temperature", _op("+", "c", 4)))
+    rhs["expr"] = jop("*", rhs["expr"], jidx("temperature", jop("+", "c", 4)))
 
     out = EA.desugar_pushdown(doc; model_name = "Binned")
     @test !haskey(out["models"]["Binned"]["variables"], "pd_cell__src_cells__temperature")
@@ -371,5 +367,3 @@ end
     @test_throws EA.SimulateError EA.observed_field(prep, "SR_PM25")
     @test_throws EA.SimulateError EA.observed_field(prep, "no_such_thing")
 end
-
-end # module PushdownCellGeometryTests

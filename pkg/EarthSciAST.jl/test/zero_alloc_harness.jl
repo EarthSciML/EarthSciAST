@@ -1,4 +1,4 @@
-# Reusable zero-allocation harness for the tree-walk PDE RHS (ess-9cc).
+# Reusable zero-allocation harness for the tree-walk PDE RHS.
 #
 # A build returns an in-place `f!(du, u, p, t)` that an ODE integrator
 # calls every Runge–Kutta stage. For the runner to scale to large grids it must

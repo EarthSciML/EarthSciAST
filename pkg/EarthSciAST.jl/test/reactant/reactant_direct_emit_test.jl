@@ -1,11 +1,10 @@
 # The COMPILED backend: direct StableHLO emission from the compiled tree-walk IR
 # (ext/reactant_direct/), against the interpreter.
 #
-# OPT-IN, like every reactant_*_test.jl: included only under `ESM_TEST_REACTANT=1`.
-# Standalone, from an environment with Reactant + JSON3:
+# Part of the Reactant suite (test/reactant/runtests.jl, its own environment).
+# Standalone, from the repository root once that environment is set up:
 #
-#     ESM_TEST_REACTANT=1 julia --project=<env> \
-#       -e 'cd("pkg/EarthSciAST.jl/test"); include("reactant_direct_emit_test.jl")'
+#     julia --project=pkg/EarthSciAST.jl/test/reactant pkg/EarthSciAST.jl/test/reactant/reactant_direct_emit_test.jl
 #
 # Set `ESM_DIRECT_EMIT_DUMP_DIR=<dir>` to also write the raw (`optimize=false`)
 # StableHLO modules of both backends to `<dir>/<fixture>.{direct,traced}.mlir`.
@@ -37,7 +36,7 @@ using EarthSciAST
 using Reactant
 using JSON3
 
-include("testutils.jl")  # TESTUTILS_REPO_ROOT
+include("../testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const ESM_DE = EarthSciAST
 const RX_DE = Reactant
@@ -385,7 +384,7 @@ function _de_scan_stag_obs(n::Int)
     return ESM_DE.Model(vars, eqs), isets
 end
 
-# ---- the lane-batched scalar surface (ess-oop-batch) -------------------------
+# ---- the lane-batched scalar surface -------------------------
 #
 # The shape that surface exists for: a mass-weighted halo tent. Per OUTPUT CELL one `_NK_CONTRACTION_LOOP` whose body
 # reads the state at a loop-var-dependent slot (`_NK_STATE_GATHER`) times a
@@ -1055,10 +1054,10 @@ end
         # The GROUP was emitted as a group, once.
         @test get(d.stats, :scalar_batch, 0) == 1
 
-        # And against the SAME build with the grouping disabled — the pre-batch
-        # emitter, entry by entry — which is the only comparison that says what
-        # the batched surface changed. Same numbers, and a program whose size
-        # no longer follows the cell count.
+        # And against the SAME build with the grouping disabled — the
+        # unbatched emitter, entry by entry — which is the only comparison that
+        # says what the batched surface changes. Same numbers, and a program
+        # whose size does not follow the cell count.
         fn, u0n, pn, _, _ = _de_halo_build(doc, ics; batch = false)
         @test isempty(getfield(getfield(fn, :rhs), :rhs_batches).groups)
         dn, _ = _de_compare(
@@ -1129,8 +1128,7 @@ end
     # uncovered slot holds can reach an output.
     #
     # The emitter keeps a slot MAP, not a zeroed buffer, so that read arrives as
-    # "nothing has written this slot". It used to be an unconditional refusal.
-    # It is not a refusal: the interpreter reads the zero its freshly allocated
+    # "nothing has written this slot". It is not a refusal: the interpreter reads the zero its freshly allocated
     # vector supplies, and the emitter must supply the same zero. What IS still
     # a refusal is a slot a LATER section writes, which is a mis-ordered level
     # plan — pinned below on the write plan itself.
@@ -1373,7 +1371,7 @@ end
         @test isapprox(a, _de_ip(fi!, u, p, 0.25); rtol = 1.0e-12, atol = 0.0)
 
         pv2 = copy(pv0)
-        pv2[findfirst(==(:k_diff), collect(syms))] *= 2.0
+        pv2[findfirst(==(Symbol("M.k_diff")), collect(syms))] *= 2.0
         b = Array(xla(ur, _de_dev(nt(pv2)), tr))           # no recompile
         # It MOVED (so it was not frozen) …
         @test !isapprox(a, b; rtol = 1.0e-12)

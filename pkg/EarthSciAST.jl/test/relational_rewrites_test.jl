@@ -26,7 +26,7 @@ const _RR_GOLDEN = Dict(
 _rr_bits(v) = reinterpret(UInt64, Float64.(collect(v)))
 
 _rr_path(e) = haskey(e, :out) ? joinpath(_RR_ROOT, String(e.out)) : joinpath(_RR_DIR, "$(e.id).esm")
-_rr_native(path) = EarthSciAST.Cadence.to_native(JSON3.read(read(path, String)))
+_rr_native(path) = JSON3.read(read(path, String), Dict{String, Any})
 _rr_floats(v) = Float64.(
     v isa AbstractVector && !isempty(v) && first(v) isa AbstractVector ?
         permutedims(reduce(hcat, [Float64.(r) for r in v])) : collect(v)

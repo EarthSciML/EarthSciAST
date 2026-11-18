@@ -544,7 +544,7 @@ function serial_native!(rec, path, entry, compiler, ref, budget)
         # Both names, so a floor already set in the environment under either
         # cannot hold the serial build threaded.
         floor = string(typemax(Int))
-        withenv("ESS_THREADS_MIN_WORK" => floor, "ESS_THREADS_MIN_CELLS" => floor) do
+        withenv("ESS_THREADS_MIN_WORK" => floor) do
             f!(sdu, u, p, PROBE_T)
         end
         if !isequal(dy_by_name(prob, sdu, canonical_names(fam, entry)), ref)

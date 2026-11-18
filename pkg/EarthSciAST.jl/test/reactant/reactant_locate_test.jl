@@ -27,7 +27,7 @@
 # that verifier against brute force, including that it REFUSES the axes it
 # cannot serve.
 #
-# OPT-IN like the other Reactant files: included only under ESM_TEST_REACTANT=1.
+# Part of the Reactant suite (test/reactant/runtests.jl, its own environment).
 
 using Test
 using EarthSciAST

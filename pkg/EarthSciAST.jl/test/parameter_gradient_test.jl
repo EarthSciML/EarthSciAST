@@ -25,6 +25,7 @@
 #   self-consistent.
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 using ForwardDiff
 
@@ -36,9 +37,6 @@ const _PG_ESM = EarthSciAST
 # through the reaction term, and `Ea`/`T` nonlinearly through the hoisted
 # INVARIANT `exp(-Ea/T)` — the arm a build-time constant fold would silently
 # freeze.
-_pg_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_pg_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
-_pg_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 _pg_ao(e) = Dict{String, Any}(
     "op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
@@ -51,14 +49,14 @@ _pg_state(; kw...) = Dict{String, Any}(
 _pg_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)
 
 function _pg_rd(N)
-    stencil = _pg_o(
-        "+", _pg_o(
-            "-", _pg_ix("c", _pg_o("-", "i", 1.0)),
-            _pg_o("*", 2.0, _pg_ix("c", "i"))
+    stencil = jop(
+        "+", jop(
+            "-", jidx("c", jop("-", "i", 1.0)),
+            jop("*", 2.0, jidx("c", "i"))
         ),
-        _pg_ix("c", _pg_o("+", "i", 1.0))
+        jidx("c", jop("+", "i", 1.0))
     )
-    rate = _pg_o("*", "k_rxn", _pg_o("exp", _pg_o("neg", _pg_o("/", "Ea", "T"))))
+    rate = jop("*", "k_rxn", jop("exp", jop("neg", jop("/", "Ea", "T"))))
     return Dict{String, Any}(
         "esm" => _PG_ESM.SCHEMA_VERSION, "metadata" => Dict{String, Any}("name" => "RD"),
         "index_sets" => Dict{String, Any}(
@@ -73,13 +71,13 @@ function _pg_rd(N)
                 ),
                 "equations" => Any[
                     Dict{String, Any}(
-                        "lhs" => _pg_ao(_pg_Dt(_pg_ix("c", "i"))),
+                        "lhs" => _pg_ao(jD(jidx("c", "i"))),
                         "rhs" => _pg_ao(
-                            _pg_o(
-                                "-", _pg_o("*", "k_diff", stencil),
-                                _pg_o(
+                            jop(
+                                "-", jop("*", "k_diff", stencil),
+                                jop(
                                     "*", rate,
-                                    _pg_o("^", _pg_ix("c", "i"), 2.0)
+                                    jop("^", jidx("c", "i"), 2.0)
                                 )
                             )
                         )

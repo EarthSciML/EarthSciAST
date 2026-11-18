@@ -29,11 +29,6 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 # A discrete provider: one field per refresh time.
-struct _CRProvider
-    fields::Dict{Float64, Dict{String, Vector{Float64}}}
-end
-ESM.provider_refresh_times(p::_CRProvider) = sort!(collect(keys(p.fields)))
-ESM.provider_sample(p::_CRProvider, t::Real) = p.fields[Float64(t)]
 
 #   c[i] = k·sin(i)                         const cadence (p only)
 #   w[i] = t·F[i] + c[i]                    time cadence (t, a live buffer)
@@ -145,7 +140,7 @@ if get(ENV, "ESS_CR_CHILD", "") == "1"
 else
     @testset "cadence refresh kinds" begin
         @testset "serial" begin
-            withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
+            withenv("ESS_THREADS_MIN_WORK" => string(typemax(Int))) do
                 _cr_refresh_sequence(16)
             end
         end
@@ -210,7 +205,7 @@ else
                 f!, u0, p = b
                 cb, tstops = if how === :provider
                     ESM.build_refresh_callback(;
-                        providers = Dict("F" => _CRProvider(fields)),
+                        providers = Dict("F" => SeriesProvider(fields)),
                         buffers = ESM.RefreshBuffers(Dict("F" => F)), owner = b
                     )
                 else
@@ -242,7 +237,7 @@ else
                 startswith(k, "ESS_") && delete!(env, k)
             end
             env["ESS_CR_CHILD"] = "1"
-            env["ESS_THREADS_MIN_CELLS"] = "8"
+            env["ESS_THREADS_MIN_WORK"] = "8"
             env["JULIA_PROJECT"] = Base.active_project()
             cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 2 $(@__FILE__)`, env)
             proc = run(pipeline(ignorestatus(cmd); stdout = stdout, stderr = stderr))

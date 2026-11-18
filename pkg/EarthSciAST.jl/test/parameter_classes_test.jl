@@ -1,5 +1,5 @@
 # The PARAMETER PARTITION — which parameters may be overridden at SOLVE time,
-# and which are a rebuild (differentiability plan §3 Phase 5).
+# and which are a rebuild.
 #
 # Every one of these is spelled `"type": "parameter"` in the document, so the
 # declared type is NOT the discriminator; WHERE THE VALUE IS CONSUMED is. Four
@@ -34,9 +34,6 @@ const ESM_PC = EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
 
-_pc_D(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_pc_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
-_pc_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
 _pc_param(v; shape = nothing) = shape === nothing ?
     Dict{String, Any}("type" => "parameter", "default" => v) :
     Dict{String, Any}("type" => "parameter", "default" => v, "shape" => shape)
@@ -51,13 +48,13 @@ _pc_param(v; shape = nothing) = shape === nothing ?
 function _pc_doc(; fold_ic::Bool = true)
     eqs = Any[
         Dict{String, Any}(
-            "lhs" => _pc_D("y"),
-            "rhs" => _pc_o("*", "k", _pc_o("*", _pc_ix("dat", 1.0), _pc_ix("buf", 1.0)))
+            "lhs" => jD("y"),
+            "rhs" => jop("*", "k", jop("*", jidx("dat", 1.0), jidx("buf", 1.0)))
         ),
     ]
     fold_ic && push!(
         eqs, Dict{String, Any}(
-            "lhs" => _pc_o("ic", "y"), "rhs" => _pc_o("*", "y0", 2.0)
+            "lhs" => jop("ic", "y"), "rhs" => jop("*", "y0", 2.0)
         )
     )
     return Dict{String, Any}(

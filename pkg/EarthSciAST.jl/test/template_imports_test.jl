@@ -505,16 +505,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     end
 
     @testset "round-trip expands CALL SITES, keeps DECLARATIONS (§9.6.4 rule 5)" begin
-        # This testset used to assert `!occursin("expression_templates", text)`
-        # and `!occursin("metaparameters", text)` — i.e. that a round trip strips
-        # EVERY §9.7 construct. That is the bug, enshrined as the contract.
-        #
-        # Option A expands CALL SITES; it does not delete DECLARATIONS. The two
-        # assertions passed only incidentally, because this fixture declares
-        # neither block at the top level (its templates come in over an import
-        # edge). Applied to a file that DOES declare them — a template library —
-        # the same rule emitted `{esm, metadata, index_sets}`: not one of the five
-        # payload keys the top-level `anyOf` requires. See the next testset.
+        # Option A expands CALL SITES; it does not delete DECLARATIONS. This
+        # fixture declares neither block at the top level (its templates come in
+        # over an import edge), so it cannot show that declarations survive.
+        # Applied to a file that DOES declare them — a template library — a rule
+        # that stripped every §9.7 construct would emit `{esm, metadata,
+        # index_sets}`: not one of the five payload keys the top-level `anyOf`
+        # requires. See the next testset.
         f = EarthSciAST.load_path(conf("import_smoke", "fixture.esm"))
         tmp = tempname() * ".esm"
         try
@@ -853,7 +850,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 """
             )
             # esm-spec §9.6.4 Option B: t_keep's body reference to t_inner
-            # resolved in the LIBRARY's own scope. Bodies are no longer inlined
+            # resolved in the LIBRARY's own scope. Bodies are not inlined
             # (§9.7.3), so importing `only: [t_keep]` carries the internal-wiring
             # reference-closure (t_inner) along and the reference SURVIVES;
             # `Expand` yields 2 * 7 (the Option-A image, §9.6.4 rule 2).
@@ -1027,7 +1024,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 )
                 f = EarthSciAST.load_path(p)
                 @test f.index_sets["x"].size == 4
-                # A metaparameter closed by this edge's `bindings` is no longer
+                # A metaparameter closed by this edge's `bindings` is not
                 # exported, so renaming it is a loud unknown-name error.
                 write(
                     p, _model_json(

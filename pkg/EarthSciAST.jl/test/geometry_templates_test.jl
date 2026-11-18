@@ -23,7 +23,6 @@ const _GT_PAIRS = JSON3.read(
 const _GT_RTOL = Float64(_GT_PAIRS.tolerance.rtol)
 const _GT_ATOL_FACTOR = Float64(_GT_PAIRS.tolerance.atol_factor)
 
-_gt_const(a) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => a)
 _gt_apply(name, bindings) = Dict{String, Any}(
     "op" => "apply_expression_template", "args" => Any[], "name" => name, "bindings" => bindings
 )
@@ -81,7 +80,7 @@ function _gt_document(manifold, rows)
     eqs = Any[]
     for (x, stack) in (("ra", ra), ("rb", rb))
         vars[x] = Dict{String, Any}("type" => "unknown", "units" => "1", "shape" => Any["pairs", "verts", "xy"])
-        push!(eqs, Dict{String, Any}("lhs" => x, "rhs" => _gt_const(stack)))
+        push!(eqs, Dict{String, Any}("lhs" => x, "rhs" => jconst(stack)))
     end
     index_sets["xy"] = Dict{String, Any}("kind" => "interval", "size" => 2)
     a, b, name = "ra", "rb", "overlap_area_planar"
@@ -199,7 +198,7 @@ end
                     "lhs" => Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t"),
                     "rhs" => _gt_apply(
                         "lonlat_to_unit",
-                        Dict{String, Any}("ring" => _gt_const(ring), "cell" => 1, "vert" => k, "comp" => d)
+                        Dict{String, Any}("ring" => jconst(ring), "cell" => 1, "vert" => k, "comp" => d)
                     )
                 )
             )

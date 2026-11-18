@@ -1,4 +1,4 @@
-# Contraction tier ORDER (ess-runtime-contraction × ess-affine).
+# Contraction tier ORDER (contraction loop × affine tier).
 #
 # `_compile_faq_equation!` offers a constant-bound array reduction to two
 # tiers, and their build costs scale with different things:
@@ -30,10 +30,10 @@
 # every equation the loop would have. The out-of-place build keeps the loop,
 # because its emitters compile it (test/reactant_direct_emit_test.jl).
 #
-# And in the in-place build the affine tier no longer unrolls: it keeps the
+# And in the in-place build the affine tier does not unroll: it keeps the
 # contracted index as a loop dim and folds it at run time (`_AffineReduce`), an
-# O(#groups) build at every reduction length, so the preemption's premise is
-# gone and the affine tier is offered even the narrow-output shape first. The
+# O(#groups) build at every reduction length, so the preemption's premise does
+# not hold there and the affine tier is offered even the narrow-output shape first. The
 # nest is what an affine decline leaves.
 #
 # Numerically nothing may move, whichever tier takes the equation: every case is

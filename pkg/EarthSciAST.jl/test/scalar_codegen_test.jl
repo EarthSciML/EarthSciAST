@@ -118,7 +118,6 @@ _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
 # observed `acc` that `D(u)` reads (a second state `w` reads site 1 alone).
 # `odd`: the aliasing, non-ascending and repeated axes of the per-member testset.
 _scg_jop(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
-_scg_jconst(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 function _scg_sites_doc(S::Int; odd::Bool = false)
     vars = Dict{String, Any}(
         "u" => Dict("type" => "unknown", "default" => 0.0),
@@ -144,8 +143,8 @@ function _scg_sites_doc(S::Int; odd::Bool = false)
             Dict{String, Any}(
                 "op" => "apply_expression_template", "args" => Any[], "name" => "bilinear",
                 "bindings" => Dict{String, Any}(
-                    "table" => _scg_jconst(tb), "axis_x" => _scg_jconst(ax),
-                    "axis_y" => _scg_jconst(ay), "x" => _scg_jop("+", 2.5, x),
+                    "table" => jconst(tb), "axis_x" => jconst(ax),
+                    "axis_y" => jconst(ay), "x" => _scg_jop("+", 2.5, x),
                     "y" => _scg_jop("+", 1.25, x), "nx" => 8, "ny" => 8
                 )
             )
@@ -153,7 +152,7 @@ function _scg_sites_doc(S::Int; odd::Bool = false)
             Dict{String, Any}(
                 "op" => "apply_expression_template", "args" => Any[], "name" => "linear",
                 "bindings" => Dict{String, Any}(
-                    "table" => _scg_jconst(tab), "axis" => _scg_jconst(ax),
+                    "table" => jconst(tab), "axis" => jconst(ax),
                     "x" => _scg_jop("+", 2.0 + 0.37 * (i % 5), x), "n" => 8
                 )
             )

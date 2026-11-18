@@ -66,10 +66,9 @@ end
 # producer, so more than one equation now carries a `faq` RHS, and the promoted
 # observed is exactly the bare-variable-LHS definition.
 #
-# The two used to be separable by TAG — the lift emitted `arrayop` while the
-# consumer carried `aggregate` — but those were always the same node, and esm
-# 1.1.0 collapses them to `faq` (docs/content/rfcs/faq-node-rename.md). This
-# helper never meant "the only `faq`"; it meant "the consumer".
+# The lift and the consumer carry the same node, `faq`
+# (docs/content/rfcs/faq-node-rename.md), so they cannot be told apart by tag.
+# This helper does not mean "the only `faq`"; it means "the consumer".
 consumer_rhs(sys) = only(
     eq for eq in sys.equations
         if eq.rhs isa E.OpExpr && eq.rhs.op == "faq" &&
@@ -222,8 +221,7 @@ end
 
 @testset "explicitly indexed consumers are untouched (M2-1 contract)" begin
     # The original M2-1 fixture indexes the promoted chain EXPLICITLY
-    # (`index(b,k)`); the consumer pass must not rewrap it — behaviour and
-    # numbers identical to the pre-fix pass.
+    # (`index(b,k)`); the consumer pass must not rewrap it.
     aggd = agg(Any[], Dict{String, Any}("k" => isref("c")), ix("b", "k"))
     d = Dict{String, Any}(
         "esm" => "0.5.0", "metadata" => Dict("name" => "P"),

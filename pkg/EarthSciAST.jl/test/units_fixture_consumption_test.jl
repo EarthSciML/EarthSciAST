@@ -1,16 +1,15 @@
-# Units fixtures consumption runner (gt-dt0o).
+# Units fixtures consumption runner.
 #
 # The units_*.esm files in tests/valid/ carry inline `tests` blocks
-# (id / parameter_overrides / initial_conditions / time_span / assertions)
-# added in gt-p3v. Schema parse coverage is already asserted elsewhere
+# (id / parameter_overrides / initial_conditions / time_span / assertions).
+# Schema parse coverage is already asserted elsewhere
 # (units_test.jl's Cross-binding units fixtures suite). This file closes
 # the schema-vs-execution gap: every assertion's target (all of which are
 # observed variables at t = 0) is actually evaluated under the test's
 # bindings and compared against the expected value within the resolved
 # tolerance (assertion → test → model, falling back to rtol = 1e-6).
 #
-# Corrupting an expected value in any fixture — or reverting the
-# pressure_drop fix from gt-p3v — must cause this suite to fail.
+# Corrupting an expected value in any fixture must cause this suite to fail.
 using Test
 using EarthSciAST
 
@@ -28,11 +27,10 @@ end
 
 # Resolve every observed unknown to a Float64 by iterated substitution.
 #
-# esm 1.0.0 (§6.3.1): "observed" is no longer a declared variable type and a
-# variable carries no `expression`. An observed unknown is the one DEFINED by a
-# bare-variable-LHS equation, and its defining right-hand side is read from
-# `observed_definitions(model)` — the derivation replacing the 0.x
-# `var.type == ObservedVariable` test plus `var.expression`.
+# §6.3.1: "observed" is not a declared variable type and a variable carries no
+# `expression`. An observed unknown is the one DEFINED by a bare-variable-LHS
+# equation, and its defining right-hand side is read from
+# `observed_definitions(model)`.
 #
 # The bindings dict starts with parameters and non-observed unknowns; each pass
 # tries to evaluate any observed whose defining RHS no longer has unbound
@@ -98,7 +96,7 @@ function _run_units_test(mname::AbstractString, model, t::_ESM_UF.InlineTest)
     return
 end
 
-@testset "Units fixtures inline tests execution (gt-dt0o)" begin
+@testset "Units fixtures inline tests execution" begin
     fixtures_root = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
     # Only the fixtures that CARRY an inline `tests` block belong here;
     # units_ifelse_undeterminable_branch.esm and

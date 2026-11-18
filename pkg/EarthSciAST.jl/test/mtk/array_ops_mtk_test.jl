@@ -1,4 +1,4 @@
-# Native Julia tests for the array-op runtime implementation (gt-vt3), through
+# Native Julia tests for the array-op runtime implementation, through
 # the ModelingToolkit extension. The parse/serialize round trips and
 # `infer_array_shapes`, which need no compiled system, are test/array_ops_test.jl.
 # Each testset builds an ESM `Model` that uses the new array-op nodes
@@ -194,7 +194,7 @@ function _run_fixture(path::AbstractString)
     return
 end
 
-@testset "Array-op runtime (gt-vt3 Phases 1-4)" begin
+@testset "Array-op runtime" begin
 
     # ================================================================
     # Case 1 — Pure ODE on u[i], N=5, analytical u_i(t) = i * exp(-t).
@@ -386,7 +386,7 @@ end
     end
 
     # ================================================================
-    # Schema-driven fixture runner (Phase 5, gt-cc1 integration).
+    # Schema-driven fixture runner.
     # ================================================================
     #
     # Loads `.esm` files from `tests/fixtures/faq/` (repo root), builds the MTK

@@ -185,8 +185,7 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
         @test sec.walk isa _LC._PerCellLicense && !isempty(sec.kernels)
         rebuild(walk) = _LC._KernelSection(
             sec.cgf, sec.cgtabs, sec.n_emitted, sec.kernels,
-            sec.dualf, sec.dualtabs, sec.n_dual_emitted, sec.dual_resid, sec.f64cg,
-            sec.tcache, sec.dual_tcache, sec.ntiles, walk
+            sec.tcache, sec.ntiles, walk
         )
         @test_throws ArgumentError rebuild(nothing)
         @test rebuild(sec.walk) isa _LC._KernelSection

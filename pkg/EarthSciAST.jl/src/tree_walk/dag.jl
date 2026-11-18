@@ -69,6 +69,33 @@ function _dag_path_counts(
     return total, uncond
 end
 _dag_children(n) = n.children
+
+# Whether `pred` holds for any node under `root` (each unique node asked once).
+_node_any(pred::P, root) where {P} =
+    _dag_postorder_until(root, _dag_children, _dag_every, pred)[3]
+
+# The size `root` has written out as a tree: a node reached on several paths
+# counts once per path, as an emitter that writes it at each use does.
+function _node_tree_size(root)
+    order, pos = _dag_postorder(root, _dag_children, _dag_every)
+    total, _ = _dag_path_counts(order, pos, _dag_children, _dag_every, _dag_strict)
+    s = 0
+    for t in total
+        s = _sat_add(s, t)
+    end
+    return s
+end
+
+# `f(n, child_values)` folded bottom-up over the unique nodes under `root`, each
+# node computed once whatever the number of paths reaching it; the root's value.
+function _node_fold(f::Fn, root::N, ::Type{V}) where {Fn, N, V}
+    order, pos = _dag_postorder(root, _dag_children, _dag_every)
+    val = Vector{V}(undef, length(order))
+    for (p, n) in enumerate(order)
+        val[p] = f(n, (val[pos[c]] for c in n.children))
+    end
+    return val[end]
+end
 _dag_every(_) = true
 _dag_never(_) = false
 _dag_strict(_, _) = false

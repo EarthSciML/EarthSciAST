@@ -3,8 +3,8 @@
 # §2.5.10 puts EVERY evaluation a compiler performs for a problem under its
 # refusal rule: the right-hand side, the construction-time materializations and
 # seeds, and the observeds read at output time. Each testset below takes one
-# route that used to walk the tree per cell under `native` with nothing to show
-# for it, and pins what `native` does with it now:
+# route that could walk the tree per cell under `native`, and pins what
+# `native` does with it:
 #
 #   * a route that stays per cell REFUSES with `compiler_refused_rule`, naming
 #     the rule, at construction — and `compiler = :interpreter` still runs the
@@ -604,8 +604,7 @@ end
     )
 
     no_codegen(f) = withenv(
-        f, "ESS_CODEGEN_NODE_BUDGET" => "0",
-        "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0"
+        f, "ESS_CODEGEN_NODE_BUDGET" => "0"
     )
 
     @testset "observed_field: a read native cannot compile refuses" begin

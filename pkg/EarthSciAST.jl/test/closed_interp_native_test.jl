@@ -27,7 +27,6 @@ const _TI = EarthSciAST
 
 _ti_op(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
 _ti_ix(a, s...) = _ti_op("index", a, s...)
-_ti_const(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 _ti_apply(name; b...) = Dict{String, Any}(
     "op" => "apply_expression_template", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
@@ -104,7 +103,7 @@ function _ti_doc(shape::Symbol, n::Int)
         v = Dict{String, Any}("type" => "unknown");
         shape === nothing || (v["shape"] = shape); d === nothing || (v["default"] = d); v
     )
-    lookup(t, x) = _ti_apply("linear"; table = _ti_const(t), axis = _ti_const(z), x = x, n = n)
+    lookup(t, x) = _ti_apply("linear"; table = jconst(t), axis = jconst(z), x = x, n = n)
     # The query moves with t and passes below the axis, through every knot
     # interval and above it, so every branch of the template is taken.
     sweep = _ti_op("+", zt, _ti_op("*", 1.3 * zt, _ti_op("sin", _ti_op("*", 0.3, "t"))))
@@ -126,7 +125,7 @@ function _ti_doc(shape::Symbol, n::Int)
             end
         elseif shape === :ss
             vars["u"] = sv(["lev"], 0.0)
-            look = _ti_apply("searchsorted"; x = _ti_ix("xq", "l"), xs = _ti_const(z), n = n)
+            look = _ti_apply("searchsorted"; x = _ti_ix("xq", "l"), xs = jconst(z), n = n)
             push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", look, _ti_ix("u", "l")))))
         else
             vars["yq"] = sv()
@@ -134,7 +133,7 @@ function _ti_doc(shape::Symbol, n::Int)
             vars["u"] = sv(["lev"], 10.0)
             t2, ya = _ti_rows(_ti_t2(n)), _ti_ya()
             look = _ti_apply(
-                "bilinear"; table = _ti_const(t2), axis_x = _ti_const(z), axis_y = _ti_const(ya),
+                "bilinear"; table = jconst(t2), axis_x = jconst(z), axis_y = jconst(ya),
                 x = _ti_ix("xq", "l"), y = "yq", nx = n, ny = _TI_NY
             )
             push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", look, _ti_ix("u", "l")))))
@@ -254,9 +253,9 @@ end
 @testset "repeated sub-trees computed once: matches and near misses" begin
     n = 23
     ax = Float64[(k - 3) / 2 for k in 1:n]
-    cnt(x; lit = 1) = _ti_count("k", n, _ti_op("<=", _ti_ix(_ti_const(ax), "k"), x), []; yes = lit)
+    cnt(x; lit = 1) = _ti_count("k", n, _ti_op("<=", _ti_ix(jconst(ax), "k"), x), []; yes = lit)
     # Below the contraction-loop floor: the count is unrolled into a fold.
-    cnt5(x) = _ti_count("k", 5, _ti_op("<=", _ti_ix(_ti_const(ax[1:5]), "k"), x), [])
+    cnt5(x) = _ti_count("k", 5, _ti_op("<=", _ti_ix(jconst(ax[1:5]), "k"), x), [])
     function doc(rhs_of)
         vars = Dict{String, Any}(
             "q" => Dict("type" => "unknown", "shape" => Any["lev"]),
@@ -357,7 +356,7 @@ end
 @testset "repeated sub-tree only in later gather subscripts stays lazy" begin
     M = 24
     c = Float64[mod1(5m, M) for m in 1:M]
-    cg = _ti_ix(_ti_const(c), _ti_op("+", "k", "s"))
+    cg = _ti_ix(jconst(c), _ti_op("+", "k", "s"))
     body = _ti_op(
         "+", _ti_ix("q", _ti_op("+", "k", "i", 1), cg),
         _ti_op("*", 2.0, _ti_ix("q", _ti_op("+", "k", "i", 2), cg))
@@ -534,8 +533,8 @@ _ti_sub_doc(sub; n = 9, nl = 23) = begin
         "pn" => Dict{String, Any}("type" => "parameter", "default" => Float64(n - 1)),
     )
     eqs = Any[
-        Dict("lhs" => "axis", "rhs" => _ti_const(z)),
-        Dict("lhs" => "tab", "rhs" => _ti_const(tab)),
+        Dict("lhs" => "axis", "rhs" => jconst(z)),
+        Dict("lhs" => "tab", "rhs" => jconst(tab)),
         Dict("lhs" => "xq", "rhs" => xq),
         Dict("lhs" => "r", "rhs" => _ti_lev(_ti_ix("tab", sub(cnt, n)))),
         Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", _ti_ix("r", "l"), _ti_ix("u", "l")))),
@@ -611,7 +610,7 @@ _ti_ngens(_) = 1
             "+", _ti_op("*", _ti_op("+", "i", _ti_op("*", 3, "j")), z[n] / (ni + 3 * nj)),
             _ti_op("*", 50.0, _ti_ix("u", "i", "j"))
         )
-        look = _ti_apply("linear"; table = _ti_const(tab), axis = _ti_const(z), x = x, n = n)
+        look = _ti_apply("linear"; table = jconst(tab), axis = jconst(z), x = x, n = n)
         doc = Dict{String, Any}(
             "esm" => "2.0.0", "metadata" => Dict("name" => "nest_2d_consumer"),
             "index_sets" => Dict(
@@ -653,7 +652,7 @@ _ti_ngens(_) = 1
         for j in 1:m
             vars["r$j"] = Dict{String, Any}("type" => "unknown", "shape" => ["lev"])
             tab = Float64[j + 0.125 * k * k for k in 1:n]
-            push!(eqs, Dict("lhs" => "r$j", "rhs" => _ti_lev(_ti_apply("linear"; table = _ti_const(tab), axis = _ti_const(z), x = _ti_ix("xq", "l"), n = n))))
+            push!(eqs, Dict("lhs" => "r$j", "rhs" => _ti_lev(_ti_apply("linear"; table = jconst(tab), axis = jconst(z), x = _ti_ix("xq", "l"), n = n))))
             push!(terms, _ti_ix("r$j", "l"))
         end
         push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", _ti_op("+", terms...), _ti_ix("u", "l")))))
@@ -688,7 +687,7 @@ end
     x = _ti_op("+", 0.5 * z[end], _ti_op("+", _ti_op("*", 100.0, "u"), _ti_op("*", 30.0, "t")))
     y = _ti_op("+", 2.25, _ti_op("+", "u", _ti_op("*", 0.001, "t")))
     look = _ti_apply(
-        "bilinear"; table = _ti_const(t2), axis_x = _ti_const(z), axis_y = _ti_const(ya),
+        "bilinear"; table = jconst(t2), axis_x = jconst(z), axis_y = jconst(ya),
         x = x, y = y, nx = n, ny = _TI_NY
     )
     model = Dict{String, Any}(

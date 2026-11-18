@@ -162,8 +162,8 @@ end
     end
 
     # Density: a hole or a double-covered cell is refused, not written out as if it
-    # were right (the Julia derivation used to derive the shape from the max index
-    # and never check coverage).
+    # were right (deriving the shape from the max index alone would not check
+    # coverage).
     @testset "an incomplete or double-covered grid is refused" begin
         @test_throws OutputError derive_output_gridding(
             Dict("u[1,1]" => 1, "u[2,1]" => 2, "u[1,2]" => 3)

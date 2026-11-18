@@ -10,6 +10,7 @@
 # parameters whose source declares a `unit_conversion`.
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 using EarthSciIO
 using DiffEqCallbacks            # the refresh callback of a discrete provider
@@ -28,9 +29,6 @@ struct _FBProvider
 end
 FB.provider_refresh_times(p::_FBProvider) = p.times
 FB.provider_sample(p::_FBProvider, ::Real; selection = nothing) = p.sample
-
-_fb_idx(v, ix...) = Dict("op" => "index", "args" => Any[v, ix...])
-_fb_op(op, args...) = Dict("op" => op, "args" => Any[args...])
 
 # `u[x]` forced by a gridded `E[x, y]`, a scalar `s` and `R[rec, x]`, whose
 # first dimension holds two records, all fed by one data source.
@@ -75,15 +73,15 @@ function _fb_doc(nx::Int, ny::Int)
                     Dict(
                         "lhs" => faq(
                             Dict(
-                                "op" => "D", "args" => Any[_fb_idx("u", "i")],
+                                "op" => "D", "args" => Any[jidx("u", "i")],
                                 "wrt" => "t"
                             )
                         ),
                         "rhs" => faq(
-                            _fb_op(
-                                "+", _fb_op("*", "s", _fb_idx("E", "i", 2)),
-                                _fb_idx("R", 1, "i"), _fb_idx("R", 2, "i"),
-                                _fb_op("*", -1, "k", _fb_idx("u", "i"))
+                            jop(
+                                "+", jop("*", "s", jidx("E", "i", 2)),
+                                jidx("R", 1, "i"), jidx("R", 2, "i"),
+                                jop("*", -1, "k", jidx("u", "i"))
                             )
                         )
                     ),
@@ -219,12 +217,12 @@ end
         m["equations"] = Any[
             Dict(
                 "lhs" => sfaq(
-                    Dict("op" => "D", "args" => Any[_fb_idx("h", "i")], "wrt" => "t")
+                    Dict("op" => "D", "args" => Any[jidx("h", "i")], "wrt" => "t")
                 ),
                 "rhs" => sfaq(
-                    _fb_op(
-                        "+", _fb_idx("annual", "i"), _fb_idx("stkhgt", "i"),
-                        _fb_idx("stkdiam", "i"), _fb_idx("stktemp", "i")
+                    jop(
+                        "+", jidx("annual", "i"), jidx("stkhgt", "i"),
+                        jidx("stkdiam", "i"), jidx("stktemp", "i")
                     )
                 )
             ),

@@ -1,587 +1,216 @@
-"""
-    EarthSciAST.Cadence
-
-The raw-JSON **cadence classifier** backing the cross-binding conformance
-contract of `CONFORMANCE_SPEC.md` §5.7 (RFC `semiring-faq-unified-ir` §6.1,
-bead `ess-my4.3.7`) — the EarthSciAST analogue of ModelingToolkit's
-`structural_simplify` / observed-variable elimination, generalised from two
-phases to three.
-
-Every value is classified by the **cadence** at which it can change, forming the
-total order `const ⊏ discrete ⊏ continuous`:
-
-| Class | Changes | Phase | Leaf seed |
-|---|---|---|---|
-| `const` | never | folded artifact | a constant or sampled parameter, a literal, an index-set name, a bound index |
-| `discrete` | only at discrete events | per-event handler | a parameter in `discrete_parameters` |
-| `continuous` | every step | hot per-step `_Node` tree | an ODE-state or algebraic unknown, a Brownian parameter, the independent variable `t` |
-
-An OBSERVED unknown is the one leaf whose seed is not a fixed class: it is the
-class of its DEFINING EQUATION's right-hand side, resolved transitively
-(§5.7.2). See [`seed_leaf`](@ref).
-
-The pass is a **pure function of the data-dependency DAG**: `class(node) = max`
-over its inputs' classes, derived bottom-up, never declared.
-
-# CONFORMANCE-ONLY: why raw JSON, not the typed IR
-
-This module walks the **raw parsed JSON** of a model (`AbstractDict` /
-`JSON3.Object` → native dicts) because it must classify documents in the shape
-the conformance harness hands them, including the whole-document surroundings
-(`data_sources`, `index_sets`) that never reach a typed expression. The typed
-IR is no longer the obstacle it once was: `OpExpr` now carries
-`expect_cadence` like any other wire field (`OPEXPR_FIELD_TABLE`, types.jl), so
-this classifier's raw-JSON reads and a typed walk would see the same
-annotation. The pass is consumed ONLY by the conformance surface: the cadence
-adapter (`scripts/cadence_adapter.jl`, which also hosts the §5.7
-`partition_model` pass and the CONST-fold kernels) and `test/cadence_test.jl`.
-The PRODUCTION build path does not run it: the value-invention front door
-(`value_invention.jl`) derives the §5.7 guard-2 classification directly on the
-typed `OpExpr` IR. `reference_graph.jl` walks raw JSON for the same conformance
-reason.
-
-# The gather rule (the design's load-bearing rule)
-
-For a gather `index(A, e₁…eₖ)` the index expressions are classified
-**independently of the array**:
-
-    class(index(A, e…)) = max(class(A), class(e₁), …, class(eₖ))
-
-This is just `max` over a node's children, so it needs no special case — but it
-is what lets a stencil *split* across phases: in `index(u, index(nbr,i,k))` the
-inner topology selection `index(nbr,i,k)` is `const` while the outer value load
-`index(u, .)` is `continuous`.
-
-The guards ([`assert_no_continuous_relational`](@ref),
-[`assert_acyclic_index_sets`](@ref), and the [`check_expect_cadence!`](@ref)
-assertion) are *checked*, not hoped for. The index-set acyclicity guard routes
-through the shared three-color DFS (`detect_cycle`, reference_graph.jl) over a
-materialised set→set graph instead of carrying its own cycle detector.
-"""
-module Cadence
-
-import JSON3
-using ..EarthSciAST: EarthSciASTError, ERROR_CODES, ReferenceGraph, ReferenceVertex, detect_cycle,
-    _ensure_vertex!, _add_edge!
-
-export CadenceError, classify,
-    assert_no_continuous_relational, assert_acyclic_index_sets,
-    load_model_json
-
-# The cadence lattice (§5.7.1): const ⊏ discrete ⊏ continuous. `class(node) =
-# max over inputs` is the lattice join over these ranks.
-const CLASS_RANK = Dict("const" => 0, "discrete" => 1, "continuous" => 2)
-const RANK_CLASS = Dict(0 => "const", 1 => "discrete", 2 => "continuous")
-
-# The relational / value-invention ops that may not run on the hot path (§5.7
-# guard 2): one classifying `continuous` is a hard error.
-const RELATIONAL_OPS = Set(["distinct", "join"])
+# Cadence classification (CONFORMANCE_SPEC.md §5.7) on the typed tree: the one
+# classifier the build's value-invention guard and the cadence conformance pass
+# both use.
+#
+# Every value is classified by the cadence at which it can change, the total
+# order `const ⊏ discrete ⊏ continuous`. A leaf is seeded from its derived role
+# (esm-spec §6.3.1, `cadence_seeds`); an operator node is the maximum over its
+# children (`cadence_class`), drawn from every expression-bearing `OpExpr` field
+# (`foreach_child`). For a gather `index(A, e…)` that maximum classes the index
+# expressions independently of the array, which is what lets a stencil split:
+# in `index(u, index(nbr, i, k))` the inner topology selection is `const` while
+# the outer value load is `continuous` (§5.7.3).
 
 """
-    CadenceError(msg, code = "")
+    CadenceClass
 
-A cadence-partition contract violation in a fixture or producer output —
-a wrong `expect_cadence`, a `continuous` relational node (§5.7 guard 2), a
-`from_faq` cycle (§5.7 guard 1), a float topology key, or an unknown fold.
-Fields: `code` (an [`ERROR_CODES`](@ref) value, or `""`) and `msg`.
+The §5.7.1 cadence lattice, ordered `CadenceConst < CadenceDiscrete <
+CadenceContinuous`; the class of a node is the `max` over its inputs.
+[`cadence_name`](@ref) gives the wire spelling.
 """
-struct CadenceError <: EarthSciASTError
-    code::String
-    msg::String
-    CadenceError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
-end
-
-# ── Raw-JSON access ─────────────────────────────────────────────────────────
-# Convert JSON3 structures to native `Dict{String,Any}` / `Vector{Any}` so node
-# access is uniform string-keyed `get`/`haskey` — a direct mirror of the
-# reference classifier (`scripts/run-cadence-conformance.py`). Conformance
-# fixtures are small, so the up-front copy is cheap; the production build path
-# never runs this conversion (it parses straight into the typed IR).
-
-to_native(x::JSON3.Object) = Dict{String, Any}(String(k) => to_native(v) for (k, v) in pairs(x))
-to_native(x::JSON3.Array) = Any[to_native(v) for v in x]
-to_native(x::AbstractDict) = Dict{String, Any}(String(k) => to_native(v) for (k, v) in x)
-to_native(x::AbstractVector) = Any[to_native(v) for v in x]
-to_native(x) = x
+@enum CadenceClass::UInt8 CadenceConst CadenceDiscrete CadenceContinuous
 
 """
-    load_model_json(path, model_name) -> Dict{String,Any}
+    cadence_name(c::CadenceClass) -> String
 
-Load one model from an `.esm` document as a native JSON dict (no typed coercion:
-this classifier reads the model's whole-document surroundings — `data_sources`,
-`index_sets`, the parameter/variable declarations — none of which live inside a
-typed expression. The `expect_cadence` annotation it asserts against IS carried
-by the typed IR (`OPEXPR_FIELD_TABLE`, types.jl); the raw form is about scope,
-not about that field).
+The wire spelling of a class: `"const"`, `"discrete"` or `"continuous"`.
 """
-function load_model_json(path::AbstractString, model_name::AbstractString)
-    doc = to_native(JSON3.read(read(path, String)))
-    models = get(doc, "models", Dict{String, Any}())
-    haskey(models, model_name) ||
-        throw(CadenceError("$(path): model $(repr(model_name)) not found"))
-    model = models[model_name]
-    # Attach the document's top-level `data_sources` so the source-seeded
-    # cadence refinement (§5.7.2) can resolve a `data`-update parameter's source
-    # and decide `discrete` (temporal) vs `const` (no temporal).
-    sources = get(doc, "data_sources", nothing)
-    if isa(sources, AbstractDict) && !haskey(model, "data_sources")
-        model = merge(model, Dict{String, Any}("data_sources" => sources))
-    end
-    return model
-end
-
-# ── Classification (§5.7.2–5.7.3) ───────────────────────────────────────────
-
-"""The lattice join (max) over cadence classes — the §5.7 propagation rule."""
-_join(classes) = isempty(classes) ? "const" :
-    RANK_CLASS[maximum(CLASS_RANK[c] for c in classes)]
+cadence_name(c::CadenceClass) =
+    c === CadenceConst ? "const" : c === CadenceDiscrete ? "discrete" : "continuous"
 
 """
-    _observed_definitions(model) -> Dict{String,Any}
+    cadence_seeds(model::Model; data_sources = nothing) -> Dict{String,CadenceClass}
 
-Map each OBSERVED unknown of `model` to its defining equation's RHS, memoised on
-the model dict.
+The cadence seed of every variable of `model` (CONFORMANCE_SPEC §5.7.2), from
+the esm-spec §6.3.1 classification rather than a declared type:
 
-An observed unknown is one an equation defines, read through the LHS's BASE
-NAME at any rank (esm-spec §6.3.1): `y ~ …`, `y[i] ~ …` and `faq{k}(y[k]) ~ …`
-all define `y`, while a `D` under the same shells is a tendency and defines
-nothing. This is the raw-JSON form of `observed_definitions` (classification.jl,
-via `_lhs_role`); the strict bare-variable form is the narrower INLINING set,
-which "does not narrow the partition", and seeding from it would seed a
-state-free arrayed observed `continuous` and stop it folding at bind. First
-definition wins, matching the reference implementation
-(`scripts/run-cadence-conformance.py`).
-"""
-function _observed_definitions(model)
-    cached = get(model, "_observed_defs", nothing)
-    cached === nothing || return cached
-    variables = get(model, "variables", Dict{String, Any}())
-    roles = Tuple{Symbol, String, Any}[]
-    for eq in get(model, "equations", Any[])
-        isa(eq, AbstractDict) || continue
-        role, name = _raw_lhs_role(get(eq, "lhs", nothing))
-        push!(roles, (role, name, eq))
-    end
-    states = Set(name for (role, name, _) in roles if role === :derivative)
-    defs = Dict{String, Any}()
-    for (role, name, eq) in roles
-        role === :definition || continue
-        name in states && continue
-        v = get(variables, name, nothing)
-        (isa(v, AbstractDict) && get(v, "type", nothing) == "unknown") || continue
-        haskey(defs, name) || (defs[name] = get(eq, "rhs", nothing))
-    end
-    model["_observed_defs"] = defs
-    return defs
-end
-
-"""Strip the array-addressing shells from a raw-JSON LHS: an `faq` addresses its
-`expr`, an `index` its first argument."""
-function _raw_lhs_unwrap(e)
-    while isa(e, AbstractDict)
-        op = get(e, "op", nothing)
-        args = get(e, "args", nothing)
-        if op == "faq" && get(e, "expr", nothing) !== nothing
-            e = e["expr"]
-        elseif op == "index" && isa(args, AbstractVector) && !isempty(args)
-            e = args[1]
-        else
-            break
-        end
-    end
-    return e
-end
-
-"""The raw-JSON counterpart of `_lhs_role` (classification.jl):
-`(:definition, y)` for `y`, `index(y, …)` or `faq{…}(index(y, …))`;
-`(:derivative, u)` for a time `D` of `u` under the same shells; otherwise
-`(:none, "")`."""
-function _raw_lhs_role(lhs)
-    head = _raw_lhs_unwrap(lhs)
-    isa(head, AbstractString) && return (:definition, String(head))
-    if isa(head, AbstractDict) && get(head, "op", nothing) == "D" &&
-            get(head, "wrt", "t") in ("t", nothing)
-        args = get(head, "args", nothing)
-        if isa(args, AbstractVector) && !isempty(args)
-            base = _raw_lhs_unwrap(args[1])
-            isa(base, AbstractString) && return (:derivative, String(base))
-        end
-    end
-    return (:none, "")
-end
-
-"""
-    seed_leaf(leaf, model[, resolving]) -> String
-
-Seed a leaf's cadence from its DERIVED role (§5.7.2 leaf-seed table).
-
-From esm 1.0.0 the seed cannot be read off a declared type, because there are
-only two of those. It comes from the classification of esm-spec §6.3.1, and
-every binding MUST seed from those functions rather than re-deriving the
-categories locally — five local derivations are five chances to disagree about
-which nodes fold:
-
-| Leaf | Seed |
+| Derived category | Seed |
 |---|---|
-| the independent variable `t` | `continuous` |
-| an unknown in `ode_states` or `algebraic_unknowns` | `continuous` |
-| an unknown in `observed_unknowns` | the class of its DEFINING EQUATION's RHS |
-| a parameter in `brownian_parameters` (`update.kind == "wiener"`) | `continuous` |
-| a parameter in `discrete_parameters` (any other `update`) | `discrete`, subject to the source refinement |
-| a parameter in `sampled_parameters` or `constant_parameters` | `const` |
-| numeric literal, index-set name, bound index symbol, relation tag | `const` |
+| `ode_states`, `algebraic_unknowns` | continuous |
+| `brownian_parameters` | continuous (resampled every step) |
+| `observed_unknowns` | the class of its defining equation's right-hand side, transitively |
+| `discrete_parameters` | discrete, or const when its `data` update's source declares no `temporal` block |
+| `sampled_parameters`, `constant_parameters` | const |
 
-**The observed leaf is the one that changed, and it must not be shortcut.**
-Seeding every unknown `continuous` is sound but stops a STATE-FREE observed
-folding at bind, and const-folding exactly those is what the geometry and
-projection-pushdown paths rely on. Seeding an observed `const` — what the 0.x
-code did, with a comment admitting it was imprecise and unexercised — is
-unsound the other way, since an observed reading a state is `continuous`. So an
-observed resolves to the class of its defining equation's RHS, computed by this
-same pass and memoised; `resolving` carries the chain currently being resolved
-so a definition cycle is REPORTED rather than recursed forever.
+A name absent from the result (an index-set name, a bound index) is `const`;
+the independent variable `t` is `continuous` ([`cadence_class`](@ref) applies
+both). `data_sources` is the document's `data_sources` table; without it no
+source can be resolved and every discrete parameter seeds `discrete`, which
+moves no value across the `continuous` boundary.
+
+An observed definition cycle is refused (`observed_cycle`): a cycle has no
+class to resolve to.
 """
-function seed_leaf(leaf, model, resolving::Tuple = ())
-    # numeric literal (Bool is excluded, mirroring the reference's `not bool`)
-    if (isa(leaf, Integer) && !isa(leaf, Bool)) || isa(leaf, AbstractFloat)
-        return "const"
+function cadence_seeds(model::Model; data_sources = nothing)::Dict{String, CadenceClass}
+    seeds = Dict{String, CadenceClass}()
+    for n in solver_unknowns(model)
+        seeds[n] = CadenceContinuous
     end
-    isa(leaf, AbstractString) || throw(CadenceError("unexpected leaf $(repr(leaf))"))
-    leaf == "t" && return "continuous"
-    variables = get(model, "variables", Dict{String, Any}())
-    if haskey(variables, leaf)
-        var = variables[leaf]
-        kind = get(var, "type", nothing)
-        if kind == "unknown"
-            defs = _observed_definitions(model)
-            if haskey(defs, leaf)
-                leaf in resolving && throw(
-                    CadenceError(
-                        "observed definition cycle through $(repr(leaf)): " *
-                            join(String[resolving..., leaf], " -> "),
-                        ERROR_CODES.OBSERVED_CYCLE
-                    )
+    for n in brownian_parameters(model)
+        seeds[n] = CadenceContinuous
+    end
+    for n in discrete_parameters(model)
+        seeds[n] = _data_source_without_temporal(model.variables[n], data_sources) ?
+            CadenceConst : CadenceDiscrete
+    end
+    for n in Iterators.flatten((sampled_parameters(model), constant_parameters(model)))
+        seeds[n] = CadenceConst
+    end
+    defs = observed_definitions(model)
+    resolving = String[]
+    function resolve(name::String)
+        haskey(seeds, name) && return seeds[name]
+        def = get(defs, name, nothing)
+        def === nothing && return CadenceConst
+        if name in resolving
+            throw(
+                TreeWalkError(
+                    ERROR_CODES.OBSERVED_CYCLE,
+                    "observed definition cycle through $(repr(name)): " *
+                        join(vcat(resolving, name), " -> ")
                 )
-                return classify(defs[leaf], model, ClassMemo(), (resolving..., leaf))
-            end
-            # An ODE state or an algebraic unknown: continuous.
-            return "continuous"
+            )
         end
-        if kind == "parameter"
-            update = get(var, "update", nothing)
-            # No update at all — a constant or a sampled-once parameter. Both
-            # seed `const`.
-            (isa(update, AbstractDict) || isa(update, AbstractVector)) || return "const"
-            _update_has_wiener(update) && return "continuous"
-            # Source-seeded cadence refinement (RFC pure-io-data-loaders §4.6 /
-            # §5.7.2): a parameter fed by a `data` update whose source declares
-            # no `temporal` block is non-time-varying and seeds `const` (folds
-            # at bind). With `temporal` — or any other update kind, or an
-            # unresolvable source — it seeds `discrete`.
-            return _source_without_temporal(var, model) ? "const" : "discrete"
-        end
-        throw(CadenceError("leaf $(repr(leaf)): unknown variable kind $(repr(kind))"))
+        push!(resolving, name)
+        cls = _cadence_walk(def, n -> haskey(defs, n) ? resolve(n) : get(seeds, n, CadenceConst), nothing)
+        pop!(resolving)
+        seeds[name] = cls
+        return cls
     end
-    # index-set name, bound index symbol (i, k, e, f, le), relation tag
-    # ("edge"), or numeric-string literal — all `const`.
-    return "const"
+    for name in sort!(collect(keys(defs)))
+        resolve(name)
+    end
+    return seeds
 end
 
-"""The update rules of a raw-JSON parameter, as a vector. `update` is either one
-rule object or an ordered array of two or more (esm-spec §5.4); both read the
-same here."""
-_update_rules(update) = isa(update, AbstractVector) ? update :
-    (isa(update, AbstractDict) ? Any[update] : Any[])
-
-"""True iff any of the parameter's update rules is a `wiener` process. The schema
-forbids `wiener` inside an array, so in practice an array update is never
-Brownian — but the test reads through the rules rather than assuming it."""
-_update_has_wiener(update) =
-    any(
-    r -> isa(r, AbstractDict) && get(r, "kind", nothing) == "wiener",
-    _update_rules(update)
-)
-
-"""
-    _source_without_temporal(var, model) -> Bool
-
-True iff `var` is a parameter whose `data` update names a DataSource — found in
-the document's top-level `data_sources`, attached to the model by
-[`load_model_json`](@ref) — that declares no `temporal` block. Such a source
-describes non-time-varying data, so the parameter reading it seeds `const`
-(folds at bind), not `discrete` (RFC pure-io-data-loaders §4.6 / §5.7.2). The
-rule is unchanged from 0.x; only its spelling is, since a `discrete` variable
-with a `data_ingest` refresh is now a parameter with a `data` update.
-"""
-function _source_without_temporal(var, model)
-    rules = _update_rules(get(var, "update", nothing))
-    data_rule = nothing
-    for r in rules
-        if isa(r, AbstractDict) && get(r, "kind", nothing) == "data"
-            data_rule = r
-            break
-        end
-    end
-    data_rule === nothing && return false
-    sources = get(model, "data_sources", nothing)
-    isa(sources, AbstractDict) || return false
-    src = get(sources, get(data_rule, "source", nothing), nothing)
-    return isa(src, AbstractDict) && !haskey(src, "temporal")
+# Whether `v` is fed by a `data` update whose source, in `data_sources`, declares
+# no `temporal` block: non-time-varying data, read once (CONFORMANCE_SPEC §5.7.2).
+function _data_source_without_temporal(v::ModelVariable, data_sources)
+    data_sources isa AbstractDict || return false
+    i = findfirst(r -> r.kind == "data", _update_rules(v))
+    i === nothing && return false
+    source = _update_rules(v)[i].source
+    source === nothing && return false
+    ds = get(data_sources, source, nothing)
+    return ds !== nothing && ds.temporal === nothing
 end
 
 """
-    child_exprs(node) -> Vector
+    cadence_class(expr::ASTExpr, seeds[, memo]) -> CadenceClass
 
-Every sub-Expression of a RAW operator node: the operand list `args`, the
-aggregate/integral sub-fields `expr`, `key`, `filter`, `lower`, `upper`, and an
-`apply_expression_template` call's `bindings` values.
-`output_idx`, `ranges`, `wrt`, `dim`, `var` are index/metadata declarations
-(`const`), not value inputs, and are excluded. (The typed-IR analogue is the
-generated `child_exprs` walker in expression.jl; this raw twin exists only
-because the conformance fixtures are classified pre-parse.)
+The class of `expr`: a variable's seed (`t` is `continuous`, a name `seeds` does
+not hold is `const`), a literal `const`, an operator node the `max` over its
+children. `memo` (an `IdDict{OpExpr,CadenceClass}`) caches operator nodes when
+one tree is classified repeatedly.
 """
-function child_exprs(node::AbstractDict)
-    out = Any[]
-    args = get(node, "args", nothing)
-    if args !== nothing
-        for a in args
-            push!(out, a)
-        end
+cadence_class(expr::ASTExpr, seeds::AbstractDict{String, CadenceClass}, memo = nothing) =
+    _cadence_walk(expr, n -> get(seeds, n, CadenceConst), memo)
+
+function _cadence_walk(expr::ASTExpr, seed, memo)::CadenceClass
+    expr isa VarExpr && return expr.name == "t" ? CadenceContinuous : seed(expr.name)
+    expr isa OpExpr || return CadenceConst
+    if memo !== nothing
+        hit = get(memo, expr, nothing)
+        hit === nothing || return hit
     end
-    for field in ("expr", "key", "filter", "lower", "upper")
-        haskey(node, field) && push!(out, node[field])
+    cls = CadenceConst
+    foreach_child(expr) do c
+        cls = max(cls, _cadence_walk(c, seed, memo))
     end
-    # A template body reads only its bindings, so a call's class is the join
-    # of its bindings' classes.
-    if get(node, "op", nothing) == "apply_expression_template"
-        b = get(node, "bindings", nothing)
-        b isa AbstractDict && append!(out, values(b))
+    memo === nothing || (memo[expr] = cls)
+    return cls
+end
+
+"""
+    check_expect_cadence(expr, seeds[, memo]) -> Vector{String}
+
+One message per node under `expr` whose `expect_cadence` annotation disagrees
+with its derived class (§5.7.6 guard 3).
+"""
+function check_expect_cadence(
+        expr::ASTExpr, seeds::AbstractDict{String, CadenceClass}, memo = nothing
+    )
+    problems = String[]
+    foreach_subexpr(expr) do node
+        (node isa OpExpr && node.expect_cadence !== nothing) || return
+        derived = cadence_name(cadence_class(node, seeds, memo))
+        derived == node.expect_cadence && return
+        push!(
+            problems,
+            "expect_cadence mismatch on op=$(repr(node.op)): " *
+                "declared $(repr(node.expect_cadence)) but derived $(repr(derived))"
+        )
+    end
+    return problems
+end
+
+"""
+    continuous_relational_nodes(expr, seeds[, memo]) -> Vector{OpExpr}
+
+The relational nodes under `expr` (a `distinct` or `join` operator, or a
+`distinct: true` `faq`) that classify `continuous`. State-dependent topology may
+not run on the per-step hot path (§5.7 guard 2), so each is a refusal.
+"""
+function continuous_relational_nodes(
+        expr::ASTExpr, seeds::AbstractDict{String, CadenceClass}, memo = nothing
+    )
+    out = OpExpr[]
+    foreach_subexpr(expr) do node
+        node isa OpExpr || return
+        relational = node.op in ("distinct", "join") ||
+            (node.op == "faq" && node.distinct === true)
+        relational && cadence_class(node, seeds, memo) === CadenceContinuous &&
+            push!(out, node)
     end
     return out
 end
 
-# Per-pass class memo: operator node (by identity) → derived class. Threaded
-# through the walkers so each node is classified exactly once per pass instead
-# of re-running the recursive `classify` from scratch at every visit
-# (quadratic-plus on deep trees).
-const ClassMemo = IdDict{Any, String}
-
 """
-    classify(node, model[, memo::ClassMemo]) -> String
+    derived_index_set_cycle(models, index_sets) -> Union{Vector{String},Nothing}
 
-Derive a node's cadence class. A leaf is seeded ([`seed_leaf`](@ref)); an
-operator node is `max` over its child classes — which, for a gather
-`index(A, e…)`, is `max(class(A), class(e…))`: the index expressions are
-classed independently of the array, so a stencil splits (§5.7.3 gather rule).
-
-`memo` caches the derived class per operator node (by identity); the walkers
-in one pass share a single memo so classification is linear in tree size.
-
-`resolving` carries the chain of OBSERVED unknowns currently being resolved
-through their defining equations (§5.7.2), so a definition cycle is reported
-rather than recursed forever. A nested resolution runs with its own memo,
-because a node's class inside an observed's definition is derived under a
-different resolution chain.
+A cycle among derived index sets, or `nothing` (§5.7 guard 1). A
+`kind: "derived"` set names its producer node by `from_faq`; that node reads the
+index sets of its `ranges` (`from`); a cycle in set → producer → set is an
+implicit solve, out of scope. `models` is any collection of `Model`s whose
+equations hold the producers.
 """
-function classify(node, model, memo::ClassMemo = ClassMemo(), resolving::Tuple = ())
-    isa(node, AbstractDict) || return seed_leaf(node, model, resolving)
-    cached = get(memo, node, nothing)
-    cached !== nothing && return cached
-    children = child_exprs(node)
-    cls = isempty(children) ? "const" :
-        _join(String[classify(c, model, memo, resolving) for c in children])
-    memo[node] = cls
-    return cls
-end
-
-"""Walk the tree; wherever a node carries `expect_cadence`, assert the derived
-class agrees (§5.7.6 guard 3). Appends a message per disagreement to `problems`."""
-function check_expect_cadence!(
-        node, model, problems::Vector{String},
-        memo::ClassMemo = ClassMemo()
-    )
-    isa(node, AbstractDict) || return
-    if haskey(node, "expect_cadence")
-        derived = classify(node, model, memo)
-        want = node["expect_cadence"]
-        if derived != want
-            push!(
-                problems,
-                "expect_cadence mismatch on op=$(repr(get(node, "op", nothing))): " *
-                    "declared $(repr(want)) but derived $(repr(derived))"
-            )
-        end
+function derived_index_set_cycle(models, index_sets)
+    index_sets isa AbstractDict || return nothing
+    producer_of = Dict{String, String}()
+    for (name, s) in index_sets
+        s.kind == "derived" && s.from_faq !== nothing &&
+            (producer_of[String(name)] = String(s.from_faq))
     end
-    for c in child_exprs(node)
-        check_expect_cadence!(c, model, problems, memo)
-    end
-    return
-end
-
-"""Count annotated nodes (those carrying `expect_cadence`) by derived class —
-the golden `class_summary`."""
-function tally_classes!(
-        node, model, counts::Dict{String, Int},
-        memo::ClassMemo = ClassMemo()
-    )
-    isa(node, AbstractDict) || return
-    if haskey(node, "expect_cadence")
-        c = classify(node, model, memo)
-        counts[c] = get(counts, c, 0) + 1
-    end
-    for c in child_exprs(node)
-        tally_classes!(c, model, counts, memo)
-    end
-    return
-end
-
-# ── Materialization frontier (§5.7.4) ───────────────────────────────────────
-
-"""Derive the expr-edge materialization frontier: a dict child whose class is
-strictly lower than its parent's is a materialization point (the maximal
-lower-cadence sub-DAG below that edge is cut, stored in a buffer, referenced by
-the parent). We record the boundary and do NOT recurse into it. A bare
-scalar-constant leaf is not a buffer, so scalar inlining is excluded."""
-function materialization_frontier!(
-        node, model, out::Vector{Any},
-        memo::ClassMemo = ClassMemo()
-    )
-    isa(node, AbstractDict) || return
-    parent = classify(node, model, memo)
-    for c in child_exprs(node)
-        isa(c, AbstractDict) || continue
-        cc = classify(c, model, memo)
-        if CLASS_RANK[cc] < CLASS_RANK[parent]
-            push!(
-                out, Dict{String, Any}(
-                    "threshold" => "$(cc)->$(parent)",
-                    "kind" => "expr_edge",
-                    "op" => get(c, "op", nothing)
-                )
-            )
-        else
-            materialization_frontier!(c, model, out, memo)
-        end
-    end
-    return
-end
-
-"""True iff any value under `node` is `continuous` (drives hot-tree emptiness)."""
-function has_continuous(node, model, memo::ClassMemo = ClassMemo())
-    if isa(node, AbstractDict)
-        classify(node, model, memo) == "continuous" && return true
-        return any(has_continuous(c, model, memo) for c in child_exprs(node))
-    end
-    return seed_leaf(node, model) == "continuous"
-end
-
-# ── Guards (§5.7.6, checked) ─────────────────────────────────────────────────
-
-"""
-    assert_no_continuous_relational(node, model)
-
-§5.7 guard 2: a `distinct`/`join` node (or a `distinct`
-aggregate) that classifies `continuous` is rejected — state-dependent topology
-may not run on the per-step hot path in v1. Throws [`CadenceError`](@ref).
-"""
-function assert_no_continuous_relational(node, model, memo::ClassMemo = ClassMemo())
-    isa(node, AbstractDict) || return
-    op = get(node, "op", nothing)
-    is_relational = (op in RELATIONAL_OPS) ||
-        (op == "faq" && get(node, "distinct", false) == true)
-    if is_relational && classify(node, model, memo) == "continuous"
-        throw(
-            CadenceError(
-                "relational/value-invention node op=$(repr(op)) classifies CONTINUOUS — " *
-                    "it may not run on the hot path (§5.7 guard 2). A state-dependent " *
-                    "distinct/join is out of scope for v1.",
-                ERROR_CODES.RELATIONAL_NODE_IN_CONTINUOUS
-            )
-        )
-    end
-    for c in child_exprs(node)
-        assert_no_continuous_relational(c, model, memo)
-    end
-    return
-end
-
-"""
-    assert_acyclic_index_sets(model)
-
-§5.7 guard 1: the `≤discrete` subgraph must be a DAG. A derived index set points
-(via `from_faq`) at the node that materialises it; that node references index
-sets (via `ranges {from}`); a cycle in those edges is an implicit/iterative
-solve, out of scope. The implicit set→node→set relation is materialised as a
-small graph and checked by the SHARED three-color DFS
-([`detect_cycle`](@ref), reference_graph.jl). Throws [`CadenceError`](@ref)
-naming the cycle.
-"""
-function assert_acyclic_index_sets(model)
-    index_sets = get(model, "index_sets", Dict{String, Any}())
-    # Map each aggregate node id → the index sets it reads (ranges {from}).
-    node_reads = Dict{String, Set{String}}()
-
-    function collect_reads(node)
-        isa(node, AbstractDict) || return
-        nid = get(node, "id", nothing)
-        if nid !== nothing
-            reads = get!(() -> Set{String}(), node_reads, String(nid))
-            ranges = get(node, "ranges", nothing)
-            if isa(ranges, AbstractDict)
-                for (_, r) in ranges
-                    if isa(r, AbstractDict) && haskey(r, "from")
-                        push!(reads, String(r["from"]))
-                    end
-                end
+    isempty(producer_of) && return nothing
+    reads = Dict{String, Set{String}}()
+    for m in models, eq in m.equations, side in (eq.lhs, eq.rhs)
+        foreach_subexpr(side) do node
+            (node isa OpExpr && node.id !== nothing) || return
+            r = get!(Set{String}, reads, node.id)
+            node.ranges === nothing && return
+            for (_, spec) in node.ranges
+                from = spec isa IndexSetRef ? spec.from :
+                    spec isa AbstractDict ? get(spec, "from", nothing) : nothing
+                from === nothing || push!(r, String(from))
             end
         end
-        for c in child_exprs(node)
-            collect_reads(c)
-        end
-        return
     end
-
-    for eq in get(model, "equations", Any[])
-        collect_reads(get(eq, "lhs", nothing))
-        collect_reads(get(eq, "rhs", nothing))
-    end
-
-    # Edges: set --(from_faq)--> node --(reads)--> set.
-    set_to_node = Dict{String, String}()
-    for (name, s) in index_sets
-        if isa(s, AbstractDict) && get(s, "kind", nothing) == "derived" &&
-                get(s, "from_faq", nothing) !== nothing
-            set_to_node[name] = String(s["from_faq"])
-        end
-    end
-
-    # Materialise the derived-set dependency graph (vertex per derived set,
-    # edge per set→set read through its producer node) and run the shared
-    # deterministic DFS over it.
     g = ReferenceGraph("cadence-index-set-deps")
-    for name in keys(set_to_node)
-        _ensure_vertex!(
-            g, ReferenceVertex(
-                String(name), "index_set", String(name),
-                nothing, nothing, nothing
-            )
-        )
+    for name in keys(producer_of)
+        _ensure_vertex!(g, ReferenceVertex(name, "index_set", name, nothing, nothing, nothing))
     end
-    for (name, node_id) in set_to_node
-        for nxt in get(node_reads, node_id, Set{String}())
-            haskey(set_to_node, nxt) || continue  # only derived sets participate
-            _add_edge!(g, String(name), String(nxt), "range_from")
-        end
+    for (name, node_id) in producer_of, next in get(reads, node_id, Set{String}())
+        haskey(producer_of, next) && _add_edge!(g, name, next, "range_from")
     end
-    cyc = detect_cycle(g)
-    cyc === nothing || throw(
-        CadenceError(
-            "cycle in the ≤DISCRETE index-set dependency graph " *
-                "(implicit solve, out of scope — §5.7 guard 1): " * join(cyc, " -> "),
-            ERROR_CODES.CIRCULAR_DEPENDENCY
-        )
-    )
-    return
+    return detect_cycle(g)
 end
-
-end # module Cadence

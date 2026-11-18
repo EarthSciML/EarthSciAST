@@ -195,9 +195,9 @@ EARTHSCI_JULIA_XLA_DEVICE=gpu julia --project=. run_model.jl
 allocation runs a two-device leg without a second submission. Reactant prints
 hwloc and scheduler warnings on start-up that are harmless.
 
-The multi-device agreement test is opt-in twice over: it runs under
-`ESM_TEST_REACTANT=1` *and* `ESM_TEST_REACTANT_GPU=1`, and skips with a message
-explaining why otherwise. With `EARTHSCI_JULIA_XLA_DEVICE=cpu` and
+The multi-device agreement test (`test/reactant/reactant_direct_sharding_test.jl`,
+in the Reactant suite) is opt-in: it runs under `ESM_TEST_REACTANT_GPU=1` and
+skips with a message explaining why otherwise. With `EARTHSCI_JULIA_XLA_DEVICE=cpu` and
 `XLA_FLAGS=--xla_force_host_platform_device_count=4` it runs the identical
 assertions against mock host devices, which is the way to develop a sharding
 change without holding a GPU.

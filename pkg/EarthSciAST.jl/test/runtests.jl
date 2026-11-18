@@ -4,8 +4,8 @@
 # shadow another's, and a file that runs here also runs standalone
 # (`julia --project -e 'include("test/<file>")'`, which `test_file_prelude_test.jl`
 # checks). `ESM_TEST_GROUPS=build,simulate` runs only the named groups; unset,
-# every group runs. The `reactant` group needs Reactant in the environment and
-# runs only with `ESM_TEST_REACTANT=1`.
+# every group runs. The ModelingToolkit and Reactant tests are separate suites
+# with their own environments: test/mtk/runtests.jl and test/reactant/runtests.jl.
 using Test
 
 const GROUPS = [
@@ -14,6 +14,7 @@ const GROUPS = [
         "invalidations_test.jl",
         "error_hierarchy_test.jl",
         "test_file_prelude_test.jl",
+        "environments_test.jl",
     ],
     :document => [
         "types_test.jl",
@@ -144,11 +145,10 @@ const GROUPS = [
         "array_obs_materialize_test.jl",
         "cadence_refresh_test.jl",
         "codegen_kernel_test.jl",
-        "dual_fast_path_test.jl",
-        "f64_overflow_codegen_test.jl",
         "cg_foreign_scratch_test.jl",
         "scalar_codegen_test.jl",
         "codegen_threaded_test.jl",
+        "thread_dispatch_test.jl",
         "codegen_body_split_test.jl",
         "stencil_indexed_contraction_test.jl",
         "cross_eq_class_emission_test.jl",
@@ -293,19 +293,10 @@ const GROUPS = [
     :fixtures => [
         "fixture_sweeps_test.jl",
     ],
-    :reactant => [
-        "reactant_locate_test.jl",
-        "reactant_direct_emit_test.jl",
-        "reactant_direct_closed_test.jl",
-        "reactant_direct_sharding_test.jl",
-        "compiler_xla_test.jl",
-    ],
 ]
 
 const _SELECTED = Set(split(get(ENV, "ESM_TEST_GROUPS", ""), ','; keepempty = false))
-_selected(group::Symbol) =
-    (isempty(_SELECTED) || String(group) in _SELECTED) &&
-    (group !== :reactant || get(ENV, "ESM_TEST_REACTANT", "0") == "1")
+_selected(group::Symbol) = isempty(_SELECTED) || String(group) in _SELECTED
 
 # A fresh named module per file: `module … end` gives it its own `include` and
 # `eval`, which `Module()` would not.

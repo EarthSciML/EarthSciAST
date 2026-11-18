@@ -340,12 +340,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.julia == 'true'
     timeout-minutes: 120
-    # Job-wide: this is the repository's opt-in for anything Reactant. It gates
-    # the `reactant_*_test.jl` files in the package's runtests.jl AND the julia
-    # compiled stage of scripts/test-conformance.sh, so setting it here is what
-    # makes this job the one place those run. (The tier steps below call the
-    # runner directly and do not consult it; it is set at the job level so that
-    # every Reactant-touching thing in this job agrees, and so the contrast with
+    # Job-wide: this is the repository's opt-in for the julia compiled stage of
+    # scripts/test-conformance.sh, so setting it here is what makes this job the
+    # one place that stage runs. (The tier steps below call the runner directly
+    # and do not consult it; it is set at the job level so that every
+    # Reactant-touching thing in this job agrees, and so the contrast with
     # conformance-testing.yml, which never sets it, is visible in one place.)
     env:
       ESM_TEST_REACTANT: '1'
@@ -382,47 +381,23 @@ jobs:
             Pkg.precompile()
           '
 
-      # `Pkg.test()` on the package is not used on purpose: the full target is
-      # heavy and runs the whole suite for the sake of one opt-in file. The
-      # driver below is the standalone invocation the test file's own header
-      # documents -- `cd` into test/ (the file includes testutils.jl and reads
-      # fixtures relative to it) and include it, from the Reactant env.
-      - name: Direct StableHLO emitter tests
+      # The package's Reactant suite (test/reactant/): the direct StableHLO
+      # emitter's tests and `esm_problem(…; compiler = :xla)` on the solve path.
+      # It has its own environment, as the ModelingToolkit suite does, because
+      # the package's regular `Pkg.test()` does not carry Reactant. This job is
+      # the only one that runs it. The depot is shared with the step above, so
+      # Reactant itself is already precompiled and this resolve is cheap.
+      - name: Instantiate the Reactant test environment
         run: |
-          julia --project=pkg/EarthSciAST.jl/scripts/compiled_rhs_reactant_env -e '
-            cd("pkg/EarthSciAST.jl/test")
-            include("reactant_direct_emit_test.jl")
-          '
-
-      # A SECOND Reactant environment, and the reason is the same one that gave
-      # the compiled_rhs adapter its own: the file below drives the SOLVE path,
-      # so it needs SciMLBase and an integrator, which
-      # compiled_rhs_reactant_env deliberately does not carry (it exists for the
-      # adapter and nothing else). compiler_agreement_reactant_env already
-      # carries both, plus Reactant, so it is instantiated here rather than a
-      # third env being invented. The depot is shared, so Reactant itself is
-      # already precompiled by the step above and this resolve is cheap.
-      - name: Instantiate the compiler-agreement Reactant environment
-        run: |
-          julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env -e '
+          julia --project=pkg/EarthSciAST.jl/test/reactant -e '
             using Pkg
             Pkg.develop(path="pkg/EarthSciAST.jl")
             Pkg.instantiate()
             Pkg.precompile()
           '
 
-      # `esm_problem(…; compiler = :xla)` — the emitter reached from the Problem
-      # surface rather than from the emitter's own entry point. Run HERE and
-      # nowhere else, for the same reason the step above is: it is the only job
-      # that carries Reactant. Without this step the compiler keyword's whole
-      # Julia lane would ship with no CI coverage, since conformance-testing.yml
-      # never sets ESM_TEST_REACTANT and so takes runtests.jl's skip branch.
-      - name: compiler = :xla on the solve path
-        run: |
-          julia --project=pkg/EarthSciAST.jl/scripts/compiler_agreement_reactant_env -e '
-            cd("pkg/EarthSciAST.jl/test")
-            include("compiler_xla_test.jl")
-          '
+      - name: Reactant test suite
+        run: julia --project=pkg/EarthSciAST.jl/test/reactant pkg/EarthSciAST.jl/test/reactant/runtests.jl
 
       - name: compiled_rhs harness self-test
         run: python3 scripts/run-compiled-rhs-conformance.py --self-test

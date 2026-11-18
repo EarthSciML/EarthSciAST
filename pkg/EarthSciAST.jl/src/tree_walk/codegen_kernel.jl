@@ -1,6 +1,5 @@
 # ========================================================================
-# tree_walk/codegen_kernel.jl — the Julia CODEGEN tier for access kernels
-# (perf-gap-closure plan, item B1).
+# tree_walk/codegen_kernel.jl — the Julia CODEGEN tier for access kernels.
 #
 # The scalar access-kernel runner (`_run_acc_kernel!`, access_kernel.jl) walks
 # the spine `_Node` tree once per cell: one dynamic kind/op dispatch per node
@@ -15,7 +14,7 @@
 # `_eval_acc_op` (and through them `_eval_node_op`) operation for operation:
 #   * same operand order and the same LEFT-nested fold for n-ary `+`/`*`/
 #     `min`/`max` (`((c1 ⊕ c2) ⊕ c3)…`), the same 0̄-seeded fold for
-#     `_NK_CONTRACTION`/`_NK_REDUCE` (`((0̄ ⊕ c1) ⊕ c2)…`);
+#     `_NK_CONTRACTION`/`_NK_AREDUCE` (`((0̄ ⊕ c1) ⊕ c2)…`);
 #   * NO `@simd`, NO `@fastmath`, NO `muladd`, NO reassociation of any kind
 #     (`@inbounds` only — indices were validated at build);
 #   * LAZY guard semantics preserved verbatim: `ifelse` emits a ternary (only
@@ -32,8 +31,8 @@
 #
 # FALLBACK CONTRACT: anything the emitter cannot model — an unknown node kind
 # or descriptor, a foreign CSE scratch (except the build's own shared
-# scalar-prelude cache, which since ess-cgfsc is emitted as the interpreter's
-# `_cse_read`; see the tier note below), an oversized spine —
+# scalar-prelude cache, which is emitted as the interpreter's `_cse_read`; see
+# the tier note below), an oversized spine —
 # declines THAT kernel silently (`_Decline`); the kernel keeps the
 # per-cell interpreter (`_run_acc_kernel!`, eltype-generic). Declines are
 # counted per reason in the build's cascade tally (`:codegen_kernel` /
@@ -43,10 +42,9 @@
 # SSA-style locals, never writes into the kernel's `_AccScratch` buffers — so
 # an emitted kernel and an interpreted one coexist within one RHS call.
 #
-# With the tier off (`compiler=:interpreter`) BOTH generated functions (primary
-# and overflow) stand down and every kernel runs the per-cell interpreter: that
-# is the differential oracle, slower but bit-identical by the emitter's
-# contract.
+# With the tier off (`compiler=:interpreter`) the generated function stands
+# down and every kernel runs the per-cell interpreter: that is the differential
+# oracle, slower but bit-identical by the emitter's contract.
 # Budget: ESS_CODEGEN_NODE_BUDGET overrides the emitted-node cap (default
 # 64_000_000 across all kernels of one build) that backstops a runaway build.
 # ========================================================================
@@ -54,77 +52,24 @@
 _codegen_disabled() = !_compiler_plan_now().codegen
 # CUMULATIVE emitted-node budget across all kernels in one build call — a
 # build-latency backstop, NOT a per-function compile bound (the intra-kernel
-# split, ess-iip-split, handles that: every generated function stays under
-# `_codegen_fn_node_cap` regardless of a kernel's total size). Since a kernel
-# that exceeds this used to DECLINE to the interpreter — which is forbidden
-# (runtime speed is critical) — the default is high enough that realistic
-# models always emit fully; it only backstops a runaway. The duo LMARS `:inplace`
-# state RHS is ~1.5e6 nodes (13 spine-dominated momentum kernels, ~1.1e5–1.6e5
-# each); the AST build of that is ~3 GB and cheap. Override with
-# ESS_CODEGEN_NODE_BUDGET — a REFUSAL BOUNDARY under `native`, since a kernel
-# past it that the overflow emission also declines is a refused rule, not a
-# quiet demotion.
+# split handles that: every generated function stays under
+# `_codegen_fn_node_cap` regardless of a kernel's total size). The default is
+# high enough that realistic models always emit fully; it only backstops a
+# runaway. It is a REFUSAL BOUNDARY under `native`: a kernel past it is a
+# refused rule, never a quiet demotion to the per-cell runner. Override with
+# ESS_CODEGEN_NODE_BUDGET.
 _codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_NODE_BUDGET", "")), 64_000_000)
 
 # Emitted-node size of a tree: a node shared by several parents is counted
 # once per parent, as the emitter writes it once per use.
-_cg_node_tree_size(n::_Node) = 1 + sum(_cg_node_tree_size, n.children; init = 0)
+_cg_node_tree_size(n::_Node) = _node_tree_size(n)
 
-# ---- Dual overflow tier (ess-dualfp) ----------------------------------------
-# Kernels the primary emission declines — in practice on the node BUDGET, which
-# exists to bound Float64 build latency — used to drop to the per-cell
-# interpreter `_run_acc_kernel!` under non-Float64 `T` (ForwardDiff `Dual` in a
-# stiff-solver Jacobian). The dual overflow tier re-emits those residual
-# kernels into a SECOND generated function with its own (default unbounded)
-# budget. Under non-Float64 `T` it is called unconditionally, so its
-# native-compile cost is paid at the first Dual call.
-# (Since ess-f64ofl, below, the same function also serves Float64 calls when
-# the Float64 overflow routing is armed.)
-# Off, the routing is the pre-dual one; the tier is also off under
-# `compiler=:interpreter`, which disables codegen wholesale, so the oracle stays
-# a pure interpreter build.
-# Budget: ESS_DUAL_CODEGEN_NODE_BUDGET overrides the overflow emission budget
-# (default unbounded — per-function size is still capped by
-# ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory). It is a
-# REFUSAL BOUNDARY under `native`: this is the emission whose decline is what
-# leaves a tree walk in the right-hand side.
-# Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in the
-# build's cascade tally — the observability hook for which tier Dual evaluation
-# uses.
-_dual_codegen_disabled() = !_compiler_plan_now().dual_codegen
-_dual_codegen_node_budget() =
-    something(tryparse(Int, get(ENV, "ESS_DUAL_CODEGEN_NODE_BUDGET", "")), typemax(Int))
-
-# ---- Float64 overflow routing (ess-f64ofl) ----------------------------------
-# The SAME overflow generated function, called at Float64 too — so a
-# budget-declined kernel runs compiled code, like every other kernel. The
-# overflow RGF is eltype-generic and its emission is already paid at build (a
-# few ms); what this routing adds is the residual kernels' NATIVE compile at the
-# first Float64 call — roughly linear in emitted nodes, the per-function
-# `ESS_CODEGEN_FN_NODE_CAP` chunking being what keeps it linear, and the same
-# latency a Dual caller already pays at its first call. With more than one
-# thread, the overflow RGF runs CHUNKED on its own threaded cell axis (see
-# "Threaded cell axis for the codegen tier" below).
-#
-# Off, every residual Float64 kernel routes to the per-cell interpreter
-# instead — the differential oracle for this routing.
-# Kernels even the overflow emission declines (`dual_resid`) keep the
-# interpreter at Float64.
-# The routing is inert unless the PRIMARY emission declined something and the
-# overflow function exists, so turning the overflow tier off turns this off
-# too. On every model within the primary budget — all repo fixtures — nothing
-# changes at all.
-# Build tally: `:f64_overflow_armed` when a section is built with the routing
-# armed (overflow function present + feature on).
-_f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
-
-# ---- Shared-prelude (xcse) cache reads (ess-cgfsc) ---------------------------
-# The cross-kernel CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
-# defs into bare `_NK_CACHED` reads of the build's SCALAR prelude cache — a
-# `_CSECache` payload that is no kernel's scratch. The emitter used to decline
-# every such kernel (`:foreign_scratch`), dropping it to the interpreter.
-# This tier emits the read instead, as the very call the interpreter makes
+# ---- Shared-prelude (xcse) cache reads ---------------------------------------
+# The cross-kernel CSE pass (xcse.jl) rewrites kernel invariant-tier defs into
+# bare `_NK_CACHED` reads of the build's SCALAR prelude cache — a `_CSECache`
+# payload that is no kernel's scratch. The emitter emits the read as the very
+# call the interpreter makes
 # (`_cse_read(cache, idx, T)` — eltype-generic, so the Float64 AND the Dual
 # specialization of the generated code read the same buffer the interpreter
 # would: `f64` at Float64, the lazily-allocated `alt::Vector{T}` otherwise).
@@ -133,18 +78,16 @@ _f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
 # the build threads in (`shared_cache` below): `_make_rhs` fills every prelude
 # tier (const/time/dynamic) into that exact cache — for the SAME value type `T`
 # the kernel section is about to run at — before `kernel_section(du,u,p,t,T)`
-# is called, in the same `f!` body (acc_merge.jl). Both generated functions
-# (primary and dual/f64 overflow) are only ever invoked from inside that
-# section, so every accepted read lands on a slot filled this call. Call sites
+# is called, in the same `f!` body (acc_merge.jl). The generated function is
+# only ever invoked from inside that section, so every accepted read lands on
+# a slot filled this call. Call sites
 # that cannot pin that ordering (the materialized-observed fill sections in
 # build_observed_fills.jl, hand-built test sections) pass `shared_cache = nothing` and keep
 # today's decline — as does ANY payload that is not that one cache object.
 #
-# Off, every such read is an unconditional `:foreign_scratch` decline.
 # Build tally: `:cg_foreign_scratch_emit` — one bump per kernel that COMPILED
-# carrying at least one shared-prelude read (primary or overflow emission; a
-# kernel that later declines for another reason is not counted).
-_cg_foreign_scratch_disabled() = !_compiler_plan_now().cg_foreign_scratch
+# carrying at least one shared-prelude read (a kernel that later declines for
+# another reason is not counted).
 
 # A kernel the emitter cannot model declines through `_Decline` (compiler.jl);
 # the per-kernel transaction in `_build_codegen_rhs` catches it and the kernel
@@ -152,16 +95,13 @@ _cg_foreign_scratch_disabled() = !_compiler_plan_now().cg_foreign_scratch
 
 # ---- Emission context (one per generated function) --------------------------
 mutable struct _CGCtx
-    # Runtime objects the generated code needs (const arrays, connectivity /
-    # valence tables, outs vectors), GROUPED BY CONCRETE TYPE into
-    # homogeneous containers (ess-iip-tabgroup). The generated code indexes a
+    # Runtime objects the generated code needs (const arrays, slot tables,
+    # outs vectors), GROUPED BY CONCRETE TYPE into
+    # homogeneous containers. The generated code indexes a
     # concrete-element container — `_cggrpG[pos]` — so its element type infers in
     # O(1); the runtime `tabs` argument is a small tuple of those containers, one
-    # per distinct type. This replaces a per-object heterogeneous N-tuple whose
-    # TYPE alone made inference super-linear: the duo LMARS momentum RHS registers
-    # ~2.5e5 tabs, EVERY one a `Vector{Int}`; as `Tuple{Vector{Int},…×2.5e5}` it
-    # drove the split helpers' compile to ~850 s, as one `Vector{Vector{Int}}` it
-    # is cheap. `tab_types[g]` is group g's element type, `tab_objs[g]` its objects
+    # per distinct type. A per-object heterogeneous N-tuple instead would have a
+    # TYPE that alone makes inference super-linear in the number of tabs. `tab_types[g]` is group g's element type, `tab_objs[g]` its objects
     # (deduped by identity via `tabid` → (group, position)).
     tab_types::Vector{DataType}
     tab_objs::Vector{Vector{Any}}
@@ -175,17 +115,17 @@ mutable struct _CGCtx
     nodes::Int                   # emitted-node tally (budget enforcement)
     budget::Int
     nname::Int                   # unique-name counter
-    # Shared-prelude cache reads (ess-cgfsc): the ONE `_CSECache` whose
-    # `_NK_CACHED` reads may be emitted (`nothing` ⇒ decline as before), and a
+    # Shared-prelude cache reads: the ONE `_CSECache` whose
+    # `_NK_CACHED` reads may be emitted (`nothing` ⇒ decline), and a
     # per-build count of reads emitted (tally bookkeeping in the build loop).
     shared_cache::Union{Nothing, _CSECache}
     fscratch::Int
-    # Intra-kernel split (ess-iip-split): top-level `@noinline` helper defs a
+    # Intra-kernel split: top-level `@noinline` helper defs a
     # large kernel's body was partitioned into. Spliced ahead of the chunk
     # sub-functions so both call them by name; each captures nothing (params
     # only), so the RHS stays allocation-free.
     helpers::Vector{Any}
-    # Helper dedup (ess-iip-helper-dedup): identical spilled bodies (same code —
+    # Helper dedup: identical spilled bodies (same code —
     # the momentum spine bears LAZY nodes, so scalar CSE was skipped and its
     # redundant sub-expressions reach codegen un-shared) collapse to ONE compiled
     # `@noinline`, still called per occurrence. Body string → the helper name it
@@ -211,7 +151,8 @@ mutable struct _CGCtx
     tblcbs::Vector{Symbol}
     # A fused prefix scan's nest (scan_fused.jl): `nothing`, or the names and
     # rule its loop body folds each cell's term with — `(acc, a, b, op,
-    # inclusive)`, the nest running ordinals `[a, b)` (one lane).
+    # inclusive, cons)`, the nest running ordinals `[a, b)` (one lane), `cons`
+    # the consumer taken in (`_cg_consumer`) or `nothing`.
     scanmode::Any
     # Two-buffer addressing (`_ObsSplitVec`, obs_buffers.jl): the state length of the
     # slot space the section runs on, or 0 for one plain vector. With `nst > 0`
@@ -224,10 +165,9 @@ mutable struct _CGCtx
     olnext::IdDict{Any, Tuple{Int, Int}}
     subks::IdDict{Any, Bool}
     sidememo::IdDict{Any, Tuple{Int, Int}}
-    # A fused scan's consumer body (scan_fused.jl): `nothing`, `(K, ix, v)` —
-    # kernel `K`'s descriptor `ix` reads as the local `v` — or `(K, Dict(ix =>
-    # v))` for several descriptors.
-    subst::Any
+    # A scan consumer's body (scan_fused.jl): `nothing`, or `(K, Dict(ix =>
+    # v))` — kernel `K`'s descriptor `ix` reads as the local `v`.
+    subst::Union{Nothing, Tuple{_AccKernel, Dict{Int, Any}}}
     # Shared invariant prologue (see `_cg_inv!`): the geometry local the
     # prologue already holds for a (field, value) pair, the invariant local
     # already holding an emitted invariant expression, and the keys of both in
@@ -248,8 +188,6 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int 
     Dict{Any, Symbol}(), Dict{Any, Symbol}(), Tuple{Int, Bool, Any}[]
 )
 
-_cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup
-
 _cg_name(ctx::_CGCtx, base::String) = Symbol("_cg", base, ctx.nname += 1)
 
 # The local that holds group `g`'s homogeneous tab container (`_cggrpG`).
@@ -262,7 +200,7 @@ _cg_grp_sym(g::Int) = Symbol("_cggrp", g)
 end
 
 # Register a runtime object; returns the indexing expression `_cggrpG[pos]` into
-# its by-type container (ess-iip-tabgroup). Deduped by identity; a new object is
+# its by-type container. Deduped by identity; a new object is
 # appended to the container for its concrete type (a new group if that type is
 # unseen). The returned `_cggrpG[pos]` reads a CONCRETE-element container, so its
 # element type infers in O(1) — the whole point of grouping.
@@ -379,8 +317,6 @@ end
 # call by the prologue, as `_fill_invariant!` does).
 struct _CGKernCtx
     K::_AccKernel
-    c::Any        # cell ordinal
-    n::Any        # neighbour index (0 outside a reduction)
     oln::Any      # output linear slot
     mi1::Any      # loop multi-index, padded with literal 1s
     mi2::Any
@@ -392,8 +328,8 @@ struct _CGKernCtx
     # interpreter's padded `midx` does.
     mix::Vector{Any}
 end
-_CGKernCtx(K, c, n, oln, mi1, mi2, mi3, cellsyms, invsyms) =
-    _CGKernCtx(K, c, n, oln, mi1, mi2, mi3, cellsyms, invsyms, Any[])
+_CGKernCtx(K, oln, mi1, mi2, mi3, cellsyms, invsyms) =
+    _CGKernCtx(K, oln, mi1, mi2, mi3, cellsyms, invsyms, Any[])
 
 _cg_mi(kc::_CGKernCtx, d::Int) =
     d == 1 ? kc.mi1 : d == 2 ? kc.mi2 : d == 3 ? kc.mi3 :
@@ -418,7 +354,7 @@ function _cg_with_mi(kc::_CGKernCtx, d::Int, v)
         mix[d - 3] = v
     end
     return _CGKernCtx(
-        kc.K, kc.c, kc.n, kc.oln, mi1, mi2, mi3, kc.cellsyms,
+        kc.K, kc.oln, mi1, mi2, mi3, kc.cellsyms,
         kc.invsyms, mix
     )
 end
@@ -554,7 +490,6 @@ _cg_slab_literal(cs::_CellSet, d::Int) =
 function _cg_oln_extent(cs::_CellSet)
     any(isempty, cs.ranges) && return (1, 0)
     _is_outs(cs) && return extrema(cs.outs)
-    _is_contig(cs) && return (first(cs.ranges[1]), last(cs.ranges[1]))
     lo = hi = cs.base
     for d in eachindex(cs.strides)
         a = cs.strides[d] * first(cs.ranges[d])
@@ -615,11 +550,8 @@ function _cg_side(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc)
         return _cg_slot_side(ctx.nst, a.idx, a.idx)
     elseif k === _AK_STATE_TBL_BOX && a.idx > 0
         return _cg_slot_side(ctx.nst, a.idx, a.idx)
-    elseif k === _AK_STATE_INDIRECT || k === _AK_STATE_INDIRECT_COL ||
-            k === _AK_STATE_TBL_BOX
+    elseif k === _AK_STATE_TBL_BOX
         lo, hi = _cg_table_extent(ctx, a.conn)
-        # An indirect table has no ghost entry; one that did would read slot 0.
-        k !== _AK_STATE_TBL_BOX && lo > hi && return :x
         return _cg_slot_side(ctx.nst, lo, hi)
     end
     return :x
@@ -638,17 +570,6 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key = nothing)
             _cg_side(ctx, kc, a),
             _cg_offset(kc.oln, _cg_geo!(ctx, a.delta, _cg_gkey(key, :delta), true))
         )
-    elseif k === _AK_CONST_AFFINE
-        return :(
-            $(_cg_tab!(ctx, a.arr))[
-                $(
-                    _cg_offset(
-                        kc.oln,
-                        _cg_geo!(ctx, a.delta, _cg_gkey(key, :delta), true)
-                    )
-                ),
-            ]
-        )
     elseif k === _AK_CONST_BOX || k === _AK_FORCING_BOX
         # FORCING_BOX's arr is the aliased LIVE buffer — passing the reference
         # through `tabs` keeps every in-place refresh visible.
@@ -666,26 +587,8 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key = nothing)
         return _cg_uread(_cg_side(ctx, kc, a), _cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))
     elseif k === _AK_LOOP_IDX
         return :(Float64($(_cg_mi(kc, a.dim))))
-    elseif k === _AK_SCALAR
-        return a.v
-    elseif k === _AK_CONST_CELL
-        return :($(_cg_tab!(ctx, a.arr))[$(kc.c)])
-    elseif k === _AK_CONST_EDGE
-        return :($(_cg_tab!(ctx, a.arr))[($(kc.c) - 1) * $(a.width) + $(kc.n)])
     elseif k === _AK_ARR_FIXED
         return :($(_cg_tab!(ctx, a.arr))[$(_cg_geo!(ctx, a.idx, _cg_gkey(key, :idx)))])
-    elseif k === _AK_STATE_INDIRECT
-        ctx.tblread = true
-        return _cg_uread(
-            _cg_side(ctx, kc, a),
-            :($(_cg_tabh!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(kc.n)])
-        )
-    elseif k === _AK_STATE_INDIRECT_COL
-        ctx.tblread = true
-        return _cg_uread(
-            _cg_side(ctx, kc, a),
-            :($(_cg_tabh!(ctx, a.conn))[($(kc.c) - 1) * $(a.width) + $(a.col)])
-        )
     elseif k === _AK_STATE_TBL_BOX
         s = _cg_name(ctx, "s")
         addr = _cg_boxaddr(ctx, kc, a.s1, a.s2, a.s3, a.off, a.sx, key)
@@ -767,13 +670,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     if k === _NK_ACCESS
         sb = ctx.subst
         if sb !== nothing && kc.K === sb[1]
-            # One descriptor `(K, ix, v)`, or several `(K, Dict(ix => v))`.
-            if sb[2] isa Int
-                nd.idx == sb[2] && return sb[3]
-            else
-                v = get(sb[2], nd.idx, nothing)
-                v === nothing || return v
-            end
+            v = get(sb[2], nd.idx, nothing)
+            v === nothing || return v
         end
         return _cg_fetch(ctx, kc, kc.K.acc[nd.idx], (kc.K.acc, nd.idx))
     elseif k === _NK_LITERAL
@@ -789,9 +687,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             return kc.cellsyms[nd.idx]
         elseif pl === cse.inv_scratch && nd.idx <= length(kc.invsyms)
             return kc.invsyms[nd.idx]
-        elseif pl === ctx.shared_cache && pl isa _CSECache &&
-                !_cg_foreign_scratch_disabled()
-            # Shared scalar-prelude slot (xcse.jl rewrite; ess-cgfsc). Emit the
+        elseif pl === ctx.shared_cache && pl isa _CSECache
+            # Shared scalar-prelude slot (xcse.jl rewrite). Emit the
             # interpreter's exact read — `_cse_read` selects `f64` at Float64
             # and the `alt::Vector{T}` buffer under any other `T`, both filled
             # by `_make_rhs`'s prelude tiers (at this same `T`) before the
@@ -801,28 +698,6 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             return :(_cse_read($(_cg_tab!(ctx, pl)), $(nd.idx), _cgT))
         end
         _decline(:foreign_scratch)
-    elseif k === _NK_REDUCE
-        # `s = K.zerobar; for m in 1:cnt; s += ev(body @ n=m); end` — the
-        # `_eval_acc` REDUCE arm verbatim (the ⊕ is always `+`, seeded from
-        # the kernel's 0̄).
-        b = kc.K.bound
-        cnt = b isa _FixedBound ? b.k :
-            b isa _VarBound ? :($(_cg_tab!(ctx, b.valence))[$(kc.c)]) :
-            _decline(:unsupported_bound)
-        s = _cg_name(ctx, "r")
-        m = _cg_name(ctx, "m")
-        inner = _CGKernCtx(
-            kc.K, kc.c, m, kc.oln, kc.mi1, kc.mi2, kc.mi3,
-            kc.cellsyms, kc.invsyms, kc.mix
-        )
-        body = _cg_emit(ctx, inner, nd.children[1])
-        return quote
-            local $s = $(kc.K.zerobar)
-            for $m in 1:$cnt
-                $s += $body
-            end
-            $s
-        end
     elseif k === _NK_AREDUCE
         return _cg_emit_areduce(ctx, kc, nd)
     elseif k === _NK_CONTRACTION
@@ -910,7 +785,7 @@ function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     invsyms === nothing && _decline(:subcall_order)
     ctx.subks[S] = true
     inner = _CGKernCtx(
-        S, kc.c, kc.n, kc.oln, kc.mi1, kc.mi2, kc.mi3,
+        S, kc.oln, kc.mi1, kc.mi2, kc.mi3,
         Symbol[], invsyms, kc.mix
     )
     stmts = _cg_emit_recipes!(Any[], ctx, inner)
@@ -984,14 +859,14 @@ end
 # ---- Invariant tier → prologue locals (mirrors `_fill_invariant!`) ----------
 # Emitted once per kernel OBJECT (a sub-kernel shared by several parents is
 # recomputed-identical, so one fill is the same values). The dummy cell
-# context (c=1, n=0, oln=1, midx=(1,1,1)) is `_fill_invariant!`'s — invariant
+# context (oln=1, midx=(1,1,1)) is `_fill_invariant!`'s — invariant
 # recipes contain no cell-varying access, so it is never consulted, but a
 # hand-built kernel that violates that reproduces the interpreter's reads.
 function _cg_inv!(ctx::_CGCtx, K::_AccKernel)
     syms = get(ctx.invdone, K, nothing)
     syms === nothing || return syms
     syms = Symbol[]
-    kc = _CGKernCtx(K, 1, 0, 1, 1, 1, 1, Symbol[], syms)
+    kc = _CGKernCtx(K, 1, 1, 1, 1, Symbol[], syms)
     ctx.invdone[K] = syms
     push!(ctx.invlog, K)
     # Geometry an invariant recipe reads (a fixed slot) is read into the
@@ -1104,9 +979,9 @@ function _cg_scan_consumer_cell(ctx::_CGCtx, cons, oln::Symbol, xv::Symbol)
     Kc = cons.K
     oc = _cg_name(ctx, "oc")
     d = _cg_geo!(ctx, cons.delta, (Kc, :scan_consumer_delta))
-    kc = _CGKernCtx(Kc, oc, 0, oc, 1, 1, 1, Symbol[], cons.invsyms)
+    kc = _CGKernCtx(Kc, oc, 1, 1, 1, Symbol[], cons.invsyms)
     stmts = Any[:(local $oc = $oln - $d)]
-    ctx.subst = (Kc, cons.ix, xv)
+    ctx.subst = (Kc, Dict{Int, Any}(cons.ix => xv))
     try
         _cg_emit_recipes!(stmts, ctx, kc)
         val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, Kc.spine))
@@ -1199,7 +1074,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
         outs = _cg_tab!(ctx, cs.outs)
         c = _cg_name(ctx, "c")
         oln = _cg_name(ctx, "o")
-        kc = _CGKernCtx(K, c, 0, oln, c, 1, 1, Symbol[], invsyms)
+        kc = _CGKernCtx(K, oln, c, 1, 1, Symbol[], invsyms)
         ctx.tblread = false
         body = cellbody(kc)
         tv1 = _cg_tblread!(ctx)
@@ -1211,23 +1086,10 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                 $(tv1...)
             end
         end
-    elseif _is_contig(cs)
-        c0 = geo(first(cs.ranges[1]), (1, :first))
-        c = _cg_name(ctx, "c")
-        kc = _CGKernCtx(K, c, 0, c, c, 1, 1, Symbol[], invsyms)
-        ctx.tblread = false
-        body = cellbody(kc)
-        tv1 = _cg_tblread!(ctx)
-        return quote
-            $(hdr...)
-            for $c in ($c0 + $av):($c0 + $bv - 1)
-                $(body...)
-                $(tv1...)
-            end
-        end
     end
+    _is_cellless(cs) && error("_cg_emit_kernel_nest!: a sub-kernel has no loop nest of its own")
     # Strided Cartesian box, rank ≤ 3, in `_run_box_kernel!`'s exact iteration
-    # order (k-outer, i-inner). c == oln for a box. The flat cell ordinal `o`
+    # order (k-outer, i-inner). The flat cell ordinal `o`
     # of `(i, j, k)` is `(i-i0) + ni·((j-j0) + nj·(k-k0))` — exactly the serial
     # enumeration position — and a chunk `[a, b)` is walked as whole i-ROWS
     # with the FIRST and LAST row's i-range clamped to the chunk boundary
@@ -1243,7 +1105,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     olnexpr = :($(geo(cs.base, :base)) + $iv * $(st[1]))
     nd >= 2 && (olnexpr = :($olnexpr + $jv * $(st[2])))
     nd >= 3 && (olnexpr = :($olnexpr + $kv * $(st[3])))
-    kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invsyms)
+    kc = _CGKernCtx(K, oln, iv, jv, kv, Symbol[], invsyms)
     ctx.tblread = false
     body = cellbody(kc)
     # The innermost loop's own annotation: kept scalar when it gathers through
@@ -1373,7 +1235,7 @@ end
 # template sub-kernel.
 function _cg_fuse_leading(K::_AccKernel)
     cs = K.cells
-    (_is_outs(cs) || _is_contig(cs)) && return K
+    (_is_outs(cs) || _is_cellless(cs)) && return K
     # Whether a box spans whole rows depends on the cells a tile owns, so a
     # tile that shares its code never fuses.
     _range_shared_code(_range_spec_now()) && return K
@@ -1391,16 +1253,11 @@ function _cg_fuse_leading(K::_AccKernel)
             a.dim <= 2 && return K
         end
     end
-    ok = Ref(true)
-    function scan(n::_Node)
-        ok[] || return
-        n.kind === _NK_SUBCALL && (ok[] = false; return)
-        return foreach(scan, n.children)
-    end
-    scan(K.spine)
-    foreach(scan, K.cse.recipes)
-    foreach(scan, K.cse.inv_recipes)
-    ok[] || return K
+    is_sub(n) = n.kind === _NK_SUBCALL
+    (
+        _node_any(is_sub, K.spine) || _anyof(r -> _node_any(is_sub, r), K.cse.recipes) ||
+            _anyof(r -> _node_any(is_sub, r), K.cse.inv_recipes)
+    ) && return K
     j0 = first(cs.ranges[2])
     shift(s1, s2, s3, sx) = (
         s1, s3, isempty(sx) ? 0 : sx[1],
@@ -1411,19 +1268,9 @@ function _cg_fuse_leading(K::_AccKernel)
         k = a.kind
         if _ak_box_addressed(k)
             n1, n2, n3, nx = shift(a.s1, a.s2, a.s3, a.sx)
-            push!(
-                acc, _AccDesc(
-                    a.kind, a.arr, a.conn, a.delta, a.idx, a.width, a.col,
-                    a.dim, n1, n2, n3, a.off + (j0 - 1) * a.s2, a.v, nx
-                )
-            )
+            push!(acc, _acc_with_box(a; s1 = n1, s2 = n2, s3 = n3, off = a.off + (j0 - 1) * a.s2, sx = nx))
         elseif k === _AK_LOOP_IDX
-            push!(
-                acc, _AccDesc(
-                    a.kind, a.arr, a.conn, a.delta, a.idx, a.width, a.col,
-                    a.dim - 1, a.s1, a.s2, a.s3, a.off, a.v, a.sx
-                )
-            )
+            push!(acc, _acc_with_box(a; dim = a.dim - 1))
         else
             push!(acc, a)
         end
@@ -1453,7 +1300,7 @@ function _cg_fuse_leading(K::_AccKernel)
     strides = Int[cs.strides[1]; cs.strides[3:end]]
     slab = length(cs.slab) >= 2 ? Bool[false; cs.slab[3:end]] : Bool[]
     cells = _CellSet(strides, ranges, cs.base + j0 * cs.strides[2], Int[], slab)
-    return _cg_fuse_leading(_AccKernel(cells, spine, acc, K.bound, K.zerobar, cse, K.subs))
+    return _cg_fuse_leading(_AccKernel(cells, spine, acc, cse, K.subs))
 end
 
 # ---- Row-fused box kernels ---------------------------------------------------
@@ -1560,7 +1407,7 @@ function _cg_emit_rowgroup_nest!(
         iv = _cg_name(ctx, "i")
         oln = _cg_name(ctx, "o")
         _cg_note_nest!(ctx, K)
-        kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invs[m])
+        kc = _CGKernCtx(K, oln, iv, jv, kv, Symbol[], invs[m])
         ctx.tblread = false
         rec = _cg_emit_recipes!(Any[], ctx, kc)
         val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
@@ -1722,20 +1569,19 @@ function _cg_reduce_strides_favor_cells(K::_AccKernel, body::_Node, rdim::Int)
     stride(a::_AccDesc, d::Int) = d == 1 ? a.s1 : d == 2 ? a.s2 : d == 3 ? a.s3 :
         (d - 3 <= length(a.sx) ? a.sx[d - 3] : 0)
     near(s) = s == 0 || s == 1
-    function visit(n::_Node)
-        if n.kind === _NK_ACCESS
-            a = K.acc[n.idx]
-            if _ak_box_addressed(a.kind)
-                so = stride(a, 1)
-                sk = stride(a, rdim)
-                near(so) && !near(sk) && (gain += 1)
-                near(sk) && !near(so) && (gain -= 1)
-            end
-        end
-        foreach(visit, n.children)
-        return nothing
+    # Each read counts once per path that reaches it, as the emitted nest
+    # performs it once per use.
+    order, pos = _dag_postorder(body, _dag_children, _dag_every)
+    paths, _ = _dag_path_counts(order, pos, _dag_children, _dag_every, _dag_strict)
+    for (p, n) in enumerate(order)
+        n.kind === _NK_ACCESS || continue
+        a = K.acc[n.idx]
+        _ak_box_addressed(a.kind) || continue
+        so = stride(a, 1)
+        sk = stride(a, rdim)
+        near(so) && !near(sk) && (gain += paths[p])
+        near(sk) && !near(so) && (gain -= paths[p])
     end
-    visit(body)
     return gain > 0
 end
 
@@ -1914,7 +1760,7 @@ function _cg_emit_box_rank_n(
         rowexpr = :($rowexpr + $(ovs[d]) * $(st[d]))
     end
     kc = _CGKernCtx(
-        K, oln, 0, oln, ovs[1], ovs[2], ovs[3], Symbol[], _cg_inv!(ctx, K),
+        K, oln, ovs[1], ovs[2], ovs[3], Symbol[], _cg_inv!(ctx, K),
         Any[ovs[d] for d in 4:nd]
     )
     ctx.tblread = false
@@ -2039,8 +1885,7 @@ end
 
 # One cell's work in a kernel, in node evaluations: every node of the spine and
 # of the per-cell CSE recipes counts one, a loop's body counts once per
-# iteration (a neighbour reduction's mean valence, an affine reduction's or a
-# contraction loop's range), and a template sub-kernel counts its own work.
+# iteration (an affine reduction's or a contraction loop's range), and a template sub-kernel counts its own work.
 # The loop-invariant recipes run once per call and do not count. A rough cost,
 # used only to decide whether a section is worth a thread dispatch.
 function _acc_kernel_work(K::_AccKernel)
@@ -2050,23 +1895,11 @@ function _acc_kernel_work(K::_AccKernel)
     end
     return max(w, 1)
 end
-function _acc_node_work(nd::_Node, K::_AccKernel)
+_acc_node_work(root::_Node, K::_AccKernel) =
+    _node_fold(root, Int) do nd, kids
     nd.kind === _NK_SUBCALL && nd.payload isa _AccKernel &&
         return 1 + _acc_kernel_work(nd.payload::_AccKernel)
-    s = 0
-    for c in nd.children
-        s += _acc_node_work(c, K)
-    end
-    if nd.kind === _NK_REDUCE
-        b = K.bound
-        reach = b isa _FixedBound ? b.k :
-            b isa _VarBound && !isempty(b.valence) ?
-            cld(sum(b.valence), length(b.valence)) : 1
-        s *= max(reach, 1)
-    else
-        s *= _node_loop_reach(nd)
-    end
-    return 1 + s
+    return 1 + sum(kids; init = 0) * _node_loop_reach(nd)
 end
 
 # The iterations a looping node runs its body for (1 for any other node).
@@ -2087,18 +1920,13 @@ function _node_loop_reach(nd::_Node)
 end
 
 # A scalar spine's work in node evaluations, loops counted per iteration.
-function _node_work(nd::_Node)
-    s = 0
-    for c in nd.children
-        s += _node_work(c)
-    end
-    return 1 + s * _node_loop_reach(nd)
-end
+_node_work(root::_Node) =
+    _node_fold((nd, kids) -> 1 + sum(kids; init = 0) * _node_loop_reach(nd), root, Int)
 
 # Per-generated-FUNCTION emitted-node cap. The node budget above bounds total
 # AST size; this bounds the size of any ONE compiled function, because LLVM's
-# first-call compile memory is super-linear in single-function size (one ~400k-
-# node function OOMs a 40 GB host). Loop nests are packed into `@noinline`
+# first-call compile memory is super-linear in single-function size. Loop nests
+# are packed into `@noinline`
 # sub-functions up to this cap so LLVM compiles bounded pieces. Override with
 # ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, one flat body).
 # Every supported Julia can split (`_cg_split_transport` picks the transport),
@@ -2455,17 +2283,6 @@ end
 _cg_tabpack(ctx::_CGCtx, fns) =
     _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), length(ctx.tab_types)), fns)
 
-# A state consumer `(K, ix, delta[, …])` taken into a generated section, as the
-# emitter reads it: the kernel, the descriptor it reads the section's value
-# through, the slot offset, whether the value is still stored, and the
-# consumer's invariant symbols (registered with the function's prologue).
-function _cg_consumer(ctx::_CGCtx, consumer, store::Bool = true)
-    consumer === nothing && return nothing
-    Kc, ix, delta = consumer[1], consumer[2], consumer[3]
-    _cg_note_nest!(ctx, Kc)
-    return (K = Kc, ix = ix, delta = delta, store = store, invsyms = _cg_inv!(ctx, Kc))
-end
-
 # The signature of a section's generated function.
 const _CG_SECTION_ARGS = (:du, :u, :p, :t, :tabs, :_cgci, :_cgnc)
 
@@ -2489,13 +2306,12 @@ function _cg_local_lhs(stmt)
     return a isa Expr && a.head === :(=) ? a.args[1] : nothing
 end
 
-# ---- Intra-kernel body split (ess-iip-split) --------------------------------
-# `_cg_emit` lowers one output cell to a SINGLE Julia expression. For a
-# spine-dominated kernel that tree can be ~1e5 nodes; emitted as one function it
-# blows the Julia compiler (compile is superlinear in single-function size — the
-# duo LMARS momentum kernels OOM a 40 GB `:inplace` build). The kernel-CLASS
-# merge already made the cell body grid-INDEPENDENT (one body over a lane axis),
-# so the fix is purely to cap the SINGLE-FUNCTION size: partition the emitted
+# ---- Intra-kernel body split -------------------------------------------------
+# `_cg_emit` lowers one output cell to a SINGLE Julia expression, which for a
+# spine-dominated kernel can be large enough that compiling it as one function
+# exhausts memory (compile is superlinear in single-function size). The
+# kernel-CLASS merge already made the cell body grid-INDEPENDENT (one body over
+# a lane axis), so what remains is to cap the SINGLE-FUNCTION size: partition the emitted
 # expression so no generated function exceeds `_codegen_fn_node_cap`, while the
 # WHOLE RHS stays compiled and NEVER touches the interpreter.
 #
@@ -2518,7 +2334,7 @@ function _cg_is_spill_call(ex)
     return f isa Symbol && startswith(String(f::Symbol), "_cgh")
 end
 
-# A head that introduces its own scope / bindings (a `_NK_REDUCE`/subcall body is
+# A head that introduces its own scope / bindings (an `_NK_AREDUCE`/subcall body is
 # a `quote` block with a `local` accumulator and a `for` loop var). Partitioning
 # must treat such a node ATOMICALLY — never hoist a sub-expression out of it,
 # since that sub-expression may reference a name bound INSIDE it — so it is
@@ -2564,7 +2380,7 @@ _cg_is_passable(s::Symbol) =
 
 # Spill `sub` (already ≤ cap) into a fresh `@noinline` helper returning its
 # value; return the call expression that replaces it. Tab reads in `sub` are
-# already the by-type container indices `_cggrpG[pos]` (ess-iip-tabgroup), so the
+# already the by-type container indices `_cggrpG[pos]`, so the
 # helper's tab dependency is ONE argument per GROUP (a few concrete-typed
 # containers) no matter how many distinct tabs it touches — this is what keeps
 # the split's parameter/inference cost from exploding with the tab count.
@@ -2580,10 +2396,8 @@ function _cg_spill!(ctx::_CGCtx, sub)
     # it. Only the CALL is re-emitted; the compiled function is shared. Value-exact
     # and laziness-preserving — a call in place of the sub-expression evaluates
     # exactly when the sub-expression would.
-    dedup = !_cg_helper_dedup_disabled()
-    key = dedup ? string(sub) : ""
-    if dedup
-        got = get(ctx.helper_dedup, key, nothing)
+    key = string(sub)
+    let got = get(ctx.helper_dedup, key, nothing)
         if got !== nothing
             _tally_cascade!(:cg_helper_deduped)
             return Expr(:call, got, params...)
@@ -2596,7 +2410,7 @@ function _cg_spill!(ctx::_CGCtx, sub)
     fname = _cg_name(ctx, "h")
     fdef = Expr(:function, Expr(:call, fname, params...), Expr(:block, stmts...))
     push!(ctx.helpers, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
-    dedup && (ctx.helper_dedup[key] = fname)
+    ctx.helper_dedup[key] = fname
     return Expr(:call, fname, params...)
 end
 
@@ -2646,7 +2460,6 @@ end
 # byte. Off, it is the no-op: one flat body per kernel, which is the
 # differential oracle and what reproduces the OOM.
 function _cg_bound_body!(ctx::_CGCtx, ex)
-    _compiler_plan_now().codegen_body_split || return ex
     cap = _codegen_fn_node_cap()
     cap <= 0 && return ex
     _cg_expr_size(ex) <= cap && return ex
@@ -2670,10 +2483,57 @@ end
 # reference, as explicit arguments — it captures nothing, so the RHS stays
 # allocation-free. Kernels that decline stay on their existing runners
 # (`covered[j] == false`). Returns `nothing` when no kernel could be emitted.
+# How far a generated function's emission state reached before one kernel (or
+# row group) began: its prologue, its invariant registrations, its split
+# helpers, its node count and shared-prelude read count.
+struct _CGMark
+    nprologue::Int
+    ninvlog::Int
+    nhelpers::Int
+    nodes::Int
+    fscratch::Int
+end
+_cg_mark(ctx::_CGCtx) = _CGMark(
+    length(ctx.prologue), length(ctx.invlog), length(ctx.helpers), ctx.nodes, ctx.fscratch
+)
+
+# Take the function's emission state back to `m`: a declined kernel's partial
+# prologue statements, its invariant registrations (a later kernel sharing
+# that sub-kernel would otherwise reference rolled-back locals), its split
+# helpers and its node count.
+function _cg_rollback!(ctx::_CGCtx, m::_CGMark)
+    resize!(ctx.prologue, m.nprologue)
+    _cg_prolog_rollback!(ctx, m.nprologue)
+    for i in length(ctx.invlog):-1:(m.ninvlog + 1)
+        delete!(ctx.invdone, ctx.invlog[i])
+    end
+    resize!(ctx.invlog, m.ninvlog)
+    resize!(ctx.helpers, m.nhelpers)
+    ctx.nodes = m.nodes
+    ctx.fscratch = m.fscratch
+    return nothing
+end
+
+# One kernel's emission as a transaction: `emit()`'s loop nest with its
+# emitted-node cost and whether it read the shared prelude, or — when it
+# declines — the `_Decline`, with every piece of state it added taken back.
+# The helper dedup scope is the one kernel (see the field doc).
+function _cg_transaction(emit, ctx::_CGCtx)
+    m = _cg_mark(ctx)
+    empty!(ctx.helper_dedup)
+    try
+        lx = emit()
+        return (lx, ctx.nodes - m.nodes, ctx.fscratch > m.fscratch)
+    catch err
+        err isa _Decline || rethrow()
+        _cg_rollback!(ctx, m)
+        return err::_Decline
+    end
+end
+
 function _build_codegen_rhs(
         acc_kernels::AbstractVector{_AccKernel};
         budget::Int = _codegen_node_budget(),
-        tally::Symbol = :codegen,
         shared_cache::Union{Nothing, _CSECache} = nothing,
         nst::Int = 0
     )
@@ -2690,66 +2550,34 @@ function _build_codegen_rhs(
     for (j, K) in enumerate(acc_kernels)
         if haskey(groups, j)
             js = groups[j]
-            nprologue = length(ctx.prologue)
-            ninvlog = length(ctx.invlog)
-            nhelpers = length(ctx.helpers)
-            nodes0 = ctx.nodes
-            fscratch0 = ctx.fscratch
-            empty!(ctx.helper_dedup)
-            try
-                lx = _cg_emit_rowgroup!(ctx, _AccKernel[acc_kernels[m] for m in js])
-                push!(kloops, (lx, ctx.nodes - nodes0))
+            r = _cg_transaction(ctx) do
+                _cg_emit_rowgroup!(ctx, _AccKernel[acc_kernels[m] for m in js])
+            end
+            if !(r isa _Decline)
+                lx, cost, fscratch = r
+                push!(kloops, (lx, cost))
                 for m in js
                     covered[m] = true
                     ingroup[m] = true
-                    _tally_cascade!(Symbol(tally, :_kernel))
+                    _tally_cascade!(:codegen_kernel)
                 end
                 _tally_cascade!(:cg_rowfused_group)
-                ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
-            catch err
-                err isa _Decline || rethrow()
-                resize!(ctx.prologue, nprologue)
-                _cg_prolog_rollback!(ctx, nprologue)
-                for i in length(ctx.invlog):-1:(ninvlog + 1)
-                    delete!(ctx.invdone, ctx.invlog[i])
-                end
-                resize!(ctx.invlog, ninvlog)
-                resize!(ctx.helpers, nhelpers)
-                ctx.nodes = nodes0
-                ctx.fscratch = fscratch0
+                fscratch && _tally_cascade!(:cg_foreign_scratch_emit)
             end
         end
         ingroup[j] && continue
-        # Snapshot for rollback: a mid-kernel decline must discard its partial
-        # prologue statements AND its invariant registrations (a later kernel
-        # sharing that sub-kernel would otherwise reference rolled-back locals).
-        nprologue = length(ctx.prologue)
-        ninvlog = length(ctx.invlog)
-        nhelpers = length(ctx.helpers)
-        nodes0 = ctx.nodes
-        fscratch0 = ctx.fscratch
-        empty!(ctx.helper_dedup)   # dedup scope = this kernel (see the field doc)
-        try
-            lx = _cg_emit_kernel!(ctx, K)
-            push!(kloops, (lx, ctx.nodes - nodes0))
+        r = _cg_transaction(() -> _cg_emit_kernel!(ctx, K), ctx)
+        if r isa _Decline
+            reasons[j] = r.reason
+            _tally_cascade!(Symbol("codegen_decline_", r.reason))
+        else
+            lx, cost, fscratch = r
+            push!(kloops, (lx, cost))
             covered[j] = true
-            _tally_cascade!(Symbol(tally, :_kernel))
-            # Shared-prelude read observability (ess-cgfsc): this kernel
-            # compiled carrying at least one such read.
-            ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
-        catch err
-            err isa _Decline || rethrow()
-            resize!(ctx.prologue, nprologue)
-            _cg_prolog_rollback!(ctx, nprologue)
-            for i in length(ctx.invlog):-1:(ninvlog + 1)
-                delete!(ctx.invdone, ctx.invlog[i])
-            end
-            resize!(ctx.invlog, ninvlog)
-            resize!(ctx.helpers, nhelpers)     # discard this kernel's split helpers
-            ctx.nodes = nodes0
-            ctx.fscratch = fscratch0
-            reasons[j] = err.reason
-            _tally_cascade!(Symbol(tally, "_decline_", err.reason))
+            _tally_cascade!(:codegen_kernel)
+            # Shared-prelude read observability: this kernel compiled carrying
+            # at least one such read.
+            fscratch && _tally_cascade!(:cg_foreign_scratch_emit)
         end
     end
     any(covered) || return nothing
@@ -2760,7 +2588,7 @@ function _build_codegen_rhs(
     # passed — it is the value TYPE (a runtime `DataType`), and passing it across
     # the call boundary loses the constant-propagation that keeps `convert(_cgT,
     # …)` type-stable, boxing every scalar. Each chunk recomputes `_cgT` locally
-    # from (u, p, t) instead, so inference constant-propagates it as before.
+    # from (u, p, t) instead, so inference constant-propagates it.
     ngrp = length(ctx.tab_types)
     outer_passed = Set{Symbol}()
     # The by-type tab containers (`_cggrpG`, one per distinct tab type — a handful,
@@ -2851,7 +2679,7 @@ function _build_codegen_rhs(
             callstmts...
         )
     )
-    # The intra-kernel split helpers (ess-iip-split) come FIRST so the
+    # The intra-kernel split helpers come FIRST so the
     # invariant prologue and every chunk sub-function can call them by name;
     # each is `@noinline`, params-only (captures nothing). By value, every
     # sub-function becomes its own generated function, arriving in a tuple
@@ -2865,115 +2693,11 @@ function _build_codegen_rhs(
     return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint, work, rmw)
 end
 
-# ---- Threaded cell axis for the codegen tier (RFC threaded-eval-tier) -------
-# The shared threading infrastructure (batch-runner hook, verdict tally,
-# static partition) lives in access_kernel.jl ("Threading infrastructure" —
-# the safety argument lives there). This section threads the generated
-# functions themselves; since the Float64 lane tape was retired it is the only
-# threaded tier.
-#
-# GRANULARITY: the WHOLE SECTION is chunked, not each kernel. One batch
-# dispatch runs chunk `c` of every emitted kernel back to back —
-# `f(du, u, p, t, tabs, c, nchunks)` — with no inter-kernel barrier. That is
-# safe because the section builder proves the strong property up front:
-# `_cg_covered_outs_disjoint` verifies at build time that every covered
-# out-slot is globally unique ACROSS all emitted kernels. When that holds, no
-# two cells anywhere in the section touch the same `du` slot, kernels share no
-# other mutable state (locals only; `u`/`p`/`t`/tabs are read-only here), and
-# the inter-kernel barrier is unnecessary — one dispatch per RHS call, so the
-# per-dispatch wake-up latency is paid ONCE instead of #kernels times. When it
-# does NOT hold (`:cg_serial_shared_outs`), the section never chunks and every
-# generated function runs its serial `(1, 1)` instance.
-#
-# BIT-IDENTITY, per kernel: chunk boundaries are not observable (a cell
-# computes the same instruction sequence on the same inputs whichever chunk it
-# lands in; every ⊕-fold is WITHIN a cell — REDUCE/CONTRACTION loops are
-# per-cell in the emitted body), the partition is the static
-# `_chunk_ordinals`, and disjoint writes commute. Threaded `du` is bitwise
-# `===` serial `du`.
-#
-# One Julia thread ⇒ serial; a section's work below two chunks of the serial
-# work floor (`_thread_min_work`, ESS_THREADS_MIN_WORK) ⇒ serial.
-# Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
-# `:cg_serial_shared_outs`), documented with the existing keys.
-
-# One-time threading verdict for one generated function's cell axes:
-# `state` is 0 unexamined, 1 chunked, -1 serial (too little work), -2 serial
-# (globally shared out-slots — permanent, decided at build).
-# `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
-# at the first threaded call, so the partition is identical call to call.
-# `work` is what the work floor is held against: the section's node
-# evaluations per call (`_acc_kernel_work` per cell for a kernel section, the
-# fold terms for a contraction, array_contraction.jl), the cell count when the
-# builder gives none; the chunk count never exceeds `ncells`.
-# `job1`/`job2` hold the section's dispatch jobs (thread_dispatch.jl) for the
-# last two argument types it ran at, so a caller alternating between Float64
-# and dual-number calls (a solver and its Jacobian) reuses both.
-mutable struct _SecTCache
-    state::Int
-    ncells::Int
-    disjoint::Bool
-    work::Int
-    nchunks::Int
-    job1::Any
-    job2::Any
-    rmw::Bool        # `_CGBuilt.rmw`: chunks also keep `_THREAD_MIN_RMW_CELLS` cells
-end
-_SecTCache(ncells::Int, disjoint::Bool, work::Int = ncells, rmw::Bool = false) =
-    _SecTCache(0, ncells, disjoint, work, 1, nothing, nothing, rmw)
+# ---- Threaded cell axis for the codegen tier ---------------------------------
+# The verdict, the partition and the dispatch are threading.jl's (the safety
+# argument lives there). A generated function runs chunk `c` of every emitted
+# kernel back to back, `f(du, u, p, t, tabs, c, nchunks)`.
 _sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint, cg.work, cg.rmw)
-_sec_tcache(::Nothing) = _SecTCache(0, false)
-
-# Decide once whether this generated function may run chunked: size first
-# (the work floor guards per-DISPATCH work, and the section is one dispatch),
-# then the build-time disjointness verdict.
-function _sec_prep_threads!(tc::_SecTCache)
-    tc.state == 0 || return tc
-    minw = _thread_min_work()
-    nchunks = min(Threads.nthreads(), tc.ncells, max(1, div(tc.work, max(minw, 1))))
-    tc.rmw && (nchunks = min(nchunks, max(1, div(tc.ncells, _THREAD_MIN_RMW_CELLS))))
-    if nchunks < 2
-        tc.state = -1                 # too little work to be worth a dispatch
-        _tally_thread!(:cg_serial_small)
-        return tc
-    end
-    if !tc.disjoint
-        tc.state = -2                 # shared out-slots: chunks would race
-        _tally_thread!(:cg_serial_shared_outs)
-        return tc
-    end
-    tc.nchunks = nchunks
-    tc.state = 1
-    _tally_thread!(:cg_threaded)
-    return tc
-end
-
-# This section's job for body type `B` and argument type `A`, from the two
-# cached slots or freshly made (the only allocation, once per argument type).
-@inline function _section_job!(tc::_SecTCache, ::Type{B}, ::Type{A}) where {B, A}
-    J = _ThreadJob{B, A}
-    j = tc.job1
-    j isa J && return j
-    j2 = tc.job2
-    tc.job2 = j
-    if j2 isa J
-        tc.job1 = j2
-        return j2
-    end
-    jn = J()
-    tc.job1 = jn
-    return jn
-end
-
-# Run `body(args, c, nchunks)` for every chunk of the section's verdict.
-@inline function _run_chunked!(tc::_SecTCache, body::B, args::A) where {B, A}
-    j = _section_job!(tc, B, A)
-    j.body = body
-    j.args = args
-    j.nchunks = tc.nchunks
-    _dispatch_job!(j)
-    return nothing
-end
 
 # A generated function's chunk: the static partition (`_chunk_ordinals`) is
 # computed inside it, and each chunk re-runs the (pure) tab-hoist + invariant
@@ -3004,88 +2728,53 @@ end
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, acc_merge.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
-# plus the residual kernels that keep the per-cell interpreter. The
-# `F === Nothing` branch folds away per closure specialization, so with the
-# tier disabled (or nothing emitted) `f!` is instruction-for-instruction the
-# pre-codegen RHS. Emitted kernels write disjoint du slots from residual ones
-# (each state slot has exactly one equation/cell), so running the generated
-# section first is value-identical to the original in-order kernel loop.
+# plus the residual kernels the emitter declined. The `F === Nothing` branch
+# folds away per closure specialization. Emitted kernels write disjoint du
+# slots from residual ones (each state slot has exactly one equation/cell), so
+# running the generated section first is value-identical to the in-order
+# kernel loop.
 #
 # The per-cell runner is the interpreter's: a section that runs any kernel on
-# it, at any value type, holds a `_PerCellLicense` in `walk` (W), and one that
-# runs none holds `nothing`. The constructor checks the two agree, so a strict
-# plan, which has no license, cannot build a section that walks; with
-# `W === Nothing` the runner's loops are not in the compiled call at all.
-struct _KernelSection{F, TB, G, GTB, W}
+# it holds a `_PerCellLicense` in `walk` (W), and one that runs none holds
+# `nothing`. The constructor checks the two agree, so a strict plan, which has
+# no license, cannot build a section that walks; with `W === Nothing` the
+# runner's loops are not in the compiled call at all.
+struct _KernelSection{F, TB, W}
     cgf::F
     cgtabs::TB
     n_emitted::Int                # kernels compiled into the generated function
     kernels::Vector{_AccKernel}   # residual kernels (interpreter runner)
-    # Dual overflow tier (ess-dualfp): a second generated function covering the
-    # residual kernels the PRIMARY emission declined (in practice on the node
-    # budget). Under non-Float64 `T` it is called unconditionally, so Duals run
-    # compiled code instead of the per-cell interpreter; at Float64 it serves
-    # the residual kernels whenever `f64cg` below is armed. `dual_resid`
-    # indexes `kernels`: the kernels even the overflow emission declined, which
-    # keep the eltype-generic interpreter under every `T`.
-    dualf::G
-    dualtabs::GTB
-    n_dual_emitted::Int
-    dual_resid::Vector{Int}
-    # Float64 overflow routing (ess-f64ofl): when true, the overflow function
-    # above also serves Float64 calls (in place of the per-cell interpreter).
-    # Baked at build time from the plan's Float64 overflow routing.
-    f64cg::Bool
-    # Threaded cell axis: one lazily-decided chunk verdict per generated
-    # function (primary / overflow), see `_SecTCache` above.
+    # Threaded cell axis: the lazily-decided chunk verdict of the generated
+    # function, see `_SecTCache` above.
     tcache::_SecTCache
-    dual_tcache::_SecTCache
-    # Serial cell tiling of the primary function: the number of static chunks
-    # a serial call runs back to back (1 = one pass per kernel). See
-    # `_section_tiles`.
+    # Serial cell tiling: the number of static chunks a serial call runs back
+    # to back (1 = one pass per kernel). See `_section_tiles`.
     ntiles::Int
     walk::W
     function _KernelSection(
             cgf::F, cgtabs::TB, n_emitted::Int, kernels::Vector{_AccKernel},
-            dualf::G, dualtabs::GTB, n_dual_emitted::Int,
-            dual_resid::Vector{Int}, f64cg::Bool, tcache::_SecTCache,
-            dual_tcache::_SecTCache, ntiles::Int,
-            walk::W
-        ) where {F, TB, G, GTB, W <: Union{Nothing, _PerCellLicense}}
-        _section_walks(kernels, G !== Nothing, f64cg, dual_resid) == (W !== Nothing) ||
+            tcache::_SecTCache, ntiles::Int, walk::W
+        ) where {F, TB, W <: Union{Nothing, _PerCellLicense}}
+        isempty(kernels) == (W === Nothing) ||
             throw(
             ArgumentError(
                 "a kernel section holds a per-cell license exactly " *
                     "when it runs a kernel on the per-cell runner"
             )
         )
-        return new{F, TB, G, GTB, W}(
-            cgf, cgtabs, n_emitted, kernels, dualf, dualtabs,
-            n_dual_emitted, dual_resid, f64cg, tcache,
-            dual_tcache, ntiles, walk
-        )
+        return new{F, TB, W}(cgf, cgtabs, n_emitted, kernels, tcache, ntiles, walk)
     end
 end
 
-# True when a section with these residual `kernels` runs any of them on the
-# per-cell runner at some value type: every one when there is no overflow
-# function, and with one, those it declined (`dual_resid`) — at Float64 too
-# only when the Float64 routing is armed, and otherwise all of them there.
-_section_walks(kernels, has_dual::Bool, f64cg::Bool, dual_resid) =
-    !isempty(kernels) && !(has_dual && f64cg && isempty(dual_resid))
-
-# The per-cell runner over `kernels[idx]`, in order.
-@inline function _walk_kernels!(
-        ::_PerCellLicense, du, u, p, t, kernels, idx,
-        ::Type{T}
-    ) where {T}
-    @inbounds for j in idx
+# The per-cell runner over `kernels`, in order.
+@inline function _walk_kernels!(::_PerCellLicense, du, u, p, t, kernels, ::Type{T}) where {T}
+    @inbounds for j in eachindex(kernels)
         _run_acc_kernel!(du, u, p, t, kernels[j], T)
     end
     return nothing
 end
 
-# SERIAL TILING. The primary function runs chunk `c` of every emitted kernel
+# SERIAL TILING. The generated function runs chunk `c` of every emitted kernel
 # back to back (the threaded path's granularity, above), so a serial call can
 # run the chunks one after another instead of each kernel over all its cells:
 # several kernels over the same cells — one per species of a reaction system
@@ -3113,74 +2802,46 @@ end
     return nothing
 end
 
-@inline function (s::_KernelSection{F, TB, G, GTB, W})(
+@inline function (s::_KernelSection{F, TB, W})(
         du, u, p, t,
         ::Type{T}
-    ) where {F, TB, G, GTB, W, T}
-    if F !== Nothing
-        # PRIMARY generated function, chunked when the section verdict allows
-        # (threaded cell axis above), at every value type. Any serial verdict
-        # (small, shared outs, one thread) runs it tiled serially.
-        _run_cg_maybe_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache, s.ntiles)
-    end
-    if G !== Nothing && (T !== Float64 || s.f64cg)
-        # The overflow function covers every residual kernel not in
-        # `dual_resid`: under a non-Float64 `T` always (Duals run compiled code),
-        # and at Float64 when the Float64 overflow routing (ess-f64ofl) is
-        # armed — bit-identical to the interpreter by the emitter's contract,
-        # CHUNKED whenever the section verdict allows, serial `(1, 1)`
-        # otherwise. In particular, a shared-outs section
-        # (`:cg_serial_shared_outs`) under threading runs it SERIAL; that
-        # verdict needs two equations writing one state slot, which no real
-        # build has produced. Emitted kernels write disjoint du slots from
-        # residual ones (each state slot has exactly one equation/cell), so the
-        # order generated-first is value-identical to the in-order kernel loop.
-        # Kernels the overflow emission itself declined keep the interpreter.
-        _run_cg_maybe_threaded!(s.dualf, s.dualtabs, du, u, p, t, s.dual_tcache)
-        W === Nothing || _walk_kernels!(s.walk, du, u, p, t, s.kernels, s.dual_resid, T)
-        return nothing
-    end
-    W === Nothing ||
-        _walk_kernels!(s.walk, du, u, p, t, s.kernels, eachindex(s.kernels), T)
+    ) where {F, TB, W, T}
+    # The generated function, chunked when the section verdict allows
+    # (threaded cell axis above), at every value type. Any serial verdict
+    # (small, shared outs, one thread) runs it tiled serially.
+    F !== Nothing && _run_cg_maybe_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache, s.ntiles)
+    W === Nothing || _walk_kernels!(s.walk, du, u, p, t, s.kernels, T)
     return nothing
 end
 
-# Partition the kernels between the codegen tier and the pre-existing runners.
-# With the codegen tier off (or an empty emission) the section is exactly the
-# pre-codegen kernel loop; with only the overflow tier off it is the pre-dual
-# routing (Duals interpret every residual kernel) with the primary tier intact.
-# `shared_cache` (ess-cgfsc): the build's scalar prelude `_CSECache`, passed
-# ONLY by the `_make_rhs` call site (acc_merge.jl) — the one place where the
-# section provably runs after that cache's prelude tiers were filled in the
-# same `f!` call. Every other caller keeps the default `nothing`, which keeps
-# the `:foreign_scratch` decline for shared-prelude reads.
-# A kernel BOTH emissions declined runs on `_run_acc_kernel!` — the `_eval_acc`
-# tree walk, once per output cell, on every right-hand-side call (§0 of the
-# phase-0 census). That is the interpreter's runner, so the section needs a
-# license for it; a strict compiler refuses at BUILD instead, naming the rule
-# the cascade has open and the reason the OVERFLOW emission gave: the primary
-# pass's reasons are not refusals, since the overflow pass compiles what the
-# budget declined.
+# Partition the kernels between the codegen tier and the per-cell runner. With
+# the codegen tier off (or an empty emission) the section is the plain kernel
+# loop.
+# `shared_cache`: the build's scalar prelude `_CSECache`, passed ONLY by the
+# `_make_rhs` call site (acc_merge.jl) — the one place where the section
+# provably runs after that cache's prelude tiers were filled in the same `f!`
+# call. Every other caller keeps the default `nothing`, which keeps the
+# `:foreign_scratch` decline for shared-prelude reads.
+# A kernel the emission declined runs on `_run_acc_kernel!` — the `_eval_acc`
+# tree walk, once per output cell, on every right-hand-side call. That is the
+# interpreter's runner, so the section needs a license for it; a strict
+# compiler refuses at BUILD instead, naming the rule the cascade has open and
+# the reason the emission gave.
 function _kernel_walk_license(
         kernels::AbstractVector{_AccKernel},
-        resid::AbstractVector{Int},
-        reasons::AbstractVector{Symbol},
-        emission_empty::Bool
+        reasons::AbstractVector{Symbol}
     )
     return _percell_license(
         _current_rule_label("the assembled right-hand side"), _ -> begin
             why = :emission_produced_nothing
-            if !emission_empty
-                for j in resid
-                    j <= length(reasons) || continue
-                    reasons[j] === :none && continue
-                    why = reasons[j]
-                    break
-                end
+            for r in reasons
+                r === :none && continue
+                why = r
+                break
             end
-            "$(length(resid)) of $(length(kernels)) access kernel" *
-                (length(kernels) == 1 ? "" : "s") * " reached the end of both codegen " *
-                "emissions undeclared (deepest reason: $why), so they would run on the " *
+            "$(length(kernels)) access kernel" *
+                (length(kernels) == 1 ? "" : "s") * " reached the end of the codegen " *
+                "emission undeclared (deepest reason: $why), so they would run on the " *
                 "per-cell tree-walk kernel runner on every right-hand-side call. Build " *
                 "with compiler=:interpreter to run it, or grow the emitter to cover " *
                 "this construct"
@@ -3198,61 +2859,17 @@ function _make_kernel_section(
     if cg === nothing
         kernels = collect(_AccKernel, acc_kernels)
         n_emitted = 0
-        # No primary emission ran, so there is no per-kernel reason to carry.
-        primary_reasons = Symbol[]
+        reasons = Symbol[]
     else
         resid = [j for j in eachindex(cg.covered) if !cg.covered[j]]
         kernels = _AccKernel[acc_kernels[j] for j in resid]
         n_emitted = count(cg.covered)
-        # Re-indexed onto `kernels`, which is what every consumer below indexes.
-        primary_reasons = Symbol[cg.reasons[j] for j in resid]
+        reasons = Symbol[cg.reasons[j] for j in resid]
     end
-    cgf = cg === nothing ? nothing : cg.f
-    cgtabs = cg === nothing ? nothing : cg.tabs
-    # Dual overflow tier: retry the residual kernels under the dual budget. Its
-    # RGF is only ever CALLED with non-Float64 arguments, so nothing here adds
-    # Float64 compile latency — only the (cheap) AST emission runs at build.
-    # Gated on the primary tier too: with codegen off the build must stay a pure
-    # pre-codegen one, which is the tier's differential oracle.
-    dg = (_codegen_disabled() || _dual_codegen_disabled() || isempty(kernels)) ?
-        nothing :
-        _build_codegen_rhs(
-            kernels; budget = _dual_codegen_node_budget(),
-            tally = :dual_codegen, shared_cache = shared_cache, nst = nst
-        )
-    if dg === nothing
-        walk = isempty(kernels) ? nothing :
-            _kernel_walk_license(
-                kernels, collect(Int, 1:length(kernels)),
-                primary_reasons, isempty(primary_reasons)
-            )
-        return _KernelSection(
-            cgf, cgtabs, n_emitted, kernels,
-            nothing, nothing, 0, collect(Int, 1:length(kernels)),
-            false, _sec_tcache(cg), _sec_tcache(nothing),
-            _cg_section_tiles(cg, n_emitted), walk
-        )
-    end
-    # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
-    # function exists and the plan has not turned the routing off. A build with
-    # either codegen tier off reaches the branch above instead, so both remain
-    # full oracles for their tiers.
-    f64cg = _f64_overflow_codegen_enabled()
-    f64cg && _tally_cascade!(:f64_overflow_armed)
-    dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]
-    # With the Float64 routing off, Float64 calls run every residual kernel on
-    # the per-cell runner, not just the ones the overflow emission declined.
-    walk = !_section_walks(kernels, true, f64cg, dual_resid) ? nothing :
-        f64cg ? _kernel_walk_license(kernels, dual_resid, dg.reasons, false) :
-        _kernel_walk_license(
-            kernels, collect(Int, 1:length(kernels)),
-            fill(:f64_overflow_routing_off, length(kernels)), false
-        )
+    walk = isempty(kernels) ? nothing : _kernel_walk_license(kernels, reasons)
     return _KernelSection(
-        cgf, cgtabs, n_emitted, kernels,
-        dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
-        _sec_tcache(cg), _sec_tcache(dg),
-        _cg_section_tiles(cg, n_emitted), walk
+        cg === nothing ? nothing : cg.f, cg === nothing ? nothing : cg.tabs,
+        n_emitted, kernels, _sec_tcache(cg), _cg_section_tiles(cg, n_emitted), walk
     )
 end
 

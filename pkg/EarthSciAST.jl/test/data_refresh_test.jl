@@ -1,7 +1,7 @@
-# Discrete-cadence loader refresh — build_refresh_callback (ess-14f.4, JL-J1).
+# Discrete-cadence loader refresh — build_refresh_callback.
 #
-# J0 (ess-14f.3) made a forcing buffer readable LIVE by the RHS (`param_arrays`
-# / `_NK_PARAM_GATHER`). These tests pin the J1 surface that drives it: a
+# A forcing buffer is readable LIVE by the RHS (`param_arrays`
+# / `_NK_PARAM_GATHER`). These tests pin the surface that drives it: a
 # `PresetTimeCallback` whose `affect!` samples a Provider, regrids, and writes
 # the SAME buffer object in place at each cadence anchor. They exercise the full
 # user wiring — the build + `build_refresh_callback` + an honest
@@ -47,7 +47,7 @@ end
 # A source with NO protocol methods — its generics must throw a clean RefreshError.
 struct _BareSource end
 
-@testset "build_refresh_callback (ess-14f.4, JL-J1)" begin
+@testset "build_refresh_callback" begin
 
     @testset "returns (cb, tstops); buffer refreshes at each preset time; RHS reads latest" begin
         # D(y) = forcing[1]; forcing is piecewise-constant, refreshed at the

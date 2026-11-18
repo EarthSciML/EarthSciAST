@@ -2,13 +2,12 @@
 # sharded along the flat state's cell axis across several devices, must answer
 # what one device answers and what the interpreter answers.
 #
-# DOUBLY OPT-IN, because it needs hardware the default test run does not have:
-# `ESM_TEST_REACTANT=1` (as every reactant_*_test.jl does) AND
-# `ESM_TEST_REACTANT_GPU=1`. Without the second it prints why it is skipping and
-# asserts nothing.
+# OPT-IN within the Reactant suite (test/reactant/runtests.jl), because it needs
+# hardware a default run does not have: `ESM_TEST_REACTANT_GPU=1`. Without it the
+# file prints why it is skipping and asserts nothing.
 #
-#     ESM_TEST_REACTANT=1 ESM_TEST_REACTANT_GPU=1 julia --project=<env> \
-#       -e 'cd("pkg/EarthSciAST.jl/test"); include("reactant_direct_sharding_test.jl")'
+#     ESM_TEST_REACTANT_GPU=1 julia --project=pkg/EarthSciAST.jl/test/reactant \
+#       pkg/EarthSciAST.jl/test/reactant/reactant_direct_sharding_test.jl
 #
 # WHICH DEVICES. `EARTHSCI_JULIA_XLA_DEVICE` picks the client, the same variable
 # the conformance adapter reads; it defaults to `gpu` here, because that is the
@@ -33,7 +32,7 @@ using Test
 using EarthSciAST
 using Reactant
 
-include("testutils.jl")  # TESTUTILS_REPO_ROOT
+include("../testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _SH_ON = get(ENV, "ESM_TEST_REACTANT_GPU", "0") == "1"
 

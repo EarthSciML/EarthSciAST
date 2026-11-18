@@ -270,7 +270,7 @@ function _bi_ragged_doc()
             )
         ),
         # esm 1.0.0: the const factors, the bare-name alias and `div` are all
-        # `unknown`s whose DEFINING equation carries what used to be `expression`.
+        # `unknown`s, each defined by an equation.
         "models" => Dict{String, Any}(
             "Div" => Dict{String, Any}(
                 "variables" => Dict{String, Any}(

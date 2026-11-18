@@ -1,4 +1,4 @@
-# Tests for M2 value-equality joins + filter predicates (ess-my4.2.2).
+# Tests for M2 value-equality joins + filter predicates.
 #
 # `join.on` (RFC semiring-faq-unified-ir §5.3) is an inner equi-join that gates
 # which (output × contracted) index combinations of an aggregate contribute a
@@ -12,7 +12,7 @@
 # Semantics (FIXED, §5.3): inner-only; many-to-many = m·n terms; key types
 # int / categorical only (floats / nulls rejected at build); unmatched → 0̄;
 # output in DECLARED index order (permutation-invariant value). These mirror the
-# Python reference suite tests/test_numpy_interpreter_join.py (ess-my4.2.4) so the
+# Python reference suite tests/test_numpy_interpreter_join.py so the
 # two bindings agree value-for-value.
 #
 # RFC: docs/content/rfcs/semiring-faq-unified-ir.md §5.3 / §5.7 / §7.2.
@@ -23,7 +23,7 @@ using JSON3
 
 const ESMJ = EarthSciAST
 
-@testset "tree_walk join.on + filter (ess-my4.2.2)" begin
+@testset "tree_walk join.on + filter" begin
     # ---- Helpers (scoped to this testset) -----------------------------------
     _v(n) = VarExpr(String(n))
     _n(x) = NumExpr(Float64(x))

@@ -1,5 +1,4 @@
-# Shared-prelude (xcse) cache reads in the codegen tier (ess-cgfsc,
-# codegen_kernel.jl).
+# Shared-prelude (xcse) cache reads in the codegen tier (codegen_kernel.jl).
 #
 # The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel
 # invariant-tier defs into bare `_NK_CACHED` reads of the build's SCALAR
@@ -20,7 +19,7 @@
 #      and `compiler=:interpreter`, on several (u, t) probes.
 #   3. DUAL BIT-IDENTITY — the ForwardDiff state Jacobian and a direct
 #      Dual-seeded in-place call agree bit-for-bit with the interpreter
-#      oracle (the emitted read serves the Dual-typed overflow RGF too).
+#      oracle (the emitted read serves the Dual specialization too).
 #   4. ALLOCATIONS — a warmed Float64 f! call allocates 0 bytes (the
 #      surrounding tier's zero-alloc pin, kept through the new read).
 using Test
@@ -77,7 +76,7 @@ _cfs_ics(N) = Dict{String, Float64}(
         for (j, x) in enumerate(("a", "b")), k in 1:N
 )
 
-@testset "codegen shared-prelude reads (ess-cgfsc)" begin
+@testset "codegen shared-prelude reads" begin
     N = 8
     model, ics = _cfs_model(N), _cfs_ics(N)
 
@@ -92,8 +91,7 @@ _cfs_ics(N) = Dict{String, Float64}(
         @test dON.n_xcse_slots >= 1
         # … the default build compiles the kernels carrying the foreign read …
         @test get(tON, :cg_foreign_scratch_emit, 0) >= 2
-        @test get(tON, :codegen_decline_foreign_scratch, 0) +
-            get(tON, :dual_codegen_decline_foreign_scratch, 0) == 0
+        @test get(tON, :codegen_decline_foreign_scratch, 0) == 0
         @test get(tON, :codegen_kernel, 0) >= 2
         # … and the interpreter compiles nothing at all, so the comparison
         # below is against a build with no emitted read anywhere.

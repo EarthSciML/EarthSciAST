@@ -69,9 +69,8 @@ function _compile_derivative_equations(
     # Cross-equation direct class emission (acc_merge.jl): pool every per-cell
     # equation's cell entries here and run the scalarizer-level class emitter
     # ONCE, above the equation loop, so structurally identical cells arising in
-    # DIFFERENT equations share a class kernel directly — no post-hoc repair
-    # needed. `nothing` (the stage off, or per-equation direct emission itself
-    # off) keeps the per-equation `_acc_from_cell_entries` call byte for byte.
+    # DIFFERENT equations share a class kernel directly. `nothing` (the class
+    # merge off) keeps one `_acc_from_cell_entries` call per equation.
     pooled_cells = _cross_eq_class_emit_enabled() ? Tuple{Int, _Node}[] : nothing
     faq_scope = _FaqScope(
         resolved_obs, array_var_info, var_map, const_registry, pgather, param_sym_set,
@@ -725,18 +724,13 @@ end
 #                         rescue firings, not final routing.
 #
 # Class-emission observability keys (also non-routing) ride the same tally:
-#   :direct_classmerge_round{1,2}_merge
-#                         — the assembled-kernel DIRECT emission stage
-#                           (oop_merge.jl `_merge_acc_kernel_classes` under
-#                           cross-eq/affine-box direct emission) merged one
-#                           class; this is where affine-box classes are
-#                           expected to land.
 #   :classmerge_round{1,2}_merge
-#                         — the post-hoc REPAIR pass merged one class. With
-#                           direct emission on (the default) these are the
-#                           safety-net counters and are expected to be ZERO;
-#                           nonzero means genuinely residual work the direct
-#                           stages did not see.
+#                         — a class-merge round over the assembled kernels
+#                           (oop_merge.jl `_merge_acc_kernel_classes`) merged
+#                           one class.
+#   :classmerge_recheck   — under `_with_merge_recheck` (tests), a second
+#                           application of the rounds merged a class: the
+#                           rounds were not idempotent on this build.
 # The ROUTING keys — the ones that say where an array equation finally landed,
 # exactly one per equation. Bumping one of these closes the rule the cascade
 # opened and files it in the build's `CompilerReport`; every other key is a

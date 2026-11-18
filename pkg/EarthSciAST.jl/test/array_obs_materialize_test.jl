@@ -1,9 +1,8 @@
 # Factored array observeds ≡ the inlining build (differential).
 #
-# An array-shaped observed defined by a `faq`/`makearray` used to be
-# INLINED into every reader (`_collect_array_inline_vars`); it is now evaluated
-# ONCE PER RHS CALL into a dense buffer laid out above the ODE state, and readers
-# gather that buffer (obs_buffers.jl). `compiler=:interpreter` is the inlining
+# An array-shaped observed defined by a `faq`/`makearray` is evaluated ONCE PER
+# RHS CALL into a dense buffer laid out above the ODE state rather than INLINED
+# into every reader, and readers gather that buffer (obs_buffers.jl). `compiler=:interpreter` is the inlining
 # build — it splices every array observed into its readers — and it is the
 # oracle every case below compares against, bit-for-bit, not approximately.
 using Test
@@ -438,7 +437,7 @@ end
         A = [du[vmD["M.A[$j]"]] for j in 1:M]
         B = [du[vmD["M.B[$j]"]] for j in 1:M]
         @test A == B                       # THE invariant — exact, not approximate
-        @test !all(iszero, A)              # and non-vacuous (it used to be all zeros)
+        @test !all(iszero, A)              # and non-vacuous (not all zeros)
         # the hand-computed centered difference of u = j², periodic wrap
         @test B == [
             (4.0 - 36.0) / 2, (9.0 - 1.0) / 2, (16.0 - 4.0) / 2,
@@ -484,12 +483,11 @@ end
     # oracle: a lane whose const VALUES coincide at the box corners but differ
     # inside (`W[3, j]` is 0, 0.5, 0 across j = 1..3) must not fold to a literal.
     #
-    # This IS the adversarial column that the old value-sampling fold in
-    # `_derive_lane_repl` silently zeroed, and the reason the fill used to be
-    # withheld from the bare-aggregate path. That fold now derives invariance
-    # STRUCTURALLY from the resolved linear index, so `_unwrap_identity_gather`
-    # hands this contracting producer over bare — which makes this testset the
-    # live guard on that derivation rather than a test of an avoided path.
+    # This IS the adversarial column a value-sampling fold would silently zero.
+    # The fold in `_derive_lane_repl` derives invariance STRUCTURALLY from the
+    # resolved linear index, so `_unwrap_identity_gather` hands this contracting
+    # producer over bare — which makes this testset the live guard on that
+    # derivation.
     @testset "const-weight contraction ≡ the inlining build" begin
         Wm = [
             0.5 0.0 0.0; 0.5 0.0 0.0; 0.0 0.5 0.0;
@@ -616,7 +614,7 @@ end
         end
     end
 
-    # ---- Intersection with the O(N) prefix scan (ess-scan, scan.jl) ----
+    # ---- Intersection with the O(N) prefix scan (scan.jl) ----
     # These two mechanisms meet in `_build_compile_evaluator`: the scan rewrite
     # widened `_compile_derivative_equations`' return and `_make_rhs`' argument
     # list, and the fills WRAP the state RHS. A merge that dropped either side
@@ -688,17 +686,17 @@ end
 
 # Capture-avoiding substitution when an array observed is INLINED.
 #
-# `_sub_preserving` (expression.jl) used to substitute straight through a
-# nested aggregate's own binders, so an inlined column sum lost its loop variable
-# while `ranges` still declared it — the unroll then emitted `length(gk)`
-# IDENTICAL terms and the sum degenerated to `length(gk) · body[gk = outer_k]`.
+# `_sub_preserving` (expression.jl) must not substitute straight through a
+# nested aggregate's own binders: an inlined column sum would lose its loop
+# variable while `ranges` still declared it — the unroll would then emit
+# `length(gk)` IDENTICAL terms and the sum degenerate to
+# `length(gk) · body[gk = outer_k]`.
 #
 # The shape below is the ReSEACT PBL mixing operator reduced to its essentials:
 # `gk` is CONTRACTED in `w` and an OUTPUT index in `mean`, so inlining `w` into
 # `mean` puts the two binders in the same body. Materializing `w` (the default
-# `:inplace` build) hides the collision behind a buffer gather, which is why the
-# defect was invisible there and reached only the INLINING build
-# (`compiler=:interpreter`).
+# `:inplace` build) hides the collision behind a buffer gather, so only the
+# INLINING build (`compiler=:interpreter`) exercises it.
 @testset "inlined aggregate does not capture a reader's loop variable" begin
     NI, NK = 2, 4
     _agg(out, rngs, body) = Dict{String, Any}(
@@ -779,12 +777,10 @@ end
 # An out-of-place BUILD materializes array observeds too, and its plan agrees
 # with the in-place build's.
 #
-# Materialization used to be `:inplace`-only, which made INLINING mandatory for
-# the out-of-place form — and inlining is superlinear, because a reader spliced
-# with a reduction body pays that whole body per output cell. On ReSEACT the
-# same model took 2 GiB materialized and blew past 39 GiB inlined at the
-# smallest grid it builds, so a compiled build was not merely slower, it was
-# impossible.
+# Without materialization the out-of-place form would have to INLINE, and
+# inlining is superlinear, because a reader spliced with a reduction body pays
+# that whole body per output cell; on a model like ReSEACT that makes a compiled
+# build impossible, not merely slower.
 @testset "an out-of-place build materializes array observeds too" begin
     Ns = 6
     isetsO = Dict("x" => ESM_AOM.IndexSet("interval"; size = Ns))

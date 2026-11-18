@@ -8,70 +8,26 @@
 # (Julia) runs the OFFICIAL `run_inline_tests` pathway over the committed fixtures
 # and must reproduce the committed goldens (which that same pathway minted).
 #
-# This is the conformance GATE for the 0-D `ic` fix. Before it, Python dropped
-# every 0-D `ic` on BOTH of its pathways and Rust dropped it on its scalar
-# interpreter, in each case silently seeding the state from its declared
-# `default` and still reporting a test verdict. Every state in `scalar_ic.esm`
-# declares a `default` that DIFFERS from its `ic` so that substitution cannot
-# hide, and `y` integrates `D(y)/dt = u` so the seeded value must also reach the
+# Every state in `scalar_ic.esm` declares a `default` that DIFFERS from its `ic`,
+# so a binding that seeds from the `default` cannot pass, and `y` integrates
+# `D(y)/dt = u` so the seeded value must also reach the
 # trajectory. See tests/conformance/scalar_ic/.
 
 using Test
 using JSON3
 using EarthSciAST
 import SciMLBase
-import SciMLBase: solve, remake
+import SciMLBase: solve
 import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _SIC_CAT_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic")
-const _SIC_MANIFEST = joinpath(_SIC_CAT_DIR, "manifest.json")
 
 @testset "Conformance: scalar_ic (manifest-driven)" begin
-    @test isfile(_SIC_MANIFEST)
-    manifest = JSON3.read(read(_SIC_MANIFEST, String))
-    @test manifest.category == "scalar_ic"
-    @test !isempty(manifest.fixtures)
-    @test "julia" in manifest.bindings_required
-    @test "python" in manifest.bindings_required
-    @test "rust" in manifest.bindings_required
-
-    rtol = Float64(manifest.tolerances.assertion_rtol)
-    atol = Float64(manifest.tolerances.assertion_atol)
-
-    for fixture in manifest.fixtures
-        id = String(fixture.id)
-        @testset "$(id)" begin
-            esm_path = joinpath(_SIC_CAT_DIR, String(fixture.path))
-            golden_path = joinpath(_SIC_CAT_DIR, String(fixture.golden))
-            @test isfile(esm_path)
-            @test isfile(golden_path)
-
-            golden = JSON3.read(read(golden_path, String))
-            @test String(golden.reference_binding) == "julia"
-
-            results = run_inline_tests(
-                esm_path; model_name = String(fixture.model),
-                alg = OrdinaryDiffEqTsit5.Tsit5(),
-                reltol = 1.0e-12, abstol = 1.0e-14
-            )
-            @test length(results) == length(golden.assertions)
-
-            # Index by (test_id, assertion_idx) and gate each against BOTH the
-            # golden actual (the cross-binding anchor) and the fixture's own
-            # declared `expected` (author intent, via `r.passed`).
-            by_key = Dict((r.test_id, r.assertion_idx) => r for r in results)
-            for g in golden.assertions
-                key = (String(g.test_id), Int(g.assertion_idx))
-                @test haskey(by_key, key)
-                r = by_key[key]
-                @test r.passed
-                @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
-            end
-        end
-    end
+    # Each golden actual by `(test_id, assertion_idx)` (the cross-binding
+    # anchor), and the fixture's declared `expected` through `r.passed`.
+    check_inline_golden("scalar_ic", OrdinaryDiffEqTsit5.Tsit5(); by_test = true)
 end
 
 # Direct unit coverage of the seeding precedence the category gates, on the

@@ -427,15 +427,13 @@ end
 # A COMPUTED array observed `scaled = mult * base` of arbitrary rank over a
 # const `base`, plus a trivial state `u` (D(u) = scaled) so the solve runs.
 # Asserting DIRECTLY on `scaled` drives `_observed_field`, whose cell sweep is
-# a `CartesianIndices` comprehension: rank≥2 yields a Matrix, and the pre-fix
-# `sort!` on it threw `UndefKeywordError: dims`. Pins the `vec()` fix and the
-# row-major (lexicographic) cell mapping that pairs with the value layout.
+# a `CartesianIndices` comprehension: rank≥2 yields a Matrix, which must be
+# flattened with `vec()` before sorting. Pins that and the row-major
+# (lexicographic) cell mapping that pairs with the value layout.
 #
-# esm 1.0.0 (§6.3, §6.3.1): `base` and `scaled` are declared as plain `unknown`s
-# and are made OBSERVED by their bare-variable-LHS equations below — a variable
-# carries no `expression` field any more, so what was
-# `{"type":"observed","expression":E}` is now `{"type":"unknown"}` plus
-# `{"lhs":"<name>","rhs":E}` in the model's `equations`.
+# esm §6.3, §6.3.1: `base` and `scaled` are declared as plain `unknown`s and are
+# made OBSERVED by their bare-variable-LHS equations below (`{"type":"unknown"}`
+# plus `{"lhs":"<name>","rhs":E}` in the model's `equations`).
 function _pit_observed_doc(
         sizes::Vector{Int}, mult::Float64, base_nested,
         assertions::Vector
@@ -633,9 +631,9 @@ end
 end
 
 @testset "inline-Expression §6.6.5 reference loaded from file (parse fix)" begin
-    # A JSON3-loaded inline reference is an `AbstractDict`; the pre-fix
-    # `coerce_assertion` misclassified it as `from_file` and `run_inline_tests`
-    # rejected it ("unsupported `reference` shape Dict"). At t=0 the cos(pi x)
+    # A JSON3-loaded inline reference is an `AbstractDict`; `coerce_assertion`
+    # must not misclassify it as `from_file`, or `run_inline_tests` rejects it
+    # ("unsupported `reference` shape Dict"). At t=0 the cos(pi x)
     # ic exactly equals the cos(pi x) analytic reference → relative L2 ≈ 0.
     file = _pit_load(
         _pit_decay_doc(

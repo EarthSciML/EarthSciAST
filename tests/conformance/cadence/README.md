@@ -74,8 +74,8 @@ structural fixture `tests/valid/faq/edge_enumeration_area_eff.esm`.
 
 ## Two phases
 
-All three producers have landed — Julia (`ess-my4.3.7`,
-`EarthSciAST.Cadence`), Rust (`ess-my4.3.8`), and Python
+All three producers have landed — Julia (`ess-my4.3.7`, the package's
+typed classifier in `src/cadence.jl`), Rust (`ess-my4.3.8`), and Python
 (`ess-my4.3.9`) — and all three adapters are now wired into
 `scripts/test-conformance.sh` (`run_cadence_conformance_{julia,rust,python}`,
 ess-my4.3.10). The harness still runs in two phases, exactly like the determinism

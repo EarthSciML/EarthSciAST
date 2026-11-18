@@ -1,4 +1,4 @@
-# Named scalar-observed prelude slots (ess-obs-slots).
+# Named scalar-observed prelude slots.
 #
 # A SCALAR observed compiles ONCE as a NAMED PRELUDE DEF (an `_NK_CACHED` slot
 # evaluated in dependency order before the equations) instead of being spliced
@@ -28,7 +28,7 @@ _obs_v(n) = VarExpr(n)
 _obs_op(op, args...; kw...) = OpExpr(op, ESM.ASTExpr[args...]; kw...)
 _obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
 
-@testset "scalar observeds compile as named prelude slots (ess-obs-slots)" begin
+@testset "scalar observeds compile as named prelude slots" begin
 
     # ----------------------------------------------------------------
     # The basic slot: one observed, several readers — one named def, zero

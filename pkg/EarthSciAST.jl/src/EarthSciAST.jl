@@ -14,11 +14,8 @@ those packages loaded, `flatten` still produces a pure-Julia `FlattenedSystem`
 snapshot, and the MTK-free tree-walk runtime (`esm_problem`)
 runs it end to end.
 
-Two features live in namespaced submodules rather than the flat namespace:
-`EarthSciAST.Cadence` (the conformance-only raw-JSON cadence classifier,
-spec §5.7 — the §5.7 pass driver itself lives in the conformance adapter,
-`scripts/cadence_adapter.jl`) and `EarthSciAST.Relational` (build-time
-relational kernels). Their generic names (`classify`, `equijoin`, …) are
+The build-time relational kernels live in the submodule
+`EarthSciAST.Relational`; their generic names (`distinct`, `equijoin`, …) are
 deliberately not re-exported — reach them qualified.
 """
 module EarthSciAST
@@ -28,11 +25,13 @@ using JSON3
 using JSONSchema
 using LinearAlgebra   # BLAS `mul!` accelerator for linear mat-vec observeds (inline_tests.jl)
 # The threaded RHS tier needs a thread dispatch that does NOT allocate a task
-# per call (see access_kernel.jl, "Threaded cell axis"). Base
-# `Threads.@threads :static` allocates ~1.6 kB per dispatch; Polyester reuses a
-# persistent, spin-then-sleep pool. It is a hard dependency: native threads its
-# compiled sections whenever Julia runs with more than one thread.
+# per call (tree_walk/threading.jl): Polyester's persistent, spin-then-sleep
+# worker pool, driven through ThreadingUtilities and PolyesterWeave directly.
+# A hard dependency: native threads its compiled sections whenever Julia runs
+# with more than one thread.
 using Polyester: Polyester
+using PolyesterWeave: PolyesterWeave
+using ThreadingUtilities: ThreadingUtilities
 using RuntimeGeneratedFunctions
 using SHA: SHA
 using Serialization: Serialization

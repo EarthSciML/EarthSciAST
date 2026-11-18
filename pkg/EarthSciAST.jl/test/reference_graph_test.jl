@@ -1,7 +1,7 @@
 # Unit tests for src/reference_graph.jl — build-time reference resolution
 # (semiring-FAQ node addressing, RFC semiring-faq-unified-ir §6.1).
 #
-# Covers the four acceptance criteria of the node-addressing bead:
+# Covers four properties of node addressing:
 #   1. a derived index set resolves its from_faq to a specific node;
 #   2. a join factor resolves to its referenced factor;
 #   3. references are edges queryable by the partition pass;
@@ -329,11 +329,10 @@ eqn(lhs, rhs) = Dict{String, Any}("lhs" => lhs, "rhs" => rhs)
     # Every other test in this file writes `index_sets` INSIDE the model,
     # which is the pre-0.8.0 shape. esm 1.0.0 puts the registry at the top
     # level of the document (`esm-schema.json` declares `index_sets` at
-    # `/properties/index_sets` and nowhere else), and this pass read only the
-    # model key — so on a real 1.0.0 document every `ranges[*].from` target
-    # looked undeclared and the pass THREW `undeclared_index_set` where
-    # Python, Rust and Go all built the graph. The whole existing suite passed
-    # throughout, because none of it used the 1.0.0 shape.
+    # `/properties/index_sets` and nowhere else), so the pass must read the
+    # document registry: a pass that reads only the model key sees every
+    # `ranges[*].from` target as undeclared and throws `undeclared_index_set`
+    # where Python, Rust and Go all build the graph.
     # ---------------------------------------------------------------------
     @testset "index_sets at DOCUMENT scope (esm 1.0.0 flat shape)" begin
         # One model, no model-local `index_sets`; the registry is a sibling of
@@ -353,9 +352,8 @@ eqn(lhs, rhs) = Dict{String, Any}("lhs" => lhs, "rhs" => rhs)
             "models" => Dict("M" => model)
         )
 
-        # (a) The pre-fix read: no registry threaded, no model-local key, so
-        #     the FIRST `ranges[*].from` is undeclared and the build throws.
-        #     This is exactly what `resolve_references` used to do.
+        # (a) No registry threaded, no model-local key, so the FIRST
+        #     `ranges[*].from` is undeclared and the build throws.
         err = try
             build_reference_graph(model, "M")
             nothing
@@ -365,7 +363,7 @@ eqn(lhs, rhs) = Dict{String, Any}("lhs" => lhs, "rhs" => rhs)
         @test err isa ReferenceResolutionError
         @test err.code == ESS.E_REF_UNDECLARED_INDEX_SET
 
-        # (b) With the document registry threaded — the fixed behaviour — the
+        # (b) With the document registry threaded, the
         #     graph builds, both index sets are vertices, both `range_from`
         #     edges exist, and the derived set resolves its `from_faq`.
         g = build_reference_graph(model, "M", document["index_sets"])
@@ -438,9 +436,9 @@ eqn(lhs, rhs) = Dict{String, Any}("lhs" => lhs, "rhs" => rhs)
     #
     # `index_sets` is a document-scoped registry, so a `kind:"derived"` entry is
     # visible to every model and its producing node may live in ANY of them.
-    # Every binding used to resolve `from_faq` against one model's nodes, which
-    # made the cross-model shape unresolvable. The consequence: node ids are
-    # unique per DOCUMENT, not per model.
+    # Resolving `from_faq` against one model's nodes would make the cross-model
+    # shape unresolvable. The consequence: node ids are unique per DOCUMENT,
+    # not per model.
     @testset "from_faq resolves at document scope" begin
         producer = Dict{String, Any}(
             "equations" => [

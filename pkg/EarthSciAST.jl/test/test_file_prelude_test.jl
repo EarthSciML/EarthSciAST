@@ -61,12 +61,15 @@ using Test
 
 const _PRELUDE_TEST_DIR = @__DIR__
 const _PRELUDE_PKG_DIR = normpath(joinpath(_PRELUDE_TEST_DIR, ".."))
-# The ModelingToolkit / Catalyst suite: its own driver and environment, the same
-# two invariants (see test/mtk/runtests.jl).
+# The ModelingToolkit / Catalyst and Reactant suites: each its own driver and
+# environment, the same two invariants (see test/mtk/runtests.jl and
+# test/reactant/runtests.jl).
 const _PRELUDE_MTK_DIR = joinpath(_PRELUDE_TEST_DIR, "mtk")
+const _PRELUDE_REACTANT_DIR = joinpath(_PRELUDE_TEST_DIR, "reactant")
+const _PRELUDE_SUBSUITES = (_PRELUDE_MTK_DIR, _PRELUDE_REACTANT_DIR)
 
 # The spellings of the prelude include: `testutils.jl` from this directory,
-# `../testutils.jl` from test/mtk/.
+# `../testutils.jl` from a sub-suite's.
 const _PRELUDE_TESTUTILS_INCLUDES = ("testutils.jl", "../testutils.jl")
 
 # ---------------------------------------------------------------------------
@@ -206,7 +209,7 @@ end
 
 Every package name this project declares — `[deps]`, `[weakdeps]` and
 `[extras]` of Project.toml, plus the package's own `name` — and every `[deps]`
-entry of the ModelingToolkit suite's test/mtk/Project.toml. A `Mod.` reference
+entry of the sub-suites' environments (test/mtk/, test/reactant/). A `Mod.` reference
 to anything outside this set is some local alias or a submodule, not an import
 this check has an opinion about.
 """
@@ -214,7 +217,7 @@ function _declared_packages()
     out = Set{Symbol}()
     for project in (
             joinpath(_PRELUDE_PKG_DIR, "Project.toml"),
-            joinpath(_PRELUDE_MTK_DIR, "Project.toml"),
+            (joinpath(d, "Project.toml") for d in _PRELUDE_SUBSUITES)...,
         )
         _declared_packages!(out, project)
     end
@@ -306,7 +309,7 @@ function _missing_prelude(
     isempty(borrowed) || has_tu ||
         push!(
         missing_lines,
-        "include(\"$(dirname(path) == _PRELUDE_MTK_DIR ? "../" : "")testutils.jl\")" *
+        "include(\"$(dirname(path) in _PRELUDE_SUBSUITES ? "../" : "")testutils.jl\")" *
             "   # uses " * join(borrowed, ", ")
     )
 
@@ -331,9 +334,10 @@ end
         joinpath(dir, f) for f in sort!(readdir(dir))
             if endswith(f, ".jl") && f != "runtests.jl"
     ]
-    files = vcat(sweep(_PRELUDE_TEST_DIR), sweep(_PRELUDE_MTK_DIR))
+    files = vcat(sweep(_PRELUDE_TEST_DIR), sweep(_PRELUDE_MTK_DIR), sweep(_PRELUDE_REACTANT_DIR))
     @test count(f -> dirname(f) == _PRELUDE_TEST_DIR, files) > 100   # the sweep is not vacuous
-    @test count(f -> dirname(f) == _PRELUDE_MTK_DIR, files) > 10     # …in either suite
+    @test count(f -> dirname(f) == _PRELUDE_MTK_DIR, files) > 10     # …in any suite
+    @test count(f -> dirname(f) == _PRELUDE_REACTANT_DIR, files) >= 5
 
     offenders = String[]
     for f in files
@@ -364,16 +368,17 @@ end
 # and the native-versus-interpreter agreement, none of it run.
 #
 # The check is textual on purpose: a driver names each file as a string in its
-# `GROUPS` table. A group a run leaves out (`reactant` without
-# `ESM_TEST_REACTANT=1`) still NAMES its files, which is the property being
-# pinned — that the driver knows the file exists.
+# file table. A group a run leaves out (`ESM_TEST_GROUPS`) still NAMES its
+# files, which is the property being pinned — that the driver knows the file
+# exists.
 #
-# Both suites, each against its own driver: test/runtests.jl (`Pkg.test()`) for
+# Every suite, each against its own driver: test/runtests.jl (`Pkg.test()`) for
 # this directory, test/mtk/runtests.jl (the ModelingToolkit CI workflow) for
-# test/mtk/.
+# test/mtk/, test/reactant/runtests.jl (the XLA CI workflow) for test/reactant/.
 @testset "runtests.jl names every test file: $(suite)" for (suite, dir, at_least) in (
         ("test/", _PRELUDE_TEST_DIR, 100),
         ("test/mtk/", _PRELUDE_MTK_DIR, 10),
+        ("test/reactant/", _PRELUDE_REACTANT_DIR, 4),
     )
     driver = read(joinpath(dir, "runtests.jl"), String)
     named = Set{String}(m.captures[1] for m in eachmatch(r"\"([^\"/]+_test\.jl)\"", driver))
