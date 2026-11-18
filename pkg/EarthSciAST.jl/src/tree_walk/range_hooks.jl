@@ -29,7 +29,7 @@ _range_observed_box(::Nothing, name, dims) = (ones(Int, length(dims)), copy(dims
 _range_fill_equations(::Nothing, name, def, dims, box) =
     _materialized_fill_equations(name, def, dims)
 
-# The document and build keywords the AbstractDict front door hands the typed
+# The document and build keywords the front door (`_front_door`) hands the
 # build, recorded so a restriction re-lowers without re-reading the document.
 _range_front_door_done(::Nothing, file, model_name, kwd) = nothing
 

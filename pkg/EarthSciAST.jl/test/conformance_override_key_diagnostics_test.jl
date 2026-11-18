@@ -95,7 +95,7 @@ const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
                 catch e
                     e
                 end
-                @test err isa ArgumentError
+                @test err isa SimulateError
                 msg = err === nothing ? "" : sprint(showerror, err)
                 # The diagnostic must name the offending key...
                 @test occursin(key, msg)
@@ -138,29 +138,28 @@ end
     @test ns == Set{String}(["Left", "Right"])
     @test EarthSciAST._dotted_suffix_hit(names, ns, "Doc.Left.solo") === nothing
     @test EarthSciAST._dotted_suffix_hit(names, ns, "Left.Left.solo") == "Left.solo"
-    _, unknown, _, _ = EarthSciAST._canonicalize_override_keys(
-        Float64, names, ns, Dict("Doc.Left.solo" => 9.0)
+    _, unknown, _, _ = EarthSciAST.canonicalize_keys(
+        Float64, EarthSciAST.NameTable(names; namespaces = ns), Dict("Doc.Left.solo" => 9.0)
     )
     @test unknown == ["Doc.Left.solo"]
     # The §4.6 fully-qualified spelling of a name the build holds shorter, with
     # `P` the model's own name and `sub` its mounted subsystem.
     sub_names = Set{String}(["sub.g", "g"])
     sub_ns = EarthSciAST._override_namespaces(sub_names; model_name = "P")
-    sub, u, a, c = EarthSciAST._canonicalize_override_keys(
-        Float64, sub_names, sub_ns, Dict("P.sub.g" => 1.5)
+    sub, u, a, c = EarthSciAST.canonicalize_keys(
+        Float64, EarthSciAST.NameTable(sub_names; namespaces = sub_ns), Dict("P.sub.g" => 1.5)
     )
     @test sub == Dict("sub.g" => 1.5)
     @test isempty(u) && isempty(a) && isempty(c)
     # ...and with `P` out of scope the same key names nothing.
-    _, u_np, _, _ = EarthSciAST._canonicalize_override_keys(
-        Float64, sub_names, EarthSciAST._override_namespaces(sub_names),
-        Dict("P.sub.g" => 1.5)
+    _, u_np, _, _ = EarthSciAST.canonicalize_keys(
+        Float64, EarthSciAST.NameTable(sub_names; namespaces = EarthSciAST._override_namespaces(sub_names)), Dict("P.sub.g" => 1.5)
     )
     @test u_np == ["P.sub.g"]
     # A key none of whose suffixes is a name, and which is the suffix of no
     # name either, stays UNKNOWN under both rule 2 and the widened rule 3.
-    _, u2, _, _ = EarthSciAST._canonicalize_override_keys(
-        Float64, names, ns, Dict("Missing.solo" => 1.0)
+    _, u2, _, _ = EarthSciAST.canonicalize_keys(
+        Float64, EarthSciAST.NameTable(names; namespaces = ns), Dict("Missing.solo" => 1.0)
     )
     @test u2 == ["Missing.solo"]
 end
@@ -176,8 +175,8 @@ end
     names = Set{String}(["P.sub.g", "P.x0"])
     ns = EarthSciAST._override_namespaces(names)
     for key in ("P.sub.g", "sub.g", "g")
-        n, u, a, c = EarthSciAST._canonicalize_override_keys(
-            Float64, names, ns, Dict(key => 1.5)
+        n, u, a, c = EarthSciAST.canonicalize_keys(
+            Float64, EarthSciAST.NameTable(names; namespaces = ns), Dict(key => 1.5)
         )
         @test n == Dict("P.sub.g" => 1.5)
         @test isempty(u) && isempty(a) && isempty(c)
@@ -185,8 +184,8 @@ end
     # A key that is the suffix of NOTHING stays unknown: widening rule 3 must
     # not turn it into a trailing-segment match on `P.sub.g`.
     for key in ("Missing.solo", "Missing.g", "x.sub.g")
-        _, u, _, _ = EarthSciAST._canonicalize_override_keys(
-            Float64, names, ns, Dict(key => 1.5)
+        _, u, _, _ = EarthSciAST.canonicalize_keys(
+            Float64, EarthSciAST.NameTable(names; namespaces = ns), Dict(key => 1.5)
         )
         @test u == [key]
     end
@@ -194,15 +193,15 @@ end
     two = Set{String}(["Left.sub.g", "Right.sub.g"])
     two_ns = EarthSciAST._override_namespaces(two)
     for key in ("sub.g", "g")
-        _, u, a, _ = EarthSciAST._canonicalize_override_keys(
-            Float64, two, two_ns, Dict(key => 1.5)
+        _, u, a, _ = EarthSciAST.canonicalize_keys(
+            Float64, EarthSciAST.NameTable(two; namespaces = two_ns), Dict(key => 1.5)
         )
         @test isempty(u)
         @test sort(a[key]) == ["Left.sub.g", "Right.sub.g"]
     end
     # Two spellings of ONE name still collide rather than racing.
-    _, _, _, c = EarthSciAST._canonicalize_override_keys(
-        Float64, names, ns, Dict("sub.g" => 1.5, "g" => 2.5)
+    _, _, _, c = EarthSciAST.canonicalize_keys(
+        Float64, EarthSciAST.NameTable(names; namespaces = ns), Dict("sub.g" => 1.5, "g" => 2.5)
     )
     @test c == Dict("P.sub.g" => ["g", "sub.g"])
 end
@@ -211,7 +210,9 @@ end
     names = Set{String}(["Left.solo"])
     ns = Set{String}(["A", "B", "Doc", "Left"])
     collide(pairs) = begin
-        _, u, a, c = EarthSciAST._canonicalize_override_keys(Float64, names, ns, Dict(pairs))
+        _, u, a, c = EarthSciAST.canonicalize_keys(
+            Float64, EarthSciAST.NameTable(names; namespaces = ns), Dict(pairs)
+        )
         @test isempty(u)
         @test isempty(a)
         c
@@ -226,9 +227,8 @@ end
         Dict("Left.solo" => ["A.Left.solo", "B.Left.solo"])
     # An EXACT hit wins outright over the competing suffix claims, which are
     # discarded rather than reported.
-    n, u, a, c = EarthSciAST._canonicalize_override_keys(
-        Float64, names, ns,
-        Dict("Left.solo" => 1.0, "solo" => 2.0, "Doc.Left.solo" => 9.0)
+    n, u, a, c = EarthSciAST.canonicalize_keys(
+        Float64, EarthSciAST.NameTable(names; namespaces = ns), Dict("Left.solo" => 1.0, "solo" => 2.0, "Doc.Left.solo" => 9.0)
     )
     @test n == Dict("Left.solo" => 1.0)
     @test isempty(u) && isempty(a) && isempty(c)
@@ -257,7 +257,7 @@ end
     catch e
         e
     end
-    @test err isa ArgumentError
+    @test err isa SimulateError
     msg = err === nothing ? "" : sprint(showerror, err)
     @test occursin("2 keys designate the parameter 'Left.solo'", msg)
     @test occursin("Left.Left.solo, solo", msg)

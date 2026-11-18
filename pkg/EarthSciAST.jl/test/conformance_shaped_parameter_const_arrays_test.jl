@@ -54,7 +54,7 @@ end
         ),
         EarthSciAST.Equation[]
     )
-    @test_throws ArgumentError EarthSciAST._normalize_const_array_keys(
+    @test_throws SimulateError EarthSciAST._normalize_const_array_keys(
         two, Dict{String, Any}("k" => [1.0])
     )
     one = EarthSciAST.Model(
@@ -63,7 +63,7 @@ end
         ),
         EarthSciAST.Equation[]
     )
-    @test_throws ArgumentError EarthSciAST._normalize_const_array_keys(
+    @test_throws SimulateError EarthSciAST._normalize_const_array_keys(
         one, Dict{String, Any}("k" => [1.0], "sub.k" => [2.0])
     )
     # An exact key wins over a local one, and data that is no parameter's value

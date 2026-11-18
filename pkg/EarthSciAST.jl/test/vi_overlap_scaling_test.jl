@@ -417,7 +417,7 @@ end
 
     # The build-time field read the Problem makes: against the flattened run
     # document, whose one model is `Flattened`.
-    file = ESS.coerce_esm_file(rep.run_doc)
+    file = rep.run_file
     (fwd_field, _), counts = ESS.Internal.counting() do
         ESS._observed_field(insp, file, String(first(keys(file.models))), "Fwd.Emis")
     end

@@ -842,9 +842,9 @@ function compile_kernels(prob::EsmProblem, specs)
             ERROR_CODES.COMPILER_UNAVAILABLE
         )
     )
-    seed = _program_seed(prob)
+    seed = prob.build.seed
     seed === nothing && throw(SimulateError("compile_kernels: this Problem carries no program seed"))
-    flat = seed.flat
+    flat = seed.prep.flat
     s = stripped(prob)
     znames = String[b.name for b in s.z_layout]
     all_states = Set{String}(keys(flat.state_variables))

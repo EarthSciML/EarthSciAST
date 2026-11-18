@@ -85,15 +85,16 @@ end
     end
 
     @testset "removed `call` op is refused" begin
-        # The build reads the flattened run document, whose parse refuses it.
+        # A load refuses it by name; a tree built in memory reaches the build,
+        # whose operator gate refuses it.
         err = try
             _eval1(_op("call", _n(1.0)))
             nothing
         catch e
             e
         end
-        @test err isa ESM.ParseError
-        @test err isa ESM.ParseError && occursin("`call` op", sprint(showerror, err))
+        @test err isa ESM.TreeWalkError && err.code == "unlowered_operator" &&
+            occursin("'call'", sprint(showerror, err))
     end
 
     @testset "Graceful errors on unsupported ops" begin
