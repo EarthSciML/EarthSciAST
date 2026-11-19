@@ -1326,6 +1326,7 @@ function _build_evaluator_impl_inner(
         calls = _CallTable(_template_reg)
         # The index-set registry a call body's `{"from": S}` range reads.
         calls.tt.root_memos[:index_sets] = index_sets
+        calls.tt.root_memos[:vi_extents] = _vi_extents
         _build_state().calls = calls
         map_expressions!(e -> _tpl_structural_refs(calls.tt, e), model)
         # An ELEMENT read of an aggregate or makearray body (`index(ref, s…)`)

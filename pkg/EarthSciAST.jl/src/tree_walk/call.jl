@@ -1754,7 +1754,7 @@ function _tpl_refusal(tt::_TplTable, call::OpExpr)
         s = _TPL_ARG * p
         kind = s in info.arrays ? "array" : s in info.fixed ? "fixed" :
             s in info.uncond ? "value" : s in info.scalars ? "conditional" : "unread"
-        vop = v isa OpExpr ? v.op : v isa VarExpr ? "name" : "literal"
+        vop = v isa OpExpr ? first(JSON3.write(serialize_expression(v)), 160) : v isa VarExpr ? "name" : "literal"
         push!(bad, "$p:$kind=$vop")
     end
     return "binding: " * join(bad, " ")

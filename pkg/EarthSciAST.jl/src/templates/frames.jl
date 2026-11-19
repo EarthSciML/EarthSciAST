@@ -764,16 +764,24 @@ function _tpl_call_info_uncached(tt::_TplTable, name::String)
     return info
 end
 
-# The size of the interval index set a range `{"from": S}` names, from the
-# build's registry (set at the build entry), or `nothing` (not an interval of
-# known size, a ragged range, no registry in reach).
+# The size of the index set a range `{"from": S}` names, from the build's
+# registry (set at the build entry): an interval's size, a derived set's
+# extent from value invention; `nothing` otherwise (a ragged range, no
+# registry in reach).
 function _tpl_iset_extent(tt::_TplTable, rv::IndexSetRef)
     isempty(rv.of) || return nothing
     sets = get(tt.root_memos, :index_sets, nothing)
     sets === nothing && return nothing
     s = get(sets, rv.from, nothing)
-    (s isa IndexSet && s.kind == "interval" && s.size isa Int) || return nothing
-    return s.size::Int
+    s isa IndexSet || return nothing
+    s.kind == "interval" && s.size isa Int && return s.size::Int
+    # A derived set the front door's value invention has sized.
+    if s.kind == "derived" && s.from_faq !== nothing
+        ext = get(tt.root_memos, :vi_extents, nothing)
+        e = ext === nothing ? nothing : get(ext, s.from_faq, nothing)
+        e === nothing || return Int(e)
+    end
+    return nothing
 end
 
 # A range bound the build can fix: an integer literal, or a parameter (fixed).
