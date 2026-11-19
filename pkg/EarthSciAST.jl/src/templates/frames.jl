@@ -282,7 +282,7 @@ function _tpl_frame(tt::_TplTable, call::OpExpr, parent::Union{Nothing, _TplFram
         )
     end
     for k in keys(bind)
-        (k in def.params || startswith(k, _TPL_FREE)) || throw(
+        (k in def.params || startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT)) || throw(
             ExpressionTemplateError(
                 ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 "apply_expression_template '$name' supplies unknown param '$k'"
@@ -537,8 +537,11 @@ struct _TplCallInfo
     arrays::Set{String}
     fixed::Set{String}
     scalars::Set{String}      # every sentinel read as a value (any path)
+    outs::Vector{String}      # an array-valued body's output indices (empty: scalar)
 end
-_TplCallInfo() = _TplCallInfo(Set{String}(), Set{String}(), Set{String}(), Set{String}())
+_TplCallInfo() = _TplCallInfo(Set{String}(), Set{String}(), Set{String}(), Set{String}(), String[])
+
+const _TPL_OUT = "\0out\0"
 
 # Per template name: `nothing` when the build does not call it yet, else its
 # `_TplCallInfo`.
@@ -560,7 +563,21 @@ function _tpl_call_info_uncached(tt::_TplTable, name::String)
     def = _tpl_def(tt, name)
     def.closed === nothing && return nothing
     info = _TplCallInfo()
-    _tpl_call_walk!(tt, def.closed.body, false, info) || return nothing
+    body = def.closed.body
+    # An ARRAY-VALUED body, `faq` over its output indices only (no reduction):
+    # its element at subscripts `s…` is the expression with each output index
+    # read as `s`. It is called through `index(ref, s…)` (call.jl `_elem_call`).
+    if body isa OpExpr && _is_faq_op(body.op) && body.output_idx !== nothing && !isempty(body.output_idx)
+        oi = body.output_idx
+        all(x -> x isa AbstractString, oi) || return nothing
+        (body.filter === nothing && body.join_gates === nothing && body.key === nothing &&
+            body.expr_body !== nothing) || return nothing
+        outs = String[String(x) for x in oi]
+        body.ranges === nothing || all(k -> String(k) in outs, keys(body.ranges)) || return nothing
+        append!(info.outs, outs)
+        body = body.expr_body
+    end
+    _tpl_call_walk!(tt, body, false, info) || return nothing
     # A name is read one way only; an implicit parameter is never fixed (its
     # value is the caller's, not a literal at the reference).
     isempty(intersect(info.arrays, info.scalars)) || return nothing

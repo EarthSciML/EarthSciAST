@@ -209,6 +209,24 @@ function _call_target(expr::OpExpr)
     return _call_target(ct, expr)
 end
 
+# The fixed parameters of a reference (`info.fixed`: reduction or output range
+# bounds) with their integer literal values, into `S`.
+function _call_fixed!(S::Dict{String, Any}, name, info::_TplCallInfo, b::AbstractDict)
+    for s in info.fixed
+        p = s[(ncodeunits(_TPL_ARG) + 1):end]
+        v = _call_arg(b, s)
+        iv = v isa IntExpr ? Int(v.value) : v isa NumExpr && isinteger(v.value) ? Int(v.value) :
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_OP",
+                "template '$name': parameter '$p' bounds a range and needs an integer literal"
+            )
+        )
+        S[p] = iv
+    end
+    return S
+end
+
 # The target of reference `call`: one per INSTANCE, keyed by the template,
 # the value of each fixed parameter (a reduction bound, substituted into the
 # instance's body), and the kind of each array argument. Arrays themselves are
@@ -231,18 +249,9 @@ function _call_target(ct::_CallTable, call::OpExpr)
     io = IOBuffer()
     print(io, name)
     if info !== nothing
-        for s in sort!(collect(info.fixed))
-            p = s[(ncodeunits(_TPL_ARG) + 1):end]
-            v = _call_arg(b, s)
-            iv = v isa IntExpr ? Int(v.value) : v isa NumExpr && isinteger(v.value) ? Int(v.value) :
-                throw(
-                TreeWalkError(
-                    "E_TREEWALK_UNSUPPORTED_OP",
-                    "template '$name': parameter '$p' bounds a reduction and needs an integer literal"
-                )
-            )
-            S[p] = iv
-            print(io, '\x01', p, '=', iv)
+        _call_fixed!(S, name, info, b)
+        for p in sort!(collect(keys(S)))
+            print(io, '\x01', p, '=', S[p])
         end
         for s in sort!(collect(info.arrays))
             v = _call_arg(b, s)
@@ -258,15 +267,30 @@ function _call_target(ct::_CallTable, call::OpExpr)
             end
         end
     end
+    outs = info === nothing ? String[] : info.outs
+    isempty(outs) || print(io, '\x03', "elem")
     key = String(take!(io))
     got = get(ct.targets, key, nothing)
     got === nothing || return got
     inst = _tpl_inst_closed(ct.tt, def, S)
+    ibody = inst.body
+    if !isempty(outs)
+        # The element body: the output indices are arguments (`_elem_call`).
+        haskey(b, _TPL_OUT * outs[1]) || throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_OP",
+                "array-valued template '$name' is read other than through `index`"
+            )
+        )
+        m = Dict{String, ASTExpr}(o => VarExpr(_TPL_OUT * o) for o in outs)
+        ibody = _tpl_subst_scoped((ibody::OpExpr).expr_body, m, IdDict{OpExpr, ASTExpr}())
+    end
     arrslots = sort!(collect(keys(arrkind)))
     slots = String[_TPL_ARG * p for p in def.params if !haskey(S, p)]
     append!(slots, String[_TPL_FREE * n for n in inst.free])
     filter!(s -> !haskey(arrkind, s), slots)
     sort!(slots)
+    append!(slots, String[_TPL_OUT * o for o in outs])
     tg = _CallTarget(
         name, key, slots, arrslots, Symbol[arrkind[s] for s in arrslots],
         Vector{Int}[get(arrdims, s, Int[]) for s in arrslots],
@@ -288,7 +312,7 @@ function _call_target(ct::_CallTable, call::OpExpr)
         # unmemoized pass would walk it as a tree.
         bm = _BuildMemo()
         rb = _resolve_indices(
-                inst.body, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), _EMPTY_VARMAP,
+                ibody, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), _EMPTY_VARMAP,
                 _EMPTY_CONST_ARRAYS, _EMPTY_PGATHER, bm
             )
         _compile(rb, _EMPTY_VARMAP, Set{Symbol}(), bm)
@@ -468,6 +492,103 @@ end
 
 @inline _eval_arg(n::_Node, ::Type{T}) where {T} =
     (tg = n.payload::_CallTarget; _argstack_read(tg.stack, tg.fp + n.idx, T))
+
+# ---- Array-valued templates ------------------------------------------------------
+# An array-valued template (its body a `faq` over its output indices, frames.jl
+# `_TplCallInfo.outs`) is read two ways, both rewritten ONCE at the build entry
+# (`_tpl_whole_views`), so no later phase tests for them:
+#
+#   * its ELEMENT, `index(ref, s...)`, is the ELEMENT CALL: the same reference
+#     with each output index `o` bound to its subscript (`"\0out\0o" => s`). It
+#     is a scalar call like any other; its target's body is the `faq`'s
+#     expression with the output indices read as those arguments
+#     (`_call_target`). A subscript is an index expression: pure and cheap, so
+#     it is passed as a value whatever the body does with it.
+#   * the WHOLE ARRAY, where the reference stands as an array (an equation's
+#     right-hand side, a `makearray` region value), is the aggregate over the
+#     template's output indices and ranges whose element is the element call:
+#
+#         ref  ==  faq(output_idx = o, ranges = R, expr = ref[o => o])
+#
+#     This is the definition of an array value read whole, not an expansion:
+#     the body stays in the template, and every phase that handles an array
+#     producer handles this one; substituting the output indices (the
+#     producer rule every phase already applies) substitutes into the element
+#     call's bindings. `R` is the instance's own ranges (a fixed range bound
+#     substituted, `_tpl_inst_closed`).
+
+# The rank of the array `e` denotes when it is an array-valued reference (not
+# an element call), else 0.
+function _tpl_view_rank(tt::_TplTable, e)
+    _tpl_is_call(e) || return 0
+    info = _tpl_call_info(tt, (e::OpExpr).name)
+    (info === nothing || isempty(info.outs)) && return 0
+    _tpl_is_elem(e::OpExpr) && return 0
+    return length(info.outs)
+end
+
+_tpl_is_elem(e::OpExpr) = e.bindings !== nothing && any(k -> startswith(k, _TPL_OUT), keys(e.bindings))
+
+# The element of the array-valued reference `call` at `subs`.
+function _elem_call(tt::_TplTable, call::OpExpr, subs::AbstractVector)
+    outs = (_tpl_call_info(tt, call.name)::_TplCallInfo).outs
+    length(outs) == length(subs) || throw(
+        TreeWalkError(
+            "E_TREEWALK_ARRAYOP_INDEX_NDIM",
+            "template '$(call.name)' is an array of rank $(length(outs)) read with $(length(subs)) subscripts"
+        )
+    )
+    nb = call.bindings === nothing ? Dict{String, ASTExpr}() : copy(call.bindings)
+    for (o, s) in zip(outs, subs)
+        nb[_TPL_OUT * o] = s
+    end
+    return reconstruct(call; bindings = nb)
+end
+
+# The whole-array view of the array-valued reference `call`. The output index
+# names are the body's own unless the reference's bindings read one of them.
+function _tpl_whole_view(tt::_TplTable, call::OpExpr)
+    info = _tpl_call_info(tt, call.name)::_TplCallInfo
+    def = _tpl_def(tt, call.name)
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    S = _call_fixed!(Dict{String, Any}(), call.name, info, b)
+    body = _tpl_inst_closed(tt, def, S).body::OpExpr
+    reads = Set{String}()
+    for v in values(b)
+        union!(reads, _tpl_free_leaves(v))
+    end
+    names = Dict{String, String}()
+    for o in info.outs
+        n = o
+        while n in reads
+            n *= "′"
+        end
+        names[o] = n
+    end
+    ranges = body.ranges === nothing ? nothing :
+        Dict{String, Any}(names[String(k)] => v for (k, v) in body.ranges)
+    oi = String[names[o] for o in info.outs]
+    el = _elem_call(tt, call, ASTExpr[VarExpr(n) for n in oi])
+    return reconstruct(body; output_idx = Any[oi...], ranges = ranges, expr_body = el, args = ASTExpr[])
+end
+
+# `e` with every element read of an array-valued reference an element call
+# and every whole-array use its view. Applied once at the build entry.
+function _tpl_whole_views(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}())
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    if e.op == "index" && _tpl_structless(e) && length(e.args) >= 2 &&
+            _tpl_view_rank(tt, e.args[1]) == length(e.args) - 1
+        a1 = map_children(c -> _tpl_whole_views(tt, c, memo), e.args[1]::OpExpr)
+        r = _elem_call(tt, a1, ASTExpr[_tpl_whole_views(tt, a, memo) for a in e.args[2:end]])
+    else
+        r = map_children(c -> _tpl_whole_views(tt, c, memo), e)
+        _tpl_view_rank(tt, r) > 0 && (r = _tpl_whole_view(tt, r::OpExpr))
+    end
+    memo[e] = r
+    return r
+end
 
 # ---- Value operands -------------------------------------------------------------------
 # The operands of `e` read as VALUES: a call's bindings except the arrays its

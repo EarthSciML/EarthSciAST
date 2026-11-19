@@ -1328,6 +1328,11 @@ function _build_evaluator_impl_inner(
         # the reference (`_tpl_augment`), so the phases below that ask which
         # names an expression reads see the body's reads.
         _tpl_augment_component!(model, _template_reg)
+        # An array-valued reference read as a whole array is its whole-array
+        # view, whose element is a call (call.jl `_tpl_whole_view`).
+        let vm = IdDict{OpExpr, ASTExpr}()
+            map_expressions!(e -> _tpl_whole_views(calls.tt, e, vm), model)
+        end
         _expand_cache = nothing
         isempty(sites) || (_template_sites = sites)
     elseif _model_has_surviving_refs(model)
