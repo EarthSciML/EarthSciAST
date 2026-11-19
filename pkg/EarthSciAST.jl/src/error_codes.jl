@@ -377,8 +377,8 @@ const ERROR_CODES = (
     # ── Discretization pipeline (tree_walk/; esm-spec §4.2 / §9.6.8). The one
     #    `TreeWalkError` code that is NOT an `E_TREEWALK_*` Julia-local name:
     #    it is the uniform cross-binding wire code every implementation
-    #    surfaces when a rewrite-target operator (an RHS-position `D`, or
-    #    `grad`/`div`/`laplacian`) reaches evaluation unlowered. ────────────
+    #    surfaces when a rewrite-target operator (an RHS-position or spatial
+    #    `D`, or a user op) reaches evaluation unlowered. ────────────
     UNLOWERED_OPERATOR = "unlowered_operator",
     # An expression node spelling an op that was REMOVED rather than deprecated
     # (`arrayop` at 0.8.0; `fn`, `table_lookup`, `skolem`, `rank`,
@@ -401,6 +401,9 @@ const ERROR_CODES = (
     # `fn`), rewritten to its replacement at the wire boundary (esm-spec §4.2
     # "Deprecated ops").
     DEPRECATED_OP = "deprecated_op",
+    # WARNING, not an error: a model declares `"system_kind": "pde"`, deprecated
+    # at esm 2.4.0 and ignored (the model is treated as its derived kind).
+    DEPRECATED_SYSTEM_KIND = "deprecated_system_kind",
     # ── Its complement (esm-spec §9.6.6): an op that IS in the §4.2 evaluable
     #    core but that the tree-walk evaluator has no rule for (an array/query or
     #    value-invention op outside the position that consumes it, an unlowered

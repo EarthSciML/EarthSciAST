@@ -386,6 +386,11 @@ export const ERROR_CODES = {
   //   boundary rewrote each use and warns once per document (esm-spec §4.2
   //   "Deprecated ops", parse.ts `rewriteDeprecatedOps`).
   DEPRECATED_OP: 'deprecated_op',
+  // `deprecated_system_kind` — WARNING, not an error: a model declared
+  //   `"system_kind": "pde"`, deprecated at esm 2.4.0 and ignored (the model is
+  //   treated as its derived kind); one warning per document naming every such
+  //   model (parse.ts `findDeprecatedSystemKinds`).
+  DEPRECATED_SYSTEM_KIND: 'deprecated_system_kind',
   EXPRESSION_TEMPLATE_ERROR: 'expression_template_error',
   ENUM_LOWERING_ERROR: 'enum_lowering_error',
   NONFINITE_NUMBER: 'nonfinite_number',

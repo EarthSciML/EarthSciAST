@@ -98,3 +98,61 @@ fn faq_below_v11_is_rejected() {
         "got: {err}"
     );
 }
+
+// --- every fixture under tests/invalid/removed_ops/ ------------------------
+
+/// Every `tests/invalid/removed_ops/*.esm` fixture is refused at load with
+/// `removed_op`, naming its op (the `function_tables` fixture names the block).
+#[test]
+fn every_removed_ops_fixture_is_refused_with_removed_op() {
+    let dir = common::repo_fixture("invalid/removed_ops");
+    let mut count = 0usize;
+    for entry in std::fs::read_dir(&dir).expect("read removed_ops dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("esm") {
+            continue;
+        }
+        let stem = path.file_stem().unwrap().to_str().unwrap().to_string();
+        let op = stem
+            .strip_prefix("removed_op_")
+            .unwrap_or(&stem)
+            .to_string();
+        let src = std::fs::read_to_string(&path).expect("read fixture");
+        let e = load_string(&src)
+            .expect_err(&format!("{stem} must be refused"))
+            .to_string();
+        assert!(e.contains("removed_op"), "{stem}: {e}");
+        if op != "function_tables" {
+            assert!(
+                e.contains(&format!("\"{op}\"")),
+                "{stem} must name `{op}`: {e}"
+            );
+        }
+        count += 1;
+    }
+    assert!(count >= 10, "expected the removed_ops corpus, saw {count}");
+}
+
+// --- grad / div / laplacian are ordinary op names ---------------------------
+
+/// `grad`, `div` and `laplacian` are not removed and not special: a document
+/// spelling them loads like any document using a user op, whatever `esm` it
+/// declares, and a model whose only spatial operator is one of them classifies
+/// by its time derivative (`ode`).
+#[test]
+fn grad_div_laplacian_load_as_ordinary_ops() {
+    for op in ["grad", "div", "laplacian"] {
+        for esm in ["2.3.0", earthsci_ast::SCHEMA_VERSION] {
+            let src = format!(
+                r#"{{"esm": "{esm}", "metadata": {{"name": "Ordinary"}},
+                "models": {{"M": {{"variables": {{"u": {{"type": "unknown", "default": 1.0}}}},
+                "equations": [{{"lhs": {{"op": "D", "args": ["u"], "wrt": "t"}},
+                                "rhs": {{"op": "{op}", "args": ["u"], "dim": "x"}}}}]}}}}}}"#
+            );
+            let file = load_string(&src).unwrap_or_else(|e| panic!("{op} at {esm}: {e}"));
+            let model = &file.models.as_ref().expect("models")["M"];
+            let kind = earthsci_ast::Classification::of(model).system_kind;
+            assert_eq!(kind, earthsci_ast::SystemKind::Ode, "{op} at {esm}");
+        }
+    }
+}

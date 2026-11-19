@@ -7,715 +7,715 @@
       "id": "add_nary",
       "kind": "print",
       "description": "An n-ary + prints flat.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b", 1], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b", 1], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = a + b + 1", "typst": "y = a + b + 1"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a + b + 1\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a + b + 1 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a + b + 1\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a + b + 1 $\n"
     },
     {
       "id": "sub_right_nested",
       "kind": "print",
       "description": "A right operand at the same level keeps its parentheses.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["x", 1], "op": "-"}], "op": "-"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["x", 1], "op": "-"}], "op": "-"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = a - \\left(x - 1\\right)", "typst": "y = a - (x - 1)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a - \\left(x - 1\\right)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = a - (x - 1) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a - \\left(x - 1\\right)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = a - (x - 1) $\n"
     },
     {
       "id": "mul_juxtaposition",
       "kind": "print",
       "description": "* is juxtaposition when no factor starts with a digit or sign.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [2, "k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [2, "k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = 2 k x", "typst": "y = 2 k x"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = 2 k x\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = 2 k x $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = 2 k x\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = 2 k x $\n"
     },
     {
       "id": "mul_cdot_before_digit",
       "kind": "print",
       "description": "* is \\cdot (Typst dot) when the right factor starts with a digit.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [2, 3], "op": "*"}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [2, 3], "op": "*"}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = 2 \\cdot 3", "typst": "y = 2 dot 3"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = 2 \\cdot 3\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = 2 dot 3 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = 2 \\cdot 3\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = 2 dot 3 $\n"
     },
     {
       "id": "mul_cdot_before_sign",
       "kind": "print",
       "description": "A negative literal factor is a literal, after \\cdot.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", -3], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", -3], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = a \\cdot -3", "typst": "y = a dot -3"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\cdot -3\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = a dot -3 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\cdot -3\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = a dot -3 $\n"
     },
     {
       "id": "div_frac",
       "kind": "print",
       "description": "/ is \\frac in LaTeX and a/b with grouping parentheses in Typst.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["b", 1], "op": "+"}], "op": "/"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["b", 1], "op": "+"}], "op": "/"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\frac{a}{b + 1}", "typst": "y = a/(b + 1)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{a}{b + 1}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a/(b + 1) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{a}{b + 1}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a/(b + 1) $\n"
     },
     {
       "id": "pow",
       "kind": "print",
       "description": "^ with a braced exponent.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", 2], "op": "^"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", 2], "op": "^"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = x^{2}", "typst": "y = x^2"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x^{2}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x^2 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x^{2}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x^2 $\n"
     },
     {
       "id": "pow_right_assoc",
       "kind": "print",
       "description": "^ is right-associative: no parentheses on the right.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["x", 2], "op": "^"}], "op": "^"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["x", 2], "op": "^"}], "op": "^"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = a^{x^{2}}", "typst": "y = a^(x^2)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a^{x^{2}}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = a^(x^2) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a^{x^{2}}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = a^(x^2) $\n"
     },
     {
       "id": "pow_left_nested",
       "kind": "print",
       "description": "A power as the base keeps its parentheses.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "^"}, 2], "op": "^"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "^"}, 2], "op": "^"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left(a^{x}\\right)^{2}", "typst": "y = (a^x)^2"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a^{x}\\right)^{2}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (a^x)^2 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a^{x}\\right)^{2}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (a^x)^2 $\n"
     },
     {
       "id": "neg_sum",
       "kind": "print",
       "description": "A negated sum keeps its parentheses.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "+"}], "op": "-"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "+"}], "op": "-"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = -\\left(a + x\\right)", "typst": "y = -(a + x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = -\\left(a + x\\right)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = -(a + x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = -\\left(a + x\\right)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = -(a + x) $\n"
     },
     {
       "id": "neg_literal",
       "kind": "print",
       "description": "Unary minus on a positive literal prints -(3), apart from the literal -3.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [3], "op": "-"}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [3], "op": "-"}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = -\\left(3\\right)", "typst": "y = -(3)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = -\\left(3\\right)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = -(3) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = -\\left(3\\right)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = -(3) $\n"
     },
     {
       "id": "negative_literal",
       "kind": "print",
       "description": "A negative literal.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": -1}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": -1}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = -1", "typst": "y = -1"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = -1\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = -1 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = -1\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = -1 $\n"
     },
     {
       "id": "numbers",
       "kind": "print",
       "description": "Integers, decimals, and scientific notation as one literal.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [0.25, "x"], "op": "*"}, {"args": ["k", 1.8e-12], "op": "*"}, 100000, 1.0e20], "op": "+"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [0.25, "x"], "op": "*"}, {"args": ["k", 1.8e-12], "op": "*"}, 100000, 1.0e20], "op": "+"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = 0.25 x + k \\cdot 1.8 \\times 10^{-12} + 100000 + 1.0 \\times 10^{20}", "typst": "y = 0.25 x + k dot 1.8 times 10^(-12) + 100000 + 1.0 times 10^20"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = 0.25 x + k \\cdot 1.8 \\times 10^{-12} + 100000 + 1.0 \\times 10^{20}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = 0.25 x + k dot 1.8 times 10^(-12) + 100000 + 1.0 times 10^20 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = 0.25 x + k \\cdot 1.8 \\times 10^{-12} + 100000 + 1.0 \\times 10^{20}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = 0.25 x + k dot 1.8 times 10^(-12) + 100000 + 1.0 times 10^20 $\n"
     },
     {
       "id": "integral_float",
       "kind": "print",
       "description": "An integral float is the integer (CONFORMANCE §5.5.3.1).",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [2, "x"], "op": "*"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [2, "x"], "op": "*"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = 2 x", "typst": "y = 2 x"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = 2 x\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = 2 x $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = 2 x\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = 2 x $\n"
     },
     {
       "id": "comparisons",
       "kind": "print",
       "description": "The six comparisons; == is = and parenthesized at the top of an equation.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "b"], "op": "<"}, {"args": ["a", "b"], "op": "<="}, {"args": ["a", "b"], "op": ">"}, {"args": ["a", "b"], "op": ">="}, {"args": ["a", "b"], "op": "!="}], "op": "and"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "b"], "op": "<"}, {"args": ["a", "b"], "op": "<="}, {"args": ["a", "b"], "op": ">"}, {"args": ["a", "b"], "op": ">="}, {"args": ["a", "b"], "op": "!="}], "op": "and"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left(a < b \\land a \\le b \\land a > b \\land a \\ge b \\land a \\ne b\\right)", "typst": "y = (a < b and a <= b and a > b and a >= b and a != b)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a < b \\land a \\le b \\land a > b \\land a \\ge b \\land a \\ne b\\right)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = (a < b and a <= b and a > b and a >= b and a != b) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a < b \\land a \\le b \\land a > b \\land a \\ge b \\land a \\ne b\\right)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = (a < b and a <= b and a > b and a >= b and a != b) $\n"
     },
     {
       "id": "equality_top",
       "kind": "print",
       "description": "== at the top of a right-hand side is parenthesized.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "x"], "op": "=="}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "x"], "op": "=="}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left(a = x\\right)", "typst": "y = (a = x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a = x\\right)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (a = x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a = x\\right)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (a = x) $\n"
     },
     {
       "id": "logic",
       "kind": "print",
       "description": "and, or, not.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [{"args": [{"args": ["x", 0], "op": ">"}], "op": "not"}, {"args": ["a", 1], "op": "<"}], "op": "and"}, {"args": [], "op": "true"}, {"args": [], "op": "false"}], "op": "or"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [{"args": [{"args": ["x", 0], "op": ">"}], "op": "not"}, {"args": ["a", 1], "op": "<"}], "op": "and"}, {"args": [], "op": "true"}, {"args": [], "op": "false"}], "op": "or"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left(\\lnot\\left(x > 0\\right) \\land a < 1 \\lor \\text{true} \\lor \\text{false}\\right)", "typst": "y = (not (x > 0) and a < 1 or \"true\" or \"false\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(\\lnot\\left(x > 0\\right) \\land a < 1 \\lor \\text{true} \\lor \\text{false}\\right)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (not (x > 0) and a < 1 or \"true\" or \"false\") $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(\\lnot\\left(x > 0\\right) \\land a < 1 \\lor \\text{true} \\lor \\text{false}\\right)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (not (x > 0) and a < 1 or \"true\" or \"false\") $\n"
     },
     {
       "id": "exp_log",
       "kind": "print",
       "description": "exp, log (natural) and log10.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "exp"}, {"args": ["x"], "op": "log"}, {"args": ["x"], "op": "log10"}], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "exp"}, {"args": ["x"], "op": "log"}, {"args": ["x"], "op": "log10"}], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\exp(x) + \\ln(x) + \\log_{10}(x)", "typst": "y = exp(x) + ln(x) + log_10(x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\exp(x) + \\ln(x) + \\log_{10}(x)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) + ln(x) + log_10(x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\exp(x) + \\ln(x) + \\log_{10}(x)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) + ln(x) + log_10(x) $\n"
     },
     {
       "id": "roots_rounding",
       "kind": "print",
       "description": "sqrt, abs, floor and ceil.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [{"args": ["x"], "op": "abs"}], "op": "sqrt"}, {"args": ["x"], "op": "floor"}, {"args": ["x"], "op": "ceil"}], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [{"args": ["x"], "op": "abs"}], "op": "sqrt"}, {"args": ["x"], "op": "floor"}, {"args": ["x"], "op": "ceil"}], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sqrt{\\left|x\\right|} + \\lfloor x\\rfloor + \\lceil x\\rceil", "typst": "y = sqrt(abs(x)) + floor(x) + ceil(x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sqrt{\\left|x\\right|} + \\lfloor x\\rfloor + \\lceil x\\rceil\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = sqrt(abs(x)) + floor(x) + ceil(x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sqrt{\\left|x\\right|} + \\lfloor x\\rfloor + \\lceil x\\rceil\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = sqrt(abs(x)) + floor(x) + ceil(x) $\n"
     },
     {
       "id": "trig",
       "kind": "print",
       "description": "sin, cos, tan and their inverses.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "sin"}, {"args": [{"args": ["k", "x"], "op": "*"}], "op": "cos"}, {"args": ["x"], "op": "tan"}, {"args": ["x"], "op": "asin"}, {"args": ["x"], "op": "acos"}, {"args": ["x"], "op": "atan"}], "op": "+"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "sin"}, {"args": [{"args": ["k", "x"], "op": "*"}], "op": "cos"}, {"args": ["x"], "op": "tan"}, {"args": ["x"], "op": "asin"}, {"args": ["x"], "op": "acos"}, {"args": ["x"], "op": "atan"}], "op": "+"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sin(x) + \\cos(k x) + \\tan(x) + \\arcsin(x) + \\arccos(x) + \\arctan(x)", "typst": "y = sin(x) + cos(k x) + tan(x) + arcsin(x) + arccos(x) + arctan(x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sin(x) + \\cos(k x) + \\tan(x) + \\arcsin(x) + \\arccos(x) + \\arctan(x)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = sin(x) + cos(k x) + tan(x) + arcsin(x) + arccos(x) + arctan(x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sin(x) + \\cos(k x) + \\tan(x) + \\arcsin(x) + \\arccos(x) + \\arctan(x)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = sin(x) + cos(k x) + tan(x) + arcsin(x) + arccos(x) + arctan(x) $\n"
     },
     {
       "id": "hyperbolic",
       "kind": "print",
       "description": "sinh, cosh and tanh.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "sinh"}, {"args": ["x"], "op": "cosh"}, {"args": ["x"], "op": "tanh"}], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "sinh"}, {"args": ["x"], "op": "cosh"}, {"args": ["x"], "op": "tanh"}], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sinh(x) + \\cosh(x) + \\tanh(x)", "typst": "y = sinh(x) + cosh(x) + tanh(x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sinh(x) + \\cosh(x) + \\tanh(x)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = sinh(x) + cosh(x) + tanh(x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sinh(x) + \\cosh(x) + \\tanh(x)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = sinh(x) + cosh(x) + tanh(x) $\n"
     },
     {
       "id": "min_max",
       "kind": "print",
       "description": "min and max.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "max"}, {"args": ["a", "b", "x"], "op": "min"}], "op": "-"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "max"}, {"args": ["a", "b", "x"], "op": "min"}], "op": "-"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\max(a, x) - \\min(a, b, x)", "typst": "y = max(a, x) - min(a, b, x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\max(a, x) - \\min(a, b, x)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = max(a, x) - min(a, b, x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\max(a, x) - \\min(a, b, x)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = max(a, x) - min(a, b, x) $\n"
     },
     {
       "id": "canon_neg",
       "kind": "print",
       "description": "The canonical form rewrites the deprecated neg to unary minus.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "neg", "args": [{"op": "+", "args": ["a", "x"]}]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "+"}], "op": "-"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "neg", "args": [{"op": "+", "args": ["a", "x"]}]}}]}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "+"}], "op": "-"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = -\\left(a + x\\right)", "typst": "y = -(a + x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = -\\left(a + x\\right)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = -(a + x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = -\\left(a + x\\right)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = -(a + x) $\n"
     },
     {
       "id": "canon_pow",
       "kind": "print",
       "description": "The canonical form rewrites the deprecated pow to ^.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "pow", "args": ["x", 2]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", 2], "op": "^"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "pow", "args": ["x", 2]}}]}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", 2], "op": "^"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = x^{2}", "typst": "y = x^2"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x^{2}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x^2 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x^{2}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x^2 $\n"
     },
     {
       "id": "canon_float_shortest",
       "kind": "print",
       "description": "A decimal with more digits than its double needs is written with the shortest digits that read back as the same double.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": [1.4715177646857694, "x"]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [1.4715177646857693, "x"], "op": "*"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": [1.4715177646857694, "x"]}}]}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [1.4715177646857693, "x"], "op": "*"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = 1.4715177646857693 x", "typst": "y = 1.4715177646857693 x"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = 1.4715177646857693 x\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = 1.4715177646857693 x $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = 1.4715177646857693 x\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = 1.4715177646857693 x $\n"
     },
     {
       "id": "canon_float_integral",
       "kind": "print",
       "description": "A decimal whose nearest double is integral is that integer.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "+", "args": ["x", 1.0000000000000001]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", 1], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "+", "args": ["x", 1.0000000000000001]}}]}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", 1], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = x + 1", "typst": "y = x + 1"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x + 1\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x + 1 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x + 1\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x + 1 $\n"
     },
     {
       "id": "canon_float_large_integral",
       "kind": "print",
       "description": "A decimal past 2^53 is the integer its nearest double is, not the one it spells.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "+", "args": ["x", -1.999999999999999e16]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", -19999999999999992], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "+", "args": ["x", -1.999999999999999e16]}}]}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x", -19999999999999992], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = x + -19999999999999992", "typst": "y = x + -19999999999999992"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x + -19999999999999992\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x + -19999999999999992 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x + -19999999999999992\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = x + -19999999999999992 $\n"
     },
     {
       "id": "call_tier",
       "kind": "print",
       "description": "sign, atan2, asinh, acosh and atanh print in the call form.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "sign"}, {"args": ["a", "x"], "op": "atan2"}, {"args": ["x"], "op": "asinh"}, {"args": ["x"], "op": "acosh"}, {"args": ["x"], "op": "atanh"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "sign"}, {"args": ["a", "x"], "op": "atan2"}, {"args": ["x"], "op": "asinh"}, {"args": ["x"], "op": "acosh"}, {"args": ["x"], "op": "atanh"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{sign}(x) + \\operatorname{atan2}(a, x) + \\operatorname{asinh}(x) + \\operatorname{acosh}(x) + \\operatorname{atanh}(x)", "typst": "y = op(\"sign\")(x) + op(\"atan2\")(a, x) + op(\"asinh\")(x) + op(\"acosh\")(x) + op(\"atanh\")(x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{sign}(x) + \\operatorname{atan2}(a, x) + \\operatorname{asinh}(x) + \\operatorname{acosh}(x) + \\operatorname{atanh}(x)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"sign\")(x) + op(\"atan2\")(a, x) + op(\"asinh\")(x) + op(\"acosh\")(x) + op(\"atanh\")(x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{sign}(x) + \\operatorname{atan2}(a, x) + \\operatorname{asinh}(x) + \\operatorname{acosh}(x) + \\operatorname{atanh}(x)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"sign\")(x) + op(\"atan2\")(a, x) + op(\"asinh\")(x) + op(\"acosh\")(x) + op(\"atanh\")(x) $\n"
     },
     {
       "id": "pre",
       "kind": "print",
       "description": "Pre in the call form.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "Pre"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "Pre"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{Pre}(x)", "typst": "y = op(\"Pre\")(x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{Pre}(x)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"Pre\")(x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{Pre}(x)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"Pre\")(x) $\n"
     },
     {
       "id": "enum",
       "kind": "print",
       "description": "enum in the call form, its arguments explicit names.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["Land", "urban"], "op": "enum"}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["Land", "urban"], "op": "enum"}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{enum}(\\mathit{Land}, \\mathit{urban})", "typst": "y = op(\"enum\")(italic(\"Land\"), italic(\"urban\"))"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{enum}(\\mathit{Land}, \\mathit{urban})\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"enum\")(italic(\"Land\"), italic(\"urban\")) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{enum}(\\mathit{Land}, \\mathit{urban})\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"enum\")(italic(\"Land\"), italic(\"urban\")) $\n"
     },
     {
       "id": "d_time",
       "kind": "print",
       "description": "A time derivative on the left-hand side: d over dt, upright d.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
       "math": {"latex": "\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N", "typst": "(dif N)/(dif t) = -k N"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ (dif N)/(dif t) = -k N $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ (dif N)/(dif t) = -k N $\n"
     },
     {
       "id": "d_time_compound",
       "kind": "print",
       "description": "A time derivative of a compound operand: the operator form.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "*"}], "op": "D", "wrt": "t"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "x"], "op": "*"}], "op": "D", "wrt": "t"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\frac{\\mathrm{d}}{\\mathrm{d} t} \\left(a x\\right)", "typst": "y = (dif)/(dif t) (a x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{\\mathrm{d}}{\\mathrm{d} t} \\left(a x\\right)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (dif)/(dif t) (a x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{\\mathrm{d}}{\\mathrm{d} t} \\left(a x\\right)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (dif)/(dif t) (a x) $\n"
     },
     {
       "id": "d_spatial",
       "kind": "print",
       "description": "A spatial derivative: partial over partial.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "D", "wrt": "z"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}, "z": {"type": "parameter"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "D", "wrt": "z"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}, "z": {"type": "parameter"}}}}},
       "math": {"latex": "y = \\frac{\\partial x}{\\partial z}", "typst": "y = (partial x)/(partial z)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n:param[$z$]{}\n\n$$\ny = \\frac{\\partial x}{\\partial z}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n#param($z$)\n\n$ y = (partial x)/(partial z) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n:param[$z$]{}\n\n$$\ny = \\frac{\\partial x}{\\partial z}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n#param($z$)\n\n$ y = (partial x)/(partial z) $\n"
     },
     {
       "id": "d_spatial_trailing",
       "kind": "print",
       "description": "A spatial derivative with trailing operands: the call form D_x(u, a, b).",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["u", "a", "b"], "op": "D", "wrt": "x"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "u": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["u", "a", "b"], "op": "D", "wrt": "x"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "u": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{D}_{x}(u, a, b)", "typst": "y = op(\"D\")_(x)(u, a, b)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$u$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{D}_{x}(u, a, b)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($u$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"D\")_(x)(u, a, b) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$u$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{D}_{x}(u, a, b)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($u$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"D\")_(x)(u, a, b) $\n"
     },
     {
       "id": "cases_two",
       "kind": "print",
       "description": "ifelse is a cases block with an otherwise row.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 0], "op": ">"}, "a", "b"], "op": "ifelse"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 0], "op": ">"}, "a", "b"], "op": "ifelse"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{otherwise}\\end{cases}", "typst": "y = cases(a & \"if \" x > 0, b & \"otherwise\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{otherwise}\\end{cases}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = cases(a & \"if \" x > 0, b & \"otherwise\") $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{otherwise}\\end{cases}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = cases(a & \"if \" x > 0, b & \"otherwise\") $\n"
     },
     {
       "id": "cases_chain",
       "kind": "print",
       "description": "A right-nested ifelse chain is one multi-row cases block.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 0], "op": ">"}, "a", {"args": [{"args": ["x", -1], "op": "<"}, "b", 0], "op": "ifelse"}], "op": "ifelse"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 0], "op": ">"}, "a", {"args": [{"args": ["x", -1], "op": "<"}, "b", 0], "op": "ifelse"}], "op": "ifelse"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{if } x < -1 \\\\ 0 & \\text{otherwise}\\end{cases}", "typst": "y = cases(a & \"if \" x > 0, b & \"if \" x < -1, 0 & \"otherwise\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{if } x < -1 \\\\ 0 & \\text{otherwise}\\end{cases}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = cases(a & \"if \" x > 0, b & \"if \" x < -1, 0 & \"otherwise\") $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{if } x < -1 \\\\ 0 & \\text{otherwise}\\end{cases}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = cases(a & \"if \" x > 0, b & \"if \" x < -1, 0 & \"otherwise\") $\n"
     },
     {
       "id": "faq_sum",
       "kind": "print",
       "description": "A sum over an index set.",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sum_{i \\in S} w_{i}", "typst": "y = sum_(i in S) w_i"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{i \\in S} w_{i}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in S) w_i $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{i \\in S} w_{i}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in S) w_i $\n"
     },
     {
       "id": "faq_sum_dense",
       "kind": "print",
       "description": "A lone dense range: the sum with limits.",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": [1, 4]}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": [1, 4]}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sum_{i = 1}^{4} w_{i}", "typst": "y = sum_(1 <= i <= 4) w_i"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{i = 1}^{4} w_{i}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(1 <= i <= 4) w_i $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{i = 1}^{4} w_{i}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(1 <= i <= 4) w_i $\n"
     },
     {
       "id": "faq_product",
       "kind": "print",
       "description": "reduce * is a product.",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}, "reduce": "*"}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}, "reduce": "*"}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\prod_{i \\in S} w_{i}", "typst": "y = product_(i in S) w_i"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\prod_{i \\in S} w_{i}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = product_(i in S) w_i $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\prod_{i \\in S} w_{i}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = product_(i in S) w_i $\n"
     },
     {
       "id": "faq_max_min",
       "kind": "print",
       "description": "reduce max and reduce min.",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}, "reduce": "max"}, {"args": [], "expr": {"args": ["w", "j"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"j": {"from": "S"}}, "reduce": "min"}], "op": "-"}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}, "reduce": "max"}, {"args": [], "expr": {"args": ["w", "j"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"j": {"from": "S"}}, "reduce": "min"}], "op": "-"}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\max_{i \\in S} w_{i} - \\min_{j \\in S} w_{j}", "typst": "y = max_(i in S) w_i - min_(j in S) w_j"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\max_{i \\in S} w_{i} - \\min_{j \\in S} w_{j}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = max_(i in S) w_i - min_(j in S) w_j $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\max_{i \\in S} w_{i} - \\min_{j \\in S} w_{j}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = max_(i in S) w_i - min_(j in S) w_j $\n"
     },
     {
       "id": "faq_output_filter",
       "kind": "print",
       "description": "Output indices in brackets; several ranges, then the filter, stacked.",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [{"args": ["w", "i"], "op": "index"}, {"args": ["v", "j"], "op": "index"}], "op": "*"}, "filter": {"args": [{"args": ["w", "i"], "op": "index"}, 0], "op": ">"}, "op": "faq", "output_idx": ["j"], "ranges": {"i": {"from": "S"}, "j": {"from": "C"}}}}], "variables": {"v": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [{"args": ["w", "i"], "op": "index"}, {"args": ["v", "j"], "op": "index"}], "op": "*"}, "filter": {"args": [{"args": ["w", "i"], "op": "index"}, 0], "op": ">"}, "op": "faq", "output_idx": ["j"], "ranges": {"i": {"from": "S"}, "j": {"from": "C"}}}}], "variables": {"v": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left[\\sum_{\\substack{i \\in S \\\\ w_{i} > 0}} w_{i} v_{j}\\right]_{j \\in C}", "typst": "y = lr([sum_(i in S \\ w_i > 0) w_i v_j])_(j in C)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$v$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{\\substack{i \\in S \\\\ w_{i} > 0}} w_{i} v_{j}\\right]_{j \\in C}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($v$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(i in S \\ w_i > 0) w_i v_j])_(j in C) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$v$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{\\substack{i \\in S \\\\ w_{i} > 0}} w_{i} v_{j}\\right]_{j \\in C}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($v$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(i in S \\ w_i > 0) w_i v_j])_(j in C) $\n"
     },
     {
       "id": "faq_ranges",
       "kind": "print",
       "description": "A set range, a dense range and a ragged range (from with of) together.",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "R": {"kind": "ragged", "of": ["S"], "offsets": "off", "values": "vals"}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i", "k", "m"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}, "k": {"from": "R", "of": ["i"]}, "m": [0, 2]}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "R": {"kind": "ragged", "of": ["S"], "offsets": "off", "values": "vals"}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": ["w", "i", "k", "m"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}, "k": {"from": "R", "of": ["i"]}, "m": [0, 2]}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sum_{\\substack{i \\in S \\\\ k \\in R(i) \\\\ 0 \\le m \\le 2}} w_{i, k, m}", "typst": "y = sum_(i in S \\ k in R(i) \\ 0 <= m <= 2) w_(i, k, m)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nR:\n  kind: \"ragged\"\n  of:\n    - \"S\"\n  offsets: \"off\"\n  values: \"vals\"\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{\\substack{i \\in S \\\\ k \\in R(i) \\\\ 0 \\le m \\le 2}} w_{i, k, m}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  R: (\n    kind: \"ragged\",\n    of: (\n      \"S\",\n    ),\n    offsets: \"off\",\n    values: \"vals\",\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in S \\ k in R(i) \\ 0 <= m <= 2) w_(i, k, m) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nR:\n  kind: \"ragged\"\n  of:\n    - \"S\"\n  offsets: \"off\"\n  values: \"vals\"\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{\\substack{i \\in S \\\\ k \\in R(i) \\\\ 0 \\le m \\le 2}} w_{i, k, m}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  R: (\n    kind: \"ragged\",\n    of: (\n      \"S\",\n    ),\n    offsets: \"off\",\n    values: \"vals\",\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in S \\ k in R(i) \\ 0 <= m <= 2) w_(i, k, m) $\n"
     },
     {
       "id": "faq_call_semiring",
       "kind": "print",
       "description": "A faq with a semiring other than sum_product prints in the call form, its fields as named arguments.",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [], "op": "true"}, "op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "S"}}, "semiring": "bool_and_or"}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "expr": {"args": [], "op": "true"}, "op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "S"}}, "semiring": "bool_and_or"}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{faq}(; \\mathrm{expr} = \\text{true}, \\mathrm{output\\_idx} = [\\text{\"i\"}], \\mathrm{ranges} = {\\text{\"i\"}: {\\text{\"from\"}: \\text{\"S\"}}}, \\mathrm{semiring} = \\text{\"bool\\_and\\_or\"})", "typst": "y = op(\"faq\")(; upright(\"expr\") = \"true\", upright(\"output_idx\") = #(\n  \"i\",\n), upright(\"ranges\") = #(\n  i: (\n    from: \"S\",\n  ),\n), upright(\"semiring\") = #\"bool_and_or\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{faq}(; \\mathrm{expr} = \\text{true}, \\mathrm{output\\_idx} = [\\text{\"i\"}], \\mathrm{ranges} = {\\text{\"i\"}: {\\text{\"from\"}: \\text{\"S\"}}}, \\mathrm{semiring} = \\text{\"bool\\_and\\_or\"})\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = op(\"faq\")(; upright(\"expr\") = \"true\", upright(\"output_idx\") = #(\n  \"i\",\n), upright(\"ranges\") = #(\n  i: (\n    from: \"S\",\n  ),\n), upright(\"semiring\") = #\"bool_and_or\") $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{faq}(; \\mathrm{expr} = \\text{true}, \\mathrm{output\\_idx} = [\\text{\"i\"}], \\mathrm{ranges} = {\\text{\"i\"}: {\\text{\"from\"}: \\text{\"S\"}}}, \\mathrm{semiring} = \\text{\"bool\\_and\\_or\"})\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = op(\"faq\")(; upright(\"expr\") = \"true\", upright(\"output_idx\") = #(\n  \"i\",\n), upright(\"ranges\") = #(\n  i: (\n    from: \"S\",\n  ),\n), upright(\"semiring\") = #\"bool_and_or\") $\n"
     },
     {
       "id": "faq_call_join",
       "kind": "print",
       "description": "A faq with join prints in the call form: its args positional, its fields named, JSON-valued fields as JSON.",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["src", "tgt"], "expr": "a", "join": [{"overlap": {"eps": 1.0e-9, "src_env": ["src"], "tgt_env": ["tgt"]}}], "op": "faq", "output_idx": ["i", "j"], "ranges": {"i": {"from": "S"}, "j": {"from": "C"}}}}], "variables": {"a": {"type": "parameter"}, "src": {"type": "parameter"}, "tgt": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["src", "tgt"], "expr": "a", "join": [{"overlap": {"eps": 1.0e-9, "src_env": ["src"], "tgt_env": ["tgt"]}}], "op": "faq", "output_idx": ["i", "j"], "ranges": {"i": {"from": "S"}, "j": {"from": "C"}}}}], "variables": {"a": {"type": "parameter"}, "src": {"type": "parameter"}, "tgt": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{faq}(\\mathit{src}, \\mathit{tgt}; \\mathrm{expr} = a, \\mathrm{join} = [{\\text{\"overlap\"}: {\\text{\"eps\"}: 1.0 \\times 10^{-9}, \\text{\"src\\_env\"}: [\\text{\"src\"}], \\text{\"tgt\\_env\"}: [\\text{\"tgt\"}]}}], \\mathrm{output\\_idx} = [\\text{\"i\"}, \\text{\"j\"}], \\mathrm{ranges} = {\\text{\"i\"}: {\\text{\"from\"}: \\text{\"S\"}}, \\text{\"j\"}: {\\text{\"from\"}: \\text{\"C\"}}})", "typst": "y = op(\"faq\")(italic(\"src\"), italic(\"tgt\"); upright(\"expr\") = a, upright(\"join\") = #(\n  (\n    overlap: (\n      eps: 1.0e-9,\n      src_env: (\n        \"src\",\n      ),\n      tgt_env: (\n        \"tgt\",\n      ),\n    ),\n  ),\n), upright(\"output_idx\") = #(\n  \"i\",\n  \"j\",\n), upright(\"ranges\") = #(\n  i: (\n    from: \"S\",\n  ),\n  j: (\n    from: \"C\",\n  ),\n))"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$\\mathit{src}$]{}\n\n:param[$\\mathit{tgt}$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{faq}(\\mathit{src}, \\mathit{tgt}; \\mathrm{expr} = a, \\mathrm{join} = [{\\text{\"overlap\"}: {\\text{\"eps\"}: 1.0 \\times 10^{-9}, \\text{\"src\\_env\"}: [\\text{\"src\"}], \\text{\"tgt\\_env\"}: [\\text{\"tgt\"}]}}], \\mathrm{output\\_idx} = [\\text{\"i\"}, \\text{\"j\"}], \\mathrm{ranges} = {\\text{\"i\"}: {\\text{\"from\"}: \\text{\"S\"}}, \\text{\"j\"}: {\\text{\"from\"}: \\text{\"C\"}}})\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($a$)\n\n#param($italic(\"src\")$)\n\n#param($italic(\"tgt\")$)\n\n#var($y$)\n\n$ y = op(\"faq\")(italic(\"src\"), italic(\"tgt\"); upright(\"expr\") = a, upright(\"join\") = #(\n  (\n    overlap: (\n      eps: 1.0e-9,\n      src_env: (\n        \"src\",\n      ),\n      tgt_env: (\n        \"tgt\",\n      ),\n    ),\n  ),\n), upright(\"output_idx\") = #(\n  \"i\",\n  \"j\",\n), upright(\"ranges\") = #(\n  i: (\n    from: \"S\",\n  ),\n  j: (\n    from: \"C\",\n  ),\n)) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$\\mathit{src}$]{}\n\n:param[$\\mathit{tgt}$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{faq}(\\mathit{src}, \\mathit{tgt}; \\mathrm{expr} = a, \\mathrm{join} = [{\\text{\"overlap\"}: {\\text{\"eps\"}: 1.0 \\times 10^{-9}, \\text{\"src\\_env\"}: [\\text{\"src\"}], \\text{\"tgt\\_env\"}: [\\text{\"tgt\"}]}}], \\mathrm{output\\_idx} = [\\text{\"i\"}, \\text{\"j\"}], \\mathrm{ranges} = {\\text{\"i\"}: {\\text{\"from\"}: \\text{\"S\"}}, \\text{\"j\"}: {\\text{\"from\"}: \\text{\"C\"}}})\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($a$)\n\n#param($italic(\"src\")$)\n\n#param($italic(\"tgt\")$)\n\n#var($y$)\n\n$ y = op(\"faq\")(italic(\"src\"), italic(\"tgt\"); upright(\"expr\") = a, upright(\"join\") = #(\n  (\n    overlap: (\n      eps: 1.0e-9,\n      src_env: (\n        \"src\",\n      ),\n      tgt_env: (\n        \"tgt\",\n      ),\n    ),\n  ),\n), upright(\"output_idx\") = #(\n  \"i\",\n  \"j\",\n), upright(\"ranges\") = #(\n  i: (\n    from: \"S\",\n  ),\n  j: (\n    from: \"C\",\n  ),\n)) $\n"
     },
     {
       "id": "faq_args_limits",
       "kind": "print",
       "description": "args listing exactly the arrays the body indexes: the \\limits marker (Typst limits(sum)).",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["w"], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["w"], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}}}], "variables": {"w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sum\\limits_{i \\in S} w_{i}", "typst": "y = limits(sum)_(i in S) w_i"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum\\limits_{i \\in S} w_{i}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = limits(sum)_(i in S) w_i $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum\\limits_{i \\in S} w_{i}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = limits(sum)_(i in S) w_i $\n"
     },
     {
       "id": "faq_args_set_dense",
       "kind": "print",
       "description": "Other args names: a superscript set on the operator; a lone dense range then uses the one-row subscript.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f"], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": [1, {"args": ["N", 1], "op": "-"}]}}}], "variables": {"N": {"type": "parameter"}, "f": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f"], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": [], "ranges": {"i": [1, {"args": ["N", 1], "op": "-"}]}}}], "variables": {"N": {"type": "parameter"}, "f": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sum_{1 \\le i \\le N - 1}^{\\{f\\}} w_{i}", "typst": "y = sum_(1 <= i <= N - 1)^({f}) w_i"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{1 \\le i \\le N - 1}^{\\{f\\}} w_{i}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(1 <= i <= N - 1)^({f}) w_i $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{1 \\le i \\le N - 1}^{\\{f\\}} w_{i}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(1 <= i <= N - 1)^({f}) w_i $\n"
     },
     {
       "id": "faq_args_set_from",
       "kind": "print",
       "description": "A superscript set of two names after a one-row set range.",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f", "g"], "expr": {"args": [{"args": ["w", "i"], "op": "index"}, "x"], "op": "*"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}}}], "variables": {"f": {"type": "parameter"}, "g": {"type": "parameter"}, "w": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f", "g"], "expr": {"args": [{"args": ["w", "i"], "op": "index"}, "x"], "op": "*"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}}}}], "variables": {"f": {"type": "parameter"}, "g": {"type": "parameter"}, "w": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sum_{i \\in S}^{\\{f, g\\}} w_{i} x", "typst": "y = sum_(i in S)^({f, g}) w_i x"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$g$]{}\n\n:param[$w$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{i \\in S}^{\\{f, g\\}} w_{i} x\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($g$)\n\n#param($w$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = sum_(i in S)^({f, g}) w_i x $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$g$]{}\n\n:param[$w$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{i \\in S}^{\\{f, g\\}} w_{i} x\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($g$)\n\n#param($w$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = sum_(i in S)^({f, g}) w_i x $\n"
     },
     {
       "id": "faq_args_set_substack",
       "kind": "print",
       "description": "A superscript set after a stacked subscript (two ranges and a filter).",
-      "esm": {"esm": "2.3.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f"], "expr": {"args": ["w", "i", "j"], "op": "index"}, "filter": {"args": [{"args": ["w", "i", "j"], "op": "index"}, 0], "op": ">"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}, "j": {"from": "C"}}}}], "variables": {"f": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "index_sets": {"C": {"kind": "interval", "size": 2}, "S": {"kind": "interval", "size": 3}}, "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f"], "expr": {"args": ["w", "i", "j"], "op": "index"}, "filter": {"args": [{"args": ["w", "i", "j"], "op": "index"}, 0], "op": ">"}, "op": "faq", "output_idx": [], "ranges": {"i": {"from": "S"}, "j": {"from": "C"}}}}], "variables": {"f": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sum_{\\substack{i \\in S \\\\ j \\in C \\\\ w_{i, j} > 0}}^{\\{f\\}} w_{i, j}", "typst": "y = sum_(i in S \\ j in C \\ w_(i, j) > 0)^({f}) w_(i, j)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{\\substack{i \\in S \\\\ j \\in C \\\\ w_{i, j} > 0}}^{\\{f\\}} w_{i, j}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in S \\ j in C \\ w_(i, j) > 0)^({f}) w_(i, j) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{\\substack{i \\in S \\\\ j \\in C \\\\ w_{i, j} > 0}}^{\\{f\\}} w_{i, j}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(i in S \\ j in C \\ w_(i, j) > 0)^({f}) w_(i, j) $\n"
     },
     {
       "id": "faq_args_set_filter_eq",
       "kind": "print",
       "description": "A superscript set after a lone equality filter, which never reads as a dense range.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f"], "expr": {"args": ["w", "k"], "op": "index"}, "filter": {"args": ["k", 1], "op": "=="}, "op": "faq", "output_idx": []}}], "variables": {"f": {"type": "parameter"}, "k": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f"], "expr": {"args": ["w", "k"], "op": "index"}, "filter": {"args": ["k", 1], "op": "=="}, "op": "faq", "output_idx": []}}], "variables": {"f": {"type": "parameter"}, "k": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sum_{k = 1}^{\\{f\\}} w_{k}", "typst": "y = sum_(k = 1)^({f}) w_k"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$k$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{k = 1}^{\\{f\\}} w_{k}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($f$)\n\n#param($k$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(k = 1)^({f}) w_k $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$k$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum_{k = 1}^{\\{f\\}} w_{k}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($f$)\n\n#param($k$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum_(k = 1)^({f}) w_k $\n"
     },
     {
       "id": "faq_args_set_nosub",
       "kind": "print",
       "description": "A superscript set on an operator with no subscript.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f"], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": []}}], "variables": {"f": {"type": "parameter"}, "i": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["f"], "expr": {"args": ["w", "i"], "op": "index"}, "op": "faq", "output_idx": []}}], "variables": {"f": {"type": "parameter"}, "i": {"type": "parameter"}, "w": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\sum^{\\{f\\}} w_{i}", "typst": "y = sum^({f}) w_i"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$i$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum^{\\{f\\}} w_{i}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($f$)\n\n#param($i$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum^({f}) w_i $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$i$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum^{\\{f\\}} w_{i}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($f$)\n\n#param($i$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = sum^({f}) w_i $\n"
     },
     {
       "id": "faq_args_set_output",
       "kind": "print",
       "description": "With output indices the superscript set goes on the bracket, before its subscript; a power of it is parenthesized.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["f", "g"], "expr": {"args": [{"args": ["f", {"args": ["i", 1], "op": "+"}], "op": "index"}, {"args": ["f", "i"], "op": "index"}], "op": "-"}, "op": "faq", "output_idx": ["i"], "ranges": {"i": [2, {"args": ["N", 1], "op": "-"}]}}, 2], "op": "^"}}], "variables": {"N": {"type": "parameter"}, "f": {"type": "parameter"}, "g": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["f", "g"], "expr": {"args": [{"args": ["f", {"args": ["i", 1], "op": "+"}], "op": "index"}, {"args": ["f", "i"], "op": "index"}], "op": "-"}, "op": "faq", "output_idx": ["i"], "ranges": {"i": [2, {"args": ["N", 1], "op": "-"}]}}, 2], "op": "^"}}], "variables": {"N": {"type": "parameter"}, "f": {"type": "parameter"}, "g": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left(\\left[\\sum\\left(f_{i + 1} - f_{i}\\right)\\right]^{\\{f, g\\}}_{2 \\le i \\le N - 1}\\right)^{2}", "typst": "y = (lr([sum (f_(i + 1) - f_i)])^({f, g})_(2 <= i <= N - 1))^2"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$f$]{}\n\n:param[$g$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(\\left[\\sum\\left(f_{i + 1} - f_{i}\\right)\\right]^{\\{f, g\\}}_{2 \\le i \\le N - 1}\\right)^{2}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($f$)\n\n#param($g$)\n\n#var($y$)\n\n$ y = (lr([sum (f_(i + 1) - f_i)])^({f, g})_(2 <= i <= N - 1))^2 $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$f$]{}\n\n:param[$g$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(\\left[\\sum\\left(f_{i + 1} - f_{i}\\right)\\right]^{\\{f, g\\}}_{2 \\le i \\le N - 1}\\right)^{2}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($f$)\n\n#param($g$)\n\n#var($y$)\n\n$ y = (lr([sum (f_(i + 1) - f_i)])^({f, g})_(2 <= i <= N - 1))^2 $\n"
     },
     {
       "id": "index",
       "kind": "print",
       "description": "index is a subscript of italic expressions.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["A", "i", {"args": ["j", 1], "op": "+"}], "op": "index"}}], "variables": {"A": {"type": "parameter"}, "i": {"type": "parameter"}, "j": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["A", "i", {"args": ["j", 1], "op": "+"}], "op": "index"}}], "variables": {"A": {"type": "parameter"}, "i": {"type": "parameter"}, "j": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = A_{i, j + 1}", "typst": "y = A_(i, j + 1)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$A$]{}\n\n:param[$i$]{}\n\n:param[$j$]{}\n\n:var[$y$]{}\n\n$$\ny = A_{i, j + 1}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($A$)\n\n#param($i$)\n\n#param($j$)\n\n#var($y$)\n\n$ y = A_(i, j + 1) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$A$]{}\n\n:param[$i$]{}\n\n:param[$j$]{}\n\n:var[$y$]{}\n\n$$\ny = A_{i, j + 1}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($A$)\n\n#param($i$)\n\n#param($j$)\n\n#var($y$)\n\n$ y = A_(i, j + 1) $\n"
     },
     {
       "id": "const_vector",
       "kind": "print",
       "description": "A constant vector: a bmatrix column, Typst vec.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [1, 2, 3]}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [1, 2, 3]}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\begin{bmatrix}1 \\\\ 2 \\\\ 3\\end{bmatrix}", "typst": "y = vec(1, 2, 3)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}1 \\\\ 2 \\\\ 3\\end{bmatrix}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = vec(1, 2, 3) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}1 \\\\ 2 \\\\ 3\\end{bmatrix}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = vec(1, 2, 3) $\n"
     },
     {
       "id": "const_matrix_units",
       "kind": "print",
       "description": "A constant matrix with units.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "units": "m", "value": [[1, 2], [3, 4]]}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "units": "m", "value": [[1, 2], [3, 4]]}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\begin{bmatrix}1 & 2 \\\\ 3 & 4\\end{bmatrix}\\,\\mathrm{m}", "typst": "y = mat(1, 2; 3, 4) thin upright(\"m\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}1 & 2 \\\\ 3 & 4\\end{bmatrix}\\,\\mathrm{m}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(1, 2; 3, 4) thin upright(\"m\") $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}1 & 2 \\\\ 3 & 4\\end{bmatrix}\\,\\mathrm{m}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(1, 2; 3, 4) thin upright(\"m\") $\n"
     },
     {
       "id": "const_large",
       "kind": "print",
       "description": "An array of any size prints natively: a column of 17 entries.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\begin{bmatrix}0 \\\\ 1 \\\\ 2 \\\\ 3 \\\\ 4 \\\\ 5 \\\\ 6 \\\\ 7 \\\\ 8 \\\\ 9 \\\\ 10 \\\\ 11 \\\\ 12 \\\\ 13 \\\\ 14 \\\\ 15 \\\\ 16\\end{bmatrix}", "typst": "y = vec(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}0 \\\\ 1 \\\\ 2 \\\\ 3 \\\\ 4 \\\\ 5 \\\\ 6 \\\\ 7 \\\\ 8 \\\\ 9 \\\\ 10 \\\\ 11 \\\\ 12 \\\\ 13 \\\\ 14 \\\\ 15 \\\\ 16\\end{bmatrix}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = vec(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}0 \\\\ 1 \\\\ 2 \\\\ 3 \\\\ 4 \\\\ 5 \\\\ 6 \\\\ 7 \\\\ 8 \\\\ 9 \\\\ 10 \\\\ 11 \\\\ 12 \\\\ 13 \\\\ 14 \\\\ 15 \\\\ 16\\end{bmatrix}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = vec(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16) $\n"
     },
     {
       "id": "const_large_matrix",
       "kind": "print",
       "description": "A matrix of more than 16 entries prints natively.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "units": "m", "value": [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19]]}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "units": "m", "value": [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19]]}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 \\\\ 5 & 6 & 7 & 8 & 9 \\\\ 10 & 11 & 12 & 13 & 14 \\\\ 15 & 16 & 17 & 18 & 19\\end{bmatrix}\\,\\mathrm{m}", "typst": "y = mat(0, 1, 2, 3, 4; 5, 6, 7, 8, 9; 10, 11, 12, 13, 14; 15, 16, 17, 18, 19) thin upright(\"m\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 \\\\ 5 & 6 & 7 & 8 & 9 \\\\ 10 & 11 & 12 & 13 & 14 \\\\ 15 & 16 & 17 & 18 & 19\\end{bmatrix}\\,\\mathrm{m}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(0, 1, 2, 3, 4; 5, 6, 7, 8, 9; 10, 11, 12, 13, 14; 15, 16, 17, 18, 19) thin upright(\"m\") $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 \\\\ 5 & 6 & 7 & 8 & 9 \\\\ 10 & 11 & 12 & 13 & 14 \\\\ 15 & 16 & 17 & 18 & 19\\end{bmatrix}\\,\\mathrm{m}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(0, 1, 2, 3, 4; 5, 6, 7, 8, 9; 10, 11, 12, 13, 14; 15, 16, 17, 18, 19) thin upright(\"m\") $\n"
     },
     {
       "id": "const_wide_matrix",
       "kind": "print",
       "description": "A matrix of more than 10 columns: LaTeX \\left[\\begin{array}{c…c} … \\right], one c per column (bmatrix holds at most 10); Typst mat(…) as for any matrix.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]]}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]]}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left[\\begin{array}{ccccccccccc}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\\\ 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 \\end{array}\\right]", "typst": "y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10; 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{ccccccccccc}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\\\ 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 \\end{array}\\right]\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10; 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{ccccccccccc}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\\\ 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 \\end{array}\\right]\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10; 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21) $\n"
     },
     {
       "id": "const_ten_columns",
       "kind": "print",
       "description": "A matrix of exactly 10 columns keeps the bmatrix.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]]}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]]}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 \\\\ 10 & 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19\\end{bmatrix}", "typst": "y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9; 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 \\\\ 10 & 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19\\end{bmatrix}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9; 10, 11, 12, 13, 14, 15, 16, 17, 18, 19) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 \\\\ 10 & 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19\\end{bmatrix}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = mat(0, 1, 2, 3, 4, 5, 6, 7, 8, 9; 10, 11, 12, 13, 14, 15, 16, 17, 18, 19) $\n"
     },
     {
       "id": "const_rank3",
       "kind": "print",
       "description": "A rank-3 array prints in the call form, its value as JSON.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]}}], "variables": {"y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "const", "value": [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]}}], "variables": {"y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{const}(; \\mathrm{value} = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]])", "typst": "y = op(\"const\")(; upright(\"value\") = #(\n  (\n    (\n      1,\n      2,\n    ),\n    (\n      3,\n      4,\n    ),\n  ),\n  (\n    (\n      5,\n      6,\n    ),\n    (\n      7,\n      8,\n    ),\n  ),\n))"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{const}(; \\mathrm{value} = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]])\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"const\")(; upright(\"value\") = #(\n  (\n    (\n      1,\n      2,\n    ),\n    (\n      3,\n      4,\n    ),\n  ),\n  (\n    (\n      5,\n      6,\n    ),\n    (\n      7,\n      8,\n    ),\n  ),\n)) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{const}(; \\mathrm{value} = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]])\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"const\")(; upright(\"value\") = #(\n  (\n    (\n      1,\n      2,\n    ),\n    (\n      3,\n      4,\n    ),\n  ),\n  (\n    (\n      5,\n      6,\n    ),\n    (\n      7,\n      8,\n    ),\n  ),\n)) $\n"
     },
     {
       "id": "template_positional",
       "kind": "print",
       "description": "A template applied where its parameter list is known: positional arguments. Its multi-letter parameter names print in Typst with parentheses (A_(upright(\"pre\")), italic(\"Ea\")), which the template header reads back.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{arrhenius}(a, T)", "typst": "y = op(\"arrhenius\")(a, T)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
     },
     {
       "id": "template_named",
       "kind": "print",
       "description": "A template whose parameter list is not in the document: named arguments.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"f": "x", "n": 2}, "name": "scale", "op": "apply_expression_template"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"f": "x", "n": 2}, "name": "scale", "op": "apply_expression_template"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{scale}(f = x, n = 2)", "typst": "y = op(\"scale\")(f = x, n = 2)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{scale}(f = x, n = 2)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"scale\")(f = x, n = 2) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{scale}(f = x, n = 2)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"scale\")(f = x, n = 2) $\n"
     },
     {
       "id": "template_bare",
       "kind": "print",
       "description": "A template applied with no bindings and no known parameter list: its bare name.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [], "bindings": {}, "name": "duo_tile_map", "op": "apply_expression_template"}, "x"], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [], "bindings": {}, "name": "duo_tile_map", "op": "apply_expression_template"}, "x"], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{duo\\_tile\\_map} + x", "typst": "y = op(\"duo_tile_map\") + x"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{duo\\_tile\\_map} + x\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"duo_tile_map\") + x $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{duo\\_tile\\_map} + x\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"duo_tile_map\") + x $\n"
     },
     {
       "id": "template_zero_params",
       "kind": "print",
       "description": "A template in scope with no parameters, applied with no bindings: its call with empty parentheses (the bare name is refused there).",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {}, "name": "unit_tile", "op": "apply_expression_template"}}], "expression_templates": {"unit_tile": {"body": 1, "params": []}}, "variables": {"y": {"type": "unknown"}}}}},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{unit\\_tile}()\n$$\n\n$$\n\\operatorname{unit\\_tile}() \\coloneqq 1\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"unit_tile\")() $\n\n$ op(\"unit_tile\")() := 1 $\n"
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {}, "name": "unit_tile", "op": "apply_expression_template"}}], "expression_templates": {"unit_tile": {"body": 1, "params": []}}, "variables": {"y": {"type": "unknown"}}}}},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{unit\\_tile}()\n$$\n\n$$\n\\operatorname{unit\\_tile}() \\coloneqq 1\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"unit_tile\")() $\n\n$ op(\"unit_tile\")() := 1 $\n"
     },
     {
       "id": "template_bare_in_scope",
       "kind": "print",
       "description": "A template in scope with parameters, applied with no bindings: its bare name.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"y": {"type": "unknown"}}}}},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"arrhenius\") $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"y": {"type": "unknown"}}}}},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"arrhenius\") $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
     },
     {
       "id": "template_bare_product",
       "kind": "print",
       "description": "A bare template is parenthesized as a factor of a product and as an index base.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "bindings": {}, "name": "dlon", "op": "apply_expression_template"}, {"args": [{"args": [], "bindings": {}, "name": "dlon", "op": "apply_expression_template"}, 1], "op": "index"}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "bindings": {}, "name": "dlon", "op": "apply_expression_template"}, {"args": [{"args": [], "bindings": {}, "name": "dlon", "op": "apply_expression_template"}, 1], "op": "index"}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\left(\\operatorname{dlon}\\right) \\left(\\operatorname{dlon}\\right)[1]", "typst": "y = k (op(\"dlon\")) (op(\"dlon\"))[1]"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\left(\\operatorname{dlon}\\right) \\left(\\operatorname{dlon}\\right)[1]\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k (op(\"dlon\")) (op(\"dlon\"))[1] $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\left(\\operatorname{dlon}\\right) \\left(\\operatorname{dlon}\\right)[1]\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k (op(\"dlon\")) (op(\"dlon\"))[1] $\n"
     },
     {
       "id": "open_op",
       "kind": "print",
       "description": "An open (rewrite-target) operator prints in the call form.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "grad"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "grad"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{grad}(x)", "typst": "y = op(\"grad\")(x)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{grad}(x)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"grad\")(x) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{grad}(x)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"grad\")(x) $\n"
     },
     {
       "id": "open_op_no_operands",
       "kind": "print",
       "description": "An open operator with no operands keeps its parentheses, apart from a bare template.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [], "op": "noise"}, "x"], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": [], "op": "noise"}, "x"], "op": "+"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{noise}() + x", "typst": "y = op(\"noise\")() + x"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{noise}() + x\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"noise\")() + x $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{noise}() + x\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"noise\")() + x $\n"
     },
     {
       "id": "open_op_fields",
       "kind": "print",
       "description": "Node fields of an open operator are named arguments after a semicolon.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "dim": "x", "op": "myop", "order": 2}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "dim": "x", "op": "myop", "order": 2}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{myop}(x; \\mathrm{dim} = x, \\mathrm{order} = 2)", "typst": "y = op(\"myop\")(x; upright(\"dim\") = x, upright(\"order\") = 2)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(x; \\mathrm{dim} = x, \\mathrm{order} = 2)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"myop\")(x; upright(\"dim\") = x, upright(\"order\") = 2) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(x; \\mathrm{dim} = x, \\mathrm{order} = 2)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"myop\")(x; upright(\"dim\") = x, upright(\"order\") = 2) $\n"
     },
     {
       "id": "open_op_string",
       "kind": "print",
       "description": "A JSON string among the fields prints as \\text{\"…\"} (Typst #\"…\").",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k"], "op": "myop", "s": "a{b}_c"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k"], "op": "myop", "s": "a{b}_c"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{myop}(k; \\mathrm{s} = \\text{\"a\\{b\\}\\_c\"})", "typst": "y = op(\"myop\")(k; upright(\"s\") = #\"a{b}_c\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k; \\mathrm{s} = \\text{\"a\\{b\\}\\_c\"})\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = op(\"myop\")(k; upright(\"s\") = #\"a{b}_c\") $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k; \\mathrm{s} = \\text{\"a\\{b\\}\\_c\"})\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = op(\"myop\")(k; upright(\"s\") = #\"a{b}_c\") $\n"
     },
     {
       "id": "makearray_1d",
       "kind": "print",
       "description": "makearray: a bracketed table of value and region, rows in order; region bounds are ordinary math.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[2, {"args": ["N", 1], "op": "-"}]], [[1, 1]], [["N", "N"]]], "values": [{"args": [], "bindings": {"u": "x"}, "name": "interior", "op": "apply_expression_template"}, {"args": [2, "a"], "op": "*"}, 0]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[2, {"args": ["N", 1], "op": "-"}]], [[1, 1]], [["N", "N"]]], "values": [{"args": [], "bindings": {"u": "x"}, "name": "interior", "op": "apply_expression_template"}, {"args": [2, "a"], "op": "*"}, 0]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left[\\begin{array}{l|l} \\operatorname{interior}(u = x) & [2, N - 1] \\\\ 2 a & [1, 1] \\\\ 0 & [N, N] \\end{array}\\right]", "typst": "y = mat(delim: \"[\", augment: #1, op(\"interior\")(u = x), [2, N - 1]; 2 a, [1, 1]; 0, [N, N])"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} \\operatorname{interior}(u = x) & [2, N - 1] \\\\ 2 a & [1, 1] \\\\ 0 & [N, N] \\end{array}\\right]\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, op(\"interior\")(u = x), [2, N - 1]; 2 a, [1, 1]; 0, [N, N]) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} \\operatorname{interior}(u = x) & [2, N - 1] \\\\ 2 a & [1, 1] \\\\ 0 & [N, N] \\end{array}\\right]\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, op(\"interior\")(u = x), [2, N - 1]; 2 a, [1, 1]; 0, [N, N]) $\n"
     },
     {
       "id": "makearray_2d",
       "kind": "print",
       "description": "A two-dimensional region is its bound pairs joined by \\times.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[1, "N"], [1, "N"]], [[1, 1], [2, {"args": ["N", 1], "op": "-"}]]], "values": ["a", {"args": ["x", 1], "op": "index"}]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[1, "N"], [1, "N"]], [[1, 1], [2, {"args": ["N", 1], "op": "-"}]]], "values": ["a", {"args": ["x", 1], "op": "index"}]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left[\\begin{array}{l|l} a & [1, N] \\times [1, N] \\\\ x_{1} & [1, 1] \\times [2, N - 1] \\end{array}\\right]", "typst": "y = mat(delim: \"[\", augment: #1, a, [1, N] times [1, N]; x_1, [1, 1] times [2, N - 1])"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} a & [1, N] \\times [1, N] \\\\ x_{1} & [1, 1] \\times [2, N - 1] \\end{array}\\right]\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, a, [1, N] times [1, N]; x_1, [1, 1] times [2, N - 1]) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} a & [1, N] \\times [1, N] \\\\ x_{1} & [1, 1] \\times [2, N - 1] \\end{array}\\right]\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, a, [1, N] times [1, N]; x_1, [1, 1] times [2, N - 1]) $\n"
     },
     {
       "id": "makearray_lifted",
       "kind": "print",
       "description": "A lifted makearray carries its output indices as the bracket's subscript.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "output_idx": ["i"], "regions": [[[1, 4]]], "values": [{"args": [], "expr": {"args": ["k", {"args": ["x", "i"], "op": "index"}], "op": "*"}, "op": "faq", "output_idx": ["i"], "ranges": {"i": [1, 4]}}]}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "output_idx": ["i"], "regions": [[[1, 4]]], "values": [{"args": [], "expr": {"args": ["k", {"args": ["x", "i"], "op": "index"}], "op": "*"}, "op": "faq", "output_idx": ["i"], "ranges": {"i": [1, 4]}}]}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\left[\\begin{array}{l|l} \\left[\\sum k x_{i}\\right]_{1 \\le i \\le 4} & [1, 4] \\end{array}\\right]_{i}", "typst": "y = mat(delim: \"[\", augment: #1, lr([sum k x_i])_(1 <= i <= 4), [1, 4])_(i)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} \\left[\\sum k x_{i}\\right]_{1 \\le i \\le 4} & [1, 4] \\end{array}\\right]_{i}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, lr([sum k x_i])_(1 <= i <= 4), [1, 4])_(i) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} \\left[\\sum k x_{i}\\right]_{1 \\le i \\le 4} & [1, 4] \\end{array}\\right]_{i}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, lr([sum k x_i])_(1 <= i <= 4), [1, 4])_(i) $\n"
     },
     {
       "id": "makearray_call",
       "kind": "print",
       "description": "A makearray with no native shape (operands, no values) prints in the call form.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "x"], "op": "makearray", "output_idx": ["i"], "regions": [[[1, 1]], [[2, 2]]]}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "x"], "op": "makearray", "output_idx": ["i"], "regions": [[[1, 1]], [[2, 2]]]}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{makearray}(a, x; \\mathrm{output\\_idx} = [\\text{\"i\"}], \\mathrm{regions} = [[[1, 1]], [[2, 2]]])", "typst": "y = op(\"makearray\")(a, x; upright(\"output_idx\") = #(\n  \"i\",\n), upright(\"regions\") = #(\n  (\n    (\n      1,\n      1,\n    ),\n  ),\n  (\n    (\n      2,\n      2,\n    ),\n  ),\n))"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{makearray}(a, x; \\mathrm{output\\_idx} = [\\text{\"i\"}], \\mathrm{regions} = [[[1, 1]], [[2, 2]]])\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"makearray\")(a, x; upright(\"output_idx\") = #(\n  \"i\",\n), upright(\"regions\") = #(\n  (\n    (\n      1,\n      1,\n    ),\n  ),\n  (\n    (\n      2,\n      2,\n    ),\n  ),\n)) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{makearray}(a, x; \\mathrm{output\\_idx} = [\\text{\"i\"}], \\mathrm{regions} = [[[1, 1]], [[2, 2]]])\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"makearray\")(a, x; upright(\"output_idx\") = #(\n  \"i\",\n), upright(\"regions\") = #(\n  (\n    (\n      1,\n      1,\n    ),\n  ),\n  (\n    (\n      2,\n      2,\n    ),\n  ),\n)) $\n"
     },
     {
       "id": "call_broadcast",
       "kind": "print",
       "description": "broadcast prints in the call form; fn is a named JSON field.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "x"], "fn": "+", "op": "broadcast"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "x"], "fn": "+", "op": "broadcast"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{broadcast}(a, x; \\mathrm{fn} = \\text{\"+\"})", "typst": "y = op(\"broadcast\")(a, x; upright(\"fn\") = #\"+\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{broadcast}(a, x; \\mathrm{fn} = \\text{\"+\"})\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"broadcast\")(a, x; upright(\"fn\") = #\"+\") $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{broadcast}(a, x; \\mathrm{fn} = \\text{\"+\"})\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"broadcast\")(a, x; upright(\"fn\") = #\"+\") $\n"
     },
     {
       "id": "call_reshape",
       "kind": "print",
       "description": "reshape in the call form, its shape a JSON list.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a"], "op": "reshape", "shape": [2, 3]}}], "variables": {"a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a"], "op": "reshape", "shape": [2, 3]}}], "variables": {"a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{reshape}(a; \\mathrm{shape} = [2, 3])", "typst": "y = op(\"reshape\")(a; upright(\"shape\") = #(\n  2,\n  3,\n))"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{reshape}(a; \\mathrm{shape} = [2, 3])\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"reshape\")(a; upright(\"shape\") = #(\n  2,\n  3,\n)) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{reshape}(a; \\mathrm{shape} = [2, 3])\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"reshape\")(a; upright(\"shape\") = #(\n  2,\n  3,\n)) $\n"
     },
     {
       "id": "call_transpose",
       "kind": "print",
       "description": "transpose in the call form, with no fields.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a"], "op": "transpose"}}], "variables": {"a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a"], "op": "transpose"}}], "variables": {"a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{transpose}(a)", "typst": "y = op(\"transpose\")(a)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{transpose}(a)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"transpose\")(a) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{transpose}(a)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"transpose\")(a) $\n"
     },
     {
       "id": "call_concat",
       "kind": "print",
       "description": "concat in the call form; a field that is not expression-valued prints as JSON.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "x"], "axis": 1, "op": "concat"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "x"], "axis": 1, "op": "concat"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\operatorname{concat}(a, x; \\mathrm{axis} = 1)", "typst": "y = op(\"concat\")(a, x; upright(\"axis\") = #1)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{concat}(a, x; \\mathrm{axis} = 1)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"concat\")(a, x; upright(\"axis\") = #1) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{concat}(a, x; \\mathrm{axis} = 1)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"concat\")(a, x; upright(\"axis\") = #1) $\n"
     },
     {
       "id": "escape_annotated",
       "kind": "print",
       "description": "A node carrying id prints in its notation wrapped in the escape form.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["x", 1], "op": "index"}], "id": "tagged", "op": "*"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["x", 1], "op": "index"}], "id": "tagged", "op": "*"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\esm{*}{{\\text{\"id\"}: \\text{\"tagged\"}}}{a, x_{1}}", "typst": "y = esm.node(\"*\", #(\n  id: \"tagged\",\n), a, x_1)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\esm{*}{{\\text{\"id\"}: \\text{\"tagged\"}}}{a, x_{1}}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = esm.node(\"*\", #(\n  id: \"tagged\",\n), a, x_1) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\esm{*}{{\\text{\"id\"}: \\text{\"tagged\"}}}{a, x_{1}}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = esm.node(\"*\", #(\n  id: \"tagged\",\n), a, x_1) $\n"
     },
     {
       "id": "escape_annotated_reshape",
       "kind": "print",
       "description": "A shape operator carrying id keeps the escape form.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a"], "id": "tagged", "op": "reshape", "shape": [2, 3]}}], "variables": {"a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a"], "id": "tagged", "op": "reshape", "shape": [2, 3]}}], "variables": {"a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = \\esm{reshape}{{\\text{\"id\"}: \\text{\"tagged\"}, \\text{\"shape\"}: [2, 3]}}{a}", "typst": "y = esm.node(\"reshape\", #(\n  id: \"tagged\",\n  shape: (\n    2,\n    3,\n  ),\n), a)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\esm{reshape}{{\\text{\"id\"}: \\text{\"tagged\"}, \\text{\"shape\"}: [2, 3]}}{a}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = esm.node(\"reshape\", #(\n  id: \"tagged\",\n  shape: (\n    2,\n    3,\n  ),\n), a) $\n"
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\esm{reshape}{{\\text{\"id\"}: \\text{\"tagged\"}, \\text{\"shape\"}: [2, 3]}}{a}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = esm.node(\"reshape\", #(\n  id: \"tagged\",\n  shape: (\n    2,\n    3,\n  ),\n), a) $\n"
     }
   ]
 }

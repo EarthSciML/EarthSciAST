@@ -192,15 +192,14 @@ fn run_classification_category(category: &str) {
                 want_kind,
                 "[{id}] {key}.system_kind"
             );
+            // A declared `"pde"` (deprecated at esm 2.4.0) counts as absent.
+            let declared = declared_kind(model);
             assert_eq!(
                 want["declared_system_kind"],
-                model
-                    .system_kind
-                    .as_ref()
-                    .map_or(Value::Null, |k| Value::String(k.clone())),
+                declared.map_or(Value::Null, |k| Value::String(k.to_string())),
                 "[{id}] {key}.declared_system_kind"
             );
-            if let Some(declared) = model.system_kind.as_deref() {
+            if let Some(declared) = declared {
                 assert_eq!(
                     declared, want_kind,
                     "[{id}] {key}: a declared system_kind that disagrees with the \
@@ -216,10 +215,10 @@ fn run_classification_category(category: &str) {
     }
 }
 
-/// The `system_kind` table is ORDERED and first-match-wins, and two of its rows
-/// only differ by that order. `system_kind_pde` pins all four rows; this test
-/// says out loud which row each of its models is there to catch, so a binding
-/// that reorders the table fails with the reason rather than with a diff.
+/// The `system_kind` table is ORDERED and first-match-wins (`sde`, then
+/// `nonlinear`, then `ode`), and since esm 2.4.0 has no `pde` row: spatial
+/// derivatives do not affect the kind. `system_kind_pde` (name kept) pins
+/// that; this test says out loud what each of its models is there to catch.
 #[test]
 fn system_kind_order_is_first_match_wins() {
     let doc = load_json("tests/conformance/classification/fixtures/system_kind_pde.esm");
@@ -227,13 +226,23 @@ fn system_kind_order_is_first_match_wins() {
 
     let kind = |name: &str| Classification::of(&nodes[name]).system_kind;
 
-    // Row 2 beats row 3: a steady-state PDE has no time-derivative equation and
-    // would otherwise fall through to `nonlinear`.
-    assert_eq!(kind("SteadyState"), SystemKind::Pde);
-    // Row 1 beats row 2: there is no SPDESystem constructor to select.
+    // No time-derivative equation: nonlinear, spatial derivatives or not.
+    assert_eq!(kind("SteadyState"), SystemKind::Nonlinear);
+    // A Brownian parameter wins first.
     assert_eq!(kind("StochasticSpatial"), SystemKind::Sde);
-    // A spatial `D` (wrt present and not "t") and the sugar ops are the same
-    // signal.
-    assert_eq!(kind("Transient"), SystemKind::Pde);
-    assert_eq!(kind("SugarOps"), SystemKind::Pde);
+    // A spatial `D` (alone or nested) does not make a model anything but `ode`.
+    assert_eq!(kind("Transient"), SystemKind::Ode);
+    assert_eq!(kind("SugarOps"), SystemKind::Ode);
+    // A declared `"pde"` is ignored: the derived kind, no declared kind, no
+    // mismatch.
+    assert_eq!(kind("DeclaredPde"), SystemKind::Ode);
+    assert_eq!(nodes["DeclaredPde"].system_kind.as_deref(), Some("pde"));
+    assert_eq!(declared_kind(&nodes["DeclaredPde"]), None);
+}
+
+/// The declared `system_kind` the comparison uses: a declared `"pde"`
+/// (deprecated at esm 2.4.0, warned `deprecated_system_kind` at load) counts as
+/// absent and never mismatches.
+fn declared_kind(model: &Model) -> Option<&str> {
+    model.system_kind.as_deref().filter(|k| *k != "pde")
 }

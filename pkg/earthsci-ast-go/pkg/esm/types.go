@@ -15,7 +15,7 @@ type ExprNode struct {
 	Op    string  `json:"op"`
 	Args  []any   `json:"args"`
 	Wrt   *string `json:"wrt,omitempty"`   // for derivatives
-	Dim   *string `json:"dim,omitempty"`   // for grad
+	Dim   *string `json:"dim,omitempty"`   // axis name (bc, integral, user ops)
 	Fn    *string `json:"fn,omitempty"`    // for bc wrapper kind encoding
 	Var   *string `json:"var,omitempty"`   // integration variable name (for integral)
 	Lower any     `json:"lower,omitempty"` // lower integration bound (for integral)
@@ -388,7 +388,8 @@ type Model struct {
 	// or Expression graphs (serialized as interface{}).
 	Guesses map[string]any `json:"guesses,omitempty"`
 	// SystemKind discriminates the MTK system type this model maps to.
-	// One of "ode" (default), "nonlinear", "sde", "pde".
+	// One of "ode" (default), "nonlinear", "sde"; "pde" is deprecated (esm
+	// 2.4.0) and ignored.
 	SystemKind *string `json:"system_kind,omitempty"`
 
 	// unresolvedMountRef is the `ref` of a top-level `models.<k>` `{ref}` MOUNT

@@ -72,7 +72,7 @@ def test_the_absent_wrt_is_not_materialized_into_the_canonical_form() -> None:
         ("ShapedWrtExplicit", ["x"], "ode"),
         # The complement, which stops an over-broad fix: a SPATIAL `wrt` is
         # still not a time derivative.
-        ("SpatialControl", [], "pde"),
+        ("SpatialControl", [], "nonlinear"),
     ],
 )
 def test_classification_reads_both_spellings_the_same(

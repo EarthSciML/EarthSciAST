@@ -52,7 +52,7 @@
       "discrete_parameters": [],
       "sampled_parameters": [],
       "constant_parameters": ["kappa"],
-      "system_kind": "pde",
+      "system_kind": "nonlinear",
       "declared_system_kind": null
     }
   }

@@ -120,8 +120,8 @@ end
     end
 
     @testset "unlowered rewrite-target op surfaced before evaluation" begin
-        # grad/div/laplacian are rewrite-target sugar (esm-spec §4.2 / §9.6.8),
-        # NOT evaluable-core ops. One that reaches the compiler unlowered (no
+        # grad/div/laplacian are ordinary open-tier user ops (esm-spec §4.2 /
+        # §9.6.8), NOT evaluable-core ops. One that reaches the compiler unlowered (no
         # discretization rule matched) must be rejected with the uniform
         # `unlowered_operator` code — never silently evaluated to zero (the
         # historical stub-to-zero pattern in other bindings). The gate fires

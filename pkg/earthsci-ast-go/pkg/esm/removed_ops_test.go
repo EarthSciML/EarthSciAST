@@ -169,3 +169,40 @@ func TestParseMathRefusesRemovedCallees(t *testing.T) {
 		}
 	}
 }
+
+// Every shared fixture under tests/invalid/removed_ops/ is refused at load
+// with `removed_op`, naming the construct its file name carries.
+func TestRemovedOpsFixturesAreRefusedAtLoad(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "..", "tests", "invalid", "removed_ops")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	checked := 0
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".esm")
+		if !ok {
+			continue
+		}
+		name, ok = strings.CutPrefix(name, "removed_op_")
+		if !ok {
+			continue
+		}
+		checked++
+		t.Run(e.Name(), func(t *testing.T) {
+			_, err := LoadPath(filepath.Join(dir, e.Name()))
+			var re *removedOpError
+			if !errors.As(err, &re) {
+				t.Fatalf("err = %v, want a removed_op refusal", err)
+			}
+			// removed_op_table_lookup.esm also carries the `function_tables`
+			// block its lookup reads, which is reported first.
+			if re.Name != name && !(name == "table_lookup" && re.Name == removedFunctionTables) {
+				t.Errorf("removed_op refusal names %q, want %q", re.Name, name)
+			}
+		})
+	}
+	if checked == 0 {
+		t.Fatal("tests/invalid/removed_ops/ holds no removed_op_*.esm fixture")
+	}
+}

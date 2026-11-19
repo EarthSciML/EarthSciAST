@@ -581,7 +581,7 @@ func (f *FlattenedSystem) InitialValues() map[string]float64 {
 }
 
 // SystemKind is the flattened system's derived MTK system kind (esm-spec
-// §6.3.1): "sde" / "pde" / "nonlinear" / "ode", tested in that order.
+// §6.3.1): "sde" / "nonlinear" / "ode", tested in that order.
 //
 // It is available on the flattened form precisely because BrownianParameters
 // survives flattening — the derivation's first row is "any parameter in
@@ -1672,7 +1672,7 @@ func qualifyTranslateEndpoint(name, system string) string {
 
 // expandOperatorComposePlaceholders expands `_var` placeholders in B's equations
 // against A's state variables (esm-spec §4.7.1): an equation like
-// `D(_var, t) = -u·grad(_var, x)` is cloned once per state variable of A, with
+// `D(_var, t) = -u·D(_var, wrt: x)` is cloned once per state variable of A, with
 // `_var` substituted for the actual namespaced name.
 func expandOperatorComposePlaceholders(components map[string]*componentSystem, entry OperatorComposeCoupling) {
 	a, aok := components[entry.Systems[0]]
@@ -3413,10 +3413,9 @@ func deriveIndependentVars(flat *FlattenedSystem) {
 			}
 			// `wrt` is the other axis-naming scalar field, and a differential
 			// taken with respect to anything but time names a spatial axis
-			// exactly as `dim` does -- §4.7.6 step 2 lists it alongside
-			// grad/div/laplacian as "`D` with `wrt != \"t\"`". Scanning `dim`
-			// alone made `D(u,t) = k * D(u,x)`, the heat equation, come out as
-			// a pure ODE.
+			// exactly as `dim` does ("`D` with `wrt != \"t\"`"). Scanning
+			// `dim` alone made `D(u,t) = k * D(u,x)`, the heat equation, come
+			// out as a pure ODE.
 			if n.Wrt != nil && *n.Wrt != DefaultIndepVar {
 				add(*n.Wrt)
 			}

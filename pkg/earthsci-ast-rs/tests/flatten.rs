@@ -917,8 +917,7 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
 // `unlowered_operator`. esm-libraries-spec §4.7.6 rules otherwise: the
 // independent variables are DERIVED from exactly these operators, and that
 // derivation "is what determines whether the downstream constructor produces an
-// ODESystem or a PDESystem" — which a refusal makes unreachable, along with
-// esm-spec §6.3.1's `"pde"` system_kind. So flatten now succeeds and records the
+// ODESystem or a PDESystem" — which a refusal makes unreachable. So flatten now succeeds and records the
 // axis, and the refusal moves to the places that genuinely require a discretized
 // system: `reject_unlowered_operators`, and the simulators' compile-time gate.
 // Both halves are asserted here so neither can be lost.
@@ -988,8 +987,10 @@ fn flatten_derives_spatial_independent_variable_from_grad() {
         vec!["t".to_string(), "x".to_string()],
         "grad(c, dim=x) must contribute the spatial axis `x`"
     );
-    // ...and esm-spec §6.3.1 can therefore report the system as a PDE.
-    assert_eq!(flat.system_kind().as_str(), "pde");
+    // Spatial operators do not affect esm-spec §6.3.1's `system_kind` (there
+    // is no `pde` kind since esm 2.4.0): the system classifies by its time
+    // derivative.
+    assert_eq!(flat.system_kind().as_str(), "ode");
 
     // The `unlowered_operator` refusal still exists, for a consumer that
     // requires a DISCRETIZED system and says so.
@@ -1077,7 +1078,8 @@ fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
         vec!["t".to_string(), "x".to_string()],
         "D(c, wrt=x) must contribute the spatial axis `x`, un-namespaced"
     );
-    assert_eq!(flat.system_kind().as_str(), "pde");
+    // No `pde` kind since esm 2.4.0: a spatial `D` leaves the system `ode`.
+    assert_eq!(flat.system_kind().as_str(), "ode");
 
     // ...and it is still rejected on demand, with the offending op name `"D"`.
     let err = earthsci_ast::extension::flatten::reject_unlowered_operators(&flat)

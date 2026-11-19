@@ -86,7 +86,8 @@ end
         # The complement: a SPATIAL `wrt` is still not a time derivative, so an
         # over-broad fix that treated every `D` as structural is caught here.
         @test isempty(ode_states(doc.models["SpatialControl"]))
-        @test system_kind(doc.models["SpatialControl"]) == "pde"
+        # No time derivative at all, and no "pde" kind (esm 2.4.0).
+        @test system_kind(doc.models["SpatialControl"]) == "nonlinear"
     end
 
     @testset "scalar state" begin
