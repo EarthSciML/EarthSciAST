@@ -933,9 +933,33 @@ function _tpl_is_called(tt::_TplTable, call::OpExpr)
         # INTO the instance (the user's bound-expression rule; call.jl
         # `_call_inlined`), when it is made of names, literals and
         # elementwise operators.
-        _tpl_plain_binding(v) || _tpl_inlinable(v) || return false
+        _tpl_plain_binding(v) || _tpl_inlinable(v) || _tpl_value_binding(tt, v) || return false
     end
     return true
+end
+
+# A conditional compound binding that holds a template call (and reads no
+# name the body binds, checked above): passed as a value, evaluated by the
+# caller, as a marked binding's parts that read no name the body binds are
+# (call.jl `_inl_mark`). Every call in it must itself be a call.
+function _tpl_value_binding(tt::_TplTable, v::ASTExpr)
+    v isa OpExpr || return false
+    has = Ref(false)
+    ok = Ref(true)
+    function walk(x)
+        ok[] || return
+        x isa OpExpr || return
+        if _tpl_is_call(x)
+            has[] = true
+            _tpl_is_called(tt, x) || (ok[] = false)
+            return
+        end
+        (x.op in _TPL_CALL_OPS || x.op == "index") && _tpl_structless(x) && isempty(_bound_symbols(x)) ||
+            (ok[] = false; return)
+        foreach(walk, x.args)
+    end
+    walk(v)
+    return ok[] && has[]
 end
 
 # A compound binding the build compiles into its instance (`_call_inlined`):
@@ -946,6 +970,11 @@ function _tpl_inlinable(v::ASTExpr)
     if v.op == "index" && _tpl_structless(v) && length(v.args) >= 2 && v.args[1] isa VarExpr
         a = v.args[1]::VarExpr
         (_tpl_is_sentinel(a.name) || occursin(_TPL_SENTINEL, a.name)) && return false
+        return all(_tpl_inlinable, @view v.args[2:end])
+    end
+    # A read of an inline const table.
+    if v.op == "index" && _tpl_structless(v) && length(v.args) >= 2 && v.args[1] isa OpExpr &&
+            v.args[1].op == "const" && v.args[1].value isa AbstractVector
         return all(_tpl_inlinable, @view v.args[2:end])
     end
     (v.op in _TPL_CALL_OPS && v.op != "const" && _tpl_structless(v) && !_tpl_is_call(v)) || return false

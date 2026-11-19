@@ -895,7 +895,8 @@ function _inl_mark(leaf, arr, v::ASTExpr, B::Set{String}, parent = "", j = 0)
     if !(v isa OpExpr) || !_tpl_reads_any(v, B)
         return OpExpr("__inleaf", ASTExpr[leaf(v)])
     end
-    if v.op == "index" && v.args[1] isa VarExpr
+    if v.op == "index" && (v.args[1] isa VarExpr ||
+            (v.args[1] isa OpExpr && v.args[1].op == "const" && v.args[1].value isa AbstractVector))
         return reconstruct(v; args = ASTExpr[arr(v.args[1]), (_inl_mark(leaf, arr, x, B, "index", i + 1) for (i, x) in enumerate(v.args[2:end]))...])
     end
     return reconstruct(v; args = ASTExpr[_inl_mark(leaf, arr, x, B, v.op, i) for (i, x) in enumerate(v.args)])
