@@ -1775,9 +1775,8 @@ fn is_iso8601_duration(s: &str) -> bool {
 }
 
 /// The wire-boundary op checks: a removed op (`arrayop`, removed at esm 0.8.0,
-/// the ops and the `function_tables` block esm 2.0.0 removed,
-/// [`REMOVED_AT_V2`], `aggregate` among them, and the `grad` / `div` /
-/// `laplacian` ops esm 2.4.0 removed, [`REMOVED_AT_V2_4`]) is rejected by name with
+/// and the ops and the `function_tables` block esm 2.0.0 removed,
+/// [`REMOVED_AT_V2`], `aggregate` among them) is rejected by name with
 /// `removed_op`, `faq` is refused in a document declaring esm below 1.1.0, and
 /// the deprecated spellings `neg` and `pow`
 /// ([`crate::op_registry::deprecated_op`]) are rewritten
@@ -1865,8 +1864,47 @@ pub(crate) fn prepare_document_ops_scanned(
     if let Some(warning) = deprecated_op_warning(&scan.deprecated) {
         eprintln!("warning: {warning}");
     }
+    // 4. A model declaring `"system_kind": "pde"` (deprecated at esm 2.4.0):
+    //    ONE warning per document naming every such model; the field is kept.
+    if let Some(warning) = deprecated_system_kind_warning(value) {
+        eprintln!("warning: {warning}");
+    }
     Ok(facts)
 }
+
+/// The `deprecated_system_kind` load warning for one document: every model
+/// that declares `"system_kind": "pde"`, by JSON pointer, or `None` when no
+/// model does. The value is ignored for classification (the model takes its
+/// derived kind) and is kept as written.
+pub(crate) fn deprecated_system_kind_warning(value: &serde_json::Value) -> Option<String> {
+    let sites: Vec<String> = value
+        .get("models")
+        .and_then(|m| m.as_object())
+        .into_iter()
+        .flatten()
+        .filter(|(_, model)| {
+            model.get("system_kind").and_then(|k| k.as_str()) == Some(DEPRECATED_SYSTEM_KIND)
+        })
+        .map(|(name, _)| {
+            format!(
+                "/models/{}/system_kind",
+                name.replace('~', "~0").replace('/', "~1")
+            )
+        })
+        .collect();
+    (!sites.is_empty()).then(|| {
+        format!(
+            "deprecated_system_kind: the `system_kind` value \"pde\" is deprecated (esm \
+             2.4.0) and ignored; the model is treated as its derived kind (esm-spec §6.3.1). \
+             Declared at: {}.",
+            sites.join(", ")
+        )
+    })
+}
+
+/// The `system_kind` value esm 2.4.0 deprecated: there is no `pde` kind any
+/// more, so a declared `"pde"` counts as absent.
+pub(crate) const DEPRECATED_SYSTEM_KIND: &str = "pde";
 
 /// The expression ops esm 2.0.0 removed (esm-spec, "2.0.0 is a break"):
 /// `aggregate`, the pre-1.1.0 spelling of `faq`, and the external functions,
@@ -1886,15 +1924,9 @@ pub(crate) const REMOVED_AT_V2: [&str; 9] = [
     "argmax",
 ];
 
-/// The spatial-calculus ops esm 2.4.0 removed (esm-spec §4.2 "Removed ops"):
-/// each is written with spatial `D`, one `D` per axis, or with a user op
-/// lowered by a rewrite rule. There is no codemod for these.
-pub(crate) const REMOVED_AT_V2_4: [&str; 3] = ["grad", "div", "laplacian"];
-
 /// The first removed construct a document uses, and where.
 pub(crate) enum Removed {
-    /// An `"op"` naming a removed op (`arrayop`, or one of [`REMOVED_AT_V2`] or
-    /// [`REMOVED_AT_V2_4`]).
+    /// An `"op"` naming a removed op (`arrayop`, or one of [`REMOVED_AT_V2`]).
     Op { path: String, op: String },
     /// The `function_tables` block, removed at esm 2.0.0.
     FunctionTables { path: String },
@@ -1914,12 +1946,6 @@ impl Removed {
                  `\"op\": \"faq\"`, was removed at esm 2.0.0; write `faq` (the codemod, \
                  `python -m earthsci_ast.migrate`, renames it)."
             ),
-            Removed::Op { path, op } if REMOVED_AT_V2_4.contains(&op.as_str()) => format!(
-                "removed_op at {path}: `\"op\": \"{op}\"` was removed at esm 2.4.0; write the \
-                 derivative with spatial `D`, one `D` per axis (`grad(f, dim: x)` is \
-                 `D(f, wrt: x)`), or with a user op lowered by a rewrite rule (MIGRATION.md, \
-                 \"esm 2.4.0\")."
-            ),
             Removed::Op { path, op } => format!(
                 "removed_op at {path}: `\"op\": \"{op}\"` was removed at esm 2.0.0; its \
                  replacement is an `esm:std/*.esm` expression template. Convert the document \
@@ -1937,7 +1963,7 @@ impl Removed {
 
 /// Is `op` an op name a loader rejects by name with `removed_op`?
 pub(crate) fn is_removed_op(op: &str) -> bool {
-    op == "arrayop" || REMOVED_AT_V2.contains(&op) || REMOVED_AT_V2_4.contains(&op)
+    op == "arrayop" || REMOVED_AT_V2.contains(&op)
 }
 
 /// The path of a `function_tables` block in a raw document: at the top level,
@@ -2218,25 +2244,37 @@ mod tests {
         assert_eq!(v, json!({"esm": "2.0.0", "a": {"op": "faq"}}));
     }
 
-    /// `grad`, `div` and `laplacian` are refused by name whatever `esm` the
-    /// document declares, with a message pointing at spatial `D` and
-    /// MIGRATION.md, never at the 2.0.0 codemod.
+    /// A declared `"system_kind": "pde"` warns once per document, naming every
+    /// such model by pointer, and is kept as written.
     #[test]
-    fn the_ops_removed_at_v2_4_are_refused_without_a_codemod_pointer() {
+    fn a_declared_pde_system_kind_warns_once_and_is_kept() {
         use serde_json::json;
-        for op in REMOVED_AT_V2_4 {
-            for esm in ["1.3.0", "2.3.0", crate::SCHEMA_VERSION] {
-                let mut v =
-                    json!({"esm": esm, "m": {"rhs": {"op": op, "args": ["u"], "dim": "x"}}});
-                let e = prepare_document_ops(&mut v).unwrap_err().to_string();
-                assert!(e.contains("removed_op at /m/rhs:"), "{e}");
-                assert!(e.contains(&format!("\"{op}\"")), "{e}");
-                assert!(e.contains("removed at esm 2.4.0"), "{e}");
-                assert!(e.contains("spatial `D`"), "{e}");
-                assert!(e.contains("MIGRATION.md"), "{e}");
-                assert!(!e.contains("earthsci_ast.migrate"), "{e}");
-            }
-        }
+        let doc = json!({"esm": "2.4.0", "models": {
+            "A": {"system_kind": "pde"}, "B": {"system_kind": "ode"}, "C/x": {"system_kind": "pde"}
+        }});
+        let w = deprecated_system_kind_warning(&doc).expect("a warning");
+        assert!(w.starts_with("deprecated_system_kind: "), "{w}");
+        assert!(
+            w.ends_with("Declared at: /models/A/system_kind, /models/C~1x/system_kind."),
+            "{w}"
+        );
+        assert!(
+            deprecated_system_kind_warning(&json!({"models": {"B": {"system_kind": "ode"}}}))
+                .is_none()
+        );
+
+        let src = r#"{"esm": "2.4.0", "metadata": {"name": "P"},
+            "models": {"M": {"system_kind": "pde", "variables": {"u": {"type": "unknown"}},
+                "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "u"}]}}}"#;
+        let file = load_string(src).expect("a declared pde loads");
+        let model = &file.models.as_ref().unwrap()["M"];
+        assert_eq!(model.system_kind.as_deref(), Some("pde"), "kept as written");
+        assert_eq!(crate::classification::declared_system_kind(model), None);
+        assert_eq!(
+            crate::classification::system_kind_mismatch(model),
+            None,
+            "a declared pde never mismatches"
+        );
     }
 
     #[test]
