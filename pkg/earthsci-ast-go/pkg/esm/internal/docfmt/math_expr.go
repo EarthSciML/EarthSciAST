@@ -233,7 +233,7 @@ func exprJwf(j Json) bool { return JsonWfb(j) }
 // name.
 var exprRemovedOps = []string{
 	"arrayop", "aggregate", "fn", "table_lookup", "skolem", "rank", "argmin", "argmax",
-	"polygon_intersection_area", "intersect_polygon", "grad", "div", "laplacian",
+	"polygon_intersection_area", "intersect_polygon",
 }
 
 // exprDeprecatedOps is `Math.deprecatedOps`: read in the call form and

@@ -70,7 +70,7 @@ func TestUnitsFixturesCrossBinding(t *testing.T) {
 // tests/invalid/units_gradient_operator_mismatch.esm as declared in
 // tests/invalid/expected_errors.json.
 //
-// The fixture is schema-VALID ("schema_errors": []): it carries a user op `upwind_gradient` applied
+// The fixture is schema-VALID ("schema_errors": []): it carries a grad applied
 // over a coordinate 'x' the model declares WITHOUT units, plus a companion
 // 'bad_sum' observed variable that adds metres to kilograms. Its intended
 // rejections are two *structural* "unit_inconsistency" errors.
@@ -81,10 +81,11 @@ func TestUnitsFixturesCrossBinding(t *testing.T) {
 // dimensional mismatch is now a hard error, so the fixture must be REJECTED.
 //
 // Go surfaces the 'bad_sum' error (`/models/SpatialModel/variables/bad_sum`).
-// The fixture's notes also name an error at `/models/SpatialModel/equations/0`
-// for the gradient term; Go gives an open-tier user op an indeterminate
-// dimension, and `bad_sum` exists precisely so a binding that reports nothing
-// there still rejects the file.
+// The grad-specific error at `/models/SpatialModel/equations/0` requires
+// resolving the grad `dim` against the model's declared variables, which only
+// Julia does today — the fixture's own notes track that as a follow-up for
+// Go/TS/Rust, and note that `bad_sum` exists precisely so bindings without
+// grad-unit support still reject the file.
 func TestGradientOperatorMismatchFixtureRejected(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {

@@ -555,3 +555,29 @@ func TestAggregateDerivativeLHSIsNotAnObservedDefinition(t *testing.T) {
 		t.Errorf("ODEStates = %v, want [u]", got)
 	}
 }
+
+// `grad`, `div` and `laplacian` are ordinary open-tier op names (esm 2.4.0):
+// a document using them loads, and they do not make a model a PDE — only a
+// spatial `D` (a `wrt` other than `t`) does.
+func TestGradDivLaplacianAreOrdinaryOpNames(t *testing.T) {
+	for _, op := range []string{"grad", "div", "laplacian"} {
+		t.Run(op, func(t *testing.T) {
+			src := `{"esm": "2.4.0", "metadata": {"name": "ordinary"},
+			  "models": {"M": {
+			    "variables": {"u": {"type": "unknown", "default": 0.0},
+			                  "k": {"type": "parameter", "default": 1.0}},
+			    "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+			                   "rhs": {"op": "*", "args": ["k",
+			                     {"op": "` + op + `", "args": ["u"], "dim": "x"}]}}]}}}`
+			file, err := LoadString(src)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			m := file.Models["M"]
+			if got := SystemKind(&m); got != SystemKindODE {
+				t.Errorf("SystemKind = %q, want %q: `%s` is an ordinary user op, not a spatial derivative",
+					got, SystemKindODE, op)
+			}
+		})
+	}
+}
