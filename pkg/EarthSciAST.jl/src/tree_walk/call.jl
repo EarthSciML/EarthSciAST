@@ -1414,6 +1414,21 @@ function _tpl_free_leaves_all(e::ASTExpr)
     return out
 end
 
+# The references in `model` read through `index` whose template has an
+# aggregate or makearray body (no element call, `_tpl_call_info` is
+# `nothing`): an element of such a template is not read through its view.
+function _tpl_elem_read_aggs(tt::_TplTable, model)
+    out = IdDict{OpExpr, Nothing}()
+    foreach_expression(model) do e, _, _
+        foreach_subexpr(e) do x
+            (x isa OpExpr && x.op == "index" && !isempty(x.args) && _tpl_is_call(x.args[1])) || return
+            r = x.args[1]::OpExpr
+            _tpl_call_info(tt, r.name) === nothing && (out[r] = nothing)
+        end
+    end
+    return out
+end
+
 # Whether the build reads the reference `call` through its view: it has one
 # and every leaf is a call the build compiles.
 function _tpl_agg_called(tt::_TplTable, call::OpExpr)

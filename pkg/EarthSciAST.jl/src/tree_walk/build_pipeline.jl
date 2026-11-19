@@ -1328,7 +1328,12 @@ function _build_evaluator_impl_inner(
         calls.tt.root_memos[:index_sets] = index_sets
         _build_state().calls = calls
         map_expressions!(e -> _tpl_structural_refs(calls.tt, e), model)
-        keep_cache = _ExpandCache(; keep = e -> _tpl_is_called(calls.tt, e))
+        # An ELEMENT read of an aggregate or makearray body (`index(ref, s…)`)
+        # is not read through the view (option B, the callee selecting the
+        # element, is not implemented: no document needs it yet); it is still
+        # expanded here (call.jl `_tpl_elem_read_aggs`).
+        elem_aggs = _tpl_elem_read_aggs(calls.tt, model)
+        keep_cache = _ExpandCache(; keep = e -> !haskey(elem_aggs, e) && _tpl_is_called(calls.tt, e))
         _expand_model_refs!(model, _template_reg; sites = sites, memo = keep_cache)
         # How many references the build still expands (none at the end of A1).
         _count!(:tpl_expanded, length(sites))
