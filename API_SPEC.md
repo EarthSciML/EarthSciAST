@@ -540,7 +540,7 @@ bindings export the family; all are total and return sorted names.
 | `discrete_parameters(model) -> [str]` | event/schedule-updated parameters |
 | `sampled_parameters(model) -> [str]` | distribution-drawn parameters |
 | `constant_parameters(model) -> [str]` | never updated |
-| `system_kind(model) -> SystemKind` | `ode` / `dae` / `sde` / `pde` / `nonlinear` |
+| `system_kind(model) -> SystemKind` | `ode` / `dae` / `sde` / `nonlinear` (`pde` was dropped at esm 2.4.0; a declared `pde` is ignored with the warning `deprecated_system_kind`) |
 | `observed_definitions(model) -> {str: Expr}` | observed name → defining expression |
 
 Divergences:
