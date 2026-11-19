@@ -172,7 +172,10 @@ either surface back gives the same node:
 The time derivative and the spatial one are told apart by their differential: `\mathrm{d}` /
 `dif` reads back as `D` with `wrt: "t"`, `\partial` / `partial` as `partial` with the `wrt`
 the denominator names (which is never `t`, §4.2). Both renderings show ∂ for `partial`; there
-is no third spelling. The `\nabla` forms are notation only: the format gives `grad`, `div`,
+is no third spelling. The four `\nabla` forms are told apart by what follows `\nabla` / `nabla`: nothing (`grad`),
+`\cdot` / `dot` (`div`), `^{2}` / `^2` (`laplacian`), `\times` / `times` (`curl`). They are
+trees, not identities: `\nabla \cdot \nabla u` reads back as `div(grad(u))`, a different tree
+from `laplacian(u)`, which prints `\nabla^{2} u`; both round-trip. The `\nabla` forms are notation only: the format gives `grad`, `div`,
 `laplacian` and `curl` no meaning (§4.2), and a node outside the row's shape prints in the call
 form. The operand of a `\nabla` form, and of `\partial_{x}`, is printed at the level of a power
 base (parenthesized unless atomic), so `\nabla f \cdot g` reads as `grad(f)·g`. `\Delta` is not
@@ -5934,8 +5937,13 @@ and round-trips unchanged — the discretization-agnostic component of §6.6.6, 
 (§4.8.3). It is an error only if evaluated: `unlowered_operator` (§9.6.3 constraint 6), whose
 message lists every definition of the operator in scope and why it was not eligible.
 
-**Units.** A call's unit is the unit expression of the definition it resolved to, evaluated
-from the units of what the call binds, without evaluating the body (§4.8.3, §9.6.1 `units`). A
+**Units.** A call's unit is the unit expression of the definition it resolves to, evaluated
+from the units of what the call binds, without evaluating the body (§4.8.3, §9.6.1 `units`).
+Selection is static (§9.6.3: patterns, declared shapes, `priority`, declaration order), so which
+definition a call resolves to, and with it the call's unit, is always known at load. A call that
+no definition in scope matches has no unit to give and is an error if evaluated
+(`unlowered_operator`); a placeholder — a name with no definitions in scope — has an
+UNDETERMINABLE unit. A
 definition without a unit expression has its body's unit, inferred statically per instance. When
 a definition has both and they disagree at a call, a checker reports `definition_unit_mismatch`:
 an **error** when the body's unit is determinable, a **warning** when it is not (a stencil whose
