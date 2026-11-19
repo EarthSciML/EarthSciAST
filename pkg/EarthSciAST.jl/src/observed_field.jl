@@ -75,7 +75,26 @@ function _observed_field_read(
     # runs under the plan that BUILT the problem rather than under whatever
     # plan (if any) happens to be in scope on the reader's task.
     return _with_compiler_plan(_plan(compiler(prob))) do
-        _observed_field_memo(prob, name, u, t, p)
+        _with_problem_calls(prob) do
+            _observed_field_memo(prob, name, u, t, p)
+        end
+    end
+end
+
+# Run `f` with the problem's template call targets (call.jl) on the current
+# build state: an output-time read compiles and evaluates the build's
+# expressions, whose template references are calls.
+function _with_problem_calls(f, prob::EsmProblem)
+    octx = prob.build.products.observed_ctx
+    calls = octx === nothing ? nothing : octx.calls
+    calls === nothing && return f()
+    st = _build_state()
+    saved = st.calls
+    st.calls = calls
+    try
+        return f()
+    finally
+        st.calls = saved
     end
 end
 

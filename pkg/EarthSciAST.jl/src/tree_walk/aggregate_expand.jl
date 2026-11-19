@@ -269,11 +269,12 @@ end
 _contracted_index_names(ranges_dict, output_idx) =
     sort!(String[n for n in keys(ranges_dict) if !(n in output_idx)])
 
-# `pred` holds for `e` or a node under it reached through `args` alone. The
-# walk for a subscript or a range bound, which is integer arithmetic over names
-# with no expression-bearing field but its operands.
+# `pred` holds for `e` or a node under it reached through its operands alone
+# (`_operands`: `args`, or a template call's arguments). The walk for a
+# subscript or a range bound, which is integer arithmetic over names with no
+# expression-bearing field but its operands.
 _args_any(pred::P, e::ASTExpr) where {P} =
-    pred(e)::Bool || (e isa OpExpr && _anyof(a -> _args_any(pred, a), (e::OpExpr).args))
+    pred(e)::Bool || (e isa OpExpr && _anyof(a -> _args_any(pred, a), _operands(e::OpExpr)))
 
 _ast_reads(e::ASTExpr, name::AbstractString) =
     _args_any(x -> x isa VarExpr && (x::VarExpr).name == name, e)

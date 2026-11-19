@@ -1050,7 +1050,9 @@ function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
         Expr(:meta, small ? :inline : :no_constprop),
         Expr(:macrocall, Symbol("@inbounds"), ln, :(return $body)),
     ]
-    name = _cg_name(ctx, "tc")
+    # In the helper namespace (`_cgh…`): never taken for a local to pass along
+    # (`_cg_is_passable`).
+    name = _cg_name(ctx, "htc")
     fdef = Expr(:function, Expr(:call, name, :u, :p, :t, argsyms...), Expr(:block, stmts...))
     def = Expr(:macrocall, Symbol(small ? "@inline" : "@noinline"), ln, fdef)
     push!(ctx.helpers, def)
@@ -2440,7 +2442,7 @@ function _cg_section_small(ex::Expr)
 end
 
 _cg_is_instance_fn(name::Symbol) = startswith(String(name), "_cghi")
-_cg_is_call_fn(name::Symbol) = startswith(String(name), "_cgtc")
+_cg_is_call_fn(name::Symbol) = startswith(String(name), "_cghtc")
 
 # `ex` with every template-instance function (`_cg_instance_call!`) made
 # inlinable: `@inline`, its `no_constprop` meta replaced by `inline` (which the

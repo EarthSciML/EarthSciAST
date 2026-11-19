@@ -592,3 +592,20 @@ function _tpl_is_called(tt::_TplTable, call::OpExpr)
     end
     return true
 end
+
+"""
+    _operands(e::OpExpr) -> AbstractVector{ASTExpr}
+
+The operands of `e` as a value-level walker sees them: a template call's
+arguments are its bindings (in name order), every other node's are its
+`args`. A hand-written walker that recurses into `e.args` to find what an
+expression computes from uses this instead, so a call's arguments are not
+missed (the call's body is reached through the shared layer, never by
+expanding).
+"""
+_operands(e::OpExpr) = _tpl_is_call(e) ? _call_operands(e) : e.args
+function _call_operands(e::OpExpr)
+    b = e.bindings
+    b === nothing && return ASTExpr[]
+    return ASTExpr[b[k] for k in sort!(collect(keys(b)))]
+end

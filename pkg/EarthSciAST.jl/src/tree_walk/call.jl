@@ -97,15 +97,28 @@ function _call_args(tg::_CallTarget, expr::OpExpr)
     b = expr.bindings === nothing ? Dict{String, ASTExpr}() : expr.bindings
     out = Vector{ASTExpr}(undef, length(tg.slots))
     for (i, s) in enumerate(tg.slots)
-        out[i] = if startswith(s, _TPL_ARG)
-            b[s[(ncodeunits(_TPL_ARG) + 1):end]]
-        else
-            # An implicit parameter the reference does not carry reads the
-            # caller's name of the same spelling (`_tpl_frame`).
-            get(b, s, nothing) === nothing ? VarExpr(s[(ncodeunits(_TPL_FREE) + 1):end]) : b[s]
-        end
+        out[i] = _call_arg(b, s)
     end
     return out
+end
+
+# The binding of argument sentinel `s` in the bindings `b` of a reference.
+function _call_arg(b::AbstractDict, s::String)
+    if startswith(s, _TPL_ARG)
+        p = s[(ncodeunits(_TPL_ARG) + 1):end]
+        v = get(b, p, nothing)
+        v === nothing && throw(
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                "apply_expression_template missing binding for param '$p'"
+            )
+        )
+        return v
+    end
+    # An implicit parameter the reference does not carry reads the caller's
+    # name of the same spelling (`_tpl_frame`).
+    v = get(b, s, nothing)
+    return v === nothing ? VarExpr(s[(ncodeunits(_TPL_FREE) + 1):end]) : v
 end
 
 # The target of the reference `expr` in the open build.
@@ -285,14 +298,63 @@ end
 function _eval_through_call(ev::F, expr::OpExpr, env::Dict{String, V}) where {F, V}
     ct = _call_table()
     ct === nothing && throw(_no_call_table(expr.name))
-    fr = _tpl_frame(ct.tt, expr, nothing)
+    def = _tpl_def(ct.tt, expr.name)
+    if def.closed === nothing
+        # A parameter in a structural position: the instance's own prepared
+        # body (one frame per instance, so per distinct structural value).
+        fr = _tpl_frame(ct.tt, expr, nothing)
+        body, slots, args = fr.body, collect(keys(fr.args)), s -> fr.args[s]
+    else
+        # The template's prepared body, with the reference's bindings as its
+        # arguments. No frame: a build-time evaluator may run per cell, and a
+        # frame per distinct argument value would be kept for the whole build.
+        closed = def.closed::_TplClosed
+        b = expr.bindings === nothing ? Dict{String, ASTExpr}() : expr.bindings
+        slots = String[_TPL_ARG * p for p in def.params]
+        append!(slots, String[_TPL_FREE * n for n in closed.free])
+        body = closed.body
+        args = s -> _call_arg(b, s)
+    end
     inner = Dict{String, V}()
-    for (s, b) in fr.args
+    for s in slots
         try
-            inner[s] = ev(b, env)
+            inner[s] = ev(args(s), env)
         catch err
             err isa TreeWalkError || rethrow()
         end
     end
-    return ev(fr.body, inner)
+    return ev(body, inner)
+end
+
+# ---- Operator predicates through a call ------------------------------------------------
+# Whether any operator in the body of the reference `call` (transitively through
+# nested references, each template once) satisfies `pred(op::String)`. A phase
+# that asks "which operators does this expression use" asks it through here at
+# a reference, never by expanding. With no template table in reach the answer
+# is `true` (the conservative one for every caller: "some operator is outside
+# what I handle").
+function _call_body_any_op(pred, call::OpExpr)
+    ct = _call_table()
+    ct === nothing && return true
+    memo = _tpl_memo(ct.tt, nothing, :body_ops, () -> Dict{String, Set{String}}())
+    return any(pred, _call_body_ops!(memo, ct.tt, String(call.name)))
+end
+
+function _call_body_ops!(memo::Dict{String, Set{String}}, tt::_TplTable, name::String)
+    got = get(memo, name, nothing)
+    got === nothing || return got
+    ops = Set{String}()
+    memo[name] = ops
+    def = _tpl_def(tt, name)
+    body = def.closed === nothing ? nothing : def.closed.body
+    body === nothing && (push!(ops, APPLY_EXPRESSION_TEMPLATE_OP); return ops)
+    foreach_subexpr(body) do e
+        e isa OpExpr || return
+        if _tpl_is_call(e)
+            union!(ops, _call_body_ops!(memo, tt, String(e.name)))
+        else
+            push!(ops, e.op)
+        end
+    end
+    return ops
 end

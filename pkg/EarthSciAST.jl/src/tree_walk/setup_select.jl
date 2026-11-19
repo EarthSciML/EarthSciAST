@@ -33,7 +33,7 @@ function _faq_nesting(e::OpExpr, memo::IdDict{OpExpr, Int})
     got = get(memo, e, nothing)
     got === nothing || return got
     d = 0
-    for a in e.args
+    for a in _operands(e)
         a isa OpExpr && (d = max(d, _faq_nesting(a, memo)))
     end
     e.expr_body isa OpExpr && (d = max(d, _faq_nesting(e.expr_body::OpExpr, memo)))
@@ -69,7 +69,7 @@ function _setup_ranges_ok(e::OpExpr, index_sets, seen::IdDict{OpExpr, Nothing})
     if _is_faq_op(e.op) && e.ranges !== nothing
         _allof(r -> _setup_range_ok(r, index_sets), collect(values(e.ranges))) || return false
     end
-    _allof(a -> !(a isa OpExpr) || _setup_ranges_ok(a, index_sets, seen), e.args) || return false
+    _allof(a -> !(a isa OpExpr) || _setup_ranges_ok(a, index_sets, seen), _operands(e)) || return false
     for c in (e.expr_body, e.filter)
         c isa OpExpr && !_setup_ranges_ok(c, index_sets, seen) && return false
     end
