@@ -109,9 +109,9 @@ const _CLS = ClassificationConformanceAdapter
         @test observed_definition(m, "x") === nothing   # an ODE state, not observed
     end
 
-    @testset "grad/div/laplacian are ordinary user ops, not a pde signal" begin
-        # esm-spec §4.2 / §6.3.1: only a spatial `D` makes a model a PDE. A
-        # document using `grad` loads, and with no spatial `D` it is an ODE.
+    @testset "grad/div/laplacian are ordinary user ops" begin
+        # esm-spec §4.2: a document using `grad` loads, and it classifies by
+        # the ordinary derivation (an ODE here).
         for op in ("grad", "div", "laplacian")
             doc = Dict{String, Any}(
                 "esm" => EarthSciAST.SCHEMA_VERSION,
@@ -131,27 +131,64 @@ const _CLS = ClassificationConformanceAdapter
                 ),
             )
             m = EarthSciAST.load_string(JSON3.write(doc)).models["M"]
-            @test (op, has_spatial_derivative(m)) == (op, false)
             @test (op, system_kind(m)) == (op, "ode")
         end
     end
 
-    @testset "system_kind derivation: order is sde → pde → nonlinear → ode" begin
+    @testset "system_kind derivation: order is sde → nonlinear → ode; no pde" begin
         pde = EarthSciAST.load_path(joinpath(_CLS_DIR, "fixtures", "system_kind_pde.esm"))
-        # A spatial `D` (wrt an axis), alone or nested, is the pde signal.
-        @test system_kind(pde.models["Transient"]) == "pde"
-        @test system_kind(pde.models["SugarOps"]) == "pde"
-        # pde BEFORE nonlinear: a steady-state PDE has no time derivative.
-        @test system_kind(pde.models["SteadyState"]) == "pde"
+        # esm 2.4.0 dropped the "pde" kind: a spatial derivative does not
+        # change the derived kind.
+        @test system_kind(pde.models["Transient"]) == "ode"
+        @test system_kind(pde.models["SugarOps"]) == "ode"
+        @test system_kind(pde.models["SteadyState"]) == "nonlinear"
         @test has_time_derivative(pde.models["SteadyState"]) == false
-        # sde BEFORE pde: there is no SPDESystem to select.
         @test system_kind(pde.models["StochasticSpatial"]) == "sde"
         @test has_spatial_derivative(pde.models["StochasticSpatial"]) == true
+    end
 
-        # The document declares ONE domain shared by all four models, which is
-        # the discriminator: a binding deriving `pde` from the presence of a
-        # domain block classifies all four alike.
-        @test pde.domain !== nothing
+    @testset "a declared \"pde\" is deprecated and ignored" begin
+        doc(kind) = Dict{String, Any}(
+            "esm" => EarthSciAST.SCHEMA_VERSION,
+            "metadata" => Dict{String, Any}("name" => "m"),
+            "models" => Dict{String, Any}(
+                name => Dict{String, Any}(
+                    "system_kind" => kind,
+                    "variables" => Dict{String, Any}(
+                        "u" => Dict{String, Any}("type" => "unknown", "units" => "1", "default" => 1.0)
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}("op" => "-", "args" => Any["u"]),
+                        ),
+                    ],
+                ) for name in ("A", "B")
+            ),
+        )
+        # ONE warning for the document, naming both models by pointer.
+        file = @test_logs (
+            :warn,
+            "deprecated_system_kind: the system_kind value \"pde\" is deprecated " *
+                "(esm 2.4.0) and ignored; the model is treated as its derived kind. " *
+                "Declared at: /models/A/system_kind, /models/B/system_kind.",
+        ) EarthSciAST.load_string(JSON3.write(doc("pde")))
+        m = file.models["A"]
+        @test m.system_kind == "pde"                 # kept as written
+        @test declared_system_kind(m) === nothing    # counts as absent
+        @test system_kind(m) == "ode"
+        @test effective_system_kind(m) == "ode"
+        @test !any(
+            e -> e.error_type == "system_kind_mismatch",
+            EarthSciAST.validate(file).structural_errors
+        )
+        @test EarthSciAST.ERROR_CODES.DEPRECATED_SYSTEM_KIND == "deprecated_system_kind"
+        # A declared kind that contradicts the derivation is still a mismatch.
+        bad = @test_logs EarthSciAST.load_string(JSON3.write(doc("nonlinear")))
+        @test any(
+            e -> e.error_type == "system_kind_mismatch",
+            EarthSciAST.validate(bad).structural_errors
+        )
     end
 
     # API_SPEC.md §8 item 11: three distinct questions, not one. `system_kind`
