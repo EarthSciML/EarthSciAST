@@ -1431,3 +1431,19 @@ function _call_with_implicit(call::OpExpr)
     end
     return reconstruct(call; bindings = nb)
 end
+
+# ---- Survey of the references the build still expands ------------------------------
+# With `ENV["ESS_TPL_SURVEY"]` naming a file, each reference the build entry
+# expanded is appended to it as one line (template name, tab, the
+# reference's bindings' keys). A diagnostic for the remaining expansion sites.
+function _tpl_survey(sites)
+    path = get(ENV, "ESS_TPL_SURVEY", "")
+    (isempty(path) || isempty(sites)) && return nothing
+    open(path, "a") do io
+        for ap in values(sites)
+            ks = ap.bindings === nothing ? String[] : sort!([k for k in keys(ap.bindings) if !startswith(k, "\0")])
+            println(io, "entry\t", ap.name, "\t", join(ks, ","))
+        end
+    end
+    return nothing
+end
