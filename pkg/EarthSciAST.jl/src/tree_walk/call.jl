@@ -1351,6 +1351,34 @@ function _call_body_measure(f, call::OpExpr, key::Symbol)
     end
 end
 
+# The body one call of the reference `call` evaluates (`_call_elem_body`,
+# every parameter a sentinel) and the map from the names that body reads to
+# the caller's names: `rd(n)` is the set of names the caller reads for the
+# body's name `n` (a sentinel: its binding's free names; an implicit one the
+# call carries no binding for: its own name; an element's output index: its
+# subscript's free names), `nothing` for a name the body binds itself.
+# `nothing` when no table is in reach. A phase that asks which of the
+# caller's names a part of a body depends on asks it here.
+function _call_body_reads(call::OpExpr)
+    ct = _call_table()
+    ct === nothing && return nothing
+    tt = (ct::_CallTable).tt
+    body = _call_elem_body(tt, _tpl_def(tt, call.name))
+    body isa OpExpr || return nothing
+    b = call.bindings
+    function rd(n::String)
+        key = startswith(n, _TPL_ARG) ? n[(ncodeunits(_TPL_ARG) + 1):end] :
+            startswith(n, _TPL_FREE) ? n : _TPL_OUT * n
+        x = b === nothing ? nothing : get(b, key, nothing)
+        if x === nothing
+            startswith(n, _TPL_FREE) && return Set{String}([n[(ncodeunits(_TPL_FREE) + 1):end]])
+            return nothing
+        end
+        return _hoist_free_names!(Set{String}(), x, Set{String}())
+    end
+    return body, rd
+end
+
 # The body the reference `call` evaluates, as an AST: its instance's prepared
 # body with the fixed parameters (`_TplCallInfo.fixed`) substituted, the
 # element's expression for an element call; `nothing` when no table is in

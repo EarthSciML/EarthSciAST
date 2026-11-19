@@ -21,9 +21,12 @@ function _is_setup_join_reduction(e)
     (e.output_idx !== nothing && !isempty(e.output_idx)) || return false
     _body_needs_general_eval(e) && return false
     gated = e.join !== nothing || e.join_gates !== nothing
-    # Ungated, the rule is about a body unrolled per cell; a template call's
-    # body is compiled once, so its own nesting does not count there.
-    depth = _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}(); calls = gated)
+    # Ungated, the nesting is the one left after the nested-reduction hoist
+    # (hoist.jl), which lifts a scalar reduction reading a strict subset of the
+    # output indices into its own observed; through a template call it is
+    # worked out on the call's body (`_faq_nesting_hoisted`).
+    depth = gated ? _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}()) :
+        _faq_nesting_hoisted(e)
     # Ungated, a dense range the setup sweep has no loop for (not starting at
     # 1) leaves the faq to the right-hand-side tiers. Gated, no tier takes it,
     # so it stays a setup var and the sweep refuses it by name.
@@ -31,18 +34,81 @@ function _is_setup_join_reduction(e)
     return gated ? depth >= 1 : depth >= 2
 end
 # How deep `faq` reductions nest inside `e` (0: none).
-function _faq_nesting(e::OpExpr, memo::IdDict{OpExpr, Int}; calls::Bool = true)
+function _faq_nesting(e::OpExpr, memo::IdDict{OpExpr, Int})
     got = get(memo, e, nothing)
     got === nothing || return got
     d = 0
     for a in _operands(e)
-        a isa OpExpr && (d = max(d, _faq_nesting(a, memo; calls = calls)))
+        a isa OpExpr && (d = max(d, _faq_nesting(a, memo)))
     end
-    e.expr_body isa OpExpr && (d = max(d, _faq_nesting(e.expr_body::OpExpr, memo; calls = calls)))
+    e.expr_body isa OpExpr && (d = max(d, _faq_nesting(e.expr_body::OpExpr, memo)))
     # A template call nests what its body nests (call.jl).
-    calls && _tpl_is_call(e) && (d = max(d, _call_body_measure(_faq_nesting, e, :faq_nesting)))
+    _tpl_is_call(e) && (d = max(d, _call_body_measure(_faq_nesting, e, :faq_nesting)))
     _is_faq_op(e.op) && (d += 1)
     return memo[e] = d
+end
+# The nesting of the ungated array faq `f`'s body as the build sees it after
+# the nested-reduction hoist (hoist.jl). The hoist has already run on the
+# model's own tree, so a reduction left there was not lifted; but it does not
+# enter a template call's body, where the expansion would have lifted a scalar
+# reduction reached through eager elementwise operators whose reads (through
+# the call's bindings, `_call_body_reads`) are a strict subset of `f`'s
+# output indices, each over a whole index set, and none of its contracted
+# indices: such a reduction is one read of an observed, depth 0. (The
+# `argmin` template's searches over a candidate list that reads no output
+# index are lifted; a cell area over the cell's own ring is not.) A filtered
+# reduction reading an output index is counted in place (the hoist may keep
+# a reverse window in place).
+function _faq_nesting_hoisted(f::OpExpr)
+    memo = IdDict{OpExpr, Int}()
+    _array_obs_inline_forced() && return _faq_nesting(f.expr_body::OpExpr, memo)
+    f.filter === nothing || return _faq_nesting(f.expr_body::OpExpr, memo)
+    out = String[String(x) for x in f.output_idx if x isa AbstractString]
+    contracted = Set{String}(String(k) for k in keys(f.ranges) if !(String(k) in out))
+    return _hoist_nesting(f.expr_body::OpExpr, f, out, contracted, nothing, memo)
+end
+# `rd`: `nothing` on the model's tree; inside a call body, the map from a set
+# of the body's names to the caller's (`nothing`: not all are the caller's).
+function _hoist_nesting(e::OpExpr, f::OpExpr, out, contracted, rd, memo)
+    if _hoist_scalar_reduction(e)
+        rd === nothing && return _faq_nesting(e, memo)
+        lift = e.join === nothing && e.join_gates === nothing && e.expr_body !== nothing &&
+            e.ranges !== nothing && !isempty(e.ranges)
+        F = lift ? rd(_hoist_free_names!(Set{String}(), e, Set{String}())) : nothing
+        if F !== nothing && !any(n -> n in contracted, F)
+            S = String[s for s in out if s in F]
+            if length(S) < length(out) && (isempty(S) || e.filter === nothing) &&
+                    all(s -> (r = get(f.ranges, s, nothing); r isa IndexSetRef && isempty(r.of)), S)
+                return 0
+            end
+        end
+        return _faq_nesting(e, memo)
+    end
+    if _tpl_is_call(e)
+        got = _call_body_reads(e)
+        got === nothing && return _faq_nesting(e, memo)
+        body, brd = got
+        inner = rd === nothing ? (ns -> _hoist_reads(brd, ns)) :
+            (ns -> (m = _hoist_reads(brd, ns); m === nothing ? nothing : rd(m)))
+        return _hoist_nesting(body, f, out, contracted, inner, IdDict{OpExpr, Int}())
+    end
+    _hoist_plain(e) || return _faq_nesting(e, memo)
+    d = 0
+    eager = _hoist_eager_args(e)
+    for (j, a) in enumerate(e.args)
+        a isa OpExpr || continue
+        d = max(d, j in eager ? _hoist_nesting(a, f, out, contracted, rd, memo) : _faq_nesting(a, memo))
+    end
+    return d
+end
+function _hoist_reads(brd, ns::Set{String})
+    out = Set{String}()
+    for n in ns
+        m = brd(n)
+        m === nothing && return nothing
+        union!(out, m)
+    end
+    return out
 end
 _model_has_setup_join_reduction(equations) =
     _anyof(eq -> eq.lhs isa VarExpr && _is_setup_join_reduction(eq.rhs), equations)
