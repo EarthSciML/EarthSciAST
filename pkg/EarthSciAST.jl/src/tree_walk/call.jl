@@ -1683,16 +1683,64 @@ end
 
 # ---- Survey of the references the build still expands ------------------------------
 # With `ENV["ESS_TPL_SURVEY"]` naming a file, each reference the build entry
-# expanded is appended to it as one line (template name, tab, the
-# reference's bindings' keys). A diagnostic for the remaining expansion sites.
-function _tpl_survey(sites)
+# expanded is appended to it as one line: template name, tab, why the gate
+# refused it (`_tpl_refusal`). A diagnostic for the remaining expansion sites.
+function _tpl_survey(tt::_TplTable, sites)
     path = get(ENV, "ESS_TPL_SURVEY", "")
     (isempty(path) || isempty(sites)) && return nothing
     open(path, "a") do io
         for ap in values(sites)
-            ks = ap.bindings === nothing ? String[] : sort!([k for k in keys(ap.bindings) if !startswith(k, "\0")])
-            println(io, "entry\t", ap.name, "\t", join(ks, ","))
+            why = try
+                _tpl_refusal(tt, ap)
+            catch err
+                "error: " * first(sprint(showerror, err), 120)
+            end
+            println(io, "entry\t", replace(String(ap.name), '\0' => '·'), "\t", why)
         end
     end
     return nothing
+end
+
+function _tpl_refusal(tt::_TplTable, call::OpExpr)
+    def = _tpl_def(tt, call.name)
+    def.closed === nothing && return "structural parameter bound to other than a name or number: " *
+        join(def.structural, ",")
+    info = _tpl_call_info(tt, call.name)
+    if info === nothing
+        ops = Set{String}()
+        foreach_subexpr(def.closed.body) do e
+            e isa OpExpr || return
+            if _tpl_is_call(e)
+                _tpl_call_info(tt, e.name) === nothing && _tpl_skel(tt, e.name) === nothing &&
+                    push!(ops, "ref " * replace(String(e.name), '\0' => '·'))
+                return
+            end
+            (e.op in _TPL_CALL_OPS || e.op == "index") && return
+            if _is_faq_op(e.op)
+                bits = String["faq"]
+                e.output_idx === nothing || isempty(e.output_idx) || push!(bits, "out")
+                e.join === nothing && e.join_gates === nothing || push!(bits, "join")
+                e.filter === nothing || push!(bits, "filter")
+                e.ranges === nothing || any(v -> v isa IndexSetRef, values(e.ranges)) && push!(bits, "from-set")
+                push!(ops, join(bits, "+"))
+                return
+            end
+            push!(ops, e.op)
+        end
+        b = def.closed.body
+        top = b isa OpExpr ? b.op : string(typeof(b))
+        return "body (top $top): " * join(sort!(collect(ops)), ",")
+    end
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    bad = String[]
+    for p in def.params
+        v = get(b, p, nothing)
+        v === nothing && (push!(bad, "$p unbound"); continue)
+        s = _TPL_ARG * p
+        kind = s in info.arrays ? "array" : s in info.fixed ? "fixed" :
+            s in info.uncond ? "value" : s in info.scalars ? "conditional" : "unread"
+        vop = v isa OpExpr ? v.op : v isa VarExpr ? "name" : "literal"
+        push!(bad, "$p:$kind=$vop")
+    end
+    return "binding: " * join(bad, " ")
 end

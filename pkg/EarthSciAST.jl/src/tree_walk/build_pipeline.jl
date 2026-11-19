@@ -1332,7 +1332,7 @@ function _build_evaluator_impl_inner(
         _expand_model_refs!(model, _template_reg; sites = sites, memo = keep_cache)
         # How many references the build still expands (none at the end of A1).
         _count!(:tpl_expanded, length(sites))
-        _tpl_survey(sites)
+        _tpl_survey(calls.tt, sites)
         # Every name a kept body reads from its caller becomes a binding of
         # the reference (`_tpl_augment`), so the phases below that ask which
         # names an expression reads see the body's reads.
