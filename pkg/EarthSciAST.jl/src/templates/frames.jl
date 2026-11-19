@@ -570,8 +570,9 @@ function _tpl_call_info_uncached(tt::_TplTable, name::String)
     if body isa OpExpr && _is_faq_op(body.op) && body.output_idx !== nothing && !isempty(body.output_idx)
         oi = body.output_idx
         all(x -> x isa AbstractString, oi) || return nothing
-        (body.filter === nothing && body.join_gates === nothing && body.key === nothing &&
-            body.expr_body !== nothing) || return nothing
+        (body.filter === nothing && body.join_gates === nothing && body.join === nothing &&
+            body.key === nothing && body.expr_body !== nothing && all(a -> a isa VarExpr, body.args) &&
+            body.values === nothing && body.lower === nothing && body.upper === nothing) || return nothing
         outs = String[String(x) for x in oi]
         body.ranges === nothing || all(k -> String(k) in outs, keys(body.ranges)) || return nothing
         append!(info.outs, outs)
@@ -611,9 +612,14 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
     if _tpl_is_call(e)
         inner = _tpl_call_info(tt, e.name)
         inner === nothing && return false
+        # An array-valued reference is read through `index` (an element
+        # call), which a body does not do yet.
+        isempty(inner.outs) || return false
         b = e.bindings === nothing ? Dict{String, ASTExpr}() : e.bindings
         for (k, v) in b
             s = startswith(k, _TPL_FREE) ? k : _TPL_ARG * k
+            # A parameter the inner body never reads: its binding is never made.
+            (s in inner.scalars || s in inner.arrays || s in inner.fixed) || continue
             # An array argument of a nested call: the body passes on its own
             # array argument (call.jl `_FwdArr`).
             if s in inner.arrays
@@ -622,7 +628,11 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
                 continue
             end
             if s in inner.fixed
-                (v isa IntExpr || (v isa NumExpr && isinteger(v.value))) || return false
+                (v isa IntExpr || (v isa NumExpr && isinteger(v.value))) && continue
+                # A range bound passed on: fixed in this body too (substituted
+                # into its instance, so the nested call sees the literal).
+                (v isa VarExpr && startswith(v.name, _TPL_ARG)) || return false
+                push!(info.fixed, v.name)
                 continue
             end
             c = cond || !(s in inner.uncond)
@@ -645,7 +655,7 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
     if _is_faq_op(e.op)
         # A scalar reduction over constant ranges.
         (e.output_idx === nothing || isempty(e.output_idx)) || return false
-        (e.filter === nothing && e.join_gates === nothing && e.key === nothing &&
+        (e.filter === nothing && e.join_gates === nothing && e.join === nothing && e.key === nothing &&
             e.values === nothing && e.lower === nothing && e.upper === nothing) || return false
         (e.expr_body === nothing || e.ranges === nothing) && return false
         isempty(e.args) || all(a -> a isa VarExpr, e.args) || return false
@@ -695,6 +705,8 @@ function _tpl_is_called(tt::_TplTable, call::OpExpr)
             continue
         end
         s in info.uncond && continue
+        # A parameter the body never reads: its binding is never made.
+        s in info.scalars || continue
         # A parameter placeholder of a template skeleton being expanded
         # (expand_typed.jl) stands for a binding not known yet.
         (v isa VarExpr && occursin(_TPL_SENTINEL, v.name)) && return false

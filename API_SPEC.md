@@ -920,7 +920,7 @@ docstring repeats:
 | `unsupported_op` | an operator the tier has no form for |
 | `unknown_kind` | a compiled node kind the tier has no form for |
 | `call_array_args` | a template call that passes arrays, in a context that has no array arguments (setup geometry) |
-| `call_array_forward` | a template call passing an array argument on to another call |
+| `call_array_forward` | a template call, inside another call's body, passing on an array that is not that body's own array argument |
 | `unknown_array` | a gather of a name that is not a known array |
 | `malformed_index` | an `index` node with no operand |
 | `subscript_rank_mismatch` | a gather whose subscript count is not the array's rank |

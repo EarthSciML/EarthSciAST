@@ -404,6 +404,9 @@ function _call_target(ct::_CallTable, call::OpExpr)
     append!(cand, String[_TPL_OUT * o for o in outs])
     hp === nothing || append!(cand, String[_TPL_LANE * string(k) for k in eachindex(hp.gathers)])
     filter!(s -> !haskey(arrkind, s) && !(hp !== nothing && s in hp.whole) && !haskey(inl, s), cand)
+    # A declared parameter the body never reads as a value is no argument
+    # (its binding is never made, as in the expansion).
+    info === nothing || filter!(s -> !startswith(s, _TPL_ARG) || s in info.scalars, cand)
     for (sn, sk) in inl
         p = sn[(ncodeunits(_TPL_ARG) + 1):end]
         append!(cand, String[_TPL_IN * p * "\0" * string(k) for k in 1:_inl_count(b[p])])
@@ -734,7 +737,7 @@ function _call_inlined(info::_TplCallInfo, def::_TplDef, S, b::AbstractDict)
     out = Dict{String, ASTExpr}()
     for p in def.params
         sn = _TPL_ARG * p
-        (haskey(S, p) || sn in info.arrays || sn in info.fixed || sn in info.uncond) && continue
+        (haskey(S, p) || sn in info.arrays || sn in info.fixed || sn in info.uncond || !(sn in info.scalars)) && continue
         v = get(b, p, nothing)
         (v === nothing || _tpl_plain_binding(v) || !_tpl_inlinable(v)) && continue
         k = Ref(0)
@@ -1050,7 +1053,10 @@ function _tpl_whole_view(tt::_TplTable, call::OpExpr)
         Dict{String, Any}(names[String(k)] => v for (k, v) in body.ranges)
     oi = String[names[o] for o in info.outs]
     el = _tpl_with_lanes(tt, _elem_call(tt, call, ASTExpr[VarExpr(n) for n in oi]))
-    return reconstruct(body; output_idx = Any[oi...], ranges = ranges, expr_body = el, args = ASTExpr[])
+    # The aggregate's operand list stays as the body spells it, with each
+    # parameter read as its binding.
+    args = ASTExpr[a isa VarExpr && _tpl_is_sentinel(a.name) ? _call_arg(b, a.name) : a for a in body.args]
+    return reconstruct(body; output_idx = Any[oi...], ranges = ranges, expr_body = el, args = args)
 end
 
 # `e` with every element read of an array-valued reference an element call
