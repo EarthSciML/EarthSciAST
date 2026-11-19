@@ -203,7 +203,7 @@ end
 # the `__arrarg` marker of its geometry source, read as a const array.
 function _geo_call_arrays(call::OpExpr, g::_GeoCompileCtx)
     ct = _call_table()
-    arrs = ct === nothing ? nothing : _tpl_array_slots((ct::_CallTable).tt, call.name)
+    arrs = ct === nothing ? nothing : _call_array_slots((ct::_CallTable).tt, call)
     (arrs === nothing || isempty(arrs)) && return call
     call = _call_with_implicit(call)
     nb = copy(call.bindings::AbstractDict)

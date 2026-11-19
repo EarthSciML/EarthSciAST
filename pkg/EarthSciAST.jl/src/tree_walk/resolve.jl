@@ -474,7 +474,7 @@ function _resolve_call_bindings(expr::OpExpr, rc::_ResolveCtx)
     b = expr.bindings
     b === nothing && return expr
     ct = _call_table()
-    arrs = ct === nothing ? nothing : _tpl_array_slots((ct::_CallTable).tt, expr.name)
+    arrs = ct === nothing ? nothing : _call_array_slots((ct::_CallTable).tt, expr)
     nb = b
     for (k, v) in b
         # An array argument is passed whole (`_arr_arg_marker`); every other

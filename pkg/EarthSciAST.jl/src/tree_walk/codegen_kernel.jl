@@ -1118,6 +1118,21 @@ function _cg_arg_gather(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
     kind = ref.target.arrkinds[ref.j]
     ch = nd.children
     subs = Symbol[_cg_name(ctx, "ags") for _ in ch]
+    if kind === :block
+        # A block array: its layout is the target's, its base the argument.
+        sg = ref.target.blocks[ref.j]::_StateGather
+        bs = kc.args[ref.target.baseidx[ref.j]]
+        off = _cg_foldl(:+, Any[:(unsafe_trunc(Int, $bs)), (:(($(subs[d]) - $(sg.lo[d])) * $(sg.strides[d])) for d in eachindex(ch))...])
+        inner = :(@inbounds u[$off])
+        for d in reverse(eachindex(ch))
+            se = d == 1 ? _cg_emit(ctx, kc, ch[d]) : _cg_emit_region(ctx, kc, ch[d])
+            inner = Expr(
+                :let, Expr(:block, :($(subs[d]) = round(Int, $se))),
+                Expr(:block, :(($(sg.lo[d]) <= $(subs[d]) <= $(sg.hi[d])) ? $inner : zero(eltype(u))))
+            )
+        end
+        return inner
+    end
     if kind === :state
         off = _cg_foldl(:+, Any[0, (:(($(subs[d]) - $A.lo[$d]) * $A.strides[$d]) for d in eachindex(ch))...])
         inner = :(@inbounds u[_sg_slot($A, $off)])
@@ -1161,6 +1176,8 @@ function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
     end
     argsyms = Symbol[Symbol("_cga", i) for i in eachindex(tg.slots)]
     arrsyms = Symbol[Symbol("_cgA", j) for j in eachindex(tg.arrslots)]
+    # A block array is no parameter: its base is a scalar argument.
+    arrparams = Symbol[arrsyms[j] for j in eachindex(tg.arrslots) if tg.passed[j] != 0]
     kc = _CGCallCtx(argsyms, arrsyms)
     body = _cg_emit_region(ctx, kc, tg.body)
     ln = LineNumberNode(0, Symbol("ess-template-call"))
@@ -1179,7 +1196,7 @@ function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
     small && (ctx.inlsize[name] = sz)
     fdef = Expr(
         :function,
-        Expr(:call, name, :u, :p, :t, argsyms..., arrsyms..., Iterators.flatten(zip(kc.ctsyms, kc.ctoks))...),
+        Expr(:call, name, :u, :p, :t, argsyms..., arrparams..., Iterators.flatten(zip(kc.ctsyms, kc.ctoks))...),
         Expr(:block, stmts...)
     )
     def = Expr(:macrocall, Symbol(small ? "@inline" : "@noinline"), ln, fdef)
@@ -1204,7 +1221,7 @@ function _cg_site_count_tables(ctx::_CGFunction, site::_CallSite, tally::Symbol)
     out = Tuple{Vector{Float64}, Bool, Bool}[]
     ct = _call_table()
     for (j, lo, hi) in ctabs
-        a = site.arrays[j]
+        a = site.arrays[site.target.passed[j]]
         build() = (
             f = _count_const_axis_of(a.data::_ConstGatherArray, lo:hi);
             f === nothing ? (Float64[], false, false) : (f[1], true, f[2])

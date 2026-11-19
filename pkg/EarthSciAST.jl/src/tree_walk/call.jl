@@ -37,9 +37,17 @@ _ArgStack() = _ArgStack(Float64[], nothing, Bool[], 0)
 
 # An ARRAY argument (frames.jl `_TplCallInfo.arrays`): the array a reference
 # binds to an array parameter, passed at run time. `data` is the same payload
-# the build's own gathers read (`_StateGather` for `:state`,
+# the build's own gathers read (`_StateGather` for `:state` and `:block`,
 # `_ConstGatherArray` for `:const` and `:live`), so a read through the argument
 # is the gather the expansion would have compiled, bit for bit.
+#
+# A `:block` array is a state array stored as one block of the state vector
+# (`run_base != 0`): its layout (strides and bounds) is part of the target, and
+# its base slot is a SCALAR argument of the call (a `"\0base\0"` slot, its
+# value the literal base). Two sites passing different state arrays of one
+# layout (two tracers) are then the same call with a different literal, so
+# every pass that merges cells or kernels by structure (a literal that differs
+# becomes a per-member table) merges them, as it merged their expansions.
 struct _ArrArg
     kind::Symbol
     data::Any
@@ -58,6 +66,9 @@ mutable struct _CallTarget
     fp::Int                     # stack position below the innermost running call's arguments
     nodes::Int                  # node count of `body` (emitter inline policy)
     curarrs::Vector{_ArrArg}    # the array arguments of the innermost running call
+    passed::Vector{Int}         # per array slot: its position in a site's `arrays`, 0 for a block
+    baseidx::Vector{Int}        # per array slot: the scalar slot of its base, 0 unless a block
+    blocks::Vector{Any}         # per array slot: a block's layout (`_StateGather`), else nothing
 end
 
 # One call site's payload: the target and the arrays this site passes. Sites
@@ -84,11 +95,39 @@ struct _CallTable
     # The count tables built from array arguments, by (array, lo, hi): one
     # object per table for the build (codegen_kernel.jl `_cg_site_count_tables`).
     ctabs::Dict{Tuple{UInt, Int, Int}, Any}
+    # One `_ArrArg` per const or live array (by the identity of its data), so
+    # two sites passing the same array are the same `_CallSite`.
+    arrs::Dict{Tuple{Symbol, UInt}, _ArrArg}
+    # Targets by the structure of their compiled body (`_call_canon`): two
+    # instances that compile to the same function are one target.
+    bystruct::Dict{String, _CallTarget}
+    # Per instance key, the slot names of ITS bindings (`slots`, `arrslots`):
+    # a target shared by structure reads each instance's own names; and the
+    # last reference `_call_target` answered, with its names, for
+    # `_call_args` / `_call_arrays` right after it.
+    keyslots::Dict{String, Tuple{Vector{String}, Vector{String}}}
+    last::Vector{Any}
 end
 _CallTable(reg) = _CallTable(
     _TplTable(reg), Dict{String, _CallTarget}(), _ArgStack(),
-    Dict{Tuple{_CallTarget, Vector{UInt}}, _CallSite}(), Dict{Tuple{UInt, Int, Int}, Any}()
+    Dict{Tuple{_CallTarget, Vector{UInt}}, _CallSite}(), Dict{Tuple{UInt, Int, Int}, Any}(),
+    Dict{Tuple{Symbol, UInt}, _ArrArg}(), Dict{String, _CallTarget}(),
+    Dict{String, Tuple{Vector{String}, Vector{String}}}(), Any[nothing, nothing]
 )
+
+# The slot names `expr`'s bindings are read by (`_call_target` answered it last).
+function _call_names(tg::_CallTarget, expr::OpExpr)
+    ct = _call_table()
+    (ct !== nothing && (ct::_CallTable).last[1] === expr) || return (tg.slots, tg.arrslots)
+    return (ct::_CallTable).last[2]::Tuple{Vector{String}, Vector{String}}
+end
+
+# The build's one `_ArrArg` of kind `k` over the source object `src`.
+function _arrarg_interned(mk, k::Symbol, src)
+    ct = _call_table()
+    ct === nothing && return mk()
+    return get!(mk, (ct::_CallTable).arrs, (k, objectid(src)))
+end
 
 # The body compile's argument map (`_compile(::VarExpr)` reads `idx`, the
 # resolve of `index(<array sentinel>, …)` reads `arr`).
@@ -126,10 +165,10 @@ end
 # the arguments (`_call_args`, in slot order) compiled in its own context, the
 # arrays (`_call_arrays`), and `_call_node`.
 function _call_node(tg::_CallTarget, kids::Vector{_Node}, arrs::Vector{_ArrArg} = _ArrArg[])
-    length(arrs) == length(tg.arrslots) || throw(
+    length(arrs) == count(!=(0), tg.passed) || throw(
         TreeWalkError(
             "E_TREEWALK_UNSUPPORTED_OP",
-            "template '$(tg.name)': a call site passes $(length(arrs)) of its $(length(tg.arrslots)) array arguments"
+            "template '$(tg.name)': a call site passes $(length(arrs)) of its $(count(!=(0), tg.passed)) array arguments"
         )
     )
     _count!(:call_sites)
@@ -150,17 +189,9 @@ end
 function _call_arrays(tg::_CallTarget, expr::OpExpr)
     isempty(tg.arrslots) && return _ArrArg[]
     b = expr.bindings === nothing ? Dict{String, ASTExpr}() : expr.bindings
-    out = Vector{_ArrArg}(undef, length(tg.arrslots))
-    for (j, s) in enumerate(tg.arrslots)
-        v = _call_arg(b, s)
-        (v isa OpExpr && v.op == "__arrarg" && v.value isa _ArrArg) || throw(
-            TreeWalkError(
-                "E_TREEWALK_UNSUPPORTED_OP",
-                "template '$(tg.name)': the array argument $(repr(s)) reached compile " *
-                    "unresolved"
-            )
-        )
-        a = v.value::_ArrArg
+    out = _ArrArg[]
+    for (j, s) in enumerate(_call_names(tg, expr)[2])
+        a = _call_arrarg(tg, b, s)
         a.kind === tg.arrkinds[j] || throw(
             TreeWalkError(
                 "E_TREEWALK_UNSUPPORTED_OP",
@@ -168,17 +199,38 @@ function _call_arrays(tg::_CallTarget, expr::OpExpr)
                     "the target was compiled for a $(tg.arrkinds[j]) array"
             )
         )
-        out[j] = a
+        # A block is passed by its base, a scalar argument (`_call_args`).
+        tg.passed[j] == 0 || push!(out, a)
     end
     return out
+end
+
+# The `_ArrArg` the reference binds to array slot `s` (resolved to its marker).
+function _call_arrarg(tg::_CallTarget, b::AbstractDict, s::String)
+    v = _call_arg(b, s)
+    (v isa OpExpr && v.op == "__arrarg" && v.value isa _ArrArg) || throw(
+        TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_OP",
+            "template '$(tg.name)': the array argument $(repr(s)) reached compile " *
+                "unresolved"
+        )
+    )
+    return v.value::_ArrArg
 end
 
 # The binding expression of each argument slot of `tg` at the reference `expr`.
 function _call_args(tg::_CallTarget, expr::OpExpr)
     b = expr.bindings === nothing ? Dict{String, ASTExpr}() : expr.bindings
-    out = Vector{ASTExpr}(undef, length(tg.slots))
-    for (i, s) in enumerate(tg.slots)
-        out[i] = _call_arg(b, s)
+    slots = _call_names(tg, expr)[1]
+    out = Vector{ASTExpr}(undef, length(slots))
+    for (i, s) in enumerate(slots)
+        if startswith(s, _TPL_BASE)
+            # A block array's base slot: the literal base of the array bound.
+            a = _call_arrarg(tg, b, s[(ncodeunits(_TPL_BASE) + 1):end])
+            out[i] = NumExpr(Float64((a.data::_StateGather).run_base))
+        else
+            out[i] = _call_arg(b, s)
+        end
     end
     return out
 end
@@ -246,6 +298,7 @@ function _call_target(ct::_CallTable, call::OpExpr)
     S = Dict{String, Any}()
     arrkind = Dict{String, Symbol}()
     arrdims = Dict{String, Vector{Int}}()
+    blocks = Dict{String, _StateGather}()
     io = IOBuffer()
     print(io, name)
     if info !== nothing
@@ -253,7 +306,11 @@ function _call_target(ct::_CallTable, call::OpExpr)
         for p in sort!(collect(keys(S)))
             print(io, '\x01', p, '=', S[p])
         end
+        hp = _call_has_lanes(call) ? _call_hoist_plan(ct.tt, def, S, _call_outs(info, call)) : nothing
         for s in sort!(collect(info.arrays))
+            # An array every read of which the caller makes (`_call_hoist_plan`)
+            # is no argument.
+            hp === nothing || !(s in hp.whole) || continue
             v = _call_arg(b, s)
             k = (v isa OpExpr && v.value isa _ArrArg) ? (v.value::_ArrArg).kind : :unresolved
             arrkind[s] = k
@@ -264,37 +321,60 @@ function _call_target(ct::_CallTable, call::OpExpr)
                 d = ((v.value::_ArrArg).data::_ConstGatherArray).dims
                 arrdims[s] = copy(d)
                 print(io, '/', join(d, 'x'))
+            elseif k === :block
+                # A block's layout is part of the instance; its base is an argument.
+                sg = (v.value::_ArrArg).data::_StateGather
+                print(io, '/', join(sg.strides, ','), '/', join(sg.lo, ','), '/', join(sg.hi, ','), '/', sg.len)
+                blocks[s] = sg
             end
         end
     end
     outs = info === nothing ? String[] : info.outs
     isempty(outs) || print(io, '\x03', "elem")
+    hp = info === nothing || !_call_has_lanes(call) ? nothing : _call_hoist_plan(ct.tt, def, S, outs)
+    hp === nothing || print(io, '\x04', "lanes")
     key = String(take!(io))
     got = get(ct.targets, key, nothing)
-    got === nothing || return got
-    inst = _tpl_inst_closed(ct.tt, def, S)
-    ibody = inst.body
+    if got !== nothing
+        ct.last[1] = call
+        ct.last[2] = ct.keyslots[key]
+        return got
+    end
     if !isempty(outs)
-        # The element body: the output indices are arguments (`_elem_call`).
         haskey(b, _TPL_OUT * outs[1]) || throw(
             TreeWalkError(
                 "E_TREEWALK_UNSUPPORTED_OP",
                 "array-valued template '$name' is read other than through `index`"
             )
         )
-        m = Dict{String, ASTExpr}(o => VarExpr(_TPL_OUT * o) for o in outs)
-        ibody = _tpl_subst_scoped((ibody::OpExpr).expr_body, m, IdDict{OpExpr, ASTExpr}())
     end
+    inst = _tpl_inst_closed(ct.tt, def, S)
+    ibody = _call_ibody(ct.tt, def, S, outs)
+    # Each read the caller makes is the argument `"\0lane\0k"`.
+    hp === nothing || (ibody = hp.body)
     arrslots = sort!(collect(keys(arrkind)))
-    slots = String[_TPL_ARG * p for p in def.params if !haskey(S, p)]
-    append!(slots, String[_TPL_FREE * n for n in inst.free])
-    filter!(s -> !haskey(arrkind, s), slots)
-    sort!(slots)
-    append!(slots, String[_TPL_OUT * o for o in outs])
+    # Scalar slots: the argument sentinels in the order the body first reads
+    # them (so two instances whose bodies have one structure have one slot
+    # order, `_call_canon`), then any the body does not read.
+    cand = String[_TPL_ARG * p for p in def.params if !haskey(S, p)]
+    append!(cand, String[_TPL_FREE * n for n in inst.free])
+    append!(cand, String[_TPL_OUT * o for o in outs])
+    hp === nothing || append!(cand, String[_TPL_LANE * string(k) for k in eachindex(hp.gathers)])
+    filter!(s -> !haskey(arrkind, s) && !(hp !== nothing && s in hp.whole), cand)
+    slots = _call_first_reads(ibody, Set{String}(cand))
+    append!(slots, sort!(setdiff(cand, slots)))
+    append!(slots, String[_TPL_BASE * s for s in arrslots if haskey(blocks, s)])
+    passed = zeros(Int, length(arrslots))
+    np = 0
+    for (j, s) in enumerate(arrslots)
+        haskey(blocks, s) || (passed[j] = (np += 1))
+    end
     tg = _CallTarget(
         name, key, slots, arrslots, Symbol[arrkind[s] for s in arrslots],
         Vector{Int}[get(arrdims, s, Int[]) for s in arrslots],
-        _mknode(kind = _NK_LITERAL), ct.stack, 0, 0, _ArrArg[]
+        _mknode(kind = _NK_LITERAL), ct.stack, 0, 0, _ArrArg[],
+        passed, Int[haskey(blocks, s) ? findfirst(==(_TPL_BASE * s), slots) : 0 for s in arrslots],
+        Any[get(blocks, s, nothing) for s in arrslots]
     )
     am = _ArgMap(
         tg, Dict{String, Int}(s => i for (i, s) in enumerate(slots)),
@@ -321,12 +401,270 @@ function _call_target(ct::_CallTable, call::OpExpr)
     end
     tg.body = body
     tg.nodes = _call_body_size(body)
+    # One target per compiled structure: an instance whose body compiles to
+    # the function another instance already has calls that one.
+    canon = _call_canon(tg)
+    ct.keyslots[key] = (slots, arrslots)
+    ct.last[1] = call
+    ct.last[2] = ct.keyslots[key]
+    if canon !== nothing
+        same = get(ct.bystruct, canon, nothing)
+        if same !== nothing
+            ct.targets[key] = same
+            _count!(:call_targets_shared)
+            return same
+        end
+        ct.bystruct[canon] = tg
+    end
     ct.targets[key] = tg
     _count!(:call_targets)
     return tg
 end
 
+# The output indices `call` binds (an element call), else none.
+_call_outs(info::_TplCallInfo, call::OpExpr) = _tpl_is_elem(call) ? info.outs : String[]
+
+# The body a call to `def` with fixed values `S` compiles, as an AST: the
+# instance's prepared body, or for an element call its element (the `faq`'s
+# expression with each output index read as the argument `"\0out\0o"`).
+# One object per (template, `S`, element), so the hoist plan below can name
+# its nodes by identity.
+function _call_ibody(tt::_TplTable, def::_TplDef, S::Dict{String, Any}, outs::Vector{String})
+    memo = _tpl_memo(tt, nothing, :call_ibody, () -> Dict{Tuple{String, String, Bool}, ASTExpr}())
+    skey = join(sort!([k * "\0" * string(v) for (k, v) in S]), "\x01")
+    return get!(memo, (def.name, skey, !isempty(outs))) do
+        ibody = _tpl_inst_closed(tt, def, S).body
+        isempty(outs) && return ibody
+        m = Dict{String, ASTExpr}(o => VarExpr(_TPL_OUT * o) for o in outs)
+        _tpl_subst_scoped((ibody::OpExpr).expr_body, m, IdDict{OpExpr, ASTExpr}())
+    end
+end
+
+# ---- Reads the caller makes ("lanes") --------------------------------------------
+# A read of an array argument at subscripts that are arguments or arguments
+# plus a literal (`q[i+1, j, k]` in an element body), made on every path that
+# runs the body, is made by the CALLER instead and passed as a scalar
+# argument (`"\0lane\0k"` => `index(q_bound, s′...)`, the subscripts read as
+# the call's bindings). The value is the same read of the same array at the
+# same subscripts, so the bits are; what changes is where it is made:
+#
+#   * the body is then a function of values only, the shape a stencil sub-
+#     kernel had: two templates that differ only in WHICH cells they read
+#     (a face flux at the interior and at each boundary row) compile to the
+#     same function (`_call_canon`), called with different reads;
+#   * in the stencil tier the reads are lanes of the caller, so the kernels of
+#     different region classes and tracers merge by structure, as their
+#     expansions did;
+#   * an array bound to an observed the interpreter inlines is read in the
+#     caller, where the inlining is.
+#
+# A read made only on some paths stays in the body (made in the caller, it
+# could fail where the body would not have made it).
+
+const _TPL_LANE = "\0lane\0"
+
+struct _HoistPlan
+    gathers::Vector{OpExpr}     # the read each lane makes, lane k = gathers[k]
+    body::ASTExpr               # the body with each such read the argument `"\0lane\0k"`
+    whole::Set{String}          # the array sentinels every read of which is a lane
+end
+
+# The array sentinels `call` passes as array arguments: its template's
+# arrays, less those whose every read the caller makes (lanes).
+function _call_array_slots(tt::_TplTable, call::OpExpr)
+    info = _tpl_call_info(tt, call.name)
+    info === nothing && return nothing
+    _call_has_lanes(call) || return info.arrays
+    def = _tpl_def(tt, call.name)
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    S = _call_fixed!(Dict{String, Any}(), call.name, info, b)
+    return setdiff(info.arrays, _call_hoist_plan(tt, def, S, _call_outs(info, call)).whole)
+end
+
+_call_has_lanes(call::OpExpr) = call.bindings !== nothing && any(k -> startswith(k, _TPL_LANE), keys(call.bindings))
+
+_hoist_int(x) = x isa IntExpr || (x isa NumExpr && isinteger(x.value))
+_hoist_arg(x) = x isa VarExpr && (_tpl_is_sentinel(x.name) || startswith(x.name, _TPL_OUT))
+# A subscript the caller reads as a lane: integers and arguments under `+`
+# and `-` (affine in the arguments with unit coefficients).
+function _hoist_sub(x)
+    (_hoist_int(x) || _hoist_arg(x)) && return true
+    x isa OpExpr && (x.op == "+" || x.op == "-") && 1 <= length(x.args) <= 2 && _tpl_structless(x) || return false
+    return all(_hoist_sub, x.args)
+end
+
+function _call_hoist_plan(tt::_TplTable, def::_TplDef, S::Dict{String, Any}, outs::Vector{String})
+    memo = _tpl_memo(tt, nothing, :call_hoist, () -> Dict{Tuple{String, String, Bool}, _HoistPlan}())
+    skey = join(sort!([k * "\0" * string(v) for (k, v) in S]), "\x01")
+    return get!(memo, (def.name, skey, !isempty(outs))) do
+        info = _tpl_call_info(tt, def.name)::_TplCallInfo
+        body = _call_ibody(tt, def, S, outs)
+        st = (; tt, arrays = info.arrays, gathers = OpExpr[], keep = Set{String}(), has = IdDict{OpExpr, Bool}())
+        nbody = _hoist_rw(body, false, st)
+        # An array with a read left in the body stays an array argument; its
+        # other reads are still made by the caller.
+        _HoistPlan(st.gathers, nbody, setdiff(info.arrays, st.keep))
+    end
+end
+
+# Does `e` hold a read of an array argument?
+function _hoist_has(e::ASTExpr, st)
+    e isa OpExpr || return false
+    got = get(st.has, e, nothing)
+    got === nothing || return got
+    r = (e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr && (e.args[1]::VarExpr).name in st.arrays)
+    r || foreach_child(c -> (r = r || _hoist_has(c, st)), e)
+    return st.has[e] = r
+end
+
+# The body with every read made on every path at lane subscripts a lane, one
+# lane per OCCURRENCE (a read node reached twice is two lanes): two instances
+# whose bodies differ only in which cells they read then have the same lanes
+# in the same places, and so the same compiled body (`_call_canon`). `cond`:
+# the node is evaluated only on some paths.
+function _hoist_rw(e::ASTExpr, cond::Bool, st)
+    (e isa OpExpr && _hoist_has(e, st)) || return e
+    if _tpl_is_call(e)
+        inner = _tpl_call_info(st.tt, e.name)
+        b = e.bindings::AbstractDict
+        nb = nothing
+        for k in sort!(collect(keys(b)))
+            v = b[k]
+            s = startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT) ? k : _TPL_ARG * k
+            # A binding the inner call passes as a value is made where the
+            # inner call is (`_tpl_is_called`).
+            c = cond || !(inner !== nothing && (s in inner.uncond || _tpl_plain_binding(v)))
+            r = _hoist_rw(v, c, st)
+            r === v && continue
+            nb === nothing && (nb = Dict{String, ASTExpr}(b))
+            nb[k] = r
+        end
+        return nb === nothing ? e : reconstruct(e; bindings = nb)
+    end
+    if e.op == "index" && _tpl_structless(e) && length(e.args) >= 2 &&
+            e.args[1] isa VarExpr && (e.args[1]::VarExpr).name in st.arrays
+        if !cond && all(_hoist_sub, @view e.args[2:end])
+            push!(st.gathers, e)
+            return VarExpr(_TPL_LANE * string(length(st.gathers)))
+        end
+        push!(st.keep, (e.args[1]::VarExpr).name)
+        return e
+    end
+    if _is_faq_op(e.op)
+        # A reduction's terms may be none: everything in it is conditional.
+        return map_children(c -> _hoist_rw(c, true, st), e)
+    end
+    return map_children(e) do c
+        j = findfirst(a -> a === c, e.args)
+        _hoist_rw(c, j === nothing ? true : cond || _op_arg_conditional(e.op, j), st)
+    end
+end
+
+# `call` with its lanes: each read of its plan as the binding
+# `"\0lane\0k" => index(<array bound>, <subscripts read as the bindings>)`.
+function _tpl_with_lanes(tt::_TplTable, call::OpExpr)
+    info = _tpl_call_info(tt, call.name)
+    (info === nothing || isempty(info.arrays)) && return call
+    _call_has_lanes(call) && return call
+    outs = _call_outs(info, call)
+    isempty(info.outs) || !isempty(outs) || return call      # a whole array: its view does this
+    def = _tpl_def(tt, call.name)
+    def.closed === nothing && return call
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    S = _call_fixed!(Dict{String, Any}(), call.name, info, b)
+    hp = _call_hoist_plan(tt, def, S, outs)
+    isempty(hp.gathers) && return call
+    nb = copy(b)
+    m = Dict{String, ASTExpr}()
+    for (k, g) in enumerate(hp.gathers)
+        for x in g.args
+            _hoist_bind!(m, x, b)
+        end
+        nb[_TPL_LANE * string(k)] = _tpl_subst_scoped(g, m, IdDict{OpExpr, ASTExpr}())
+    end
+    return reconstruct(call; bindings = nb)
+end
+function _hoist_bind!(m, x, b)
+    if x isa VarExpr
+        haskey(m, x.name) || (m[x.name] = _call_arg(b, x.name))
+    elseif x isa OpExpr
+        foreach(a -> _hoist_bind!(m, a, b), x.args)
+    end
+    return
+end
+
+# The sentinels of `cand` that `e` reads, in first-read order (bindings of a
+# nested call in name order).
+function _call_first_reads(e::ASTExpr, cand::Set{String})
+    out = String[]
+    seen = Set{String}()
+    vis = IdDict{OpExpr, Nothing}()
+    function walk(x)
+        if x isa VarExpr
+            (x.name in cand && !(x.name in seen)) && (push!(seen, x.name); push!(out, x.name))
+            return
+        end
+        x isa OpExpr || return
+        haskey(vis, x) && return
+        vis[x] = nothing
+        if _tpl_is_call(x)
+            foreach(walk, _operands(x))
+            return
+        end
+        foreach(walk, x.args)
+        foreach_child(c -> any(a -> a === c, x.args) || walk(c), x)
+        return
+    end
+    walk(e)
+    return out
+end
+
+# A structural key of target `tg`'s compiled body, equal for two targets
+# whose bodies are the same function of their slots; `nothing` when the body
+# holds a node this key does not describe (no sharing then).
+function _call_canon(tg::_CallTarget)
+    io = IOBuffer()
+    print(io, length(tg.slots), '|', tg.arrkinds, '|', tg.arrdims, '|')
+    for (j, bl) in enumerate(tg.blocks)
+        bl === nothing && continue
+        sg = bl::_StateGather
+        print(io, j, ':', sg.strides, sg.lo, sg.hi, sg.len, ';')
+    end
+    print(io, tg.baseidx, '|')
+    ids = _NodeIdMap{Int}()
+    ok = Ref(true)
+    nid = Ref(0)
+    function walk(n::_Node)
+        got = get(ids, n, 0)
+        got == 0 || return got
+        for c in n.children
+            walk(c)
+        end
+        k = n.kind
+        pl = n.payload
+        print(io, '[', Int(k), ' ', n.op, ' ', reinterpret(UInt64, n.literal), ' ', n.idx, ' ', n.sym, ' ')
+        if k === _NK_ARG
+            print(io, 'A')
+        elseif k === _NK_ARG_GATHER
+            print(io, 'G', (pl::_ArgGatherRef).j)
+        elseif k === _NK_CALL
+            print(io, 'F', objectid(pl))
+        elseif pl !== nothing
+            ok[] = false
+        end
+        for c in n.children
+            print(io, ' ', ids[c])
+        end
+        print(io, ']')
+        return ids[n] = (nid[] += 1)
+    end
+    walk(tg.body)
+    return ok[] ? String(take!(io)) : nothing
+end
+
 const _EMPTY_VARMAP = Dict{String, Int}()
+
+const _TPL_BASE = "\0base\0"
 
 function _call_body_size(n::_Node)
     seen = _NodeIdMap{Nothing}()
@@ -372,25 +710,33 @@ function _arr_arg_marker(v::ASTExpr, rc)
     (v isa OpExpr && v.op == "__arrarg") && return v
     a = if v isa OpExpr && v.op == "const" && v.value isa AbstractVector
         vals, cname = _intern_inline_const(v, rc.const_arrays)
-        _ArrArg(:const, _const_gather_payload(vals, cname), cname)
+        _arrarg_interned(:const, vals) do
+            _ArrArg(:const, _const_gather_payload(vals, cname), cname)
+        end
     elseif v isa VarExpr
         n = v.name
         src = _array_source(n, rc.array_var_info, rc.pgather, rc.const_arrays)
         if src === :state
             lo, hi = rc.array_var_info[n]
-            _ArrArg(:state, _state_gather_payload(n, lo, hi, rc.var_map), n)
+            sg = _state_gather_payload(n, lo, hi, rc.var_map)
+            _ArrArg(sg.run_base != 0 ? :block : :state, sg, n)
         elseif src === :forcing
             pg = rc.pgather[n]::_PGatherArray
-            nd = length(pg.dims)
-            strides = Vector{Int}(undef, nd)
-            acc = 1
-            for d in 1:nd
-                strides[d] = acc
-                acc *= pg.dims[d]
+            _arrarg_interned(:live, pg) do
+                nd = length(pg.dims)
+                strides = Vector{Int}(undef, nd)
+                acc = 1
+                for d in 1:nd
+                    strides[d] = acc
+                    acc *= pg.dims[d]
+                end
+                _ArrArg(:live, _ConstGatherArray(pg.flat, strides, collect(Int, pg.dims), fill(:live, nd), n), n)
             end
-            _ArrArg(:live, _ConstGatherArray(pg.flat, strides, collect(Int, pg.dims), fill(:live, nd), n), n)
         elseif src === :const
-            _ArrArg(:const, _const_gather_payload(rc.const_arrays[n], n), n)
+            ca = rc.const_arrays[n]
+            _arrarg_interned(:const, ca) do
+                _ArrArg(:const, _const_gather_payload(ca, n), n)
+            end
         else
             throw(
                 TreeWalkError(
@@ -485,9 +831,33 @@ end
 # it (`_eval_state_gather_at`, `_eval_const_gather_at`).
 function _eval_arg_gather(n::_Node, u, p, t, ::Type{T}) where {T}
     ref = n.payload::_ArgGatherRef
-    a = @inbounds ref.target.curarrs[ref.j]
+    tg = ref.target
+    bi = @inbounds tg.baseidx[ref.j]
+    bi == 0 || return _eval_block_gather_at(
+        tg.blocks[ref.j]::_StateGather, _argstack_int(tg.stack, tg.fp + bi), n.children, u, p, t, T
+    )
+    a = @inbounds tg.curarrs[tg.passed[ref.j]]
     a.kind === :state && return _eval_state_gather_at(a.data::_StateGather, n.children, u, p, t, T)
     return _eval_const_gather_at(a.data::_ConstGatherArray, n.children, u, p, t, T)
+end
+
+# A block array's read: `_eval_state_gather_at` with the run base an argument.
+function _eval_block_gather_at(sg::_StateGather, base::Int, children::Vector{_Node}, u, p, t, ::Type{T}) where {T}
+    off = 0
+    @inbounds for d in eachindex(children)
+        sub = round(Int, _eval_node(children[d], u, p, t, T))
+        (sg.lo[d] <= sub <= sg.hi[d]) || return zero(eltype(u))   # ghost cell
+        off += (sub - sg.lo[d]) * sg.strides[d]
+    end
+    @inbounds return u[base + off]
+end
+
+# A base slot's value (always a Float64 literal or table entry).
+@inline function _argstack_int(st::_ArgStack, i::Int)
+    @inbounds st.isalt[i] && throw(
+        TreeWalkError("E_TREEWALK_UNSUPPORTED_OP", "a block array's base argument is not a number")
+    )
+    return unsafe_trunc(Int, @inbounds st.f64[i])
 end
 
 @inline _eval_arg(n::_Node, ::Type{T}) where {T} =
@@ -568,7 +938,7 @@ function _tpl_whole_view(tt::_TplTable, call::OpExpr)
     ranges = body.ranges === nothing ? nothing :
         Dict{String, Any}(names[String(k)] => v for (k, v) in body.ranges)
     oi = String[names[o] for o in info.outs]
-    el = _elem_call(tt, call, ASTExpr[VarExpr(n) for n in oi])
+    el = _tpl_with_lanes(tt, _elem_call(tt, call, ASTExpr[VarExpr(n) for n in oi]))
     return reconstruct(body; output_idx = Any[oi...], ranges = ranges, expr_body = el, args = ASTExpr[])
 end
 
@@ -581,10 +951,14 @@ function _tpl_whole_views(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExp
     if e.op == "index" && _tpl_structless(e) && length(e.args) >= 2 &&
             _tpl_view_rank(tt, e.args[1]) == length(e.args) - 1
         a1 = map_children(c -> _tpl_whole_views(tt, c, memo), e.args[1]::OpExpr)
-        r = _elem_call(tt, a1, ASTExpr[_tpl_whole_views(tt, a, memo) for a in e.args[2:end]])
+        r = _tpl_with_lanes(tt, _elem_call(tt, a1, ASTExpr[_tpl_whole_views(tt, a, memo) for a in e.args[2:end]]))
     else
         r = map_children(c -> _tpl_whole_views(tt, c, memo), e)
-        _tpl_view_rank(tt, r) > 0 && (r = _tpl_whole_view(tt, r::OpExpr))
+        if _tpl_view_rank(tt, r) > 0
+            r = _tpl_whole_view(tt, r::OpExpr)
+        elseif _tpl_is_call(r)
+            r = _tpl_with_lanes(tt, r::OpExpr)
+        end
     end
     memo[e] = r
     return r
