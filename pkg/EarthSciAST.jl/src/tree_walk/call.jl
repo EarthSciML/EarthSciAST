@@ -500,11 +500,32 @@ function _call_ibody(tt::_TplTable, def::_TplDef, S::Dict{String, Any}, outs::Ve
     memo = _tpl_memo(tt, nothing, :call_ibody, () -> Dict{Tuple{String, String, Bool}, ASTExpr}())
     skey = join(sort!([k * "\0" * string(v) for (k, v) in S]), "\x01")
     return get!(memo, (def.name, skey, !isempty(outs))) do
-        ibody = _tpl_inst_closed(tt, def, S).body
+        ibody = _call_iset_ranges(tt, _tpl_inst_closed(tt, def, S).body, IdDict{OpExpr, ASTExpr}())
         isempty(outs) && return ibody
         m = Dict{String, ASTExpr}(o => VarExpr(_TPL_OUT * o) for o in outs)
         _tpl_subst_scoped((ibody::OpExpr).expr_body, m, IdDict{OpExpr, ASTExpr}())
     end
+end
+
+# `e` with each scalar reduction's range over a whole interval index set
+# (`{"from": S}`) read as the dense range `[1, size(S)]` it denotes: the same
+# indices in the same order, in the form a call body loops over.
+function _call_iset_ranges(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr})
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    r = map_children(c -> _call_iset_ranges(tt, c, memo), e)
+    if _is_faq_op(r.op) && r.ranges !== nothing && (r.output_idx === nothing || isempty(r.output_idx)) &&
+            any(v -> v isa IndexSetRef, values(r.ranges))
+        rg = empty(r.ranges)
+        for (k, v) in r.ranges
+            n = v isa IndexSetRef ? _tpl_iset_extent(tt, v) : nothing
+            rg[k] = n === nothing ? v : Any[1, n]
+        end
+        r = reconstruct(r; ranges = rg)
+    end
+    memo[e] = r
+    return r
 end
 
 # ---- Reads the caller makes ("lanes") --------------------------------------------

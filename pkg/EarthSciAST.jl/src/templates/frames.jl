@@ -663,6 +663,18 @@ function _tpl_call_info_uncached(tt::_TplTable, name::String)
     return info
 end
 
+# The size of the interval index set a range `{"from": S}` names, from the
+# build's registry (set at the build entry), or `nothing` (not an interval of
+# known size, a ragged range, no registry in reach).
+function _tpl_iset_extent(tt::_TplTable, rv::IndexSetRef)
+    isempty(rv.of) || return nothing
+    sets = get(tt.root_memos, :index_sets, nothing)
+    sets === nothing && return nothing
+    s = get(sets, rv.from, nothing)
+    (s isa IndexSet && s.kind == "interval" && s.size isa Int) || return nothing
+    return s.size::Int
+end
+
 # A range bound the build can fix: an integer literal, or a parameter (fixed).
 function _tpl_range_bound!(x, info::_TplCallInfo)
     (x isa Integer || x isa IntExpr) && return true
@@ -741,6 +753,8 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
         (e.expr_body === nothing || e.ranges === nothing) && return false
         isempty(e.args) || all(a -> a isa VarExpr, e.args) || return false
         for (_, rv) in e.ranges
+            # A whole interval index set: the range [1, size] (`_call_ibody`).
+            rv isa IndexSetRef && _tpl_iset_extent(tt, rv) !== nothing && continue
             (rv isa AbstractVector && 2 <= length(rv) <= 3) || return false
             all(x -> _tpl_range_bound!(x, info), rv) || return false
         end

@@ -1324,6 +1324,8 @@ function _build_evaluator_impl_inner(
         # (`_tpl_structural_refs`), never in the caller's.
         _template_reg = copy(_template_reg)
         calls = _CallTable(_template_reg)
+        # The index-set registry a call body's `{"from": S}` range reads.
+        calls.tt.root_memos[:index_sets] = index_sets
         _build_state().calls = calls
         map_expressions!(e -> _tpl_structural_refs(calls.tt, e), model)
         keep_cache = _ExpandCache(; keep = e -> _tpl_is_called(calls.tt, e))
