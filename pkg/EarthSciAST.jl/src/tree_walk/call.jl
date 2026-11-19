@@ -1697,6 +1697,41 @@ function _call_with_implicit(call::OpExpr)
     return reconstruct(call; bindings = nb)
 end
 
+# ---- Preparing a model's references ----------------------------------------------
+# `model` (a copy the caller owns) prepared for a build against the registry
+# `reg` (which the build owns: structural instances and view parts are
+# registered in it): structural references re-pointed at their instances,
+# the references the call node does not handle yet expanded (an intermediate
+# state of A1, see callnode-design.md; `sites` records them), every reference
+# carrying its implicit parameters, and array-valued and aggregate references
+# read as element calls and views. The template table is installed in the
+# build state, so the compilers and build-time evaluators compile a reference
+# as a call. Returns `(model, calls, sites)`.
+function _tpl_prepare_model!(model, reg, index_sets, vi_extents)
+    sites = IdDict{OpExpr, OpExpr}()
+    calls = _CallTable(reg)
+    # The index-set registry a call body's `{"from": S}` range reads.
+    calls.tt.root_memos[:index_sets] = index_sets
+    calls.tt.root_memos[:vi_extents] = vi_extents
+    _build_state().calls = calls
+    map_expressions!(e -> _tpl_structural_refs(calls.tt, e), model)
+    # An ELEMENT read of an aggregate or makearray body (`index(ref, s…)`) is
+    # not read through the view: option B (the callee selecting the element)
+    # is not implemented, so it is still expanded (`_tpl_elem_read_aggs`).
+    elem_aggs = _tpl_elem_read_aggs(calls.tt, model)
+    keep_cache = _ExpandCache(; keep = e -> !haskey(elem_aggs, e) && _tpl_is_called(calls.tt, e))
+    _expand_model_refs!(model, reg; sites = sites, memo = keep_cache)
+    # Every name a kept body reads from its caller becomes a binding of the
+    # reference (`_tpl_augment`), so a phase that asks which names an
+    # expression reads sees the body's reads.
+    _tpl_augment_component!(model, reg)
+    # An array-valued reference read as a whole array is its whole-array view,
+    # whose element is a call (`_tpl_whole_view`, `_tpl_agg_view`).
+    vm = IdDict{OpExpr, ASTExpr}()
+    map_expressions!(e -> _tpl_whole_views(calls.tt, e, vm), model)
+    return model, calls, sites
+end
+
 # ---- Survey of the references the build still expands ------------------------------
 # With `ENV["ESS_TPL_SURVEY"]` naming a file, each reference the build entry
 # expanded is appended to it as one line: template name, tab, why the gate

@@ -430,12 +430,12 @@ function _front_door(
     if model !== nothing && _model_has_surviving_refs(model)
         _tmpl_reg = _component_template_reg(file, model_name)
         if _tmpl_reg !== nothing
+            # The pre-passes read the model as the build does: references
+            # compiled as calls, with the template table in the build state
+            # (`_tpl_prepare_model!`, on a copy and against a copy of the
+            # registry; the impl prepares its own from `file`).
             model = _expansion_copy(model)
-            # The impl expands the same model against the same registry: it
-            # takes this expansion's cache (`_ExpandCache`).
-            cache = _ExpandCache()
-            _expand_model_refs!(model, _tmpl_reg; memo = cache)
-            opts.expand_cache = cache
+            model, _, _ = _tpl_prepare_model!(model, copy(_tmpl_reg), file.index_sets, Dict{String, Int}())
         end
     end
 

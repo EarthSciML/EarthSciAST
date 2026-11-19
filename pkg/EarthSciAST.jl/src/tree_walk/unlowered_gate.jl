@@ -35,6 +35,11 @@ function _first_unlowered_node(e::ASTExpr, lhs::Bool, seen::IdDict{OpExpr, Nothi
         (lhs && (o.wrt === nothing || o.wrt == "t")) || return o
     elseif _is_unlowered_op(o.op)
         return o
+    elseif _tpl_is_call(o) && _call_table() !== nothing &&
+            _call_body_any_op(op -> op == "D" || _is_unlowered_op(op), o)
+        # A template call evaluates its body, where no `D` is an equation's
+        # left-hand side (call.jl `_call_body_any_op`, each template once).
+        return o
     end
     found = nothing
     EarthSciAST.foreach_child(o) do c

@@ -1301,53 +1301,25 @@ function _build_evaluator_impl_inner(
     # A parameter recomputed by a symbolic update is an event in all but name.
     symbolic = _first_symbolic_update(model)
     symbolic === nothing || throw(_symbolic_update_refusal(symbolic...))
-    # ---- Compile-once template tier: expand references at the entry, keeping
-    # the SITES (RFC out-of-line-expression-templates §7.7). Every phase and
-    # every fallback path below sees exactly the fused expanded tree Option A
-    # produced — variable discovery, layout, validation, and the per-cell /
-    # symbolic paths are byte-identical to a pre-expanded build. The recorded
-    # expansion roots are consumed ONLY by the affine stencil build, which
-    # compiles each (use site, region class) body once and calls it as a
-    # sub-kernel. Expansion works on a copy (`_expansion_copy`): the caller's
-    # typed model must keep its references (`serialize_esm_file` emits them
-    # verbatim — R1).
+    # ---- Template references: compiled as calls (tree_walk/call.jl) ----
+    # Every reference the call node handles stays a reference and compiles as
+    # a call; an array-valued or aggregate one read whole is its view
+    # (`_tpl_prepare_model!`). The references it does not handle yet are still
+    # expanded here, with their roots recorded (`_template_sites`) for the
+    # stencil tier's sub-kernels (an intermediate state of A1). Preparation
+    # works on a copy (`_expansion_copy`): the caller's typed model keeps its
+    # references (`serialize_esm_file` emits them verbatim — R1).
     _template_sites = nothing
     if _template_reg !== nothing
         model = _expansion_copy(model)
         sites = IdDict{OpExpr, OpExpr}()
-        # The references the call node handles stay references and compile as
-        # calls (tree_walk/call.jl, `_tpl_is_called`); the rest still expand
-        # here (an intermediate state of A1, see callnode-design.md). The
-        # expansion cache is the build's own: the front door's cache holds
-        # full expansions.
-        # The build's own registry: structural instances are registered in it
-        # (`_tpl_structural_refs`), never in the caller's.
+        # The build's own registry: structural instances and view parts are
+        # registered in it, never in the caller's (call.jl `_tpl_prepare_model!`).
         _template_reg = copy(_template_reg)
-        calls = _CallTable(_template_reg)
-        # The index-set registry a call body's `{"from": S}` range reads.
-        calls.tt.root_memos[:index_sets] = index_sets
-        calls.tt.root_memos[:vi_extents] = _vi_extents
-        _build_state().calls = calls
-        map_expressions!(e -> _tpl_structural_refs(calls.tt, e), model)
-        # An ELEMENT read of an aggregate or makearray body (`index(ref, s…)`)
-        # is not read through the view (option B, the callee selecting the
-        # element, is not implemented: no document needs it yet); it is still
-        # expanded here (call.jl `_tpl_elem_read_aggs`).
-        elem_aggs = _tpl_elem_read_aggs(calls.tt, model)
-        keep_cache = _ExpandCache(; keep = e -> !haskey(elem_aggs, e) && _tpl_is_called(calls.tt, e))
-        _expand_model_refs!(model, _template_reg; sites = sites, memo = keep_cache)
+        model, calls, sites = _tpl_prepare_model!(model, _template_reg, index_sets, _vi_extents)
         # How many references the build still expands (none at the end of A1).
         _count!(:tpl_expanded, length(sites))
         _tpl_survey(calls.tt, sites)
-        # Every name a kept body reads from its caller becomes a binding of
-        # the reference (`_tpl_augment`), so the phases below that ask which
-        # names an expression reads see the body's reads.
-        _tpl_augment_component!(model, _template_reg)
-        # An array-valued reference read as a whole array is its whole-array
-        # view, whose element is a call (call.jl `_tpl_whole_view`).
-        let vm = IdDict{OpExpr, ASTExpr}()
-            map_expressions!(e -> _tpl_whole_views(calls.tt, e, vm), model)
-        end
         _expand_cache = nothing
         isempty(sites) || (_template_sites = sites)
     elseif _model_has_surviving_refs(model)

@@ -253,6 +253,10 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
     elseif node isa OpExpr
         op = node.op
         args = node.args
+        # A template call: its body with its parameters bound (call.jl).
+        _tpl_is_call(node) && return _eval_through_call(
+            (e, env) -> _vi_eval(e, ctx, env), node, Dict{String, Any}(bindings)
+        )
         # The registry arity is normative here as on every evaluator.
         _check_op_arity(Symbol(op), length(args))
         if op == "index"
