@@ -378,8 +378,7 @@ export const ERROR_CODES = {
   // `removed_op` — an op or block removed from the format (`arrayop` at esm
   //   0.8.0; `fn`, `table_lookup`, `skolem`, `rank`, `intersect_polygon`,
   //   `polygon_intersection_area`, `argmin`, `argmax`, the `aggregate` alias of
-  //   `faq` and the `function_tables` block at esm 2.0.0; `grad`, `div` and
-  //   `laplacian` at esm 2.4.0), rejected by name at
+  //   `faq` and the `function_tables` block at esm 2.0.0), rejected by name at
   //   the wire boundary (parse.ts).
   REMOVED_OP: 'removed_op',
   // `deprecated_op` — WARNING, not an error: a document spelled the deprecated
@@ -387,6 +386,11 @@ export const ERROR_CODES = {
   //   boundary rewrote each use and warns once per document (esm-spec §4.2
   //   "Deprecated ops", parse.ts `rewriteDeprecatedOps`).
   DEPRECATED_OP: 'deprecated_op',
+  // `deprecated_system_kind` — WARNING, not an error: a model declared
+  //   `"system_kind": "pde"`, deprecated at esm 2.4.0 and ignored (the model is
+  //   treated as its derived kind); one warning per document naming every such
+  //   model (parse.ts `findDeprecatedSystemKinds`).
+  DEPRECATED_SYSTEM_KIND: 'deprecated_system_kind',
   EXPRESSION_TEMPLATE_ERROR: 'expression_template_error',
   ENUM_LOWERING_ERROR: 'enum_lowering_error',
   NONFINITE_NUMBER: 'nonfinite_number',

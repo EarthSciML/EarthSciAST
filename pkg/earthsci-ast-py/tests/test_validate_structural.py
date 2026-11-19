@@ -228,7 +228,7 @@ class TestStructuralValidation:
         """`_var` (the reserved operator placeholder, spec §6.4) must be accepted
         as a valid reference at ANY nesting depth in a model's equations —
         including nested inside an operator such as the canonical advection idiom
-        ``D(_var, wrt: lon)`` — not merely in the top-level ``D(_var)`` derivative
+        ``grad(_var, dim)`` — not merely in the top-level ``D(_var)`` derivative
         position. Regression test for the false
         ``undefined variable reference '_var'`` structural error."""
         advection = {
@@ -247,7 +247,7 @@ class TestStructuralValidation:
                                 "op": "*",
                                 "args": [
                                     {"op": "-", "args": ["u"]},
-                                    {"op": "D", "args": ["_var"], "wrt": "lon"},
+                                    {"op": "grad", "args": ["_var"], "dim": "lon"},
                                 ],
                             },
                         }
@@ -292,7 +292,7 @@ class TestStructuralValidation:
                                     {"op": "-", "args": ["u"]},
                                     # `typo_missing` is not a declared variable and
                                     # is not the reserved `_var` placeholder.
-                                    {"op": "D", "args": ["typo_missing"], "wrt": "lon"},
+                                    {"op": "grad", "args": ["typo_missing"], "dim": "lon"},
                                 ],
                             },
                         }

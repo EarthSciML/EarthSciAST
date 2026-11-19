@@ -620,7 +620,7 @@ func TestOpInTCoreOps(t *testing.T) {
 			t.Errorf("opInT(%q) = true, want false (evaluable core)", op)
 		}
 	}
-	for _, op := range []string{"godunov_hamiltonian", "D", "integral"} {
+	for _, op := range []string{"grad", "godunov_hamiltonian", "D", "integral"} {
 		if !opInT(op) {
 			t.Errorf("opInT(%q) = false, want true (rewrite target)", op)
 		}

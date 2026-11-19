@@ -378,11 +378,9 @@ class TestSection04ExpressionAST:
 
         calculus_cases = [
             {"op": "D", "args": ["O3"], "wrt": "t"},  # Time derivative
-            {"op": "D", "args": ["_var"], "wrt": "x"},  # Spatial derivative
-            # Divergence, one D per axis
-            {"op": "D", "args": [{"op": "*", "args": ["u", "_var"]}], "wrt": "x"},
-            # Second derivative (one axis of a Laplacian)
-            {"op": "D", "args": [{"op": "D", "args": ["_var"], "wrt": "z"}], "wrt": "z"},
+            {"op": "grad", "args": ["_var"], "dim": "x"},  # Spatial gradient
+            {"op": "div", "args": [{"op": "*", "args": ["u", "_var"]}]},  # Divergence
+            {"op": "laplacian", "args": ["_var"]},  # Laplacian
         ]
 
         for op_case in calculus_cases:
@@ -1891,14 +1889,14 @@ class TestSection13CompleteExamples:
                                         "op": "*",
                                         "args": [
                                             {"op": "-", "args": ["u_wind"]},
-                                            {"op": "D", "args": ["_var"], "wrt": "x"},
+                                            {"op": "grad", "args": ["_var"], "dim": "x"},
                                         ],
                                     },
                                     {
                                         "op": "*",
                                         "args": [
                                             {"op": "-", "args": ["v_wind"]},
-                                            {"op": "D", "args": ["_var"], "wrt": "y"},
+                                            {"op": "grad", "args": ["_var"], "dim": "y"},
                                         ],
                                     },
                                 ],
@@ -1995,14 +1993,7 @@ class TestSection13CompleteExamples:
                             "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
                             "rhs": {
                                 "op": "*",
-                                "args": [
-                                    "Kz",
-                                    {
-                                        "op": "D",
-                                        "args": [{"op": "D", "args": ["_var"], "wrt": "z"}],
-                                        "wrt": "z",
-                                    },
-                                ],
+                                "args": ["Kz", {"op": "laplacian", "args": ["_var"]}],
                             },
                         }
                     ],
@@ -2396,7 +2387,7 @@ class TestCrossSectionValidation:
                             "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
                             "rhs": {
                                 "op": "*",
-                                "args": ["wind", {"op": "D", "args": ["_var"], "wrt": "x"}],
+                                "args": ["wind", {"op": "grad", "args": ["_var"], "dim": "x"}],
                             },
                         }
                     ],

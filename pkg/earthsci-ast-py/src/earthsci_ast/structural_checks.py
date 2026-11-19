@@ -58,6 +58,7 @@ from .classification import (
     _field,
     _variables,
     algebraic_unknowns,
+    declared_system_kind,
     model_nodes,
     observed_definitions,
     ode_states,
@@ -2977,13 +2978,14 @@ def _check_system_kind(data: dict[str, Any], errors: list[str]) -> None:
 
     The field is optional and the derivation is authoritative -- a binding uses
     it whenever the field is absent -- so a present field that disagrees is
-    always an author error, never a legitimate override.
+    always an author error, never a legitimate override. The deprecated
+    declared value ``"pde"`` counts as absent and is never a mismatch.
     """
     for mname, m in (data.get("models") or {}).items():
         if not isinstance(m, dict):
             continue
-        declared = m.get("system_kind")
-        if not isinstance(declared, str):
+        declared = declared_system_kind(m)
+        if declared is None:
             continue
         derived = system_kind(m)
         if declared == derived:

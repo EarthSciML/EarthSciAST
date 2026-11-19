@@ -955,24 +955,6 @@ const REMOVED_OPS_V2: ReadonlyMap<string, string> = new Map([
   ['aggregate', '`"op": "faq"`, the same node under its 1.1.0 name'],
 ])
 
-/**
- * Ops removed at esm 2.4.0, each with how its derivative is written now. Like
- * {@link REMOVED_OPS_V2} they are rejected BY NAME at the wire boundary, on
- * every document whatever `esm` it declares. There is no codemod for them: the
- * message points at MIGRATION.md, "esm 2.4.0".
- */
-const REMOVED_OPS_V24: ReadonlyMap<string, string> = new Map([
-  ['grad', '`grad(f, dim: x)` is `D(f, wrt: x)`'],
-  ['div', '`div(F)` is the sum over axes of `D(F_i, wrt: x_i)`'],
-  ['laplacian', '`laplacian(u)` is the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)`'],
-])
-
-/** Every removed op name, for one pre-order search. */
-const REMOVED_OPS_ALL: ReadonlyMap<string, string> = new Map([
-  ...REMOVED_OPS_V2,
-  ...REMOVED_OPS_V24,
-])
-
 /** Where a removed construct's message sends the author. */
 const MIGRATE_HINT = 'Convert the document with the codemod: `python -m earthsci_ast.migrate`.'
 
@@ -1035,8 +1017,7 @@ function findFunctionTables(doc: unknown): string | null {
  * The first removed construct `doc` uses, as its JSON path and `removed_op`
  * message, or `null` when it uses none: `"op": "arrayop"` (removed at esm
  * 0.8.0), then the `function_tables` block, then the ops in
- * {@link REMOVED_OPS_V2} (removed at 2.0.0) and {@link REMOVED_OPS_V24} (removed
- * at 2.4.0) in pre-order. The message names the construct, where
+ * {@link REMOVED_OPS_V2} in pre-order. The message names the construct, where
  * it sits, and what replaces it. Shared by the load-time rejection,
  * `validate()` and `migrate()`, which refuses to relabel such a 1.x document.
  */
@@ -1061,17 +1042,7 @@ export function findRemovedConstruct(doc: unknown): { path: string; message: str
         `esm:std/interp.esm instead. ${MIGRATE_HINT}`,
     }
   }
-  const hit = findFirstOp(doc, REMOVED_OPS_ALL)
-  if (hit !== null && REMOVED_OPS_V24.has(hit.op)) {
-    return {
-      path: hit.path,
-      message:
-        `removed_op at ${hit.path}: \`"op": "${hit.op}"\` was removed at esm 2.4.0; ` +
-        `write the derivative with spatial \`D\`, one \`D\` per axis ` +
-        `(${REMOVED_OPS_V24.get(hit.op)}), or with a user op lowered by a rewrite rule ` +
-        `(MIGRATION.md, "esm 2.4.0").`,
-    }
-  }
+  const hit = findFirstOp(doc, REMOVED_OPS_V2)
   if (hit !== null) {
     return {
       path: hit.path,
@@ -1236,6 +1207,39 @@ export function deprecatedOpWarning(sites: readonly string[]): string {
   )
 }
 
+/**
+ * JSON pointers (`/models/<name>/system_kind`, and `.../subsystems/<name>/...`
+ * for a nested model) of every model in `doc` that declares the deprecated
+ * `"system_kind": "pde"` (esm 2.4.0), in document order. The field is left as
+ * written; classification reads it as absent.
+ */
+export function findDeprecatedSystemKinds(doc: unknown): string[] {
+  const sites: string[] = []
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+  const visit = (model: unknown, at: string): void => {
+    if (!isObj(model)) return
+    if (model.system_kind === 'pde') sites.push(`${at}/system_kind`)
+    const subs = model.subsystems
+    if (isObj(subs)) {
+      for (const [k, sub] of Object.entries(subs)) visit(sub, `${at}/subsystems/${pointerToken(k)}`)
+    }
+  }
+  if (isObj(doc) && isObj(doc.models)) {
+    for (const [k, model] of Object.entries(doc.models)) visit(model, `/models/${pointerToken(k)}`)
+  }
+  return sites
+}
+
+/** The load-time `deprecated_system_kind` warning naming the models at `sites`. */
+export function deprecatedSystemKindWarning(sites: readonly string[]): string {
+  return (
+    `${ERROR_CODES.DEPRECATED_SYSTEM_KIND}: the \`system_kind\` value "pde" is deprecated ` +
+    '(esm 2.4.0) and ignored; the model is treated as its derived kind. ' +
+    `Declared at: ${sites.join(', ')}.`
+  )
+}
+
 /** Options for {@link prepareDocumentOps}. */
 export interface PrepareDocumentOpsOptions {
   /**
@@ -1252,8 +1256,7 @@ export interface PrepareDocumentOpsOptions {
  * Three steps, in this order:
  *
  * 1. `arrayop` (removed at esm 0.8.0), the ops removed at esm 2.0.0 (the
- *    `aggregate` alias of `faq` among them), the ops removed at esm 2.4.0
- *    (`grad`, `div`, `laplacian`) and the `function_tables` block are
+ *    `aggregate` alias of `faq` among them) and the `function_tables` block are
  *    rejected BY NAME with `removed_op`. Each op is a well-formed identifier, so
  *    esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op: the
  *    document would load silently and fail much later as `unlowered_operator`,
@@ -1266,6 +1269,11 @@ export interface PrepareDocumentOpsOptions {
  * 3. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
  *    (esm-spec §2.2.4).
  *
+ * Between steps 2 and 3, a model declaring the deprecated `"system_kind":
+ * "pde"` (esm 2.4.0) draws ONE `deprecated_system_kind` warning for the
+ * document, naming every such model ({@link findDeprecatedSystemKinds}); the
+ * field is kept as written.
+ *
  * The document is modified only by step 2.
  */
 export function prepareDocumentOps(doc: unknown, options?: PrepareDocumentOpsOptions): void {
@@ -1274,6 +1282,10 @@ export function prepareDocumentOps(doc: unknown, options?: PrepareDocumentOpsOpt
   const deprecated = rewriteDeprecatedOps(doc)
   if (deprecated.length > 0 && options?.warn !== false) {
     console.warn(deprecatedOpWarning(deprecated))
+  }
+  const pdeKinds = findDeprecatedSystemKinds(doc)
+  if (pdeKinds.length > 0 && options?.warn !== false) {
+    console.warn(deprecatedSystemKindWarning(pdeKinds))
   }
   const faqAt = findOp(doc, 'faq')
   if (faqAt !== null && declaredBelowV11(doc)) {

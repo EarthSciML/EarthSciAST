@@ -7,9 +7,6 @@ package esm
 // `intersect_polygon` / `polygon_intersection_area` and the `argmin` /
 // `argmax` op forms; the standard-library templates (`esm:std/...`) replace
 // them. `aggregate`, the pre-1.1.0 spelling of `faq`, is removed with them.
-// esm 2.4.0 removed the spatial-calculus ops `grad`, `div` and `laplacian`
-// (MIGRATION.md, "esm 2.4.0"); spatial `D`, one per axis, replaces them, and
-// there is no codemod for them.
 // A removed op's name is still a well-formed identifier, which esm-spec §4.2
 // would admit as an OPEN rewrite-target op, so a document using one is
 // refused BY NAME at the wire boundary (prepareDocumentOps), before schema
@@ -41,9 +38,6 @@ var removedOps = map[string]string{
 	"polygon_intersection_area": "2.0.0",
 	"argmin":                    "2.0.0",
 	"argmax":                    "2.0.0",
-	"grad":                      "2.4.0",
-	"div":                       "2.4.0",
-	"laplacian":                 "2.4.0",
 }
 
 // removedFunctionTables is the removed document block; it is refused at the
@@ -84,11 +78,6 @@ func newRemovedOpError(name, path string, isField bool) *removedOpError {
 		msg = fmt.Sprintf("`\"op\": \"arrayop\"` at %s was removed at esm 0.8.0 and is not a "+
 			"deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query node). "+
 			"See docs/content/rfcs/faq-node-rename.md", where)
-	case removedOps[name] == "2.4.0":
-		msg = fmt.Sprintf("`\"op\": \"%s\"` at %s was removed at esm 2.4.0; write the "+
-			"derivative with spatial `D`, one `D` per axis (`grad(f, dim: x)` is "+
-			"`D(f, wrt: x)`), or with a user op lowered by a rewrite rule (MIGRATION.md, "+
-			"\"esm 2.4.0\")", name, where)
 	default:
 		msg = fmt.Sprintf("`\"op\": \"%s\"` at %s was removed at esm %s; the esm:std expression "+
 			"templates replace it. Convert the document with `%s` (MIGRATION.md)",

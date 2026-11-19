@@ -1555,22 +1555,17 @@ type EquationBalance struct {
 // (§4.9.4) and are never counted here; nor is an in-band `ic`-op equation, which
 // is the same prescription spelled inside `equations` (§11.4).
 //
-// Two carve-outs skip the check entirely:
+// One carve-out skips the check entirely:
 //
 //   - a model with SUBSYSTEMS holds its dynamics in those subsystems, so its own
 //     `equations` list may legitimately be empty while it declares unknowns
-//     (tests/valid/scoped_refs_coupling.esm);
-//   - a PDE model, whose unknown count is a property of a discretization this
-//     binding does not perform.
+//     (tests/valid/scoped_refs_coupling.esm).
 //
 // A coupled model is skipped by the CALLER (validateModel): its unknowns may be
 // driven by equations another system contributes.
 func computeEquationBalance(model *Model) (EquationBalance, bool) {
 	var bal EquationBalance
 	if len(model.Subsystems) > 0 {
-		return bal, true
-	}
-	if EffectiveSystemKind(model) == SystemKindPDE {
 		return bal, true
 	}
 

@@ -256,7 +256,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
 // Auto-applied `match` rewrite rules (esm-spec §9.6, §9.6.8).
 // ---------------------------------------------------------------------------
 
-function derivModel(templates: Record<string, unknown>, rhs: unknown) {
+function gradModel(templates: Record<string, unknown>, rhs: unknown) {
   return {
     esm: '2.0.0',
     metadata: { name: 'rewrite_rules', authors: ['t'] },
@@ -271,15 +271,15 @@ function derivModel(templates: Record<string, unknown>, rhs: unknown) {
 
 describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
   it('auto-applies an operator-lowering rule: binds operand, passes through unbound params', () => {
-    const file = derivModel(
+    const file = gradModel(
       {
-        central_d_x: {
+        central_grad_x: {
           params: ['f', 'dx'],
-          match: { op: 'D', args: ['f'], wrt: 'x' },
+          match: { op: 'grad', args: ['f'], dim: 'x' },
           body: { op: '/', args: [{ op: '-', args: ['f', 'f'] }, 'dx'] },
         },
       },
-      { op: 'D', args: ['c'], wrt: 'x' },
+      { op: 'grad', args: ['c'], dim: 'x' },
     )
     const out = lowerExpressionTemplates(file) as any
     // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at loadString.
@@ -292,15 +292,15 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
   })
 
   it('binds an operand metavariable to a full sub-AST (repeated occurrences)', () => {
-    const file = derivModel(
+    const file = gradModel(
       {
         dup: {
           params: ['f'],
-          match: { op: 'D', args: ['f'], wrt: 'x' },
+          match: { op: 'grad', args: ['f'], dim: 'x' },
           body: { op: 'makearray', args: ['f', 'f'] },
         },
       },
-      { op: 'D', args: [{ op: '+', args: ['a', 'b'] }], wrt: 'x' },
+      { op: 'grad', args: [{ op: '+', args: ['a', 'b'] }], dim: 'x' },
     )
     const out = lowerExpressionTemplates(file) as any
     expect(out.models.M.equations[0].rhs).toEqual({
@@ -312,16 +312,16 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     })
   })
 
-  it('binds a scalar-field metavariable (wrt) to the matched literal', () => {
-    const file = derivModel(
+  it('binds a scalar-field metavariable (dim) to the matched literal', () => {
+    const file = gradModel(
       {
-        d_any: {
+        grad_any: {
           params: ['f', 'd'],
-          match: { op: 'D', args: ['f'], wrt: 'd' },
+          match: { op: 'grad', args: ['f'], dim: 'd' },
           body: { op: 'index', args: ['f'], along: 'd' },
         },
       },
-      { op: 'D', args: ['c'], wrt: 'y' },
+      { op: 'grad', args: ['c'], dim: 'y' },
     )
     const out = lowerExpressionTemplates(file) as any
     // d → "y" (scalar field literal), substituted into the body's `along` field.
@@ -329,20 +329,20 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
   })
 
   it('applies match rules in declaration order (first match wins)', () => {
-    const file = derivModel(
+    const file = gradModel(
       {
         rule_a: {
           params: ['f'],
-          match: { op: 'D', args: ['f'], wrt: 'x' },
+          match: { op: 'grad', args: ['f'], dim: 'x' },
           body: { op: 'sin', args: ['f'] },
         },
         rule_b: {
           params: ['g'],
-          match: { op: 'D', args: ['g'], wrt: 'x' },
+          match: { op: 'grad', args: ['g'], dim: 'x' },
           body: { op: 'cos', args: ['g'] },
         },
       },
-      { op: 'D', args: ['c'], wrt: 'x' },
+      { op: 'grad', args: ['c'], dim: 'x' },
     )
     const out = lowerExpressionTemplates(file) as any
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'sin', args: ['c'] })
@@ -351,21 +351,21 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
   it('re-scans a produced body in a SUBSEQUENT pass (bounded fixpoint)', () => {
     // 0.8.0 outermost-first + fixpoint (esm-spec §9.6.3): a freshly-produced
     // body is NOT re-matched within the pass that produced it, but IS re-scanned
-    // in the NEXT pass. So D(·, x) → D(·, y) (pass 1) then D(·, y) → abs (pass 2).
-    const file = derivModel(
+    // in the NEXT pass. So grad → div (pass 1) then div → abs (pass 2).
+    const file = gradModel(
       {
         g2d: {
           params: ['f'],
-          match: { op: 'D', args: ['f'], wrt: 'x' },
-          body: { op: 'D', args: ['f'], wrt: 'y' },
+          match: { op: 'grad', args: ['f'], dim: 'x' },
+          body: { op: 'div', args: ['f'], dim: 'x' },
         },
         d2z: {
           params: ['f'],
-          match: { op: 'D', args: ['f'], wrt: 'y' },
+          match: { op: 'div', args: ['f'], dim: 'x' },
           body: { op: 'abs', args: ['f'] },
         },
       },
-      { op: 'D', args: ['c'], wrt: 'x' },
+      { op: 'grad', args: ['c'], dim: 'x' },
     )
     const out = lowerExpressionTemplates(file) as any
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'abs', args: ['c'] })
@@ -375,21 +375,21 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     // esm-spec §9.6.3: when several rules match a node, the highest `priority`
     // wins (default 0). Here `lo` is declared first but `hi` (priority 5)
     // out-ranks it and fires.
-    const file = derivModel(
+    const file = gradModel(
       {
         lo: {
           params: ['f'],
-          match: { op: 'D', args: ['f'], wrt: 'x' },
+          match: { op: 'grad', args: ['f'], dim: 'x' },
           body: { op: 'sin', args: ['f'] },
         },
         hi: {
           params: ['f'],
           priority: 5,
-          match: { op: 'D', args: ['f'], wrt: 'x' },
+          match: { op: 'grad', args: ['f'], dim: 'x' },
           body: { op: 'cos', args: ['f'] },
         },
       },
-      { op: 'D', args: ['c'], wrt: 'x' },
+      { op: 'grad', args: ['c'], dim: 'x' },
     )
     const out = lowerExpressionTemplates(file) as any
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'cos', args: ['c'] })
@@ -399,15 +399,15 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     // 0.8.0: nontermination is caught by the MAX_REWRITE_PASSES=64 bound at
     // loadString time, NOT by a static pre-check. A rule whose body wraps its own
     // pattern grows the tree every pass and never converges.
-    const file = derivModel(
+    const file = gradModel(
       {
         bad: {
           params: ['f'],
-          match: { op: 'D', args: ['f'], wrt: 'x' },
-          body: { op: '+', args: [{ op: 'D', args: ['f'], wrt: 'x' }, 'f'] },
+          match: { op: 'grad', args: ['f'], dim: 'x' },
+          body: { op: '+', args: [{ op: 'grad', args: ['f'], dim: 'x' }, 'f'] },
         },
       },
-      { op: 'D', args: ['c'], wrt: 'x' },
+      { op: 'grad', args: ['c'], dim: 'x' },
     )
     expect(() => lowerExpressionTemplates(file)).toThrow(/rewrite_rule_nonterminating/)
     try {
@@ -425,24 +425,24 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       models: {
         M: {
           expression_templates: {
-            d_x: {
+            grad_x: {
               params: ['f'],
-              match: { op: 'D', args: ['f'], wrt: 'x' },
+              match: { op: 'grad', args: ['f'], dim: 'x' },
               body: { op: 'makearray', args: ['f'] },
             },
           },
           equations: [
             // Matches despite carrying an extra field absent from the pattern.
-            { lhs: 'p', rhs: { op: 'D', args: ['c'], wrt: 'x', note: 'keep' } },
-            // Does not match (wrt differs) — left untouched.
-            { lhs: 'q', rhs: { op: 'D', args: ['c'], wrt: 'y' } },
+            { lhs: 'p', rhs: { op: 'grad', args: ['c'], dim: 'x', note: 'keep' } },
+            // Does not match (dim differs) — left untouched.
+            { lhs: 'q', rhs: { op: 'grad', args: ['c'], dim: 'y' } },
           ],
         },
       },
     }
     const out = lowerExpressionTemplates(file) as any
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'makearray', args: ['c'] })
-    expect(out.models.M.equations[1].rhs).toEqual({ op: 'D', args: ['c'], wrt: 'y' })
+    expect(out.models.M.equations[1].rhs).toEqual({ op: 'grad', args: ['c'], dim: 'y' })
   })
 
   it('accepts the `match` field through loadString() and auto-applies the rule', () => {
@@ -528,7 +528,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
   })
 
   it('nested-derivative fixpoint converges across passes', () => {
-    // lap_xy -> D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D ->
+    // laplacian -> D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D ->
     // stencil (pass 2). A produced body is re-scanned only in a subsequent pass.
     const out = lowerFixture('fixpoint_nested_deriv')
     expect(out.models.m.variables).toEqual(expandedVars('fixpoint_nested_deriv'))
@@ -541,7 +541,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
       ],
     })
     const exprJson = JSON.stringify(definingRhs(out.models.m, 'lap'))
-    expect(exprJson).not.toContain('lap_xy')
+    expect(exprJson).not.toContain('laplacian')
     expect(exprJson).not.toContain('"op":"D"')
   })
 
@@ -578,6 +578,19 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     expect((err as UnloweredOperatorError).code).toBe('unlowered_operator')
     expect(String(err)).toMatch(/unlowered_operator/)
     expect((err as UnloweredOperatorError).code).toBe(goldenError('unlowered_operator').code)
+  })
+
+  it('grad/div/laplacian also gate as `unlowered_operator` at evaluation', () => {
+    for (const op of ['grad', 'div', 'laplacian']) {
+      let err: unknown
+      try {
+        evaluateExpression({ op, args: ['x'], dim: 'x' } as any, new Map([['x', 1.0]]))
+      } catch (e) {
+        err = e
+      }
+      expect((err as UnloweredOperatorError).code).toBe('unlowered_operator')
+      expect(String(err)).toContain(op)
+    }
   })
 
   it('attrs on a rewrite-target op bind as scalar metavariables', () => {
@@ -931,7 +944,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
   const lower = (name: string) => expandDocument(lowerExpressionTemplates(fixture(name))) as any
 
   it('constrained_match_scope: fires only where the shape constraint holds', () => {
-    // D(F_edge, wrt: x) rewritten (F over [edges]); D(F_cell, wrt: x) constraint-excluded,
+    // div(F_edge) rewritten (F over [edges]); div(F_cell) constraint-excluded,
     // survives as the un-lowered rewrite-target (loading is permissive).
     const out = lower('constrained_match_scope')
     expect(out.models).toEqual(golden('constrained_match_scope').models)
@@ -939,11 +952,11 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
       op: '*',
       args: ['inv_area', 'F_edge'],
     })
-    expect(definingRhs(out.models.m, 'div_cell')).toEqual({ op: 'D', args: ['F_cell'], wrt: 'x' })
+    expect(definingRhs(out.models.m, 'div_cell')).toEqual({ op: 'div', args: ['F_cell'] })
   })
 
   it('two_div_two_meshes: identical patterns routed by shape at equal priority', () => {
-    // Without `where`, the declaration-order tie-break would send BOTH fv_div
+    // Without `where`, the declaration-order tie-break would send BOTH div
     // nodes to fv_div_mesh_a. Constraints filter before selection, so each div
     // lowers by its own mesh's rule.
     const out = lower('two_div_two_meshes')
@@ -986,7 +999,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
   // --- non-fixture unit pins (match-pattern-scoping-constraints RFC §10.6) ---
 
   it('constraints filter BEFORE priority (excluded high-priority rule never shadows)', () => {
-    // A high-priority (100) shape-constrained rule is excluded at D(F_cell, wrt: x)
+    // A high-priority (100) shape-constrained rule is excluded at div(F_cell)
     // because F_cell is not over [edges]; a low-priority (0) generic rule must
     // still fire there. Pins that `where` is part of eligibility, not selection.
     const src = {
@@ -1003,20 +1016,20 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
           // constraint is still judged against F_cell's DECLARED shape.
           equations: [
             { lhs: { op: 'D', args: ['F_cell'], wrt: 't' }, rhs: 0.0 },
-            { lhs: 'd', rhs: { op: 'D', args: ['F_cell'], wrt: 'x' } },
+            { lhs: 'd', rhs: { op: 'div', args: ['F_cell'] } },
           ],
           expression_templates: {
             hi_edges_only: {
               params: ['F'],
               priority: 100,
-              match: { op: 'D', args: ['F'], wrt: 'x' },
+              match: { op: 'div', args: ['F'] },
               where: { F: { shape: ['edges'] } },
               body: { op: 'edge_div', args: ['F'] },
             },
             lo_generic: {
               params: ['F'],
               priority: 0,
-              match: { op: 'D', args: ['F'], wrt: 'x' },
+              match: { op: 'div', args: ['F'] },
               body: { op: 'generic_div', args: ['F'] },
             },
           },
@@ -1043,12 +1056,12 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
           },
           equations: [
             { lhs: { op: 'D', args: ['F'], wrt: 't' }, rhs: 0.0 },
-            { lhs: 'd', rhs: { op: 'D', args: [{ op: '*', args: [2, 'F'] }], wrt: 'x' } },
+            { lhs: 'd', rhs: { op: 'div', args: [{ op: '*', args: [2, 'F'] }] } },
           ],
           expression_templates: {
             fv: {
               params: ['F'],
-              match: { op: 'D', args: ['F'], wrt: 'x' },
+              match: { op: 'div', args: ['F'] },
               where: { F: { shape: ['edges'] } },
               body: { op: '*', args: ['inv_area', 'F'] },
             },
@@ -1057,11 +1070,10 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
       },
     }
     const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
-    // The D of a compound flux is NOT rewritten (bare-var-only judgment).
+    // The div of a compound flux is NOT rewritten (bare-var-only judgment).
     expect(definingRhs(out.models.m, 'd')).toEqual({
-      op: 'D',
+      op: 'div',
       args: [{ op: '*', args: [2, 'F'] }],
-      wrt: 'x',
     })
   })
 

@@ -127,7 +127,7 @@ describe('the body is the left fold of the contributions (§4.7.5 invariant)', (
         expect(result.discriminating, `${show(eq.lhs)} cannot tell sum orders apart`).toBe(true)
       }
     }
-    // Out of the scalar evaluator's reach entirely: a spatial `D` with no
+    // Out of the scalar evaluator's reach entirely: `grad` with no
     // discretization, and the lifted `faq` over a grid.
     if (!SCALAR_UNREACHABLE.has(fixture)) expect(evaluated).toBeGreaterThan(0)
   })

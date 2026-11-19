@@ -43,6 +43,7 @@ from .error_handling import (
     AMBIGUOUS_SUBSYSTEM_REF,
     DATA_SOURCE_MERGE_CONFLICT,
     DEPRECATED_OP,
+    DEPRECATED_SYSTEM_KIND,
     ELEMENT_TYPE_UNCARRIED,
     REMOVED_OP,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
@@ -177,9 +178,6 @@ def _count_top_level_systems(parsed) -> int:
 # as an `update`, and turns `data_loaders` into the document-scoped
 # `data_sources` ingest registry, which is not a component. None of that is
 # expressible in a 0.x reader, and none of the 0.x spellings survive.
-#
-# 2.4.0 removes the `grad`, `div` and `laplacian` ops (`removed_op` at the wire
-# boundary, whatever `esm` a document declares) and nothing else.
 #
 # Prior steps, for the record: 0.9.0 made template references survive
 # parse->emit (§9.6.4); 0.8.0 replaced the bespoke spatial-grid / discretization
@@ -346,10 +344,10 @@ def _parse_expression(
         # canonical encoding round-trips the document as written rather than
         # materializing a field the author did not spell.
         #
-        # Open-tier ops are the same: `dim` is an OPTIONAL axis-naming scalar
-        # field (like `wrt`), so `integral` or a user op is NOT forced to supply
-        # one — they are ordinary rewrite-target ops with no privilege, and the
-        # schema mandates no `dim` per op (esm-spec §4.2 / §4.9.1).
+        # The open-tier sugar ops are the same: `dim` is an OPTIONAL axis-naming
+        # scalar field (like `wrt`), so `grad`/`div`/`laplacian` are NOT forced to
+        # supply one — they are ordinary rewrite-target ops with no privilege, and
+        # the schema mandates no `dim` per op (esm-spec §4.2 / §4.9.1).
         if op == "call" and kwargs["handler_id"] is None:
             raise ParseError("Operator 'call' requires 'handler_id' field to be specified")
         if op == "const" and "value" not in expr_data:
@@ -3534,14 +3532,13 @@ def _warn_deprecated_records_per_sample(file: EsmFile) -> None:
     )
 
 
-#: Ops removed at esm 2.0.0 and 2.4.0, each with the version that removed it,
-#: rejected BY NAME with ``removed_op``. Each is a well-formed identifier, so the
-#: open rewrite-target tier (esm-spec §4.2) would otherwise admit it and the
-#: document would fail much later as ``unlowered_operator``. (``arrayop``,
-#: removed at 0.8.0, has its own message in :func:`reject_removed_constructs`.)
-_REMOVED_OPS_SINCE_2_0_0: dict[str, str] = {
-    op: version for op, version in op_registry.REMOVED_OPS.items() if version in ("2.0.0", "2.4.0")
-}
+#: Ops removed at esm 2.0.0, rejected BY NAME with ``removed_op``. Each is a
+#: well-formed identifier, so the open rewrite-target tier (esm-spec §4.2) would
+#: otherwise admit it and the document would fail much later as
+#: ``unlowered_operator``.
+_REMOVED_OPS_2_0_0: frozenset[str] = frozenset(
+    op for op, version in op_registry.REMOVED_OPS.items() if version == "2.0.0"
+)
 
 #: The codemod a ``removed_op`` message points at.
 _CODEMOD_HINT = (
@@ -3553,12 +3550,12 @@ _CODEMOD_HINT = (
 def _find_removed(node: object, at: str = "") -> tuple[str, str, str] | None:
     """The first removed construct in ``node``, as ``(kind, name, path)``:
     ``("op", <op>, <path>)`` for a node whose ``op`` is in
-    :data:`_REMOVED_OPS_SINCE_2_0_0`, ``("field", "function_tables", <path>)`` for a
+    :data:`_REMOVED_OPS_2_0_0`, ``("field", "function_tables", <path>)`` for a
     ``function_tables`` key (top-level or on a component). ``None`` if there is
     none."""
     if isinstance(node, dict):
         op = node.get("op")
-        if isinstance(op, str) and op in _REMOVED_OPS_SINCE_2_0_0:
+        if isinstance(op, str) and op in _REMOVED_OPS_2_0_0:
             return ("op", op, at)
         if "function_tables" in node:
             return ("field", "function_tables", f"{at}/function_tables")
@@ -3577,10 +3574,9 @@ def _find_removed(node: object, at: str = "") -> tuple[str, str, str] | None:
 def reject_removed_constructs(data: object) -> None:
     """Raise ``removed_op`` (a :class:`ParseError` carrying ``code``) for the
     first op or field ``data`` spells that the format has removed: ``arrayop``
-    (esm 0.8.0); the 2.0.0 ops in :data:`_REMOVED_OPS_SINCE_2_0_0` and the
-    ``function_tables`` block (esm 2.0.0); ``grad``, ``div`` and ``laplacian``
-    (esm 2.4.0). The message names the op or field and its node path, and
-    whatever ``esm`` the document declares, it is refused."""
+    (esm 0.8.0); the ops in :data:`_REMOVED_OPS_2_0_0` and the
+    ``function_tables`` block (esm 2.0.0). The message names the op or field
+    and its node path."""
     path = _find_op(data, "arrayop")
     if path is not None:
         err = ParseError(
@@ -3594,30 +3590,10 @@ def reject_removed_constructs(data: object) -> None:
     if hit is None:
         return
     kind, name, at = hit
-    err = ParseError(removed_construct_message(kind, name, at))
+    what = f'\'"op": "{name}"\'' if kind == "op" else f"the `{name}` block"
+    err = ParseError(f"removed_op at {at or '/'}: {what} was removed at esm 2.0.0. {_CODEMOD_HINT}")
     err.code = REMOVED_OP
     raise err
-
-
-#: How a ``removed_op`` message for a 2.4.0 removal says what to write instead.
-#: There is no codemod for these: the replacement depends on the axes.
-_SPATIAL_OP_HINT = (
-    "write the derivative with spatial `D`, one `D` per axis (`grad(f, dim: x)` is "
-    "`D(f, wrt: x)`), or with a user op lowered by a rewrite rule "
-    '(MIGRATION.md, "esm 2.4.0").'
-)
-
-
-def removed_construct_message(kind: str, name: str, at: str) -> str:
-    """The ``removed_op`` message for one removed construct found by
-    :func:`_find_removed` (``kind`` ``"op"`` or ``"field"``). A 2.0.0 removal
-    points at the 2.0.0 codemod; a 2.4.0 removal (``grad``, ``div``,
-    ``laplacian``) points at spatial ``D`` and MIGRATION.md, not the codemod."""
-    what = f'\'"op": "{name}"\'' if kind == "op" else f"the `{name}` block"
-    version = _REMOVED_OPS_SINCE_2_0_0.get(name, "2.0.0") if kind == "op" else "2.0.0"
-    if version == "2.4.0":
-        return f"removed_op at {at or '/'}: {what} was removed at esm 2.4.0; {_SPATIAL_OP_HINT}"
-    return f"removed_op at {at or '/'}: {what} was removed at esm 2.0.0. {_CODEMOD_HINT}"
 
 
 def _rewrite_deprecated(node: object, at: str, sites: list[str]) -> None:
@@ -3677,6 +3653,42 @@ def _warn_deprecated_ops(sites: list[str]) -> None:
     )
 
 
+def _pde_system_kind_sites(models: object, at: str, sites: list[str]) -> None:
+    if not isinstance(models, dict):
+        return
+    for name, model in models.items():
+        if not isinstance(model, dict):
+            continue
+        here = f"{at}/{_pointer_token(name)}"
+        if model.get("system_kind") == "pde":
+            sites.append(f"{here}/system_kind")
+        _pde_system_kind_sites(model.get("subsystems"), f"{here}/subsystems", sites)
+
+
+def deprecated_system_kind_sites(data: object) -> list[str]:
+    """The JSON pointer of every model ``system_kind`` field in ``data`` that
+    declares ``"pde"`` (deprecated at esm 2.4.0), in document order."""
+    sites: list[str] = []
+    if isinstance(data, dict):
+        _pde_system_kind_sites(data.get("models"), "/models", sites)
+    return sites
+
+
+def _warn_deprecated_system_kind(sites: list[str]) -> None:
+    """The one ``deprecated_system_kind`` warning for a document, naming every
+    model that declares ``system_kind: "pde"``. The field is kept as written;
+    classification treats it as absent."""
+    if not sites:
+        return
+    warnings.warn(
+        f'{DEPRECATED_SYSTEM_KIND}: the system_kind value "pde" is deprecated '
+        "(esm 2.4.0) and ignored; the model is treated as its derived kind "
+        "(esm-spec §6.3.1). Declared at: " + ", ".join(sites) + ".",
+        EsmDeprecationWarning,
+        stacklevel=4,
+    )
+
+
 def prepare_document_ops(data: object) -> None:
     """The wire boundary for expression-node ``op`` spellings, applied to EVERY
     document — root, ``{ref}``-loaded child, template library, coupling library.
@@ -3688,8 +3700,7 @@ def prepare_document_ops(data: object) -> None:
        2.0.0 the ``aggregate`` alias of ``faq``, ``fn``, ``table_lookup``,
        ``skolem``, ``rank``,
        ``intersect_polygon``, ``polygon_intersection_area``, ``argmin``,
-       ``argmax`` and the ``function_tables`` block, and at esm 2.4.0
-       ``grad``, ``div`` and ``laplacian``. Each op is a well-formed
+       ``argmax`` and the ``function_tables`` block. Each op is a well-formed
        identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
        rewrite-target op: the document would load silently and fail much later
        as ``unlowered_operator``, or never.
@@ -3700,10 +3711,14 @@ def prepare_document_ops(data: object) -> None:
     3. The ``faq`` version gate — ``faq`` arrives at esm 1.1.0 (esm-spec
        §2.2.4, same rule as the top-level ``solver`` block).
 
+    It also issues the one ``deprecated_system_kind`` warning for a document
+    whose models declare ``system_kind: "pde"`` (deprecated at esm 2.4.0).
+
     See ``docs/content/rfcs/faq-node-rename.md``.
     """
     reject_removed_constructs(data)
     _warn_deprecated_ops(rewrite_deprecated_ops(data))
+    _warn_deprecated_system_kind(deprecated_system_kind_sites(data))
     faq_at = _find_op(data, "faq")
     if faq_at is not None and _version_below_v11(data):
         declared = data.get("esm") if isinstance(data, dict) else None

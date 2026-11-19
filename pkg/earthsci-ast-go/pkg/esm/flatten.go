@@ -581,7 +581,7 @@ func (f *FlattenedSystem) InitialValues() map[string]float64 {
 }
 
 // SystemKind is the flattened system's derived MTK system kind (esm-spec
-// §6.3.1): "sde" / "pde" / "nonlinear" / "ode", tested in that order.
+// §6.3.1): "sde" / "nonlinear" / "ode", tested in that order.
 //
 // It is available on the flattened form precisely because BrownianParameters
 // survives flattening — the derivation's first row is "any parameter in

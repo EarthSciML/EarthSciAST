@@ -38,19 +38,16 @@ package's conformance suite runs it over the whole corpus.
 ============================  ==========================================
 
 :func:`system_kind` derives what the optional ``system_kind`` FIELD declares,
-by a four-row table tested IN ORDER, first match wins (esm-spec §6.3.1):
+by a three-row table tested IN ORDER, first match wins (esm-spec §6.3.1):
 
 1. any Brownian parameter → ``"sde"``;
-2. any equation contains a **spatial derivative** → ``"pde"``;
-3. no time-derivative equation at all → ``"nonlinear"``;
-4. otherwise → ``"ode"``.
+2. no time-derivative equation at all → ``"nonlinear"``;
+3. otherwise → ``"ode"``.
 
-The order is normative. ``pde`` precedes ``nonlinear`` so a steady-state PDE
-(``D(D(phi, wrt: x), wrt: x) ~ f``) is a PDE and not a nonlinear system;
-``sde`` precedes ``pde`` because there is no SPDESystem constructor to select. A
-spatial derivative is a ``D`` whose ``wrt`` is present and is not ``"t"``. (The
-``grad`` / ``div`` / ``laplacian`` ops that once also counted were removed at
-esm 2.4.0.)
+Spatial derivatives do not affect the kind: there is no ``"pde"`` kind any
+more (esm 2.4.0). A model that DECLARES ``system_kind: "pde"`` loads with a
+``deprecated_system_kind`` warning, and the declared value counts as absent
+(:func:`declared_system_kind` returns ``None`` for it).
 
 Dual representation
 ===================
@@ -98,7 +95,11 @@ __all__ = [
 
 
 #: The closed set of derived system kinds (esm-spec §6.3).
-SYSTEM_KINDS = ("ode", "nonlinear", "sde", "pde")
+SYSTEM_KINDS = ("ode", "nonlinear", "sde")
+
+#: The declared ``system_kind`` value deprecated at esm 2.4.0. It is accepted
+#: on load (with a ``deprecated_system_kind`` warning) and treated as absent.
+DEPRECATED_SYSTEM_KIND_VALUE = "pde"
 
 #: The independent variable a time derivative is taken with respect to. ``D``
 #: with no ``wrt`` at all is read as a time derivative (the common shorthand).
@@ -253,15 +254,6 @@ def _is_time_derivative(node: Any) -> bool:
         return False
     wrt = _slot(node, "wrt", "wrt")
     return wrt is None or wrt == _TIME
-
-
-def _is_spatial_derivative(node: Any) -> bool:
-    """A spatial differential operator: a ``D`` whose ``wrt`` is PRESENT and is
-    not ``"t"`` (esm-spec §6.3.1)."""
-    if _op(node) != "D":
-        return False
-    wrt = _slot(node, "wrt", "wrt")
-    return wrt is not None and wrt != _TIME
 
 
 def _derivative_targets(lhs: Any) -> set[str]:
@@ -487,34 +479,22 @@ def _has_time_derivative_equation(model: Any) -> bool:
     return any(_derivative_targets(_lhs(eq)) for eq in _equations(model))
 
 
-def _has_spatial_derivative(model: Any) -> bool:
-    """True if ANY equation contains a spatial derivative anywhere in its LHS or
-    RHS, descending every Expression child."""
-    for equation in _equations(model):
-        for side in (_lhs(equation), _rhs(equation)):
-            if any(_is_spatial_derivative(node) for node in walk(side)):
-                return True
-    return False
-
-
 def system_kind(model: Any) -> str:
     """Derive the model's MTK system kind (esm-spec §6.3.1).
 
-    Four rows tested IN ORDER, first match wins — the order is normative:
+    Three rows tested IN ORDER, first match wins — the order is normative:
 
-    1. any Brownian parameter → ``"sde"`` (there is no SPDESystem, so this wins
-       even over a spatial derivative);
-    2. any spatial derivative in any equation → ``"pde"``;
-    3. no time-derivative equation at all → ``"nonlinear"``;
-    4. otherwise → ``"ode"``.
+    1. any Brownian parameter → ``"sde"``;
+    2. no time-derivative equation at all → ``"nonlinear"``;
+    3. otherwise → ``"ode"``.
 
-    A binding uses this derivation whenever the ``system_kind`` FIELD is absent,
-    and reports ``system_kind_mismatch`` when a present field contradicts it.
+    Spatial derivatives do not affect the kind (there is no ``"pde"`` kind).
+    A binding uses this derivation whenever the ``system_kind`` FIELD is absent
+    (or declares the deprecated ``"pde"``), and reports ``system_kind_mismatch``
+    when a present field contradicts it.
     """
     if brownian_parameters(model):
         return "sde"
-    if _has_spatial_derivative(model):
-        return "pde"
     if not _has_time_derivative_equation(model):
         return "nonlinear"
     return "ode"
@@ -522,9 +502,14 @@ def system_kind(model: Any) -> str:
 
 def declared_system_kind(model: Any) -> str | None:
     """The model's explicit ``system_kind`` field, or None when absent. Compare
-    against :func:`system_kind` to detect ``system_kind_mismatch``."""
+    against :func:`system_kind` to detect ``system_kind_mismatch``.
+
+    The deprecated value ``"pde"`` counts as absent (esm 2.4.0): it returns
+    None, so it never reports a mismatch and never overrides the derivation."""
     declared = _field(model, "system_kind")
-    return declared if isinstance(declared, str) else None
+    if not isinstance(declared, str) or declared == DEPRECATED_SYSTEM_KIND_VALUE:
+        return None
+    return declared
 
 
 def effective_system_kind(model: Any) -> str:
