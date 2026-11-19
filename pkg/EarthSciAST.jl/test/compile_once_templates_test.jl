@@ -260,7 +260,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             # are loop-invariant subtrees — hoisted whole into the parent spine
             # (strictly better than a sub-kernel), exactly as the fused walk
             # treats them.
-            @test cfast.variants == 1
+            # Now calls: no expansion sub-kernel, and at most one compiled
+            # body per template.
+            @test cfast.variants == 0
+            @test 1 <= cfast.targets <= 3
         end
     end
 

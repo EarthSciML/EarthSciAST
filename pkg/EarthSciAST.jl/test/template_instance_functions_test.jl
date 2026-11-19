@@ -177,7 +177,9 @@ end
                 @test fast[k] == interp[k]
                 @test sum(abs, fast[k]) > 0
             end
-            nfns[length(tracers)] = get(counts, :cg_instance_fn, 0)
+            # The references are template calls: one emitted function per
+            # compiled body.
+            nfns[length(tracers)] = get(counts, :cg_call_fn, 0)
             @test nfns[length(tracers)] >= 1
         end
     end
