@@ -2,6 +2,44 @@
 
 **EarthSciML Abstract Syntax Tree Format — Version 2.3.0**
 
+> **Proposed for 2.4.0 (not additive: the behaviour differences are listed below).** The
+> version line above, and `esm-schema.json`, stay at 2.3.0 until the release that adopts
+> this change bumps both together. No step of loading or flattening inlines a template body. A firing
+> `match` rule writes a reference to itself instead of its body (§9.6.3 constraint 7); rules
+> apply inside template bodies once per template instance, replacing eager expansion
+> (§9.6.4 rule 3); mounted leaves keep their references (§9.6.4 rule 1); and the elementwise
+> lift keeps references, reading their bindings at the cell (§9.6.11). For a document in which
+> no match spans a template boundary, `Expand(load(f))` is the same tree as under 2.3.0. This
+> change's breaking differences are:
+>
+> 1. **A pattern no longer matches across a reference to a template whose body holds a
+>    rewrite-target op.** 2.3.0 expanded such a reference before the fixpoint, so a compound
+>    pattern could match a node assembled partly from the call site and partly from the body;
+>    now the reference is a leaf (§9.6.4 rule 4, case c).
+> 2. **A compound pattern no longer matches around another rule's replacement**, because the
+>    replacement is now a reference (§9.6.4 rule 4, case a).
+> 3. **Inside a template body, a pattern sees a parameter only through its kind and declared
+>    shape**; a structured or ground pattern node at a parameter no longer matches what the
+>    call site bound (§9.6.4 rule 4, case b).
+> 4. **The reference-preserving (emitted) form changes**: a lowered node is a reference to
+>    its rule; a referenced rule is emitted as a match-less entry under its name; rewritten
+>    template bodies replace authored ones, and the registry gains `<name>.variant<k>` and
+>    `<name>.cellwise<k>` entries. A consumer that reads a loaded or emitted document
+>    expecting inlined stencils (e.g. one that counts zero `apply_expression_template` nodes)
+>    must expand first.
+> 5. **The flattened system's form changes**: elementwise-lifted equations and mounted leaves
+>    keep references; a structural `D` inside a template body is resolved in the body, adding
+>    `p_dt` parameters and bindings and `<name>.ddt` derivative entries; the merged registry
+>    carries them all; `Expand` of the flattened system is unchanged.
+>
+> A template body holding a structural time derivative is still accepted, and resolves to
+> exactly what its expansion did (§9.6.4 rule 3).
+>
+> Differences 1–3 change which rules fire, and so what a document means, wherever they apply;
+> none applies anywhere in the 2026-11 corpus of real models. These semantics are not
+> version-switched: a loader implementing them applies them to every document it accepts, as
+> the reference-preserving load of 0.9.0 did.
+
 > **2.3.0 is additive.** The JSON form does not change. The word spellings
 > `neg` and `pow` are deprecated: a loader rewrites them to unary `-` and `^`
 > and warns `deprecated_op` (§4.2, "Deprecated ops"). The canonical form writes
@@ -5017,7 +5055,7 @@ The `enums` top-level block declares file-local symbol → integer mappings used
 - Within a single enum, integer values MUST be unique — `0` is a value like any other, so two symbols MUST NOT both map to `0`. Bindings MUST reject an enum in which two symbols map to the same integer at load time with diagnostic `enum_duplicate_value`, whether or not any `enum` op names either symbol. Across enums, values MAY collide (each enum defines its own namespace).
 - Two `.esm` files may declare an enum of the same name with different mappings: enums are file-local and never merged across files. A component mounted by a §4.7 `ref` resolves its `enum` ops against the enums declared in the *referenced* file, not the enclosing one (next bullet).
 - **Mounted files (§4.7).** An `enum` op in a file mounted at either mount form — a `subsystems.<k>` `{ref}` or a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` — resolves against **the mounted file's** `enums` block. It is lowered at the mount edge, once the mounted document has resolved in its own scope (§4.7 "Edge pipeline", step 1; its own nested mounts were lowered at their own edges) and before its component splices in. The mounted file's `enums` block does not merge into the mounting document. So two mounted files that declare the same enum name with different mappings each keep their own values; a mounting document that declares an enum of the same name, with the same or a different mapping, changes neither; and the mounting document's own `enum` ops resolve against its own block only, so naming an enum that only a mounted file declares is `unknown_enum`. An op spelled by one of a template's `params` is decided by the call that binds that parameter, as at a template-library import edge (next bullet); a mounting document cannot call a mounted file's component-local templates, so every such call is the mounted file's own, and the edge expands it before lowering. The op therefore resolves against the mounted file's block too, whether or not that file carries §9.7 import machinery. The one exception is the top-level `reaction_systems.<k>` form, which only Julia mounts and which is still the raw pre-pass "Two mount forms, one mechanism" (§4.7) names as the remaining gap: it defers the mounted reaction system's template resolution to the mounting document, so an op spelled by a parameter there still resolves against the mounting document's block, and closes when that gap does. A mounted file naming an enum or symbol it does not declare is `unknown_enum` / `unknown_enum_symbol` at the edge, exactly as when that file loads on its own. Fixtures: `tests/conformance/mount_enums/`.
-- **Template libraries (§9.7).** An `enum` op written in a template-library file's template `body` resolves against **that library's** `enums` block, never the importer's. It is lowered at the import edge, while the library resolves in its own scope (§9.7.7 edge pipeline, step 1), so the templates reach the importer with the op already a `const` (§9.7.5). An importer therefore needs no copy of a library's enums, and an importer that declares an enum of the same name, with the same or a different mapping, does not change what the library's templates compute. An op whose enum-name or symbol argument is spelled by one of the template's `params` is decided by the file that binds that parameter: parameter substitution is position-blind (§9.6.3 constraint 5), so the binding decides what the op spells. **The library's own calls resolve in the library.** When a library template body calls a template in the library's scope (its own or one it imports) and that call binds the parameter, the edge expands each such call to a template that can still produce an `enum` op (the eager expansion §9.6.4 rule 3 requires at load) and lowers the result against the library's block. **Only parameters the importer binds resolve in the importer.** An op still spelled with a parameter after that step (because the importer calls the template directly, or because the calling library template forwards one of its own `params` into the call) stays as written and resolves with the importing document's enums after expansion. An op whose arguments are not two strings is left to the document-wide pass. A library body naming an enum or symbol the library does not declare, directly or through a symbol it binds in its own call, is `unknown_enum` / `unknown_enum_symbol` at load, reported against the library and the template, even when the importer declares that name.
+- **Template libraries (§9.7).** An `enum` op written in a template-library file's template `body` resolves against **that library's** `enums` block, never the importer's. It is lowered at the import edge, while the library resolves in its own scope (§9.7.7 edge pipeline, step 1), so the templates reach the importer with the op already a `const` (§9.7.5). An importer therefore needs no copy of a library's enums, and an importer that declares an enum of the same name, with the same or a different mapping, does not change what the library's templates compute. An op whose enum-name or symbol argument is spelled by one of the template's `params` is decided by the file that binds that parameter: parameter substitution is position-blind (§9.6.3 constraint 5), so the binding decides what the op spells. **The library's own calls resolve in the library.** When a library template body calls a template in the library's scope (its own or one it imports) and that call binds the parameter, the edge lowers the called template's body against the library's block for that call's instance (§9.6.4 rule 3: the instance includes the symbols the call binds), without expanding the call. **Only parameters the importer binds resolve in the importer.** An op still spelled with a parameter after that step (because the importer calls the template directly, or because the calling library template forwards one of its own `params` into the call) stays as written and resolves with the importing document's enums after expansion. An op whose arguments are not two strings is left to the document-wide pass. A library body naming an enum or symbol the library does not declare, directly or through a symbol it binds in its own call, is `unknown_enum` / `unknown_enum_symbol` at load, reported against the library and the template, even when the importer declares that name.
 
 **Lowering contract:**
 
@@ -5050,6 +5088,8 @@ An `expression_templates` entry is a **rewrite rule**: a set of metavariable `pa
 
 The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary rewrite rule** that lowers a rewrite-target op (a spatial `D` on a right-hand side, or the `grad`/`div`/`laplacian` sugar, §4.2) into a `faq` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
 
+**No step of this mechanism inlines a body.** A firing rule replaces the matched node with a *reference* to the rule, bound to what the match captured (§9.6.3 constraint 7); rules apply inside template bodies once per template instance, not by expanding references into the tree (§9.6.4 rule 3). A reference denotes its expansion (§9.6.4 rule 2), so what a document means is unchanged by this; what changes is that one discretization rule applied at many sites is one body, shared, in the loaded and the emitted document.
+
 #### 9.6.1 The `expression_templates` block
 
 `expression_templates` is declared **inside a single `model` or `reaction_system`**, or at the top level of a **template-library file** shared across components and files via `expression_template_imports` (§9.7). It is a JSON object whose keys are template names and whose values are rewrite-rule definitions:
@@ -5077,7 +5117,7 @@ Required fields:
 
 Optional fields:
 
-- `match`: a pattern Expression that makes the entry an **auto-applied rewrite rule**. Parameter names appearing as bare strings in `match` are wildcards: a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field (e.g. `dim`, `side`) binds to the matched literal. A **non-parameter** string in an operand/`args` position is a **literal**: it matches only that exact bare variable reference (numbers and booleans likewise match literally; arrays match elementwise at equal length; an object pattern constrains exactly the fields it names, extra node fields are permitted). A ground `args` entry is the sanctioned **per-variable selector** — `{"op": "D", "args": ["u"], "wrt": "x"}` with `u` not in `params` fires only on the derivative of `u`, so mixed schemes on one axis (upwind for `u`, central for `v`) are two rules with ground patterns, ranked by explicit `priority` (§9.6.8). The rule fires wherever `match` structurally matches a node and its `where` constraints (below), if any, are satisfied. When `match` is absent the entry is applied only by explicit `apply_expression_template` invocation (§9.6.2).
+- `match`: a pattern Expression that makes the entry an **auto-applied rewrite rule**. Parameter names appearing as bare strings in `match` are wildcards: a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field (e.g. `dim`, `side`) binds to the matched literal. A **non-parameter** string in an operand/`args` position is a **literal**: it matches only that exact bare variable reference (numbers and booleans likewise match literally; arrays match elementwise at equal length; an object pattern constrains exactly the fields it names, extra node fields are permitted). A ground `args` entry is the sanctioned **per-variable selector** — `{"op": "D", "args": ["u"], "wrt": "x"}` with `u` not in `params` fires only on the derivative of `u`, so mixed schemes on one axis (upwind for `u`, central for `v`) are two rules with ground patterns, ranked by explicit `priority` (§9.6.8). The rule fires wherever `match` structurally matches a node and its `where` constraints (below), if any, are satisfied — in a component's expression positions and inside the bodies of the templates they reference (§9.6.4 rule 3) — and replaces the node with a reference to itself (§9.6.3 constraint 7). When `match` is absent the entry is applied only by explicit `apply_expression_template` invocation (§9.6.2).
 
 - `where`: **static match-scoping constraints** on the captured parameters — admissible only alongside `match` (a `where` on a match-less template is `apply_expression_template_invalid_declaration`). A JSON object whose keys are declared `params` (a non-param key is `apply_expression_template_invalid_declaration`) and whose values are constraint objects. The v1 constraint vocabulary is exactly one kind:
   - `shape`: a non-empty ordered array of index-set names. The constraint on parameter `p` is satisfied iff the sub-AST bound to `p` by the structural match is a **bare variable-reference string** naming a declaration in the enclosing component whose declared `shape` (§6, the ordered list of index-set names) equals the constraint's list exactly — same names, same order. Anything else fails the constraint: a compound sub-AST, a numeric literal, a scalar-field-bound literal, a scoped (`System.var`) reference, an undeclared name, a scalar (shapeless) variable, or a parameter that never bound. The judgment is deliberately **syntactic and conservative** — no shape inference over compound expressions — so eligibility depends only on *declarations* visible at lowering time, never on runtime values, and the §9.6.3 determinism contract (priority order, declaration-order tie-break, bounded fixpoint, byte-identical results) is untouched.
@@ -5103,18 +5143,19 @@ Reactions and any other expression positions within the same component reference
 
 Required fields:
 
-- `name`: id of an `expression_templates` entry declared in the same component or imported into it via `expression_template_imports` (§9.7.2). Only match-less entries are invocable by name; a `match` rule is a rewrite step, not a named fragment.
+- `name`: id of an `expression_templates` entry declared in the same component or imported into it via `expression_template_imports` (§9.7.2). Only match-less entries are invocable by name; a `match` rule is a rewrite step, not a named fragment. The one exception is the reference the §9.6.3 engine writes when a rule fires (§9.6.3 constraint 7): it names the rule. Emit materializes such a rule as a match-less entry (§9.6.4 rule 5), so a reloaded document again names only match-less entries.
 - `bindings`: object mapping each parameter in the referenced template's `params` to a value. Values MAY be numeric literals, variable name references, or arbitrary Expression ASTs (full subtrees). An array bound to a parameter the body reads as a scalar makes the application elementwise (§9.6.11).
 - `args`: MUST be an empty array.
 
 #### 9.6.3 Constraints (normative)
 
 1. **AST → AST only.** Rules take Expression args and produce an Expression. No string interpolation, no schema-level substitution, no metaprogramming.
-2. **Outermost-first, priority-ordered, bounded fixpoint.** Rule application is a sequence of **passes**; one pass is a single **pre-order (outermost-first)** walk of the expression tree. At each node visited, the engine considers every `match` rule whose pattern structurally matches that node **and whose `where` constraints (§9.6.1), if any, are satisfied by the resulting bindings** — constraint filtering is part of match *eligibility* and therefore happens **before** the priority/declaration-order selection: a constraint-excluded rule is a non-matching rule at this node, exactly as if its pattern had failed structurally (in particular, a high-`priority` constraint-excluded rule never shadows a lower-priority rule that does fire). From the eligible set the engine selects the winner **deterministically**: highest `priority` (integer, default `0`); ties broken by **declaration order** (earliest wins). Constraint evaluation reads only declared variable shapes (§9.6.1) — static, load-time information — so eligibility, and with it the fixpoint, remains byte-identical across bindings. The winner's `body` (instantiated by pure substitution, constraint 5) replaces the node, and the engine does **not** descend into the freshly-produced body during the current pass; if no rule matches a node, the walk descends into its children. Passes repeat until a pass performs **zero** rewrites (the fixpoint) or until `MAX_REWRITE_PASSES = 64` passes have run without converging, in which case the file is rejected with diagnostic `rewrite_rule_nonterminating` (naming the last-rewritten node). The pass bound is the authoritative termination guard — a self-reintroducing rule simply fails to converge. "Declaration order" is the **effective sequence** of §9.7.4 (imports depth-first post-order, then local declarations); without imports it degenerates to file order as before. A `body`'s `apply_expression_template` references are checked at registration time (§9.7.3) as a statically-checked acyclic DAG — cyclic reference is `apply_expression_template_recursive_body`; from `esm: 0.9.0` bodies are **not** inlined, references denote their expansion (§9.6.4 rule 2), and the engine treats surviving (non-eager) references as leaves (§9.6.4 rule 4); `match` patterns MUST NOT contain `apply_expression_template` nodes. Because selection and traversal are fully deterministic, all five bindings MUST produce byte-identical fixpoints (or the same non-convergence rejection). **Compound precedence:** a rule matching a *compound* term (e.g. a Godunov Hamiltonian `sqrt(add(pow(D(u,x),2), pow(D(u,y),2)))`) declares a higher `priority` than the plain per-derivative rule, so under outermost-first selection it fires on the whole compound **before** the inner `D(u,x)` is lowered. The engine never *infers* specificity; precedence is the author's explicit, portable choice.
+2. **Outermost-first, priority-ordered, bounded fixpoint.** Rule application is a sequence of **passes**; one pass is a single **pre-order (outermost-first)** walk of the expression tree. At each node visited, the engine considers every `match` rule whose pattern structurally matches that node **and whose `where` constraints (§9.6.1), if any, are satisfied by the resulting bindings** — constraint filtering is part of match *eligibility* and therefore happens **before** the priority/declaration-order selection: a constraint-excluded rule is a non-matching rule at this node, exactly as if its pattern had failed structurally (in particular, a high-`priority` constraint-excluded rule never shadows a lower-priority rule that does fire). From the eligible set the engine selects the winner **deterministically**: highest `priority` (integer, default `0`); ties broken by **declaration order** (earliest wins). Constraint evaluation reads only declared variable shapes (§9.6.1) — static, load-time information — so eligibility, and with it the fixpoint, remains byte-identical across bindings. The node is replaced by a **reference to the winner** (constraint 7), and the engine does **not** descend into the freshly-produced reference during the current pass; if no rule matches a node, the walk descends into its children. At a reference — authored, or written by an earlier pass — no pattern matches inside it (§9.6.4 rule 4), but the walk descends into the values of its `bindings`, which are expressions of the call site, in the order of the referenced template's `params`; the referenced template's body is rewritten separately, once per instance (§9.6.4 rule 3). Passes repeat until a pass performs **zero** rewrites (the fixpoint) or until `MAX_REWRITE_PASSES = 64` passes have run without converging, in which case the file is rejected with diagnostic `rewrite_rule_nonterminating` (naming the last-rewritten node). The bound applies to the **rewrite depth** of §9.6.4 rule 3, which counts on through the bodies of referenced templates, so a rewrite inside a rule's body counts the passes that led to the rule firing. The pass bound is the authoritative termination guard — a self-reintroducing rule simply fails to converge. "Declaration order" is the **effective sequence** of §9.7.4 (imports depth-first post-order, then local declarations); without imports it degenerates to file order as before. A `body`'s `apply_expression_template` references are checked at registration time (§9.7.3) as a statically-checked acyclic DAG — cyclic reference is `apply_expression_template_recursive_body`; from `esm: 0.9.0` bodies are **not** inlined, references denote their expansion (§9.6.4 rule 2), and the engine treats references as leaves for matching (§9.6.4 rule 4); `match` patterns MUST NOT contain `apply_expression_template` nodes. Because selection and traversal are fully deterministic, all five bindings MUST produce byte-identical fixpoints (or the same non-convergence rejection). **Compound precedence:** a rule matching a *compound* term (e.g. a Godunov Hamiltonian `sqrt(add(pow(D(u,x),2), pow(D(u,y),2)))`) declares a higher `priority` than the plain per-derivative rule, so under outermost-first selection it fires on the whole compound **before** the inner `D(u,x)` is lowered. The engine never *infers* specificity; precedence is the author's explicit, portable choice.
 3. **Typed signatures (positional-by-name).** Bindings MUST cover every entry of the template's `params` exactly — no missing keys, no extras.
 4. **Component-local scope.** Templates declared inside — or imported into (§9.7.2) — one `model` / `reaction_system` are visible only within that component's expression positions.
-5. **Pure syntactic substitution.** Every parameter occurrence in `body` — a bare parameter-name string in a variable-reference position, or the string value of a scalar Expression-node field (§9.6.1) — is replaced by the bound argument's AST in source order. Substitution is position-blind and purely syntactic: a declared parameter name shadows any coincident field literal or index symbol inside `body`, no evaluation occurs, and no field-specific admissibility is checked at substitution time — a value substituted into a scalar-field position MUST be a literal admissible for that field, enforced by the §9.6.9 validation discharge, never by the substitution engine. Expansion MUST NOT depend on argument evaluation. Parameter substitution applies inside the `bindings` values of nested `apply_expression_template` references exactly as in any other Expression position; the `name` field is never a substitution site; params shadow as above. If instantiation introduces an eager reference into the tree (a rule body referencing a target-bearing template), the engine expands it immediately as part of the same rewrite (§9.6.4 rules 3–4).
-6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry `grad`/`div`/`laplacian`/spatial-`D` as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, and a right-hand-side structural `D` that §4.2's total-derivative resolution left standing (an operand outside its closed set, a name it cannot resolve, or a cyclic chain) — is rejected with diagnostic `unlowered_operator` (naming the op and node path). This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
+5. **Pure syntactic substitution.** Every parameter occurrence in `body` — a bare parameter-name string in a variable-reference position, or the string value of a scalar Expression-node field (§9.6.1) — is replaced by the bound argument's AST in source order. Substitution is position-blind and purely syntactic: a declared parameter name shadows any coincident field literal or index symbol inside `body`, no evaluation occurs, and no field-specific admissibility is checked at substitution time — a value substituted into a scalar-field position MUST be a literal admissible for that field, enforced by the §9.6.9 validation discharge, never by the substitution engine. Expansion MUST NOT depend on argument evaluation. Parameter substitution applies inside the `bindings` values of nested `apply_expression_template` references exactly as in any other Expression position; the `name` field is never a substitution site; params shadow as above. Substitution is what `Expand` does (§9.6.4 rule 2) and what a reference denotes; the rewrite engine never substitutes a rule's body into the tree (constraint 7).
+6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry `grad`/`div`/`laplacian`/spatial-`D` as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, and a right-hand-side structural `D` that §4.2's total-derivative resolution left standing (an operand outside its closed set, a name it cannot resolve, or a cyclic chain) — is rejected with diagnostic `unlowered_operator` (naming the op and node path). The walk also covers the body of every template a reachable reference names, as §9.6.4 rule 3 rewrote it, once per template instance; an op left standing there is rejected the same way, naming the op, the template, and the first call site in document order that reaches it. Substitution introduces no op that is not in a body or in a call site's `bindings`, so this walk sees every op `Expand(tree)` contains without expanding anything. This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
+7. **A firing rule writes a reference, never its body.** When rule `R` fires at a node, the engine replaces the node with `{"op": "apply_expression_template", "args": [], "name": N, "bindings": B}`, where `N` is `R`'s registered name in the component (post-rename, §9.7.7) and `B` maps each entry of `R`'s `params` to what the match bound to it: the matched sub-AST for a parameter in an operand position, the matched literal for one in a scalar-field position (§9.6.1). A parameter that occurs nowhere in `R`'s `match` is bound to its own name, so the reference expands to `R`'s body exactly as written there. `Expand` of the reference is `R`'s body with `B` substituted (constraint 5) — the replacement the engine used to write in place — so this constraint changes the reference-preserving form, and with it the emitted document (§9.6.4 rule 5), but not `Expand(load(f))` wherever no match would span a reference boundary (§9.6.4 rule 4): every existing `expanded*.esm` golden of §9.6.7 stands. The written reference is an ordinary reference from then on: later passes rewrite inside its `bindings` (constraint 2), no pattern sees into it (§9.6.4 rule 4), and `R`'s body is rewritten once per instance (§9.6.4 rule 3). A rule whose `body` is a single leaf — a number, a boolean, or a bare string — writes the leaf (for a string that is one of `R`'s `params`, what that parameter bound): there is no body to share, and the reference would be larger than what it stands for.
 
 #### 9.6.4 Round-trip — Option B (reference-preserving)
 
@@ -5130,7 +5171,14 @@ special-case older versions to recover Option A matching. Motivation and measure
 
 1. **Load resolves; it does not expand.** Loaders resolve imports, renames, and
    metaparameters and run the §9.6.3 fixpoint as before, but MUST NOT expand
-   `apply_expression_template` nodes except as rule 3 requires. Template references survive
+   `apply_expression_template` nodes. (An earlier revision required the eager expansion of
+   target-bearing references here; rule 3 now rewrites inside template bodies instead.)
+   This holds at a §4.7 mount edge too: a mounted leaf is lowered in its own file, its
+   references survive the mount, and the registries of its components travel with the
+   mounted components into the mounting document, materialized as rule 5 states, exactly as
+   a component's own registry does. (A binding that still expands — rule 2 says it SHOULD NOT
+   — keeps with each expansion the provenance §9.6.11 "Applications" requires.)
+   Template references survive
    load; downstream code MAY recognise them (that is the point), but MUST give them the
    semantics of rule 2.
 2. **A reference denotes its expansion.** `Expand(tree)` — full pure substitution to the
@@ -5145,22 +5193,135 @@ special-case older versions to recover Option A matching. Motivation and measure
    per node, still meets this rule if its behavior is as stated above. Explicit expansion
    utilities (for tools and interchange) remain permitted; they are not the build or analysis
    path.
-3. **Eager expansion.** A reference whose template is **target-bearing** (its composed body
-   contains, transitively through the §9.7.3-checked DAG — including inside the `bindings` of
-   nested references — an op no evaluator implements: the §4.2 open rewrite-target tier, or
-   the load-eliminated `enum` form), or whose own `bindings` carry such an op
-   or a nested eager reference, MUST be expanded innermost-first in a pre-pass before the
-   §9.6.3 fixpoint. The pre-pass consumes no `MAX_REWRITE_PASSES` budget. Consequently no
-   rewrite-target op can survive inside a reference, and the pre-evaluation
-   `unlowered_operator` gate (§9.6.3 constraint 6) walks the reference-preserving tree
-   unchanged.
-4. **Patterns do not see through surviving references.** The rewrite engine treats a
-   surviving (non-eager) reference as a **leaf**: patterns match it only whole (via a
-   metavariable), never inside it; it does not satisfy a `where` `shape` constraint (a
-   reference is not a bare variable name). Instantiation (§9.6.3 constraint 5) substitutes
-   parameters through nested references' `bindings`; the `name` field is never a substitution
-   site; an eager reference introduced into the tree by instantiation expands as part of the
-   same rewrite.
+3. **Rewriting inside template bodies.** A component's §9.6.3 rules, and its load-time
+   `enum` lowering (§9.3), apply inside the bodies of the templates its references name —
+   including the rules a firing wrote a reference to (§9.6.3 constraint 7) — without
+   expanding any reference. They apply once per **template instance**, not once per call
+   site.
+
+   - *Instance.* The instance of a reference is its template together with, for each of the
+     template's `params`: the literal bound to it, when the parameter occurs in a scalar-field
+     position, a `ranges` bound or `from` (§9.6.1), or an argument of an `enum` op (§9.3);
+     otherwise the **kind** of what is bound — a bare variable name together with its
+     declared `shape` (§6), a literal, or any other expression. A reference inside a body
+     being rewritten binds its parameters in terms of that body's own parameters; its
+     instance takes, for each, the entry of the enclosing instance that it forwards. Two
+     references with the same instance rewrite identically, so the rewriting is done once.
+   - *How a body is rewritten.* For each instance that a reachable reference names — from a
+     component's expression positions, from a coupling transform it receives (§10.4), or from
+     a body being rewritten — the engine runs the §9.6.3 fixpoint on the template's body
+     with the component's rules. A parameter in an operand position is a **leaf**: a pattern
+     metavariable captures it whole; it satisfies a `where` `shape` constraint iff the
+     instance binds it to a bare variable whose declared `shape` equals the constraint's
+     list; it never matches a structured or a ground pattern node. A parameter in a
+     scalar-field or structural position reads as the literal the instance binds to it. A
+     firing rule writes a reference (§9.6.3 constraint 7) whose `bindings` are expressions
+     of the body's own parameters, and the references in the body are rewritten in their own
+     instances, recursively along the §9.7.3 DAG.
+   - *Where the result lives.* When every reachable instance of a template rewrites to the
+     same body, that body replaces the template's body in the component's registry, under the
+     same name. Otherwise each distinct rewritten body is registered as its own entry named
+     `<name>.variant<k>`, with `k = 1, 2, …` taken in the order of the bodies' canonical
+     serialization (CONFORMANCE_SPEC §5.5.3) and `_` appended to the name until it names no
+     other entry, and each reference is re-pointed to the entry of its instance. A body in
+     which nothing fires is left unchanged, and a template that no reference reaches is not
+     rewritten.
+   - *Rewrite depth.* A rewrite made in pass `p` of the fixpoint on a component's
+     expression positions has depth `p`. A rewrite made in pass `q` of the fixpoint on an
+     instance's body has depth `d + q`, where `d` is the depth of the rewrite that wrote the
+     reference naming the instance (`0` for a reference the author wrote). A rewrite whose
+     depth would exceed `MAX_REWRITE_PASSES`, and an instance whose rewriting needs the same
+     instance again (a rule that reintroduces its own pattern), reject the document with
+     `rewrite_rule_nonterminating`, naming the rule and the template. The depth of a rewrite
+     is the pass in which an engine that substituted every rule's body in place would have
+     made it, so the bound accepts and rejects the same documents as that engine did; a
+     binding computes it once per instance (the instance's own pass count plus the deepest
+     instance it writes), not once per call site.
+   - *Time derivatives.* A template body — match-less, or a `match` rule's — MAY hold a
+     structural time derivative: a `D` whose `wrt` is `"t"` or absent, or, in an instance
+     whose `wrt` parameter is bound to `"t"`, a `D` whose `wrt` is that parameter (the bound
+     literal is part of the instance, so such a `D` is structural in that instance and
+     spatial in another). It is resolved in flatten step 3a (esm-libraries-spec §4.7.5) by
+     §4.2's table, **without expanding**, as follows. Resolving inside a body follows the
+     table's structural recursion unchanged, except at three kinds of leaf:
+     - a **parameter** `p` resolves to a fresh parameter `p_dt` (`_dt` appended to `p`, then
+       `_` until it names no parameter of the template and no name its body reads), which each
+       reference binds to §4.2's resolution of `D(b)` for the `b` it binds to `p`, computed at
+       the reference like any right-hand-side `D`;
+     - a **reference** `R` to template `S` resolves to a reference to `S`'s **derivative
+       entry** (the resolution of `S`'s whole body, by this same rule, registered once per
+       template as `<S>.ddt`, named like rule 3's variants), bound to `R`'s bindings plus a
+       `q_dt` binding for each of `S`'s parameters `q` that the derivative entry needs;
+     - every other name and every literal resolves exactly as at a call site: a state to its
+       tendency, an observed by the chain rule, a time-invariant name to `0`.
+
+     The body with its `D`s resolved replaces the template's body in the flattened registry,
+     with the `p_dt` parameters appended to its `params`, and every reference to it gains the
+     `p_dt` bindings. This depends on the template alone (which parameters sit under a
+     structural `D` is read from the body), plus the `wrt` literal where `wrt` is a
+     parameter, so it is done once per template instance. **It equals the expansion's
+     resolution exactly**: §4.2's recursion is structural, so resolving `D(e[p := b])`
+     visits the nodes of `e` as resolving `D(e)` in the body does and, at each place `b` was
+     substituted, yields the resolution of `D(b)` — which is what `p_dt` is bound to.
+     Free names in the body are flatten-scoped names of the system (§10.7), resolved against
+     the same equations; cycles are detected over names exactly as at a call site.
+
+     When the table answers nothing — an operator outside it inside the body, or a `D(b)` at
+     a reference that answers nothing — the expansion would leave its `D` standing, and so
+     does this rule: a `D` the body's own recursion cannot answer stays in the body, and a
+     reference for which some `p_dt` cannot be resolved keeps pointing at the unresolved body
+     (registered as `<name>.unresolved` when other references resolve). Either way the
+     `unlowered_operator` gate (§9.6.3 constraint 6) rejects the build exactly as it would
+     reject the expansion, naming the `D`, the template and the reference. A structural `D`
+     on a reference written at a call site (`D(ref(T, b), t)`) resolves to a reference to
+     `<T>.ddt` the same way.
+
+     Order and the lifts: step 3a runs where esm-libraries-spec §4.7.5 puts it, after the
+     pointwise lift (step 3b) and before the elementwise lift (§9.6.11). Each of the three
+     treats a parameter by its role exactly as it treats the binding substituted for it in the
+     expansion — a `D` operand is an array position (§9.6.11), so a lift leaves a binding read
+     only under `D` whole, as it leaves the substituted operand whole — and so the composite
+     equals the expansion's. Roles that the elementwise lift reads after step 3a are read
+     from the resolved body, where `p_dt` stands where `D(p)` stood. A `match` rule MAY match
+     a structural `D` like any node; it fires at load, inside bodies per this rule, before
+     flatten resolves what is left. Structural `D` is strictly unary (§4.2), so an instance
+     whose `wrt` parameter is bound to `"t"` on a `D` with trailing operands is rejected at
+     that reference with `operator_arity`.
+   - *Equivalence.* Wherever no match would span a reference boundary (rule 4), `Expand` of
+     the result equals the tree that substituting each firing rule's body in place, and
+     continuing the fixpoint on the substituted tree, would produce. Where a match would span
+     a boundary, the two differ, and this rule and rule 4 define the result; the
+     `expanded*.esm` goldens of §9.6.7 pin this rule's result in both cases. No existing
+     golden contains such a match, so every existing one is unchanged; the
+     `opacity_rule_replacement/` fixture pins the cases that differ.
+
+   This rule replaces the eager expansion that earlier revisions required (every reference to
+   a template whose body could hold a rewrite-target or `enum` op was expanded before the
+   fixpoint). The `unlowered_operator` gate stays sound without it by walking each reachable
+   rewritten body once (§9.6.3 constraint 6, §9.6.9).
+4. **Patterns do not see across a reference boundary.** The rewrite engine treats a
+   reference — authored, or written by a firing rule (§9.6.3 constraint 7) — as a **leaf** of
+   the tree around it: patterns match it only whole (via a metavariable), never inside it; it
+   does not satisfy a `where` `shape` constraint (a reference is not a bare variable name).
+   Inside a body being rewritten (rule 3), a parameter occurrence is the same kind of leaf,
+   seen only through its instance. No match is therefore ever assembled partly from a call
+   site and partly from a body. Instantiation (§9.6.3 constraint 5) substitutes parameters
+   through nested references' `bindings`; the `name` field is never a substitution site.
+
+   **What this changes from in-place rewriting.** An engine that substituted rule bodies in
+   place, and expanded references to templates whose bodies held rewrite-target ops, could
+   match across the boundaries this rule closes. Three cases now differ, deliberately: (a) a
+   compound pattern whose inner node would only exist as part of another rule's replacement
+   (a pattern on `sqrt(D(u,x)^2 + …)` around a node that an alias rule rewrites to `D`);
+   (b) inside a template body, a pattern that needs more of a parameter's binding than its
+   kind and declared shape — a structured or ground pattern node at a parameter; and (c) a
+   compound pattern that would have matched a node assembled partly from a call site and
+   partly from the body of a reference that eager expansion used to inline. None occurs in
+   the 2026-11 corpus of real models (EarthSciDiscretizations, EarthSciModels, EqESM, EqIce,
+   EqWeFiC, reseact.esm and others) or in an existing conformance golden; the audit is
+   recorded with this revision's design notes, and `opacity_rule_replacement/` (§9.6.7) pins
+   all three. A pattern that needs one SHOULD be written against the replacement itself, or
+   the template SHOULD take the inner operand as its own parameter.
 
    **Scope of this rule.** Rule 4 governs the §9.6.3 **rewrite-rule engine** and nothing else:
    the `match`-pattern matcher, whose opacity keeps the fixpoint deterministic and
@@ -5185,16 +5346,21 @@ special-case older versions to recover Option A matching. Motivation and measure
    modes" below). Each component materializes into its own
    `expression_templates` block the transitive closure of templates its surviving references
    name — **registered instances**: post-`only`, post-`rename`/`rebind`,
-   post-metaparameter-fold, checked but uninlined — with authored entries first in authored
-   order, then materialized entries in lexicographic (UTF-8 byte) name order; all five
+   post-metaparameter-fold, checked but uninlined, with bodies as rule 3 rewrote them — with
+   authored entries first in authored order, then materialized entries in lexicographic
+   (UTF-8 byte) name order; all five
    bindings MUST emit this exact order. **Canonical serialization:** every JSON object's keys
    emit sorted (UTF-8 byte order) EXCEPT an `expression_templates` block, whose entries emit
    in the order this rule defines — that exception is part of the cross-binding byte-identity
    contract. Registry keys admit dotted identifiers (renamed imports materialize under their
-   post-rename names). Match rules are never materialized (only match-less entries are
-   referenceable, §9.6.2), and a **component-level** authored `match` rule — consumed by the
-   fixpoint, invocable by nothing — is dropped from the emitted component; component-level
-   authored **match-less** entries survive verbatim (they remain referenceable).
+   post-rename names, and rule 3's variants under `<name>.variant<k>`). A `match` rule that a
+   firing wrote a reference to (§9.6.3 constraint 7) materializes like any referenced
+   template, **without** its `match`, `where` and `priority`: in the emitted document it is a
+   match-less entry under the same name, holding its body as rule 3 rewrote it (an authored
+   rule keeps its authored position). A **component-level** authored `match` rule that
+   nothing references — consumed by the fixpoint, invocable by nothing — is dropped from the
+   emitted component; component-level authored **match-less** entries survive (they remain
+   referenceable), verbatim unless rule 3 rewrote their bodies.
    `expression_template_imports` is consumed as before (§9.7.6). Top-level authored
    declarations survive verbatim **including their `match` rules** — a top-level
    `expression_templates` registry and a top-level `metaparameters` block are *declarations*,
@@ -5282,8 +5448,10 @@ special-case older versions to recover Option A matching. Motivation and measure
    3. the **load-time rewrites this specification REQUIRES**, each of which replaces an
       authored construct by its defined meaning: `enum` lowering (§9.3), subsystem `ref`
       resolution (§4.7 "Resolution timing"), metaparameter folding on an *instantiating*
-      load (§9.7.6), eager expansion of a target-bearing reference (rule 3), and the
-      component-level `match`-only registry drop stated above. A rewrite this specification
+      load (§9.7.6), the §9.6.3 fixpoint's rewrites (each writes a reference, §9.6.3
+      constraint 7), rule 3's rewriting of template bodies and its variants, the
+      materialization of a referenced `match` rule without its `match`, `where` and
+      `priority`, and the component-level `match`-only registry drop stated above. A rewrite this specification
       merely **permits** — §6.7.4 states the inline multi-series `y` shorthand and its
       desugared `y` + `series` spelling are *equivalent*, so a binding may emit either — is
       not a licence to drop anything else: a binding applying one MUST still preserve every
@@ -5340,7 +5508,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `apply_expression_template_bindings_mismatch` | `bindings` does not exactly match the template's `params` (missing or extra keys). |
 | `apply_expression_template_recursive_body` | A template-body reference cycle (self or mutual) in the §9.7.3 registration-time DAG. (Redefined by the template-library RFC: acyclic body references are legal — checked at registration and, from `esm: 0.9.0`, preserved uninlined, §9.6.4/§9.7.3.) |
 | `apply_expression_template_invalid_declaration` | `params` is missing/empty/duplicates entries, `body` is missing, a malformed `where` block (§9.6.1: `where` without `match`, a key that is not a declared param, an unknown constraint kind — v1 admits exactly `shape` — or an empty/non-string `shape` list), or other structural defects. |
-| `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3). |
+| `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3), counted as rewrite depth through template bodies, or a template instance's rewriting needs the same instance again (§9.6.4 rule 3). |
 | `derived_index_set_unmaterialized` | An expression ranges over a `kind: "derived"` index set whose producer could not be materialized at build — a `distinct` producer whose key column is not a constant factor (§4.2), or a producer no stage evaluated. Raised when the model is built for evaluation, naming the index set and its `from_faq` producer. The evaluator MUST NOT contract the range as empty: an empty range folds to the semiring's additive identity, and a `0` indistinguishable from a real count is exactly the silent wrong answer this code exists to prevent. |
 | `value_invention_key_out_of_range` | A `distinct` producer's `key`, or a column a value-invention `join.on` clause reads, evaluates to NaN at build. The key templates of `lib/relational.esm` (`pair_key`, `edge_key`) return NaN for a component that is outside its declared range, non-integral or NaN, so that a key can never collide silently with another; this code is how that reaches the author. Raised when value invention runs, naming the column (the producer whose `key` it is, or the join column) and the loop indices at which it was NaN. Takes precedence over `derived_index_set_unmaterialized`: the producer ran, and the column, not the data, is wrong. Fixture: `tests/conformance/value_invention_materialize/fixtures/key_out_of_range.esm`. |
 | `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
@@ -5427,7 +5595,17 @@ The Option B RFC adds (see `docs/content/rfcs/out-of-line-expression-templates.m
 
 - `emit_materialized_registry/` — `import_smoke`'s consuming model, emitted: imports gone, referenced stencils materialized, call sites intact; plus the §9.6.4-rule-5 idempotency assertion.
 - `emit_rename_dotted_keys/` — `import_rename_two_instances`, emitted: dotted registry keys on disk.
-- `eager_target_bearing/` — one match-less template whose body carries a `D`, one that doesn't; the first's reference is expanded and lowered at load, the second's survives (positive + negative in one golden).
+- `rewrite_in_template_body/` (formerly `eager_target_bearing/`) — one match-less template whose body carries a `D`, one that doesn't. Both references survive load; the first template's body is rewritten in place to a reference to the `central` rule, which materializes match-less (§9.6.4 rules 3 and 5); the second is unchanged. Its `expanded.esm` is the fully lowered tree the eager-expansion engine produced, and stays the `Expand` oracle.
+
+The rules-as-references revision (§9.6.3 constraint 7, §9.6.4 rule 3) adds the following, each with an `emitted.esm` golden and, where a rule fires, an `expanded.esm` golden of `Expand(load(fixture))` under this revision's semantics. That golden equals the tree the in-place engine produced except in `opacity_rule_replacement/`, whose cases are exactly the ones where the two differ:
+
+- `rule_writes_reference/` — one rule fired at three sites with different operands: three references to the rule, one materialized body; a leaf-bodied rule writes its leaf.
+- `template_instance_variants/` — one template whose body holds a `D`, called with two variables of different declared shapes, and two `where`-scoped rules: two variants `<name>.variant1` / `.variant2`, numbered by canonical serialization, each call site re-pointed.
+- `rewrite_depth_through_bodies/` — invalid: a rule whose body reintroduces its own pattern under the same instance → `rewrite_rule_nonterminating`, naming the rule and the template; and a chain that converges at depth 64 exactly (accepted) beside one at depth 65 (rejected).
+- `unlowered_in_template_body/` — invalid at build: a template body holding a `D` that no rule matches → `unlowered_operator`, naming the op, the template and the first call site.
+- `opacity_rule_replacement/` — the cases where this revision and the in-place engine differ, each pinned the way this revision decides it: (a) a compound pattern whose inner node only exists in another rule's replacement does not fire, (b) a structured and a ground pattern node at a template parameter do not match what the call site bound, and (c) a compound pattern that would have assembled across an eagerly expanded reference to a template whose body holds a rewrite-target op does not fire. Its `expanded.esm` is written under this revision's semantics, and the in-place engine would fail it; its description records, case by case, what the in-place engine produced instead.
+
+Every `emitted.esm` golden of a fixture in which a rule fires changes under this revision (the lowered node becomes a reference and the rule materializes); every existing `expanded*.esm` golden is unchanged, because no existing fixture contains a match that spans a reference boundary (checked: `godunov_beats_inner_deriv`, `fixpoint_nested_deriv`, `eager_target_bearing`, `opacity_negative` and `opacity_priority_shadowing` match within one side of every boundary).
 - `opacity_negative/` — a compound `match` pattern whose shape only assembles across a surviving-reference boundary: MUST NOT fire (§9.6.4 rule 4's pinned divergence).
 - `opacity_priority_shadowing/` — the silent form of the divergence: a high-priority compound rule whose structural fragment is hidden in a target-free reference, plus a lower-priority generic rule; the golden pins that the compound rule does NOT fire and the generic rule DOES (binding the surviving reference whole).
 - `per_instantiation_validation/` — a template parameterized on a scalar field, two call sites, one inadmissible: rejected on the expanded-equivalent check (§9.6.9), naming the offending call site.
@@ -5517,7 +5695,9 @@ Both selectors filter **before** the §9.6.3 priority/declaration-order selectio
 
 after which the ordinary `D`-discretization rules apply. `div`/`laplacian` are sugar for sums/compositions of `D`; the bounded fixpoint (§9.6.3) lowers the resulting nested `D`s on subsequent passes. A rule author MAY instead match `laplacian` directly and emit a one-shot 5-point stencil — the open namespace (§4.2) permits either.
 
-**Determinism.** Lowering is the outermost-first, priority-ordered, bounded-fixpoint rewrite of §9.6.3. Two bindings expanding the same file MUST produce byte-identical post-lowering ASTs (or the same non-convergence / `unlowered_operator` rejection).
+**Determinism.** Lowering is the outermost-first, priority-ordered, bounded-fixpoint rewrite of §9.6.3. Two bindings lowering the same file MUST produce byte-identical post-lowering documents — the references firings wrote, the rewritten template bodies and the names of their variants (§9.6.3 constraint 7, §9.6.4 rule 3) — and therefore byte-identical expansions (or the same non-convergence / `unlowered_operator` rejection).
+
+**A discretization is one body, however often it applies.** A rule that fires at every tracer's `D(U*q, wrt: "lon")` writes one reference per tracer to the same rule, each binding that tracer's operands; the stencil body exists once in the component's registry and once in the emitted document. A derivative inside a template body is lowered inside that body, once per instance (§9.6.4 rule 3): a template applied to many columns lowers its `D` once.
 
 #### 9.6.9 Validation discharge (reference-preserving)
 
@@ -5530,8 +5710,8 @@ A document is valid iff `Expand(document)` (§9.6.4 rule 2) is valid. Bindings M
 | `apply_expression_template_recursive_body`, `template_body_expansion_too_deep` | §9.7.3 registration (then inlined) | §9.7.3 registration (check-only); same codes |
 | `makearray_region_inverted` | expanded, folded form | registration, on the composed folded body — on a §9.6.4-rule-5 *generic load* of a template-library file there is no folded body, so bounds still carrying open metaparameter expressions are not checked until they fold at a binding site (§4.3.2, §9.7.6). Sound because region bounds cannot contain template params — params substitute only in variable-reference and scalar-field positions (§9.6.1), and region bounds are metaparameter expressions (§9.7.6), not strings — so the check is instantiation-independent |
 | Units and shape checks | expanded form | per-instantiation, memoized on `(template id, scalar-field values, per-param unit+shape signature)` |
-| `unlowered_operator` | pre-evaluation walk of the expanded tree | the same walk on the reference-preserving tree; sound by eager expansion (§9.6.4 rule 3) |
-| `rewrite_rule_nonterminating` | fixpoint | unchanged; the eager pre-pass consumes no pass budget |
+| `unlowered_operator` | pre-evaluation walk of the expanded tree | the same walk on the reference-preserving tree plus each reachable template body as §9.6.4 rule 3 rewrote it, once per instance; sound because substitution introduces no op that is not in a body or a call site's `bindings` (§9.6.3 constraint 6) |
+| `rewrite_rule_nonterminating` | fixpoint | the same bound, applied to the rewrite depth of §9.6.4 rule 3 (counted through bodies, once per instance) |
 
 #### 9.6.10 Authoring for whole-array evaluation (non-normative)
 
@@ -5569,17 +5749,17 @@ Whether an argument is array-valued is decided on the **flattened** system (§10
 
 **Several array arguments.** The array-valued arguments read in value positions, together with every other array operand of the elementwise expression the application sits in, follow §4.3.4 broadcast compatibility over their declared index sets:
 
-- The result's index sets are those of the equation's target when the target declares a `shape`. Otherwise they are the index sets of the one operand whose index sets contain every other operand's.
+- The result's index sets are those of the equation's target when the target declares a `shape`. Otherwise they are the union of the operands' index sets, in order of first appearance (§4.3.4, "An undeclared result takes the union").
 - Each argument supplies the axes it names and replicates along the rest. A `[lev]` column argument and a `[lon, lat, lev]` field therefore agree, the column replicating over `lon` and `lat`, and `bilinear` with `x` and `y` over the same index sets reads both at the same element.
-- Two arguments neither of whose index sets contains the other's (`[x]` and `[y]`) have no elementwise result, nor does an argument naming an index set the target's declared shape lacks, or one whose index sets would put one name on two axes. Each MUST be rejected with `array_shape_mismatch`.
+- Arguments on disjoint index sets (`[x]` and `[y]`) give the outer product over the union. An argument naming an index set the target's declared shape lacks, or one whose index sets would put one name on two axes, has no elementwise result and MUST be rejected with `array_shape_mismatch`.
 
 **When the shape checks run.** An argument's shape is known only on the flattened system, so `array_shape_mismatch` for an elementwise application MUST be decided at build, by every evaluating binding, on the flattened system. This is an explicit exception to §4.3.4's rule that a shape mismatch is decided at validation time: `validate()` reads a component alone, where a coupled argument still has its declared scalar shape, and does not decide it.
 
 **Anonymous arrays.** An argument read in a value position MUST be a scalar or an array over declared index sets: a variable whose `shape` is declared, inferred (§4.3.4) or given by coupling, or an elementwise expression of such variables. An anonymous array (a `const` array literal, a `reshape` result) read in a value position of an application has no index sets, so nothing says which element each cell reads; every evaluating binding MUST reject it at build with `array_shape_mismatch`.
 
-**Realization (normative for evaluating bindings).** A binding evaluates an elementwise application at build, after flatten, by **lifting** the equation `x = rhs` that holds it, where the application sits in elementwise position of `rhs`: `rhs` itself, or an operand reached from it through elementwise operators and closed-function arguments taken per element. `rhs` becomes a `faq` whose `output_idx` ranges over the result's index sets (`{"from": <set>}`). Its body is `rhs` with each array-valued argument gathered at the cell in each of its value positions, and every other bare shaped read in elementwise position of `rhs` gathered too, aligned by index-set name (`index(lev, ℓ)`). Arguments in array positions stay whole. A variable declared without a `shape` that the lift defines takes the result's index sets. An equation with no elementwise application in elementwise position is left as written; an application elsewhere (inside a `faq` body or an `index` subscript the author wrote) denotes its expansion. Any check that refuses a bare shaped read inside a `faq` body runs after this lift, on the lifted equations. The conformance fixtures place each application in the right-hand side of an equation that defines a variable. A binding MAY require that, and an application in a differential equation's right-hand side can be written through such a variable. Fixtures: `tests/conformance/template_array_args/` (inline tests, every element against the scalar application at tolerance 0); `tests/conformance/template_array_args/coupled/` (the coupled case).
+**Realization (normative for evaluating bindings).** A binding evaluates an elementwise application at build, after flatten, by **lifting** the equation `x = rhs` that holds it, where the application sits in elementwise position of `rhs`: `rhs` itself, or an operand reached from it through elementwise operators and closed-function arguments taken per element. `rhs` becomes a `faq` whose `output_idx` ranges over the result's index sets (`{"from": <set>}`). Its body is `rhs` read at the cell, and **the lift never writes an expansion**: every bare shaped read in elementwise position of `rhs` is gathered at the cell, aligned by index-set name (`index(lev, ℓ)`), and every application keeps its reference, with each binding read at the cell by its parameter's role. A binding for a scalar-role parameter is read at the cell — its bare shaped reads in value positions gathered, `{"x": "lev"}` becoming `{"x": index(lev, ℓ)}` — and a binding for an array-role parameter stays whole. Because a reference denotes its expansion and substitution puts the gathered binding at each of the parameter's value positions, `Expand` of the lifted equation is the lift as earlier revisions wrote it, with each array-valued argument gathered in each of its value positions and passed whole in its array positions; the `flatten_wire` goldens, which are compared after `Expand`, are unchanged. **A mixed parameter** — one the body reads in a value position and also in an array position (eleven templates in the 2026-11 corpus) — bound to an array-valued argument cannot be gathered and whole in one binding. The lift then re-points the reference to the template's **cellwise variant** for the set of such parameters: an entry named `<name>.cellwise<k>`, numbered and named like the variants of §9.6.4 rule 3, whose `params` are the template's plus, for each such parameter `p`, a fresh parameter `p_cell` (`_` appended until it names no parameter of the template and no name its body reads), which replaces `p` in each of `p`'s value positions, through the references the body makes (each re-pointed to its own cellwise variant); the reference binds `p` whole and `p_cell` read at the cell. Whether an application is elementwise, and each parameter's role, are decided once per template instance from the body (§9.6.4 rule 3), never by expanding it. A variable declared without a `shape` that the lift defines takes the result's index sets. An equation with no elementwise application in elementwise position is left as written; an application elsewhere (inside a `faq` body or an `index` subscript the author wrote) denotes its expansion. Any check that refuses a bare shaped read inside a `faq` body runs after this lift, on the lifted equations. The conformance fixtures place each application in the right-hand side of an equation that defines a variable. A binding MAY require that, and an application in a differential equation's right-hand side can be written through such a variable. Fixtures: `tests/conformance/template_array_args/` (inline tests, every element against the scalar application at tolerance 0); `tests/conformance/template_array_args/coupled/` (the coupled case).
 
-**A flattened system keeps its applications' meaning on the wire (normative).** A consumer that splits a flattened system into derived documents writes its equations out, with every surviving template reference expanded, and reads them back through `load`. An expansion read that way is no longer an application: whether it came from one is load provenance (or, in a binding that keeps references, a reference the consumer expanded), and no document carries it. It reads the array by bare name inside the template's `faq` body, which is `faq_bare_array_operand` (§4.3.1). Every binding's flatten MUST therefore write the lift above into the flattened equations themselves, after coupling, so that the flattened system and its wire form denote the same system and the build's lift finds nothing left to do. A field initial condition `ic(x) = rhs` (§11.4.1) is lifted the same way, over the index sets `x` declares. A variable declared `shape: []` is a scalar (§4.3.1) and its equation is never lifted. The lifted body holds the application's expansion; every other template reference survives as before. The loop symbols are `_p0, _p1, …` in the order of the result's index sets, each prefixed with one more `_` until none is a name the expanded right-hand side reads or binds, in any field: a variable it reads, a loop symbol, `ranges` key, `of` parent, integral `var`, `wrt`, `dim`, `arg`, or `table_lookup` axis name. The lift changes no declaration (esm-libraries-spec §4.7.5): a variable declared without a `shape` keeps none, and the build gives it the index sets its `faq` definition ranges over, as it does any variable so defined. A lifted equation's contributions collapse into the one `faq`, their origins united. When the lift refuses any right-hand side, flatten leaves every equation and initial condition as written, for the build to refuse with `array_shape_mismatch`. Fixtures: `tests/conformance/flatten_wire/` (the flattened, serialized form, byte for byte).
+**A flattened system keeps its applications' meaning on the wire (normative).** A consumer that splits a flattened system into derived documents writes its equations out and reads them back through `load`. It SHOULD write surviving references as references, carrying into each derived document the entries of the flattened registry its references reach (esm-libraries-spec §4.7.5), so that nothing is inlined on the wire either. A consumer that expands them instead reads back expansions that are no longer applications: whether one came from an application is load provenance, and no document carries it. Unlifted, such an expansion would read the array by bare name inside the template's `faq` body, which is `faq_bare_array_operand` (§4.3.1). Every binding's flatten MUST therefore write the lift above into the flattened equations themselves, after coupling, so that the flattened system and its wire form denote the same system and the build's lift finds nothing left to do. A field initial condition `ic(x) = rhs` (§11.4.1) is lifted the same way, over the index sets `x` declares. A variable declared `shape: []` is a scalar (§4.3.1) and its equation is never lifted. The lifted body keeps every reference, as above; nothing is expanded. The loop symbols are `_p0, _p1, …` in the order of the result's index sets, each prefixed with one more `_` until none is a name the expanded right-hand side reads or binds, in any field: a variable it reads, a loop symbol, `ranges` key, `of` parent, integral `var`, `wrt`, `dim`, `arg`, or `table_lookup` axis name. A binding computes that set without expanding: the names the right-hand side reads or binds outside references, including inside `bindings`, plus, for each template the right-hand side reaches, the names its body reads or binds other than its `params` (memoized per template). This is exactly the set of names of the expansion, so the loop symbols, and with them the bytes of the lifted equation, are the same in every binding and the same as under earlier revisions. The lift changes no declaration (esm-libraries-spec §4.7.5): a variable declared without a `shape` keeps none, and the build gives it the index sets its `faq` definition ranges over, as it does any variable so defined. A lifted equation's contributions collapse into the one `faq`, their origins united. When the lift refuses any right-hand side, flatten leaves every equation and initial condition as written, for the build to refuse with `array_shape_mismatch`. Fixtures: `tests/conformance/flatten_wire/` (the flattened, serialized form, byte for byte).
 
 ### 9.7 Template libraries, cross-file imports, and metaparameters
 
@@ -5604,7 +5784,7 @@ An **ordered array** appearing (i) inside a `model` or `reaction_system`, or (ii
 
 #### 9.7.3 Registration-time body checking
 
-A template `body` MAY contain `apply_expression_template` nodes referencing other templates that are **in scope** (declared locally or imported) and **match-less**. After the effective sequence (§9.7.4) is fixed and before the §9.6.3 fixpoint runs, the loader builds the body-reference graph, rejects cycles (`apply_expression_template_recursive_body`) and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 32` (`template_body_expansion_too_deep`), and computes each template's **target-bearing** flag (§9.6.4 rule 3) — computable once at registration and cached. Bodies are **not** inlined (from `esm: 0.9.0`; pre-0.9.0 loaders inlined here in topological order — substitution is confluent, so the result was order-independent). Because nothing inlines at a library boundary anymore, the depth bound is measured on the **full merged cross-file reference graph**: a chain deeper than 32 across files is rejected even though each file's local chain is shallow (under Option A each library's own composition closed its bodies at its edge, resetting the count — a deliberate, corner-case-only behavioral change of 0.9.0). A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_expression_template` nodes.
+A template `body` MAY contain `apply_expression_template` nodes referencing other templates that are **in scope** (declared locally or imported) and **match-less**. After the effective sequence (§9.7.4) is fixed and before the §9.6.3 fixpoint runs, the loader builds the body-reference graph, rejects cycles (`apply_expression_template_recursive_body`), and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 32` (`template_body_expansion_too_deep`). Bodies are **not** inlined (from `esm: 0.9.0`; pre-0.9.0 loaders inlined here in topological order — substitution is confluent, so the result was order-independent). Because nothing inlines at a library boundary anymore, the depth bound is measured on the **full merged cross-file reference graph**: a chain deeper than 32 across files is rejected even though each file's local chain is shallow (under Option A each library's own composition closed its bodies at its edge, resetting the count — a deliberate, corner-case-only behavioral change of 0.9.0). A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_expression_template` nodes.
 
 #### 9.7.4 Effective declaration order
 
@@ -5616,7 +5796,7 @@ Renaming (§9.7.7) applies per edge **before** this merge, so the effective sequ
 
 An imported file's top-level `index_sets` merge into the importing **document's** document-scoped registry, after metaparameter instantiation and after any edge renaming (§9.7.7) — i.e. under their **post-rename** names, with any rebound keyed factors already rewritten. This lets a grid library file own its axes: a consuming model's variables are shaped over the merged names without redeclaring them — and lets two instances of one grid family coexist as, e.g., `fine.x` and `coarse.x`. Deep-equal redeclaration is idempotent; a non-equal collision is `template_import_index_set_conflict`. A §4.7 subsystem reference edge merges the referenced file's top-level `index_sets` the same way, with its own diagnostic (`subsystem_index_set_conflict`, §4.7) and its own edge-level renaming field (`index_set_rename`, §4.7 "Mount-edge index-set renaming") — the mount-edge counterpart of this section's `prefix`/`rename`, restricted to index sets because they are the only declaration kind a mount contributes to the document registry.
 
-An imported file's `enums` block does **not** merge (§9.3). The library resolves its own `enum` ops before its templates cross the edge: each `enum` op in one of the library's own template bodies is lowered against the library's block, and each call those bodies make to a template that can still produce an `enum` op is expanded and lowered against the same block. An op still spelled with one of the calling template's `params` resolves at the importer's call site. What reaches the importer is the templates, not the enums they used. A library template whose own call is expanded this way reaches the importer with that call inlined, so the importer's references to it are no longer target-bearing on that account (§9.6.4 rule 3) and survive load uninlined (rules 1–2).
+An imported file's `enums` block does **not** merge (§9.3). The library resolves its own `enum` ops before its templates cross the edge: each `enum` op in one of the library's own template bodies is lowered against the library's block, and for each call those bodies make to a template that can still produce an `enum` op, the called template's body is lowered against the same block for that call's instance (§9.6.4 rule 3), without expanding the call. An op still spelled with one of the calling template's `params` resolves at the importer's call site. What reaches the importer is the templates, not the enums they used. A library template whose own call was lowered this way reaches the importer with that call re-pointed to the lowered body (in place, or as a `<name>.variant<k>` entry), and the importer's references to it survive load uninlined (§9.6.4 rules 1–3).
 
 #### 9.7.6 Load-time metaparameters
 
@@ -5649,7 +5829,7 @@ A top-level `metaparameters` object declares document-scoped named integers:
 
 Because instantiation happens per edge, a diamond whose two paths bind the same file differently produces non-deep-equal definitions and is rejected by the existing conflict diagnostics.
 
-**Ordering within load.** Per document, innermost-first: resolve imports (recursively, instantiating at each edge) → merge index sets → close and fold this document's metaparameters (**except on the §9.6.4-rule-5 generic-load path**, below) → §9.7.3 body checking (target-bearing flags; no inlining) → the §9.6.4-rule-3 eager-expansion pre-pass → the §9.6.3 fixpoint on fully-concrete trees. An import-edge binding expression carrying open importer names is substituted at the edge but only **folds at the "close and fold this document's metaparameters" step**, once those names are bound — so a child index-set size derived from an importer metaparameter (`NTGT = NX*NY`) becomes concrete together with the importer's own sizes, not before. Because a §4.7 subsystem ref is resolved as its own complete document only **after** the mounting document has closed its metaparameters (subsystem refs resolve post-close), its binding expressions fold against that closed environment and the mounted form is fully concrete when it splices in — the load stays deterministic and byte-identical across bindings. Validators discharge on the folded, reference-preserving form (§9.6.9). Round-trip emits the reference-preserving form — **folded on an instantiating load, symbolic on a generic load** (§9.6.4 rule 5). **The import EDGE is expanded away; the DECLARATIONS survive** (§9.6.4 rule 5). `expression_template_imports` is a call site — the fixpoint consumes it and it does **not** survive `parse → emit`. A top-level `expression_templates` registry and a top-level `metaparameters` block are *declarations*, peers of `index_sets`: they **do** survive `parse → emit` verbatim. Source files remain the source of truth for the consumed constructs (import edges and eagerly-expanded call sites). (An earlier revision said all three declaration kinds were stripped, which contradicted rule 5 and made a conforming library file unrepresentable — legal on disk, illegal the moment it was loaded and re-emitted.)
+**Ordering within load.** Per document, innermost-first: resolve imports (recursively, instantiating at each edge) → merge index sets → close and fold this document's metaparameters (**except on the §9.6.4-rule-5 generic-load path**, below) → §9.7.3 body checking (no inlining) → the §9.6.3 fixpoint on fully-concrete trees, with §9.6.4 rule 3 rewriting inside the bodies of the templates its references reach. An import-edge binding expression carrying open importer names is substituted at the edge but only **folds at the "close and fold this document's metaparameters" step**, once those names are bound — so a child index-set size derived from an importer metaparameter (`NTGT = NX*NY`) becomes concrete together with the importer's own sizes, not before. Because a §4.7 subsystem ref is resolved as its own complete document only **after** the mounting document has closed its metaparameters (subsystem refs resolve post-close), its binding expressions fold against that closed environment and the mounted form is fully concrete when it splices in — the load stays deterministic and byte-identical across bindings. Validators discharge on the folded, reference-preserving form (§9.6.9). Round-trip emits the reference-preserving form — **folded on an instantiating load, symbolic on a generic load** (§9.6.4 rule 5). **The import EDGE is expanded away; the DECLARATIONS survive** (§9.6.4 rule 5). `expression_template_imports` is a call site — the fixpoint consumes it and it does **not** survive `parse → emit`. A top-level `expression_templates` registry and a top-level `metaparameters` block are *declarations*, peers of `index_sets`: they **do** survive `parse → emit` verbatim. Source files remain the source of truth for the consumed constructs (import edges). (An earlier revision said all three declaration kinds were stripped, which contradicted rule 5 and made a conforming library file unrepresentable — legal on disk, illegal the moment it was loaded and re-emitted.)
 
 **The generic-load exception (§9.6.4 rule 5).** When the root document is a template-library file (§9.7.1) and the load supplies no loader-API metaparameter bindings (site 4) — an empty binding set and an absent one being the same signal, so only a non-empty set instantiates — the "close and fold this document's metaparameters" step **does not run**: the document's metaparameters stay open, its structural integer sites stay symbolic exactly as authored, and site 5 does not apply, so an open metaparameter is not `metaparameter_unbound`. An **import-free** library file therefore round-trips to **itself**; a library that imports round-trips to its self-contained form, which is import-free and round-trips to itself. Everything upstream of that step is unchanged — the library's own import edges are still resolved and instantiated innermost-first, and their `bindings` still close the metaparameters they name — so what stays open is exactly the set this file leaves open to its future importer, which is what §9.7.6 site 2 (re-export) requires in order to reach the grid file at the bottom of a chain. Every other load, including a load of this same file through an import edge or with loader-API bindings, closes and folds as stated above. (An earlier revision folded unconditionally, which contradicted rule 5's round-trip requirement and silently froze a library's sizes at their defaults on re-emit while the file still carried `metaparameters` and still looked generic.)
 

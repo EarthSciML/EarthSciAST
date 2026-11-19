@@ -128,7 +128,7 @@ fn const_gather_boundary_policies_resolve_at_build() {
             ],
         ));
         compiled.const_scope =
-            std::sync::Arc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
+            std::sync::Arc::new(ConstArrayScope::default().with_boundary("M.C", vec![kind]));
         compiled
     };
     // Unfused: whether fusion folds a many-segment gather depends on the run
@@ -620,32 +620,39 @@ fn undeclared_ifelse_observed_takes_its_array_arms_box() {
     assert_eq!(declared, Some(Some(vec![3])));
 }
 
-/// Where the arm's value is consumed whole — a gather of the `ifelse` itself,
-/// operands over different index sets — the oracle's answer follows the taken
-/// arm's shape, so no box is inferred and native still refuses.
+/// Where the arm's value is consumed whole — a gather of the `ifelse` itself —
+/// the oracle's answer follows the taken arm's shape, so no box is inferred
+/// and native still refuses.
 #[test]
 fn undeclared_ifelse_consumed_whole_is_still_refused() {
     let gathered = idx(
         mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.0)),
         &[json!(2)],
     );
-    let two_sets = mixed_ifelse(json!({"op": "+", "args": ["F", "G"]}), json!(0.0));
-    for body in [gathered, two_sets] {
-        let compiled = compile(undeclared_mixed_doc(
-            body,
-            json!({"G": {"type": "parameter", "shape": ["other"], "default": 1.0}}),
-            vec![],
-        ));
-        let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()));
-        assert!(
-            report
-                .fallbacks
-                .iter()
-                .any(|(_, why)| why.contains("branch value boxes differ")),
-            "{:?}",
-            report.fallbacks
-        );
-    }
+    let compiled = compile(undeclared_mixed_doc(gathered, json!({}), vec![]));
+    let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()));
+    assert!(
+        report
+            .fallbacks
+            .iter()
+            .any(|(_, why)| why.contains("branch value boxes differ")),
+        "{:?}",
+        report.fallbacks
+    );
+}
+
+/// An array arm over two index sets (`F[cell] + G[other]`) spans their union
+/// (esm-spec §4.3.4), so the observed is a `cell × other` array whichever arm
+/// the condition takes: native lowers it and agrees with the per-cell oracle.
+#[test]
+fn undeclared_ifelse_over_two_index_sets_takes_their_union() {
+    let x = mixed_ifelse(json!({"op": "+", "args": ["F", "G"]}), json!(0.0));
+    let compiled = compile(undeclared_mixed_doc(
+        x,
+        json!({"G": {"type": "parameter", "shape": ["other"], "default": 1.0}}),
+        vec![],
+    ));
+    ab(&compiled, &both_arms());
 }
 
 /// The box each compiled observed rule carries, by name.

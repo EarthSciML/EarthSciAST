@@ -1485,7 +1485,11 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    by the resolution table of esm-spec §4.2: a state's own tendency, an observed's definition
    differentiated by the chain rule, `0` for a time-invariant name, and the sum, product and
    quotient rules through `+ - neg * /`. A `D` the table cannot answer, and a cyclic chain, is left
-   standing for the `unlowered_operator` gate. Left-hand sides are never rewritten.
+   standing for the `unlowered_operator` gate. Left-hand sides are never rewritten. A structural
+   `D` inside a template body, or applied to a reference, is resolved in the body without
+   expanding, by esm-spec §9.6.4 rule 3 ("Time derivatives"): a parameter's derivative becomes a
+   `p_dt` parameter that each reference binds to the resolution of its own operand, and a
+   reference's derivative becomes a reference to the template's `<name>.ddt` entry.
 
    **`ic` right-hand sides are resolved too.** An `ic` equation (esm-spec §11.4) is still in the
    equation list when this step runs, and step 4 classifies it out into `field_ics` afterwards, so
@@ -1524,15 +1528,20 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - **Metadata** recording which component systems were flattened and which coupling rules were applied.
    - **The merged template registry** (from `esm: 0.9.0`; esm-spec §9.6.4 rule 7, §10.7) as a
      first-class field of the flattened representation: the union of the component registries
-     (post-step-2 scoping), with deep-equal same-name entries deduplicated at first occurrence
+     (post-step-2 scoping) — including the referenced `match` rules each component materializes
+     without their `match`, `where` and `priority`, and the `<name>.variant<k>` entries of
+     esm-spec §9.6.4 rule 3, which merge, deduplicate and collide like any other entry — with deep-equal same-name entries deduplicated at first occurrence
      and any non-deep-equal same-name collision resolved by deterministically renaming **both**
      entries to `<ComponentPath>.<name>` and rewriting their references in lockstep. A collision
      propagates along the reference DAG: an entry whose body references a colliding name is
      renamed per owner too, so no deduplicated entry is left holding a reference the merged
      registry cannot resolve. Downstream
      consumers — graph construction, simulation backends, emit — resolve surviving
-     `apply_expression_template` references against this registry; a consumer MAY evaluate them
-     natively or via `Expand` (esm-spec §9.6.4 rule 2), whose observable behavior is identical.
+     `apply_expression_template` references against this registry. Builders, evaluators and
+     analyses SHOULD NOT expand them: they SHOULD evaluate each referenced template natively,
+     once per template and binding shape (esm-spec §9.6.4 rule 2). A consumer that does expand
+     still conforms if its observable behavior is identical; explicit expansion utilities (for
+     tools and interchange) remain permitted.
    - **`state_variables` is the solved-for vector, not a classification.** esm-spec
   §6.3.1's `ode_states` / `observed_unknowns` / `algebraic_unknowns` partition the
   UNKNOWNS and are recovered by the accessors of that section; they are a different
@@ -1703,13 +1712,20 @@ rewrites their equations.
   - an `index` whose subscripts are all scalars is a scalar, and is undecided otherwise;
   - a `faq` with no output indices is a scalar; one whose every output index ranges
     `{"from": X}` has those index sets in `output_idx` order; any other is undecided;
+  - an `apply_expression_template` reference has the axes of its expansion (esm-spec §9.6.4
+    rule 2). A binding decides it on the template's body, once per instance (esm-spec §9.6.4
+    rule 3), reading each parameter as the axes of what it binds; it MUST NOT treat a
+    reference as undecided because it is a reference, since a firing discretization rule writes
+    one (esm-spec §9.6.3 constraint 7);
   - every other node is undecided.
 
   A definition is followed once and its answer remembered, so the answer does not depend on the
   order equations are visited in; a name reached again while its own definition is being read
   (a cycle) is undecided.
 - **Candidates.** A scalar state is a candidate when its merged equation's right-hand side
-  carries an operator `makearray` (the operator route; its grid follows "Pointwise lift: index
+  carries an operator `makearray`, read on the expanded tree as in "Pointwise lift: index sets"
+  below — a reference whose body holds the `makearray`, such as the reference a firing
+  discretization rule writes (esm-spec §9.6.3 constraint 7), carries it (the operator route; its grid follows "Pointwise lift: index
   sets" below), or when that right-hand side's value axes are decided and not empty (its grid is
   those index sets, each of which MUST declare a `size`).
 - **The whole component.** A component is a top-level `models` or `reaction_systems` entry with
@@ -1808,7 +1824,13 @@ arrays, such as a 0-D component's coefficient `k = v · ρ / Δp` whose inputs a
 feeds from grid fields. The author wrote such a read elementwise and outside any `faq`; the lift
 is what puts it inside one, so a read the lift left bare would be refused at build as
 `faq_bare_array_operand` (esm-spec §4.3.1). Only a declared shape names an index set for the
-grid (rule 1 above). Fixture: `tests/conformance/flatten_wire/fixtures/lift_inferred_operand.esm`.
+grid (rule 1 above). **A template reference is read at the cell without expanding it**, by the
+rule of esm-spec §9.6.11 "Realization": a reference whose value is an array (a stencil a
+discretization rule wrote, esm-spec §9.6.3 constraint 7) is read as `index(<reference>, ℓ…)`;
+inside a reference, a binding for a scalar-role parameter is read at the cell and a binding for
+an array-role parameter stays whole, with a mixed parameter taking the template's cellwise
+variant. The lift writes no expansion, and `Expand` of its result is what reading the expansion
+at the cell gives. Fixture: `tests/conformance/flatten_wire/fixtures/lift_inferred_operand.esm`.
 
 **Per-term provenance (normative; issue #539).** Flatten sums `operator_compose` and `couple`
 contributions into one right-hand side. `equation_contributions` records where each summand came

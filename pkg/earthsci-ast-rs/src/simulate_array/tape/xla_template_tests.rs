@@ -279,7 +279,7 @@ fn computed_subscript_gathers_resolve_as_the_oracle_does() {
     for kind in [BoundaryKind::Clamp, BoundaryKind::Periodic] {
         let mut compiled = compile(gather_doc(u.len()));
         compiled.const_scope =
-            std::sync::Arc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
+            std::sync::Arc::new(ConstArrayScope::default().with_boundary("M.C", vec![kind]));
         let prog = program(&compiled);
         assert!(
             prog.opcode_count("DataGather") >= 1,

@@ -127,12 +127,14 @@ pub(crate) struct LiftPlan {
 ///
 /// # Errors
 ///
-/// `array_shape_mismatch` (esm-spec §9.6.11, §4.3.4) when the array arguments
-/// of a lifted right-hand side have no common index sets (neither one's index
-/// sets contain the other's, or an operand names an index set the declared
-/// result shape does not), and when an application of any equation reads an
-/// anonymous array (a `const` array literal, a `reshape` result) in a value
-/// position, which has no index sets to align by.
+/// `array_shape_mismatch` (esm-spec §9.6.11, §4.3.4) when a lifted variable
+/// declared without a `shape` has no one shape (its definition reads itself
+/// through a cycle of definitions, or another equation also defines it), when
+/// the index sets a right-hand side is lifted over name one index set twice,
+/// and when an application of any equation reads an anonymous array (a
+/// `const` array literal, a `reshape` result) in a value position, which has
+/// no index sets to align by. An operand over an index set a declared result
+/// shape lacks is refused when the lift gathers it.
 pub(crate) fn plan_elementwise_lift(model: &Model) -> Result<LiftPlan, String> {
     let mut shapes: HashMap<String, Vec<String>> = model
         .variables
@@ -196,9 +198,7 @@ pub(crate) fn plan_elementwise_lift(model: &Model) -> Result<LiftPlan, String> {
     for d in crate::structural::dependency_first_order(&deps) {
         let k = defs[d];
         let names: Vec<&str> = reads[k].iter().map(|(n, _)| *n).collect();
-        // A right-hand side whose array arguments do not meet is left
-        // unshaped here and refused below if it is lifted.
-        if let Ok(Some(axes)) = union_axes(&names, &shapes) {
+        if let Some(axes) = union_axes(&names, &shapes) {
             let (name, _) = targets[k].as_ref().expect("a definition has a target");
             shapes.insert(name.clone(), axes);
         }
@@ -224,7 +224,6 @@ pub(crate) fn plan_elementwise_lift(model: &Model) -> Result<LiftPlan, String> {
             None => {
                 let names: Vec<&str> = reads[k].iter().map(|(n, _)| *n).collect();
                 let axes = union_axes(&names, &shapes)
-                    .map_err(|m| format!("array_shape_mismatch: '{lhs}': {m}"))?
                     .ok_or_else(|| format!("array_shape_mismatch: '{lhs}': no array operand"))?;
                 if shapes.get(lhs) != Some(&axes) {
                     return Err(format!(
@@ -387,30 +386,20 @@ fn reduction_bound(node: &ExpressionNode, bound: &HashSet<String>) -> HashSet<St
 }
 
 /// The index sets an elementwise application over the shaped `reads` runs
-/// over: the one read's index sets that contain every other read's (§4.3.4).
-/// `Ok(None)` when nothing is read; `Err` when no read's index sets contain
-/// all the others'.
-fn union_axes(
-    reads: &[&str],
-    shapes: &HashMap<String, Vec<String>>,
-) -> Result<Option<Vec<String>>, String> {
-    let mut acc: Option<&Vec<String>> = None;
-    for n in reads {
-        let Some(s) = shapes.get(*n) else { continue };
-        acc = match acc {
-            None => Some(s),
-            Some(cur) if s.iter().all(|a| cur.contains(a)) => Some(cur),
-            Some(cur) if cur.iter().all(|a| s.contains(a)) => Some(s),
-            Some(cur) => {
-                return Err(format!(
-                    "array arguments over {cur:?} and {s:?} (from '{n}'): neither one's index \
-                     sets contain the other's, so there is no elementwise result shape \
-                     (esm-spec §9.6.11, §4.3.4)"
-                ));
+/// over: the union of the reads' index sets, in order of first appearance
+/// (§4.3.4), so reads over disjoint index sets span their outer product.
+/// `None` when no read is shaped.
+fn union_axes(reads: &[&str], shapes: &HashMap<String, Vec<String>>) -> Option<Vec<String>> {
+    let mut out: Option<Vec<String>> = None;
+    for s in reads.iter().filter_map(|n| shapes.get(*n)) {
+        let acc = out.get_or_insert_with(Vec::new);
+        for axis in s {
+            if !acc.contains(axis) {
+                acc.push(axis.clone());
             }
-        };
+        }
     }
-    Ok(acc.cloned())
+    out
 }
 
 /// `n` loop names that no name in `expr` uses.
@@ -925,25 +914,24 @@ mod tests {
     }
 
     #[test]
-    fn incomparable_array_arguments_are_refused() {
+    fn disjoint_array_arguments_span_their_union_in_order_of_first_appearance() {
         let shapes: HashMap<String, Vec<String>> = [
             ("a".to_string(), vec!["x".to_string()]),
             ("b".to_string(), vec!["y".to_string()]),
-        ]
-        .into();
-        let err = union_axes(&["a", "b"], &shapes).unwrap_err();
-        assert!(err.contains("neither one's index sets"), "{err}");
-        let shapes2: HashMap<String, Vec<String>> = [
-            ("a".to_string(), vec!["z".to_string()]),
+            ("s".to_string(), vec!["z".to_string()]),
             (
-                "b".to_string(),
+                "w".to_string(),
                 vec!["x".to_string(), "y".to_string(), "z".to_string()],
             ),
         ]
         .into();
-        assert_eq!(
-            union_axes(&["a", "b"], &shapes2).unwrap(),
-            Some(vec!["x".to_string(), "y".to_string(), "z".to_string()])
-        );
+        let axes = |v: &[&str]| Some(v.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        assert_eq!(union_axes(&["a", "b"], &shapes), axes(&["x", "y"]));
+        assert_eq!(union_axes(&["b", "a"], &shapes), axes(&["y", "x"]));
+        // A read over a subset contributes its axes where it first appears.
+        assert_eq!(union_axes(&["s", "w"], &shapes), axes(&["z", "x", "y"]));
+        assert_eq!(union_axes(&["w", "s"], &shapes), axes(&["x", "y", "z"]));
+        // Unshaped reads are scalars and contribute nothing.
+        assert_eq!(union_axes(&["k"], &shapes), None);
     }
 }

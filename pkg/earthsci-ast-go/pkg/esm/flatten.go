@@ -1187,20 +1187,19 @@ func placeholderLeaveAlone() map[string]bool {
 	return map[string]bool{DefaultIndepVar: true, operatorPlaceholderVar: true}
 }
 
-// dataSourceFields returns every data-fed parameter of the model as a
-// LoaderField (esm-spec §8.5). A parameter whose `update` is `kind: "data"`
+// dataSourceFields returns every data-fed parameter of one component as a
+// LoaderField (esm-spec §8.5), in the order of names. rulesOf returns a name's
+// update rules, or nil when the name is not a parameter; a model's parameter
+// variables and a reaction system's parameters both count (esm-libraries-spec
+// §4.7.5 step 4). A parameter whose `update` is `kind: "data"`
 // reads one `file_variable` of the named document-scoped source; its cadence
 // follows the SOURCE, not its own declaration (CONFORMANCE_SPEC §5.7.2). An
 // unresolvable source is skipped — `data_source_undefined` is the validator's
 // finding, not flatten's.
-func dataSourceFields(model *Model, fullPrefix string, varOrder []string, sources map[string]DataSource) []LoaderField {
+func dataSourceFields(fullPrefix string, names []string, rulesOf func(string) []ParameterUpdate, sources map[string]DataSource) []LoaderField {
 	var out []LoaderField
-	for _, varName := range varOrder {
-		v := model.Variables[varName]
-		if v.Type != VarTypeParameter {
-			continue
-		}
-		for _, rule := range v.UpdateRules() {
+	for _, varName := range names {
+		for _, rule := range rulesOf(varName) {
 			if rule.Kind != UpdateKindData || rule.From == nil {
 				continue
 			}
@@ -1331,7 +1330,12 @@ func collectModel(file *ESMFile, model *Model, fullPrefix, docPath string, sourc
 
 	component.namespaceEquations(model.Equations, fullPrefix, leaveAlone, subKeys, locals)
 	component.loaderFields = append(component.loaderFields,
-		dataSourceFields(model, fullPrefix, varOrder, sources)...)
+		dataSourceFields(fullPrefix, varOrder, func(name string) []ParameterUpdate {
+			if v := model.Variables[name]; v.Type == VarTypeParameter {
+				return v.UpdateRules()
+			}
+			return nil
+		}, sources)...)
 
 	for _, subName := range orderedKeys(model.Subsystems, file.declarationOrder(docPath+"/subsystems")) {
 		sub, ok := decodeSubsystemAs[Model](model.Subsystems[subName])
@@ -1358,7 +1362,7 @@ func collectModel(file *ESMFile, model *Model, fullPrefix, docPath string, sourc
 // PARAMETER: the spec holds its concentration fixed and emits no ODE for it, so
 // it is not a state. Its `default` carries over as the parameter's fixed value,
 // so it still reads as a concentration in every rate law.
-func collectReactionSystem(file *ESMFile, rs *ReactionSystem, fullPrefix, docPath string) (*componentSystem, error) {
+func collectReactionSystem(file *ESMFile, rs *ReactionSystem, fullPrefix, docPath string, sources map[string]DataSource) (*componentSystem, error) {
 	component := newComponentSystem(fullPrefix)
 	leaveAlone := placeholderLeaveAlone()
 
@@ -1413,6 +1417,12 @@ func collectReactionSystem(file *ESMFile, rs *ReactionSystem, fullPrefix, docPat
 		})
 	}
 
+	// Data-fed parameters (esm-spec §8.5), in declaration order.
+	component.loaderFields = append(component.loaderFields,
+		dataSourceFields(fullPrefix, paramOrder, func(name string) []ParameterUpdate {
+			return rs.Parameters[name].UpdateRules()
+		}, sources)...)
+
 	derived, err := lowerReactionsToEquations(rs, speciesOrder)
 	if err != nil {
 		return nil, err
@@ -1426,7 +1436,7 @@ func collectReactionSystem(file *ESMFile, rs *ReactionSystem, fullPrefix, docPat
 			continue
 		}
 		subComponent, err := collectReactionSystem(file, &sub, fullPrefix+"."+subName,
-			docPath+"/subsystems/"+subName)
+			docPath+"/subsystems/"+subName, sources)
 		if err != nil {
 			return nil, err
 		}
@@ -3113,7 +3123,7 @@ func collectComponents(file *ESMFile) (map[string]*componentSystem, []string, er
 		if rs.unresolvedMountRef != "" {
 			return nil, nil, unresolvedTopLevelMountError("reaction_systems", name, rs.unresolvedMountRef)
 		}
-		comp, err := collectReactionSystem(file, &rs, name, "/reaction_systems/"+name)
+		comp, err := collectReactionSystem(file, &rs, name, "/reaction_systems/"+name, sources)
 		if err != nil {
 			return nil, nil, err
 		}

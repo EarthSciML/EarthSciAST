@@ -95,8 +95,11 @@ fn the_flattened_coupled_case_written_out_and_read_back_matches_the_template_for
     }
 }
 
+/// Array arguments over unrelated index sets (`px[a]`, `py[b]`) give the
+/// outer product over their union (esm-spec §4.3.4, §9.6.11), under both
+/// compilers.
 #[test]
-fn arrays_over_unrelated_index_sets_are_refused() {
+fn arrays_over_unrelated_index_sets_span_their_union() {
     let doc = r#"{"esm": "2.0.0", "metadata": {"name": "taa_mismatch"},
       "index_sets": {"a": {"kind": "interval", "size": 2}, "b": {"kind": "interval", "size": 3}},
       "models": {"M": {
@@ -119,8 +122,9 @@ fn arrays_over_unrelated_index_sets_are_refused() {
             compiler: Some(compiler),
             ..Default::default()
         };
-        let err = esm_problem(&file, (0.0, 1.0), opts).expect_err("refused");
-        assert!(err.to_string().contains("array_shape_mismatch"), "{err}");
+        if let Err(err) = esm_problem(&file, (0.0, 1.0), opts) {
+            panic!("{compiler:?}: {err}");
+        }
     }
 }
 

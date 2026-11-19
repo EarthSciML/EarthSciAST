@@ -163,7 +163,7 @@ fn run_time_subscript_under_a_boundary_policy() {
             ],
         ));
         compiled.const_scope =
-            std::sync::Arc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
+            std::sync::Arc::new(ConstArrayScope::default().with_boundary("M.C", vec![kind]));
         let prog = ab(&compiled, &no_params());
         assert!(
             prog.tables.data_gathers.iter().all(|g| g.order.is_none()),
@@ -742,8 +742,8 @@ fn several_data_subscripts_over_a_rank_1_box() {
             if let Some(kind) = policy {
                 compiled.const_scope = std::sync::Arc::new(
                     ConstArrayScope::default()
-                        .with_boundary("C", vec![kind, kind])
-                        .with_boundary("D", vec![kind, kind, kind]),
+                        .with_boundary("M.C", vec![kind, kind])
+                        .with_boundary("M.D", vec![kind, kind, kind]),
                 );
             }
             ab(&compiled, &no_params());

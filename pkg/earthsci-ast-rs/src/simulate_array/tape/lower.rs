@@ -189,9 +189,7 @@ mod wholesale;
 #[cfg(test)]
 pub(super) use tuples::{set_tuple_list_budget, take_chunk_inputs_held, take_tuple_walks};
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use standalone::StandaloneError;
-#[cfg(not(target_arch = "wasm32"))]
 pub(in crate::simulate_array) use standalone::{collect_variable_names, eval_standalone_rule};
 
 /// What a build knows about the forcing buffer: the box a read of each name
