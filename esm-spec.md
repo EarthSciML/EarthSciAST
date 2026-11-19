@@ -156,6 +156,33 @@ on earthsci.dev. The Lean modules are the authority for the source formats:
 What a document means is still the `.esm` JSON form this document specifies; a
 source document is a lossless spelling of it.
 
+**Operators in the source formats (draft 2.4.0, normative; the Lean modules above are to be
+amended to match).** Each surface writes an operator in its own native form, and reading
+either surface back gives the same node:
+
+| Node | LaTeX (Markdown documents) | Typst |
+|---|---|---|
+| time derivative `D(N; wrt: t)` | `\frac{\mathrm{d} N}{\mathrm{d} t}`; compound operand `\frac{\mathrm{d}}{\mathrm{d} t}\left(…\right)` (unchanged) | `(dif N)/(dif t)` (unchanged) |
+| `partial(u; wrt: x)` | `\frac{\partial u}{\partial x}`; compound operand `\frac{\partial}{\partial x}\left(…\right)` | `(partial u)/(partial x)` |
+| `partial(u, a, b; wrt: x)` (trailing operands) | `\partial_{x}(u, a, b)` | `partial_(x)(u, a, b)` |
+| `grad(f)`, `div(F)`, `laplacian(u)`, `curl(F)` with one operand and no field | `\nabla f`, `\nabla \cdot F`, `\nabla^{2} u`, `\nabla \times F` | `nabla f`, `nabla dot F`, `nabla^2 u`, `nabla times F` |
+| any other operator call, and those four otherwise | `\operatorname{name}(args; fields)` (unchanged) | `op("name")(args; fields)` (unchanged) |
+| `apply_operator` reference | `\operatorname{key}(args)`, positional when the definition's `params` are known (unchanged) | `op("key")(args)` (unchanged) |
+
+The time derivative and the spatial one are told apart by their differential: `\mathrm{d}` /
+`dif` reads back as `D` with `wrt: "t"`, `\partial` / `partial` as `partial` with the `wrt`
+the denominator names (which is never `t`, §4.2). Both renderings show ∂ for `partial`; there
+is no third spelling. The `\nabla` forms are notation only: the format gives `grad`, `div`,
+`laplacian` and `curl` no meaning (§4.2), and a node outside the row's shape prints in the call
+form. The operand of a `\nabla` form, and of `\partial_{x}`, is printed at the level of a power
+base (parenthesized unless atomic), so `\nabla f \cdot g` reads as `grad(f)·g`. `\Delta` is not
+used for the Laplacian, because `Delta` is a Greek variable name. Read on input and never
+printed: `\operatorname{D}_{x}(u, a, b)` / `op("D")_(x)(u, a, b)` (the earlier trailing-operand
+form) as `partial`. A call whose operator name is also the key of a definition with known
+`params` would print like a reference to that definition; it prints in the escape form instead
+(`\esm{…}` / `esm.node(…)`) so that it reads back as the call. `integral` keeps the call form;
+a native `\int` form is not specified here.
+
 ---
 
 ## 2. Top-Level Structure
@@ -848,8 +875,24 @@ which is any axis name, never the literal `"t"`. It is an ordinary operator (§9
 evaluator and no definition in this format: a discretization library supplies its definitions
 (§9.6.8), and with none in scope it is a placeholder. Its call shape is fixed here: `args[0]`
 is the differentiated operand; `args[1..]` are any number of trailing operands (boundary data
-for a definition to bind, below, "Arity of `D`"); `wrt` names the axis. It is printed ∂ in the
-math notation (§1.2). `D` is only the time derivative: strictly unary, `wrt` absent or `"t"`.
+for a definition to bind, below, "Arity of `D`"); `wrt` names the axis. `D` is only the time
+derivative: strictly unary, `wrt` absent or `"t"`. How each source format writes the two is
+§1.2, "Operators in the source formats".
+
+**The unit expressions of `partial` and `integral` are fixed here too (draft 2.4.0,
+normative).** They are part of the call shape, not entries of any `operators` block, so they
+hold whether or not a definition is in scope:
+
+| Call | Unit expression (an Expression tree, §9.6.1 `units`) |
+|---|---|
+| `partial(f, b₁, …; wrt: x)` | `{"op": "/", "args": ["f", "wrt"]}`: the unit of `args[0]` over the unit of the coordinate `wrt` names; trailing operands never enter it |
+| `integral(f; var: v, lower: a, upper: b)` | `{"op": "*", "args": ["f", "var"]}`: the unit of `args[0]` times the unit of the coordinate `var` names |
+
+So an unresolved `partial` or `integral` has a determinable unit whenever its operand's and its
+axis's units are determinable. Every definition of either MUST agree at each call it resolves:
+its own unit expression, if it has one, and its body's unit, when that is determinable, are
+compared with the fixed expression, and a disagreement is `definition_unit_mismatch` as an
+**error**; a body whose unit is undeterminable gives the same code as a warning (§9.6.12).
 
 *Reading earlier documents (no refusal).* At the wire boundary, in the pass that rewrites
 `neg` and `pow` ("Deprecated ops", below), a loader rewrites every `D` whose `wrt` is present
@@ -2251,7 +2294,8 @@ A binding's canonicalizer MUST write every `units` string of the canonical form 
 | `atan2` (2-ary) | The two operands MUST be **COMMENSURATE with each other** — same dimension and same scale, but ANY dimension, not necessarily dimensionless. The result is an **angle** (`rad`). `atan2` is the ONE inverse-trig op that does not take a dimensionless argument: it takes a *ratio not yet formed*, so `atan2(dy_m, dx_m)` is the ordinary spelling of a bearing and MUST be admitted. A checker that gives `atan2` the `asin`/`acos`/`atan` dimensionless-argument rule rejects it. `atan2(dy_m, dx_s)` remains an ERROR — the operands are not commensurate. |
 | **Strict transcendentals** | The argument MUST be **dimensionless at scale 1** — a PURE NUMBER — and the result is dimensionless. The set is EXACTLY: `log` `log10` `exp` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` — nine ops, and no others. (`ln` is not an operator: the natural logarithm is `log`, §4.2, and an `ln` node is a rewrite-target like any other unknown op.) It is a CLOSED list, not a category to be extended by intuition: `sqrt`, `abs`, `min`, `max` are not members and have their own rules above. |
 | a reference (`apply_operator`), and so a resolved operator call | *(Draft 2.4.0.)* The referenced definition's **unit expression** (§9.6.12), evaluated by this table with each parameter standing for the unit of what the reference binds to it (a parameter bound to an axis name stands for that coordinate's unit); trailing operands that no parameter of the expression names do not enter it. A definition without a unit expression has the unit of its body, inferred by this table per instance without evaluating anything. |
-| an unresolved operator call (a placeholder) | UNDETERMINABLE (§4.8.4). |
+| a call of `partial` or `integral`, resolved or not | *(Draft 2.4.0.)* The fixed unit expression of §4.2 ("The unit expressions of `partial` and `integral`"): `args[0]` over the `wrt` coordinate, `args[0]` times the `var` coordinate. A definition that resolves the call must agree with it (§9.6.12). |
+| any other unresolved operator call (a placeholder) | UNDETERMINABLE (§4.8.4). |
 | any other op | No dimensional rule ⇒ the result is UNDETERMINABLE (§4.8.4). It is **not** dimensionless. |
 
 **Angles are the ONE exception to the dimensionless-argument rule, and they must be.** `rad` is one of the eight axes (§4.8.1), so an angle is NOT dimensionless — which means a rule that demanded a dimensionless argument for *every* transcendental would make `cos(θ)` illegal, and `cos(θ)` is the single most common operation in earth science. It would reject the shipped standard library (`lib/solar.esm`: `cos_zenith = sin φ · sin δ + cos φ · cos δ · cos ω`) and `tests/valid/lib_solar_subsystem_inclusion.esm` (`cos(Solar.solar_zenith_angle)`) along with it. The circular functions map an angle to a pure ratio and their inverses map a ratio back to an angle; the hyperbolic and logarithmic/exponential functions do not, and keep the strict rule. This is the only place where tracking `rad` as an axis costs anything, and it is what tracking it buys: a latitude in `deg` stays distinguishable from a bare number.
@@ -5552,6 +5596,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3), counted as rewrite depth through definition bodies, or a definition instance's rewriting needs the same instance again (§9.6.4 rule 3). |
 | `derived_index_set_unmaterialized` | An expression ranges over a `kind: "derived"` index set whose producer could not be materialized at build — a `distinct` producer whose key column is not a constant factor (§4.2), or a producer no stage evaluated. Raised when the model is built for evaluation, naming the index set and its `from_faq` producer. The evaluator MUST NOT contract the range as empty: an empty range folds to the semiring's additive identity, and a `0` indistinguishable from a real count is exactly the silent wrong answer this code exists to prevent. |
 | `value_invention_key_out_of_range` | A `distinct` producer's `key`, or a column a value-invention `join.on` clause reads, evaluates to NaN at build. The key definitions of `lib/relational.esm` (`pair_key`, `edge_key`) return NaN for a component that is outside its declared range, non-integral or NaN, so that a key can never collide silently with another; this code is how that reaches the author. Raised when value invention runs, naming the column (the producer whose `key` it is, or the join column) and the loop indices at which it was NaN. Takes precedence over `derived_index_set_unmaterialized`: the producer ran, and the column, not the data, is wrong. Fixture: `tests/conformance/value_invention_materialize/fixtures/key_out_of_range.esm`. |
+| `operator_arity_mismatch` | *(Draft 2.4.0.)* At load: a call of an operator whose definitions in scope all take another number of operands (§9.6.12). |
 | `deprecated_field` | *(Draft 2.4.0, warning.)* A document spells `expression_templates` or `expression_template_imports`; the loader reads it as `operators` or `operator_imports`. Neither old spelling survives into the loaded or emitted document. |
 | `definition_unit_mismatch` | *(Draft 2.4.0.)* At a call, a definition's body has a determinable unit that disagrees with its unit expression: an **error**. When the body's unit is undeterminable the same finding is a **warning** (§9.6.12). |
 | `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. *(Draft 2.4.0: an operator call no definition resolved, or a placeholder. The message MUST name the operator and the call, and list each definition of that operator in scope with the reason it was not eligible there — its `match` did not match, its `where` failed (naming the constraint and the operand's declared shape), or its arity differed.)* Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
@@ -5601,6 +5646,25 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `ragged_values_not_gathered` | A `faq` that is not a value-invention node ranges over a `kind: "ragged"` index set, but its body (`expr` / `filter`) never reads that set's `values` array (§4.3.1 "Ragged ranges"). The range binds the position `k ∈ 1..offsets[parent]`, not a member, so the body reads positions where members were meant. Reported by `validate()` in every binding at the containing expression field. Not decided for a body holding an `apply_operator` reference, nor for a set the document does not declare. |
 | `faq_bare_array_operand` | A `faq`'s `expr` or `filter` reads a variable declared with a non-empty `shape` by bare name in an elementwise position (§4.3.1 "Shaped variables inside a `faq` are read through `index`"). The node names its axes by its range symbols, so the read must be `index(v, i, …)`. Reported by `validate()` in every binding at the containing expression field, on the authored equations of every model and inline subsystem, where a definition application is opaque; refused at build by every evaluating binding on the flattened, definition-expanded system after the §9.6.11 elementwise lift, against declared and inferred shapes. A loop symbol of the node or an enclosing node shadows the declaration; an observed or recurrence definition's own variable is left to `recurrence_not_wellfounded` / `observed_cycle`, a derivative's is not. |
 | `operator_constraint_unknown_index_set` | A `where` `shape` constraint (§9.6.1) names an index set the consuming document's merged `index_sets` registry (§9.7.5) does not declare. Raised at rule registration in the consuming component — a loud typo failure, mirroring `operator_import_unknown_name`. A constrained rule that merely never fires is NOT an error. |
+
+**Renamed codes (draft 2.4.0).** The codes named after templates are renamed; each old code is
+an **alias** of its new one: a binding reports the new code, and a harness, test or tool that
+matches the old spelling MUST treat it as the new one.
+
+| Old code | New code |
+|---|---|
+| `apply_expression_template_version_too_old` | `operator_version_too_old` |
+| `apply_expression_template_unknown_template` | `operator_unknown_definition` |
+| `apply_expression_template_bindings_mismatch` | `operator_bindings_mismatch` |
+| `apply_expression_template_recursive_body` | `operator_recursive_body` |
+| `apply_expression_template_invalid_declaration` | `operator_invalid_definition` |
+| `template_import_unknown_name`, `template_import_not_library`, `template_import_index_set_conflict`, `template_import_unresolved`, `template_import_rename_unknown_name`, `template_import_rename_invalid`, `template_import_rename_collision`, `template_import_name_conflict`, `template_import_version_too_old`, `template_import_rebind_unknown_name`, `template_import_cycle`, `template_import_is_coupling_library` | the same with `operator_import_` in place of `template_import_` |
+| `template_constraint_unknown_index_set` | `operator_constraint_unknown_index_set` |
+| `template_body_expansion_too_deep` | `operator_body_expansion_too_deep` |
+| `template_library_illegal_payload` | `operator_library_illegal_payload` |
+| `subsystem_ref_is_template_library` | `subsystem_ref_is_operator_library` |
+| `template_inject_target_unknown`, `template_inject_target_not_component` | `operator_inject_target_unknown`, `operator_inject_target_not_component` |
+| `template_body_references_coupling_rewritten_variable`, `template_body_references_pushdown_rewritten_variable` | the same with `operator_body_` in place of `template_body_` |
 
 #### 9.6.7 Conformance fixtures
 
@@ -5742,8 +5806,11 @@ for staggered fields, the staggered index set they live on:
 ```
 
 **Staggered fields live on their own index sets.** A face-centred field is declared over a face
-index set (`i_face`, with N+1 points for N cells, or the grid's own convention), not over the
-cell set with an advisory tag, so that `shape` alone selects the definition: a flux divergence
+index set, not over the cell set with an advisory tag. Along a **bounded** axis of N cells the
+face set has **N+1** points: every cell's flux divergence needs both of its faces, and the two
+boundary faces are where the boundary condition acts (a wall's zero normal velocity, an open
+boundary's inflow). Along a **periodic** axis it has **N** points: face N+1 is face 1. So
+`shape` alone selects the definition: a flux divergence
 is `where U: ["i_face", "j"]`, a cell-centred gradient `where f: ["i", "j"]`. The `location`
 field of §6 stays advisory and is not read by matching.
 
@@ -5816,11 +5883,12 @@ Whether an argument is array-valued is decided on the **flattened** system (§10
 #### 9.6.12 One operator type (normative)
 
 > **Draft (proposed for 2.4.0).** This subsection replaces three earlier notions — the open
-> rewrite-target tier with its user ops, the rewrite-target sugar, and expression definitions —
-> with one: the **operator**, given by its **definitions**. Elsewhere in this text, until it
-> is reworded, "definition" means an operator definition, "definition reference" an
-> `apply_operator` reference, "rule" a definition with a `match`, and "rewrite-target" an
-> unresolved operator call.
+> rewrite-target tier with its user ops, the rewrite-target sugar, and expression templates —
+> with one: the **operator**, given by its **definitions**. Terminology: earlier revisions
+> called a definition an *expression template*, its block `expression_templates` and its
+> reference `apply_expression_template`; this text says *definition*, `operators` and
+> `apply_operator` throughout. A *rule* is a definition with a `match`; a *rewrite-target* is
+> an unresolved operator call.
 
 **Operators and definitions.** Every `op` string that is not core (§4.2) and not removed names
 an **operator**. Every entry of an `operators` block (§9.6.1) — in a component, or in an
@@ -5852,6 +5920,14 @@ derivatives — fires on that whole shape, as before; outermost-first selection 
 shape before the inner calls are resolved. Such a definition defines no callable name (§9.6.1
 `defines`).
 
+**Arity (an error at load).** When definitions of `N` are in scope and none of them takes the
+number of operands a call of `N` carries — a definition's count is its `params` when it has no
+`match`, and the operand count of its pattern's root otherwise — the call is
+`operator_arity_mismatch` at load, naming the call and the counts in scope. With no definition of
+`N` in scope the call is a placeholder (below), whatever its arity. The check runs wherever the
+fixpoint runs, with the scope it runs with: a component loaded on its own sees its own and its
+imported definitions, not those a test or an assembly injects (§9.7.10).
+
 **Placeholders.** A call of a name with no definition in scope is legal. It loads, validates
 and round-trips unchanged — the discretization-agnostic component of §6.6.6, the test input
 `input_T()` that an injected library defines per test (§9.7.10). Its unit is UNDETERMINABLE
@@ -5864,10 +5940,16 @@ definition without a unit expression has its body's unit, inferred statically pe
 a definition has both and they disagree at a call, a checker reports `definition_unit_mismatch`:
 an **error** when the body's unit is determinable, a **warning** when it is not (a stencil whose
 spacing is built from bare-integer metaparameters). A call carries no `units` of its own.
+`partial` and `integral` are the exception that needs no definition: §4.2 fixes their unit
+expressions with their call shapes, so their calls have a unit even unresolved, and every
+definition of them is checked against it. Any other call with no definition in scope has an
+UNDETERMINABLE unit.
 
 **The spatial derivative and the standard names.** `partial` (§4.2) and `integral` are operator
-names whose call shapes this specification fixes — `partial`'s axis field `wrt` and its trailing
-operands; `integral`'s `var`, `lower` and `upper` — and for which it ships no definition.
+names whose call shapes and unit expressions this specification fixes — `partial`'s axis field
+`wrt`, its trailing operands and `[f]/[wrt]`; `integral`'s `var`, `lower`, `upper` and
+`[f]·[var]` — and for which it ships no definition (nor any entry without a body: the fixed facts
+are part of §4.2, not of an `operators` block).
 `grad`, `div`, `laplacian` and `curl` are names whose meaning a library documents (§9.8.5); this
 format fixes nothing about them. All six are placeholders until a definition is in scope.
 
@@ -5879,8 +5961,8 @@ definition's key was renamed on import.
 **Old names (no refusal).** A loader reads `expression_templates` as `operators` and
 `expression_template_imports` as `operator_imports` (warning `deprecated_field`), and the op
 `apply_expression_template` as `apply_operator` (warning `deprecated_op`), at the wire boundary
-on every document a load touches. Emit writes only the new names. Diagnostic codes keep their
-spelling (`operator_unknown_definition`, `operator_import_name_conflict`, …).
+on every document a load touches. Emit writes only the new names. Diagnostic codes named after templates are renamed, and
+each old code is an alias of its new one (§9.6.6, "Renamed codes").
 
 ### 9.7 Operator libraries, cross-file imports, and metaparameters
 
