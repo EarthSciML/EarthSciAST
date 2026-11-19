@@ -161,18 +161,14 @@ func ConstantParameters(model *Model) []string {
 // --- system kind ------------------------------------------------------------
 
 // SystemKind derives what the `system_kind` field declares (esm-spec §6.3.1),
-// testing four conditions IN ORDER and taking the first that holds:
+// testing three conditions IN ORDER and taking the first that holds:
 //
 //  1. any Brownian parameter                   => "sde"
-//  2. any equation holds a spatial derivative  => "pde"
-//  3. no time-derivative equation at all       => "nonlinear"
-//  4. otherwise                                => "ode"
+//  2. no time-derivative equation at all       => "nonlinear"
+//  3. otherwise                                => "ode"
 //
-// The order is normative and two orderings that look interchangeable are not.
-// "pde" is tested BEFORE "nonlinear" so a steady-state PDE
-// (D(D(phi, wrt: x), wrt: x) ~ f, which has no time derivative) does not fall through to "nonlinear"; "sde" is
-// tested BEFORE "pde" because there is no SPDESystem constructor to select for
-// a model that is both.
+// Spatial derivatives do not enter the derivation: esm 2.4.0 dropped the "pde"
+// kind, so a declared "pde" is deprecated and ignored (DeclaredSystemKind).
 //
 // Detection is a property of the EQUATIONS, never of the `domain` block: v0.8.0
 // removed Domain.spatial, so `domain` carries nothing spatial and the earlier
@@ -188,9 +184,6 @@ func SystemKind(model *Model) string {
 	if len(BrownianParameters(model)) > 0 {
 		return SystemKindSDE
 	}
-	if hasDifferentialOperator(model) {
-		return SystemKindPDE
-	}
 	if !hasTimeDerivative(model) {
 		return SystemKindNonlinear
 	}
@@ -205,8 +198,12 @@ func SystemKind(model *Model) string {
 // (API_SPEC.md §8 item 11): SystemKind always derives an answer, and
 // EffectiveSystemKind always produces one. Comparing this against SystemKind is
 // what detects `system_kind_mismatch`.
+//
+// A declared "pde" counts as ABSENT: the kind was dropped at esm 2.4.0, so the
+// value is deprecated and ignored (a load warns `deprecated_system_kind`), and
+// the model is treated as its derived kind.
 func DeclaredSystemKind(model *Model) *string {
-	if model == nil {
+	if model == nil || model.SystemKind == nil || *model.SystemKind == SystemKindPDE {
 		return nil
 	}
 	return model.SystemKind
@@ -374,36 +371,6 @@ func derivativeIsTemporal(node ExprNode) bool {
 func hasTimeDerivative(model *Model) bool {
 	for _, eq := range model.Equations {
 		if len(derivativeTargets(eq.LHS)) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// hasDifferentialOperator reports whether any equation uses a SPATIAL
-// differential operator — a `D` with an explicit non-temporal `wrt`.
-func hasDifferentialOperator(model *Model) bool {
-	for _, eq := range model.Equations {
-		if exprHasSpatialOperator(eq.LHS) || exprHasSpatialOperator(eq.RHS) {
-			return true
-		}
-	}
-	return false
-}
-
-// The open rewrite-target tier is unbounded, so the rule cannot be "any op
-// that looks differential" and still agree across five bindings: a spatial
-// derivative is written as a `D` with a non-`t` `wrt`.
-func exprHasSpatialOperator(expr Expression) bool {
-	node, ok := asExprNode(expr)
-	if !ok {
-		return false
-	}
-	if node.Op == OpDerivative && node.Wrt != nil && *node.Wrt != DefaultIndepVar {
-		return true
-	}
-	for _, child := range exprRefChildren(node) {
-		if exprHasSpatialOperator(child.Child) {
 			return true
 		}
 	}

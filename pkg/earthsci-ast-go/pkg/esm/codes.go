@@ -491,6 +491,12 @@ const (
 	// "Deprecated ops", deprecated_ops.go).
 	codeDeprecatedOp = "deprecated_op"
 
+	// codeDeprecatedSystemKind is the load-time WARNING (not an error) for a
+	// document whose model declares `"system_kind": "pde"`, a value esm 2.4.0
+	// dropped: it is ignored and the model is treated as its derived kind
+	// (deprecated_system_kind.go).
+	codeDeprecatedSystemKind = "deprecated_system_kind"
+
 	// codeDeprecatedRecordsPerSample is the load-time WARNING (not an error)
 	// for a document that writes the deprecated `from.records_per_sample` or
 	// `temporal.records_per_sample` (esm-spec §8.3, §8.5.1; removed at esm
@@ -632,7 +638,10 @@ const (
 	SystemKindDAE       = "dae"
 	SystemKindNonlinear = "nonlinear"
 	SystemKindSDE       = "sde"
-	SystemKindPDE       = "pde"
+	// SystemKindPDE is the DEPRECATED declared value "pde" (esm 2.4.0): no
+	// derivation produces it, and a model that declares it is treated as its
+	// derived kind (DeclaredSystemKind) with a `deprecated_system_kind` warning.
+	SystemKindPDE = "pde"
 )
 
 // --- Spec default: the independent variable when Domain.IndependentVariable
