@@ -203,19 +203,27 @@ end
 # the `__arrarg` marker of its geometry source, read as a const array.
 function _geo_call_arrays(call::OpExpr, g::_GeoCompileCtx)
     ct = _call_table()
+    # A binding compiled into the instance with its leaves marked
+    # (call.jl `_call_mark_inlined`): its arrays are geometry sources.
+    ct === nothing || (call = _call_mark_inlined(identity, a -> _geo_arrarg(a, g), (ct::_CallTable).tt, call))
     arrs = ct === nothing ? nothing : _call_array_slots((ct::_CallTable).tt, call)
     (arrs === nothing || isempty(arrs)) && return call
     call = _call_with_implicit(call)
     nb = copy(call.bindings::AbstractDict)
     for (k, v) in nb
         ((startswith(k, _TPL_FREE) ? k : _TPL_ARG * k) in arrs) || continue
-        src = _geo_source(v, g)
-        src isa AbstractArray ||
-            _decline(:call_array_args, "a template call passing a ring slice in setup geometry")
-        name = v isa VarExpr ? v.name : "geometry source"
-        nb[k] = OpExpr("__arrarg", ASTExpr[]; value = _ArrArg(:const, _const_gather_payload(src, name), name))
+        nb[k] = _geo_arrarg(v, g)
     end
     return reconstruct(call; bindings = nb)
+end
+
+# The `__arrarg` marker of a geometry source passed as an array argument.
+function _geo_arrarg(v::ASTExpr, g::_GeoCompileCtx)
+    src = _geo_source(v, g)
+    src isa AbstractArray ||
+        _decline(:call_array_args, "a template call passing a ring slice in setup geometry")
+    name = v isa VarExpr ? v.name : "geometry source"
+    return OpExpr("__arrarg", ASTExpr[]; value = _ArrArg(:const, _const_gather_payload(src, name), name))
 end
 
 # A ring/array SOURCE: an env array by name or a partial `index` slice of a

@@ -234,7 +234,13 @@ end
 
 # The `_ArrArg` the reference binds to array slot `s` (resolved to its marker).
 function _call_arrarg(tg::_CallTarget, b::AbstractDict, s::String)
-    v = _call_arg(b, s)
+    v = if startswith(s, _TPL_INA)
+        # An array read inside a binding compiled into the instance.
+        p, k = rsplit(s[(ncodeunits(_TPL_INA) + 1):end], '\0'; limit = 2)
+        _inl_arrays(b[String(p)])[parse(Int, k)]
+    else
+        _call_arg(b, s)
+    end
     (v isa OpExpr && v.op == "__arrarg" && v.value isa _ArrArg) || throw(
         TreeWalkError(
             "E_TREEWALK_UNSUPPORTED_OP",
@@ -344,11 +350,22 @@ function _call_target(ct::_CallTable, call::OpExpr)
             print(io, '\x01', p, '=', S[p])
         end
         hp = _call_has_lanes(call) ? _call_hoist_plan(ct.tt, def, S, _call_outs(info, call)) : nothing
+        asrc = Tuple{String, ASTExpr}[]
         for s in sort!(collect(info.arrays))
             # An array every read of which the caller makes (`_call_hoist_plan`)
             # is no argument.
             hp === nothing || !(s in hp.whole) || continue
-            v = _call_arg(b, s)
+            push!(asrc, (s, _call_arg(b, s)))
+        end
+        # The arrays read inside bindings compiled into the instance.
+        for p in sort!(collect(def.params))
+            v = get(b, p, nothing)
+            (v === nothing || !_inl_is_marked(v)) && continue
+            for (k, m) in enumerate(_inl_arrays(v))
+                push!(asrc, (_TPL_INA * p * "\0" * string(k), m))
+            end
+        end
+        for (s, v) in asrc
             k = (v isa OpExpr && v.value isa _ArrArg) ? (v.value::_ArrArg).kind : :unresolved
             arrkind[s] = k
             print(io, '\x02', s, '=', k)
@@ -371,7 +388,7 @@ function _call_target(ct::_CallTable, call::OpExpr)
     hp = info === nothing || !_call_has_lanes(call) ? nothing : _call_hoist_plan(ct.tt, def, S, outs)
     hp === nothing || print(io, '\x04', "lanes")
     # Compound bindings read only on some paths, compiled into the instance.
-    inl = info === nothing ? Dict{String, ASTExpr}() : _call_inlined(info, def, S, b)
+    inl = info === nothing ? Dict{String, ASTExpr}() : _call_inlined(ct.tt, info, def, S, b)
     for sn in sort!(collect(keys(inl)))
         print(io, '\x05', sn, '=', _inl_key(b[sn[(ncodeunits(_TPL_ARG) + 1):end]]))
     end
@@ -722,6 +739,7 @@ const _EMPTY_VARMAP = Dict{String, Int}()
 
 const _TPL_BASE = "\0base\0"
 const _TPL_IN = "\0in\0"
+const _TPL_INA = "\0ina\0"
 
 # ---- Compound bindings compiled into the instance -------------------------------
 # A parameter the body reads only on some paths, bound to a compound
@@ -733,18 +751,47 @@ const _TPL_IN = "\0in\0"
 # per-cell substitution (a loop index becoming a number) does not make an
 # instance per cell; a literal exponent stays in the skeleton (`x^2`).
 
-function _call_inlined(info::_TplCallInfo, def::_TplDef, S, b::AbstractDict)
+function _call_inlined(tt::_TplTable, info::_TplCallInfo, def::_TplDef, S, b::AbstractDict)
     out = Dict{String, ASTExpr}()
     for p in def.params
-        sn = _TPL_ARG * p
-        (haskey(S, p) || sn in info.arrays || sn in info.fixed || sn in info.uncond || !(sn in info.scalars)) && continue
+        haskey(S, p) && continue
         v = get(b, p, nothing)
-        (v === nothing || _tpl_plain_binding(v) || !_tpl_inlinable(v)) && continue
+        v === nothing && continue
+        _call_inl_mode(tt, info, def, p, v) === :none && continue
         k = Ref(0)
-        out[sn] = _inl_skel(v, p, k)
+        a = Ref(0)
+        out[_TPL_ARG * p] = _inl_is_marked(v) ? _inl_mskel(v, p, k, a) : _inl_skel(v, p, k)
     end
     return out
 end
+
+# How the binding `v` of parameter `p` reaches the body: `:none` (passed as a
+# value, or an array, or never read), `:plain` (a compound binding of names,
+# literals and elementwise operators read on some paths only, compiled into
+# the instance with its names and literals as arguments), `:marked` (one that
+# reads an array, or reads a name the body binds: compiled into the instance
+# with its leaves marked where the reference's bindings resolve,
+# `_call_mark_inlined`).
+function _call_inl_mode(tt::_TplTable, info::_TplCallInfo, def::_TplDef, p::String, v::ASTExpr)
+    sn = _TPL_ARG * p
+    (sn in info.arrays || sn in info.fixed || !(sn in info.scalars)) && return :none
+    _inl_is_marked(v) && return :marked
+    B = _tpl_body_binders(tt, def.name)
+    rb = !isempty(B) && _tpl_reads_any(v, B)
+    if !rb
+        sn in info.uncond && return :none
+        _tpl_plain_binding(v) && return :none
+    end
+    _tpl_inlinable(v) || return :none
+    return (rb || _inl_has_index(v)) ? :marked : :plain
+end
+
+_inl_has_index(v::ASTExpr) = v isa OpExpr && (v.op == "index" || any(_inl_has_index, v.args))
+
+# A marked binding (`_call_mark_inlined`): its caller values are
+# `__inleaf(value)` nodes, its arrays `__arrarg` markers, and a bare name in it
+# is one the body binds (it stays a name, read where the body binds it).
+_inl_is_marked(v::ASTExpr) = v isa OpExpr && (v.op == "__inleaf" || v.op == "__arrarg" || any(_inl_is_marked, v.args))
 
 _inl_leaf(x, parent, j) = x isa VarExpr || ((x isa NumExpr || x isa IntExpr) && !(parent == "^" && j == 2))
 function _inl_skel(v::ASTExpr, p::String, k::Base.RefValue{Int}, parent = "", j = 0)
@@ -752,7 +799,17 @@ function _inl_skel(v::ASTExpr, p::String, k::Base.RefValue{Int}, parent = "", j 
     v isa OpExpr || return v
     return reconstruct(v; args = ASTExpr[_inl_skel(a, p, k, v.op, i) for (i, a) in enumerate(v.args)])
 end
+function _inl_mskel(v::ASTExpr, p::String, k::Base.RefValue{Int}, a::Base.RefValue{Int})
+    v isa OpExpr || return v
+    v.op == "__inleaf" && return VarExpr(_TPL_IN * p * "\0" * string(k[] += 1))
+    v.op == "__arrarg" && return VarExpr(_TPL_INA * p * "\0" * string(a[] += 1))
+    return reconstruct(v; args = ASTExpr[_inl_mskel(x, p, k, a) for x in v.args])
+end
 function _inl_leaves(v::ASTExpr, out = ASTExpr[], parent = "", j = 0)
+    if _inl_is_marked(v)
+        _inl_mleaves!(out, v, "__inleaf")
+        return ASTExpr[x.args[1] for x in out]
+    end
     if _inl_leaf(v, parent, j)
         push!(out, v)
     elseif v isa OpExpr
@@ -762,11 +819,65 @@ function _inl_leaves(v::ASTExpr, out = ASTExpr[], parent = "", j = 0)
     end
     return out
 end
+function _inl_mleaves!(out, v::ASTExpr, op::String)
+    v isa OpExpr || return out
+    v.op == op && (push!(out, v); return out)
+    (v.op == "__inleaf" || v.op == "__arrarg") && return out
+    foreach(x -> _inl_mleaves!(out, x, op), v.args)
+    return out
+end
+# The array markers of a marked binding, in skeleton order.
+_inl_arrays(v::ASTExpr) = _inl_mleaves!(ASTExpr[], v, "__arrarg")
 _inl_count(v::ASTExpr) = length(_inl_leaves(v))
 function _inl_key(v::ASTExpr, parent = "", j = 0)
+    if _inl_is_marked(v) || (v isa OpExpr && (v.op == "__inleaf" || v.op == "__arrarg"))
+        v isa OpExpr || return v isa VarExpr ? "V" * v.name : string(v)
+        v.op == "__inleaf" && return "#"
+        if v.op == "__arrarg"
+            a = v.value::_ArrArg
+            return string("A", a.kind)
+        end
+        return string("(", v.op, " ", join((_inl_key(x) for x in v.args), " "), ")")
+    end
     _inl_leaf(v, parent, j) && return "#"
     v isa OpExpr || return string(v)
     return string("(", v.op, " ", join((_inl_key(a, v.op, i) for (i, a) in enumerate(v.args)), " "), ")")
+end
+
+# The reference `call` with each binding that is compiled into its instance as
+# a marked binding (`_call_inl_mode`) rewritten: every maximal part that reads
+# no name the body binds is the caller value `__inleaf(leaf(part))`; an array
+# read at a name the body binds has its array as `arr(name)`, an `__arrarg`
+# marker; a name the body binds stays. `leaf` and `arr` are the compiler's
+# own (the resolve's, the setup geometry compiler's).
+function _call_mark_inlined(leaf, arr, tt::_TplTable, call::OpExpr)
+    info = _tpl_call_info(tt, call.name)
+    (info === nothing || call.bindings === nothing) && return call
+    def = _tpl_def(tt, call.name)
+    def.closed === nothing && return call
+    B = _tpl_body_binders(tt, call.name)
+    nb = nothing
+    for p in def.params
+        v = get(call.bindings, p, nothing)
+        (v === nothing || _inl_is_marked(v)) && continue
+        _call_inl_mode(tt, info, def, p, v) === :marked || continue
+        nb === nothing && (nb = Dict{String, ASTExpr}(call.bindings))
+        nb[p] = _inl_mark(leaf, arr, v, B)
+    end
+    return nb === nothing ? call : reconstruct(call; bindings = nb)
+end
+function _inl_mark(leaf, arr, v::ASTExpr, B::Set{String}, parent = "", j = 0)
+    v isa VarExpr && v.name in B && return v
+    if (v isa NumExpr || v isa IntExpr) && parent == "^" && j == 2
+        return v
+    end
+    if !(v isa OpExpr) || !_tpl_reads_any(v, B)
+        return OpExpr("__inleaf", ASTExpr[leaf(v)])
+    end
+    if v.op == "index" && v.args[1] isa VarExpr
+        return reconstruct(v; args = ASTExpr[arr(v.args[1]), (_inl_mark(leaf, arr, x, B, "index", i + 1) for (i, x) in enumerate(v.args[2:end]))...])
+    end
+    return reconstruct(v; args = ASTExpr[_inl_mark(leaf, arr, x, B, v.op, i) for (i, x) in enumerate(v.args)])
 end
 
 function _call_body_size(n::_Node)

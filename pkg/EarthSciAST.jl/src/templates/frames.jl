@@ -785,9 +785,17 @@ function _tpl_is_called(tt::_TplTable, call::OpExpr)
             (v isa IntExpr || (v isa NumExpr && isinteger(v.value))) || return false
             continue
         end
-        s in info.uncond && continue
         # A parameter the body never reads: its binding is never made.
         s in info.scalars || continue
+        # A binding that reads a name the body binds (a reduction index the
+        # body runs, which the expansion would capture) is compiled into the
+        # instance, read where the body binds the name.
+        B = _tpl_body_binders(tt, call.name)
+        if !isempty(B) && _tpl_reads_any(v, B)
+            _tpl_inlinable(v) || return false
+            continue
+        end
+        s in info.uncond && continue
         # A parameter placeholder of a template skeleton being expanded
         # (expand_typed.jl) stands for a binding not known yet.
         (v isa VarExpr && occursin(_TPL_SENTINEL, v.name)) && return false
@@ -801,13 +809,55 @@ function _tpl_is_called(tt::_TplTable, call::OpExpr)
 end
 
 # A compound binding the build compiles into its instance (`_call_inlined`):
-# elementwise operators over names and literals.
+# elementwise operators over names and literals, and reads of a named array.
 function _tpl_inlinable(v::ASTExpr)
     (v isa VarExpr || v isa NumExpr || v isa IntExpr) && return !(v isa VarExpr && occursin(_TPL_SENTINEL, v.name))
     v isa OpExpr || return false
+    if v.op == "index" && _tpl_structless(v) && length(v.args) >= 2 && v.args[1] isa VarExpr
+        a = v.args[1]::VarExpr
+        (_tpl_is_sentinel(a.name) || occursin(_TPL_SENTINEL, a.name)) && return false
+        return all(_tpl_inlinable, @view v.args[2:end])
+    end
     (v.op in _TPL_CALL_OPS && v.op != "const" && _tpl_structless(v) && !_tpl_is_call(v)) || return false
     isempty(_bound_symbols(v)) || return false
     return all(_tpl_inlinable, v.args)
+end
+
+# The names a template's prepared body binds (reduction and output indices):
+# a binding's name of the same spelling is captured there, as the expansion
+# captures it.
+function _tpl_body_binders(tt::_TplTable, name)
+    memo = _tpl_memo(tt, nothing, :body_binders, () -> Dict{String, Set{String}}())
+    return get!(memo, String(name)) do
+        def = _tpl_def(tt, name)
+        out = Set{String}()
+        def.closed === nothing && return out
+        seen = IdDict{OpExpr, Nothing}()
+        function walk(e)
+            e isa OpExpr || return
+            haskey(seen, e) && return
+            seen[e] = nothing
+            union!(out, _bound_symbols(e))
+            foreach_child(walk, e)
+        end
+        b = def.closed.body
+        # An array-valued body's output indices are no binders of its element
+        # body (the element call reads them as arguments).
+        if b isa OpExpr && _is_faq_op(b.op) && b.output_idx !== nothing && !isempty(b.output_idx) && b.expr_body !== nothing
+            b = b.expr_body
+        end
+        walk(b)
+        out
+    end
+end
+
+# Does `e` read (as a variable leaf) any of the names `B`?
+function _tpl_reads_any(e::ASTExpr, B::Set{String})
+    e isa VarExpr && return e.name in B
+    e isa OpExpr || return false
+    r = false
+    foreach_child(c -> (r = r || _tpl_reads_any(c, B)), e)
+    return r
 end
 
 # The sentinels of `call`'s template read as arrays (`nothing` when the build

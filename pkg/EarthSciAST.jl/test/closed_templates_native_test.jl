@@ -403,12 +403,20 @@ end
 
     @testset "keyed and gated relational templates" begin
         tp = _ct_write(_ct_relational_doc())
-        @test _ct_same(_ct_du(tp, :native), _ct_du(tp, :interpreter))
+        n = _ct_du(tp, :native)
+        @test _ct_same(n, _ct_du(tp, :interpreter))
+        @test _ct_same(n, _ct_du(_CT.expand_document(_CT.load_path(tp)), :native))
     end
 
     @testset "argmin" begin
         tp = _ct_write(_ct_nearest_doc(40, 9))
-        @test _ct_same(_ct_du(tp, :native), _ct_du(tp, :interpreter))
+        n, cn = _CT._with_counts(() -> _ct_du(tp, :native))
+        @test _ct_same(n, _ct_du(tp, :interpreter))
+        # `argmin`'s `f` reads the body's own reduction index: the binding is
+        # compiled into the instance (a call, not an expansion), and the bits
+        # are the expanded document's.
+        @test get(cn, :call_targets, 0) == 1
+        @test _ct_same(n, _ct_du(_CT.expand_document(_CT.load_path(tp)), :native))
     end
 
     # The nested sum must not leave a bare array producer in the cell body,
