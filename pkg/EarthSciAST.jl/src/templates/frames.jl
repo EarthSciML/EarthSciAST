@@ -772,13 +772,18 @@ expanding it. See the section comment above.
 """
 function _tpl_is_called(tt::_TplTable, call::OpExpr)
     info = _tpl_call_info(tt, call.name)
-    info === nothing && return false
+    # An aggregate or makearray body is read through its view, whose leaves
+    # are calls (call.jl `_tpl_agg_view`).
+    info === nothing && return _tpl_agg_called(tt, call)
     def = _tpl_def(tt, call.name)
     b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
     for p in def.params
         v = get(b, p, nothing)
-        v === nothing && return false
         s = _TPL_ARG * p
+        # A parameter the body never reads may go unbound (a part of a view,
+        # call.jl `_tpl_part_call`): its binding is never made.
+        v === nothing && !(s in info.scalars || s in info.arrays || s in info.fixed) && continue
+        v === nothing && return false
         if s in info.arrays
             _tpl_array_binding(v) || return false
             continue

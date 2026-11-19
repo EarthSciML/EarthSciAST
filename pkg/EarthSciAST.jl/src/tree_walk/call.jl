@@ -437,7 +437,7 @@ function _call_target(ct::_CallTable, call::OpExpr)
         haskey(blocks, s) || (passed[j] = (np += 1))
     end
     tg = _CallTarget(
-        name, key, slots, arrslots, Symbol[arrkind[s] for s in arrslots],
+        replace(name, '\0' => '·'), key, slots, arrslots, Symbol[arrkind[s] for s in arrslots],
         Vector{Int}[get(arrdims, s, Int[]) for s in arrslots],
         _mknode(kind = _NK_LITERAL), ct.stack, 0, 0, _ArrArg[],
         passed, Int[haskey(blocks, s) ? findfirst(==(_TPL_BASE * s), slots) : 0 for s in arrslots],
@@ -1184,12 +1184,240 @@ function _tpl_whole_views(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExp
         r = map_children(c -> _tpl_whole_views(tt, c, memo), e)
         if _tpl_view_rank(tt, r) > 0
             r = _tpl_whole_view(tt, r::OpExpr)
+        elseif _tpl_is_call(r) && _tpl_call_info(tt, (r::OpExpr).name) === nothing
+            # An aggregate or makearray body: its view (above).
+            v = _tpl_agg_view(tt, r::OpExpr)
+            v === nothing || (r = v)
         elseif _tpl_is_call(r)
             r = _tpl_with_lanes(tt, r::OpExpr)
         end
     end
     memo[e] = r
     return r
+end
+
+# ---- Aggregate and makearray bodies: the loop header in the caller -------------------
+# A template whose body is an array that is not a plain `faq` over its output
+# indices (a reduction with contracted ranges, a join, a filter, a
+# `makearray` of regions, or a whole-array reference to such a template) is
+# read whole through its VIEW: the body's loop structure only (output and
+# contracted ranges, join clauses, semiring, the filter's position, a
+# makearray's regions), with each LEAF (the term, the filter, a region's
+# value) an element call of that PART of the template:
+#
+#     ref  ==  faq(output_idx = o, ranges = R, join = J, filter = part₂(…, i, j),
+#                  expr = part₁(…, i, j))
+#
+# Each part is a template of its own, registered once in the build's
+# registry (`<name>\0part\0<k>`, the template's parameters, the leaf as its
+# body), so its arithmetic stays in the template and is compiled once per
+# instance; the loop indices it reads are its implicit parameters, bound to
+# the view's loops (named as the body names them, so a binding reading one is
+# captured there exactly as the expansion captures it). Every phase that
+# handles an aggregate, a join or a makearray handles the view as it handled
+# the expansion. An element read `index(ref, s…)` is `index(view, s…)`, as it
+# was `index(expansion, s…)`.
+
+const _TPL_PART = "\0part\0"
+const _TPL_LEAF = "\0leaf\0"
+
+_tpl_part_name(name, k::Int) = string(name, _TPL_PART, k)
+
+# The skeleton of template `name`: its body's header in the body's own
+# sentinel space with leaf `k` the placeholder `"\0leaf\0k"`, and the number
+# of parts (registered by this call); `nothing` when the body is not such an
+# array (a scalar template, a structural one, a node outside the class).
+function _tpl_skel(tt::_TplTable, name::AbstractString)
+    memo = _tpl_memo(tt, nothing, :agg_skel, () -> Dict{String, Any}())
+    haskey(memo, name) && return memo[name]
+    memo[String(name)] = nothing
+    def = _tpl_def(tt, name)
+    def.closed === nothing && return nothing
+    info = _tpl_call_info(tt, name)
+    info !== nothing && isempty(info.outs) && return nothing
+    decl = _TemplateDecl(tt.reg[name])
+    parts = Any[]
+    h = _tpl_skel_node!(tt, parts, def.closed.body, decl.body)
+    h === nothing && return nothing
+    raw = tt.reg[name]
+    for (k, pb) in enumerate(parts)
+        pn = _tpl_part_name(name, k)
+        haskey(tt.reg, pn) && continue
+        nd = OrderedDict{String, Any}()
+        for (kk, v) in pairs(raw)
+            nd[string(kk)] = v
+        end
+        nd["body"] = pb
+        tt.reg[pn] = nd
+    end
+    return memo[String(name)] = (h, length(parts))
+end
+
+function _tpl_leaf!(parts, raw)
+    push!(parts, raw)
+    return VarExpr(_TPL_LEAF * string(length(parts)))
+end
+
+function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
+    e isa OpExpr || return nothing
+    if _is_faq_op(e.op) && e.output_idx !== nothing && !isempty(e.output_idx)
+        all(x -> x isa AbstractString, e.output_idx) || return nothing
+        (e.expr_body !== nothing && e.key === nothing && e.values === nothing &&
+            e.lower === nothing && e.upper === nothing) || return nothing
+        rx = _raw_get(raw, "expr")
+        rx === nothing && return nothing
+        le = _tpl_leaf!(parts, rx)
+        lf = nothing
+        if e.filter !== nothing
+            rf = _raw_get(raw, "filter")
+            rf === nothing && return nothing
+            lf = _tpl_leaf!(parts, rf)
+        end
+        return reconstruct(e; expr_body = le, filter = lf)
+    end
+    if e.op == "makearray" && e.values !== nothing
+        rv = _raw_get(raw, "values")
+        (rv isa AbstractVector && length(rv) == length(e.values)) || return nothing
+        vals = ASTExpr[]
+        for (k, v) in enumerate(e.values)
+            h = if v isa OpExpr && ((_is_faq_op(v.op) && v.output_idx !== nothing && !isempty(v.output_idx)) ||
+                    v.op == "makearray" || (_tpl_is_call(v) && !_tpl_is_elem(v)))
+                _tpl_skel_node!(tt, parts, v, rv[k])
+            else
+                # A scalar region value: one leaf.
+                _tpl_leaf!(parts, rv[k])
+            end
+            h === nothing && return nothing
+            push!(vals, h)
+        end
+        return reconstruct(e; values = vals)
+    end
+    if _tpl_is_call(e) && !_tpl_is_elem(e)
+        # A whole-array reference in the body: its template's skeleton with
+        # its parameters read as its bindings; each of its parts a part here
+        # whose body is that part's call with this reference's bindings.
+        sk = _tpl_skel(tt, e.name)
+        sk === nothing && return nothing
+        h, n = sk
+        rb = _raw_get(raw, "bindings")
+        h = _tpl_subst_scoped(h, _tpl_sentinel_map(e), IdDict{OpExpr, ASTExpr}())
+        lm = Dict{String, ASTExpr}()
+        for j in 1:n
+            lm[_TPL_LEAF * string(j)] = _tpl_leaf!(parts, OrderedDict{String, Any}(
+                "op" => APPLY_EXPRESSION_TEMPLATE_OP, "args" => Any[],
+                "name" => _tpl_part_name(e.name, j),
+                "bindings" => rb === nothing ? OrderedDict{String, Any}() : rb,
+            ))
+        end
+        return _tpl_subst_scoped(h, lm, IdDict{OpExpr, ASTExpr}())
+    end
+    return nothing
+end
+
+# Each sentinel of `call`'s template mapped to its binding at `call` (an
+# implicit parameter with no binding: its own name).
+function _tpl_sentinel_map(call::OpExpr)
+    m = Dict{String, ASTExpr}()
+    b = call.bindings
+    b === nothing && return m
+    for (k, v) in b
+        startswith(k, _TPL_OUT) && continue
+        m[startswith(k, _TPL_FREE) ? k : _TPL_ARG * k] = v
+    end
+    return m
+end
+
+# The view of the reference `call` (above), `nothing` when its template has
+# no skeleton. Leaves are the part calls, each with the reference's bindings
+# and the loop indices it reads bound to the view's loops.
+function _tpl_agg_view(tt::_TplTable, call::OpExpr; lanes::Bool = true)
+    _tpl_is_elem(call) && return nothing
+    _tpl_call_info(tt, call.name) === nothing || return nothing
+    sk = _tpl_skel(tt, call.name)
+    sk === nothing && return nothing
+    h, n = sk
+    m = _tpl_sentinel_map(call)
+    for s in _tpl_free_leaves_all(h)
+        _tpl_is_sentinel(s) && !haskey(m, s) && startswith(s, _TPL_FREE) &&
+            (m[s] = VarExpr(s[(ncodeunits(_TPL_FREE) + 1):end]))
+    end
+    h = _tpl_subst_scoped(h, m, IdDict{OpExpr, ASTExpr}())
+    lm = Dict{String, ASTExpr}()
+    for k in 1:n
+        leaf = _tpl_part_call(tt, call, _tpl_part_name(call.name, k))
+        lanes && _tpl_call_info(tt, leaf.name) !== nothing && (leaf = _tpl_with_lanes(tt, leaf))
+        lm[_TPL_LEAF * string(k)] = leaf
+    end
+    return _tpl_subst_scoped(h, lm, IdDict{OpExpr, ASTExpr}())
+end
+
+# The call of part `pn` of the reference `call`: the reference's bindings of
+# what the part reads (a parameter the part never reads has no binding, as
+# its binding is never made), the loop indices it reads bound to their own
+# names (the view's loops).
+function _tpl_part_call(tt::_TplTable, call::OpExpr, pn::String)
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    def = _tpl_def(tt, pn)
+    info = _tpl_call_info(tt, pn)
+    free = def.closed === nothing ? _tpl_generic_free(tt, def) : def.closed.free
+    nb = Dict{String, ASTExpr}()
+    for (k, v) in b
+        if startswith(k, _TPL_FREE)
+            k[(ncodeunits(_TPL_FREE) + 1):end] in free && (nb[k] = v)
+        elseif startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE)
+            continue
+        else
+            s = _TPL_ARG * k
+            (info === nothing || s in info.scalars || s in info.arrays || s in info.fixed ||
+                !(k in def.params)) && (nb[k] = v)
+        end
+    end
+    for n in free
+        haskey(nb, _TPL_FREE * n) || (nb[_TPL_FREE * n] = VarExpr(n))
+    end
+    return _tpl_structural_ref(tt, reconstruct(call; name = pn, bindings = nb))
+end
+
+# Every variable leaf name in `e` (sentinels included, binders ignored).
+function _tpl_free_leaves_all(e::ASTExpr)
+    out = Set{String}()
+    seen = IdDict{OpExpr, Nothing}()
+    function walk(x)
+        x isa VarExpr && (push!(out, x.name); return)
+        x isa OpExpr || return
+        haskey(seen, x) && return
+        seen[x] = nothing
+        foreach_child(walk, x)
+    end
+    walk(e)
+    return out
+end
+
+# Whether the build reads the reference `call` through its view: it has one
+# and every leaf is a call the build compiles.
+function _tpl_agg_called(tt::_TplTable, call::OpExpr)
+    v = try
+        _tpl_agg_view(tt, call; lanes = false)
+    catch err
+        (err isa ExpressionTemplateError || err isa TreeWalkError) || rethrow()
+        nothing
+    end
+    v === nothing && return false
+    ok = true
+    seen = IdDict{OpExpr, Nothing}()
+    function walk(x)
+        ok || return
+        x isa OpExpr || return
+        haskey(seen, x) && return
+        seen[x] = nothing
+        if _tpl_is_call(x) && occursin(_TPL_PART, x.name)
+            ok = _tpl_is_called(tt, x)
+            return
+        end
+        foreach_child(walk, x)
+    end
+    walk(v)
+    return ok
 end
 
 # ---- Value operands -------------------------------------------------------------------
