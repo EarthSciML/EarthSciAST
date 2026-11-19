@@ -55,8 +55,17 @@
       "class": "semantic",
       "phase": 5,
       "area": "flatten",
-      "note": "ode_states, observed_unknowns and algebraic_unknowns partition the unknowns; brownian/discrete/sampled/constant partition the parameters; system_kind is the first of sde, pde, nonlinear, ode whose condition holds.",
+      "note": "ode_states, observed_unknowns and algebraic_unknowns partition the unknowns; brownian/discrete/sampled/constant partition the parameters; system_kind is the first of sde, nonlinear, ode whose condition holds (pde was dropped at esm 2.4.0).",
       "concern": "The text claims the three unknown sets partition the unknowns, but nothing forbids one unknown being both under D(.,t) on one LHS and the bare LHS of another equation (it would be in ode_states and observed_unknowns), and an unknown that appears in no equation at all is put in algebraic_unknowns by the 'no equation names them on its LHS' wording even though nothing constrains it."
+    },
+    {
+      "id": "spec.6.3.1.declared-pde-deprecated",
+      "section": "6.3.1",
+      "quote": "a loader MUST NOT refuse it; it warns\nonce per document with `deprecated_system_kind`",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A model declaring system_kind \"pde\" loads; one deprecated_system_kind warning per document names each such model; the declared kind reads as absent and system_kind_mismatch is never reported for it."
     },
     {
       "id": "spec.6.3.1.equation-defines-parameter",

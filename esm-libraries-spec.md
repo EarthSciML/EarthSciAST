@@ -1554,8 +1554,8 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
   contradicts §4.7.6, which normatively tells libraries to scan equations for
   `D` with `wrt != "t"` (and for axis names in any node's `dim` field) and add each referenced
   spatial dimension. §4.7.6 governs: a model carrying undiscretized spatial
-  operators is a PDE, `system_kind` has a `"pde"` value for exactly that case,
-  and refusing to flatten it makes `PDESystem` construction unreachable.
+  operators still flattens (its `system_kind` is derived without regard to
+  them, esm-spec §6.3.1).
   Within the list, `t` comes first and the remaining spatial axes follow in
   **document order** — the order the scan first encounters them, which is the
   order the document names them in. `full_coupled` flattens to

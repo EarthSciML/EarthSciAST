@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "ClassificationSystemKindPde",
-    "description": "The `pde` branch of system_kind (esm-spec §6.3.1), which system_kind_variants.esm does not reach. Four models share one document-level `domain`, which is exactly the point: since v0.8.0 removed `Domain.spatial`, `domain` carries only independent_variable / temporal / element_type / array_type and says NOTHING about space. A binding that derives `pde` from the presence of a domain block classifies all four models the same and fails three of them. The signal is the SPATIAL DERIVATIVE in the equations. `Transient` uses a spatial `D` (wrt an axis, not `t`) and is `pde`. `SugarOps` (named for the `laplacian` sugar it used before esm 2.4.0 made grad/div/laplacian ordinary op names) writes its Laplacian as NESTED spatial `D` on two axes, and is equally `pde` — a binding that recognizes a spatial `D` only when its argument is a bare variable misses it. `SteadyState` is the ordering case: it has NO time-derivative equation (`0 ~ D(D(phi, x), x) - f`, the spatial `D` on the right-hand side where it must be), so a binding testing `nonlinear` before `pde` calls it nonlinear; it is a steady-state PDE and maps to PDESystem. `StochasticSpatial` carries BOTH a wiener parameter and a spatial derivative, and must be `sde` — not because it is not spatial, but because there is no SPDESystem constructor to select, so `sde` wins.",
+    "description": "Spatial derivatives do NOT determine system_kind (esm 2.4.0 dropped the `pde` kind; esm-spec §6.3.1): the derived kinds are `sde`, `nonlinear` and `ode`, in that order. `Transient` has a time derivative and a spatial `D` on its right-hand side and is `ode`. `SugarOps` (named for the `laplacian` sugar it once used) writes nested spatial `D` on two axes and is equally `ode`. `SteadyState` has NO time-derivative equation (`0 ~ D(D(phi, x), x) - f`) and is `nonlinear`. `StochasticSpatial` carries a wiener parameter and is `sde`. `DeclaredPde` declares the deprecated `system_kind: \"pde\"`: the document still loads, with one `deprecated_system_kind` warning naming /models/DeclaredPde/system_kind; the declared value is ignored (the declared-kind accessor reports none), the model is its derived kind `ode`, and no `system_kind_mismatch` is reported.",
     "authors": [
       "EarthSciAST"
     ],
@@ -39,7 +39,7 @@
       },
       "equations": [
         {
-          "_comment": "D(u)/dt = -c * D(u)/dx -- the spatial D on the RHS is the pde signal.",
+          "_comment": "D(u)/dt = -c * D(u)/dx -- a spatial D on the RHS does not change the system kind.",
           "lhs": {
             "op": "D",
             "args": [
@@ -239,6 +239,53 @@
           }
         }
       ]
+    },
+    "DeclaredPde": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Advected scalar."
+        },
+        "c": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 1.0,
+          "description": "Advection speed."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(u)/dt = -c * D(u)/dx -- a spatial D on the RHS does not change the system kind.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "c"
+                ]
+              },
+              {
+                "op": "D",
+                "args": [
+                  "u"
+                ],
+                "wrt": "x"
+              }
+            ]
+          }
+        }
+      ],
+      "system_kind": "pde"
     }
   }
 }
