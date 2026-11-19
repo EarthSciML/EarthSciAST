@@ -113,7 +113,8 @@ const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 # op. Leaves (state/param/literal/time) are never hoisted — caching a leaf costs
 # more than the bare read it would replace.
 _cse_hoistable(e::OpExpr) =
-    !(e.op in _CSE_OPAQUE_OPS) && !_op_in_T(e.op) && _has_tree_walk_rule(e.op)
+    _tpl_is_call(e) ||    # a template call is a pure function of its arguments (call.jl)
+    (!(e.op in _CSE_OPAQUE_OPS) && !_op_in_T(e.op) && _has_tree_walk_rule(e.op))
 
 # `_eval_node_op` has an arm for exactly the shaped registry rows
 # (`_SHAPED_OP_SYMS`). `_compile_op` refuses any other op reaching its generic
@@ -459,7 +460,7 @@ function _cse_count!(
     end
     return
 end
-_cse_args(n::OpExpr) = n.args
+_cse_args(n::OpExpr) = _operands(n)
 _cse_counted(a) = a isa OpExpr && _cse_hoistable(a)
 _cse_op_conditional(n::OpExpr, j::Int) = _cse_arg_conditional(n.op, j)
 
@@ -494,6 +495,12 @@ end
 # becomes a `_NK_CACHED` ref. Every hoistable op is a plain `_NK_OP` whose
 # operands are all scalar.
 function _cse_rebuild(expr::OpExpr, var_map, param_syms, ctx::_CSEContext)
+    if _tpl_is_call(expr)
+        tg = _call_target(expr)
+        return _call_node(
+            tg, _Node[_compile_cse(a, var_map, param_syms, ctx) for a in _call_args(tg, expr)]
+        )
+    end
     children = _Node[
         _compile_cse(a, var_map, param_syms, ctx)
             for a in expr.args
