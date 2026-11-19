@@ -1019,14 +1019,16 @@ function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothi
         if g.calls !== nothing
             defs = Any[_cg_inner_def(d) for d in (g.calls::_CGFunction).helpers]
             idx = Dict{Symbol, Int}(d[1] => k for (k, d) in enumerate(defs))
+            heights = _cg_call_heights(defs)
+            embed = _cg_embed_call_fns(defs, idx, heights)
             left = Ref(0)
             fexs = Expr[
-                Expr(:function, Expr(:tuple, d[2]..., _CG_FNS), _cg_calls_by_value(d[3], idx, left))
+                Expr(:function, Expr(:tuple, d[2]..., _CG_FNS), _cg_calls_by_value(d[3], idx, left, embed))
                     for d in defs
             ]
-            e = _cg_calls_by_value(e, idx, left)
+            e = _cg_calls_by_value(e, idx, left, embed)
             left[] == 0 || error("geometry codegen: a call function referenced other than by a call")
-            fns = _cg_subfns(fexs, _cg_call_heights(defs))
+            fns = _cg_subfns(fexs, heights)
         end
         for m in get(g.resets, 0, Symbol[])
             push!(top, :(local $m::Float64 = 0.0), :(local $(Symbol(m, :_set))::Bool = false))

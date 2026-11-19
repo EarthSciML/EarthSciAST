@@ -2367,7 +2367,10 @@ end
 # Rewrite every call `name(args…)` of an inner definition in `idx` to the
 # by-value call `_cgfns[k](args…, _cgfns)`. `left` counts the names in `idx` met
 # anywhere other than a call head, which the rewrite cannot carry.
-function _cg_calls_by_value(ex, idx::Dict{Symbol, Int}, left::Base.RefValue{Int})
+function _cg_calls_by_value(
+        ex, idx::Dict{Symbol, Int}, left::Base.RefValue{Int},
+        embed::Union{Nothing, Dict{Symbol, Any}} = nothing
+    )
     if ex isa Symbol
         haskey(idx, ex) && (left[] += 1)
         return ex
@@ -2376,14 +2379,33 @@ function _cg_calls_by_value(ex, idx::Dict{Symbol, Int}, left::Base.RefValue{Int}
     if ex.head === :call && !isempty(ex.args)
         f = ex.args[1]
         if f isa Symbol && haskey(idx, f)
-            return Expr(
-                :call, Expr(:ref, _CG_FNS, idx[f]),
-                Any[_cg_calls_by_value(a, idx, left) for a in @view(ex.args[2:end])]...,
-                _CG_FNS
-            )
+            args = Any[_cg_calls_by_value(a, idx, left, embed) for a in @view(ex.args[2:end])]
+            # A template call function is called as itself, embedded (see
+            # `_cg_embed_call_fns`), with no sub-function tuple.
+            embed !== nothing && haskey(embed, f) &&
+                return Expr(:call, embed[f], args..., nothing)
+            return Expr(:call, Expr(:ref, _CG_FNS, idx[f]), args..., _CG_FNS)
         end
     end
-    return Expr(ex.head, Any[_cg_calls_by_value(a, idx, left) for a in ex.args]...)
+    return Expr(ex.head, Any[_cg_calls_by_value(a, idx, left, embed) for a in ex.args]...)
+end
+
+# The template call functions among `defs` as by-value instances, by name,
+# each built after the call functions it calls (by height) and calling them as
+# embedded instances. A call function's definition then reads nothing of its
+# section (no position in the section's sub-function tuple), so one template
+# instance has one content id, and Julia compiles it once per process however
+# many sections call it.
+function _cg_embed_call_fns(defs, idx::Dict{Symbol, Int}, heights::Vector{Int})
+    embed = Dict{Symbol, Any}()
+    order = sort!([k for k in eachindex(defs) if heights[k] > 0]; by = k -> heights[k])
+    for k in order
+        name, params, fb = defs[k]
+        left = Ref(0)
+        def = Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left, embed))
+        embed[name] = only(_cg_subfns(Expr[def], Int[heights[k]]))
+    end
+    return embed
 end
 
 # Choose the transport of a finished generated function `ex`, `function (…,
@@ -2420,14 +2442,15 @@ function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool}
     something(by_value, _cg_carry_by_value(ex) || any(d -> _cg_is_call_fn(d[1]), defs)) ||
         return (ex, nothing)
     heights = _cg_call_heights(defs)
+    embed = all(iszero, heights) ? nothing : _cg_embed_call_fns(defs, idx, heights)
     left = Ref(0)
     fns = Expr[
-        Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left))
+        Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left, embed))
             for (_, params, fb) in defs
     ]
     stmts = Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])]
     for s in rest
-        push!(stmts, _cg_calls_by_value(s, idx, left))
+        push!(stmts, _cg_calls_by_value(s, idx, left, embed))
     end
     # The emitter only ever calls a sub-function; a bare reference would point
     # at a definition the by-value form does not have.
