@@ -140,12 +140,34 @@ function _tpl_close(tt::_TplTable, name::String, decl::_TemplateDecl, S::Dict{St
     end
     typed = expression_from_json(_substitute(decl.body, sub))
     typed = _tpl_augment(tt, typed)
+    typed = _tpl_elem_reads(tt, typed)
     free = sort!(collect(_tpl_free_leaves(typed)))
     if !isempty(free)
         m = Dict{String, ASTExpr}(n => VarExpr(_TPL_FREE * n) for n in free)
         typed = _tpl_subst_scoped(typed, m, IdDict{OpExpr, ASTExpr}())
     end
     return _TplClosed(typed, free)
+end
+
+# A body's element reads of array-valued references, `index(ref, s...)`, as
+# element calls (call.jl `_elem_call`): the reference with each output index
+# bound to its subscript. The build entry does this for the model's own tree
+# (`_tpl_whole_views`); a body gets it once, when it is prepared, so a body
+# reading an element of another template's array is a body with a call in it.
+function _tpl_elem_reads(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}())
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    r = map_children(c -> _tpl_elem_reads(tt, c, memo), e)
+    if r.op == "index" && _tpl_structless(r) && length(r.args) >= 2 &&
+            _tpl_is_call(r.args[1]) && !_tpl_is_elem(r.args[1]::OpExpr)
+        info = _tpl_call_info(tt, (r.args[1]::OpExpr).name)
+        if info !== nothing && length(info.outs) == length(r.args) - 1
+            r = _elem_call(tt, r.args[1]::OpExpr, r.args[2:end])
+        end
+    end
+    memo[e] = r
+    return r
 end
 
 # The prepared body an instance of `def` with structural values `S` reads.
@@ -612,11 +634,16 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
     if _tpl_is_call(e)
         inner = _tpl_call_info(tt, e.name)
         inner === nothing && return false
-        # An array-valued reference is read through `index` (an element
-        # call), which a body does not do yet.
-        isempty(inner.outs) || return false
+        # An array-valued reference is read in a body through `index`, as an
+        # element call (`_tpl_elem_reads`); read whole it is refused.
+        isempty(inner.outs) || _tpl_is_elem(e) || return false
         b = e.bindings === nothing ? Dict{String, ASTExpr}() : e.bindings
         for (k, v) in b
+            # An output index's subscript: a value the element body reads.
+            if startswith(k, _TPL_OUT)
+                _tpl_call_walk!(tt, v, cond, info) || return false
+                continue
+            end
             s = startswith(k, _TPL_FREE) ? k : _TPL_ARG * k
             # A parameter the inner body never reads: its binding is never made.
             (s in inner.scalars || s in inner.arrays || s in inner.fixed) || continue

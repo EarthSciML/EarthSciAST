@@ -252,3 +252,64 @@ end
     # Compiled bodies, emitted functions and kernels do not grow with tracers.
     @test seen[3] == seen[1]
 end
+
+# A body that reads an ELEMENT of another template's array (`index(ref, s)`
+# inside a body) is a body with an element call in it: the outer template is
+# a call, not an expansion, and the bits are the expanded document's.
+function _ta_inner_elem_document(tracers)
+    N = _TA_N
+    ix(a, s...) = _ta_op("index", a, s...)
+    tpl = Dict{String, Any}(
+        "sm" => Dict("params" => Any["q"], "body" => Dict(
+            "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => Dict("i" => Any[1, N]),
+            "expr" => _ta_op("*", 0.5, _ta_op("+", ix("q", _ta_op("-", "i", 1)), ix("q", _ta_op("+", "i", 1)))),
+        )),
+        "useelem" => Dict("params" => Any["q", "c"], "body" => _ta_op(
+            "*", "c", _ta_op("-", ix(_ta_ref("sm", Dict("q" => "q")), "i"), ix("q", "i"))
+        )),
+    )
+    vars = Dict{String, Any}("kc" => Dict("type" => "parameter", "units" => "1", "default" => 0.7))
+    eqs = Any[]
+    for (n, q) in enumerate(tracers)
+        vars[q] = Dict("type" => "unknown", "units" => "1", "shape" => Any["x"], "default" => 1.0 + 0.1 * n)
+        push!(eqs, Dict(
+            "lhs" => Dict("op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]),
+                "expr" => Dict("op" => "D", "args" => Any[ix(q, "i")], "wrt" => "t")),
+            "rhs" => Dict("op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]),
+                "expr" => _ta_op("-", _ta_ref("useelem", Dict("q" => q, "c" => "kc")), _ta_op("*", 0.05, ix(q, "i")))),
+        ))
+    end
+    return Dict(
+        "esm" => "2.0.0", "metadata" => Dict("name" => "template_inner_element_calls_1d"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => N)),
+        "models" => Dict("M" => Dict("expression_templates" => tpl, "variables" => vars, "equations" => eqs)),
+    )
+end
+
+@testset "a body reading an element of an array-valued template" begin
+    seen = Dict{Int, Any}()
+    mktempdir() do dir
+        for tracers in (["a"], ["a", "b", "c"])
+            doc = _ta_inner_elem_document(tracers)
+            fix = joinpath(dir, "innerelem_$(length(tracers)).esm")
+            open(io -> JSON3.write(io, doc), fix, "w")
+            # The build calls `useelem`; nothing is expanded.
+            flat = flatten(load_path(fix))
+            tt = EarthSciAST._TplTable(flat.template_registry)
+            name = only(k for k in keys(flat.template_registry) if endswith(k, "useelem"))
+            @test EarthSciAST._tpl_call_info(tt, name) !== nothing
+            fast, counts, alloc = _ta_build_and_probe(fix)
+            atload, _, _ = _ta_build_and_probe(fix; atload = true)
+            interp, _, _ = _ta_build_and_probe(fix; compiler = :interpreter)
+            @test alloc == 0
+            for k in 1:3
+                @test fast[k] == atload[k]
+                @test interp[k] == atload[k]
+                @test sum(abs, fast[k]) > 0
+            end
+            @test get(counts, :call_targets, 0) == 2
+            seen[length(tracers)] = (get(counts, :call_targets, 0), get(counts, :codegen_kernel, 0))
+        end
+    end
+    @test seen[3] == seen[1]
+end
