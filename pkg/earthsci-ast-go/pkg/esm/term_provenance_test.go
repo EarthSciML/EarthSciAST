@@ -129,8 +129,8 @@ func checkProvenanceInvariant(t *testing.T, eq FlattenedEquation) (evaluated, di
 	return true, discriminating
 }
 
-// scalarUnreachable are the fixtures with no equation Evaluate can run: a
-// spatial derivative with no discretization, and the lifted `faq` over a grid.
+// scalarUnreachable are the fixtures with no equation Evaluate can run: `grad`
+// with no discretization, and the lifted `faq` over a grid.
 var scalarUnreachable = map[string]bool{
 	"placeholder_expansion.esm": true,
 	"pointwise_lift.esm":        true,

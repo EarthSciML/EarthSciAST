@@ -24,8 +24,7 @@ func removedOpDoc(esm, node string) string {
 }
 
 // requireRemovedOp asserts err is the `removed_op` diagnostic naming name at
-// path and, for a 2.0.0 removal, the codemod; a 2.4.0 removal has no codemod
-// and points at MIGRATION.md "esm 2.4.0" instead.
+// path and, for a 2.0.0 removal, the codemod.
 func requireRemovedOp(t *testing.T, err error, name, path string) {
 	t.Helper()
 	var de DiagnosticError
@@ -44,84 +43,8 @@ func requireRemovedOp(t *testing.T, err error, name, path string) {
 			t.Errorf("message %q does not name %q", err.Error(), want)
 		}
 	}
-	switch removedOps[name] {
-	case "0.8.0":
-	case "2.4.0":
-		if strings.Contains(err.Error(), migrateCommand) {
-			t.Errorf("message %q points at the codemod, which has no 2.4.0 rewrite", err.Error())
-		}
-		for _, want := range []string{"esm 2.4.0", "spatial `D`", "MIGRATION.md"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("message %q does not name %q", err.Error(), want)
-			}
-		}
-	default:
-		if !strings.Contains(err.Error(), migrateCommand) {
-			t.Errorf("message %q does not point at the codemod", err.Error())
-		}
-	}
-}
-
-// The spatial-calculus ops esm 2.4.0 removed are refused BY NAME at load
-// whatever version the document declares: a 1.x, a 2.3.0 and a 2.4.0
-// document alike.
-func TestSpatialCalculusOpsRemovedAt240AreRefusedAtLoad(t *testing.T) {
-	nodes := map[string]string{
-		"grad":      `{"op": "grad", "args": ["x"], "dim": "x"}`,
-		"div":       `{"op": "div", "args": ["x"], "dim": "x"}`,
-		"laplacian": `{"op": "laplacian", "args": ["x"]}`,
-	}
-	for name, node := range nodes {
-		if removedOps[name] != "2.4.0" {
-			t.Fatalf("removedOps[%q] = %q, want 2.4.0", name, removedOps[name])
-		}
-		for _, esm := range []string{"1.3.0", "2.3.0", "2.4.0"} {
-			t.Run(name+"@"+esm, func(t *testing.T) {
-				_, err := LoadString(removedOpDoc(esm, node))
-				requireRemovedOp(t, err, name, "/models/M/equations/0/rhs/args/1")
-			})
-		}
-	}
-}
-
-// Every shared fixture under tests/invalid/removed_ops/ is refused at load
-// with `removed_op`, naming the construct its file name carries. The three
-// 2.4.0 fixtures declare esm 2.3.0: the refusal does not depend on the
-// declared version.
-func TestRemovedOpsFixturesAreRefusedAtLoad(t *testing.T) {
-	dir := filepath.Join("..", "..", "..", "..", "tests", "invalid", "removed_ops")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read %s: %v", dir, err)
-	}
-	seen := map[string]bool{}
-	for _, e := range entries {
-		name, ok := strings.CutSuffix(e.Name(), ".esm")
-		if !ok {
-			continue
-		}
-		name, ok = strings.CutPrefix(name, "removed_op_")
-		if !ok {
-			continue
-		}
-		seen[name] = true
-		t.Run(e.Name(), func(t *testing.T) {
-			_, err := LoadPath(filepath.Join(dir, e.Name()))
-			var re *removedOpError
-			if !errors.As(err, &re) {
-				t.Fatalf("err = %v, want a removed_op refusal", err)
-			}
-			// removed_op_table_lookup.esm also carries the `function_tables`
-			// block its lookup reads, which is reported first.
-			if re.Name != name && !(name == "table_lookup" && re.Name == removedFunctionTables) {
-				t.Errorf("removed_op refusal names %q, want %q", re.Name, name)
-			}
-		})
-	}
-	for _, name := range []string{"grad", "div", "laplacian"} {
-		if !seen[name] {
-			t.Errorf("tests/invalid/removed_ops/ has no fixture for %q", name)
-		}
+	if removedOps[name] != "0.8.0" && !strings.Contains(err.Error(), migrateCommand) {
+		t.Errorf("message %q does not point at the codemod", err.Error())
 	}
 }
 
@@ -238,12 +161,48 @@ func TestParseMathRefusesRemovedCallees(t *testing.T) {
 	for _, src := range []string{
 		`\operatorname{skolem}(a, b)`, `\operatorname{rank}(S)`, `\operatorname{argmin}(a)`,
 		`\operatorname{table_lookup}(a)`, `\operatorname{polygon_intersection_area}(a, b)`,
-		`\operatorname{grad}(a)`, `\operatorname{div}(a)`, `\operatorname{laplacian}(a)`,
 	} {
 		_, err := ParseMath(src, names, DocumentMarkdown)
 		var de *DocumentFormatError
 		if !errors.As(err, &de) || de.Code != codeRemovedOp {
 			t.Errorf("ParseMath(%q) = %v, want a removed_op refusal", src, err)
 		}
+	}
+}
+
+// Every shared fixture under tests/invalid/removed_ops/ is refused at load
+// with `removed_op`, naming the construct its file name carries.
+func TestRemovedOpsFixturesAreRefusedAtLoad(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "..", "tests", "invalid", "removed_ops")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	checked := 0
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".esm")
+		if !ok {
+			continue
+		}
+		name, ok = strings.CutPrefix(name, "removed_op_")
+		if !ok {
+			continue
+		}
+		checked++
+		t.Run(e.Name(), func(t *testing.T) {
+			_, err := LoadPath(filepath.Join(dir, e.Name()))
+			var re *removedOpError
+			if !errors.As(err, &re) {
+				t.Fatalf("err = %v, want a removed_op refusal", err)
+			}
+			// removed_op_table_lookup.esm also carries the `function_tables`
+			// block its lookup reads, which is reported first.
+			if re.Name != name && !(name == "table_lookup" && re.Name == removedFunctionTables) {
+				t.Errorf("removed_op refusal names %q, want %q", re.Name, name)
+			}
+		})
+	}
+	if checked == 0 {
+		t.Fatal("tests/invalid/removed_ops/ holds no removed_op_*.esm fixture")
 	}
 }

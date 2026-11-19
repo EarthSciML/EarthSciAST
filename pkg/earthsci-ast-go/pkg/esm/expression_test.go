@@ -51,9 +51,9 @@ func TestFreeVariables(t *testing.T) {
 			expected: map[string]bool{"x": true, "t": true},
 		},
 		{
-			name: "user op with dim",
+			name: "gradient with dim",
 			expr: ExprNode{
-				Op:   "upwind_flux",
+				Op:   "grad",
 				Args: []any{"u"},
 				Dim:  stringPtr("x"),
 			},

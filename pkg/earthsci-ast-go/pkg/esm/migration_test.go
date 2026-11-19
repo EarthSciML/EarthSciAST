@@ -408,52 +408,9 @@ func TestMigrationRefusesRemovedOps(t *testing.T) {
 					t.Errorf("message %q does not name %s", me.Message, want)
 				}
 			}
-			switch removedOps[op] {
-			case "2.0.0":
-				if !strings.Contains(me.Message, migrateCommand) {
-					t.Errorf("message %q does not name the codemod", me.Message)
-				}
-			case "2.4.0":
-				if strings.Contains(me.Message, migrateCommand) || !strings.Contains(me.Message, "esm 2.4.0") {
-					t.Errorf("message %q must point at MIGRATION.md \"esm 2.4.0\", not the codemod", me.Message)
-				}
+			if op != "arrayop" && !strings.Contains(me.Message, migrateCommand) {
+				t.Errorf("message %q does not name the codemod", me.Message)
 			}
 		})
-	}
-}
-
-// A 2.x document on the additive line that uses `grad`, `div` or `laplacian`
-// is refused with `removed_op` too, pointing at MIGRATION.md "esm 2.4.0" and
-// not at the codemod; one that uses none of them migrates.
-func TestMigrationRefuses240RemovedOpsFrom2x(t *testing.T) {
-	for _, op := range []string{"grad", "div", "laplacian"} {
-		file := &ESMFile{
-			ESM:      "2.3.0",
-			Metadata: Metadata{Name: "m"},
-			Models: map[string]Model{"m": {
-				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
-				Equations: []Equation{{LHS: "x", RHS: ExprNode{Op: op, Args: []any{"x"}}}},
-			}},
-		}
-		_, err := Migrate(file, SchemaVersion)
-		var me *MigrationError
-		if !errors.As(err, &me) || me.Code != "removed_op" {
-			t.Fatalf("%s: err = %v, want a MigrationError with code removed_op", op, err)
-		}
-		if strings.Contains(me.Message, migrateCommand) || !strings.Contains(me.Message, "esm 2.4.0") {
-			t.Errorf("%s: message %q must point at MIGRATION.md \"esm 2.4.0\", not the codemod", op, me.Message)
-		}
-	}
-	file := &ESMFile{
-		ESM:      "2.3.0",
-		Metadata: Metadata{Name: "m"},
-		Models: map[string]Model{"m": {
-			Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
-			Equations: []Equation{{LHS: "x", RHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("y")}}},
-		}},
-	}
-	got, err := Migrate(file, SchemaVersion)
-	if err != nil || got.ESM != SchemaVersion {
-		t.Fatalf("Migrate(2.3.0 with spatial D) = (%v, %v), want esm %s", got, err, SchemaVersion)
 	}
 }
