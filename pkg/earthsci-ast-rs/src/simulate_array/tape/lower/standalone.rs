@@ -31,7 +31,6 @@ use std::collections::HashMap;
 
 /// Why [`eval_standalone_rule`] produced no value.
 #[derive(Debug)]
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) enum StandaloneError {
     /// The tape cannot lower the rule; the deepest decline reason.
     Declined(String),

@@ -128,7 +128,7 @@ fn const_gather_boundary_policies_resolve_at_build() {
             ],
         ));
         compiled.const_scope =
-            std::sync::Arc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
+            std::sync::Arc::new(ConstArrayScope::default().with_boundary("M.C", vec![kind]));
         compiled
     };
     // Unfused: whether fusion folds a many-segment gather depends on the run
