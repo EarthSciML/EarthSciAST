@@ -3,7 +3,7 @@
   "kind": "grid_discretization_descriptor",
   "metadata": {
     "name": "cartesian_1d_n8_periodic",
-    "description": "Uniform 1-D domain, N=8 cells, periodic BCs. Provides a centered-difference scheme for the spatial D for use in grid_refs resolution tests."
+    "description": "Uniform 1-D domain, N=8 cells, periodic BCs. Provides a centered-difference grad scheme for use in grid_refs resolution tests."
   },
   "grids": {
     "gx": {
@@ -14,8 +14,8 @@
     }
   },
   "discretizations": {
-    "centered_d": {
-      "applies_to": {"op": "D", "args": ["$u"], "wrt": "$x"},
+    "centered_grad": {
+      "applies_to": {"op": "grad", "args": ["$u"], "dim": "$x"},
       "grid_family": "cartesian",
       "combine": "+",
       "stencil": [

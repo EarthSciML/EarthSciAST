@@ -383,8 +383,7 @@ const ERROR_CODES = (
     # An expression node spelling an op that was REMOVED rather than deprecated
     # (`arrayop` at 0.8.0; `fn`, `table_lookup`, `skolem`, `rank`,
     # `intersect_polygon`, `polygon_intersection_area`, `argmin`, `argmax`,
-    # `aggregate` and the `function_tables` block at 2.0.0; `grad`, `div` and
-    # `laplacian` at 2.4.0), rejected by name at the wire
+    # `aggregate` and the `function_tables` block at 2.0.0), rejected by name at the wire
     # boundary (CONFORMANCE_SPEC §7).
     REMOVED_OP = "removed_op",
     # A document spells `"op": "faq"` while declaring esm below 1.1.0, the
@@ -402,6 +401,9 @@ const ERROR_CODES = (
     # `fn`), rewritten to its replacement at the wire boundary (esm-spec §4.2
     # "Deprecated ops").
     DEPRECATED_OP = "deprecated_op",
+    # WARNING, not an error: a model declares `"system_kind": "pde"`, deprecated
+    # at esm 2.4.0 and ignored (the model is treated as its derived kind).
+    DEPRECATED_SYSTEM_KIND = "deprecated_system_kind",
     # ── Its complement (esm-spec §9.6.6): an op that IS in the §4.2 evaluable
     #    core but that the tree-walk evaluator has no rule for (an array/query or
     #    value-invention op outside the position that consumes it, an unlowered

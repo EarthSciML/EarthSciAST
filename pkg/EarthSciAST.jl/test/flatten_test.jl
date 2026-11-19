@@ -1157,7 +1157,7 @@ end
         # expected to be updated by hand on each format bump. 2.2.0 -> 2.3.0
         # with deprecated `neg` / `pow` (esm-spec §4.2), the canonical unit
         # spelling (§4.8.2) and the Markdown / Typst source formats (§1.2).
-        # 2.3.0 -> 2.4.0 with `grad` / `div` / `laplacian` removed (§4.2).
+        # 2.3.0 -> 2.4.0 with `grad` / `div` / `laplacian` ordinary op names (§4.2).
         @test E.SCHEMA_VERSION == "2.4.0"
     end
 

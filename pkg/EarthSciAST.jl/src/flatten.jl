@@ -974,7 +974,6 @@ function system_kind(flat::FlattenedSystem)::String
         flat.state_variables, flat.parameters,
         flat.observed_variables, flat.equations
     )
-    has_spatial_derivative(view) && return "pde"
     has_time_derivative(view) || return "nonlinear"
     return "ode"
 end

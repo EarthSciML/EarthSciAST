@@ -14,8 +14,8 @@
     }
   },
   "discretizations": {
-    "centered_d": {
-      "applies_to": {"op": "D", "args": ["$u"], "wrt": "$x"},
+    "centered_grad": {
+      "applies_to": {"op": "grad", "args": ["$u"], "dim": "$x"},
       "grid_family": "cartesian",
       "combine": "+",
       "stencil": [

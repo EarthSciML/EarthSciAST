@@ -710,13 +710,13 @@ Settle expression-node `op` spellings for ONE document, in four steps:
    rewrite-target op — the document would load silently and fail much later as
    `unlowered_operator`, or never.
 2. The ops and the block esm 2.0.0 removed (`_REMOVED_OPS_2_0_0`, among them
-   `aggregate`, the pre-1.1.0 spelling of `faq`) and the ops esm 2.4.0 removed
-   (`_REMOVED_OPS_2_4_0`: `grad`, `div`, `laplacian`) are rejected BY NAME,
-   whatever version the document declares, for the same reason
-   (`_reject_removed_2_0_0!`).
+   `aggregate`, the pre-1.1.0 spelling of `faq`) are rejected BY NAME, for the
+   same reason (`_reject_removed_2_0_0!`).
 3. The deprecated spellings `neg` and `pow` are rewritten to unary `-` and
    `^`, with one `deprecated_op` warning for the document
    (`_rewrite_deprecated_ops!`, esm-spec §4.2 "Deprecated ops").
+   A model declaring `"system_kind": "pde"` gets one `deprecated_system_kind`
+   warning for the document (`_warn_deprecated_system_kind`, esm 2.4.0).
 4. The `faq` version gate: `faq` arrives at esm 1.1.0 (esm-spec §2.2.4, the
    rule the top-level `solver` block follows). With `gate = false`
    (post-inlining: a 1.0.0 parent whose mounted child uses `faq`), the declared
@@ -738,6 +738,9 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
     end
     _reject_removed_2_0_0!(doc)
     _rewrite_deprecated_ops!(doc)
+    # Only on the authored document's own pass: the post-inlining pass
+    # (`gate = false`) sees the same models again and must not warn twice.
+    gate && _warn_deprecated_system_kind(doc)
     if gate
         _check_version_gate(_VERSION_GATES.faq, doc)
         return nothing
@@ -776,6 +779,34 @@ function _node_key(n, name::String)
     sym = Symbol(name)
     haskey(n, sym) && return sym
     return nothing
+end
+
+"""
+    _warn_deprecated_system_kind(doc) -> Vector{String}
+
+esm 2.4.0 dropped the `"pde"` system kind. A model declaring
+`"system_kind": "pde"` is not refused: the field is kept as written, counts as
+absent for classification ([`declared_system_kind`](@ref)), and the document
+gets ONE `@warn` with the code `deprecated_system_kind` naming every such model
+by JSON pointer (`/models/<name>/system_kind`). Returns those pointers.
+"""
+function _warn_deprecated_system_kind(doc)::Vector{String}
+    sites = String[]
+    _is_object(doc) || return sites
+    models = _raw_get(doc, "models", nothing)
+    _is_object(models) || return sites
+    for (name, model) in pairs(models)
+        _is_object(model) || continue
+        _raw_get(model, "system_kind", nothing) == "pde" &&
+            push!(sites, _pointer("", "models", string(name), "system_kind"))
+    end
+    isempty(sites) && return sites
+    @warn string(
+        "deprecated_system_kind: the system_kind value \"pde\" is deprecated ",
+        "(esm 2.4.0) and ignored; the model is treated as its derived kind. ",
+        "Declared at: ", join(sites, ", "), "."
+    )
+    return sites
 end
 
 """
@@ -859,39 +890,29 @@ const _REMOVED_2_0_0_HINT =
     "removed at esm 2.0.0; run the codemod (`python -m earthsci_ast.migrate`) " *
     "to rewrite the document onto the `esm:std/*.esm` expression templates"
 
-# The spatial-calculus ops esm 2.4.0 removed. Each is written with spatial `D`,
-# one per axis, or with a user op lowered by a rewrite rule; there is no codemod.
-const _REMOVED_OPS_2_4_0 = ("grad", "div", "laplacian")
-
-const _REMOVED_2_4_0_HINT =
-    "removed at esm 2.4.0; write the derivative with spatial `D`, one `D` per " *
-    "axis (`grad(f, dim: x)` is `D(f, wrt: x)`), or with a user op lowered by a " *
-    "rewrite rule (MIGRATION.md, \"esm 2.4.0\")"
-
 """
     _REMOVED_OPS
 
 Every op spelling the format removed (esm-spec §4.2 "Removed ops"): `arrayop`
-(esm 0.8.0), [`_REMOVED_OPS_2_0_0`](@ref) and [`_REMOVED_OPS_2_4_0`](@ref).
-The document formats refuse the same tuple (`DocumentFormats.MExpr.REMOVED_OPS`
-is this object).
+(esm 0.8.0) and [`_REMOVED_OPS_2_0_0`](@ref). The document formats refuse the
+same tuple (`DocumentFormats.MExpr.REMOVED_OPS` is this object).
 """
-const _REMOVED_OPS = ("arrayop", _REMOVED_OPS_2_0_0..., _REMOVED_OPS_2_4_0...)
+const _REMOVED_OPS = ("arrayop", _REMOVED_OPS_2_0_0...)
 
 # What replaces a removed op, for its diagnostic.
 _removed_op_hint(op::AbstractString) =
     op == "arrayop" ?
     "removed at esm 0.8.0; use `\"op\": \"faq\"` (the Functional Aggregate Query " *
     "node), see docs/content/rfcs/faq-node-rename.md" :
-    op in _REMOVED_OPS_2_4_0 ? _REMOVED_2_4_0_HINT : _REMOVED_2_0_0_HINT
+    _REMOVED_2_0_0_HINT
 
 """
     _removed_2_0_0_finding(doc) -> Union{Nothing, Tuple{String, String}}
 
-`(name, path)` of the first construct esm 2.0.0 or 2.4.0 removed that `doc`
-uses: an expression node whose `op` is one of `_REMOVED_OPS_2_0_0` or
-`_REMOVED_OPS_2_4_0`, or a `function_tables` block at the top level or on a
-model / reaction system. `nothing` when there is none.
+`(name, path)` of the first construct esm 2.0.0 removed that `doc` uses: an
+expression node whose `op` is one of `_REMOVED_OPS_2_0_0`, or a
+`function_tables` block at the top level or on a model / reaction system.
+`nothing` when there is none.
 """
 function _removed_2_0_0_finding(doc)
     _is_object(doc) || return nothing
@@ -912,10 +933,7 @@ function _removed_2_0_0_finding(doc)
     removed = Ref("")
     hit(n) = (
         op = _raw_get(n, "op", nothing);
-        (
-            op isa AbstractString &&
-                (op in _REMOVED_OPS_2_0_0 || op in _REMOVED_OPS_2_4_0)
-        ) && (removed[] = String(op); true)
+        (op isa AbstractString && op in _REMOVED_OPS_2_0_0) && (removed[] = String(op); true)
     )
     path = _find_json_path(hit, doc)
     return path === nothing ? nothing : (removed[], path)
@@ -925,7 +943,7 @@ end
     _reject_removed_2_0_0!(doc)
 
 Throw the `removed_op` [`ParseError`](@ref) for the first construct esm 2.0.0
-or 2.4.0 removed (`_removed_2_0_0_finding`). Runs BY NAME at the wire boundary, before
+removed (`_removed_2_0_0_finding`). Runs BY NAME at the wire boundary, before
 schema validation: every removed op is a well-formed identifier, so esm-spec
 §4.2 would otherwise admit it as an open rewrite-target op and the document
 would fail much later as `unlowered_operator`.
@@ -938,7 +956,7 @@ function _reject_removed_2_0_0!(doc)
         "`\"op\": \"$(name)\"`"
     throw(
         ParseError(
-            "[E_REMOVED_OP] removed_op at $(at): $(what) was $(_removed_op_hint(name)).";
+            "[E_REMOVED_OP] removed_op at $(at): $(what) was $(_REMOVED_2_0_0_HINT).";
             code = ERROR_CODES.REMOVED_OP, path = at,
             details = Dict{String, Any}("name" => name)
         )

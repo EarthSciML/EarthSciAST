@@ -58,9 +58,6 @@ function _uw_box(extra_rhs; shaped = false)
     return doc
 end
 
-# An unlowered spatial derivative, `D(arg, wrt: x)`.
-_uw_dx(arg) = Dict{String, Any}("op" => "D", "args" => Any[arg], "wrt" => "x")
-
 function _uw_error(f)
     try
         f()
@@ -71,25 +68,22 @@ function _uw_error(f)
 end
 
 @testset "§9.6.3 constraint 6: unlowered ops in trees the build discards" begin
-    @testset "a dead observed carrying $(name) is refused" for (name, node, needle) in (
-            ("a spatial D", _uw_dx("c"), "wrt=x"),
-            ("godunov_hamiltonian", jop("godunov_hamiltonian", "c"), "godunov_hamiltonian"),
-        )
-        err = _uw_error(() -> esm_problem(_uw_box(node), (0.0, 1.0)))
+    @testset "a dead observed carrying $(op) is refused" for op in ("div", "godunov_hamiltonian")
+        err = _uw_error(() -> esm_problem(_uw_box(jop(op, "c")), (0.0, 1.0)))
         @test err isa _UW.TreeWalkError
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
-        @test err isa _UW.TreeWalkError && occursin(needle, err.detail)
+        @test err isa _UW.TreeWalkError && occursin(op, err.detail)
     end
 
     @testset "a dead elementwise array observed, folded away by the build, is refused" begin
-        doc = _uw_box(jop("+", _uw_dx("c"), 1.0); shaped = true)
+        doc = _uw_box(jop("+", jop("div", "c"), 1.0); shaped = true)
         err = _uw_error(() -> esm_problem(doc, (0.0, 1.0)))
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
-        @test err isa _UW.TreeWalkError && occursin("wrt=x", err.detail)
+        @test err isa _UW.TreeWalkError && occursin("div", err.detail)
     end
 
     @testset "a dead array observed reports unlowered_operator, not a shape error" begin
-        doc = _uw_box(_uw_dx("c"); shaped = true)
+        doc = _uw_box(jop("div", "c"); shaped = true)
         err = _uw_error(() -> esm_problem(doc, (0.0, 1.0)))
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
     end
@@ -107,9 +101,9 @@ end
     end
 
     @testset "the internal build entry refuses it too" begin
-        err = _uw_error(() -> EarthSciAST.Internal.build(_uw_box(_uw_dx(_uw_dx("c")))))
+        err = _uw_error(() -> EarthSciAST.Internal.build(_uw_box(jop("laplacian", "c"))))
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
-        @test err isa _UW.TreeWalkError && occursin("wrt=x", err.detail)
+        @test err isa _UW.TreeWalkError && occursin("laplacian", err.detail)
     end
 
     @testset "a dead but fully lowered observed still builds" begin
