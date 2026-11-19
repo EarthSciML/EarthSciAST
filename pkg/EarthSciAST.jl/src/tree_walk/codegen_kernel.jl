@@ -253,6 +253,9 @@ mutable struct _CGFunction
     # The template call targets emitted so far (`_cg_call_fn!`): target →
     # (name, position in `helpers`, definition), stale as `instfns` is.
     callfns::IdDict{Any, Tuple{Symbol, Int, Expr}}
+    # Per emitted call function: its count tables and the table of each count
+    # (`_cg_site_count_tables`).
+    callcounts::IdDict{Any, Tuple{Vector{Tuple{Int, Int, Int}}, Vector{Int}}}
     # The size each INLINED helper (call or instance function) adds where it is
     # called: its body's emitted size with the inlined calls in it counted
     # whole (`_cg_inl_size`). LLVM compiles that body at every call, so the
@@ -264,7 +267,7 @@ _CGFunction(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst:
     _CGTabs(), Int[], _CGPrologue(), Any[], 0, budget, 0, shared_cache, 0,
     _CGSlotSpace(nst), _CGNest(), _CGKernelTx(_CGMark(0, 0, 0, 0, 0), Dict{String, Symbol}()),
     Dict{String, Tuple{Symbol, Int, Expr}}(), IdDict{Any, Tuple{Symbol, Int, Expr}}(),
-    Dict{Symbol, Int}()
+    IdDict{Any, Tuple{Vector{Tuple{Int, Int, Int}}, Vector{Int}}}(), Dict{Symbol, Int}()
 )
 
 # The emitted size of `ex` as LLVM sees it: a call of an inlined helper counts
@@ -1033,13 +1036,22 @@ end
 struct _CGCallCtx
     args::Vector{Symbol}
     arrs::Vector{Symbol}
-    asc::Vector{Any}             # per array slot: its ascending flag's parameter, or `nothing`
+    # The comparison counts over a const array argument (`_cg_count_runtime`):
+    # each distinct (array slot, lo, hi) is a table the call site passes
+    # (`ctabs`, parameters `ctsyms`, each with a flag `ctoks`); `ctocc` lists
+    # the table of every count emitted, for the tallies.
+    ctabs::Vector{Tuple{Int, Int, Int}}
+    ctsyms::Vector{Symbol}
+    ctoks::Vector{Symbol}
+    ctocc::Vector{Int}
     loops::IdDict{Any, Symbol}   # loop counters, and sub-trees computed once ahead ("A repeated sub-tree")
     spans::IdDict{Any, Tuple{Int, Int}}
     share::Any                   # a `_CGShareKeys` (array_contraction.jl, included later)
 end
-_CGCallCtx(args, arrs, asc) =
-    _CGCallCtx(args, arrs, asc, IdDict{Any, Symbol}(), IdDict{Any, Tuple{Int, Int}}(), _CGShareKeys())
+_CGCallCtx(args, arrs) = _CGCallCtx(
+    args, arrs, Tuple{Int, Int, Int}[], Symbol[], Symbol[], Int[],
+    IdDict{Any, Symbol}(), IdDict{Any, Tuple{Int, Int}}(), _CGShareKeys()
+)
 
 function _cg_emit(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
     _cg_budget!(ctx)
@@ -1081,16 +1093,16 @@ end
 function _cg_emit_call(ctx::_CGFunction, kc, nd::_Node)
     site = nd.payload::_CallSite
     tg = site.target
+    f = _cg_call_fn!(ctx, tg)
     args = Any[_cg_emit(ctx, kc, c) for c in nd.children]
     for a in site.arrays
         kc isa _CGCallCtx && _decline(:call_array_forward)
         push!(args, _cg_tab!(ctx, a.data))
     end
-    # Per const array: whether it ascends (`_cg_count_runtime`).
-    for (j, a) in enumerate(site.arrays)
-        tg.arrkinds[j] === :const && push!(args, _arr_ascending(a))
+    # The count tables the body searches, built from this site's arrays.
+    for (tab, ok) in _cg_site_count_tables(ctx, site, :count_fold)
+        push!(args, _cg_tab!(ctx, tab), ok)
     end
-    f = _cg_call_fn!(ctx, tg)
     # An inlined body is compiled here too: it counts toward this function.
     ctx.nodes += get(ctx.inlsize, f, 0)
     return Expr(:call, f, :u, :p, :t, args...)
@@ -1149,8 +1161,8 @@ function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
     end
     argsyms = Symbol[Symbol("_cga", i) for i in eachindex(tg.slots)]
     arrsyms = Symbol[Symbol("_cgA", j) for j in eachindex(tg.arrslots)]
-    ascsyms = Any[tg.arrkinds[j] === :const ? Symbol("_cgAasc", j) : nothing for j in eachindex(tg.arrslots)]
-    body = _cg_emit_region(ctx, _CGCallCtx(argsyms, arrsyms, ascsyms), tg.body)
+    kc = _CGCallCtx(argsyms, arrsyms)
+    body = _cg_emit_region(ctx, kc, tg.body)
     ln = LineNumberNode(0, Symbol("ess-template-call"))
     # Its emitted size with the inlined calls in it counted whole: a body
     # that is large once its calls are inlined is called, not inlined.
@@ -1167,53 +1179,97 @@ function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
     small && (ctx.inlsize[name] = sz)
     fdef = Expr(
         :function,
-        Expr(:call, name, :u, :p, :t, argsyms..., arrsyms..., filter(!isnothing, ascsyms)...),
+        Expr(:call, name, :u, :p, :t, argsyms..., arrsyms..., Iterators.flatten(zip(kc.ctsyms, kc.ctoks))...),
         Expr(:block, stmts...)
     )
     def = Expr(:macrocall, Symbol(small ? "@inline" : "@noinline"), ln, fdef)
     push!(ctx.helpers, def)
     ctx.callfns[tg] = (name, length(ctx.helpers), def)
+    ctx.callcounts[tg] = (copy(kc.ctabs), copy(kc.ctocc))
     _tally_cascade!(:cg_call_fn)
     return name
 end
 
-# Whether a const array argument's entries ascend (`a[k] <= a[k+1]`, which no
-# NaN satisfies): a count over it is then a binary search (`_cg_count_runtime`).
-# Passed by each call site, as a literal, next to the array.
-function _arr_ascending(a::_ArrArg)
-    cg = a.data::_ConstGatherArray
-    length(cg.dims) == 1 || return false
-    f = cg.flat
-    @inbounds for k in 1:(length(f) - 1)
-        f[k] <= f[k + 1] || return false
+# The count tables call site `site` passes to its target's function, in the
+# order of the target's parameters (`ctx.callcounts`): per table `(entries,
+# ok)`, `ok` false when this site's array cannot give the entries (its range
+# leaves the array under a throwing boundary policy), where the body counts
+# entry by entry. Each emitted count is tallied as the const-array count is
+# (`tally` prefix `:count_fold`: `_search` over ascending entries, `_sorted`
+# over a sorted copy; `:count_fold_setup` in setup geometry).
+function _cg_site_count_tables(ctx::_CGFunction, site::_CallSite, tally::Symbol)
+    got = get(ctx.callcounts, site.target, nothing)
+    got === nothing && return Tuple{Vector{Float64}, Bool}[]
+    ctabs, occ = got
+    out = Tuple{Vector{Float64}, Bool, Bool}[]
+    ct = _call_table()
+    for (j, lo, hi) in ctabs
+        a = site.arrays[j]
+        build() = (
+            f = _count_const_axis_of(a.data::_ConstGatherArray, lo:hi);
+            f === nothing ? (Float64[], false, false) : (f[1], true, f[2])
+        )
+        # One object per table for the build, so a geometry kernel's sources
+        # (`_geo_shape_key`) and its emission name the same array.
+        push!(out, ct === nothing ? build() : get!(build, (ct::_CallTable).ctabs, (objectid(a.data), lo, hi)))
     end
-    return !(length(f) == 1 && isnan(f[1]))
+    tally === :none || for k in occ
+        _, ok, asc = out[k]
+        ok || continue
+        _tally_cascade!(tally === :count_fold ? (asc ? :count_fold_search : :count_fold_sorted) : tally)
+    end
+    return Tuple{Vector{Float64}, Bool}[(t, ok) for (t, ok, _) in out]
 end
 
 # The comparison count (`_cg_count_loop`) over a const ARRAY ARGUMENT read at
-# the counter: a binary search when the site's array ascends and the range is
-# inside it with step 1, else the comparison per entry. Both are the count, so
-# the bits are the fold's whichever runs.
+# the counter, with step 1: a binary search over the table of the array's
+# entries over the range that the call site passes (`_cg_site_count_tables`,
+# the const-array count's table, `_count_const_axis`), or, when the site
+# could not build it, the comparison per entry. Both are the count, so the
+# bits are the fold's whichever runs.
 function _cg_count_runtime(ctx::_CGFunction, kc::_CGCallCtx, a::_Node, spec, test, neg, rel, xv, xe, kv_loop)
     (a.kind === _NK_ARG_GATHER && length(a.children) == 1) || return nothing
     s = a.children[1]
     (s.kind === _NK_LOOPVAR && s.payload === spec.ref) || return nothing
     ref = a.payload::_ArgGatherRef
-    asc = kc.asc[ref.j]
-    asc === nothing && return nothing
+    ref.target.arrkinds[ref.j] === :const || return nothing
     spec.step == 1 || return nothing
-    A = kc.arrs[ref.j]
-    lo, hi = spec.lo, spec.hi
-    nrng = length(lo:hi)
+    key = (ref.j, spec.lo, spec.hi)
+    k = findfirst(==(key), kc.ctabs)
+    if k === nothing
+        push!(kc.ctabs, key)
+        push!(kc.ctsyms, Symbol("_cgCT", length(kc.ctabs)))
+        push!(kc.ctoks, Symbol("_cgCTok", length(kc.ctabs)))
+        k = length(kc.ctabs)
+    end
+    push!(kc.ctocc, k)
+    tv, okv = kc.ctsyms[k], kc.ctoks[k]
+    nrng = length(spec.lo:spec.hi)
+    search = _cg_count_search(ctx, test, rel, neg, nrng, tv)
+    linear = kv_loop()
+    return quote
+        let
+            local $xv = $xe
+            if $okv
+                $search
+            else
+                $linear
+            end
+        end
+    end
+end
+
+# The binary search for the count over the table `tv` (ascending entries),
+# shared by the const-array count and the array-argument count.
+function _cg_count_search(ctx::_CGFunction, test, rel, neg, nrng, tv)
     cv, hv, mv = _cg_name(ctx, "cn"), _cg_name(ctx, "ch"), _cg_name(ctx, "cm")
-    rd(m) = :(@inbounds $A.flat[$(lo - 1) + $m])
-    search = if rel === :<= || rel === :<
+    return if rel === :<= || rel === :<
         quote
             local $cv = 0
-            local $hv = $nrng
+            local $hv = length($tv)
             while $cv < $hv
                 local $mv = ($cv + $hv + 1) >>> 1
-                if $(test(rd(mv)))
+                if $(test(:(@inbounds $tv[$mv])))
                     $cv = $mv
                 else
                     $hv = $mv - 1
@@ -1224,28 +1280,16 @@ function _cg_count_runtime(ctx::_CGFunction, kc::_CGCallCtx, a::_Node, spec, tes
     else
         quote
             local $cv = 1
-            local $hv = $(nrng + 1)
+            local $hv = length($tv) + 1
             while $cv < $hv
                 local $mv = ($cv + $hv) >>> 1
-                if $(test(rd(mv)))
+                if $(test(:(@inbounds $tv[$mv])))
                     $hv = $mv
                 else
                     $cv = $mv + 1
                 end
             end
-            Float64($(neg ? :($nrng - ($(nrng + 1) - $cv)) : :($(nrng + 1) - $cv)))
-        end
-    end
-    linear = kv_loop()
-    _tally_cascade!(:count_fold_search)
-    return quote
-        let
-            local $xv = $xe
-            if $asc && $lo >= 1 && $hi <= length($A.flat) && length($A.dims) == 1
-                $search
-            else
-                $linear
-            end
+            Float64($(neg ? :($nrng - (length($tv) + 1 - $cv)) : :(length($tv) + 1 - $cv)))
         end
     end
 end

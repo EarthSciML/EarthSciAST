@@ -207,15 +207,15 @@ _ti_count_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_sorted, 
     end
 
     # One bracket index per lookup: `linear` writes it six times, and every
-    # copy sits in its innermost branch, so that branch computes it once. The
-    # three lookups call one compiled `linear` (a template call, its tables
-    # passed at run time), so the count is emitted once.
+    # copy sits in its innermost branch, so that branch computes it once and
+    # the count is searched once per lookup (three lookups, which call one
+    # compiled `linear` with their own tables).
     @testset "the bracket index runs once per lookup" begin
         doc = _ti_doc(:cell, n)
         _, tn, _ = _ti_eval(doc, :native; times = (0.0,))
         _, ts, _ = _ti_eval(doc, _TI_NOSHARE; times = (0.0,))
         @test get(ts, :count_fold_search, 0) == 6 * get(tn, :count_fold_search, 0)
-        @test get(tn, :count_fold_search, 0) == 1
+        @test get(tn, :count_fold_search, 0) == 3
     end
 
     @testset "N = 200 against the interpreter" for shape in (:scalar, :cell, :ss, :bil)

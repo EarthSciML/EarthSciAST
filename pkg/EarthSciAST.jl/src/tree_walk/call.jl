@@ -81,10 +81,13 @@ struct _CallTable
     targets::Dict{String, _CallTarget}
     stack::_ArgStack
     sites::Dict{Tuple{_CallTarget, Vector{UInt}}, _CallSite}
+    # The count tables built from array arguments, by (array, lo, hi): one
+    # object per table for the build (codegen_kernel.jl `_cg_site_count_tables`).
+    ctabs::Dict{Tuple{UInt, Int, Int}, Any}
 end
 _CallTable(reg) = _CallTable(
     _TplTable(reg), Dict{String, _CallTarget}(), _ArgStack(),
-    Dict{Tuple{_CallTarget, Vector{UInt}}, _CallSite}()
+    Dict{Tuple{_CallTarget, Vector{UInt}}, _CallSite}(), Dict{Tuple{UInt, Int, Int}, Any}()
 )
 
 # The body compile's argument map (`_compile(::VarExpr)` reads `idx`, the
@@ -585,6 +588,24 @@ function _call_body_ops!(memo::Dict{String, Set{String}}, tt::_TplTable, name::S
         end
     end
     return ops
+end
+
+# A structural measure `f(body, memo::IdDict{OpExpr, Int}) -> Int` of the body
+# of the reference `call`'s template (its prepared body, every parameter a
+# sentinel), once per template (`key` names the measure), 0 when no table is
+# in reach or the template has a parameter in a structural position. A phase
+# that asks how an expression is built (how deep its reductions nest) asks it
+# of a call through here.
+function _call_body_measure(f, call::OpExpr, key::Symbol)
+    ct = _call_table()
+    ct === nothing && return 0
+    tt = (ct::_CallTable).tt
+    memo = _tpl_memo(tt, nothing, key, () -> Dict{String, Int}())
+    return get!(memo, String(call.name)) do
+        def = _tpl_def(tt, call.name)
+        body = def.closed === nothing ? nothing : def.closed.body
+        body isa OpExpr ? f(body, IdDict{OpExpr, Int}()) : 0
+    end
 end
 
 # `call` with a binding for each implicit parameter of its template

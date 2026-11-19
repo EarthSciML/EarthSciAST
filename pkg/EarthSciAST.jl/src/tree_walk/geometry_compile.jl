@@ -848,10 +848,14 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
             end
             push!(args, :(srcs[$k]))
         end
-        for (j, a) in enumerate(site.arrays)
-            site.target.arrkinds[j] === :const && push!(args, _arr_ascending(a))
-        end
         f = _cg_call_fn!(g.calls::_CGFunction, site.target)
+        for (tab, ok) in _cg_site_count_tables(g.calls::_CGFunction, site, :count_fold_setup)
+            k = get!(g.src_ix, tab) do
+                push!(g.srcs, tab)
+                length(g.srcs)
+            end
+            push!(args, :(srcs[$k]), ok)
+        end
         return Expr(:call, f, nothing, nothing, nothing, args...)
     end
     n.kind == _NK_OP || _decline(:unknown_kind, string(n.kind))
@@ -1023,7 +1027,20 @@ function _geo_shape_key(body::_Node)
                     push!(arrays, a.data)
                     length(arrays)
                 end
-                push!(key, :src, i, _arr_ascending(a))
+                push!(key, :src, i)
+            end
+            # And the count tables its function searches (built from those
+            # arrays, the objects the emission passes).
+            if any(k -> k === :const, pl.target.arrkinds)
+                tmp = _CGFunction(typemax(Int))
+                _cg_call_fn!(tmp, pl.target)
+                for (tab, ok) in _cg_site_count_tables(tmp, pl, :none)
+                    i = get!(aix, tab) do
+                        push!(arrays, tab)
+                        length(arrays)
+                    end
+                    push!(key, :src, i, ok)
+                end
             end
         elseif n.op === :geo_agg
             sp = pl::_GeoAggSpec

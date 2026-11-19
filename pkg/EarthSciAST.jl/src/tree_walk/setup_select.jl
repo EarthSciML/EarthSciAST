@@ -37,6 +37,8 @@ function _faq_nesting(e::OpExpr, memo::IdDict{OpExpr, Int})
         a isa OpExpr && (d = max(d, _faq_nesting(a, memo)))
     end
     e.expr_body isa OpExpr && (d = max(d, _faq_nesting(e.expr_body::OpExpr, memo)))
+    # A template call nests what its body nests (call.jl).
+    _tpl_is_call(e) && (d = max(d, _call_body_measure(_faq_nesting, e, :faq_nesting)))
     _is_faq_op(e.op) && (d += 1)
     return memo[e] = d
 end

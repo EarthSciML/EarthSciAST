@@ -862,9 +862,10 @@ function _count_const_axis(a::_Node, spec::_ContractLoop, cg = a.payload)
     (a.kind === _NK_CONST_GATHER && length(a.children) == 1) || return nothing
     s = a.children[1]
     (s.kind === _NK_LOOPVAR && s.payload === spec.ref) || return nothing
-    cg = cg::_ConstGatherArray
+    return _count_const_axis_of(cg::_ConstGatherArray, spec.lo:spec.step:spec.hi)
+end
+function _count_const_axis_of(cg::_ConstGatherArray, rng)
     length(cg.dims) == 1 || return nothing
-    rng = spec.lo:spec.step:spec.hi
     vals = Vector{Float64}(undef, length(rng))
     for (i, k) in enumerate(rng)
         (1 <= k <= cg.dims[1]) ||
