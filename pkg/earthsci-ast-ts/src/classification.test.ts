@@ -329,3 +329,46 @@ describe('an ARRAYED definition is observed, in every LHS spelling (§6.3.1)', (
     expect(algebraicUnknowns(model)).toEqual([])
   })
 })
+
+describe('grad, div and laplacian are ordinary operator names (esm 2.4.0)', () => {
+  // They carry no spatial-detection privilege: only a spatial `D` (a `wrt`
+  // other than `t`) makes a model a PDE.
+  for (const op of ['grad', 'div', 'laplacian']) {
+    it(`a document using \`${op}\` loads, and \`${op}\` alone does not make it pde`, () => {
+      const file = loadString(
+        JSON.stringify({
+          esm: '2.4.0',
+          metadata: { name: `ordinary_${op}` },
+          models: {
+            M: {
+              variables: {
+                u: { type: 'unknown', units: '1', default: 0.0 },
+                k: { type: 'parameter', units: '1', default: 1.0 },
+              },
+              equations: [
+                {
+                  lhs: { op: 'D', args: ['u'], wrt: 't' },
+                  rhs: { op: '*', args: ['k', { op, args: ['u'], dim: 'x' }] },
+                },
+              ],
+            },
+          },
+        }),
+      )
+      expect(systemKind(file.models!.M as Model)).toBe('ode')
+    })
+  }
+
+  it('a spatial D still makes the model pde', () => {
+    const model = {
+      variables: { u: { type: 'unknown', units: '1', default: 0.0 } },
+      equations: [
+        {
+          lhs: { op: 'D', args: ['u'], wrt: 't' },
+          rhs: { op: 'D', args: ['u'], wrt: 'x' },
+        },
+      ],
+    } as unknown as Model
+    expect(systemKind(model)).toBe('pde')
+  })
+})

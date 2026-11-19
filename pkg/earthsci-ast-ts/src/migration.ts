@@ -20,11 +20,6 @@
  *    rewrite, done by the one codemod
  *    (`python -m earthsci_ast.migrate`), not here.
  *
- * esm 2.4.0 removes the `grad`, `div` and `laplacian` ops. A document of any
- * version that uses one is refused with `removed_op`; its replacement (spatial
- * `D`, one per axis, or a user op lowered by a rewrite rule) is written by hand,
- * with no codemod (MIGRATION.md, "esm 2.4.0").
- *
  * **There is no migration across the 1.0.0 boundary.** esm 1.0.0 is a clean
  * break with no deprecation path: the five declared variable types collapse to
  * two, an observed variable's `expression` becomes an equation, `data_loaders`
@@ -156,9 +151,7 @@ export const getSupportedMigrationTargets = supportedMigrationTargets
  * that uses none of the constructs esm 2.0.0 removed, advanced to the current
  * schema version (see the module header). A 1.x source that uses one throws
  * {@link MigrationError} with code `removed_op`, naming the construct, where it
- * sits, and the codemod that rewrites it. Any source that uses `grad`, `div` or
- * `laplacian` (removed at esm 2.4.0) is refused the same way, pointing at
- * spatial `D` (MIGRATION.md, "esm 2.4.0"; there is no codemod). Any other version pair — a 0.x source
+ * sits, and the codemod that rewrites it. Any other version pair — a 0.x source
  * included — throws {@link MigrationError}. The input file is never mutated; a
  * new object with the updated `esm` marker is returned.
  */
@@ -172,11 +165,11 @@ export function migrate(file: EsmFile, targetVersion: string): EsmFile {
     throw new MigrationError(`Migration from ${sourceVersion} to ${targetVersion} is not supported`)
   }
 
-  // A marker bump never makes a removed construct valid: a 1.x source using
-  // one of the 2.0.0 removals, or any source using `grad`, `div` or
-  // `laplacian` (removed at esm 2.4.0), is refused.
-  const removed = findRemovedConstruct(file)
-  if (removed !== null) throw new MigrationError(removed.message, ERROR_CODES.REMOVED_OP)
+  const source = parseVersion(sourceVersion)
+  if (source !== null && crossesV2Break(source)) {
+    const removed = findRemovedConstruct(file)
+    if (removed !== null) throw new MigrationError(removed.message, ERROR_CODES.REMOVED_OP)
+  }
 
   return { ...file, esm: targetVersion }
 }

@@ -165,32 +165,6 @@ describe('migration', () => {
       })
     }
 
-    for (const esm of ['1.3.0', '2.3.0', SCHEMA_VERSION]) {
-      for (const op of ['grad', 'div', 'laplacian']) {
-        it.runIf(IMPLEMENTS_V2)(`refuses a ${esm} file using \`${op}\` with removed_op`, () => {
-          const source = {
-            ...v1WithRhs({ op: '+', args: [1, { op, args: ['x'], dim: 'y' }] }),
-            esm,
-          } as EsmFile
-          let err: unknown
-          try {
-            migrate(source, SCHEMA_VERSION)
-          } catch (e) {
-            err = e
-          }
-          expect(err).toBeInstanceOf(MigrationError)
-          expect((err as MigrationError).code).toBe('removed_op')
-          const message = (err as MigrationError).message
-          expect(message).toContain(`"op": "${op}"`)
-          expect(message).toContain('/models/M/equations/0/rhs/args/1')
-          expect(message).toContain('was removed at esm 2.4.0')
-          expect(message).toContain('MIGRATION.md, "esm 2.4.0"')
-          expect(message).not.toContain('python -m earthsci_ast.migrate')
-          expect(source.esm).toBe(esm)
-        })
-      }
-    }
-
     for (const where of ['top-level', 'component-level']) {
       it.runIf(IMPLEMENTS_V2)(`refuses a 1.x file with a ${where} function_tables block`, () => {
         const block = { T: { axes: [{ name: 'a', values: [0, 1] }], data: [0, 1] } }

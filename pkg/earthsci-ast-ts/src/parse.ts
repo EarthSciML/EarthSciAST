@@ -955,24 +955,6 @@ const REMOVED_OPS_V2: ReadonlyMap<string, string> = new Map([
   ['aggregate', '`"op": "faq"`, the same node under its 1.1.0 name'],
 ])
 
-/**
- * Ops removed at esm 2.4.0, each with how its derivative is written now. Like
- * {@link REMOVED_OPS_V2} they are rejected BY NAME at the wire boundary, on
- * every document whatever `esm` it declares. There is no codemod for them: the
- * message points at MIGRATION.md, "esm 2.4.0".
- */
-const REMOVED_OPS_V24: ReadonlyMap<string, string> = new Map([
-  ['grad', '`grad(f, dim: x)` is `D(f, wrt: x)`'],
-  ['div', '`div(F)` is the sum over axes of `D(F_i, wrt: x_i)`'],
-  ['laplacian', '`laplacian(u)` is the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)`'],
-])
-
-/** Every removed op name, for one pre-order search. */
-const REMOVED_OPS_ALL: ReadonlyMap<string, string> = new Map([
-  ...REMOVED_OPS_V2,
-  ...REMOVED_OPS_V24,
-])
-
 /** Where a removed construct's message sends the author. */
 const MIGRATE_HINT = 'Convert the document with the codemod: `python -m earthsci_ast.migrate`.'
 
@@ -1035,8 +1017,7 @@ function findFunctionTables(doc: unknown): string | null {
  * The first removed construct `doc` uses, as its JSON path and `removed_op`
  * message, or `null` when it uses none: `"op": "arrayop"` (removed at esm
  * 0.8.0), then the `function_tables` block, then the ops in
- * {@link REMOVED_OPS_V2} (removed at 2.0.0) and {@link REMOVED_OPS_V24} (removed
- * at 2.4.0) in pre-order. The message names the construct, where
+ * {@link REMOVED_OPS_V2} in pre-order. The message names the construct, where
  * it sits, and what replaces it. Shared by the load-time rejection,
  * `validate()` and `migrate()`, which refuses to relabel such a 1.x document.
  */
@@ -1061,17 +1042,7 @@ export function findRemovedConstruct(doc: unknown): { path: string; message: str
         `esm:std/interp.esm instead. ${MIGRATE_HINT}`,
     }
   }
-  const hit = findFirstOp(doc, REMOVED_OPS_ALL)
-  if (hit !== null && REMOVED_OPS_V24.has(hit.op)) {
-    return {
-      path: hit.path,
-      message:
-        `removed_op at ${hit.path}: \`"op": "${hit.op}"\` was removed at esm 2.4.0; ` +
-        `write the derivative with spatial \`D\`, one \`D\` per axis ` +
-        `(${REMOVED_OPS_V24.get(hit.op)}), or with a user op lowered by a rewrite rule ` +
-        `(MIGRATION.md, "esm 2.4.0").`,
-    }
-  }
+  const hit = findFirstOp(doc, REMOVED_OPS_V2)
   if (hit !== null) {
     return {
       path: hit.path,
@@ -1252,8 +1223,7 @@ export interface PrepareDocumentOpsOptions {
  * Three steps, in this order:
  *
  * 1. `arrayop` (removed at esm 0.8.0), the ops removed at esm 2.0.0 (the
- *    `aggregate` alias of `faq` among them), the ops removed at esm 2.4.0
- *    (`grad`, `div`, `laplacian`) and the `function_tables` block are
+ *    `aggregate` alias of `faq` among them) and the `function_tables` block are
  *    rejected BY NAME with `removed_op`. Each op is a well-formed identifier, so
  *    esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op: the
  *    document would load silently and fail much later as `unlowered_operator`,
