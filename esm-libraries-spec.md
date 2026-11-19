@@ -115,15 +115,15 @@ After resolution completes, the in-memory representation is indistinguishable fr
 
 ### 2.1c Template Import Resolution (esm-spec §9.7)
 
-Template imports resolve in the same load phase as subsystem references, with the same reference formats and the same visited-set cycle detection, but target **template-library files** (top-level `expression_templates`; esm-spec §9.7.1) instead of single-component files.
+Template imports resolve in the same load phase as subsystem references, with the same reference formats and the same visited-set cycle detection, but target **operator-library files** (top-level `operators`; esm-spec §9.7.1) instead of single-component files.
 
 **Resolution algorithm:**
 
-1. Collect `expression_template_imports` arrays: on every `model` / `reaction_system`, and at the top level of a library file being imported.
+1. Collect `operator_imports` arrays: on every `model` / `reaction_system`, and at the top level of a library file being imported.
 2. For each entry, in array order:
    a. Load `ref` exactly as in §2.1b step 2a-b (URL vs relative path; shared visited set for cycle detection → `template_import_cycle`).
-   b. Verify the target is a pure template-library file — top-level `expression_templates` present; no `models` / `reaction_systems` / `data_sources` / `coupling` / `domain` (`template_import_not_library`).
-   c. Recurse into the target's own `expression_template_imports` (depth-first).
+   b. Verify the target is a pure operator-library file — top-level `operators` present; no `models` / `reaction_systems` / `data_sources` / `coupling` / `domain` (`template_import_not_library`).
+   c. Recurse into the target's own `operator_imports` (depth-first).
    d. Instantiate the target with the edge's metaparameter `bindings` (esm-spec §9.7.6): close the named metaparameters, re-export the rest into the importer's metaparameter scope, fold structural integer sites, substitute expression-position occurrences.
    e. Apply `only` filtering (`template_import_unknown_name` for unknown names).
    f. Merge the target's `index_sets` into the importing document's registry (deep-equal idempotent; `template_import_index_set_conflict` otherwise).
@@ -134,7 +134,7 @@ Template imports resolve in the same load phase as subsystem references, with th
 
 **Error handling:** as the §2.1b table, plus the `template_import_*` / `metaparameter_*` diagnostics of esm-spec §9.6.6.
 
-After resolution, neither `expression_template_imports` nor `metaparameters` nor top-level `expression_templates` is visible downstream; round-trip emits the expanded, folded form (esm-spec §9.7.6).
+After resolution, neither `operator_imports` nor `metaparameters` nor top-level `operators` is visible downstream; round-trip emits the expanded, folded form (esm-spec §9.7.6).
 
 ### 2.2 Data Model
 
@@ -898,7 +898,7 @@ text.
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`) |
 | `subsystem_ref_is_coupling_library` | A §4.7 subsystem `ref` targets a coupling-library file |
 | `template_import_is_coupling_library` | A §9.7.2 template import targets a coupling-library file |
-| `coupling_library_illegal_payload` | A coupling-library file declares a forbidden payload (`models`/`reaction_systems`/`data_sources`/`domain`/`index_sets`/`metaparameters`/`expression_templates`), contains a `callback` entry or an edge-level `expression_template_imports` map, or carries a transform template that would expand to a rewrite-target operator (esm-spec §10.9) |
+| `coupling_library_illegal_payload` | A coupling-library file declares a forbidden payload (`models`/`reaction_systems`/`data_sources`/`domain`/`index_sets`/`metaparameters`/`operators`), contains a `callback` entry or an edge-level `operator_imports` map, or carries a transform template that would expand to a rewrite-target operator (esm-spec §10.9) |
 | `coupling_library_nested_import` | A coupling-library file contains a `coupling_import` entry |
 | `coupling_edge_unknown_role` | A library edge's top-level system segment, at an occurrence site, is not a declared role |
 | `coupling_role_unused` | A declared role appears at no occurrence site in any library edge |
@@ -1411,7 +1411,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - For nested subsystems, the prefix is the full path: `Parent.Child.variable`.
    - **From `esm: 0.9.0` (reference-preserving round-trip, esm-spec §9.6.4):** apply the same
      renaming map to free variable references inside the component's carried
-     `expression_templates` bodies and inside surviving `apply_expression_template`
+     `operators` bodies and inside surviving `apply_operator`
      references' `bindings` (template `params` shadow, exactly as in esm-spec §9.6.1).
    - Apply it to the plain-string references a relational `join` carries as well — an `on`
      key column, and an `overlap` clause's `src_env` / `tgt_env` envelope factors. These are
@@ -1444,7 +1444,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    (`coupling_import_unresolved`, `coupling_import_not_library`, `coupling_import_role_unbound`,
    `coupling_import_unknown_role`, `coupling_import_bind_not_a_component`,
    `coupling_library_illegal_payload`, …). A library edge's transform templates
-   (`apply_expression_template`) expand here against the **bound** `to` owner's template registry,
+   (`apply_operator`) expand here against the **bound** `to` owner's template registry,
    to an already-lowered form (esm-spec §10.4 carve-out). After this sub-step every entry in the
    sequence is an ordinary coupling entry; the `coupling_import` source entry is retained only in
    the *source* document (esm-spec §10.10.3), never in the flattened system. The expansion is a
@@ -1537,7 +1537,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      renamed per owner too, so no deduplicated entry is left holding a reference the merged
      registry cannot resolve. Downstream
      consumers — graph construction, simulation backends, emit — resolve surviving
-     `apply_expression_template` references against this registry. Builders, evaluators and
+     `apply_operator` references against this registry. Builders, evaluators and
      analyses SHOULD NOT expand them: they SHOULD evaluate each referenced template natively,
      once per template and binding shape (esm-spec §9.6.4 rule 2). A consumer that does expand
      still conforms if its observable behavior is identical; explicit expansion utilities (for
@@ -1712,7 +1712,7 @@ rewrites their equations.
   - an `index` whose subscripts are all scalars is a scalar, and is undecided otherwise;
   - a `faq` with no output indices is a scalar; one whose every output index ranges
     `{"from": X}` has those index sets in `output_idx` order; any other is undecided;
-  - an `apply_expression_template` reference has the axes of its expansion (esm-spec §9.6.4
+  - an `apply_operator` reference has the axes of its expansion (esm-spec §9.6.4
     rule 2). A binding decides it on the template's body, once per instance (esm-spec §9.6.4
     rule 3), reading each parameter as the axes of what it binds; it MUST NOT treat a
     reference as undecided because it is a reference, since a firing discretization rule writes
@@ -1777,7 +1777,7 @@ index set `X_d` each dimension lives on, chosen by the first rule that applies:
 
 1. **Named by an operand.** Inside the equation's operator `makearray`s, at any depth and in
    any child field, and read on the expanded tree (esm-spec §9.6.4 rule 4: a surviving
-   `apply_expression_template` reference counts as its expansion), every
+   `apply_operator` reference counts as its expansion), every
    `index(v, a_1, …, a_m)` whose `v` is a flattened variable declaring a shape
    `[s_1, …, s_m]` names, at each position `p` whose index expression's first bare name is
    the loop symbol `ℓ_d`, the index set `s_p`. A name counts only when the document's
@@ -2835,7 +2835,7 @@ esm convert model.esm --to=compact-json
 
 The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed ODE integrator driving ONE evaluator, the array runtime, which builds every document — 0-D or a discretized PDE — and evaluates it on its tape under `native` / `xla` and on its per-cell oracle under `interpreter` (API_SPEC §5.8). v1 is intentionally limited in these ways:
 
-- **Time-integration domain.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]` — which *includes* discretized PDEs, whose spatial axis is folded into `faq` dimensions and integrated natively by the array-op runtime (see §5.9). A system that still carries a spatial independent variable holds an *undiscretized* spatial operator and returns `CompileError::UnsupportedDimensionalityError`; discretize it first (apply the `expression_templates` stencil rewrite).
+- **Time-integration domain.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]` — which *includes* discretized PDEs, whose spatial axis is folded into `faq` dimensions and integrated natively by the array-op runtime (see §5.9). A system that still carries a spatial independent variable holds an *undiscretized* spatial operator and returns `CompileError::UnsupportedDimensionalityError`; discretize it first (apply the `operators` stencil rewrite).
 - **No event handling.** Models with non-empty `continuous_events` or `discrete_events`, on the model itself or on any inline subsystem, return `CompileError::UnsupportedConstruct`, the esm-spec §9.6.6 `unsupported_construct` diagnostic, from the array runtime (single-model and coupled routes alike).
 - **No algebraic solve.** An implicit equation — an LHS that is an expression rather than an unknown, `D(unknown)` or `ic(unknown)` — returns `CompileError::UnsupportedConstruct`. Trivial algebraic equations (`var ~ expr`) are still eliminated.
 - **No SDEs.** A parameter whose `update.kind` is `wiener` returns `CompileError::UnsupportedConstruct` naming the parameter, rather than integrating the noise as a constant; no binding's evaluator integrates an SDE.

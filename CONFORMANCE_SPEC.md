@@ -1281,14 +1281,14 @@ the forward pattern has fixed `C` and `R`. A document containing only mirrored
 binning aggregates is not rewritten.
 
 **Surviving template references (esm-spec §9.6.4).** Under Option B an
-`apply_expression_template` reference survives load, so the binning body handed
+`apply_operator` reference survives load, so the binning body handed
 to the desugar MAY be a reference rather than the containment `ifelse` itself.
 esm-spec §9.6.4 rule 4 — "patterns do not see through surviving references" —
 scopes to the §9.6.3 rewrite-rule ENGINE; this desugar is a different consumer
 and **rule 2 governs it**: a reference denotes its expansion. Normatively:
 
 > **Whether the pushdown fires MUST NOT depend on whether the author factored
-> the binning body through an `expression_templates` entry.** A binding
+> the binning body through an `operators` entry.** A binding
 > implementation MUST recognise a factored body exactly as it recognises the
 > body's expansion. How it recognises it is the implementation's choice;
 > agreeing with the expansion is not. Per esm-spec §9.6.4 rule 2 an
@@ -1749,7 +1749,7 @@ not members, in an ordinary `faq`, and every binding's `validate()` MUST reject 
 `faq` whose ragged range's `values` array its body (`expr` / `filter`) never
 reads, with `ragged_values_not_gathered` at the containing expression field —
 such a body reads positions where members were meant. Two cases are not decided:
-a body still holding an `apply_expression_template` reference, and a set the
+a body still holding an `apply_operator` reference, and a set the
 document does not declare. **The one exception is value invention:** a
 value-invention `faq` (`distinct: true`, a `key`, or a `distinct` body,
 §5.5) binds the member
@@ -4079,7 +4079,7 @@ implement §5.24.
 ### 5.25 Inline-Test Build Reuse and Test Selection (normative)
 
 esm-spec §6.6 makes an inline test "exercise one model in isolation": the test
-declares the run configuration — `expression_template_imports` (§9.7.10 form C),
+declares the run configuration — `operator_imports` (§9.7.10 form C),
 `time_span`, `parameter_overrides`, `initial_conditions` — and the assertions
 judged against that run. Nothing in the spec requires a binding to CONSTRUCT the
 model once per test, and constructing it once per test is the entire cost of an
@@ -4105,7 +4105,7 @@ treat differently), and the reused artifact MUST be a pure function of it.
 For the construction contract this specification already pins, those inputs are
 exactly four:
 
-1. **`expression_template_imports`** — decides WHICH document is built (§9.7.10
+1. **`operator_imports`** — decides WHICH document is built (§9.7.10
    form C builds an ephemeral injected copy);
 2. **`time_span`** — the construction interval, and with it the time at which
    build-time constants and CONST providers are sampled (§2.5.2);
