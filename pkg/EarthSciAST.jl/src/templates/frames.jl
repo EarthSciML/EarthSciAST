@@ -614,9 +614,13 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
         b = e.bindings === nothing ? Dict{String, ASTExpr}() : e.bindings
         for (k, v) in b
             s = startswith(k, _TPL_FREE) ? k : _TPL_ARG * k
-            # An array argument of a nested call is not done yet (the emitted
-            # body would have to pass it on).
-            s in inner.arrays && return false
+            # An array argument of a nested call: the body passes on its own
+            # array argument (call.jl `_FwdArr`).
+            if s in inner.arrays
+                (v isa VarExpr && _tpl_is_sentinel(v.name)) || return false
+                push!(info.arrays, v.name)
+                continue
+            end
             if s in inner.fixed
                 (v isa IntExpr || (v isa NumExpr && isinteger(v.value))) || return false
                 continue
@@ -694,9 +698,23 @@ function _tpl_is_called(tt::_TplTable, call::OpExpr)
         # A parameter placeholder of a template skeleton being expanded
         # (expand_typed.jl) stands for a binding not known yet.
         (v isa VarExpr && occursin(_TPL_SENTINEL, v.name)) && return false
-        _tpl_plain_binding(v) || return false
+        # A compound binding the body reads only on some paths is compiled
+        # INTO the instance (the user's bound-expression rule; call.jl
+        # `_call_inlined`), when it is made of names, literals and
+        # elementwise operators.
+        _tpl_plain_binding(v) || _tpl_inlinable(v) || return false
     end
     return true
+end
+
+# A compound binding the build compiles into its instance (`_call_inlined`):
+# elementwise operators over names and literals.
+function _tpl_inlinable(v::ASTExpr)
+    (v isa VarExpr || v isa NumExpr || v isa IntExpr) && return !(v isa VarExpr && occursin(_TPL_SENTINEL, v.name))
+    v isa OpExpr || return false
+    (v.op in _TPL_CALL_OPS && v.op != "const" && _tpl_structless(v) && !_tpl_is_call(v)) || return false
+    isempty(_bound_symbols(v)) || return false
+    return all(_tpl_inlinable, v.args)
 end
 
 # The sentinels of `call`'s template read as arrays (`nothing` when the build

@@ -1096,12 +1096,22 @@ function _cg_emit_call(ctx::_CGFunction, kc, nd::_Node)
     f = _cg_call_fn!(ctx, tg)
     args = Any[_cg_emit(ctx, kc, c) for c in nd.children]
     for a in site.arrays
+        if a.data isa _FwdArr
+            # Passed on from the calling body: its own array parameter.
+            push!(args, (kc::_CGCallCtx).arrs[(a.data::_FwdArr).j])
+            continue
+        end
         kc isa _CGCallCtx && _decline(:call_array_forward)
         push!(args, _cg_tab!(ctx, a.data))
     end
-    # The count tables the body searches, built from this site's arrays.
+    # The count tables the body searches, built from this site's arrays (none
+    # for a forwarded array: the body then counts entry by entry).
     for (tab, ok) in _cg_site_count_tables(ctx, site, :count_fold)
-        push!(args, _cg_tab!(ctx, tab), ok)
+        if kc isa _CGCallCtx
+            push!(args, GlobalRef(@__MODULE__, :_CG_NO_COUNT_TABLE), false)
+        else
+            push!(args, _cg_tab!(ctx, tab), ok)
+        end
     end
     # An inlined body is compiled here too: it counts toward this function.
     ctx.nodes += get(ctx.inlsize, f, 0)
@@ -1207,6 +1217,8 @@ function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
     return name
 end
 
+const _CG_NO_COUNT_TABLE = Float64[]
+
 # The count tables call site `site` passes to its target's function, in the
 # order of the target's parameters (`ctx.callcounts`): per table `(entries,
 # ok)`, `ok` false when this site's array cannot give the entries (its range
@@ -1222,6 +1234,10 @@ function _cg_site_count_tables(ctx::_CGFunction, site::_CallSite, tally::Symbol)
     ct = _call_table()
     for (j, lo, hi) in ctabs
         a = site.arrays[site.target.passed[j]]
+        if a.data isa _FwdArr
+            push!(out, (Float64[], false, false))
+            continue
+        end
         build() = (
             f = _count_const_axis_of(a.data::_ConstGatherArray, lo:hi);
             f === nothing ? (Float64[], false, false) : (f[1], true, f[2])

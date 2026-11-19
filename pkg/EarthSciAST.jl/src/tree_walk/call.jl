@@ -71,6 +71,33 @@ mutable struct _CallTarget
     blocks::Vector{Any}         # per array slot: a block's layout (`_StateGather`), else nothing
 end
 
+# An array argument a body passes on to a call in it: array slot `j` of the
+# running call of `target` (its caller's array, whatever that is at run time).
+struct _FwdArr
+    target::_CallTarget
+    j::Int
+end
+
+# The array `a` is, through any forwarding, for the running calls.
+@inline function _arr_resolve(a::_ArrArg)
+    while a.data isa _FwdArr
+        f = a.data::_FwdArr
+        a = @inbounds f.target.curarrs[f.target.passed[f.j]]
+    end
+    return a
+end
+
+# A const or live array argument's dimensions, and a block's layout, also when
+# forwarded (from the forwarding target's own key).
+function _arrarg_dims(a::_ArrArg)
+    a.data isa _FwdArr && return (a.data::_FwdArr).target.arrdims[(a.data::_FwdArr).j]
+    return (a.data::_ConstGatherArray).dims
+end
+function _arrarg_block(a::_ArrArg)
+    a.data isa _FwdArr && return (a.data::_FwdArr).target.blocks[(a.data::_FwdArr).j]::_StateGather
+    return a.data::_StateGather
+end
+
 # One call site's payload: the target and the arrays this site passes. Sites
 # with the same target and the same arrays are one object (`_call_site`), so
 # passes that key a call by its payload treat them alike.
@@ -224,10 +251,20 @@ function _call_args(tg::_CallTarget, expr::OpExpr)
     slots = _call_names(tg, expr)[1]
     out = Vector{ASTExpr}(undef, length(slots))
     for (i, s) in enumerate(slots)
-        if startswith(s, _TPL_BASE)
+        if startswith(s, _TPL_IN)
+            # A leaf of a compound binding compiled into the instance.
+            p, k = rsplit(s[(ncodeunits(_TPL_IN) + 1):end], '\0'; limit = 2)
+            out[i] = _inl_leaves(b[String(p)])[parse(Int, k)]
+        elseif startswith(s, _TPL_BASE)
             # A block array's base slot: the literal base of the array bound.
             a = _call_arrarg(tg, b, s[(ncodeunits(_TPL_BASE) + 1):end])
-            out[i] = NumExpr(Float64((a.data::_StateGather).run_base))
+            if a.data isa _FwdArr
+                # Passed on: the base is the forwarding body's own base argument.
+                f = a.data::_FwdArr
+                out[i] = VarExpr(_TPL_BASE * f.target.arrslots[f.j])
+            else
+                out[i] = NumExpr(Float64((a.data::_StateGather).run_base))
+            end
         else
             out[i] = _call_arg(b, s)
         end
@@ -318,12 +355,12 @@ function _call_target(ct::_CallTable, call::OpExpr)
             # A const or live array's dimensions are part of the instance:
             # a subscript the body proves inside them reads directly.
             if k === :const || k === :live
-                d = ((v.value::_ArrArg).data::_ConstGatherArray).dims
+                d = _arrarg_dims(v.value::_ArrArg)
                 arrdims[s] = copy(d)
                 print(io, '/', join(d, 'x'))
             elseif k === :block
                 # A block's layout is part of the instance; its base is an argument.
-                sg = (v.value::_ArrArg).data::_StateGather
+                sg = _arrarg_block(v.value::_ArrArg)
                 print(io, '/', join(sg.strides, ','), '/', join(sg.lo, ','), '/', join(sg.hi, ','), '/', sg.len)
                 blocks[s] = sg
             end
@@ -333,6 +370,11 @@ function _call_target(ct::_CallTable, call::OpExpr)
     isempty(outs) || print(io, '\x03', "elem")
     hp = info === nothing || !_call_has_lanes(call) ? nothing : _call_hoist_plan(ct.tt, def, S, outs)
     hp === nothing || print(io, '\x04', "lanes")
+    # Compound bindings read only on some paths, compiled into the instance.
+    inl = info === nothing ? Dict{String, ASTExpr}() : _call_inlined(info, def, S, b)
+    for sn in sort!(collect(keys(inl)))
+        print(io, '\x05', sn, '=', _inl_key(b[sn[(ncodeunits(_TPL_ARG) + 1):end]]))
+    end
     key = String(take!(io))
     got = get(ct.targets, key, nothing)
     if got !== nothing
@@ -352,6 +394,7 @@ function _call_target(ct::_CallTable, call::OpExpr)
     ibody = _call_ibody(ct.tt, def, S, outs)
     # Each read the caller makes is the argument `"\0lane\0k"`.
     hp === nothing || (ibody = hp.body)
+    isempty(inl) || (ibody = _tpl_subst_scoped(ibody, inl, IdDict{OpExpr, ASTExpr}()))
     arrslots = sort!(collect(keys(arrkind)))
     # Scalar slots: the argument sentinels in the order the body first reads
     # them (so two instances whose bodies have one structure have one slot
@@ -360,7 +403,11 @@ function _call_target(ct::_CallTable, call::OpExpr)
     append!(cand, String[_TPL_FREE * n for n in inst.free])
     append!(cand, String[_TPL_OUT * o for o in outs])
     hp === nothing || append!(cand, String[_TPL_LANE * string(k) for k in eachindex(hp.gathers)])
-    filter!(s -> !haskey(arrkind, s) && !(hp !== nothing && s in hp.whole), cand)
+    filter!(s -> !haskey(arrkind, s) && !(hp !== nothing && s in hp.whole) && !haskey(inl, s), cand)
+    for (sn, sk) in inl
+        p = sn[(ncodeunits(_TPL_ARG) + 1):end]
+        append!(cand, String[_TPL_IN * p * "\0" * string(k) for k in 1:_inl_count(b[p])])
+    end
     slots = _call_first_reads(ibody, Set{String}(cand))
     append!(slots, sort!(setdiff(cand, slots)))
     append!(slots, String[_TPL_BASE * s for s in arrslots if haskey(blocks, s)])
@@ -484,7 +531,7 @@ end
 _call_has_lanes(call::OpExpr) = call.bindings !== nothing && any(k -> startswith(k, _TPL_LANE), keys(call.bindings))
 
 _hoist_int(x) = x isa IntExpr || (x isa NumExpr && isinteger(x.value))
-_hoist_arg(x) = x isa VarExpr && (_tpl_is_sentinel(x.name) || startswith(x.name, _TPL_OUT))
+_hoist_arg(x) = x isa VarExpr && (_tpl_is_sentinel(x.name) || startswith(x.name, _TPL_OUT) || startswith(x.name, _TPL_IN))
 # A subscript the caller reads as a lane: integers and arguments under `+`
 # and `-` (affine in the arguments with unit coefficients).
 function _hoist_sub(x)
@@ -512,7 +559,8 @@ function _hoist_has(e::ASTExpr, st)
     e isa OpExpr || return false
     got = get(st.has, e, nothing)
     got === nothing || return got
-    r = (e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr && (e.args[1]::VarExpr).name in st.arrays)
+    r = (e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr && (e.args[1]::VarExpr).name in st.arrays) ||
+        (_tpl_is_call(e) && e.bindings !== nothing && any(v -> v isa VarExpr && v.name in st.arrays, values(e.bindings)))
     r || foreach_child(c -> (r = r || _hoist_has(c, st)), e)
     return st.has[e] = r
 end
@@ -530,6 +578,11 @@ function _hoist_rw(e::ASTExpr, cond::Bool, st)
         nb = nothing
         for k in sort!(collect(keys(b)))
             v = b[k]
+            # An array passed on to the inner call stays an array argument.
+            if v isa VarExpr && v.name in st.arrays
+                push!(st.keep, v.name)
+                continue
+            end
             s = startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT) ? k : _TPL_ARG * k
             # A binding the inner call passes as a value is made where the
             # inner call is (`_tpl_is_called`).
@@ -665,6 +718,53 @@ end
 const _EMPTY_VARMAP = Dict{String, Int}()
 
 const _TPL_BASE = "\0base\0"
+const _TPL_IN = "\0in\0"
+
+# ---- Compound bindings compiled into the instance -------------------------------
+# A parameter the body reads only on some paths, bound to a compound
+# expression (frames.jl `_tpl_inlinable`), is compiled INTO the instance (the
+# user's bound-expression rule): the binding's operator skeleton is part of the
+# instance key and is substituted into the body, and its leaves (names and
+# literals) are arguments (`"\0in\0p\0k"`), so the binding is evaluated only
+# where the body reads it. A leaf is an argument, not part of the key, so a
+# per-cell substitution (a loop index becoming a number) does not make an
+# instance per cell; a literal exponent stays in the skeleton (`x^2`).
+
+function _call_inlined(info::_TplCallInfo, def::_TplDef, S, b::AbstractDict)
+    out = Dict{String, ASTExpr}()
+    for p in def.params
+        sn = _TPL_ARG * p
+        (haskey(S, p) || sn in info.arrays || sn in info.fixed || sn in info.uncond) && continue
+        v = get(b, p, nothing)
+        (v === nothing || _tpl_plain_binding(v) || !_tpl_inlinable(v)) && continue
+        k = Ref(0)
+        out[sn] = _inl_skel(v, p, k)
+    end
+    return out
+end
+
+_inl_leaf(x, parent, j) = x isa VarExpr || ((x isa NumExpr || x isa IntExpr) && !(parent == "^" && j == 2))
+function _inl_skel(v::ASTExpr, p::String, k::Base.RefValue{Int}, parent = "", j = 0)
+    _inl_leaf(v, parent, j) && return VarExpr(_TPL_IN * p * "\0" * string(k[] += 1))
+    v isa OpExpr || return v
+    return reconstruct(v; args = ASTExpr[_inl_skel(a, p, k, v.op, i) for (i, a) in enumerate(v.args)])
+end
+function _inl_leaves(v::ASTExpr, out = ASTExpr[], parent = "", j = 0)
+    if _inl_leaf(v, parent, j)
+        push!(out, v)
+    elseif v isa OpExpr
+        for (i, a) in enumerate(v.args)
+            _inl_leaves(a, out, v.op, i)
+        end
+    end
+    return out
+end
+_inl_count(v::ASTExpr) = length(_inl_leaves(v))
+function _inl_key(v::ASTExpr, parent = "", j = 0)
+    _inl_leaf(v, parent, j) && return "#"
+    v isa OpExpr || return string(v)
+    return string("(", v.op, " ", join((_inl_key(a, v.op, i) for (i, a) in enumerate(v.args)), " "), ")")
+end
 
 function _call_body_size(n::_Node)
     seen = _NodeIdMap{Nothing}()
@@ -708,6 +808,17 @@ end
 # array by name, or an inline `const` array.
 function _arr_arg_marker(v::ASTExpr, rc)
     (v isa OpExpr && v.op == "__arrarg") && return v
+    # In a body being compiled, an array argument of the body passed on to a
+    # call in it (forwarded at run time, `_FwdArr`).
+    am = _build_state().argmap
+    if v isa VarExpr && am !== nothing && haskey((am::_ArgMap).arr, v.name)
+        otg = (am::_ArgMap).target
+        j = (am::_ArgMap).arr[v.name]
+        a = _arrarg_interned(Symbol("fwd", j), otg) do
+            _ArrArg(otg.arrkinds[j], _FwdArr(otg, j), v.name)
+        end
+        return OpExpr("__arrarg", ASTExpr[]; value = a)
+    end
     a = if v isa OpExpr && v.op == "const" && v.value isa AbstractVector
         vals, cname = _intern_inline_const(v, rc.const_arrays)
         _arrarg_interned(:const, vals) do
@@ -836,7 +947,7 @@ function _eval_arg_gather(n::_Node, u, p, t, ::Type{T}) where {T}
     bi == 0 || return _eval_block_gather_at(
         tg.blocks[ref.j]::_StateGather, _argstack_int(tg.stack, tg.fp + bi), n.children, u, p, t, T
     )
-    a = @inbounds tg.curarrs[tg.passed[ref.j]]
+    a = _arr_resolve(@inbounds tg.curarrs[tg.passed[ref.j]])
     a.kind === :state && return _eval_state_gather_at(a.data::_StateGather, n.children, u, p, t, T)
     return _eval_const_gather_at(a.data::_ConstGatherArray, n.children, u, p, t, T)
 end
