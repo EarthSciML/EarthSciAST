@@ -141,6 +141,7 @@ function _tpl_close(tt::_TplTable, name::String, decl::_TemplateDecl, S::Dict{St
     typed = expression_from_json(_substitute(decl.body, sub))
     typed = _tpl_augment(tt, typed)
     typed = _tpl_elem_reads(tt, typed)
+    typed = _tpl_body_lift(tt, typed, IdDict{OpExpr, ASTExpr}())
     free = sort!(collect(_tpl_free_leaves(typed)))
     if !isempty(free)
         m = Dict{String, ASTExpr}(n => VarExpr(_TPL_FREE * n) for n in free)
@@ -168,6 +169,106 @@ function _tpl_elem_reads(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr
     end
     memo[e] = r
     return r
+end
+
+# THE ELEMENTWISE LIFT IN A BODY. An elementwise operator in a body whose
+# operands include whole array-valued references (`2.5 * interior(f)`, all of
+# one rank over the same ranges) and otherwise scalars is the array whose
+# element at `o…` is the operator over each reference's ELEMENT call at `o…`
+# (call.jl `_elem_call`) and the scalars:
+#
+#     2.5 * interior(f)  ==  faq(output_idx = o, ranges = R, expr = 2.5 * interior(f)[o])
+#
+# as the model's own elementwise lift reads the same arithmetic on the
+# expansion. The references stay references (element calls); the template is
+# then array-valued and called through its element like any other.
+function _tpl_body_lift(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr})
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    r = map_children(c -> _tpl_body_lift(tt, c, memo), e)
+    if r.op in _TPL_CALL_OPS && r.op != "const" && _tpl_structless(r) && !_tpl_is_call(r) &&
+            isempty(_bound_symbols(r)) && any(a -> _tpl_whole_ref(tt, a) !== nothing, r.args)
+        l = _tpl_lift_whole(tt, r)
+        l === nothing || (r = l)
+    end
+    memo[e] = r
+    return r
+end
+
+# The output indices and ranges of the whole array-valued reference `a` (its
+# instance's own, a fixed bound substituted), or `nothing`.
+function _tpl_whole_ref(tt::_TplTable, a)
+    (_tpl_is_call(a) && !_tpl_is_elem(a::OpExpr)) || return nothing
+    info = _tpl_call_info(tt, a.name)
+    (info === nothing || isempty(info.outs)) && return nothing
+    b = a.bindings === nothing ? Dict{String, ASTExpr}() : a.bindings
+    S = Dict{String, Any}()
+    for s in info.fixed
+        v = get(b, s[(ncodeunits(_TPL_ARG) + 1):end], nothing)
+        iv = v isa IntExpr ? Int(v.value) : v isa NumExpr && isinteger(v.value) ? Int(v.value) : nothing
+        iv === nothing && return nothing
+        S[s[(ncodeunits(_TPL_ARG) + 1):end]] = iv
+    end
+    body = _tpl_inst_closed(tt, _tpl_def(tt, a.name), S).body
+    (body isa OpExpr && body.ranges !== nothing) || return nothing
+    return info.outs, body.ranges
+end
+
+function _tpl_range_same(x, y)
+    x isa IndexSetRef && y isa IndexSetRef && return x.from == y.from && x.of == y.of
+    x isa AbstractVector && y isa AbstractVector && return length(x) == length(y) &&
+        all(((p, q),) -> (p isa Integer || p isa IntExpr) && (q isa Integer || q isa IntExpr) &&
+        Int(p isa IntExpr ? p.value : p) == Int(q isa IntExpr ? q.value : q), zip(x, y))
+    return false
+end
+
+function _tpl_lift_whole(tt::_TplTable, r::OpExpr)
+    shape = nothing
+    for a in r.args
+        w = _tpl_whole_ref(tt, a)
+        if w === nothing
+            # Every other operand a scalar: no whole reference, no array.
+            _tpl_reads_whole(tt, a) && return nothing
+            continue
+        end
+        outs, rg = w
+        rs = Any[rg[o] for o in outs]
+        if shape === nothing
+            shape = rs
+        else
+            (length(rs) == length(shape) && all(_tpl_range_same(p, q) for (p, q) in zip(rs, shape))) ||
+                return nothing
+        end
+    end
+    shape === nothing && return nothing
+    # Output names not read anywhere in `r`.
+    used = Set{String}()
+    foreach_subexpr(x -> x isa VarExpr && push!(used, x.name), r)
+    oi = String[]
+    for k in eachindex(shape)
+        n = string("i", k)
+        while n in used || n in oi
+            n *= "′"
+        end
+        push!(oi, n)
+    end
+    subs = ASTExpr[VarExpr(n) for n in oi]
+    args = ASTExpr[_tpl_whole_ref(tt, a) === nothing ? a : _elem_call(tt, a::OpExpr, subs) for a in r.args]
+    ranges = Dict{String, Any}(n => shape[k] for (k, n) in enumerate(oi))
+    return OpExpr(
+        "faq", ASTExpr[]; output_idx = Any[oi...], ranges = ranges,
+        expr_body = reconstruct(r; args = args)
+    )
+end
+
+# Does `a` hold a whole array-valued reference or an array-valued node?
+function _tpl_reads_whole(tt::_TplTable, a)
+    a isa OpExpr || return false
+    _tpl_whole_ref(tt, a) !== nothing && return true
+    _is_faq_op(a.op) && a.output_idx !== nothing && !isempty(a.output_idx) && return true
+    a.op == "makearray" && return true
+    return any(c -> _tpl_reads_whole(tt, c), a.args)
 end
 
 # The prepared body an instance of `def` with structural values `S` reads.
