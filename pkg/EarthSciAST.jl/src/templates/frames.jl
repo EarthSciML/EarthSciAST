@@ -179,6 +179,60 @@ function _tpl_inst_closed(tt::_TplTable, def::_TplDef, S::Dict{String, Any})
     end
 end
 
+# ---- Structural instances --------------------------------------------------
+# A template with a parameter in a structural position (a `join` envelope, a
+# range's index set, `wrt`, ...) is a family of templates, one per value of
+# those parameters. A reference whose structural bindings are names or numbers
+# reads the INSTANCE: a template of its own (`<name>\0inst\0<values>`, the
+# declaration with those values substituted, its other parameters kept),
+# registered once in the build's registry, and the reference re-pointed at it
+# with the structural bindings dropped. Every by-name query (call gate, call
+# target, element call, view) then sees an ordinary template. The expansion,
+# where a body is still expanded, substitutes the same values the same way.
+const _TPL_INST = "\0inst\0"
+
+function _tpl_structural_ref(tt::_TplTable, call::OpExpr)
+    def = _tpl_def(tt, call.name)
+    isempty(def.structural) && return call
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    S = Dict{String, Any}()
+    for p in def.structural
+        x = get(b, p, nothing)
+        ok = (x isa VarExpr && !_tpl_is_sentinel(x.name) && !occursin(_TPL_SENTINEL, x.name)) ||
+            x isa NumExpr || x isa IntExpr
+        ok || return call
+        S[p] = serialize_expression(x)
+    end
+    skey = join(sort!([k * "=" * _stable_json(v) for (k, v) in S]), ",")
+    iname = string(call.name, _TPL_INST, skey)
+    if !haskey(tt.reg, iname)
+        raw = tt.reg[call.name]
+        decl = _TemplateDecl(raw)
+        sub = Dict{String, Any}(p => v for (p, v) in S)
+        nd = OrderedDict{String, Any}()
+        for (k, v) in pairs(raw)
+            nd[string(k)] = v
+        end
+        nd["params"] = Any[p for p in decl.params if !haskey(S, p)]
+        nd["body"] = _substitute(decl.body, sub)
+        tt.reg[iname] = nd
+    end
+    nb = Dict{String, ASTExpr}(k => v for (k, v) in b if !haskey(S, k))
+    return reconstruct(call; name = iname, bindings = nb)
+end
+
+# `e` with every reference to a structural template re-pointed at its instance
+# (`_tpl_structural_ref`), bindings first.
+function _tpl_structural_refs(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}())
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    r = map_children(c -> _tpl_structural_refs(tt, c, memo), e)
+    _tpl_is_call(r) && (r = _tpl_structural_ref(tt, r::OpExpr))
+    memo[e] = r
+    return r
+end
+
 # The names `e` reads as variable leaves and does not bind itself, sentinels
 # excluded. `wrt` is not a read here: it names an axis or `t` in place.
 function _tpl_free_leaves(e::ASTExpr)

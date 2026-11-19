@@ -1320,8 +1320,12 @@ function _build_evaluator_impl_inner(
         # here (an intermediate state of A1, see callnode-design.md). The
         # expansion cache is the build's own: the front door's cache holds
         # full expansions.
+        # The build's own registry: structural instances are registered in it
+        # (`_tpl_structural_refs`), never in the caller's.
+        _template_reg = copy(_template_reg)
         calls = _CallTable(_template_reg)
         _build_state().calls = calls
+        map_expressions!(e -> _tpl_structural_refs(calls.tt, e), model)
         keep_cache = _ExpandCache(; keep = e -> _tpl_is_called(calls.tt, e))
         _expand_model_refs!(model, _template_reg; sites = sites, memo = keep_cache)
         # Every name a kept body reads from its caller becomes a binding of

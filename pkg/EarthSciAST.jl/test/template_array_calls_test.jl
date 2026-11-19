@@ -313,3 +313,29 @@ end
     end
     @test seen[3] == seen[1]
 end
+
+# A template with a parameter in a structural position (here an output index
+# name) read with a name there is a template of its own: the reference is
+# re-pointed at the instance, whose declaration has the value substituted and
+# no structural parameter left.
+@testset "structural parameters: one template per structural value" begin
+    reg = EarthSciAST.OrderedDict{String, Any}(
+        "ramp" => Dict{String, Any}("params" => Any["n", "s"], "body" => Dict{String, Any}(
+            "op" => "faq", "args" => Any[], "output_idx" => Any["n"], "ranges" => Dict{String, Any}("n" => Any[1, 4]),
+            "expr" => _ta_op("*", "s", "n")
+        )),
+    )
+    tt = EarthSciAST._TplTable(reg)
+    @test EarthSciAST._tpl_def(tt, "ramp").structural == ["n"]
+    ref = EarthSciAST.expression_from_json(_ta_ref("ramp", Dict("n" => "g", "s" => 2.0)))
+    inst = EarthSciAST._tpl_structural_refs(tt, ref)
+    @test inst.name != "ramp" && startswith(inst.name, "ramp")
+    @test sort!(collect(keys(inst.bindings))) == ["s"]
+    d = EarthSciAST._tpl_def(tt, inst.name)
+    @test isempty(d.structural) && d.params == ["s"]
+    @test d.closed.body.output_idx == ["g"]
+    # A reference whose structural binding is not a name or a number keeps
+    # the template.
+    ref2 = EarthSciAST.expression_from_json(_ta_ref("ramp", Dict("n" => _ta_op("+", "g", 1), "s" => 2.0)))
+    @test EarthSciAST._tpl_structural_refs(tt, ref2).name == "ramp"
+end
