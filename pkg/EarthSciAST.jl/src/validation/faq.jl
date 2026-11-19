@@ -281,7 +281,8 @@ into, after the elementwise lift (esm-spec §9.6.11). Order: pre-order over node
 report in.
 """
 function faq_bare_array_operands(
-        expr::ASTExpr, var_shapes::AbstractDict; exclude = (), opaque_applications::Bool = false
+        expr::ASTExpr, var_shapes::AbstractDict; exclude = (), opaque_applications::Bool = false,
+        through_calls::Bool = false
     )
     found = Tuple{String, String, Vector{String}}[]
     shaped = Dict{String, Vector{String}}(
@@ -289,9 +290,15 @@ function faq_bare_array_operands(
             for (n, s) in var_shapes if !isempty(s) && !(String(n) in exclude)
     )
     isempty(shaped) && return found
-    opaque = e -> e.op == "apply_expression_template" ||
+    # `through_calls` (the build): a template reference the build compiles as
+    # a call (tree_walk/call.jl) is a scalar function of its arguments, so an
+    # argument is an operand in place, read the way the body reads its
+    # parameter: elementwise. `validate` reads references as opaque.
+    opaque = e -> (!through_calls && e.op == "apply_expression_template") ||
         (opaque_applications && e.template_origin !== nothing)
-    _faq_bare_walk!(found, expr, shaped, Set{String}(), IdDict{Any, Vector{Set{String}}}(), opaque)
+    _faq_bare_walk!(
+        found, expr, shaped, Set{String}(), IdDict{Any, Vector{Set{String}}}(), opaque
+    )
     return found
 end
 
@@ -303,10 +310,10 @@ function _faq_bare_operands!(
     )
     if e isa VarExpr
         haskey(shaped, e.name) && push!(out, e.name)
-    elseif e isa OpExpr && _is_elementwise_node(e) && !opaque(e)
+    elseif e isa OpExpr && (_is_elementwise_node(e) || _tpl_is_call(e)) && !opaque(e)
         haskey(seen, e) && return out
         seen[e] = nothing
-        for a in e.args
+        for a in _operands(e)
             _faq_bare_operands!(out, a, shaped, opaque, seen)
         end
     end

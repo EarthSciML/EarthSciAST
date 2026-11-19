@@ -681,7 +681,7 @@ function _refuse_faq_bare_array_operands(model::Model)
         # defines is a self-reference the recurrence / cycle rules own; a
         # derivative's state is not exempt.
         defined = faq_bare_exempt_names(eq.lhs)
-        found = faq_bare_array_operands(eq.rhs, shapes; exclude = defined)
+        found = faq_bare_array_operands(eq.rhs, shapes; exclude = defined, through_calls = true)
         isempty(found) && continue
         field, name, shape = first(found)
         throw(
