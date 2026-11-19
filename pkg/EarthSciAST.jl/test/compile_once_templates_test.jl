@@ -47,6 +47,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                 branches = get(rep.counts, :branch_templates, 0),
                 variants = get(rep.counts, :body_variants, 0),
                 compiles = get(rep.counts, :compile_calls, 0),
+                targets = get(rep.counts, :call_targets, 0),
+                shared = get(rep.counts, :call_targets_shared, 0),
             )
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), probe_states(length(u0)))
@@ -83,11 +85,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             @test sum(abs, fast[k]) > 0     # and not trivially zero
         end
 
-        # 5+5+5 replaces 5×5×5: fifteen compiled body variants, and the total
-        # node-lowering count collapses (parents are tiny sub-call spines).
-        @test cfast.variants == 15
-        @test catload.variants == 0
-        @test cfast.compiles < catload.compiles ÷ 4
+        # 5+5+5 replaces 5×5×5: the references are template calls, each
+        # template body compiled once (a call target), never expanded into a
+        # sub-kernel variant per use; the expanded build has no call.
+        @test cfast.variants == 0
+        # Fifteen instances (5 per axis), three compiled bodies: the instances
+        # of one axis differ only in which cells they read (call.jl, lanes).
+        @test cfast.targets == 3 && cfast.shared == 12
+        @test catload.variants == 0 && catload.targets == 0
+        @test cfast.compiles < catload.compiles ÷ 3
     end
 
     @testset "gate: template sub-kernels take the vectorized acc form" begin
@@ -105,8 +111,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # is its `rhs` field.
         oplans = getfield(getfield(fo, :rhs), :acc_plans)
         @test !isempty(oplans)
-        @test any(P -> !isempty(P.subs), oplans)     # the tier actually fired here
-        @test all(P -> P.vectorizable, oplans)       # …and none forced the fallback
+        # The references are template calls now (no expansion sub-kernels).
+        @test all(P -> isempty(P.subs), oplans)
+        @test all(P -> P.vectorizable, oplans)       # none forced the fallback
     end
 
     @testset "reduced-rank fixture: per-cell fallback stays bit-identical" begin
