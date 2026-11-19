@@ -178,9 +178,6 @@ REMOVED_OPS = (
     "argmax",
     "polygon_intersection_area",
     "intersect_polygon",
-    "grad",
-    "div",
-    "laplacian",
 )
 REMOVED_SET = frozenset(REMOVED_OPS)
 

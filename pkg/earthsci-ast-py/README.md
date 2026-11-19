@@ -87,8 +87,8 @@ contract is: if your system has a spatial axis, **discretize it first**.
 Spatial discretization is expressed as **template expressions** —
 `expression_templates` carrying `match` rewrite rules, applied via
 `apply_expression_template`. A continuous-form ESM document — equations using
-spatial `D` (a `D` whose `wrt` names a spatial axis, one per axis), user ops such
-as `flux_1d_ppm`, and the rest of the spatial-operator vocabulary — carries the discretization templates (authored inline or imported
+`grad`, `div`, `laplacian`, `flux_1d_ppm`, and the rest of the spatial-operator
+vocabulary — carries the discretization templates (authored inline or imported
 from a discretization template library such as the EarthSciDiscretizations
 catalog) that rewrite those operators into the canonical post-discretize form:
 
@@ -107,8 +107,9 @@ state vector and integrates with SciPy's `solve_ivp`.
 
 ### What you do not do
 
-- You do **not** write the PDE form (with spatial `D`) directly into a
-  fixture and build a Problem from it. That fails the guard.
+- You do **not** write the PDE form (with `grad` / `div` / `laplacian`)
+  directly into a fixture and build a Problem from it. That fails the
+  guard.
 - You do **not** need a separate "PDE backend" — the same `esm_problem()` /
   `solve()` pair handles 0-D ODEs, mixed ODE/algebraic systems, and post-discretize
   PDEs of arbitrary dimensionality, because the post-discretize AST is
@@ -146,10 +147,11 @@ assert sol.retcode is ReturnCode.Success
 Inside the fixture, the interior stencil is a `faq` over `i in 2..9`
 with body `u[i-1] - 2*u[i] + u[i+1]`, plus scalar boundary equations for
 `u[1]` and `u[10]`. That is the canonical post-discretize shape: every
-spatial term is an explicit `faq`, no spatial `D` nodes survive. The full pipeline for a user-authored continuous PDE is:
+spatial term is an explicit `faq`, no `grad` / `div` / `laplacian`
+nodes survive. The full pipeline for a user-authored continuous PDE is:
 
 ```
-.esm (continuous form + discretization templates, with spatial D)
+.esm (continuous form + discretization templates, with grad/div/laplacian)
   → load-time template rewrite (§9.6 fixpoint lowers spatial ops to `faq` stencils)
   → earthsci_ast.esm_problem() / solve()  (NumPy interpreter integrates with SciPy)
 ```

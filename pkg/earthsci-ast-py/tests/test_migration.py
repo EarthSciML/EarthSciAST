@@ -6,9 +6,6 @@ under the newer schema. The current line is ``2.0.0 … <current schema version>
 esm 2.0.0 removed operators, so a 1.x source is relabelled only when it uses none
 of them; one that does is refused with ``removed_op``, naming the codemod
 (``test_migration_codemod.py``).
-A source of any version that uses an operator esm 2.4.0 removed (``grad``,
-``div``, ``laplacian``) is refused with ``removed_op`` pointing at MIGRATION.md
-(no codemod).
 
 Nothing crosses the 1.0.0 boundary. esm 1.0.0 is a clean break: the five
 declared variable types collapse to two, an observed variable's ``expression``
@@ -193,30 +190,6 @@ class TestMigrate:
                 migrate(source, SCHEMA_VERSION)
             assert e.value.code == "removed_op"
             assert "`fn`" in str(e.value)
-        finally:
-            reaction.rate_constant = rate
-        assert migrate(source, SCHEMA_VERSION).version == SCHEMA_VERSION
-
-    @pytest.mark.parametrize("op", ["grad", "div", "laplacian"])
-    @pytest.mark.parametrize("version", ["1.2.0", "2.3.0"])
-    def test_refuses_a_file_that_uses_an_op_removed_at_2_4_0(self, baseline_file, op, version):
-        """A 1.x or 2.x document that uses `grad`, `div` or `laplacian` cannot be
-        relabelled: `removed_op`, pointing at spatial `D` and MIGRATION.md, NOT
-        at the 2.0.0 codemod (there is no codemod for the 2.4.0 removals)."""
-        from earthsci_ast.esm_types import ExprNode
-
-        source = _at_version(baseline_file, version)
-        reaction = next(iter(source.reaction_systems.values())).reactions[0]
-        rate = reaction.rate_constant
-        reaction.rate_constant = ExprNode(op=op, args=["T"], dim="x")
-        try:
-            with pytest.raises(MigrationError, match="removed at esm 2.4.0") as e:
-                migrate(source, SCHEMA_VERSION)
-            assert e.value.code == "removed_op"
-            assert f"`{op}`" in str(e.value)
-            assert 'MIGRATION.md, "esm 2.4.0"' in str(e.value)
-            assert "D(f, wrt: x)" in str(e.value)
-            assert "earthsci_ast.migrate" not in str(e.value)
         finally:
             reaction.rate_constant = rate
         assert migrate(source, SCHEMA_VERSION).version == SCHEMA_VERSION

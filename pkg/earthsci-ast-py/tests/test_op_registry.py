@@ -130,14 +130,14 @@ def test_min_max_keep_their_spec_mandated_floor_of_two():
     assert reg.OPS["max"].arity_bounds == (2, None)
 
 
-def test_open_tier_ops_are_unregistered():
-    # The open-tier ops are NOT in the registry at all: they are ordinary
-    # unregistered rewrite-target ops with no privilege over any other user op
-    # (`godunov_hamiltonian`). They therefore carry no structural arity
-    # contract, no evaluator, and no codegen registry membership — structural
-    # validation skips their operand count exactly as it does for an
+def test_open_tier_sugar_ops_are_unregistered():
+    # The demoted open-tier sugar ops are NOT in the registry at all: they are
+    # ordinary unregistered rewrite-target ops with no privilege over any other
+    # user op (`godunov_hamiltonian`). They therefore carry no structural arity
+    # contract, no evaluator, and no codegen registry membership —
+    # structural validation skips their operand count exactly as it does for an
     # unregistered custom op. Re-registering any of them is a regression.
-    for op in ("curl", "integral"):
+    for op in ("grad", "div", "laplacian", "curl", "integral"):
         assert op not in reg.OPS, f"{op} must be unregistered (an ordinary open-tier op)"
         assert not reg.is_known(op), f"{op} must not be a known registry op"
         assert op not in reg.arity_bounds_map()
@@ -159,8 +159,8 @@ def test_registry_aliases_point_at_canonical_ops():
 
 def test_no_registered_rewrite_target_ops():
     # After the demotion, NO op in the registry is a rewrite-target: every
-    # registered op is evaluable-core. The open-tier `integral` / `curl` and
-    # every custom op are rewrite-targets
+    # registered op is evaluable-core. The open-tier sugar
+    # (grad/div/laplacian/curl/integral) and every custom op are rewrite-targets
     # by virtue of NOT being registered, so they need no registry entry — the
     # codegen generic fallback renders them with no warning. The
     # `rewrite_target` tier label remains a valid (currently unpopulated) member
@@ -271,7 +271,7 @@ def test_cadence_relational_ops_matches_registry():
 def test_flatten_has_no_op_name_spatial_detector():
     # The despecialization removed flatten's `_SPATIAL_OPS` op-name table: spatial
     # dimensions are now harvested STRUCTURALLY from any node's `dim` axis field
-    # (esm-spec §4.9.1), so no op name confers a spatial-detection privilege
+    # (esm-spec §4.9.1), so the sugar ops confer no spatial-detection privilege
     # and cannot drift from a hardcoded list. Guard that the op-name table is gone
     # and that flatten no longer imports the registry category helper for it.
     assert not hasattr(flatten, "_SPATIAL_OPS")
@@ -311,8 +311,8 @@ CODEGEN_HANDLED = {
     "^",
     "**",
     "pow",
-    "D",  # open-tier ops (`integral`, `curl`, user ops) are not special-cased in
-    # codegen — they render via the generic `op(args)` fallback (rewrite targets a
+    "D",  # `grad`/`div`/`laplacian`/`curl` are no longer special-cased in codegen —
+    # they render via the generic `op(args)` fallback (rewrite-target keywords a
     # discretization template lowers before codegen; `D` remains the special core
     # derivative reshaped per target).
     "exp",
@@ -355,29 +355,29 @@ def test_codegen_special_cases_are_registered_and_pinned():
 # ---------------------------------------------------------------------------
 # No privilege: an open-tier rewrite-target op reaching the generic `op(args)`
 # fallback is a LEGITIMATE document element (lowered before eval), so codegen
-# does not warn — `integral` and an arbitrary custom op render identically. (The former "unknown op" RuntimeWarning is gone.)
+# does not warn — the registered sugar of the past and an arbitrary custom op
+# render identically. (The former "unknown op" RuntimeWarning is gone.)
 # ---------------------------------------------------------------------------
 
 
 def test_codegen_does_not_warn_on_any_open_tier_op():
-    # `sin` (evaluable-core) and `integral` / a custom op (open-tier
-    # rewrite-target) all render via the generic function-call path with no
-    # warning.
+    # `sin` (evaluable-core) and `grad` / a custom op (open-tier rewrite-target)
+    # all render via the generic function-call path with no warning.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        for op in ("sin", "integral", "totally_made_up_op_xyz"):
+        for op in ("sin", "grad", "totally_made_up_op_xyz"):
             codegen._format_expression({"op": op, "args": ["x"]})
             codegen._format_python_expression({"op": op, "args": ["x"]})
 
 
-def test_integral_renders_identically_to_an_arbitrary_user_op():
-    # The core requirement of the despecialization: the open-tier `integral`
-    # carries NO privilege over an arbitrary open-tier user op
+def test_grad_renders_identically_to_an_arbitrary_user_op():
+    # The core requirement of the despecialization: the demoted spatial sugar
+    # `grad` carries NO privilege over an arbitrary open-tier user op
     # (`godunov_hamiltonian`) in codegen — same generic `op(args)` shape, and
     # (crucially) NO warning for either. The ONLY difference is the op name
     # itself; once substituted the renderings are byte-identical.
     def _sub(rendered: str) -> str:
-        return rendered.replace("godunov_hamiltonian", "integral")
+        return rendered.replace("godunov_hamiltonian", "grad")
 
     renderers = (
         codegen._format_expression,
@@ -386,15 +386,15 @@ def test_integral_renders_identically_to_an_arbitrary_user_op():
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # any RuntimeWarning would fail the test
         for render in renderers:
-            g = render({"op": "integral", "args": ["x", "y"]})
+            g = render({"op": "grad", "args": ["x", "y"]})
             u = render({"op": "godunov_hamiltonian", "args": ["x", "y"]})
             assert g == _sub(u), (
-                f"integral and an arbitrary user op diverge in {render.__name__}: {g!r} vs {u!r}"
+                f"grad and an arbitrary user op diverge in {render.__name__}: {g!r} vs {u!r}"
             )
 
 
 # ---------------------------------------------------------------------------
-# Removed ops (esm 0.8.0, 2.0.0, 2.4.0) are not in the vocabulary
+# Removed ops (esm 2.0.0) are not in the vocabulary
 # ---------------------------------------------------------------------------
 
 
@@ -403,43 +403,6 @@ def test_removed_ops_are_not_registered():
     # derived from the registry may still carry it.
     for op in reg.REMOVED_OPS:
         assert op not in reg.OPS, op
-
-
-def test_spatial_ops_removed_at_2_4_0():
-    # esm 2.4.0 removed `grad`, `div` and `laplacian` (a spatial derivative is a
-    # `D` with a spatial `wrt`): each is in the removed-op table at 2.4.0 and is
-    # refused BY NAME at load, whatever `esm` the document declares, with a
-    # message that points at spatial `D` and MIGRATION.md, not the 2.0.0 codemod.
-    import json
-
-    from earthsci_ast import load_string
-    from earthsci_ast.errors import ParseError
-
-    for op in ("grad", "div", "laplacian"):
-        assert reg.REMOVED_OPS[op] == "2.4.0"
-        for version in ("1.3.0", "2.3.0", "2.4.0"):
-            doc = {
-                "esm": version,
-                "metadata": {"name": "M"},
-                "models": {
-                    "M": {
-                        "variables": {"u": {"type": "unknown", "units": "1", "default": 0.0}},
-                        "equations": [
-                            {
-                                "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                                "rhs": {"op": op, "args": ["u"], "dim": "x"},
-                            }
-                        ],
-                    }
-                },
-            }
-            with pytest.raises(ParseError) as info:
-                load_string(json.dumps(doc))
-            assert info.value.code == "removed_op"
-            msg = str(info.value)
-            assert f'"op": "{op}"' in msg and "/models/M/equations/0/rhs" in msg
-            assert "removed at esm 2.4.0" in msg and 'MIGRATION.md, "esm 2.4.0"' in msg
-            assert "earthsci_ast.migrate" not in msg
 
 
 def _removed_op_fixtures():
@@ -451,21 +414,10 @@ def _removed_op_fixtures():
 @pytest.mark.parametrize("path", _removed_op_fixtures(), ids=lambda p: p.name)
 def test_removed_op_fixtures_are_refused_at_load(path):
     # Every tests/invalid/removed_ops/ fixture is refused at load with
-    # `removed_op` (the 2.4.0 ones declare esm 2.3.0, a version that still loads,
-    # so the refusal comes from the op alone). A 2.4.0 removal names MIGRATION.md
-    # and never the 2.0.0 codemod.
+    # `removed_op`, by name at the wire boundary.
     from earthsci_ast import load_path
     from earthsci_ast.errors import ParseError
 
     with pytest.raises(ParseError) as info:
         load_path(str(path))
     assert info.value.code == "removed_op", str(info.value)
-    name = path.stem.removeprefix("removed_op_")
-    if reg.REMOVED_OPS.get(name) == "2.4.0":
-        assert "removed at esm 2.4.0" in str(info.value)
-        assert "earthsci_ast.migrate" not in str(info.value)
-
-
-def test_the_three_spatial_removed_op_fixtures_exist():
-    names = {p.name for p in _removed_op_fixtures()}
-    assert {"removed_op_grad.esm", "removed_op_div.esm", "removed_op_laplacian.esm"} <= names

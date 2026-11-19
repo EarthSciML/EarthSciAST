@@ -12,7 +12,7 @@ REACTIVELY, when the evaluator happened to reach the offending node, which made
 the gate a property of the ENGINE rather than of the document:
 
 * the scalar-SymPy pathway lambdifies every observed eagerly, so a surviving
-  user op (``flux_divergence``) in a DEAD observed (one nothing consumes) tripped it;
+  ``div`` in a DEAD observed (one nothing consumes) tripped it;
 * the NumPy array pathway evaluates observeds lazily, so it never reached one
   and the same document built and solved.
 
@@ -36,12 +36,10 @@ import pytest
 from earthsci_ast.numpy_interpreter import UnreachableSpatialOperatorError
 from earthsci_ast.problem import esm_problem
 
-# A user op no rule lowers, sitting in a DEAD observed — `unlowered` is defined
+# A `div` no rule lowers, sitting in a DEAD observed — `unlowered` is defined
 # and never read. The dynamics are a plain scalar ODE, so the SHAPE of the
 # document is: everything the engine actually evaluates is fine, and the only
-# rewrite-target op is somewhere the evaluator would never go. (A user op, not
-# a spatial `D`: a spatial `D` names an axis, and the dimensionality guard
-# would refuse the document before this walk is reached.)
+# rewrite-target op is somewhere the evaluator would never go.
 DEAD_UNLOWERED_SCALAR = {
     "esm": "1.0.0",
     "metadata": {"name": "DeadUnloweredScalar", "authors": ["repro"]},
@@ -53,13 +51,13 @@ DEAD_UNLOWERED_SCALAR = {
             },
             "equations": [
                 {"lhs": {"op": "D", "args": ["c"], "wrt": "t"}, "rhs": 1.0},
-                {"lhs": "unlowered", "rhs": {"op": "flux_divergence", "args": ["c"]}},
+                {"lhs": "unlowered", "rhs": {"op": "div", "args": ["c"]}},
             ],
         }
     },
 }
 
-# The same dead unlowered user op, but on a document the declared-`shape` arm
+# The same dead unlowered `div`, but on a document the declared-`shape` arm
 # routes to the ARRAY pathway — the pathway whose lazy observed evaluation used
 # to let the op through. Under the walk the two pathways agree.
 DEAD_UNLOWERED_ARRAY = {
@@ -74,7 +72,7 @@ DEAD_UNLOWERED_ARRAY = {
             },
             "equations": [
                 {"lhs": {"op": "D", "args": ["theta"], "wrt": "t"}, "rhs": 1.0},
-                {"lhs": "unlowered", "rhs": {"op": "flux_divergence", "args": ["theta"]}},
+                {"lhs": "unlowered", "rhs": {"op": "div", "args": ["theta"]}},
             ],
         }
     },
@@ -162,7 +160,7 @@ def test_a_dead_observed_carrying_an_unlowered_op_is_rejected_on_either_pathway(
         esm_problem(path, (0.0, 1.0))
 
     assert excinfo.value.code == "unlowered_operator"
-    assert excinfo.value.op == "flux_divergence"
+    assert excinfo.value.op == "div"
 
 
 def test_a_dead_but_fully_lowered_observed_is_untouched(tmp_path):

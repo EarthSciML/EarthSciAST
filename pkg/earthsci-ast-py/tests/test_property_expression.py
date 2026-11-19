@@ -88,10 +88,8 @@ def _op_derivative(child: st.SearchStrategy):
     return st.tuples(child, _var_names).map(lambda av: ExprNode(op="D", args=[av[0]], wrt=av[1]))
 
 
-def _op_dim_axis(child: st.SearchStrategy):
-    return st.tuples(child, _var_names).map(
-        lambda av: ExprNode(op="integral", args=[av[0]], dim=av[1])
-    )
+def _op_grad(child: st.SearchStrategy):
+    return st.tuples(child, _var_names).map(lambda av: ExprNode(op="grad", args=[av[0]], dim=av[1]))
 
 
 def _op_ifelse(child: st.SearchStrategy):
@@ -235,7 +233,7 @@ def _node_strategy(child: st.SearchStrategy) -> st.SearchStrategy:
         _op_ifelse(child),
         # operator nodes that carry auxiliary scalar fields
         _op_derivative(child),
-        _op_dim_axis(child),
+        _op_grad(child),
         # array-op extensions (gt-4009)
         _op_reshape(child),
         _op_transpose(child),

@@ -500,7 +500,8 @@ class Model:
     # Initialization-only equations (hold at t=0) and solver guesses (gt-ebuq).
     initialization_equations: list[Equation] = field(default_factory=list)
     guesses: dict[str, float | Expr] = field(default_factory=dict)
-    # MTK system-kind discriminator: "ode" (default), "nonlinear", "sde", "pde".
+    # MTK system-kind discriminator: "ode" (default), "nonlinear", "sde" ("pde" is
+    # deprecated at esm 2.4.0: kept as written, treated as absent).
     system_kind: str | None = None
     # Events owned by this model (schema nests events inside components; the
     # flat EsmFile.events view aggregates these same objects for consumers).
