@@ -20,8 +20,10 @@ function _is_setup_join_reduction(e)
     (e isa OpExpr && _is_faq_op(e.op) && e.expr_body isa OpExpr) || return false
     (e.output_idx !== nothing && !isempty(e.output_idx)) || return false
     _body_needs_general_eval(e) && return false
-    depth = _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}())
     gated = e.join !== nothing || e.join_gates !== nothing
+    # Ungated, the rule is about a body unrolled per cell; a template call's
+    # body is compiled once, so its own nesting does not count there.
+    depth = _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}(); calls = gated)
     # Ungated, a dense range the setup sweep has no loop for (not starting at
     # 1) leaves the faq to the right-hand-side tiers. Gated, no tier takes it,
     # so it stays a setup var and the sweep refuses it by name.
@@ -29,16 +31,16 @@ function _is_setup_join_reduction(e)
     return gated ? depth >= 1 : depth >= 2
 end
 # How deep `faq` reductions nest inside `e` (0: none).
-function _faq_nesting(e::OpExpr, memo::IdDict{OpExpr, Int})
+function _faq_nesting(e::OpExpr, memo::IdDict{OpExpr, Int}; calls::Bool = true)
     got = get(memo, e, nothing)
     got === nothing || return got
     d = 0
     for a in _operands(e)
-        a isa OpExpr && (d = max(d, _faq_nesting(a, memo)))
+        a isa OpExpr && (d = max(d, _faq_nesting(a, memo; calls = calls)))
     end
-    e.expr_body isa OpExpr && (d = max(d, _faq_nesting(e.expr_body::OpExpr, memo)))
+    e.expr_body isa OpExpr && (d = max(d, _faq_nesting(e.expr_body::OpExpr, memo; calls = calls)))
     # A template call nests what its body nests (call.jl).
-    _tpl_is_call(e) && (d = max(d, _call_body_measure(_faq_nesting, e, :faq_nesting)))
+    calls && _tpl_is_call(e) && (d = max(d, _call_body_measure(_faq_nesting, e, :faq_nesting)))
     _is_faq_op(e.op) && (d += 1)
     return memo[e] = d
 end
@@ -72,6 +74,11 @@ function _setup_ranges_ok(e::OpExpr, index_sets, seen::IdDict{OpExpr, Nothing})
         _allof(r -> _setup_range_ok(r, index_sets), collect(values(e.ranges))) || return false
     end
     _allof(a -> !(a isa OpExpr) || _setup_ranges_ok(a, index_sets, seen), _operands(e)) || return false
+    # A template call loops over its body's ranges (call.jl).
+    if _tpl_is_call(e)
+        b = _call_inst_body(e)
+        b isa OpExpr && !_setup_ranges_ok(b, index_sets, seen) && return false
+    end
     for c in (e.expr_body, e.filter)
         c isa OpExpr && !_setup_ranges_ok(c, index_sets, seen) && return false
     end

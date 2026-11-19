@@ -1351,6 +1351,28 @@ function _call_body_measure(f, call::OpExpr, key::Symbol)
     end
 end
 
+# The body the reference `call` evaluates, as an AST: its instance's prepared
+# body with the fixed parameters (`_TplCallInfo.fixed`) substituted, the
+# element's expression for an element call; `nothing` when no table is in
+# reach or the template is not called. A phase that asks what a call loops
+# over asks it here.
+function _call_inst_body(call::OpExpr)
+    ct = _call_table()
+    ct === nothing && return nothing
+    tt = (ct::_CallTable).tt
+    info = _tpl_call_info(tt, call.name)
+    info === nothing && return nothing
+    def = _tpl_def(tt, call.name)
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    S = try
+        _call_fixed!(Dict{String, Any}(), call.name, info, b)
+    catch err
+        err isa TreeWalkError || rethrow()
+        return nothing
+    end
+    return _call_ibody(tt, def, S, _call_outs(info, call))
+end
+
 # The body one call of `def` evaluates: its prepared body, or for an
 # array-valued template (always called through its element) the element's
 # expression.

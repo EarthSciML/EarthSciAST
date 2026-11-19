@@ -736,7 +736,7 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
     if _is_faq_op(e.op)
         # A scalar reduction over constant ranges.
         (e.output_idx === nothing || isempty(e.output_idx)) || return false
-        (e.filter === nothing && e.join_gates === nothing && e.join === nothing && e.key === nothing &&
+        (e.join_gates === nothing && e.join === nothing && e.key === nothing &&
             e.values === nothing && e.lower === nothing && e.upper === nothing) || return false
         (e.expr_body === nothing || e.ranges === nothing) && return false
         isempty(e.args) || all(a -> a isa VarExpr, e.args) || return false
@@ -744,6 +744,8 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
             (rv isa AbstractVector && 2 <= length(rv) <= 3) || return false
             all(x -> _tpl_range_bound!(x, info), rv) || return false
         end
+        # A filter is evaluated per term, the term only where it holds.
+        e.filter === nothing || _tpl_call_walk!(tt, e.filter, true, info) || return false
         # The body is evaluated once per term; a range may be empty.
         return _tpl_call_walk!(tt, e.expr_body, true, info)
     end
