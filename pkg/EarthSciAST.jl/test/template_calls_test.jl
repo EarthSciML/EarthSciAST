@@ -45,6 +45,11 @@ function _tc_templates()
             "params" => Any["a"],
             "body" => _tc_op("*", "a", _tc_op("+", 1.0, _tc_op("sin", _tc_op("*", "k", "t")))),
         ),
+        # An integer subscript computed from time.
+        "slot" => Dict(
+            "params" => Any["x"],
+            "body" => _tc_op("floor", _tc_op("+", 1, "x")),
+        ),
         # A literal exponent bound at the use: it must stay a Float64 under AD.
         "power" => Dict(
             "params" => Any["x", "e"],
@@ -97,8 +102,17 @@ function _tc_document(tracers)
             eqs, Dict(
                 "lhs" => Dict("op" => "D", "args" => Any[v], "wrt" => "t"),
                 "rhs" => _tc_op(
-                    "-", _tc_ref("season", Dict("a" => v)),
-                    _tc_ref("power", Dict("x" => "m", "e" => 2))
+                    "+",
+                    _tc_op(
+                        "-", _tc_ref("season", Dict("a" => v)),
+                        _tc_ref("power", Dict("x" => "m", "e" => 2))
+                    ),
+                    # A table read at a subscript that moves with time: never
+                    # taken for a build-time constant.
+                    _tc_op(
+                        "index", "U",
+                        _tc_op("max", 1, _tc_op("min", _TC_N, _tc_ref("slot", Dict("x" => _tc_op("*", 2, "t")))))
+                    ),
                 ),
             )
         )

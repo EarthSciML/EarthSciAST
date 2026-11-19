@@ -1187,7 +1187,7 @@ function _count_obs_refs!(
             end
         else
             u = uncond[i]
-            for (j, a) in enumerate(n.args)
+            for (j, a) in enumerate(_operands(n))
                 (a isa VarExpr && a.name in names) || continue
                 tot[a.name] = _sat_add(get(tot, a.name, 0), t)
                 if u > 0 && !_cse_arg_conditional(n.op, j)

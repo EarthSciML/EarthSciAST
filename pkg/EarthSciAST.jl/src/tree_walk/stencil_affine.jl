@@ -254,7 +254,7 @@ end
 # A subexpression names no loop index (it is a constant over the loop).
 _names_no_loop(e::ASTExpr, idx_names) =
     e isa VarExpr ? !((e::VarExpr).name in idx_names) :
-    e isa OpExpr ? _allof(a -> _names_no_loop(a, idx_names), (e::OpExpr).args) : true
+    e isa OpExpr ? _allof(a -> _names_no_loop(a, idx_names), _operands(e::OpExpr)) : true
 
 function _affine_form(e::ASTExpr, idx_names::AbstractVector{String}; single::Bool = false)
     D = length(idx_names)

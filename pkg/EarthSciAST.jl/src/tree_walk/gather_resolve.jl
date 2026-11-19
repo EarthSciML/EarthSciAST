@@ -29,7 +29,7 @@ function _subscript_is_runtime(
         push!(binders, String(k))
     end
     isempty(binders) || (inner = union(local_names, binders))
-    for (k, a) in enumerate(o.args)
+    for (k, a) in enumerate(_operands(o))
         if k == 1 && o.op == "index" && a isa VarExpr
             # A gather from anything but a const array (a state, a
             # materialized observed) reads a run-time value.

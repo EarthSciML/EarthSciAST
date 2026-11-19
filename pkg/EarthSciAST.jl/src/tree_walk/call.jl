@@ -358,3 +358,23 @@ function _call_body_ops!(memo::Dict{String, Set{String}}, tt::_TplTable, name::S
     end
     return ops
 end
+
+# `call` with a binding for each implicit parameter of its template
+# (`"\0free\0n" => n`, as `_tpl_augment` writes them) that it does not carry
+# yet; `call` itself when it carries them all or no template table is in reach.
+function _call_with_implicit(call::OpExpr)
+    ct = _call_table()
+    ct === nothing && return call
+    def = _tpl_def(ct.tt, call.name)
+    free = def.closed === nothing ? _tpl_generic_free(ct.tt, def) : def.closed.free
+    isempty(free) && return call
+    b = call.bindings
+    missing_any = b === nothing || any(n -> !haskey(b, _TPL_FREE * n), free)
+    missing_any || return call
+    nb = b === nothing ? Dict{String, ASTExpr}() : copy(b)
+    for n in free
+        k = _TPL_FREE * n
+        haskey(nb, k) || (nb[k] = VarExpr(n))
+    end
+    return reconstruct(call; bindings = nb)
+end

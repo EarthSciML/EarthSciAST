@@ -462,6 +462,10 @@ function _resolve_integral(expr::OpExpr, array_var_info, var_map)
 end
 
 function _resolve_call_bindings(expr::OpExpr, rc::_ResolveCtx)
+    # Every argument is resolved here, implicit ones included (a name the body
+    # reads from its caller resolves as it would where expansion put it: a
+    # scalar const field folds to its value).
+    expr = _call_with_implicit(expr)
     b = expr.bindings
     b === nothing && return expr
     nb = b
