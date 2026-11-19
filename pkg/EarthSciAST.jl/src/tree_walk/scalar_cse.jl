@@ -307,9 +307,30 @@ function _cse_node_number!(e::OpExpr, M::_CSEKeyMemos)
             a isa VarExpr ? (:var, a.name) : _emit_json(a)
     end
     key = map(f -> _cse_field_key(e, f, ops), _EMISSIBLE_FIELDS)
+    # A template call's arguments are its `bindings`, which the canonical JSON
+    # does not carry: they enter the key here, each numbered like an operand.
+    _tpl_is_call(e) && (key = (key, _cse_bindings_key(e, M)))
     n = get!(M.ids, key, length(M.ids) + 1)
     M.num[e] = n
     return n
+end
+
+# The bindings of a template call in its CSE key: each binding's canonical
+# number, by name. A binding whose canonical form collapses to a literal is
+# keyed by identity (never shared), as `_cse_key` refuses such a collapse.
+function _cse_bindings_key(e::OpExpr, M::_CSEKeyMemos)
+    b = e.bindings
+    b === nothing && return ()
+    out = Any[]
+    for k in sort!(collect(keys(b)))
+        v = b[k]
+        c = v isa OpExpr ? _canonicalize_memo(v, M.canon) : v
+        num = c isa OpExpr ? _cse_node_number!(c, M) :
+            c isa VarExpr ? (:var, c.name) :
+            v isa OpExpr ? (:unique, objectid(v)) : _emit_json(c)
+        push!(out, k => num)
+    end
+    return Tuple(out)
 end
 
 # One emitted field of `e` in its CSE key: the operand numbers for `args`, the

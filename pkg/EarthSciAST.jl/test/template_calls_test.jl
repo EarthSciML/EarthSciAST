@@ -61,6 +61,7 @@ function _tc_document(tracers)
         ),
         "k" => Dict("type" => "parameter", "units" => "1", "default" => 0.7),
         "m" => Dict("type" => "unknown", "units" => "1", "default" => 2.0),
+        "n" => Dict("type" => "unknown", "units" => "1", "default" => 3.0),
     )
     eqs = Any[]
     for (n, q) in enumerate(tracers)
@@ -89,15 +90,19 @@ function _tc_document(tracers)
             )
         )
     end
-    push!(
-        eqs, Dict(
-            "lhs" => Dict("op" => "D", "args" => Any["m"], "wrt" => "t"),
-            "rhs" => _tc_op(
-                "-", _tc_ref("season", Dict("a" => "m")),
-                _tc_ref("power", Dict("x" => "m", "e" => 2))
-            ),
+    # Two right-hand sides that differ only in a call's binding: the scalar
+    # common-subexpression keys must tell them apart.
+    for v in ("m", "n")
+        push!(
+            eqs, Dict(
+                "lhs" => Dict("op" => "D", "args" => Any[v], "wrt" => "t"),
+                "rhs" => _tc_op(
+                    "-", _tc_ref("season", Dict("a" => v)),
+                    _tc_ref("power", Dict("x" => "m", "e" => 2))
+                ),
+            )
         )
-    )
+    end
     return Dict(
         "esm" => "2.0.0",
         "metadata" => Dict("name" => "template_calls_1d"),
