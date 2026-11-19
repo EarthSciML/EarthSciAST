@@ -170,6 +170,10 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
             return _mknode(kind = _NK_LITERAL, literal = 0.0)
         elseif op == "faq"
             return _geo_compile_agg(expr, g)
+        elseif _tpl_is_call(expr)
+            # A template call (call.jl): arguments compiled here, body apart.
+            tg = _call_target(expr)
+            return _call_node(tg, _Node[_geo_compile(a, g) for a in _call_args(tg, expr)])
         elseif op in _GEO_SCALAR_OPS
             _check_op_arity(Symbol(op), length(expr.args))
             children = _Node[_geo_compile(a, g) for a in expr.args]
@@ -672,12 +676,13 @@ end
 # Bit-exactness is the contract, as in codegen_kernel.jl: no `@fastmath`, no
 # `muladd`, no reassociation. A body the emitter has no arm for (a ring
 # reference, a gated nested reduction) keeps the walker.
-struct _GeoKernel{F, S}
+struct _GeoKernel{F, S, C}
     f::F
     srcs::S
+    fns::C          # the template call functions (`_CGSubFn`s), or `nothing`
 end
 @inline _geo_body_eval(n::_Node, u) = _eval_node(n, u, nothing, 0.0, Float64)
-@inline _geo_body_eval(k::_GeoKernel, u) = k.f(u, k.srcs)
+@inline _geo_body_eval(k::_GeoKernel, u) = k.f(u, k.srcs, k.fns)
 
 const _GEO_CG_UNARY = Dict{Symbol, Function}(r.sym => r.fn for r in _UNARY_ELEMENTWISE_OPS)
 const _GEO_CG_BINARY = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _BINARY_ELEMENTWISE_OPS)
@@ -708,6 +713,9 @@ mutable struct _GeoCG
     def::Set{Symbol}
     maybe::Set{Symbol}
     cur::Int
+    # Template call targets (call.jl) emitted as local functions, through the
+    # kernel emitter's `_cg_call_fn!`; created on the first call.
+    calls::Any
 end
 
 _geo_cg_var!(g::_GeoCG, p::String) = Symbol("_gk_", p, g.nvar += 1)
@@ -800,6 +808,14 @@ end
 function _geo_cg_raw(g::_GeoCG, n::_Node)
     n.kind == _NK_LITERAL && return n.literal
     n.kind == _NK_STATE && return :(u[$(n.idx)])
+    if n.kind == _NK_CALL
+        # A template call: its arguments here, its target a local function
+        # emitted once (`_cg_call_fn!`), which reads only its arguments.
+        g.calls === nothing && (g.calls = _CGFunction(typemax(Int)))
+        args = Any[_geo_cg(g, c) for c in n.children]
+        f = _cg_call_fn!(g.calls::_CGFunction, n.payload::_CallTarget)
+        return Expr(:call, f, nothing, nothing, nothing, args...)
+    end
     n.kind == _NK_OP || _decline(:unknown_kind, string(n.kind))
     op = n.op
     c = n.children
@@ -960,6 +976,9 @@ function _geo_shape_key(body::_Node)
                 length(arrays)
             end
             push!(key, :src, i, typeof(pl))
+        elseif pl isa _CallTarget
+            # A template call target: one object per instance for the build.
+            push!(key, :call, objectid(pl))
         elseif n.op === :geo_agg
             sp = pl::_GeoAggSpec
             push!(
@@ -988,23 +1007,38 @@ function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothi
         _NodeMap{Int}(), _NodeMap{Int}(), _NodeMap{UInt64}(), Dict{Int, Int}(),
         _NodeMap{Symbol}(),
         Dict{Int, Vector{Symbol}}(), Any[], IdDict{Any, Int}(), 0,
-        Dict{Symbol, Int}(), Set{Symbol}(), Set{Symbol}(), 0
+        Dict{Symbol, Int}(), Set{Symbol}(), Set{Symbol}(), 0, nothing
     )
     try
         _geo_cg_scan!(g, body, 0)
         e = _geo_cg(g, body)
         top = Any[]
+        # Template call functions travel by value (`_cg_split_transport`): a
+        # `_CGSubFn` per target, passed as the third argument.
+        fns = nothing
+        if g.calls !== nothing
+            defs = Any[_cg_inner_def(d) for d in (g.calls::_CGFunction).helpers]
+            idx = Dict{Symbol, Int}(d[1] => k for (k, d) in enumerate(defs))
+            left = Ref(0)
+            fexs = Expr[
+                Expr(:function, Expr(:tuple, d[2]..., _CG_FNS), _cg_calls_by_value(d[3], idx, left))
+                    for d in defs
+            ]
+            e = _cg_calls_by_value(e, idx, left)
+            left[] == 0 || error("geometry codegen: a call function referenced other than by a call")
+            fns = _cg_subfns(fexs)
+        end
         for m in get(g.resets, 0, Symbol[])
             push!(top, :(local $m::Float64 = 0.0), :(local $(Symbol(m, :_set))::Bool = false))
         end
-        ex = Expr(:function, Expr(:tuple, :u, :srcs), Expr(:block, top..., :(return Float64($e))))
+        ex = Expr(:function, Expr(:tuple, :u, :srcs, _CG_FNS), Expr(:block, top..., :(return Float64($e))))
         f = cache === nothing ? nothing : get(cache.byexpr, ex, nothing)
         if f === nothing
             f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
             cache === nothing || (cache.byexpr[ex] = f)
         end
         _tally_cascade!(:geo_kernel)
-        return _GeoKernel(f, Tuple(g.srcs))
+        return _GeoKernel(f, Tuple(g.srcs), fns)
     catch err
         # A shape the emitter has no form for declines, and so does a body that
         # raises a document-level refusal while it is emitted; the caller walks

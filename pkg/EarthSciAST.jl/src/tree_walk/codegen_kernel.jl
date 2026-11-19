@@ -250,12 +250,15 @@ mutable struct _CGFunction
     # canonical body text → (name, position in `helpers`, definition). An entry
     # whose definition a declined kernel's rollback cut from `helpers` is stale.
     instfns::Dict{String, Tuple{Symbol, Int, Expr}}
+    # The template call targets emitted so far (`_cg_call_fn!`): target →
+    # (name, position in `helpers`, definition), stale as `instfns` is.
+    callfns::IdDict{Any, Tuple{Symbol, Int, Expr}}
 end
 _CGFunction(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int = 0) =
     _CGFunction(
     _CGTabs(), Int[], _CGPrologue(), Any[], 0, budget, 0, shared_cache, 0,
     _CGSlotSpace(nst), _CGNest(), _CGKernelTx(_CGMark(0, 0, 0, 0, 0), Dict{String, Symbol}()),
-    Dict{String, Tuple{Symbol, Int, Expr}}()
+    Dict{String, Tuple{Symbol, Int, Expr}}(), IdDict{Any, Tuple{Symbol, Int, Expr}}()
 )
 
 _cg_name(ctx::_CGFunction, base::String) = Symbol("_cg", base, ctx.nname += 1)
@@ -788,6 +791,8 @@ function _cg_emit(ctx::_CGFunction, kc::_CGKernCtx, nd::_Node)
         op = nd.op
         fnsym = _reducer_fnsym(op)
         return _cg_foldl(fnsym, exprs)
+    elseif k === _NK_CALL
+        return _cg_emit_call(ctx, kc, nd)
     elseif k === _NK_SUBCALL
         return _cg_emit_subcall(ctx, kc, nd.payload::_AccKernel)
     elseif k === _NK_OP
@@ -991,6 +996,67 @@ function _cg_instance_call!(ctx::_CGFunction, body)
     ctx.instfns[key] = (name, length(ctx.helpers), def)
     _tally_cascade!(:cg_instance_fn)
     return Expr(:call, name, args...)
+end
+
+# ---- Template calls (`_NK_CALL`, call.jl) ---------------------------------------
+# A call target is emitted ONCE per generated function, as a function of its
+# arguments, and every call site calls it: the number of functions is the
+# number of targets (template instances), whatever the number of uses. The
+# body is the interpreter's (`_eval_node` over the target's `_Node`), emitted
+# through the same operator arms, so values are bit-identical; the arguments
+# are emitted in the caller's context and evaluated before the body, as the
+# interpreter evaluates them. A call in a conditional arm sits inside that arm's
+# expression, so it runs only when the arm is taken.
+
+struct _CGCallCtx
+    args::Vector{Symbol}
+end
+
+function _cg_emit(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
+    _cg_budget!(ctx)
+    k = nd.kind
+    k === _NK_LITERAL && return nd.literal
+    k === _NK_ARG && return kc.args[nd.idx]
+    k === _NK_OP && return _cg_emit_op(ctx, kc, nd)
+    k === _NK_CALL && return _cg_emit_call(ctx, kc, nd)
+    return _decline(:unknown_kind, string(nd.kind))
+end
+_cg_emit_region(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node) = _cg_emit(ctx, kc, nd)
+
+# The call of `nd` from emission context `kc`.
+function _cg_emit_call(ctx::_CGFunction, kc, nd::_Node)
+    tg = nd.payload::_CallTarget
+    args = Any[_cg_emit(ctx, kc, c) for c in nd.children]
+    f = _cg_call_fn!(ctx, tg)
+    return Expr(:call, f, :u, :p, :t, args...)
+end
+
+# The emitted function of target `tg` (minted on first use in `ctx`).
+function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
+    got = get(ctx.callfns, tg, nothing)
+    if got !== nothing
+        name, at, def = got
+        if at <= length(ctx.helpers) && ctx.helpers[at] === def
+            _tally_cascade!(:cg_call_shared)
+            return name
+        end
+    end
+    argsyms = Symbol[Symbol("_cga", i) for i in eachindex(tg.slots)]
+    body = _cg_emit(ctx, _CGCallCtx(argsyms), tg.body)
+    ln = LineNumberNode(0, Symbol("ess-template-call"))
+    small = tg.nodes <= _CG_INSTANCE_INLINE_MAX_NODES
+    small && _count!(:cg_call_fn_inlined)
+    stmts = Any[
+        Expr(:meta, small ? :inline : :no_constprop),
+        Expr(:macrocall, Symbol("@inbounds"), ln, :(return $body)),
+    ]
+    name = _cg_name(ctx, "tc")
+    fdef = Expr(:function, Expr(:call, name, :u, :p, :t, argsyms...), Expr(:block, stmts...))
+    def = Expr(:macrocall, Symbol(small ? "@inline" : "@noinline"), ln, fdef)
+    push!(ctx.helpers, def)
+    ctx.callfns[tg] = (name, length(ctx.helpers), def)
+    _tally_cascade!(:cg_call_fn)
+    return name
 end
 
 # Emitted-node size up to which an instance function is inlined at its calls.
@@ -2345,7 +2411,12 @@ function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool}
         end
     end
     isempty(defs) && return (ex, nothing)
-    something(by_value, _cg_carry_by_value(ex)) || return (ex, nothing)
+    # A template call function (`_cg_call_fn!`) is always carried by value: an
+    # inner definition is a closure of the generated function, which
+    # RuntimeGeneratedFunctions cannot run while the package precompiles, and
+    # a call target is meant to be one static function.
+    something(by_value, _cg_carry_by_value(ex) || any(d -> _cg_is_call_fn(d[1]), defs)) ||
+        return (ex, nothing)
     left = Ref(0)
     fns = Expr[
         Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left))
@@ -2369,6 +2440,7 @@ function _cg_section_small(ex::Expr)
 end
 
 _cg_is_instance_fn(name::Symbol) = startswith(String(name), "_cghi")
+_cg_is_call_fn(name::Symbol) = startswith(String(name), "_cgtc")
 
 # `ex` with every template-instance function (`_cg_instance_call!`) made
 # inlinable: `@inline`, its `no_constprop` meta replaced by `inline` (which the

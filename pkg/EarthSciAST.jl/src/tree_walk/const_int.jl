@@ -28,6 +28,10 @@ function _eval_const_int(
         expr::OpExpr, idx_env::Dict{String, Int},
         const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
     )
+    # A template call: its body in its frame (call.jl).
+    _tpl_is_call(expr) && return _eval_through_call(
+        (e, env) -> _eval_const_int(e, env, const_arrays), expr, idx_env
+    )
     op = expr.op
     c = expr.args
     # The arithmetic, rounding, clamp (`max`/`min`: a loader reindex clamps a

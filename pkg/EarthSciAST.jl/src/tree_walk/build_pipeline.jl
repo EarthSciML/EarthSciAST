@@ -673,7 +673,7 @@ function _build_compile_evaluator(
                 materialize_out.caches,
             merge(Dict{String, ASTExpr}(split.raw), split.materialized),
             _state_base_names(layout.var_map, layout.array_var_info),
-            Dict{String, Any}(), ReentrantLock()
+            Dict{String, Any}(), ReentrantLock(), _build_state().calls
         )
     end
 
@@ -1315,10 +1315,20 @@ function _build_evaluator_impl_inner(
     if _template_reg !== nothing
         model = _expansion_copy(model)
         sites = IdDict{OpExpr, OpExpr}()
-        _expand_model_refs!(
-            model, _template_reg; sites = sites,
-            memo = something(_expand_cache, _ExpandCache())
-        )
+        # The references the call node handles stay references and compile as
+        # calls (tree_walk/call.jl, `_tpl_is_called`); the rest still expand
+        # here (an intermediate state of A1, see callnode-design.md). The
+        # expansion cache is the build's own: the front door's cache holds
+        # full expansions.
+        calls = _CallTable(_template_reg)
+        _build_state().calls = calls
+        keep_cache = _ExpandCache(; keep = e -> _tpl_is_called(calls.tt, e))
+        _expand_model_refs!(model, _template_reg; sites = sites, memo = keep_cache)
+        # Every name a kept body reads from its caller becomes a binding of
+        # the reference (`_tpl_augment`), so the phases below that ask which
+        # names an expression reads see the body's reads.
+        _tpl_augment_component!(model, _template_reg)
+        _expand_cache = nothing
         isempty(sites) || (_template_sites = sites)
     elseif _model_has_surviving_refs(model)
         # A surviving reference with no registry in reach would compile into an

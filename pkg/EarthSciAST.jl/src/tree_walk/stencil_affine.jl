@@ -127,6 +127,14 @@ function _lower_to_access_node(
                 for c in tmpl.children
         ]
         return _mknode(kind = _NK_OP, op = tmpl.op, children = ch, payload = tmpl.payload)
+    elseif k === _NK_CALL
+        # A template call: its arguments lower into this spine; the target's
+        # body is a function of them and is not lowered (call.jl).
+        ch = _Node[
+            _lower_to_access(c, lane_repl, acc, subcalls, memo)
+                for c in tmpl.children
+        ]
+        return _mknode(kind = _NK_CALL, op = tmpl.op, children = ch, payload = tmpl.payload)
     end
     return _decline(:unknown_kind, string(k))
 end

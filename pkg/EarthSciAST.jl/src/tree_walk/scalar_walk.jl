@@ -85,6 +85,10 @@
         return _eval_recur_gather(n, u, p, t, T)
     elseif k === _NK_OP
         return _eval_node_op(n, u, p, t, T)
+    elseif k === _NK_ARG
+        return _eval_arg(n, T)
+    elseif k === _NK_CALL
+        return _run_call(c -> _eval_node(c, u, p, t, T), n, u, p, t, T)
     end
     return _unknown_kind(n, "the scalar walker")
 end

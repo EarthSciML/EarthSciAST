@@ -547,14 +547,21 @@ mutable struct _BuildState
     # The scalar parameter values a join gate's computed key column reads while
     # the gates resolve (`_with_join_params`, join_key_columns.jl); empty otherwise.
     join_params::Dict{String, Float64}
+    # The build's template call targets (`_CallTable`, tree_walk/call.jl), or
+    # `nothing` when the build has no template registry. A child state shares
+    # its parent's.
+    calls::Any
+    # While a call target's body compiles: its argument map (`_ArgMap`).
+    argmap::Any
 end
 _BuildState(
     count::Base.RefValue{Int} = Ref(0);
-    scatter_keep::Union{Nothing, IdDict{Any, Nothing}} = nothing
+    scatter_keep::Union{Nothing, IdDict{Any, Nothing}} = nothing,
+    calls = nothing
 ) = _BuildState(
     Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}(),
     Dict{Symbol, Base.RefValue{Int}}(), count, 0, nothing, scatter_keep,
-    Dict{String, Float64}()
+    Dict{String, Float64}(), calls, nothing
 )
 
 """
@@ -674,7 +681,10 @@ function _new_build_ctx(plan::CompilerPlan, record::Union{Nothing, _BuildRecord}
     count = outer === nothing ? Ref(0) : outer.state.loopvar_count
     return _fresh_ctx(
         plan, record,
-        _BuildState(count; scatter_keep = IdDict{Any, Nothing}()), outer
+        _BuildState(
+            count; scatter_keep = IdDict{Any, Nothing}(),
+            calls = outer === nothing ? nothing : outer.state.calls
+        ), outer
     )
 end
 
@@ -686,7 +696,10 @@ function _child_build_ctx()
     outer === nothing && return _fresh_ctx(_DEFAULT_COMPILER_PLAN, nothing, _BuildState(), nothing)
     return _BuildContext(
         outer.plan, outer.record,
-        _BuildState(outer.state.loopvar_count; scatter_keep = outer.state.scatter_keep),
+        _BuildState(
+            outer.state.loopvar_count; scatter_keep = outer.state.scatter_keep,
+            calls = outer.state.calls
+        ),
         outer.tuning, outer.range_spec, outer.ws_capture, outer.counts, outer.merge_recheck
     )
 end

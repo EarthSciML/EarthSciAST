@@ -106,6 +106,13 @@ function _oop_merge_sig!(
             _oop_merge_sig!(io, c, K, parentsubs, why)
         end
         print(io, ")")
+    elseif k === _NK_CALL
+        # A template call: the target by identity, its arguments structurally.
+        print(io, "F", objectid(n.payload), "(")
+        for c in n.children
+            _oop_merge_sig!(io, c, K, parentsubs, why)
+        end
+        print(io, ")")
     else
         why[] = :node_kind; print(io, "?", Int(k))
     end
@@ -157,7 +164,7 @@ function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
         # An inv recipe may only read other inv slots (same idx across members
         # by the signature); a cell-tier read here would not be lane-invariant.
         return _allof(i -> nodes[i].payload === Kof(i).cse.inv_scratch, 1:m)
-    elseif k === _NK_OP || k === _NK_CONTRACTION
+    elseif k === _NK_OP || k === _NK_CONTRACTION || k === _NK_CALL
         for ci in eachindex(r.children)
             _oop_inv_nodes_identical(
                 _Node[n.children[ci] for n in nodes],
@@ -636,7 +643,7 @@ function _oop_x_sig(
         pos = findfirst(s -> s === n.payload, parentsubs)
         pos === nothing && (why[] = :subcall_unknown)
         r = hash((:S, pos === nothing ? 0 : pos), UInt(0x55ee))
-    elseif k === _NK_OP || k === _NK_CONTRACTION
+    elseif k === _NK_OP || k === _NK_CONTRACTION || k === _NK_CALL
         pl = n.payload
         paytok = if pl === nothing
             0x00
@@ -645,7 +652,7 @@ function _oop_x_sig(
         end
         r = hash(
             (
-                k === _NK_OP ? :O : :K, n.op, paytok,
+                k === _NK_OP ? :O : k === _NK_CALL ? :F : :K, n.op, paytok,
                 k === _NK_CONTRACTION ? reinterpret(UInt64, n.literal) : UInt64(0),
                 length(n.children),
             ), UInt(0x8811)
@@ -711,7 +718,7 @@ function _oop_x_apply_cse(root::_Node)
     end
     dorder, dpos = _dag_postorder(root, _dag_children, _dag_every)
     _, uncond = _dag_path_counts(dorder, dpos, _dag_children, _dag_every, _cg_lazy_operand)
-    isrec(n) = (n.kind === _NK_OP || n.kind === _NK_CONTRACTION) &&
+    isrec(n) = (n.kind === _NK_OP || n.kind === _NK_CONTRACTION || n.kind === _NK_CALL) &&
         get(refcnt, n, 0) >= 2 && n !== root && uncond[dpos[n]] >= 1
     nrec = count(isrec, order)
     nrec == 0 && return (root, _Node[], _AccScratch(0))
@@ -816,7 +823,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                     error("round-2: subcall alignment mismatch")
                 @assert isassigned(merged_subs, pos) "nested-first order violated"
                 _Node(k, r.op, r.literal, r.idx, r.sym, merged_subs[pos], _Node[])
-            elseif k === _NK_OP || k === _NK_CONTRACTION
+            elseif k === _NK_OP || k === _NK_CONTRACTION || k === _NK_CALL
                 nch = length(r.children)
                 all(
                     i -> nodes[i].kind === k && nodes[i].op === r.op &&

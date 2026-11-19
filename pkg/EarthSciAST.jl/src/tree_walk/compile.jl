@@ -70,6 +70,11 @@ function _compile(expr::IntExpr, var_map, param_syms, memo::_MaybeMemo = nothing
 end
 function _compile(expr::VarExpr, var_map, param_syms, memo::_MaybeMemo = nothing)
     name = expr.name
+    # Inside a template call body every name read from outside is an argument.
+    if startswith(name, '\0')
+        a = _arg_leaf(name)
+        a === nothing || return a
+    end
     if name == "t"
         return _mknode(kind = _NK_TIME)
     end
@@ -118,6 +123,8 @@ _unevaluable_operator(op, why::AbstractString) = TreeWalkError(
 )
 
 function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
+    # A template reference is a call (call.jl): never expanded.
+    _tpl_is_call(expr) && return _compile_call(expr, var_map, param_syms, memo)
     op_sym = Symbol(expr.op)
     # A run-time loop or gather resolve lowered (`_Lowered`): its args are the
     # node's children (a loop body, ragged bounds, gather subscripts). A loop

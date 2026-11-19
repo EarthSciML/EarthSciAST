@@ -480,3 +480,115 @@ function _tpl_augmented_equations(eqs::AbstractVector{Equation}, reg)
             for eq in eqs
     ]
 end
+
+# ---------------------------------------------------------------------------
+# Template calls (the compiled form, tree_walk/call.jl)
+# ---------------------------------------------------------------------------
+#
+# A reference is compiled as a CALL: the template body is compiled once per
+# instance and called with argument values (callnode-design.md). Which
+# references the build calls rather than expands is decided here, in one
+# place, while the call node is being taught to every phase (an intermediate
+# state of the branch: the end state calls every reference).
+#
+# Today: SCALAR FUNCTION templates. Every node of the prepared body
+# (transitively through nested references) is a literal, a parameter or
+# implicit parameter, or an elementwise operator; every nested reference is
+# itself a scalar function template. Such a body reads its caller only through
+# its arguments, so it compiles to a pure function of them.
+#
+# The bound-expression rule (user decision, 2026-11-18): a plain variable, a
+# literal and a plain `index` read are passed as values; a compound binding is
+# passed as a value too when the body reads its parameter unconditionally (it
+# would be evaluated anyway), and otherwise (read only under an `ifelse` arm or
+# a short-circuited operand, or not at all) it must become part of its own
+# instance, which this step does not do yet, so such a site is still expanded.
+
+const _TPL_CALL_OPS = union(_ops_with(:stencil_elementwise), Set(["const", "true", "false"]))
+
+# A binding passed as a value whatever the body does with it.
+function _tpl_plain_binding(b::ASTExpr)
+    (b isa VarExpr || b isa NumExpr || b isa IntExpr) && return true
+    b isa OpExpr || return false
+    b.op == "index" && !isempty(b.args) && b.args[1] isa VarExpr && return true
+    return false
+end
+
+_tpl_structless(e::OpExpr) = e.expr_body === nothing && e.values === nothing &&
+    e.ranges === nothing && e.output_idx === nothing && e.filter === nothing &&
+    e.lower === nothing && e.upper === nothing && e.key === nothing
+
+# Per template name: `nothing` when it is not a scalar function template, else
+# the set of its parameters (declared names) the body reads unconditionally.
+function _tpl_scalar_fn(tt::_TplTable, name::AbstractString)
+    memo = _tpl_memo(tt, nothing, :scalar_fn, () -> Dict{String, Any}())
+    haskey(memo, name) && return memo[name]
+    memo[String(name)] = nothing      # a cycle reads as "not callable"
+    r = try
+        _tpl_scalar_fn_uncached(tt, String(name))
+    catch err
+        err isa ExpressionTemplateError || rethrow()
+        nothing
+    end
+    memo[String(name)] = r
+    return r
+end
+
+function _tpl_scalar_fn_uncached(tt::_TplTable, name::String)
+    def = _tpl_def(tt, name)
+    def.closed === nothing && return nothing
+    uncond = Set{String}()
+    ok = _tpl_scalar_walk!(tt, def.closed.body, false, uncond)
+    ok || return nothing
+    return Set{String}(p for p in def.params if (_TPL_ARG * p) in uncond)
+end
+
+# Walk a prepared body: false when a node is outside the scalar function class.
+# `uncond` collects the sentinels read on an unconditional path (`cond` false).
+function _tpl_scalar_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, uncond::Set{String})
+    if e isa VarExpr
+        (!cond && _tpl_is_sentinel(e.name)) && push!(uncond, e.name)
+        return true
+    end
+    e isa OpExpr || return true
+    if _tpl_is_call(e)
+        inner = _tpl_scalar_fn(tt, e.name)
+        inner === nothing && return false
+        b = e.bindings === nothing ? Dict{String, ASTExpr}() : e.bindings
+        for (k, v) in b
+            c = cond || !(startswith(k, _TPL_FREE) || k in inner)
+            _tpl_scalar_walk!(tt, v, c, uncond) || return false
+        end
+        return true
+    end
+    (e.op in _TPL_CALL_OPS && _tpl_structless(e)) || return false
+    isempty(_bound_symbols(e)) || return false
+    for (j, a) in enumerate(e.args)
+        _tpl_scalar_walk!(tt, a, cond || _op_arg_conditional(e.op, j), uncond) || return false
+    end
+    return true
+end
+
+"""
+    _tpl_is_called(tt, call::OpExpr) -> Bool
+
+Whether the build compiles the reference `call` (read at the top level, in the
+model's own tree or a body being expanded) as a call node rather than
+expanding it. See the section comment above.
+"""
+function _tpl_is_called(tt::_TplTable, call::OpExpr)
+    uncond = _tpl_scalar_fn(tt, call.name)
+    uncond === nothing && return false
+    def = _tpl_def(tt, call.name)
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    for p in def.params
+        v = get(b, p, nothing)
+        v === nothing && return false
+        p in uncond && continue
+        # A parameter placeholder of a template skeleton being expanded
+        # (expand_typed.jl) stands for a binding not known yet.
+        (v isa VarExpr && occursin(_TPL_SENTINEL, v.name)) && return false
+        _tpl_plain_binding(v) || return false
+    end
+    return true
+end

@@ -491,6 +491,12 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
         d = findfirst(r -> r === nd.payload, S.loops)
         d === nothing && _decline(:loopvar_out_of_scope)
         push!(sig, 10, d)
+    elseif k === _NK_CALL
+        # The target is part of the signature; its arguments are the caller's.
+        push!(sig, Int(k), _sc_obj(S, nd.payload), length(nd.children))
+        for c in nd.children
+            _sc_sig!(S, c)
+        end
     elseif k === _NK_CONTRACTION_LOOP
         spec = nd.payload::_ContractLoop
         push!(
@@ -700,6 +706,8 @@ function _cg_emit(ctx::_CGFunction, kc::_CGUnitCtx, nd::_Node)
         s = get(kc.loops, nd.payload, nothing)
         s === nothing && _decline(:loopvar_out_of_scope)
         return :(Float64($s))
+    elseif k === _NK_CALL
+        return _cg_emit_call(ctx, kc, nd)
     elseif k === _NK_CONTRACTION_LOOP
         # The range is part of the class signature (`_sc_sig!`), so its bounds
         # are the same literals for every member.

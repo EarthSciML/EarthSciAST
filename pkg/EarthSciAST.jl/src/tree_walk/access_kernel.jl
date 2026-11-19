@@ -412,6 +412,10 @@ function _eval_acc(
         return _eval_acc(S.spine, u, p, t, oln, midx, S, T)
     elseif k === _NK_OP
         return _eval_acc_op(nd, u, p, t, oln, midx, K, T)
+    elseif k === _NK_CALL
+        # A template call: its arguments in this kernel's cell context, its
+        # body (a pure function of them) by the scalar walker.
+        return _run_call(c -> _eval_acc(c, u, p, t, oln, midx, K, T), nd, u, p, t, T)
     end
     return _unknown_kind(nd, "the access-kernel walker")
 end
@@ -635,6 +639,8 @@ function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
         n.payload === nothing ? UInt(0) : objectid(n.payload),
         childvns,
     )
+    # A template call is a pure function of its arguments (call.jl).
+    k === _NK_CALL    && return (0x06, objectid(n.payload), childvns)
     return (0xff, objectid(n))     # _NK_CACHED / anything else — never merged
 end
 
@@ -699,9 +705,10 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
             k = n.kind
             inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ? true :
                 k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
-                k === _NK_OP ? all(v -> is_inv[v], childvns) :
+                (k === _NK_OP || k === _NK_CALL) ? all(v -> is_inv[v], childvns) :
                 false
-            push!(counts, 0); push!(is_op, k === _NK_OP); push!(is_inv, inv); push!(rep, n)
+            push!(counts, 0); push!(is_op, k === _NK_OP || k === _NK_CALL)
+            push!(is_inv, inv); push!(rep, n)
         end
         vn_by_pos[p] = vn
     end

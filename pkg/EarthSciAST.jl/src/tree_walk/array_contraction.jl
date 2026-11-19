@@ -224,6 +224,8 @@ function _cg_emit(ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node)
         return _cg_foldl(fnsym, exprs)
     elseif k === _NK_RAGGED_LOOP
         return _cg_ragged_loop(ctx, kc, nd)
+    elseif k === _NK_CALL
+        return _cg_emit_call(ctx, kc, nd)
     elseif k === _NK_CACHED
         # The scalar prelude's CSE scratch. A contraction body is compiled with
         # `memo=nothing` and never goes through `_cse_compile_scalar`, so this
@@ -453,6 +455,9 @@ function _cg_share_inner(K::_CGShareKeys, nd::_Node)
         return nd.payload !== nothing ? nothing : 0
     elseif k === _NK_CONTRACTION
         return 0
+    elseif k === _NK_CALL
+        # A template call: the same target over the same arguments.
+        return _cg_share_obj!(K, nd.payload)
     end
     return nothing
 end

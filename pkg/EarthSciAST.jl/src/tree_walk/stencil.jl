@@ -336,6 +336,14 @@ function _stencilize_op_core(e::OpExpr, ctx::_StencilCtx)
     op = e.op
     if op == "index"
         return _stencilize_index(e, ctx)
+    elseif _tpl_is_call(e)
+        # A template call (call.jl) is elementwise in its arguments: they are
+        # read in this spine, the body is a function of them compiled apart.
+        nb = Dict{String, ASTExpr}()
+        for k in sort!(collect(keys(e.bindings)))
+            nb[k] = _stencilize(e.bindings[k], ctx)
+        end
+        return reconstruct(e; bindings = nb)
     elseif op in _STENCIL_ELEMENTWISE_OPS
         # Pure elementwise op — must carry no sub-expression structure (a defensive
         # guard: elementwise ops never legitimately do; if one does, fall back).
@@ -1039,6 +1047,12 @@ function _branch_key!(
         _branch_key!(io, a, idxset, idx_env, const_arrays, memo, seen, segs)
     end
     e.expr_body !== nothing && _branch_key!(io, e.expr_body, idxset, idx_env, const_arrays, memo, seen, segs)
+    # A template call's arguments are read in this spine (call.jl).
+    if e.bindings !== nothing
+        for k in sort!(collect(keys(e.bindings)))
+            _branch_key!(io, e.bindings[k], idxset, idx_env, const_arrays, memo, seen, segs)
+        end
+    end
     return if e.values !== nothing
         for v in e.values
             _branch_key!(io, v, idxset, idx_env, const_arrays, memo, seen, segs)

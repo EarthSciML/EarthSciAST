@@ -101,6 +101,9 @@ function _resolve_indices(expr::OpExpr, rc::_ResolveCtx)
     return r
 end
 function _resolve_indices_op(expr::OpExpr, rc::_ResolveCtx)
+    # A template call resolves its arguments in this context; its body is
+    # compiled once, apart (call.jl).
+    _tpl_is_call(expr) && return _resolve_call_bindings(expr, rc)
     if _is_guarded_node_op(expr.op, length(expr.args)) &&
             expr.expr_body === nothing && expr.values === nothing
         return _resolve_guarded_op(expr, rc)
@@ -456,4 +459,19 @@ function _resolve_integral(expr::OpExpr, array_var_info, var_map)
         return OpExpr("*", ASTExpr[VarExpr("d$(iv)"), OpExpr("+", cells)])
     end
     return nothing
+end
+
+function _resolve_call_bindings(expr::OpExpr, rc::_ResolveCtx)
+    b = expr.bindings
+    b === nothing && return expr
+    nb = b
+    for (k, v) in b
+        r = v isa OpExpr ? _resolve_indices(v::OpExpr, rc) :
+            v isa VarExpr ? _resolve_indices(v::VarExpr, rc) : v
+        if r !== v
+            nb === b && (nb = copy(b))
+            nb[k] = r
+        end
+    end
+    return nb === b ? expr : reconstruct(expr; bindings = nb)
 end

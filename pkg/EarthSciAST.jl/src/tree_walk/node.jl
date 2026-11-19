@@ -35,6 +35,8 @@ const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time fro
 const _NK_RECUR_GATHER = UInt8(13)  # a recurrence's causal self-read: a PUBLISHED cell of its own buffer, or a fault (recurrence_sweep.jl)
 const _NK_RAGGED_LOOP = UInt8(14)  # ⊕-reduction over a range whose bounds are evaluated per call (a ragged `offsets` bound), seeded from 0̄
 const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an EVAL-TIME-computed offset (a loop-var subscript)
+const _NK_CALL = UInt8(16)  # call a compiled template instance (call.jl): payload = _CallTarget, children = its arguments
+const _NK_ARG = UInt8(17)   # read argument `idx` of the innermost running call of `payload::_CallTarget` (call.jl)
 
 # The ONE compiled IR node — scalar spines and access-kernel spines are both trees
 # of these. `kind` selects which fields are live. The catch-all `payload::Any` slot
@@ -66,6 +68,7 @@ const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an E
 #     `_NK_STATE_GATHER` — `_StateGather`; `_NK_RECUR_GATHER` — the recurrence's
 #     gather; `_NK_LOOPVAR` — the loop counter's `Base.RefValue{Int}`.
 #   * the access-kernel kinds (access_kernel.jl): `_NK_SUBCALL` — an `_AccKernel`, `_NK_AREDUCE` — an `_AReduceSpec`.
+#   * `_NK_CALL` and `_NK_ARG` — the `_CallTarget` called or read (call.jl).
 #   * `_NK_OP` — `nothing`, except the setup-time geometry operators
 #     (`:geo_gather`, `:geo_agg`, `:geo_count`, `:geomemo`, `:cellmemo`), which exist
 #     only in build-time geometry bodies and carry their source or spec.

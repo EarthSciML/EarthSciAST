@@ -51,6 +51,8 @@ mutable struct _ObsProgramCtx
     state_names::Set{String}
     programs::Dict{String, Any}
     lock::ReentrantLock
+    # The build's template call targets (`_CallTable`, call.jl), or `nothing`.
+    calls::Any
 end
 
 """
@@ -150,8 +152,11 @@ end
 # slots under the next. So each program compiles in a child build context
 # (`_child_build_ctx`, compiler.jl) with tables, loop registry and parameter-read
 # sink of its own.
-_build_observed_program(ctx::_ObsProgramCtx, name::String) =
-    _with_build_ctx(() -> _build_observed_program_impl(ctx, name), _child_build_ctx())
+function _build_observed_program(ctx::_ObsProgramCtx, name::String)
+    bc = _child_build_ctx()
+    ctx.calls === nothing || (bc.state.calls = ctx.calls)
+    return _with_build_ctx(() -> _build_observed_program_impl(ctx, name), bc)
+end
 
 function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     model = ctx.model
