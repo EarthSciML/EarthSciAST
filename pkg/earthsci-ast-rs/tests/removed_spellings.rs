@@ -102,14 +102,10 @@ fn faq_below_v11_is_rejected() {
 // --- every fixture under tests/invalid/removed_ops/ ------------------------
 
 /// Every `tests/invalid/removed_ops/*.esm` fixture is refused at load with
-/// `removed_op`, naming its op. The three ops esm 2.4.0 removed (`grad`, `div`,
-/// `laplacian`) are refused even though their fixtures declare esm 2.3.0, and
-/// their message points at spatial `D` and MIGRATION.md, never at the 2.0.0
-/// codemod.
+/// `removed_op`, naming its op (the `function_tables` fixture names the block).
 #[test]
 fn every_removed_ops_fixture_is_refused_with_removed_op() {
     let dir = common::repo_fixture("invalid/removed_ops");
-    let mut seen_v3 = Vec::new();
     let mut count = 0usize;
     for entry in std::fs::read_dir(&dir).expect("read removed_ops dir") {
         let path = entry.expect("dir entry").path();
@@ -132,20 +128,31 @@ fn every_removed_ops_fixture_is_refused_with_removed_op() {
                 "{stem} must name `{op}`: {e}"
             );
         }
-        if ["grad", "div", "laplacian"].contains(&op.as_str()) {
-            let doc: serde_json::Value = serde_json::from_str(&src).expect("fixture is JSON");
-            assert_eq!(doc["esm"], "2.3.0", "{stem} declares 2.3.0");
-            assert!(e.contains("esm 2.4.0"), "{stem}: {e}");
-            assert!(e.contains("MIGRATION.md"), "{stem}: {e}");
-            assert!(!e.contains("earthsci_ast.migrate"), "{stem}: {e}");
-            seen_v3.push(op);
-        }
         count += 1;
     }
-    seen_v3.sort();
-    assert_eq!(seen_v3, ["div", "grad", "laplacian"]);
-    assert!(
-        count >= 13,
-        "expected the full removed_ops corpus, saw {count}"
-    );
+    assert!(count >= 10, "expected the removed_ops corpus, saw {count}");
+}
+
+// --- grad / div / laplacian are ordinary op names ---------------------------
+
+/// `grad`, `div` and `laplacian` are not removed and not special: a document
+/// spelling them loads like any document using a user op, whatever `esm` it
+/// declares, and a model whose only spatial operator is one of them classifies
+/// by its time derivative (`ode`).
+#[test]
+fn grad_div_laplacian_load_as_ordinary_ops() {
+    for op in ["grad", "div", "laplacian"] {
+        for esm in ["2.3.0", earthsci_ast::SCHEMA_VERSION] {
+            let src = format!(
+                r#"{{"esm": "{esm}", "metadata": {{"name": "Ordinary"}},
+                "models": {{"M": {{"variables": {{"u": {{"type": "unknown", "default": 1.0}}}},
+                "equations": [{{"lhs": {{"op": "D", "args": ["u"], "wrt": "t"}},
+                                "rhs": {{"op": "{op}", "args": ["u"], "dim": "x"}}}}]}}}}}}"#
+            );
+            let file = load_string(&src).unwrap_or_else(|e| panic!("{op} at {esm}: {e}"));
+            let model = &file.models.as_ref().expect("models")["M"];
+            let kind = earthsci_ast::Classification::of(model).system_kind;
+            assert_eq!(kind, earthsci_ast::SystemKind::Ode, "{op} at {esm}");
+        }
+    }
 }

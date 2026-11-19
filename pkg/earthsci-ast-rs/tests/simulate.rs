@@ -967,25 +967,52 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
 }
 
 #[test]
-fn test_error_user_op_in_simulator_rejected() {
-    // Feed a non-discretized AST with a user discretization op directly to the
-    // simulator's RHS evaluator. Per the canonical pipeline contract, a
-    // rewrite rule MUST lower such an op into `faq` AST before it reaches the
-    // simulator; encountering one here means the canonical pipeline broke.
-    // The simulator must surface this rather than silently substitute zero
-    // (the historical stub).
-    let flat = flat_with_one_state_rhs(op("godunov_hamiltonian", vec![var("u")]));
+fn test_error_grad_in_simulator_rejected() {
+    // Feed a non-discretized AST with a `grad` node directly to the
+    // simulator's RHS evaluator. Per the canonical pipeline contract,
+    // ESD discretization rules MUST rewrite `grad`/`div`/`laplacian` into
+    // `faq` AST before reaching the simulator; encountering one here
+    // means the canonical pipeline broke. The simulator must surface
+    // this rather than silently substitute zero (the historical stub).
+    let flat = flat_with_one_state_rhs(op("grad", vec![var("u")]));
     let err = ArrayCompiled::from_flattened(&flat)
         .err()
         .expect("the build must be refused");
     let msg = err.to_string();
     assert!(
-        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "godunov_hamiltonian"),
-        "expected UnloweredOperatorError(godunov_hamiltonian), got: {msg}"
+        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "grad"),
+        "expected UnloweredOperatorError(grad), got: {msg}"
     );
     assert!(
-        msg.contains("unlowered_operator") && msg.contains("godunov_hamiltonian"),
+        msg.contains("unlowered_operator") && msg.contains("grad"),
         "expected uniform unlowered_operator message, got: {msg}"
+    );
+}
+
+#[test]
+fn test_error_div_in_simulator_rejected() {
+    let flat = flat_with_one_state_rhs(op("div", vec![var("u")]));
+    let err = ArrayCompiled::from_flattened(&flat)
+        .err()
+        .expect("the build must be refused");
+    assert!(
+        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "div"),
+        "expected UnloweredOperatorError(div), got: {err}"
+    );
+}
+
+#[test]
+fn test_error_laplacian_in_simulator_rejected() {
+    let flat = flat_with_one_state_rhs(op("laplacian", vec![var("u")]));
+    let err = ArrayCompiled::from_flattened(&flat)
+        .err()
+        .expect("the build must be refused");
+    assert!(
+        matches!(
+            err,
+            CompileError::UnloweredOperatorError { ref op } if op == "laplacian"
+        ),
+        "expected UnloweredOperatorError(laplacian), got: {err}"
     );
 }
 
@@ -995,7 +1022,7 @@ fn test_error_spatial_d_in_simulator_rejected() {
     // right-hand-side derivative — the structural equation-LHS `D(u, t)` is
     // consumed by flatten and never resolved here) is an unlowered
     // rewrite-target op, surfaced with the same uniform `unlowered_operator`
-    // code as a user op.
+    // code as the sugar ops.
     let flat = flat_with_one_state_rhs(Expr::operator(ExpressionNode {
         op: "D".to_string(),
         args: vec![var("u")],
@@ -1017,10 +1044,10 @@ fn test_error_spatial_d_in_simulator_rejected() {
 }
 
 #[test]
-fn test_error_spatial_d_in_array_simulator_rejected() {
+fn test_error_grad_in_array_simulator_rejected() {
     // The array-op simulator (`ArrayCompiled::from_model`) must also reject
     // unlowered rewrite-target operators with the same uniform
-    // `unlowered_operator` code. Sneak a spatial `D` into a faq body so the
+    // `unlowered_operator` code. Sneak a `grad` into a faq body so the
     // dispatcher routes the model to the array path.
     use earthsci_ast::simulate_array::ArrayCompiled;
 
@@ -1032,17 +1059,12 @@ fn test_error_spatial_d_in_array_simulator_rejected() {
     // NOTE: this used to carry the legacy `op: "faq"` spelling, which ESM
     // v0.8.0 removed (`aggregate::is_faq_op` no longer accepts it). The op
     // registry now rejects that dead name as an unlowered operator in its own
-    // right, which would shadow the spatial `D` this test is actually about —
-    // so use the current `faq` tag and keep asserting on the inner `D`.
+    // right, which would shadow the `grad` this test is actually about — so use
+    // the current `faq` tag and keep asserting on the inner `grad`.
     let faq_body = Expr::operator(ExpressionNode {
         op: "faq".to_string(),
         args: vec![],
-        expr: Some(Box::new(Expr::operator(ExpressionNode {
-            op: "D".to_string(),
-            args: vec![var("u")],
-            wrt: Some("x".to_string()),
-            ..Default::default()
-        }))),
+        expr: Some(Box::new(op("grad", vec![var("u")]))),
         output_idx: Some(vec!["i".to_string()]),
         ranges: Some(ranges),
         wrt: None,
@@ -1075,8 +1097,8 @@ fn test_error_spatial_d_in_array_simulator_rejected() {
         Err(e) => e,
     };
     assert!(
-        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "D"),
-        "expected UnloweredOperatorError(D) from array path, got: {err}"
+        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "grad"),
+        "expected UnloweredOperatorError(grad) from array path, got: {err}"
     );
 }
 

@@ -25,8 +25,8 @@
 //! flattens like any other, and the spatial axes it names are
 //! recorded in [`FlattenedSystem::independent_variables`] by §4.7.6's
 //! independent-variable derivation — which is precisely what decides whether a
-//! downstream constructor builds an `ODESystem` or a `PDESystem`, and what makes
-//! esm-spec §6.3.1's `"pde"` `system_kind` reachable. This module used to raise
+//! downstream constructor builds an `ODESystem` or a `PDESystem`. This module
+//! used to raise
 //! [`FlattenError::UnloweredOperator`] here instead; that was this binding's own
 //! stricter behaviour, not the format's, and it put Rust alone against Python,
 //! Go, TypeScript and §4.7.6 itself.
@@ -698,7 +698,7 @@ pub struct FlattenedSystem {
 
 impl FlattenedSystem {
     /// The flattened system's DERIVED kind (esm-spec §6.3.1) — `"sde"` /
-    /// `"pde"` / `"nonlinear"` / `"ode"`, tested in that order.
+    /// `"nonlinear"` / `"ode"`, tested in that order.
     ///
     /// Available on the flattened form precisely because
     /// [`Self::brownian_parameters`] survives flattening: the derivation's first
@@ -991,7 +991,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // a normative algorithm that DERIVES `[:t, :x, :y, …]` from exactly those
     // operators, and says the result "is what determines whether the downstream
     // constructor produces an ODESystem or a PDESystem" — which refusing makes
-    // unreachable, along with §6.3.1's `"pde"` `system_kind`. Python, Go and
+    // unreachable. Python, Go and
     // TypeScript all flatten such a document and agree on the ordered lists.
     // See `derive_independent_variables` below.
     //
@@ -1949,8 +1949,7 @@ fn scope_template_body(
 ///    since v0.8.0: `Domain.spatial` was removed, and the surviving `domain`
 ///    carries only `independent_variable` / `temporal` / `element_type` /
 ///    `array_type`. There is no spatial domain left to scan, so the operators
-///    in the equations are the whole signal — esm-spec §6.3.1 makes the same
-///    point about the `"pde"` `system_kind` test.
+///    in the equations are the whole signal.
 ///
 /// Step 2's signal is harvested STRUCTURALLY, from the axis-naming `dim` scalar
 /// field (esm-spec §4.9.1) and from a spatial `wrt` — never from a hardcoded
@@ -2011,7 +2010,7 @@ fn collect_spatial_dims(expr: &Expr, out: &mut Vec<String>) {
 /// [`flatten`] itself does NOT run this: a PDE is a legitimate flattened system
 /// whose spatial axes §4.7.6 records in
 /// [`FlattenedSystem::independent_variables`], and refusing it would make
-/// `PDESystem` construction and the `"pde"` `system_kind` unreachable. This is
+/// `PDESystem` construction unreachable. This is
 /// for a consumer that genuinely REQUIRES a discretized system and wants to say
 /// so before it starts work; the scalar and array simulators enforce the same
 /// rule at compile time on their own, through

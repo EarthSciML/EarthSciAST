@@ -312,10 +312,8 @@ diagnostic_code_registry! {
     /// A document uses an op (or the `function_tables` block) the format
     /// removed: `arrayop` at esm 0.8.0, and `aggregate`, `fn`, `table_lookup` with
     /// `function_tables`, `skolem`, `rank`, `intersect_polygon`,
-    /// `polygon_intersection_area`, `argmin` and `argmax` at esm 2.0.0, and
-    /// `grad`, `div` and `laplacian` at esm 2.4.0. Raised by name at load,
-    /// before schema validation, whatever `esm` the document declares; a
-    /// 2.0.0 removal names the codemod, a 2.4.0 removal points at spatial `D`.
+    /// `polygon_intersection_area`, `argmin` and `argmax` at esm 2.0.0. Raised
+    /// by name at load, before schema validation, naming the codemod.
     REMOVED_OP = "removed_op";
     /// A WARNING, not an error: a document spells a DEPRECATED op (esm-spec
     /// §4.2 "Deprecated ops") — `neg`, the word spelling of unary `-`, or
@@ -323,6 +321,12 @@ diagnostic_code_registry! {
     /// wire boundary rewrites each to its replacement and reports this once
     /// per document, naming every rewritten node.
     DEPRECATED_OP = "deprecated_op";
+    /// A WARNING, not an error: a model declares `"system_kind": "pde"`,
+    /// deprecated at esm 2.4.0 (esm-spec §6.3.1). The value is ignored — the
+    /// model is treated as its derived kind and never reports
+    /// `system_kind_mismatch` for it — and the field is kept as written. One
+    /// warning per document, naming every such model by JSON pointer.
+    DEPRECATED_SYSTEM_KIND = "deprecated_system_kind";
     /// A Markdown or Typst source text is not an ESM document: an unknown
     /// word, an ambiguous juxtaposition, an unbalanced delimiter, an unclosed
     /// display, container or directive, and every other malformed input the
@@ -728,6 +732,7 @@ mod error_code_tests {
             "data_source_undefined",
             "data_source_url_unresolved",
             "deprecated_op",
+            "deprecated_system_kind",
             "derived_index_set_unmaterialized",
             "dimensional_mismatch",
             "domain_unit_mismatch",

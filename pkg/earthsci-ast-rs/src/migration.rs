@@ -7,13 +7,6 @@
 //! schema without any mechanical transform. The current additive line is
 //! `2.0.0 … <current schema version>` ([`crate::SCHEMA_VERSION`]).
 //!
-//! **esm 2.4.0 removes `grad`, `div` and `laplacian`.** They were never part
-//! of the format proper (no evaluator, no dimensional rule, no shipped rewrite
-//! rule), so the removal stays on the 2.x line. A 1.x or 2.x document that uses
-//! any of them is refused by [`migrate`] with the `removed_op` diagnostic,
-//! which points at MIGRATION.md "esm 2.4.0": there is no codemod for these
-//! three; write them with spatial `D`, one `D` per axis.
-//!
 //! **esm 2.0.0 is a break that ends the 1.x line.** It removes the `aggregate`
 //! spelling of `faq` and the external function ops — `fn`, `table_lookup` with the `function_tables` block,
 //! `skolem`, `rank`, `intersect_polygon`, `polygon_intersection_area`,
@@ -175,8 +168,8 @@ pub fn get_supported_migration_targets(from_version: &str) -> Vec<String> {
 ///
 /// Deliberately consults the same single source of truth `migrate` does, so a
 /// caller is never told a pair is migratable and then handed a
-/// [`MigrationError`] for the versions. The one content check is the removed
-/// ops: `migrate` refuses a document that uses an op 2.0.0 or 2.4.0 removed.
+/// [`MigrationError`] for the versions. The one content check is the 1.x →
+/// 2.0.0 step: `migrate` refuses a document that uses an op 2.0.0 removed.
 pub fn can_migrate(from_version: &str, to_version: &str) -> bool {
     supported_migration_targets(from_version)
         .iter()
@@ -189,9 +182,7 @@ pub fn can_migrate(from_version: &str, to_version: &str) -> bool {
 /// transform: an additive-line source (`2.0.0 … <current>`) advanced to the
 /// current schema version, or a 1.x source relabelled to it (see the module
 /// header). A 1.x document that uses an op 2.0.0 removed is refused with a
-/// `removed_op` message naming the op, its path and the codemod; any source
-/// that uses `grad`, `div` or `laplacian` (removed at 2.4.0) is refused with a
-/// `removed_op` message pointing at MIGRATION.md "esm 2.4.0". Any other
+/// `removed_op` message naming the op, its path and the codemod. Any other
 /// version pair — a 0.x source included — yields a [`MigrationError`].
 /// Content-level changes are not performed here.
 ///
@@ -218,9 +209,9 @@ pub fn migrate(file: &EsmFile, target_version: &str) -> Result<EsmFile, Migratio
         });
     }
 
-    // A removed op is refused whatever the source declares: on a 1.x source
-    // that covers the 2.0.0 removals, and on any source the 2.4.0 ones.
-    if let Some(message) = removed_construct(file) {
+    if crate::diagnostic::parse_semver(source_version).is_some_and(on_1x_line)
+        && let Some(message) = removed_construct(file)
+    {
         return Err(MigrationError {
             message,
             from_version: source_version.clone(),
@@ -233,7 +224,7 @@ pub fn migrate(file: &EsmFile, target_version: &str) -> Result<EsmFile, Migratio
     Ok(migrated)
 }
 
-/// The `removed_op` message for the first removed op that `file` uses, in
+/// The `removed_op` message for the first op 2.0.0 removed that `file` uses, in
 /// the loader's pre-order, or `None`. The typed file has no `function_tables`
 /// field, so a table block cannot reach here; its `table_lookup` nodes can.
 fn removed_construct(file: &EsmFile) -> Option<String> {
@@ -469,34 +460,6 @@ mod tests {
             assert!(err.message.starts_with("removed_op at "), "{err}");
             assert!(err.message.contains(&format!("\"{op}\"")), "{err}");
             assert!(err.message.contains("earthsci_ast.migrate"), "{err}");
-        }
-    }
-
-    /// A 1.x or 2.x document that uses `grad`, `div` or `laplacian` (removed
-    /// at 2.4.0) is refused with `removed_op`, pointing at spatial `D` and
-    /// MIGRATION.md rather than at the codemod, never relabelled.
-    #[test]
-    fn migrate_refuses_a_file_that_uses_an_op_removed_at_v2_4() {
-        for op in crate::parse::REMOVED_AT_V2_4 {
-            for version in ["1.3.0", "2.0.0", "2.3.0"] {
-                let source: EsmFile = serde_json::from_value(serde_json::json!({
-                    "esm": version,
-                    "metadata": {"name": "test"},
-                    "models": {"M": {
-                        "variables": {"x": {"type": "unknown"}},
-                        "equations": [{
-                            "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                            "rhs": {"op": op, "args": ["x"], "dim": "x"},
-                        }],
-                    }},
-                }))
-                .expect("document deserializes");
-                let err = migrate(&source, CURRENT).expect_err("removed op must refuse");
-                assert!(err.message.starts_with("removed_op at "), "{err}");
-                assert!(err.message.contains(&format!("\"{op}\"")), "{err}");
-                assert!(err.message.contains("esm 2.4.0"), "{err}");
-                assert!(!err.message.contains("earthsci_ast.migrate"), "{err}");
-            }
         }
     }
 

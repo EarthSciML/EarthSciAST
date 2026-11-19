@@ -75,7 +75,7 @@ fn godunov_compound_rule_beats_inner_derivative() {
     );
 }
 
-/// fixpoint_nested_deriv: the user op `lap_xy(u)` -> `D(D(u,x),x)+D(D(u,y),y)` (pass 1),
+/// fixpoint_nested_deriv: `laplacian(u)` -> `D(D(u,x),x)+D(D(u,y),y)` (pass 1),
 /// then each nested `D(D(f,·),·)` -> stencil (pass 2). Exercises the bounded
 /// fixpoint: a produced body is re-scanned only in a SUBSEQUENT pass. Converges
 /// to an identical tree in every binding.
@@ -87,8 +87,8 @@ fn nested_derivative_fixpoint_converges_across_passes() {
 
     let expr_json = obs_def(model, "lap").to_string();
     assert!(
-        !expr_json.contains("lap_xy"),
-        "the first-pass user op must be gone: {expr_json}"
+        !expr_json.contains("laplacian"),
+        "laplacian sugar must be gone: {expr_json}"
     );
     assert!(
         !expr_json.contains("\"D\""),

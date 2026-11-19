@@ -24,7 +24,7 @@
 //!
 //! Four of the cases (`advanced_coupling`, `full_coupled`,
 //! `complete_coupling_types`, `coupled_atmospheric_system`) carry UNDISCRETIZED
-//! spatial operators (a spatial `D`, user ops). Rust used to refuse them with `unlowered_operator`; it
+//! `grad`/`laplacian`. Rust used to refuse them with `unlowered_operator`; it
 //! now flattens them and derives their spatial `independent_variables` per
 //! esm-libraries-spec §4.7.6, so they are ordinary compared cases. That list is
 //! the one field whose order is lexicographic rather than document order — the

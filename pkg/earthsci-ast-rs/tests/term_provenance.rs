@@ -173,8 +173,8 @@ fn body_is_the_left_fold_of_the_contributions() {
         let flat = flatten_path(&fixtures_dir().join(&fixture));
         for (eq, contributions) in flat.equations.iter().zip(&flat.equation_contributions) {
             let result = check_invariant(&fixture, &flat, &eq.lhs, &eq.rhs, contributions);
-            // Only the undiscretized spatial operator of the placeholder
-            // fixture is out of the evaluator's reach.
+            // Only `grad` without a discretization is out of the evaluator's
+            // reach.
             if fixture != "placeholder_expansion.esm" {
                 assert!(
                     result.is_some(),
