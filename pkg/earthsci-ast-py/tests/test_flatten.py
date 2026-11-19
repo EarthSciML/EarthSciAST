@@ -212,11 +212,11 @@ def test_flatten_independent_variables_default_to_t_only():
     assert flat.independent_variables == ["t"]
 
 
-def test_flatten_independent_variables_pick_up_spatial_d():
+def test_flatten_independent_variables_pick_up_grad():
     var_u = ModelVariable(type="unknown")
     eq = Equation(
         lhs=ExprNode(op="D", args=["u"], wrt="t"),
-        rhs=ExprNode(op="D", args=["u"], wrt="x"),
+        rhs=ExprNode(op="grad", args=["u"], dim="x"),
     )
     model = Model(name="Adv", variables={"u": var_u}, equations=[eq])
     file = _empty_file(models={"Adv": model})
@@ -252,7 +252,7 @@ def test_flatten_operator_compose_lhs_match_and_sum():
     adv_o3 = ModelVariable(type="unknown")
     adv_eq = Equation(
         lhs=ExprNode(op="D", args=["O3"], wrt="t"),
-        rhs=ExprNode(op="D", args=["O3"], wrt="x"),
+        rhs=ExprNode(op="grad", args=["O3"], dim="x"),
     )
     adv = Model(name="Adv", variables={"O3": adv_o3}, equations=[adv_eq])
 
@@ -266,7 +266,7 @@ def test_flatten_operator_compose_lhs_match_and_sum():
     merged = chem_eqs[0]
     # The merged RHS contains BOTH the chemistry and advection terms.
     assert "Chem.O3" in _text(merged.rhs)
-    assert '"wrt": "x"' in _text(merged.rhs)
+    assert "grad" in _text(merged.rhs)
     # The Adv equation was consumed — no orphan D(Adv.O3, t).
     assert not any("Adv.O3" in _text(e.lhs) for e in flat.equations)
 
@@ -283,7 +283,7 @@ def test_flatten_operator_compose_var_placeholder_expansion():
 
     adv_eq = Equation(
         lhs=ExprNode(op="D", args=["_var"], wrt="t"),
-        rhs=ExprNode(op="D", args=["_var"], wrt="x"),
+        rhs=ExprNode(op="grad", args=["_var"], dim="x"),
     )
     adv = Model(name="Adv", variables={}, equations=[adv_eq])
 
@@ -295,8 +295,8 @@ def test_flatten_operator_compose_var_placeholder_expansion():
     chem_eqs = [e for e in flat.equations if e.source_system == "Chem"]
     assert len(chem_eqs) == 2
     rhs_texts = [_text(e.rhs) for e in chem_eqs]
-    assert any("Chem.A" in r and '"wrt": "x"' in r for r in rhs_texts)
-    assert any("Chem.B" in r and '"wrt": "x"' in r for r in rhs_texts)
+    assert any("Chem.A" in r and "grad" in r for r in rhs_texts)
+    assert any("Chem.B" in r and "grad" in r for r in rhs_texts)
 
 
 def test_flatten_operator_compose_chained_with_operator_as_a():
@@ -362,7 +362,7 @@ def test_flatten_operator_compose_chained_with_operator_as_a():
                     op="*",
                     args=[
                         ExprNode(op="-", args=["wind"]),
-                        ExprNode(op="D", args=["_var"], wrt="x"),
+                        ExprNode(op="grad", args=["_var"]),
                     ],
                 ),
             )
@@ -396,7 +396,7 @@ def test_flatten_operator_compose_chained_with_operator_as_a():
         return {"op": "D", "args": [x], "wrt": "t"}
 
     def transport(x):
-        return times(neg("Adv.wind"), {"op": "D", "args": [x], "wrt": "x"})
+        return times(neg("Adv.wind"), {"op": "grad", "args": [x]})
 
     assert [(canonical_expr(eq.lhs), canonical_expr(eq.rhs)) for eq in flat.equations] == [
         (

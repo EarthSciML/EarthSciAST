@@ -12,10 +12,7 @@ under the newer schema. The current additive line is
 ``2.0.0 … <current schema version>``. A 1.x source is relabelled to the current
 version when it uses none of the operators and fields esm 2.0.0 removed;
 otherwise :func:`migrate` refuses with a :class:`MigrationError` whose ``code``
-is ``removed_op`` and which names the codemod below. Any source that uses one of
-the operators esm 2.4.0 removed (``grad``, ``div``, ``laplacian``) is refused
-the same way, but the message points at spatial ``D`` and MIGRATION.md "esm
-2.4.0": there is no codemod for those. A 0.x source has no target
+is ``removed_op`` and which names the codemod below. A 0.x source has no target
 at all: esm 1.0.0 was a clean break that reshaped documents (two variable
 types, observed expressions as equations, ``data_sources``), so no marker bump
 can carry one forward.
@@ -90,7 +87,6 @@ __all__ = [
     "MigrationError",
     "REMOVED_FIELDS",
     "REMOVED_OPS",
-    "REMOVED_OPS_2_4_0",
     "SCHEMA_VERSION",
     "can_migrate",
     "find_removed",
@@ -111,8 +107,7 @@ _SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 #: The version the codemod writes.
 CODEMOD_TARGET_VERSION = "2.0.0"
 
-#: Expression operators esm 2.0.0 removed — the ones the codemod rewrites, and
-#: the ones :func:`find_removed` reports.
+#: Expression operators esm 2.0.0 removed.
 REMOVED_OPS = (
     "fn",
     "table_lookup",
@@ -125,12 +120,6 @@ REMOVED_OPS = (
     "aggregate",
 )
 
-#: Expression operators esm 2.4.0 removed. There is no codemod for them: each
-#: becomes spatial ``D``, one per axis, or a user op lowered by a rewrite rule
-#: (MIGRATION.md, "esm 2.4.0"). The 2.0.0 codemod leaves them alone (they were
-#: legal at 2.0.0); :func:`migrate` refuses a source that uses one.
-REMOVED_OPS_2_4_0 = ("grad", "div", "laplacian")
-
 #: Document fields esm 2.0.0 removed (top level or on a component).
 REMOVED_FIELDS = ("function_tables",)
 
@@ -142,18 +131,12 @@ _CODEMOD_HINT = (
     f"(earthsci_ast.migration.migrate_document)"
 )
 
-_SPATIAL_OP_HINT = (
-    "write the derivative with spatial `D`, one `D` per axis (`grad(f, dim: x)` is "
-    '`D(f, wrt: x)`), or with a user op lowered by a rewrite rule (MIGRATION.md, "esm 2.4.0")'
-)
-
 
 class MigrationError(EarthSciAstError):
     """Raised when an ESM document cannot be migrated to the requested version.
 
     ``code`` is ``"removed_op"`` when :func:`migrate` refuses because the
-    document uses an operator or field esm 2.0.0 or 2.4.0 removed, and ``None``
-    otherwise.
+    document uses an operator or field esm 2.0.0 removed, and ``None`` otherwise.
     """
 
     def __init__(self, message: str, code: str | None = None) -> None:
@@ -217,53 +200,43 @@ def can_migrate(from_version: str, to_version: str) -> bool:
     return to_version in supported_migration_targets(from_version)
 
 
-def _removed_uses(
-    obj: Any, path: str, out: list[tuple[str, str]], seen: set[int], ops: frozenset[str]
-) -> None:
-    """Collect ``(path, name)`` for every operator in ``ops``, and every
-    non-empty removed field, reachable from a JSON document or a loaded document
-    object."""
+def _removed_uses(obj: Any, path: str, out: list[tuple[str, str]], seen: set[int]) -> None:
+    """Collect ``(path, name)`` for every removed operator, and every non-empty
+    removed field, reachable from a JSON document or a loaded document object."""
     if id(obj) in seen:
         return
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         seen.add(id(obj))
         op = getattr(obj, "op", None)
-        if isinstance(op, str) and op in ops:
+        if isinstance(op, str) and op in REMOVED_OPS:
             out.append((path, op))
         for f in dataclasses.fields(obj):
             value = getattr(obj, f.name, None)
             if f.name in REMOVED_FIELDS and value:
                 out.append((f"{path}/{f.name}", f.name))
                 continue
-            _removed_uses(value, f"{path}/{f.name}", out, seen, ops)
+            _removed_uses(value, f"{path}/{f.name}", out, seen)
     elif isinstance(obj, dict):
         seen.add(id(obj))
         op = obj.get("op")
-        if isinstance(op, str) and op in ops:
+        if isinstance(op, str) and op in REMOVED_OPS:
             out.append((path, op))
         for k, v in obj.items():
             if k in REMOVED_FIELDS and v:
                 out.append((f"{path}/{k}", str(k)))
                 continue
-            _removed_uses(v, f"{path}/{k}", out, seen, ops)
+            _removed_uses(v, f"{path}/{k}", out, seen)
     elif isinstance(obj, (list, tuple)):
         seen.add(id(obj))
         for i, v in enumerate(obj):
-            _removed_uses(v, f"{path}/{i}", out, seen, ops)
+            _removed_uses(v, f"{path}/{i}", out, seen)
 
 
-_OPS_2_0_0 = frozenset(REMOVED_OPS)
-_OPS_SINCE_2_0_0 = frozenset(REMOVED_OPS) | frozenset(REMOVED_OPS_2_4_0)
-
-
-def find_removed(doc: Any, *, include_2_4_0: bool = False) -> list[tuple[str, str]]:
+def find_removed(doc: Any) -> list[tuple[str, str]]:
     """Every removed operator or field in a document (parsed JSON or a loaded
-    :class:`~earthsci_ast.esm_types.EsmFile`), as ``(path, name)``, in document
-    order. By default this is what esm 2.0.0 removed (what the codemod
-    rewrites); ``include_2_4_0=True`` adds the operators esm 2.4.0 removed
-    (:data:`REMOVED_OPS_2_4_0`), which :func:`migrate` also refuses."""
+    :class:`~earthsci_ast.esm_types.EsmFile`), as ``(path, name)``."""
     out: list[tuple[str, str]] = []
-    _removed_uses(doc, "", out, set(), _OPS_SINCE_2_0_0 if include_2_4_0 else _OPS_2_0_0)
+    _removed_uses(doc, "", out, set())
     return out
 
 
@@ -273,11 +246,8 @@ def migrate(file: EsmFile, target_version: str) -> EsmFile:
     Supported: an additive-line source (``2.0.0 … <current>``) to the current
     version, and a 1.x source to the current version when it uses none of the
     operators or fields esm 2.0.0 removed. A 1.x source that uses one is refused
-    with ``code == "removed_op"``, naming the first use and the codemod. Any
-    source that uses an operator esm 2.4.0 removed (``grad``, ``div``,
-    ``laplacian``) is refused with ``removed_op`` too, pointing at spatial ``D``
-    and MIGRATION.md (there is no codemod for those). Every other pair raises
-    :class:`MigrationError`. The input is never mutated: a
+    with ``code == "removed_op"``, naming the first use and the codemod. Every
+    other pair raises :class:`MigrationError`. The input is never mutated: a
     shallow copy carrying the new marker is returned.
     """
     source_version = getattr(file, "version", None)
@@ -290,22 +260,15 @@ def migrate(file: EsmFile, target_version: str) -> EsmFile:
         )
 
     parsed = _parse_version(source_version)
-    uses = find_removed(file, include_2_4_0=True)
-    if parsed is not None and parsed[0] != 1:
-        # A 2.x source cannot carry a 2.0.0 removal past the loader; only the
-        # 2.4.0 removals are checked.
-        uses = [u for u in uses if u[1] in REMOVED_OPS_2_4_0]
-    if uses:
-        where, name = uses[0]
-        if name in REMOVED_OPS_2_4_0:
-            removed_at, hint = "2.4.0", _SPATIAL_OP_HINT
-        else:
-            removed_at, hint = "2.0.0", _CODEMOD_HINT
-        raise MigrationError(
-            f"removed_op: `{name}` at {where or '/'} was removed at esm {removed_at}, "
-            f"so this {source_version} document cannot be relabelled; {hint}",
-            code="removed_op",
-        )
+    if parsed is not None and parsed[0] == 1:
+        uses = find_removed(file)
+        if uses:
+            where, name = uses[0]
+            raise MigrationError(
+                f"removed_op: `{name}` at {where or '/'} was removed at esm 2.0.0, so this "
+                f"{source_version} document cannot be relabelled; {_CODEMOD_HINT}",
+                code="removed_op",
+            )
 
     return replace(file, version=target_version)
 

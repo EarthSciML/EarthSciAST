@@ -727,7 +727,7 @@ class FlattenedSystem:
     def system_kind(self) -> str:
         """The flattened system's derived MTK system kind (esm-spec §6.3.1),
         computed by :func:`classification.system_kind` over the flattened
-        variables and equations — "sde" / "pde" / "nonlinear" / "ode", tested in
+        variables and equations — "sde" / "nonlinear" / "ode", tested in
         that order.
 
         Available on the flattened form precisely because `brownian_parameters`

@@ -74,8 +74,7 @@ The open-tier rewrite-target ops (``integral``, ``curl``, any user op, esm-spec
 no evaluator, no privileged arity, and are not used for spatial detection, so
 they are ordinary unregistered rewrite-target ops indistinguishable from a
 custom user op (``godunov_hamiltonian``). ``grad``, ``div`` and ``laplacian``
-were removed at esm 2.4.0 (:data:`REMOVED_OPS`); a spatial derivative is a
-``D`` with a spatial ``wrt``.
+are ordinary user op names like any other.
 
 Tiers
 -----
@@ -128,9 +127,6 @@ REMOVED_OPS: dict[str, str] = {
     "polygon_intersection_area": "2.0.0",
     "argmin": "2.0.0",
     "argmax": "2.0.0",
-    "grad": "2.4.0",
-    "div": "2.4.0",
-    "laplacian": "2.4.0",
 }
 
 #: Ops the format has DEPRECATED, each with its replacement (esm-spec §4.2

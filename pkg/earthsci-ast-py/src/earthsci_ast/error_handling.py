@@ -260,6 +260,13 @@ DEPRECATED_RECORDS_PER_SAMPLE = "deprecated_records_per_sample"
 # rewritten node.
 DEPRECATED_OP = "deprecated_op"
 
+# A model declares ``system_kind: "pde"``, a value deprecated at esm 2.4.0 and
+# ignored (the model is treated as its derived kind, esm-spec §6.3.1): a
+# WARNING, issued once per document as an ``EsmDeprecationWarning`` by
+# ``parse.prepare_document_ops``, naming every such model's field by JSON
+# pointer. The field is kept as written.
+DEPRECATED_SYSTEM_KIND = "deprecated_system_kind"
+
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
 # ``ExpressionTemplateError`` from ``template_imports.py`` (and

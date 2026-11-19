@@ -147,7 +147,7 @@ def test_expression_with_metadata():
     assert expr.wrt == "t"
     assert expr.dim is None
 
-    expr_data_with_dim = {"op": "integral", "args": ["T"], "dim": "x"}
+    expr_data_with_dim = {"op": "grad", "args": ["T"], "dim": "x"}
     expr = _parse_expression(expr_data_with_dim)
     assert expr.dim == "x"
 
@@ -166,13 +166,14 @@ def test_operator_field_requirements():
     assert expr_d_no_wrt.op == "D"
     assert expr_d_no_wrt.wrt is None
 
-    # An open-tier rewrite-target op (here `integral`) has NO per-op field
+    # `grad` is an ordinary open-tier rewrite-target op with NO per-op field
     # mandate: `dim` is an OPTIONAL axis-naming scalar field (esm-spec §4.2 /
-    # §4.9.1), so one without `dim` parses cleanly — exactly like any
-    # unregistered user op.
-    expr_no_dim = _parse_expression({"op": "integral", "args": ["T"]})
-    assert expr_no_dim.op == "integral"
-    assert expr_no_dim.dim is None
+    # §4.9.1), so a `grad` without `dim` now parses cleanly — exactly like any
+    # unregistered user op. Re-adding a bespoke `grad`-requires-`dim` check is a
+    # regression.
+    expr_grad_no_dim = _parse_expression({"op": "grad", "args": ["T"]})
+    assert expr_grad_no_dim.op == "grad"
+    assert expr_grad_no_dim.dim is None
 
     # Test that other operators work without these fields
     expr_data_other = {"op": "+", "args": [1, 2]}
