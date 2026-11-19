@@ -96,7 +96,7 @@ These fixtures provide comprehensive coverage for:
 
 - ✅ All basic expression types (numbers, strings, operators)
 - ✅ All standard operators (arithmetic, logical, comparison, transcendental)
-- ✅ Special operators (D, including spatial D with a spatial `wrt`; Pre; ifelse)
+- ✅ Special operators (D, grad, Pre, ifelse)
 - ✅ Complex nesting and wide expressions
 - ✅ Unicode variable names and chemical formulas
 - ✅ Precision edge cases (very small/large numbers)

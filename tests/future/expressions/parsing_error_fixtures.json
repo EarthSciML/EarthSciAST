@@ -60,7 +60,7 @@
       {
         "description": "Invalid 'dim' type (non-string)",
         "input": {
-          "op": "integral",
+          "op": "grad",
           "args": ["Temperature"],
           "dim": true
         },
@@ -138,6 +138,16 @@
         "error_message": "Unknown operator 'nonexistent_operator'"
       },
       {
+        "description": "Gradient missing 'dim' field",
+        "input": {
+          "op": "grad",
+          "args": ["Temperature"]
+        },
+        "expected_error": "StructuralError",
+        "error_code": "missing_required_field",
+        "error_message": "Gradient operator 'grad' requires 'dim' field"
+      },
+      {
         "description": "Empty 'wrt' field",
         "input": {
           "op": "D",
@@ -151,7 +161,7 @@
       {
         "description": "Empty 'dim' field",
         "input": {
-          "op": "integral",
+          "op": "grad",
           "args": ["Temperature"],
           "dim": ""
         },

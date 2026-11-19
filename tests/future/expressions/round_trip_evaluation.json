@@ -512,40 +512,40 @@
         }
       },
       {
-        "description": "Spatial derivative (D with a spatial wrt)",
-        "input": {"op": "D", "args": ["phi"], "wrt": "x"},
+        "description": "Gradient operator with dimension",
+        "input": {"op": "grad", "args": ["phi"], "dim": "x"},
         "expected_type": "OpExpr",
-        "serialized": {"op": "D", "args": ["phi"], "wrt": "x"},
+        "serialized": {"op": "grad", "args": ["phi"], "dim": "x"},
         "evaluation": {
           "note": "Spatial operators cannot be evaluated without field data",
           "round_trip_only": true
         }
       },
       {
-        "description": "Divergence written as a sum of spatial D, one per component",
-        "input": {"op": "+", "args": [{"op": "D", "args": ["velocity_x"], "wrt": "x"}, {"op": "D", "args": ["velocity_y"], "wrt": "y"}]},
+        "description": "Divergence operator",
+        "input": {"op": "div", "args": ["velocity"]},
         "expected_type": "OpExpr",
-        "serialized": {"op": "+", "args": [{"op": "D", "args": ["velocity_x"], "wrt": "x"}, {"op": "D", "args": ["velocity_y"], "wrt": "y"}]},
+        "serialized": {"op": "div", "args": ["velocity"]},
         "evaluation": {
           "note": "Spatial operators cannot be evaluated without field data",
           "round_trip_only": true
         }
       },
       {
-        "description": "Second spatial derivative (nested D)",
-        "input": {"op": "D", "args": [{"op": "D", "args": ["u"], "wrt": "x"}], "wrt": "x"},
+        "description": "Laplacian operator",
+        "input": {"op": "laplacian", "args": ["u"]},
         "expected_type": "OpExpr",
-        "serialized": {"op": "D", "args": [{"op": "D", "args": ["u"], "wrt": "x"}], "wrt": "x"},
+        "serialized": {"op": "laplacian", "args": ["u"]},
         "evaluation": {
           "note": "Spatial operators cannot be evaluated without field data",
           "round_trip_only": true
         }
       },
       {
-        "description": "Mixed derivative: time D of a spatial D",
-        "input": {"op": "D", "args": [{"op": "D", "args": ["field"], "wrt": "x"}], "wrt": "t"},
+        "description": "Mixed derivative with both wrt and dim",
+        "input": {"op": "D", "args": [{"op": "grad", "args": ["field"], "dim": "x"}], "wrt": "t"},
         "expected_type": "OpExpr",
-        "serialized": {"op": "D", "args": [{"op": "D", "args": ["field"], "wrt": "x"}], "wrt": "t"},
+        "serialized": {"op": "D", "args": [{"op": "grad", "args": ["field"], "dim": "x"}], "wrt": "t"},
         "evaluation": {
           "note": "Mixed spatial-temporal operators cannot be evaluated without field data",
           "round_trip_only": true

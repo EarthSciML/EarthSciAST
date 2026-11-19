@@ -92,29 +92,29 @@
         "notes": "Optional fields like wrt must be preserved exactly"
       },
       {
-        "description": "Spatial derivative wrt field preservation",
+        "description": "Gradient with dim field preservation",
         "original_json": {
-          "op": "D",
+          "op": "grad",
           "args": ["Temperature"],
-          "wrt": "x"
+          "dim": "x"
         },
         "first_load_result": {
-          "op": "D",
+          "op": "grad",
           "args": ["Temperature"],
-          "wrt": "x"
+          "dim": "x"
         },
         "serialized_json": {
-          "op": "D",
+          "op": "grad",
           "args": ["Temperature"],
-          "wrt": "x"
+          "dim": "x"
         },
         "second_load_result": {
-          "op": "D",
+          "op": "grad",
           "args": ["Temperature"],
-          "wrt": "x"
+          "dim": "x"
         },
         "round_trip_identical": true,
-        "notes": "Spatial derivative wrt field must preserve exactly"
+        "notes": "Spatial derivative dim field must preserve exactly"
       }
     ]
   },
@@ -459,23 +459,23 @@
         "description": "Mixed optional fields preservation",
         "original_json": {
           "args": ["Temperature"],
-          "wrt": "x",
-          "op": "D"
+          "dim": "x",
+          "op": "grad"
         },
         "first_load_result": {
-          "op": "D",
+          "op": "grad",
           "args": ["Temperature"],
-          "wrt": "x"
+          "dim": "x"
         },
         "serialized_json": {
-          "op": "D",
+          "op": "grad",
           "args": ["Temperature"],
-          "wrt": "x"
+          "dim": "x"
         },
         "second_load_result": {
-          "op": "D",
+          "op": "grad",
           "args": ["Temperature"],
-          "wrt": "x"
+          "dim": "x"
         },
         "round_trip_identical": true,
         "notes": "All fields present, ordering normalized"

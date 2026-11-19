@@ -84,30 +84,6 @@
       "error": "removed_op"
     },
     {
-      "id": "removed_grad",
-      "kind": "refusal",
-      "description": "The removed operator grad in the call form.",
-      "surface": "markdown",
-      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{grad}(x)\n$$\n",
-      "error": "removed_op"
-    },
-    {
-      "id": "removed_div",
-      "kind": "refusal",
-      "description": "The removed operator div in the call form.",
-      "surface": "markdown",
-      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{div}(x)\n$$\n",
-      "error": "removed_op"
-    },
-    {
-      "id": "removed_laplacian",
-      "kind": "refusal",
-      "description": "The removed operator laplacian in the call form.",
-      "surface": "markdown",
-      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{laplacian}(x)\n$$\n",
-      "error": "removed_op"
-    },
-    {
       "id": "removed_fn_typst",
       "kind": "refusal",
       "description": "A removed operator in the Typst call form.",
@@ -121,30 +97,6 @@
       "description": "A removed operator in the Typst call form.",
       "surface": "typst",
       "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"aggregate\")(x) $\n",
-      "error": "removed_op"
-    },
-    {
-      "id": "removed_grad_typst",
-      "kind": "refusal",
-      "description": "An operator removed at esm 2.4.0 in the Typst call form.",
-      "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"grad\")(x) $\n",
-      "error": "removed_op"
-    },
-    {
-      "id": "removed_div_typst",
-      "kind": "refusal",
-      "description": "An operator removed at esm 2.4.0 in the Typst call form.",
-      "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"div\")(x) $\n",
-      "error": "removed_op"
-    },
-    {
-      "id": "removed_laplacian_typst",
-      "kind": "refusal",
-      "description": "An operator removed at esm 2.4.0 in the Typst call form.",
-      "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"laplacian\")(x) $\n",
       "error": "removed_op"
     },
     {

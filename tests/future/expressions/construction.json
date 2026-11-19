@@ -49,15 +49,15 @@
     "expected_fields": ["wrt"]
   },
   {
-    "description": "Spatial derivative (D with a spatial wrt)",
+    "description": "Spatial gradient with dim field",
     "input_type": "expr_node",
     "input": {
-      "op": "D",
+      "op": "grad",
       "args": ["T"],
-      "wrt": "x"
+      "dim": "x"
     },
     "expected_free_vars": ["T"],
     "expected_type": "expr_node",
-    "expected_fields": ["wrt"]
+    "expected_fields": ["dim"]
   }
 ]

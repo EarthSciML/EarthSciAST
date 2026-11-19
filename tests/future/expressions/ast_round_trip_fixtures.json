@@ -625,17 +625,17 @@
         }
       },
       {
-        "description": "Spatial derivative (D with a spatial wrt)",
+        "description": "Gradient operator",
         "input": {
-          "op": "D",
+          "op": "grad",
           "args": ["Temperature"],
-          "wrt": "x"
+          "dim": "x"
         },
         "expected_type": "OpExpr",
         "serialized": {
-          "op": "D",
+          "op": "grad",
           "args": ["Temperature"],
-          "wrt": "x"
+          "dim": "x"
         }
       },
       {
@@ -736,6 +736,15 @@
         },
         "expected_error": "ValidationError",
         "error_message": "Derivative operator 'D' requires 'wrt' field"
+      },
+      {
+        "description": "Gradient with missing dim field",
+        "input": {
+          "op": "grad",
+          "args": ["Temperature"]
+        },
+        "expected_error": "ValidationError",
+        "error_message": "Gradient operator 'grad' requires 'dim' field"
       },
       {
         "description": "ifelse with wrong number of arguments",

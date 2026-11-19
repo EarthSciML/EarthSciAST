@@ -300,11 +300,11 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "_var"
                     ],
-                    "wrt": "x"
+                    "dim": "x"
                   }
                 ]
               },
@@ -318,11 +318,11 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "_var"
                     ],
-                    "wrt": "y"
+                    "dim": "y"
                   }
                 ]
               },
@@ -336,11 +336,11 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "_var"
                     ],
-                    "wrt": "z"
+                    "dim": "z"
                   }
                 ]
               },
@@ -349,17 +349,11 @@
                 "args": [
                   "Kh",
                   {
-                    "op": "D",
+                    "op": "laplacian",
                     "args": [
-                      {
-                        "op": "D",
-                        "args": [
-                          "_var"
-                        ],
-                        "wrt": "x"
-                      }
+                      "_var"
                     ],
-                    "wrt": "x"
+                    "dim": "x"
                   }
                 ]
               },

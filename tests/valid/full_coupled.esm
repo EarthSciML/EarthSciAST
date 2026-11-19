@@ -223,11 +223,11 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "_var"
                     ],
-                    "wrt": "lon"
+                    "dim": "lon"
                   }
                 ]
               },
@@ -241,11 +241,11 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "_var"
                     ],
-                    "wrt": "lat"
+                    "dim": "lat"
                   }
                 ]
               },
@@ -259,11 +259,11 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "_var"
                     ],
-                    "wrt": "lev"
+                    "dim": "lev"
                   }
                 ]
               },
@@ -272,17 +272,11 @@
                 "args": [
                   "K_h",
                   {
-                    "op": "D",
+                    "op": "laplacian",
                     "args": [
-                      {
-                        "op": "D",
-                        "args": [
-                          "_var"
-                        ],
-                        "wrt": "lon"
-                      }
+                      "_var"
                     ],
-                    "wrt": "lon"
+                    "dim": "lon"
                   }
                 ]
               },
@@ -291,17 +285,11 @@
                 "args": [
                   "K_v",
                   {
-                    "op": "D",
+                    "op": "laplacian",
                     "args": [
-                      {
-                        "op": "D",
-                        "args": [
-                          "_var"
-                        ],
-                        "wrt": "lev"
-                      }
+                      "_var"
                     ],
-                    "wrt": "lev"
+                    "dim": "lev"
                   }
                 ]
               }

@@ -114,16 +114,18 @@ the one that can carry an expression.
 
 ## Gradient, divergence and Laplacian — written with `D`
 
-The format has no gradient, divergence or Laplacian operator. The sugar ops
-`grad`, `div` and `laplacian` were removed at esm 2.4.0, and a document that
-uses one is rejected at load with `removed_op`, whatever `esm` it declares.
-Write each with a spatial `D`, one per axis:
+The format has no gradient, divergence or Laplacian operator. Write each with a
+spatial `D`, one per axis:
 
-| Removed | Write instead |
+| Operator | Write |
 |---|---|
-| `grad(f, dim: x)` | `D(f, wrt: x)` |
-| `div(F)` | `Σᵢ D(Fᵢ, wrt: xᵢ)` |
-| `laplacian(u)` | `Σᵢ D(D(u, wrt: xᵢ), wrt: xᵢ)` |
+| gradient component along `x` | `D(f, wrt: x)` |
+| Cartesian divergence | `Σᵢ D(Fᵢ, wrt: xᵢ)` |
+| Laplacian | `Σᵢ D(D(u, wrt: xᵢ), wrt: xᵢ)` |
+
+Until esm 2.4.0 the format named `grad`, `div` and `laplacian` as sugar for
+these sums. It no longer does: they are ordinary operator names like any other
+you invent, with no meaning of their own.
 
 A two-dimensional Laplacian, for example:
 
@@ -137,7 +139,8 @@ A two-dimensional Laplacian, for example:
 
 A scheme that is not a sum of per-axis derivatives — a finite-volume
 divergence on an unstructured mesh, or a metric Laplacian discretized as one
-stencil — is an operator you invent (any non-core name), lowered by a
+stencil — is an operator you invent (any non-core name, `div` or
+`laplacian` included), lowered by a
 [template rewrite](../templates/). This format ships **no** rewrite rules for
 spatial `D` or for any invented operator. The discretization standard library
 lives in

@@ -134,7 +134,7 @@ EARTHSCI_INLINE_TESTS_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/inline_tes
 The per-binding op-table tests keep everything that is not a value claim a
 document can make:
 
-* the **refusals**: an unlowered spatial `D` is refused before evaluation,
+* the **refusals**: `grad` is refused before evaluation,
   `unevaluable_operator` names the op, a structural `D` handed to a
   single-expression evaluation is refused rather than answered `0`. Those are
   diagnostics with a code, and `tests/conformance/unevaluable_operator/` and

@@ -595,10 +595,10 @@
       "id": "open_op",
       "kind": "print",
       "description": "An open (rewrite-target) operator prints in the call form.",
-      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "upwind"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "math": {"latex": "y = \\operatorname{upwind}(x)", "typst": "y = op(\"upwind\")(x)"},
-      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{upwind}(x)\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"upwind\")(x) $\n"
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "grad"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "math": {"latex": "y = \\operatorname{grad}(x)", "typst": "y = op(\"grad\")(x)"},
+      "markdown": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{grad}(x)\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"grad\")(x) $\n"
     },
     {
       "id": "open_op_no_operands",

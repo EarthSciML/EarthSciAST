@@ -113,9 +113,7 @@ The operators esm 2.0.0 removed (`fn`, `table_lookup`, `skolem`, `rank`, the
 `argmin`/`argmax` operator forms, the two polygon operators, and `aggregate`, the
 old spelling of `faq`) are rejected at load with `removed_op`; [removed operators](closed-functions/) lists the
 standard-library template that replaces each, and [geometry](geometry/) covers
-polygon overlap areas. The operators esm 2.4.0 removed (`grad`, `div` and
-`laplacian`) are rejected the same way; the [calculus](calculus/) page shows how
-to write each with a spatial `D`.
+polygon overlap areas.
 
 The rewrite targets `integral` and a spatial `D` are covered on the
 [calculus](calculus/) page. They are *not* part of the set above.

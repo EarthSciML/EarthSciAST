@@ -132,11 +132,11 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "u"
                     ],
-                    "wrt": "x"
+                    "dim": "x"
                   }
                 ]
               },
@@ -150,11 +150,11 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "u"
                     ],
-                    "wrt": "y"
+                    "dim": "y"
                   }
                 ]
               }
@@ -207,17 +207,10 @@
                 "args": [
                   "kh",
                   {
-                    "op": "D",
+                    "op": "laplacian",
                     "args": [
-                      {
-                        "op": "D",
-                        "args": [
-                          "ozone_conc"
-                        ],
-                        "wrt": "z"
-                      }
-                    ],
-                    "wrt": "z"
+                      "ozone_conc"
+                    ]
                   }
                 ]
               },
@@ -253,17 +246,10 @@
                 "args": [
                   "kh",
                   {
-                    "op": "D",
+                    "op": "laplacian",
                     "args": [
-                      {
-                        "op": "D",
-                        "args": [
-                          "nitrogen_oxide"
-                        ],
-                        "wrt": "z"
-                      }
-                    ],
-                    "wrt": "z"
+                      "nitrogen_oxide"
+                    ]
                   }
                 ]
               },

@@ -184,11 +184,11 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "_var"
                     ],
-                    "wrt": "x"
+                    "dim": "x"
                   }
                 ]
               },
@@ -197,17 +197,10 @@
                 "args": [
                   "diffusivity",
                   {
-                    "op": "D",
+                    "op": "laplacian",
                     "args": [
-                      {
-                        "op": "D",
-                        "args": [
-                          "_var"
-                        ],
-                        "wrt": "x"
-                      }
-                    ],
-                    "wrt": "x"
+                      "_var"
+                    ]
                   }
                 ]
               }

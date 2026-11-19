@@ -1,6 +1,6 @@
 {
   "version_compatibility_test_matrix": {
-    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 2.0.0 (library at 2.4.0: 2.1.0 added `lb` / `ub` variable bounds, esm-spec §6.3.2, 2.2.0 widened the pointwise lift, esm-spec §10.5, with no on-disk change, and 2.3.0 deprecated `neg` / `pow`, esm-spec §4.2, and added the canonical unit spelling, esm-spec §4.8.2, and the Markdown / Typst source formats, esm-spec §1.2, also with no on-disk change, and 2.4.0 removed the `grad`, `div` and `laplacian` sugar ops, each a `removed_op` load error with no codemod): 2.0.0 removed the operators and fields that needed code outside the expression AST (fn, function_tables/table_lookup, skolem, rank, argmin/argmax, the geometry leaves, the aggregate alias) and otherwise changed nothing, so the library implements major version 2 AND still loads major 1 (user ruling): a 1.x document that uses no removed construct loads as written, its own 1.x version gates (solver_*, const units, faq too old) still apply, and one that uses a removed construct is refused with `removed_op`, naming `python -m earthsci_ast.migrate`. Major 0 is REJECTED (the 1.0.0 break carries no deprecation path), and so is any major above 2. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
+    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 2.0.0 (library at 2.4.0: 2.1.0 added `lb` / `ub` variable bounds, esm-spec §6.3.2, 2.2.0 widened the pointwise lift, esm-spec §10.5, with no on-disk change, and 2.3.0 deprecated `neg` / `pow`, esm-spec §4.2, and added the canonical unit spelling, esm-spec §4.8.2, and the Markdown / Typst source formats, esm-spec §1.2, also with no on-disk change, and 2.4.0 made `grad`, `div` and `laplacian` ordinary operator names, with no on-disk change): 2.0.0 removed the operators and fields that needed code outside the expression AST (fn, function_tables/table_lookup, skolem, rank, argmin/argmax, the geometry leaves, the aggregate alias) and otherwise changed nothing, so the library implements major version 2 AND still loads major 1 (user ruling): a 1.x document that uses no removed construct loads as written, its own 1.x version gates (solver_*, const units, faq too old) still apply, and one that uses a removed construct is refused with `removed_op`, naming `python -m earthsci_ast.migrate`. Major 0 is REJECTED (the 1.0.0 break carries no deprecation path), and so is any major above 2. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
     "library_version": "2.4.0",
     "migration_notes": {
       "0.x_to_1.0.0": {
@@ -33,12 +33,12 @@
         ]
       },
       "2.3.0_to_2.4.0": {
-        "summary": "The `grad`, `div` and `laplacian` sugar ops are removed. A document that uses none of them loads at 2.4.0 unchanged; one that does is refused with `removed_op`, whatever `esm` it declares. There is no codemod.",
+        "summary": "No on-disk change: `grad`, `div` and `laplacian` are no longer named as rewrite-target sugar and become ordinary open-tier operator names. Every 2.3.0 document is a valid 2.4.0 document.",
         "breaking_changes": [
-          "`grad`, `div` and `laplacian` are a `removed_op` load error, whatever `esm` the document declares."
+          "A model whose only spatial operator is `grad`, `div` or `laplacian` is no longer classified `pde` (only a spatial `D` is a spatial derivative)."
         ],
         "migration_path": [
-          "Write each with spatial `D`, one per axis: `grad(f, dim: x)` is `D(f, wrt: x)`; `div(F)` is the sum over axes of `D(F_i, wrt: x_i)`; `laplacian(u)` is the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)`. A scheme that is not written per axis (an unstructured-mesh divergence, for example) becomes a user op lowered by a rewrite rule (MIGRATION.md, esm 2.4.0 section)."
+          "None needed. To keep a model classified as a PDE, write the derivative with spatial `D` (MIGRATION.md, esm 2.4.0 section)."
         ]
       }
     },
@@ -126,7 +126,7 @@
         "file": "version_2_4_0_baseline.esm",
         "file_version": "2.4.0",
         "expected_behavior": "load_success",
-        "description": "Exact version match - should load successfully, with no version warning. 2.4.0 only removes the `grad`, `div` and `laplacian` ops (esm-spec §4.2 \"Removed ops\"), so this document is the 2.0.0 baseline restamped.",
+        "description": "Exact version match - should load successfully, with no version warning. 2.4.0 changes no on-disk shape (`grad`, `div` and `laplacian` became ordinary operator names, esm-spec §4.2), so this document is the 2.0.0 baseline restamped.",
         "warnings": []
       },
       {

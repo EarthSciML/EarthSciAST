@@ -790,7 +790,7 @@ def operators(g):
     )
 
     # Open operators.
-    E("open_op", "An open (rewrite-target) operator prints in the call form.", op("upwind", "x"))
+    E("open_op", "An open (rewrite-target) operator prints in the call form.", op("grad", "x"))
     E(
         "open_op_no_operands",
         "An open operator with no operands keeps its parentheses, apart from a bare template.",
@@ -1672,7 +1672,7 @@ def documents(g):
                         "upwind": {
                             "params": ["f"],
                             "match": op("D", "f", wrt="x"),
-                            "body": op("flux", "f"),
+                            "body": op("grad", "f"),
                             "priority": 1,
                         }
                     }
@@ -2027,9 +2027,6 @@ def refusals(g):
         "argmax",
         "intersect_polygon",
         "polygon_intersection_area",
-        "grad",
-        "div",
-        "laplacian",
     ]
     for name in removed:
         R(
@@ -2056,15 +2053,6 @@ def refusals(g):
         "removed_op",
         [('op("sign")(x)', 'op("aggregate")(x)')],
     )
-    for name in ("grad", "div", "laplacian"):
-        R(
-            f"removed_{name}_typst",
-            "An operator removed at esm 2.4.0 in the Typst call form.",
-            sg,
-            typ,
-            "removed_op",
-            [('op("sign")(x)', 'op("%s")(x)' % name)],
-        )
     bc = expr_doc(op("reshape", "a", shape=[2, 3], id="tagged"), ("a",))
     R(
         "removed_escape_latex",

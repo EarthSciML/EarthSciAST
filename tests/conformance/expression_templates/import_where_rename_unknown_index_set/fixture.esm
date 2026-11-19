@@ -53,7 +53,7 @@
         {
           "lhs": "div_A",
           "rhs": {
-            "op": "fv_div",
+            "op": "div",
             "args": [
               "F_A"
             ]

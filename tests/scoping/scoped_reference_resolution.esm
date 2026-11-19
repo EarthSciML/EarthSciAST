@@ -340,17 +340,10 @@
                         "args": [
                           "eddy_diffusivity",
                           {
-                            "op": "D",
+                            "op": "laplacian",
                             "args": [
-                              {
-                                "op": "D",
-                                "args": [
-                                  "u"
-                                ],
-                                "wrt": "x"
-                              }
-                            ],
-                            "wrt": "x"
+                              "u"
+                            ]
                           }
                         ]
                       }

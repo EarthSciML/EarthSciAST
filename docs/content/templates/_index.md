@@ -157,7 +157,7 @@ constraint: `shape`.
 ```json
 {
   "params": ["F"],
-  "match": { "op": "fv_div", "args": ["F"] },
+  "match": { "op": "div", "args": ["F"] },
   "where": { "F": { "shape": ["edges"] } },
   "body": { "op": "faq", "output_idx": ["c"], "expr": "…", "args": ["F"] }
 }

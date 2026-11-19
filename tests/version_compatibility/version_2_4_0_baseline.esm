@@ -2,7 +2,7 @@
   "esm": "2.4.0",
   "metadata": {
     "name": "Version_2_4_0_Baseline",
-    "description": "Test file with version 2.4.0 - the library's own version. 2.4.0 only removes the `grad`, `div` and `laplacian` ops, so a document that uses none of them is unchanged",
+    "description": "Test file with version 2.4.0 - the library's own version. 2.4.0 changes no on-disk shape: `grad`, `div` and `laplacian` became ordinary operator names",
     "authors": [
       "ESM Format Team"
     ],

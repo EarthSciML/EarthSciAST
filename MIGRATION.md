@@ -16,8 +16,8 @@ carries three coordinated bodies of change:
 It also carries changes to the **`.esm` document format** itself, which
 affect your documents rather than your code: the **esm 2.0.0** break, which
 removes every external function from the expression AST (next section), two
-smaller changes in Part II, and **esm 2.4.0**, which removes the `grad`,
-`div` and `laplacian` sugar ops (Part IV, "esm 2.4.0").
+smaller changes in Part II, and **esm 2.4.0**, after which `grad`, `div`
+and `laplacian` are ordinary operator names (Part IV, "esm 2.4.0").
 
 This guide is organised for someone with a working codebase who wants to know
 what breaks and what to write instead. If you have five minutes, read Part I.
@@ -1562,42 +1562,22 @@ the same thing; replace them with `-` and `^` to silence the warning. A
 consumer that compares canonical forms byte for byte now sees units in the
 canonical spelling and no `units` on a dimensionless `const`.
 
-## esm 2.4.0: `grad`, `div` and `laplacian` are removed
+## esm 2.4.0: `grad`, `div` and `laplacian` are ordinary operator names
 
-esm 2.4.0 removes the open-tier sugar ops `grad`, `div` and `laplacian`
-(esm-spec §4.2, "Removed ops"). They were never part of the format proper:
-they had no evaluator, no dimensional rule and no rewrite rule shipped with
-the format, so a document using one could run only under a rule its author
-supplied. Nothing else changes: spatial `D` (with its trailing boundary
-operands), `integral`, operators you invent, and the rewrite-rule engine are
-as they were.
+| Kind | What |
+|---|---|
+| `format` | **No on-disk change.** Every 2.3.0 document is a valid 2.4.0 document. The format no longer names `grad`, `div` and `laplacian` as rewrite-target sugar for sums of `D` (esm-spec §4.2): they are ordinary open-tier operator names, exactly like any operator you invent. |
+| `semantics` | A document using one still loads; a rewrite rule may still match one; one that reaches evaluation unlowered is still refused with `unlowered_operator`. What changes is that no binding treats the three names specially: |
+| `semantics` | **System kind.** A model whose only spatial operator is one of the three is now classified `"ode"` (or `"nonlinear"`), not `"pde"`, in every binding (esm-spec §6.3.1): only a spatial `D` makes a model a PDE. A document that declares `system_kind: "pde"` for such a model now gets `system_kind_mismatch`. |
+| `semantics` | **Julia ModelingToolkit.** `grad` is no longer lowered to an MTK `Differential`; like any user op it must be rewritten first. |
+| `deleted` | Name-based lists of the three in the bindings (Julia's op-registry rows and rewrite-target list, Python's `classification.SPATIAL_DERIVATIVE_OPS`, and the classification and implicit-equation lists of TypeScript, Go and Rust). |
+| `format` | Unchanged by name: units (any open-tier op already had an undetermined dimension), independent-variable discovery (an axis named in any node's `dim` field is still collected), and import axis renaming of `dim`. |
 
-| Removed | Write instead | Kind |
-|---|---|---|
-| `grad(f, dim: x)` | `D(f, wrt: x)` | `format` |
-| `div(F)` | the sum over axes of `D(F_i, wrt: x_i)`; for a scheme not written per axis (an unstructured-mesh finite-volume divergence, for example), an operator you invent, matched by your rewrite rule | `format` |
-| `laplacian(u)` | the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)`; or an operator you invent for a one-shot stencil | `format` |
-| a rewrite rule whose `match` is one of the three | the same rule matching the spatial `D` it stands for, or matching your own operator name | `format` |
-
-For example, a two-dimensional diffusion term `k * laplacian(u)` becomes
-
-```json
-{ "op": "*", "args": ["k", { "op": "+", "args": [
-  { "op": "D", "args": [{ "op": "D", "args": ["u"], "wrt": "x" }], "wrt": "x" },
-  { "op": "D", "args": [{ "op": "D", "args": ["u"], "wrt": "y" }], "wrt": "y" }
-] }] }
-```
-
-**Loading.** A 2.4.0 binding rejects a document that uses any of the three,
-whatever `esm` it declares, with the hard error `removed_op`, naming the op and
-the node path. There is **no codemod**: which axes a `laplacian` or `div`
-ranges over, and how a vector field's components are named, are not in the
-node, so the rewrite is the author's. `migrate()` refuses such a document with
-`removed_op` too; a document that uses none of the three is unaffected.
-
-**Format version.** `esm: 2.4.0`; the schema `$id` is
-`https://earthsciml.org/schemas/esm/2.4.0/esm.schema.json`. Each binding's
-`SCHEMA_VERSION` constant reads `2.4.0`.
+**What to do.** Nothing, unless a model relied on the three names being
+classified as spatial: write the derivative with spatial `D`
+(`grad(f, dim: x)` as `D(f, wrt: x)`, a divergence as a sum of `D` per axis, a
+Laplacian as a sum of `D(D(u, wrt: x_i), wrt: x_i)`), or keep the name as an
+operator lowered by your own rewrite rule.
 
 ---
 

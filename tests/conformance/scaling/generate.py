@@ -296,7 +296,7 @@ def chemistry_grid(n):
 
     grad = {
         "params": ["f"],
-        "match": {"op": "D", "args": ["f"], "wrt": "lon"},
+        "match": {"op": "grad", "args": ["f"], "dim": "lon"},
         "body": {
             "op": "makearray",
             "args": [],
@@ -315,7 +315,7 @@ def chemistry_grid(n):
     eqs = [
         {
             "lhs": {"op": "D", "args": [f"Pollu.{s}"], "wrt": "t"},
-            "rhs": op("*", op("-", "u_wind"), {"op": "D", "args": [f"Pollu.{s}"], "wrt": "lon"}),
+            "rhs": op("*", op("-", "u_wind"), {"op": "grad", "args": [f"Pollu.{s}"], "dim": "lon"}),
         }
         for s in species
     ]

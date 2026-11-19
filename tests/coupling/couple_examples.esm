@@ -58,11 +58,11 @@
                 "op": "/",
                 "args": [
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "pressure"
                     ],
-                    "wrt": "x"
+                    "dim": "x"
                   },
                   "density"
                 ]
@@ -78,17 +78,10 @@
                     ]
                   },
                   {
-                    "op": "D",
+                    "op": "laplacian",
                     "args": [
-                      {
-                        "op": "D",
-                        "args": [
-                          "velocity"
-                        ],
-                        "wrt": "x"
-                      }
-                    ],
-                    "wrt": "x"
+                      "velocity"
+                    ]
                   }
                 ]
               }
@@ -150,17 +143,10 @@
                 "args": [
                   "thermal_diffusivity",
                   {
-                    "op": "D",
+                    "op": "laplacian",
                     "args": [
-                      {
-                        "op": "D",
-                        "args": [
-                          "temperature"
-                        ],
-                        "wrt": "x"
-                      }
-                    ],
-                    "wrt": "x"
+                      "temperature"
+                    ]
                   }
                 ]
               },
@@ -190,11 +176,11 @@
               "args": [
                 "FluidFlow.velocity",
                 {
-                  "op": "D",
+                  "op": "grad",
                   "args": [
                     "HeatTransfer.temperature"
                   ],
-                  "wrt": "x"
+                  "dim": "x"
                 }
               ]
             }
@@ -214,11 +200,11 @@
                       "op": "^",
                       "args": [
                         {
-                          "op": "D",
+                          "op": "grad",
                           "args": [
                             "FluidFlow.velocity"
                           ],
-                          "wrt": "x"
+                          "dim": "x"
                         },
                         2
                       ]

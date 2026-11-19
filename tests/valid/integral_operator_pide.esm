@@ -47,11 +47,11 @@
                 "args": [
                   5,
                   {
-                    "op": "D",
+                    "op": "grad",
                     "args": [
                       "cumuSum"
                     ],
-                    "wrt": "x"
+                    "dim": "x"
                   }
                 ]
               },

@@ -46,17 +46,10 @@
             "args": [
               "D",
               {
-                "op": "D",
+                "op": "laplacian",
                 "args": [
-                  {
-                    "op": "D",
-                    "args": [
-                      "c"
-                    ],
-                    "wrt": "x"
-                  }
-                ],
-                "wrt": "x"
+                  "c"
+                ]
               }
             ]
           }

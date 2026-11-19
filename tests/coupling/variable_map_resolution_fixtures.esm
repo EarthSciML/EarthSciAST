@@ -137,11 +137,11 @@
               -0.1,
               "wind_speed",
               {
-                "op": "D",
+                "op": "grad",
                 "args": [
                   "pressure"
                 ],
-                "wrt": "x"
+                "dim": "x"
               }
             ]
           }

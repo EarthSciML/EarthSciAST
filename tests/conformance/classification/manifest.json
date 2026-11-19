@@ -21,7 +21,7 @@
       "discrete_parameters(model) - any OTHER update block",
       "sampled_parameters(model)  - a distribution and no update",
       "constant_parameters(model) - neither a distribution nor an update",
-      "system_kind(model)         - derived, FIRST match wins, in this order: sde (any brownian parameter) | pde (any equation contains a spatial derivative: a D whose wrt is present and is not 't'; the grad/div/laplacian sugar ops were removed at esm 2.4.0) | nonlinear (no time-derivative equation at all) | ode"
+      "system_kind(model)         - derived, FIRST match wins, in this order: sde (any brownian parameter) | pde (any equation contains a spatial derivative: a D whose wrt is present and is not 't'; since esm 2.4.0 grad/div/laplacian are ordinary op names and do not count) | nonlinear (no time-derivative equation at all) | ode"
     ],
     "partitions": [
       "ode_states + observed_unknowns + algebraic_unknowns == the model's unknowns, disjointly",
@@ -67,7 +67,7 @@
       "id": "system_kind_pde",
       "fixture": "fixtures/system_kind_pde.esm",
       "golden": "golden/system_kind_pde.json",
-      "pins": "The `pde` branch, which system_kind_variants.esm does not reach at all -- before this fixture, one of the four system_kind values was unpinned across all five bindings. Four models share ONE document-level `domain`, so a binding deriving `pde` from the presence of a domain block gets three of the four wrong. `Transient` uses a spatial `D`; `SugarOps` writes its Laplacian as nested spatial `D` (the replacement for the `laplacian` sugar removed at esm 2.4.0), catching a binding that recognizes a spatial `D` only over a bare variable; `SteadyState` has no time derivative and catches a binding testing `nonlinear` before `pde`; `StochasticSpatial` carries both a wiener parameter and a spatial derivative and must come out `sde`."
+      "pins": "The `pde` branch, which system_kind_variants.esm does not reach at all -- before this fixture, one of the four system_kind values was unpinned across all five bindings. Four models share ONE document-level `domain`, so a binding deriving `pde` from the presence of a domain block gets three of the four wrong. `Transient` uses a spatial `D`; `SugarOps` writes its Laplacian as nested spatial `D` (what the `laplacian` sugar stood for before esm 2.4.0), catching a binding that recognizes a spatial `D` only over a bare variable; `SteadyState` has no time derivative and catches a binding testing `nonlinear` before `pde`; `StochasticSpatial` carries both a wiener parameter and a spatial derivative and must come out `sde`."
     },
     {
       "id": "wrt_default_omitted",

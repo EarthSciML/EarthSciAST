@@ -46,17 +46,10 @@
             "args": [
               "diffusivity",
               {
-                "op": "D",
+                "op": "laplacian",
                 "args": [
-                  {
-                    "op": "D",
-                    "args": [
-                      "concentration"
-                    ],
-                    "wrt": "x"
-                  }
-                ],
-                "wrt": "x"
+                  "concentration"
+                ]
               }
             ]
           }
@@ -109,17 +102,10 @@
             "args": [
               "K_diff",
               {
-                "op": "D",
+                "op": "laplacian",
                 "args": [
-                  {
-                    "op": "D",
-                    "args": [
-                      "tracer"
-                    ],
-                    "wrt": "x"
-                  }
-                ],
-                "wrt": "x"
+                  "tracer"
+                ]
               }
             ]
           }
@@ -172,11 +158,11 @@
                 ]
               },
               {
-                "op": "D",
+                "op": "grad",
                 "args": [
                   "global_tracer"
                 ],
-                "wrt": "lon"
+                "dim": "lon"
               }
             ]
           }
@@ -223,17 +209,10 @@
             "wrt": "t"
           },
           "rhs": {
-            "op": "D",
+            "op": "laplacian",
             "args": [
-              {
-                "op": "D",
-                "args": [
-                  "temperature"
-                ],
-                "wrt": "x"
-              }
-            ],
-            "wrt": "x"
+              "temperature"
+            ]
           }
         },
         {
@@ -281,17 +260,10 @@
             "wrt": "t"
           },
           "rhs": {
-            "op": "D",
+            "op": "laplacian",
             "args": [
-              {
-                "op": "D",
-                "args": [
-                  "pollution"
-                ],
-                "wrt": "z"
-              }
-            ],
-            "wrt": "z"
+              "pollution"
+            ]
           }
         },
         {

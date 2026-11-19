@@ -34,30 +34,30 @@
         "operator_equation": {
           "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
           "rhs": {"op": "+", "args": [
-            {"op": "*", "args": [{"op": "-", "args": ["u"]}, {"op": "D", "args": ["_var"], "wrt": "x"}]},
-            {"op": "*", "args": [{"op": "-", "args": ["v"]}, {"op": "D", "args": ["_var"], "wrt": "y"}]}
+            {"op": "*", "args": [{"op": "-", "args": ["u"]}, {"op": "grad", "args": ["_var"], "dim": "x"}]},
+            {"op": "*", "args": [{"op": "-", "args": ["v"]}, {"op": "grad", "args": ["_var"], "dim": "y"}]}
           ]}
         },
         "expected_expansions": [
           {
             "lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
             "rhs": {"op": "+", "args": [
-              {"op": "*", "args": [{"op": "-", "args": ["u"]}, {"op": "D", "args": ["O3"], "wrt": "x"}]},
-              {"op": "*", "args": [{"op": "-", "args": ["v"]}, {"op": "D", "args": ["O3"], "wrt": "y"}]}
+              {"op": "*", "args": [{"op": "-", "args": ["u"]}, {"op": "grad", "args": ["O3"], "dim": "x"}]},
+              {"op": "*", "args": [{"op": "-", "args": ["v"]}, {"op": "grad", "args": ["O3"], "dim": "y"}]}
             ]}
           },
           {
             "lhs": {"op": "D", "args": ["NO"], "wrt": "t"},
             "rhs": {"op": "+", "args": [
-              {"op": "*", "args": [{"op": "-", "args": ["u"]}, {"op": "D", "args": ["NO"], "wrt": "x"}]},
-              {"op": "*", "args": [{"op": "-", "args": ["v"]}, {"op": "D", "args": ["NO"], "wrt": "y"}]}
+              {"op": "*", "args": [{"op": "-", "args": ["u"]}, {"op": "grad", "args": ["NO"], "dim": "x"}]},
+              {"op": "*", "args": [{"op": "-", "args": ["v"]}, {"op": "grad", "args": ["NO"], "dim": "y"}]}
             ]}
           },
           {
             "lhs": {"op": "D", "args": ["NO2"], "wrt": "t"},
             "rhs": {"op": "+", "args": [
-              {"op": "*", "args": [{"op": "-", "args": ["u"]}, {"op": "D", "args": ["NO2"], "wrt": "x"}]},
-              {"op": "*", "args": [{"op": "-", "args": ["v"]}, {"op": "D", "args": ["NO2"], "wrt": "y"}]}
+              {"op": "*", "args": [{"op": "-", "args": ["u"]}, {"op": "grad", "args": ["NO2"], "dim": "x"}]},
+              {"op": "*", "args": [{"op": "-", "args": ["v"]}, {"op": "grad", "args": ["NO2"], "dim": "y"}]}
             ]}
           }
         ],
@@ -73,16 +73,16 @@
         },
         "operator_equation": {
           "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
-          "rhs": {"op": "D", "args": [{"op": "D", "args": [{"op": "*", "args": ["D", "_var"]}], "wrt": "x"}], "wrt": "x"}
+          "rhs": {"op": "laplacian", "args": [{"op": "*", "args": ["D", "_var"]}]}
         },
         "expected_expansions": [
           {
             "lhs": {"op": "D", "args": ["X"], "wrt": "t"},
-            "rhs": {"op": "D", "args": [{"op": "D", "args": [{"op": "*", "args": ["D", "X"]}], "wrt": "x"}], "wrt": "x"}
+            "rhs": {"op": "laplacian", "args": [{"op": "*", "args": ["D", "X"]}]}
           },
           {
             "lhs": {"op": "D", "args": ["Y"], "wrt": "t"},
-            "rhs": {"op": "D", "args": [{"op": "D", "args": [{"op": "*", "args": ["D", "Y"]}], "wrt": "x"}], "wrt": "x"}
+            "rhs": {"op": "laplacian", "args": [{"op": "*", "args": ["D", "Y"]}]}
           }
         ]
       },

@@ -2127,7 +2127,7 @@
       }
     ],
     "is_valid": false,
-    "notes": "The ONLY pinned finding is the bad_sum addition mismatch ('m' + 'kg'), an ordinary \u00a74.8.3 provable-mismatch. The user op `upwind_gradient` over coordinate 'x' (declared WITHOUT units) is DELIBERATELY NOT flagged: a user op is an open-tier rewrite target with no dimensional rule (\u00a74.8.3 'any other op'), so its result dimension is UNDETERMINABLE until lowered and a checker MUST report `unknown` and skip (\u00a74.8.4), never invent a coordinate-divided dimension. This fixture GUARDS that: a binding that adds a bespoke gradient-units rule for an open-tier op (emitting a `unit_inconsistency` at /models/SpatialModel/equations/0) is regressing and the harness must go red. (Historically the bindings hand-rolled a grad-over-coordinate divide rule; it was removed when grad/div/laplacian were demoted to ordinary rewrite-target match keys, and the three were then removed from the format at esm 2.4.0 \u2014 see esm-spec \u00a74.2. The fixture used `grad` until that removal and now uses a user op, keeping its filename.)"
+    "notes": "The ONLY pinned finding is the bad_sum addition mismatch ('m' + 'kg'), an ordinary \u00a74.8.3 provable-mismatch. The grad over coordinate 'x' (declared WITHOUT units) is DELIBERATELY NOT flagged: `grad`/`div`/`laplacian` are open-tier rewrite-target sugar with no dimensional rule (\u00a74.8.3 'any other op'), so their result dimension is UNDETERMINABLE until lowered and a checker MUST report `unknown` and skip (\u00a74.8.4), never invent a coordinate-divided dimension. This fixture now GUARDS that despecialization: a binding that re-adds a bespoke gradient-units rule (emitting a `unit_inconsistency` at /models/SpatialModel/equations/0) is regressing and the harness must go red. (Historically the bindings hand-rolled a grad-over-coordinate divide rule; it was removed when grad/div/laplacian were demoted to ordinary rewrite-target match keys \u2014 see esm-spec \u00a74.2.)"
   },
   "units_mixed_dimensional_operations.esm": {
     "schema_errors": [],
@@ -4226,21 +4226,6 @@
     "parse_error": true,
     "is_valid": false,
     "notes": "Rejected at LOAD with `removed_op`: `\"op\": \"aggregate\"`, the deprecated alias of `faq`, was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
-  },
-  "removed_op_grad.esm": {
-    "parse_error": true,
-    "is_valid": false,
-    "notes": "Rejected at LOAD with `removed_op`: the `grad` op was removed at esm 2.4.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The document declares esm 2.3.0, the release before the removal, so the refusal comes from the op alone, whatever version a document declares. The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
-  },
-  "removed_op_div.esm": {
-    "parse_error": true,
-    "is_valid": false,
-    "notes": "Rejected at LOAD with `removed_op`: the `div` op was removed at esm 2.4.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The document declares esm 2.3.0, the release before the removal, so the refusal comes from the op alone, whatever version a document declares. The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
-  },
-  "removed_op_laplacian.esm": {
-    "parse_error": true,
-    "is_valid": false,
-    "notes": "Rejected at LOAD with `removed_op`: the `laplacian` op was removed at esm 2.4.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The document declares esm 2.3.0, the release before the removal, so the refusal comes from the op alone, whatever version a document declares. The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
   },
   "recurrence_group_not_candidate_bare_only.esm": {
     "schema_errors": [],
