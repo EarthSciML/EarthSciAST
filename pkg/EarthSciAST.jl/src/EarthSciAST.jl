@@ -159,6 +159,7 @@ include("coupling_imports.jl")
 include("expression.jl")
 # Structural interning (hash-consing) of the expression AST.
 include("intern.jl")
+include("templates/frames.jl")
 include("graph.jl")
 include("units.jl")
 include("variable_bounds.jl")  # esm-spec §6.3.2 lb / ub: gate, validity, flatten rewrite

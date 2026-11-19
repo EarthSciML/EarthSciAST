@@ -1094,6 +1094,19 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String, ASTExpr}, memo::_S
     # aggregates do) always take the reconstruct path so their bound expressions
     # get substituted; those are rare relative to the plain stencil math ops that
     # dominate a per-cell substitution.
+    # A template reference's bindings are expressions of this scope, implicit
+    # ones (the names its body reads from the caller, tree_walk frames) among
+    # them, so a substitution reaches them as it reaches any argument.
+    new_bindings = expr.bindings
+    if expr.bindings !== nothing
+        for (bk, bv) in expr.bindings
+            nb = _sub_preserving(bv, bindings, memo)
+            nb === bv && continue
+            new_bindings === expr.bindings && (new_bindings = copy(expr.bindings))
+            new_bindings[bk] = nb
+        end
+        changed |= new_bindings !== expr.bindings
+    end
     if expr.ranges === nothing && !changed
         memo[expr] = expr
         return expr
@@ -1108,7 +1121,8 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String, ASTExpr}, memo::_S
     # preservation this helper promises holds even as fields are added.
     result = reconstruct(
         expr; args = new_args, expr_body = new_body,
-        values = new_values, filter = new_filter, ranges = new_ranges
+        values = new_values, filter = new_filter, ranges = new_ranges,
+        bindings = new_bindings
     )
     memo[expr] = result
     return result
