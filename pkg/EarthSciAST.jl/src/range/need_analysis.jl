@@ -369,6 +369,11 @@ function _need_walk!(
         o.filter === nothing || _need_walk!(ctx, o.filter, env2, anchors, rule)
         return nothing
     end
+    if _tpl_is_call(o)
+        # A template call: the cells its arguments read (call.jl).
+        foreach(c -> _need_walk!(ctx, c, env, anchors, rule), _read_operands(o))
+        return nothing
+    end
     foreach_child(c -> _need_walk!(ctx, c, env, anchors, rule), o)
     return nothing
 end

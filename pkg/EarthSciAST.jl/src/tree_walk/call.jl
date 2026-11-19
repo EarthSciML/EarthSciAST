@@ -1101,6 +1101,26 @@ function _value_operands(e::OpExpr)
     ]
 end
 
+# The operands of `e` as reads of the caller's cells (the range need
+# analysis): a call's value operands, and the bare name of each array it still
+# passes whole (its body reads it at cells the caller cannot see, so the whole
+# array is read); an array every read of which the caller makes (lanes) is
+# read only through those lanes. Every other node's `args`.
+function _read_operands(e::OpExpr)
+    _tpl_is_call(e) || return e.args
+    ct = _call_table()
+    ct === nothing && return _call_operands(e)
+    passed = _call_array_slots((ct::_CallTable).tt, e)
+    ops = _value_operands(e)
+    passed === nothing && return ops
+    b = e.bindings::AbstractDict
+    for k in sort!(collect(keys(b)))
+        s = startswith(k, _TPL_FREE) ? k : _TPL_ARG * k
+        s in passed && push!(ops, b[k])
+    end
+    return ops
+end
+
 # ---- Generic IR helpers -------------------------------------------------------------
 # A pass over the compiled form sees a call as an operator over its argument
 # children; the body is reached once per target through `_ir_targets`.
@@ -1189,7 +1209,7 @@ function _call_body_ops!(memo::Dict{String, Set{String}}, tt::_TplTable, name::S
     ops = Set{String}()
     memo[name] = ops
     def = _tpl_def(tt, name)
-    body = def.closed === nothing ? nothing : def.closed.body
+    body = _call_elem_body(tt, def)
     body === nothing && (push!(ops, APPLY_EXPRESSION_TEMPLATE_OP); return ops)
     foreach_subexpr(body) do e
         e isa OpExpr || return
@@ -1215,9 +1235,20 @@ function _call_body_measure(f, call::OpExpr, key::Symbol)
     memo = _tpl_memo(tt, nothing, key, () -> Dict{String, Int}())
     return get!(memo, String(call.name)) do
         def = _tpl_def(tt, call.name)
-        body = def.closed === nothing ? nothing : def.closed.body
+        body = _call_elem_body(tt, def)
         body isa OpExpr ? f(body, IdDict{OpExpr, Int}()) : 0
     end
+end
+
+# The body one call of `def` evaluates: its prepared body, or for an
+# array-valued template (always called through its element) the element's
+# expression.
+function _call_elem_body(tt::_TplTable, def::_TplDef)
+    def.closed === nothing && return nothing
+    body = def.closed.body
+    info = _tpl_call_info(tt, def.name)
+    (info === nothing || isempty(info.outs)) && return body
+    return (body::OpExpr).expr_body
 end
 
 # `call` with a binding for each implicit parameter of its template
