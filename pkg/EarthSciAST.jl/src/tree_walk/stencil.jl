@@ -472,7 +472,7 @@ function _exprtbl_evaluable(
     end
     inner = isempty(binders) ? bound : union(bound, binders)
     chk(x) = x === nothing || _exprtbl_evaluable(x, inner, const_arrays)
-    for a in o.args
+    for a in _operands(o)
         chk(a) || return false
     end
     (

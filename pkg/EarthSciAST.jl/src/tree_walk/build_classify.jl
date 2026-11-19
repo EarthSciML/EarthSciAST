@@ -480,7 +480,7 @@ function _array_obs_structural_refs!(
     e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits, seen)
     e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits, seen)
     e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits, seen)
-    for a in e.args
+    for a in _operands(e)
         _array_obs_structural_refs!(
             a, names, hits, seen;
             runtime_subscripts = runtime_subscripts
@@ -1127,7 +1127,7 @@ function _obs_structural_refs!(
     e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits, seen)
     e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits, seen)
     e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits, seen)
-    for a in e.args
+    for a in _operands(e)
         _obs_structural_refs!(a, names, hits, seen)
     end
     e.expr_body === nothing || _obs_structural_refs!(e.expr_body::ASTExpr, names, hits, seen)

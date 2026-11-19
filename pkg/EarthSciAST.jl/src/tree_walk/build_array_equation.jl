@@ -756,7 +756,7 @@ _scalar_rule_tier(e) = _has_contract_loop(e) ? :scalar_loop : :scalar
 function _has_contract_loop(e)
     e isa OpExpr || return false
     e.op == "__contract_loop" && return true
-    for a in e.args
+    for a in _operands(e)
         _has_contract_loop(a) && return true
     end
     return e.expr_body !== nothing && _has_contract_loop(e.expr_body)

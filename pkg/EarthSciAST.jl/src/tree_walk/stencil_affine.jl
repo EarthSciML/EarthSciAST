@@ -486,7 +486,7 @@ function _has_indexed_producer(e, seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr,
         fa isa OpExpr && _is_scalar_op(fa.op) && _reaches_indexable_producer(fa) &&
             return true
     end
-    for a in e.args
+    for a in _operands(e)
         _has_indexed_producer(a, seen) && return true
     end
     e.expr_body !== nothing && _has_indexed_producer(e.expr_body, seen) && return true
