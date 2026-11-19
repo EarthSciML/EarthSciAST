@@ -293,6 +293,7 @@ const GROUPS = [
         "compile_once_templates_test.jl",
         "template_instance_functions_test.jl",
         "template_frames_test.jl",
+        "template_calls_test.jl",
         "expanded_model_seam_test.jl",
     ],
     :fixtures => [
