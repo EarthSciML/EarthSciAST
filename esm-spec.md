@@ -8,12 +8,16 @@
 > open-tier operator names, exactly like any user op. A document using one
 > still loads, a rewrite rule may still match one, and one that reaches
 > evaluation unlowered is still rejected with `unlowered_operator`. What
-> changes is that no binding treats them specially any more: a model whose
-> only spatial operator is one of them is no longer classified `"pde"`
-> (§6.3.1), and no binding lowers `grad` itself (the Julia ModelingToolkit
-> path used to turn it into a `Differential`). A spatial derivative is
-> written with spatial `D` (`MIGRATION.md`, "esm 2.4.0"). Every 2.3.0
-> document is a valid 2.4.0 document.
+> changes is that no binding treats them specially any more: no binding
+> lowers `grad` itself (the Julia ModelingToolkit path used to turn it into a
+> `Differential`). A spatial derivative is written with spatial `D`.
+>
+> 2.4.0 also drops the `"pde"` system kind (§6.3.1): the derived kinds are
+> `"sde"`, `"nonlinear"` and `"ode"`, and a spatial derivative (spatial `D`
+> or any of the three names) no longer changes a model's kind. A model that
+> declares `system_kind: "pde"` still loads, with the warning
+> `deprecated_system_kind`; the value is ignored. See `MIGRATION.md`,
+> "esm 2.4.0". Every 2.3.0 document is a valid 2.4.0 document.
 
 > **2.3.0 is additive.** The JSON form does not change. The word spellings
 > `neg` and `pow` are deprecated: a loader rewrites them to unary `-` and `^`
@@ -3022,7 +3026,7 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 | `continuous_events` | | Continuous events (see Section 5.2) |
 | `initialization_equations` | | Equations that hold only at t=0, solved before time-stepping begins. Typical uses: aerosol equilibrium / plume-rise style models (`system_kind='nonlinear'`) that need extra constraints for initialization, and ODE models whose initial state is determined by solving an auxiliary system. |
 | `guesses` | | Initial-guess seeds for nonlinear solvers during initialization, keyed by variable name. Values are `Expression` graphs (numbers, strings, or nodes). |
-| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — at least one `wiener`-updated parameter), `"pde"` (spatial domain + differential operators). Each binding's MTK integration uses the **kind** to select between `System`, `NonlinearSystem`, `SDESystem`, and `PDESystem` constructors — the kind **derived** from the equations and parameter updates by §6.3.1, not this field. From 1.0.0 the field is a *declaration* of something the document already determines: a binding uses the derivation when the field is absent and reports `system_kind_mismatch` when a present field contradicts it (§6.3.1), so **declaring it never changes how a document runs**. Writing `"nonlinear"` on a model that already has no time-derivative equation is therefore correctly a no-op, and writing it on one that does is an error rather than a request. A `"nonlinear"` model has NO time-derivative equations at all; its equation balance is unknowns-vs-equations and every algebraic LHS counts (§4.9.4). |
+| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — at least one `wiener`-updated parameter). `"pde"` is **deprecated** (esm 2.4.0): a document declaring it still loads, with the warning `deprecated_system_kind`, and the value is ignored (the model is its derived kind, and no `system_kind_mismatch` is reported for it). Each binding's MTK integration uses the **kind** to select between `System`, `NonlinearSystem` and `SDESystem` constructors — the kind **derived** from the equations and parameter updates by §6.3.1, not this field. From 1.0.0 the field is a *declaration* of something the document already determines: a binding uses the derivation when the field is absent and reports `system_kind_mismatch` when a present field contradicts it (§6.3.1), so **declaring it never changes how a document runs**. Writing `"nonlinear"` on a model that already has no time-derivative equation is therefore correctly a no-op, and writing it on one that does is an error rather than a request. A `"nonlinear"` model has NO time-derivative equations at all; its equation balance is unknowns-vs-equations and every algebraic LHS counts (§4.9.4). |
 | `subsystems` | | Named child models (subsystems), keyed by unique identifier. Each subsystem can be defined inline or included by reference (see Section 4.7). Enables hierarchical composition — variables in subsystems are referenced via dot notation (see Section 4.6). |
 | `tolerance` | | Model-level default numerical tolerance used by tests (see Section 6.6). Object with optional `abs` and/or `rel` fields. |
 | `tests` | | Inline validation tests that exercise this model in isolation (see Section 6.6). |
@@ -3218,40 +3222,30 @@ materialized by their own engine and are outside this rule. CONFORMANCE_SPEC.md 
 | `constant_parameters(model)` | neither — plain constants |
 
 **System kind.** `system_kind(model)` derives what the `system_kind` field
-declares, testing four conditions **in this order** and taking the first that
+declares, testing three conditions **in this order** and taking the first that
 holds:
 
 | # | Condition | Result |
 |---|---|---|
 | 1 | any parameter in `brownian_parameters` | `"sde"` |
-| 2 | any equation contains a **spatial derivative** | `"pde"` |
-| 3 | no time-derivative equation at all | `"nonlinear"` |
-| 4 | otherwise | `"ode"` |
+| 2 | no time-derivative equation at all | `"nonlinear"` |
+| 3 | otherwise | `"ode"` |
 
-A **spatial derivative** is a `D` node whose `wrt` is present and is not `"t"`
-(§4.2). It is detected
-anywhere in an equation's LHS or RHS, and the walk descends every Expression
-child, not just `args` (§4.9.5).
-
-Two points about this rule are load-bearing, because both were previously left
-to each binding to guess:
-
-- **It is stated in terms of the equations, not a domain block.** Earlier drafts
-  said "a spatial domain plus differential operators", but v0.8.0 removed
-  `Domain.spatial`, and since then `domain` has carried only
-  `independent_variable`, `temporal`, `element_type`, and `array_type` — nothing
-  spatial. There is no spatial domain to test, so a binding written to that
-  wording could not implement the `"pde"` branch at all. The differential
-  operators in the equations are the whole signal.
-- **The order puts `"pde"` before `"nonlinear"`.** A steady-state PDE
-  (`D(D(u, wrt: x), wrt: x) ~ f`, no ∂/∂t) has no time-derivative equation and would
-  otherwise fall through to `"nonlinear"`. It is a PDE, and MTK's `PDESystem`
-  is what it maps to. `"sde"` still wins over `"pde"`: there is no
-  `SPDESystem` constructor to select, so a model that is both is assembled as
-  an SDE.
+Spatial derivatives play no part: a model is spatial through its variables'
+shapes (§11.2), and a spatial `D` is lowered by a discretization rule before
+anything is assembled (§9.6.8). Until esm 2.4.0 a fourth kind, `"pde"`, was
+derived from a spatial derivative in the equations; it is gone, because its only
+consumer was a `PDESystem` constructor choice that the discretize-then-integrate
+pipeline does not need.
 
 A binding uses the derivation when the field is absent, and reports
-`system_kind_mismatch` when a present field contradicts it.
+`system_kind_mismatch` when a present field contradicts it. **A declared `"pde"`
+is deprecated and ignored (normative):** a loader MUST NOT refuse it; it warns
+once per document with `deprecated_system_kind`, naming every such model by the
+JSON pointer of its `system_kind` field; the declared kind then reads as absent
+(the model is its derived kind) and `system_kind_mismatch` is never reported for
+it. The field is kept as written, so `emit` writes it back unchanged. Fixture:
+`tests/conformance/classification/fixtures/system_kind_pde.esm`.
 
 These functions are the *only* sanctioned way to ask these questions. A site
 that used to branch on `variable.type == "state"` calls `is_ode_state`; one that
@@ -6127,7 +6121,7 @@ The last dot-separated segment is always the variable name; all preceding segmen
 
 - **Graph construction** — the expression graph (Section 4.8.2 of the library spec) operates on the flattened system to produce cross-system dependency edges.
 - **Coupled system validation** — checking that all coupling references resolve, no variables are orphaned, and equation–unknown balance holds across the full system.
-- **Simulation** — Julia libraries might convert the flattened system to a single MTK `ODESystem` (for 0D/ODE-only systems) or `PDESystem` (for systems with spatial derivatives), using MTK's native namespace separator (`₊`) in place of dots.
+- **Simulation** — Julia libraries might convert the flattened system to a single MTK `ODESystem` (after any spatial derivatives have been discretized), using MTK's native namespace separator (`₊`) in place of dots.
 - **Export and display** — pretty-printing the full coupled system as a single set of equations.
 
 **Template registries flatten with their components** (from `esm: 0.9.0`, §9.6.4 rule 7). The variable-renaming map flatten applies to a component's equations applies identically to free variable references inside that component's carried template bodies and inside surviving `apply_expression_template` references' `bindings` (template `params` shadow, exactly as in §9.6.1). Component registries merge into the flattened document: deep-equal same-name entries (post-scoping) dedupe at first occurrence — the common case, two components importing one stencil; a non-deep-equal same-name collision renames **both** entries deterministically to `<ComponentPath>.<name>`, rewriting their references in lockstep. **Collisions propagate along the reference DAG:** a declaration whose body references a colliding name is itself treated as colliding, in every component that carries it, and is renamed per owner too — otherwise a byte-identical wrapper over a per-component leaf would dedupe under its bare name and its single surviving body would reference a name the merged registry no longer holds. Equivalently: a name that survives under its bare spelling never reaches a renamed one. The rename is total and deterministic; there is no new diagnostic. The flattened representation carries the merged registry as a first-class field, and downstream consumers (graph construction, simulation backends, emit) resolve surviving references against it.
@@ -6837,7 +6831,7 @@ Many physical parameterizations are algebraic or ODE systems with no intrinsic s
 
 ### Coupled systems flatten to a single equation system
 
-The composition of multiple models and reaction systems resolves to a **single flat equation system** with dot-namespaced variables (`Atmosphere.Chemistry.O3`). This is not merely a convenience — it is the canonical intermediate representation that all downstream operations (simulation, validation, graph construction) consume. Dot-namespacing preserves provenance (you can always trace a variable back to its originating component) while producing a system that maps directly to a single solver object (MTK `ODESystem` or `PDESystem` in Julia, a single ODE integrator call in Python). The separation between modular component definitions (in the `.esm` file) and the unified flat system (produced by flattening) mirrors the distinction between source code and compiled output: the file is for humans and version control, the flattened system is for machines and solvers.
+The composition of multiple models and reaction systems resolves to a **single flat equation system** with dot-namespaced variables (`Atmosphere.Chemistry.O3`). This is not merely a convenience — it is the canonical intermediate representation that all downstream operations (simulation, validation, graph construction) consume. Dot-namespacing preserves provenance (you can always trace a variable back to its originating component) while producing a system that maps directly to a single solver object (an MTK `ODESystem` in Julia, a single ODE integrator call in Python). The separation between modular component definitions (in the `.esm` file) and the unified flat system (produced by flattening) mirrors the distinction between source code and compiled output: the file is for humans and version control, the flattened system is for machines and solvers.
 
 ---
 
