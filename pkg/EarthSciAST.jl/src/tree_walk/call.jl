@@ -35,14 +35,43 @@ mutable struct _ArgStack
 end
 _ArgStack() = _ArgStack(Float64[], nothing, Bool[], 0)
 
+# An ARRAY argument (frames.jl `_TplCallInfo.arrays`): the array a reference
+# binds to an array parameter, passed at run time. `data` is the same payload
+# the build's own gathers read (`_StateGather` for `:state`,
+# `_ConstGatherArray` for `:const` and `:live`), so a read through the argument
+# is the gather the expansion would have compiled, bit for bit.
+struct _ArrArg
+    kind::Symbol
+    data::Any
+    name::String
+end
+
 mutable struct _CallTarget
     name::String                # the template, for messages
     key::String                 # the instance key it was compiled for
-    slots::Vector{String}       # the body's argument sentinels, in slot order
+    slots::Vector{String}       # the body's scalar argument sentinels, in slot order
+    arrslots::Vector{String}    # the body's array argument sentinels, in slot order
+    arrkinds::Vector{Symbol}    # each array slot's kind (part of `key`)
+    arrdims::Vector{Vector{Int}} # each const or live array slot's dimensions (part of `key`)
     body::_Node
     stack::_ArgStack
     fp::Int                     # stack position below the innermost running call's arguments
     nodes::Int                  # node count of `body` (emitter inline policy)
+    curarrs::Vector{_ArrArg}    # the array arguments of the innermost running call
+end
+
+# One call site's payload: the target and the arrays this site passes. Sites
+# with the same target and the same arrays are one object (`_call_site`), so
+# passes that key a call by its payload treat them alike.
+struct _CallSite
+    target::_CallTarget
+    arrays::Vector{_ArrArg}
+end
+
+# The array-gather read of a body (`_NK_ARG_GATHER`): array slot `j` of `target`.
+struct _ArgGatherRef
+    target::_CallTarget
+    j::Int
 end
 
 # The call targets of one build: the template table and the compiled targets
@@ -51,13 +80,19 @@ struct _CallTable
     tt::_TplTable
     targets::Dict{String, _CallTarget}
     stack::_ArgStack
+    sites::Dict{Tuple{_CallTarget, Vector{UInt}}, _CallSite}
 end
-_CallTable(reg) = _CallTable(_TplTable(reg), Dict{String, _CallTarget}(), _ArgStack())
+_CallTable(reg) = _CallTable(
+    _TplTable(reg), Dict{String, _CallTarget}(), _ArgStack(),
+    Dict{Tuple{_CallTarget, Vector{UInt}}, _CallSite}()
+)
 
-# The body compile's argument map (`_compile(::VarExpr)` reads it first).
+# The body compile's argument map (`_compile(::VarExpr)` reads `idx`, the
+# resolve of `index(<array sentinel>, …)` reads `arr`).
 struct _ArgMap
     target::_CallTarget
     idx::Dict{String, Int}
+    arr::Dict{String, Int}
 end
 
 _call_table() = _build_state().calls
@@ -80,16 +115,59 @@ function _compile_call(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
     ct === nothing && throw(_no_call_table(expr.name))
     tg = _call_target(ct, expr)
     kids = _Node[_compile(a, var_map, param_syms, memo) for a in _call_args(tg, expr)]
-    return _call_node(tg, kids)
+    return _call_node(tg, kids, _call_arrays(tg, expr))
 end
 
 # Any compiler of expressions to `_Node` (`_compile`, the setup geometry
 # compiler) compiles a reference the same way: the target from `_call_target`,
-# the arguments (`_call_args`, in slot order) compiled in its own context, and
-# `_call_node`.
-function _call_node(tg::_CallTarget, kids::Vector{_Node})
+# the arguments (`_call_args`, in slot order) compiled in its own context, the
+# arrays (`_call_arrays`), and `_call_node`.
+function _call_node(tg::_CallTarget, kids::Vector{_Node}, arrs::Vector{_ArrArg} = _ArrArg[])
+    length(arrs) == length(tg.arrslots) || throw(
+        TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_OP",
+            "template '$(tg.name)': a call site passes $(length(arrs)) of its $(length(tg.arrslots)) array arguments"
+        )
+    )
     _count!(:call_sites)
-    return _mknode(kind = _NK_CALL, op = Symbol(tg.name), payload = tg, children = kids)
+    return _mknode(kind = _NK_CALL, op = Symbol(tg.name), payload = _call_site(tg, arrs), children = kids)
+end
+
+# The one `_CallSite` of `tg` passing `arrs`.
+function _call_site(tg::_CallTarget, arrs::Vector{_ArrArg})
+    ct = _call_table()
+    ct === nothing && return _CallSite(tg, arrs)
+    key = (tg, UInt[objectid(a.data) for a in arrs])
+    return get!(() -> _CallSite(tg, arrs), (ct::_CallTable).sites, key)
+end
+
+# The array each array slot of `tg` reads at the reference `expr`: its binding
+# as the resolve left it (`_resolve_call_bindings` turns an array binding into
+# an `__arrarg` marker carrying the `_ArrArg`).
+function _call_arrays(tg::_CallTarget, expr::OpExpr)
+    isempty(tg.arrslots) && return _ArrArg[]
+    b = expr.bindings === nothing ? Dict{String, ASTExpr}() : expr.bindings
+    out = Vector{_ArrArg}(undef, length(tg.arrslots))
+    for (j, s) in enumerate(tg.arrslots)
+        v = _call_arg(b, s)
+        (v isa OpExpr && v.op == "__arrarg" && v.value isa _ArrArg) || throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_OP",
+                "template '$(tg.name)': the array argument $(repr(s)) reached compile " *
+                    "unresolved"
+            )
+        )
+        a = v.value::_ArrArg
+        a.kind === tg.arrkinds[j] || throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_OP",
+                "template '$(tg.name)': array argument $(repr(s)) is a $(a.kind) array, " *
+                    "the target was compiled for a $(tg.arrkinds[j]) array"
+            )
+        )
+        out[j] = a
+    end
+    return out
 end
 
 # The binding expression of each argument slot of `tg` at the reference `expr`.
@@ -128,34 +206,89 @@ function _call_target(expr::OpExpr)
     return _call_target(ct, expr)
 end
 
-# The target of reference `call`: one per template (scalar function templates
-# have no structural parameter, so the template alone is the instance).
+# The target of reference `call`: one per INSTANCE, keyed by the template,
+# the value of each fixed parameter (a reduction bound, substituted into the
+# instance's body), and the kind of each array argument. Arrays themselves are
+# run-time data (`_CallSite`), so every array of one kind shares the target.
 function _call_target(ct::_CallTable, call::OpExpr)
     name = String(call.name)
-    key = name
-    got = get(ct.targets, key, nothing)
-    got === nothing || return got
     def = _tpl_def(ct.tt, name)
-    closed = def.closed
-    closed === nothing && throw(
+    def.closed === nothing && throw(
         TreeWalkError(
             "E_TREEWALK_UNSUPPORTED_OP",
             "template '$name' has a parameter in a structural position; the build " *
                 "does not compile it as a call yet"
         )
     )
-    slots = String[_TPL_ARG * p for p in def.params]
-    append!(slots, String[_TPL_FREE * n for n in closed.free])
+    info = _tpl_call_info(ct.tt, name)
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    S = Dict{String, Any}()
+    arrkind = Dict{String, Symbol}()
+    arrdims = Dict{String, Vector{Int}}()
+    io = IOBuffer()
+    print(io, name)
+    if info !== nothing
+        for s in sort!(collect(info.fixed))
+            p = s[(ncodeunits(_TPL_ARG) + 1):end]
+            v = _call_arg(b, s)
+            iv = v isa IntExpr ? Int(v.value) : v isa NumExpr && isinteger(v.value) ? Int(v.value) :
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_UNSUPPORTED_OP",
+                    "template '$name': parameter '$p' bounds a reduction and needs an integer literal"
+                )
+            )
+            S[p] = iv
+            print(io, '\x01', p, '=', iv)
+        end
+        for s in sort!(collect(info.arrays))
+            v = _call_arg(b, s)
+            k = (v isa OpExpr && v.value isa _ArrArg) ? (v.value::_ArrArg).kind : :unresolved
+            arrkind[s] = k
+            print(io, '\x02', s, '=', k)
+            # A const or live array's dimensions are part of the instance:
+            # a subscript the body proves inside them reads directly.
+            if k === :const || k === :live
+                d = ((v.value::_ArrArg).data::_ConstGatherArray).dims
+                arrdims[s] = copy(d)
+                print(io, '/', join(d, 'x'))
+            end
+        end
+    end
+    key = String(take!(io))
+    got = get(ct.targets, key, nothing)
+    got === nothing || return got
+    inst = _tpl_inst_closed(ct.tt, def, S)
+    arrslots = sort!(collect(keys(arrkind)))
+    slots = String[_TPL_ARG * p for p in def.params if !haskey(S, p)]
+    append!(slots, String[_TPL_FREE * n for n in inst.free])
+    filter!(s -> !haskey(arrkind, s), slots)
     sort!(slots)
-    tg = _CallTarget(name, key, slots, _mknode(kind = _NK_LITERAL), ct.stack, 0, 0)
-    am = _ArgMap(tg, Dict{String, Int}(s => i for (i, s) in enumerate(slots)))
+    tg = _CallTarget(
+        name, key, slots, arrslots, Symbol[arrkind[s] for s in arrslots],
+        Vector{Int}[get(arrdims, s, Int[]) for s in arrslots],
+        _mknode(kind = _NK_LITERAL), ct.stack, 0, 0, _ArrArg[]
+    )
+    am = _ArgMap(
+        tg, Dict{String, Int}(s => i for (i, s) in enumerate(slots)),
+        Dict{String, Int}(s => j for (j, s) in enumerate(arrslots))
+    )
     st = _build_state()
     saved = st.argmap
     st.argmap = am
     body = try
         # The body binds nothing of the caller's: an empty state map and no
-        # parameters. Every name it reads is an argument.
-        _compile(closed.body, _EMPTY_VARMAP, Set{Symbol}(), _BuildMemo())
+        # parameters. Every name it reads is an argument; an `index` of an
+        # array argument resolves to an argument gather (`_arg_gather_resolve`).
+        # One memo for both passes: a body is a DAG (a shared sub-term, such
+        # as an interpolation's bracket index, is read many times), and an
+        # unmemoized pass would walk it as a tree.
+        bm = _BuildMemo()
+        rb = _resolve_indices(
+                inst.body, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), _EMPTY_VARMAP,
+                _EMPTY_CONST_ARRAYS, _EMPTY_PGATHER, bm
+            )
+        _compile(rb, _EMPTY_VARMAP, Set{Symbol}(), bm)
     finally
         st.argmap = saved
     end
@@ -189,6 +322,67 @@ end
     i = get((am::_ArgMap).idx, name, 0)
     i == 0 && return nothing
     return _mknode(kind = _NK_ARG, idx = i, payload = (am::_ArgMap).target)
+end
+
+# `index(<array argument sentinel>, subs…)` inside a body being compiled: the
+# argument gather over the resolved subscripts, or `nothing` when `name` is no
+# array argument of the body.
+function _arg_gather_resolve(name::String, subs::Vector{ASTExpr}, rc)
+    am = _build_state().argmap
+    am === nothing && return nothing
+    j = get((am::_ArgMap).arr, name, 0)
+    j == 0 && return nothing
+    return OpExpr(
+        "__arg_gather", ASTExpr[_resolve_indices(a, rc) for a in subs];
+        value = _Lowered(_NK_ARG_GATHER, _ArgGatherRef((am::_ArgMap).target, j))
+    )
+end
+
+# The `__arrarg` marker for the array a reference binds to an array parameter
+# (`_resolve_call_bindings`): a state array, a live forcing buffer or a const
+# array by name, or an inline `const` array.
+function _arr_arg_marker(v::ASTExpr, rc)
+    (v isa OpExpr && v.op == "__arrarg") && return v
+    a = if v isa OpExpr && v.op == "const" && v.value isa AbstractVector
+        vals, cname = _intern_inline_const(v, rc.const_arrays)
+        _ArrArg(:const, _const_gather_payload(vals, cname), cname)
+    elseif v isa VarExpr
+        n = v.name
+        src = _array_source(n, rc.array_var_info, rc.pgather, rc.const_arrays)
+        if src === :state
+            lo, hi = rc.array_var_info[n]
+            _ArrArg(:state, _state_gather_payload(n, lo, hi, rc.var_map), n)
+        elseif src === :forcing
+            pg = rc.pgather[n]::_PGatherArray
+            nd = length(pg.dims)
+            strides = Vector{Int}(undef, nd)
+            acc = 1
+            for d in 1:nd
+                strides[d] = acc
+                acc *= pg.dims[d]
+            end
+            _ArrArg(:live, _ConstGatherArray(pg.flat, strides, collect(Int, pg.dims), fill(:live, nd), n), n)
+        elseif src === :const
+            _ArrArg(:const, _const_gather_payload(rc.const_arrays[n], n), n)
+        else
+            throw(
+                TreeWalkError(
+                    "E_TREEWALK_INDEX_NOT_ARRAY",
+                    "'$(n)' is bound to an array parameter of a template but is not an " *
+                        "array the build can pass (a state array, a forcing buffer or a const array)"
+                )
+            )
+        end
+    else
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_OP",
+                "an array parameter of a template is bound to an expression; the build " *
+                    "passes only named or inline const arrays yet"
+            )
+        )
+    end
+    return OpExpr("__arrarg", ASTExpr[]; value = a)
 end
 
 # ---- Walk ------------------------------------------------------------------------
@@ -235,7 +429,8 @@ end
 # The call itself, given an evaluator `ev(child)` for the caller's context (the
 # scalar walker or the access-kernel walker).
 @inline function _run_call(ev::F, n::_Node, u, p, t, ::Type{T}) where {F, T}
-    tg = n.payload::_CallTarget
+    site = n.payload::_CallSite
+    tg = site.target
     st = tg.stack
     base = st.top
     ch = n.children
@@ -245,18 +440,51 @@ end
         st.top = base + i
     end
     old = tg.fp
+    oldarrs = tg.curarrs
     tg.fp = base
+    tg.curarrs = site.arrays
     r = try
         _eval_node(tg.body, u, p, t, T)
     finally
         tg.fp = old
+        tg.curarrs = oldarrs
         st.top = base
     end
     return r
 end
 
+# `_NK_ARG_GATHER`: the read of array argument `j` of the running call, at
+# the subscripts `n.children`, exactly as the gather of that array would read
+# it (`_eval_state_gather_at`, `_eval_const_gather_at`).
+function _eval_arg_gather(n::_Node, u, p, t, ::Type{T}) where {T}
+    ref = n.payload::_ArgGatherRef
+    a = @inbounds ref.target.curarrs[ref.j]
+    a.kind === :state && return _eval_state_gather_at(a.data::_StateGather, n.children, u, p, t, T)
+    return _eval_const_gather_at(a.data::_ConstGatherArray, n.children, u, p, t, T)
+end
+
 @inline _eval_arg(n::_Node, ::Type{T}) where {T} =
     (tg = n.payload::_CallTarget; _argstack_read(tg.stack, tg.fp + n.idx, T))
+
+# ---- Value operands -------------------------------------------------------------------
+# The operands of `e` read as VALUES: a call's bindings except the arrays its
+# body indexes (an array argument is a whole array, legitimately bare), every
+# other node's `args`. A walker asking "which values does this compute from"
+# (the bare-array check) uses this; one asking "which names does it read" uses
+# `_operands` (frames.jl).
+function _value_operands(e::OpExpr)
+    _tpl_is_call(e) || return e.args
+    ops = _call_operands(e)
+    ct = _call_table()
+    ct === nothing && return ops
+    arrs = _tpl_array_slots((ct::_CallTable).tt, e.name)
+    (arrs === nothing || isempty(arrs)) && return ops
+    b = e.bindings::AbstractDict
+    return ASTExpr[
+        b[k] for k in sort!(collect(keys(b)))
+            if !((startswith(k, _TPL_FREE) ? k : _TPL_ARG * k) in arrs)
+    ]
+end
 
 # ---- Generic IR helpers -------------------------------------------------------------
 # A pass over the compiled form sees a call as an operator over its argument
@@ -274,7 +502,7 @@ function _ir_targets(roots)
         nseen[x] = nothing
         foreach(walk, x.children)
         if x.kind === _NK_CALL
-            tg = x.payload::_CallTarget
+            tg = (x.payload::_CallSite).target
             if !haskey(seen, tg)
                 seen[tg] = nothing
                 walk(tg.body)

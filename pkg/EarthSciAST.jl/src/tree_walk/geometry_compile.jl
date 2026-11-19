@@ -172,8 +172,13 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
             return _geo_compile_agg(expr, g)
         elseif _tpl_is_call(expr)
             # A template call (call.jl): arguments compiled here, body apart.
+            # An array argument is a geometry source (an env array): passed as
+            # the same `_ArrArg` a resolved reference carries.
+            expr = _geo_call_arrays(expr, g)
             tg = _call_target(expr)
-            return _call_node(tg, _Node[_geo_compile(a, g) for a in _call_args(tg, expr)])
+            return _call_node(
+                tg, _Node[_geo_compile(a, g) for a in _call_args(tg, expr)], _call_arrays(tg, expr)
+            )
         elseif op in _GEO_SCALAR_OPS
             _check_op_arity(Symbol(op), length(expr.args))
             children = _Node[_geo_compile(a, g) for a in expr.args]
@@ -192,6 +197,25 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
             "unsupported expression $(typeof(expr)) in setup-time geometry"
         )
     )
+end
+
+# `call` with each array argument (frames.jl `_TplCallInfo.arrays`) bound to
+# the `__arrarg` marker of its geometry source, read as a const array.
+function _geo_call_arrays(call::OpExpr, g::_GeoCompileCtx)
+    ct = _call_table()
+    arrs = ct === nothing ? nothing : _tpl_array_slots((ct::_CallTable).tt, call.name)
+    (arrs === nothing || isempty(arrs)) && return call
+    call = _call_with_implicit(call)
+    nb = copy(call.bindings::AbstractDict)
+    for (k, v) in nb
+        ((startswith(k, _TPL_FREE) ? k : _TPL_ARG * k) in arrs) || continue
+        src = _geo_source(v, g)
+        src isa AbstractArray ||
+            _decline(:call_array_args, "a template call passing a ring slice in setup geometry")
+        name = v isa VarExpr ? v.name : "geometry source"
+        nb[k] = OpExpr("__arrarg", ASTExpr[]; value = _ArrArg(:const, _const_gather_payload(src, name), name))
+    end
+    return reconstruct(call; bindings = nb)
 end
 
 # A ring/array SOURCE: an env array by name or a partial `index` slice of a
@@ -813,7 +837,21 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         # emitted once (`_cg_call_fn!`), which reads only its arguments.
         g.calls === nothing && (g.calls = _CGFunction(typemax(Int)))
         args = Any[_geo_cg(g, c) for c in n.children]
-        f = _cg_call_fn!(g.calls::_CGFunction, n.payload::_CallTarget)
+        site = n.payload::_CallSite
+        # Array arguments are sources, read from `srcs` as `:geo_gather` reads
+        # its own; each const array's ascending flag follows them, as
+        # `_cg_emit_call` passes it.
+        for a in site.arrays
+            k = get!(g.src_ix, a.data) do
+                push!(g.srcs, a.data)
+                length(g.srcs)
+            end
+            push!(args, :(srcs[$k]))
+        end
+        for (j, a) in enumerate(site.arrays)
+            site.target.arrkinds[j] === :const && push!(args, _arr_ascending(a))
+        end
+        f = _cg_call_fn!(g.calls::_CGFunction, site.target)
         return Expr(:call, f, nothing, nothing, nothing, args...)
     end
     n.kind == _NK_OP || _decline(:unknown_kind, string(n.kind))
@@ -976,9 +1014,17 @@ function _geo_shape_key(body::_Node)
                 length(arrays)
             end
             push!(key, :src, i, typeof(pl))
-        elseif pl isa _CallTarget
-            # A template call target: one object per instance for the build.
-            push!(key, :call, objectid(pl))
+        elseif pl isa _CallSite
+            # A template call: its target (one object per instance for the
+            # build) and its arrays, as sources like a gather's.
+            push!(key, :call, objectid(pl.target))
+            for a in pl.arrays
+                i = get!(aix, a.data) do
+                    push!(arrays, a.data)
+                    length(arrays)
+                end
+                push!(key, :src, i, _arr_ascending(a))
+            end
         elseif n.op === :geo_agg
             sp = pl::_GeoAggSpec
             push!(

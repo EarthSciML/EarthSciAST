@@ -253,13 +253,33 @@ mutable struct _CGFunction
     # The template call targets emitted so far (`_cg_call_fn!`): target →
     # (name, position in `helpers`, definition), stale as `instfns` is.
     callfns::IdDict{Any, Tuple{Symbol, Int, Expr}}
+    # The size each INLINED helper (call or instance function) adds where it is
+    # called: its body's emitted size with the inlined calls in it counted
+    # whole (`_cg_inl_size`). LLVM compiles that body at every call, so the
+    # inline decisions and the per-function node counts count it there.
+    inlsize::Dict{Symbol, Int}
 end
 _CGFunction(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int = 0) =
     _CGFunction(
     _CGTabs(), Int[], _CGPrologue(), Any[], 0, budget, 0, shared_cache, 0,
     _CGSlotSpace(nst), _CGNest(), _CGKernelTx(_CGMark(0, 0, 0, 0, 0), Dict{String, Symbol}()),
-    Dict{String, Tuple{Symbol, Int, Expr}}(), IdDict{Any, Tuple{Symbol, Int, Expr}}()
+    Dict{String, Tuple{Symbol, Int, Expr}}(), IdDict{Any, Tuple{Symbol, Int, Expr}}(),
+    Dict{Symbol, Int}()
 )
+
+# The emitted size of `ex` as LLVM sees it: a call of an inlined helper counts
+# that helper's body (`ctx.inlsize`), not one node.
+function _cg_inl_size(ctx::_CGFunction, ex)
+    ex isa Expr || return 1
+    n = 1
+    if ex.head === :call && !isempty(ex.args) && ex.args[1] isa Symbol
+        n += get(ctx.inlsize, ex.args[1]::Symbol, 0)
+    end
+    for a in ex.args
+        n += _cg_inl_size(ctx, a)
+    end
+    return n
+end
 
 _cg_name(ctx::_CGFunction, base::String) = Symbol("_cg", base, ctx.nname += 1)
 
@@ -981,7 +1001,8 @@ function _cg_instance_call!(ctx::_CGFunction, body)
     # A small body is inlined where it is called: the call would cost more than
     # the body, and a per-cell call keeps the loop from vectorizing. Inlining
     # leaves one definition per instance; only LLVM sees the copies.
-    nodes = _cg_expr_size(canon)
+    # Counted with the inlined call functions it calls, as LLVM compiles it.
+    nodes = _cg_inl_size(ctx, canon)
     _count_max!(:cg_instance_fn_max_nodes, nodes)
     small = nodes <= _CG_INSTANCE_INLINE_MAX_NODES
     small && _count!(:cg_instance_fn_inlined)
@@ -989,6 +1010,7 @@ function _cg_instance_call!(ctx::_CGFunction, body)
     _cg_reads_sym(canon, :_cgT) && push!(stmts, :(local _cgT = _rhs_value_type(u, p, t)))
     push!(stmts, Expr(:macrocall, Symbol("@inbounds"), ln, :(return $canon)))
     name = _cg_name(ctx, "hi")
+    small && (ctx.inlsize[name] = nodes)
     params = Any[:u, :p, :t, (Symbol("_cga", i) for i in eachindex(free))...]
     fdef = Expr(:function, Expr(:call, name, params...), Expr(:block, stmts...))
     def = Expr(:macrocall, Symbol(small ? "@inline" : "@noinline"), ln, fdef)
@@ -1010,25 +1032,109 @@ end
 
 struct _CGCallCtx
     args::Vector{Symbol}
+    arrs::Vector{Symbol}
+    asc::Vector{Any}             # per array slot: its ascending flag's parameter, or `nothing`
+    loops::IdDict{Any, Symbol}   # loop counters, and sub-trees computed once ahead ("A repeated sub-tree")
+    spans::IdDict{Any, Tuple{Int, Int}}
+    share::Any                   # a `_CGShareKeys` (array_contraction.jl, included later)
 end
+_CGCallCtx(args, arrs, asc) =
+    _CGCallCtx(args, arrs, asc, IdDict{Any, Symbol}(), IdDict{Any, Tuple{Int, Int}}(), _CGShareKeys())
 
 function _cg_emit(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
     _cg_budget!(ctx)
+    shared = get(kc.loops, nd, nothing)
+    shared === nothing || return shared
     k = nd.kind
     k === _NK_LITERAL && return nd.literal
     k === _NK_ARG && return kc.args[nd.idx]
     k === _NK_OP && return _cg_emit_op(ctx, kc, nd)
     k === _NK_CALL && return _cg_emit_call(ctx, kc, nd)
+    k === _NK_ARG_GATHER && return _cg_arg_gather(ctx, kc, nd)
+    if k === _NK_CONTRACTION_LOOP
+        spec = nd.payload::_ContractLoop
+        rng = spec.lo:spec.step:spec.hi
+        return _cg_contraction_loop(
+            ctx, kc, nd, spec.lo, spec.step, spec.hi;
+            span = isempty(rng) ? nothing : extrema((first(rng), last(rng)))
+        )
+    end
+    if k === _NK_LOOPVAR
+        s = get(kc.loops, nd.payload, nothing)
+        s === nothing && _decline(:loopvar_out_of_scope)
+        return :(Float64($s))
+    end
     return _decline(:unknown_kind, string(nd.kind))
 end
-_cg_emit_region(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node) = _cg_emit(ctx, kc, nd)
+# A body is a DAG (an interpolation reads its bracket index many times): each
+# region computes its repeated sub-trees once, as the scalar spine does.
+_cg_emit_region(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
+function _cg_share_leaf(K, kc::_CGCallCtx, nd::_Node)
+    k = nd.kind
+    (k === _NK_LITERAL || k === _NK_ARG) && return 0
+    k === _NK_ARG_GATHER && return _cg_share_obj!(K, nd.payload)
+    return _cg_share_inner(K, nd)
+end
 
-# The call of `nd` from emission context `kc`.
+# The call of `nd` from emission context `kc`: the scalar arguments, then each
+# array argument's gather payload (a run-time value, from this function's tabs).
 function _cg_emit_call(ctx::_CGFunction, kc, nd::_Node)
-    tg = nd.payload::_CallTarget
+    site = nd.payload::_CallSite
+    tg = site.target
     args = Any[_cg_emit(ctx, kc, c) for c in nd.children]
+    for a in site.arrays
+        kc isa _CGCallCtx && _decline(:call_array_forward)
+        push!(args, _cg_tab!(ctx, a.data))
+    end
+    # Per const array: whether it ascends (`_cg_count_runtime`).
+    for (j, a) in enumerate(site.arrays)
+        tg.arrkinds[j] === :const && push!(args, _arr_ascending(a))
+    end
     f = _cg_call_fn!(ctx, tg)
+    # An inlined body is compiled here too: it counts toward this function.
+    ctx.nodes += get(ctx.inlsize, f, 0)
     return Expr(:call, f, :u, :p, :t, args...)
+end
+
+# `_NK_ARG_GATHER` in a call function: the walker's read
+# (`_eval_state_gather_at` / `_eval_const_gather_at`) of the array parameter,
+# whose bounds and strides are read from it at run time. A state gather tests
+# each subscript before the next is evaluated, as the walker does.
+function _cg_arg_gather(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
+    ref = nd.payload::_ArgGatherRef
+    A = kc.arrs[ref.j]
+    kind = ref.target.arrkinds[ref.j]
+    ch = nd.children
+    subs = Symbol[_cg_name(ctx, "ags") for _ in ch]
+    if kind === :state
+        off = _cg_foldl(:+, Any[0, (:(($(subs[d]) - $A.lo[$d]) * $A.strides[$d]) for d in eachindex(ch))...])
+        inner = :(@inbounds u[_sg_slot($A, $off)])
+        for d in reverse(eachindex(ch))
+            se = d == 1 ? _cg_emit(ctx, kc, ch[d]) : _cg_emit_region(ctx, kc, ch[d])
+            inner = Expr(
+                :let, Expr(:block, :($(subs[d]) = round(Int, $se))),
+                Expr(:block, :(($A.lo[$d] <= $(subs[d]) <= $A.hi[$d]) ? $inner : zero(eltype(u))))
+            )
+        end
+        return inner
+    end
+    binds = Any[]
+    dims = ref.target.arrdims[ref.j]
+    for d in eachindex(ch)
+        se = d == 1 ? _cg_emit(ctx, kc, ch[d]) : _cg_emit_region(ctx, kc, ch[d])
+        # A subscript whose every value is an integer on the axis (the
+        # array's dimensions are part of the target) reads its element
+        # directly: `round` and the boundary policy both return it unchanged.
+        span = _cg_int_span(kc, ch[d])
+        inside = span !== nothing && d <= length(dims) && 1 <= span[1] && span[2] <= dims[d]
+        inside && _tally_cascade!(:gather_in_range)
+        push!(
+            binds, inside ? :($(subs[d]) = unsafe_trunc(Int, $se)) :
+                :($(subs[d]) = _const_gather_sub($A, $d, round(Int, $se)))
+        )
+    end
+    off = _cg_foldl(:+, Any[1, (:(($(subs[d]) - 1) * $A.strides[$d]) for d in eachindex(ch))...])
+    return Expr(:let, Expr(:block, binds...), Expr(:block, :(@inbounds $A.flat[$off])))
 end
 
 # The emitted function of target `tg` (minted on first use in `ctx`).
@@ -1042,9 +1148,14 @@ function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
         end
     end
     argsyms = Symbol[Symbol("_cga", i) for i in eachindex(tg.slots)]
-    body = _cg_emit(ctx, _CGCallCtx(argsyms), tg.body)
+    arrsyms = Symbol[Symbol("_cgA", j) for j in eachindex(tg.arrslots)]
+    ascsyms = Any[tg.arrkinds[j] === :const ? Symbol("_cgAasc", j) : nothing for j in eachindex(tg.arrslots)]
+    body = _cg_emit_region(ctx, _CGCallCtx(argsyms, arrsyms, ascsyms), tg.body)
     ln = LineNumberNode(0, Symbol("ess-template-call"))
-    small = tg.nodes <= _CG_INSTANCE_INLINE_MAX_NODES
+    # Its emitted size with the inlined calls in it counted whole: a body
+    # that is large once its calls are inlined is called, not inlined.
+    sz = _cg_inl_size(ctx, body)
+    small = sz <= _CG_INSTANCE_INLINE_MAX_NODES
     small && _count!(:cg_call_fn_inlined)
     stmts = Any[
         Expr(:meta, small ? :inline : :no_constprop),
@@ -1053,12 +1164,90 @@ function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
     # In the helper namespace (`_cgh…`): never taken for a local to pass along
     # (`_cg_is_passable`).
     name = _cg_name(ctx, "htc")
-    fdef = Expr(:function, Expr(:call, name, :u, :p, :t, argsyms...), Expr(:block, stmts...))
+    small && (ctx.inlsize[name] = sz)
+    fdef = Expr(
+        :function,
+        Expr(:call, name, :u, :p, :t, argsyms..., arrsyms..., filter(!isnothing, ascsyms)...),
+        Expr(:block, stmts...)
+    )
     def = Expr(:macrocall, Symbol(small ? "@inline" : "@noinline"), ln, fdef)
     push!(ctx.helpers, def)
     ctx.callfns[tg] = (name, length(ctx.helpers), def)
     _tally_cascade!(:cg_call_fn)
     return name
+end
+
+# Whether a const array argument's entries ascend (`a[k] <= a[k+1]`, which no
+# NaN satisfies): a count over it is then a binary search (`_cg_count_runtime`).
+# Passed by each call site, as a literal, next to the array.
+function _arr_ascending(a::_ArrArg)
+    cg = a.data::_ConstGatherArray
+    length(cg.dims) == 1 || return false
+    f = cg.flat
+    @inbounds for k in 1:(length(f) - 1)
+        f[k] <= f[k + 1] || return false
+    end
+    return !(length(f) == 1 && isnan(f[1]))
+end
+
+# The comparison count (`_cg_count_loop`) over a const ARRAY ARGUMENT read at
+# the counter: a binary search when the site's array ascends and the range is
+# inside it with step 1, else the comparison per entry. Both are the count, so
+# the bits are the fold's whichever runs.
+function _cg_count_runtime(ctx::_CGFunction, kc::_CGCallCtx, a::_Node, spec, test, neg, rel, xv, xe, kv_loop)
+    (a.kind === _NK_ARG_GATHER && length(a.children) == 1) || return nothing
+    s = a.children[1]
+    (s.kind === _NK_LOOPVAR && s.payload === spec.ref) || return nothing
+    ref = a.payload::_ArgGatherRef
+    asc = kc.asc[ref.j]
+    asc === nothing && return nothing
+    spec.step == 1 || return nothing
+    A = kc.arrs[ref.j]
+    lo, hi = spec.lo, spec.hi
+    nrng = length(lo:hi)
+    cv, hv, mv = _cg_name(ctx, "cn"), _cg_name(ctx, "ch"), _cg_name(ctx, "cm")
+    rd(m) = :(@inbounds $A.flat[$(lo - 1) + $m])
+    search = if rel === :<= || rel === :<
+        quote
+            local $cv = 0
+            local $hv = $nrng
+            while $cv < $hv
+                local $mv = ($cv + $hv + 1) >>> 1
+                if $(test(rd(mv)))
+                    $cv = $mv
+                else
+                    $hv = $mv - 1
+                end
+            end
+            Float64($(neg ? :($nrng - $cv) : cv))
+        end
+    else
+        quote
+            local $cv = 1
+            local $hv = $(nrng + 1)
+            while $cv < $hv
+                local $mv = ($cv + $hv) >>> 1
+                if $(test(rd(mv)))
+                    $hv = $mv
+                else
+                    $cv = $mv + 1
+                end
+            end
+            Float64($(neg ? :($nrng - ($(nrng + 1) - $cv)) : :($(nrng + 1) - $cv)))
+        end
+    end
+    linear = kv_loop()
+    _tally_cascade!(:count_fold_search)
+    return quote
+        let
+            local $xv = $xe
+            if $asc && $lo >= 1 && $hi <= length($A.flat) && length($A.dims) == 1
+                $search
+            else
+                $linear
+            end
+        end
+    end
 end
 
 # Emitted-node size up to which an instance function is inlined at its calls.

@@ -498,7 +498,8 @@ function _cse_rebuild(expr::OpExpr, var_map, param_syms, ctx::_CSEContext)
     if _tpl_is_call(expr)
         tg = _call_target(expr)
         return _call_node(
-            tg, _Node[_compile_cse(a, var_map, param_syms, ctx) for a in _call_args(tg, expr)]
+            tg, _Node[_compile_cse(a, var_map, param_syms, ctx) for a in _call_args(tg, expr)],
+            _call_arrays(tg, expr)
         )
     end
     children = _Node[

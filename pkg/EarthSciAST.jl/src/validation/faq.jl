@@ -313,7 +313,7 @@ function _faq_bare_operands!(
     elseif e isa OpExpr && (_is_elementwise_node(e) || _tpl_is_call(e)) && !opaque(e)
         haskey(seen, e) && return out
         seen[e] = nothing
-        for a in _operands(e)
+        for a in _value_operands(e)
             _faq_bare_operands!(out, a, shaped, opaque, seen)
         end
     end

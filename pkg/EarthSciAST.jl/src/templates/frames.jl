@@ -491,18 +491,29 @@ end
 # place, while the call node is being taught to every phase (an intermediate
 # state of the branch: the end state calls every reference).
 #
-# Today: SCALAR FUNCTION templates. Every node of the prepared body
-# (transitively through nested references) is a literal, a parameter or
-# implicit parameter, or an elementwise operator; every nested reference is
-# itself a scalar function template. Such a body reads its caller only through
-# its arguments, so it compiles to a pure function of them.
+# Today: templates whose prepared body (transitively through nested
+# references) is made of literals, parameters and implicit parameters,
+# elementwise operators, `index` reads of an ARRAY PARAMETER at scalar
+# subscripts, and scalar reductions (`faq` with no output index) over constant
+# ranges. Such a body reads its caller only through its arguments, so it
+# compiles to a function of them:
+#
+#   * a parameter read as a value is a scalar argument;
+#   * a parameter read as the array of an `index` (declared, or an implicit one:
+#     a global array the body reads) is an ARRAY argument, passed at run time
+#     (call.jl `_CallSite`), so one compiled body serves every array of the
+#     same kind and rank;
+#   * a parameter that is a bound of a reduction range is FIXED: its literal
+#     value is part of the instance (callnode-design.md section 1, "structural
+#     position"), and it is substituted into that instance's body.
 #
 # The bound-expression rule (user decision, 2026-11-18): a plain variable, a
 # literal and a plain `index` read are passed as values; a compound binding is
 # passed as a value too when the body reads its parameter unconditionally (it
 # would be evaluated anyway), and otherwise (read only under an `ifelse` arm or
-# a short-circuited operand, or not at all) it must become part of its own
-# instance, which this step does not do yet, so such a site is still expanded.
+# a short-circuited operand, inside a reduction, or not at all) it must become
+# part of its own instance, which this step does not do yet, so such a site is
+# still expanded.
 
 const _TPL_CALL_OPS = union(_ops_with(:stencil_elementwise), Set(["const", "true", "false"]))
 
@@ -518,14 +529,25 @@ _tpl_structless(e::OpExpr) = e.expr_body === nothing && e.values === nothing &&
     e.ranges === nothing && e.output_idx === nothing && e.filter === nothing &&
     e.lower === nothing && e.upper === nothing && e.key === nothing
 
-# Per template name: `nothing` when it is not a scalar function template, else
-# the set of its parameters (declared names) the body reads unconditionally.
-function _tpl_scalar_fn(tt::_TplTable, name::AbstractString)
-    memo = _tpl_memo(tt, nothing, :scalar_fn, () -> Dict{String, Any}())
+# What a callable template's body does with its parameters, by sentinel
+# (`"\0arg\0p"` / `"\0free\0n"`): read as a value on an unconditional path,
+# read as an array, a fixed (range bound) value.
+struct _TplCallInfo
+    uncond::Set{String}
+    arrays::Set{String}
+    fixed::Set{String}
+    scalars::Set{String}      # every sentinel read as a value (any path)
+end
+_TplCallInfo() = _TplCallInfo(Set{String}(), Set{String}(), Set{String}(), Set{String}())
+
+# Per template name: `nothing` when the build does not call it yet, else its
+# `_TplCallInfo`.
+function _tpl_call_info(tt::_TplTable, name::AbstractString)
+    memo = _tpl_memo(tt, nothing, :call_info, () -> Dict{String, Any}())
     haskey(memo, name) && return memo[name]
     memo[String(name)] = nothing      # a cycle reads as "not callable"
     r = try
-        _tpl_scalar_fn_uncached(tt, String(name))
+        _tpl_call_info_uncached(tt, String(name))
     catch err
         err isa ExpressionTemplateError || rethrow()
         nothing
@@ -534,40 +556,98 @@ function _tpl_scalar_fn(tt::_TplTable, name::AbstractString)
     return r
 end
 
-function _tpl_scalar_fn_uncached(tt::_TplTable, name::String)
+function _tpl_call_info_uncached(tt::_TplTable, name::String)
     def = _tpl_def(tt, name)
     def.closed === nothing && return nothing
-    uncond = Set{String}()
-    ok = _tpl_scalar_walk!(tt, def.closed.body, false, uncond)
-    ok || return nothing
-    return Set{String}(p for p in def.params if (_TPL_ARG * p) in uncond)
+    info = _TplCallInfo()
+    _tpl_call_walk!(tt, def.closed.body, false, info) || return nothing
+    # A name is read one way only; an implicit parameter is never fixed (its
+    # value is the caller's, not a literal at the reference).
+    isempty(intersect(info.arrays, info.scalars)) || return nothing
+    isempty(intersect(info.arrays, info.fixed)) || return nothing
+    any(s -> startswith(s, _TPL_FREE), info.fixed) && return nothing
+    return info
 end
 
-# Walk a prepared body: false when a node is outside the scalar function class.
-# `uncond` collects the sentinels read on an unconditional path (`cond` false).
-function _tpl_scalar_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, uncond::Set{String})
+# A range bound the build can fix: an integer literal, or a parameter (fixed).
+function _tpl_range_bound!(x, info::_TplCallInfo)
+    (x isa Integer || x isa IntExpr) && return true
+    (x isa NumExpr && isinteger(x.value)) && return true
+    if x isa VarExpr && _tpl_is_sentinel(x.name)
+        push!(info.fixed, x.name)
+        return true
+    end
+    return false
+end
+
+# Walk a prepared body: false when a node is outside the class above. `cond`:
+# the node is evaluated only on some paths.
+function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallInfo)
     if e isa VarExpr
-        (!cond && _tpl_is_sentinel(e.name)) && push!(uncond, e.name)
+        if _tpl_is_sentinel(e.name)
+            push!(info.scalars, e.name)
+            cond || push!(info.uncond, e.name)
+        end
         return true
     end
     e isa OpExpr || return true
     if _tpl_is_call(e)
-        inner = _tpl_scalar_fn(tt, e.name)
+        inner = _tpl_call_info(tt, e.name)
         inner === nothing && return false
         b = e.bindings === nothing ? Dict{String, ASTExpr}() : e.bindings
         for (k, v) in b
-            c = cond || !(startswith(k, _TPL_FREE) || k in inner)
-            _tpl_scalar_walk!(tt, v, c, uncond) || return false
+            s = startswith(k, _TPL_FREE) ? k : _TPL_ARG * k
+            # An array argument of a nested call is not done yet (the emitted
+            # body would have to pass it on).
+            s in inner.arrays && return false
+            if s in inner.fixed
+                (v isa IntExpr || (v isa NumExpr && isinteger(v.value))) || return false
+                continue
+            end
+            c = cond || !(s in inner.uncond)
+            _tpl_call_walk!(tt, v, c, info) || return false
         end
         return true
+    end
+    if e.op == "index" && _tpl_structless(e) && length(e.args) >= 2
+        base = e.args[1]
+        if base isa VarExpr && _tpl_is_sentinel(base.name)
+            push!(info.arrays, base.name)
+        elseif !(base isa OpExpr && base.op == "const" && base.value isa AbstractVector)
+            return false
+        end
+        for j in 2:length(e.args)
+            _tpl_call_walk!(tt, e.args[j], cond, info) || return false
+        end
+        return true
+    end
+    if _is_faq_op(e.op)
+        # A scalar reduction over constant ranges.
+        (e.output_idx === nothing || isempty(e.output_idx)) || return false
+        (e.filter === nothing && e.join_gates === nothing && e.key === nothing &&
+            e.values === nothing && e.lower === nothing && e.upper === nothing) || return false
+        (e.expr_body === nothing || e.ranges === nothing) && return false
+        isempty(e.args) || all(a -> a isa VarExpr, e.args) || return false
+        for (_, rv) in e.ranges
+            (rv isa AbstractVector && 2 <= length(rv) <= 3) || return false
+            all(x -> _tpl_range_bound!(x, info), rv) || return false
+        end
+        # The body is evaluated once per term; a range may be empty.
+        return _tpl_call_walk!(tt, e.expr_body, true, info)
     end
     (e.op in _TPL_CALL_OPS && _tpl_structless(e)) || return false
     isempty(_bound_symbols(e)) || return false
     for (j, a) in enumerate(e.args)
-        _tpl_scalar_walk!(tt, a, cond || _op_arg_conditional(e.op, j), uncond) || return false
+        _tpl_call_walk!(tt, a, cond || _op_arg_conditional(e.op, j), info) || return false
     end
     return true
 end
+
+# A binding the build can pass as an array argument: a name (resolved to its
+# array when the call compiles) or an inline `const` array.
+_tpl_array_binding(v::ASTExpr) =
+    (v isa VarExpr && !occursin(_TPL_SENTINEL, v.name) && !_tpl_is_sentinel(v.name)) ||
+    (v isa OpExpr && v.op == "const" && v.value isa AbstractVector)
 
 """
     _tpl_is_called(tt, call::OpExpr) -> Bool
@@ -577,20 +657,36 @@ model's own tree or a body being expanded) as a call node rather than
 expanding it. See the section comment above.
 """
 function _tpl_is_called(tt::_TplTable, call::OpExpr)
-    uncond = _tpl_scalar_fn(tt, call.name)
-    uncond === nothing && return false
+    info = _tpl_call_info(tt, call.name)
+    info === nothing && return false
     def = _tpl_def(tt, call.name)
     b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
     for p in def.params
         v = get(b, p, nothing)
         v === nothing && return false
-        p in uncond && continue
+        s = _TPL_ARG * p
+        if s in info.arrays
+            _tpl_array_binding(v) || return false
+            continue
+        end
+        if s in info.fixed
+            (v isa IntExpr || (v isa NumExpr && isinteger(v.value))) || return false
+            continue
+        end
+        s in info.uncond && continue
         # A parameter placeholder of a template skeleton being expanded
         # (expand_typed.jl) stands for a binding not known yet.
         (v isa VarExpr && occursin(_TPL_SENTINEL, v.name)) && return false
         _tpl_plain_binding(v) || return false
     end
     return true
+end
+
+# The sentinels of `call`'s template read as arrays (`nothing` when the build
+# does not call it).
+function _tpl_array_slots(tt::_TplTable, name)
+    info = _tpl_call_info(tt, name)
+    return info === nothing ? nothing : info.arrays
 end
 
 """

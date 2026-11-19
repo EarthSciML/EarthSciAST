@@ -190,6 +190,11 @@ function _resolve_index_op(expr::OpExpr, rc::_ResolveCtx)
         throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY", "index op requires at least one arg"))
     target = expr.args[1]
     subs = expr.args[2:end]
+    # Inside a template body being compiled, an array argument (call.jl).
+    if target isa VarExpr && startswith((target::VarExpr).name, '\0')
+        g = _arg_gather_resolve((target::VarExpr).name, subs, rc)
+        g === nothing || return g
+    end
     kind = _index_target_kind(target)
     if kind === _IT_FAQ
         # Expanded at build time by substituting the output indices and
@@ -468,9 +473,15 @@ function _resolve_call_bindings(expr::OpExpr, rc::_ResolveCtx)
     expr = _call_with_implicit(expr)
     b = expr.bindings
     b === nothing && return expr
+    ct = _call_table()
+    arrs = ct === nothing ? nothing : _tpl_array_slots((ct::_CallTable).tt, expr.name)
     nb = b
     for (k, v) in b
-        r = v isa OpExpr ? _resolve_indices(v::OpExpr, rc) :
+        # An array argument is passed whole (`_arr_arg_marker`); every other
+        # one is a value, resolved here.
+        isarr = arrs !== nothing && ((startswith(k, _TPL_FREE) ? k : _TPL_ARG * k) in arrs)
+        r = isarr ? _arr_arg_marker(v, rc) :
+            v isa OpExpr ? _resolve_indices(v::OpExpr, rc) :
             v isa VarExpr ? _resolve_indices(v::VarExpr, rc) : v
         if r !== v
             nb === b && (nb = copy(b))

@@ -84,8 +84,11 @@ end
 # Run `f` with the problem's template call targets (call.jl) on the current
 # build state: an output-time read compiles and evaluates the build's
 # expressions, whose template references are calls.
-function _with_problem_calls(f, prob::EsmProblem)
-    octx = prob.build.products.observed_ctx
+_with_problem_calls(f, prob::EsmProblem) = _with_build_calls(f, prob.build.products)
+
+# The same for a build's products (an inline test's assertion reads them).
+function _with_build_calls(f, products::BuildProducts)
+    octx = products.observed_ctx
     calls = octx === nothing ? nothing : octx.calls
     calls === nothing && return f()
     st = _build_state()
@@ -652,11 +655,13 @@ function _observed_field(
     exts = _shape_extents(insp, file, v.shape === nothing ? String[] : v.shape)
     exts === nothing && return nothing
     r = _ObservedRead(insp, file, model, mname, variable, exts, ctx, u, t, var_map, p)
-    for route in _OBSERVED_ROUTES
-        got = route(r)
-        got === nothing || return got
+    return _with_build_calls(insp) do
+        for route in _OBSERVED_ROUTES
+            got = route(r)
+            got === nothing || return got
+        end
+        nothing
     end
-    return nothing
 end
 
 # One `_observed_field` request, as its routes read it.
