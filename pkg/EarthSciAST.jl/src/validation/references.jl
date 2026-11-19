@@ -194,7 +194,7 @@ _indep_var(file::EsmFile)::String = _indep_var(file.domain)
 # them. v0.8.0 removed `Domain.spatial`, so a coordinate has no declaration site
 # at all: it is named directly in an expression (the `x` of an expression initial
 # condition, `0.5*(1 + tanh((x - 0.3)/0.15))`) and as the `dim` of a
-# spatial `D` (its `wrt`). It belongs to the DOMAIN, not to any `variables`
+# spatial `D` (its `wrt`) or of an open-tier op. It belongs to the DOMAIN, not to any `variables`
 # block, so reporting it `undefined_variable` rejects a valid file.
 const _CONVENTIONAL_COORDINATE_NAMES = ("x", "y", "z", "lon", "lat", "lev")
 

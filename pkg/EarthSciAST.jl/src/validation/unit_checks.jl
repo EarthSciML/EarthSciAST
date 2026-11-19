@@ -281,9 +281,11 @@ function _check_reaction_rate_units!(errors, rs::ReactionSystem, path::String, t
     return errors
 end
 
-# An open-tier user op has no dimensional rule (esm-spec §4.2, §4.8.3,
-# §4.8.4), so the units engine reports its dimension as undeterminable and
-# skips the enclosing check.
+# An open-tier user op (`grad`, `div` and `laplacian` among them) has no
+# dimensional rule (esm-spec §4.2, §4.8.3, §4.8.4), so the units engine reports
+# its dimension as undeterminable and skips the enclosing check. Pinned by
+# `tests/invalid/units_gradient_operator_mismatch.esm`, whose one finding is
+# the `m + kg` addition.
 
 """
 Well-known physical constants whose declared units can be dimensionally

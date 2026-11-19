@@ -277,9 +277,6 @@ end
         @test code(() -> parse_math("k +", names, :markdown)) == "parse_error"
         @test code(() -> parse_math("1.0e400 k", names, :typst)) == "parse_error"
         @test code(() -> parse_math("\\operatorname{arrayop}(k)", names, :markdown)) == "removed_op"
-        for op in ("grad", "div", "laplacian")
-            @test code(() -> parse_math("\\operatorname{$(op)}(k)", names, :markdown)) == "removed_op"
-        end
         deep = "("^50_000 * "k" * ")"^50_000
         @test code(() -> parse_math(deep, names, :typst)) == "parse_error"
     end

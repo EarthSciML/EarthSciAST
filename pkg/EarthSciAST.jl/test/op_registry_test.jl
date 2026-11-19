@@ -34,7 +34,8 @@ const ESM = EarthSciAST
     end
 
     @testset "_CSE_OPAQUE_OPS membership (pre-registry literal)" begin
-        # What routes a rewrite-target op through
+        # grad/div/laplacian are NOT here (esm-spec §4.2): they carry no
+        # bespoke registry flag at all. What routes a rewrite-target op through
         # `_compile_op`'s `unlowered_operator` gate (instead of the guardless
         # `_cse_rebuild` generic-node path) is the GENERIC tier predicate
         # `_op_in_T` inside `_cse_hoistable` — a member of `_REWRITE_TARGET_OPS`
@@ -99,7 +100,7 @@ const ESM = EarthSciAST
                 "asin", "acos", "atan", "sqrt", "abs",
                 "min", "max",
                 ">", "<", ">=", "<=", "==", "!=",
-                "D",
+                "D",  # grad/div/laplacian dropped (§4.2): unregistered user-op tier
                 "faq", "faq", "makearray", "index", "broadcast",
                 "reshape", "transpose",
                 "concat", "Pre", "ifelse", "ic",
@@ -108,15 +109,29 @@ const ESM = EarthSciAST
         @test ESM._ops_with(:mtk_known) isa Set{String}
     end
 
-    @testset "grad/div/laplacian were removed at esm 2.4.0 (§4.2)" begin
-        # They are refused by name at load (`removed_op`), so they have no
-        # registry row; spatial axes are harvested structurally from the
-        # `dim`/`wrt` FIELDS (flatten.jl), not from an op-name set.
+    @testset "grad/div/laplacian are ordinary open-tier user op names (§4.2)" begin
+        # esm-spec §4.2: `grad`, `div` and `laplacian` carry NO dimensional /
+        # spatial / coordinate privilege and no registry row. The former `known`/`spatial`/
+        # `dim_spatial` flags were dropped — dimension is UNDETERMINABLE until
+        # lowered (§4.8.3/§4.8.4, units.jl has no rule), and spatial axes are
+        # harvested structurally from the `dim`/`wrt` FIELDS (flatten.jl), not
+        # from an op-name set. They now carry NO bespoke registry flag at all —
+        # NOT EVEN `cse=true`. What routes them to the `unlowered_operator` gate
+        # is their membership in the open rewrite-target tier T (`_op_in_T`,
+        # which holds every op with no registry row):
+        # `_cse_hoistable` makes every T op a non-hoistable CSE barrier, so it
+        # reaches `_compile_op`'s GENERIC gate, exactly like an arbitrary user
+        # op (pinned by tree_walk_test.jl). They are NOT `_CSE_OPAQUE_OPS`.
         for op in ("grad", "div", "laplacian")
-            @test ESM._op_spec(op) === nothing
-            @test op in ESM._REMOVED_OPS
-            @test !(op in ESM._REWRITE_TARGET_OPS)
+            @test !(op in ESM._ops_with(:mtk_known))   # no MTK "known" privilege
+            @test !(op in ESM._CSE_OPAQUE_OPS)         # no bespoke cse flag
+            @test ESM._op_in_T(op)                     # in the open rewrite-target tier
+            @test ESM._op_spec(op) === nothing         # no registry row
+            @test !(op in ESM._REWRITE_TARGET_OPS)     # not a named rewrite target
+            @test !(op in ESM._REMOVED_OPS)            # not refused
         end
+        # The `spatial` / `dim_spatial` registry flags were removed entirely,
+        # and there is no `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` op-name set.
         @test !(:spatial in ESM._OP_FLAG_NAMES)
         @test !(:dim_spatial in ESM._OP_FLAG_NAMES)
         @test_throws ArgumentError ESM._ops_with(:spatial)
@@ -267,7 +282,6 @@ end
     @test ESM._REMOVED_OPS == (
         "arrayop", "fn", "table_lookup", "skolem", "rank", "intersect_polygon",
         "polygon_intersection_area", "argmin", "argmax", "aggregate",
-        "grad", "div", "laplacian",
     )
     @test ESM.DocumentFormats.MExpr.REMOVED_OPS === ESM._REMOVED_OPS
     @test ESM.DocumentFormats.MExpr.DEPRECATED_OPS == ("neg", "pow")

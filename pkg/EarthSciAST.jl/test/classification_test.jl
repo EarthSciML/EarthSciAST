@@ -109,6 +109,33 @@ const _CLS = ClassificationConformanceAdapter
         @test observed_definition(m, "x") === nothing   # an ODE state, not observed
     end
 
+    @testset "grad/div/laplacian are ordinary user ops, not a pde signal" begin
+        # esm-spec §4.2 / §6.3.1: only a spatial `D` makes a model a PDE. A
+        # document using `grad` loads, and with no spatial `D` it is an ODE.
+        for op in ("grad", "div", "laplacian")
+            doc = Dict{String, Any}(
+                "esm" => EarthSciAST.SCHEMA_VERSION,
+                "metadata" => Dict{String, Any}("name" => "m"),
+                "models" => Dict{String, Any}(
+                    "M" => Dict{String, Any}(
+                        "variables" => Dict{String, Any}(
+                            "u" => Dict{String, Any}("type" => "unknown", "units" => "1", "default" => 1.0)
+                        ),
+                        "equations" => Any[
+                            Dict{String, Any}(
+                                "lhs" => Dict{String, Any}("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                                "rhs" => Dict{String, Any}("op" => op, "args" => Any["u"], "dim" => "x"),
+                            ),
+                        ],
+                    ),
+                ),
+            )
+            m = EarthSciAST.load_string(JSON3.write(doc)).models["M"]
+            @test (op, has_spatial_derivative(m)) == (op, false)
+            @test (op, system_kind(m)) == (op, "ode")
+        end
+    end
+
     @testset "system_kind derivation: order is sde → pde → nonlinear → ode" begin
         pde = EarthSciAST.load_path(joinpath(_CLS_DIR, "fixtures", "system_kind_pde.esm"))
         # A spatial `D` (wrt an axis), alone or nested, is the pde signal.

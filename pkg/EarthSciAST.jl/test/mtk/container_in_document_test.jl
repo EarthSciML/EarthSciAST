@@ -75,7 +75,7 @@ end
 
 @testset "a document this engine cannot build refuses ALL of its containers" begin
     # `tests/valid/units_dimensional_analysis.esm` declares five models. One —
-    # `FluidMechanics` — carries `D(P, wrt: x)`, an unlowered rewrite-target
+    # `FluidMechanics` — carries `grad(P, dim: x)`, an unlowered rewrite-target
     # operator that puts `x` in the DOCUMENT's independent variables, and
     # `ModelingToolkit.System` refuses a flattened system with spatial
     # independent variables (the binding has no PDE constructor). Spatiality is a property of the whole flatten, so the
@@ -83,7 +83,7 @@ end
     #
     # That is deliberate and it is the CROSS-BINDING number: the Rust CLI
     # reports 0 pass / 18 err on this same file, refusing the whole document for
-    # the same unlowered spatial `D` (`esm test tests/valid/units_dimensional_analysis.esm`).
+    # the same unlowered `grad` (`esm test tests/valid/units_dimensional_analysis.esm`).
     # A document must not validate under one binding and fail under another, so
     # the four purely temporal siblings do NOT get a private per-container build
     # that would pass 13 assertions here alone. If this assertion ever goes red
@@ -94,7 +94,7 @@ end
     @test count(r -> r.status == EarthSciAST.PASS, res) == 0   # Rust: 0
     @test all(r -> r.status == EarthSciAST.ERROR, res)
     @test all(r -> occursin("PDE", r.message), res)
-    # All five containers are refused, not only the one carrying the spatial `D`.
+    # All five containers are refused, not only the one carrying the `grad`.
     @test length(Set(r.container_name for r in res)) == 5
 end
 

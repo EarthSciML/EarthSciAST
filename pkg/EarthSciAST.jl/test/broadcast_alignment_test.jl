@@ -311,6 +311,8 @@ _bc_oracle(name, body) = _bc_model(
             (_bc_bcast("index", "x"), "non_scalar"),
             (_bc_bcast("makearray", "x"), "non_scalar"),
             (_bc_bcast("D", "x"), "non_scalar"),
+            # An ordinary user op name is not in the registry at all.
+            (_bc_bcast("grad", "x"), "unknown"),
             (_bc_bcast("sin", "x", "x"), "arity"),
             (_bc_bcast("/", "x"), "arity"),
             (_bc_bcast("ifelse", "x", "x"), "arity"),
