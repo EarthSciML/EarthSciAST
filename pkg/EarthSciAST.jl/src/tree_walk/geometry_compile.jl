@@ -1026,7 +1026,7 @@ function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothi
             ]
             e = _cg_calls_by_value(e, idx, left)
             left[] == 0 || error("geometry codegen: a call function referenced other than by a call")
-            fns = _cg_subfns(fexs)
+            fns = _cg_subfns(fexs, _cg_call_heights(defs))
         end
         for m in get(g.resets, 0, Symbol[])
             push!(top, :(local $m::Float64 = 0.0), :(local $(Symbol(m, :_set))::Bool = false))

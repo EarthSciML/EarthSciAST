@@ -45,6 +45,17 @@ function _tc_templates()
             "params" => Any["a"],
             "body" => _tc_op("*", "a", _tc_op("+", 1.0, _tc_op("sin", _tc_op("*", "k", "t")))),
         ),
+        # A chain of calls, each calling the next with a different arity.
+        "c1" => Dict("params" => Any["x"], "body" => _tc_op("*", "x", 2)),
+        "c2" => Dict("params" => Any["x", "y"], "body" => _tc_op("+", _tc_ref("c1", Dict("x" => "x")), "y")),
+        "c3" => Dict(
+            "params" => Any["x", "y", "z"],
+            "body" => _tc_op("*", _tc_ref("c2", Dict("x" => "x", "y" => "y")), "z"),
+        ),
+        "c4" => Dict(
+            "params" => Any["a", "b", "c", "d"],
+            "body" => _tc_op("-", _tc_ref("c3", Dict("x" => "a", "y" => "b", "z" => "c")), "d"),
+        ),
         # An integer subscript computed from time.
         "slot" => Dict(
             "params" => Any["x"],
@@ -88,7 +99,18 @@ function _tc_document(tracers)
                     "op" => "faq", "output_idx" => Any["i"], "args" => Any[],
                     "ranges" => Dict("i" => Any[1, _TC_N]),
                     "expr" => _tc_op(
-                        "-", flux,
+                        "-",
+                        _tc_op(
+                            "+", flux,
+                            _tc_op(
+                                "*", 1.0e-3, _tc_ref(
+                                    "c4", Dict(
+                                        "a" => _tc_at(q, 0), "b" => _tc_at(q, 1),
+                                        "c" => _tc_at("U", 0), "d" => 0.5
+                                    )
+                                )
+                            )
+                        ),
                         _tc_op("*", _tc_ref("season", Dict("a" => 0.01)), _tc_at(q, 0))
                     ),
                 ),
@@ -144,7 +166,10 @@ function _tc_build_and_probe(fix; atload = false, compiler = :native)
         f(du, u, p, ti)
         push!(dus, copy(du))
     end
-    return dus, u0, counts
+    du = similar(u0)
+    f(du, u0, p, 0.1)
+    alloc = @allocated f(du, u0, p, 0.2)
+    return dus, u0, counts, alloc
 end
 
 @testset "template references compiled as calls" begin
@@ -153,9 +178,12 @@ end
         for tracers in (["a"], ["a", "b", "c"])
             fix = joinpath(dir, "calls_$(length(tracers)).esm")
             open(io -> JSON3.write(io, _tc_document(tracers)), fix, "w")
-            fast, u0, counts = _tc_build_and_probe(fix)
-            atload, _, _ = _tc_build_and_probe(fix; atload = true)
-            interp, _, icounts = _tc_build_and_probe(fix; compiler = :interpreter)
+            fast, u0, counts, alloc = _tc_build_and_probe(fix)
+            atload, _, _, _ = _tc_build_and_probe(fix; atload = true)
+            interp, _, icounts, _ = _tc_build_and_probe(fix; compiler = :interpreter)
+            # Calls between emitted call functions are static: nothing is
+            # boxed on a right-hand-side call.
+            @test alloc == 0
             for k in 1:3
                 @test fast[k] == atload[k]
                 @test interp[k] == atload[k]

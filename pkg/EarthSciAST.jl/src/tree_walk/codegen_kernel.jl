@@ -2419,6 +2419,7 @@ function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool}
     # a call target is meant to be one static function.
     something(by_value, _cg_carry_by_value(ex) || any(d -> _cg_is_call_fn(d[1]), defs)) ||
         return (ex, nothing)
+    heights = _cg_call_heights(defs)
     left = Ref(0)
     fns = Expr[
         Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left))
@@ -2432,7 +2433,9 @@ function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool}
     # at a definition the by-value form does not have.
     left[] == 0 || error("codegen: an emitted sub-function is referenced other than by a call")
     _tally_cascade!(:cg_split_by_value)
-    return (Expr(:function, ex.args[1], Expr(:block, stmts...)), fns)
+    # The heights travel with the definitions only when a call function is
+    # among them (`_cg_pack_fns`).
+    return (Expr(:function, ex.args[1], Expr(:block, stmts...)), all(iszero, heights) ? fns : (fns, heights))
 end
 
 # Whether the generated function `ex` is under the by-value size threshold.
@@ -2497,6 +2500,20 @@ struct _CGSubFn{ID}
     def::Expr
 end
 
+# A template call function (`_cg_call_fn!`) by value. Call functions call each
+# other (a template body calls the templates it references), and instance
+# functions call them; through the one generated method of `_CGSubFn` every
+# such call would be that method calling itself with another type parameter,
+# which inference widens (boxed arguments, dynamic dispatch). So a call
+# function is a `_CGSubFnH{H, ID}`, `H` its HEIGHT (1 + the largest height of
+# the call functions it calls), and each height has a generated method of its
+# own: along any call chain the heights strictly fall, so no method calls
+# itself. Heights past `_CG_MAX_CALL_HEIGHT` share its method (correct, slower).
+struct _CGSubFnH{H, ID}
+    def::Expr
+end
+const _CG_MAX_CALL_HEIGHT = 32
+
 mutable struct _CGSubFnTable
     @atomic defs::Dict{UInt128, WeakRef}
 end
@@ -2546,11 +2563,41 @@ function _cg_subfn_register!(ids::Vector{UInt128}, defs::Vector{Expr})
     end
 end
 
-# The sub-functions of one build, as the tuple a body indexes.
-function _cg_subfns(defs::Vector{Expr})
+# The sub-functions of one build, as the tuple a body indexes. `heights[i] > 0`
+# makes entry `i` a call function of that height (`_CGSubFnH`).
+function _cg_subfns(defs::Vector{Expr}, heights::Vector{Int} = zeros(Int, length(defs)))
     ids = UInt128[_cg_subfn_id(d) for d in defs]
     live = _cg_subfn_register!(ids, defs)
-    return Tuple(_CGSubFn{ids[i]}(live[i]) for i in eachindex(ids))
+    return Tuple(
+        heights[i] > 0 ?
+            _CGSubFnH{min(heights[i], _CG_MAX_CALL_HEIGHT), ids[i]}(live[i]) :
+            _CGSubFn{ids[i]}(live[i])
+            for i in eachindex(ids)
+    )
+end
+
+# The height of each inner definition in `defs` (`(name, params, body)`, as
+# `_cg_inner_def` gives them) that is a call function, 0 for the others: 1 +
+# the largest height of the call functions its body calls.
+function _cg_call_heights(defs)
+    idx = Dict{Symbol, Int}(d[1] => k for (k, d) in enumerate(defs))
+    h = zeros(Int, length(defs))
+    function height(k)
+        h[k] != 0 && return h[k]
+        h[k] = 1                       # a cycle cannot occur (the template graph is a DAG)
+        best = 0
+        callees = _cg_collect_syms!(Set{Symbol}(), defs[k][3])
+        for c in callees
+            j = get(idx, c, 0)
+            (j != 0 && _cg_is_call_fn(c)) && (best = max(best, height(j)))
+        end
+        h[k] = best + 1
+        return h[k]
+    end
+    for k in eachindex(defs)
+        _cg_is_call_fn(defs[k][1]) && height(k)
+    end
+    return h
 end
 
 # The registered definition of `id`, or `nothing`. Lock-free (see `_CGSubFn`).
@@ -2566,16 +2613,24 @@ function Serialization.deserialize(
     def = Serialization.deserialize(s)::Expr
     return _CGSubFn{ID}(only(_cg_subfn_register!(UInt128[ID], Expr[def])))
 end
+function Serialization.deserialize(
+        s::Serialization.AbstractSerializer, ::Type{_CGSubFnH{H, ID}}
+    ) where {H, ID}
+    def = Serialization.deserialize(s)::Expr
+    return _CGSubFnH{H, ID}(only(_cg_subfn_register!(UInt128[ID], Expr[def])))
+end
 
 # A deep copy is the instance itself, as for an RGF or any other function; the
 # copy keeps the original's entry alive.
 Base.deepcopy_internal(f::_CGSubFn, ::IdDict) = f
+Base.deepcopy_internal(f::_CGSubFnH, ::IdDict) = f
 
 # The method's own argument and parameter names are not ones the emitter mints
 # (they hold a `#`), so no sub-function parameter or local can rebind them.
-@generated function (::_CGSubFn{var"##id"})(
-        var"##args"::Vararg{Any, var"##n"}
-    ) where {var"##id", var"##n"}
+# The method body of by-value sub-function `id` called with `n` arguments.
+function _cg_subfn_body(id, n::Int)
+    var"##id" = id
+    var"##n" = n
     def = _cg_subfn_def(var"##id")
     def === nothing && error("codegen: by-value sub-function $(var"##id") has no definition")
     params = (def::Expr).args[1].args
@@ -2604,11 +2659,29 @@ Base.deepcopy_internal(f::_CGSubFn, ::IdDict) = f
     )
 end
 
+# Defined after `_cg_subfn_body`: a generator may call only what exists when
+# it is defined.
+@generated function (::_CGSubFn{var"##id"})(
+        var"##args"::Vararg{Any, var"##n"}
+    ) where {var"##id", var"##n"}
+    return _cg_subfn_body(var"##id", var"##n")
+end
+for H in 1:_CG_MAX_CALL_HEIGHT
+    @eval @generated function (::_CGSubFnH{$H, var"##id"})(
+            var"##args"::Vararg{Any, var"##n"}
+        ) where {var"##id", var"##n"}
+        return _cg_subfn_body(var"##id", var"##n")
+    end
+end
+
+
 # The runtime `tabs` tuple, plus — in the by-value transport — the sub-function
 # tuple as one more element: a heterogeneous tuple of concrete callables, so a
 # call site reading it at a LITERAL index resolves its callee statically.
 _cg_pack_fns(tabpack::Tuple, ::Nothing) = tabpack
 _cg_pack_fns(tabpack::Tuple, fns::Vector{Expr}) = (tabpack..., _cg_subfns(fns))
+_cg_pack_fns(tabpack::Tuple, fh::Tuple{Vector{Expr}, Vector{Int}}) =
+    (tabpack..., _cg_subfns(fh[1], fh[2]))
 
 """
     _cg_finish(ctx, args, stmts...; pre = (), by_value = nothing) -> (f, fns)
