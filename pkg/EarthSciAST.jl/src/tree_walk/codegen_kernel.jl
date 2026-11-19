@@ -261,13 +261,18 @@ mutable struct _CGFunction
     # whole (`_cg_inl_size`). LLVM compiles that body at every call, so the
     # inline decisions and the per-function node counts count it there.
     inlsize::Dict{Symbol, Int}
+    # A content number per read table (`_cg_tbl_content`): equal for two
+    # tables with equal entries, by object and by content.
+    tblid::IdDict{Any, Int}
+    tblcontent::Dict{Any, Int}
 end
 _CGFunction(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int = 0) =
     _CGFunction(
     _CGTabs(), Int[], _CGPrologue(), Any[], 0, budget, 0, shared_cache, 0,
     _CGSlotSpace(nst), _CGNest(), _CGKernelTx(_CGMark(0, 0, 0, 0, 0), Dict{String, Symbol}()),
     Dict{String, Tuple{Symbol, Int, Expr}}(), IdDict{Any, Tuple{Symbol, Int, Expr}}(),
-    IdDict{Any, Tuple{Vector{Tuple{Int, Int, Int}}, Vector{Int}}}(), Dict{Symbol, Int}()
+    IdDict{Any, Tuple{Vector{Tuple{Int, Int, Int}}, Vector{Int}}}(), Dict{Symbol, Int}(),
+    IdDict{Any, Int}(), Dict{Any, Int}()
 )
 
 # The emitted size of `ex` as LLVM sees it: a call of an inlined helper counts
@@ -1529,12 +1534,103 @@ function _cg_scan_consumer_cell(ctx::_CGFunction, cons, oln::Symbol, xv::Symbol)
     return stmts
 end
 
+# A table read a cell makes more than once, read once. The access CSE gives a
+# slot to repeated OPERATORS, never to a bare read, and the kernel-class merge
+# gives every member read its own descriptor; a read through a table costs
+# some seventy emitted nodes (its address, the ghost test and the
+# loop-version ladder). Reads made by the caller of a template call are one
+# argument per read occurrence (call.jl), so a merged stencil cell reads the
+# same table at the same address many times (two face fluxes of a cell read
+# the same neighbours). Descriptors whose keys are equal (`_cg_read_key`: equal
+# tables at the same address) are the same read of the same cell; each such read is made once into a local at the top of the cell,
+# and every use reads the local (`kc.subst`). A read inside an affine
+# reduction is addressed by the reduction's counters, not the cell's, so a
+# descriptor read there is left alone; a sub-kernel's reads are its own. A
+# read is pure and cannot fail (the table covers every cell of the box), so
+# making it once ahead of its uses gives every use the same value.
+const _CG_SHARED_READ_KINDS = (_AK_STATE_TBL_BOX, _AK_ARR_TBL_BOX, _AK_CONST_BOX, _AK_FORCING_BOX)
+
+# The content number of table `v` in this function (one per distinct entry
+# list; each object hashed once).
+function _cg_tbl_content(ctx::_CGFunction, v)
+    v isa Vector || return objectid(v)
+    got = get(ctx.tblid, v, 0)
+    got == 0 || return got
+    c = get!(ctx.tblcontent, v, length(ctx.tblcontent) + 1)
+    ctx.tblid[v] = c
+    return c
+end
+
+# Two descriptors with equal keys read the same value at every cell: the kind,
+# the address (strides, offset), the table by CONTENT (a merge makes one table
+# object per member read, so equal reads hold equal tables, not one table), and
+# a live buffer by identity.
+function _cg_read_key(ctx::_CGFunction, a::_AccDesc)
+    k = a.kind
+    tbl = k === _AK_STATE_TBL_BOX || k === _AK_ARR_TBL_BOX ? _cg_tbl_content(ctx, a.conn) : 0
+    arr = k === _AK_CONST_BOX ? _cg_tbl_content(ctx, a.arr) :
+        (k === _AK_ARR_TBL_BOX || k === _AK_FORCING_BOX) ? objectid(a.arr) : UInt(0)
+    return (k, tbl, arr, a.s1, a.s2, a.s3, a.off, Tuple(a.sx))
+end
+function _cg_shared_reads!(stmts::Vector{Any}, ctx::_CGFunction, kc::_CGKernCtx)
+    K = kc.K
+    acc = K.acc
+    uses = Dict{Any, Int}()
+    firstidx = Dict{Any, Int}()
+    inred = Set{Int}()
+    seen = IdDict{_Node, Nothing}()
+    function walk(n::_Node, red::Bool)
+        k = n.kind
+        if k === _NK_ACCESS
+            if red
+                push!(inred, n.idx)
+            elseif acc[n.idx].kind in _CG_SHARED_READ_KINDS
+                key = _cg_read_key(ctx, acc[n.idx])
+                uses[key] = get(uses, key, 0) + 1
+                get!(firstidx, key, n.idx)
+            end
+            return
+        end
+        k === _NK_SUBCALL && return
+        (haskey(seen, n) && !red) && return
+        red || (seen[n] = nothing)
+        r = red || k === _NK_AREDUCE
+        for c in n.children
+            walk(c, r)
+        end
+    end
+    walk(K.spine, false)
+    for r in K.cse.recipes
+        walk(r, false)
+    end
+    any(>(1), values(uses)) || return kc
+    sub = kc.subst === nothing ? Dict{Int, Any}() : copy(kc.subst)
+    bykey = Dict{Any, Any}()
+    for i in eachindex(acc)
+        acc[i].kind in _CG_SHARED_READ_KINDS || continue
+        i in inred && continue
+        haskey(sub, i) && continue
+        key = _cg_read_key(ctx, acc[i])
+        get(uses, key, 0) > 1 || continue
+        v = get(bykey, key, nothing)
+        if v === nothing
+            r = _cg_name(ctx, "rd")
+            push!(stmts, :(local $r = $(_cg_fetch(ctx, kc, acc[firstidx[key]], (acc, firstidx[key])))))
+            v = bykey[key] = r
+        end
+        sub[i] = v
+    end
+    return _CGKernCtx(kc.K, kc.oln, kc.mi1, kc.mi2, kc.mi3, kc.cellsyms, kc.invsyms, kc.mix, sub)
+end
+
 # One cell's statements: the CSE recipes as locals (converted to T exactly
 # where the interpreter's scratch store converts), then the spine stored into
 # `du[oln]`, or, inside a fused scan's nest (`sm`, a `_CGStoreScan`), folded
 # into the lane's running value.
 function _cg_cell_stmts(ctx::_CGFunction, K::_AccKernel, sm::_CGStore, kc::_CGKernCtx)
-    stmts = _cg_emit_recipes!(Any[], ctx, kc)
+    stmts = Any[]
+    kc = _cg_shared_reads!(stmts, ctx, kc)
+    _cg_emit_recipes!(stmts, ctx, kc)
     val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
     if sm isa _CGStoreDu
         push!(stmts, :(du[$(kc.oln)] = $val))
@@ -3325,7 +3421,8 @@ function _build_codegen_rhs(
     cap = _codegen_fn_node_cap()
     chunks = Vector{Vector{Any}}()
     cur = Any[]; curcost = 0
-    for (lx, cost) in kloops
+    for (lx, cost0) in kloops
+        cost = _cg_chunk_cost(ctx, lx, cost0)
         if !isempty(cur) && cap > 0 && curcost + cost > cap
             push!(chunks, cur); cur = Any[]; curcost = 0
         end
@@ -3405,6 +3502,19 @@ function _build_codegen_rhs(
     tabpack = _cg_tabpack(ctx, fns)
     return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint, work, rmw)
 end
+
+# A loop nest's weight toward the chunk cap: its emitter cost (spine nodes
+# emitted), or its emitted expression size (inlined call functions counted
+# whole, `_cg_inl_size`) over `_CG_EXPR_PER_NODE`, whichever is larger. The
+# emitter charges one node per state read, but a read through a slot table is
+# some seventy expression nodes (its loop-version ladder); a nest made mostly
+# of such reads (a stencil whose neighbour reads are made by the caller of a
+# template call) was charged a sixth of its size, so one chunk took five times
+# the code of the others and LLVM's time and memory, superlinear in a
+# function's size, went to that one function. Measured on reseact_s: ordinary
+# nests are 4.9 expression nodes per emitted node, table-read nests 16 to 18.
+const _CG_EXPR_PER_NODE = 5
+_cg_chunk_cost(ctx::_CGFunction, lx, cost::Int) = max(cost, cld(_cg_inl_size(ctx, lx), _CG_EXPR_PER_NODE))
 
 # ---- Threaded cell axis for the codegen tier ---------------------------------
 # The verdict, the partition and the dispatch are threading.jl's (the safety
