@@ -166,12 +166,16 @@ const _CLS = ClassificationConformanceAdapter
                 ) for name in ("A", "B")
             ),
         )
-        # ONE warning for the document, naming both models by pointer.
+        # ONE warning for the document, naming both models by pointer (in
+        # document order; this test's Dict has none, so either order).
         file = @test_logs (
             :warn,
-            "deprecated_system_kind: the system_kind value \"pde\" is deprecated " *
-                "(esm 2.4.0) and ignored; the model is treated as its derived kind. " *
-                "Declared at: /models/A/system_kind, /models/B/system_kind.",
+            Regex(
+                "^deprecated_system_kind: the system_kind value \"pde\" is deprecated " *
+                    "\\(esm 2\\.4\\.0\\) and ignored; the model is treated as its derived kind\\. " *
+                    "Declared at: (/models/A/system_kind, /models/B/system_kind|" *
+                    "/models/B/system_kind, /models/A/system_kind)\\.\$"
+            ),
         ) EarthSciAST.load_string(JSON3.write(doc("pde")))
         m = file.models["A"]
         @test m.system_kind == "pde"                 # kept as written
