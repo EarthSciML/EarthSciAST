@@ -11,7 +11,7 @@
 # stencils (1-D/2-D, ghosts), makearray regions, const-array coefficients,
 # lazy guards over singular ops, scalar parameters, constant-bound
 # contractions (unrolled einsum), and the
-# compile-once template sub-kernel fixture (transport_3axis_7cubed_fullrank).
+# compile-once template fixture (transport_3axis_7cubed_fullrank).
 using Test
 using JSON3
 using EarthSciAST
@@ -259,7 +259,7 @@ end
         end
     end
 
-    @testset "template sub-kernels (_NK_SUBCALL): 7³ transport fixture" begin
+    @testset "template calls: 7³ transport fixture" begin
         FIX = joinpath(
             TESTUTILS_REPO_ROOT, "tests", "bench",
             "transport_3axis_7cubed_fullrank.esm"
@@ -287,7 +287,7 @@ end
                 # zero — only the non-trivial probes must be non-zero.
                 k > 1 && @test sum(abs, duc) > 0
             end
-            # Dual axis through the sub-kernel inlining (a single directional
+            # Dual axis through the template calls (a single directional
             # derivative keeps the 343-state Jacobian affordable).
             seed = _cgk_probe(length(u0), 7)
             gc = ForwardDiff.derivative(s -> sum(_cgk_du(fc, u0 .+ s .* seed, p, 0.4)), 0.0)

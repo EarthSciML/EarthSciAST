@@ -68,7 +68,7 @@ const _NK_ARG_GATHER = UInt8(18)  # read an ARRAY argument of the running call a
 #   * `_NK_CONTRACTION_LOOP` — `_ContractLoop`; `_NK_RAGGED_LOOP` — `_RaggedLoop`;
 #     `_NK_STATE_GATHER` — `_StateGather`; `_NK_RECUR_GATHER` — the recurrence's
 #     gather; `_NK_LOOPVAR` — the loop counter's `Base.RefValue{Int}`.
-#   * the access-kernel kinds (access_kernel.jl): `_NK_SUBCALL` — an `_AccKernel`, `_NK_AREDUCE` — an `_AReduceSpec`.
+#   * the access-kernel kind `_NK_AREDUCE` (access_kernel.jl) — an `_AReduceSpec`.
 #   * `_NK_CALL` — the `_CallSite` (target and array arguments) called;
 #     `_NK_ARG` — the `_CallTarget` whose argument it reads; `_NK_ARG_GATHER` —
 #     an `_ArgGatherRef` (call.jl).

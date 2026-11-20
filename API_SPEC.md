@@ -938,7 +938,6 @@ docstring repeats:
 | `unsupported_desc` | an access descriptor the code generator has no form for |
 | `unsupported_bound` | a loop bound the code generator cannot write |
 | `foreign_scratch` | a read of a scratch buffer the generated function does not own |
-| `subcall_order` | a sub-kernel call emitted before its invariants are in scope |
 | `loopvar_out_of_scope` | a loop variable read outside the loop that binds it |
 | `loop_reentered` | a loop entered again inside its own body |
 | `lane_spec_on_scalar_spine` | a lane descriptor on a scalar spine |

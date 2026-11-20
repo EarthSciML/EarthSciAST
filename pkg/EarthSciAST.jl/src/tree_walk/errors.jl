@@ -74,7 +74,7 @@ Fields:
 
 * `code` — always [`E_DIRECT_EMIT_UNSUPPORTED`](@ref).
 * `construct` — WHAT could not be lowered, in the IR's own vocabulary: the node
-  kind (`_NK_SUBCALL`), the access descriptor kind (`_AK_ARR_TBL_BOX`), the
+  kind (`_NK_AREDUCE`), the access descriptor kind (`_AK_ARR_TBL_BOX`), the
   operator (`` `op `atan2`` ``) or the kernel shape ("per-cell fallback
   kernel"). This is the string a test asserts on.
 * `rule` — WHERE it came from: the state equation, materialized-observed fill

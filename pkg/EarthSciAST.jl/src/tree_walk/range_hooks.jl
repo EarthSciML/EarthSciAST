@@ -295,25 +295,22 @@ function _range_var_slot(view::_RangeAffineView, rec, b)
     return 1 <= s <= view.real.n ? s : 0
 end
 
-# Move every fixed slot of `kernels` onto the tile's layout: each kernel's own,
-# and those of its sub-kernels (`K.subs` holds every sub-kernel reachable from
-# `K`, nested ones included). A descriptor table shared by several kernels is
-# moved once. Each moved slot's variable and virtual slot are recorded
+# Move every fixed slot of `kernels` onto the tile's layout. A descriptor
+# table shared by several kernels is moved once. Each moved slot's variable and virtual slot are recorded
 # (`view.fixed`), which name the cell it reads where clamping a slot the tile
 # does not store merges it with another (`_range_fixed_ident`).
 function _range_real_fixed!(view::_RangeAffineView, kernels)
     for K in kernels
-        for acc in Iterators.flatten(((K.acc,), (S.acc for S in K.subs)))
-            haskey(view.done, acc) && continue
-            view.done[acc] = nothing
-            for i in eachindex(acc)
-                a = acc[i]
-                a.kind === _AK_STATE_FIXED || continue
-                name = get(view.vm.names, a.idx, nothing)
-                name == "" && (name = nothing)
-                acc[i] = _AccStateFixed(_range_real_slot(view, name, a.idx))
-                get!(() -> Dict{Int, Any}(), view.fixed, acc)[i] = (name, a.idx)
-            end
+        acc = K.acc
+        haskey(view.done, acc) && continue
+        view.done[acc] = nothing
+        for i in eachindex(acc)
+            a = acc[i]
+            a.kind === _AK_STATE_FIXED || continue
+            name = get(view.vm.names, a.idx, nothing)
+            name == "" && (name = nothing)
+            acc[i] = _AccStateFixed(_range_real_slot(view, name, a.idx))
+            get!(() -> Dict{Int, Any}(), view.fixed, acc)[i] = (name, a.idx)
         end
     end
     return kernels
