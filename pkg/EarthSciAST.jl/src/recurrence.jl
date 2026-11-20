@@ -42,12 +42,12 @@ and each `apply_expression_template` reference through its frame against the
 model's template table, never expanded, so a self-read or a group peer inside
 a template body is seen as the build sees it.
 """
-function validate_recurrence_semantics(file::EsmFile; views = nothing)::Vector{StructuralError}
+function validate_recurrence_semantics(file::EsmFile; views = nothing, tables = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     file.models === nothing && return errors
     for model_name in sort!(collect(keys(file.models)))
         model = _units_view(file, model_name, file.models[model_name], views)
-        templates = _tpl_component_table(file, "models", model_name)
+        templates = _tpl_component_table(file, "models", model_name, tables)
         # An array-shaped variable is the only thing a causal self-reference can
         # define: a scalar has no axis to fold along. The declared TYPE is
         # deliberately not consulted — the reference implementation keys on the

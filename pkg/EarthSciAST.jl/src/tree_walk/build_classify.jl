@@ -851,7 +851,7 @@ function _decline_unmaterialized_recurrences(
         # and can never be a recurrence, so it keeps whatever diagnosis it
         # had — the self-edge exemption must not weaken cycle handling.
         name in array_shaped_vars || continue
-        recurrence_self_reference_kind(name, observed_exprs[name]) === :indexed || continue
+        recurrence_self_reference_kind(name, observed_exprs[name]; templates = _build_templates()) === :indexed || continue
         throw(
             TreeWalkError(
                 "E_TREEWALK_UNSUPPORTED_RECURRENCE",

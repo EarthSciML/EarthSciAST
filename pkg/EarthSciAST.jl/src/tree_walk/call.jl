@@ -166,6 +166,12 @@ end
 
 _call_table() = _build_state().calls
 
+# The template table of the build in progress (`nothing` outside a build, or
+# when its model carries no reference): what a build phase that reads a
+# reference's body through its frame (`_tpl_step`) reads it against.
+_build_templates() =
+    (c = _build_ctx(); c === nothing ? nothing : (ct = c.state.calls; ct === nothing ? nothing : ct.tt))
+
 _no_call_table(name) = TreeWalkError(
     "E_TREEWALK_UNRESOLVED_TEMPLATE_REF",
     "template reference '$(name)' reached compile with no template registry in the build"
@@ -1783,7 +1789,7 @@ function _tpl_prepare_model!(model, reg, index_sets, vi_extents; refuse::Bool = 
     # Every name a body reads from its caller becomes a binding of the
     # reference (`_tpl_augment`), so a phase that asks which names an
     # expression reads sees the body's reads.
-    _tpl_augment_component!(model, reg)
+    _tpl_augment_component!(model, reg, calls.tt)
     # An array-valued reference read as a whole array is its whole-array view,
     # whose element is a call (`_tpl_whole_view`, `_tpl_agg_view`); an element
     # read of an aggregate or makearray body is `index(view, s…)`.

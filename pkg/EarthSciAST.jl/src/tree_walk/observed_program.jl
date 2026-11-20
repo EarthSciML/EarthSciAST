@@ -287,7 +287,7 @@ function _obs_reaches_recurrence(ctx::_ObsProgramCtx, name::String)
         n = pop!(frontier)
         (n in seen || !haskey(defs, n)) && continue
         push!(seen, n)
-        (n in shaped && recurrence_self_reference_kind(n, defs[n]) === :indexed) &&
+        (n in shaped && recurrence_self_reference_kind(n, defs[n]; templates = _build_templates()) === :indexed) &&
             return true
         append!(frontier, collect(_referenced_var_names(defs[n])))
     end

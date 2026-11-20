@@ -259,7 +259,7 @@ function _refuse_cut_recurrences(spec::_TileSpec, obs_defs, shapes)
     for n in sort!(collect(keys(obs_defs)))
         def = obs_defs[n]
         (def isa OpExpr && _is_faq_op(def.op) && def.expr_body !== nothing) || continue
-        recurrence_self_reference_kind(n, def) === :indexed || continue
+        recurrence_self_reference_kind(n, def; templates = _build_templates()) === :indexed || continue
         idx = _output_idx_strings(def)
         sh = get(shapes, n, nothing)
         (sh === nothing || length(sh) != length(idx)) && continue

@@ -1121,7 +1121,8 @@ function _build_evaluator_impl(
     # fill route sweeps it through the one recurrence implementation
     # (tree_walk/recurrence_group.jl). `nothing` — no group — changes nothing.
     stacked = _stack_recurrence_groups(
-        model, get(kwargs, :index_sets, Dict{String, IndexSet}())
+        model, get(kwargs, :index_sets, Dict{String, IndexSet}()),
+        get(kwargs, :_template_reg, nothing)
     )
     if stacked !== nothing
         model = stacked[1]

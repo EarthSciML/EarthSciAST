@@ -1,16 +1,16 @@
 # Reference integrity: model, expression, coupling and system references.
 
 """
-    validate_reference_integrity(file::EsmFile; views = nothing, names = nothing) -> Vector{StructuralError}
+    validate_reference_integrity(file::EsmFile; views = nothing, tables = nothing, names = nothing) -> Vector{StructuralError}
 
 Validate that all variable references can be resolved through the hierarchy.
 `views` are the top-level models' validation views (`_units_view`: each
-template reference kept, carrying the names its body reads) and `names` the
-document-wide name sets (`_document_names`), both from a validation pass's
-context when the caller has one.
+template reference kept, carrying the names its body reads), `tables` their
+template tables and `names` the document-wide name sets (`_document_names`),
+all from a validation pass's context when the caller has one.
 """
 function validate_reference_integrity(
-        file::EsmFile; views = nothing, names = nothing
+        file::EsmFile; views = nothing, tables = nothing, names = nothing
     )::Vector{StructuralError}
     errors = StructuralError[]
     names === nothing && (names = _document_names(file))
@@ -27,7 +27,7 @@ function validate_reference_integrity(
                 errors, validate_model_references(
                     file, model, _pointer("", "models", model_name);
                     model_name = model_name,
-                    is_coupled = (model_name ∈ names.coupled), views = views,
+                    is_coupled = (model_name ∈ names.coupled), views = views, tables = tables,
                     names = names
                 )
             )
@@ -348,7 +348,7 @@ its model subsystems (an event's affect targets are names, not sites).
 function validate_model_references(
         file::EsmFile, model::Model, path::String;
         model_name::AbstractString = "",
-        is_coupled::Bool = false, views = nothing, names = nothing
+        is_coupled::Bool = false, views = nothing, tables = nothing, names = nothing
     )::Vector{StructuralError}
     errors = StructuralError[]
     names === nothing && (names = _document_names(file))
@@ -357,7 +357,7 @@ function validate_model_references(
     # composed along with its parent, so it is checked with the parent's scope
     # rule.
     view = isempty(model_name) ? model : _units_view(file, model_name, model, views)
-    templates = isempty(model_name) ? nothing : _tpl_component_table(file, "models", model_name)
+    templates = isempty(model_name) ? nothing : _tpl_component_table(file, "models", model_name, tables)
     _foreach_component(view, path) do m, p, _
         _check_component_references!(errors, file, m, p, is_coupled, names; templates)
     end

@@ -9,11 +9,15 @@
 # (`_tpl_call_unit!`), and the recurrence checks read its body through its
 # frame (`_tpl_step`). The augmentation is made on a copy (`_expansion_copy`
 # copies only the containers it rewrites); the loaded model is not changed.
-function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
+# `tt` is the model's template table when the caller has one.
+function _units_view(
+        file::EsmFile, model_name::AbstractString, model::Model;
+        tt = nothing
+    )
     file.component_templates === nothing && return model
     reg = get(file.component_templates, "models.$model_name", nothing)
     reg === nothing && return model
-    return _tpl_augment_component!(_expansion_copy(model), reg)
+    return _tpl_augment_component!(_expansion_copy(model), reg, tt)
 end
 # The same, read from `views` — a validation pass's `_UnitsInputs.models`,
 # which holds each top-level model's view — when the caller built them.
@@ -85,11 +89,11 @@ function _unit_check!(units::_UnitsInputs)
         return
     end
     for name in sort!(collect(keys(units.models)))
-        tt[] = _tpl_component_table(units.file, "models", name)
+        tt[] = _tpl_component_table(units.file, "models", name, units.tables)
         _foreach_component(visit, units.models[name], _pointer("", "models", name); sorted = true)
     end
     for name in sort!(collect(keys(units.reaction_systems)))
-        tt[] = _tpl_component_table(units.file, "reaction_systems", name)
+        tt[] = _tpl_component_table(units.file, "reaction_systems", name, units.tables)
         _foreach_component(
             visit, units.reaction_systems[name], _pointer("", "reaction_systems", name);
             sorted = true

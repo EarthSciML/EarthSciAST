@@ -26,8 +26,11 @@
 
 # The stacked model, or `nothing` when `model` has no recurrence group (every
 # document that does not use the construct pays one classification pass).
-function _stack_recurrence_groups(model::Model, index_sets::AbstractDict)
-    groups = recurrence_groups(model)
+#
+# `reg` is the build's surviving template registry: a peer read inside a
+# template body is read through its frame, never on an expanded copy.
+function _stack_recurrence_groups(model::Model, index_sets::AbstractDict, reg = nothing)
+    groups = recurrence_groups(model; templates = reg === nothing ? nothing : _TplTable(reg))
     isempty(groups) && return nothing
     variables = OrderedDict{String, ModelVariable}(model.variables)
     equations = Equation[eq for eq in model.equations]

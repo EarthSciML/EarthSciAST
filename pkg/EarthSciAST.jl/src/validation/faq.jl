@@ -21,7 +21,7 @@ convention the reference-integrity pass uses. The `faq_bare_array_operand`
 check runs at the same sites; on an equation's right-hand side the names its
 left-hand side defines are exempt.
 """
-function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{StructuralError}
+function validate_aggregate_semantics(file::EsmFile; views = nothing, tables = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     registry = Set{String}(keys(file.index_sets))
     if file.models !== nothing
@@ -38,7 +38,10 @@ function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{St
             file.component_templates === nothing && continue
             reg = get(file.component_templates, "models.$model_name", nothing)
             reg === nothing && continue
-            _check_template_index_sets!(errors, model, _pointer("", "models", model_name), registry, reg)
+            _check_template_index_sets!(
+                errors, model, _pointer("", "models", model_name), registry,
+                _tpl_component_table(file, "models", model_name, tables)
+            )
         end
     end
     if file.reaction_systems !== nothing
@@ -164,9 +167,8 @@ end
 # binds. No reference is expanded.
 function _check_template_index_sets!(
         errors::Vector{StructuralError}, model::Model,
-        path::String, registry::Set{String}, reg
+        path::String, registry::Set{String}, tt
     )
-    tt = _TplTable(reg)
     foreach_expression(model, path) do e, anchor, _
         _contains_template_reference(e) || return nothing
         any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&

@@ -836,13 +836,20 @@ function _tpl_component_table(file::EsmFile, kind::AbstractString, name::Abstrac
     reg = get(ct, "$kind.$name", nothing)
     return reg === nothing ? nothing : _TplTable(reg)
 end
+# The same, read from `tables` — a validation pass's `_ValidationContext.tables`,
+# which holds each top-level component's one table — when the caller built them.
+_tpl_component_table(file::EsmFile, kind::AbstractString, name::AbstractString, ::Nothing) =
+    _tpl_component_table(file, kind, name)
+_tpl_component_table(::EsmFile, kind::AbstractString, name::AbstractString, tables::AbstractDict) =
+    get(tables, "$kind.$name", nothing)
 
 # `m` (a model or reaction system) with every reference carrying its implicit
 # parameters (`_tpl_augment`): the names a referenced body reads are then
 # reads of the reference itself. In place, so the caller passes a copy.
-function _tpl_augment_component!(m, reg)
+# `tt` is the component's template table when the caller has one.
+function _tpl_augment_component!(m, reg, tt::Union{Nothing, _TplTable} = nothing)
     reg === nothing && return m
-    tt = _TplTable(reg)
+    tt === nothing && (tt = _TplTable(reg))
     memo = IdDict{OpExpr, ASTExpr}()
     map_expressions!(e -> _tpl_augment(tt, e, memo), m)
     return m

@@ -186,7 +186,7 @@ Cross-binding pins: `(observed_cycle, /models/<M>)` only — the prose is
 deliberately NOT pinned (CONFORMANCE_SPEC §5.19.5); what every binding owes is
 that the message NAME the observeds on the cycle.
 """
-function validate_observed_cycles(file::EsmFile; views = nothing)::Vector{StructuralError}
+function validate_observed_cycles(file::EsmFile; views = nothing, tables = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     file.models === nothing && return errors
     for model_name in sort!(collect(keys(file.models)))
@@ -196,7 +196,7 @@ function validate_observed_cycles(file::EsmFile; views = nothing)::Vector{Struct
         # its body reads, and is read through its frame where the check looks
         # at how a name is read.
         model = _units_view(file, model_name, file.models[model_name], views)
-        templates = _tpl_component_table(file, "models", model_name)
+        templates = _tpl_component_table(file, "models", model_name, tables)
         _foreach_component(model, _pointer("", "models", model_name)) do m, p, _
             _check_observed_cycles!(errors, m, p; templates)
         end
