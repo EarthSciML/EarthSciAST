@@ -702,6 +702,97 @@ function _tpl_augmented_equations(eqs::AbstractVector{Equation}, reg)
     ]
 end
 
+"""
+    _tpl_explicit_free(block) -> (block′, added)
+
+`block` (a component's raw template registry) with every match-less body's
+free names made EXPLICIT parameters: a name a body reads from its caller (a
+variable leaf it does not bind and that is not one of its parameters, read
+directly or through a nested reference) is appended, sorted, to its `params`,
+and every nested reference in a body binds its callee's added parameters to
+the same names (`_tpl_bind_explicit`). `added` maps each changed template to
+the parameters it gained, for the call sites (`_tpl_bind_explicit`).
+
+Expansion substitutes a body into its call site, where the site's scope then
+renames the body's free names; binding each free name to itself at the site
+gives the same names in the same scope, so the reference denotes the same
+expansion, and a rename at the site (namespacing, a coupling substitution)
+reaches the body's reads through the bindings. Used by flatten for
+reaction-rate references (the user's decision of 2026-11-20).
+"""
+function _tpl_explicit_free(block)
+    added = Dict{String, Vector{String}}()
+    (block === nothing || !_is_object(block)) && return (block, added)
+    newdecl = Dict{String, Any}()
+    visiting = Set{String}()
+    function visit(name::String)
+        (haskey(newdecl, name) || name in visiting) && return
+        push!(visiting, name)
+        decl = _raw_get(block, name)
+        td = _TemplateDecl(decl)
+        if td.body === nothing || td.match !== nothing
+            newdecl[name] = decl
+            return
+        end
+        typed = expression_from_json(td.body)
+        callees = Set{String}()
+        f(x) = (_tpl_is_call(x) && x.name isa AbstractString && push!(callees, String(x.name)); nothing)
+        f(typed)
+        foreach_subexpr(f, typed)
+        for c in callees
+            _raw_haskey(block, c) && visit(c)
+        end
+        bound = _tpl_bind_explicit(typed, added)
+        free = sort!(collect(setdiff(_tpl_free_leaves(bound), td.params)))
+        if bound === typed && isempty(free)
+            newdecl[name] = decl
+            return
+        end
+        nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl))
+        bound === typed || (nd["body"] = serialize_expression(bound))
+        if !isempty(free)
+            nd["params"] = Any[td.params..., free...]
+            added[name] = free
+        end
+        newdecl[name] = nd
+        return
+    end
+    for (k, _) in pairs(block)
+        visit(string(k))
+    end
+    out = OrderedDict{String, Any}(string(k) => newdecl[string(k)] for (k, _) in pairs(block))
+    return (out, added)
+end
+
+"""
+    _tpl_bind_explicit(e, added) -> ASTExpr
+
+`e` with every reference to a template of `added` (`_tpl_explicit_free`)
+binding each added parameter to the same name, `n => n`. A binding the
+reference already has is kept.
+"""
+function _tpl_bind_explicit(
+        e::ASTExpr, added::AbstractDict{String, Vector{String}},
+        memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
+    )
+    (isempty(added) || !(e isa OpExpr)) && return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    out = map_children(c -> _tpl_bind_explicit(c, added, memo), e)
+    if _tpl_is_call(out) && out.name isa AbstractString
+        names = get(added, String(out.name), nothing)
+        if names !== nothing
+            b = out.bindings === nothing ? Dict{String, ASTExpr}() : copy(out.bindings)
+            for n in names
+                haskey(b, n) || (b[n] = VarExpr(n))
+            end
+            out = reconstruct(out; bindings = b)
+        end
+    end
+    memo[e] = out
+    return out
+end
+
 # ---------------------------------------------------------------------------
 # Template calls (the compiled form, tree_walk/call.jl)
 # ---------------------------------------------------------------------------
@@ -738,7 +829,13 @@ end
 
 const _TPL_CALL_OPS = union(_ops_with(:stencil_elementwise), Set(["const", "true", "false"]))
 
-# A binding passed as a value whatever the body does with it.
+# A binding the caller evaluates and passes as a value whatever the body does
+# with it: a name or a literal.
+_tpl_value_leaf(b::ASTExpr) = b isa VarExpr || b isa NumExpr || b isa IntExpr
+
+# A binding passed as a value when the body reads it on every path, and made
+# in the caller without a compiled instance of its own: a name, a literal or a
+# plain read of a named array.
 function _tpl_plain_binding(b::ASTExpr)
     (b isa VarExpr || b isa NumExpr || b isa IntExpr) && return true
     b isa OpExpr || return false

@@ -453,7 +453,9 @@ permanently-zero derivative — a zero row in the chemistry Jacobian block.
 """
 function _collect_reaction_system!(
         st, rsys::ReactionSystem, prefix::String;
-        templates = nothing
+        tpl_added::Union{Nothing, AbstractDict{String, Vector{String}}} = nothing,
+        tpl_rename::Union{Nothing, AbstractDict{String, String}} = nothing,
+        tpl_captures::_TplCaptures = _NO_CAPTURES
     )
     local_names = Set{String}()
     for sp in rsys.species
@@ -476,27 +478,25 @@ function _collect_reaction_system!(
 
     # v0.8.0: every component shares the document's single `domain`; a system
     # is spatial iff its variables are shaped over index sets, 0-D otherwise.
-    # POLICY (the flatten invariant, esm-spec §9.6.4): references survive
-    # flatten only in MODEL equations; reaction-RATE references are ALWAYS
-    # expanded here at collect. A rate-law `apply_expression_template` reference is expanded
-    # EAGERLY here — BEFORE namespacing — so a template body's free variables that
-    # name the reaction system's own scalar parameters (e.g. Arrhenius `P`/`T` in
-    # `arrh_per_molecule = A*P*exp(B/T)/(8314e3*T)`) are renamed to the component
-    # scope (`SuperFast.P`/`SuperFast.T`) by the same `namespace_expr` pass that
-    # renames the rest of the rate. That renaming is what makes them reachable by a
+    # A rate-law or event `apply_expression_template` reference SURVIVES
+    # flatten, as a model's does (esm-spec §9.6.4). Its template's free names
+    # (e.g. Arrhenius `P`/`T` in `arrh_per_molecule = A*P*exp(B/T)/(8314e3*T)`)
+    # were made explicit parameters (`_tpl_explicit_free`), and the reference
+    # binds them to the same names HERE, before namespacing: the same
+    # `namespace_expr` pass that renames the rest of the rate renames those
+    # bindings to the component scope (`SuperFast.P`/`SuperFast.T`), where a
     # later `param_to_var` coupling (`Transport3D.Pc -> SuperFast.P`) and the
-    # pointwise lift: if the reference instead SURVIVED to the build boundary, the
-    # coupling would have already run over the equations while the body's `P`/`T`
-    # were still hidden in the registry, and expansion there would surface bare,
-    # unbound `P`/`T` (`E_TREEWALK_UNBOUND_VARIABLE`). Model/import (discretization)
-    # templates do NOT take this path — they are component-scoped in the flat
-    # registry and legitimately survive to the compile-once tier. A no-op when the
-    # reaction system carries no template registry or its rates hold no references.
+    # pointwise lift reach them, exactly where expansion would have put them.
+    added = tpl_added === nothing ? Dict{String, Vector{String}}() : tpl_added
+    memo = IdDict{OpExpr, ASTExpr}()
+    function _ns_site(e)
+        r = namespace_expr(_tpl_bind_explicit(e, added, memo), prefix, local_names; captures = tpl_captures)
+        return tpl_rename === nothing ? r : _rename_expr_apply_refs(r, tpl_rename)
+    end
     raw_eqs = lower_reactions_to_equations(rsys.reactions, rsys.species)
     for eq in raw_eqs
-        rhs0 = templates === nothing ? eq.rhs : _expand_expr_refs(eq.rhs, templates)
         lhs = namespace_expr(eq.lhs, prefix, local_names)
-        rhs = namespace_expr(rhs0, prefix, local_names)
+        rhs = _ns_site(eq.rhs)
         push!(
             st.equations, _FlatEq(
                 Equation(lhs, rhs; _comment = eq._comment),
@@ -507,19 +507,15 @@ function _collect_reaction_system!(
 
     # A reaction system's events are collected on the same footing as a model's
     # (esm-spec §6.4 permits both, and the schema gives `ReactionSystem` the same
-    # `continuous_events` / `discrete_events` blocks). Rate-law template
-    # references are expanded eagerly at collect, and an event expression is a
-    # component-scoped expression exactly like a rate, so it takes the same
-    # expansion before namespacing.
-    _ns_event(e) = namespace_expr(
-        templates === nothing ? e :
-            _expand_expr_refs(e, templates), prefix, local_names
-    )
-    _collect_events!(st, rsys.continuous_events, rsys.discrete_events, prefix, _ns_event)
+    # `continuous_events` / `discrete_events` blocks). An event expression is a
+    # component-scoped expression exactly like a rate, so its references bind
+    # their explicit parameters the same way.
+    _collect_events!(st, rsys.continuous_events, rsys.discrete_events, prefix, _ns_site)
 
     for (sub_name, sub_rsys) in rsys.subsystems
         _collect_reaction_system!(
-            st, sub_rsys, "$(prefix).$(sub_name)"; templates = templates
+            st, sub_rsys, "$(prefix).$(sub_name)";
+            tpl_added = tpl_added, tpl_rename = tpl_rename, tpl_captures = tpl_captures
         )
     end
     return

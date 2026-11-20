@@ -627,7 +627,7 @@ function _hoist_rw(e::ASTExpr, cond::Bool, st)
             s = startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT) ? k : _TPL_ARG * k
             # A binding the inner call passes as a value is made where the
             # inner call is (`_tpl_compiles`).
-            c = cond || !(inner !== nothing && (s in inner.uncond || _tpl_plain_binding(v)))
+            c = cond || !(inner !== nothing && (s in inner.uncond || _tpl_value_leaf(v)))
             r = _hoist_rw(v, c, st)
             r === v && continue
             nb === nothing && (nb = Dict{String, ASTExpr}(b))
@@ -801,7 +801,12 @@ function _call_inl_mode(tt::_TplTable, info::_TplCallInfo, def::_TplDef, p::Stri
     rb = !isempty(B) && _tpl_reads_any(v, B)
     if !rb
         sn in info.uncond && return :none
-        _tpl_plain_binding(v) && return :none
+        # A name or a literal is a value whatever the body does with it. A
+        # plain array read is not: read only on some paths, it is compiled
+        # into the instance and read only where the body reads the parameter
+        # (the user's decision of 2026-11-20), so a subscript that is out of
+        # range only on a branch the body does not take is never read.
+        _tpl_value_leaf(v) && return :none
     end
     # A template call in a binding that reads a name the body binds is not
     # compiled in (`_tpl_compiles` refuses it).
@@ -909,19 +914,18 @@ function _call_mark_inlined(leaf, arr, tt::_TplTable, call::OpExpr)
     end
     return nb === nothing ? call : reconstruct(call; bindings = nb)
 end
-# A caller value is only a LEAF of the binding (a name, a literal, a plain read
-# of an array): what the caller evaluates up front costs a read and cannot fail
-# where the body would not have evaluated it. Every operator above the leaves,
-# and any template call in the binding (with its own bindings marked the same
-# way), stays in the instance and runs only where the body reads the parameter.
+# A caller value is only a LEAF of the binding (a name or a literal): what the
+# caller evaluates up front cannot fail where the body would not have evaluated
+# it. Every operator above the leaves, every array read (its array an
+# `__arrarg`, read in the instance at its compiled-in subscripts) and any
+# template call in the binding (with its own bindings marked the same way)
+# stays in the instance and runs only where the body reads the parameter.
 function _inl_mark(leaf, arr, v::ASTExpr, B::Set{String}, tt::_TplTable, parent = "", j = 0)
     v isa VarExpr && v.name in B && return v
     if (v isa NumExpr || v isa IntExpr) && parent == "^" && j == 2
         return v
     end
-    if !(v isa OpExpr) || (!_tpl_reads_any(v, B) && _inl_cheap(v))
-        return OpExpr("__inleaf", ASTExpr[leaf(v)])
-    end
+    v isa OpExpr || return OpExpr("__inleaf", ASTExpr[leaf(v)])
     if _tpl_is_call(v)
         v = _call_with_implicit(v)
         info = _tpl_call_info(tt, v.name)::_TplCallInfo
@@ -941,16 +945,6 @@ function _inl_mark(leaf, arr, v::ASTExpr, B::Set{String}, tt::_TplTable, parent 
         return reconstruct(v; args = ASTExpr[arr(v.args[1]), (_inl_mark(leaf, arr, x, B, tt, "index", i + 1) for (i, x) in enumerate(v.args[2:end]))...])
     end
     return reconstruct(v; args = ASTExpr[_inl_mark(leaf, arr, x, B, tt, v.op, i) for (i, x) in enumerate(v.args)])
-end
-
-# A part of a binding the caller may evaluate up front (above): a plain read
-# of a named or inline const array at subscripts of names, literals and
-# elementwise arithmetic.
-function _inl_cheap(v::OpExpr)
-    v.op == "index" && _tpl_structless(v) && length(v.args) >= 2 || return false
-    a = v.args[1]
-    (a isa VarExpr || (a isa OpExpr && a.op == "const" && a.value isa AbstractVector)) || return false
-    return all(x -> _tpl_inlinable(x), @view v.args[2:end])
 end
 
 function _call_body_size(n::_Node)
@@ -1565,12 +1559,14 @@ end
 
 # ---- Build-time evaluators ------------------------------------------------------------
 # A build-time evaluator that meets a reference reads its body in the
-# reference's frame (`_tpl_frame`): each argument is evaluated in the caller's
-# environment and bound to its sentinel, then the body is evaluated with those
-# bindings. Nothing is copied or substituted. `ev(e, env)` is the evaluator;
-# an argument whose evaluation fails is left unbound, so the body fails only if
-# it reads it, as the expansion would.
-function _eval_through_call(ev::F, expr::OpExpr, env::Dict{String, V}) where {F, V}
+# reference's frame (`_tpl_frame`): the body is evaluated with each parameter
+# bound to its argument, and an argument is evaluated, in the caller's
+# environment, only when the body first reads it (`_LazyArgs`). Nothing is
+# copied or substituted. `ev(e, env)` is the evaluator. An argument the body
+# does not read on the path it takes is never evaluated, so its failure (an
+# out-of-range read on an untaken branch) cannot stop the build, as it could
+# not in the expansion.
+function _eval_through_call(ev::F, expr::OpExpr, env::AbstractDict{String, V}) where {F, V}
     ct = _call_table()
     ct === nothing && throw(_no_call_table(expr.name))
     def = _tpl_def(ct.tt, expr.name)
@@ -1590,15 +1586,44 @@ function _eval_through_call(ev::F, expr::OpExpr, env::Dict{String, V}) where {F,
         body = closed.body
         args = s -> _call_arg(b, s)
     end
-    inner = Dict{String, V}()
-    for s in slots
-        try
-            inner[s] = ev(args(s), env)
-        catch err
-            err isa TreeWalkError || rethrow()
-        end
-    end
+    inner = _LazyArgs{V}(Dict{String, V}(), Set{String}(slots), s -> ev(args(s), env))
     return ev(body, inner)
+end
+
+"""
+    _LazyArgs{V}(vals, slots, thunk)
+
+The argument environment of a body evaluated at build time
+(`_eval_through_call`): each name in `slots` is bound, and its value is
+`thunk(name)`, computed when the body first reads it and kept. Other names
+(a reduction's own index, set while the body runs) are stored in `vals`
+like a `Dict`'s.
+"""
+struct _LazyArgs{V, F} <: AbstractDict{String, V}
+    vals::Dict{String, V}
+    slots::Set{String}
+    thunk::F
+end
+_LazyArgs{V}(vals::Dict{String, V}, slots::Set{String}, thunk::F) where {V, F} =
+    _LazyArgs{V, F}(vals, slots, thunk)
+Base.haskey(d::_LazyArgs, k::AbstractString) = haskey(d.vals, k) || k in d.slots
+function Base.getindex(d::_LazyArgs{V}, k::AbstractString) where {V}
+    got = get(d.vals, k, nothing)
+    got === nothing || return got
+    k in d.slots || throw(KeyError(k))
+    v = d.thunk(String(k))::V
+    d.vals[String(k)] = v
+    return v
+end
+Base.get(d::_LazyArgs, k::AbstractString, default) = haskey(d, k) ? d[k] : default
+Base.setindex!(d::_LazyArgs{V}, v, k::AbstractString) where {V} = (d.vals[String(k)] = v; d)
+Base.delete!(d::_LazyArgs, k::AbstractString) = (delete!(d.vals, k); delete!(d.slots, k); d)
+Base.keys(d::_LazyArgs) = union(keys(d.vals), d.slots)
+Base.length(d::_LazyArgs) = length(keys(d))
+function Base.iterate(d::_LazyArgs, st = (collect(keys(d)), 1))
+    ks, i = st
+    i > length(ks) && return nothing
+    return (ks[i] => d[ks[i]], (ks, i + 1))
 end
 
 # ---- Operator predicates through a call ------------------------------------------------

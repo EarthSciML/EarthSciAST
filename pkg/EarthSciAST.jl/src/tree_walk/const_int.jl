@@ -5,19 +5,19 @@
 # substitution, and for indirect gather: u[index(conn, c, k)] where conn is a
 # 2D const_array holding neighbor indices.
 function _eval_const_int(
-        expr::NumExpr, idx_env::Dict{String, Int},
+        expr::NumExpr, idx_env::AbstractDict{String, Int},
         const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
     )
     return Int(expr.value)
 end
 function _eval_const_int(
-        expr::IntExpr, idx_env::Dict{String, Int},
+        expr::IntExpr, idx_env::AbstractDict{String, Int},
         const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
     )
     return expr.value
 end
 function _eval_const_int(
-        expr::VarExpr, idx_env::Dict{String, Int},
+        expr::VarExpr, idx_env::AbstractDict{String, Int},
         const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
     )
     haskey(idx_env, expr.name) ||
@@ -25,7 +25,7 @@ function _eval_const_int(
     return idx_env[expr.name]
 end
 function _eval_const_int(
-        expr::OpExpr, idx_env::Dict{String, Int},
+        expr::OpExpr, idx_env::AbstractDict{String, Int},
         const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
     )
     # A template call: its body in its frame (call.jl).

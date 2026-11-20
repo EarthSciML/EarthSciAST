@@ -1003,7 +1003,7 @@ function _resolve_mount_edge(
         )
     )
     leaf_precision = _declared_element_type(comp)
-    # What the leaf itself declares is checked, closed and expanded in the
+    # What the leaf itself declares is checked and closed in the
     # leaf's own file; a diagnostic escaping this block names it.
     comp, nested_contributed = _in_file(target.key) do
         _close_mounted_leaf(comp, edge, target, base, ctx, leaf_precision, mount_noun)
@@ -1020,7 +1020,7 @@ function _resolve_mount_edge(
 end
 
 # Steps 1 to 5 of `_resolve_mount_edge`, on the leaf `comp` read from `target`.
-# Returns the closed, expanded leaf and the index-set names that reached its
+# Returns the closed leaf and the index-set names that reached its
 # registry only through its own mounts.
 function _close_mounted_leaf(
         comp, edge::_MountEdge, target::_RefTarget, base::_RefBase,
@@ -1050,15 +1050,39 @@ function _close_mounted_leaf(
         comp, target.base, ctx.source; metaparameters = close.bindings,
         mount_declared = close.mount_declared, mounted_leaf = true
     )
-    # Marked: the elementwise lift applies to the leaf's applications (§9.6.11).
-    comp = task_local_storage(_MARK_TEMPLATE_ORIGINS_KEY, true) do
-        expand_document(lower_expression_templates(resolved === nothing ? comp : resolved))
-    end
+    # The leaf keeps its references: each component keeps its match-less
+    # template definitions (closed in the leaf's own file, and already its
+    # `match` rules' fixpoint), which the mounting document merges into its
+    # own registry by flatten's rule (`_hoist_mounted_templates!`, or flatten's
+    # registry merge for a top-level mount).
+    comp = _mounted_registries!(lower_expression_templates(resolved === nothing ? comp : resolved))
     comp = _lower_mounted_enums_at_edge(comp, comp, mount_noun)
     comp isa AbstractDict{String, Any} || (comp = _to_ordered(comp))
 
     nested_contributed = _land_staged_index_sets!(comp, child.staged, close.fold_env, target.ref)
     return comp, nested_contributed
+end
+
+# The lowered leaf `comp` with each component's `expression_templates` block
+# kept for the mounting document: its match-less entries only (the `match`
+# rules have fired in the leaf), and none on a component no reference reads.
+function _mounted_registries!(comp)
+    _is_object(comp) || return comp
+    comp = comp isa OrderedDict{String, Any} ? comp : _to_ordered(comp)
+    for (_, _, c) in _components(comp)
+        blk = _raw_get(c, "expression_templates")
+        _is_object(blk) || continue
+        keep = OrderedDict{String, Any}(
+            string(n) => d for (n, d) in pairs(blk) if _raw_get(d, "match") === nothing
+        )
+        used = any(k -> k != "expression_templates" && _has_apply_op(c[k]), collect(keys(c)))
+        if isempty(keep) || !used
+            delete!(c, "expression_templates")
+        else
+            c["expression_templates"] = keep
+        end
+    end
+    return comp
 end
 
 # A leaf's own mounts have staged their index sets; the leaf has closed, so they
