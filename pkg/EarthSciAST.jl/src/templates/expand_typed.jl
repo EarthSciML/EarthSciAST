@@ -71,18 +71,11 @@ mutable struct _ExpandCache
     # entry gate the same expansions.
     gate_lhs::IdDict{OpExpr, Nothing}
     gate_rhs::IdDict{OpExpr, Nothing}
-    # The build's call predicate (`_tpl_is_called`, templates/frames.jl): a
-    # reference it accepts is kept (its bindings expanded) and compiled as a
-    # call; `nothing` expands every reference.
-    keep::Any
 end
-_ExpandCache(
-    bind::Dict{Tuple{String, String}, OpExpr} = Dict{Tuple{String, String}, OpExpr}();
-    keep = nothing
-) =
+_ExpandCache(bind::Dict{Tuple{String, String}, OpExpr} = Dict{Tuple{String, String}, OpExpr}()) =
     _ExpandCache(
     bind, IdDict{OpExpr, Vector{Pair{OpExpr, OpExpr}}}(), nothing, Dict{String, Any}(), Set{String}[],
-    IdDict{OpExpr, Nothing}(), IdDict{OpExpr, Nothing}(), keep
+    IdDict{OpExpr, Nothing}(), IdDict{OpExpr, Nothing}()
 )
 
 # Bind `memo` to `reg`: what it holds from another registry is dropped.
@@ -168,11 +161,6 @@ function _expand_expr_refs(
                     "'$(name === nothing ? "?" : name)' with no in-scope registry entry"
             )
         )
-        # A reference the build compiles as a call stays; only the references
-        # in its bindings expand.
-        if memo !== nothing && memo.keep !== nothing && memo.keep(e)
-            return map_children(c -> _expand_expr_refs(c, reg, sites, memo), e)
-        end
         bindings_raw = Dict{String, Any}()
         if e.bindings !== nothing
             for (k, v) in e.bindings

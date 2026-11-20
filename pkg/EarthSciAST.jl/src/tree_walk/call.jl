@@ -8,7 +8,7 @@
 # `_tpl_augment`) is an `_NK_ARG` leaf. The body reads its caller only through
 # its arguments, so one compiled body serves every use with the same instance.
 #
-# Which references are calls is decided in one place, `_tpl_is_called`
+# Which references are calls is decided in one place, `_tpl_compiles`
 # (templates/frames.jl).
 #
 # ARGUMENT FRAMES (the walkers). The arguments of a running call live on one
@@ -626,7 +626,7 @@ function _hoist_rw(e::ASTExpr, cond::Bool, st)
             end
             s = startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT) ? k : _TPL_ARG * k
             # A binding the inner call passes as a value is made where the
-            # inner call is (`_tpl_is_called`).
+            # inner call is (`_tpl_compiles`).
             c = cond || !(inner !== nothing && (s in inner.uncond || _tpl_plain_binding(v)))
             r = _hoist_rw(v, c, st)
             r === v && continue
@@ -804,7 +804,7 @@ function _call_inl_mode(tt::_TplTable, info::_TplCallInfo, def::_TplDef, p::Stri
         _tpl_plain_binding(v) && return :none
     end
     # A template call in a binding that reads a name the body binds is not
-    # compiled in (`_tpl_is_called` refuses it).
+    # compiled in (`_tpl_compiles` refuses it).
     _tpl_inlinable(v, rb ? nothing : tt) || return :none
     return (rb || _inl_has_index(v)) ? :marked : :plain
 end
@@ -1484,7 +1484,7 @@ function _tpl_agg_called(tt::_TplTable, call::OpExpr)
         haskey(seen, x) && return
         seen[x] = nothing
         if _tpl_is_call(x) && occursin(_TPL_PART, x.name)
-            ok = _tpl_is_called(tt, x)
+            ok = _tpl_compiles(tt, x)
             return
         end
         foreach_child(walk, x)
@@ -1737,57 +1737,85 @@ end
 # `model` (a copy the caller owns) prepared for a build against the registry
 # `reg` (which the build owns: structural instances and view parts are
 # registered in it): structural references re-pointed at their instances,
-# the references the call node does not handle yet expanded (an intermediate
-# state of A1, see callnode-design.md; `sites` records them), every reference
-# carrying its implicit parameters, and array-valued and aggregate references
-# read as element calls and views. The template table is installed in the
-# build state, so the compilers and build-time evaluators compile a reference
-# as a call. Returns `(model, calls, sites)`.
+# every reference carrying its implicit parameters, and array-valued and
+# aggregate references read as element calls and views. No reference is
+# expanded: one the build cannot compile as a call or read through its view is
+# refused with the reason (`_tpl_refuse_uncompiled`). The template table is
+# installed in the build state, so the compilers and build-time evaluators
+# compile a reference as a call. Returns `(model, calls)`.
 function _tpl_prepare_model!(model, reg, index_sets, vi_extents)
-    sites = IdDict{OpExpr, OpExpr}()
     calls = _CallTable(reg)
     # The index-set registry a call body's `{"from": S}` range reads.
     calls.tt.root_memos[:index_sets] = index_sets
     calls.tt.root_memos[:vi_extents] = vi_extents
     _build_state().calls = calls
     map_expressions!(e -> _tpl_structural_refs(calls.tt, e), model)
-    # An ELEMENT read of an aggregate or makearray body, `index(ref, s…)`, is
-    # read through its view like a whole use, `index(view, s…)` (option C at an
-    # element read): the caller holds the regions or loop header, each leaf a
-    # call of that part of the template.
-    keep_cache = _ExpandCache(; keep = e -> _tpl_is_called(calls.tt, e))
-    _expand_model_refs!(model, reg; sites = sites, memo = keep_cache)
-    # Every name a kept body reads from its caller becomes a binding of the
+    _tpl_refuse_uncompiled(calls.tt, model)
+    # Every name a body reads from its caller becomes a binding of the
     # reference (`_tpl_augment`), so a phase that asks which names an
     # expression reads sees the body's reads.
     _tpl_augment_component!(model, reg)
     # An array-valued reference read as a whole array is its whole-array view,
-    # whose element is a call (`_tpl_whole_view`, `_tpl_agg_view`).
+    # whose element is a call (`_tpl_whole_view`, `_tpl_agg_view`); an element
+    # read of an aggregate or makearray body is `index(view, s…)`.
     vm = IdDict{OpExpr, ASTExpr}()
     map_expressions!(e -> _tpl_whole_views(calls.tt, e, vm), model)
-    return model, calls, sites
+    return model, calls
 end
 
-# ---- Survey of the references the build still expands ------------------------------
-# With `ENV["ESS_TPL_SURVEY"]` naming a file, each reference the build entry
-# expanded is appended to it as one line: template name, tab, why the gate
-# refused it (`_tpl_refusal`). A diagnostic for the remaining expansion sites.
-function _tpl_survey(tt::_TplTable, sites)
-    path = get(ENV, "ESS_TPL_SURVEY", "")
-    (isempty(path) || isempty(sites)) && return nothing
-    open(path, "a") do io
-        for ap in values(sites)
-            why = try
-                _tpl_refusal(tt, ap)
-            catch err
-                "error: " * first(sprint(showerror, err), 120)
-            end
-            println(io, "entry\t", replace(String(ap.name), '\0' => '·'), "\t", why)
-        end
+# Every outermost reference in `model` compiles (`_tpl_compiles`: as a call,
+# or through its view); otherwise the build is refused, naming the template and
+# why. With `ENV["ESS_TPL_SURVEY"]` naming a file, each refusal is also appended
+# to it (a diagnostic: the target is none).
+function _tpl_refuse_uncompiled(tt::_TplTable, model)
+    foreach_expression(model) do e, _, _
+        _tpl_refuse_walk(tt, e)
+        nothing
     end
     return nothing
 end
+function _tpl_refuse_walk(tt::_TplTable, e)
+    e isa OpExpr || return
+    if _tpl_is_call(e)
+        _tpl_compiles(tt, e) || throw(_tpl_refusal_error(tt, e))
+        return
+    end
+    foreach_child(c -> _tpl_refuse_walk(tt, c), e)
+    return
+end
 
+function _tpl_refusal_error(tt::_TplTable, call::OpExpr)
+    name = replace(String(call.name), '\0' => '·')
+    # An inadmissible `broadcast` fn in the body: the build's own refusal of it
+    # (tree_walk/build_equation_prep.jl `_lower_broadcast_node`).
+    def = try
+        _tpl_def(tt, call.name)
+    catch err
+        err isa ExpressionTemplateError || rethrow()
+        return err
+    end
+    if def.closed !== nothing
+        bad = nothing
+        foreach_subexpr(def.closed.body) do x
+            (bad === nothing && x isa OpExpr && x.op == "broadcast") || return
+            bad = _broadcast_fn_problem(x.fn, length(x.args))
+        end
+        bad === nothing || return TreeWalkError("E_TREEWALK_BROADCAST_FN", bad.message)
+    end
+    why = try
+        _tpl_refusal(tt, call)
+    catch err
+        "error: " * first(sprint(showerror, err), 160)
+    end
+    path = get(ENV, "ESS_TPL_SURVEY", "")
+    isempty(path) || open(io -> println(io, "refused\t", name, "\t", why), path, "a")
+    return TreeWalkError(
+        "E_TREEWALK_UNSUPPORTED_OP",
+        "template reference '$name' cannot be compiled as a call: $why"
+    )
+end
+
+# ---- Why a reference does not compile ------------------------------------------------
 function _tpl_refusal(tt::_TplTable, call::OpExpr)
     def = _tpl_def(tt, call.name)
     def.closed === nothing && return "structural parameter bound to other than a name or number: " *

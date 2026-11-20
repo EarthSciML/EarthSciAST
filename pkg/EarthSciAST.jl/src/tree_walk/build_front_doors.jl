@@ -435,7 +435,7 @@ function _front_door(
             # (`_tpl_prepare_model!`, on a copy and against a copy of the
             # registry; the impl prepares its own from `file`).
             model = _expansion_copy(model)
-            model, _, _ = _tpl_prepare_model!(model, copy(_tmpl_reg), file.index_sets, Dict{String, Int}())
+            model, _ = _tpl_prepare_model!(model, copy(_tmpl_reg), file.index_sets, Dict{String, Int}())
         end
     end
 

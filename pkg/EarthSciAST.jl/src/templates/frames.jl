@@ -931,13 +931,13 @@ _tpl_array_binding(v::ASTExpr) =
     (v isa OpExpr && v.op == "const" && v.value isa AbstractVector)
 
 """
-    _tpl_is_called(tt, call::OpExpr) -> Bool
+    _tpl_compiles(tt, call::OpExpr) -> Bool
 
-Whether the build compiles the reference `call` (read at the top level, in the
-model's own tree or a body being expanded) as a call node rather than
-expanding it. See the section comment above.
+Whether the build can compile the reference `call` as a call node (or read it
+through its view). The build never expands a reference: one this refuses is a
+build error (call.jl `_tpl_refuse_uncompiled`). See the section comment above.
 """
-function _tpl_is_called(tt::_TplTable, call::OpExpr)
+function _tpl_compiles(tt::_TplTable, call::OpExpr)
     info = _tpl_call_info(tt, call.name)
     # An aggregate or makearray body is read through its view, whose leaves
     # are calls (call.jl `_tpl_agg_view`).
@@ -970,9 +970,6 @@ function _tpl_is_called(tt::_TplTable, call::OpExpr)
             continue
         end
         s in info.uncond && continue
-        # A parameter placeholder of a template skeleton being expanded
-        # (expand_typed.jl) stands for a binding not known yet.
-        (v isa VarExpr && occursin(_TPL_SENTINEL, v.name)) && return false
         # A compound binding the body reads only on some paths is compiled
         # INTO the instance (the user's bound-expression rule; call.jl
         # `_call_inlined`), when it is made of names, literals and
@@ -1015,7 +1012,7 @@ function _tpl_inlinable_call(v::OpExpr, tt::_TplTable)
     info = _tpl_call_info(tt, v.name)
     info === nothing && return false
     isempty(info.outs) || _tpl_is_elem(v) || return false
-    _tpl_is_called(tt, v) || return false
+    _tpl_compiles(tt, v) || return false
     v.bindings === nothing && return true
     for (k, x) in v.bindings
         s = _tpl_binding_sentinel(k)

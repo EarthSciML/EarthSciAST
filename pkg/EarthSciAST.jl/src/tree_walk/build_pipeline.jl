@@ -1302,26 +1302,20 @@ function _build_evaluator_impl_inner(
     symbolic = _first_symbolic_update(model)
     symbolic === nothing || throw(_symbolic_update_refusal(symbolic...))
     # ---- Template references: compiled as calls (tree_walk/call.jl) ----
-    # Every reference the call node handles stays a reference and compiles as
-    # a call; an array-valued or aggregate one read whole is its view
-    # (`_tpl_prepare_model!`). The references it does not handle yet are still
-    # expanded here, with their roots recorded (`_template_sites`) for the
-    # stencil tier's sub-kernels (an intermediate state of A1). Preparation
-    # works on a copy (`_expansion_copy`): the caller's typed model keeps its
-    # references (`serialize_esm_file` emits them verbatim — R1).
+    # No reference is expanded: each stays a reference and compiles as a call;
+    # an array-valued or aggregate one read whole (or an element of an
+    # aggregate one) is its view (`_tpl_prepare_model!`), and one the build
+    # cannot compile is refused. Preparation works on a copy
+    # (`_expansion_copy`): the caller's typed model keeps its references
+    # (`serialize_esm_file` emits them verbatim — R1).
     _template_sites = nothing
     if _template_reg !== nothing
         model = _expansion_copy(model)
-        sites = IdDict{OpExpr, OpExpr}()
         # The build's own registry: structural instances and view parts are
         # registered in it, never in the caller's (call.jl `_tpl_prepare_model!`).
         _template_reg = copy(_template_reg)
-        model, calls, sites = _tpl_prepare_model!(model, _template_reg, index_sets, _vi_extents)
-        # How many references the build still expands (none at the end of A1).
-        _count!(:tpl_expanded, length(sites))
-        _tpl_survey(calls.tt, sites)
+        model, _ = _tpl_prepare_model!(model, _template_reg, index_sets, _vi_extents)
         _expand_cache = nothing
-        isempty(sites) || (_template_sites = sites)
     elseif _model_has_surviving_refs(model)
         # A surviving reference with no registry in reach would compile into an
         # opaque op node and only fail at RHS evaluation time — fail loudly at
@@ -1338,10 +1332,10 @@ function _build_evaluator_impl_inner(
             )
         )
     end
-    # ---- esm-spec §4.3.1 `faq_bare_array_operand`, on the EXPANDED model ----
+    # ---- esm-spec §4.3.1 `faq_bare_array_operand` ----
     # `validate` (and the front door's reference-integrity refusal) cannot see a
-    # bare shaped name a template binding delivers into a `faq` filter; here
-    # every reference is expanded.
+    # bare shaped name a template binding delivers into a `faq` filter; the
+    # check reads a call's value operands (call.jl `_value_operands`).
     _refuse_faq_bare_array_operands(model)
     # ---- §9.6.3 constraint 6: walk every equation for an unlowered op ----
     # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
