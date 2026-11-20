@@ -43,7 +43,6 @@ mutable struct _ObsProgramCtx
     scope::_CompileScope
     n_states::Int
     p::Any                               # the parameter NamedTuple the build bound (the fallback)
-    template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}}
     discrete_caches::Dict{String, Array{Float64}}
     # Every observed definition the build's split published (inlined and
     # materialized), by build name, as authored after lowering.
@@ -247,7 +246,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
         for lvl in _materialized_obs_levels(mat_defs, mat, raw_obs)
             lv = _compile_fill_level(
                 lvl, :dynamic, fill, recurrence, resolved_obs, cs, n_total;
-                label_by_name = true, template_sites = ctx.template_sites
+                label_by_name = true
             )
             push!(
                 levels, _inplace_fill_level(

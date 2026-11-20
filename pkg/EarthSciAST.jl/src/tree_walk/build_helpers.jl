@@ -10,51 +10,6 @@
 # per use site and region class). A benchmark or a test that asserts build work
 # does not grow with the grid reads them from `Internal.build`'s report.
 
-# Lockstep site translation (compile-once template tier): a SHAPE-PRESERVING
-# equation rewrite — join-gate or index-set-range resolution rebuilds a node's
-# non-expression fields (`ranges`, `join_gates`) and every ancestor — detaches
-# recorded expansion roots from the tree by identity. Walk the old and new trees
-# in parallel (`child_exprs` yields the same expression slots in the same order
-# when only non-expression fields changed) and map each recorded root to its
-# rebuilt counterpart. Old keys are kept (they appear in no tree); a subtree whose expression-slot count changed is skipped, so its
-# sites degrade to the fused build — slower, never wrong.
-# Identity-deduped on the OLD node: the shape-preserving rewrites are
-# identity-memoized, so a shared old node maps to exactly ONE new node — a
-# repeat (old, new) visit through another parent is redundant, and skipping it
-# keeps the lockstep walk O(distinct nodes) on a shared DAG (unchanged
-# subtrees already short-circuit via `old === new`).
-function _translate_sites_lockstep!(
-        sites::IdDict{OpExpr, OpExpr},
-        old::ASTExpr, new::ASTExpr,
-        seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}()
-    )
-    old === new && return nothing
-    (old isa OpExpr && new isa OpExpr) || return nothing
-    haskey(seen, old) && return nothing
-    seen[old] = nothing
-    ap = get(sites, old, nothing)
-    ap === nothing || (sites[new] = ap)
-    co = child_exprs(old)
-    cn = child_exprs(new)
-    length(co) == length(cn) || return nothing
-    for i in eachindex(co)
-        _translate_sites_lockstep!(sites, co[i], cn[i], seen)
-    end
-    return nothing
-end
-function _translate_equation_sites!(
-        sites::Union{Nothing, IdDict{OpExpr, OpExpr}},
-        old_eqs::Vector{Equation}, new_eqs::Vector{Equation}
-    )
-    (sites === nothing || old_eqs === new_eqs) && return nothing
-    length(old_eqs) == length(new_eqs) || return nothing
-    for i in eachindex(old_eqs)
-        _translate_sites_lockstep!(sites, old_eqs[i].lhs, new_eqs[i].lhs)
-        _translate_sites_lockstep!(sites, old_eqs[i].rhs, new_eqs[i].rhs)
-    end
-    return nothing
-end
-
 # ─────────────────────────────────────────────────────────────────────────────
 # THE SLOTS AN EQUATION BUILD HAS CLAIMED (`_compile_derivative_equations`'s
 # duplicate-derivative check). Single slots go in a bit set over the slot space,
