@@ -1530,7 +1530,8 @@ function resolve_subsystem_refs!(file::EsmFile, base_path::AbstractString)
         "data_sources" => OrderedDict{String, Any}(n => nothing for n in own)
     )
     for (name, model) in file.models
-        _resolve_typed_subsystems!(model, String(name), base, ctx, host)
+        mounted = _resolve_typed_subsystems!(model, String(name), base, ctx, host)
+        isempty(mounted) || (file = _merge_typed_mounted_templates!(file, String(name), model, mounted))
     end
     _merge_staged_index_sets!(file.index_sets, ctx.staged, Dict{String, Int}())
     prov = get(host, _MOUNT_PROVENANCE_KEY, nothing)
@@ -1545,16 +1546,47 @@ function resolve_subsystem_refs!(file::EsmFile, base_path::AbstractString)
     return reconstruct(file; data_sources = mounted)
 end
 
+# The typed mount path's twin of `_hoist_mounted_templates!`: the mounted
+# models' definitions join the top-level model `name`'s registry in
+# `file.component_templates` by the same rule (`_merge_mounted_blocks`), the
+# model's own references follow its renames, and each mounted model is coerced
+# into place.
+function _merge_typed_mounted_templates!(file::EsmFile, name::String, model::Model, mounted)
+    ct = file.component_templates
+    key = "models.$name"
+    own = ct === nothing ? nothing : get(ct, key, nothing)
+    block, rn = _merge_mounted_blocks(own, name, Tuple{String, Any}[(p, m[3]) for (p, m) in mounted])
+    rn === nothing || map_expressions!(e -> _rename_expr_apply_refs(e, rn), model)
+    for (_, (parent, sub_name, raw)) in mounted
+        delete!(raw, "expression_templates")
+        parent.subsystems[sub_name] = coerce_model(raw)
+    end
+    if ct === nothing
+        file = reconstruct(file; component_templates = OrderedDict{String, Any}(key => block))
+    else
+        ct[key] = block
+    end
+    return file
+end
+
 function _resolve_typed_subsystems!(
-        model::Model, name::String, base::_RefBase, ctx::_MountContext, host::AbstractDict
+        model::Model, name::String, base::_RefBase, ctx::_MountContext, host::AbstractDict,
+        mounted::Vector{Tuple{String, Any}} = Tuple{String, Any}[], prefix::String = ""
     )
     for (sub_name, sub) in collect(model.subsystems)
+        path = isempty(prefix) ? String(sub_name) : "$prefix.$(sub_name)"
         if sub isa SubsystemRef
             raw = _mount_subsystem!(host, _MountEdge(sub), String(sub_name), name, base, ctx)
-            model.subsystems[sub_name] = coerce_model(raw)
+            if _is_object(_raw_get(raw, "expression_templates"))
+                # Kept references: coerced once its definitions have joined
+                # the top-level component's registry (`resolve_subsystem_refs!`).
+                push!(mounted, (path, (model, String(sub_name), raw)))
+            else
+                model.subsystems[sub_name] = coerce_model(raw)
+            end
         elseif sub isa Model
-            _resolve_typed_subsystems!(sub, String(sub_name), base, ctx, host)
+            _resolve_typed_subsystems!(sub, String(sub_name), base, ctx, host, mounted, path)
         end
     end
-    return
+    return mounted
 end

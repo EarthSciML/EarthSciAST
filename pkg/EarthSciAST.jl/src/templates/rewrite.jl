@@ -950,7 +950,34 @@ function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
     mounts = Tuple{String, Any}[]          # (subsystem path, subsystem)
     _collect_mounted_blocks!(mounts, comp, "")
     isempty(mounts) && return comp
-    own = _raw_get(comp, "expression_templates")
+    newblock, rn = _merge_mounted_blocks(_raw_get(comp, "expression_templates"), cname, mounts)
+    # `comp`'s own sites, outside the mount points.
+    if rn !== nothing
+        for k in collect(keys(comp))
+            k in ("expression_templates", "subsystems") && continue
+            comp[k] = _rename_apply_refs(comp[k], rn)
+        end
+        _rename_outside_mounts!(comp, rn)
+    end
+    for (_, sub) in mounts
+        delete!(sub, "expression_templates")
+    end
+    comp["expression_templates"] = newblock
+    return comp
+end
+
+"""
+    _merge_mounted_blocks(own, cname, mounts) -> (block, own_rename)
+
+The merge `_hoist_mounted_templates!` describes, shared with the typed mount
+path (`resolve_subsystem_refs!`): the component `cname`'s registry `own` (raw,
+or `nothing`) and each mounted raw model of `mounts` (`(path, model)`, the
+model still carrying its `expression_templates`) merged by flatten's rule.
+Each mounted model's own references are renamed here, in place; the caller
+applies `own_rename` (old name => new name, or `nothing`) to the component's
+other sites. `own`'s `match` rules are kept, ahead of the merged entries.
+"""
+function _merge_mounted_blocks(own, cname::String, mounts)
     blocks = OrderedDict{String, Any}()
     blocks["models.$cname"] = OrderedDict{String, Any}(
         string(n) => d for (n, d) in pairs(_is_object(own) ? own : Dict{String, Any}())
@@ -960,25 +987,15 @@ function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
         blocks["models.$path"] = _mounted_block_as_read_from_parent(sub, path)
     end
     merged, rename = _merge_flat_registry(blocks)
-    # `comp`'s own sites, outside the mount points.
-    rn = get(rename, cname, nothing)
-    if rn !== nothing
-        for k in collect(keys(comp))
-            k in ("expression_templates", "subsystems") && continue
-            comp[k] = _rename_apply_refs(comp[k], rn)
-        end
-        _rename_outside_mounts!(comp, rn)
-    end
-    # Each mount point's subtree, with its own renames; its block now lives
-    # in `comp`'s.
     for (path, sub) in mounts
-        delete!(sub, "expression_templates")
         rm = get(rename, path, nothing)
         rm === nothing && continue
         for k in collect(keys(sub))
+            k == "expression_templates" && continue
             sub[k] = _rename_apply_refs(sub[k], rm)
         end
     end
+    rn = get(rename, cname, nothing)
     newblock = OrderedDict{String, Any}()
     if _is_object(own)
         for (n, d) in pairs(own)
@@ -987,8 +1004,7 @@ function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
         end
     end
     merge!(newblock, merged)
-    comp["expression_templates"] = newblock
-    return comp
+    return newblock, rn
 end
 
 # The subsystems below `node` that carry a mounted block, with their paths;
