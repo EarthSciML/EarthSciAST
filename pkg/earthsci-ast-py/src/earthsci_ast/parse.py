@@ -107,7 +107,7 @@ from .esm_types import (
     VariableMapCoupling,
     _sum_entries,
 )
-from .json_walk import ExpressionTemplateError, expand_ref_env, read_ref_text
+from .json_walk import ExpressionTemplateError, decode_document, expand_ref_env, read_ref_text
 
 
 class SchemaValidationError(EarthSciAstError):
@@ -1713,17 +1713,26 @@ def _load_ref_data(
 
     ref_str = expand_ref_env(ref_str, base_path)  # esm-spec §4.7 ${VAR} / esm:std expansion
     if mount_pointer is None:
-        ref_data = json.loads(_fetch_ref_content(ref_str, base_path))
+        ref_data = decode_document(_fetch_ref_content(ref_str, base_path), ref_str)
     else:
         # A leaf file that cannot be found, fetched or parsed is a failure of
         # THIS edge, so it carries the edge's code and pointer. Everything
         # raised further down (the leaf's schema, its own mounts) keeps its own.
         try:
-            ref_data = json.loads(_fetch_ref_content(ref_str, base_path))
+            ref_data = decode_document(_fetch_ref_content(ref_str, base_path), ref_str)
         except SubsystemRefError as exc:
             exc.code = exc.code or UNRESOLVED_SUBSYSTEM_REF
             exc.path = exc.path or mount_pointer
             raise
+        except ParseError as exc:
+            # A source document's reader refused it (esm-spec §1.2.1).
+            if getattr(exc, "code", None) == REMOVED_OP:
+                raise
+            raise SubsystemRefError(
+                f"{kind} ref '{ref_str}' did not parse: {exc}",
+                code=UNRESOLVED_SUBSYSTEM_REF,
+                path=mount_pointer,
+            ) from exc
         except json.JSONDecodeError as exc:
             raise SubsystemRefError(
                 f"{kind} ref '{ref_str}' did not parse as JSON: {exc}",
@@ -2992,7 +3001,9 @@ def load_path(
     ``base_path`` defaults to the file's own directory.
 
     Args:
-        path: Filesystem path to the ``.esm`` document.
+        path: Filesystem path to the document: ``.esm`` JSON, or a Markdown
+            (``.md``) or Typst (``.typ``) source document, by its extension
+            (esm-spec §1.2.1).
         metaparameters: See :func:`load_string`.
         base_path: Overrides the file's own directory as the ref anchor.
 
@@ -3003,7 +3014,7 @@ def load_path(
     file_path = Path(path)
     resolved_base = base_path if base_path is not None else str(file_path.parent.resolve())
     with open(file_path) as f:
-        data = json.load(f)
+        data = decode_document(f.read(), file_path)
     esm_file = _load_data(data, resolved_base, metaparameters, file_path)
     _warn_deprecated_records_per_sample(esm_file)
     # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
