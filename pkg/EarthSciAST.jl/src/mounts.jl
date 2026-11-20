@@ -1303,8 +1303,14 @@ const _TOPLEVEL_MOUNT_FORMS = (
 
 # The top-level form's diagnostic for a leaf that cannot be read.
 function _toplevel_unreadable(u::_RefUnreadable, form::_TopLevelMountForm)
-    u.reason === :invalid_json && return u.cause
     t = u.target
+    # A leaf that does not parse, JSON or a Markdown or Typst source document
+    # (esm-spec §1.2.1), is an unresolved mount, as at the `subsystems` form.
+    u.reason === :invalid_json && return SubsystemRefError(
+        "Referenced $(form.noun) file did not parse: $(t.key) (from ref '$(t.ref)'): " *
+            _unreadable_cause(u);
+        code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF
+    )
     u.reason === :not_found && return SubsystemRefError(
         "Referenced $(form.noun) file not found: $(t.key) (from ref '$(t.ref)')";
         code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF

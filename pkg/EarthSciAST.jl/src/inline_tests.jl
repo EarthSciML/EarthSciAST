@@ -596,7 +596,7 @@ function _ephemeral_injected_file(
         mname::AbstractString, imports, base_dir::AbstractString
     )::EsmFile
     raw = source_path !== nothing ?
-        _to_native_json(JSON3.read(read(String(source_path), String))) :
+        _to_native_json(_parse_document_text(read(String(source_path), String), String(source_path))) :
         serialize_esm_file(file)
     injected = false
     for kind in ("models", "reaction_systems")

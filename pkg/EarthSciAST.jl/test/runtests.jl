@@ -287,6 +287,7 @@ const GROUPS = [
         "expression_templates_test.jl",
         "template_imports_test.jl",
         "stdlib_refs_test.jl",
+        "source_documents_test.jl",
         "scope_injection_test.jl",
         "out_of_line_templates_test.jl",
         "compile_once_templates_test.jl",
