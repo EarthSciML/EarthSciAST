@@ -738,6 +738,11 @@ fn pass_reserved_index_symbols(doc: &mut Doc<'_>) -> Result<(), PassError> {
 
 /// Load an ESM file from a filesystem path.
 ///
+/// The file's extension picks its format (esm-spec §1.2.1): `.md` is a
+/// Markdown source document, `.typ` a Typst source document, and every other
+/// name (`.esm` among them) JSON. A refused source document fails with its
+/// reader's code (`parse_error`, or `removed_op`).
+///
 /// Reads the file, resolves any subsystem references relative to the file's
 /// directory, validates against the schema, and deserializes into an
 /// [`EsmFile`].
@@ -753,10 +758,11 @@ pub fn load_path_with_options<P: AsRef<std::path::Path>>(
     metaparameters: &std::collections::BTreeMap<String, i64>,
 ) -> Result<EsmFile, EsmError> {
     let path = path.as_ref();
-    let json_str = std::fs::read_to_string(path).map_err(|e| EsmError::FileRead {
+    let text = std::fs::read_to_string(path).map_err(|e| EsmError::FileRead {
         path: path.display().to_string(),
         source: e,
     })?;
+    let json_value = crate::ref_reader::decode_document(&text, path)?;
 
     let base = path
         .parent()
@@ -766,7 +772,7 @@ pub fn load_path_with_options<P: AsRef<std::path::Path>>(
         base_path: Some(base),
         metaparameters: metaparameters.clone(),
     };
-    load_string_with_options(&json_str, &options)
+    load_value(json_value, &options)
 }
 
 /// Validate a JSON value against the ESM schema

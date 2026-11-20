@@ -1969,10 +1969,17 @@ fn load_import_raw(
                 path.display()
             ),
         ),
+        // esm-spec §1.2.1: a source document's removed-op refusal keeps its code.
+        RefError::Parse {
+            path,
+            err: crate::ref_reader::DecodeError::Source(d),
+        } if d.code == codes::REMOVED_OP => {
+            err(d.code, format!("{}: {}", path.display(), d.message))
+        }
         RefError::Parse { path, err: e } => err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!(
-                "{origin}: template-library ref '{}' is not valid JSON: {e}",
+                "{origin}: template-library ref '{}' did not parse: {e}",
                 path.display()
             ),
         ),

@@ -7,6 +7,11 @@
 //! against the referencing document's directory, read, parse. Each caller keeps
 //! its own diagnostic wording by mapping [`RefError`].
 //!
+//! The parse step is [`decode_document`], the esm-spec §1.2.1 read of a
+//! document's text by its file extension (Markdown, Typst or JSON). Every other
+//! place that reads a document from a path (the root of a load from a path, the
+//! problem front door, the inline-test re-read of a source file) uses it too.
+//!
 //! # File identity
 //!
 //! A file's identity — the key of every cycle check and of the parse cache —
@@ -46,11 +51,71 @@ pub(crate) enum RefError {
     Missing { path: PathBuf, err: std::io::Error },
     /// The file exists but could not be read.
     Read { path: PathBuf, err: std::io::Error },
-    /// The file is not JSON.
-    Parse {
-        path: PathBuf,
-        err: serde_json::Error,
-    },
+    /// The file does not decode in the format its extension names
+    /// ([`decode_document`]).
+    Parse { path: PathBuf, err: DecodeError },
+}
+
+/// Why a document's text did not decode ([`decode_document`]).
+#[derive(Debug)]
+pub(crate) enum DecodeError {
+    /// JSON text that does not parse.
+    Json(serde_json::Error),
+    /// A Markdown or Typst source document its reader refused: code
+    /// `parse_error`, or `removed_op` for a removed operator.
+    Source(crate::diagnostic::DiagnosticError),
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecodeError::Json(e) => write!(f, "{e}"),
+            DecodeError::Source(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<DecodeError> for crate::EsmError {
+    /// The root's refusal: unparseable JSON as [`crate::EsmError::JsonParse`],
+    /// a refused source document as its coded diagnostic (`parse_error` or
+    /// `removed_op`).
+    fn from(e: DecodeError) -> Self {
+        match e {
+            DecodeError::Json(e) => crate::EsmError::JsonParse(e),
+            DecodeError::Source(d) => crate::EsmError::schema(d),
+        }
+    }
+}
+
+/// The source format a document read from `location` is in (esm-spec §1.2.1):
+/// a path, or a URL's path (query and fragment ignored), ending in `.md` is a
+/// Markdown source document, one ending in `.typ` a Typst source document, and
+/// every other name JSON (`None`). The match is exact and case-sensitive.
+pub(crate) fn source_format(location: &Path) -> Option<crate::DocumentFormat> {
+    let location = location.to_string_lossy();
+    let name: &str = if is_remote(&location) {
+        let after_scheme = location.split_once("://").map_or("", |(_, rest)| rest);
+        let end = after_scheme.find(['?', '#']).unwrap_or(after_scheme.len());
+        &after_scheme[..end]
+    } else {
+        &location
+    };
+    if name.ends_with(".md") {
+        Some(crate::DocumentFormat::Markdown)
+    } else if name.ends_with(".typ") {
+        Some(crate::DocumentFormat::Typst)
+    } else {
+        None
+    }
+}
+
+/// Decode a document's `text` in the format its `location` names
+/// ([`source_format`]); the format is never guessed from the text.
+pub(crate) fn decode_document(text: &str, location: &Path) -> Result<Value, DecodeError> {
+    match source_format(location) {
+        Some(format) => crate::parse_document(text, format).map_err(DecodeError::Source),
+        None => serde_json::from_str(text).map_err(DecodeError::Json),
+    }
 }
 
 /// The §4.7 spelling step on a ref as authored: `${VAR}` expansion (a
@@ -169,7 +234,7 @@ pub(crate) fn open(
 }
 
 fn parse(text: &str, path: &Path) -> Result<Value, RefError> {
-    serde_json::from_str(text).map_err(|err| RefError::Parse {
+    decode_document(text, path).map_err(|err| RefError::Parse {
         path: path.to_path_buf(),
         err,
     })

@@ -1643,7 +1643,8 @@ pub fn ephemeral_injected_file(
             let s = std::fs::read_to_string(p).map_err(|e| {
                 crate::EsmError::SchemaValidation(format!("failed to read {}: {e}", p.display()))
             })?;
-            serde_json::from_str(&s).map_err(crate::EsmError::JsonParse)?
+            // esm-spec §1.2.1: the extension picks the format.
+            crate::ref_reader::decode_document(&s, p)?
         }
         None => serde_json::to_value(file).map_err(crate::EsmError::JsonParse)?,
     };
