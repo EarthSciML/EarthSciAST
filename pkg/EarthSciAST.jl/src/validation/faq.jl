@@ -32,13 +32,13 @@ function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{St
                 _pointer("", "models", model_name), registry
             )
             # A template parameter may stand for a range's `from` (esm-spec §9.6.1),
-            # so the index-set name a call binds is checked on the expansion; the
+            # so the index-set name a call binds is checked in each template
+            # instance's body, read through its frame (never expanded); the
             # pointer still names the authored field.
-            view = _units_view(file, model_name, model, views)
-            view === model && continue
+            file.component_templates === nothing && continue
             reg = get(file.component_templates, "models.$model_name", nothing)
             reg === nothing && continue
-            _check_template_index_sets!(errors, model, view, _pointer("", "models", model_name), registry, reg)
+            _check_template_index_sets!(errors, model, _pointer("", "models", model_name), registry, reg)
         end
     end
     if file.reaction_systems !== nothing
@@ -157,36 +157,29 @@ function _check_site_aggregates!(
 end
 
 # The `undefined_index_set` check of `_check_undefined_index_set!` on every
-# expression site of `model` and its subsystem models (`foreach_expression`)
-# that calls a template, read from the expanded `view`. A
-# field the view leaves unexpanded is expanded here against `reg`.
+# `faq` a template body evaluates at an expression site of `model` and its
+# subsystem models (`foreach_expression`) that calls a template: each instance
+# body read once through its frame (templates/frames.jl `_tpl_foreach_node`),
+# where a structural parameter (a range's `from`) is the name the reference
+# binds. No reference is expanded.
 function _check_template_index_sets!(
-        errors::Vector{StructuralError}, model::Model, view::Model,
+        errors::Vector{StructuralError}, model::Model,
         path::String, registry::Set{String}, reg
     )
-    templated = Set{String}()
+    tt = _TplTable(reg)
     foreach_expression(model, path) do e, anchor, _
-        _contains_template_reference(e) && push!(templated, anchor)
-        nothing
-    end
-    isempty(templated) && return errors
-    memo = _ExpandCache()
-    foreach_expression(view, path) do e, anchor, _
-        anchor in templated || return nothing
+        _contains_template_reference(e) || return nothing
         any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&
             return nothing
-        if _contains_template_reference(e)
-            e = try
-                _expand_expr_refs(e, reg, nothing, memo)
-            catch err
-                # An unresolvable call is reported by the template checks.
-                err isa ExpressionTemplateError || rethrow()
-                return nothing
+        try
+            _tpl_foreach_node(tt, e) do sub, fr
+                fr === nothing && return
+                sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
+                return
             end
-        end
-        foreach_subexpr_once(e) do sub
-            sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
-            nothing
+        catch err
+            # An unresolvable call is reported by the template checks.
+            err isa ExpressionTemplateError || rethrow()
         end
         return nothing
     end
