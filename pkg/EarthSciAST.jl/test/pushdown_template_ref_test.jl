@@ -232,7 +232,7 @@ end
         @test EA.desugar_pushdown(dense; model_name = "Binned") === dense
 
         # (b) a surviving reference the detector could NOT see through — here
-        #     because the registry is gone, so expansion cannot resolve it. The
+        #     because the registry is gone, so the reference cannot be read. The
         #     document is join-shaped, so this is reported, naming the template.
         orphan = base_doc()
         _define!(
