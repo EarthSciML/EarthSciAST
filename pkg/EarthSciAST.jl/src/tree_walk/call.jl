@@ -1743,14 +1743,18 @@ end
 # refused with the reason (`_tpl_refuse_uncompiled`). The template table is
 # installed in the build state, so the compilers and build-time evaluators
 # compile a reference as a call. Returns `(model, calls)`.
-function _tpl_prepare_model!(model, reg, index_sets, vi_extents)
+function _tpl_prepare_model!(model, reg, index_sets, vi_extents; refuse::Bool = true)
     calls = _CallTable(reg)
     # The index-set registry a call body's `{"from": S}` range reads.
     calls.tt.root_memos[:index_sets] = index_sets
     calls.tt.root_memos[:vi_extents] = vi_extents
     _build_state().calls = calls
     map_expressions!(e -> _tpl_structural_refs(calls.tt, e), model)
-    _tpl_refuse_uncompiled(calls.tt, model)
+    # The front door's pre-passes run before value invention has sized the
+    # derived index sets a body may range over, and read references through
+    # `_eval_through_call` (no call target needed): they pass `refuse = false`,
+    # and the build entry refuses.
+    refuse && _tpl_refuse_uncompiled(calls.tt, model)
     # Every name a body reads from its caller becomes a binding of the
     # reference (`_tpl_augment`), so a phase that asks which names an
     # expression reads sees the body's reads.

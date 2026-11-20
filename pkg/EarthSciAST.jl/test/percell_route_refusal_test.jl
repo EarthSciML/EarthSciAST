@@ -1095,7 +1095,7 @@ end
                 Dict("u" => ([1], [1])), Dict("u[1]" => 1),
                 Dict{String, Any}(), Dict{String, Any}(), Dict{Symbol, Int}()
             ),
-            nothing, nothing, nothing, false, 0,
+            nothing, nothing, false, 0,
             Tuple{Int, _PR._Node}[], _PR._AccKernel[], _PR._ScanFold[],
             _PR._ArrayContraction[], _PR._Covered(1)
         )

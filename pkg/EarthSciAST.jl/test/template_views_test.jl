@@ -114,7 +114,7 @@ end
     doc = _tv_overlap_doc(1)
     tt = _TV._TplTable(Dict{String, Any}(doc["models"]["M"]["expression_templates"]))
     ap = _TV._tpl_augment(tt, _TV._tpl_structural_refs(tt, _TV.expression_from_json(doc["models"]["M"]["equations"][5]["rhs"])))
-    @test _TV._tpl_is_called(tt, ap)
+    @test _TV._tpl_compiles(tt, ap)
     v = _TV._tpl_agg_view(tt, ap)
     @test v.op == "faq" && v.join !== nothing && v.output_idx == ["j"]
     @test _TV._tpl_is_call(v.expr_body) && occursin(_TV._TPL_PART, v.expr_body.name)
