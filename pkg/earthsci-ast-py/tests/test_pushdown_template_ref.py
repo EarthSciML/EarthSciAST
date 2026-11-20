@@ -222,8 +222,34 @@ def test_bare_factor_name_bindings_are_repointed():
     assert rv == lv
     assert r["metadata"]["x_esd"] == lr["metadata"]["x_esd"]
     assert r["index_sets"] == lr["index_sets"]
-    # The generated `distinct` producer is identical…
-    assert _structural(r) == _structural(lr)
+    # The generated `distinct` producer is the longhand one but for its filter:
+    # the containment sits in the template body, so the filter is a reference
+    # to the DERIVED template `bin_into_cell__pd_filter` (the body's
+    # comparisons, in the template's params) bound to the full-grid rect
+    # factors — never a copy of the expanded body.
+    rs, ls = copy.deepcopy(_structural(r)), copy.deepcopy(_structural(lr))
+    assert len(rs) == len(ls) == 1
+    rf, lf = rs[0]["rhs"].pop("filter"), ls[0]["rhs"].pop("filter")
+    assert rs == ls
+    assert lf == {"op": "*", "args": _contain()["args"]}
+    assert rf == {
+        "op": "apply_expression_template",
+        "name": "bin_into_cell__pd_filter",
+        "args": [],
+        "bindings": {
+            "xmin": "src_W",
+            "ymin": "src_S",
+            "xmax": "src_E",
+            "ymax": "src_N",
+            "ptx": "px",
+            "pty": "py",
+        },
+    }
+    tpls = r["models"]["Binned"]["expression_templates"]
+    assert tpls["bin_into_cell__pd_filter"] == {
+        "params": ["xmin", "ymin", "xmax", "ymax", "ptx", "pty"],
+        "body": {"op": "*", "args": tpl_contain["args"]},
+    }
     # …and among the DEFINITIONS only E_PM25's body differs.
     rdef, ldef = _defs(r), _defs(lr)
     assert set(rdef) == set(ldef)
@@ -233,7 +259,7 @@ def test_bare_factor_name_bindings_are_repointed():
     assert b["xmin"] == "pd_cell__src_cells__src_W"
     assert b["ymax"] == "pd_cell__src_cells__src_N"
     assert b["ptx"] == "px"
-    assert r["models"]["Binned"]["expression_templates"] == tpl_before
+    assert {k: v for k, v in tpls.items() if k != "bin_into_cell__pd_filter"} == tpl_before
     assert desugar_pushdown(r) is r
     assert pushdown_diagnostics(d, model_name="Binned") == []
 
@@ -299,7 +325,14 @@ def test_subscripted_bindings_are_repointed():
     assert b["lo_x"]["args"][0] == "pd_cell__src_cells__src_W"
     assert b["hi_y"]["args"][0] == "pd_cell__src_cells__src_N"
     assert b["x"]["args"][0] == "px"  # records untouched
-    assert r["models"]["Binned"]["expression_templates"] == tpl_before
+    # The authored template is untouched; the producer filter is the derived
+    # template of its containment, read with the full-grid subscripted bindings.
+    tpls = r["models"]["Binned"]["expression_templates"]
+    assert {k: v for k, v in tpls.items() if k != "bin2__pd_filter"} == tpl_before
+    assert tpls["bin2__pd_filter"]["params"] == ["lo_x", "lo_y", "hi_x", "hi_y", "x", "y"]
+    prod = _structural(r)[0]["rhs"]
+    assert prod["filter"]["name"] == "bin2__pd_filter"
+    assert prod["filter"]["bindings"]["lo_x"] == _ix("src_W", "c")
     assert desugar_pushdown(r) is r
 
 

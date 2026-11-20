@@ -91,7 +91,7 @@ end
 # and `pushdown_diagnostics` (which only reports). Returns `nothing` when no
 # model is selected; otherwise the plan (`nothing` ⇒ the pattern did not match),
 # the residual diagnostics, the model name, and the component template registry
-# the emission side needs to expand references with.
+# the emission side reads template bodies from (never to expand a reference).
 function _pd_analyze(esm::AbstractDict, model_name)
     file = _coerce_or_load(esm)
     m = _select_model_or_nothing(file, model_name)
@@ -906,22 +906,100 @@ function _pd_rewrite_rects!(node, rectmap::AbstractDict)
     return node
 end
 
-# Find the condition of the first dict-form `ifelse` node.
-function _pd_dict_find_ifelse_cond(node)
+# The producer filter of the first dict-form `ifelse` node in `node` (pre-order),
+# written in `node`'s own scope, or `nothing` when there is none: the
+# comparisons of its condition (an `and`/`*` of them, or the one condition) as
+# a `*`, deep-copied. An `ifelse` inside the body of a template `T` that a
+# reference names (`reg`, the component registry) is not copied out of the
+# body: the comparisons become the body of the DERIVED template `T__pd_filter`
+# (registered in `derived`), written in `T`'s parameters, and the filter in
+# `node`'s scope is a reference to it with the parameters it reads bound as
+# the reference binds them. A containment nested several templates deep gets
+# one derived template per template on the way, each body a reference to the
+# next. No reference is expanded.
+function _pd_filter_in(node, reg, derived::AbstractDict)
     if node isa AbstractDict
-        if get(node, "op", nothing) == "ifelse"
+        op = get(node, "op", nothing)
+        if op == "ifelse"
             a = get(node, "args", nothing)
-            a isa AbstractVector && length(a) == 3 && return a[1]
+            if a isa AbstractVector && length(a) == 3
+                c = a[1]
+                comps = (c isa AbstractDict && get(c, "op", nothing) in ("and", "*")) ?
+                    c["args"] : Any[c]
+                return OrderedDict{String, Any}(
+                    "op" => "*", "args" => Any[_to_ordered(deepcopy(x)) for x in comps]
+                )
+            end
+        elseif op == APPLY_EXPRESSION_TEMPLATE_OP && reg !== nothing
+            name = get(node, "name", nothing)
+            if name isa AbstractString && haskey(reg, name)
+                decl = _TemplateDecl(reg[name])
+                f = _pd_filter_in(decl.body, reg, derived)
+                f === nothing || return _pd_filter_ref(String(name), decl.params, f, node, derived)
+            end
         end
         for (_, v) in node
-            r = _pd_dict_find_ifelse_cond(v)
+            r = _pd_filter_in(v, reg, derived)
             r === nothing || return r
         end
     elseif node isa AbstractVector
         for x in node
-            r = _pd_dict_find_ifelse_cond(x)
+            r = _pd_filter_in(x, reg, derived)
             r === nothing || return r
         end
+    end
+    return nothing
+end
+
+# The derived template `<name>__pd_filter` with body `f` (written in the
+# parameters of template `name`, declared `params`), registered in `derived`,
+# and the reference to it at `call` (a reference to `name`): the parameters `f`
+# reads, in declared order, each bound to `call`'s binding of it.
+function _pd_filter_ref(name::String, params, f, call::AbstractDict, derived::AbstractDict)
+    used = String[p for p in params if _pd_reads_param(f, p)]
+    dname = name * "__pd_filter"
+    derived[dname] = OrderedDict{String, Any}("params" => Any[used...], "body" => f)
+    b = get(call, "bindings", nothing)
+    bindings = OrderedDict{String, Any}(
+        p => _to_ordered(deepcopy(b[p])) for p in used if b isa AbstractDict && haskey(b, p)
+    )
+    return OrderedDict{String, Any}(
+        "op" => APPLY_EXPRESSION_TEMPLATE_OP, "name" => dname, "args" => Any[],
+        "bindings" => bindings
+    )
+end
+
+# Does the dict-form body `n` read the parameter `p`: a string leaf `p`
+# anywhere but a reference's `name` (where template substitution, `_substitute`,
+# puts a binding)?
+function _pd_reads_param(n, p::AbstractString)::Bool
+    n isa AbstractString && return n == p
+    if n isa AbstractDict
+        apply = get(n, "op", nothing) == APPLY_EXPRESSION_TEMPLATE_OP
+        return any(kv -> !(apply && kv[1] == "name") && _pd_reads_param(kv[2], p), pairs(n))
+    end
+    n isa AbstractVector && return any(x -> _pd_reads_param(x, p), n)
+    return false
+end
+
+# Register the derived filter templates in the model's `expression_templates`
+# block. A name already declared there with a different declaration is refused
+# rather than overwritten.
+function _pd_register_derived!(model::AbstractDict, derived::AbstractDict, reg)
+    isempty(derived) && return nothing
+    blk = get(model, "expression_templates", nothing)
+    if !(blk isa AbstractDict)
+        blk = OrderedDict{String, Any}()
+        model["expression_templates"] = blk
+    end
+    for (k, v) in derived
+        old = get(blk, k, nothing)
+        old === nothing && reg !== nothing && (old = get(reg, k, nothing))
+        (old === nothing || _to_ordered(old) == v) || error(
+            "projection-pushdown desugar: the derived producer-filter template '$(k)' " *
+                "would replace a template of that name the document already declares"
+        )
+        blk[k] = v
     end
     return nothing
 end
@@ -1223,7 +1301,7 @@ function _pd_apply(esm, mname::AbstractString, plan::_PdPlan, reg = nothing)
     end
     defs = _pd_definitions(eqs)
 
-    prod_filter = _pd_producer_filter(eqs, defs, plan, reg)
+    prod_filter = _pd_producer_filter(d["models"][mname], eqs, defs, plan, reg)
     # The member buffer is an `unknown`: the generated producer equation
     # defines it (esm-spec §6.3.1).
     mv[names.member_var] = Dict{String, Any}("type" => "unknown", "shape" => Any[names.support_set])
@@ -1261,23 +1339,17 @@ function _pd_rect_factors(plan::_PdPlan)
 end
 
 # The producer's filter: the comparisons of the representative binning's
-# containment, deep-copied, with their full-grid rect references. A body
-# factored through a template is read off its expansion (§9.6.4 rule 2), a
-# scratch value of which nothing else is emitted.
-function _pd_producer_filter(eqs, defs::Dict{String, Int}, plan::_PdPlan, reg)
+# containment, with their full-grid rect references (`_pd_filter_in`). A
+# containment inside a template body is the derived template
+# `<template>__pd_filter`, registered in `model`'s `expression_templates`, and
+# the filter is a reference to it: the body is never expanded.
+function _pd_producer_filter(model::AbstractDict, eqs, defs::Dict{String, Int}, plan::_PdPlan, reg)
     repexpr = _pd_defining_rhs(eqs, defs, plan.forward[1].name)
-    ifcond = _pd_dict_find_ifelse_cond(get(repexpr, "expr", nothing))
-    if ifcond === nothing && reg !== nothing
-        ifcond = _pd_dict_find_ifelse_cond(
-            _expand_all(
-                _to_ordered(deepcopy(get(repexpr, "expr", nothing))),
-                reg, "pushdown_rewrite"
-            )
-        )
-    end
-    ifcond === nothing && error("pushdown desugar: representative E lost its containment ifelse")
-    comps = get(ifcond, "op", nothing) in ("and", "*") ? ifcond["args"] : Any[ifcond]
-    return Dict{String, Any}("op" => "*", "args" => Any[_to_ordered(c) for c in comps])
+    derived = OrderedDict{String, Any}()
+    f = _pd_filter_in(get(repexpr, "expr", nothing), reg, derived)
+    f === nothing && error("pushdown desugar: representative E lost its containment ifelse")
+    _pd_register_derived!(model, derived, reg)
+    return f
 end
 
 # The per-rect cell-gather observeds `cell_F[c] = index(F, index(member_factor, c))`,

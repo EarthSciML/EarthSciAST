@@ -502,8 +502,11 @@ function _tpl_frame(tt::_TplTable, call::OpExpr, parent::Union{Nothing, _TplFram
             )
         )
     end
+    # A lane (`"\0lane\0k"`, call.jl `_tpl_with_lanes`) is a read the caller
+    # makes for the body, derived from the other bindings, which it keeps: the
+    # frame reads the instance body itself, so a lane is no argument of it.
     for k in keys(bind)
-        (k in def.params || startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT)) || throw(
+        (k in def.params || startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE)) || throw(
             ExpressionTemplateError(
                 ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 "apply_expression_template '$name' supplies unknown param '$k'"

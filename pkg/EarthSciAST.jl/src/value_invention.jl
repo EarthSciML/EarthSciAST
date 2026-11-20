@@ -63,13 +63,24 @@ _vi_model_assignments(model::Model) =
 # Every `index` target name reachable in a sub-tree (the array a value reads
 # from): `index(NAME, …)` → NAME. Walks EVERY expression-bearing `OpExpr` field
 # via the generated `foreach_subexpr` walker (expression.jl).
+#
+# A template reference's body is read through its frame (`_tpl_foreach_node`,
+# against the build's template table), an array parameter as the name its
+# binding gives: `index(<param>, …)` targets the array the reference binds.
 function _vi_index_targets!(refs, node)
     node isa ASTExpr || return refs
-    foreach_subexpr(node) do n
-        if n isa OpExpr && n.op == "index" && !isempty(n.args) && n.args[1] isa VarExpr
-            push!(refs, n.args[1].name)
+    visit = function (n, fr)
+        if n isa OpExpr && n.op == "index" && !isempty(n.args)
+            t, _ = _tpl_leaf(n.args[1], fr)
+            t isa VarExpr && push!(refs, t.name)
         end
-        nothing
+        return nothing
+    end
+    ct = _call_table()
+    if ct === nothing
+        foreach_subexpr(n -> visit(n, nothing), node)
+    else
+        _tpl_foreach_node(visit, ct.tt, node)
     end
     return refs
 end
@@ -362,6 +373,13 @@ end
 function _vi_index(node::OpExpr, ctx::_ViCtx, bindings::AbstractDict)
     args = node.args
     name = !isempty(args) && args[1] isa VarExpr ? args[1].name : nothing
+    # An array parameter of a template body (`_eval_through_call`): bound to
+    # the factor name its binding evaluates to (`_vi_eval` returns a bare
+    # factor name as the name), which is the array the body gathers from.
+    if name !== nothing && _tpl_is_sentinel(name) && haskey(bindings, name)
+        v = bindings[name]
+        v isa AbstractString && (name = String(v))
+    end
     if name !== nothing && haskey(ctx.maps, name)
         length(args) == 2 || throw(
             TreeWalkError(

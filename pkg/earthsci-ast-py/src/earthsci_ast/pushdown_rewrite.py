@@ -285,6 +285,93 @@ def _pd_find_ifelse_cond(e: Any) -> Any:
     return None
 
 
+def _pd_filter_in(node: Any, templates: dict | None, derived: dict) -> Any:
+    """The producer filter of the first raw ``ifelse`` in ``node`` (pre-order),
+    written in ``node``'s own scope, or ``None`` when there is none: the
+    comparisons of its condition (an ``and``/``*`` of them, or the one
+    condition) as a ``*``, deep-copied. An ``ifelse`` inside the body of a
+    template ``T`` that a reference names is not copied out of the body: the
+    comparisons become the body of the DERIVED template ``T__pd_filter``
+    (registered in ``derived``), written in ``T``'s parameters, and the filter
+    in ``node``'s scope is a reference to it with the parameters it reads bound
+    as the reference binds them. A containment nested several templates deep
+    gets one derived template per template on the way. No reference is
+    expanded. Mirrors the Julia reference's ``_pd_filter_in``."""
+    if isinstance(node, dict):
+        op = node.get("op")
+        if op == "ifelse":
+            a = node.get("args")
+            if isinstance(a, list) and len(a) == 3:
+                c = a[0]
+                comps = c["args"] if isinstance(c, dict) and c.get("op") in ("and", "*") else [c]
+                return {"op": "*", "args": [copy.deepcopy(x) for x in comps]}
+        elif op == APPLY_OP and templates is not None:
+            name = node.get("name")
+            if isinstance(name, str) and name in templates:
+                decl = templates[name]
+                f = _pd_filter_in(decl.get("body"), templates, derived)
+                if f is not None:
+                    params = [p for p in decl.get("params") or [] if isinstance(p, str)]
+                    return _pd_filter_ref(name, params, f, node, derived)
+        for v in node.values():
+            r = _pd_filter_in(v, templates, derived)
+            if r is not None:
+                return r
+    elif isinstance(node, list):
+        for x in node:
+            r = _pd_filter_in(x, templates, derived)
+            if r is not None:
+                return r
+    return None
+
+
+def _pd_filter_ref(name: str, params: list, f: Any, call: dict, derived: dict) -> dict:
+    """Register the derived template ``<name>__pd_filter`` (body ``f``, the
+    parameters of ``name`` it reads, in declared order) and return the
+    reference to it at ``call``, each parameter bound as ``call`` binds it."""
+    used = [p for p in params if _pd_reads_param(f, p)]
+    dname = name + "__pd_filter"
+    derived[dname] = {"params": list(used), "body": f}
+    b = call.get("bindings")
+    bindings = {p: copy.deepcopy(b[p]) for p in used if isinstance(b, dict) and p in b}
+    return {"op": APPLY_OP, "name": dname, "args": [], "bindings": bindings}
+
+
+def _pd_reads_param(n: Any, p: str) -> bool:
+    """Does the raw body ``n`` read parameter ``p``: a string leaf ``p``
+    anywhere but a reference's ``name``?"""
+    if isinstance(n, str):
+        return n == p
+    if isinstance(n, dict):
+        apply = n.get("op") == APPLY_OP
+        return any(not (apply and k == "name") and _pd_reads_param(v, p) for k, v in n.items())
+    if isinstance(n, list):
+        return any(_pd_reads_param(x, p) for x in n)
+    return False
+
+
+def _pd_register_derived(model: dict, derived: dict, templates: dict | None) -> None:
+    """Register the derived filter templates in ``model``'s
+    ``expression_templates`` block; a name already declared with a different
+    declaration is refused rather than overwritten."""
+    if not derived:
+        return
+    blk = model.get("expression_templates")
+    if not isinstance(blk, dict):
+        blk = {}
+        model["expression_templates"] = blk
+    for k, v in derived.items():
+        old = blk.get(k)
+        if old is None and templates is not None:
+            old = templates.get(k)
+        if old is not None and old != v:
+            raise PushdownRewriteError(
+                f"projection-pushdown desugar: the derived producer-filter template '{k}' "
+                "would replace a template of that name the document already declares"
+            )
+        blk[k] = v
+
+
 def _pd_parse_containment(pred: Any, c_sym: str, r_sym: str):
     """Parse a containment predicate — an ``and``/``*`` of comparisons, each
     between a factor subscripted by ``c_sym`` and one subscripted by ``r_sym``
@@ -1237,22 +1324,16 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
     mv = d["models"][mname]["variables"]
 
     # --- producer filter comparisons, deep-copied from the representative E
-    #     BEFORE E is rewritten (they must keep full-grid rect factor refs) ---
+    #     BEFORE E is rewritten (they must keep full-grid rect factor refs).
+    #     A containment inside a template body becomes the derived template
+    #     ``<template>__pd_filter`` and the filter a reference to it; no
+    #     reference is expanded (see :func:`_pd_filter_in`). ---
     repexpr = _pd_observed_defs(d["models"][mname])[plan["rep_ename"]]
-    ifcond = _pd_find_ifelse_cond(repexpr.get("expr"))
-    if ifcond is None:
-        # The body is factored through a template. Read the predicate off the
-        # EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID rect
-        # references, which is exactly what the pre-rewrite expansion yields. The
-        # expansion is a scratch value: nothing of it is emitted except these
-        # comparisons, so the document's template block and call sites are
-        # untouched. A template-free document never reaches this branch, so its
-        # emitted filter is byte-identical to before.
-        ifcond = _pd_find_ifelse_cond(_pd_expand_for_detection(repexpr.get("expr"), templates))
-    if ifcond is None:
+    derived: dict[str, dict] = {}
+    prod_filter = _pd_filter_in(repexpr.get("expr"), templates, derived)
+    if prod_filter is None:
         raise PushdownRewriteError("pushdown desugar: representative E lost its containment ifelse")
-    comps = ifcond["args"] if ifcond.get("op") in ("and", "*") else [ifcond]
-    prod_filter = {"op": "*", "args": [copy.deepcopy(c) for c in comps]}
+    _pd_register_derived(d["models"][mname], derived, templates)
 
     # --- member state var + member_factor param ---
     # An UNKNOWN, defined by the generated `distinct` producer equation below.

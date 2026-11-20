@@ -63,85 +63,17 @@
               "op": "true"
             },
             "filter": {
-              "args": [
-                {
-                  "args": [
-                    {
-                      "args": [
-                        "src_W",
-                        "c"
-                      ],
-                      "op": "index"
-                    },
-                    {
-                      "args": [
-                        "px",
-                        "r"
-                      ],
-                      "op": "index"
-                    }
-                  ],
-                  "op": "<="
-                },
-                {
-                  "args": [
-                    {
-                      "args": [
-                        "px",
-                        "r"
-                      ],
-                      "op": "index"
-                    },
-                    {
-                      "args": [
-                        "src_E",
-                        "c"
-                      ],
-                      "op": "index"
-                    }
-                  ],
-                  "op": "<"
-                },
-                {
-                  "args": [
-                    {
-                      "args": [
-                        "src_S",
-                        "c"
-                      ],
-                      "op": "index"
-                    },
-                    {
-                      "args": [
-                        "py",
-                        "r"
-                      ],
-                      "op": "index"
-                    }
-                  ],
-                  "op": "<="
-                },
-                {
-                  "args": [
-                    {
-                      "args": [
-                        "py",
-                        "r"
-                      ],
-                      "op": "index"
-                    },
-                    {
-                      "args": [
-                        "src_N",
-                        "c"
-                      ],
-                      "op": "index"
-                    }
-                  ],
-                  "op": "<"
-                }
-              ],
-              "op": "*"
+              "args": [],
+              "bindings": {
+                "ptx": "px",
+                "pty": "py",
+                "xmax": "src_E",
+                "xmin": "src_W",
+                "ymax": "src_N",
+                "ymin": "src_S"
+              },
+              "name": "bin_into_cell__pd_filter",
+              "op": "apply_expression_template"
             },
             "id": "pd_faq__src_cells",
             "join": [
@@ -512,6 +444,97 @@
             "ptx",
             "pty",
             "wgt"
+          ]
+        },
+        "bin_into_cell__pd_filter": {
+          "body": {
+            "args": [
+              {
+                "args": [
+                  {
+                    "args": [
+                      "xmin",
+                      "c"
+                    ],
+                    "op": "index"
+                  },
+                  {
+                    "args": [
+                      "ptx",
+                      "r"
+                    ],
+                    "op": "index"
+                  }
+                ],
+                "op": "<="
+              },
+              {
+                "args": [
+                  {
+                    "args": [
+                      "ptx",
+                      "r"
+                    ],
+                    "op": "index"
+                  },
+                  {
+                    "args": [
+                      "xmax",
+                      "c"
+                    ],
+                    "op": "index"
+                  }
+                ],
+                "op": "<"
+              },
+              {
+                "args": [
+                  {
+                    "args": [
+                      "ymin",
+                      "c"
+                    ],
+                    "op": "index"
+                  },
+                  {
+                    "args": [
+                      "pty",
+                      "r"
+                    ],
+                    "op": "index"
+                  }
+                ],
+                "op": "<="
+              },
+              {
+                "args": [
+                  {
+                    "args": [
+                      "pty",
+                      "r"
+                    ],
+                    "op": "index"
+                  },
+                  {
+                    "args": [
+                      "ymax",
+                      "c"
+                    ],
+                    "op": "index"
+                  }
+                ],
+                "op": "<"
+              }
+            ],
+            "op": "*"
+          },
+          "params": [
+            "xmin",
+            "ymin",
+            "xmax",
+            "ymax",
+            "ptx",
+            "pty"
           ]
         }
       },

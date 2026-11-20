@@ -65,12 +65,16 @@ is **deep-equal as parsed JSON** to the committed golden.
   pins the invariant that whether the pushdown fires MUST NOT depend on how the
   author factored the body: the derived set, producer, member factor, cell
   gathers, gate and `gated_select` record are IDENTICAL to the longhand golden —
-  the two goldens differ in `E_PM25` and nothing else — while the template
-  **body is byte-identical to the input's**. The rewrite re-points the CALL
-  SITE's `bindings` onto the generated `pd_cell__*` gathers, never the shared
-  body, so Option B's single lowering survives the rewrite. (The generated
-  producer `filter` still carries the FULL-GRID rect references, read off the
-  expanded body before the call site is rewritten.)
+  the two goldens differ in `E_PM25`, the producer's `filter` and the template
+  block, and nothing else — while the authored template **body is
+  byte-identical to the input's**. The rewrite re-points the CALL SITE's
+  `bindings` onto the generated `pd_cell__*` gathers, never the shared body, so
+  Option B's single lowering survives the rewrite. The generated producer
+  `filter` keeps the FULL-GRID rect references without expanding the body: it
+  is a reference to the derived template `bin_into_cell__pd_filter` (the
+  body's four comparisons as a `*`, over the six parameters they read), bound
+  to `src_W`/`src_S`/`src_E`/`src_N`/`px`/`py` as the call site was before it
+  was re-pointed (CONFORMANCE_SPEC §5.5.7).
 - `fixtures/pushdown_unreadable_join.esm` — a `fires: false` fixture: `E_PM25`
   bins records into `src_cells` with a THREE-dimensional box containment and
   feeds the provider-backed `SR_PM25`, so it is unmistakably in the join

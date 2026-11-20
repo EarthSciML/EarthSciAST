@@ -178,8 +178,17 @@ end
         @test b["lo_x"]["args"][1] == "pd_cell__src_cells__src_W"
         @test b["hi_y"]["args"][1] == "pd_cell__src_cells__src_N"
         @test b["x"]["args"][1] == "px"                          # records untouched
-        # Option B survives: the SHARED body is not edited.
-        @test r["models"]["Binned"]["expression_templates"] == tpl_before
+        # Option B survives: the SHARED body is not edited, and the producer
+        # filter is a reference to the derived template of its containment,
+        # read with the full-grid subscripted bindings (never an expanded copy).
+        tpls = r["models"]["Binned"]["expression_templates"]
+        @test Dict(k => v for (k, v) in tpls if k != "bin2__pd_filter") == tpl_before
+        @test tpls["bin2__pd_filter"]["params"] == Any["lo_x", "lo_y", "hi_x", "hi_y", "x", "y"]
+        prod = only(eq for eq in r["models"]["Binned"]["equations"] if !(eq["lhs"] isa AbstractString))
+        @test prod["rhs"]["filter"]["op"] == "apply_expression_template"
+        @test prod["rhs"]["filter"]["name"] == "bin2__pd_filter"
+        @test prod["rhs"]["filter"]["bindings"]["lo_x"] == jidx("src_W", "c")
+        @test !haskey(prod["rhs"]["filter"]["bindings"], "wgt")
         @test EA.desugar_pushdown(r) === r                       # idempotent
         @test isempty(EA.pushdown_diagnostics(d; model_name = "Binned"))
     end
@@ -254,6 +263,37 @@ end
         @test EA.desugar_pushdown(orphan; model_name = "Binned") === orphan
     end
 
+    # ---- the producer filter is a reference, and invents the same support ----
+    # The corpus golden's producer filter is a reference to the derived
+    # template `bin_into_cell__pd_filter` (the containment test of the body),
+    # never an expanded copy. Value invention reads it through the call, as the
+    # build front door prepares the model, and must invent the same members as
+    # the longhand golden's comparisons.
+    @testset "derived filter template invents the longhand support set" begin
+        gdir = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "pushdown", "golden")
+        arrays = Dict{String, Any}(
+            "src_W" => [0.0, 2, 4, 6], "src_E" => [2.0, 4, 6, 8],
+            "src_S" => zeros(4), "src_N" => fill(2.0, 4),
+            "px" => [1.0, 5.0, 9.0], "py" => [1.0, 1.0, 1.0]
+        )
+        members = map(("pushdown_template_body", "pushdown_gated_dense")) do g
+            file = EA.load_document(JSON.parsefile(joinpath(gdir, "$g.rewritten.json")))
+            @test isempty(EA.validate_structural(file))
+            m = EA._select_model(file, "Binned")
+            reg = EA._component_template_reg(file, "Binned")
+            if reg !== nothing
+                @test haskey(reg, "bin_into_cell__pd_filter")
+                m = EA._expansion_copy(m)
+                m, _ = EA._tpl_prepare_model!(
+                    m, copy(reg), file.index_sets, Dict{String, Int}(); refuse = false
+                )
+            end
+            vi = EA.materialize_value_invention(m, file.index_sets, arrays, Dict{String, Any}())
+            sort(collect(Int, vi.members["pd_faq__src_cells"]))
+        end
+        @test members[1] == members[2] == [1, 3]
+    end
+
     # ---- ACCEPTANCE: the sanctioned spelling flattens AND is recognised ----
     # `flatten.jl` rejects a template body naming a variable a coupling
     # `variable_map` rewrote (`template_body_references_coupling_rewritten_variable`)
@@ -316,8 +356,11 @@ end
             @test haskey(ex, "join")
             @test ex["expr"]["bindings"]["xmin"] == "pd_cell__src_cells__src_W"
         end
-        @test r["models"]["ISRM"]["expression_templates"] ==
-            raw["models"]["ISRM"]["expression_templates"]     # body untouched
+        rt = r["models"]["ISRM"]["expression_templates"]
+        @test Dict(k => v for (k, v) in rt if k != "bin_emissions__pd_filter") ==
+            Dict(raw["models"]["ISRM"]["expression_templates"])   # body untouched
+        @test rt["bin_emissions__pd_filter"]["params"] ==
+            Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty"]
         @test isempty(EA.pushdown_diagnostics(raw; model_name = "ISRM"))
     end
 end

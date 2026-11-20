@@ -450,8 +450,11 @@ end
         trd = EA.desugar_pushdown(tdoc; model_name = "ISRM")
         @test trd !== tdoc                                     # it fired
         @test trd["metadata"]["x_esd"]["pushdown"]["gated_select"]["gated_by"] == SET
-        # the SHARED body is not edited — Option B's single lowering survives
-        @test trd["models"]["ISRM"]["expression_templates"] == tpl_before
+        # the SHARED body is not edited — Option B's single lowering survives;
+        # the producer filter is the derived template of its containment
+        ttpl = trd["models"]["ISRM"]["expression_templates"]
+        @test Dict(k => v for (k, v) in ttpl if k != "bin_emissions__pd_filter") == tpl_before
+        @test haskey(ttpl, "bin_emissions__pd_filter")
         # the CALL SITES are: each E now gathers the compact per-support rects
         for Ename in ("E_VOC", "E_NOx", "E_NH3", "E_SOx", "E_PM25")
             b = _defrhs(trd["models"]["ISRM"], Ename)["expr"]["bindings"]
