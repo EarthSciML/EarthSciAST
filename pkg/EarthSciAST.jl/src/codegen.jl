@@ -27,11 +27,12 @@ function _generate_script(
         reaction_system_emitter::Function,
         emit_data_sources::Bool = false
     )
-    # Expand at the boundary (RFC out-of-line-expression-templates §7.7): the
-    # expression emitters have no `apply_expression_template` arm (the generic
-    # fallback would render `apply_expression_template()`, dropping name and
-    # bindings), so generated code must be the Option-A image. No-op without refs.
-    file.component_templates === nothing || (file = _expand_refs!(deepcopy(file)))
+    # Template references are printed as references (esm-spec §9.6.4): each
+    # template a component references is emitted once, as a Julia function,
+    # and each reference as a call to it (`_cg_template_calls`). Nothing is
+    # expanded. No-op without references.
+    tplfns = Dict{String, Vector{String}}()
+    file.component_templates === nothing || ((file, tplfns) = _cg_template_calls(file))
     lines = String[]
 
     # Header comment
@@ -54,6 +55,7 @@ function _generate_script(
     if !isnothing(file.models) && !isempty(file.models)
         push!(lines, "# Models")
         for (name, model) in file.models
+            append!(lines, get(tplfns, "models.$name", String[]))
             append!(lines, model_emitter(name, model))
             push!(lines, "")
         end
@@ -63,6 +65,7 @@ function _generate_script(
     if !isnothing(file.reaction_systems) && !isempty(file.reaction_systems)
         push!(lines, "# Reaction Systems")
         for (name, reaction_system) in file.reaction_systems
+            append!(lines, get(tplfns, "reaction_systems.$name", String[]))
             append!(lines, reaction_system_emitter(name, reaction_system))
             push!(lines, "")
         end
@@ -94,6 +97,121 @@ function _generate_script(
     end
 
     return join(lines, "\n")
+end
+
+# ---------------------------------------------------------------------------
+# Template references in the printed script
+#
+# A template a component references is printed ONCE, as a Julia function of its
+# parameters (declared order) followed by its implicit parameters — the names
+# its body reads from its caller (sorted; templates/frames.jl `_tpl_augment`) —
+# and every reference as a call to that function with the reference's
+# bindings, in the same order. A body's own references are calls too, so the
+# printed functions call one another as the templates do. The functions are
+# defined before the component's system, and the system's equations evaluate
+# the calls when they are built, so a symbolic caller (ModelingToolkit,
+# Catalyst) gets exactly the expression the reference denotes.
+# ---------------------------------------------------------------------------
+
+# The Julia function name of template `tname` of component `cname`.
+function _cg_template_fname(cname::AbstractString, tname::AbstractString)
+    s = replace(string(cname, "_", tname), r"[^A-Za-z0-9_]" => "_")
+    return isdigit(first(s)) ? "_" * s : s
+end
+
+# The implicit parameters of template `def` (`_tpl_augment`'s list, which the
+# references carry as `"\0free\0n"` bindings).
+_cg_template_free(tt::_TplTable, def::_TplDef) =
+    def.closed === nothing ? _tpl_generic_free(tt, def) : def.closed.free
+
+# `e` with every (augmented) template reference replaced by a plain call
+# `fname(bindings...)`; each referenced template's name is added to `used`.
+function _cg_calls(tt::_TplTable, cname, e::ASTExpr, used::Set{String}, memo::IdDict{OpExpr, ASTExpr})
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    out = map_children(c -> _cg_calls(tt, cname, c, used, memo), e)
+    if _tpl_is_call(out)
+        def = _tpl_def(tt, out.name)
+        push!(used, def.name)
+        b = out.bindings === nothing ? Dict{String, ASTExpr}() : out.bindings
+        args = ASTExpr[b[p] for p in def.params]
+        for n in _cg_template_free(tt, def)
+            push!(args, get(b, _TPL_FREE * n, VarExpr(n)))
+        end
+        out = OpExpr(_cg_template_fname(cname, def.name), args)
+    end
+    memo[e] = out
+    return out
+end
+
+# The function definition printing template `name` of component `cname`.
+function _cg_template_function(tt::_TplTable, cname, name::String, used::Set{String})
+    def = _tpl_def(tt, name)
+    decl = _TemplateDecl(tt.reg[name])
+    # The declared body with each parameter a sentinel and every reference in
+    # it carrying its implicit parameters (as `_tpl_generic_free` reads it).
+    body = _tpl_augment(
+        tt, expression_from_json(_substitute(decl.body, Dict{String, Any}(p => _TPL_ARG * p for p in def.params)))
+    )
+    free = _cg_template_free(tt, def)
+    # Argument names: the parameters' own; an implicit parameter keeps its
+    # name unless a parameter has it.
+    taken = Set{String}(def.params)
+    m = Dict{String, ASTExpr}(_TPL_ARG * p => VarExpr(p) for p in def.params)
+    argnames = copy(def.params)
+    for n in free
+        a = n
+        while a in taken
+            a *= "_"
+        end
+        push!(taken, a)
+        push!(argnames, a)
+        a == n || (m[n] = VarExpr(a))
+    end
+    body = _cg_calls(tt, cname, _tpl_subst_scoped(body, m, IdDict{OpExpr, ASTExpr}()), used, IdDict{OpExpr, ASTExpr}())
+    return "$(_cg_template_fname(cname, name))($(join(argnames, ", "))) = $(format_julia_expression(body))"
+end
+
+"""
+    _cg_template_calls(file) -> (file′, functions)
+
+`file′`: a copy of `file` whose top-level components print their template
+references as calls; `functions`: per component (`"models.<name>"`,
+`"reaction_systems.<name>"`), the lines defining the functions those calls
+call, one per referenced template.
+"""
+function _cg_template_calls(file::EsmFile)
+    ct = file.component_templates
+    fns = Dict{String, Vector{String}}()
+    out = deepcopy(file)
+    for (kind, comps) in (("models", out.models), ("reaction_systems", out.reaction_systems))
+        comps === nothing && continue
+        for (cname, comp) in comps
+            key = "$kind.$cname"
+            reg = get(ct, key, nothing)
+            reg === nothing && continue
+            tt = _TplTable(reg)
+            used = Set{String}()
+            amemo = IdDict{OpExpr, ASTExpr}()
+            cmemo = IdDict{OpExpr, ASTExpr}()
+            map_expressions!(e -> _cg_calls(tt, cname, _tpl_augment(tt, e, amemo), used, cmemo), comp; subsystems = false)
+            isempty(used) && continue
+            lines = String["# Expression templates of $cname"]
+            done = Set{String}()
+            while true
+                todo = sort!(collect(setdiff(used, done)))
+                isempty(todo) && break
+                for name in todo
+                    push!(done, name)
+                    push!(lines, _cg_template_function(tt, cname, name, used))
+                end
+            end
+            push!(lines, "")
+            fns[key] = lines
+        end
+    end
+    return out, fns
 end
 
 """
