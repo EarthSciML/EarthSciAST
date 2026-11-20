@@ -112,6 +112,11 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", path, err)
 	}
+	// esm-spec §1.2.1: a `.md` or `.typ` file is a source document, read by its
+	// extension into the JSON text everything below takes.
+	if data, err = decodeDocumentText(data, path); err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", path, err)
+	}
 
 	basePath := filepath.Dir(path)
 	// The loader-API bindings, kept SEPARATE from rootMetaEnv below. They reach
