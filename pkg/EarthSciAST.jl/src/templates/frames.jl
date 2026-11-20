@@ -139,6 +139,10 @@ function _tpl_close(tt::_TplTable, name::String, decl::_TemplateDecl, S::Dict{St
         sub[p] = haskey(S, p) ? S[p] : _TPL_ARG * p
     end
     typed = expression_from_json(_substitute(decl.body, sub))
+    # `broadcast(fn = F, …)` is `F(…)` (esm-spec §4.3.4), lowered in a body as
+    # the build lowers it in the model's own tree (an invalid `fn` is left for
+    # the build to refuse).
+    typed = _tpl_lower_broadcast(typed, IdDict{OpExpr, ASTExpr}())
     typed = _tpl_augment(tt, typed)
     typed = _tpl_elem_reads(tt, typed)
     typed = _tpl_body_lift(tt, typed, IdDict{OpExpr, ASTExpr}())
@@ -171,13 +175,29 @@ function _tpl_elem_reads(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr
     return r
 end
 
+# `e` with every `broadcast` whose `fn` is admissible lowered to its operator
+# (tree_walk/build_equation_prep.jl `_lower_broadcast_node`).
+function _tpl_lower_broadcast(e::ASTExpr, memo::IdDict{OpExpr, ASTExpr})
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    r = map_children(c -> _tpl_lower_broadcast(c, memo), e)
+    if r.op == "broadcast" && _broadcast_fn_problem(r.fn, length(r.args)) === nothing
+        r = OpExpr(String(r.fn), copy(r.args))
+    end
+    memo[e] = r
+    return r
+end
+
 # THE ELEMENTWISE LIFT IN A BODY. An elementwise operator in a body whose
 # operands include whole array-valued references (`2.5 * interior(f)`, all of
-# one rank over the same ranges) and otherwise scalars is the array whose
+# one rank over the same ranges) or array-valued `faq`s over their output
+# indices only (`pi * faq(i, R, e)`), and otherwise scalars, is the array whose
 # element at `o…` is the operator over each reference's ELEMENT call at `o…`
-# (call.jl `_elem_call`) and the scalars:
+# (call.jl `_elem_call`), each `faq`'s expression at `o…`, and the scalars:
 #
 #     2.5 * interior(f)  ==  faq(output_idx = o, ranges = R, expr = 2.5 * interior(f)[o])
+#     pi * faq(i, R, e)  ==  faq(output_idx = o, ranges = R, expr = pi * e[i => o])
 #
 # as the model's own elementwise lift reads the same arithmetic on the
 # expansion. The references stay references (element calls); the template is
@@ -188,7 +208,7 @@ function _tpl_body_lift(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr}
     r === nothing || return r
     r = map_children(c -> _tpl_body_lift(tt, c, memo), e)
     if r.op in _TPL_CALL_OPS && r.op != "const" && _tpl_structless(r) && !_tpl_is_call(r) &&
-            isempty(_bound_symbols(r)) && any(a -> _tpl_whole_ref(tt, a) !== nothing, r.args)
+            isempty(_bound_symbols(r)) && any(a -> _tpl_whole_arr(tt, a) !== nothing, r.args)
         l = _tpl_lift_whole(tt, r)
         l === nothing || (r = l)
     end
@@ -215,6 +235,30 @@ function _tpl_whole_ref(tt::_TplTable, a)
     return info.outs, body.ranges
 end
 
+# An array-valued `faq` over its output indices only (no reduction, filter or
+# join): its output indices and ranges, else `nothing`.
+function _tpl_whole_faq(a)
+    (a isa OpExpr && _is_faq_op(a.op) && a.output_idx !== nothing && !isempty(a.output_idx)) || return nothing
+    all(x -> x isa AbstractString, a.output_idx) || return nothing
+    (a.expr_body !== nothing && a.ranges !== nothing && a.filter === nothing && a.join === nothing &&
+        a.join_gates === nothing && a.key === nothing && a.values === nothing && a.lower === nothing &&
+        a.upper === nothing && all(x -> x isa VarExpr, a.args)) || return nothing
+    outs = String[String(x) for x in a.output_idx]
+    (length(a.ranges) == length(outs) && all(o -> haskey(a.ranges, o), outs)) || return nothing
+    return outs, a.ranges
+end
+
+# A whole array operand of an elementwise operator in a body (above).
+_tpl_whole_arr(tt::_TplTable, a) = (w = _tpl_whole_ref(tt, a); w === nothing ? _tpl_whole_faq(a) : w)
+
+# The element of the whole array operand `a` at `subs`.
+function _tpl_whole_elem(tt::_TplTable, a::OpExpr, subs::Vector{ASTExpr})
+    _tpl_whole_ref(tt, a) === nothing || return _elem_call(tt, a, subs)
+    outs, _ = _tpl_whole_faq(a)
+    m = Dict{String, ASTExpr}(o => subs[k] for (k, o) in enumerate(outs))
+    return _tpl_subst_scoped(a.expr_body, m, IdDict{OpExpr, ASTExpr}())
+end
+
 function _tpl_range_same(x, y)
     x isa IndexSetRef && y isa IndexSetRef && return x.from == y.from && x.of == y.of
     x isa AbstractVector && y isa AbstractVector && return length(x) == length(y) &&
@@ -226,7 +270,7 @@ end
 function _tpl_lift_whole(tt::_TplTable, r::OpExpr)
     shape = nothing
     for a in r.args
-        w = _tpl_whole_ref(tt, a)
+        w = _tpl_whole_arr(tt, a)
         if w === nothing
             # Every other operand a scalar: no whole reference, no array.
             _tpl_reads_whole(tt, a) && return nothing
@@ -254,7 +298,7 @@ function _tpl_lift_whole(tt::_TplTable, r::OpExpr)
         push!(oi, n)
     end
     subs = ASTExpr[VarExpr(n) for n in oi]
-    args = ASTExpr[_tpl_whole_ref(tt, a) === nothing ? a : _elem_call(tt, a::OpExpr, subs) for a in r.args]
+    args = ASTExpr[_tpl_whole_arr(tt, a) === nothing ? a : _tpl_whole_elem(tt, a::OpExpr, subs) for a in r.args]
     ranges = Dict{String, Any}(n => shape[k] for (k, n) in enumerate(oi))
     return OpExpr(
         "faq", ASTExpr[]; output_idx = Any[oi...], ranges = ranges,
@@ -883,7 +927,7 @@ end
 # A binding the build can pass as an array argument: a name (resolved to its
 # array when the call compiles) or an inline `const` array.
 _tpl_array_binding(v::ASTExpr) =
-    (v isa VarExpr && !occursin(_TPL_SENTINEL, v.name) && !_tpl_is_sentinel(v.name)) ||
+    (v isa VarExpr && !occursin(_TPL_SENTINEL, v.name)) ||
     (v isa OpExpr && v.op == "const" && v.value isa AbstractVector)
 
 """
@@ -933,54 +977,63 @@ function _tpl_is_called(tt::_TplTable, call::OpExpr)
         # INTO the instance (the user's bound-expression rule; call.jl
         # `_call_inlined`), when it is made of names, literals and
         # elementwise operators.
-        _tpl_plain_binding(v) || _tpl_inlinable(v) || _tpl_value_binding(tt, v) || return false
+        # A template call in it stays a call inside the instance, evaluated
+        # only where the body reads the parameter (`_tpl_inlinable` with `tt`).
+        _tpl_plain_binding(v) || _tpl_inlinable(v, tt) || return false
     end
     return true
 end
 
-# A conditional compound binding that holds a template call (and reads no
-# name the body binds, checked above): passed as a value, evaluated by the
-# caller, as a marked binding's parts that read no name the body binds are
-# (call.jl `_inl_mark`). Every call in it must itself be a call.
-function _tpl_value_binding(tt::_TplTable, v::ASTExpr)
-    v isa OpExpr || return false
-    has = Ref(false)
-    ok = Ref(true)
-    function walk(x)
-        ok[] || return
-        x isa OpExpr || return
-        if _tpl_is_call(x)
-            has[] = true
-            _tpl_is_called(tt, x) || (ok[] = false)
-            return
-        end
-        (x.op in _TPL_CALL_OPS || x.op == "index") && _tpl_structless(x) && isempty(_bound_symbols(x)) ||
-            (ok[] = false; return)
-        foreach(walk, x.args)
-    end
-    walk(v)
-    return ok[] && has[]
-end
-
 # A compound binding the build compiles into its instance (`_call_inlined`):
-# elementwise operators over names and literals, and reads of a named array.
-function _tpl_inlinable(v::ASTExpr)
+# elementwise operators over names and literals, and reads of a named array;
+# with the template table `tt`, also template calls the build compiles whose
+# bindings are such expressions (the call stays a call inside the instance,
+# so it is evaluated only where the body reads the parameter).
+function _tpl_inlinable(v::ASTExpr, tt::Union{Nothing, _TplTable} = nothing)
     (v isa VarExpr || v isa NumExpr || v isa IntExpr) && return !(v isa VarExpr && occursin(_TPL_SENTINEL, v.name))
     v isa OpExpr || return false
+    _tpl_is_call(v) && return tt !== nothing && _tpl_inlinable_call(v, tt)
     if v.op == "index" && _tpl_structless(v) && length(v.args) >= 2 && v.args[1] isa VarExpr
         a = v.args[1]::VarExpr
         (_tpl_is_sentinel(a.name) || occursin(_TPL_SENTINEL, a.name)) && return false
-        return all(_tpl_inlinable, @view v.args[2:end])
+        return all(a -> _tpl_inlinable(a, tt), @view v.args[2:end])
     end
     # A read of an inline const table.
     if v.op == "index" && _tpl_structless(v) && length(v.args) >= 2 && v.args[1] isa OpExpr &&
             v.args[1].op == "const" && v.args[1].value isa AbstractVector
-        return all(_tpl_inlinable, @view v.args[2:end])
+        return all(a -> _tpl_inlinable(a, tt), @view v.args[2:end])
     end
-    (v.op in _TPL_CALL_OPS && v.op != "const" && _tpl_structless(v) && !_tpl_is_call(v)) || return false
+    (v.op in _TPL_CALL_OPS && v.op != "const" && _tpl_structless(v)) || return false
     isempty(_bound_symbols(v)) || return false
-    return all(_tpl_inlinable, v.args)
+    return all(a -> _tpl_inlinable(a, tt), v.args)
 end
+
+# A template call inside a compiled-in binding (above): a scalar call the build
+# compiles, each array argument a name or inline const array, each fixed one a
+# literal, each value one compiled in as well (call.jl `_inl_mark`).
+function _tpl_inlinable_call(v::OpExpr, tt::_TplTable)
+    info = _tpl_call_info(tt, v.name)
+    info === nothing && return false
+    isempty(info.outs) || _tpl_is_elem(v) || return false
+    _tpl_is_called(tt, v) || return false
+    v.bindings === nothing && return true
+    for (k, x) in v.bindings
+        s = _tpl_binding_sentinel(k)
+        if s in info.arrays
+            _tpl_array_binding(x) || return false
+        elseif s in info.fixed
+            continue
+        elseif startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE) || s in info.scalars
+            _tpl_inlinable(x, tt) || return false
+        end
+    end
+    return true
+end
+
+# The sentinel a reference's binding key binds (`"\0arg\0p"` for a declared
+# parameter `p`, the key itself for an implicit, output or lane binding).
+_tpl_binding_sentinel(k::AbstractString) =
+    startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE) ? String(k) : _TPL_ARG * k
 
 # The names a template's prepared body binds (reduction and output indices):
 # a binding's name of the same spelling is captured there, as the expansion

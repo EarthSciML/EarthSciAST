@@ -803,16 +803,33 @@ function _call_inl_mode(tt::_TplTable, info::_TplCallInfo, def::_TplDef, p::Stri
         sn in info.uncond && return :none
         _tpl_plain_binding(v) && return :none
     end
-    _tpl_inlinable(v) || return :none
+    # A template call in a binding that reads a name the body binds is not
+    # compiled in (`_tpl_is_called` refuses it).
+    _tpl_inlinable(v, rb ? nothing : tt) || return :none
     return (rb || _inl_has_index(v)) ? :marked : :plain
 end
 
-_inl_has_index(v::ASTExpr) = v isa OpExpr && (v.op == "index" || any(_inl_has_index, v.args))
+# Does the binding read an array or hold a template call (compiled in marked)?
+_inl_has_index(v::ASTExpr) = v isa OpExpr && (v.op == "index" || _tpl_is_call(v) || any(_inl_has_index, v.args))
 
-# A marked binding (`_call_mark_inlined`): its caller values are
-# `__inleaf(value)` nodes, its arrays `__arrarg` markers, and a bare name in it
-# is one the body binds (it stays a name, read where the body binds it).
-_inl_is_marked(v::ASTExpr) = v isa OpExpr && (v.op == "__inleaf" || v.op == "__arrarg" || any(_inl_is_marked, v.args))
+# A marked binding (`_call_mark_inlined`) is `__inlb(m)`: in `m` the caller
+# values are `__inleaf(value)` nodes, the arrays `__arrarg` markers, and a bare
+# name is one the body binds (it stays a name, read where the body binds it).
+_inl_is_marked(v::ASTExpr) = v isa OpExpr && v.op == "__inlb"
+
+# `v` (an operator or a template call) with its operands (`_operands` order:
+# a call's bindings by name) mapped by `f(x, i)`.
+function _inl_map_operands(f, v::OpExpr)
+    if _tpl_is_call(v)
+        v.bindings === nothing && return v
+        nb = Dict{String, ASTExpr}()
+        for (i, k) in enumerate(sort!(collect(keys(v.bindings))))
+            nb[k] = f(v.bindings[k], i)
+        end
+        return reconstruct(v; bindings = nb)
+    end
+    return reconstruct(v; args = ASTExpr[f(x, i) for (i, x) in enumerate(v.args)])
+end
 
 _inl_leaf(x, parent, j) = x isa VarExpr || ((x isa NumExpr || x isa IntExpr) && !(parent == "^" && j == 2))
 function _inl_skel(v::ASTExpr, p::String, k::Base.RefValue{Int}, parent = "", j = 0)
@@ -820,15 +837,17 @@ function _inl_skel(v::ASTExpr, p::String, k::Base.RefValue{Int}, parent = "", j 
     v isa OpExpr || return v
     return reconstruct(v; args = ASTExpr[_inl_skel(a, p, k, v.op, i) for (i, a) in enumerate(v.args)])
 end
+# The skeleton of the marked binding `v` (`__inlb(m)`, or a part of `m`).
 function _inl_mskel(v::ASTExpr, p::String, k::Base.RefValue{Int}, a::Base.RefValue{Int})
     v isa OpExpr || return v
+    _inl_is_marked(v) && return _inl_mskel(v.args[1], p, k, a)
     v.op == "__inleaf" && return VarExpr(_TPL_IN * p * "\0" * string(k[] += 1))
     v.op == "__arrarg" && return VarExpr(_TPL_INA * p * "\0" * string(a[] += 1))
-    return reconstruct(v; args = ASTExpr[_inl_mskel(x, p, k, a) for x in v.args])
+    return _inl_map_operands((x, _) -> _inl_mskel(x, p, k, a), v)
 end
 function _inl_leaves(v::ASTExpr, out = ASTExpr[], parent = "", j = 0)
     if _inl_is_marked(v)
-        _inl_mleaves!(out, v, "__inleaf")
+        _inl_mleaves!(out, v.args[1], "__inleaf")
         return ASTExpr[x.args[1] for x in out]
     end
     if _inl_leaf(v, parent, j)
@@ -844,25 +863,28 @@ function _inl_mleaves!(out, v::ASTExpr, op::String)
     v isa OpExpr || return out
     v.op == op && (push!(out, v); return out)
     (v.op == "__inleaf" || v.op == "__arrarg") && return out
-    foreach(x -> _inl_mleaves!(out, x, op), v.args)
+    foreach(x -> _inl_mleaves!(out, x, op), _operands(v))
     return out
 end
 # The array markers of a marked binding, in skeleton order.
-_inl_arrays(v::ASTExpr) = _inl_mleaves!(ASTExpr[], v, "__arrarg")
+_inl_arrays(v::ASTExpr) = _inl_is_marked(v) ? _inl_mleaves!(ASTExpr[], v.args[1], "__arrarg") : ASTExpr[]
 _inl_count(v::ASTExpr) = length(_inl_leaves(v))
 function _inl_key(v::ASTExpr, parent = "", j = 0)
-    if _inl_is_marked(v) || (v isa OpExpr && (v.op == "__inleaf" || v.op == "__arrarg"))
-        v isa OpExpr || return v isa VarExpr ? "V" * v.name : string(v)
-        v.op == "__inleaf" && return "#"
-        if v.op == "__arrarg"
-            a = v.value::_ArrArg
-            return string("A", a.kind)
-        end
-        return string("(", v.op, " ", join((_inl_key(x) for x in v.args), " "), ")")
-    end
+    _inl_is_marked(v) && return "M" * _inl_mkey(v.args[1])
     _inl_leaf(v, parent, j) && return "#"
     v isa OpExpr || return string(v)
     return string("(", v.op, " ", join((_inl_key(a, v.op, i) for (i, a) in enumerate(v.args)), " "), ")")
+end
+function _inl_mkey(v::ASTExpr)
+    v isa VarExpr && return "V" * v.name
+    v isa OpExpr || return string(v)
+    v.op == "__inleaf" && return "#"
+    v.op == "__arrarg" && return string("A", (v.value::_ArrArg).kind)
+    if _tpl_is_call(v)
+        b = v.bindings === nothing ? Dict{String, ASTExpr}() : v.bindings
+        return string("(call ", v.name, " ", join((string(repr(k), "=", _inl_mkey(b[k])) for k in sort!(collect(keys(b)))), " "), ")")
+    end
+    return string("(", v.op, " ", join((_inl_mkey(x) for x in v.args), " "), ")")
 end
 
 # The reference `call` with each binding that is compiled into its instance as
@@ -883,23 +905,52 @@ function _call_mark_inlined(leaf, arr, tt::_TplTable, call::OpExpr)
         (v === nothing || _inl_is_marked(v)) && continue
         _call_inl_mode(tt, info, def, p, v) === :marked || continue
         nb === nothing && (nb = Dict{String, ASTExpr}(call.bindings))
-        nb[p] = _inl_mark(leaf, arr, v, B)
+        nb[p] = OpExpr("__inlb", ASTExpr[_inl_mark(leaf, arr, v, B, tt)])
     end
     return nb === nothing ? call : reconstruct(call; bindings = nb)
 end
-function _inl_mark(leaf, arr, v::ASTExpr, B::Set{String}, parent = "", j = 0)
+# A caller value is only a LEAF of the binding (a name, a literal, a plain read
+# of an array): what the caller evaluates up front costs a read and cannot fail
+# where the body would not have evaluated it. Every operator above the leaves,
+# and any template call in the binding (with its own bindings marked the same
+# way), stays in the instance and runs only where the body reads the parameter.
+function _inl_mark(leaf, arr, v::ASTExpr, B::Set{String}, tt::_TplTable, parent = "", j = 0)
     v isa VarExpr && v.name in B && return v
     if (v isa NumExpr || v isa IntExpr) && parent == "^" && j == 2
         return v
     end
-    if !(v isa OpExpr) || !_tpl_reads_any(v, B)
+    if !(v isa OpExpr) || (!_tpl_reads_any(v, B) && _inl_cheap(v))
         return OpExpr("__inleaf", ASTExpr[leaf(v)])
+    end
+    if _tpl_is_call(v)
+        v = _call_with_implicit(v)
+        info = _tpl_call_info(tt, v.name)::_TplCallInfo
+        b = v.bindings === nothing ? Dict{String, ASTExpr}() : v.bindings
+        nb = Dict{String, ASTExpr}()
+        for (k, x) in b
+            s = _tpl_binding_sentinel(k)
+            nb[k] = s in info.arrays ? arr(x) :
+                s in info.fixed ? x :
+                (startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE) || s in info.scalars) ?
+                _inl_mark(leaf, arr, x, B, tt) : x
+        end
+        return reconstruct(v; bindings = nb)
     end
     if v.op == "index" && (v.args[1] isa VarExpr ||
             (v.args[1] isa OpExpr && v.args[1].op == "const" && v.args[1].value isa AbstractVector))
-        return reconstruct(v; args = ASTExpr[arr(v.args[1]), (_inl_mark(leaf, arr, x, B, "index", i + 1) for (i, x) in enumerate(v.args[2:end]))...])
+        return reconstruct(v; args = ASTExpr[arr(v.args[1]), (_inl_mark(leaf, arr, x, B, tt, "index", i + 1) for (i, x) in enumerate(v.args[2:end]))...])
     end
-    return reconstruct(v; args = ASTExpr[_inl_mark(leaf, arr, x, B, v.op, i) for (i, x) in enumerate(v.args)])
+    return reconstruct(v; args = ASTExpr[_inl_mark(leaf, arr, x, B, tt, v.op, i) for (i, x) in enumerate(v.args)])
+end
+
+# A part of a binding the caller may evaluate up front (above): a plain read
+# of a named or inline const array at subscripts of names, literals and
+# elementwise arithmetic.
+function _inl_cheap(v::OpExpr)
+    v.op == "index" && _tpl_structless(v) && length(v.args) >= 2 || return false
+    a = v.args[1]
+    (a isa VarExpr || (a isa OpExpr && a.op == "const" && a.value isa AbstractVector)) || return false
+    return all(x -> _tpl_inlinable(x), @view v.args[2:end])
 end
 
 function _call_body_size(n::_Node)
@@ -1415,21 +1466,6 @@ function _tpl_free_leaves_all(e::ASTExpr)
     return out
 end
 
-# The references in `model` read through `index` whose template has an
-# aggregate or makearray body (no element call, `_tpl_call_info` is
-# `nothing`): an element of such a template is not read through its view.
-function _tpl_elem_read_aggs(tt::_TplTable, model)
-    out = IdDict{OpExpr, Nothing}()
-    foreach_expression(model) do e, _, _
-        foreach_subexpr(e) do x
-            (x isa OpExpr && x.op == "index" && !isempty(x.args) && _tpl_is_call(x.args[1])) || return
-            r = x.args[1]::OpExpr
-            _tpl_call_info(tt, r.name) === nothing && (out[r] = nothing)
-        end
-    end
-    return out
-end
-
 # Whether the build reads the reference `call` through its view: it has one
 # and every leaf is a call the build compiles.
 function _tpl_agg_called(tt::_TplTable, call::OpExpr)
@@ -1715,11 +1751,11 @@ function _tpl_prepare_model!(model, reg, index_sets, vi_extents)
     calls.tt.root_memos[:vi_extents] = vi_extents
     _build_state().calls = calls
     map_expressions!(e -> _tpl_structural_refs(calls.tt, e), model)
-    # An ELEMENT read of an aggregate or makearray body (`index(ref, s…)`) is
-    # not read through the view: option B (the callee selecting the element)
-    # is not implemented, so it is still expanded (`_tpl_elem_read_aggs`).
-    elem_aggs = _tpl_elem_read_aggs(calls.tt, model)
-    keep_cache = _ExpandCache(; keep = e -> !haskey(elem_aggs, e) && _tpl_is_called(calls.tt, e))
+    # An ELEMENT read of an aggregate or makearray body, `index(ref, s…)`, is
+    # read through its view like a whole use, `index(view, s…)` (option C at an
+    # element read): the caller holds the regions or loop header, each leaf a
+    # call of that part of the template.
+    keep_cache = _ExpandCache(; keep = e -> _tpl_is_called(calls.tt, e))
     _expand_model_refs!(model, reg; sites = sites, memo = keep_cache)
     # Every name a kept body reads from its caller becomes a binding of the
     # reference (`_tpl_augment`), so a phase that asks which names an

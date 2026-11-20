@@ -74,6 +74,12 @@ function _compile(expr::VarExpr, var_map, param_syms, memo::_MaybeMemo = nothing
     if startswith(name, '\0')
         a = _arg_leaf(name)
         a === nothing || return a
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_UNRESOLVED_TEMPLATE_REF",
+                "a template parameter $(repr(replace(name, '\0' => '·'))) reached compile outside its call body"
+            )
+        )
     end
     if name == "t"
         return _mknode(kind = _NK_TIME)
