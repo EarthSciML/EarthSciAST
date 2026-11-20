@@ -19,9 +19,10 @@ validate_structural(file::EsmFile)::Vector{StructuralError} =
 # (`composed`); the document-wide declared names, coordinate names and
 # callback-injected names reference integrity scopes with; every declaration by
 # scoped name (`index`) and the document-wide scoped-reference units read off
-# it (esm-spec §4.8.4); each top-level model's and reaction
-# system's template-expanded view (`_units_view`); and the units checker's
-# result once it has run (`_unit_check!`).
+# it (esm-spec §4.8.4); each top-level model's view (`_units_view`: its
+# references kept, each carrying the names its body reads) and each top-level
+# reaction system; and the units checker's result once it has run
+# (`_unit_check!`).
 struct _ValidationContext
     file::EsmFile
     indep::String
@@ -46,12 +47,8 @@ function _ValidationContext(file::EsmFile)
             models[name] = _units_view(file, name, model)
         end
     end
-    rss = Dict{String, ReactionSystem}()
-    if file.reaction_systems !== nothing
-        for (name, rs) in file.reaction_systems
-            rss[name] = _reaction_system_units_view(file, name, rs)
-        end
-    end
+    rss = file.reaction_systems === nothing ? Dict{String, ReactionSystem}() :
+        Dict{String, ReactionSystem}(file.reaction_systems)
     index = _scoped_index(file)
     return _ValidationContext(
         file, _indep_var(file), _coupled_system_names(file),

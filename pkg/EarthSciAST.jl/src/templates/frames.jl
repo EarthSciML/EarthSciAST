@@ -654,6 +654,189 @@ function _tpl_foreach_node!(f, tt::_TplTable, e::ASTExpr, fr, seen)
     return
 end
 
+"""
+    _tpl_step(visit, tt, e, fr) -> Bool
+
+One step of a walk that reads `e` (in the frame `fr`) as its expansion reads
+it, without building the expansion: when `e` is a parameter sentinel,
+`visit(binding, binding_frame)` (the binding, read in the frame that bound
+it); when it is a reference, `visit(body, instance_frame)` (its instance's
+prepared body, read in the instance's frame) and then `visit(subscript, fr)`
+for each element subscript (an element call's body is the whole array, read
+as the expansion's `index(<array>, subscripts…)` reads it). Returns `true`
+when it stepped, `false` when `e` is an ordinary node the walker handles
+itself — as it is for a reference whose template cannot be read
+(`ExpressionTemplateError`, reported by the template checks) or with no table
+(`tt === nothing`). Frames are memoized per instance, so a walker that
+memoizes per (node, frame) reads each body once per instance.
+"""
+function _tpl_step(visit, tt, e::ASTExpr, fr::Union{Nothing, _TplFrame})
+    if e isa VarExpr
+        (fr !== nothing && _tpl_is_sentinel(e.name)) || return false
+        b, bf = _tpl_arg(fr, e.name)
+        visit(b, bf)
+        return true
+    end
+    (tt !== nothing && _tpl_is_call(e)) || return false
+    sub = _tpl_frame_or_nothing(tt, e::OpExpr, fr)
+    sub === nothing && return false
+    visit(sub.body, sub)
+    for s in _tpl_out_bindings(e::OpExpr)
+        visit(s, fr)
+    end
+    return true
+end
+
+# `_tpl_frame`, or `nothing` for a reference whose template cannot be read.
+function _tpl_frame_or_nothing(tt::_TplTable, call::OpExpr, fr::Union{Nothing, _TplFrame})
+    return try
+        _tpl_frame(tt, call, fr)
+    catch err
+        err isa ExpressionTemplateError || rethrow()
+        nothing
+    end
+end
+
+# The subscripts of an element call (`_elem_call`), in output order; empty for
+# any other node.
+function _tpl_out_bindings(call::OpExpr)
+    b = call.bindings
+    b === nothing && return ASTExpr[]
+    ks = sort!([k for k in keys(b) if startswith(k, _TPL_OUT)])
+    return ASTExpr[b[k] for k in ks]
+end
+
+"""
+    _tpl_reads_binding(tt, call, k) -> Bool
+
+Whether the binding `k` of the reference `call` is read as an expression by the
+reference's expansion (`_tpl_body_reads`): an element subscript always; a
+declared parameter's when the body reads it as a value somewhere — not only in
+a structural position (a range's `from`, `wrt`, an op name, where it is a name
+substituted in place), directly or through a nested reference; an implicit
+parameter's (`"\0free\0n"`) when the body reads `n` from the caller, not only
+inside a scope of its own that captures it. A name-reading analysis visits exactly these bindings of a reference,
+treats no binding key as a binder of the caller's names, and reads a declared
+parameter's binding with the body's own binders in scope
+(`_tpl_scope_binders`), where the expansion substitutes it. `true` for a
+reference whose template cannot be read (the template checks report it).
+"""
+function _tpl_reads_binding(tt::_TplTable, call::OpExpr, k::AbstractString)
+    startswith(k, _TPL_OUT) && return true
+    try
+        return _tpl_binding_sentinel(k) in _tpl_body_reads(tt, call.name)
+    catch err
+        err isa ExpressionTemplateError || rethrow()
+        return true
+    end
+end
+
+# The body of `name` for the name analyses: every parameter a sentinel, the
+# nested references carrying their implicit parameters, and every name read
+# from the caller the sentinel `"\0free\0n"` (as `_tpl_close` prepares it,
+# without the build's lowerings, which change no name).
+function _tpl_names_body(tt::_TplTable, name)
+    memo = _tpl_memo(tt, nothing, :names_body, () -> Dict{String, ASTExpr}())
+    return get!(memo, String(name)) do
+        def = _tpl_def(tt, name)
+        decl = _TemplateDecl(tt.reg[def.name])
+        sub = Dict{String, Any}(p => _TPL_ARG * p for p in decl.params)
+        typed = _tpl_augment(tt, expression_from_json(_substitute(decl.body, sub)))
+        free = _tpl_free_leaves(typed)
+        isempty(free) && return typed
+        m = Dict{String, ASTExpr}(n => VarExpr(_TPL_FREE * n) for n in free)
+        _tpl_subst_scoped(typed, m, IdDict{OpExpr, ASTExpr}())
+    end
+end
+
+# Every name the body of `name` binds anywhere (loop, output and integration
+# indices): a binding the expansion substitutes into the body may be captured
+# by any of them (read wide, as the build reads a binding's capture).
+function _tpl_scope_binders(tt::_TplTable, name)
+    memo = _tpl_memo(tt, nothing, :scope_binders, () -> Dict{String, Set{String}}())
+    return get!(memo, String(name)) do
+        out = Set{String}()
+        seen = IdDict{OpExpr, Nothing}()
+        function walk(e)
+            e isa OpExpr || return
+            haskey(seen, e) && return
+            seen[e] = nothing
+            union!(out, _bound_symbols(e))
+            foreach_child(walk, e)
+        end
+        walk(_tpl_names_body(tt, name))
+        out
+    end
+end
+
+# The parameter sentinels the expansion of `name` reads as values: each
+# declared parameter (`"\0arg\0p"`) the body reads as a variable leaf, directly
+# or in a binding a nested reference reads (`_tpl_reads_binding`); each implicit
+# parameter (`"\0free\0n"`) likewise, less one read only inside a binding of a
+# nested reference whose own body binds `n` (the expansion captures it there).
+function _tpl_body_reads(tt::_TplTable, name)
+    memo = _tpl_memo(tt, nothing, :body_reads, () -> Dict{String, Set{String}}())
+    return get!(memo, String(name)) do
+        out = Set{String}()
+        function walk(e, captured)
+            if e isa VarExpr
+                if startswith(e.name, _TPL_FREE)
+                    e.name[(ncodeunits(_TPL_FREE) + 1):end] in captured || push!(out, e.name)
+                elseif startswith(e.name, _TPL_ARG)
+                    push!(out, e.name)
+                end
+                return
+            end
+            e isa OpExpr || return
+            if _tpl_is_call(e)
+                foreach(a -> walk(a, captured), e.args)
+                b = e.bindings
+                b === nothing && return
+                for (k, v) in b
+                    _tpl_reads_binding(tt, e, k) || continue
+                    inner = (startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT)) ? captured :
+                        union(captured, _tpl_scope_binders(tt, e.name))
+                    walk(v, inner)
+                end
+                return
+            end
+            foreach_child(c -> walk(c, captured), e)
+        end
+        walk(_tpl_names_body(tt, name), Set{String}())
+        out
+    end
+end
+
+"""
+    _tpl_ground(tt, e, fr) -> ASTExpr
+
+`e`, read in `fr`, with every parameter sentinel leaf replaced by its binding
+(itself grounded in the frame that bound it): the expression as the caller
+spells it. For the small expressions an analysis reports from inside a body (a
+self-read's subscripts), never for a body itself; a reference inside `e` is
+kept as it is.
+"""
+function _tpl_ground(tt, e::ASTExpr, fr::Union{Nothing, _TplFrame})
+    fr === nothing && return e
+    if e isa VarExpr
+        _tpl_is_sentinel(e.name) || return e
+        b, bf = _tpl_arg(fr, e.name)
+        return _tpl_ground(tt, b, bf)
+    end
+    e isa OpExpr || return e
+    return map_children(c -> _tpl_ground(tt, c, fr), e)
+end
+
+# The template table of the top-level component `<kind>.<name>` of `file`
+# (`kind` is "models" or "reaction_systems"), or `nothing` when it has no
+# surviving reference. Its subsystems read the same registry.
+function _tpl_component_table(file::EsmFile, kind::AbstractString, name::AbstractString)
+    ct = file.component_templates
+    ct === nothing && return nothing
+    reg = get(ct, "$kind.$name", nothing)
+    return reg === nothing ? nothing : _TplTable(reg)
+end
+
 # `m` (a model or reaction system) with every reference carrying its implicit
 # parameters (`_tpl_augment`): the names a referenced body reads are then
 # reads of the reference itself. In place, so the caller passes a copy.

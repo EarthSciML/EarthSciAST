@@ -647,8 +647,8 @@ end
     end
 
     # -----------------------------------------------------------------------
-    # Expanding an `_expansion_copy` (the units view `validate` builds, and the
-    # copy the tree-walk build expands) leaves the loaded model as it was, at
+    # Expanding an `_expansion_copy` (the copy the tree-walk build expands;
+    # `validate`'s view augments one the same way, never expanding it) leaves the loaded model as it was, at
     # every site expansion rewrites in place: events, guesses and tests as well
     # as equations and variables.
     # -----------------------------------------------------------------------

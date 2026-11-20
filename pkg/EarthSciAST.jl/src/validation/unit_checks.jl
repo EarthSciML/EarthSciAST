@@ -1,16 +1,19 @@
-# The unit checks validate runs: template-expanded views, rates, declarations, heuristics.
+# The unit checks validate runs: reference-preserving views, rates, declarations, heuristics.
 
-# The model the units engine judges: its surviving `apply_expression_template`
-# references expanded against the component's registry, so a call has the unit
-# of its expansion (esm-spec §4.8.5 item 5, §9.6.4 rule 2). The expansion is made
-# on a copy; the rest of `validate` keeps the reference-preserving model.
+# The model a validation pass's checks read: the model itself, with every
+# surviving `apply_expression_template` reference CARRYING the names its body
+# reads from the caller as bindings (`_tpl_augment_component!`,
+# templates/frames.jl), so a check that asks which names an expression reads
+# sees through a reference without entering its body. No reference is
+# expanded: the units engine reads a reference through its frame
+# (`_tpl_call_unit!`), and the recurrence checks read its body through its
+# frame (`_tpl_step`). The augmentation is made on a copy (`_expansion_copy`
+# copies only the containers it rewrites); the loaded model is not changed.
 function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
     file.component_templates === nothing && return model
     reg = get(file.component_templates, "models.$model_name", nothing)
     reg === nothing && return model
-    view = _expansion_copy(model)
-    _expand_model_refs!(view, reg)
-    return view
+    return _tpl_augment_component!(_expansion_copy(model), reg)
 end
 # The same, read from `views` — a validation pass's `_UnitsInputs.models`,
 # which holds each top-level model's view — when the caller built them.
@@ -18,69 +21,6 @@ _units_view(file::EsmFile, model_name::AbstractString, model::Model, ::Nothing) 
     _units_view(file, model_name, model)
 _units_view(::EsmFile, model_name::AbstractString, ::Model, views::AbstractDict) =
     views[model_name]
-
-# A copy of `model` that `_expand_model_refs!` can expand without touching the
-# original. The containers expansion rewrites in place (the equation vectors,
-# the variable map, the event vectors, the inline tests and the guesses, and
-# the same in every subsystem model) are copied one level deep; what it only
-# reads or replaces whole — each `Equation`, `ModelVariable`, event and test,
-# the analyses, a non-model subsystem — is shared. A whole `deepcopy` would also
-# copy every inline array the equations carry (a regrid's polygon rings), work
-# that grows with the data.
-function _expansion_copy(model::Model)
-    seen = IdDict{Any, Any}()
-    _share_unexpanded!(seen, model)
-    return Base.deepcopy_internal(model, seen)
-end
-function _share_unexpanded!(seen::IdDict{Any, Any}, m::Model)
-    for eq in m.equations
-        _share_fields!(seen, eq)
-    end
-    for eq in m.initialization_equations
-        _share_fields!(seen, eq)
-    end
-    for (_, v) in m.variables
-        _share_fields!(seen, v)
-    end
-    for x in (m.discrete_events, m.continuous_events, m.tests, m.guesses)
-        seen[x] = copy(x)
-    end
-    seen[m.analyses] = m.analyses
-    for (_, sub) in m.subsystems
-        sub isa Model ? _share_unexpanded!(seen, sub) : (seen[sub] = sub)
-    end
-    return seen
-end
-# `deepcopy` consults `seen` only for a mutable object, so an immutable
-# `Equation` or `ModelVariable` is shared through its fields: each mutable
-# field value (an expression tree, an inline array) is marked as its own copy,
-# and an immutable struct field is shared the same way.
-function _share_fields!(seen::IdDict{Any, Any}, x)
-    if ismutable(x)
-        seen[x] = x
-    elseif isstructtype(typeof(x))
-        for i in 1:nfields(x)
-            isdefined(x, i) && _share_fields!(seen, getfield(x, i))
-        end
-    end
-    return seen
-end
-
-# The reaction system the units engine judges: `_units_view` for a reaction
-# system — the surviving `apply_expression_template` references in its rates
-# and constraint equations, and in those of its subsystems at any depth,
-# expanded on a copy.
-function _reaction_system_units_view(
-        file::EsmFile, rs_name::AbstractString,
-        rs::ReactionSystem
-    )
-    file.component_templates === nothing && return rs
-    reg = get(file.component_templates, "reaction_systems.$rs_name", nothing)
-    reg === nothing && return rs
-    view = deepcopy(rs)
-    _expand_reaction_system_refs!(view, reg)
-    return view
-end
 
 """
     validate_model_unit_consistency(model::Model, path::String; file=nothing, toplevel=nothing, indep="t") -> Vector{StructuralError}
@@ -114,8 +54,9 @@ end
 
 The units checker of a `validate` pass, run once and kept on `units`: every
 component's unit findings (`_component_unit_findings!`), each top-level model
-and reaction system typed through its template-expanded view and its inline
-subsystems at any depth. `errors` are the structural errors;
+and reaction system and its inline subsystems at any depth, each template
+reference read through its frame against the component's registry
+(`_tpl_units_env`). `errors` are the structural errors;
 `warnings` the esm-spec §4.8.6 `(pointer, message)` pairs.
 """
 function _unit_check!(units::_UnitsInputs)
@@ -125,10 +66,11 @@ function _unit_check!(units::_UnitsInputs)
     warnings = Tuple{String, String}[]
     errs = UnitFinding[]
     warns = UnitFinding[]
+    tt = Ref{Any}(nothing)
     visit = function (c, p, _)
         empty!(errs)
         empty!(warns)
-        env = _component_unit_env(c, units.toplevel; indep = units.indep)
+        env = _tpl_units_env(_component_unit_env(c, units.toplevel; indep = units.indep), tt[])
         _component_unit_findings!(errs, warns, c, p, env)
         for f in errs
             _report!(
@@ -143,9 +85,11 @@ function _unit_check!(units::_UnitsInputs)
         return
     end
     for name in sort!(collect(keys(units.models)))
+        tt[] = _tpl_component_table(units.file, "models", name)
         _foreach_component(visit, units.models[name], _pointer("", "models", name); sorted = true)
     end
     for name in sort!(collect(keys(units.reaction_systems)))
+        tt[] = _tpl_component_table(units.file, "reaction_systems", name)
         _foreach_component(
             visit, units.reaction_systems[name], _pointer("", "reaction_systems", name);
             sorted = true
