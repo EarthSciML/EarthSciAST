@@ -1,0 +1,90 @@
+{
+  "category": "source_documents",
+  "version": "1.0",
+  "description": "Loading Markdown and Typst source documents from files (esm-spec \u00a71.2.1): a loader reading a document from a path or URL picks its format by the file extension alone (`.md` Markdown, `.typ` Typst, anything else JSON), at the root and at every ref site (subsystem mounts of both forms, template imports, coupling imports). Each `same_as_twin` case has a twin under twins/ that spells every file as `.esm` JSON; loading the two must give the same document once every string value of a `ref` key is replaced by one placeholder. `json_content.typ` and `json_content.md` hold JSON text: read by their extension they are refused, so the `error` cases fail with `code` through `driver` (load, or flatten for a coupling import; a binding that resolves coupling imports earlier may fail at load with the same code). `ok` cases must succeed through `driver`.",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust",
+    "typescript",
+    "go"
+  ],
+  "cases": [
+    {
+      "id": "root_typst",
+      "fixture": "root.typ",
+      "twin": "twins/root.esm",
+      "expect": "same_as_twin",
+      "driver": "load"
+    },
+    {
+      "id": "root_markdown",
+      "fixture": "root.md",
+      "twin": "twins/root.esm",
+      "expect": "same_as_twin",
+      "driver": "load"
+    },
+    {
+      "id": "json_root_mixed_refs",
+      "fixture": "esm_root.esm",
+      "twin": "twins/root.esm",
+      "expect": "same_as_twin",
+      "driver": "load"
+    },
+    {
+      "id": "mount_toplevel_typst",
+      "fixture": "mount_toplevel.esm",
+      "twin": "twins/mount_toplevel.esm",
+      "expect": "same_as_twin",
+      "driver": "load"
+    },
+    {
+      "id": "coupling_import_typst",
+      "fixture": "coupling_root.esm",
+      "expect": "ok",
+      "driver": "flatten"
+    },
+    {
+      "id": "root_typst_json_content",
+      "fixture": "json_content.typ",
+      "expect": "error",
+      "code": "parse_error",
+      "driver": "load"
+    },
+    {
+      "id": "root_markdown_json_content",
+      "fixture": "json_content.md",
+      "expect": "error",
+      "code": "parse_error",
+      "driver": "load"
+    },
+    {
+      "id": "import_json_content",
+      "fixture": "import_json_content.esm",
+      "expect": "error",
+      "code": "template_import_unresolved",
+      "driver": "load"
+    },
+    {
+      "id": "mount_json_content",
+      "fixture": "mount_json_content.esm",
+      "expect": "error",
+      "code": "unresolved_subsystem_ref",
+      "driver": "load"
+    },
+    {
+      "id": "mount_toplevel_json_content",
+      "fixture": "mount_toplevel_json_content.esm",
+      "expect": "error",
+      "code": "unresolved_subsystem_ref",
+      "driver": "load"
+    },
+    {
+      "id": "coupling_import_json_content",
+      "fixture": "coupling_import_json_content.esm",
+      "expect": "error",
+      "code": "coupling_import_unresolved",
+      "driver": "flatten"
+    }
+  ]
+}
