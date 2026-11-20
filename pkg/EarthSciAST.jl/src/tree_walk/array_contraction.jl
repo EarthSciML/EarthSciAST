@@ -45,7 +45,7 @@
 #
 # What the emitter models is the SCALAR `_Node` spine — the kinds `_eval_node`
 # dispatches on. `_cg_emit`'s other method models the ACCESS-KERNEL spine
-# (`_NK_ACCESS` / `_NK_SUBCALL` / `_NK_AREDUCE`), a disjoint set of kinds over the
+# (`_NK_ACCESS` / `_NK_AREDUCE`), a disjoint set of kinds over the
 # same `_Node` type, so the two are methods of one generic function on two
 # context types and the op ladder (`_cg_emit_op` / `_cg_emit_fn`, the registry
 # rows) is shared rather than written twice.

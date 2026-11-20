@@ -93,8 +93,8 @@ function _sc_cache_reads!(acc::Vector{Int}, nd::_Node, cache::_CSECache)
     return true
 end
 
-# Every slot of `cache` an array kernel reads (spine, both recipe tiers,
-# sub-kernels): those slots must be in the cache when the kernel section runs.
+# Every slot of `cache` an array kernel reads (spine and both recipe tiers):
+# those slots must be in the cache when the kernel section runs.
 function _sc_kernel_reads!(acc::Set{Int}, K::_AccKernel, cache::_CSECache, seen::IdDict{Any, Nothing})
     haskey(seen, K) && return acc
     seen[K] = nothing
@@ -105,13 +105,8 @@ function _sc_kernel_reads!(acc::Set{Int}, K::_AccKernel, cache::_CSECache, seen:
         nd = pop!(nodes)
         if nd.kind === _NK_CACHED && nd.payload === cache
             push!(acc, nd.idx)
-        elseif nd.kind === _NK_SUBCALL && nd.payload isa _AccKernel
-            _sc_kernel_reads!(acc, nd.payload::_AccKernel, cache, seen)
         end
         append!(nodes, nd.children)
-    end
-    for S in K.subs
-        _sc_kernel_reads!(acc, S, cache, seen)
     end
     return acc
 end

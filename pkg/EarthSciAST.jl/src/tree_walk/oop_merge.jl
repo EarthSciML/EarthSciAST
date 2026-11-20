@@ -23,11 +23,8 @@
 #
 # with `_outs_cells` lane addressing (m1 = lane ordinal, so s1=1/off=1).
 # Per-lane index/const data comes from each member's already-built
-# `_OopAccPlan` tables; template-body sub-kernels are merged recursively the
-# same way (their plans are parent-lane-aligned), with the sub inv-CSE tier
-# folded into the cell tier (same values, lane-vectorized). The PARENT
-# kernel's inv tier is PRESERVED when every member's inv recipes are
-# VALUE-identical (no access/subcall leaves, equal literals —
+# `_OopAccPlan` tables. The kernel's inv tier is PRESERVED when every
+# member's inv recipes are VALUE-identical (no access leaves, equal literals —
 # `_oop_inv_nodes_identical`): the merged kernel then keeps a real
 # invariant tier evaluated once per call, so a chain shared by a class of
 # species balances is NOT demoted to a per-lane recompute, the B4 xcse pass still sees it, and the `n_acc_inv_slots` build
@@ -48,8 +45,8 @@
 #
 # SAFETY POSTURE. This is a default-on optimization of a correct baseline,
 # so every "can't" is a fallback, not an error: overlapping out-slots, a
-# blocked kernel (reduce segment / unmergeable descriptor kind / nested
-# sub-subs), a failed group merge, or a merged kernel whose fresh plan is
+# blocked kernel (reduce segment / unmergeable descriptor kind), a failed
+# group merge, or a merged kernel whose fresh plan is
 # not vectorizable — each falls back to the original kernels for that scope.
 # ========================================================================
 
@@ -64,7 +61,7 @@ _oop_merge_disabled() = !_compiler_plan_now().oop_merge
 # identically, so an interior AFFINE cell and a boundary TBL_BOX cell of the
 # same equation share a class.
 function _oop_merge_sig!(
-        io::IOBuffer, n::_Node, K::_AccKernel, parentsubs,
+        io::IOBuffer, n::_Node, K::_AccKernel,
         why::Base.RefValue{Symbol}
     )
     k = n.kind
@@ -91,26 +88,22 @@ function _oop_merge_sig!(
         n.payload === nothing || (why[] = :op_payload)
         print(io, "K", n.op, "s", n.literal, "(")
         for c in n.children
-            _oop_merge_sig!(io, c, K, parentsubs, why)
+            _oop_merge_sig!(io, c, K, why)
         end
         print(io, ")")
-    elseif k === _NK_SUBCALL
-        pos = findfirst(s -> s === n.payload, parentsubs)
-        pos === nothing && (why[] = :subcall_unknown; return)
-        print(io, "S", pos)
     elseif k === _NK_OP
         n.payload === nothing || (why[] = :op_payload)
         print(io, "O", n.op)
         print(io, "(")
         for c in n.children
-            _oop_merge_sig!(io, c, K, parentsubs, why)
+            _oop_merge_sig!(io, c, K, why)
         end
         print(io, ")")
     elseif k === _NK_CALL
         # A template call: the target by identity, its arguments structurally.
         print(io, "F", objectid(n.payload), "(")
         for c in n.children
-            _oop_merge_sig!(io, c, K, parentsubs, why)
+            _oop_merge_sig!(io, c, K, why)
         end
         print(io, ")")
     else
@@ -119,14 +112,14 @@ function _oop_merge_sig!(
     return io
 end
 
-function _oop_merge_trees_sig!(io::IOBuffer, K::_AccKernel, parentsubs, why)
-    _oop_merge_sig!(io, K.spine, K, parentsubs, why); print(io, "|I")
+function _oop_merge_trees_sig!(io::IOBuffer, K::_AccKernel, why)
+    _oop_merge_sig!(io, K.spine, K, why); print(io, "|I")
     for r in K.cse.inv_recipes
-        _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";")
+        _oop_merge_sig!(io, r, K, why); print(io, ";")
     end
     print(io, "|R")
     for r in K.cse.recipes
-        _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";")
+        _oop_merge_sig!(io, r, K, why); print(io, ";")
     end
     return io
 end
@@ -137,19 +130,14 @@ function _oop_merge_kernel_sig(K::_AccKernel, vectorizable::Bool)
     why = Ref(:ok)
     vectorizable || (why[] = :unvectorizable)
     io = IOBuffer()
-    _oop_merge_trees_sig!(io, K, K.subs, why)
-    for (si, S) in enumerate(K.subs)
-        isempty(S.subs) || (why[] = :nested_sub_subs)
-        print(io, "|SUB", si, ":")
-        _oop_merge_trees_sig!(io, S, K.subs, why)
-    end
+    _oop_merge_trees_sig!(io, K, why)
     return why[] === :ok ? String(take!(io)) : nothing, why[]
 end
 
 # Are the members' aligned inv-recipe trees VALUE-identical, so the merged
 # kernel can keep them in a REAL invariant tier (evaluated once per call by
 # `_fill_invariant!` / the oop prelude) instead of folding them into the
-# per-lane cell tier? Deliberately conservative: any access or subcall leaf,
+# per-lane cell tier? Deliberately conservative: any access leaf,
 # any literal that differs across members, or a cached read outside the inv
 # tier declines — the fold-to-cell fallback is always value-correct, this
 # only decides WHERE the (identical) value is computed. No node here carries a
@@ -172,7 +160,7 @@ function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
             ) || return false
         end
         return true
-    else # _NK_ACCESS / _NK_SUBCALL / anything else: decline, fold to cell
+    else # _NK_ACCESS / anything else: decline, fold to cell
         return false
     end
 end
@@ -247,20 +235,13 @@ end
 # merged lane ordinal, read through `_outs_cells` addressing (s1=1, off=1).
 function _oop_merge_group(kernels, plans, js::Vector{Int})
     m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]
-    rep = kernels[js[1]]
-    nsubs = length(rep.subs)
-    @assert _allof(j -> length(kernels[j].subs) == nsubs, js)
-    merged_subs = Vector{_AccKernel}(undef, nsubs)
-
-    # Merge one aligned tree-family (parent trees or sub-si trees). Kof(i) /
-    # Pof(i): member i's context kernel and the plan whose tables resolve that
-    # context's descriptors — sub plans are built against PARENT lanes, so
-    # every table below has member-lane length by construction. `keep_inv`
-    # (parent trees only): when every member's inv recipes are VALUE-identical
-    # the merged kernel keeps a real inv tier — evaluated once per call — and
-    # only the cell tier goes per-lane; otherwise (and always for subs, whose
-    # runners lane-vectorize the whole prelude) the inv tier folds into the
-    # cell tier. Both placements compute the same bits.
+    # Merge the members' aligned trees. Kof(i) / Pof(i): member i's kernel and
+    # the plan whose tables resolve its descriptors, so every table below has
+    # member-lane length by construction. `keep_inv`: when every member's inv
+    # recipes are VALUE-identical the merged kernel keeps a real inv tier —
+    # evaluated once per call — and only the cell tier goes per-lane;
+    # otherwise the inv tier folds into the cell tier. Both placements compute
+    # the same bits.
     function merge_trees(Kof, Pof, keep_inv::Bool)
         accvec = _AccDesc[]
         n_inv = length(Kof(1).cse.inv_recipes); n_cell = length(Kof(1).cse.recipes)
@@ -303,12 +284,6 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                 else              # folded inv-tier read (slots 1..n_inv of cell)
                     return _Node(k, r.op, r.literal, r.idx, r.sym, newscr, _Node[])
                 end
-            elseif k === _NK_SUBCALL
-                pos = findfirst(s -> s === r.payload, kernels[js[1]].subs)
-                @assert pos !== nothing
-                @assert all(i -> kernels[js[i]].subs[pos] === nodes[i].payload, 1:m)
-                @assert isassigned(merged_subs, pos) "nested-first order violated"
-                return _Node(k, r.op, r.literal, r.idx, r.sym, merged_subs[pos], _Node[])
             elseif k === _NK_ACCESS
                 akind = Kof(1).acc[r.idx].kind
                 desc = if _oop_x_statefam(akind)
@@ -361,21 +336,8 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
         return spine, recipes, _Node[], invscr, accvec, newscr
     end
 
-    for si in 1:nsubs
-        # NOTE: these names must not collide with `clone`'s locals — a nested
-        # function assigning a name bound in this scope REBINDS the shared box.
-        msp_, mrc_, _mi_, _ms_, mav_, msc_ = merge_trees(
-            i -> kernels[js[i]].subs[si],
-            i -> plans[js[i]].sub_plans[si],
-            false
-        )
-        repsub = rep.subs[si]
-        merged_subs[si] = _AccKernel(
-            repsub.cells, msp_, mav_,
-            _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)),
-            _AccKernel[]
-        )
-    end
+    # NOTE: these names must not collide with `clone`'s locals — a nested
+    # function assigning a name bound in this scope REBINDS the shared box.
     msp_, mrc_, minv_, mis_, mav_, msc_ = merge_trees(
         i -> kernels[js[i]],
         i -> plans[js[i]], true
@@ -383,7 +345,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     outs = reduce(vcat, (plans[j].out_slots for j in js))
     return _AccKernel(
         _outs_cells(outs), msp_, mav_,
-        _AccCSE(mrc_, msc_, minv_, mis_), merged_subs
+        _AccCSE(mrc_, msc_, minv_, mis_)
     )
 end
 
@@ -608,9 +570,9 @@ _oop_x_constfam(k) = (s = _ak_source(k); s === :const || s === :loop)
 end
 
 # Memoized expansion-normalized structural hash of one tree in kernel context
-# `K`. `parentsubs` positions `_NK_SUBCALL` payloads exactly as round 1 does.
+# `K`.
 function _oop_x_sig(
-        n0::_Node, K::_AccKernel, parentsubs,
+        n0::_Node, K::_AccKernel,
         memo::IdDict{_Node, UInt}, why::Base.RefValue{Symbol}
     )::UInt
     n = _oop_x_resolve(n0, K)
@@ -639,10 +601,6 @@ function _oop_x_sig(
     elseif k === _NK_CACHED                    # foreign scratch survived resolve
         why[] = :foreign_cached
         r = hash(:Cf, UInt(0x44dd))
-    elseif k === _NK_SUBCALL
-        pos = findfirst(s -> s === n.payload, parentsubs)
-        pos === nothing && (why[] = :subcall_unknown)
-        r = hash((:S, pos === nothing ? 0 : pos), UInt(0x55ee))
     elseif k === _NK_OP || k === _NK_CONTRACTION || k === _NK_CALL
         pl = n.payload
         paytok = if pl === nothing
@@ -658,7 +616,7 @@ function _oop_x_sig(
             ), UInt(0x8811)
         )
         for c in n.children
-            r = hash(_oop_x_sig(c, K, parentsubs, memo, why), r)
+            r = hash(_oop_x_sig(c, K, memo, why), r)
         end
     else
         why[] = :node_kind
@@ -674,13 +632,7 @@ function _oop_x_kernel_sig(K::_AccKernel, vectorizable::Bool)
     why = Ref(:ok)
     vectorizable || (why[] = :unvectorizable)
     memo = IdDict{_Node, UInt}()
-    h = hash(_oop_x_sig(K.spine, K, K.subs, memo, why), UInt(0xaa33))
-    for (si, S) in enumerate(K.subs)
-        isempty(S.subs) || (why[] = :nested_sub_subs)
-        smemo = IdDict{_Node, UInt}()
-        hs = hash(_oop_x_sig(S.spine, S, K.subs, smemo, why), UInt(0xbb44))
-        h = hash((si, hs), h)
-    end
+    h = hash(_oop_x_sig(K.spine, K, memo, why), UInt(0xaa33))
     return (why[] === :ok ? h : nothing), why[]
 end
 
@@ -766,10 +718,6 @@ end
 # the pathological case where it does not.
 function _oop_x_merge_group(kernels, plans, js::Vector{Int})
     m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]
-    rep = kernels[js[1]]
-    nsubs = length(rep.subs)
-    @assert _allof(j -> length(kernels[j].subs) == nsubs, js)
-    merged_subs = Vector{_AccKernel}(undef, nsubs)
     budget = Ref(2_000_000)              # cloned-node budget (throw ⇒ fallback)
 
     function merge_trees(Kof, Pof)
@@ -813,16 +761,6 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                 all(i -> nodes[i].kind === k && nodes[i].sym === r.sym, 1:m) ||
                     error("round-2: param/time mismatch in a class")
                 _Node(k, r.op, r.literal, r.idx, r.sym, r.payload, _Node[])
-            elseif k === _NK_SUBCALL
-                pos = findfirst(s -> s === r.payload, kernels[js[1]].subs)
-                pos !== nothing &&
-                    all(
-                    i -> nodes[i].kind === _NK_SUBCALL &&
-                        kernels[js[i]].subs[pos] === nodes[i].payload, 1:m
-                ) ||
-                    error("round-2: subcall alignment mismatch")
-                @assert isassigned(merged_subs, pos) "nested-first order violated"
-                _Node(k, r.op, r.literal, r.idx, r.sym, merged_subs[pos], _Node[])
             elseif k === _NK_OP || k === _NK_CONTRACTION || k === _NK_CALL
                 nch = length(r.children)
                 all(
@@ -853,23 +791,11 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
         return spine, recipes, accvec, scr
     end
 
-    for si in 1:nsubs
-        msp_, mrc_, mav_, msc_ = merge_trees(
-            i -> kernels[js[i]].subs[si],
-            i -> plans[js[i]].sub_plans[si]
-        )
-        repsub = rep.subs[si]
-        merged_subs[si] = _AccKernel(
-            repsub.cells, msp_, mav_,
-            _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)),
-            _AccKernel[]
-        )
-    end
     msp_, mrc_, mav_, msc_ = merge_trees(i -> kernels[js[i]], i -> plans[js[i]])
     outs = reduce(vcat, (plans[j].out_slots for j in js))
     return _AccKernel(
         _outs_cells(outs), msp_, mav_,
-        _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)), merged_subs
+        _AccCSE(mrc_, msc_, _Node[], _AccScratch(0))
     )
 end
 
@@ -910,10 +836,7 @@ _affine_keep_kind(k) =
 
 # The number of axes along which `K`'s box is more than one cell thick, or 0
 # when `K` is not an affine box kernel the emitter compiles as its own nest.
-# A template sub-kernel is inlined into its parent's nest, so its descriptors
-# count as the parent's.
-_affine_keep_reads(K::_AccKernel) =
-    _allof(a -> _affine_keep_kind(a.kind), K.acc) && _allof(_affine_keep_reads, K.subs)
+_affine_keep_reads(K::_AccKernel) = _allof(a -> _affine_keep_kind(a.kind), K.acc)
 function _affine_box_rank(K::_AccKernel)
     cs = K.cells
     (_is_outs(cs) || length(cs.strides) < 2 || !_affine_keep_reads(K)) && return 0

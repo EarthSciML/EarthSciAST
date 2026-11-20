@@ -1,5 +1,5 @@
 # One compiled function per template instance (esm-spec §9.6.4 rule 2): the
-# native emitter writes each template body's sub-kernel once, as a function of
+# native emitter writes each template body once, as a function of
 # its run-time inputs, and calls it from every use with the same instance —
 # here three tracers transported by one flux template, so three uses share one
 # function per region class. The fixtures nest templates, bind compound

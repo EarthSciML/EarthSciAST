@@ -315,7 +315,7 @@ mutable struct _AffineEq{B, VM, CA, PS, V}
     fast_key::Union{Nothing, Bool, _FastKey}
     # The boxes' lowered spines by branch key and lane lowering, and the
     # flattened constant arrays the lowerings read.
-    spine_cache::Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}
+    spine_cache::Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE}}
     flat_cache::IdDict{Any, Vector{Float64}}
     # Scratch reused across keyed cells: the branch-key text, the state lanes'
     # slots, the backward probe, and the visited set `_branch_key!` clears.
@@ -335,7 +335,7 @@ function _AffineEq(
         Dict{String, Int}(), Dict{String, Vector{Union{Nothing, _LaneEval}}}(),
         Dict{String, Any}(), Dict{String, Vector{Vector{_GuardPath}}}(),
         IdDict{Any, Bool}(), nothing, IdDict{OpExpr, Any}(), nothing,
-        Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}(),
+        Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE}}(),
         IdDict{Any, Vector{Float64}}(), IOBuffer(), Int[], Int[], _SeenSet()
     )
 end
@@ -1748,7 +1748,7 @@ _is_const_oob(err) = err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY
 
 # Every guard path each lane sentinel of `tmpl` is read under (`ifelse`
 # branches, the short-circuited operands of `and` / `or`). A lane with no
-# recorded path — one inside a template sub-kernel, or past the walk budget —
+# recorded path — one the walk does not reach, or past the walk budget —
 # has unknown guards, which `_lane_guard_at` treats as a run-time guard.
 function _lane_guard_paths(tmpl::_Node, nlanes::Int)
     paths = [_GuardPath[] for _ in 1:nlanes]
@@ -2136,7 +2136,7 @@ function _process_affine_box!(kernels, eq::_AffineEq, box, cbox)
     end
 
     view === nothing || _range_real_repls!(view, lane_repl, recipes)
-    spine, acc, cse, subs = get!(eq.spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
+    spine, acc, cse = get!(eq.spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
         a = _AccDesc[]
         raw = _lower_to_access(tmpl, lane_repl, a)
         if reduce !== nothing
@@ -2150,7 +2150,7 @@ function _process_affine_box!(kernels, eq::_AffineEq, box, cbox)
             )
         end
         cs_spine, cse = _build_acc_cse(raw, a)   # per-cell CSE (shared subtrees → scratch)
-        (cs_spine, a, cse, _AccKernel[])
+        (cs_spine, a, cse)
     end
     out_ranges = eq.out_ranges
     slab = Bool[
@@ -2165,7 +2165,7 @@ function _process_affine_box!(kernels, eq::_AffineEq, box, cbox)
         UnitRange{Int}[cbox[d] for d in 1:nout],
         base - (view === nothing ? 0 : view.shift), Int[], slab
     )
-    return push!(kernels, _AccKernel(cs, spine, acc, cse, subs))
+    return push!(kernels, _AccKernel(cs, spine, acc, cse))
 end
 
 # Every lane recipe's compiled evaluator (`nothing` where it has none), per

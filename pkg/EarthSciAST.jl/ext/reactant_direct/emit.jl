@@ -1,6 +1,6 @@
 # ========================================================================
 # ext/reactant_direct/emit.jl — the walk: scalar spines, access kernels,
-# template sub-kernels, CSR reduces, prefix scans, and the whole RHS.
+# CSR reduces, prefix scans, and the whole RHS.
 # ========================================================================
 
 # ---- parameters and time -----------------------------------------------------
@@ -78,14 +78,12 @@ struct _DEScalarFrame <: _DEFrame
     cache::Vector{_DEVal}
 end
 
-# One access kernel `K` under its lane plan, with its CSE tiers and its
-# template sub-kernels' runtime.
+# One access kernel `K` under its lane plan, with its CSE tiers.
 struct _DEKernelFrame <: _DEFrame
     K::_E._AccKernel
     plan::_E._OopAccPlan
     inv::Vector{_DEVal}
     cell::Vector{_DEVal}
-    sub::Any                                 # _DESubRT
 end
 
 _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal =
@@ -93,8 +91,8 @@ _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal =
 
 _de_acck(
     ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan,
-    invvals::Vector{_DEVal}, cellvals::Vector{_DEVal}, sub
-)::_DEVal = _de_walk(ctx, _DEKernelFrame(K, plan, invvals, cellvals, sub), nd)
+    invvals::Vector{_DEVal}, cellvals::Vector{_DEVal}
+)::_DEVal = _de_walk(ctx, _DEKernelFrame(K, plan, invvals, cellvals), nd)
 
 # The frame's views for the count recognisers and the computed-subscript read.
 _de_keyval(ctx::_DECtx, ::_DEScalarFrame, x::_E._Node) = _de_scalar_keyval(ctx, x)
@@ -214,44 +212,12 @@ end
 
 _de_kindname(k::UInt8) = _E._node_kind_name(k)
 
-# ---- template sub-kernels ----------------------------------------------------
-#
-# The per-call runtime for a kernel's template SUB-KERNELS: the parent plan's
-# FLAT transitive sub list
-# with its aligned lane plans, and one CSE tier per sub. The invariant tier is
-# emitted once per kernel by the prologue (as the host evaluator fills it once
-# per call); the per-cell tier is re-emitted at each subcall site, which is the
-# host evaluator's per-cell re-fill in SSA form.
-struct _DESubRT
-    subs::Vector{_E._AccKernel}
-    plans::Vector{_E._OopAccPlan}
-    invvals::Vector{Vector{_DEVal}}
-    cellvals::Vector{Vector{_DEVal}}
-end
-const _DE_NO_SUB = _DESubRT(
-    _E._AccKernel[], _E._OopAccPlan[],
-    Vector{_DEVal}[], Vector{_DEVal}[]
-)
-
-function _de_build_subrt(plan::_E._OopAccPlan)
-    subs = plan.subs
-    isempty(subs) && return _DE_NO_SUB
-    invvals = Vector{Vector{_DEVal}}(undef, length(subs))
-    cellvals = Vector{Vector{_DEVal}}(undef, length(subs))
-    for j in eachindex(subs)
-        S = subs[j]
-        invvals[j] = Vector{_DEVal}(undef, length(S.cse.inv_recipes))
-        cellvals[j] = Vector{_DEVal}(undef, length(S.cse.recipes))
-    end
-    return _DESubRT(subs, plan.sub_plans, invvals, cellvals)
-end
-
 # ---- access kernels ----------------------------------------------------------
 
 # ---- an access kernel's own leaves -------------------------------------------
 
 function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
-    K = fr.K; plan = fr.plan; sub = fr.sub::_DESubRT
+    K = fr.K; plan = fr.plan
     k = nd.kind
     if k === _E._NK_ACCESS
         a = K.acc[nd.idx]
@@ -278,16 +244,6 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
             # CONST_BOX / LOOP_IDX: frozen lane data, one interned array constant.
             return _de_arrconst(ctx, plan.consts[nd.idx])
         end
-    elseif k === _E._NK_SUBCALL
-        S = nd.payload::_E._AccKernel
-        j = _de_sub_index(ctx, sub.subs, S)
-        sfr = _DEKernelFrame(S, sub.plans[j], sub.invvals[j], sub.cellvals[j], sub)
-        rs = S.cse.recipes
-        for i in eachindex(rs)
-            sfr.cell[i] = _de_walk(ctx, sfr, rs[i])
-        end
-        _de_tally!(ctx, :subcall)
-        return _de_walk(ctx, sfr, S.spine)
     end
     return _de_refuse(
         ctx, "the access-kernel node kind $(_de_kindname(k))",
@@ -295,23 +251,9 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
     )
 end
 
-function _de_sub_index(ctx::_DECtx, subs::Vector{_E._AccKernel}, S::_E._AccKernel)
-    for j in eachindex(subs)
-        subs[j] === S && return j
-    end
-    return _de_refuse(
-        ctx,
-        "_NK_SUBCALL",
-        "the call references a sub-kernel absent from the parent plan's " *
-            "transitive `K.subs` list — a `_collect_subkernels` invariant break, " *
-            "not a coverage gap."
-    )
-end
-
-# One vectorized kernel: the sub-kernels' invariant tiers, then this kernel's
-# invariant and per-cell tiers, the spine, and the scatter into the target slot
-# map. One kernel: sub-kernel invariant tiers, then this kernel's own CSE tiers
-# in slot order, the spine over whole lanes, and ONE write.
+# One vectorized kernel: this kernel's own CSE tiers (invariant, then per-cell)
+# in slot order, the spine over whole lanes, and ONE write into the target slot
+# map.
 function _de_run_kernel!(
         ctx::_DECtx, out::_DEMap, K::_E._AccKernel,
         plan::_E._OopAccPlan
@@ -326,26 +268,16 @@ function _de_run_kernel!(
             "(an unsupported descriptor kind or an unbounded reduce) and lower " *
             "that instead."
     )
-    sub = _de_build_subrt(plan)
-    for j in eachindex(sub.subs)
-        S = sub.subs[j]
-        Sp = sub.plans[j]
-        iv = sub.invvals[j]; cv = sub.cellvals[j]
-        ir = S.cse.inv_recipes
-        for i in eachindex(ir)
-            iv[i] = _de_acck(ctx, ir[i], S, Sp, iv, cv, sub)
-        end
-    end
     cse = K.cse
     invvals = Vector{_DEVal}(undef, length(cse.inv_recipes))
     cellvals = Vector{_DEVal}(undef, length(cse.recipes))
     for i in eachindex(cse.inv_recipes)
-        invvals[i] = _de_acck(ctx, cse.inv_recipes[i], K, plan, invvals, cellvals, sub)
+        invvals[i] = _de_acck(ctx, cse.inv_recipes[i], K, plan, invvals, cellvals)
     end
     for i in eachindex(cse.recipes)
-        cellvals[i] = _de_acck(ctx, cse.recipes[i], K, plan, invvals, cellvals, sub)
+        cellvals[i] = _de_acck(ctx, cse.recipes[i], K, plan, invvals, cellvals)
     end
-    res = _de_acck(ctx, K.spine, K, plan, invvals, cellvals, sub)
+    res = _de_acck(ctx, K.spine, K, plan, invvals, cellvals)
     _de_tally!(ctx, :kernels)
     _de_write!(ctx, out, plan.out_slots, res)
     return nothing

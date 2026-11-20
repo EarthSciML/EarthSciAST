@@ -1,7 +1,7 @@
 # Compile-once template tier (RFC out-of-line-expression-templates §5/§7.7
 # "compile references natively", esm-spec §9.6.4 Option B): the affine stencil
 # build compiles each surviving `apply_expression_template` body once per
-# (use site, region class) and calls it as a runtime sub-kernel, instead of
+# (use site, region class) and calls it (a template call, call.jl), instead of
 # fusing the expanded body into every branch spine. This is THE default path —
 # `flatten` always carries references, and the build boundary is the single
 # evaluator-side expansion point. Gate 3 (§12): the result MUST be
@@ -96,14 +96,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         @test cfast.compiles < catload.compiles ÷ 3
     end
 
-    @testset "gate: template sub-kernels take the vectorized acc form" begin
-        # A template-body sub-kernel (`K.subs` / `_NK_SUBCALL`) must not force the
-        # per-cell FALLBACK, which addresses the state one element at a time and
-        # so cannot be compiled. The build plans each variant as its OWN whole-array op over the parent lanes, splicing the
-        # lane-aligned result into the parent operand stream. Pin structurally:
-        # this fixture DOES carry sub-kernels and EVERY acc plan is vectorizable,
-        # which is the property a compiled backend needs — the emitter refuses a
-        # per-cell fallback kernel outright.
+    @testset "gate: template calls take the vectorized acc form" begin
+        # A template call must not force the per-cell FALLBACK, which addresses
+        # the state one element at a time and so cannot be compiled. Pin
+        # structurally: EVERY acc plan is vectorizable, which is the property a
+        # compiled backend needs — the emitter refuses a per-cell fallback
+        # kernel outright.
         FIX = fullrank_per_cell_fixture()
         flat = flatten(load_path(FIX))
         fo, u0, p, _, _ = EarthSciAST.Internal.build(flat; form = :oop)
@@ -111,8 +109,6 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # is its `rhs` field.
         oplans = getfield(getfield(fo, :rhs), :acc_plans)
         @test !isempty(oplans)
-        # The references are template calls now (no expansion sub-kernels).
-        @test all(P -> isempty(P.subs), oplans)
         @test all(P -> P.vectorizable, oplans)       # none forced the fallback
     end
 
@@ -136,8 +132,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # NESTED reference (pair_diff — compiled FUSED into its enclosing
         # variant: boundaries are the OUTERMOST expansion roots only, the RFC's
         # granularity) and (b) an all-literal invariant subtree exp(neg(0.3))
-        # (exercises the sub-kernel invariant CSE tier filled by the runner
-        # prologue).
+        # (exercises the invariant CSE tier filled by the runner prologue).
         idx(f, off) = off == 0 ? Dict("op" => "index", "args" => [f, "i"]) :
             Dict(
                 "op" => "index", "args" => [

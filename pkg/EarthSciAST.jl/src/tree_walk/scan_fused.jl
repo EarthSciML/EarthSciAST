@@ -166,7 +166,7 @@ end
 const _SCAN_CONSUMER_KINDS = (_AK_STATE_AFFINE, _AK_STATE_FIXED, _AK_ARR_FIXED)
 
 # Whether a consumer's spine (or recipe) uses only leaves and plain operators:
-# nothing addressed by the loop index, no reduction, no sub-kernel.
+# nothing addressed by the loop index, no reduction.
 function _scan_consumer_node_ok(nd::_Node)
     k = nd.kind
     if k === _NK_OP
@@ -205,7 +205,7 @@ function _scan_desc_extent(a::_AccDesc, olnext)
 end
 _scan_overlaps(e, lo::Int, hi::Int) = e !== nothing && e[1] <= hi && e[2] >= lo
 
-# Whether any descriptor of `K` (sub-kernels included) other than `K.acc[skip]`
+# Whether any descriptor of `K` other than `K.acc[skip]`
 # may read a slot in `lo:hi`.
 function _scan_kernel_reads(
         K::_AccKernel, lo::Int, hi::Int, skip::Int = 0,
@@ -215,8 +215,7 @@ function _scan_kernel_reads(
         j == skip && continue
         _scan_overlaps(_scan_desc_extent(a, olnext), lo, hi) && return true
     end
-    # A sub-kernel runs at its parent's `oln`, which its own cells do not give.
-    return _anyof(S -> _scan_kernel_reads(S, lo, hi, 0, nothing), K.subs)
+    return false
 end
 
 # A state kernel that computes its cells from an observed's values as a
@@ -246,7 +245,7 @@ function _cg_consumer(ctx::_CGFunction, c::_ScanConsumer)
     return _CGConsumer(c.K, ix, c.delta, c.store, _cg_inv!(ctx, c.K))
 end
 
-# The one kernel among `Ks` (sub-kernels included) that may read a slot in
+# The one kernel among `Ks` that may read a slot in
 # `lo:hi`, or `nothing` when none or several do.
 function _find_scan_reader(lo::Int, hi::Int, Ks::AbstractVector{_AccKernel})
     found = nothing
@@ -255,8 +254,6 @@ function _find_scan_reader(lo::Int, hi::Int, Ks::AbstractVector{_AccKernel})
         found === nothing || return nothing          # two readers
         found = K
     end
-    found === nothing && return nothing
-    isempty(found.subs) || return nothing
     return found
 end
 
@@ -384,9 +381,6 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
     lv = _cg_name(ctx, "l")
     lr = _cg_name(ctx, "lr")
     blk = try
-        for Sub in K.subs
-            _cg_inv!(ctx, Sub)
-        end
         invsyms = _cg_inv!(ctx, K)
         cons = consumer === nothing ? nothing : _cg_consumer(ctx, consumer)
         store = _CGStoreScan(acc, av, bv, opsym, S.inclusive, cons)
@@ -656,9 +650,6 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer 
     ctx = _CGFunction(_codegen_node_budget(); nst = nst)
     nlanes = length(sh.r1)
     blk = try
-        for Sub in K.subs
-            _cg_inv!(ctx, Sub)
-        end
         invsyms = _cg_inv!(ctx, K)
         _cg_note_nest!(ctx, K)
         cinv = Symbol[]

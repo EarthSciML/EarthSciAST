@@ -10,8 +10,7 @@
 #
 #   1. every existing scalar prelude def is EXACTLY value-numbered (slot order,
 #      so `_NK_CACHED` refs expand through already-numbered slots);
-#   2. every kernel's `inv_recipes` defs (top-level kernels + their transitive
-#      template-body `subs`) are value-numbered in the same table, with
+#   2. every kernel's `inv_recipes` defs are value-numbered in the same table, with
 #      `_NK_ACCESS` leaves NORMALIZED to their scalar-node equivalents
 #      (`_AK_STATE_FIXED` ≡ `_NK_STATE`, `_AK_ARR_FIXED` ≡ `_NK_PARAM_GATHER`)
 #      so a kernel-side `u[5]` matches a
@@ -247,7 +246,7 @@ function _xnode_vn_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
         # has drifted from what this key models: decline rather than key past it.
         n.payload === nothing || return _XVN_NONE
     else
-        return _XVN_NONE    # _NK_SUBCALL / _NK_AREDUCE / geometry / future kinds
+        return _XVN_NONE    # _NK_AREDUCE / geometry / future kinds
     end
     kids = Vector{Int}(undef, length(n.children))
     for i in eachindex(n.children)
@@ -421,22 +420,14 @@ function _share_kernel_invariants!(
     )
     isempty(acc_kernels) && return _XCSE_NONE_DIAG
 
-    # Deterministic kernel enumeration: top-level kernels in build order, each
-    # followed by its transitive template-body subs, deduplicated by identity
-    # (a sub shared by several parents is one def source, not several).
+    # Deterministic kernel enumeration: kernels in build order, deduplicated
+    # by identity (a kernel listed twice is one def source, not two).
     kernels = _AccKernel[]
     seenk = IdDict{_AccKernel, Nothing}()
-    function addk(K::_AccKernel)
-        haskey(seenk, K) && return nothing
+    for K in acc_kernels
+        haskey(seenk, K) && continue
         seenk[K] = nothing
         push!(kernels, K)
-        for S in K.subs
-            addk(S)
-        end
-        return nothing
-    end
-    for K in acc_kernels
-        addk(K)
     end
     any(K -> _has_inv(K.cse), kernels) || return _XCSE_NONE_DIAG
 
