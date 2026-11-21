@@ -53,6 +53,7 @@ pub fn capture_component_templates(
 ) -> Option<indexmap::IndexMap<String, Value>> {
     let root = value.as_object()?;
     let mut out: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
+    let mut received = super::emit::received_transform_refs(root);
     for compkind in ["models", "reaction_systems"] {
         let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) else {
             continue;
@@ -61,6 +62,7 @@ pub fn capture_component_templates(
             let Some(comp) = comp.as_object() else {
                 continue;
             };
+            let here_refs = received.remove(cname.as_str()).unwrap_or_default();
             if !comp
                 .get("expression_templates")
                 .is_some_and(|t| t.as_object().is_some_and(|t| !t.is_empty()))
@@ -69,7 +71,7 @@ pub fn capture_component_templates(
             }
             let key = format!("{compkind}.{cname}");
             let here = authored.get(&key).map(Vec::as_slice).unwrap_or(&[]);
-            let (block, _, _) = materialize_component_block(comp, here);
+            let (block, _, _) = materialize_component_block(comp, here, &here_refs);
             if !block.is_empty() {
                 out.insert(key, Value::Object(block));
             }
