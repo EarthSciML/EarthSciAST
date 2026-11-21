@@ -5345,7 +5345,8 @@ special-case older versions to recover Option A matching. Motivation and measure
    emit verbatim (post-substitution; post-fold on an **instantiating load** — see "Two load
    modes" below). Each component materializes into its own
    `expression_templates` block the transitive closure of templates its surviving references
-   name — **registered instances**: post-`only`, post-`rename`/`rebind`,
+   name — the references in the coupling `variable_map` transforms it receives count as its
+   own (§10.4) — as **registered instances**: post-`only`, post-`rename`/`rebind`,
    post-metaparameter-fold, checked but uninlined, with bodies as rule 3 rewrote them — with
    authored entries first in authored order, then materialized entries in lexicographic
    (UTF-8 byte) name order; all five
@@ -5476,7 +5477,8 @@ special-case older versions to recover Option A matching. Motivation and measure
    component registries merge into the flattened document with deep-equal dedup at first
    occurrence and deterministic `<ComponentPath>.<name>` rename of both entries on a
    non-deep-equal collision — propagated along the reference DAG to every declaration
-   that reaches one — with references rewritten in lockstep. The component-scoping runs
+   that reaches one — with references rewritten in lockstep, a coupling transform's
+   references with those of its receiving component (§10.4). The component-scoping runs
    **before** the merge and the dedup compares post-scoping bodies; a binding that expands
    every reference at load carries no registry into flatten and has nothing to scope
    (§10.7, "Applicability across bindings").
@@ -6214,7 +6216,7 @@ For `variable_map` coupling entries, `transform` specifies how the source variab
 
 Every `variable_map` transform performs a **replacement**: the target is bound to the source, optionally scaled by `factor`. `factor` is a scaling coefficient valid only on the scaling transforms (`additive`, `multiplicative`, `conversion_factor`); a `factor` on `param_to_var` or `identity` — which have nothing to scale — or alongside an Expression transform — which spells its own arithmetic — is rejected at load. The three scaling transforms are equivalent in effect for a `variable_map` and differ only in documented intent. Genuine additive/multiplicative **term composition** (adding a source/sink term, or multiplying a tendency in place) is a `couple`/ConnectorSystem concern (§10.3), not a `variable_map`.
 
-**Expression-transform evaluation contract.** When `transform` is an Expression — always an **operator node** (the degenerate bare-reference and literal Expression spellings are not admissible in this slot: bare replacement is what the named transforms already provide, and the string space is reserved for their names) — the entry binds the target to a **derived value**: flattening (§10.7) removes the `to` parameter and introduces in its place a derived (observed) variable — same name, units, and shape — whose defining expression is the transform, so every reference to the target evaluates the expression's value exactly as an authored observed would. The expression's free variables follow the connector-equation convention (§10.3, §4.6): every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system. The expression MUST reference the entry's `from` variable — it is the data-flow edge the entry declares — and MAY reference any other variable, parameter, or observed in scope of the flattened system (this is what the §8.6 regridding form relies on: the receiving component's build-once overlap weights, normalization row-sums, and sliver tolerance appear alongside the source field). The expression's value must be shaped like the target (its units are the target's declared units; validators MAY check consistency as for `identity`). Template invocations (`apply_expression_template`) are legal anywhere in the transform: they resolve at load, before validation and flattening, against the template registry of the component that owns the `to` target — the receiving component — which is where a regridding library import (§9.7) naturally lives. Eager invocations expand in the §9.6.4-rule-3 pre-pass; the rest survive and denote their expansion (§9.6.4 rule 2), resolved at flatten/evaluation against the carried registry (§9.6.4 rule 7). As with all of §9.6.4, round-trip emits the reference-preserving form. **One carve-out for coupling-library edges (§10.9).** When a `variable_map` edge arrives via a `coupling_import` expansion (§10.10) rather than being authored inline, its `to` owner is a role and is not known until binding, so its transform templates cannot expand at load. For such an edge, transform-template expansion is deferred to the flatten-time expansion step (§10.10, `esm-libraries-spec.md` §4.7.5): the invocations expand against the *bound* `to` owner's registry immediately after role substitution. Because this is *after* the §9.6.3 fixpoint, a library edge's transform MUST expand to an already-lowered form (a regridding `faq`/`index` carries no rewrite-target operator); a transform template that would introduce `grad` / `div` / spatial `D` is rejected with `coupling_library_illegal_payload`.
+**Expression-transform evaluation contract.** When `transform` is an Expression — always an **operator node** (the degenerate bare-reference and literal Expression spellings are not admissible in this slot: bare replacement is what the named transforms already provide, and the string space is reserved for their names) — the entry binds the target to a **derived value**: flattening (§10.7) removes the `to` parameter and introduces in its place a derived (observed) variable — same name, units, and shape — whose defining expression is the transform, so every reference to the target evaluates the expression's value exactly as an authored observed would. The expression's free variables follow the connector-equation convention (§10.3, §4.6): every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system. The expression MUST reference the entry's `from` variable — it is the data-flow edge the entry declares — and MAY reference any other variable, parameter, or observed in scope of the flattened system (this is what the §8.6 regridding form relies on: the receiving component's build-once overlap weights, normalization row-sums, and sliver tolerance appear alongside the source field). The expression's value must be shaped like the target (its units are the target's declared units; validators MAY check consistency as for `identity`). Template invocations (`apply_expression_template`) are legal anywhere in the transform: they resolve at load, before validation and flattening, against the template registry of the component that owns the `to` target — the receiving component — which is where a regridding library import (§9.7) naturally lives. The receiving component's rules rewrite the transform as they rewrite its own expression positions (§9.6.3; a firing writes a reference, constraint 7), and §9.6.4 rule 3 rewrites the bodies the transform's references reach. The references stay references — at load, at emit and at flatten — and denote their expansion (§9.6.4 rule 2); only an explicit expansion utility expands them. They are the receiving component's references: its emitted `expression_templates` block materializes the templates they name exactly as it does for its own (§9.6.4 rule 5), and flattening scopes and renames them in lockstep with that component's registry entries (§9.6.4 rule 7) — on a registry collision a transform's reference follows the receiving component's `<ComponentPath>.<name>` rename — so the observed that replaces the `to` parameter is defined by an expression carrying the references, like any other equation of the flattened system. **One carve-out for coupling-library edges (§10.9).** When a `variable_map` edge arrives via a `coupling_import` expansion (§10.10) rather than being authored inline, its `to` owner is a role and is not known until binding, so its transform cannot resolve at load. For such an edge, resolution is deferred to the flatten-time expansion step (§10.10, `esm-libraries-spec.md` §4.7.5): immediately after role substitution, the transform's references resolve against the *bound* `to` owner's registry and stay references, owned by that component exactly as an inline edge's are. Because this is *after* the §9.6.3 fixpoint, no rule rewrites a library edge's transform, so the templates it references MUST already be lowered (a regridding `faq`/`index` carries no rewrite-target operator); a transform whose references reach a template that would introduce `grad` / `div` / spatial `D` is rejected with `coupling_library_illegal_payload`.
 
 ### 10.5 Coupling across grids and dimensionality
 
@@ -6222,7 +6224,7 @@ Coupled components may live on different index sets (resolutions), or differ in 
 
 #### Regridding
 
-When a variable is mapped between two components on different index sets — or from a data-fed parameter's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `faq` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `faq` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration. This is the Expression form of `transform` (§10.4): the target parameter becomes a derived variable defined by the expression, whose scoped references reach the source field and the receiving component's build-once weight arrays. The expression is authored inline, or — the usual factoring — invokes overlap-weight templates imported from a regridding library (§9.7), expanded at load per §9.6.4:
+When a variable is mapped between two components on different index sets — or from a data-fed parameter's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `faq` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `faq` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration. This is the Expression form of `transform` (§10.4): the target parameter becomes a derived variable defined by the expression, whose scoped references reach the source field and the receiving component's build-once weight arrays. The expression is authored inline, or — the usual factoring — invokes overlap-weight templates imported from a regridding library (§9.7), resolved at load per §9.6.4 against the receiving component and kept as references (§10.4):
 
 ```json
 {
@@ -6395,10 +6397,11 @@ A coupling-library file **MUST NOT** itself contain a `coupling_import` entry
 **No discretization inside a library edge, and no rewrite-target transform templates.** A regridding
 `transform` (§10.4) references the *receiving* component's build-once weight arrays and index sets;
 after binding, the `to` target is a real component whose registry is in scope, so the library needs
-no `index_sets` or templates of its own. Because a library edge's transform templates expand at
-flatten (§10.4 carve-out, §10.10.3) — after the §9.6.3 fixpoint — a library transform MUST expand
-to an already-lowered form; a transform template that would introduce a rewrite-target operator
-(`grad` / `div` / spatial `D`) is rejected with `coupling_library_illegal_payload`.
+no `index_sets` or templates of its own. Because a library edge's transform references resolve at
+flatten (§10.4 carve-out, §10.10.3) — after the §9.6.3 fixpoint — the templates a library transform
+references MUST already be lowered; a transform whose references reach a template that would
+introduce a rewrite-target operator (`grad` / `div` / spatial `D`) is rejected with
+`coupling_library_illegal_payload`.
 
 **Role-scoped reference resolution.** In an ordinary document a coupling edge's top-level segment
 must resolve to a top-level `models` / `reaction_systems` key (§4.6). A library
@@ -6552,8 +6555,9 @@ Two consequences of expanding inside flatten are normative:
   so it runs only for a document whose location the loader recorded (§4.7); a document with no
   location of its own leaves the mis-bind to flatten rather than resolving the `ref` against the
   process working directory.
-- **A library-edge transform's templates expand at flatten** against the bound `to` owner's
-  registry (§10.4 carve-out), to an already-lowered form.
+- **A library-edge transform's references resolve at flatten** against the bound `to` owner's
+  registry (§10.4 carve-out) and stay references, owned by that component; the templates they
+  reference are already lowered.
 
 Two independent import edges referencing the same library with *different* `bind` maps expand to two
 independent edge sets. A double-driven `param_to_var` target (two edges, imported or inline, whose
@@ -6580,7 +6584,7 @@ arrive at run time. This holds for a SCALAR parameter exactly as for a shaped on
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`). |
 | `subsystem_ref_is_coupling_library` | A §4.7 subsystem `ref` targets a coupling-library file. |
 | `template_import_is_coupling_library` | A §9.7.2 template import targets a coupling-library file. |
-| `coupling_library_illegal_payload` | A coupling-library file declares `models` / `reaction_systems` / `data_sources` / `domain` / `index_sets` / `metaparameters` / `expression_templates`; **or** contains a `callback` entry or a library edge carrying `expression_template_imports`; **or** carries a library edge whose transform template would expand to a rewrite-target operator; **or** (if the binding narrows the entry set) an entry type it does not permit. |
+| `coupling_library_illegal_payload` | A coupling-library file declares `models` / `reaction_systems` / `data_sources` / `domain` / `index_sets` / `metaparameters` / `expression_templates`; **or** contains a `callback` entry or a library edge carrying `expression_template_imports`; **or** carries a library edge whose transform references a template that would introduce a rewrite-target operator; **or** (if the binding narrows the entry set) an entry type it does not permit. |
 | `coupling_library_nested_import` | A coupling-library file contains a `coupling_import` entry. |
 | `coupling_edge_unknown_role` | A library edge's top-level system segment, at any occurrence site, is not a declared role. |
 | `coupling_role_unused` | A declared role appears at no occurrence site in any library edge. |
