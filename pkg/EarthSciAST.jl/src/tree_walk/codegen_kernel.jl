@@ -934,7 +934,8 @@ function _cg_emit(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
     k === _NK_ARG_GATHER && return _cg_arg_gather(ctx, kc, nd)
     # A read of a literal table in the body (an inline `const`, or a
     # reference to a template that is one, frames.jl `_tpl_const_table`): the
-    # build-time array, captured in this function's tabs like any other.
+    # build-time array, read through a trailing parameter of the call
+    # function (`_cg_cga`), which each call site passes (`_cg_emit_call`).
     k === _NK_CONST_GATHER && return _cg_call_const_gather(ctx, kc, nd)
     if k === _NK_CONTRACTION_LOOP
         spec = nd.payload::_ContractLoop
