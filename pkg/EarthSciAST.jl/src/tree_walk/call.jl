@@ -1290,7 +1290,12 @@ function _tpl_whole_views(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExp
     e isa OpExpr || return e
     r = get(memo, e, nothing)
     r === nothing || return r
-    if e.op == "index" && _tpl_structless(e) && length(e.args) >= 2 &&
+    if (c = _tpl_const_table(tt, e.op == "index" && !isempty(e.args) ? e.args[1] : nothing)) !== nothing &&
+            _tpl_structless(e) && length(e.args) >= 2
+        # A read of a literal table a reference denotes (frames.jl
+        # `_tpl_const_table_read`).
+        r = reconstruct(e; args = ASTExpr[c, (_tpl_whole_views(tt, a, memo) for a in e.args[2:end])...])
+    elseif e.op == "index" && _tpl_structless(e) && length(e.args) >= 2 &&
             _tpl_view_rank(tt, e.args[1]) == length(e.args) - 1
         a1 = map_children(c -> _tpl_whole_views(tt, c, memo), e.args[1]::OpExpr)
         r = _tpl_with_lanes(tt, _elem_call(tt, a1, ASTExpr[_tpl_whole_views(tt, a, memo) for a in e.args[2:end]]))
@@ -1334,6 +1339,12 @@ end
 
 const _TPL_PART = "\0part\0"
 const _TPL_LEAF = "\0leaf\0"
+# A makearray region whose value is a parameter carries it in the skeleton as
+# `"\0rval\0"(param)` (`_tpl_skel_node!`), so the view knows which of its
+# nodes is a binding standing as a region's value (`_tpl_agg_view`): a nested
+# reference's skeleton substitutes its raw binding into the marker, which then
+# still marks it.
+const _TPL_RVAL = "\0rval\0"
 
 _tpl_part_name(name, k::Int) = string(name, _TPL_PART, k)
 
@@ -1375,7 +1386,10 @@ end
 function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
     e isa OpExpr || return nothing
     if _is_faq_op(e.op) && e.output_idx !== nothing && !isempty(e.output_idx)
-        all(x -> x isa AbstractString, e.output_idx) || return nothing
+        # An output index is a name the view's loop binds, or an integer
+        # literal (a singleton output position, `[1, "s"]`), which binds
+        # nothing and stays in the header as it is.
+        all(x -> x isa AbstractString || (x isa Integer && !(x isa Bool)), e.output_idx) || return nothing
         (
             e.expr_body !== nothing && e.key === nothing && e.values === nothing &&
                 e.lower === nothing && e.upper === nothing
@@ -1396,7 +1410,16 @@ function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
         (rv isa AbstractVector && length(rv) == length(e.values)) || return nothing
         vals = ASTExpr[]
         for (k, v) in enumerate(e.values)
-            h = if v isa OpExpr && (
+            h = if v isa VarExpr && _tpl_is_sentinel(v.name)
+                # A parameter as the region's value: the reference's binding
+                # itself (the view substitutes it, `_tpl_agg_view`), read as
+                # the expansion reads it there: a whole array (an
+                # array-valued reference, read through its own view) at the
+                # region's cells, a scalar broadcast over them. No part: a
+                # part's body is a scalar read, so a part reading an
+                # array-valued binding cannot compile.
+                OpExpr(_TPL_RVAL, ASTExpr[v])
+            elseif v isa OpExpr && (
                     (_is_faq_op(v.op) && v.output_idx !== nothing && !isempty(v.output_idx)) ||
                         v.op == "makearray" || (_tpl_is_call(v) && !_tpl_is_elem(v))
                 )
@@ -1449,8 +1472,12 @@ end
 
 # The view of the reference `call` (above), `nothing` when its template has
 # no skeleton. Leaves are the part calls, each with the reference's bindings
-# and the loop indices it reads bound to the view's loops.
-function _tpl_agg_view(tt::_TplTable, call::OpExpr; lanes::Bool = true)
+# and the loop indices it reads bound to the view's loops. Each region value
+# that is a binding (`_TPL_RVAL`) is pushed to `rvals` when one is given.
+function _tpl_agg_view(
+        tt::_TplTable, call::OpExpr; lanes::Bool = true,
+        rvals::Union{Nothing, Vector{ASTExpr}} = nothing
+    )
     _tpl_is_elem(call) && return nothing
     _tpl_call_info(tt, call.name) === nothing || return nothing
     sk = _tpl_skel(tt, call.name)
@@ -1462,6 +1489,22 @@ function _tpl_agg_view(tt::_TplTable, call::OpExpr; lanes::Bool = true)
             (m[s] = VarExpr(s[(ncodeunits(_TPL_FREE) + 1):end]))
     end
     h = _tpl_subst_scoped(h, m, IdDict{OpExpr, ASTExpr}())
+    # A binding standing as a region's value, read as the build reads it in
+    # the model: an array-valued reference through its own view
+    # (`_tpl_whole_views`). With lanes, `call` comes from that walk with its
+    # bindings already read so (`_tpl_whole_views` maps a reference's children
+    # before its view), so only what a nested reference's skeleton wrote
+    # around them is read here: each binding is its own result in the memo.
+    wm = IdDict{OpExpr, ASTExpr}()
+    if lanes && call.bindings !== nothing
+        for (_, b) in call.bindings
+            b isa OpExpr && (wm[b] = b)
+        end
+    end
+    h = _tpl_unmark_rvals(h, IdDict{OpExpr, ASTExpr}()) do x
+        rvals === nothing || push!(rvals, x)
+        return lanes ? _tpl_whole_views(tt, x, wm) : x
+    end
     lm = Dict{String, ASTExpr}()
     for k in 1:n
         leaf = _tpl_part_call(tt, call, _tpl_part_name(call.name, k))
@@ -1469,6 +1512,17 @@ function _tpl_agg_view(tt::_TplTable, call::OpExpr; lanes::Bool = true)
         lm[_TPL_LEAF * string(k)] = leaf
     end
     return _tpl_subst_scoped(h, lm, IdDict{OpExpr, ASTExpr}())
+end
+
+# `h` with each region-value marker (`_TPL_RVAL`) replaced by `f` of the
+# binding it marks.
+function _tpl_unmark_rvals(f, h::ASTExpr, memo::IdDict{OpExpr, ASTExpr})
+    h isa OpExpr || return h
+    r = get(memo, h, nothing)
+    r === nothing || return r
+    r = h.op == _TPL_RVAL ? f(only(h.args)) : map_children(c -> _tpl_unmark_rvals(f, c, memo), h)
+    memo[h] = r
+    return r
 end
 
 # The call of part `pn` of the reference `call`: the reference's bindings of
@@ -1515,11 +1569,14 @@ function _tpl_free_leaves_all(e::ASTExpr)
     return out
 end
 
-# Whether the build reads the reference `call` through its view: it has one
-# and every leaf is a call the build compiles.
+# Whether the build reads the reference `call` through its view: it has one,
+# every leaf is a call the build compiles, and so is every outermost
+# reference in a binding that stands as a region's value (`_TPL_RVAL`: the
+# view reads it as it stands, through its own view).
 function _tpl_agg_called(tt::_TplTable, call::OpExpr)
+    rv = ASTExpr[]
     v = try
-        _tpl_agg_view(tt, call; lanes = false)
+        _tpl_agg_view(tt, call; lanes = false, rvals = rv)
     catch err
         (err isa ExpressionTemplateError || err isa TreeWalkError) || rethrow()
         nothing
@@ -1539,6 +1596,19 @@ function _tpl_agg_called(tt::_TplTable, call::OpExpr)
         return foreach_child(walk, x)
     end
     walk(v)
+    function walk_rval(x)
+        ok || return
+        x isa OpExpr || return
+        haskey(seen, x) && return
+        seen[x] = nothing
+        if _tpl_is_call(x)
+            ok = _tpl_compiles(tt, x)
+            return
+        end
+        return foreach_child(walk_rval, x)
+    end
+    empty!(seen)
+    foreach(walk_rval, rv)
     return ok
 end
 
@@ -1906,6 +1976,24 @@ function _tpl_refusal(tt::_TplTable, call::OpExpr)
         join(def.structural, ",")
     info = _tpl_call_info(tt, call.name)
     if info === nothing
+        # A body read through its view: the first leaf of the view that does
+        # not compile, and why.
+        v = try
+            _tpl_agg_view(tt, call; lanes = false)
+        catch err
+            (err isa ExpressionTemplateError || err isa TreeWalkError) || rethrow()
+            nothing
+        end
+        if v !== nothing
+            bad = nothing
+            foreach_subexpr(v) do x
+                (bad === nothing && x isa OpExpr && _tpl_is_call(x) && !_tpl_compiles(tt, x)) && (bad = x)
+            end
+            if bad !== nothing
+                bn = replace(String(bad.name), '\0' => '·')
+                return "view leaf '$bn': " * _tpl_refusal(tt, bad)
+            end
+        end
         ops = Set{String}()
         foreach_subexpr(def.closed.body) do e
             e isa OpExpr || return
