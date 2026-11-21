@@ -842,6 +842,12 @@ pub(crate) struct BuildProducts {
     /// read by [`EsmProblem::built_variables`] when there is no compiled model
     /// to answer instead. Empty when the pipeline did not run.
     pub built_variables: crate::simulate_array::BuiltVariables,
+    /// The names (keyed like `fields`) whose value the build pipeline took
+    /// from a TIME-VARYING provider's record in effect at the construction
+    /// sample, in a document with nothing to integrate: each data-fed
+    /// parameter such a provider fed and every observed reading one. Their
+    /// build-time values are the answer at that time only.
+    pub time_pinned: std::collections::HashSet<String>,
 }
 
 /// The raw document a Problem carries. A document read from a file and built
@@ -1188,6 +1194,13 @@ impl EsmProblem {
     /// named. Empty when no provider fed the build or none was named.
     pub(crate) fn data_fields(&self) -> &HashMap<String, ArrayD<f64>> {
         &self.build.data_fields
+    }
+
+    /// [`BuildProducts::time_pinned`]: the build-time values that hold only
+    /// at the construction sample, because a time-varying provider decided
+    /// them there.
+    pub(crate) fn time_pinned(&self) -> &std::collections::HashSet<String> {
+        &self.build.time_pinned
     }
 
     /// The names of the OBSERVED VARIABLES [`observed_trajectory`] can report a
@@ -1569,6 +1582,13 @@ fn build_problem(
                 "re-serializing the typed document for the build pipeline: {e}"
             )))
         })?);
+        // The JSON form does not carry where the document was loaded from,
+        // and the re-parse would resolve its relative `coupling_import` refs
+        // against the working directory instead (esm-spec §10.10 -> §4.7: they
+        // resolve against the importing document). Keep that anchor.
+        if opts.base_path.is_none() {
+            opts.base_path = file.coupling_import_base.as_ref().map(PathBuf::from);
+        }
         owned_file = None;
     }
 
