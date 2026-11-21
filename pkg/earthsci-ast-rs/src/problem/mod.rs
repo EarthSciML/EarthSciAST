@@ -1563,6 +1563,13 @@ fn build_problem(
                 "re-serializing the typed document for the build pipeline: {e}"
             )))
         })?);
+        // The JSON form does not carry where the document was loaded from,
+        // and the re-parse would resolve its relative `coupling_import` refs
+        // against the working directory instead (esm-spec §10.10 -> §4.7: they
+        // resolve against the importing document). Keep that anchor.
+        if opts.base_path.is_none() {
+            opts.base_path = file.coupling_import_base.as_ref().map(PathBuf::from);
+        }
         owned_file = None;
     }
 

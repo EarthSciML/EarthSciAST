@@ -379,6 +379,8 @@ mod template_scenarios;
 mod term_provenance;
 #[path = "tests_blocks_execution.rs"]
 mod tests_blocks_execution;
+#[path = "time_varying_data_inline.rs"]
+mod time_varying_data_inline;
 #[path = "toplevel_mount_edge_pipeline.rs"]
 mod toplevel_mount_edge_pipeline;
 #[path = "toplevel_reaction_system_ref.rs"]

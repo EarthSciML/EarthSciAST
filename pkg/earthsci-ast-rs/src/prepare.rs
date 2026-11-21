@@ -382,14 +382,17 @@ const PER_CELL_RECURRENCE: &str = "a causal self-reference (esm-spec §4.3.1.1),
 
 /// The dependency summaries of the observed definitions `defs`
 /// ([`crate::dependency`]). A state of `model` (an unknown that is not an
-/// observed) is the one input that varies: the build-time observed pass does
-/// not evaluate an observed that reads one, directly or through another
-/// observed, because there is no state at build time. Those are evaluated at
-/// run time like every other observed, by the compiler the Problem names. A
-/// self-read is dropped: it is not an edge to another observed.
+/// observed) and a parameter in `runtime_fed` (one a time-varying provider
+/// feeds at run time, [`run_prepare`]) are the inputs that vary: the
+/// build-time observed pass does not evaluate an observed that reads one,
+/// directly or through another observed, because neither has its value at
+/// build time. Those are evaluated at run time like every other observed, by
+/// the compiler the Problem names. A self-read is dropped: it is not an edge
+/// to another observed.
 fn observed_dependencies(
     model: &Model,
     defs: &HashMap<String, Expr>,
+    runtime_fed: &HashSet<String>,
 ) -> crate::dependency::DependencySummaries {
     use crate::dependency::{DependencySummaries, Leaf, Reads};
     let class = crate::classification::Classification::of(model);
@@ -400,6 +403,7 @@ fn observed_dependencies(
             Some(var) if var.var_type == VariableType::Unknown && !class.is_observed(name) => {
                 Leaf::State
             }
+            _ if runtime_fed.contains(name) => Leaf::Discrete,
             _ => Leaf::Const,
         },
     )
@@ -1117,10 +1121,29 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 /// per gated request and per observed, not merely per phase — and returning
 /// [`Flow::Cancel`] stops it at a named point. Pair it with
 /// [`crate::problem::ProblemOptions::gated_fetch_batch`] so the fetch itself is interruptible.
+///
+/// `timed` holds the TIME-VARYING providers (those with refresh times). What
+/// the build does with them depends on whether the built model has state:
+///
+/// * with nothing to integrate, the build's fields ARE the document's
+///   answer, materialized once at `t0` (the inline-test runner refuses an
+///   assertion on a time-dependent field away from `t0`), so each one is
+///   consumed here as the record in effect at `t0` ([`InEffectAt`]), exactly
+///   as a CONST provider is;
+/// * with state, they are left in `timed` for the run-time executor, and an
+///   observed reading a parameter one of them feeds, directly or through
+///   another observed, is not evaluated at build time: its value moves at
+///   every refresh, so it is evaluated at run time, as an observed reading a
+///   state is.
+///
+/// Either way an observed reading such a parameter — a record-shaped one
+/// (esm-spec §8.5.1) included — is never evaluated against a scope that does
+/// not hold it.
 pub(crate) fn run_prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
     providers: Vec<(String, Box<dyn DataProvider>)>,
+    timed: &mut Vec<(String, Box<dyn DataProvider>)>,
     opts: &BuildContext<'_>,
 ) -> Result<PreparedBuild, SimulateError> {
     let mut providers = providers;
@@ -1134,6 +1157,17 @@ pub(crate) fn run_prepare(
     check_discovered_gate_conflict(&discovered, &rw.pd_gates)?;
 
     let mut st = BuildState::load_document(rw.rewritten.as_ref(), opts, metaparameters)?;
+    if st.has_state() {
+        st.runtime_fed = st.parameters_fed_by(timed.iter().map(|(k, _)| k.as_str()));
+    } else {
+        let t0 = opts.t0;
+        providers.extend(timed.drain(..).map(|(k, p)| {
+            (
+                k,
+                Box::new(InEffectAt { inner: p, t: t0 }) as Box<dyn DataProvider>,
+            )
+        }));
+    }
     let gated = st.inject_providers(const_arrays, providers, discovered, &rw.pd_gates)?;
     st.alias_pushdown_names(&rw.pd_coupling);
     st.bind_inline_parameters(&gated, &rw.pd_coupling)?;
@@ -1154,6 +1188,47 @@ pub(crate) fn run_prepare(
     st.fetch_gated_providers(gated, &rw.pd_coupling)?;
     st.eval_observed_graph()?;
     Ok(st.finish(rw.rewritten.into_owned()))
+}
+
+/// A TIME-VARYING provider as the CONST provider of the record in effect at
+/// `t`: the latest record whose time is at or before `t` (esm-spec §8.5.1, a
+/// record-shaped parameter's pair included). [`run_prepare`] wraps each one
+/// this way for a document with nothing to integrate, whose fields the build
+/// materializes once, at `t`.
+struct InEffectAt {
+    inner: Box<dyn DataProvider>,
+    t: f64,
+}
+
+impl DataProvider for InEffectAt {
+    fn sample(&mut self) -> Result<ArrayD<f64>, crate::provider::ProviderError> {
+        // A provider answers `refresh` at any time, `None` when it has nothing
+        // new there; it then still holds the record of its latest refresh time
+        // before `t`, which is asked for directly.
+        if let Some(a) = self.inner.refresh(self.t)? {
+            return Ok(a);
+        }
+        let before = self
+            .inner
+            .refresh_times()
+            .into_iter()
+            .filter(|&b| b <= self.t)
+            .max_by(f64::total_cmp);
+        match before {
+            Some(b) => match self.inner.refresh(b)? {
+                Some(a) => Ok(a),
+                None => self.inner.sample(),
+            },
+            None => Err(crate::error::MessageError(format!(
+                "no record is in effect at t = {}: the source's first record is later",
+                self.t
+            ))),
+        }
+    }
+
+    fn extent_metaparameter(&self) -> Option<String> {
+        self.inner.extent_metaparameter()
+    }
 }
 
 /// Verbose-mode narration; a no-op unless [`crate::problem::ProblemOptions::verbose`] is set.
@@ -1466,9 +1541,49 @@ struct BuildState<'o> {
     /// unshaped data-fed parameters decides (esm-spec §4.3.4,
     /// [`crate::simulate_array::ShapeTable::data_shaped`]).
     built_variables: BuiltVariables,
+    /// The data-fed parameters a TIME-VARYING provider feeds at run time
+    /// (see [`run_prepare`]): an observed reading one is evaluated at run
+    /// time, not here.
+    runtime_fed: HashSet<String>,
 }
 
 impl<'o> BuildState<'o> {
+    /// Whether the built model has state: an unknown that is not an observed
+    /// (an ODE state or an algebraic unknown solved for).
+    fn has_state(&self) -> bool {
+        let class = crate::classification::Classification::of(&self.model);
+        self.model
+            .variables
+            .iter()
+            .any(|(name, var)| var.var_type == VariableType::Unknown && !class.is_observed(name))
+    }
+
+    /// The data-fed parameters of the built model a provider under one of
+    /// `keys` feeds. A key designates a parameter by its name, or by a dotted
+    /// suffix in either direction (`M.Q` for the model-local `Q`, `Q` for the
+    /// flattened `M.Q`, esm-spec §6.6.2); only data-fed parameters are
+    /// candidates, so the loose match cannot reach anything else.
+    fn parameters_fed_by<'k>(&self, keys: impl Iterator<Item = &'k str>) -> HashSet<String> {
+        let keys: Vec<&str> = keys.collect();
+        self.model
+            .variables
+            .iter()
+            .filter(|(_, v)| {
+                v.var_type == VariableType::Parameter
+                    && v.update.as_ref().is_some_and(crate::data_fed::is_data_fed)
+            })
+            .filter(|(name, _)| {
+                keys.iter().any(|k| {
+                    *k == name.as_str()
+                        || k.strip_suffix(name.as_str())
+                            .is_some_and(|h| h.ends_with('.'))
+                        || name.strip_suffix(k).is_some_and(|h| h.ends_with('.'))
+                })
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
     /// The shape `name`'s value fills when its body evaluates to a single
     /// number, decided before it is evaluated (esm-spec §4.3.4: a binding
     /// MUST NOT let the value's rank replace the declared shape): its declared
@@ -1643,6 +1758,7 @@ impl<'o> BuildState<'o> {
             obs_total: 0,
             cone_applied: false,
             built_variables,
+            runtime_fed: HashSet::new(),
         })
     }
 
@@ -2140,10 +2256,12 @@ impl<'o> BuildState<'o> {
             })
             .map(|(n, _)| n.clone())
             .collect();
-        let deps = observed_dependencies(&self.model, &defs);
+        let deps = observed_dependencies(&self.model, &defs, &self.runtime_fed);
         self.order = observed_order(&deps)?;
-        self.order
-            .retain(|name| deps.get(name).is_none_or(|s| !s.reads_state));
+        self.order.retain(|name| {
+            deps.get(name)
+                .is_none_or(|s| !s.reads_state && !s.reads_discrete)
+        });
         self.defs = defs;
         self.deps = deps;
         Ok(())
@@ -2441,12 +2559,7 @@ impl<'o> BuildState<'o> {
         let Some(requested) = &self.opts.problem.observed_cone else {
             return;
         };
-        let class = crate::classification::Classification::of(&self.model);
-        let has_state =
-            self.model.variables.iter().any(|(name, var)| {
-                var.var_type == VariableType::Unknown && !class.is_observed(name)
-            });
-        if has_state {
+        if self.has_state() {
             return;
         }
         let prefix = match &self.spelling {
@@ -2742,12 +2855,32 @@ pub(crate) fn run_build_pipeline(
             (k, p)
         })
         .collect();
+    // The TIME-VARYING providers, lent to the pipeline: it consumes them for
+    // a document with nothing to integrate (sampled at `t0`, see
+    // [`run_prepare`]) and hands every other one back for the run-time
+    // executor.
+    let mut timed: Vec<(String, Box<dyn DataProvider>)> = Vec::new();
+    if takes {
+        let mut keys: Vec<String> = opts
+            .providers
+            .iter()
+            .filter(|(_, p)| !p.refresh_times().is_empty())
+            .map(|(k, _)| k.clone())
+            .collect();
+        keys.sort();
+        for k in keys {
+            let p = opts.providers.remove(&k).expect("a key of the map");
+            timed.push((k, p));
+        }
+    }
     let ctx = BuildContext {
         problem: opts,
         t0,
         refuse_per_cell: opts.compiler.unwrap_or_default().is_strict(),
     };
-    run_prepare(doc, const_arrays, providers, &ctx)
+    let prepared = run_prepare(doc, const_arrays, providers, &mut timed, &ctx);
+    opts.providers.extend(timed);
+    prepared
 }
 
 /// Whether `file`'s one model built alone is the whole system `flatten(file)`
@@ -3354,7 +3487,7 @@ mod whole_document_tests {
             t0: 0.0,
             refuse_per_cell: false,
         };
-        run_prepare(d, HashMap::new(), Vec::new(), &opts).unwrap()
+        run_prepare(d, HashMap::new(), Vec::new(), &mut Vec::new(), &opts).unwrap()
     }
 
     /// The flattened system the pipeline hands forward is `flatten` of the

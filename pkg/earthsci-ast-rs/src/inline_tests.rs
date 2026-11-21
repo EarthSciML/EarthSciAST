@@ -1845,9 +1845,11 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
     }
 }
 
-/// The observeds of `model` whose value is a function of `t` — DIRECTLY,
-/// because the defining body mentions the independent variable free, or
-/// TRANSITIVELY, because it reads one that does.
+/// The observeds of `model` (the component at `owner` of `file`) whose value
+/// is a function of `t` — DIRECTLY, because the defining body mentions the
+/// independent variable free or reads a parameter fed by a TIME-VARYING data
+/// source (its own, or one a `param_to_var` edge replaces it with, esm-spec
+/// §8.5.1), or TRANSITIVELY, because it reads one that does.
 ///
 /// Used by [`unevaluable_time_dependent_assertion`] to tell a field the build
 /// materialized once, at `tspan.0`, and which is therefore the answer at every
@@ -1857,9 +1859,45 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
 /// Only `y ~ f(…)` definitions are walked ([`crate::classification::LhsForm`]
 /// calls that shape `Bare`): an ODE state is not read from a build field at
 /// all, and an implicit constraint defines no single name.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String> {
+fn time_dependent_observeds(
+    file: &EsmFile,
+    owner: &str,
+    model: &Model,
+) -> std::collections::BTreeSet<String> {
     use crate::dependency::{DependencySummaries, Leaf, Reads};
+    // A parameter whose value is a record of a source with a `temporal`
+    // start moves with `t` exactly as `t` itself does.
+    let time_fed = |var: &crate::types::ModelVariable| {
+        var.update
+            .as_ref()
+            .and_then(crate::simulate_array::data_feed_source)
+            .and_then(|src| file.data_sources.as_ref()?.get(src))
+            .and_then(|ds| ds.temporal.as_ref()?.start.as_deref())
+            .is_some_and(|start| !start.is_empty())
+    };
+    let mut timed: HashSet<String> = model
+        .variables
+        .iter()
+        .filter(|(_, v)| time_fed(v))
+        .map(|(n, _)| n.clone())
+        .collect();
+    for entry in file.coupling.iter().flatten() {
+        if let crate::CouplingEntry::VariableMap {
+            from,
+            to,
+            transform,
+            ..
+        } = entry
+            && transform.as_named() == Some("param_to_var")
+            && let Some(local) = to.strip_prefix(owner).and_then(|r| r.strip_prefix('.'))
+            && let Some((src_owner, src_var)) = from.rsplit_once('.')
+            && model_at(file, src_owner)
+                .and_then(|m| m.variables.get(src_var))
+                .is_some_and(time_fed)
+        {
+            timed.insert(local.to_string());
+        }
+    }
     let mut defs: HashMap<String, Reads> = HashMap::new();
     for eq in &model.equations {
         if let crate::classification::LhsForm::Bare(name) = crate::classification::lhs_form(&eq.lhs)
@@ -1870,7 +1908,13 @@ fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String>
             entry.join_names.extend(reads.join_names);
         }
     }
-    let deps = DependencySummaries::new(defs, |_| Leaf::Const);
+    let deps = DependencySummaries::new(defs, |name| {
+        if timed.contains(name) {
+            Leaf::Time
+        } else {
+            Leaf::Const
+        }
+    });
     model
         .equations
         .iter()
@@ -1900,7 +1944,6 @@ fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String>
 /// would report the value at `tspan.0` for a question asked at another time,
 /// which is exactly the outcome issue #406 is about, so it is refused by name
 /// instead.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn unevaluable_time_dependent_assertion(
     file: &EsmFile,
     model_name: &str,
@@ -1915,7 +1958,7 @@ fn unevaluable_time_dependent_assertion(
         let (owner, variable) = resolve_asserted_name(file, model_name, &a.variable);
         let dependent = per_owner.entry(owner.clone()).or_insert_with(|| {
             model_at(file, &owner)
-                .map(time_dependent_observeds)
+                .map(|m| time_dependent_observeds(file, &owner, m))
                 .unwrap_or_default()
         });
         if dependent.contains(variable) {
@@ -2875,9 +2918,16 @@ fn run_component_tests(
                     None => match solve(prob, &run_opts) {
                         Ok(sol) => Ok(sol),
                         // A document with no ODEs never integrates; its answers
-                        // are the build's, evaluated at the asserted times.
+                        // are the build's, materialized at `tspan.0`, so an
+                        // assertion on a field that moves with `t` (one
+                        // reading `t`, or a time-varying data source) away
+                        // from `tspan.0` is refused by name, not answered with
+                        // the value at `tspan.0`.
                         Err(crate::simulate::SimulateError::NotDynamic { .. }) => {
-                            Ok(build_only_solution(saveat.clone()))
+                            match unevaluable_time_dependent_assertion(run_file, model_name, t) {
+                                Some(message) => Err(message),
+                                None => Ok(build_only_solution(saveat.clone())),
+                            }
                         }
                         // Nothing to integrate, and no compiled observed graph
                         // to evaluate: the ARRAY runtime, which is what a
