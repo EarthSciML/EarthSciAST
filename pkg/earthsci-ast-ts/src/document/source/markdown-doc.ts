@@ -14,7 +14,17 @@ import { chars, type Chars } from '../number.js'
 import { escChar, isIdent } from '../strings.js'
 import * as yaml from '../yaml.js'
 import { eqExpr, eqSides } from './equation.js'
-import { ckMx, cookDoc, items, prMx, rawDoc, unitems, type RItem } from './items.js'
+import {
+  ckMx,
+  cookDoc,
+  cookDocBlocks,
+  items,
+  mathifyDoc,
+  prMx,
+  rawDoc,
+  unitems,
+  type RItem,
+} from './items.js'
 import type { Kv, Kvs } from './keys.js'
 import { attrOk, isBlock, itemMd, itemOk, lex, nameLatex, rxnOk, tmLex } from './markdown.js'
 import { cookRows } from './multi-line.js'
@@ -154,7 +164,7 @@ export function printMd(d: Json): string {
   // `Md.canonSegs` and `Md.render`: each construct after a blank line, a
   // declaration on a line of its own.
   const out: string[] = [frontMd(doc.front)]
-  for (const it of items(rawDoc(prMdx, doc))) {
+  for (const it of items(mathifyDoc(printLatex, rawDoc(prMdx, doc)))) {
     out.push('\n', itemMd(it))
     if (!isBlock(it)) out.push('\n')
   }
@@ -175,7 +185,8 @@ function lexDoc(cs: Chars): [Kvs, RItem[]] | undefined {
 /** `Md.parseItemsMd`. */
 function parseItemsMd(front: Kvs, its: readonly RItem[]): Json | undefined {
   const r = unitems(front, its)
-  const d = r === undefined ? undefined : cookDoc(ckMdx, r)
+  const rb = r === undefined ? undefined : cookDocBlocks(parseLatex, r)
+  const d = rb === undefined ? undefined : cookDoc(ckMdx, rb)
   return d === undefined ? undefined : ofDoc(d)
 }
 

@@ -277,6 +277,8 @@ export function jwf(j: Json): boolean {
       return j.xs.every(jwf)
     case 'obj':
       return keysDistinct(j.kvs) && j.kvs.every(([, v]) => jwf(v))
+    case 'math':
+      return false
     default:
       return true
   }
