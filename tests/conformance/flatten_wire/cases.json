@@ -5,6 +5,8 @@
     {"name": "lift_inferred_operand", "fixture": "fixtures/lift_inferred_operand.esm", "golden": "golden/lift_inferred_operand.json", "builds": true},
     {"name": "field_ic_application", "fixture": "fixtures/field_ic_application.esm", "golden": "golden/field_ic_application.json", "builds": true},
     {"name": "declared_scalar_application", "fixture": "fixtures/declared_scalar_application.esm", "golden": "golden/declared_scalar_application.json", "builds": false},
-    {"name": "union_lift", "fixture": "fixtures/union_lift.esm", "golden": "golden/union_lift.json", "builds": true}
+    {"name": "union_lift", "fixture": "fixtures/union_lift.esm", "golden": "golden/union_lift.json", "builds": true},
+    {"name": "template_time_derivative", "fixture": "fixtures/template_time_derivative.esm", "golden": "golden/template_time_derivative.json", "refs_golden": "golden/template_time_derivative.refs.json", "builds": true},
+    {"name": "template_time_derivative_unanswered", "fixture": "fixtures/template_time_derivative_unanswered.esm", "golden": "golden/template_time_derivative_unanswered.json", "refs_golden": "golden/template_time_derivative_unanswered.refs.json", "builds": false}
   ]
 }
