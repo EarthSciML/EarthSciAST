@@ -164,6 +164,7 @@ function _tpl_elem_reads(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr
     r = get(memo, e, nothing)
     r === nothing || return r
     r = map_children(c -> _tpl_elem_reads(tt, c, memo), e)
+    r = _tpl_const_table_read(tt, r)
     if r.op == "index" && _tpl_structless(r) && length(r.args) >= 2 &&
             _tpl_is_call(r.args[1]) && !_tpl_is_elem(r.args[1]::OpExpr)
         info = _tpl_call_info(tt, (r.args[1]::OpExpr).name)
@@ -173,6 +174,37 @@ function _tpl_elem_reads(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr
     end
     memo[e] = r
     return r
+end
+
+# The literal `const` array a reference denotes when its template has no
+# parameters and its body is that literal (a lookup table, `duo_tile_map`);
+# `nothing` otherwise. One node per template, so every read of the table
+# shares it (one interned const array).
+function _tpl_const_table(tt::_TplTable, call)
+    (call isa OpExpr && _tpl_is_call(call) && !_tpl_is_elem(call)) || return nothing
+    memo = _tpl_memo(tt, nothing, :const_table, () -> Dict{String, Any}())
+    return get!(memo, call.name) do
+        def = try
+            _tpl_def(tt, call.name)
+        catch err
+            err isa ExpressionTemplateError || rethrow()
+            return nothing
+        end
+        (isempty(def.params) && def.closed !== nothing) || return nothing
+        b = def.closed.body
+        (b isa OpExpr && b.op == "const" && b.value isa AbstractVector && isempty(def.closed.free)) || return nothing
+        b
+    end
+end
+
+# `index(ref, s…)` of a reference that denotes a literal table
+# (`_tpl_const_table`) read as `index(<the literal>, s…)`: a constant, which
+# every phase reads as it reads an inline `const` array.
+function _tpl_const_table_read(tt::_TplTable, r::OpExpr)
+    (r.op == "index" && _tpl_structless(r) && length(r.args) >= 2) || return r
+    c = _tpl_const_table(tt, r.args[1])
+    c === nothing && return r
+    return reconstruct(r; args = ASTExpr[c, r.args[2:end]...])
 end
 
 # `e` with every `broadcast` whose `fn` is admissible lowered to its operator
@@ -565,6 +597,20 @@ function _tpl_frame(tt::_TplTable, call::OpExpr, parent::Union{Nothing, _TplFram
     )
     tt.frames[key] = fr
     return fr
+end
+
+# The binding of the frame argument `k` (a sentinel) as the reference `call`
+# writes it: `"\0arg\0p"` is the binding of parameter `p`, `"\0free\0n"`
+# the implicit binding (the name `n` itself when the reference carries none),
+# as `_tpl_frame` makes them.
+function _tpl_call_binding(call::OpExpr, k::String)
+    b = call.bindings
+    if startswith(k, _TPL_FREE)
+        v = b === nothing ? nothing : get(b, k, nothing)
+        return v === nothing ? VarExpr(k[(ncodeunits(_TPL_FREE) + 1):end]) : v
+    end
+    startswith(k, _TPL_ARG) || throw(ArgumentError("not a frame argument: $(repr(k))"))
+    return b[k[(ncodeunits(_TPL_ARG) + 1):end]]
 end
 
 # The structural key of `e` read in `fr`: its own structure, with each

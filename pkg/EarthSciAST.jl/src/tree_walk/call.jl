@@ -1290,7 +1290,12 @@ function _tpl_whole_views(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExp
     e isa OpExpr || return e
     r = get(memo, e, nothing)
     r === nothing || return r
-    if e.op == "index" && _tpl_structless(e) && length(e.args) >= 2 &&
+    if (c = _tpl_const_table(tt, e.op == "index" && !isempty(e.args) ? e.args[1] : nothing)) !== nothing &&
+            _tpl_structless(e) && length(e.args) >= 2
+        # A read of a literal table a reference denotes (frames.jl
+        # `_tpl_const_table_read`).
+        r = reconstruct(e; args = ASTExpr[c, (_tpl_whole_views(tt, a, memo) for a in e.args[2:end])...])
+    elseif e.op == "index" && _tpl_structless(e) && length(e.args) >= 2 &&
             _tpl_view_rank(tt, e.args[1]) == length(e.args) - 1
         a1 = map_children(c -> _tpl_whole_views(tt, c, memo), e.args[1]::OpExpr)
         r = _tpl_with_lanes(tt, _elem_call(tt, a1, ASTExpr[_tpl_whole_views(tt, a, memo) for a in e.args[2:end]]))
@@ -1375,7 +1380,10 @@ end
 function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
     e isa OpExpr || return nothing
     if _is_faq_op(e.op) && e.output_idx !== nothing && !isempty(e.output_idx)
-        all(x -> x isa AbstractString, e.output_idx) || return nothing
+        # An output index is a name the view's loop binds, or an integer
+        # literal (a singleton output position, `[1, "s"]`), which binds
+        # nothing and stays in the header as it is.
+        all(x -> x isa AbstractString || x isa Integer, e.output_idx) || return nothing
         (
             e.expr_body !== nothing && e.key === nothing && e.values === nothing &&
                 e.lower === nothing && e.upper === nothing
@@ -1396,7 +1404,16 @@ function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
         (rv isa AbstractVector && length(rv) == length(e.values)) || return nothing
         vals = ASTExpr[]
         for (k, v) in enumerate(e.values)
-            h = if v isa OpExpr && (
+            h = if v isa VarExpr && _tpl_is_sentinel(v.name)
+                # A parameter as the region's value: the reference's binding
+                # itself (the view substitutes it, `_tpl_agg_view`), read as
+                # the expansion reads it there: a whole array (an
+                # array-valued reference, read through its own view) at the
+                # region's cells, a scalar broadcast over them. No part: a
+                # part's body is a scalar read, so a part reading an
+                # array-valued binding cannot compile.
+                v
+            elseif v isa OpExpr && (
                     (_is_faq_op(v.op) && v.output_idx !== nothing && !isempty(v.output_idx)) ||
                         v.op == "makearray" || (_tpl_is_call(v) && !_tpl_is_elem(v))
                 )
@@ -1462,6 +1479,10 @@ function _tpl_agg_view(tt::_TplTable, call::OpExpr; lanes::Bool = true)
             (m[s] = VarExpr(s[(ncodeunits(_TPL_FREE) + 1):end]))
     end
     h = _tpl_subst_scoped(h, m, IdDict{OpExpr, ASTExpr}())
+    # A binding the header carries as it stands (a region's value that is a
+    # parameter, `_tpl_skel_node!`) read as the build reads it in the model:
+    # an array-valued reference through its own view (`_tpl_whole_views`).
+    lanes && (h = _tpl_whole_views(tt, h, IdDict{OpExpr, ASTExpr}()))
     lm = Dict{String, ASTExpr}()
     for k in 1:n
         leaf = _tpl_part_call(tt, call, _tpl_part_name(call.name, k))
@@ -1533,6 +1554,12 @@ function _tpl_agg_called(tt::_TplTable, call::OpExpr)
         haskey(seen, x) && return
         seen[x] = nothing
         if _tpl_is_call(x) && occursin(_TPL_PART, x.name)
+            ok = _tpl_compiles(tt, x)
+            return
+        end
+        # A reference the view carries as it stands (a binding that is a
+        # region's value, `_tpl_skel_node!`) compiles on its own terms.
+        if _tpl_is_call(x)
             ok = _tpl_compiles(tt, x)
             return
         end
@@ -1906,6 +1933,24 @@ function _tpl_refusal(tt::_TplTable, call::OpExpr)
         join(def.structural, ",")
     info = _tpl_call_info(tt, call.name)
     if info === nothing
+        # A body read through its view: the first leaf of the view that does
+        # not compile, and why.
+        v = try
+            _tpl_agg_view(tt, call; lanes = false)
+        catch err
+            (err isa ExpressionTemplateError || err isa TreeWalkError) || rethrow()
+            nothing
+        end
+        if v !== nothing
+            bad = nothing
+            foreach_subexpr(v) do x
+                (bad === nothing && x isa OpExpr && _tpl_is_call(x) && !_tpl_compiles(tt, x)) && (bad = x)
+            end
+            if bad !== nothing
+                bn = replace(String(bad.name), '\0' => '·')
+                return "view leaf '$bn': " * _tpl_refusal(tt, bad)
+            end
+        end
         ops = Set{String}()
         foreach_subexpr(def.closed.body) do e
             e isa OpExpr || return

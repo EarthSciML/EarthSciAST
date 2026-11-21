@@ -512,6 +512,72 @@ function _index_pushdown_arrayish(
     return false
 end
 
+# The names a template reference in `equations` binds by name (a binding that
+# is a bare variable), at any depth.
+function _names_bound_to_references(equations::Vector{Equation})
+    out = Set{String}()
+    seen = IdDict{OpExpr, Nothing}()
+    function walk(e)
+        e isa OpExpr || return
+        haskey(seen, e) && return
+        seen[e] = nothing
+        if _tpl_is_call(e) && e.bindings !== nothing
+            for (_, v) in e.bindings
+                v isa VarExpr && push!(out, v.name)
+            end
+        end
+        foreach_child(walk, e)
+        return
+    end
+    for eq in equations
+        walk(eq.lhs)
+        walk(eq.rhs)
+    end
+    return out
+end
+
+# The elementwise array definition `rhs` (operators over variables and
+# numbers) of an observed of declared shape `shape`, as the producer it
+# denotes: `faq` over `shape` (one output index per axis) whose term reads
+# each shaped variable at the output indices. `nothing` when a shaped operand's
+# shape is not `shape` (a broadcast the lift does not write) or a node is not
+# an elementwise operator.
+function _lift_elementwise_array_def(rhs::OpExpr, shape, model::Model)
+    sh = String[String(x) for x in shape]
+    idx = String["__esm_lift_$k" for k in eachindex(sh)]
+    reads = String[]
+    ok = Ref(true)
+    function lift(x)
+        ok[] || return x
+        if x isa VarExpr
+            v = get(model.variables, x.name, nothing)
+            v === nothing && return x
+            _is_array_shape(v.shape) || return x
+            if String[String(a) for a in v.shape] != sh
+                ok[] = false
+                return x
+            end
+            x.name in reads || push!(reads, x.name)
+            return OpExpr("index", ASTExpr[x, (VarExpr(i) for i in idx)...])
+        end
+        (x isa NumExpr || x isa IntExpr) && return x
+        if x isa OpExpr && x.op in _WS4_FOLDABLE_ELEMENTWISE_OPS && _tpl_structless(x) &&
+                isempty(_bound_symbols(x)) && !_tpl_is_call(x)
+            return reconstruct(x; args = ASTExpr[lift(a) for a in x.args])
+        end
+        ok[] = false
+        return x
+    end
+    body = lift(rhs)
+    (ok[] && !isempty(reads)) || return nothing
+    return OpExpr(
+        "faq", ASTExpr[VarExpr(n) for n in reads];
+        output_idx = Any[idx...],
+        ranges = Dict{String, Any}(idx[k] => IndexSetRef(sh[k]) for k in eachindex(sh)),
+        expr_body = body
+    )
+end
+
 # ---- Elementwise array-observed fold (WS4: readable PDE-leaf decomposition) ----
 # Fold every ARRAY-shaped observed whose (already-discretization-lowered) defining
 # equation RHS is an ELEMENTWISE expression — top-level op in
@@ -537,6 +603,7 @@ end
 # whole-array derivative lift. Byte-identical (empty fold, same equations vector)
 # for any model with no elementwise array observed.
 function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::Model)
+    eqs0 = equations
     observed_here = Set{String}(observed_unknowns(model))
     function is_array_obs(name)
         var = get(model.variables, name, nothing)
@@ -562,6 +629,30 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
         rhs isa VarExpr || return false
         var = get(model.variables, rhs.name, nothing)
         return var !== nothing && !_is_array_shape(var.shape)
+    end
+    # An array observed a template reference binds BY NAME (an argument the
+    # call passes whole, `K` in `flux(u = u, K = K)`) is not folded: its
+    # substituted body would reach the call as an expression, which the build
+    # passes as no array (it compiles a reference as a call, never expanding
+    # it). Its elementwise definition is lifted to the producer it denotes,
+    # `faq` over its declared shape (`_lift_elementwise_array_def`), so it is
+    # a producer-defined array observed (materialized, read by name).
+    bound = _names_bound_to_references(equations)
+    lifted = Dict{String, ASTExpr}()
+    for (name, rhs) in defs
+        (name in bound && is_array_obs(name)) || continue
+        (rhs isa OpExpr && rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS) || continue
+        f = _lift_elementwise_array_def(rhs, model.variables[name].shape, model)
+        f === nothing || (lifted[name] = f)
+    end
+    if !isempty(lifted)
+        for (k, eq) in enumerate(equations)
+            lhs = eq.lhs
+            (lhs isa VarExpr && haskey(lifted, lhs.name)) || continue
+            equations === eqs0 && (equations = copy(equations))
+            equations[k] = Equation(lhs, lifted[lhs.name]; _comment = eq._comment)
+            defs[lhs.name] = lifted[lhs.name]
+        end
     end
     targets = Dict{String, ASTExpr}()
     # Selection runs to a FIXED POINT, because an observed that merely ALIASES
