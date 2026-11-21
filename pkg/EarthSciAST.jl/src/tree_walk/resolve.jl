@@ -474,12 +474,19 @@ function _resolve_call_bindings(expr::OpExpr, rc::_ResolveCtx)
     b = expr.bindings
     b === nothing && return expr
     ct = _call_table()
+    # An array parameter bound to an expression (an array observed the build
+    # substituted into the binding, say) has no array to pass: that reference
+    # is expanded, for this instance only, and the expansion resolved here.
+    ct === nothing || (x = _call_expanded_for_array(ct.tt, expr)) === nothing ||
+        return _resolve_indices(x, rc)
     # A binding compiled into the instance with its leaves marked: each caller
     # value resolved here, each array its marker (call.jl `_call_mark_inlined`).
-    ct === nothing || (expr = _call_mark_inlined(
-        x -> x isa OpExpr ? _resolve_indices(x::OpExpr, rc) : x isa VarExpr ? _resolve_indices(x::VarExpr, rc) : x,
-        a -> _arr_arg_marker(a, rc), (ct::_CallTable).tt, expr
-    ))
+    ct === nothing || (
+        expr = _call_mark_inlined(
+            x -> x isa OpExpr ? _resolve_indices(x::OpExpr, rc) : x isa VarExpr ? _resolve_indices(x::VarExpr, rc) : x,
+            a -> _arr_arg_marker(a, rc), (ct::_CallTable).tt, expr
+        )
+    )
     b = expr.bindings
     arrs = ct === nothing ? nothing : _call_array_slots((ct::_CallTable).tt, expr)
     nb = b

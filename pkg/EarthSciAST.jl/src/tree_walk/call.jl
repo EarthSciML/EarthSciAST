@@ -318,11 +318,11 @@ function _call_fixed!(S::Dict{String, Any}, name, info::_TplCallInfo, b::Abstrac
         v = _call_arg(b, s)
         iv = v isa IntExpr ? Int(v.value) : v isa NumExpr && isinteger(v.value) ? Int(v.value) :
             throw(
-            TreeWalkError(
-                "E_TREEWALK_UNSUPPORTED_OP",
-                "template '$name': parameter '$p' bounds a range and needs an integer literal"
+                TreeWalkError(
+                    "E_TREEWALK_UNSUPPORTED_OP",
+                    "template '$name': parameter '$p' bounds a range and needs an integer literal"
+                )
             )
-        )
         S[p] = iv
     end
     return S
@@ -465,9 +465,9 @@ function _call_target(ct::_CallTable, call::OpExpr)
         # unmemoized pass would walk it as a tree.
         bm = _BuildMemo()
         rb = _resolve_indices(
-                ibody, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), _EMPTY_VARMAP,
-                _EMPTY_CONST_ARRAYS, _EMPTY_PGATHER, bm
-            )
+            ibody, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), _EMPTY_VARMAP,
+            _EMPTY_CONST_ARRAYS, _EMPTY_PGATHER, bm
+        )
         _compile(rb, _EMPTY_VARMAP, Set{Symbol}(), bm)
     finally
         st.argmap = saved
@@ -946,8 +946,10 @@ function _inl_mark(leaf, arr, v::ASTExpr, B::Set{String}, tt::_TplTable, parent 
         end
         return reconstruct(v; bindings = nb)
     end
-    if v.op == "index" && (v.args[1] isa VarExpr ||
-            (v.args[1] isa OpExpr && v.args[1].op == "const" && v.args[1].value isa AbstractVector))
+    if v.op == "index" && (
+            v.args[1] isa VarExpr ||
+                (v.args[1] isa OpExpr && v.args[1].op == "const" && v.args[1].value isa AbstractVector)
+        )
         return reconstruct(v; args = ASTExpr[arr(v.args[1]), (_inl_mark(leaf, arr, x, B, tt, "index", i + 1) for (i, x) in enumerate(v.args[2:end]))...])
     end
     return reconstruct(v; args = ASTExpr[_inl_mark(leaf, arr, x, B, tt, v.op, i) for (i, x) in enumerate(v.args)])
@@ -960,7 +962,7 @@ function _call_body_size(n::_Node)
         haskey(seen, x) && return
         seen[x] = nothing
         c[] += 1
-        foreach(walk, x.children)
+        return foreach(walk, x.children)
     end
     walk(n)
     return c[]
@@ -1054,6 +1056,45 @@ function _arr_arg_marker(v::ASTExpr, rc)
         )
     end
     return OpExpr("__arrarg", ASTExpr[]; value = a)
+end
+
+# A binding the build passes as an array argument as it stands
+# (`_arr_arg_marker`): a name, an inline `const` array, or a marker already.
+_call_passable_array(v::ASTExpr) =
+    v isa VarExpr || (v isa OpExpr && (v.op == "__arrarg" || (v.op == "const" && v.value isa AbstractVector)))
+
+"""
+    _call_expanded_for_array(tt, call) -> Union{Nothing, ASTExpr}
+
+The expansion of the reference `call` when an array parameter of it is bound
+to an expression the build cannot pass as an array (`_call_passable_array`),
+`nothing` otherwise. The expansion substitutes the bindings into the body (and
+every reference in it) as load's expansion does, so the expression is read
+where the body reads the parameter; an implicit parameter the reference binds
+to another name reads that name. An element call or a call with lanes has no
+expansion here and is left to the build.
+"""
+function _call_expanded_for_array(tt::_TplTable, call::OpExpr)
+    b = call.bindings
+    b === nothing && return nothing
+    any(k -> startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE), keys(b)) && return nothing
+    arrs = _call_array_slots(tt, call)
+    arrs === nothing && return nothing
+    any(
+        kv -> !_call_passable_array(kv[2]) &&
+            ((startswith(kv[1], _TPL_FREE) ? kv[1] : _TPL_ARG * kv[1]) in arrs),
+        b
+    ) || return nothing
+    nb = Dict{String, ASTExpr}(k => v for (k, v) in b if !startswith(k, _TPL_FREE))
+    ex = _expand_expr_refs(reconstruct(call; bindings = nb), tt.reg)
+    m = Dict{String, ASTExpr}()
+    for (k, v) in b
+        startswith(k, _TPL_FREE) || continue
+        n = k[(ncodeunits(_TPL_FREE) + 1):end]
+        (v isa VarExpr && v.name == n) || (m[n] = v)
+    end
+    isempty(m) || (ex = _tpl_subst_scoped(ex, m, IdDict{OpExpr, ASTExpr}()))
+    return ex
 end
 
 # ---- Walk ------------------------------------------------------------------------
@@ -1335,8 +1376,10 @@ function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
     e isa OpExpr || return nothing
     if _is_faq_op(e.op) && e.output_idx !== nothing && !isempty(e.output_idx)
         all(x -> x isa AbstractString, e.output_idx) || return nothing
-        (e.expr_body !== nothing && e.key === nothing && e.values === nothing &&
-            e.lower === nothing && e.upper === nothing) || return nothing
+        (
+            e.expr_body !== nothing && e.key === nothing && e.values === nothing &&
+                e.lower === nothing && e.upper === nothing
+        ) || return nothing
         rx = _raw_get(raw, "expr")
         rx === nothing && return nothing
         le = _tpl_leaf!(parts, rx)
@@ -1353,8 +1396,10 @@ function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
         (rv isa AbstractVector && length(rv) == length(e.values)) || return nothing
         vals = ASTExpr[]
         for (k, v) in enumerate(e.values)
-            h = if v isa OpExpr && ((_is_faq_op(v.op) && v.output_idx !== nothing && !isempty(v.output_idx)) ||
-                    v.op == "makearray" || (_tpl_is_call(v) && !_tpl_is_elem(v)))
+            h = if v isa OpExpr && (
+                    (_is_faq_op(v.op) && v.output_idx !== nothing && !isempty(v.output_idx)) ||
+                        v.op == "makearray" || (_tpl_is_call(v) && !_tpl_is_elem(v))
+                )
                 _tpl_skel_node!(tt, parts, v, rv[k])
             else
                 # A scalar region value: one leaf.
@@ -1376,11 +1421,13 @@ function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
         h = _tpl_subst_scoped(h, _tpl_sentinel_map(e), IdDict{OpExpr, ASTExpr}())
         lm = Dict{String, ASTExpr}()
         for j in 1:n
-            lm[_TPL_LEAF * string(j)] = _tpl_leaf!(parts, OrderedDict{String, Any}(
-                "op" => APPLY_EXPRESSION_TEMPLATE_OP, "args" => Any[],
-                "name" => _tpl_part_name(e.name, j),
-                "bindings" => rb === nothing ? OrderedDict{String, Any}() : rb,
-            ))
+            lm[_TPL_LEAF * string(j)] = _tpl_leaf!(
+                parts, OrderedDict{String, Any}(
+                    "op" => APPLY_EXPRESSION_TEMPLATE_OP, "args" => Any[],
+                    "name" => _tpl_part_name(e.name, j),
+                    "bindings" => rb === nothing ? OrderedDict{String, Any}() : rb,
+                )
+            )
         end
         return _tpl_subst_scoped(h, lm, IdDict{OpExpr, ASTExpr}())
     end
@@ -1441,8 +1488,10 @@ function _tpl_part_call(tt::_TplTable, call::OpExpr, pn::String)
             continue
         else
             s = _TPL_ARG * k
-            (info === nothing || s in info.scalars || s in info.arrays || s in info.fixed ||
-                !(k in def.params)) && (nb[k] = v)
+            (
+                info === nothing || s in info.scalars || s in info.arrays || s in info.fixed ||
+                    !(k in def.params)
+            ) && (nb[k] = v)
         end
     end
     for n in free
@@ -1460,7 +1509,7 @@ function _tpl_free_leaves_all(e::ASTExpr)
         x isa OpExpr || return
         haskey(seen, x) && return
         seen[x] = nothing
-        foreach_child(walk, x)
+        return foreach_child(walk, x)
     end
     walk(e)
     return out
@@ -1487,7 +1536,7 @@ function _tpl_agg_called(tt::_TplTable, call::OpExpr)
             ok = _tpl_compiles(tt, x)
             return
         end
-        foreach_child(walk, x)
+        return foreach_child(walk, x)
     end
     walk(v)
     return ok
@@ -1548,7 +1597,7 @@ function _ir_targets(roots)
         haskey(nseen, x) && return
         nseen[x] = nothing
         foreach(walk, x.children)
-        if x.kind === _NK_CALL
+        return if x.kind === _NK_CALL
             tg = (x.payload::_CallSite).target
             if !haskey(seen, tg)
                 seen[tg] = nothing
