@@ -1,0 +1,34 @@
+{
+  "id": "ast",
+  "title": "EarthSciAST",
+  "description": "The EarthSciML Abstract Syntax Tree format: schema, operators, coupling, and five language bindings.",
+  "repo": "EarthSciML/EarthSciAST",
+  "nav": [
+    {
+      "title": "File structure",
+      "path": "file-structure/"
+    },
+    {
+      "title": "Operators",
+      "path": "operators/"
+    },
+    {
+      "title": "Coupling",
+      "path": "coupling/"
+    },
+    {
+      "title": "Templates",
+      "path": "templates/"
+    },
+    {
+      "title": "Document formats",
+      "path": "generated/document-formats/"
+    },
+    {
+      "title": "API",
+      "path": "generated/api/"
+    }
+  ],
+  "sha": "1b8dd9b3a909d0f577bce67589773106fbd2ec95",
+  "version": "dev"
+}

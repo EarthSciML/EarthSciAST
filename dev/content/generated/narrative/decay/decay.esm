@@ -1,0 +1,305 @@
+{
+  "esm": "2.2.0",
+  "metadata": {
+    "description": "A tutorial: define, test and plot a model inside the page that explains it.",
+    "name": "decay"
+  },
+  "models": {
+    "Decay": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "N"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              {
+                "args": [
+                  "lambda",
+                  "N"
+                ],
+                "op": "*"
+              }
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "variables": {
+        "N": {
+          "default": 100,
+          "description": "Amount of nitrogen",
+          "type": "unknown",
+          "units": "mol"
+        },
+        "lambda": {
+          "default": 0.1,
+          "description": "Decay constant",
+          "type": "parameter",
+          "units": "1/s"
+        }
+      },
+      "tests": [
+        {
+          "id": "half-life",
+          "time_span": {
+            "start": 0.0,
+            "end": 10.0
+          },
+          "assertions": [
+            {
+              "variable": "N",
+              "time": 6.931471805599453,
+              "expected": 50.0,
+              "tolerance": {
+                "rel": 0.0001
+              }
+            }
+          ]
+        }
+      ],
+      "analyses": [
+        {
+          "id": "decay",
+          "time_span": {
+            "start": 0.0,
+            "end": 50.0
+          },
+          "plots": [
+            {
+              "id": "decay",
+              "type": "line",
+              "description": "The sample decays to about 0.7% of its initial amount in 50 s.",
+              "x": {
+                "variable": "t"
+              },
+              "y": {
+                "variable": "N"
+              }
+            }
+          ]
+        },
+        {
+          "id": "rates",
+          "time_span": {
+            "start": 0.0,
+            "end": 50.0
+          },
+          "parameter_sweep": {
+            "type": "cartesian",
+            "dimensions": [
+              {
+                "parameter": "lambda",
+                "values": [
+                  0.05,
+                  0.1,
+                  0.2
+                ]
+              }
+            ]
+          },
+          "plots": [
+            {
+              "id": "rates",
+              "type": "line",
+              "description": "Faster decay constants empty the sample sooner.",
+              "x": {
+                "variable": "t"
+              },
+              "y": {
+                "variable": "N"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "TwoBox": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "A"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              {
+                "args": [
+                  {
+                    "args": [
+                      "k_ab",
+                      "A"
+                    ],
+                    "op": "*"
+                  }
+                ],
+                "op": "-"
+              },
+              {
+                "args": [
+                  "k_ba",
+                  "B"
+                ],
+                "op": "*"
+              }
+            ],
+            "op": "+"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "B"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              {
+                "args": [
+                  "k_ab",
+                  "A"
+                ],
+                "op": "*"
+              },
+              {
+                "args": [
+                  "k_ba",
+                  "B"
+                ],
+                "op": "*"
+              }
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "variables": {
+        "A": {
+          "default": 1,
+          "description": "Mass in box A",
+          "type": "unknown",
+          "units": "mol"
+        },
+        "B": {
+          "default": 0,
+          "description": "Mass in box B",
+          "type": "unknown",
+          "units": "mol"
+        },
+        "k_ab": {
+          "default": 0.3,
+          "description": "Transfer rate, A to B",
+          "type": "parameter",
+          "units": "1/s"
+        },
+        "k_ba": {
+          "default": 0.1,
+          "description": "Transfer rate, B to A",
+          "type": "parameter",
+          "units": "1/s"
+        }
+      },
+      "tests": [
+        {
+          "id": "equilibrium",
+          "time_span": {
+            "start": 0.0,
+            "end": 100.0
+          },
+          "assertions": [
+            {
+              "variable": "B",
+              "time": 100.0,
+              "expected": 0.75,
+              "tolerance": {
+                "rel": 0.001
+              }
+            }
+          ]
+        }
+      ],
+      "analyses": [
+        {
+          "id": "rates",
+          "time_span": {
+            "start": 0.0,
+            "end": 100.0
+          },
+          "parameter_sweep": {
+            "type": "cartesian",
+            "dimensions": [
+              {
+                "parameter": "k_ab",
+                "range": {
+                  "start": 0.1,
+                  "stop": 1.0,
+                  "count": 8
+                }
+              },
+              {
+                "parameter": "k_ba",
+                "range": {
+                  "start": 0.01,
+                  "stop": 1.0,
+                  "count": 8,
+                  "scale": "log"
+                }
+              }
+            ]
+          },
+          "plots": [
+            {
+              "id": "final_B",
+              "type": "heatmap",
+              "description": "The share of mass in box B at equilibrium, over both rate constants.",
+              "x": {
+                "variable": "k_ab"
+              },
+              "y": {
+                "variable": "k_ba"
+              },
+              "value": {
+                "variable": "B",
+                "reduce": "final"
+              }
+            }
+          ]
+        },
+        {
+          "id": "boxes",
+          "time_span": {
+            "start": 0.0,
+            "end": 20.0
+          },
+          "plots": [
+            {
+              "id": "boxes",
+              "type": "line",
+              "description": "Mass moves from A to B until the two flows balance.",
+              "x": {
+                "variable": "t"
+              },
+              "y": [
+                {
+                  "variable": "A"
+                },
+                {
+                  "variable": "B"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
