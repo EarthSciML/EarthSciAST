@@ -49,7 +49,7 @@
 > expansion drops can stay in the body (§9.6.4 rule 3).
 >
 > Differences 1–4 change which rules fire, and so what a document means, wherever they apply;
-> none of 1–3 applies anywhere in the 2026-11 corpus of real models. These semantics are not
+> none of 1–4 applies anywhere in the 2026-11 corpus of real models. These semantics are not
 > version-switched: a loader implementing them applies them to every document it accepts, as
 > the reference-preserving load of 0.9.0 did.
 
@@ -5357,10 +5357,11 @@ special-case older versions to recover Option A matching. Motivation and measure
    engine treated as a leaf and never rewrote, though the rule fired on the same node anywhere
    else. Cases (a)–(c) no longer fire; case (d) now fires, because the walk descends into a
    reference's bindings (§9.6.3 constraint 2), so `Expand` of the result is the tree the rule
-   produces on the expansion. None of (a)–(c) occurs in the 2026-11 corpus of real models
-   (EarthSciDiscretizations, EarthSciModels, EqESM, EqIce, EqWeFiC, reseact.esm and others),
-   and none of the four in an existing conformance golden; the audit is recorded with this
-   revision's design notes, and `opacity_rule_replacement/` (§9.6.7) pins all four. A pattern
+   produces on the expansion. None of (a)–(d) occurs in the 2026-11 corpus of real models
+   (EarthSciDiscretizations, EarthSciModels, EqESM, EqIce, EqWeFiC, reseact.esm and others) —
+   for (d), no rule there has a pattern built from core ops alone — or in an existing
+   conformance golden; the audit is recorded with this revision's design notes, and
+   `opacity_rule_replacement/` (§9.6.7) pins all four. A pattern
    that needs one of (a)–(c) SHOULD be written against the replacement itself, or the template
    SHOULD take the inner operand as its own parameter.
 
