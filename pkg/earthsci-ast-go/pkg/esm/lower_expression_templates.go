@@ -1712,7 +1712,7 @@ func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[s
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
 		return "", nil, err
 	}
-	componentTemplates := captureComponentTemplates(view, orders)
+	componentTemplates := captureComponentTemplates(view, orders, jsonStr)
 	// Expand-at-build (§9.6.4 rule 2 / RFC §7.7): the raw §9.7 pipeline emits the
 	// Option-A image (references replaced by their expansion, registries
 	// stripped) so external conformance runners reproduce the expanded goldens.
@@ -1726,13 +1726,19 @@ func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[s
 
 // captureComponentTemplates snapshots every component's `expression_templates`
 // block, keyed "<section>.<component>", in the DOCUMENT order the components
-// are declared in and, within a component, the resolved template declaration
-// order (imports depth-first post-order, then local declarations) that
-// resolveComponentImports wrote back into `orders`. Components declaring no
-// block are omitted, so the common document yields an empty map and flatten's
-// registry merge is a no-op.
-func captureComponentTemplates(view map[string]any, orders map[string][]string) map[string]*orderedMap {
+// are declared in, each block as emit materializes it (esm-spec §9.6.4 rule 5,
+// materializeComponentBlock): the entries authored in `source` first, in
+// authored order, then the closure of the component's surviving references,
+// sorted — the typed load path's registry, as the Julia
+// `_materialize_components!` gives it. Components with an empty block are
+// omitted, so the common document yields an empty map and flatten's registry
+// merge is a no-op.
+func captureComponentTemplates(view map[string]any, orders map[string][]string, source string) map[string]*orderedMap {
 	out := map[string]*orderedMap{}
+	var authored map[string][]string
+	if origView, err := decodeJSONView([]byte(source)); err == nil {
+		authored = authoredTemplateNames(origView, extractTemplateOrders(source))
+	}
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -1743,13 +1749,16 @@ func captureComponentTemplates(view map[string]any, orders map[string][]string) 
 			if !ok {
 				continue
 			}
-			tpl, ok := comp["expression_templates"].(map[string]any)
-			if !ok || len(tpl) == 0 {
+			if tpl, ok := comp["expression_templates"].(map[string]any); !ok || len(tpl) == 0 {
+				continue
+			}
+			mat, _, _ := materializeComponentBlock(comp, authored[kind+"."+cname])
+			if mat.len() == 0 {
 				continue
 			}
 			block := newOrderedMap()
-			for _, n := range orderedKeysOf(tpl, orders["/"+kind+"/"+cname+"/expression_templates"]) {
-				block.set(n, deepCopyJSON(tpl[n]))
+			for _, n := range mat.keys {
+				block.set(n, deepCopyJSON(mat.get(n)))
 			}
 			out[kind+"."+cname] = block
 		}

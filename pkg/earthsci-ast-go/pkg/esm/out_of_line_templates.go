@@ -593,6 +593,59 @@ func authoredTemplateNames(origView map[string]any, orders map[string][]string) 
 	return authored
 }
 
+// materializeComponentBlock computes one Option-B loaded component's emitted
+// `expression_templates` block (esm-spec §9.6.4 rule 5): the entries authored
+// in-file (`authoredHere`, authored order) first — a `match` rule only once a
+// firing referenced it and rule 3 materialized it without `match` — then the
+// transitive closure of the component's surviving references not authored
+// here, sorted by UTF-8 bytes. Also reports whether the component carries any
+// surviving reference and whether any non-authored entry was materialized
+// (the §9.6.4 rule 8 version stamp). Shared by emit and the typed load path,
+// as the Julia `_materialize_components!` is.
+func materializeComponentBlock(comp map[string]any, authoredHere []string) (*orderedMap, bool, bool) {
+	named := map[string]any{}
+	if tpl, ok := comp["expression_templates"].(map[string]any); ok {
+		for n, d := range tpl {
+			named[n] = d
+		}
+	}
+	refnames := map[string]bool{}
+	for _, k := range sortedKeys(comp) {
+		if k == "expression_templates" || k == "expression_template_imports" {
+			continue
+		}
+		var refs []string
+		collectApplyNames(&refs, comp[k])
+		for _, r := range refs {
+			refnames[r] = true
+		}
+	}
+	materialized := refClosure(refnames, named)
+	authoredSet := map[string]bool{}
+	for _, n := range authoredHere {
+		authoredSet[n] = true
+	}
+	block := newOrderedMap()
+	for _, n := range authoredHere {
+		// A `match` rule nothing references still carries its `match` (a
+		// referenced one was materialized without it, §9.6.4 rule 3).
+		if d, ok := named[n].(map[string]any); ok && !declHasMatch(d) {
+			block.set(n, d)
+		}
+	}
+	var matNames []string
+	for n := range materialized {
+		if !authoredSet[n] {
+			matNames = append(matNames, n)
+		}
+	}
+	sort.Strings(matNames)
+	for _, n := range matNames {
+		block.set(n, named[n])
+	}
+	return block, len(refnames) > 0, len(matNames) > 0
+}
+
 // emitDocument produces the reference-preserving, self-contained emitted
 // document (esm-spec §9.6.4 rule 5, RFC §7.5) from a source document. Loads the
 // source under Option B, then for every component builds its emitted
@@ -627,50 +680,8 @@ func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (ma
 				continue
 			}
 			key := kind + "." + cname
-			named := map[string]any{}
-			if tpl, ok := comp["expression_templates"].(map[string]any); ok {
-				for n, d := range tpl {
-					named[n] = d
-				}
-			}
-			refnames := map[string]bool{}
-			for _, k := range sortedKeys(comp) {
-				if k == "expression_templates" || k == "expression_template_imports" {
-					continue
-				}
-				var refs []string
-				collectApplyNames(&refs, comp[k])
-				for _, r := range refs {
-					refnames[r] = true
-				}
-			}
-			if len(refnames) > 0 {
-				bump = true
-			}
-			materialized := refClosure(refnames, named)
-			authoredHere := authored[key]
-			authoredSet := map[string]bool{}
-			for _, n := range authoredHere {
-				authoredSet[n] = true
-			}
-
-			emitBlock := newOrderedMap()
-			for _, n := range authoredHere {
-				// A `match` rule nothing references still carries its `match`
-				// (a referenced one was materialized without it, §9.6.4 rule 3).
-				if d, ok := named[n].(map[string]any); ok && !declHasMatch(d) {
-					emitBlock.set(n, d)
-				}
-			}
-			var matNames []string
-			for n := range materialized {
-				if !authoredSet[n] {
-					matNames = append(matNames, n)
-				}
-			}
-			sort.Strings(matNames)
-			for _, n := range matNames {
-				emitBlock.set(n, named[n])
+			emitBlock, hasRefs, hasMaterialized := materializeComponentBlock(comp, authored[key])
+			if hasRefs || hasMaterialized {
 				bump = true
 			}
 
