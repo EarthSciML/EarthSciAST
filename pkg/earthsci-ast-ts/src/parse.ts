@@ -17,8 +17,10 @@ import {
 } from './numeric-literal.js'
 import { lowerEnums } from './lower-enums.js'
 import {
+  authoredTemplateNames,
   expandDocument,
   lowerExpressionTemplates,
+  materializeComponentBlock,
   rejectExpressionTemplatesPreV04,
 } from './lower-expression-templates.js'
 import {
@@ -661,7 +663,10 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // registry as a first-class field of the flattened representation. Keyed
   // `"models.<name>"` / `"reaction_systems.<name>"` (the Julia / Python
   // `component_templates` key shape).
-  const componentTemplates = captureComponentTemplates(loweredTemplates)
+  const componentTemplates = captureComponentTemplates(
+    loweredTemplates,
+    authoredTemplateNames(machineryInput),
+  )
   const authoredTemplateRhs = captureTemplateApplicationRhs(loweredTemplates)
   const typedData = expandDocument(loweredTemplates) as EsmFile
 
@@ -830,7 +835,18 @@ function captureTemplateApplicationRhs(data: unknown): Record<string, unknown> {
   return out
 }
 
-function captureComponentTemplates(data: unknown): Record<string, unknown> {
+/**
+ * Each component's registry as emit materializes it (esm-spec §9.6.4 rule 5,
+ * {@link materializeComponentBlock}): authored entries in authored order (a
+ * rule only once it is match-less), then the closure of referenced
+ * non-authored entries sorted by UTF-8 bytes — followed by the rules that
+ * still carry `match`. `authored` holds the names read from the document
+ * before import resolution.
+ */
+function captureComponentTemplates(
+  data: unknown,
+  authored: Record<string, string[]>,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return out
   const root = data as Record<string, unknown>
@@ -839,10 +855,23 @@ function captureComponentTemplates(data: unknown): Record<string, unknown> {
     if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
     for (const [cname, comp] of Object.entries(comps as Record<string, unknown>)) {
       if (comp === null || typeof comp !== 'object' || Array.isArray(comp)) continue
-      const block = (comp as Record<string, unknown>).expression_templates
-      if (block === null || typeof block !== 'object' || Array.isArray(block)) continue
-      if (Object.keys(block as Record<string, unknown>).length === 0) continue
-      out[`${section}.${cname}`] = deepClone(block)
+      const key = `${section}.${cname}`
+      const { block } = materializeComponentBlock(
+        comp as Record<string, unknown>,
+        authored[key] ?? [],
+      )
+      // The rules still carrying `match` (nothing referenced them) follow: a
+      // rewrite pass re-run after `{ref}` resolution still needs them, and
+      // flatten's registry merge skips them.
+      const own = (comp as Record<string, unknown>).expression_templates
+      if (own !== null && typeof own === 'object' && !Array.isArray(own)) {
+        for (const [n, d] of Object.entries(own as Record<string, unknown>)) {
+          if (n in block) continue
+          if (d !== null && typeof d === 'object' && 'match' in d) block[n] = d
+        }
+      }
+      if (Object.keys(block).length === 0) continue
+      out[key] = deepClone(block)
     }
   }
   return out

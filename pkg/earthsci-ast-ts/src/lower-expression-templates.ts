@@ -2063,6 +2063,47 @@ export function authoredTemplateNames(rawSource: unknown): Record<string, string
 }
 
 /**
+ * The emitted `expression_templates` block of one Option-B loaded component
+ * (esm-spec §9.6.4 rule 5): authored entries first in authored order (a
+ * `match` rule only once rule 3 materialized it match-less), then the closure
+ * of its references not authored here, sorted by UTF-8 bytes. `referenced` is
+ * whether the component carries a surviving reference, `materialized` whether
+ * a non-authored entry was added. Shared by emit ({@link buildEmittedDocument})
+ * and the typed load path's per-component registry capture. Does not mutate
+ * `comp`. Mirrors the Python/Rust `materialize_component_block`.
+ */
+export function materializeComponentBlock(
+  comp: Record<string, unknown>,
+  authoredHere: readonly string[],
+): { block: Record<string, unknown>; referenced: boolean; materialized: boolean } {
+  const named = namedRegistry(comp)
+  const refnames = new Set<string>()
+  for (const [k, v] of Object.entries(comp)) {
+    if (k === 'expression_templates' || k === 'expression_template_imports') continue
+    for (const r of collectApplyNames(v, [])) refnames.add(r)
+  }
+  const closure = refClosure(refnames, named)
+  const authoredSet = new Set(authoredHere)
+  const block: Record<string, unknown> = {}
+  for (const n of authoredHere) {
+    // A `match` rule nothing references still carries its `match` (a
+    // referenced one was materialized without it, §9.6.4 rule 3).
+    if (
+      Object.prototype.hasOwnProperty.call(named, n) &&
+      (named[n] as { match?: Json }).match === undefined
+    ) {
+      block[n] = named[n]
+    }
+  }
+  let materialized = false
+  for (const n of [...closure].filter((n) => !authoredSet.has(n)).sort(compareUtf8)) {
+    block[n] = named[n]
+    materialized = true
+  }
+  return { block, referenced: refnames.size > 0, materialized }
+}
+
+/**
  * Build the reference-preserving, self-contained emitted document (esm-spec
  * §9.6.4 rule 5, §7.5) from an already Option-B-loaded document `loaded` and
  * the authored-name map from the pristine source. For every component builds
@@ -2086,32 +2127,12 @@ export function buildEmittedDocument(
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
       const key = `${compKind}.${cname}`
-      const named = namedRegistry(comp)
-      const refnames = new Set<string>()
-      for (const [k, v] of Object.entries(comp)) {
-        if (k === 'expression_templates' || k === 'expression_template_imports') continue
-        for (const r of collectApplyNames(v, [])) refnames.add(r)
-      }
-      if (refnames.size > 0) bump = true
-      const materialized = refClosure(refnames, named)
-      const authoredHere = authored[key] ?? []
-      const authoredSet = new Set(authoredHere)
-
-      const emitBlock: Record<string, unknown> = {}
-      for (const n of authoredHere) {
-        // A `match` rule nothing references still carries its `match` (a
-        // referenced one was materialized without it, §9.6.4 rule 3).
-        if (
-          Object.prototype.hasOwnProperty.call(named, n) &&
-          (named[n] as { match?: Json }).match === undefined
-        ) {
-          emitBlock[n] = named[n]
-        }
-      }
-      for (const n of [...materialized].filter((n) => !authoredSet.has(n)).sort(compareUtf8)) {
-        emitBlock[n] = named[n]
-        bump = true
-      }
+      const {
+        block: emitBlock,
+        referenced,
+        materialized,
+      } = materializeComponentBlock(comp, authored[key] ?? [])
+      if (referenced || materialized) bump = true
 
       if (Object.keys(emitBlock).length === 0) {
         delete comp.expression_templates
