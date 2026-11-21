@@ -306,8 +306,8 @@ mod tests {
 
     /// The v0.8.0 variable_map expression-transform widening (esm-spec
     /// §10.4/§10.5): a coupling `transform` invoking a template declared by the
-    /// RECEIVING component expands at load against that component's registry
-    /// (§9.6.4). Cross-binding golden: expanded.esm.
+    /// RECEIVING component resolves against that component's registry; Expand
+    /// gives the inline form (§9.6.4, §10.4). Cross-binding golden: expanded.esm.
     #[test]
     fn coupling_transform_expression_conformance_fixture_matches_expanded_form() {
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));

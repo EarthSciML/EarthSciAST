@@ -229,7 +229,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
   it('coupling_transform_expression conformance fixture matches expanded form (esm-spec §10.4)', () => {
     // The v0.8.0 variable_map expression-transform widening: a coupling
     // `transform` invoking a template declared by the RECEIVING component
-    // expands at loadString against that component's registry (§9.6.4).
+    // resolves against that component's registry; Expand inlines it (§9.6.4, §10.4).
     const casedir = fixturesDir('conformance/expression_templates/coupling_transform_expression')
     const file = loadString(
       fs.readFileSync(path.join(casedir, 'fixture.esm'), 'utf8'),
