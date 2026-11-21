@@ -1845,59 +1845,22 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
     }
 }
 
-/// The observeds of `model` (the component at `owner` of `file`) whose value
-/// is a function of `t` — DIRECTLY, because the defining body mentions the
-/// independent variable free or reads a parameter fed by a TIME-VARYING data
-/// source (its own, or one a `param_to_var` edge replaces it with, esm-spec
-/// §8.5.1), or TRANSITIVELY, because it reads one that does.
+/// The observeds of `model` whose value is a function of `t` — DIRECTLY,
+/// because the defining body mentions the independent variable free, or
+/// TRANSITIVELY, because it reads one that does.
 ///
 /// Used by [`unevaluable_time_dependent_assertion`] to tell a field the build
 /// materialized once, at `tspan.0`, and which is therefore the answer at every
 /// time, apart from one whose value moves and whose build-time materialization
-/// is only the answer at the start of the span.
+/// is only the answer at the start of the span. A field that moves because a
+/// time-varying data source decided it is not found here but recorded by the
+/// build itself ([`time_pinned_assertion`]).
 ///
 /// Only `y ~ f(…)` definitions are walked ([`crate::classification::LhsForm`]
 /// calls that shape `Bare`): an ODE state is not read from a build field at
 /// all, and an implicit constraint defines no single name.
-fn time_dependent_observeds(
-    file: &EsmFile,
-    owner: &str,
-    model: &Model,
-) -> std::collections::BTreeSet<String> {
+fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String> {
     use crate::dependency::{DependencySummaries, Leaf, Reads};
-    // A parameter whose value is a record of a source with a `temporal`
-    // start moves with `t` exactly as `t` itself does.
-    let time_fed = |var: &crate::types::ModelVariable| {
-        var.update
-            .as_ref()
-            .and_then(crate::simulate_array::data_feed_source)
-            .and_then(|src| file.data_sources.as_ref()?.get(src))
-            .and_then(|ds| ds.temporal.as_ref()?.start.as_deref())
-            .is_some_and(|start| !start.is_empty())
-    };
-    let mut timed: HashSet<String> = model
-        .variables
-        .iter()
-        .filter(|(_, v)| time_fed(v))
-        .map(|(n, _)| n.clone())
-        .collect();
-    for entry in file.coupling.iter().flatten() {
-        if let crate::CouplingEntry::VariableMap {
-            from,
-            to,
-            transform,
-            ..
-        } = entry
-            && transform.as_named() == Some("param_to_var")
-            && let Some(local) = to.strip_prefix(owner).and_then(|r| r.strip_prefix('.'))
-            && let Some((src_owner, src_var)) = from.rsplit_once('.')
-            && model_at(file, src_owner)
-                .and_then(|m| m.variables.get(src_var))
-                .is_some_and(time_fed)
-        {
-            timed.insert(local.to_string());
-        }
-    }
     let mut defs: HashMap<String, Reads> = HashMap::new();
     for eq in &model.equations {
         if let crate::classification::LhsForm::Bare(name) = crate::classification::lhs_form(&eq.lhs)
@@ -1908,13 +1871,7 @@ fn time_dependent_observeds(
             entry.join_names.extend(reads.join_names);
         }
     }
-    let deps = DependencySummaries::new(defs, |name| {
-        if timed.contains(name) {
-            Leaf::Time
-        } else {
-            Leaf::Const
-        }
-    });
+    let deps = DependencySummaries::new(defs, |_| Leaf::Const);
     model
         .equations
         .iter()
@@ -1958,7 +1915,7 @@ fn unevaluable_time_dependent_assertion(
         let (owner, variable) = resolve_asserted_name(file, model_name, &a.variable);
         let dependent = per_owner.entry(owner.clone()).or_insert_with(|| {
             model_at(file, &owner)
-                .map(|m| time_dependent_observeds(file, &owner, m))
+                .map(time_dependent_observeds)
                 .unwrap_or_default()
         });
         if dependent.contains(variable) {
@@ -1973,6 +1930,51 @@ fn unevaluable_time_dependent_assertion(
         }
     }
     None
+}
+
+/// The refusal for an assertion at a time other than `time_span.start` on a
+/// value the build took from a TIME-VARYING data source's record in effect
+/// at that start ([`EsmProblem::time_pinned`]: a data-fed parameter such a
+/// source feeds, directly or through a coupling, and every observed reading
+/// one) — `None` when no assertion of `t` asks for one.
+///
+/// Only a build with nothing to integrate pins anything, and its answer at
+/// every time is its build, whichever arm of the runner reads it (the
+/// observed graph evaluated per time holds the same parameter values). So
+/// this is checked before any of them: answering such an assertion would
+/// report the record at the start for a question asked later.
+fn time_pinned_assertion(
+    file: &EsmFile,
+    model_name: &str,
+    t: &crate::types::ModelTest,
+    pinned: &HashSet<String>,
+) -> Option<String> {
+    if pinned.is_empty() {
+        return None;
+    }
+    let t0 = t.time_span.start;
+    t.assertions.iter().find_map(|a| {
+        if (a.time - t0).abs() <= 1e-9 * f64::max(1.0, t0.abs()) {
+            return None;
+        }
+        let (owner, variable) = resolve_asserted_name(file, model_name, &a.variable);
+        let stem = asserted_field_name(variable);
+        let is_pinned = owner_spellings(file, &owner)
+            .iter()
+            .any(|m| pinned.contains(&format!("{m}.{stem}")))
+            || (!owner.contains('.') && pinned.contains(stem));
+        is_pinned.then(|| {
+            format!(
+                "'{}' is a function of `t` through a time-varying data source, and this \
+                 document has nothing to integrate: its fields were materialized once, from \
+                 the record in effect at t = {t0}, so this test's assertion on it at t = {} \
+                 cannot be answered. Assert it at t = {t0}, or give the model a \
+                 differential equation so the data is refreshed along a trajectory \
+                 (esm-spec §6.6.3, §8.5.1)",
+                a.variable, a.time
+            )
+        })
+    })
 }
 
 /// The times a document with **nothing to integrate** is evaluated at: the
@@ -2913,7 +2915,13 @@ fn run_component_tests(
                 // Python's runner refuses.
                 let static_times =
                     static_evaluation_times(&saveat, t.time_span.start, t.time_span.end);
-                match static_trajectory(prob, &static_times) {
+                // A value a time-varying source's record at `tspan.0` decided
+                // is the answer there only, whichever arm below would read it.
+                let pinned = time_pinned_assertion(run_file, model_name, t, prob.time_pinned());
+                match pinned
+                    .map(Err)
+                    .or_else(|| static_trajectory(prob, &static_times))
+                {
                     Some(result) => result,
                     None => match solve(prob, &run_opts) {
                         Ok(sol) => Ok(sol),

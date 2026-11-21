@@ -1126,10 +1126,12 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 /// the build does with them depends on whether the built model has state:
 ///
 /// * with nothing to integrate, the build's fields ARE the document's
-///   answer, materialized once at `t0` (the inline-test runner refuses an
-///   assertion on a time-dependent field away from `t0`), so each one is
-///   consumed here as the record in effect at `t0` ([`InEffectAt`]), exactly
-///   as a CONST provider is;
+///   answer, materialized once at `t0`, so each one is consumed here as the
+///   record in effect at `t0` ([`InEffectAt`]), exactly as a CONST provider
+///   is: gated by its own gate or the pushdown rewrite's, and sampled whole
+///   by extent discovery. The parameters they feed and every observed that
+///   reads one are recorded ([`crate::problem::BuildProducts::time_pinned`])
+///   so that nothing answers from these fields at another time;
 /// * with state, they are left in `timed` for the run-time executor, and an
 ///   observed reading a parameter one of them feeds, directly or through
 ///   another observed, is not evaluated at build time: its value moves at
@@ -1138,7 +1140,11 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 ///
 /// Either way an observed reading such a parameter — a record-shaped one
 /// (esm-spec §8.5.1) included — is never evaluated against a scope that does
-/// not hold it.
+/// not hold it. Whether the model has state is known only after the typed
+/// load, which needs the extents discovery closes, so discovery reads every
+/// provider's extent, time-varying ones included (a record's leading axis is
+/// the same in every record), and the rewrite's gates for the time-varying
+/// providers are read after the load.
 pub(crate) fn run_prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
@@ -1148,25 +1154,48 @@ pub(crate) fn run_prepare(
 ) -> Result<PreparedBuild, SimulateError> {
     let mut providers = providers;
     let mut metaparameters = opts.problem.metaparameters.clone();
-    let discovered = discover_loader_extents(&mut providers, opts, &mut metaparameters)?;
+    let n_const = providers.len();
+    providers.append(timed);
+    let discovered = discover_loader_extents(&mut providers, opts, &mut metaparameters);
+    *timed = providers.split_off(n_const);
+    let mut discovered = discovered?;
+    let timed_keys: Vec<String> = timed.iter().map(|(k, _)| k.clone()).collect();
 
     let resolved = resolve_pushdown_imports(doc, opts, &metaparameters)?;
     let doc: &JsonValue = resolved.as_ref().unwrap_or(doc);
     let provider_keys: Vec<String> = providers.iter().map(|(k, _)| k.clone()).collect();
-    let rw = apply_pushdown_rewrite(doc, opts, &provider_keys)?;
+    let mut rw = apply_pushdown_rewrite(doc, opts, &provider_keys)?;
     check_discovered_gate_conflict(&discovered, &rw.pd_gates)?;
 
     let mut st = BuildState::load_document(rw.rewritten.as_ref(), opts, metaparameters)?;
     if st.has_state() {
-        st.runtime_fed = st.parameters_fed_by(timed.iter().map(|(k, _)| k.as_str()));
-    } else {
+        st.runtime_fed = st.parameters_fed_by(timed_keys.iter().map(String::as_str));
+    } else if !timed.is_empty() {
+        if matches!(rw.rewritten, std::borrow::Cow::Owned(_)) {
+            let gates =
+                pushdown_provider_gates(&rw.rewritten, &timed_keys).map_err(|e| err(e.0))?;
+            rw.pd_gates.extend(gates);
+            check_discovered_gate_conflict(&discovered, &rw.pd_gates)?;
+        }
+        st.time_pinned = st.parameters_fed_by(timed_keys.iter().map(String::as_str));
         let t0 = opts.t0;
-        providers.extend(timed.drain(..).map(|(k, p)| {
-            (
-                k,
-                Box::new(InEffectAt { inner: p, t: t0 }) as Box<dyn DataProvider>,
-            )
-        }));
+        for (k, p) in timed.drain(..) {
+            let feeds = st.fed_parameter(&k);
+            let fallback = feeds.as_deref().and_then(|n| st.declared_default_field(n));
+            let wrapped = InEffectAt {
+                inner: p,
+                t: t0,
+                feeds: feeds.unwrap_or_else(|| k.clone()),
+                fallback,
+                delivered: None,
+            };
+            providers.push((k, Box::new(wrapped)));
+        }
+    }
+    // A time-varying provider's discovery read only its extent, from its
+    // time-less sample; its value is the record in effect at `t0`, read below.
+    for k in &timed_keys {
+        discovered.remove(k);
     }
     let gated = st.inject_providers(const_arrays, providers, discovered, &rw.pd_gates)?;
     st.alias_pushdown_names(&rw.pd_coupling);
@@ -1195,13 +1224,24 @@ pub(crate) fn run_prepare(
 /// record-shaped parameter's pair included). [`run_prepare`] wraps each one
 /// this way for a document with nothing to integrate, whose fields the build
 /// materializes once, at `t`.
+///
+/// With no record in effect at `t` (every refresh time is later), the
+/// parameter `feeds` takes its declared default (`fallback`), as it does at a
+/// solve's start (esm-spec §11.4.2 item 5); one that declares none is refused.
 struct InEffectAt {
     inner: Box<dyn DataProvider>,
     t: f64,
+    /// The parameter this provider feeds (its key when it designates none),
+    /// for the refusal.
+    feeds: String,
+    /// The declared default of [`Self::feeds`] over its declared shape.
+    fallback: Option<ArrayD<f64>>,
+    /// The record this provider delivered: every later sample is it again.
+    delivered: Option<ArrayD<f64>>,
 }
 
-impl DataProvider for InEffectAt {
-    fn sample(&mut self) -> Result<ArrayD<f64>, crate::provider::ProviderError> {
+impl InEffectAt {
+    fn in_effect(&mut self) -> Result<ArrayD<f64>, crate::provider::ProviderError> {
         // A provider answers `refresh` at any time, `None` when it has nothing
         // new there; it then still holds the record of its latest refresh time
         // before `t`, which is asked for directly.
@@ -1219,11 +1259,44 @@ impl DataProvider for InEffectAt {
                 Some(a) => Ok(a),
                 None => self.inner.sample(),
             },
-            None => Err(crate::error::MessageError(format!(
-                "no record is in effect at t = {}: the source's first record is later",
-                self.t
-            ))),
+            None => self.fallback.clone().ok_or_else(|| {
+                crate::error::MessageError(format!(
+                    "the provider has no record in effect at time_span.start {} (it \
+                     delivered nothing there, nor at a refresh time before it), and the \
+                     parameter `{}` it feeds declares no default",
+                    self.t, self.feeds
+                ))
+            }),
         }
+    }
+}
+
+impl DataProvider for InEffectAt {
+    fn sample(&mut self) -> Result<ArrayD<f64>, crate::provider::ProviderError> {
+        if let Some(a) = &self.delivered {
+            return Ok(a.clone());
+        }
+        let a = self.in_effect()?;
+        self.delivered = Some(a.clone());
+        Ok(a)
+    }
+
+    /// A selection on the inner provider would read its time-less record,
+    /// not the one in effect at `t`, so none is pushed down: a gated fetch
+    /// samples the record in effect whole and slices it.
+    fn supports_selection(&self) -> bool {
+        false
+    }
+
+    fn sample_with_selection(
+        &mut self,
+        selection: &[crate::provider::AxisSel],
+    ) -> Result<ArrayD<f64>, crate::provider::ProviderError> {
+        Ok(slice_whole(self.sample()?, selection))
+    }
+
+    fn gate_spec(&self) -> Option<ProviderGate> {
+        self.inner.gate_spec()
     }
 
     fn extent_metaparameter(&self) -> Option<String> {
@@ -1545,6 +1618,10 @@ struct BuildState<'o> {
     /// (see [`run_prepare`]): an observed reading one is evaluated at run
     /// time, not here.
     runtime_fed: HashSet<String>,
+    /// The data-fed parameters a TIME-VARYING provider fed with its record
+    /// in effect at `t0`, in a build with nothing to integrate (see
+    /// [`run_prepare`]).
+    time_pinned: HashSet<String>,
 }
 
 impl<'o> BuildState<'o> {
@@ -1559,29 +1636,52 @@ impl<'o> BuildState<'o> {
     }
 
     /// The data-fed parameters of the built model a provider under one of
-    /// `keys` feeds. A key designates a parameter by its name, or by a dotted
-    /// suffix in either direction (`M.Q` for the model-local `Q`, `Q` for the
-    /// flattened `M.Q`, esm-spec §6.6.2); only data-fed parameters are
-    /// candidates, so the loose match cannot reach anything else.
+    /// `keys` feeds, each key resolved to at most one ([`Self::fed_parameter`]).
     fn parameters_fed_by<'k>(&self, keys: impl Iterator<Item = &'k str>) -> HashSet<String> {
-        let keys: Vec<&str> = keys.collect();
-        self.model
-            .variables
-            .iter()
-            .filter(|(_, v)| {
-                v.var_type == VariableType::Parameter
-                    && v.update.as_ref().is_some_and(crate::data_fed::is_data_fed)
-            })
-            .filter(|(name, _)| {
-                keys.iter().any(|k| {
-                    *k == name.as_str()
-                        || k.strip_suffix(name.as_str())
-                            .is_some_and(|h| h.ends_with('.'))
-                        || name.strip_suffix(k).is_some_and(|h| h.ends_with('.'))
-                })
-            })
-            .map(|(name, _)| name.clone())
-            .collect()
+        keys.filter_map(|k| self.fed_parameter(k)).collect()
+    }
+
+    /// The one data-fed parameter of the built model a provider keyed `key`
+    /// feeds, by the key rules its data is routed by (esm-spec §6.6.2): in
+    /// the whole-document build the `Model.var` the key designates
+    /// ([`Self::array_routes`]); model-locally the name it spells most
+    /// strongly, a key prefixed by the built model's name before a bare
+    /// suffix. `None` when it designates no data-fed parameter, or several
+    /// equally.
+    fn fed_parameter(&self, key: &str) -> Option<String> {
+        let name = match self.spelling {
+            Spelling::Qualified => {
+                let mut hits = self.keys.designates(key).ok()?;
+                (hits.len() == 1).then(|| hits.remove(0).0)?
+            }
+            Spelling::ModelLocal(_) => self.keys.strongest(key).ok()??,
+        };
+        let var = self.model.variables.get(&name)?;
+        (var.var_type == VariableType::Parameter
+            && var
+                .update
+                .as_ref()
+                .is_some_and(crate::data_fed::is_data_fed))
+        .then_some(name)
+    }
+
+    /// The declared default of the parameter `name` over its declared shape
+    /// (a scalar broadcast, or its inline array data; esm-spec §6.3), or
+    /// `None` when it declares none or its shape does not resolve here.
+    fn declared_default_field(&self, name: &str) -> Option<ArrayD<f64>> {
+        let var = self.model.variables.get(name)?;
+        let default = var.default.as_ref()?;
+        let shape: Vec<usize> = match var.shape.as_deref() {
+            None => Vec::new(),
+            Some(decl) => crate::simulate_array::resolve_declared_shape(decl, &self.index_sets)?,
+        };
+        if let Some(v) = default.as_scalar() {
+            return Some(ArrayD::from_elem(IxDyn(&shape), v));
+        }
+        let (dense_shape, values) = default.to_dense().ok()?;
+        (dense_shape == shape)
+            .then(|| ArrayD::from_shape_vec(IxDyn(&shape), values).ok())
+            .flatten()
     }
 
     /// The shape `name`'s value fills when its body evaluates to a single
@@ -1759,6 +1859,7 @@ impl<'o> BuildState<'o> {
             cone_applied: false,
             built_variables,
             runtime_fed: HashSet::new(),
+            time_pinned: HashSet::new(),
         })
     }
 
@@ -2800,6 +2901,19 @@ impl<'o> BuildState<'o> {
             .filter(|(_, v)| v.update.as_ref().is_some_and(crate::data_fed::is_data_fed))
             .filter_map(|(name, _)| Some((name.clone(), self.arrays.remove(name)?)))
             .collect();
+        // Every field the record at `t0` decided: the pinned parameters and
+        // each observed reading one, directly or through another observed.
+        let time_pinned: HashSet<String> = if self.time_pinned.is_empty() {
+            HashSet::new()
+        } else {
+            let deps = observed_dependencies(&self.model, &self.defs, &self.time_pinned);
+            self.defs
+                .keys()
+                .filter(|n| deps.get(n.as_str()).is_some_and(|s| s.reads_discrete))
+                .cloned()
+                .chain(self.time_pinned.iter().cloned())
+                .collect()
+        };
         PreparedBuild {
             doc,
             model_name: match self.spelling {
@@ -2814,6 +2928,7 @@ impl<'o> BuildState<'o> {
                 extents: self.extents,
                 gated_provider_keys: self.gated_keys,
                 built_variables: self.built_variables,
+                time_pinned,
                 ..Default::default()
             },
             data_fields,
@@ -3587,5 +3702,58 @@ mod whole_document_tests {
         .expect("the compile takes the pipeline's three members");
         assert_eq!(prob.extents().get("kind_set"), Some(&3));
         assert_eq!(prob.members()["kind_set"], vec![1, 2, 3]);
+    }
+}
+
+#[cfg(test)]
+mod in_effect_at_tests {
+    use super::InEffectAt;
+    use crate::provider::{DataProvider, ProviderError};
+    use ndarray::{ArrayD, IxDyn};
+
+    /// Records `0, 1, 2` from `0, 10, 20`; answers `None` while the record
+    /// in effect has not changed since its last delivery.
+    struct Steps {
+        last: Option<usize>,
+    }
+
+    impl DataProvider for Steps {
+        fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+            Ok(ArrayD::from_elem(IxDyn(&[]), 0.0))
+        }
+
+        fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
+            match self.refresh_times().iter().rposition(|&b| b <= t) {
+                Some(k) if self.last != Some(k) => {
+                    self.last = Some(k);
+                    Ok(Some(ArrayD::from_elem(IxDyn(&[]), k as f64)))
+                }
+                _ => Ok(None),
+            }
+        }
+
+        fn refresh_times(&self) -> Vec<f64> {
+            vec![0.0, 10.0, 20.0]
+        }
+    }
+
+    fn at(t: f64) -> InEffectAt {
+        InEffectAt {
+            inner: Box::new(Steps { last: None }),
+            t,
+            feeds: "Q".to_string(),
+            fallback: None,
+            delivered: None,
+        }
+    }
+
+    /// Every sample is the record in effect at `t`, not the provider's
+    /// time-less one after the first.
+    #[test]
+    fn every_sample_is_the_record_in_effect() {
+        let mut p = at(15.0);
+        for _ in 0..3 {
+            assert_eq!(p.sample().unwrap().first().copied(), Some(1.0));
+        }
     }
 }
