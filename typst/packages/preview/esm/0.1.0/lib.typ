@@ -63,13 +63,30 @@
 /// A species declaration.
 #let species(name, ..attrs) = _decl("species", name, attrs.named())
 
+/// A path block's value: objects and arrays as nested key and item rows, an
+/// expression (math, `$…$`) as typeset math, any other value as JSON.
+#let _block-value(v) = {
+  let rows(pairs) = grid(
+    columns: 2,
+    column-gutter: 0.6em,
+    row-gutter: 0.45em,
+    ..pairs.map(((k, x)) => (raw(k), _block-value(x))).flatten(),
+  )
+  if type(v) == content { v }
+  else if type(v) == dictionary {
+    if v.len() == 0 { raw("{}") } else { rows(v.pairs().map(((k, x)) => (k + ":", x))) }
+  } else if type(v) == array {
+    if v.len() == 0 { raw("[]") } else { rows(v.map(x => ("-", x))) }
+  } else { raw(json.encode(v)) }
+}
+
 /// A field of the document with no surface of its own, keyed by its JSON path.
 #let esm-block(path, value) = block(
   width: 100%,
   inset: 0.6em,
   stroke: 0.5pt + luma(180),
   radius: 2pt,
-  [#text(fill: luma(90), raw(path)) \ #raw(json.encode(value), lang: "json", block: true)],
+  [#text(fill: luma(90), raw(path)) \ #_block-value(value)],
 )
 
 #let _labelled(name, body, attrs) = block(

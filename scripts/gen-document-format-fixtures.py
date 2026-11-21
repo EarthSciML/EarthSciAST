@@ -1402,6 +1402,29 @@ def box_model(**fields):
     return m
 
 
+BLOCK_MATH_TESTS = document(
+    models={
+        "M": box_model(
+            tests=[
+                {
+                    "id": "decays",
+                    "time_span": {"start": 0, "end": 1},
+                    "assertions": [
+                        {
+                            "variable": "c",
+                            "time": 1,
+                            "expected": 0,
+                            "reduce": "Linf_error",
+                            "tolerance": {"abs": 1e-9},
+                            "reference": op("*", "c", op("exp", op("-", "u"))),
+                        }
+                    ],
+                }
+            ]
+        )
+    }
+)
+
 PLOT_RUN = {
     "id": "run",
     "time_span": {"start": 0, "end": 10},
@@ -1723,6 +1746,87 @@ def documents(g):
             coupling=[{"type": "operator_compose", "systems": ["M", "M"]}],
         ),
     )
+    P(
+        "block_math_tests",
+        "An expression-valued field of a path block (a test assertion's reference) is "
+        "math: $…$ in a Typst dictionary, the plain scalar $…$ in YAML.",
+        BLOCK_MATH_TESTS,
+    )
+    P(
+        "block_math_events",
+        "Event conditions, trigger expressions and affect right-hand sides, and guesses, "
+        "are math in their blocks; an affect's lhs is a name and stays a string.",
+        document(
+            models={
+                "M": box_model(
+                    discrete_events=[
+                        {
+                            "name": "reset",
+                            "trigger": {"type": "condition", "expression": op(">", "c", 2)},
+                            "affects": [{"lhs": "c", "rhs": op("/", op("Pre", "c"), 2)}],
+                        }
+                    ],
+                    continuous_events=[
+                        {
+                            "name": "floor",
+                            "conditions": [op("-", "c", 0.5)],
+                            "affects": [{"lhs": "u", "rhs": op("-", "u")}],
+                        }
+                    ],
+                    guesses={"c": op("+", "u", 1)},
+                )
+            }
+        ),
+    )
+    P(
+        "block_math_coupling",
+        "A top-level coupling event's expressions are math under the document's table: "
+        "scoped names in it print as scoped references.",
+        document(
+            models={"A": box_model(), "B": box_model()},
+            coupling=[
+                {
+                    "type": "event",
+                    "event_type": "discrete",
+                    "name": "sync",
+                    "trigger": {"type": "condition", "expression": op(">", "A.c", "B.c")},
+                    "affects": [{"lhs": "B.c", "rhs": op("Pre", "A.c")}],
+                }
+            ],
+        ),
+    )
+    P(
+        "block_math_raw",
+        "A value at an expression path that is not a well-formed expression stays as it "
+        "is; so does one whose math the container cannot delimit (in Typst a string field "
+        "holding $ prints as #\"$\", in LaTeX as {\\char036}, so only Typst keeps it raw).",
+        document(
+            models={
+                "M": box_model(
+                    tests=[
+                        {
+                            "id": "t",
+                            "time_span": {"start": 0, "end": 1},
+                            "assertions": [
+                                {
+                                    "variable": "c",
+                                    "time": 1,
+                                    "expected": 0,
+                                    "reference": {"note": "not an expression"},
+                                },
+                                {
+                                    "variable": "c",
+                                    "time": 1,
+                                    "expected": 0,
+                                    "reference": op("Dx", "c", dim="$"),
+                                },
+                            ],
+                        }
+                    ]
+                )
+            }
+        ),
+    )
     plot = document(models={"Box": box_model(analyses=[PLOT_RUN])})
     P(
         "plot_shorthand",
@@ -2015,6 +2119,38 @@ def refusals(g):
         g.refusal(a, cid, desc, doc, surface, error, edits, **kw)
 
     md, typ = "markdown", "typst"
+    R(
+        "math_leaf_outside_block_typst",
+        "A math leaf is read only inside a path block: as a declaration attribute it is refused.",
+        document(models={"M": box_model()}),
+        typ,
+        "parse_error",
+        [('#param($u$, default: 1,', '#param($u$, default: $1$,')],
+    )
+    R(
+        "math_leaf_outside_block_markdown",
+        "A math leaf is read only inside a path block: in the front matter it is refused.",
+        document(models={"M": box_model()}),
+        md,
+        "parse_error",
+        [('name: "fixture"', "name: $x$")],
+    )
+    R(
+        "block_math_unreadable_typst",
+        "Math in a path block that does not read as an expression is refused.",
+        BLOCK_MATH_TESTS,
+        typ,
+        "parse_error",
+        [("reference: $c exp(-u)$", "reference: $c exp($")],
+    )
+    R(
+        "block_math_unreadable_markdown",
+        "Math in a path block that does not read as an expression is refused.",
+        BLOCK_MATH_TESTS,
+        md,
+        "parse_error",
+        [(r"reference: $c \exp(-u)$", r"reference: $\frac{c}$")],
+    )
     sg = expr_doc(op("sign", "x"), ("x",))
     removed = [
         "arrayop",

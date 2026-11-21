@@ -1,4 +1,5 @@
 import Esm.Document.Source.SkeletonRT
+import Esm.Document.Notation
 
 /-!
 # The skeleton as a sequence of constructs
@@ -301,6 +302,378 @@ theorem unitems_items (D : Doc MR) (hD : itemsOK D) : unitems D.front (items D) 
   | some c =>
     simp only [Option.toList_none, List.append_nil, Option.toList_some, List.nil_append]
     exact ⟨trivial, trivial, trivial, List.dropLast_append_getLast? c hl⟩
+
+/-! ## Expressions inside path blocks
+
+`Notation.compExprPaths` and `Notation.topExprPaths` list the expression-valued fields of
+path blocks. The printer turns a value there into a math leaf (`Json.math`) when it is a
+well-formed expression whose math text the container can delimit (`mathOK`); the reader
+reads every math leaf back, wherever it is. -/
+
+/-- The paths below the entry `k` of an object (or below an element, `Seg.any`). -/
+def stepKey (k : Option String) (ps : List (List Notation.Seg)) : List (List Notation.Seg) :=
+  ps.filterMap fun p => match p with
+    | .any :: q => some q
+    | .key k' :: q => if some k' = k then some q else none
+    | [] => none
+
+mutual
+/-- `leaf` applied to every value of `v` at one of the paths `ps` (the shortest first:
+a value at a path is not looked into); every other value as it is. -/
+def atPaths (leaf : Json → Json) (ps : List (List Notation.Seg)) : Json → Json
+  | .arr xs => if ps.contains [] then leaf (.arr xs) else .arr (atPathsL leaf (stepKey none ps) xs)
+  | .obj kvs => if ps.contains [] then leaf (.obj kvs) else .obj (atPathsO leaf ps kvs)
+  | v => if ps.contains [] then leaf v else v
+
+def atPathsL (leaf : Json → Json) (ps : List (List Notation.Seg)) : List Json → List Json
+  | [] => []
+  | v :: vs => atPaths leaf ps v :: atPathsL leaf ps vs
+
+def atPathsO (leaf : Json → Json) (ps : List (List Notation.Seg)) : List (String × Json) → List (String × Json)
+  | [] => []
+  | (k, v) :: es => (k, atPaths leaf (stepKey (some k) ps) v) :: atPathsO leaf ps es
+end
+
+/-- A value at an expression path: its math text, when it is a well-formed expression
+whose text a container can delimit; otherwise the value. -/
+def mathLeaf (prR : Sym → Json → String) (S : Sym) (v : Json) : Json :=
+  if isE v && mathOK (prR S v) then .math (prR S v) else v
+
+/-- **Print a section's path blocks**: every expression at one of the paths `ps` (keyed by
+the block's key) as math under the symbol table `S`. -/
+def mathify (prR : Sym → Json → String) (S : Sym) (ps : List (List Notation.Seg))
+    (bs : List (String × Json)) : List (String × Json) :=
+  bs.map fun kv => (kv.1, atPaths (mathLeaf prR S) (stepKey (some kv.1) ps) kv.2)
+
+mutual
+/-- Every math leaf of a value read back with `ck`. -/
+def cookV (ck : String → Option Json) : Json → Option Json
+  | .math s => ck s
+  | .arr xs => (cookL ck xs).map .arr
+  | .obj kvs => (cookO ck kvs).map .obj
+  | v => some v
+
+def cookL (ck : String → Option Json) : List Json → Option (List Json)
+  | [] => some []
+  | v :: vs =>
+    match cookV ck v, cookL ck vs with
+    | some a, some b => some (a :: b)
+    | _, _ => none
+
+def cookO (ck : String → Option Json) : List (String × Json) → Option (List (String × Json))
+  | [] => some []
+  | (k, v) :: es =>
+    match cookV ck v, cookO ck es with
+    | some a, some b => some ((k, a) :: b)
+    | _, _ => none
+end
+
+/-- **Read a section's path blocks**: every math leaf, wherever it is, read back as an
+expression under the symbol table `S`. -/
+def cookBlocks (ckR : Sym → String → Option Json) (S : Sym) (bs : List (String × Json)) :
+    Option (List (String × Json)) :=
+  cookO (ckR S) bs
+
+/-! ### The path-block round trip -/
+
+mutual
+/-- A value with no math leaf reads back as itself. -/
+theorem cookV_wf (ck : String → Option Json) : ∀ v : Json, v.WF → cookV ck v = some v
+  | .null, _ => rfl
+  | .bool _, _ => rfl
+  | .num _, _ => rfl
+  | .str _, _ => rfl
+  | .math _, h => h.elim
+  | .arr xs, h => by simp [cookV, cookL_wf ck xs h]
+  | .obj kvs, h => by simp [cookV, cookO_wf ck kvs h.2]
+
+theorem cookL_wf (ck : String → Option Json) : ∀ xs : List Json, Json.WFList xs → cookL ck xs = some xs
+  | [], _ => rfl
+  | v :: vs, h => by simp [cookL, cookV_wf ck v h.1, cookL_wf ck vs h.2]
+
+theorem cookO_wf (ck : String → Option Json) :
+    ∀ kvs : List (String × Json), Json.WFObj kvs → cookO ck kvs = some kvs
+  | [] , _ => rfl
+  | (k, v) :: es, h => by simp [cookO, cookV_wf ck v h.1, cookO_wf ck es h.2]
+end
+
+/-- The math leaf of a value reads back as the value. -/
+theorem cookV_mathLeaf (prR : Sym → Json → String) (ck : String → Option Json) (S : Sym)
+    (hck : ∀ e, isE e = true → ck (prR S e) = some e) (v : Json) (hv : v.WF) :
+    cookV ck (mathLeaf prR S v) = some v := by
+  unfold mathLeaf
+  split
+  · rename_i h
+    simp only [Bool.and_eq_true] at h
+    simp [cookV, hck v h.1]
+  · exact cookV_wf ck v hv
+
+mutual
+theorem cookV_atPaths (prR : Sym → Json → String) (ck : String → Option Json) (S : Sym)
+    (hck : ∀ e, isE e = true → ck (prR S e) = some e) :
+    ∀ (ps : List (List Notation.Seg)) (v : Json), v.WF → cookV ck (atPaths (mathLeaf prR S) ps v) = some v
+  | ps, .arr xs, h => by
+    unfold atPaths
+    split
+    · exact cookV_mathLeaf prR ck S hck _ h
+    · simp [cookV, cookL_atPaths prR ck S hck _ xs h]
+  | ps, .obj kvs, h => by
+    unfold atPaths
+    split
+    · exact cookV_mathLeaf prR ck S hck _ h
+    · simp [cookV, cookO_atPaths prR ck S hck ps kvs h.2]
+  | ps, .null, h => by unfold atPaths; split <;> [exact cookV_mathLeaf prR ck S hck _ h; rfl]
+  | ps, .bool _, h => by unfold atPaths; split <;> [exact cookV_mathLeaf prR ck S hck _ h; rfl]
+  | ps, .num _, h => by unfold atPaths; split <;> [exact cookV_mathLeaf prR ck S hck _ h; rfl]
+  | ps, .str _, h => by unfold atPaths; split <;> [exact cookV_mathLeaf prR ck S hck _ h; rfl]
+  | _, .math _, h => h.elim
+
+theorem cookL_atPaths (prR : Sym → Json → String) (ck : String → Option Json) (S : Sym)
+    (hck : ∀ e, isE e = true → ck (prR S e) = some e) :
+    ∀ (ps : List (List Notation.Seg)) (xs : List Json), Json.WFList xs →
+      cookL ck (atPathsL (mathLeaf prR S) ps xs) = some xs
+  | _, [], _ => rfl
+  | ps, v :: vs, h => by
+    simp [atPathsL, cookL, cookV_atPaths prR ck S hck ps v h.1, cookL_atPaths prR ck S hck ps vs h.2]
+
+theorem cookO_atPaths (prR : Sym → Json → String) (ck : String → Option Json) (S : Sym)
+    (hck : ∀ e, isE e = true → ck (prR S e) = some e) :
+    ∀ (ps : List (List Notation.Seg)) (kvs : List (String × Json)), Json.WFObj kvs →
+      cookO ck (atPathsO (mathLeaf prR S) ps kvs) = some kvs
+  | _, [], _ => rfl
+  | ps, (k, v) :: es, h => by
+    simp [atPathsO, cookO, cookV_atPaths prR ck S hck _ v h.1, cookO_atPaths prR ck S hck ps es h.2]
+end
+
+/-- **Path blocks read back**: the math the printer put in reads back under the same
+table, and every other value is as it was. -/
+theorem cookBlocks_mathify (prR : Sym → Json → String) (ckR : Sym → String → Option Json)
+    (S : Sym) (hck : ∀ e, isE e = true → ckR S (prR S e) = some e) (ps : List (List Notation.Seg)) :
+    ∀ bs : List (String × Json), (∀ kv ∈ bs, kv.2.WF) → cookBlocks ckR S (mathify prR S ps bs) = some bs
+  | [], _ => rfl
+  | (k, v) :: es, h => by
+    have h1 := cookV_atPaths prR (ckR S) S hck (stepKey (some k) ps) v (h _ List.mem_cons_self)
+    have h2 := cookBlocks_mathify prR ckR S hck ps es (fun kv hm => h kv (List.mem_cons_of_mem _ hm))
+    simp only [cookBlocks, mathify, List.map_cons] at h1 h2 ⊢
+    simp [cookO, h1, h2]
+
+/-! ### What the printer leaves for the codecs -/
+
+theorem mathLeaf_wfm (prR : Sym → Json → String) (S : Sym) (v : Json) (hv : v.WF) :
+    (mathLeaf prR S v).WFm := by
+  unfold mathLeaf
+  split
+  · rename_i h
+    simp only [Bool.and_eq_true] at h
+    exact h.2
+  · exact Json.WF.wfm hv
+
+theorem atPathsO_keys (leaf : Json → Json) (ps : List (List Notation.Seg)) :
+    ∀ kvs : List (String × Json), (atPathsO leaf ps kvs).map Prod.fst = kvs.map Prod.fst
+  | [] => rfl
+  | (_, _) :: es => by simp [atPathsO, atPathsO_keys leaf ps es]
+
+mutual
+theorem atPaths_wfm (prR : Sym → Json → String) (S : Sym) :
+    ∀ (ps : List (List Notation.Seg)) (v : Json), v.WF → (atPaths (mathLeaf prR S) ps v).WFm
+  | ps, .arr xs, h => by
+    unfold atPaths
+    split
+    · exact mathLeaf_wfm prR S _ h
+    · exact atPathsL_wfm prR S _ xs h
+  | ps, .obj kvs, h => by
+    unfold atPaths
+    split
+    · exact mathLeaf_wfm prR S _ h
+    · exact ⟨by rw [atPathsO_keys]; exact h.1, atPathsO_wfm prR S ps kvs h.2⟩
+  | ps, .null, h => by unfold atPaths; split <;> [exact mathLeaf_wfm prR S _ h; trivial]
+  | ps, .bool _, h => by unfold atPaths; split <;> [exact mathLeaf_wfm prR S _ h; trivial]
+  | ps, .num _, h => by unfold atPaths; split <;> [exact mathLeaf_wfm prR S _ h; exact h]
+  | ps, .str _, h => by unfold atPaths; split <;> [exact mathLeaf_wfm prR S _ h; trivial]
+  | _, .math _, h => h.elim
+
+theorem atPathsL_wfm (prR : Sym → Json → String) (S : Sym) :
+    ∀ (ps : List (List Notation.Seg)) (xs : List Json), Json.WFList xs →
+      Json.WFmList (atPathsL (mathLeaf prR S) ps xs)
+  | _, [], _ => trivial
+  | ps, v :: vs, h => ⟨atPaths_wfm prR S ps v h.1, atPathsL_wfm prR S ps vs h.2⟩
+
+theorem atPathsO_wfm (prR : Sym → Json → String) (S : Sym) :
+    ∀ (ps : List (List Notation.Seg)) (kvs : List (String × Json)), Json.WFObj kvs →
+      Json.WFmObj (atPathsO (mathLeaf prR S) ps kvs)
+  | _, [], _ => trivial
+  | ps, (_, v) :: es, h => ⟨atPaths_wfm prR S _ v h.1, atPathsO_wfm prR S ps es h.2⟩
+end
+
+/-- Every printed block value is well formed with math leaves. -/
+theorem mathify_wfm (prR : Sym → Json → String) (S : Sym) (ps : List (List Notation.Seg))
+    (bs : List (String × Json)) (h : ∀ kv ∈ bs, kv.2.WF) :
+    ∀ kv ∈ mathify prR S ps bs, kv.2.WFm := by
+  intro kv hkv
+  simp only [mathify, List.mem_map] at hkv
+  obtain ⟨kv', hm, rfl⟩ := hkv
+  exact atPaths_wfm prR S _ _ (h kv' hm)
+
+/-! ### The symbol tables do not change -/
+
+/-- Away from every path the value is as it was. -/
+theorem atPaths_nil (leaf : Json → Json) : ∀ v : Json, atPaths leaf [] v = v
+  | .arr xs => by simp [atPaths, stepKey, atPathsL_nil leaf xs]
+  | .obj kvs => by simp [atPaths, atPathsO_nil leaf kvs]
+  | .null | .bool _ | .num _ | .str _ | .math _ => by simp [atPaths]
+where
+  atPathsL_nil (leaf : Json → Json) : ∀ xs : List Json, atPathsL leaf [] xs = xs
+    | [] => rfl
+    | v :: vs => by simp [atPathsL, atPaths_nil leaf v, atPathsL_nil leaf vs]
+  atPathsO_nil (leaf : Json → Json) : ∀ kvs : List (String × Json), atPathsO leaf [] kvs = kvs
+    | [] => rfl
+    | (k, v) :: es => by simp [atPathsO, stepKey, atPaths_nil leaf v, atPathsO_nil leaf es]
+
+/-- With no path ending here, an object keeps its keys. -/
+theorem keysOf_atPaths (leaf : Json → Json) (ps : List (List Notation.Seg)) (h : ps.contains [] = false)
+    (v : Json) : keysOf (some (atPaths leaf ps v)) = keysOf (some v) := by
+  have h' : [] ∉ ps := by simpa using h
+  cases v <;> simp [atPaths, h', keysOf, atPathsO_keys]
+
+theorem look_mathify (prR : Sym → Json → String) (S : Sym) (ps : List (List Notation.Seg)) (k : String) :
+    ∀ bs : List (String × Json),
+      look k (mathify prR S ps bs) = (look k bs).map (atPaths (mathLeaf prR S) (stepKey (some k) ps))
+  | [] => rfl
+  | (k', v) :: es => by
+    simp only [mathify, List.map_cons, look] at *
+    split
+    · rename_i h; subst h; rfl
+    · exact look_mathify prR S ps k es
+
+/-- The keys of a block are the same after printing, when no path ends at the block. -/
+theorem keysOf_mathify (prR : Sym → Json → String) (S : Sym) (ps : List (List Notation.Seg)) (k : String)
+    (h : (stepKey (some k) ps).contains [] = false) (bs : List (String × Json)) :
+    keysOf (look k (mathify prR S ps bs)) = keysOf (look k bs) := by
+  rw [look_mathify]
+  cases look k bs with
+  | none => rfl
+  | some v => exact keysOf_atPaths _ _ h v
+
+/-- A block no path starts at is the same after printing. -/
+theorem look_mathify_none (prR : Sym → Json → String) (S : Sym) (ps : List (List Notation.Seg)) (k : String)
+    (h : stepKey (some k) ps = []) (bs : List (String × Json)) :
+    look k (mathify prR S ps bs) = look k bs := by
+  rw [look_mathify, h]
+  cases look k bs <;> simp [atPaths_nil]
+
+/-- **Print the path blocks of a skeleton**: each section's under its symbol table (a
+component's, or the document's for the top-level blocks). -/
+def mathifyDoc {α ρ : Type} (prR : Sym → Json → String) (D : Doc (Mx α ρ)) : Doc (Mx α ρ) :=
+  { D with
+    blocks := mathify prR (topSym D) Notation.topExprPaths D.blocks,
+    comps := D.comps.map fun c =>
+      { c with blocks := mathify prR (symFor D c) Notation.compExprPaths c.blocks } }
+
+/-- **Read the path blocks of a skeleton**: every math leaf of a section's blocks under the
+section's symbol table. -/
+def cookDocBlocks {α ρ : Type} (ckR : Sym → String → Option Json) (D : Doc (Mx α ρ)) :
+    Option (Doc (Mx α ρ)) := do
+  let bs ← cookBlocks ckR (topSym D) D.blocks
+  let cs ← D.comps.mapM fun c => (cookBlocks ckR (symFor D c) c.blocks).map fun b => { c with blocks := b }
+  pure { D with blocks := bs, comps := cs }
+
+/-- No expression path ends at a block, and none starts at the blocks the symbol tables
+read (`index_sets`, `variables`, `species`, `parameters`, `expression_templates`). -/
+theorem stepKey_table :
+    (stepKey (some "index_sets") Notation.topExprPaths).contains [] = false ∧
+    stepKey (some "expression_templates") Notation.topExprPaths = [] ∧
+    (stepKey (some "variables") Notation.compExprPaths).contains [] = false ∧
+    (stepKey (some "species") Notation.compExprPaths).contains [] = false ∧
+    (stepKey (some "parameters") Notation.compExprPaths).contains [] = false := by
+  decide
+
+/-- The document's table is the same after printing its blocks. -/
+theorem topSym_mathifyDoc {α ρ : Type} (prR : Sym → Json → String) (D : Doc (Mx α ρ)) :
+    topSym (mathifyDoc prR D) = topSym D := by
+  simp only [topSym, mathifyDoc, rootTs]
+  rw [keysOf_mathify _ _ _ _ stepKey_table.1, look_mathify_none _ _ _ _ stepKey_table.2.1]
+
+/-- A component's table is the same after printing the blocks. -/
+theorem symFor_mathifyDoc {α ρ : Type} (prR : Sym → Json → String) (D : Doc (Mx α ρ))
+    (c : Comp (Mx α ρ)) :
+    symFor (mathifyDoc prR D) { c with blocks := mathify prR (symFor D c) Notation.compExprPaths c.blocks } =
+      symFor D c := by
+  simp only [symFor, symWith, mathifyDoc, rootTs, compTs]
+  rw [keysOf_mathify _ _ _ _ stepKey_table.1, look_mathify_none _ _ _ _ stepKey_table.2.1,
+    keysOf_mathify _ _ _ _ stepKey_table.2.2.1, keysOf_mathify _ _ _ _ stepKey_table.2.2.2.1,
+    keysOf_mathify _ _ _ _ stepKey_table.2.2.2.2]
+
+/-- **The path blocks of a skeleton read back** when every expression does under its
+table (the math round trips `parseLatex_printLatex`, `parseTypst_printTypst`). -/
+theorem cookDocBlocks_mathifyDoc {α ρ : Type} (prR : Sym → Json → String)
+    (ckR : Sym → String → Option Json) (hck : ∀ S e, isE e = true → ckR S (prR S e) = some e)
+    (D : Doc (Mx α ρ)) (hb : ∀ kv ∈ D.blocks, kv.2.WF)
+    (hc : ∀ c ∈ D.comps, ∀ kv ∈ c.blocks, kv.2.WF) :
+    cookDocBlocks ckR (mathifyDoc prR D) = some D := by
+  have hT := topSym_mathifyDoc prR D
+  have hS := symFor_mathifyDoc prR D
+  unfold cookDocBlocks
+  rw [hT]
+  have h1 : cookBlocks ckR (topSym D) (mathifyDoc prR D).blocks = some D.blocks :=
+    cookBlocks_mathify prR ckR _ (hck _) _ D.blocks hb
+  rw [h1]
+  have h2 : (mathifyDoc prR D).comps.mapM (fun c => (cookBlocks ckR (symFor (mathifyDoc prR D) c)
+      c.blocks).map fun b => { c with blocks := b }) = some D.comps := by
+    show (D.comps.map _).mapM _ = _
+    rw [List.mapM_map]
+    refine (mapM_some _ id D.comps (fun c hcm => ?_)).trans (by simp)
+    simp only [Function.comp_def, hS c, id]
+    rw [cookBlocks_mathify prR ckR _ (hck _) _ c.blocks (hc c hcm)]
+    rfl
+  simp only [Option.bind_eq_bind, Option.bind_some, h2]
+  rfl
+
+/-- **The printed constructs stay readable**: printing the blocks only changes block
+values, each into one well formed with math leaves. `ok` is a container's `itemOK`, whose
+test of a block is `Json.wfmb`. -/
+theorem items_mathifyDoc_ok (ok : RItem → Bool) (hblk : ∀ k v, ok (.block k v) = v.wfmb)
+    (prR : Sym → Json → String) (X : Doc MR) (hX : ∀ it ∈ items X, ok it = true)
+    (hb : ∀ kv ∈ X.blocks, kv.2.WF) (hc : ∀ c ∈ X.comps, ∀ kv ∈ c.blocks, kv.2.WF) :
+    ∀ it ∈ items (mathifyDoc prR X), ok it = true := by
+  intro it hit
+  have hcomp : ∀ c ∈ X.comps, ∀ it ∈ compItems c, ok it = true := fun c hc' it h =>
+    hX it (by simp only [items, List.mem_append, List.mem_flatMap]; exact Or.inr ⟨c, hc', h⟩)
+  simp only [items, mathifyDoc, List.mem_append, List.mem_flatMap] at hit
+  rcases hit with ((hd | hbk) | hm) | ⟨c', hc', hit⟩
+  · exact hX it (by simp only [items, List.mem_append]; exact Or.inl (Or.inl (Or.inl hd)))
+  · obtain ⟨kv, hkv, rfl⟩ := List.mem_map.mp hbk
+    rw [hblk]; exact (Json.wfmb_iff _).mpr (mathify_wfm prR _ _ _ hb kv hkv)
+  · exact hX it (by simp only [items, List.mem_append]; exact Or.inl (Or.inr hm))
+  · obtain ⟨c, hcm, rfl⟩ := List.mem_map.mp hc'
+    simp only [compItems, List.mem_cons, List.mem_append] at hit
+    rcases hit with h0 | ((((h1 | h2) | h3) | h4) | hbk)
+    · exact hcomp c hcm it (by simp [compItems, h0])
+    · exact hcomp c hcm it (by simp [compItems, h1])
+    · exact hcomp c hcm it (by simp [compItems, h2])
+    · exact hcomp c hcm it (by simp [compItems, h3])
+    · exact hcomp c hcm it (by simp [compItems, h4])
+    · obtain ⟨kv, hkv, rfl⟩ := List.mem_map.mp hbk
+      rw [hblk]; exact (Json.wfmb_iff _).mpr (mathify_wfm prR _ _ _ (hc c hcm) kv hkv)
+
+theorem wfmb_of_jwf {v : Json} (h : jwf v = true) : v.wfmb = true :=
+  (Json.wfmb_iff v).mpr (Json.WF.wfm (jwf_sound v h))
+
+/-- Printing the blocks keeps every key. -/
+theorem mem_mathify_key {prR : Sym → Json → String} {S : Sym} {ps : List (List Notation.Seg)}
+    {bs : List (String × Json)} {kv : String × Json} (h : kv ∈ mathify prR S ps bs) :
+    ∃ kv0 ∈ bs, kv0.1 = kv.1 := by
+  obtain ⟨kv0, hm, rfl⟩ := List.mem_map.mp h
+  exact ⟨kv0, hm, rfl⟩
+
+/-- The skeleton with printed blocks satisfies `itemsOK` when the skeleton does. -/
+theorem itemsOK_mathifyDoc (prR : Sym → Json → String) (X : Doc MR) (h : itemsOK X) :
+    itemsOK (mathifyDoc prR X) := by
+  refine ⟨fun c hc => ?_, h.2⟩
+  obtain ⟨c0, hc0, rfl⟩ := List.mem_map.mp hc
+  obtain ⟨h1, h2⟩ := h.1 c0 hc0
+  refine ⟨fun kv hkv => ?_, h2⟩
+  obtain ⟨kv0, hm, he⟩ := mem_mathify_key hkv
+  rw [← he]; exact h1 kv0 hm
 
 /-! ## Math entries: printed under the symbol table, and read back -/
 

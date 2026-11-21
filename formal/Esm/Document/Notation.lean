@@ -26,8 +26,9 @@ Decisions of record (2026-11-13):
 * Template arguments are positional when the parameter list is known, named otherwise.
 * Index subscripts are italic expressions; the subscript part of a name is upright;
   an ambiguous digit subscript prints the index in brackets (`k[1]`).
-* Expression-valued fields inside blocks are math strings; an equation's `_comment`
-  is a comment line inside its math.
+* Expression-valued fields inside blocks are math strings (spelled 2026-11-20: a math
+  leaf `$…$`, see "Expressions inside path blocks"); an equation's `_comment` is a comment
+  line inside its math.
 * Models and reaction systems keep separate directives.
 
 Decisions of record (2026-11-15), array notation:
@@ -434,6 +435,59 @@ def skeleton : List SkeletonRow := [
     typst := r#"#plot(key: value, …, plot: (…)), the same fields"# },
   { field := "everything else", home := .pathBlock,
     markdown := "```esm:<path> block", typst := r#"#esm-block("<path>", (…))"# }
+]
+
+/-! ## Expressions inside path blocks
+
+Decided 2026-11-13 ("expression-valued fields inside blocks are math strings"), spelled
+2026-11-20: a field of a path block whose schema type is `Expression` holds math when its
+value is a well-formed expression whose math text a container can delimit
+(`Json.mathOK`): `$…$` in a Typst dictionary (Typst math content) and the plain scalar
+`$…$` in YAML (where a string is always double-quoted). Every other value there stays as
+it is. The math is printed under the section's symbol table (a component's, or the
+document's for a top-level block). The reader reads every math leaf back under the same
+table, wherever it is (`Source.cookBlocks`); a math leaf anywhere else is refused (the
+document read back is not canonical).
+
+The fields are listed as paths from the block's key: `Seg.key k` steps into the entry
+`k` of an object, `Seg.any` into every element of an array and every value of an object.
+Fields with a surface of their own (equations, reactions, templates and rules, which fall
+back to a block only when their math cannot be printed natively) are not listed. -/
+
+/-- One step of a path inside a block value. -/
+inductive Seg where
+  | key (k : String)
+  | any
+  deriving DecidableEq, Repr
+
+open Seg in
+/-- The expression-valued fields of a component's path blocks (esm-schema.json:
+`Assertion.reference`, `ContinuousEvent.conditions`, `AffectEquation.rhs`,
+`DiscreteEventTrigger.expression`, `Model.guesses`, `ParameterUpdate.expression` and
+`.when`). -/
+def compExprPaths : List (List Seg) := [
+  [key "continuous_events", any, key "affect_neg", any, key "rhs"],
+  [key "continuous_events", any, key "affects", any, key "rhs"],
+  [key "continuous_events", any, key "conditions", any],
+  [key "discrete_events", any, key "affects", any, key "rhs"],
+  [key "discrete_events", any, key "trigger", key "expression"],
+  [key "guesses", any],
+  [key "parameters", any, key "update", key "expression"],
+  [key "parameters", any, key "update", key "when"],
+  [key "tests", any, key "assertions", any, key "reference"],
+  [key "variables", any, key "update", key "expression"],
+  [key "variables", any, key "update", key "when"]
+]
+
+open Seg in
+/-- The expression-valued fields of the document's top-level path blocks (the coupling
+entries' events and connector equations). -/
+def topExprPaths : List (List Seg) := [
+  [key "coupling", any, key "affect_neg", any, key "rhs"],
+  [key "coupling", any, key "affects", any, key "rhs"],
+  [key "coupling", any, key "conditions", any],
+  [key "coupling", any, key "connector", key "equations", any, key "expression"],
+  [key "coupling", any, key "trigger", key "expression"]
 ]
 
 /-! ## Templates and rules

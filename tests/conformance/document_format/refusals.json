@@ -4,6 +4,38 @@
   "area": "Input every binding refuses, with the code it reports",
   "cases": [
     {
+      "id": "math_leaf_outside_block_typst",
+      "kind": "refusal",
+      "description": "A math leaf is read only inside a path block: as a declaration attribute it is refused.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: $1$, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "math_leaf_outside_block_markdown",
+      "kind": "refusal",
+      "description": "A math leaf is read only inside a path block: in the front matter it is refused.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.3.0\"\nname: $x$\n---\n\n::model[M]\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "block_math_unreadable_typst",
+      "kind": "refusal",
+      "description": "Math in a path block that does not read as an expression is refused.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($c$, default: 0, units: \"kg/m^3\")\n\n#param($u$, default: 1, units: \"m/s\")\n\n$ (dif c)/(dif t) = -u c $\n\n#esm-block(\"tests\", (\n  (\n    assertions: (\n      (\n        expected: 0,\n        reduce: \"Linf_error\",\n        reference: $c exp($,\n        time: 1,\n        tolerance: (\n          abs: 1.0e-9,\n        ),\n        variable: \"c\",\n      ),\n    ),\n    id: \"decays\",\n    time_span: (\n      end: 1,\n      start: 0,\n    ),\n  ),\n))\n",
+      "error": "parse_error"
+    },
+    {
+      "id": "block_math_unreadable_markdown",
+      "kind": "refusal",
+      "description": "Math in a path block that does not read as an expression is refused.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n\n```esm:tests\n- assertions:\n    - expected: 0\n      reduce: \"Linf_error\"\n      reference: $\\frac{c}$\n      time: 1\n      tolerance:\n        abs: 1.0e-9\n      variable: \"c\"\n  id: \"decays\"\n  time_span:\n    end: 1\n    start: 0\n```\n",
+      "error": "parse_error"
+    },
+    {
       "id": "removed_arrayop",
       "kind": "refusal",
       "description": "The removed operator arrayop in the call form.",

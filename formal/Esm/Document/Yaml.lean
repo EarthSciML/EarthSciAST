@@ -20,7 +20,9 @@ Markdown documents. The printed text is block-style YAML 1.2:
 
 Scalars: `null`, `true`, `false`, numbers in the canonical spelling (`Number.print`),
 and strings ALWAYS double-quoted with JSON-style escapes (`\uXXXX` for the characters
-of `Strings.needsHex`), which avoids YAML's implicit typing. A key is bare when it
+of `Strings.needsHex`), which avoids YAML's implicit typing. Because a string is always
+quoted, a math leaf (path blocks only, `Source.mathify`) is the plain scalar `$…$`, its
+text up to the next `$` (`Json.mathOK`). A key is bare when it
 matches `[A-Za-z_][A-Za-z0-9_]*` and is not, in any letter case, one of YAML's
 special plain scalars (`true false null yes no on off y n`); otherwise it is quoted
 like a string. A key whose spelling is longer than 1024 characters (YAML's limit on
@@ -64,6 +66,7 @@ def inline : Json → List Char
   | .bool false => ['f', 'a', 'l', 's', 'e']
   | .num n => Number.print n
   | .str s => quote false s
+  | .math s => '$' :: s.toList ++ ['$']
   | .arr _ => ['[', ']']
   | .obj _ => ['{', '}']
 
@@ -81,6 +84,7 @@ def itemBody (m : Nat) : Json → List Char
   | .bool b => ' ' :: inline (.bool b) ++ ['\n']
   | .num n => ' ' :: inline (.num n) ++ ['\n']
   | .str s => ' ' :: inline (.str s) ++ ['\n']
+  | .math s => ' ' :: inline (.math s) ++ ['\n']
   | .arr [] => ' ' :: inline (.arr []) ++ ['\n']
   | .obj [] => ' ' :: inline (.obj []) ++ ['\n']
 
@@ -97,6 +101,7 @@ def valBody (m : Nat) : Json → List Char
   | .bool b => ' ' :: inline (.bool b) ++ ['\n']
   | .num n => ' ' :: inline (.num n) ++ ['\n']
   | .str s => ' ' :: inline (.str s) ++ ['\n']
+  | .math s => ' ' :: inline (.math s) ++ ['\n']
   | .arr [] => ' ' :: inline (.arr []) ++ ['\n']
   | .obj [] => ' ' :: inline (.obj []) ++ ['\n']
 end
@@ -154,6 +159,7 @@ def pInline : List Char → Option (Json × List Char)
       | '}' :: r' => some (.obj [], r')
       | _ => none
     else if c = '"' then (parseQuoted false (c :: r)).map fun p => (.str p.1, p.2)
+    else if c = '$' then pMath r
     else (Number.parse (c :: r)).map fun p => (.num p.1, p.2)
 
 /-- A scalar and the end of its line. -/
@@ -242,15 +248,15 @@ def pTop (f : Nat) (input : List Char) : Option (Json × List Char) :=
 formed (no repeated key; numbers are already canonical, `Number.parse`). -/
 def decode (s : List Char) : Option Json :=
   match pTop (4 * s.length + 4) s with
-  | some (v, []) => if v.wfb then some v else none
+  | some (v, []) => if v.wfmb then some v else none
   | _ => none
 
 /-- **What `decode` reads is well formed.** -/
-theorem decode_wf {s : List Char} {v : Json} (h : decode s = some v) : v.WF := by
+theorem decode_wf {s : List Char} {v : Json} (h : decode s = some v) : v.WFm := by
   unfold decode at h
   split at h
   · split at h
-    · cases h; exact (Json.wfb_iff _).mp ‹_›
+    · cases h; exact (Json.wfmb_iff _).mp ‹_›
     · cases h
   · cases h
 
@@ -375,7 +381,7 @@ def isInl : Json → Bool
   | .obj (_ :: _) => false
   | _ => true
 
-theorem pInline_inline (v : Json) (hi : isInl v = true) (hv : v.WF) (rest : List Char) :
+theorem pInline_inline (v : Json) (hi : isInl v = true) (hv : v.WFm) (rest : List Char) :
     pInline (inline v ++ '\n' :: rest) = some (v, '\n' :: rest) := by
   match v with
   | .null => rfl
@@ -392,19 +398,27 @@ theorem pInline_inline (v : Json) (hi : isInl v = true) (hv : v.WF) (rest : List
       (by decide : ('"' = '{') = False), ite_false, ite_true]
     rw [← h]
     simp [inline, parseQuoted_quote]
+  | .math s =>
+    have h : inline (.math s) ++ '\n' :: rest = '$' :: (s.toList ++ '$' :: '\n' :: rest) := by
+      simp [inline]
+    rw [h]
+    simp only [pInline, (by decide : ('$' = 'n') = False), (by decide : ('$' = 't') = False),
+      (by decide : ('$' = 'f') = False), (by decide : ('$' = '[') = False),
+      (by decide : ('$' = '{') = False), (by decide : ('$' = '"') = False), ite_false, ite_true]
+    exact pMath_math s _ hv
   | .num n =>
     obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
     have hp := Number.parse_print n ('\n' :: rest) hv (fun c hc => by cases hc; decide)
     simp only [inline, h, List.cons_append] at hp ⊢
     simp only [pInline, numHead_ne hc 'n', numHead_ne hc 't', numHead_ne hc 'f', numHead_ne hc '[',
-      numHead_ne hc '{', numHead_ne hc '"', ite_false, hp]
+      numHead_ne hc '{', numHead_ne hc '"', numHead_ne hc '$', ite_false, hp]
     rfl
 
-theorem pScalarLine_inline (v : Json) (hi : isInl v = true) (hv : v.WF) (rest : List Char) :
+theorem pScalarLine_inline (v : Json) (hi : isInl v = true) (hv : v.WFm) (rest : List Char) :
     pScalarLine (inline v ++ '\n' :: rest) = some (v, rest) := by
   simp [pScalarLine, pInline_inline v hi hv rest]
 
-theorem pEntry_inline (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WF) (rest : List Char) :
+theorem pEntry_inline (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WFm) (rest : List Char) :
     pEntry f m (inline v ++ '\n' :: rest) = none := by
   cases f with
   | zero => simp [pEntry]
@@ -420,6 +434,8 @@ theorem pEntry_inline (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WF) (
       rw [h, parseKeyAt_ne m _ (by decide), ← h]
       simp only [inline, parseKey_quote]
       rfl
+    | .math s =>
+      simp [pEntry, inline, parseKeyAt, parseKey, isIdentStart]
     | .num n =>
       obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
       simp [pEntry, inline, h, parseKeyAt, parseKey, numHead_ne hc '"', numHead_ident hc,
@@ -430,19 +446,19 @@ theorem pEntry_inline (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WF) (
 theorem itemBody_inl (m : Nat) (v : Json) (hi : isInl v = true) :
     itemBody m v = ' ' :: inline v ++ ['\n'] := by
   match v with
-  | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] => rfl
+  | .null | .bool _ | .num _ | .str _ | .math _ | .arr [] | .obj [] => rfl
 
 theorem valBody_inl (m : Nat) (v : Json) (hi : isInl v = true) :
     valBody m v = ' ' :: inline v ++ ['\n'] := by
   match v with
-  | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] => rfl
+  | .null | .bool _ | .num _ | .str _ | .math _ | .arr [] | .obj [] => rfl
 
 theorem itemBody_head (m : Nat) (v : Json) :
     ∃ c t, itemBody m v = c :: t ∧ (c = ' ' ∨ c = '\n') := by
   match v with
   | .arr (_ :: _) => exact ⟨_, _, rfl, Or.inr rfl⟩
   | .obj ((_, _) :: _) => exact ⟨_, _, rfl, Or.inl rfl⟩
-  | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] => exact ⟨_, _, rfl, Or.inl rfl⟩
+  | .null | .bool _ | .num _ | .str _ | .math _ | .arr [] | .obj [] => exact ⟨_, _, rfl, Or.inl rfl⟩
 
 theorem items_ends (m : Nat) (vs : List Json) (rest : List Char) (h : Ends m rest) :
     Ends (m + 2) (encItems m vs ++ rest) := by
@@ -483,7 +499,7 @@ theorem sizeObj_pos (l : List (String × Json)) : 1 ≤ Json.sizeObj l := by
   | nil => simp [Json.sizeObj]
   | cons e es => obtain ⟨k, v⟩ := e; simp [Json.sizeObj]
 
-theorem pValBody_scalar (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WF) (rest : List Char) :
+theorem pValBody_scalar (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WFm) (rest : List Char) :
     pValBody (f + 1) m (valBody m v ++ rest) = some (v, rest) := by
   have h : valBody m v ++ rest = ' ' :: (inline v ++ '\n' :: rest) := by
     simp [valBody_inl m v hi]
@@ -491,7 +507,7 @@ theorem pValBody_scalar (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WF)
   simp only [pValBody, ite_true]
   exact pScalarLine_inline v hi hv rest
 
-theorem pItemBody_scalar (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WF) (rest : List Char) :
+theorem pItemBody_scalar (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WFm) (rest : List Char) :
     pItemBody (f + 1) m (itemBody m v ++ rest) = some (v, rest) := by
   have h : itemBody m v ++ rest = ' ' :: (inline v ++ '\n' :: rest) := by
     simp [itemBody_inl m v hi]
@@ -501,13 +517,14 @@ theorem pItemBody_scalar (f m : Nat) (v : Json) (hi : isInl v = true) (hv : v.WF
   exact pScalarLine_inline v hi hv rest
 
 mutual
-theorem pValBody_enc : ∀ (v : Json) (f m : Nat) (rest : List Char), v.WF → Ends (m + 2) rest →
+theorem pValBody_enc : ∀ (v : Json) (f m : Nat) (rest : List Char), v.WFm → Ends (m + 2) rest →
     2 * v.size ≤ f → pValBody f m (valBody m v ++ rest) = some (v, rest)
   | v, 0, _, _, _, _, hf => absurd hf (by have := size_pos v; omega)
   | .null, f + 1, m, rest, hv, _, _ => pValBody_scalar f m .null rfl hv rest
   | .bool b, f + 1, m, rest, hv, _, _ => pValBody_scalar f m (.bool b) rfl hv rest
   | .num n, f + 1, m, rest, hv, _, _ => pValBody_scalar f m (.num n) rfl hv rest
   | .str s, f + 1, m, rest, hv, _, _ => pValBody_scalar f m (.str s) rfl hv rest
+  | .math s, f + 1, m, rest, hv, _, _ => pValBody_scalar f m (.math s) rfl hv rest
   | .arr [], f + 1, m, rest, hv, _, _ => pValBody_scalar f m (.arr []) rfl hv rest
   | .obj [], f + 1, m, rest, hv, _, _ => pValBody_scalar f m (.obj []) rfl hv rest
   | .arr (w :: ws), f + 1, m, rest, hv, hr, hf => by
@@ -529,13 +546,14 @@ theorem pValBody_enc : ∀ (v : Json) (f m : Nat) (rest : List Char), v.WF → E
     simp only [valBody, List.cons_append, pValBody, (by decide : ('\n' = ' ') = False),
       ite_false, ite_true, hl, hen, Option.map_some, Bool.false_eq_true]
 
-theorem pItemBody_enc : ∀ (v : Json) (f m : Nat) (rest : List Char), v.WF → Ends (m + 2) rest →
+theorem pItemBody_enc : ∀ (v : Json) (f m : Nat) (rest : List Char), v.WFm → Ends (m + 2) rest →
     2 * v.size ≤ f → pItemBody f m (itemBody m v ++ rest) = some (v, rest)
   | v, 0, _, _, _, _, hf => absurd hf (by have := size_pos v; omega)
   | .null, f + 1, m, rest, hv, _, _ => pItemBody_scalar f m .null rfl hv rest
   | .bool b, f + 1, m, rest, hv, _, _ => pItemBody_scalar f m (.bool b) rfl hv rest
   | .num n, f + 1, m, rest, hv, _, _ => pItemBody_scalar f m (.num n) rfl hv rest
   | .str s, f + 1, m, rest, hv, _, _ => pItemBody_scalar f m (.str s) rfl hv rest
+  | .math s, f + 1, m, rest, hv, _, _ => pItemBody_scalar f m (.math s) rfl hv rest
   | .arr [], f + 1, m, rest, hv, _, _ => pItemBody_scalar f m (.arr []) rfl hv rest
   | .obj [], f + 1, m, rest, hv, _, _ => pItemBody_scalar f m (.obj []) rfl hv rest
   | .arr (w :: ws), f + 1, m, rest, hv, hr, hf => by
@@ -543,8 +561,8 @@ theorem pItemBody_enc : ∀ (v : Json) (f m : Nat) (rest : List Char), v.WF → 
     have hit := pItems_enc (w :: ws) f (m + 2) rest hv hr (by omega)
     simp only [itemBody, List.cons_append, pItemBody, ite_true, hit, Option.map_some]
   | .obj ((k, w) :: es), f + 1, m, rest, hv, hr, hf => by
-    have hw : Json.WFObj ((k, w) :: es) := hv.2
-    have hw' : w.WF ∧ Json.WFObj es := hw
+    have hw : Json.WFmObj ((k, w) :: es) := hv.2
+    have hw' : w.WFm ∧ Json.WFmObj es := hw
     have hs : 2 * (w.size + Json.sizeObj es + 1 + 1) ≤ f + 1 := by
       simpa [Json.size, Json.sizeObj] using hf
     have hes := sizeObj_pos es
@@ -558,13 +576,13 @@ theorem pItemBody_enc : ∀ (v : Json) (f m : Nat) (rest : List Char), v.WF → 
     rw [hent]
     simp only [hen, Option.map_some]
 
-theorem pItems_enc : ∀ (l : List Json) (f m : Nat) (rest : List Char), Json.WFList l →
+theorem pItems_enc : ∀ (l : List Json) (f m : Nat) (rest : List Char), Json.WFmList l →
     Ends m rest → 2 * Json.sizeList l ≤ f → pItems f m (encItems m l ++ rest) = some (l, rest)
   | l, 0, _, _, _, _, hf => absurd hf (by have := sizeList_pos l; omega)
   | [], f + 1, m, rest, _, hr, _ => by
     simp [encItems, pItems, isItemLine_ends hr]
   | v :: vs, f + 1, m, rest, hw, hr, hf => by
-    have hw' : v.WF ∧ Json.WFList vs := hw
+    have hw' : v.WFm ∧ Json.WFmList vs := hw
     have hs : 2 * (v.size + Json.sizeList vs + 1) ≤ f + 1 := by simpa [Json.sizeList] using hf
     have hib := pItemBody_enc v f m (encItems m vs ++ rest) hw'.1 (items_ends m vs rest hr) (by omega)
     have hit := pItems_enc vs f m rest hw'.2 hr (by omega)
@@ -573,13 +591,13 @@ theorem pItems_enc : ∀ (l : List Json) (f m : Nat) (rest : List Char), Json.WF
     rw [h, pItems, ite_eq_left (isItemLine_dash _ _), drop_spaces]
     simp only [List.drop_succ_cons, List.drop_zero, hib, hit, Option.map_some]
 
-theorem pEntries_enc : ∀ (l : List (String × Json)) (f m : Nat) (rest : List Char), Json.WFObj l →
+theorem pEntries_enc : ∀ (l : List (String × Json)) (f m : Nat) (rest : List Char), Json.WFmObj l →
     Ends m rest → 2 * Json.sizeObj l ≤ f → pEntries f m (encEntries m l ++ rest) = some (l, rest)
   | l, 0, _, _, _, _, hf => absurd hf (by have := sizeObj_pos l; omega)
   | [], f + 1, m, rest, _, hr, _ => by
     simp [encEntries, pEntries, isEntryLine_ends hr]
   | (k, v) :: es, f + 1, m, rest, hw, hr, hf => by
-    have hw' : v.WF ∧ Json.WFObj es := hw
+    have hw' : v.WFm ∧ Json.WFmObj es := hw
     have hs : 2 * (v.size + Json.sizeObj es + 1) ≤ f + 1 := by simpa [Json.sizeObj] using hf
     have hes := sizeObj_pos es
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by omega⟩
@@ -598,7 +616,7 @@ end
 
 mutual
 theorem size_le_valBody (m : Nat) : ∀ v : Json, v.size ≤ 2 * (valBody m v).length
-  | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] => by
+  | .null | .bool _ | .num _ | .str _ | .math _ | .arr [] | .obj [] => by
     simp only [Json.size, Json.sizeList, Json.sizeObj, valBody, List.length_cons,
       List.length_append]
     omega
@@ -612,7 +630,7 @@ theorem size_le_valBody (m : Nat) : ∀ v : Json, v.size ≤ 2 * (valBody m v).l
     omega
 
 theorem size_le_itemBody (m : Nat) : ∀ v : Json, v.size ≤ 2 * (itemBody m v).length
-  | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] => by
+  | .null | .bool _ | .num _ | .str _ | .math _ | .arr [] | .obj [] => by
     simp only [Json.size, Json.sizeList, Json.sizeObj, itemBody, List.length_cons,
       List.length_append]
     omega
@@ -646,7 +664,7 @@ end
 
 theorem size_le_encode (v : Json) : v.size ≤ 2 * (encode v).length + 2 := by
   match v with
-  | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] =>
+  | .null | .bool _ | .num _ | .str _ | .math _ | .arr [] | .obj [] =>
     simp only [Json.size, Json.sizeList, Json.sizeObj]
     omega
   | .arr (w :: ws) =>
@@ -670,10 +688,10 @@ theorem pTop_eq (f : Nat) (input : List Char) :
         | some (e, r) => (pEntries f 0 r).map fun p => (.obj (e :: p.1), p.2)
         | none => pScalarLine input := rfl
 
-theorem topIsArray_scalar (v : Json) (hi : isInl v = true) (hv : v.WF) (rest : List Char) :
+theorem topIsArray_scalar (v : Json) (hi : isInl v = true) (hv : v.WFm) (rest : List Char) :
     topIsArray (inline v ++ '\n' :: rest) = false := by
   match v with
-  | .null | .bool true | .bool false | .str _ | .arr [] | .obj [] =>
+  | .null | .bool true | .bool false | .str _ | .math _ | .arr [] | .obj [] =>
     simp [topIsArray, isItemLine, dropSp, inline, quote]
   | .num n =>
     obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
@@ -686,17 +704,17 @@ theorem topIsArray_scalar (v : Json) (hi : isInl v = true) (hv : v.WF) (rest : L
       simp [topIsArray, inline, h, ht, this]
     · simp [topIsArray, isItemLine, dropSp, inline, h, hm]
 
-theorem pTop_scalar (f : Nat) (v : Json) (hi : isInl v = true) (hv : v.WF) :
+theorem pTop_scalar (f : Nat) (v : Json) (hi : isInl v = true) (hv : v.WFm) :
     pTop f (inline v ++ ['\n']) = some (v, []) := by
   rw [pTop_eq, topIsArray_scalar v hi hv [], pEntry_inline f 0 v hi hv []]
   exact pScalarLine_inline v hi hv []
 
 /-- **The YAML round trip.** Reading the canonical YAML spelling of a well-formed value
-gives the value back. -/
-theorem decode_encode (v : Json) (hv : v.WF) : decode (encode v) = some v := by
+(math leaves allowed) gives the value back. -/
+theorem decode_encode (v : Json) (hv : v.WFm) : decode (encode v) = some v := by
   have hlen := size_le_encode v
   suffices h : pTop (4 * (encode v).length + 4) (encode v) = some (v, []) by
-    unfold decode; rw [h]; simp [(Json.wfb_iff v).mpr hv]
+    unfold decode; rw [h]; simp [(Json.wfmb_iff v).mpr hv]
   generalize hF : 4 * (encode v).length + 4 = F
   have hf : 2 * v.size ≤ F := by omega
   clear hF hlen
@@ -705,6 +723,7 @@ theorem decode_encode (v : Json) (hv : v.WF) : decode (encode v) = some v := by
   | .bool b => exact pTop_scalar _ (.bool b) rfl hv
   | .num n => exact pTop_scalar _ (.num n) rfl hv
   | .str s => exact pTop_scalar _ (.str s) rfl hv
+  | .math s => exact pTop_scalar _ (.math s) rfl hv
   | .arr [] => exact pTop_scalar _ (.arr []) rfl hv
   | .obj [] => exact pTop_scalar _ (.obj []) rfl hv
   | .arr (w :: ws) =>
@@ -722,7 +741,7 @@ theorem decode_encode (v : Json) (hv : v.WF) : decode (encode v) = some v := by
     rw [hit]
     rfl
   | .obj ((k, w) :: es) =>
-    have hw : w.WF ∧ Json.WFObj es := hv.2
+    have hw : w.WFm ∧ Json.WFmObj es := hv.2
     have hs : 2 * (w.size + Json.sizeObj es + 1 + 1) ≤ F := by
       simpa [Json.size, Json.sizeObj] using hf
     have hes := sizeObj_pos es
