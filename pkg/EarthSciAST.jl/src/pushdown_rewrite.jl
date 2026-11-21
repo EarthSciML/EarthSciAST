@@ -204,6 +204,7 @@ function _pd_open(tt, e::ASTExpr, fr)
             return (e, fr)
         end
     end
+    return
 end
 
 # The name `e` reads as a name of the model's own tree, or `nothing`.
@@ -906,19 +907,40 @@ function _pd_rewrite_rects!(node, rectmap::AbstractDict)
     return node
 end
 
-# The producer filter of the first dict-form `ifelse` node in `node` (pre-order),
-# written in `node`'s own scope, or `nothing` when there is none: the
-# comparisons of its condition (an `and`/`*` of them, or the one condition) as
-# a `*`, deep-copied. An `ifelse` inside the body of a template `T` that a
-# reference names (`reg`, the component registry) is not copied out of the
-# body: the comparisons become the body of the DERIVED template `T__pd_filter`
-# (registered in `derived`), written in `T`'s parameters, and the filter in
-# `node`'s scope is a reference to it with the parameters it reads bound as
-# the reference binds them. A containment nested several templates deep gets
-# one derived template per template on the way, each body a reference to the
-# next. No reference is expanded.
+# The producer filter of the first dict-form `ifelse` node of `Expand(node)`
+# (pre-order), written in `node`'s own scope, or `nothing` when there is none:
+# the comparisons of its condition (an `and`/`*` of them, or the one condition)
+# as a `*`, deep-copied. No reference is expanded; the walk visits nodes in the
+# order the expansion would hold them, so it finds the `ifelse` detection
+# (`_pd_find_ifelse_cond`, reading through the frames) found: a template body
+# is walked in place of the reference (`reg`, the component registry), and a
+# parameter leaf of that body stands for its binding, walked in the
+# reference's scope. An `ifelse` inside the body of a template `T` is not
+# copied out of the body: the comparisons become the body of the DERIVED
+# template `T__pd_filter` (registered in `derived`), written in `T`'s
+# parameters, and the filter in `node`'s scope is a reference to it with the
+# parameters it reads bound as the reference binds them. A containment nested
+# several templates deep gets one derived template per template on the way,
+# each body a reference to the next.
 function _pd_filter_in(node, reg, derived::AbstractDict)
-    if node isa AbstractDict
+    r = _pd_filter_scan(node, reg, derived, nothing)
+    return r === nothing ? nothing : r[1]
+end
+
+# A template body's scope in `_pd_filter_scan`: the reference's binding of each
+# parameter and the scope the reference itself sits in (`nothing` at the top).
+struct _PdFilterScope
+    bindings::Dict{String, Any}
+    outer::Union{Nothing, _PdFilterScope}
+end
+
+# `_pd_filter_in`'s walk: `(filter, owner)`, `owner` the scope the filter is
+# written in, or `nothing`.
+function _pd_filter_scan(node, reg, derived::AbstractDict, scope)
+    if node isa AbstractString
+        (scope !== nothing && haskey(scope.bindings, node)) || return nothing
+        return _pd_filter_scan(scope.bindings[node], reg, derived, scope.outer)
+    elseif node isa AbstractDict
         op = get(node, "op", nothing)
         if op == "ifelse"
             a = get(node, "args", nothing)
@@ -926,25 +948,37 @@ function _pd_filter_in(node, reg, derived::AbstractDict)
                 c = a[1]
                 comps = (c isa AbstractDict && get(c, "op", nothing) in ("and", "*")) ?
                     c["args"] : Any[c]
-                return OrderedDict{String, Any}(
+                f = OrderedDict{String, Any}(
                     "op" => "*", "args" => Any[_to_ordered(deepcopy(x)) for x in comps]
                 )
+                return (f, scope)
             end
         elseif op == APPLY_EXPRESSION_TEMPLATE_OP && reg !== nothing
             name = get(node, "name", nothing)
             if name isa AbstractString && haskey(reg, name)
                 decl = _TemplateDecl(reg[name])
-                f = _pd_filter_in(decl.body, reg, derived)
-                f === nothing || return _pd_filter_ref(String(name), decl.params, f, node, derived)
+                b = get(node, "bindings", nothing)
+                inner = _PdFilterScope(
+                    Dict{String, Any}(
+                        p => b[p] for p in decl.params if b isa AbstractDict && haskey(b, p)
+                    ),
+                    scope
+                )
+                r = _pd_filter_scan(decl.body, reg, derived, inner)
+                (r !== nothing && r[2] === inner) &&
+                    return (_pd_filter_ref(String(name), decl.params, r[1], node, derived), scope)
+                return r
             end
         end
-        for (_, v) in node
-            r = _pd_filter_in(v, reg, derived)
+        apply = op == APPLY_EXPRESSION_TEMPLATE_OP
+        for (k, v) in node
+            apply && k == "name" && continue
+            r = _pd_filter_scan(v, reg, derived, scope)
             r === nothing || return r
         end
     elseif node isa AbstractVector
         for x in node
-            r = _pd_filter_in(x, reg, derived)
+            r = _pd_filter_scan(x, reg, derived, scope)
             r === nothing || return r
         end
     end
@@ -954,9 +988,13 @@ end
 # The derived template `<name>__pd_filter` with body `f` (written in the
 # parameters of template `name`, declared `params`), registered in `derived`,
 # and the reference to it at `call` (a reference to `name`): the parameters `f`
-# reads, in declared order, each bound to `call`'s binding of it.
+# reads, in declared order, each bound to `call`'s binding of it. When `f`
+# reads none of the parameters (only free names, or names the body binds) a
+# template of no parameters is not a valid declaration, so `f` itself, the
+# longhand `*` filter, is returned instead.
 function _pd_filter_ref(name::String, params, f, call::AbstractDict, derived::AbstractDict)
     used = String[p for p in params if _pd_reads_param(f, p)]
+    isempty(used) && return f
     dname = name * "__pd_filter"
     derived[dname] = OrderedDict{String, Any}("params" => Any[used...], "body" => f)
     b = get(call, "bindings", nothing)

@@ -287,6 +287,24 @@ end
                 m, _ = EA._tpl_prepare_model!(
                     m, copy(reg), file.index_sets, Dict{String, Int}(); refuse = false
                 )
+                # The filter (a reference to the derived template) has a
+                # compiled form: value invention runs it as one kernel per
+                # candidate rather than reading the body through the call.
+                prod = only(
+                    eq.rhs for eq in m.equations
+                        if eq.rhs isa EA.OpExpr && eq.rhs.filter !== nothing
+                )
+                @test EA._tpl_is_call(prod.filter)
+                ctx = EA._ViCtx(
+                    Dict{String, Any}(arrays), Dict{String, Float64}(),
+                    Dict{String, EA.IndexSet}(String(k) => v for (k, v) in file.index_sets),
+                    m.variables, Dict{String, Dict{Any, Any}}(), EA.cadence_seeds(m)
+                )
+                kf = EA._vi_compile_filter(ctx, EA._vi_ranges(prod), prod.filter)
+                @test kf !== nothing
+                # c = 1 holds record 1 (x = 1 in [0, 2)), not record 2 (x = 5).
+                @test EA._vi_truthy(kf(Dict{String, Any}("c" => 1, "r" => 1)))
+                @test !EA._vi_truthy(kf(Dict{String, Any}("c" => 1, "r" => 2)))
             end
             vi = EA.materialize_value_invention(m, file.index_sets, arrays, Dict{String, Any}())
             sort(collect(Int, vi.members["pd_faq__src_cells"]))
@@ -362,5 +380,52 @@ end
         @test rt["bin_emissions__pd_filter"]["params"] ==
             Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty"]
         @test isempty(EA.pushdown_diagnostics(raw; model_name = "ISRM"))
+    end
+
+    # The filter is emitted from the `ifelse` detection finds, in the order of
+    # the expanded body: a binding's containment reached through a parameter
+    # leaf comes before the body's own `ifelse`, and is written in the caller's
+    # scope. A containment reading none of a template's parameters is the
+    # longhand `*` filter, not a derived template of no parameters.
+    @testset "producer filter follows expansion order" begin
+        longhand = Dict{String, Any}("op" => "*", "args" => _contain()["args"])
+        reg = Dict{String, Any}(
+            "T" => Dict{String, Any}(
+                "params" => ["p", "q"],
+                "body" => jop("*", "p", jop("ifelse", jop(">", "q", 0.0), 1.0, 0.0))
+            )
+        )
+        call = _apply(
+            "T", Dict(
+                "p" => jop("ifelse", _contain(), jidx("emis_annual", "r"), 0.0),
+                "q" => jidx("px", "r")
+            )
+        )
+        derived = Dict{String, Any}()
+        @test EA._pd_filter_in(call, reg, derived) == longhand
+        @test isempty(derived)
+
+        reg2 = Dict{String, Any}(
+            "Inner" => Dict{String, Any}("params" => ["a"], "body" => jop("*", "a", 2.0)),
+            "Outer" => Dict{String, Any}(
+                "params" => ["b"], "body" => _apply("Inner", Dict("a" => "b"))
+            )
+        )
+        call2 = _apply("Outer", Dict("b" => jop("ifelse", _contain(), 1.0, 0.0)))
+        @test EA._pd_filter_in(call2, reg2, derived) == longhand
+        @test isempty(derived)
+    end
+
+    @testset "producer filter reading no parameter is inlined" begin
+        reg = Dict{String, Any}(
+            "T" => Dict{String, Any}(
+                "params" => ["w"],
+                "body" => jop("*", jop("ifelse", _contain(), 1.0, 0.0), "w")
+            )
+        )
+        derived = Dict{String, Any}()
+        f = EA._pd_filter_in(_apply("T", Dict("w" => jidx("emis_annual", "r"))), reg, derived)
+        @test f == Dict{String, Any}("op" => "*", "args" => _contain()["args"])
+        @test isempty(derived)
     end
 end
