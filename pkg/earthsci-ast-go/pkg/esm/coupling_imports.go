@@ -536,6 +536,9 @@ func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]Couplin
 			if errors.As(err, &etErr) {
 				return nil, err
 			}
+			if kept, ok := keptRefusal(err); ok {
+				return nil, kept
+			}
 			return nil, newETErr(CodeCouplingImportUnresolved,
 				fmt.Sprintf("coupling_import ref '%s' failed to load: %v", imp.Ref, err))
 		}

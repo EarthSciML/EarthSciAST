@@ -104,12 +104,14 @@ func decodeDocumentText(data []byte, location string) ([]byte, error) {
 }
 
 // keptRefusal returns the error a ref site must surface as it is rather than
-// under its own unresolved code: a source document refused with `removed_op`
-// (esm-spec §1.2.1 — any other refusal is the ref site's unresolved code).
+// under its own unresolved code: a removed operator (`removed_op`), whether a
+// source document's reader refused it or the wire-boundary check of a JSON
+// document did (esm-spec §1.2.1 — any other refusal is the ref site's
+// unresolved code).
 func keptRefusal(err error) (error, bool) {
-	var dfe *DocumentFormatError
-	if errors.As(err, &dfe) && dfe.Code == codeRemovedOp {
-		return dfe, true
+	var coded DiagnosticError
+	if errors.As(err, &coded) && coded.DiagnosticCode() == codeRemovedOp {
+		return coded, true
 	}
 	return nil, false
 }

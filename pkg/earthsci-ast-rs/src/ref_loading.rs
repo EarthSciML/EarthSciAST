@@ -392,13 +392,6 @@ fn ref_read_error(
             noun.code,
             format!("failed to read {} {}: {e}", noun.item, path.display()),
         ),
-        // esm-spec §1.2.1: a source document's removed-op refusal keeps its code.
-        RefError::Parse {
-            path,
-            err: crate::ref_reader::DecodeError::Source(d),
-        } if d.code == codes::REMOVED_OP => {
-            err(d.code, format!("{}: {}", path.display(), d.message))
-        }
         RefError::Parse { path, err: e } => err(
             noun.code,
             format!("failed to parse {} {}: {e}", noun.item, path.display()),
@@ -450,13 +443,18 @@ fn load_ref_document(
     // `solver` gate (§2.2.4) is among them: a leaf's block does not cross the
     // mount edge, but it must still be legal in the file that carries it.
     let loaded = crate::ref_reader::open(&located, crate::version_gates::DocKind::MountedLeaf)
-        .map_err(|e| match e {
-            crate::ref_reader::OpenError::Ref(e) => read_error(e),
-            crate::ref_reader::OpenError::Wire(e) => {
-                err(noun.code, format!("{}: {e}", canonical.display()))
+        .map_err(|e| {
+            if let Some(kept) = e.kept_refusal(&located) {
+                return kept;
             }
-            crate::ref_reader::OpenError::Gate(e) => {
-                err(e.code, format!("{}: {}", canonical.display(), e.message))
+            match e {
+                crate::ref_reader::OpenError::Ref(e) => read_error(e),
+                crate::ref_reader::OpenError::Wire(e) => {
+                    err(noun.code, format!("{}: {e}", canonical.display()))
+                }
+                crate::ref_reader::OpenError::Gate(e) => {
+                    err(e.code, format!("{}: {}", canonical.display(), e.message))
+                }
             }
         });
 

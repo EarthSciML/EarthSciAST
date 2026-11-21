@@ -23,6 +23,13 @@ library or mount a `.md` model.
 | `mount_json_content` | subsystem mount of `json_content.md` | `unresolved_subsystem_ref` |
 | `mount_toplevel_json_content` | top-level `models.<k>` mount of `json_content.typ` | `unresolved_subsystem_ref` |
 | `coupling_import_json_content` | `coupling_import` of `json_content.typ` | `coupling_import_unresolved` |
+| `root_typst_removed_op` | `removed_op.typ` (calls the removed `fn`) as the root | `removed_op` |
+| `root_markdown_removed_op` | `removed_op.md` (calls the removed `fn`) as the root | `removed_op` |
+| `mount_removed_op` | subsystem mount of `removed_op.md` | `removed_op` |
+| `mount_toplevel_removed_op` | top-level `models.<k>` mount of `removed_op.typ` | `removed_op` |
+| `import_removed_op` | template import of `removed_op.typ` | `removed_op` |
+| `coupling_import_removed_op` | `coupling_import` of `removed_op.md` | `removed_op` |
+| `import_json_removed_op` | template import of `twins/removed_op.esm`, the JSON twin | `removed_op` |
 
 How a binding runs a case:
 
@@ -39,7 +46,11 @@ How a binding runs a case:
 The `json_content` files hold a valid `.esm` document as JSON text. A loader that
 picked the format by looking at the content would accept them; read by their
 extension they are not Markdown or Typst documents and are refused, which is the
-point of the `error` cases.
+point of the `error` cases. The `removed_op` files call `fn`, an operator
+removed at esm 2.0.0: a source document's refusal of it keeps the code
+`removed_op` wherever it happens, as the wire-boundary refusal of the same
+document written as JSON does (`import_json_removed_op`), rather than turning
+into the ref site's unresolved code.
 
 Wired into: Julia `test/source_documents_test.jl`, Python
 `tests/test_source_documents.py`, Rust `tests/source_documents_conformance.rs`,

@@ -100,4 +100,10 @@ describe('documentFormatOf (esm-spec §1.2.1)', () => {
     expect(documentFormatOf('https://example.com/lib.md#top')).toBe('markdown')
     expect(documentFormatOf('https://example.com/lib.esm?f=x.md')).toBeUndefined()
   })
+
+  it("never reads a URL's host as its path", () => {
+    expect(documentFormatOf('https://docs.example.md')).toBeUndefined()
+    expect(documentFormatOf('https://host.typ?x=1')).toBeUndefined()
+    expect(documentFormatOf('https://host.typ#a.md')).toBeUndefined()
+  })
 })

@@ -178,20 +178,29 @@ export function readFileSyncNode(path: string): string {
 
 /**
  * The source format of a document read from `location` (esm-spec §1.2.1): a
- * path, or a URL's path (its query and fragment ignored), ending in `.md` is
- * Markdown and one ending in `.typ` Typst. Every other name — `.esm` among
- * them — is JSON, given as `undefined`. An exact, case-sensitive suffix match;
- * the format is never guessed from the text.
+ * path, or a URL's path (its host, query and fragment ignored), ending in
+ * `.md` is Markdown and one ending in `.typ` Typst. Every other name — `.esm`
+ * among them — is JSON, given as `undefined`. An exact, case-sensitive suffix
+ * match; the format is never guessed from the text.
  */
 export function documentFormatOf(location: string): DocumentFormat | undefined {
-  let p = location
-  if (isRemoteRef(p)) {
-    const cut = p.search(/[?#]/)
-    if (cut >= 0) p = p.slice(0, cut)
-  }
+  const p = isRemoteRef(location) ? urlPath(location) : location
+
   if (p.endsWith('.md')) return 'markdown'
   if (p.endsWith('.typ')) return 'typst'
   return undefined
+}
+
+/**
+ * The path of an `http(s)` URL: what follows the authority, up to the query or
+ * fragment (empty when the URL has none, as in `https://host.md`).
+ */
+function urlPath(url: string): string {
+  const afterScheme = url.slice(url.indexOf('://') + 3)
+  const cut = afterScheme.search(/[?#]/)
+  const beforeQuery = cut >= 0 ? afterScheme.slice(0, cut) : afterScheme
+  const start = beforeQuery.indexOf('/')
+  return start >= 0 ? beforeQuery.slice(start) : ''
 }
 
 /**

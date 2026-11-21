@@ -59,7 +59,21 @@ fn source_documents_manifest_cases() {
             "error" => {
                 let code = case["code"].as_str().unwrap();
                 let message = match load_path(&fixture) {
-                    Err(e) => e.to_string(),
+                    Err(e) => {
+                        // A coded refusal carries the case's code itself, and
+                        // a malformed source root is a source parse error,
+                        // not a schema-stage one.
+                        if let Some(got) = e.code() {
+                            assert_eq!(got, code, "{id}: {e}");
+                        }
+                        if code == "parse_error" {
+                            assert!(
+                                matches!(e, earthsci_ast::EsmError::SourceParse { .. }),
+                                "{id}: want EsmError::SourceParse, got {e:?}"
+                            );
+                        }
+                        e.to_string()
+                    }
                     Ok(file) => {
                         assert_eq!(driver, "flatten", "{id}: load must fail");
                         match flatten(&file) {

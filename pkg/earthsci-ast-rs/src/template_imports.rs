@@ -1969,13 +1969,6 @@ fn load_import_raw(
                 path.display()
             ),
         ),
-        // esm-spec §1.2.1: a source document's removed-op refusal keeps its code.
-        RefError::Parse {
-            path,
-            err: crate::ref_reader::DecodeError::Source(d),
-        } if d.code == codes::REMOVED_OP => {
-            err(d.code, format!("{}: {}", path.display(), d.message))
-        }
         RefError::Parse { path, err: e } => err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!(
@@ -1990,16 +1983,21 @@ fn load_import_raw(
     // version"): the template-machinery constructs, and declared `units` on
     // an expression node in a template body (§4.8.5 item 6).
     let raw = crate::ref_reader::open(&located, crate::version_gates::DocKind::TemplateLibrary)
-        .map_err(|e| match e {
-            crate::ref_reader::OpenError::Ref(e) => read_error(e),
-            // A template library is a document too, and its template BODIES
-            // carry expression nodes — so it gets the same wire-boundary
-            // treatment as the root (docs/content/rfcs/faq-node-rename.md §5.2).
-            crate::ref_reader::OpenError::Wire(e) => err(
-                codes::TEMPLATE_IMPORT_UNRESOLVED,
-                format!("{origin}: {}: {e}", located.identity.display()),
-            ),
-            crate::ref_reader::OpenError::Gate(e) => e,
+        .map_err(|e| {
+            if let Some(kept) = e.kept_refusal(&located) {
+                return kept;
+            }
+            match e {
+                crate::ref_reader::OpenError::Ref(e) => read_error(e),
+                // A template library is a document too, and its template BODIES
+                // carry expression nodes — so it gets the same wire-boundary
+                // treatment as the root (docs/content/rfcs/faq-node-rename.md §5.2).
+                crate::ref_reader::OpenError::Wire(e) => err(
+                    codes::TEMPLATE_IMPORT_UNRESOLVED,
+                    format!("{origin}: {}: {e}", located.identity.display()),
+                ),
+                crate::ref_reader::OpenError::Gate(e) => e,
+            }
         })?;
     Ok((raw, located.dir))
 }

@@ -775,6 +775,25 @@ pub fn load_path_with_options<P: AsRef<std::path::Path>>(
     load_value(json_value, &options)
 }
 
+/// A document file's `text` as JSON text, read in the format its `location`
+/// names (esm-spec §1.2.1): JSON text is returned as it is, and a Markdown
+/// (`.md`) or Typst (`.typ`) source document is read and rendered as JSON. For
+/// a caller that has a file's text in hand and goes on to load or validate it
+/// as a string (the `esm` CLI's subcommands); [`load_path`] reads files
+/// directly.
+pub fn document_json_text<'a>(
+    text: &'a str,
+    location: &std::path::Path,
+) -> Result<std::borrow::Cow<'a, str>, EsmError> {
+    if crate::ref_reader::source_format(location).is_none() {
+        return Ok(std::borrow::Cow::Borrowed(text));
+    }
+    let value = crate::ref_reader::decode_document(text, location)?;
+    Ok(std::borrow::Cow::Owned(
+        serde_json::to_string(&value).map_err(EsmError::JsonParse)?,
+    ))
+}
+
 /// Validate a JSON value against the ESM schema
 ///
 /// This performs schema validation only. The JSON is assumed to be valid.

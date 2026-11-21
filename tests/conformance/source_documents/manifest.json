@@ -1,7 +1,7 @@
 {
   "category": "source_documents",
   "version": "1.0",
-  "description": "Loading Markdown and Typst source documents from files (esm-spec \u00a71.2.1): a loader reading a document from a path or URL picks its format by the file extension alone (`.md` Markdown, `.typ` Typst, anything else JSON), at the root and at every ref site (subsystem mounts of both forms, template imports, coupling imports). Each `same_as_twin` case has a twin under twins/ that spells every file as `.esm` JSON; loading the two must give the same document once every string value of a `ref` key is replaced by one placeholder. `json_content.typ` and `json_content.md` hold JSON text: read by their extension they are refused, so the `error` cases fail with `code` through `driver` (load, or flatten for a coupling import; a binding that resolves coupling imports earlier may fail at load with the same code). `ok` cases must succeed through `driver`.",
+  "description": "Loading Markdown and Typst source documents from files (esm-spec \u00a71.2.1): a loader reading a document from a path or URL picks its format by the file extension alone (`.md` Markdown, `.typ` Typst, anything else JSON), at the root and at every ref site (subsystem mounts of both forms, template imports, coupling imports). Each `same_as_twin` case has a twin under twins/ that spells every file as `.esm` JSON; loading the two must give the same document once every string value of a `ref` key is replaced by one placeholder. `json_content.typ` and `json_content.md` hold JSON text: read by their extension they are refused, so the `error` cases fail with `code` through `driver` (load, or flatten for a coupling import; a binding that resolves coupling imports earlier may fail at load with the same code). `ok` cases must succeed through `driver`. The `removed_op` cases call `fn`, an operator removed at esm 2.0.0: a source document's reader refuses it, and that refusal keeps its code `removed_op` at the root and at every ref site, as the wire-boundary refusal of a JSON document does (`import_json_removed_op`).",
   "bindings_required": [
     "julia",
     "python",
@@ -85,6 +85,55 @@
       "expect": "error",
       "code": "coupling_import_unresolved",
       "driver": "flatten"
+    },
+    {
+      "id": "root_typst_removed_op",
+      "fixture": "removed_op.typ",
+      "expect": "error",
+      "code": "removed_op",
+      "driver": "load"
+    },
+    {
+      "id": "root_markdown_removed_op",
+      "fixture": "removed_op.md",
+      "expect": "error",
+      "code": "removed_op",
+      "driver": "load"
+    },
+    {
+      "id": "mount_removed_op",
+      "fixture": "mount_removed_op.esm",
+      "expect": "error",
+      "code": "removed_op",
+      "driver": "load"
+    },
+    {
+      "id": "mount_toplevel_removed_op",
+      "fixture": "mount_toplevel_removed_op.esm",
+      "expect": "error",
+      "code": "removed_op",
+      "driver": "load"
+    },
+    {
+      "id": "import_removed_op",
+      "fixture": "import_removed_op.esm",
+      "expect": "error",
+      "code": "removed_op",
+      "driver": "load"
+    },
+    {
+      "id": "coupling_import_removed_op",
+      "fixture": "coupling_import_removed_op.esm",
+      "expect": "error",
+      "code": "removed_op",
+      "driver": "flatten"
+    },
+    {
+      "id": "import_json_removed_op",
+      "fixture": "import_json_removed_op.esm",
+      "expect": "error",
+      "code": "removed_op",
+      "driver": "load"
     }
   ]
 }
