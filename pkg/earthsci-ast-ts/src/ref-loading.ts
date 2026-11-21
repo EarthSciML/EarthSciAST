@@ -42,6 +42,7 @@ import { isCouplingLibraryDoc } from './coupling-imports.js'
 import { EnumLoweringError, lowerMountedDocumentEnums } from './lower-enums.js'
 import {
   canonicalizePath,
+  decodeDocument,
   expandRefEnv,
   isRemoteRef,
   joinPath,
@@ -425,7 +426,8 @@ async function prefetchRefs(
       const refBase = refBaseOf(ref, currentBase)
       let parsed: unknown
       try {
-        parsed = JSON.parse(content)
+        // esm-spec §1.2.1: the format is the target's extension.
+        parsed = decodeDocument(content, key)
       } catch {
         // A malformed target is the sync core's error to report, with its code.
         continue
@@ -1228,7 +1230,22 @@ function resolveRefEdge(
       throw error
     }
     const refBasePath = refBaseOf(ref, basePath)
-    const refDoc = JSON.parse(content) as EsmFile
+    let refDoc: EsmFile
+    try {
+      // esm-spec §1.2.1: Markdown, Typst or JSON by the target's extension.
+      refDoc = decodeDocument(content, chainKey) as EsmFile
+    } catch (error) {
+      // A removed operator keeps its own code; any other refused read is a
+      // failure of THIS edge, at the offending mount.
+      if (error instanceof EsmDiagnosticError && error.code === ERROR_CODES.REMOVED_OP) throw error
+      throw new RefLoadError(
+        ref,
+        undefined,
+        ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
+        `${mountFormBlock(mountForm)}.${subName} ref '${ref}' did not parse: ${error instanceof Error ? error.message : String(error)}`,
+        pointer,
+      )
+    }
     // Same wire boundary as the root (docs/content/rfcs/faq-node-rename.md §5.2).
     prepareDocumentOps(refDoc)
     // esm-spec §4.7 "Working precision crosses a mount": read before resolution
@@ -1946,7 +1963,10 @@ export async function ephemeralInjectedFile(
   let raw: Record<string, unknown>
   if (sourcePath !== null) {
     const fs = await import('node:fs/promises')
-    raw = JSON.parse(await fs.readFile(sourcePath, 'utf-8')) as Record<string, unknown>
+    raw = decodeDocument(await fs.readFile(sourcePath, 'utf-8'), sourcePath) as Record<
+      string,
+      unknown
+    >
     // Same wire boundary as the root (docs/content/rfcs/faq-node-rename.md §5.2).
     prepareDocumentOps(raw)
   } else if (file !== null) {

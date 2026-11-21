@@ -237,6 +237,9 @@ func canonicalRefPath(ref, baseDir string) string {
 func loadImportBytes(ref, baseDir, origin string) ([]byte, string, error) {
 	data, dir, err := loadRefBytes(ref, baseDir)
 	if err != nil {
+		if kept, ok := keptRefusal(err); ok {
+			return nil, "", kept
+		}
 		return nil, "", newETErr(CodeTemplateImportUnresolved,
 			fmt.Sprintf("%s: could not load template-library ref '%s': %v", origin, ref, err))
 	}

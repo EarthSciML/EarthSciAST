@@ -46,7 +46,6 @@ and CONSTRUCTING a EsmProblem never needs SciPy. Only :func:`solve`, :func:`init
 from __future__ import annotations
 
 import copy
-import json
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -71,6 +70,7 @@ from .compiler import (
 from .elementwise_lift import lift_elementwise_applications
 from .error_handling import CALLBACK_UNREGISTERED, FLOAT32_UNSUPPORTED
 from .errors import MissingDataError
+from .json_walk import decode_document
 from .esm_types import CouplingType, EsmFile, ExprNode, is_aggregate_op
 from .expr_walk import iter_children
 from .expression import DataSourceUnboundError, UnsupportedConstructError, free_variables
@@ -246,7 +246,7 @@ def _raw_document(input_: Any) -> tuple[dict | None, str | None]:
         return input_, None
     if isinstance(input_, (str, Path)) and os.path.isfile(str(input_)):
         with open(input_) as fh:
-            return json.load(fh), str(Path(input_).resolve().parent)
+            return decode_document(fh.read(), input_), str(Path(input_).resolve().parent)
     return None, None
 
 

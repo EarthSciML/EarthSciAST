@@ -273,8 +273,8 @@ pub use graph::{
     expression_graph_with_options, get_component_type, to_dot, to_json_graph, to_mermaid,
 };
 pub use parse::{
-    LoadOptions, load_document, load_document_with_options, load_path, load_path_with_options,
-    load_string, load_string_with_options,
+    LoadOptions, document_json_text, load_document, load_document_with_options, load_path,
+    load_path_with_options, load_string, load_string_with_options,
 };
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,

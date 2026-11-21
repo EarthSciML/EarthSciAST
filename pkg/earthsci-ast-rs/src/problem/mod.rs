@@ -1321,7 +1321,8 @@ fn strip_and_build(
                     path.display()
                 )))
             })?;
-            let raw: JsonValue = serde_json::from_str(&text).map_err(|e| {
+            // esm-spec §1.2.1: the extension picks the format.
+            let raw: JsonValue = crate::ref_reader::decode_document(&text, path).map_err(|e| {
                 SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
                     "parsing {}: {e}",
                     path.display()
@@ -1405,14 +1406,19 @@ fn build_problem(
                     path.display()
                 )))
             })?;
-            let raw: JsonValue = serde_json::from_str(&text).map_err(|e| {
+            // esm-spec §1.2.1: the extension picks the format.
+            let raw: JsonValue = crate::ref_reader::decode_document(&text, path).map_err(|e| {
                 SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
                     "parsing {}: {e}",
                     path.display()
                 )))
             })?;
             owned_json = Some(raw);
-            source_text = Some(text);
+            // Only JSON text is the document's text; a Markdown or Typst
+            // source document is kept as its parse.
+            source_text = crate::ref_reader::source_format(path)
+                .is_none()
+                .then_some(text);
             json_from_text = true;
             // A relative `{ref}` or template import resolves against the
             // referencing file's directory (esm-spec §4.7), not the process's

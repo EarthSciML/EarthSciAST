@@ -17,6 +17,9 @@ It carries:
 * :func:`expand_ref_env` / :func:`load_ref_raw` — the §4.7 ``${VAR}`` ref
   expansion + local/URL loader shared by the template-import and
   coupling-import resolvers (parameterised by the caller's diagnostic code).
+* :func:`decode_document` — the esm-spec §1.2.1 read of a document's text by
+  its file extension (Markdown, Typst or JSON), used wherever a document is
+  read from a path or URL.
 """
 
 from __future__ import annotations
@@ -27,7 +30,8 @@ import re
 from collections.abc import Iterator
 from typing import Any, Callable
 
-from .errors import EarthSciAstError
+from .error_handling import REMOVED_OP
+from .errors import EarthSciAstError, ParseError
 from .stdlib import in_bundle_ref_path, is_std_ref, std_ref_path
 
 #: The op-name of an ``apply_expression_template`` node (esm-spec §9.6). Shared
@@ -436,6 +440,33 @@ def read_ref_text(
         raise on_read_error(ref, path, e) from e
 
 
+def decode_document(text: str, location: str | os.PathLike[str]) -> Any:
+    """Read a document's ``text`` in the format its ``location`` names
+    (esm-spec §1.2.1): a path, or a URL's path, ending in ``.md`` is Markdown,
+    one ending in ``.typ`` Typst, and every other name JSON. The format is never
+    guessed from the text.
+
+    Raises :class:`ValueError` (a :class:`json.JSONDecodeError`) for JSON that
+    does not parse, and :class:`~earthsci_ast.errors.ParseError` (``code``
+    ``parse_error``, or ``removed_op``) for a source document its reader
+    refuses.
+    """
+    path = os.fspath(location)
+    if path.startswith(("http://", "https://")):
+        from urllib.parse import urlsplit
+
+        path = urlsplit(path).path
+    if path.endswith(".md"):
+        from .document import parse_markdown
+
+        return parse_markdown(text)
+    if path.endswith(".typ"):
+        from .document import parse_typst
+
+        return parse_typst(text)
+    return json.loads(text)
+
+
 def load_ref_raw(
     ref: str,
     base_dir: str,
@@ -480,7 +511,14 @@ def load_ref_raw(
     # unresolved when encountered.
     label = ref if path is None else path
     try:
-        raw = json.loads(content)
+        raw = decode_document(content, label)
+    except ParseError as e:
+        # A source document's reader refused it (esm-spec §1.2.1).
+        if getattr(e, "code", None) == REMOVED_OP:
+            raise
+        raise ExpressionTemplateError(
+            code, f"{prefix}{subject} ref '{label}' did not parse: {e}"
+        ) from e
     except ValueError as e:
         raise ExpressionTemplateError(
             code, f"{prefix}{subject} ref '{label}' is not valid JSON: {e}"

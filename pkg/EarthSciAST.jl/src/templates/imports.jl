@@ -816,7 +816,7 @@ function _library_unreadable(u::_RefUnreadable, origin::String)
     msg = if u.reason === :not_found
         "$origin: template-library file not found: $(t.key) (from ref '$(t.authored)')"
     elseif u.reason === :invalid_json
-        "$origin: template-library ref '$(t.key)' is not valid JSON: $(u.cause.original_error)"
+        "$origin: template-library ref '$(t.key)' did not parse: $(_unreadable_cause(u))"
     elseif _is_remote(t)
         "$origin: failed to download template-library ref '$(t.ref)' " *
             "(resolved to '$(t.key)'): $(_unreadable_cause(u))"

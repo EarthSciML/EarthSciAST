@@ -293,7 +293,8 @@ end
 
 A referenced document could not be read: `reason` is `:not_found` (no such
 local file), `:unreachable` (the read or the fetch failed; `cause` is the
-error) or `:invalid_json` (`cause` is the `ParseError`). Internal: each
+error) or `:invalid_json` (the JSON, or the Markdown or Typst source document,
+does not parse; `cause` is the `ParseError`). Internal: each
 reference mechanism converts it at its edge into its own diagnostic
 (`unresolved_subsystem_ref`, `template_import_unresolved`,
 `coupling_import_unresolved`).
@@ -322,7 +323,8 @@ end
     _read_document(src, t; copy = true) -> post-wire document
 
 The document `t` names, read and parsed through `src` once per load
-(`_wire_document`: JSON parse, carrier, op spellings). A caller that mutates
+(`_parse_document_text`: JSON, Markdown or Typst by the extension, esm-spec
+§1.2.1; then `_wire_document`: carrier, op spellings). A caller that mutates
 gets a fresh `deepcopy`; `copy = false` hands out the cached tree for a
 read-only look. Raises `_RefUnreadable`; an op-spelling refusal (`removed_op`,
 the `faq` gate) propagates as the `ParseError` it is.
@@ -331,9 +333,10 @@ function _read_document(src::_DocumentSource, t::_RefTarget; copy::Bool = true)
     if !haskey(src.cache, t.key)
         text = _read_text(src, t)
         parsed = try
-            _parse_json_text(text)
+            _parse_document_text(text, t.key)
         catch e
-            e isa ParseError || rethrow()
+            # A removed operator keeps its own code (esm-spec §1.2.1).
+            (e isa ParseError && e.code != ERROR_CODES.REMOVED_OP) || rethrow()
             throw(_RefUnreadable(t, :invalid_json, e))
         end
         src.cache[t.key] = _wire_document(parsed)

@@ -15,6 +15,7 @@
  */
 
 import { joinUrlDirectory, removeUrlPathDotSegments } from './data-source-urls.js'
+import { parseDocument, type DocumentFormat } from './document/index.js'
 import { classifyStdRef } from './stdlib.js'
 
 /** True for `http://` / `https://` refs, which are resolved as opaque keys. */
@@ -173,6 +174,53 @@ export function readFileSyncNode(path: string): string {
   throw new Error(
     'synchronous file access is unavailable in this environment; supply a readFile hook',
   )
+}
+
+/**
+ * The source format of a document read from `location` (esm-spec §1.2.1): a
+ * path, or a URL's path (its host, query and fragment ignored), ending in
+ * `.md` is Markdown and one ending in `.typ` Typst. Every other name — `.esm`
+ * among them — is JSON, given as `undefined`. An exact, case-sensitive suffix
+ * match; the format is never guessed from the text.
+ */
+export function documentFormatOf(location: string): DocumentFormat | undefined {
+  const p = isRemoteRef(location) ? urlPath(location) : location
+
+  if (p.endsWith('.md')) return 'markdown'
+  if (p.endsWith('.typ')) return 'typst'
+  return undefined
+}
+
+/**
+ * The path of an `http(s)` URL: what follows the authority, up to the query or
+ * fragment (empty when the URL has none, as in `https://host.md`).
+ */
+function urlPath(url: string): string {
+  const afterScheme = url.slice(url.indexOf('://') + 3)
+  const cut = afterScheme.search(/[?#]/)
+  const beforeQuery = cut >= 0 ? afterScheme.slice(0, cut) : afterScheme
+  const start = beforeQuery.indexOf('/')
+  return start >= 0 ? beforeQuery.slice(start) : ''
+}
+
+/**
+ * Read a document's `text` in the format its `location` names (esm-spec
+ * §1.2.1, see {@link documentFormatOf}): a Markdown or Typst source document
+ * through its reader, anything else with `JSON.parse`. Used wherever a document
+ * is read from a path or a URL, so a ref site gives the parsed value to the
+ * same pipeline whatever the file's format.
+ *
+ * @throws {SyntaxError} for JSON text that does not parse
+ * @throws {EsmDiagnosticError} with code `parse_error` (or `removed_op`) for a
+ *   source document its reader refuses
+ */
+export function decodeDocument(
+  text: string,
+  location: string,
+  options?: { canonical?: boolean },
+): unknown {
+  const format = documentFormatOf(location)
+  return format === undefined ? JSON.parse(text) : parseDocument(text, format, options)
 }
 
 /**

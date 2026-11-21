@@ -7,6 +7,11 @@
 //! against the referencing document's directory, read, parse. Each caller keeps
 //! its own diagnostic wording by mapping [`RefError`].
 //!
+//! The parse step is [`decode_document`], the esm-spec §1.2.1 read of a
+//! document's text by its file extension (Markdown, Typst or JSON). Every other
+//! place that reads a document from a path (the root of a load from a path, the
+//! problem front door, the inline-test re-read of a source file) uses it too.
+//!
 //! # File identity
 //!
 //! A file's identity — the key of every cycle check and of the parse cache —
@@ -33,6 +38,10 @@ pub(crate) struct Located {
     pub(crate) dir: PathBuf,
     /// The bundled text, for a standard-library file.
     bundled: Option<&'static str>,
+    /// The format the file is read in: the extension of the path as the ref
+    /// spells it (esm-spec §1.2.1), never of the target a symlink resolves
+    /// to, which `identity` is.
+    format: Option<crate::DocumentFormat>,
 }
 
 /// Why a reference could not be read.
@@ -46,11 +55,93 @@ pub(crate) enum RefError {
     Missing { path: PathBuf, err: std::io::Error },
     /// The file exists but could not be read.
     Read { path: PathBuf, err: std::io::Error },
-    /// The file is not JSON.
-    Parse {
-        path: PathBuf,
-        err: serde_json::Error,
-    },
+    /// The file does not decode in the format its extension names
+    /// ([`decode_document`]).
+    Parse { path: PathBuf, err: DecodeError },
+}
+
+/// Why a document's text did not decode ([`decode_document`]).
+#[derive(Debug)]
+pub(crate) enum DecodeError {
+    /// JSON text that does not parse.
+    Json(serde_json::Error),
+    /// A Markdown or Typst source document its reader refused: code
+    /// `parse_error`, or `removed_op` for a removed operator.
+    Source(crate::diagnostic::DiagnosticError),
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecodeError::Json(e) => write!(f, "{e}"),
+            DecodeError::Source(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<DecodeError> for crate::EsmError {
+    /// The root's refusal: unparseable JSON as [`crate::EsmError::JsonParse`],
+    /// a malformed source document as [`crate::EsmError::SourceParse`]
+    /// (`parse_error`), and a removed operator as the same schema-stage
+    /// `removed_op` refusal a JSON document carrying one gets.
+    fn from(e: DecodeError) -> Self {
+        match e {
+            DecodeError::Json(e) => crate::EsmError::JsonParse(e),
+            DecodeError::Source(d) if d.code == crate::diagnostic::codes::REMOVED_OP => {
+                crate::EsmError::schema(d)
+            }
+            DecodeError::Source(d) => crate::EsmError::SourceParse {
+                code: d.code,
+                message: d.to_string(),
+            },
+        }
+    }
+}
+
+/// The source format a document read from `location` is in (esm-spec §1.2.1):
+/// a path, or a URL's path (its host, query and fragment ignored), ending in
+/// `.md` is a Markdown source document, one ending in `.typ` a Typst source
+/// document, and every other name JSON (`None`). The match is exact and
+/// case-sensitive.
+pub(crate) fn source_format(location: &Path) -> Option<crate::DocumentFormat> {
+    let location = location.to_string_lossy();
+    let name: &str = if is_remote(&location) {
+        url_path(&location)
+    } else {
+        &location
+    };
+    if name.ends_with(".md") {
+        Some(crate::DocumentFormat::Markdown)
+    } else if name.ends_with(".typ") {
+        Some(crate::DocumentFormat::Typst)
+    } else {
+        None
+    }
+}
+
+/// The path of an `http(s)` URL: what follows the authority, up to the query
+/// or fragment (empty when the URL has none, as in `https://host.md`).
+fn url_path(url: &str) -> &str {
+    let after_scheme = url.split_once("://").map_or("", |(_, rest)| rest);
+    let end = after_scheme.find(['?', '#']).unwrap_or(after_scheme.len());
+    let before_query = &after_scheme[..end];
+    before_query
+        .find('/')
+        .map_or("", |start| &before_query[start..])
+}
+
+/// Decode a document's `text` in the format its `location` names
+/// ([`source_format`]); the format is never guessed from the text.
+pub(crate) fn decode_document(text: &str, location: &Path) -> Result<Value, DecodeError> {
+    decode_as(text, source_format(location))
+}
+
+/// Decode `text` as `format` (`None` is JSON).
+fn decode_as(text: &str, format: Option<crate::DocumentFormat>) -> Result<Value, DecodeError> {
+    match format {
+        Some(format) => crate::parse_document(text, format).map_err(DecodeError::Source),
+        None => serde_json::from_str(text).map_err(DecodeError::Json),
+    }
 }
 
 /// The §4.7 spelling step on a ref as authored: `${VAR}` expansion (a
@@ -67,6 +158,7 @@ pub(crate) fn locate(expanded: &str, base: &Path) -> Result<Located, RefError> {
             let identity = PathBuf::from(identity);
             Ok(Located {
                 dir: parent_dir(&identity, base),
+                format: source_format(&identity),
                 identity,
                 bundled: Some(text),
             })
@@ -83,6 +175,7 @@ pub(crate) fn locate(expanded: &str, base: &Path) -> Result<Located, RefError> {
             })?;
             Ok(Located {
                 dir: parent_dir(&identity, base),
+                format: source_format(&joined),
                 identity,
                 bundled: None,
             })
@@ -101,28 +194,28 @@ pub(crate) fn identity_key(expanded: &str, base: &Path) -> PathBuf {
 }
 
 /// Read and parse a located file, through the parse cache when one is open.
+/// The cache key is the identity and the format together: two refs that
+/// spell one file with different extensions read it differently.
 pub(crate) fn read(located: &Located) -> Result<Value, RefError> {
-    if let Some(hit) = PARSE_CACHE.with(|c| {
-        c.borrow()
-            .as_ref()
-            .and_then(|m| m.get(&located.identity).cloned())
-    }) {
+    let key = (located.identity.clone(), located.format);
+    if let Some(hit) = PARSE_CACHE.with(|c| c.borrow().as_ref().and_then(|m| m.get(&key).cloned()))
+    {
         return Ok(hit);
     }
     let parsed = match located.bundled {
-        Some(text) => parse(text, &located.identity)?,
+        Some(text) => parse(text, located)?,
         None => {
             let text =
                 std::fs::read_to_string(&located.identity).map_err(|err| RefError::Read {
                     path: located.identity.clone(),
                     err,
                 })?;
-            parse(&text, &located.identity)?
+            parse(&text, located)?
         }
     };
     PARSE_CACHE.with(|c| {
         if let Some(m) = c.borrow_mut().as_mut() {
-            m.insert(located.identity.clone(), parsed.clone());
+            m.insert(key, parsed.clone());
         }
     });
     Ok(parsed)
@@ -136,6 +229,32 @@ pub(crate) enum OpenError {
     Wire(crate::EsmError),
     /// A version gate for its kind refused it.
     Gate(crate::diagnostic::DiagnosticError),
+}
+
+impl OpenError {
+    /// The refusal a ref site surfaces with its own code rather than under the
+    /// site's unresolved code: a removed operator (`removed_op`, esm-spec
+    /// §4.2), whether a source document's reader refused it (§1.2.1) or the
+    /// wire-boundary check of a JSON document did. The message names the file.
+    pub(crate) fn kept_refusal(
+        &self,
+        located: &Located,
+    ) -> Option<crate::diagnostic::DiagnosticError> {
+        let (code, message) = match self {
+            OpenError::Ref(RefError::Parse {
+                err: DecodeError::Source(d),
+                ..
+            }) => (d.code, &d.message),
+            OpenError::Wire(crate::EsmError::SchemaDiagnostic { code, message, .. }) => {
+                (*code, message)
+            }
+            _ => return None,
+        };
+        (code == crate::diagnostic::codes::REMOVED_OP).then(|| crate::diagnostic::DiagnosticError {
+            code,
+            message: format!("{}: {message}", located.identity.display()),
+        })
+    }
 }
 
 /// The passes every document a load reaches by reference runs first, in
@@ -168,9 +287,9 @@ pub(crate) fn open(
     Ok(doc)
 }
 
-fn parse(text: &str, path: &Path) -> Result<Value, RefError> {
-    serde_json::from_str(text).map_err(|err| RefError::Parse {
-        path: path.to_path_buf(),
+fn parse(text: &str, located: &Located) -> Result<Value, RefError> {
+    decode_as(text, located.format).map_err(|err| RefError::Parse {
+        path: located.identity.clone(),
         err,
     })
 }
@@ -187,8 +306,11 @@ fn parent_dir(identity: &Path, fallback: &Path) -> PathBuf {
         .unwrap_or_else(|| fallback.to_path_buf())
 }
 
+/// A parse-cache key: a file's identity and the format it is read in.
+type CacheKey = (PathBuf, Option<crate::DocumentFormat>);
+
 thread_local! {
-    static PARSE_CACHE: RefCell<Option<HashMap<PathBuf, Value>>> = const { RefCell::new(None) };
+    static PARSE_CACHE: RefCell<Option<HashMap<CacheKey, Value>>> = const { RefCell::new(None) };
 }
 
 /// Opens the per-load parse cache for the current thread while alive. Nested
@@ -279,5 +401,46 @@ mod tests {
         }
         let loc = locate("a.esm", dir.path()).ok().unwrap();
         assert_eq!(read(&loc).ok().unwrap()["v"], 2, "no cache outside a scope");
+    }
+
+    /// esm-spec §1.2.1: the format is the extension of the path as the ref
+    /// spells it, not of the file a symlink points at.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_read_in_the_format_its_own_name_says() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("target.typ"), r#"{"v": 1}"#).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("target.typ"), dir.path().join("link.esm"))
+            .unwrap();
+        let _scope = ParseCacheScope::on();
+        let as_json = locate("link.esm", dir.path()).ok().unwrap();
+        assert_eq!(
+            read(&as_json).ok().unwrap()["v"],
+            1,
+            "link.esm reads as JSON"
+        );
+        let as_typst = locate("target.typ", dir.path()).ok().unwrap();
+        assert_eq!(as_typst.identity, as_json.identity);
+        assert!(
+            matches!(read(&as_typst), Err(RefError::Parse { .. })),
+            "target.typ reads as Typst, past the cached JSON read of the same file"
+        );
+    }
+
+    #[test]
+    fn a_urls_host_is_not_its_path() {
+        let format = |s: &str| source_format(Path::new(s));
+        assert_eq!(format("https://docs.example.md"), None);
+        assert_eq!(format("https://host.typ?x=1"), None);
+        assert_eq!(format("https://host.typ#a.md"), None);
+        assert_eq!(
+            format("https://host/a.md?x=1"),
+            Some(crate::DocumentFormat::Markdown)
+        );
+        assert_eq!(
+            format("http://h/lib.typ#f"),
+            Some(crate::DocumentFormat::Typst)
+        );
+        assert_eq!(format("https://h/a.esm"), None);
     }
 }

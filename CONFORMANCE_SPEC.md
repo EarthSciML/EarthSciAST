@@ -7847,6 +7847,34 @@ whether its build compiles a referenced body once or once per call site:
 esm-spec §9.6.4 rule 2 governs that. The observables are the two goldens and
 the diagnostics.
 
+### 5.61 Source Documents Loaded from Files (normative)
+
+**Decision pinned.** A loader that reads a document from a path or a URL picks
+Markdown for a `.md` name, Typst for a `.typ` name and JSON for every other
+name, by the extension alone, at the root and at every ref site (esm-spec
+§1.2.1). A source document its reader refuses as malformed fails as
+unparseable JSON fails there: `parse_error` at the root, the mechanism's
+unresolved diagnostic at a ref. A source document refused for a removed
+operator keeps `removed_op` everywhere, as a JSON document carrying one does.
+
+**Shape.** `tests/conformance/source_documents/` (contract in its `README.md`)
+holds a Typst and a Markdown root that import a template library and mount a
+model written in the other source format, a JSON root that imports a `.typ`
+library and mounts a `.md` model, a top-level mount of a `.typ` model and a
+coupling import of a `.typ` coupling library, each with a JSON twin under
+`twins/` where one exists, and the refusals of `json_content.typ` and
+`json_content.md`, two files that hold JSON text: read by their extension they
+are refused, at the root and at each ref site. `removed_op.typ` and
+`removed_op.md` call the removed `fn`; they are refused with `removed_op` at the
+root and at each ref site, and so is the JSON twin `twins/removed_op.esm` when
+a template import reaches it.
+
+**Adapters.** `pkg/EarthSciAST.jl/test/source_documents_test.jl` (Julia),
+`pkg/earthsci-ast-py/tests/test_source_documents.py` (Python),
+`pkg/earthsci-ast-rs/tests/source_documents_conformance.rs` (Rust),
+`pkg/earthsci-ast-ts/src/source-documents.test.ts` (TypeScript) and
+`pkg/earthsci-ast-go/pkg/esm/source_documents_test.go` (Go).
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

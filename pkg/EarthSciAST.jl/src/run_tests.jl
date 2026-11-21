@@ -641,23 +641,25 @@ itself already reports that failure as a load ERROR row.
 function _mounted_components(path::AbstractString)
     edges = String[]
     raw = try
-        JSON3.read(read(path, String))
+        # JSON, Markdown or Typst by the extension (esm-spec §1.2.1).
+        _to_native_json(_parse_document_text(read(path, String), path))
     catch err
-        # An unreadable file or malformed JSON: the run reports it as a load row.
-        err isa Union{SystemError, ArgumentError, EOFError} || rethrow()
+        # An unreadable file or an unparseable document: the run reports it as
+        # a load row.
+        err isa Union{SystemError, ParseError} || rethrow()
         return edges
     end
-    (raw isa AbstractDict || raw isa JSON3.Object) || return edges
+    raw isa AbstractDict || return edges
     # The mount-edge shapes the two inliners recognise: a `ref` and no inline
     # body key (`variables` for a model, `species` for a reaction system).
-    for (section, body) in ((:models, :variables), (:reaction_systems, :species))
+    for (section, body) in (("models", "variables"), ("reaction_systems", "species"))
         comps = get(raw, section, nothing)
-        (comps isa AbstractDict || comps isa JSON3.Object) || continue
+        comps isa AbstractDict || continue
         for (name, entry) in pairs(comps)
-            (entry isa AbstractDict || entry isa JSON3.Object) || continue
-            (haskey(entry, :ref) && !haskey(entry, body)) || continue
-            entry[:ref] isa AbstractString || continue
-            push!(edges, string(name, " ← ", entry[:ref]))
+            entry isa AbstractDict || continue
+            (haskey(entry, "ref") && !haskey(entry, body)) || continue
+            entry["ref"] isa AbstractString || continue
+            push!(edges, string(name, " ← ", entry["ref"]))
         end
     end
     return edges

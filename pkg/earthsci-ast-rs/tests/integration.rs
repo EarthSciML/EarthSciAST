@@ -343,6 +343,8 @@ mod solver_block;
 mod solver_external_conformance;
 #[path = "solver_time_span_conformance.rs"]
 mod solver_time_span_conformance;
+#[path = "source_documents_conformance.rs"]
+mod source_documents_conformance;
 #[path = "static_evaluation_assertions_conformance.rs"]
 mod static_evaluation_assertions_conformance;
 #[path = "stdlib_refs_conformance.rs"]

@@ -1,0 +1,31 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "root",
+    "description": "Imports the upwind_flux template from a template library and mounts a decay model as a subsystem.",
+    "authors": ["EarthSciML"]
+  },
+  "models": {
+    "Transport": {
+      "expression_template_imports": [{"ref": "./library.typ"}],
+      "subsystems": {
+        "Leaf": {"ref": "./leaf.md"}
+      },
+      "variables": {
+        "c": {"type": "parameter", "units": "1/s", "default": 2.0},
+        "F": {"type": "unknown", "units": "1/s"}
+      },
+      "equations": [
+        {
+          "lhs": "F",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "upwind_flux",
+            "bindings": {"u": "Leaf.x", "c": "c"}
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "import_removed_op",
+    "description": "Imports ./removed_op.typ as a template library: it calls fn, an operator removed at esm 2.0.0, so the Typst reader refuses it and the import keeps the reader's code (removed_op).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "M": {
+      "expression_template_imports": [
+        {
+          "ref": "./removed_op.typ"
+        }
+      ],
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}

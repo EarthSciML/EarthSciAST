@@ -4,11 +4,19 @@
 use std::fs;
 use std::path::PathBuf;
 
-/// Read a UTF-8 input file, mapping the failure to a message that names the
-/// offending path (a bare `io::Error` would surface as a Debug dump with no
-/// filename).
+/// Read a UTF-8 input document as JSON text, mapping a read failure to a
+/// message that names the offending path (a bare `io::Error` would surface as
+/// a Debug dump with no filename). The file's extension picks its format
+/// (esm-spec §1.2.1): a Markdown (`.md`) or Typst (`.typ`) source document is
+/// read and rendered as JSON, so every subcommand loads it as it would the
+/// `.esm` file.
 pub(crate) fn read_input(path: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
-    fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()).into())
+    let text =
+        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    match earthsci_ast::document_json_text(&text, path)? {
+        std::borrow::Cow::Borrowed(_) => Ok(text),
+        std::borrow::Cow::Owned(json) => Ok(json),
+    }
 }
 
 /// The base directory a document loaded FROM `path` must resolve against: its
