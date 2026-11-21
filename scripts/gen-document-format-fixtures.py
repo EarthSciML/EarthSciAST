@@ -20,8 +20,9 @@ so a printer or parser change that moves a pinned spelling fails it.
 (formal/scripts/doc-corpus.py) does: every Typst document compiles with Typst against the
 repository's `esm` package (typst/packages), and every piece of math in every Markdown
 document renders in KaTeX in strict mode with mhchem (formal/scripts/katex-check.cjs,
-which needs the `katex` npm package on NODE_PATH). It needs those tools and is not part
-of `--check`.
+which needs the `katex` npm package on NODE_PATH), and the front matter and every
+`esm:<path>` block of every Markdown document reads with PyYAML. It needs those tools and
+is not part of `--check`.
 
 The whole-corpus round trip (every .esm under tests/ through both formats) is run at
 run time from the corpus itself and is never written here.
@@ -1799,7 +1800,7 @@ def documents(g):
         "block_math_raw",
         "A value at an expression path that is not a well-formed expression stays as it "
         "is; so does one whose math the container cannot delimit (in Typst a string field "
-        "holding $ prints as #\"$\", in LaTeX as {\\char036}, so only Typst keeps it raw).",
+        'holding $ prints as #"$", in LaTeX as {\\char036}, so only Typst keeps it raw).',
         document(
             models={
                 "M": box_model(
@@ -1820,6 +1821,79 @@ def documents(g):
                                     "expected": 0,
                                     "reference": op("Dx", "c", dim="$"),
                                 },
+                            ],
+                        }
+                    ]
+                )
+            }
+        ),
+    )
+    P(
+        "block_math_update_rules",
+        "A parameter update is one rule or an array of them (ParameterUpdateSpec): the "
+        "expression, when and from.unit_conversion of each rule are math in either form, "
+        "and the object form's other fields (kind, times) are not array elements and stay "
+        "as they are. The names k.2 and w.3 print as no declaration, so the variables "
+        "they are in are a path block.",
+        document(
+            models={
+                "M": box_model(
+                    variables={
+                        "c": {"type": "unknown", "units": "kg/m^3", "default": 0},
+                        "u": {"type": "parameter", "units": "m/s", "default": 1},
+                        "k.2": {
+                            "type": "parameter",
+                            "default": 1,
+                            "update": [
+                                {"kind": "condition", "when": op(">", "c", 2), "expression": 0},
+                                {
+                                    "kind": "schedule",
+                                    "times": [1, 2],
+                                    "expression": op("*", 2, "u"),
+                                },
+                                {
+                                    "kind": "data",
+                                    "source": "met",
+                                    "from": {
+                                        "file_variable": "K",
+                                        "unit_conversion": op("/", "u", 1000),
+                                    },
+                                },
+                            ],
+                        },
+                        "w.3": {
+                            "type": "parameter",
+                            "default": 0,
+                            "update": {
+                                "kind": "schedule",
+                                "times": [1],
+                                "from": {"file_variable": "W", "unit_conversion": op("*", 2, "u")},
+                            },
+                        },
+                    }
+                )
+            }
+        ),
+    )
+    P(
+        "block_math_yaml_plain",
+        "Math whose text holds ': ' (here the LaTeX escape form of an annotated node) "
+        "would not read as a YAML plain scalar, so in Markdown the expression stays as "
+        "JSON in its block (in Typst too, where the escape form spans lines).",
+        document(
+            models={
+                "M": box_model(
+                    tests=[
+                        {
+                            "id": "t",
+                            "time_span": {"start": 0, "end": 1},
+                            "assertions": [
+                                {
+                                    "variable": "c",
+                                    "time": 1,
+                                    "expected": 0,
+                                    "reference": op("*", "c", "u", id="tagged"),
+                                }
                             ],
                         }
                     ]
@@ -2125,7 +2199,7 @@ def refusals(g):
         document(models={"M": box_model()}),
         typ,
         "parse_error",
-        [('#param($u$, default: 1,', '#param($u$, default: $1$,')],
+        [("#param($u$, default: 1,", "#param($u$, default: $1$,")],
     )
     R(
         "math_leaf_outside_block_markdown",
@@ -2717,9 +2791,73 @@ def validate(areas, args):
         proc = subprocess.run(["node", str(KATEX_CHECK), mddir], capture_output=True, text=True)
         print("\n".join(x for x in (proc.stdout.strip(), proc.stderr.strip()) if x))
         ok = ok and proc.returncode == 0
+        ok = validate_yaml(md) and ok
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return ok
+
+
+def yaml_pieces(text):
+    """The front matter and every `esm:<path>` block body of a Markdown document."""
+    lines = text.split("\n")
+    out = []
+    if lines and lines[0] == "---":
+        end = lines.index("---", 1)
+        out.append(("front matter", "\n".join(lines[1:end]) + "\n"))
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("```esm:"):
+            j = lines.index("```", i + 1)
+            out.append((lines[i][3:], "\n".join(lines[i + 1 : j]) + "\n"))
+            i = j
+        i += 1
+    return out
+
+
+def validate_yaml(md):
+    """Every YAML piece of every Markdown document reads with PyYAML, and each math
+    leaf (`$…$`) reads as that string, never as a mapping or with a comment cut off."""
+    try:
+        import yaml
+    except ImportError:
+        sys.exit("--validate needs PyYAML (pip install pyyaml)")
+    failed = 0
+    count = 0
+    for where, text in md:
+        for what, body in yaml_pieces(text):
+            count += 1
+            try:
+                got = yaml.safe_load(body)
+            except yaml.YAMLError as e:
+                failed += 1
+                print(f"yaml: {where} {what} does not parse:\n{e}")
+                continue
+            maths = set()
+            for ln in body.split("\n"):
+                t = ln.strip().removeprefix("- ")
+                if not t.startswith("$") and ": " in t:
+                    t = t.split(": ", 1)[1]
+                if t.startswith("$"):
+                    maths.add(t)
+            seen = set()
+
+            def walk(v, seen=seen):
+                if isinstance(v, str):
+                    seen.add(v)
+                elif isinstance(v, dict):
+                    for x in v.values():
+                        walk(x)
+                elif isinstance(v, list):
+                    for x in v:
+                        walk(x)
+
+            walk(got)
+            lost = maths - seen
+            if lost:
+                failed += 1
+                print(f"yaml: {where} {what} reads math leaves differently: {sorted(lost)}")
+    print(f"yaml: {count - failed} of {count} YAML pieces parse with PyYAML")
+    return failed == 0
 
 
 if __name__ == "__main__":

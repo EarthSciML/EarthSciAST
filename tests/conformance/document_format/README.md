@@ -26,7 +26,7 @@ text back.
 | `operators.json` | print | Every operator tier: native arithmetic and functions, derivatives, `cases`, `faq` reductions (unmarked, the `\limits` marker, and an `args` superscript set on the operator in each subscript shape and on the output bracket), `index`, constant arrays of any size (a matrix of more than 10 columns in the LaTeX array form, since `bmatrix` holds at most 10), the `makearray` table (one- and two-dimensional regions, the lifted form with its output indices), the call tier, function-call templates (positional, named, the bare name of one with no bindings), open operators (with and without operands), the call form with named fields of the shape operators and of a `faq`, `makearray` or `const` with no native shape, and the escape form left for annotated nodes |
 | `names.json` | print | The name shapes (single letter, Greek, subscripted, chemical formula, word), the collisions that force `\mathit{…}` or the bracketed index `k[1]`, declared `e` and `d`, scoped references |
 | `variants.json` | variant | Every accepted hand-written math spelling (`Notation.variants`), with the canonical text it normalizes to |
-| `documents.json` | print, variant | Front matter, descriptions, declarations, equations and their comments, reactions (coefficients, empty sides, attributes), initialization and constraint containers, templates and rules, by-reference subsystems, path-keyed blocks and the math of their expression-valued fields (`Notation.compExprPaths`, `Notation.topExprPaths`: `$…$` in a Typst dictionary, the plain scalar `$…$` in YAML), quoted flow-collection attributes, the plot shorthand next to the analyses block it stands for, the document-layer variants, and prose and label independence |
+| `documents.json` | print, variant | Front matter, descriptions, declarations, equations and their comments, reactions (coefficients, empty sides, attributes), initialization and constraint containers, templates and rules, by-reference subsystems, path-keyed blocks and the math of their expression-valued fields (`Notation.compExprPaths`, `Notation.topExprPaths`, an update's single-rule and array forms: `$…$` in a Typst dictionary, the plain scalar `$…$` in YAML only when a YAML parser reads it as that string, `Yaml.plainMathOK`), quoted flow-collection attributes, the plot shorthand next to the analyses block it stands for, the document-layer variants, and prose and label independence |
 | `units.json` | print, variant | Constants with units in both notations |
 | `refusals.json` | refusal | Removed operators refused by name, malformed input, a math leaf outside a path block or one that does not read, and array-notation spellings the printer never writes (a set on a `\limits` operator or inside an output bracket, an annotation, repeated or `args` field in the call form, a native node in the call form, a bare template whose parameter list is empty, a `bmatrix` of more than 10 columns, a mis-sized or narrow array form) |
 | `limits.json` | limit | The reader limits every binding shares and the Lean model does not have (see Limits) |
@@ -140,7 +140,9 @@ compile with Typst 0.15.1 against the repository's `esm` package
 each Markdown document must render in KaTeX in strict mode with mhchem
 (`formal/scripts/katex-check.cjs`). As remark-math reads them, the `$$` display
 lines render as display math and a one-line `$$\ce{…}$$` reaction line and a
-directive label as inline math. It needs Typst and the `katex` npm package:
+directive label as inline math. The front matter and every `esm:<path>` block of
+each Markdown document must also read with PyYAML, each math leaf `$…$` as that
+string. It needs Typst, the `katex` npm package and PyYAML:
 
 ```bash
 NODE_PATH=/path/to/node_modules \
