@@ -7845,7 +7845,7 @@ the lift of the expansion did. Each case gains a second golden, the flattened
 equations with references kept and the reached registry entries, byte for byte
 across bindings, and the set gains a case whose application binds an array to a
 mixed parameter, pinning the `<name>.cellwise<k>` variant and its `p_cell`
-parameter. A structural time derivative inside a template body is pinned by
+parameter (`mixed_parameter_cellwise`). A structural time derivative inside a template body is pinned by
 a fixture whose flattened golden (after `Expand`) equals the expansion's
 resolution: one `D` with `wrt` absent over a parameter bound to a state, one
 over a parameter bound to an observed (chain rule), one over a nested
