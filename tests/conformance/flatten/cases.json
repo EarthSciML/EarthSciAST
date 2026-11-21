@@ -5054,6 +5054,8 @@
         "x"
       ],
       "template_registry": [
+        "A.d_x_rule",
+        "B.d_x_rule",
         "A.interior_stencil",
         "B.interior_stencil",
         "A.outer_stencil",
@@ -5180,6 +5182,8 @@
         "x"
       ],
       "template_registry": [
+        "A.d_x_rule",
+        "B.d_x_rule",
         "A.interior_stencil",
         "B.interior_stencil",
         "A.outer_stencil",
@@ -7143,7 +7147,9 @@
         "lon",
         "lat"
       ],
-      "template_registry": [],
+      "template_registry": [
+        "grad_lon_inflow"
+      ],
       "field_ics": [
         {
           "state": "Chemistry.O3",

@@ -1457,6 +1457,44 @@ def _authored_template_names(raw_source: Any) -> dict[str, list[str]]:
     return authored
 
 
+def materialize_component_block(
+    comp: dict, authored_here: list[str]
+) -> tuple[dict[str, Any], bool, bool]:
+    """One Option-B loaded component's emitted ``expression_templates`` block
+    (esm-spec §9.6.4 rule 5): the entries authored in-file (``authored_here``,
+    authored order) first — a ``match`` rule only once a firing referenced it
+    and rule 3 materialized it without ``match`` — then the transitive closure
+    of the component's surviving references not authored here, sorted by UTF-8
+    bytes. Also reports whether the component carries any surviving reference
+    and whether any non-authored entry was materialized (the §9.6.4 rule 8
+    version stamp). Shared by :func:`emit_document` and the typed load path's
+    registry (the one flatten merges), as the Julia ``_materialize_components!``
+    is. ``comp`` is not modified."""
+    tpl = comp.get("expression_templates")
+    named: dict[str, Any] = {}
+    if _is_object(tpl):
+        for n, d in tpl.items():
+            named[str(n)] = d
+    refnames: set[str] = set()
+    for k, v in comp.items():
+        if k in ("expression_templates", "expression_template_imports"):
+            continue
+        for r in _collect_apply_names([], v):
+            refnames.add(r)
+    materialized = _ref_closure(refnames, named)
+    authored_set = set(authored_here)
+    block: dict[str, Any] = {}
+    for n in authored_here:
+        # A `match` rule nothing references still carries its `match` (a
+        # referenced one was materialized without it, §9.6.4 rule 3).
+        if n in named and not (_is_object(named[n]) and named[n].get("match") is not None):
+            block[n] = named[n]
+    mat_names = sorted(materialized - authored_set)
+    for n in mat_names:
+        block[n] = named[n]
+    return block, bool(refnames), bool(mat_names)
+
+
 def emit_document(raw_source: Any, base_path: str) -> dict:
     """Produce the reference-preserving, self-contained emitted document
     (esm-spec §9.6.4 rule 5, RFC out-of-line-expression-templates §7.5) from a
@@ -1494,32 +1532,10 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
         for cname, comp in comps.items():
             if not _is_object(comp):
                 continue
-            key = f"{compkind}.{cname}"
-            tpl = comp.get("expression_templates")
-            named: dict[str, Any] = {}
-            if _is_object(tpl):
-                for n, d in tpl.items():
-                    named[str(n)] = d
-            refnames: set[str] = set()
-            for k, v in comp.items():
-                if k in ("expression_templates", "expression_template_imports"):
-                    continue
-                for r in _collect_apply_names([], v):
-                    refnames.add(r)
-            if refnames:
-                bump = True
-            materialized = _ref_closure(refnames, named)
-            authored_here = authored.get(key, [])
-            authored_set = set(authored_here)
-
-            emit_block: dict[str, Any] = {}
-            for n in authored_here:
-                # A `match` rule nothing references still carries its `match`
-                # (a referenced one was materialized without it, §9.6.4 rule 3).
-                if n in named and not (_is_object(named[n]) and named[n].get("match") is not None):
-                    emit_block[n] = named[n]
-            for n in sorted(materialized - authored_set):
-                emit_block[n] = named[n]
+            emit_block, has_refs, has_materialized = materialize_component_block(
+                comp, authored.get(f"{compkind}.{cname}", [])
+            )
+            if has_refs or has_materialized:
                 bump = True
 
             if emit_block:
