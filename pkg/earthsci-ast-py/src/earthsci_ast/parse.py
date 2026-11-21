@@ -2957,19 +2957,34 @@ _LOAD_ARGS_DOC = """
 """
 
 
-def _capture_component_templates(data: Any) -> dict[str, Any]:
+def _capture_component_templates(
+    data: Any, authored: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     """The per-component ``expression_templates`` blocks of an Option-B loaded
-    document, keyed ``"<section>.<component>"``.
+    document, keyed ``"<section>.<component>"``, each as emit materializes it
+    (esm-spec §9.6.4 rule 5,
+    :func:`~earthsci_ast.lower_expression_templates.materialize_component_block`):
+    the entries authored in-file (``authored``, from the source before
+    resolution) first, in authored order, then the closure of the component's
+    surviving references, sorted — the registry flatten merges, as the Julia
+    ``_materialize_components!`` gives the typed load path.
 
     Snapshot taken on the tree BETWEEN ``lower_expression_templates`` (which
     preserves the blocks) and ``expand_document`` (which strips them). Deep
     copied so a later in-place pass over ``data`` cannot mutate the snapshot.
-    Components declaring no block are omitted, so the common document yields
+    Components with an empty block are omitted, so the common document yields
     ``{}`` and flatten's registry merge is a no-op.
     """
+    from .lower_expression_templates import (
+        materialize_component_block,
+        received_transform_refs,
+    )
+
+    authored = authored or {}
     out: dict[str, Any] = {}
     if not isinstance(data, dict):
         return out
+    received = received_transform_refs(data)
     for section in ("models", "reaction_systems"):
         comps = data.get(section)
         if not isinstance(comps, dict):
@@ -2977,9 +2992,15 @@ def _capture_component_templates(data: Any) -> dict[str, Any]:
         for cname, comp in comps.items():
             if not isinstance(comp, dict):
                 continue
+            refs = received.pop(cname, None)
             block = comp.get("expression_templates")
-            if isinstance(block, dict) and block:
-                out[f"{section}.{cname}"] = copy.deepcopy(block)
+            if not (isinstance(block, dict) and block):
+                continue
+            mat, _, _ = materialize_component_block(
+                comp, authored.get(f"{section}.{cname}", []), refs
+            )
+            if mat:
+                out[f"{section}.{cname}"] = copy.deepcopy(mat)
     return out
 
 
@@ -3153,6 +3174,7 @@ def _load_data(
 
     from ._data_source_urls import resolve_data_source_urls
     from .lower_expression_templates import (
+        _authored_template_names,
         expand_document,
         lower_expression_templates,
         marking_template_origins,
@@ -3328,6 +3350,10 @@ def _load_data(
     # exempts it, so a single file whose `extent` misspells a metaparameter it
     # declares itself stops being caught. Measured both ways.
     check_data_source_extents(data, base_path, _mount_declared)
+    # The template names authored in-file, before resolution merges imports
+    # into the blocks: the typed registry keeps them in authored position
+    # (esm-spec §9.6.4 rule 5, `_capture_component_templates`).
+    _authored_templates = _authored_template_names(data)
     resolved = resolve_template_machinery(
         data, base_path, metaparameters=metaparameters, mount_declared=_mount_declared
     )
@@ -3337,10 +3363,12 @@ def _load_data(
     # Structural validation (runs on the resolved, folded form — §9.6.4)
     _validate_structural(data, file_path=file_path)
 
-    # Run the §9.6.3 rewrite fixpoint under Option B (esm-spec §9.6.4): explicit
-    # target-bearing references are eagerly expanded and `match` rules fired, but
-    # NON-eager `apply_expression_template` references and the per-component
-    # `expression_templates` registries SURVIVE on the returned tree.
+    # Run the §9.6.3 rewrite fixpoint under Option B (esm-spec §9.6.4): `match`
+    # rules fire and each firing writes a reference to its rule (§9.6.3
+    # constraint 7), rules rewrite the template bodies the references reach
+    # (§9.6.4 rule 3), and the `apply_expression_template` references and the
+    # per-component `expression_templates` registries SURVIVE on the returned
+    # tree.
     data = lower_expression_templates(data)
     # Capture the per-component registries while the Option-B image still holds
     # them: `expand_document` below strips every `expression_templates` block,
@@ -3348,7 +3376,7 @@ def _load_data(
     # registry as a first-class field of the flattened representation. Keyed
     # `"models.<name>"` / `"reaction_systems.<name>"` (the Julia
     # `component_templates` key shape).
-    _raw_component_templates = _capture_component_templates(data)
+    _raw_component_templates = _capture_component_templates(data, _authored_templates)
     # esm-spec §9.6.4 Option B: the typed IR / build path (simulate, flatten,
     # codegen) is Expand-at-build (RFC out-of-line-expression-templates §7.7) —
     # call `Expand` once here so `_parse_esm_data` sees the fully-expanded

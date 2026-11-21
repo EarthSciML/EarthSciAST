@@ -224,7 +224,7 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
 /// cannot drift: every name listed here has a `match` arm below, and every arm
 /// below is listed here.
 ///
-/// It is NOT the same set as [`crate::op_registry::is_core_op`]. The registry
+/// It is NOT the same set as `crate::op_registry::is_core_op`. The registry
 /// answers "may this op appear in a legal AST"; this answers "can the per-cell
 /// evaluator produce a number for it". The gap between them is real and is
 /// exactly what [`check_evaluable`] rejects:

@@ -1,0 +1,10 @@
+{
+  "esm": "1.1.0",
+  "metadata": { "name": "lib_scale" },
+  "expression_templates": {
+    "scale_by": {
+      "params": ["x", "k"],
+      "body": { "op": "*", "args": ["k", "x"] }
+    }
+  }
+}

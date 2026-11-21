@@ -1,0 +1,315 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ],
+    "description": "esm-spec §9.6.4 rule 4: the three cases where this revision and the in-place engine differ, each pinned the way this revision decides it. (a) `a_case`: the alias rule `grad_alias` writes `ref(grad_alias, {f: c, d: x})`; the compound rule `godunov` (priority 100, `sqrt(D(u,x)^2)`) never sees a `D` around it, and `central` lowers the `D` inside `grad_alias`'s body (its `wrt` parameter read as the bound literal `x`). The in-place engine wrote `D(c, x)` in place and fired `godunov` in pass 2: `999*c`. (b) `b_structured` and `b_ground`: inside `flux_div`'s body the parameter `F` is a leaf, so neither the structured pattern `D(U*q, x)` of `upwind_Uq` nor the ground pattern `D(c, x)` of `ground_c` matches it; `central` fires, and both instances rewrite the body in place to `ref(central, {f: F})`. The in-place engine expanded the references first and produced `777*c` and `555*g` (`g` unbound, written as itself). (c) `c_case`: `sqrt(ref(sq_grad, {u: c}))` — the reference is a leaf, so `godunov` does not match across it; `central` lowers the `D` inside `sq_grad`'s body. The in-place engine expanded `sq_grad` eagerly and fired `godunov`: `999*c`. `expanded.esm` is written under this revision's semantics; the in-place engine fails it by design.",
+    "name": "opacity_rule_replacement"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "c"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "c"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "a_case",
+          "rhs": {
+            "args": [
+              {
+                "args": [
+                  {
+                    "args": [
+                      "c"
+                    ],
+                    "expr": {
+                      "args": [
+                        {
+                          "args": [
+                            "c",
+                            {
+                              "args": [
+                                "i",
+                                1
+                              ],
+                              "op": "+"
+                            }
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "c",
+                            {
+                              "args": [
+                                "i",
+                                1
+                              ],
+                              "op": "-"
+                            }
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "-"
+                    },
+                    "op": "faq",
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": {
+                        "from": "x"
+                      }
+                    }
+                  },
+                  2
+                ],
+                "op": "^"
+              }
+            ],
+            "op": "sqrt"
+          }
+        },
+        {
+          "lhs": "b_structured",
+          "rhs": {
+            "args": [
+              {
+                "args": [
+                  "U",
+                  "c"
+                ],
+                "op": "*"
+              }
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "U",
+                        "c"
+                      ],
+                      "op": "*"
+                    },
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "+"
+                    }
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "U",
+                        "c"
+                      ],
+                      "op": "*"
+                    },
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "-"
+                    }
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "-"
+            },
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            }
+          }
+        },
+        {
+          "lhs": "b_ground",
+          "rhs": {
+            "args": [
+              "c"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "c",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "+"
+                    }
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "c",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "-"
+                    }
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "-"
+            },
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            }
+          }
+        },
+        {
+          "lhs": "c_case",
+          "rhs": {
+            "args": [
+              {
+                "args": [
+                  {
+                    "args": [
+                      "c"
+                    ],
+                    "expr": {
+                      "args": [
+                        {
+                          "args": [
+                            "c",
+                            {
+                              "args": [
+                                "i",
+                                1
+                              ],
+                              "op": "+"
+                            }
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "c",
+                            {
+                              "args": [
+                                "i",
+                                1
+                              ],
+                              "op": "-"
+                            }
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "-"
+                    },
+                    "op": "faq",
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": {
+                        "from": "x"
+                      }
+                    }
+                  },
+                  2
+                ],
+                "op": "^"
+              }
+            ],
+            "op": "sqrt"
+          }
+        }
+      ],
+      "variables": {
+        "U": {
+          "default": 1.5,
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "a_case": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "b_ground": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "b_structured": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "c": {
+          "default": 0.5,
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "c_case": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,887 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {},
+  "metadata": {
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ],
+    "description": "esm-spec §9.6.4 rule 3 (Rewrite depth): a chain of 64 rules, rule r<k> rewriting op `s<k>` into a body holding `s<k+1>`. The call site fires r1 in pass 1 (depth 1); each later rule fires in pass 1 of the body of the rule before it, one level deeper. The deepest rewrite has depth 64 = MAX_REWRITE_PASSES, so the document is accepted; `y` expands to `2*u`.",
+    "name": "rewrite_depth_through_bodies_64"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "u"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "u"
+            },
+            "name": "r1",
+            "op": "apply_expression_template"
+          }
+        }
+      ],
+      "expression_templates": {
+        "r1": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r2",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r2": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r3",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r3": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r4",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r4": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r5",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r5": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r6",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r6": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r7",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r7": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r8",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r8": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r9",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r9": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r10",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r10": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r11",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r11": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r12",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r12": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r13",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r13": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r14",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r14": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r15",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r15": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r16",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r16": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r17",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r17": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r18",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r18": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r19",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r19": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r20",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r20": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r21",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r21": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r22",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r22": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r23",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r23": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r24",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r24": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r25",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r25": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r26",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r26": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r27",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r27": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r28",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r28": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r29",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r29": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r30",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r30": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r31",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r31": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r32",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r32": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r33",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r33": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r34",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r34": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r35",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r35": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r36",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r36": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r37",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r37": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r38",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r38": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r39",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r39": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r40",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r40": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r41",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r41": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r42",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r42": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r43",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r43": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r44",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r44": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r45",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r45": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r46",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r46": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r47",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r47": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r48",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r48": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r49",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r49": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r50",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r50": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r51",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r51": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r52",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r52": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r53",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r53": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r54",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r54": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r55",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r55": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r56",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r56": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r57",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r57": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r58",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r58": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r59",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r59": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r60",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r60": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r61",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r61": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r62",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r62": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r63",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r63": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "r64",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "r64": {
+          "body": {
+            "args": [
+              2,
+              "f"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "f"
+          ]
+        }
+      },
+      "variables": {
+        "u": {
+          "default": 0.5,
+          "type": "unknown",
+          "units": "1"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

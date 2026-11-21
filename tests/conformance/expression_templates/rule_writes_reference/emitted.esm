@@ -1,0 +1,222 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ],
+    "description": "esm-spec §9.6.3 constraint 7: one rule (`central`) fires at three sites with different operands (`a`, `b`, `2*c`). Each firing writes a reference to the rule bound to what its match captured, so the emitted document holds three references and one materialized body: `central` emitted as a match-less entry in its authored position. Two leaf-bodied rules write their leaf instead of a reference: `dx_const` (body `0.25`) writes the number, `same` (body `u`, a parameter) writes what `u` bound. `expanded.esm` is Expand(load(fixture)), the tree the in-place engine produced.",
+    "name": "rule_writes_reference"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "a"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "a"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "b"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "b"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "c"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "c"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "da",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "a"
+            },
+            "name": "central",
+            "op": "apply_expression_template"
+          }
+        },
+        {
+          "lhs": "db",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "b"
+            },
+            "name": "central",
+            "op": "apply_expression_template"
+          }
+        },
+        {
+          "lhs": "dc",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": {
+                "args": [
+                  2,
+                  "c"
+                ],
+                "op": "*"
+              }
+            },
+            "name": "central",
+            "op": "apply_expression_template"
+          }
+        },
+        {
+          "lhs": "e",
+          "rhs": {
+            "args": [
+              0.25,
+              "b"
+            ],
+            "op": "*"
+          }
+        }
+      ],
+      "expression_templates": {
+        "central": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "+"
+                    }
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "-"
+                    }
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "-"
+            },
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            }
+          },
+          "params": [
+            "f"
+          ]
+        }
+      },
+      "variables": {
+        "a": {
+          "default": 0.5,
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "b": {
+          "default": 1.5,
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "c": {
+          "default": 2.5,
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "da": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "db": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "dc": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "e": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

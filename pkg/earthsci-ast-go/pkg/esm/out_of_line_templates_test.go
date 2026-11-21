@@ -5,7 +5,8 @@ package esm
 // §9.6.7 (new fixtures), §9.6.9 (validation discharge), §10.7 (flatten registry
 // merge). Mirrors the Julia reference test
 // EarthSciAST.jl/test/out_of_line_templates_test.jl. Drives
-// tests/conformance/expression_templates/{emit_*, eager_*, opacity_*,
+// tests/conformance/expression_templates/{emit_*, rewrite_in_template_body,
+// rule_writes_reference, template_instance_variants, opacity_*,
 // per_instantiation_validation, flatten_registry_merge}.
 
 import (
@@ -205,9 +206,10 @@ func TestOOL_ExpandDeterministicAndNonDestructive(t *testing.T) {
 	if string(a) != string(b) {
 		t.Errorf("Expand is not deterministic")
 	}
-	// Non-destructive: the loaded view still carries the surviving makearray.
+	// Non-destructive: the loaded view still carries the surviving reference
+	// the rule's firing wrote (esm-spec §9.6.3 constraint 7).
 	mk := loaded["models"].(map[string]any)["Advection"].(map[string]any)["equations"].([]any)[0].(map[string]any)["rhs"].(map[string]any)["args"].([]any)[1].(map[string]any)
-	if op, _ := mk["op"].(string); op != "makearray" {
+	if !isApplyNode(mk) {
 		t.Errorf("loaded view mutated by Expand: op=%v", mk["op"])
 	}
 }
@@ -243,12 +245,24 @@ func TestOOL_EmitMaterializedRegistry(t *testing.T) {
 	if _, has := adv["expression_template_imports"]; has {
 		t.Errorf("expression_template_imports should be consumed")
 	}
+	// The firing wrote a reference to its rule, which materializes match-less
+	// (esm-spec §9.6.3 constraint 7, §9.6.4 rule 5).
 	reg := adv["expression_templates"].(map[string]any)
-	if len(reg) != 2 || reg["central_D_lon_interior"] == nil || reg["dlon_deg"] == nil {
-		t.Errorf("materialized registry = %v; want {central_D_lon_interior, dlon_deg}", sortedKeys(reg))
+	if len(reg) != 3 || reg["central_D_lon_interior"] == nil || reg["dlon_deg"] == nil ||
+		reg["central_D_lon_zero_grad_bc"] == nil {
+		t.Errorf("materialized registry = %v; want {central_D_lon_interior, central_D_lon_zero_grad_bc, dlon_deg}", sortedKeys(reg))
 	}
-	if _, has := reg["central_D_lon_zero_grad_bc"]; has {
-		t.Errorf("match rule central_D_lon_zero_grad_bc must NOT be materialized")
+	rule, _ := reg["central_D_lon_zero_grad_bc"].(map[string]any)
+	if _, has := rule["match"]; has {
+		t.Errorf("the referenced rule central_D_lon_zero_grad_bc must be materialized without `match`")
+	}
+	site := adv["equations"].([]any)[0].(map[string]any)["rhs"].(map[string]any)["args"].([]any)[1]
+	if !isApplyNode(site) || site.(map[string]any)["name"] != "central_D_lon_zero_grad_bc" {
+		t.Errorf("call site = %v; want a reference to central_D_lon_zero_grad_bc", site)
+	}
+	interior := rule["body"].(map[string]any)["values"].([]any)[0]
+	if !isApplyNode(interior) || interior.(map[string]any)["name"] != "central_D_lon_interior" {
+		t.Errorf("rule body interior = %v; want a surviving central_D_lon_interior reference", interior)
 	}
 	// Idempotency (§9.6.4 rule 5 / RFC gate 2).
 	s2, err := EmitReferencePreserving(s, oolConf("emit_materialized_registry"), nil)
@@ -278,8 +292,9 @@ func TestOOL_EmitRenameDottedKeys(t *testing.T) {
 	dec.UseNumber()
 	_ = dec.Decode(&doc)
 	reg := doc["models"].(map[string]any)["TwoGrids"].(map[string]any)["expression_templates"].(map[string]any)
-	if reg["fine.dx"] == nil || reg["coarse.dx"] == nil || len(reg) != 2 {
-		t.Errorf("registry keys = %v; want {fine.dx, coarse.dx}", sortedKeys(reg))
+	if reg["fine.dx"] == nil || reg["coarse.dx"] == nil || reg["fine.central_D_x"] == nil ||
+		reg["coarse.central_D_x"] == nil || len(reg) != 4 {
+		t.Errorf("registry keys = %v; want {fine.dx, coarse.dx, fine.central_D_x, coarse.central_D_x}", sortedKeys(reg))
 	}
 }
 
@@ -312,29 +327,157 @@ func oolVarDef(t *testing.T, root map[string]any, comp, v string) any {
 }
 
 // -----------------------------------------------------------------------
-// eager_target_bearing (§9.6.4 rule 3): positive + negative.
+// rewrite_in_template_body (§9.6.4 rule 3, §9.6.7; formerly
+// eager_target_bearing): both references survive; the `central` rule rewrites
+// `deriv_c`'s body in place to a reference to itself.
 // -----------------------------------------------------------------------
 
-func TestOOL_EagerTargetBearing(t *testing.T) {
-	loaded := oolLoad(t, "eager_target_bearing")
-	// POSITIVE: deriv_c (D-bearing) reference eagerly expanded, then the D
-	// lowered by the `central` rule → an aggregate. No surviving ref.
+func TestOOL_RewriteInTemplateBody(t *testing.T) {
+	loaded := oolLoad(t, "rewrite_in_template_body")
+	m := loaded["models"].(map[string]any)["m"].(map[string]any)
+	reg := m["expression_templates"].(map[string]any)
 	deager := normTree(oolVarDef(t, loaded, "m", "d_eager")).(map[string]any)
-	if deager["op"] != "index" {
-		t.Errorf("d_eager op = %v; want index", deager["op"])
+	if a0 := deager["args"].([]any)[0]; !isApplyNode(a0) || a0.(map[string]any)["name"] != "deriv_c" {
+		t.Errorf("d_eager arg[0] = %v; want a surviving deriv_c reference", a0)
 	}
-	if inner, ok := deager["args"].([]any)[0].(map[string]any); !ok || inner["op"] != "faq" {
-		t.Errorf("d_eager arg[0] op = %v; want aggregate (D lowered at load)", deager["args"].([]any)[0])
+	body := normTree(reg["deriv_c"].(map[string]any)["body"]).(map[string]any)
+	if !isApplyNode(body) || body["name"] != "central" ||
+		!reflect.DeepEqual(body["bindings"], map[string]any{"f": "f"}) {
+		t.Errorf("deriv_c body = %v; want a reference to central binding f to f", body)
 	}
-	// NEGATIVE: scale_c (target-free) reference SURVIVES.
+	if _, has := reg["central"].(map[string]any)["match"]; has {
+		t.Errorf("the referenced rule central must be materialized without `match`")
+	}
 	dsurv := normTree(oolVarDef(t, loaded, "m", "d_survive")).(map[string]any)
-	arg0 := dsurv["args"].([]any)[0]
-	if !isApplyNode(arg0) || arg0.(map[string]any)["name"] != "scale_c" {
-		t.Errorf("d_survive arg[0] = %v; want surviving scale_c reference", arg0)
+	if a0 := dsurv["args"].([]any)[0]; !isApplyNode(a0) || a0.(map[string]any)["name"] != "scale_c" {
+		t.Errorf("d_survive arg[0] = %v; want surviving scale_c reference", a0)
 	}
-	// Emit golden.
-	if got, want := oolEmit(t, "eager_target_bearing"), mustRead(t, "eager_target_bearing", "emitted.esm"); got != want {
-		t.Errorf("eager emit != golden\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	if got, want := oolEmit(t, "rewrite_in_template_body"), mustRead(t, "rewrite_in_template_body", "emitted.esm"); got != want {
+		t.Errorf("rewrite_in_template_body emit != golden\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// -----------------------------------------------------------------------
+// Rules write references (CONFORMANCE_SPEC §5.60; esm-spec §9.6.3 constraint
+// 7, §9.6.4 rule 3): both goldens — the emitted form byte for byte, and
+// Expand(load) against the expanded oracle — for every fixture §5.60 lists,
+// plus the two rejected fixtures of rewrite_depth_through_bodies.
+// -----------------------------------------------------------------------
+
+func TestOOL_RulesWriteReferencesGoldens(t *testing.T) {
+	coreJSON := func(d map[string]any) string {
+		core := map[string]any{}
+		for _, k := range []string{"models", "reaction_systems", "coupling", "index_sets"} {
+			if v, ok := d[k]; ok {
+				core[k] = normTree(v)
+			}
+		}
+		out, err := json.Marshal(core)
+		if err != nil {
+			t.Fatalf("marshal core: %v", err)
+		}
+		return string(out)
+	}
+	cases := []struct{ dir, fixture, emitted, expanded string }{
+		{"rewrite_in_template_body", "fixture.esm", "emitted.esm", "expanded.esm"},
+		{"rule_writes_reference", "fixture.esm", "emitted.esm", "expanded.esm"},
+		{"template_instance_variants", "fixture.esm", "emitted.esm", "expanded.esm"},
+		{"opacity_rule_replacement", "fixture.esm", "emitted.esm", "expanded.esm"},
+		{"rewrite_depth_through_bodies", "chain_depth_64.esm", "emitted_chain_depth_64.esm", "expanded_chain_depth_64.esm"},
+		// Coupling transforms keep their references (esm-spec §10.4); the
+		// receiving component's block materializes what they name.
+		{"coupling_transform_expression", "fixture.esm", "emitted.esm", "expanded.esm"},
+		{"coupling_transform_rule_and_import", "fixture.esm", "emitted.esm", "expanded.esm"},
+	}
+	for _, c := range cases {
+		t.Run(c.dir+"/"+c.fixture, func(t *testing.T) {
+			if got, want := oolEmit(t, c.dir, c.fixture), mustRead(t, c.dir, c.emitted); got != want {
+				t.Errorf("emit != %s (byte-exact)\n--- got ---\n%s\n--- want ---\n%s", c.emitted, got, want)
+			}
+			// Emit then load is a fixed point: the emitted form reloads and
+			// re-emits byte for byte. For the depth-64 chain this holds only
+			// because the body-nesting bound equals MaxRewritePasses (esm-spec
+			// §9.7.3): its emitted form is a 64-template body-reference chain.
+			if got, want := oolEmit(t, c.dir, c.emitted), mustRead(t, c.dir, c.emitted); got != want {
+				t.Errorf("re-emit of %s is not a fixed point\n--- got ---\n%s\n--- want ---\n%s", c.emitted, got, want)
+			}
+			loaded := oolLoad(t, c.dir, c.fixture)
+			if rpCount(loaded, "", "apply_expression_template") == 0 {
+				t.Errorf("no surviving reference: the loaded form must keep the references firings wrote")
+			}
+			expanded := Expand(loaded)
+			if n := rpCount(expanded, "", "apply_expression_template"); n != 0 {
+				t.Errorf("Expand left %d reference(s)", n)
+			}
+			var want map[string]any
+			dec := json.NewDecoder(strings.NewReader(mustRead(t, c.dir, c.expanded)))
+			dec.UseNumber()
+			if err := dec.Decode(&want); err != nil {
+				t.Fatalf("decode %s: %v", c.expanded, err)
+			}
+			if got, w := coreJSON(expanded), coreJSON(want); got != w {
+				t.Errorf("Expand(load) core != %s\n got=%s\nwant=%s", c.expanded, got, w)
+			}
+		})
+	}
+	// The emitted form of the build-gate fixture (its error is an evaluate-stage
+	// error, N/A for this parse/validate-only binding).
+	if got, want := oolEmit(t, "unlowered_in_template_body"), mustRead(t, "unlowered_in_template_body", "emitted.esm"); got != want {
+		t.Errorf("unlowered_in_template_body emit != golden\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+
+	// Variants are numbered by canonical bytes and each call site re-pointed.
+	m := oolLoad(t, "template_instance_variants")["models"].(map[string]any)["m"].(map[string]any)
+	defRHS := func(m map[string]any, v string) map[string]any {
+		for _, e := range m["equations"].([]any) {
+			eq := e.(map[string]any)
+			if lhs, _ := eq["lhs"].(string); lhs == v {
+				return eq["rhs"].(map[string]any)
+			}
+		}
+		t.Fatalf("no defining equation for %s", v)
+		return nil
+	}
+	if got := defRHS(m, "du")["name"]; got != "ddx.variant1" {
+		t.Errorf("du references %v; want ddx.variant1", got)
+	}
+	if got := defRHS(m, "dv")["name"]; got != "ddx.variant2" {
+		t.Errorf("dv references %v; want ddx.variant2", got)
+	}
+	v1 := m["expression_templates"].(map[string]any)["ddx.variant1"].(map[string]any)["body"].(map[string]any)
+	if v1["name"] != "central_1d" {
+		t.Errorf("ddx.variant1 body references %v; want central_1d", v1["name"])
+	}
+	// A leaf-bodied rule writes its leaf.
+	rw := oolLoad(t, "rule_writes_reference")["models"].(map[string]any)["m"].(map[string]any)
+	e := normTree(defRHS(rw, "e"))
+	if want := map[string]any{"op": "*", "args": []any{0.25, "b"}}; !reflect.DeepEqual(e, want) {
+		t.Errorf("e = %v; want %v", e, want)
+	}
+
+	// Nontermination detected through bodies, and the depth bound.
+	for _, c := range []struct{ fixture, errf string }{
+		{"fixture.esm", "error.json"},
+		{"chain_depth_65.esm", "error_chain_depth_65.json"},
+	} {
+		t.Run("rewrite_depth_through_bodies/"+c.fixture, func(t *testing.T) {
+			var want struct{ Code string }
+			if err := json.Unmarshal([]byte(mustRead(t, "rewrite_depth_through_bodies", c.errf)), &want); err != nil {
+				t.Fatalf("decode %s: %v", c.errf, err)
+			}
+			fp := oolConf("rewrite_depth_through_bodies", c.fixture)
+			data, err := os.ReadFile(fp)
+			if err != nil {
+				t.Fatalf("read %s: %v", fp, err)
+			}
+			_, err = loadOptionB(string(data), filepath.Dir(fp), nil)
+			if err == nil {
+				t.Fatalf("expected %s, got no error", want.Code)
+			}
+			if got := tiErrCode(t, err); got != want.Code {
+				t.Errorf("expected %s, got %s (%v)", want.Code, got, err)
+			}
+		})
 	}
 }
 
@@ -366,16 +509,19 @@ func TestOOL_OpacityNegative(t *testing.T) {
 
 func TestOOL_OpacityPriorityShadowing(t *testing.T) {
 	loaded := oolLoad(t, "opacity_priority_shadowing")
+	// The generic rule fired and wrote a reference to itself (esm-spec §9.6.3
+	// constraint 7), binding the surviving reference WHOLE.
 	flux := normTree(oolVarDef(t, loaded, "m", "flux")).(map[string]any)
-	if flux["op"] != "*" {
-		t.Fatalf("flux op = %v; want * (generic rule fired)", flux["op"])
+	if !isApplyNode(flux) || flux["name"] != "generic" {
+		t.Fatalf("flux = %v; want a reference to the generic rule", flux)
 	}
-	args := flux["args"].([]any)
-	if v, ok := args[0].(int64); !ok || v != 1 {
-		t.Errorf("flux arg[0] = %v; want generic marker 1 (NOT compound 999)", args[0])
+	f := flux["bindings"].(map[string]any)["f"]
+	if !isApplyNode(f) || f.(map[string]any)["name"] != "flux_prod" {
+		t.Errorf("flux bindings.f = %v; want surviving flux_prod reference bound whole", f)
 	}
-	if !isApplyNode(args[1]) || args[1].(map[string]any)["name"] != "flux_prod" {
-		t.Errorf("flux arg[1] = %v; want surviving flux_prod reference bound whole", args[1])
+	generic := normTree(loaded["models"].(map[string]any)["m"].(map[string]any)["expression_templates"].(map[string]any)["generic"]).(map[string]any)
+	if v, ok := generic["body"].(map[string]any)["args"].([]any)[0].(int64); !ok || v != 1 {
+		t.Errorf("generic body arg[0] = %v; want generic marker 1 (NOT compound 999)", generic["body"])
 	}
 	if got, want := oolEmit(t, "opacity_priority_shadowing"), mustRead(t, "opacity_priority_shadowing", "emitted.esm"); got != want {
 		t.Errorf("opacity_priority_shadowing emit != golden\n--- got ---\n%s\n--- want ---\n%s", got, want)
@@ -446,9 +592,20 @@ func TestOOL_FlattenRegistryMergeTransitive(t *testing.T) {
 	root, merged := flattenTemplateRegistries(loaded)
 	gotKeys := append([]string(nil), merged.keys...)
 	sort.Strings(gotKeys)
-	wantKeys := []string{"A.interior_stencil", "A.outer_stencil", "B.interior_stencil", "B.outer_stencil"}
+	wantKeys := []string{"A.d_x_rule", "A.interior_stencil", "A.outer_stencil", "B.d_x_rule", "B.interior_stencil", "B.outer_stencil"}
 	if !reflect.DeepEqual(gotKeys, wantKeys) {
 		t.Errorf("merged registry keys = %v; want %v", gotKeys, wantKeys)
+	}
+	// The rule's firing wrote a reference to the rule (esm-spec §9.6.3
+	// constraint 7), whose body references the wrapper: it renames with it.
+	for _, m := range []string{"A", "B"} {
+		decl, ok := merged.get(m + ".d_x_rule").(map[string]any)
+		if !ok {
+			t.Fatalf("merged registry is missing %s.d_x_rule", m)
+		}
+		if got, want := applyNames(decl["body"]), []string{m + ".outer_stencil"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s.d_x_rule body references %v; want %v", m, got, want)
+		}
 	}
 	// Each owner's wrapper reaches its OWN leaf, never the other model's.
 	for _, m := range []string{"A", "B"} {
@@ -464,7 +621,7 @@ func TestOOL_FlattenRegistryMergeTransitive(t *testing.T) {
 	models := root["models"].(map[string]any)
 	for _, m := range []string{"A", "B"} {
 		eqs := models[m].(map[string]any)["equations"]
-		if got, want := applyNames(eqs), []string{m + ".outer_stencil"}; !reflect.DeepEqual(got, want) {
+		if got, want := applyNames(eqs), []string{m + ".d_x_rule"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("model %s equations reference %v; want %v", m, got, want)
 		}
 	}
@@ -514,7 +671,7 @@ func TestOOL_FlattenRegistryMergeIsUnionHalfOnly(t *testing.T) {
 	// Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
 	gotKeys := append([]string(nil), merged.keys...)
 	sort.Strings(gotKeys)
-	if want := []string{"interior_stencil", "outer_stencil"}; !reflect.DeepEqual(gotKeys, want) {
+	if want := []string{"d_x_rule", "interior_stencil", "outer_stencil"}; !reflect.DeepEqual(gotKeys, want) {
 		t.Fatalf("merged registry keys = %v; want %v", gotKeys, want)
 	}
 	outer := merged.get("outer_stencil").(map[string]any)
@@ -524,7 +681,7 @@ func TestOOL_FlattenRegistryMergeIsUnionHalfOnly(t *testing.T) {
 	models := root["models"].(map[string]any)
 	for _, m := range []string{"A", "B"} {
 		eqs := models[m].(map[string]any)["equations"]
-		if got, want := applyNames(eqs), []string{"outer_stencil"}; !reflect.DeepEqual(got, want) {
+		if got, want := applyNames(eqs), []string{"d_x_rule"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("model %s equations reference %v; want %v", m, got, want)
 		}
 	}
@@ -562,14 +719,19 @@ func TestOOL_EmitIdempotentByteWise(t *testing.T) {
 	cases := []struct{ dir, fixture string }{
 		{"emit_materialized_registry", "fixture.esm"},
 		{"emit_rename_dotted_keys", "fixture.esm"},
-		{"eager_target_bearing", "fixture.esm"},
+		{"rewrite_in_template_body", "fixture.esm"},
 		{"opacity_negative", "fixture.esm"},
 		{"opacity_priority_shadowing", "fixture.esm"},
+		{"rule_writes_reference", "fixture.esm"},
+		{"template_instance_variants", "fixture.esm"},
+		{"opacity_rule_replacement", "fixture.esm"},
+		{"unlowered_in_template_body", "fixture.esm"},
 		{"flatten_registry_merge", "fixture.esm"},
 		{"faq_int_ratio_golden", "fixture.esm"},
 		{"arrhenius_smoke", "fixture.esm"},
 		{"constrained_match_scope", "fixture.esm"},
 		{"coupling_transform_expression", "fixture.esm"},
+		{"coupling_transform_rule_and_import", "fixture.esm"},
 		{"fixpoint_nested_deriv", "fixture.esm"},
 		{"godunov_beats_inner_deriv", "fixture.esm"},
 		{"import_diamond", "fixture.esm"},

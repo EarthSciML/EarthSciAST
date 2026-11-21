@@ -545,13 +545,16 @@ struct _SeamRewrite
     ctx::_NeedCtx
     aliases::Dict{String, Tuple{String, Vector{Bool}}}
     inline::Dict{Tuple{String, Tuple}, ASTExpr}
+    # Seam instances made so far, per (chain of references, context).
+    inst::Dict{Tuple{Vector{UInt}, Any}, Union{Nothing, String}}
 end
 
 # The dimensions on which the read of `n` at `node` lands past the seam in
 # context `tag` (`:any`: every context), or `nothing` for a read that does not
 # (or that the walk never reached).
-function _seam_far_dims(ctx::_NeedCtx, node, n::String, tag)
-    m = get(ctx.marks, node, nothing)
+_seam_far_dims(ctx::_NeedCtx, node, n::String, tag) =
+    _seam_far_dims(ctx, get(ctx.marks, node, nothing), n, tag)
+function _seam_far_dims(ctx::_NeedCtx, m::Union{Nothing, AbstractDict}, n::String, tag)
     m === nothing && return nothing
     bits = nothing
     if tag === :any
@@ -586,7 +589,9 @@ function _seam_rewrite(rw::_SeamRewrite, e::ASTExpr, tag)
         all(k -> args[k] === o.args[k], eachindex(args)) && return o
         return reconstruct(o; args = args)
     end
-    return map_children(x -> _seam_rewrite(rw, x, tag), o)
+    r = map_children(x -> _seam_rewrite(rw, x, tag), o)
+    _tpl_is_call(o) && (r = _seam_call(rw, o, r::OpExpr, tag))
+    return r
 end
 
 # The target of the `index` node `node` (`nothing` for an observed's own
@@ -621,13 +626,224 @@ function _seam_target(rw::_SeamRewrite, t::ASTExpr, node, tag)
     ) && return _seam_rewrite(rw, o, tag)
     # An elementwise combination of arrays: each array operand is read at the
     # cells of `node` itself.
-    return map_children(o) do x
+    r = map_children(o) do x
         _is_arrayish(ctx, x) ? _seam_target(rw, x, node, tag) : _seam_rewrite(rw, x, tag)
+    end
+    _tpl_is_call(o) && (r = _seam_call(rw, o, r::OpExpr, tag))
+    return r
+end
+
+# ---- Reads past a periodic seam inside a template body ----
+#
+# A template reference is compiled once per instance, its body shared by every
+# use (call.jl), so a read the body makes cannot be sent to the far block at
+# one use by rewriting the body in place. The need walk recorded each read a
+# body makes per chain of references that reached it (`_NeedCtx.bmarks`); a
+# reference whose body (or a body it calls) reads a state past the seam at
+# this use is pointed at a SEAM INSTANCE of its template: a template of its
+# own (`<name>\0seam\0<key>`), registered once in the build's registry as
+# structural instances and view parts are, whose body is the template's with
+# each such read made of the far block instead (`_seam_alias`, the block the
+# seam rewrite sends an inlined read past the seam to), and each reference in
+# it whose body does so pointed at that template's seam instance in turn. The
+# far block is a name the body reads from its caller, so it is an implicit
+# parameter of the instance, passed down the chain as every implicit
+# parameter is. The key is the instance body itself: two uses that read past
+# the seam alike share one seam instance, and a reference that reads nothing
+# past the seam (every reference in a tile whose storage crosses no seam)
+# keeps the ordinary instance. No body is expanded.
+
+const _TPL_SEAM = "\0seam\0"
+
+# `new` (the reference `orig` with its bindings rewritten) pointed at its seam
+# instance when its body reads past the seam at this use.
+function _seam_call(rw::_SeamRewrite, orig::OpExpr, new::OpExpr, tag)
+    isempty(rw.ctx.bmarks) && return new
+    name = _seam_instance(rw, orig, Any[orig], tag)
+    name === nothing && return new
+    _seam_check_lanes(rw.ctx.tt, orig, name)
+    return reconstruct(new; name = name)
+end
+
+# The body the need walk read for the reference `call` (`_need_enter`) and the
+# node of the template's prepared body it stands for (they have one shape: a
+# lane replaces a read by a leaf, an element call reads its element).
+function _seam_walked_body(tt, call::OpExpr)
+    def = _tpl_def(tt, call.name)
+    def.closed === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_OP",
+            "template '$(call.name)' reads past a periodic seam within a tile's storage and " *
+                "has a parameter in a structural position; the build makes no seam instance of it"
+        )
+    )
+    C = def.closed.body
+    if _call_has_lanes(call)
+        info = _tpl_call_info(tt, call.name)
+        if info !== nothing
+            outs = _call_outs(info, call)
+            S = _call_fixed!(Dict{String, Any}(), call.name, info, call.bindings)
+            hp = _call_hoist_plan(tt, def, S, outs)
+            return hp.body, (isempty(outs) ? C : (C::OpExpr).expr_body), def
+        end
+    end
+    return C, C, def
+end
+
+# Pair each node of the walked body `w` with the prepared body's node `c` it
+# stands for.
+function _seam_pair!(corr::IdDict{Any, Any}, w, c)
+    (w isa OpExpr && c isa OpExpr) || return corr
+    haskey(corr, w) && return corr
+    w.op == c.op || return corr
+    corr[w] = c
+    for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+        x = getfield(w, f)
+        y = getfield(c, f)
+        (x === nothing || y === nothing) && continue
+        if spec.kind === :expr
+            _seam_pair!(corr, x, y)
+        elseif spec.kind === :expr_vec
+            length(x) == length(y) || continue
+            for k in eachindex(x)
+                _seam_pair!(corr, x[k], y[k])
+            end
+        elseif spec.kind === :expr_map
+            for (k, v) in x
+                u = get(y, k, nothing)
+                u === nothing || _seam_pair!(corr, v, u)
+            end
+        end
+    end
+    return corr
+end
+
+# Whether the marks `m` of one body read hold context `tag`.
+_seam_tag_in(m, tag) = tag === :any || any(k -> k[2] == tag, keys(m))
+
+# The seam instance of the reference `call` reached through `chain` (the
+# references the walk entered, outermost first, ending with `call`) in
+# context `tag`, registered in the build's registry; `nothing` when its body
+# reads nothing past the seam there.
+function _seam_instance(rw::_SeamRewrite, call::OpExpr, chain::Vector{Any}, tag)
+    ctx = rw.ctx
+    ids = UInt[objectid(c) for c in chain]
+    return get!(rw.inst, (ids, tag)) do
+        L = length(ids)
+        direct = IdDict{Any, String}()      # walked read => far block it reads
+        nested = IdDict{Any, Nothing}()     # walked reference with reads below
+        for ((cids, _), (ch, node, m)) in ctx.bmarks
+            (length(cids) >= L && view(cids, 1:L) == ids && _seam_tag_in(m, tag)) || continue
+            if length(cids) > L
+                nested[ch[L + 1]] = nothing
+                continue
+            end
+            for n in unique!([k[1] for k in keys(m)])
+                far = _seam_far_dims(ctx, m, n, tag)
+                far === nothing && continue
+                n in ctx.states || _refuse_rule(
+                    _rule_display(n),
+                    "tile restriction: template '$(call.name)' reads the observed '$n' past " *
+                        "the periodic seam within the tile's storage, where a template body " *
+                        "cannot evaluate it; give the tile a storage box that does not cross the seam"
+                )
+                a = _seam_alias(n, far)
+                rw.aliases[a] = (n, far)
+                direct[node] = a
+            end
+        end
+        tt = ctx.tt
+        swap = IdDict{Any, Any}()
+        W, C, def = (isempty(direct) && isempty(nested)) ? (nothing, nothing, nothing) :
+            _seam_walked_body(tt, call)
+        if W !== nothing
+            corr = _seam_pair!(IdDict{Any, Any}(), W, C)
+            for (node, a) in direct
+                c = get(corr, node, nothing)
+                c === nothing && throw(_seam_lost(call))
+                swap[c] = reconstruct(c::OpExpr; args = ASTExpr[VarExpr(a); (c::OpExpr).args[2:end]])
+            end
+            for y in keys(nested)
+                yn = _seam_instance(rw, y::OpExpr, Any[chain; y], tag)
+                yn === nothing && continue
+                c = get(corr, y, nothing)
+                c === nothing && throw(_seam_lost(call))
+                swap[c] = reconstruct(c::OpExpr; name = yn)
+            end
+        end
+        isempty(swap) && return nothing
+        body = _seam_swap(def.closed.body, swap, IdDict{OpExpr, ASTExpr}())
+        return _seam_register!(tt, String(call.name), body)
     end
 end
 
+_seam_lost(call) = TreeWalkError(
+    "E_TREEWALK_UNSUPPORTED_OP",
+    "template '$(call.name)': a read past a periodic seam was not found in the body the build compiles"
+)
+
+# `e` with each node of `swap` replaced.
+function _seam_swap(e::ASTExpr, swap::IdDict{Any, Any}, memo::IdDict{OpExpr, ASTExpr})
+    e isa OpExpr || return e
+    got = get(swap, e, nothing)
+    got === nothing || return got
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    return memo[e] = map_children(c -> _seam_swap(c, swap, memo), e)
+end
+
+# Register the seam instance of template `name` whose prepared body is `body`
+# (parameters and implicit parameters as sentinels): its declaration is the
+# template's, with `body` written back in the declaration's own names.
+function _seam_register!(tt, name::String, body::ASTExpr)
+    m = Dict{String, ASTExpr}()
+    foreach_subexpr(body) do x
+        if x isa VarExpr && _tpl_is_sentinel(x.name)
+            pre = startswith(x.name, _TPL_ARG) ? _TPL_ARG : _TPL_FREE
+            m[x.name] = VarExpr(x.name[(ncodeunits(pre) + 1):end])
+        end
+    end
+    raw = serialize_expression(_tpl_subst_scoped(body, m, IdDict{OpExpr, ASTExpr}()))
+    sname = string(name, _TPL_SEAM, bytes2hex(SHA.sha1(_stable_json(raw))))
+    if !haskey(tt.reg, sname)
+        nd = OrderedDict{String, Any}()
+        for (k, v) in pairs(tt.reg[name])
+            nd[string(k)] = v
+        end
+        nd["body"] = raw
+        tt.reg[sname] = nd
+    end
+    return sname
+end
+
+# A reference's reads the caller makes (its lanes, made for the ordinary
+# instance and seam-rewritten with the caller's tree) are those of its seam
+# instance: the instance reads past the seam only where the body reads on
+# some paths, never a lane.
+function _seam_check_lanes(tt, call::OpExpr, sname::String)
+    _call_has_lanes(call) || return nothing
+    info = _tpl_call_info(tt, call.name)::_TplCallInfo
+    sinfo = _tpl_call_info(tt, sname)
+    outs = _call_outs(info, call)
+    S = _call_fixed!(Dict{String, Any}(), call.name, info, call.bindings)
+    a = _call_hoist_plan(tt, _tpl_def(tt, call.name), S, outs).gathers
+    b = sinfo === nothing ? nothing : _call_hoist_plan(tt, _tpl_def(tt, sname), S, outs).gathers
+    (b !== nothing && length(a) == length(b) &&
+        all(k -> _tpl_bkey(tt, a[k], nothing) == _tpl_bkey(tt, b[k], nothing), eachindex(a))) || throw(
+        TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_OP",
+            "template '$(call.name)': its seam instance reads other cells in the caller " *
+                "than the template does"
+        )
+    )
+    return nothing
+end
+
 function _seam_equations(ctx::_NeedCtx, spec::_TileSpec, eqs::Vector{Equation})
-    rw = _SeamRewrite(ctx, spec.aliases, Dict{Tuple{String, Tuple}, ASTExpr}())
+    rw = _SeamRewrite(
+        ctx, spec.aliases, Dict{Tuple{String, Tuple}, ASTExpr}(),
+        Dict{Tuple{Vector{UInt}, Any}, Union{Nothing, String}}()
+    )
     out = Equation[]
     for eq in eqs
         rhs = if _d_target(eq.lhs) !== nothing

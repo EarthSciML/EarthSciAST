@@ -643,12 +643,12 @@ function _lower_and_coerce(
     expanded = loaded
     if loaded !== lowered_src
         # The machinery ran (the no-machinery fast path returns its input by
-        # identity). Coupling `variable_map` transform references expand against
-        # the receiving component's registry before the registries are
-        # materialized for emit and stripped from the coercion tree.
+        # identity). Coupling `variable_map` transform references stay
+        # references (esm-spec §10.4): the receiving component's materialized
+        # registry carries their templates, then the registries are stripped
+        # from the coercion tree.
         root = loaded
         authored = _authored_template_names(machinery_input)
-        _expand_coupling_transform_refs!(root)
         blocks, bump = _materialize_components!(root, authored)
         for (_, _, comp) in _components(root)
             delete!(comp, "expression_templates")

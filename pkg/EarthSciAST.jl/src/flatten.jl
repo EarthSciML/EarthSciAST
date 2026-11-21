@@ -497,20 +497,22 @@ function _rhs_derivative_target(e::ASTExpr)::Union{String, Nothing}
 end
 
 """
-    _resolve_rhs_time_derivatives!(pool, time_invariant, lifted_shapes)
+    _resolve_rhs_time_derivatives!(pool, time_invariant, lifted_shapes;
+                                   registry = nothing, map_other_sites = nothing)
 
-Step 3c of [`flatten`]: rewrite every right-hand-side STRUCTURAL time derivative
-into the tendency this system already defines for it (esm-spec §4.2).
+Step 3a of [`flatten`]: rewrite every right-hand-side STRUCTURAL time derivative
+into the tendency this system already defines for it (esm-spec §4.2;
+esm-libraries-spec §4.7.5 step 3a).
 
 `D` on an equation's LEFT-hand side is structural: it makes the equation
 differential, and system assembly consumes it. On a RIGHT-hand side,
 `D(x, t)` over a STATE is `x`'s own tendency, and `D(y, t)` over an OBSERVED is
 the total derivative of `y`'s defining right-hand side, by the same rule one
-level down: the one recursive walk [`_deriv`](@ref). It runs here, after
+level down: the one recursive walk [`_dt_deriv`](@ref). It runs here, after
 coupling and reaction lowering, so no evaluator meets a right-hand-side `D` and
 a sibling model's `D(Chem.O3, t)` resolves to the mechanism's tendency (§7.4).
 
-What `_deriv` covers, and nothing else: a STATE (its tendency, with any `D`
+What the table covers, and nothing else: a STATE (its tendency, with any `D`
 inside that tendency resolved in turn, so a chained
 `D(lai)/dt ~ sla · D(biomass)/dt` terminates in states; a pointwise-lifted
 state's tendency is its lifted `faq`, and one cell `index(x, ℓ…)` of it is that
@@ -524,6 +526,15 @@ with `unlowered_operator`: §4.2 forbids inventing a value there, in particular
 `0`. A SPATIAL `D` is untouched (§9.6.8 owns it) and left-hand sides are never
 rewritten.
 
+A structural `D` inside the body of a template a reference names, or applied
+to a reference, is resolved in the body without expanding anything (esm-spec
+§9.6.4 rule 3, "Time derivatives"; flatten_template_dt.jl): a parameter's
+derivative becomes a `p_dt` parameter each reference binds, a reference's
+derivative a reference to `<name>.ddt`, and the flattened `registry` is
+rewritten in place. `map_other_sites(f)` rewrites the expression sites outside
+the equation pool, which this step does not resolve, so their references keep
+pointing at the unresolved bodies.
+
 The tendency and definition tables are built straight from the equations' LHS
 FORMS, never from a classification set: §6.3.1 derives an unknown's role from the
 equations.
@@ -533,10 +544,11 @@ contribution, which keeps its origins; `x`'s own contributions are not spliced
 in (esm-libraries-spec §4.7.5).
 
 Mirrors the Rust `flatten::resolve_rhs_time_derivatives` and the Python
-`_resolve_rhs_time_derivatives` exactly.
+`_resolve_rhs_time_derivatives`.
 """
 function _resolve_rhs_time_derivatives!(
-        pool::Vector{_FlatEq}, time_invariant::Set{String}, lifted_shapes::AbstractDict
+        pool::Vector{_FlatEq}, time_invariant::Set{String}, lifted_shapes::AbstractDict;
+        registry::Union{Nothing, AbstractDict} = nothing, map_other_sites = nothing
     )
     tendency = Dict{String, ASTExpr}()
     definition = Dict{String, ASTExpr}()
@@ -556,28 +568,33 @@ function _resolve_rhs_time_derivatives!(
         end
     end
     (isempty(tendency) && isempty(definition)) && return pool
-    for (i, fe) in enumerate(pool)
-        eq = fe.eq
-        _has_time_derivative(eq.rhs) || continue
-        # The quantity this equation DEFINES is not available to substitute into
-        # its own right-hand side; seeding `active` with it is what makes
-        # `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather
-        # than expand forever.
+    # The quantity an equation DEFINES is not available to substitute into its
+    # own right-hand side; seeding `active` with it is what makes
+    # `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather
+    # than expand forever.
+    function own_of(eq)
         own = _rhs_derivative_target(eq.lhs)
         own === nothing && (own = _lifted_target(eq, lifted_shapes))
-        if own === nothing && eq.lhs isa VarExpr
-            own = (eq.lhs::VarExpr).name
-        end
-        active = own === nothing ? String[] : String[own]
-        resolve(e) = _substitute_time_derivatives(
-            e, tendency, definition,
-            time_invariant, active
-        )
-        resolved = _rewrite_flat_eq(resolve, fe, _is_lifted(eq, lifted_shapes))
-        resolved === fe ||
-            (pool[i] = _FlatEq(Equation(eq.lhs, resolved.eq.rhs), resolved.contribs, fe.owner))
+        (own === nothing && eq.lhs isa VarExpr) && (own = (eq.lhs::VarExpr).name)
+        return own
     end
-    return pool
+    reg = registry === nothing ? OrderedDict{String, Any}() : registry
+    st = _DtState(tendency, definition, time_invariant, lifted_shapes, reg)
+    if isempty(reg)
+        # No template: only the pool's own `D`s.
+        for (i, fe) in enumerate(pool)
+            eq = fe.eq
+            _has_time_derivative(eq.rhs) || continue
+            own = own_of(eq)
+            active = own === nothing ? String[] : String[own]
+            resolve(e) = _dt_rewrite(st, e, nothing, _DtAcc(), active)
+            resolved = _rewrite_flat_eq(resolve, fe, _is_lifted(eq, lifted_shapes))
+            resolved === fe ||
+                (pool[i] = _FlatEq(Equation(eq.lhs, resolved.eq.rhs), resolved.contribs, fe.owner))
+        end
+        return pool
+    end
+    return _resolve_template_time_derivatives!(pool, st, own_of, lifted_shapes, map_other_sites)
 end
 
 """
@@ -608,129 +625,6 @@ function _has_time_derivative(e::ASTExpr)::Bool
     found = false
     foreach_child(x -> (found |= _has_time_derivative(x)), e)
     return found
-end
-
-"""
-    _substitute_time_derivatives(e, tendency, definition, time_invariant, active)
-
-Rewrite every structural `D` inside `e`, leaving the ones [`_deriv`](@ref)
-cannot answer exactly as authored for the gate to report. `map_children` is
-identity-preserving, so an expression carrying no `D` is returned unchanged
-rather than rebuilt.
-"""
-function _substitute_time_derivatives(
-        e::ASTExpr, tendency::Dict{String, ASTExpr},
-        definition::Dict{String, ASTExpr},
-        time_invariant::Set{String},
-        active::Vector{String}
-    )::ASTExpr
-    e isa OpExpr || return e
-    if _is_structural_time_derivative(e)
-        out = _deriv(e.args[1], tendency, definition, time_invariant, active)
-        return out === nothing ? e : out
-    end
-    return map_children(
-        x -> _substitute_time_derivatives(x, tendency, definition, time_invariant, active), e
-    )
-end
-
-"""
-    _deriv(e, tendency, definition, time_invariant, active) -> Union{ASTExpr,Nothing}
-
-d/dt of `e`, or `nothing` when this format does not define it.
-"""
-function _deriv(
-        e::ASTExpr, tendency::Dict{String, ASTExpr},
-        definition::Dict{String, ASTExpr}, time_invariant::Set{String},
-        active::Vector{String}
-    )::Union{ASTExpr, Nothing}
-    if e isa VarExpr
-        name = (e::VarExpr).name
-        # A cycle: stop here and let the gate name it.
-        name in active && return nothing
-        if haskey(tendency, name)
-            push!(active, name)
-            try
-                return _substitute_time_derivatives(
-                    tendency[name], tendency, definition,
-                    time_invariant, active
-                )
-            finally
-                pop!(active)
-            end
-        elseif haskey(definition, name)
-            # CHAIN RULE: an observed's total time derivative is its defining
-            # right-hand side differentiated by this same rule, one level down.
-            push!(active, name)
-            try
-                return _deriv(definition[name], tendency, definition, time_invariant, active)
-            finally
-                pop!(active)
-            end
-        elseif name in time_invariant
-            return _zero_expr()
-        end
-        # A name in none of the three. Answering `0` for a name this pass does
-        # not recognise is exactly the invention §4.2 forbids.
-        return nothing
-    end
-    (e isa NumExpr || e isa IntExpr) && return _zero_expr()
-    e isa OpExpr || return nothing
-
-    d(a) = _deriv(a, tendency, definition, time_invariant, active)
-    op = (e::OpExpr).op
-    args = (e::OpExpr).args
-    if op == "index" && !isempty(args) && args[1] isa VarExpr &&
-            _is_lifted_tendency(get(tendency, (args[1]::VarExpr).name, nothing))
-        # One cell of a lifted state: that cell of its lifted tendency.
-        whole = d(args[1])
-        whole === nothing && return nothing
-        return OpExpr("index", ASTExpr[whole, args[2:end]...])
-    end
-    if op == "+"
-        terms = ASTExpr[]
-        for a in args
-            da = d(a)
-            da === nothing && return nothing
-            push!(terms, da)
-        end
-        return _sum_expr(terms)
-    elseif op == "-" && length(args) == 1
-        da = d(args[1]); da === nothing && return nothing
-        return _negate_expr(da)
-    elseif op == "-" && length(args) == 2
-        da = d(args[1]); da === nothing && return nothing
-        db = d(args[2]); db === nothing && return nothing
-        return _difference_expr(da, db)
-    elseif op == "neg" && length(args) == 1
-        da = d(args[1]); da === nothing && return nothing
-        return _negate_expr(da)
-    elseif op == "*"
-        # Product rule over an n-ary `*`: one term per factor, that factor
-        # differentiated and the others left alone.
-        terms = ASTExpr[]
-        for (i, a) in enumerate(args)
-            da = d(a)
-            da === nothing && return nothing
-            _is_zero_expr(da) && continue
-            factors = ASTExpr[da]
-            for (j, b) in enumerate(args)
-                i == j || push!(factors, b)
-            end
-            push!(terms, _product_expr(factors))
-        end
-        return _sum_expr(terms)
-    elseif op == "/" && length(args) == 2
-        u, v = args[1], args[2]
-        du = d(u); du === nothing && return nothing
-        dv = d(v); dv === nothing && return nothing
-        # `v` constant in t: (u/v)' = u'/v, which keeps the common `D(x, t)/c`
-        # shape small.
-        _is_zero_expr(dv) && return _quotient_expr(du, v)
-        num = _difference_expr(_product_expr(ASTExpr[du, v]), _product_expr(ASTExpr[u, dv]))
-        return _quotient_expr(num, _product_expr(ASTExpr[v, v]))
-    end
-    return nothing
 end
 
 # ---------------------------------------------------------------------------
@@ -1067,7 +961,9 @@ function flatten(
     # so a reaction network's mass-action tendency (§7.4) is available to a
     # sibling model's scoped `D(Chem.O3, t)`.
     _resolve_rhs_time_derivatives!(
-        st.equations, Set{String}(keys(st.params)), st.lifted_shapes
+        st.equations, Set{String}(keys(st.params)), st.lifted_shapes;
+        registry = st.template_registry,
+        map_other_sites = f -> _map_flat_sites!(f, st)
     )
     return _finish_flatten(st, pointwise)
 end
@@ -1211,6 +1107,7 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
         end
     end
     template_registry, template_rename = _merge_flat_registry(scoped)
+    file = _own_transform_refs(file, template_rename, rs_added)
     st = FlattenState(file, template_registry)
     ct = file.component_templates
     if file.models !== nothing
@@ -1241,6 +1138,63 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
     _check_variable_map_endpoints(file, st.states, st.params, st.observeds)
     st.loader_fields = _loader_fields(file, st.params, records)
     return st
+end
+
+# The `apply_expression_template` references of a `variable_map` expression
+# transform are owned by the RECEIVING component (the first segment of `to`,
+# esm-spec §10.4), whose registry they resolve against: they follow that
+# component's slice of the registry collision rename (§9.6.4 rule 7, §10.7) and,
+# for a reaction system, bind its templates' explicit free names
+# (`_tpl_explicit_free`) to the system's scoped names, as its own rate
+# references do. The transform's other references are fully scoped already
+# (§10.4), so nothing else is namespaced. Library edges (§10.10) arrive here
+# role-substituted and are treated the same way.
+function _own_transform_refs(file::EsmFile, template_rename, rs_added)
+    (isempty(template_rename) && isempty(rs_added)) && return file
+    changed = false
+    coupling = CouplingEntry[]
+    for entry in file.coupling
+        if entry isa CouplingVariableMap && entry.transform isa ASTExpr
+            owner = String(first(split(entry.to, "."; limit = 2)))
+            tr = entry.transform::ASTExpr
+            added = get(rs_added, owner, nothing)
+            if added !== nothing && !isempty(added)
+                tr = _tpl_bind_explicit(tr, added)
+                tr = _scope_added_bindings(tr, added, owner)
+            end
+            rn = get(template_rename, owner, nothing)
+            rn === nothing || (tr = _rename_expr_apply_refs(tr, rn))
+            if tr !== entry.transform
+                changed = true
+                entry = CouplingVariableMap(
+                    entry.from, entry.to, tr;
+                    factor = entry.factor, description = entry.description,
+                    lifting = entry.lifting
+                )
+            end
+        end
+        push!(coupling, entry)
+    end
+    return changed ? reconstruct(file; coupling = coupling) : file
+end
+
+# The bindings `_tpl_bind_explicit` added (a free name bound to itself) are
+# names of the receiving system `owner`: scope them `owner.name`.
+function _scope_added_bindings(e::ASTExpr, added, owner::String)
+    e isa OpExpr || return e
+    out = map_children(c -> _scope_added_bindings(c, added, owner), e)::OpExpr
+    if _tpl_is_call(out) && out.name isa AbstractString && out.bindings !== nothing
+        names = get(added, String(out.name), nothing)
+        if names !== nothing
+            b = copy(out.bindings)
+            for n in names
+                v = get(b, n, nothing)
+                v isa VarExpr && v.name == n && (b[n] = VarExpr("$owner.$n"))
+            end
+            out = reconstruct(out; bindings = b)
+        end
+    end
+    return out
 end
 
 # Step 3: apply the coupling entries, by kind in the order §4.7 fixes
@@ -1366,6 +1320,11 @@ function _finish_flatten(st::FlattenState, pointwise)
         seed = pointwise === nothing ? nothing : pointwise.shapes,
         stale = pointwise === nothing ? () : pointwise.stale
     )
+    # Every lift is done: the cellwise variants they made take their final
+    # names (esm-spec §9.6.11), at every site that references them.
+    renames = _name_cellwise_variants!(st.template_registry)
+    isempty(renames) ||
+        _map_flat_sites!(e -> _rename_expr_apply_refs(e, renames), st; equations = true)
     return FlattenedSystem(;
         independent_variables = ivs,
         state_variables = st.states, parameters = st.params,
@@ -1729,6 +1688,25 @@ function expand_flattened_refs(
         field_ics = Pair{String, ASTExpr}[name => expand(e) for (name, e) in flat.field_ics],
         continuous_events = _map_event_exprs(expand, flat.continuous_events),
         discrete_events = _map_event_exprs(expand, flat.discrete_events)
+    )
+end
+
+# `flat` with every template reference renamed through `renames` (old => new),
+# in each expression site `expand_flattened_refs` rewrites, its initialization
+# equations, and its field initial conditions.
+function _rename_flat_refs(flat::FlattenedSystem, renames::AbstractDict{String, String})
+    isempty(renames) && return flat
+    f = e -> _rename_expr_apply_refs(e, renames)
+    neweqs, newcontribs = _rewrite_flat_equations(f, flat)
+    return FlattenedSystem(
+        flat; equations = neweqs, equation_contributions = newcontribs,
+        state_variables = _map_variable_sites(f, flat.state_variables),
+        parameters = _map_variable_sites(f, flat.parameters),
+        observed_variables = _map_variable_sites(f, flat.observed_variables),
+        field_ics = Pair{String, ASTExpr}[name => f(e) for (name, e) in flat.field_ics],
+        continuous_events = _map_event_exprs(f, flat.continuous_events),
+        discrete_events = _map_event_exprs(f, flat.discrete_events),
+        initialization_equations = _map_equation_sides(f, flat.initialization_equations)
     )
 end
 

@@ -241,8 +241,8 @@ end
     @testset "coupling_transform_expression conformance fixture matches expanded form" begin
         # The v0.8.0 variable_map expression-transform widening (esm-spec
         # §10.4/§10.5): a coupling `transform` invoking a template declared by
-        # the RECEIVING component expands at load against that component's
-        # registry (§9.6.4).
+        # the RECEIVING component resolves against that component's registry
+        # and keeps its reference; Expand gives the inline form.
         repo_root = TESTUTILS_REPO_ROOT
         case = joinpath(
             repo_root, "tests", "conformance",
@@ -255,12 +255,15 @@ end
             _normj(expanded_dict.coupling)
         @test _normj(expanded_via_pass["models"]) ==
             _normj(expanded_dict.models)
-        # Typed load: the expanded transform arrives as an ASTExpr operator node.
+        # Typed load: the transform keeps its reference (esm-spec §10.4), and
+        # the receiving component's registry carries the template.
         f = EarthSciAST.load_path(joinpath(case, "fixture.esm"))
         entry = f.coupling[1]
         @test entry isa CouplingVariableMap
         @test entry.transform isa OpExpr
-        @test (entry.transform::OpExpr).op == "+"
+        @test (entry.transform::OpExpr).op == "apply_expression_template"
+        @test (entry.transform::OpExpr).name == "double_plus"
+        @test haskey(f.component_templates["models.Sink"], "double_plus")
     end
 
     @testset "AST-valued bindings are accepted and substituted" begin
@@ -834,6 +837,7 @@ end
             """
         )
         f = EarthSciAST.load_path(model_path)
+        EarthSciAST._expand_refs!(f)   # the firing wrote a reference (esm-spec §9.6.3 constraint 7)
         m = f.models["m"]
         @test (observed_definition(m, "d_edge")::OpExpr).op == "*"    # constrained rule fired
         @test (observed_definition(m, "d_cell")::OpExpr).op == "div"  # excluded, survives load

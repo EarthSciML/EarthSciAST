@@ -167,7 +167,7 @@ def shapeVal (sizes : List Nat) (vals : List Float) : Option (Val Float) :=
 /-- A `faq` body at one index tuple, references expanded through `scope`. -/
 def evalAt (scope : List (String × Template)) (env : Env Float) (body : Ast)
     (syms : List String) (t : List Nat) : Except String Float := do
-  let a ← match expandRefs scope 32 body with
+  let a ← match expandRefs scope 64 body with
     | .ok a => pure a
     | .error e => throw (errorString (.expand e))
   let env' := (syms.zip t).foldl (fun e (sk : String × Nat) =>
@@ -262,7 +262,7 @@ def materialize (scope : List (String × Template)) (env : Env Float) (vars sets
   let parse (j : Json) : Except VIFail Ast :=
     match astOf j with
     | .error w => throw (.skip w)
-    | .ok a => match expandRefs scope 32 a with
+    | .ok a => match expandRefs scope 64 a with
       | .ok a => pure a
       | .error e => throw (.error (errorString (.expand e)))
   let keyAst ← parse (← match rhs.getObjVal? "key" with
@@ -439,7 +439,7 @@ def main (args : List String) : IO UInt32 := do
             let some t := tpls.lookup name | throw s!"{lhs}: template {name} is not imported"
             let bs ← liftExcept ((← liftExcept (rhs.getObjVal? "bindings")).getObj?)
             let σ ← liftExcept (bs.toArray.toList.mapM (fun (k, v) => do return (k, ← astOf v)))
-            match evalApplyIn scope 32 t σ env with
+            match evalApplyIn scope 64 t σ env with
             | .ok (.num x) =>
               out := out.push ((floatJson x).mergeObj (Json.mkObj [("name", lhs)]))
               env := (lhs, .num x) :: env

@@ -974,16 +974,16 @@ fn resolve_loaded_leaf(
         true,
     )?
     .unwrap_or_else(|| std::mem::take(comp));
-    // A mounted component is a self-contained build boundary (mirrors Julia
-    // `_load_ref` → `_lower_and_coerce`): lower under Option B, then `expand`,
-    // so the spliced component carries the fully-expanded Option-A image and
-    // the assembling document's lowering never resolves the leaf's template
-    // names against its own registry. A leaf with no §9.7 machinery still
-    // expands here: its own calls bind their parameters, so an `enum` op a
-    // parameter spells resolves against the leaf's block below (esm-spec
-    // §9.3).
+    // The leaf keeps its references (esm-spec §9.6.4 rule 1): it is lowered
+    // here, in its own file, and each component keeps the match-less template
+    // definitions its references read (its `match` rules have fired), which
+    // the mounting document merges into its own registry by flatten's rule —
+    // at its lowering for a subsystem mount
+    // (`lower_expression_templates::hoist_mounted_templates`), or as the
+    // mounted component's own registry at a top-level mount. Mirrors the Julia
+    // reference `_mounted_registries!`.
     crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
-    crate::lower_expression_templates::expand(&mut resolved)?;
+    crate::lower_expression_templates::mounted_registries(&mut resolved);
     *comp = resolved;
 
     // esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN `enums`

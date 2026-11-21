@@ -146,6 +146,7 @@ function _tpl_close(tt::_TplTable, name::String, decl::_TemplateDecl, S::Dict{St
     typed = _tpl_augment(tt, typed)
     typed = _tpl_elem_reads(tt, typed)
     typed = _tpl_body_lift(tt, typed, IdDict{OpExpr, ASTExpr}())
+    typed = _tpl_lift_root_ref(tt, typed)
     free = sort!(collect(_tpl_free_leaves(typed)))
     if !isempty(free)
         m = Dict{String, ASTExpr}(n => VarExpr(_TPL_FREE * n) for n in free)
@@ -307,6 +308,37 @@ function _tpl_lift_whole(tt::_TplTable, r::OpExpr)
     return OpExpr(
         "faq", ASTExpr[]; output_idx = Any[oi...], ranges = ranges,
         expr_body = reconstruct(r; args = args)
+    )
+end
+
+# A body that is itself a whole array-valued reference — the body of a rule
+# that forwards to a stencil template, which a firing references (esm-spec
+# §9.6.3 constraint 7) — is that reference read at each output index:
+#
+#     interior(f)  ==  faq(output_idx = o, ranges = R, expr = interior(f)[o])
+#
+# The reference stays a reference (its element call); the template is then
+# array-valued and called through its element like any other.
+function _tpl_lift_root_ref(tt::_TplTable, r::ASTExpr)
+    r isa OpExpr || return r
+    w = _tpl_whole_ref(tt, r)
+    w === nothing && return r
+    outs, rg = w
+    used = Set{String}()
+    foreach_subexpr(x -> x isa VarExpr && push!(used, x.name), r)
+    oi = String[]
+    for k in eachindex(outs)
+        n = string("i", k)
+        while n in used || n in oi
+            n *= "′"
+        end
+        push!(oi, n)
+    end
+    subs = ASTExpr[VarExpr(n) for n in oi]
+    ranges = Dict{String, Any}(n => rg[outs[k]] for (k, n) in enumerate(oi))
+    return OpExpr(
+        "faq", ASTExpr[]; output_idx = Any[oi...], ranges = ranges,
+        expr_body = _elem_call(tt, r, subs)
     )
 end
 
@@ -820,6 +852,51 @@ function _tpl_body_reads(tt::_TplTable, name)
         walk(_tpl_names_body(tt, name), Set{String}())
         out
     end
+end
+
+# The parameter sentinels the expansion of `name` reads ONLY in index space:
+# inside a subscript of an `index` (its operands after the array), directly or
+# through a nested reference that reads its own parameter only there. Where the
+# expansion substitutes such a binding, every name in it is a loop index of
+# that `index` (the reference check's subscript-position rule,
+# validation/references.jl `_bound_index_symbols`), so the binding binds the
+# caller to no name of its scope.
+function _tpl_index_reads(tt::_TplTable, name)
+    memo = _tpl_memo(tt, nothing, :index_reads, () -> Dict{String, Set{String}}())
+    haskey(memo, String(name)) && return memo[String(name)]
+    memo[String(name)] = Set{String}()      # (the template graph is acyclic)
+    inidx = Set{String}()
+    outside = Set{String}()
+    function walk(e, idx::Bool)
+        if e isa VarExpr
+            _tpl_is_sentinel(e.name) && push!(idx ? inidx : outside, e.name)
+            return
+        end
+        e isa OpExpr || return
+        if _tpl_is_call(e)
+            foreach(a -> walk(a, idx), e.args)
+            b = e.bindings
+            b === nothing && return
+            inner = try
+                _tpl_index_reads(tt, e.name)
+            catch err
+                err isa ExpressionTemplateError || rethrow()
+                Set{String}()
+            end
+            for (k, v) in b
+                _tpl_reads_binding(tt, e, k) || continue
+                walk(v, idx || _tpl_binding_sentinel(k) in inner)
+            end
+            return
+        end
+        for (j, a) in enumerate(e.args)
+            walk(a, idx || (e.op == "index" && j >= 2))
+        end
+        foreach_child(c -> any(x -> x === c, e.args) || walk(c, false), e)
+        return
+    end
+    walk(_tpl_names_body(tt, name), false)
+    return memo[String(name)] = setdiff(inidx, outside)
 end
 
 """

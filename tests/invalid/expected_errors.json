@@ -2471,7 +2471,7 @@
     "is_valid": true,
     "resolver_only": true,
     "resolver_error_code": "template_body_expansion_too_deep",
-    "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. GENERATED fixture: a 33-template body-reference chain c_01 -> ... -> c_33. The longest chain (counted in templates) exceeds MAX_TEMPLATE_EXPANSION_DEPTH = 32 (esm-spec \u00a79.7.3); a 32-template chain is legal."
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7, RFC template-library-imports). The document is SCHEMA-VALID \u2014 the \u00a79.7 constructs are legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. GENERATED fixture: a 65-template body-reference chain c_01 -> ... -> c_65. The longest chain (counted in templates) exceeds MAX_TEMPLATE_EXPANSION_DEPTH = 64 (esm-spec \u00a79.7.3); a 64-template chain is legal."
   },
   "metaparameter_unbound.esm": {
     "schema_errors": [],

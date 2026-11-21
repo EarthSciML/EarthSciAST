@@ -1,0 +1,258 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    },
+    "y": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "metadata": {
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ],
+    "description": "esm-spec §9.6.4 rule 3: the match-less template `ddx` holds a spatial `D` and is called with `u` (declared shape [x]) and `v` (declared shape [x, y]): two instances. Inside the body the parameter `f` is a leaf that a `where` shape constraint reads through its instance, so `central_1d` fires in the first and `central_2d` in the second. The two rewritten bodies differ, so they are registered as `ddx.variant1` (the reference to `central_1d`, first in canonical byte order) and `ddx.variant2`, each call site is re-pointed to its instance's variant, and `ddx` stays as authored. Both rules are referenced and materialize match-less in their authored positions. `expanded.esm` is the tree the eager-expansion engine produced.",
+    "name": "template_instance_variants"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "u"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "v"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "v"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "du",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "u"
+            },
+            "name": "ddx.variant1",
+            "op": "apply_expression_template"
+          }
+        },
+        {
+          "lhs": "dv",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "v"
+            },
+            "name": "ddx.variant2",
+            "op": "apply_expression_template"
+          }
+        }
+      ],
+      "expression_templates": {
+        "ddx": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "op": "D",
+            "wrt": "x"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "central_1d": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "+"
+                    }
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "-"
+                    }
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "-"
+            },
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            }
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "central_2d": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "+"
+                    },
+                    "j"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "-"
+                    },
+                    "j"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "-"
+            },
+            "op": "faq",
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            }
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "ddx.variant1": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "central_1d",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "ddx.variant2": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "central_2d",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        }
+      },
+      "variables": {
+        "du": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "dv": {
+          "shape": [
+            "x",
+            "y"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "u": {
+          "default": 0.5,
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "v": {
+          "default": 1.5,
+          "shape": [
+            "x",
+            "y"
+          ],
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

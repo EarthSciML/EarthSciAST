@@ -1,0 +1,174 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "out-of-line-expression-templates conformance"
+    ],
+    "description": "esm-spec §9.6.4 rule 3 (formerly `eager_target_bearing`). Two match-less templates: `deriv_c` carries a spatial `D` in its body, `scale_c` does not. Both references survive load. The `central` rule applies inside `deriv_c`'s body for its one instance and writes a reference to itself (§9.6.3 constraint 7), so `deriv_c`'s body is rewritten in place to `ref(central, {f: f})` and `central` materializes as a match-less entry in its authored position (§9.6.4 rule 5); `scale_c` is unchanged. `expanded.esm` is the fully lowered tree the eager-expansion engine produced, and stays the Expand oracle.",
+    "name": "rewrite_in_template_body"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "c"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "c"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "d_eager",
+          "rhs": {
+            "args": [
+              {
+                "args": [],
+                "bindings": {
+                  "f": "c"
+                },
+                "name": "deriv_c",
+                "op": "apply_expression_template"
+              },
+              "i"
+            ],
+            "op": "index"
+          }
+        },
+        {
+          "lhs": "d_survive",
+          "rhs": {
+            "args": [
+              {
+                "args": [],
+                "bindings": {
+                  "f": "c",
+                  "k": 2
+                },
+                "name": "scale_c",
+                "op": "apply_expression_template"
+              },
+              "i"
+            ],
+            "op": "index"
+          }
+        }
+      ],
+      "expression_templates": {
+        "central": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "+"
+                    }
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "-"
+                    }
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "-"
+            },
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            }
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "deriv_c": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "central",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "scale_c": {
+          "body": {
+            "args": [
+              "k",
+              "f"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "f",
+            "k"
+          ]
+        }
+      },
+      "variables": {
+        "c": {
+          "default": 0.5,
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "d_eager": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "d_survive": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

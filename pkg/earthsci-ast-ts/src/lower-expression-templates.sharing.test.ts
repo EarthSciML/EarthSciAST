@@ -107,10 +107,10 @@ describe('nested-template expansion uses structural sharing (no exponential blow
     expect(node.op).toBe('*') // the single shared leaf
   })
 
-  it('handles the spec-maximum 32-template chain (depth 31) with flat memory', () => {
-    const file = loadDocument(buildDoublingChainDoc(31))
+  it('handles the spec-maximum 64-template chain (depth 63) with flat memory', () => {
+    const file = loadDocument(buildDoublingChainDoc(63))
     const { logical, unique } = countNodes(expandedRate(file))
-    expect(logical).toBeGreaterThan(2 ** 31)
+    expect(logical).toBeGreaterThan(2 ** 63)
     expect(unique).toBeLessThan(200)
   })
 

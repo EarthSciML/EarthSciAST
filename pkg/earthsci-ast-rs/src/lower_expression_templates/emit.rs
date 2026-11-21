@@ -33,10 +33,15 @@ fn ref_closure(
     out
 }
 
-/// Per-component MATCH-LESS template names authored in-file in `raw_source`
-/// (compkind.cname → ordered names). Emit keeps these verbatim as authored
-/// entries (esm-spec §9.6.4 rule 5). Mirrors `_authored_template_names`.
-fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<String, Vec<String>> {
+/// Per-component template names authored in-file in `raw_source`
+/// (compkind.cname → ordered names). Emit keeps these in authored position
+/// (esm-spec §9.6.4 rule 5): a match-less entry always, a `match` rule only
+/// when a firing referenced it (it is then materialized without `match`,
+/// `where` and `priority`); imported/derived templates are materialized
+/// instead. Mirrors `_authored_template_names`.
+pub(crate) fn authored_template_names(
+    raw_source: &Value,
+) -> std::collections::HashMap<String, Vec<String>> {
     let mut authored: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     let Some(root) = raw_source.as_object() else {
@@ -52,7 +57,7 @@ fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<Stri
             };
             let mut names = Vec::new();
             for (n, d) in tpl {
-                if d.as_object().is_some_and(|o| !o.contains_key("match")) {
+                if d.is_object() {
                     names.push(n.clone());
                 }
             }
@@ -60,6 +65,95 @@ fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<Stri
         }
     }
     authored
+}
+
+/// The template names referenced by the `variable_map` transforms each
+/// component RECEIVES, keyed by component name (the first segment of `to`; the
+/// first component of that name, models before reaction systems, as the
+/// lowering pairs them). The transforms keep their references (esm-spec
+/// §10.4); the receiving component owns them, so its emitted block
+/// materializes their closure (§9.6.4 rule 5). Mirrors the Julia reference
+/// `_received_transform_refs`.
+pub(crate) fn received_transform_refs(
+    root: &Map<String, Value>,
+) -> std::collections::HashMap<String, Vec<String>> {
+    let mut out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let Some(Value::Array(entries)) = root.get("coupling") else {
+        return out;
+    };
+    for entry in entries {
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
+        if obj.get("type").and_then(|v| v.as_str()) != Some("variable_map") {
+            continue;
+        }
+        let Some(transform) = obj.get("transform").filter(|t| t.is_object()) else {
+            continue;
+        };
+        let Some(comp_name) = obj
+            .get("to")
+            .and_then(|v| v.as_str())
+            .map(|t| t.split('.').next().unwrap_or(""))
+        else {
+            continue;
+        };
+        collect_apply_names(transform, out.entry(comp_name.to_string()).or_default());
+    }
+    out
+}
+
+/// One component's `expression_templates` block as emit materializes it
+/// (esm-spec §9.6.4 rule 5): the entries authored in-file (`authored_here`,
+/// read off the source before resolution) first, in authored order — a `match`
+/// rule only once rule 3 materialized it without its `match` — then the
+/// transitive closure of the component's surviving references not authored
+/// here, sorted by UTF-8 bytes. Also answers whether the component holds a
+/// surviving reference and whether a non-authored entry was carried (the
+/// §9.6.4 rule-8 stamp). Shared by [`emit_document`] and the typed load path's
+/// registry capture, as the Julia reference `_materialize_components!` is.
+/// `received` names the references of the coupling transforms the component
+/// receives ([`received_transform_refs`]), which count as its own.
+pub(crate) fn materialize_component_block(
+    comp: &Map<String, Value>,
+    authored_here: &[String],
+    received: &[String],
+) -> (Map<String, Value>, bool, bool) {
+    let block = comp.get("expression_templates").and_then(|v| v.as_object());
+    let named = block.map(build_named).unwrap_or_default();
+    // Surviving-reference names across every non-template field.
+    let mut refnames: std::collections::BTreeSet<String> = received.iter().cloned().collect();
+    for (k, v) in comp.iter() {
+        if k == "expression_templates" || k == "expression_template_imports" {
+            continue;
+        }
+        let mut names = Vec::new();
+        collect_apply_names(v, &mut names);
+        refnames.extend(names);
+    }
+    let materialized = ref_closure(&refnames, &named);
+    let authored_set: std::collections::HashSet<&str> =
+        authored_here.iter().map(String::as_str).collect();
+    let mut emit_block = Map::new();
+    let mut carried = false;
+    for n in authored_here {
+        if let Some(decl) = block
+            .and_then(|t| t.get(n))
+            .filter(|d| d.get("match").is_none())
+        {
+            emit_block.insert(n.clone(), decl.clone());
+        }
+    }
+    for n in &materialized {
+        if authored_set.contains(n.as_str()) {
+            continue;
+        }
+        if let Some(decl) = block.and_then(|t| t.get(n)) {
+            emit_block.insert(n.clone(), decl.clone());
+            carried = true;
+        }
+    }
+    (emit_block, !refnames.is_empty(), carried)
 }
 
 /// Produce the reference-preserving, self-contained emitted document (esm-spec
@@ -108,6 +202,7 @@ pub fn emit_document(
         return Ok(loaded);
     };
     let mut bump = false;
+    let mut received = received_transform_refs(root);
 
     for compkind in ["models", "reaction_systems"] {
         let Some(Value::Object(comps)) = root.get_mut(compkind) else {
@@ -118,57 +213,11 @@ pub fn emit_document(
                 continue;
             };
             let key = format!("{compkind}.{cname}");
-            let named = comp
-                .get("expression_templates")
-                .and_then(|v| v.as_object())
-                .map(build_named)
-                .unwrap_or_default();
-            // Surviving-reference names across every non-template field.
-            let mut refnames: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
-            for (k, v) in comp.iter() {
-                if k == "expression_templates" || k == "expression_template_imports" {
-                    continue;
-                }
-                let mut names = Vec::new();
-                collect_apply_names(v, &mut names);
-                for n in names {
-                    refnames.insert(n);
-                }
-            }
-            if !refnames.is_empty() {
-                bump = true;
-            }
-            let materialized = ref_closure(&refnames, &named);
             let authored_here = authored.get(&key).cloned().unwrap_or_default();
-            let authored_set: std::collections::HashSet<&str> =
-                authored_here.iter().map(String::as_str).collect();
-
-            // Authored match-less entries first (authored order), then the
-            // materialized closure minus authored, lexicographically sorted.
-            let mut emit_block = Map::new();
-            for n in &authored_here {
-                if let Some(decl) = comp
-                    .get("expression_templates")
-                    .and_then(|v| v.as_object())
-                    .and_then(|t| t.get(n))
-                {
-                    emit_block.insert(n.clone(), decl.clone());
-                }
-            }
-            for n in &materialized {
-                if authored_set.contains(n.as_str()) {
-                    continue;
-                }
-                if let Some(decl) = comp
-                    .get("expression_templates")
-                    .and_then(|v| v.as_object())
-                    .and_then(|t| t.get(n))
-                {
-                    emit_block.insert(n.clone(), decl.clone());
-                    bump = true;
-                }
-            }
+            let here = received.remove(cname.as_str()).unwrap_or_default();
+            let (emit_block, refs, carried) =
+                materialize_component_block(comp, &authored_here, &here);
+            bump |= refs || carried;
 
             if emit_block.is_empty() {
                 comp.remove("expression_templates");
@@ -378,6 +427,68 @@ pub(crate) fn registry_collision_names(
         }
     }
     collide
+}
+
+/// Per owner path, the registry renames (old name → new name) a
+/// [`merge_flat_registry`] made.
+pub(crate) type RegistryRenames =
+    std::collections::HashMap<String, std::collections::HashMap<String, String>>;
+
+/// Merge per-owner match-less registries `blocks` (`(owner path, block)`, in
+/// document order) into one registry, by the rule flatten merges component
+/// registries with (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5
+/// step 4): entries in document order (owners as given, entries as each block
+/// declares them); deep-equal same-name entries kept once, at first occurrence;
+/// a colliding name ([`registry_collision_names`]: not deep-equal, or reaching
+/// one that is) renamed in EVERY owner to `<owner path>.<name>`, with the
+/// renamed bodies' own references following their owner's renames.
+///
+/// Returns the merged registry and each owner's renames, which the caller MUST
+/// apply to that owner's reference sites. Shared by the flattened registry
+/// ([`crate::flatten::merged_template_registry`]) and the mount hoist
+/// ([`hoist_mounted_templates`]). Mirrors the Julia reference
+/// `_merge_flat_registry`.
+pub(crate) fn merge_flat_registry(
+    blocks: &[(String, Map<String, Value>)],
+) -> (Map<String, Value>, RegistryRenames) {
+    let mut byname: Vec<(String, Vec<(String, Value)>)> = Vec::new();
+    let mut slot: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (path, block) in blocks {
+        for (name, decl) in block {
+            let i = *slot.entry(name.clone()).or_insert_with(|| {
+                byname.push((name.clone(), Vec::new()));
+                byname.len() - 1
+            });
+            byname[i].1.push((path.clone(), decl.clone()));
+        }
+    }
+    let collide = registry_collision_names(&byname);
+    let mut merged = Map::new();
+    let mut rename = RegistryRenames::new();
+    for (name, occ) in &byname {
+        if collide.contains(name) {
+            for (path, decl) in occ {
+                let newname = format!("{path}.{name}");
+                merged.insert(newname.clone(), decl.clone());
+                rename
+                    .entry(path.clone())
+                    .or_default()
+                    .insert(name.clone(), newname);
+            }
+        } else {
+            merged.insert(name.clone(), occ[0].1.clone()); // deep-equal dedup
+        }
+    }
+    // A renamed body's own nested references follow its OWNER's map, so a
+    // per-owner wrapper reaches its owner's leaf and never the other owner's.
+    for per_owner in rename.values() {
+        for new in per_owner.values() {
+            if let Some(decl) = merged.get_mut(new) {
+                rename_apply_refs(decl, per_owner);
+            }
+        }
+    }
+    (merged, rename)
 }
 
 /// The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;

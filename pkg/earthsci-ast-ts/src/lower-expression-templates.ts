@@ -20,27 +20,27 @@
  * Rewriting is an **outermost-first, priority-ordered, bounded-fixpoint**
  * process (esm-spec §9.6.3; mirrors the Julia reference `_rewrite_pass` /
  * `_rewrite_to_fixpoint`). Rule application proceeds in **passes**; one pass
- * (`onePass`) is a single **pre-order (outermost-first)** walk of the tree. At
- * each node visited the engine first tries to fire a rule AT that node before
- * descending: an `apply_expression_template` op is expanded (counts as a
- * rewrite), otherwise the structurally-matching `match` rule of highest
- * `priority` (integer, default 0; ties broken by DECLARATION order) fires. A
- * fired rule's `body` replaces the node and the walk does **not** descend into
- * that freshly-produced body during the current pass (it is revisited next
- * pass). If nothing fires, the walk descends into children. Passes repeat until
- * a pass performs **zero** rewrites (the fixpoint) or until
- * `MAX_REWRITE_PASSES = 64` productive passes have run without converging, in
- * which case the file is rejected with `rewrite_rule_nonterminating`. The pass
- * bound — NOT a static check — is the authoritative termination guard, so a
- * self-reintroducing rule simply fails to converge. Because selection and
- * traversal are fully deterministic, all bindings produce byte-identical
- * fixpoints.
+ * (`rewritePass`) is a single **pre-order (outermost-first)** walk of the tree.
+ * At each object node the structurally-matching `match` rule of highest
+ * `priority` (integer, default 0; ties broken by DECLARATION order) whose
+ * `where` holds fires, and the firing writes a REFERENCE to the rule in place
+ * of the node (constraint 7; a leaf-bodied rule writes its leaf); the walk does
+ * **not** descend into it during the current pass. At an
+ * `apply_expression_template` node no rule is tried, but the walk descends into
+ * the values of its `bindings`. If nothing fires, the walk descends into
+ * children. Passes repeat until a pass performs **zero** rewrites; a rewrite
+ * whose depth (the pass that made it) would exceed `MAX_REWRITE_PASSES = 64`
+ * rejects the file with `rewrite_rule_nonterminating`.
  *
- * After convergence the component carries no `expression_templates` block and
- * no `apply_expression_template` ops — downstream consumers see only normal
- * Expression ASTs (Option A round-trip). Any rewrite-target op (e.g. a spatial
- * `D`) that survives the fixpoint into an evaluation position is caught later by
- * the `unlowered_operator` gate (`evaluateExpression`), not here.
+ * Then rule 3 (esm-spec §9.6.4): the rules rewrite the body of every template
+ * the references reach, once per template instance (`applyRule3`), with depth
+ * counted through bodies. One distinct rewritten body replaces the template's
+ * in place; several become `<name>.variant<k>` entries; every reference is
+ * re-pointed, and each referenced rule is materialized without `match`,
+ * `where` and `priority`. Nothing here expands a reference: references survive
+ * and denote their expansion (`Expand`, §9.6.4 rule 2). Any rewrite-target op
+ * (e.g. a spatial `D`) left in an evaluation position or a reachable body is
+ * caught later by the `unlowered_operator` gate (`evaluateExpression`).
  *
  * Operates on the pre-coercion JSON view (plain objects) — runs in
  * `load()` after schema validation but before typed coercion.
@@ -76,6 +76,15 @@
 import { isNumericLiteral, numericValue } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
+import { lowerEnumOpsForFile } from './lower-enums.js'
+import {
+  JSON_DESCEND,
+  canonicalCompact,
+  compareUtf8,
+  rewriteJson,
+  rewriteJsonChildren,
+  visitJson,
+} from './json-rewrite.js'
 
 const APPLY_OP = 'apply_expression_template'
 
@@ -127,6 +136,8 @@ type Templates = Record<string, TemplateDecl>
 interface MatchRule {
   name: string
   params: Set<string>
+  /** `params` in declared order: the keys of the reference a firing writes (§9.6.3 constraint 7). */
+  paramList: string[]
   match: Json
   body: Json
   /** Selection precedence (esm-spec §9.6.3): higher fires first, ties by declIndex. */
@@ -143,7 +154,6 @@ interface MatchRule {
 
 /** The static shape environment of one component (variable name → declared shape). */
 type ShapeEnv = Record<string, string[]>
-const EMPTY_SHAPE_ENV: ShapeEnv = {}
 
 /**
  * The `priority` of a `match` rule (esm-spec §9.6.3): higher fires first,
@@ -222,7 +232,21 @@ function matchPattern(
   node: Json,
   params: Set<string>,
   bindings: Record<string, Json>,
+  bv?: BodyView,
 ): boolean {
+  // Inside a template body (esm-spec §9.6.4 rules 3 and 4) a parameter is a
+  // leaf: a metavariable captures it whole, and any other pattern node sees it
+  // only as the literal its instance binds in a structural position (and never
+  // matches an operand-position parameter).
+  if (
+    bv !== undefined &&
+    typeof node === 'string' &&
+    bv.params.has(node) &&
+    !(typeof pattern === 'string' && params.has(pattern))
+  ) {
+    if (!bv.lit.has(node)) return false
+    return matchPattern(pattern, bv.lit.get(node), params, bindings)
+  }
   // Metavariable: binds to whatever node occupies this position (sub-AST
   // in an operand/`args` slot, literal in a scalar field / `attrs.<key>`).
   if (typeof pattern === 'string' && params.has(pattern)) {
@@ -244,7 +268,7 @@ function matchPattern(
   if (Array.isArray(pattern)) {
     if (!Array.isArray(node) || node.length !== pattern.length) return false
     for (let i = 0; i < pattern.length; i++) {
-      if (!matchPattern(pattern[i], node[i], params, bindings)) return false
+      if (!matchPattern(pattern[i], node[i], params, bindings, bv)) return false
     }
     return true
   }
@@ -255,7 +279,7 @@ function matchPattern(
     if (!isObject(node)) return false
     for (const k of Object.keys(pattern)) {
       if (!Object.prototype.hasOwnProperty.call(node, k)) return false
-      if (!matchPattern(pattern[k], node[k], params, bindings)) return false
+      if (!matchPattern(pattern[k], node[k], params, bindings, bv)) return false
     }
     return true
   }
@@ -307,11 +331,18 @@ function whereSatisfied(
   whereC: Record<string, string[]> | null,
   bindings: Record<string, Json>,
   shapeEnv: ShapeEnv,
+  bv?: BodyView,
 ): boolean {
   if (whereC === null) return true
   for (const [p, req] of Object.entries(whereC)) {
     const b = Object.prototype.hasOwnProperty.call(bindings, p) ? bindings[p] : undefined
     if (typeof b !== 'string') return false
+    // A template-body parameter satisfies it iff its instance binds a bare
+    // variable of exactly that declared shape (esm-spec §9.6.4 rule 3).
+    if (bv !== undefined && bv.params.has(b)) {
+      if ((bv.entries.get(b) ?? '') !== shapeEntry(req)) return false
+      continue
+    }
     if (!Object.prototype.hasOwnProperty.call(shapeEnv, b)) return false
     const shp = shapeEnv[b]!
     if (shp.length !== req.length) return false
@@ -564,12 +595,14 @@ export function validateTemplates(
 
 /**
  * Maximum template-body reference-chain depth (counted in TEMPLATES along the
- * longest chain, so a 33-template chain is rejected while a 32-template chain
+ * longest chain, so a 65-template chain is rejected while a 64-template chain
  * is accepted) before a file is rejected with
  * `template_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
- * across all bindings.
+ * across all bindings. It equals `MAX_REWRITE_PASSES`: a rewrite of depth `d`
+ * writes a body-reference chain `d` templates deep, so every document the
+ * rewriter accepts also reloads once emitted with its references.
  */
-export const MAX_TEMPLATE_EXPANSION_DEPTH = 32
+export const MAX_TEMPLATE_EXPANSION_DEPTH = 64
 
 /** Collect the `name`s of every `apply_expression_template` node in a tree. */
 export function collectApplyNames(x: Json, out: string[]): string[] {
@@ -595,8 +628,7 @@ export function collectApplyNames(x: Json, out: string[]): string[] {
  *
  * From `esm: 0.9.0` (RFC out-of-line-expression-templates §7.1 step 4) bodies
  * are **NOT inlined** — the references are preserved uninlined and denote their
- * expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are computed
- * separately by {@link templateTargetBearing}. Runs BEFORE the §9.6.3 fixpoint
+ * expansion (§9.6.4 rule 2). Runs BEFORE the §9.6.3 fixpoint
  * ever consults a `match` rule; it now only validates the DAG. Mirrors the
  * Julia reference `_compose_template_bodies!`.
  *
@@ -724,117 +756,12 @@ function expandApply(node: Record<string, unknown>, templates: Templates, scope:
 }
 
 // ---------------------------------------------------------------------------
-// Eager-expansion carve-out: the rewrite-target op tier T (esm-spec §9.6.4
-// rule 3 / RFC out-of-line-expression-templates §7.2)
+// Op flags over the template reference DAG (the library-edge `enum` lowering)
 // ---------------------------------------------------------------------------
 
 /**
- * The rewrite-target ops explicitly named by §4.2 as the open rewrite-target
- * tier plus the two load-eliminated forms — the members of **T** that carry a
- * recognized op name. Any op NOT in the evaluable-core registry
- * ({@link EVALUABLE_CORE_OPS}) is ALSO in T (an open-namespace custom op no
- * evaluator implements); `apply_expression_template` itself is excluded.
- */
-const REWRITE_TARGET_OPS = new Set<string>(['D', 'grad', 'div', 'laplacian', 'integral', 'enum'])
-
-/**
- * The evaluable-core op registry — every op name the format defines an
- * evaluator/structural meaning for (mirrors the Julia reference
- * `op_registry.jl` `_OP_INDEX`). An op absent from this set (and not
- * `apply_expression_template`) is an open-namespace custom op no evaluator
- * implements, hence a member of **T**. Pinned identically across bindings so
- * target-bearing classification — and therefore which references survive — is
- * byte-identical everywhere.
- */
-const EVALUABLE_CORE_OPS = new Set<string>([
-  '+',
-  '-',
-  '*',
-  '/',
-  '^',
-  'pow',
-  'neg',
-  '<',
-  '<=',
-  '>',
-  '>=',
-  '==',
-  '!=',
-  'and',
-  'or',
-  'not',
-  'ifelse',
-  'Pre',
-  'sin',
-  'cos',
-  'tan',
-  'asin',
-  'acos',
-  'atan',
-  'atan2',
-  'sinh',
-  'cosh',
-  'tanh',
-  'asinh',
-  'acosh',
-  'atanh',
-  'exp',
-  'log',
-  'log10',
-  'sqrt',
-  'abs',
-  'sign',
-  'floor',
-  'ceil',
-  'min',
-  'max',
-  'pi',
-  'π',
-  'e',
-  'true',
-  'false',
-  'call',
-  'const',
-  'enum',
-  'D',
-  'ic',
-  'grad',
-  'div',
-  'laplacian',
-  'index',
-  'makearray',
-  'broadcast',
-  'reshape',
-  'transpose',
-  'concat',
-  'faq',
-])
-
-/**
- * True iff op string `op` is a member of the rewrite-target tier **T**
- * (esm-spec §9.6.4 rule 3): one of the named rewrite-target ops, or an op with
- * no evaluable-core registry entry (an open-namespace custom op). The template
- * reference op itself is never in T.
- */
-function opInT(op: string): boolean {
-  if (op === APPLY_OP) return false
-  if (REWRITE_TARGET_OPS.has(op)) return true
-  return !EVALUABLE_CORE_OPS.has(op)
-}
-
-/**
- * True iff `node` contains, ANYWHERE within it (descending through every field,
- * including the `bindings` of nested `apply_expression_template` nodes), an
- * object whose `op` is in **T** ({@link opInT}). Does NOT follow references to
- * other templates — that transitive step is {@link templateTargetBearing}.
- */
-function directTOp(node: Json): boolean {
-  return directOp(node, opInT)
-}
-
-/**
  * True iff `node` contains, anywhere within it, an object whose `op` satisfies
- * `pred`. {@link directTOp} is this with the tier-**T** predicate.
+ * `pred`.
  */
 function directOp(
   node: Json,
@@ -858,24 +785,10 @@ function directOp(
 }
 
 /**
- * Compute, for every template in `templates`, its **target-bearing** flag
- * (esm-spec §9.6.4 rule 3): a template is target-bearing iff its body contains
- * an op in **T** anywhere (including inside nested references' `bindings`), OR
- * it references — transitively through the §9.7.3-checked acyclic DAG — a
- * target-bearing template. The DAG is acyclic (checked by
- * {@link composeTemplateBodies}), so a memoized DFS terminates. Cached per
- * component registry.
- */
-export function templateTargetBearing(templates: Record<string, unknown>): Record<string, boolean> {
-  return templateOpBearing(templates, opInT)
-}
-
-/**
  * Compute, for every template in `templates`, whether it can produce an object
  * whose `op` satisfies `pred`: its body contains one anywhere (including inside
  * nested references' `bindings`), or it references, transitively through the
  * acyclic body-reference DAG, a template that can.
- * {@link templateTargetBearing} is this with the tier-**T** predicate.
  */
 export function templateOpBearing(
   templates: Record<string, unknown>,
@@ -910,112 +823,6 @@ export function templateOpBearing(
   }
   for (const name of Object.keys(templates)) visit(name)
   return tb
-}
-
-/**
- * Whether an `apply_expression_template` `node` is **eager** (esm-spec §9.6.4
- * rule 3): its referenced template is target-bearing, OR any of its `bindings`
- * values contains an op in **T**. (After innermost-first eager expansion of the
- * bindings, a "nested eager reference" always manifests as a T-op in the
- * bindings, so this predicate subsumes that clause — see {@link expandEager}.)
- */
-function refIsEager(
-  node: Record<string, unknown>,
-  targetBearing: Record<string, boolean>,
-): boolean {
-  const name = node.name
-  if (typeof name !== 'string') return false
-  if (targetBearing[name]) return true
-  const b = node.bindings
-  if (b === undefined) return false
-  return directTOp(b)
-}
-
-/**
- * The eager-expansion pre-pass (esm-spec §9.6.4 rule 3): expand — by pure
- * substitution, innermost-first — every EAGER `apply_expression_template` node,
- * and only eager nodes. Non-eager (surviving) references are returned intact.
- * Consumes no `MAX_REWRITE_PASSES` budget (it is a separate pre-pass). Sharing
- * is preserved via an identity memo. Mirrors the Julia reference `_expand_eager`.
- */
-function expandEager(
-  node: Json,
-  templates: Templates,
-  targetBearing: Record<string, boolean>,
-  scope: string,
-  memo: Map<object, Json> = new Map(),
-): Json {
-  return expandReferencesWhere(node, templates, scope, (n) => refIsEager(n, targetBearing), memo)
-}
-
-/**
- * The reference-expansion walk behind {@link expandEager}: expand,
- * innermost-first, every `apply_expression_template` node for which
- * `shouldExpand` holds (asked after the node's bindings are expanded), and
- * return every other reference intact. Sharing is preserved via an identity
- * memo. Mirrors the Julia reference `_expand_refs_walk`.
- */
-export function expandReferencesWhere(
-  node: Json,
-  templates: Record<string, unknown>,
-  scope: string,
-  shouldExpand: (node: Record<string, unknown>) => boolean,
-  memo: Map<object, Json> = new Map(),
-): Json {
-  if (isObject(node)) {
-    const hit = memo.get(node)
-    if (hit !== undefined) return hit
-    let res: Json
-    if (node.op === APPLY_OP) {
-      // Innermost-first: expand eager references inside the bindings first.
-      const b = node.bindings
-      let newnode: Record<string, unknown> = node
-      if (isObject(b)) {
-        const nb: Record<string, unknown> = {}
-        let changed = false
-        for (const k of Object.keys(b)) {
-          const rv = expandReferencesWhere(b[k], templates, scope, shouldExpand, memo)
-          if (rv !== b[k]) changed = true
-          nb[k] = rv
-        }
-        if (changed) {
-          newnode = {}
-          for (const k of Object.keys(node)) newnode[k] = k === 'bindings' ? nb : node[k]
-        }
-      }
-      if (shouldExpand(newnode)) {
-        const body = expandApply(newnode, templates as Templates, scope)
-        res = expandReferencesWhere(body, templates, scope, shouldExpand, memo)
-      } else {
-        res = newnode
-      }
-    } else {
-      let changed = false
-      const out: Record<string, unknown> = {}
-      for (const k of Object.keys(node)) {
-        const rv = expandReferencesWhere(node[k], templates, scope, shouldExpand, memo)
-        if (rv !== node[k]) changed = true
-        out[k] = rv
-      }
-      res = changed ? out : node
-    }
-    memo.set(node, res)
-    return res
-  }
-  if (Array.isArray(node)) {
-    const hit = memo.get(node)
-    if (hit !== undefined) return hit
-    let changed = false
-    const out = node.map((v) => {
-      const rv = expandReferencesWhere(v, templates, scope, shouldExpand, memo)
-      if (rv !== v) changed = true
-      return rv
-    })
-    const res = changed ? out : node
-    memo.set(node, res)
-    return res
-  }
-  return node
 }
 
 /**
@@ -1084,17 +891,21 @@ function expandAllNode(
 }
 
 /**
- * Call-site check for a SURVIVING (non-expanded) `apply_expression_template`
- * reference (esm-spec §9.6.9): the referenced `name` must resolve to an
- * in-scope MATCH-LESS template and `bindings` must cover its `params` exactly.
- * Same diagnostics as {@link expandApply}, but WITHOUT expanding — the
- * reference is preserved (§9.6.4 rule 1).
+ * The ONE call-site resolution shared by the surviving-reference check
+ * ({@link validateApplyRef}) and rule 3 ({@link refInstance}): `name` present,
+ * declared in `templates`, `bindings` an object covering the declaration's
+ * `params` exactly. `rejectMatchRule` additionally rejects a reference to a
+ * `match` rewrite rule (only match-less templates are invocable by name,
+ * esm-spec §9.6.2); that check runs directly after the declaration lookup, so it
+ * takes precedence over a bindings mismatch. Mirrors the Julia reference
+ * `_resolve_apply_site`.
  */
-function validateApplyRef(
+function resolveApplySite(
   node: Record<string, unknown>,
   templates: Templates,
   scope: string,
-): void {
+  rejectMatchRule: boolean,
+): { name: string; decl: TemplateDecl; bindings: Record<string, unknown> } {
   const name = node.name
   if (typeof name !== 'string' || name.length === 0) {
     throw new EsmMachineryError(
@@ -1102,14 +913,14 @@ function validateApplyRef(
       `${scope}: apply_expression_template node missing or empty 'name'`,
     )
   }
-  const decl = templates[name]
+  const decl = Object.prototype.hasOwnProperty.call(templates, name) ? templates[name] : undefined
   if (!decl) {
     throw new EsmMachineryError(
       ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
       `${scope}: apply_expression_template references undeclared template '${name}'`,
     )
   }
-  if ((decl as { match?: Json }).match !== undefined) {
+  if (rejectMatchRule && (decl as { match?: Json }).match !== undefined) {
     throw new EsmMachineryError(
       ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
       `${scope}: apply_expression_template references '${name}', a \`match\` rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)`,
@@ -1140,6 +951,21 @@ function validateApplyRef(
       )
     }
   }
+  return { name, decl, bindings }
+}
+
+/**
+ * Call-site check for a SURVIVING `apply_expression_template` reference
+ * (esm-spec §9.6.9): the referenced `name` must resolve to an in-scope
+ * MATCH-LESS template (a rule a firing referenced was materialized match-less
+ * by rule 3) and `bindings` must cover its `params` exactly.
+ */
+function validateApplyRef(
+  node: Record<string, unknown>,
+  templates: Templates,
+  scope: string,
+): void {
+  resolveApplySite(node, templates, scope, true)
 }
 
 /**
@@ -1148,203 +974,539 @@ function validateApplyRef(
  * checks). Descends into references' `bindings` too — a binding value MAY itself
  * be a surviving reference. Mirrors the Julia reference `_check_surviving_refs`.
  */
-function checkSurvivingRefs(
-  node: Json,
-  templates: Templates,
-  scope: string,
-  seen: Set<object> = new Set(),
-): void {
-  if (Array.isArray(node)) {
-    if (seen.has(node)) return
-    seen.add(node)
-    for (const c of node) checkSurvivingRefs(c, templates, scope, seen)
-    return
-  }
-  if (isObject(node)) {
-    if (seen.has(node)) return
-    seen.add(node)
-    if (node.op === APPLY_OP) validateApplyRef(node, templates, scope)
-    for (const k of Object.keys(node)) checkSurvivingRefs(node[k], templates, scope, seen)
-  }
+function checkSurvivingRefs(node: Json, templates: Templates, scope: string): void {
+  visitJson(node, (n) => {
+    if (n.op === APPLY_OP) validateApplyRef(n, templates, scope)
+  })
 }
 
-interface PassResult {
-  node: Json
-  changed: boolean
+/** Whether `n` is an `apply_expression_template` node. */
+function isApplyNode(n: unknown): n is Record<string, unknown> {
+  return isObject(n) && n.op === APPLY_OP
 }
 
 /**
- * One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3).
- * At each object node the engine first tries to fire a rule AT the node before
- * descending:
- *
- *   1. an `apply_expression_template` op is expanded (`expandApply`), OR
- *   2. the first rule in `sortedRules` (pre-sorted highest-`priority`-first,
- *      ties by declaration order) whose `match` pattern structurally matches
- *      the node fires.
- *
- * A fired rule's body replaces the node and the walk does NOT descend into that
- * freshly-produced body during this pass (it is revisited next pass). If nothing
- * fires, the walk descends into the node's children. `changed` is `true` iff any
- * rewrite occurred in this subtree; `last.op` records the op of the most recent
- * rewrite, for the non-convergence diagnostic.
- *
- * The pass is IDENTITY-PRESERVING (a subtree with no rewrite is returned as
- * the SAME object, not a copy) and IDENTITY-MEMOIZED per pass (`memo`, keyed
- * on object identity): expanded template bodies are shared DAGs (see
- * `substitute`), so a subtree reachable through many parents is rewritten
- * once and the single result is spliced everywhere — the pass stays linear in
- * UNIQUE nodes and preserves the sharing. This is safe because the pass is a
- * pure function of the node (rules, templates, and shape env are fixed for
- * the pass) and nothing mutates expanded nodes in place afterwards; the
- * fixpoint result is byte-identical to the unshared expansion when
- * serialized.
+ * How the rewrite engine sees a template body it rewrites for one template
+ * instance (esm-spec §9.6.4 rule 3): `params` — the template's parameters, each
+ * a leaf; `lit` — the literal the instance binds to each parameter in a
+ * structural position; `entries` — each parameter's instance entry
+ * ({@link instanceEntry}), which a `where` `shape` constraint reads. Mirrors the
+ * Julia reference `_BodyView`.
  */
-function onePass(
-  node: Json,
-  templates: Templates,
-  sortedRules: MatchRule[],
-  scope: string,
-  last: { op: string },
-  shapeEnv: ShapeEnv,
-  targetBearing: Record<string, boolean>,
-  memo: Map<object, PassResult>,
-): PassResult {
-  if (Array.isArray(node)) {
-    const hit = memo.get(node)
-    if (hit !== undefined) return hit
-    let changed = false
-    const out = node.map((c) => {
-      const r = onePass(c, templates, sortedRules, scope, last, shapeEnv, targetBearing, memo)
-      changed = changed || r.changed
-      return r.node
-    })
-    const res: PassResult = { node: changed ? out : node, changed }
-    memo.set(node, res)
-    return res
-  }
-  if (!isObject(node)) {
-    return { node, changed: false }
-  }
-  const hit = memo.get(node)
-  if (hit !== undefined) return hit
-  const res = onePassObject(
-    node,
-    templates,
-    sortedRules,
-    scope,
-    last,
-    shapeEnv,
-    targetBearing,
-    memo,
-  )
-  memo.set(node, res)
-  return res
+interface BodyView {
+  params: Set<string>
+  lit: Map<string, Json>
+  entries: Map<string, string>
 }
 
-/** The object-node arm of {@link onePass} (split out so memoization stays in one place). */
-function onePassObject(
-  node: Record<string, unknown>,
-  templates: Templates,
-  sortedRules: MatchRule[],
-  scope: string,
-  last: { op: string },
-  shapeEnv: ShapeEnv,
-  targetBearing: Record<string, boolean>,
-  memo: Map<object, PassResult>,
-): PassResult {
-  // (1) Outermost-first: fire a rule AT this node before descending.
-  if (node.op === APPLY_OP) {
-    // esm-spec §9.6.4 rule 4 (Option B): the engine treats a surviving
-    // (non-eager) reference as a LEAF — it does not descend into its
-    // `bindings`, no rule fires inside it, and it survives the fixpoint.
-    // Eager references were already removed by the pre-pass (`expandEager`);
-    // a defensive check keeps any eager node passed in unexpanded correct.
-    if (refIsEager(node, targetBearing)) {
-      last.op = APPLY_OP
-      return { node: expandEager(node, templates, targetBearing, scope), changed: true }
-    }
-    return { node, changed: false }
+/**
+ * One component's rewrite state (esm-spec §9.6.3, §9.6.4 rule 3): `named` —
+ * every template declaration keyed by name (the component's registry, to which
+ * rule 3 adds its variants); `matchRules` — the auto-applied rules in §9.6.3
+ * selection order; `shapeEnv` — the component's static shape environment;
+ * `enums` — the document's `enums` block (the per-instance `enum` lowering of
+ * rule 3); `depth` — the rewrite depth of each reference a firing wrote (the
+ * pass that wrote it; an authored reference has depth 0 and no entry). Mirrors
+ * the Julia reference `_Lowering`.
+ */
+interface Lowering {
+  named: Templates
+  matchRules: MatchRule[]
+  shapeEnv: ShapeEnv
+  enums: unknown
+  scope: string
+  depth: Map<object, number>
+}
+
+/**
+ * What a firing of `rule` writes in place of the matched node (esm-spec §9.6.3
+ * constraint 7): a reference to the rule bound to what the match captured, a
+ * parameter the match never bound being bound to its own name. A rule whose
+ * body is a single leaf writes the leaf (for one of its parameters, what that
+ * parameter bound): there is no body to share.
+ */
+function ruleReference(rule: MatchRule, captured: Record<string, Json>): Json {
+  const body = rule.body
+  const has = (p: string): boolean => Object.prototype.hasOwnProperty.call(captured, p)
+  if (!isObject(body) && !Array.isArray(body)) {
+    if (typeof body === 'string' && rule.params.has(body)) return has(body) ? captured[body] : body
+    return body
   }
-  for (const rule of sortedRules) {
-    const bindings: Record<string, Json> = {}
-    // Constraint filtering is part of match ELIGIBILITY (esm-spec §9.6.3
-    // constraint 2): a `where`-excluded rule is treated exactly like a
-    // non-matching rule at this node, so a high-priority excluded rule never
-    // shadows a lower-priority rule that does fire.
-    if (
-      matchPattern(rule.match, node, rule.params, bindings) &&
-      whereSatisfied(rule.whereConstraint, bindings, shapeEnv)
-    ) {
-      last.op = typeof node.op === 'string' ? node.op : ''
-      // Instantiate by pure substitution (through nested references' `bindings`;
-      // `name` is never a site). An eager reference introduced by the
-      // instantiation expands as part of the same rewrite (§9.6.4 rule 4).
-      const body = substitute(rule.body, bindings)
-      return {
-        node: expandEager(body, templates, targetBearing, scope),
-        changed: true,
+  const b: Record<string, Json> = {}
+  for (const p of rule.paramList) b[p] = has(p) ? captured[p] : p
+  return { op: APPLY_OP, args: [], name: rule.name, bindings: b }
+}
+
+/**
+ * One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3), a
+ * sharing-preserving walk. At each object node the first rule in
+ * `L.matchRules` (highest `priority` first, ties by declaration order) whose
+ * `match` pattern matches AND whose `where` constraints hold fires; constraint
+ * filtering is part of match eligibility (§9.6.3 constraint 2). A firing writes
+ * a reference to the rule ({@link ruleReference}, constraint 7), recorded in
+ * `L.depth` at depth `pass`, and the walk does not descend into it during this
+ * pass. At a reference — authored or written — no pattern matches (§9.6.4
+ * rule 4), but the walk descends into the values of its `bindings`. `bv` is the
+ * template-body view when `node` is a body rewritten for one instance (§9.6.4
+ * rule 3). Mirrors the Julia reference `_rewrite_pass`.
+ */
+function rewritePass(
+  node: Json,
+  L: Lowering,
+  pass: number,
+  last: { name: string },
+  bv: BodyView | undefined,
+): { node: Json; changed: boolean } {
+  let changed = false
+  const out = rewriteJson(node, (rw, n) => {
+    if (n.op === APPLY_OP) {
+      const b = n.bindings
+      if (!isObject(b)) return n
+      const nb = rewriteJsonChildren(rw, b)
+      if (nb === b) return n
+      const nn: Record<string, unknown> = {}
+      for (const k of Object.keys(n)) nn[k] = k === 'bindings' ? nb : n[k]
+      const d = L.depth.get(n)
+      if (d !== undefined) L.depth.set(nn, d)
+      return nn
+    }
+    for (const rule of L.matchRules) {
+      const bindings: Record<string, Json> = {}
+      if (
+        matchPattern(rule.match, n, rule.params, bindings, bv) &&
+        whereSatisfied(rule.whereConstraint, bindings, L.shapeEnv, bv)
+      ) {
+        last.name = rule.name
+        changed = true
+        const r = ruleReference(rule, bindings)
+        if (isApplyNode(r)) L.depth.set(r, pass)
+        return r
       }
     }
-  }
-  // (2) No rule fired here — descend into children.
-  let changed = false
-  const out: Record<string, unknown> = {}
-  for (const k of Object.keys(node)) {
-    const r = onePass(node[k], templates, sortedRules, scope, last, shapeEnv, targetBearing, memo)
-    out[k] = r.node
-    changed = changed || r.changed
-  }
-  return { node: changed ? out : node, changed }
+    return JSON_DESCEND
+  })
+  return { node: out, changed }
 }
 
 /**
- * Drive `onePass` to a fixpoint (esm-spec §9.6.3): repeat pre-order passes
- * until a pass performs zero rewrites, or reject the file with
- * `rewrite_rule_nonterminating` once `MAX_REWRITE_PASSES` productive passes have
- * run without converging. This bound — not a static check — is the authoritative
- * termination guard, so a self-reintroducing rule fails to converge rather than
- * being flagged up front.
+ * Drive {@link rewritePass} to a fixpoint (esm-spec §9.6.3): repeat pre-order
+ * passes until one performs zero rewrites. A rewrite made in pass `p` has depth
+ * `p`; one whose depth would exceed `MAX_REWRITE_PASSES` rejects the file with
+ * `rewrite_rule_nonterminating` (so at most `MAX_REWRITE_PASSES + 1` passes run,
+ * the last of which must rewrite nothing). Returns the rewritten node and the
+ * number of productive passes. Mirrors the Julia reference
+ * `_rewrite_to_fixpoint`.
  */
 function rewriteToFixpoint(
   node: Json,
-  templates: Templates,
-  sortedRules: MatchRule[],
+  L: Lowering,
   scope: string,
-  shapeEnv: ShapeEnv = EMPTY_SHAPE_ENV,
-  targetBearing: Record<string, boolean> = {},
-): Json {
-  const last = { op: '' }
-  // esm-spec §9.6.4 rule 3 / §7.1 step 5: the eager-expansion pre-pass runs
-  // BEFORE the fixpoint and consumes no `MAX_REWRITE_PASSES` budget. It removes
-  // every eager reference (target-bearing, or T-op in bindings) so the fixpoint
-  // and the later `unlowered_operator` gate walk a tree in which no
-  // rewrite-target op hides inside a surviving reference.
-  let current = expandEager(node, templates, targetBearing, scope)
-  for (let pass = 0; pass < MAX_REWRITE_PASSES; pass++) {
-    // Fresh identity-memo per pass: rule context is fixed within a pass, so a
-    // shared subtree is rewritten once per pass and stays shared.
-    const memo = new Map<object, PassResult>()
-    const { node: next, changed } = onePass(
-      current,
-      templates,
-      sortedRules,
-      scope,
-      last,
-      shapeEnv,
-      targetBearing,
-      memo,
-    )
-    current = next
-    if (!changed) return current // fixpoint reached
+  bv?: BodyView,
+): { node: Json; passes: number } {
+  const last = { name: '' }
+  let current = node
+  for (let pass = 1; pass <= MAX_REWRITE_PASSES + 1; pass++) {
+    const r = rewritePass(current, L, pass, last, bv)
+    current = r.node
+    if (!r.changed) return { node: current, passes: pass - 1 }
   }
   throw new EsmMachineryError(
     ERROR_CODES.REWRITE_RULE_NONTERMINATING,
     `${scope}: expression-template rewriting did not converge within ` +
-      `MAX_REWRITE_PASSES=${MAX_REWRITE_PASSES} passes (last rewritten op ` +
-      `'${last.op}'). A \`match\` rule likely re-introduces its own pattern ` +
+      `MAX_REWRITE_PASSES=${MAX_REWRITE_PASSES} passes (last rule fired ` +
+      `'${last.name}'). A \`match\` rule likely re-introduces its own pattern ` +
       `(esm-spec §9.6.3).`,
   )
+}
+
+// ===========================================================================
+// Rule 3: rewriting inside template bodies, once per template instance
+// (esm-spec §9.6.4 rule 3). Mirrors the Julia reference `templates/instances.jl`.
+// ===========================================================================
+
+/** The instance entry of a bare variable with declared shape `shape`. */
+function shapeEntry(shape: readonly string[]): string {
+  return 'V' + canonicalCompact(shape)
+}
+
+/** Fields whose value is an Expression (an operand position). */
+const OPERAND_FIELDS = new Set(['expr', 'filter', 'key', 'lower', 'upper'])
+const OPERAND_LIST_FIELDS = new Set(['args', 'values'])
+
+/**
+ * The parameters of a template that occur in a structural position of `body`
+ * (esm-spec §9.6.4 rule 3): anywhere but an operand position — a scalar field
+ * (`wrt`, `dim`, `fn`, …), a `ranges` bound or `from`, an `enum` argument. An
+ * operand position is an element of `args` or `values` (but not an `enum` op's
+ * `args`), the value of `expr`, `filter`, `key`, `lower` or `upper`, a value of
+ * a nested reference's `bindings`, or the body itself.
+ */
+function structuralParams(body: Json, params: readonly string[]): Set<string> {
+  const P = new Set(params)
+  const out = new Set<string>()
+  const walk = (x: Json, operand: boolean): void => {
+    if (typeof x === 'string') {
+      if (!operand && P.has(x)) out.add(x)
+    } else if (Array.isArray(x)) {
+      for (const v of x) walk(v, operand)
+    } else if (isObject(x)) {
+      const ops = typeof x.op === 'string' ? x.op : x.op === undefined ? '' : String(x.op)
+      for (const k of Object.keys(x)) {
+        const v = x[k]
+        if (k === 'op' || (k === 'name' && ops === APPLY_OP)) continue
+        if (k === 'bindings' && ops === APPLY_OP && isObject(v)) {
+          for (const bvv of Object.values(v)) walk(bvv, true)
+        } else if (OPERAND_LIST_FIELDS.has(k) && ops !== 'enum') {
+          walk(v, true)
+        } else if (OPERAND_FIELDS.has(k)) {
+          walk(v, true)
+        } else {
+          walk(v, false)
+        }
+      }
+    }
+  }
+  walk(body, true)
+  return out
+}
+
+const NO_LIT: unique symbol = Symbol('no-literal')
+
+/** A JSON number or boolean (plain or a tagged numeric literal). */
+function isNumberLike(v: unknown): boolean {
+  return typeof v === 'number' || typeof v === 'boolean' || isNumericLiteral(v)
+}
+
+/**
+ * The instance entry (esm-spec §9.6.4 rule 3) for one parameter bound to `v`:
+ * inside a body (`bv`), a binding that is one of the body's own parameters
+ * forwards the enclosing instance's entry; a structural parameter takes the
+ * literal bound (`"L" + canonical bytes`); otherwise the kind — `"V" + shape`
+ * for a bare variable with a declared shape, `"V"` for one without, `"N"` for a
+ * number or boolean literal, `"E"` for any other expression. The literal is
+ * the value a structural position reads, or {@link NO_LIT}.
+ */
+function instanceEntry(
+  v: Json,
+  structural: boolean,
+  L: Lowering,
+  bv: BodyView | undefined,
+): [string, Json | typeof NO_LIT] {
+  if (typeof v === 'string' && bv !== undefined && bv.params.has(v)) {
+    return [bv.entries.get(v)!, bv.lit.has(v) ? bv.lit.get(v) : NO_LIT]
+  }
+  if (structural) {
+    if (typeof v === 'string' || isNumberLike(v)) return ['L' + canonicalCompact(v), v]
+    return ['E', NO_LIT]
+  }
+  if (typeof v === 'string') {
+    const shp = Object.prototype.hasOwnProperty.call(L.shapeEnv, v) ? L.shapeEnv[v] : undefined
+    return [shp === undefined ? 'V' : shapeEntry(shp), NO_LIT]
+  }
+  if (isNumberLike(v)) return ['N', NO_LIT]
+  return ['E', NO_LIT]
+}
+
+/**
+ * One rewritten template instance: the template's `name`, the body as rule 3
+ * rewrote it (references not yet re-pointed to variants), the instance key of
+ * every reference in that body (by node identity), and its height — the
+ * deepest rewrite depth below the reference that names it.
+ */
+interface InstanceResult {
+  key: string
+  name: string
+  body: Json
+  refs: Map<object, string>
+  height: number
+}
+
+interface Rule3State {
+  L: Lowering
+  done: Map<string, InstanceResult>
+  active: string[]
+  structural: Map<string, Set<string>>
+  order: string[]
+}
+
+function nonterminating(scope: string, msg: string): never {
+  throw new EsmMachineryError(
+    ERROR_CODES.REWRITE_RULE_NONTERMINATING,
+    `${scope}: ${msg} (esm-spec §9.6.4 rule 3)`,
+  )
+}
+
+/**
+ * The structural parameters of template `name` ({@link structuralParams}), plus
+ * each parameter forwarded whole into a structural parameter of a template its
+ * body references (transitively). Memoized per template; a template reached
+ * again while being computed contributes its direct set.
+ */
+function templateStructural(st: Rule3State, name: string, decl: TemplateDecl): Set<string> {
+  const r = st.structural.get(name)
+  if (r !== undefined) return r
+  const S = structuralParams(decl.body, decl.params)
+  st.structural.set(name, S) // a cycle reads the direct set
+  const P = new Set(decl.params)
+  visitJson(decl.body, (n) => {
+    if (n.op !== APPLY_OP) return
+    const inner = n.name
+    const b = n.bindings
+    if (typeof inner !== 'string' || !isObject(b)) return
+    const idecl = Object.prototype.hasOwnProperty.call(st.L.named, inner)
+      ? st.L.named[inner]
+      : undefined
+    if (!idecl) return
+    const IS = templateStructural(st, inner, idecl)
+    for (const [k, v] of Object.entries(b)) {
+      if (typeof v === 'string' && P.has(v) && IS.has(k)) S.add(v)
+    }
+  })
+  return S
+}
+
+/**
+ * The rewritten instance a reference `n` names, computed once per instance. A
+ * reference the author wrote must name a match-less template (§9.6.2); one a
+ * firing wrote (it has a depth) names its rule. `bv` is the enclosing body's
+ * view when `n` sits in a template body, `undefined` at a call site.
+ */
+function refInstance(
+  st: Rule3State,
+  n: Record<string, unknown>,
+  bv: BodyView | undefined,
+  scope: string,
+): InstanceResult {
+  const written = st.L.depth.has(n)
+  const { name, decl, bindings } = resolveApplySite(n, st.L.named, scope, !written)
+  const params = decl.params
+  const S = templateStructural(st, name, decl)
+  const entries: string[] = []
+  const lits = new Map<string, Json>()
+  for (const p of params) {
+    const [e, l] = instanceEntry(bindings[p], S.has(p), st.L, bv)
+    entries.push(e)
+    if (l !== NO_LIT) lits.set(p, l)
+  }
+  return instance(st, name, decl, params, entries, lits)
+}
+
+function instance(
+  st: Rule3State,
+  name: string,
+  decl: TemplateDecl,
+  params: string[],
+  entries: string[],
+  lits: Map<string, Json>,
+): InstanceResult {
+  const key = [name, ...entries].join('\x1f')
+  const r = st.done.get(key)
+  if (r !== undefined) return r
+  const tscope = `${st.L.scope}.expression_templates.${name}`
+  if (st.active.includes(key)) {
+    nonterminating(
+      tscope,
+      `rewriting template '${name}' needs the same template instance again — a \`match\` ` +
+        `rule re-introduces its own pattern through the template's body`,
+    )
+  }
+  st.active.push(key)
+  const bv: BodyView = {
+    params: new Set(params),
+    lit: lits,
+    entries: new Map(params.map((p, i) => [p, entries[i]!])),
+  }
+  const body = lowerBodyEnums(decl.body, bv, st.L.enums)
+  const { node: rewritten, passes } = rewriteToFixpoint(body, st.L, tscope, bv)
+  const refs = new Map<object, string>()
+  let height = passes
+  visitJson(rewritten, (n) => {
+    if (n.op !== APPLY_OP) return
+    const child = refInstance(st, n, bv, tscope)
+    refs.set(n, child.key)
+    height = Math.max(height, (st.L.depth.get(n) ?? 0) + child.height)
+  })
+  if (height > MAX_REWRITE_PASSES) {
+    nonterminating(
+      tscope,
+      `a rewrite inside template '${name}' has depth ${height}, beyond MAX_REWRITE_PASSES=` +
+        `${MAX_REWRITE_PASSES} (depth counts through template bodies)`,
+    )
+  }
+  st.active.pop()
+  const res: InstanceResult = { key, name, body: rewritten, refs, height }
+  st.done.set(key, res)
+  st.order.push(key)
+  return res
+}
+
+/**
+ * The `enum` lowering of esm-spec §9.3 applied inside a template body for one
+ * instance (§9.6.4 rule 3): an `enum` op whose two arguments are strings, or
+ * parameters the instance binds to strings, becomes its `const`; one still
+ * spelled with an unbound parameter stays as written.
+ */
+function lowerBodyEnums(body: Json, bv: BodyView, enums: unknown): Json {
+  return rewriteJson(body, (_rw, n) => {
+    if (n.op !== 'enum') return JSON_DESCEND
+    const args = n.args
+    if (!Array.isArray(args) || args.length !== 2) return n
+    const resolved = args.map((a) =>
+      typeof a === 'string' && bv.params.has(a) ? (bv.lit.has(a) ? bv.lit.get(a) : NO_LIT) : a,
+    )
+    if (!resolved.every((a) => typeof a === 'string')) return n
+    return lowerEnumOpsForFile({ enums }, { ...n, args: resolved })
+  })
+}
+
+/**
+ * `x` with every reference re-pointed to the entry its instance was given:
+ * `refs` maps a reference node (by identity) to its instance key, `final` an
+ * instance key to the registry name its body lives under.
+ */
+function repointRefs(x: Json, refs: Map<object, string>, final: Map<string, string>): Json {
+  return rewriteJson(x, (rw, n) => {
+    if (n.op !== APPLY_OP) return JSON_DESCEND
+    const key = refs.get(n)
+    const nn = rewriteJsonChildren(rw, n, 'name') as Record<string, unknown>
+    const newname = key === undefined ? undefined : final.get(key)
+    if (newname === undefined || newname === n.name) return nn
+    return { ...nn, name: newname }
+  })
+}
+
+/**
+ * The template-level order in which instances are named: a template after
+ * every template its instances' bodies reference. A cycle is a rule that
+ * re-introduces itself through a template body.
+ */
+function rule3TemplateOrder(st: Rule3State, byTemplate: Map<string, string[]>): string[] {
+  const deps = new Map<string, string[]>()
+  for (const [t, keysT] of byTemplate) {
+    const ds: string[] = []
+    for (const k of keysT) {
+      for (const ck of st.done.get(k)!.refs.values()) {
+        const dn = st.done.get(ck)!.name
+        if (!ds.includes(dn)) ds.push(dn)
+      }
+    }
+    deps.set(t, ds)
+  }
+  const order: string[] = []
+  const state = new Map<string, number>()
+  const visit = (t: string): void => {
+    const s = state.get(t) ?? 0
+    if (s === 2) return
+    if (s === 1) {
+      nonterminating(
+        st.L.scope,
+        `template '${t}' reaches itself through the references rules wrote in template bodies`,
+      )
+    }
+    state.set(t, 1)
+    for (const d of deps.get(t)!) visit(d)
+    state.set(t, 2)
+    order.push(t)
+  }
+  for (const t of byTemplate.keys()) visit(t)
+  return order
+}
+
+/** `decl` without `match`, `where` and `priority`. */
+function matchStripped(decl: TemplateDecl): TemplateDecl {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(decl)) {
+    if (k === 'match' || k === 'where' || k === 'priority') continue
+    out[k] = v
+  }
+  return out as TemplateDecl
+}
+
+/**
+ * Esm-spec §9.6.4 rule 3 for one component whose expression positions (and the
+ * coupling `transforms` it receives, `variable_map` entries) have reached the
+ * §9.6.3 fixpoint: rewrite the body of every template instance their
+ * references reach, place each result (in place, or as `<name>.variant<k>`),
+ * re-point the references, materialize each referenced `match` rule without its
+ * `match`, `where` and `priority`, and check the rewrite depth of every call
+ * site. Mirrors the Julia reference `_apply_rule3!`.
+ */
+function applyRule3(
+  comp: Record<string, unknown>,
+  L: Lowering,
+  transforms: { entry: Record<string, unknown>; scope: string }[],
+): void {
+  const st: Rule3State = { L, done: new Map(), active: [], structural: new Map(), order: [] }
+  const siteRefs = new Map<object, string>()
+  const sites: [Record<string, unknown>, string, string][] = []
+  for (const k of Object.keys(comp)) {
+    if (k === 'expression_templates') continue
+    sites.push([comp, k, `${L.scope}.${k}`])
+  }
+  for (const { entry, scope } of transforms) sites.push([entry, 'transform', scope])
+  for (const [holder, k, scope] of sites) {
+    visitJson(holder[k], (n) => {
+      if (n.op !== APPLY_OP) return
+      const res = refInstance(st, n, undefined, scope)
+      siteRefs.set(n, res.key)
+      const d = (L.depth.get(n) ?? 0) + res.height
+      if (d > MAX_REWRITE_PASSES) {
+        nonterminating(
+          scope,
+          `a rewrite through template '${res.name}' has depth ${d}, beyond ` +
+            `MAX_REWRITE_PASSES=${MAX_REWRITE_PASSES} (depth counts through template bodies)`,
+        )
+      }
+    })
+  }
+  if (st.order.length === 0) return
+
+  const byTemplate = new Map<string, string[]>()
+  for (const k of st.order) {
+    const t = st.done.get(k)!.name
+    if (!byTemplate.has(t)) byTemplate.set(t, [])
+    byTemplate.get(t)!.push(k)
+  }
+  const final = new Map<string, string>()
+  if (!isObject(comp.expression_templates)) comp.expression_templates = L.named
+  const block = comp.expression_templates as Record<string, unknown>
+  const taken = new Set(Object.keys(L.named))
+  for (const t of rule3TemplateOrder(st, byTemplate)) {
+    const keysT = byTemplate.get(t)!
+    const bodies = keysT.map((k) => {
+      const r = st.done.get(k)!
+      return repointRefs(r.body, r.refs, final)
+    })
+    const canon = bodies.map((b) => canonicalCompact(b))
+    const distinct = [...new Set(canon)].sort(compareUtf8)
+    const decl = L.named[t]!
+    if (distinct.length === 1) {
+      for (const k of keysT) final.set(k, t)
+      const isRule = (decl as { match?: Json }).match !== undefined
+      const nd = isRule ? matchStripped(decl) : ({ ...decl } as TemplateDecl)
+      if (distinct[0] !== canonicalCompact(decl.body)) {
+        nd.body = bodies[0]
+      } else if (!isRule) {
+        continue
+      }
+      L.named[t] = nd
+      block[t] = nd
+    } else {
+      const names = new Map<string, string>()
+      distinct.forEach((c, i) => {
+        let vn = `${t}.variant${i + 1}`
+        while (taken.has(vn)) vn += '_'
+        taken.add(vn)
+        names.set(c, vn)
+        const nd = matchStripped(decl)
+        nd.body = bodies[canon.indexOf(c)]
+        L.named[vn] = nd
+        block[vn] = nd
+      })
+      keysT.forEach((k, i) => final.set(k, names.get(canon[i]!)!))
+    }
+  }
+  for (const [holder, k] of sites) holder[k] = repointRefs(holder[k], siteRefs, final)
 }
 
 /**
@@ -1460,8 +1622,6 @@ interface RewriteContext {
   matchRules: MatchRule[]
   /** The enclosing component's static shape environment for `where` (esm-spec §9.6.1). */
   shapeEnv: ShapeEnv
-  /** Per-template target-bearing flags (esm-spec §9.6.4 rule 3). */
-  targetBearing: Record<string, boolean>
 }
 
 /**
@@ -1495,6 +1655,7 @@ function buildRewriteContext(
       matchRules.push({
         name: tname,
         params: new Set(decl.params),
+        paramList: [...decl.params],
         match: decl.match,
         body: decl.body,
         priority: rulePriority(decl),
@@ -1510,10 +1671,7 @@ function buildRewriteContext(
   // Deterministic selection order (esm-spec §9.6.3): highest `priority`
   // first, ties broken by declaration order (earliest wins).
   matchRules.sort((a, b) => b.priority - a.priority || a.declIndex - b.declIndex)
-  // Target-bearing flags (esm-spec §9.6.4 rule 3) drive the eager pre-pass and
-  // the surviving-reference leaf semantics.
-  const targetBearing = templateTargetBearing(templates)
-  return { templates, matchRules, shapeEnv, targetBearing }
+  return { templates, matchRules, shapeEnv }
 }
 
 /** True if any model / reaction_system declares an expression_templates block. */
@@ -1631,13 +1789,17 @@ function validateMakearrayRegionsInRegistries(
 
 /**
  * Load the file under Option B (reference preservation, esm-spec §9.6.4): fire
- * auto-applied `match` rules and eagerly expand target-bearing references to a
- * fixpoint per component (outermost-first, priority-ordered, bounded — §9.6.3),
- * but leave NON-eager `apply_expression_template` references intact (they
- * denote their expansion, §9.6.4 rule 2). The per-component
- * `expression_templates` registries are RETAINED — they are what {@link
- * expandDocument} consumes (rule 2) and emit materializes (rule 5). Call-site
- * checks (§9.6.9) and the registration-time makearray-region check run on the reference-preserving form.
+ * auto-applied `match` rules to a fixpoint per component (outermost-first,
+ * priority-ordered, bounded — §9.6.3), each firing writing a reference to its
+ * rule (constraint 7); then rewrite the bodies of the templates the references
+ * reach, once per template instance (§9.6.4 rule 3). No reference is expanded:
+ * every `apply_expression_template` reference survives and denotes its
+ * expansion (§9.6.4 rule 2). The per-component `expression_templates`
+ * registries are RETAINED (with referenced rules materialized match-less and
+ * any `<name>.variant<k>` entries) — they are what {@link expandDocument}
+ * consumes (rule 2) and emit materializes (rule 5). Call-site checks (§9.6.9)
+ * and the registration-time makearray-region check run on the
+ * reference-preserving form.
  *
  * Returns a new file object; the input is not mutated.
  *
@@ -1649,9 +1811,7 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   if (!isObject(file)) return file
   const root = file as Record<string, unknown>
 
-  // Scan globally for apply ops and for any expression_templates block (a
-  // component may carry `match` rules or surviving references even when there
-  // are no eager apply ops).
+  // Scan globally for apply ops and for any expression_templates block.
   const strayApplyPaths = findStrayApplyOps(file)
   if (strayApplyPaths.length === 0 && !hasExpressionTemplatesBlock(root)) {
     // No template machinery at all; the §9.6.4 expanded-form validator still
@@ -1670,51 +1830,68 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
     for (const k of Object.keys(root.index_sets)) isetNames.add(k)
   }
 
-  // Walk both component families. Contexts of components that DECLARE an
-  // expression_templates block are retained per family for the coupling walk
-  // and the reference-aware validators below (esm-spec §9.6.4 / §9.6.9).
   const out = deepClone(root)
+  const enums = out.enums
+  // Contexts of components that DECLARE an expression_templates block, per
+  // family, for the registry validator below.
   const contextsByKind = {
     models: new Map<string, RewriteContext>(),
     reaction_systems: new Map<string, RewriteContext>(),
+  }
+  // Every component's rewrite state, captured so coupling `variable_map`
+  // transforms (esm-spec §10.4) are rewritten against the RECEIVING
+  // component's rules, and rule 3 runs per component afterwards.
+  const lowerings: {
+    comp: Record<string, unknown>
+    L: Lowering
+    transforms: { entry: Record<string, unknown>; scope: string }[]
+  }[] = []
+  const byKind = {
+    models: new Map<string, number>(),
+    reaction_systems: new Map<string, number>(),
   }
   forEachRawComponent(out, (compKind, compName, compRaw) => {
     const comp = compRaw as Component
     const tplRaw = comp.expression_templates
     const shapeEnv = componentShapeEnv(comp)
+    const cscope = `${compKind}.${compName}`
     let templates: Templates = {}
     let matchRules: MatchRule[] = []
-    let targetBearing: Record<string, boolean> = {}
     if (isObject(tplRaw)) {
-      const ctx = buildRewriteContext(tplRaw, isetNames, shapeEnv, `${compKind}.${compName}`)
+      const ctx = buildRewriteContext(tplRaw, isetNames, shapeEnv, cscope)
       templates = ctx.templates
       matchRules = ctx.matchRules
-      targetBearing = ctx.targetBearing
       contextsByKind[compKind].set(compName, ctx)
     }
-    // Rewrite every property except expression_templates to a fixpoint, then
-    // run call-site checks on surviving (non-eager) references (§9.6.9). The
-    // registry block is RETAINED (Option B, §9.6.4 rule 1).
+    const L: Lowering = {
+      named: templates,
+      matchRules,
+      shapeEnv,
+      enums,
+      scope: cscope,
+      depth: new Map(),
+    }
+    // Outermost-first, priority-ordered, bounded-fixpoint rewrite per
+    // non-template field (esm-spec §9.6.3): each firing writes a reference to
+    // its rule (constraint 7); references are leaves for matching and the walk
+    // descends into their bindings (§9.6.4 rule 4). The registry block is
+    // RETAINED (Option B, §9.6.4 rule 1).
     for (const k of Object.keys(comp)) {
       if (k === 'expression_templates') continue
-      comp[k] = rewriteToFixpoint(
-        comp[k],
-        templates,
-        matchRules,
-        `${compKind}.${compName}.${k}`,
-        shapeEnv,
-        targetBearing,
-      )
-      checkSurvivingRefs(comp[k], templates, `${compKind}.${compName}.${k}`)
+      comp[k] = rewriteToFixpoint(comp[k], L, `${cscope}.${k}`).node
     }
+    lowerings.push({ comp, L, transforms: [] })
+    // Only a component that declares templates receives transforms: one
+    // without leaves the transform unrewritten (Expand rejects a dangling ref).
+    if (isObject(tplRaw)) byKind[compKind].set(compName, lowerings.length - 1)
   })
 
   // Top-level coupling: a `variable_map` entry may carry an object-valued
-  // Expression `transform` (esm-spec §8.6). It is rewritten to fixpoint in the
-  // SAME rewrite context as a field of the RECEIVING component — the first
-  // dot-segment of the entry's `to`, looked up under models then
-  // reaction_systems. A receiving component that is absent or declares no
-  // templates leaves the transform unrewritten.
+  // Expression `transform` (esm-spec §8.6). It is rewritten to fixpoint with
+  // the rules of the RECEIVING component — the first dot-segment of the
+  // entry's `to`, looked up under models then reaction_systems — exactly as a
+  // field of that component would be. A receiving component that is absent or
+  // declares no templates leaves the transform unrewritten.
   const coupling = out.coupling
   if (Array.isArray(coupling)) {
     for (let i = 0; i < coupling.length; i++) {
@@ -1724,25 +1901,26 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
       const to = entry.to
       if (typeof to !== 'string') continue
       const receiver = to.split('.')[0] ?? ''
-      const ctx =
-        contextsByKind.models.get(receiver) ?? contextsByKind.reaction_systems.get(receiver)
-      if (!ctx) continue
-      entry.transform = rewriteToFixpoint(
-        entry.transform,
-        ctx.templates,
-        ctx.matchRules,
-        `coupling[${i}].transform`,
-        ctx.shapeEnv,
-        ctx.targetBearing,
-      )
-      checkSurvivingRefs(entry.transform, ctx.templates, `coupling[${i}].transform`)
+      const idx = byKind.models.get(receiver) ?? byKind.reaction_systems.get(receiver)
+      if (idx === undefined) continue
+      const lw = lowerings[idx]!
+      entry.transform = rewriteToFixpoint(entry.transform, lw.L, `coupling[${i}].transform`).node
+      lw.transforms.push({ entry, scope: `coupling[${i}].transform` })
     }
   }
 
-  // esm-spec §9.6.4 rule 1 (Option B): surviving `apply_expression_template`
-  // references are the NEW NORMAL. Only unknown-name / bindings-mismatch
-  // references are errors — already checked per component / per transform by
-  // `checkSurvivingRefs`. No global "no apply ops remain" gate.
+  // esm-spec §9.6.4 rule 3: the rules apply inside the bodies of the templates
+  // the references reach, once per template instance, without expanding any
+  // reference. Then the call-site checks on surviving references (§9.6.9):
+  // unknown name / bindings mismatch, against the registry as rule 3 left it.
+  for (const { comp, L, transforms } of lowerings) {
+    applyRule3(comp, L, transforms)
+    for (const k of Object.keys(comp)) {
+      if (k === 'expression_templates') continue
+      checkSurvivingRefs(comp[k], L.named, `${L.scope}.${k}`)
+    }
+    for (const { entry, scope } of transforms) checkSurvivingRefs(entry.transform, L.named, scope)
+  }
 
   // Validation discharge (esm-spec §9.6.9): the makearray-region check on the
   // reference-preserving form. Region bounds cannot carry template params, so
@@ -1858,10 +2036,12 @@ function refClosure(refnames: Iterable<string>, named: Record<string, unknown>):
 }
 
 /**
- * Per-component MATCH-LESS template names authored in-file in `rawSource`
- * (`compKind.cname` → ordered names). Emit keeps these verbatim as authored
- * entries (esm-spec §9.6.4 rule 5); imported/derived templates are materialized
- * instead. Mirrors the Julia reference `_authored_template_names`.
+ * Per-component template names authored in-file in `rawSource`
+ * (`compKind.cname` → ordered names). Emit keeps these in authored position
+ * (esm-spec §9.6.4 rule 5): a match-less entry always, a `match` rule only when
+ * a firing referenced it (it is then materialized without `match`, `where` and
+ * `priority`); imported/derived templates are materialized instead. Mirrors the
+ * Julia reference `_authored_template_names`.
  */
 export function authoredTemplateNames(rawSource: unknown): Record<string, string[]> {
   const authored: Record<string, string[]> = {}
@@ -1876,7 +2056,6 @@ export function authoredTemplateNames(rawSource: unknown): Record<string, string
       const names: string[] = []
       for (const [n, d] of Object.entries(tpl)) {
         if (!isObject(d)) continue
-        if (d.match !== undefined) continue // only match-less are referenceable
         names.push(n)
       }
       authored[`${compKind}.${cname}`] = names
@@ -1886,11 +2065,84 @@ export function authoredTemplateNames(rawSource: unknown): Record<string, string
 }
 
 /**
+ * The template names referenced by the `variable_map` transforms each
+ * component RECEIVES, keyed by component name (the first segment of `to`; the
+ * first component of that name, models before reaction systems, as the
+ * lowering pairs them). The transforms keep their references (esm-spec
+ * §10.4); the receiving component owns them, so its emitted block
+ * materializes their closure (§9.6.4 rule 5). Mirrors the Julia reference
+ * `_received_transform_refs`.
+ */
+export function receivedTransformRefs(root: Record<string, unknown>): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  const coupling = root.coupling
+  if (!Array.isArray(coupling)) return out
+  for (const entry of coupling) {
+    if (!isObject(entry) || entry.type !== 'variable_map') continue
+    if (!isObject(entry.transform)) continue
+    const to = entry.to
+    if (typeof to !== 'string') continue
+    const receiver = to.split('.')[0] ?? ''
+    let names = out.get(receiver)
+    if (names === undefined) {
+      names = []
+      out.set(receiver, names)
+    }
+    collectApplyNames(entry.transform as Json, names)
+  }
+  return out
+}
+
+/**
+ * The emitted `expression_templates` block of one Option-B loaded component
+ * (esm-spec §9.6.4 rule 5): authored entries first in authored order (a
+ * `match` rule only once rule 3 materialized it match-less), then the closure
+ * of its references not authored here, sorted by UTF-8 bytes. `referenced` is
+ * whether the component carries a surviving reference, `materialized` whether
+ * a non-authored entry was added. `received` names the references of the
+ * coupling transforms the component receives ({@link receivedTransformRefs}),
+ * which count as its own. Shared by emit ({@link buildEmittedDocument})
+ * and the typed load path's per-component registry capture. Does not mutate
+ * `comp`. Mirrors the Python/Rust `materialize_component_block`.
+ */
+export function materializeComponentBlock(
+  comp: Record<string, unknown>,
+  authoredHere: readonly string[],
+  received: readonly string[] = [],
+): { block: Record<string, unknown>; referenced: boolean; materialized: boolean } {
+  const named = namedRegistry(comp)
+  const refnames = new Set<string>(received)
+  for (const [k, v] of Object.entries(comp)) {
+    if (k === 'expression_templates' || k === 'expression_template_imports') continue
+    for (const r of collectApplyNames(v, [])) refnames.add(r)
+  }
+  const closure = refClosure(refnames, named)
+  const authoredSet = new Set(authoredHere)
+  const block: Record<string, unknown> = {}
+  for (const n of authoredHere) {
+    // A `match` rule nothing references still carries its `match` (a
+    // referenced one was materialized without it, §9.6.4 rule 3).
+    if (
+      Object.prototype.hasOwnProperty.call(named, n) &&
+      (named[n] as { match?: Json }).match === undefined
+    ) {
+      block[n] = named[n]
+    }
+  }
+  let materialized = false
+  for (const n of [...closure].filter((n) => !authoredSet.has(n)).sort(compareUtf8)) {
+    block[n] = named[n]
+    materialized = true
+  }
+  return { block, referenced: refnames.size > 0, materialized }
+}
+
+/**
  * Build the reference-preserving, self-contained emitted document (esm-spec
  * §9.6.4 rule 5, §7.5) from an already Option-B-loaded document `loaded` and
  * the authored-name map from the pristine source. For every component builds
- * its emitted `expression_templates` block — authored match-less entries first
- * in authored order, then the materialized transitive closure of its surviving
+ * its emitted `expression_templates` block — authored entries first in authored
+ * order (a `match` rule only once rule 3 materialized it match-less), then the materialized transitive closure of its surviving
  * references (match-less), lexicographically sorted — drops consumed
  * `expression_template_imports`, and version-stamps `esm: 0.9.0` when any
  * surviving reference or materialized entry remains (§9.6.4 rule 8). Mutates
@@ -1902,6 +2154,7 @@ export function buildEmittedDocument(
 ): Record<string, unknown> {
   const root = loaded
   let bump = false
+  const received = receivedTransformRefs(root)
 
   for (const compKind of COMP_KINDS) {
     const comps = root[compKind]
@@ -1909,25 +2162,14 @@ export function buildEmittedDocument(
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
       const key = `${compKind}.${cname}`
-      const named = namedRegistry(comp)
-      const refnames = new Set<string>()
-      for (const [k, v] of Object.entries(comp)) {
-        if (k === 'expression_templates' || k === 'expression_template_imports') continue
-        for (const r of collectApplyNames(v, [])) refnames.add(r)
-      }
-      if (refnames.size > 0) bump = true
-      const materialized = refClosure(refnames, named)
-      const authoredHere = authored[key] ?? []
-      const authoredSet = new Set(authoredHere)
-
-      const emitBlock: Record<string, unknown> = {}
-      for (const n of authoredHere) {
-        if (Object.prototype.hasOwnProperty.call(named, n)) emitBlock[n] = named[n]
-      }
-      for (const n of [...materialized].filter((n) => !authoredSet.has(n)).sort()) {
-        emitBlock[n] = named[n]
-        bump = true
-      }
+      const here = received.get(cname) ?? []
+      received.delete(cname)
+      const {
+        block: emitBlock,
+        referenced,
+        materialized,
+      } = materializeComponentBlock(comp, authored[key] ?? [], here)
+      if (referenced || materialized) bump = true
 
       if (Object.keys(emitBlock).length === 0) {
         delete comp.expression_templates

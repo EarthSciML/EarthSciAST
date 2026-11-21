@@ -4,7 +4,7 @@
 # A chain of match-less templates T0..T<depth> in which each T_i body
 # references T_{i-1} twice expands to 2^(depth+3) - 1 logical AST nodes: a
 # few-KB document within every documented limit (chain depth <=
-# MAX_TEMPLATE_EXPANSION_DEPTH = 32). The binding keeps expanded expressions as
+# MAX_TEMPLATE_EXPANSION_DEPTH = 64). The binding keeps expanded expressions as
 # structurally shared DAGs, so the distinct nodes it holds grow linearly in the
 # depth; this script loads one such document and reports the logical node
 # count, the distinct node count, the load time and the peak resident memory.

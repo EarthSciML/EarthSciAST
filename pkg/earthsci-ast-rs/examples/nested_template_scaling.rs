@@ -5,7 +5,7 @@
 //! `apply_expression_template(T{depth})`. The logically expanded tree has
 //! 2^depth copies of the T0 leaf, so a naive deep-copy expansion is
 //! exponential in time and memory while respecting every documented limit
-//! (chain depth <= MAX_TEMPLATE_EXPANSION_DEPTH = 32). The expansion pipeline
+//! (chain depth <= MAX_TEMPLATE_EXPANSION_DEPTH = 64). The expansion pipeline
 //! must therefore compose and rewrite with structural sharing; the owned
 //! `serde_json::Value` document is materialized once at the end (that final
 //! materialization is inherently proportional to the expanded size).

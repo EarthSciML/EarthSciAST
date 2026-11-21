@@ -33,32 +33,48 @@ pub(crate) fn strip_component_template_blocks(value: &mut Value) {
 }
 
 /// Capture every component's `expression_templates` registry BEFORE
-/// [`expand`] strips the blocks from the document.
+/// [`expand`] strips the blocks from the document, each as emit materializes
+/// it ([`materialize_component_block`], esm-spec §9.6.4 rule 5): the entries
+/// authored in-file (`authored`, keyed `"<compkind>.<cname>"`, read off the
+/// source before template resolution) first, in authored order, then the
+/// closure of the component's surviving references, sorted by UTF-8 bytes.
 ///
-/// Keyed `"models.<name>"` / `"reaction_systems.<name>"` in document order,
-/// each value the component's registry object verbatim (post
-/// `expression_template_imports` resolution). The typed `EsmFile` deliberately
-/// never sees an `expression_templates` block — the build path is
-/// Expand-at-build (RFC out-of-line-expression-templates §7.7) — so this is the
-/// only place the per-component registries survive to reach
-/// [`crate::flatten::merged_template_registry`], which needs them to build the
-/// step-4 merged registry. Returns `None` when no component declares one, so a
-/// document without templates costs nothing.
-pub fn capture_component_templates(value: &Value) -> Option<indexmap::IndexMap<String, Value>> {
+/// Keyed `"models.<name>"` / `"reaction_systems.<name>"` in document order.
+/// The typed `EsmFile` deliberately never sees an `expression_templates` block
+/// — the build path is Expand-at-build (RFC out-of-line-expression-templates
+/// §7.7) — so this is the only place the per-component registries survive to
+/// reach [`crate::flatten::merged_template_registry`], which needs them to
+/// build the step-4 merged registry. Components whose materialized block is
+/// empty are omitted; returns `None` when none remains, so a document without
+/// templates costs nothing.
+pub fn capture_component_templates(
+    value: &Value,
+    authored: &std::collections::HashMap<String, Vec<String>>,
+) -> Option<indexmap::IndexMap<String, Value>> {
     let root = value.as_object()?;
     let mut out: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
+    let mut received = super::emit::received_transform_refs(root);
     for compkind in ["models", "reaction_systems"] {
         let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) else {
             continue;
         };
         for (cname, comp) in comps {
-            let Some(tpl) = comp.get("expression_templates") else {
+            let Some(comp) = comp.as_object() else {
                 continue;
             };
-            if !tpl.is_object() {
+            let here_refs = received.remove(cname.as_str()).unwrap_or_default();
+            if !comp
+                .get("expression_templates")
+                .is_some_and(|t| t.as_object().is_some_and(|t| !t.is_empty()))
+            {
                 continue;
             }
-            out.insert(format!("{compkind}.{cname}"), tpl.clone());
+            let key = format!("{compkind}.{cname}");
+            let here = authored.get(&key).map(Vec::as_slice).unwrap_or(&[]);
+            let (block, _, _) = materialize_component_block(comp, here, &here_refs);
+            if !block.is_empty() {
+                out.insert(key, Value::Object(block));
+            }
         }
     }
     (!out.is_empty()).then_some(out)
@@ -178,21 +194,25 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
         return Ok(());
     };
 
-    // Capture each component's named registry BEFORE stripping the blocks.
-    let mut comp_named: std::collections::HashMap<(String, String), Named> =
+    // Capture each component's registry BEFORE stripping the blocks.
+    let mut comp_blocks: std::collections::HashMap<(String, String), Map<String, Value>> =
         std::collections::HashMap::new();
     for compkind in ["models", "reaction_systems"] {
         if let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) {
             for (cname, comp) in comps {
-                let named = comp
+                let block = comp
                     .get("expression_templates")
                     .and_then(|v| v.as_object())
-                    .map(build_named)
+                    .cloned()
                     .unwrap_or_default();
-                comp_named.insert((compkind.to_string(), cname.clone()), named);
+                comp_blocks.insert((compkind.to_string(), cname.clone()), block);
             }
         }
     }
+    let comp_named: std::collections::HashMap<(String, String), Named> = comp_blocks
+        .iter()
+        .map(|(k, b)| (k.clone(), build_named(b)))
+        .collect();
 
     for compkind in ["models", "reaction_systems"] {
         let Some(Value::Object(comps)) = root.get_mut(compkind) else {
@@ -202,40 +222,11 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
             let Value::Object(comp) = comp_value else {
                 continue;
             };
-            let named = comp_named
-                .get(&(compkind.to_string(), cname.clone()))
-                .cloned()
-                .unwrap_or_default();
+            let key = (compkind.to_string(), cname.clone());
+            let named = comp_named.get(&key).cloned().unwrap_or_default();
+            let block = comp_blocks.get(&key).cloned().unwrap_or_default();
             let scope = format!("{compkind}.{cname}");
-            let keys: Vec<String> = comp.keys().cloned().collect();
-            for k in keys {
-                if k == "expression_templates" || k == "expression_template_imports" {
-                    continue;
-                }
-                let Some(child) = comp.get_mut(&k) else {
-                    continue;
-                };
-                let parked = park_plain(child, false);
-                let shared = to_shared(child);
-                let mut memo = PtrMemo::default();
-                let _marking = MarkingScope::set(LOAD_MARKS.with(std::cell::Cell::get));
-                let expanded = expand_all(&shared, &named, &format!("{scope}.{k}"), &mut memo);
-                let expanded = match expanded {
-                    Ok(x) => x,
-                    Err(e) => {
-                        if let Some(child) = comp.get_mut(&k) {
-                            unpark_plain(child, parked);
-                        }
-                        return Err(e);
-                    }
-                };
-                if !Rc::ptr_eq(&expanded, &shared) {
-                    comp.insert(k.clone(), to_value(&expanded));
-                }
-                if let Some(child) = comp.get_mut(&k) {
-                    unpark_plain(child, parked);
-                }
-            }
+            expand_component_fields(comp, &named, &block, &[], &scope)?;
             comp.remove("expression_templates");
         }
     }
@@ -276,5 +267,78 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
         }
     }
 
+    Ok(())
+}
+
+/// Expand the references in every field of the component (or subsystem)
+/// `comp` against the component registry `named`. A subsystem's fields are
+/// expanded as that subsystem reads the registry
+/// ([`registry_read_from_subsystem`] of `block` at its key path `path` below
+/// the component): a body's names under the subsystem, which a mounted leaf's
+/// hoisted bodies spell as the component reads them (`Sub.k`), are spelled as
+/// the subsystem reads them (`k`), so the expansion denotes what the
+/// reference-preserving form does in the component's scope.
+fn expand_component_fields(
+    comp: &mut Map<String, Value>,
+    named: &Named,
+    block: &Map<String, Value>,
+    path: &[String],
+    scope: &str,
+) -> Result<(), ExpressionTemplateError> {
+    let keys: Vec<String> = comp.keys().cloned().collect();
+    for k in keys {
+        if k == "expression_templates" || k == "expression_template_imports" {
+            continue;
+        }
+        if k == "subsystems" && !block.is_empty() {
+            let Some(Value::Object(subs)) = comp.get_mut("subsystems") else {
+                continue;
+            };
+            for (sname, sub) in subs.iter_mut() {
+                let Value::Object(sub) = sub else {
+                    continue;
+                };
+                let mut sub_path = path.to_vec();
+                sub_path.push(sname.clone());
+                let sub_block = registry_read_from_subsystem(block, &sub_path.join("."));
+                let sub_named = if sub_block == *block {
+                    named.clone()
+                } else {
+                    build_named(&sub_block)
+                };
+                expand_component_fields(
+                    sub,
+                    &sub_named,
+                    block,
+                    &sub_path,
+                    &format!("{scope}.subsystems.{sname}"),
+                )?;
+            }
+            continue;
+        }
+        let Some(child) = comp.get_mut(&k) else {
+            continue;
+        };
+        let parked = park_plain(child, false);
+        let shared = to_shared(child);
+        let mut memo = PtrMemo::default();
+        let _marking = MarkingScope::set(LOAD_MARKS.with(std::cell::Cell::get));
+        let expanded = expand_all(&shared, named, &format!("{scope}.{k}"), &mut memo);
+        let expanded = match expanded {
+            Ok(x) => x,
+            Err(e) => {
+                if let Some(child) = comp.get_mut(&k) {
+                    unpark_plain(child, parked);
+                }
+                return Err(e);
+            }
+        };
+        if !Rc::ptr_eq(&expanded, &shared) {
+            comp.insert(k.clone(), to_value(&expanded));
+        }
+        if let Some(child) = comp.get_mut(&k) {
+            unpark_plain(child, parked);
+        }
+    }
     Ok(())
 }

@@ -19,19 +19,20 @@ package esm
 // Rewriting is OUTERMOST-FIRST, PRIORITY-ORDERED, BOUNDED-FIXPOINT (esm-spec
 // §9.6.3), mirroring the Julia reference `_rewrite_pass` / `_rewrite_to_fixpoint`.
 // One pass (`rewritePass`) is a single pre-order (outermost-first) walk. At each
-// node the engine first tries to fire a rule AT that node before descending: an
-// `apply_expression_template` op is expanded, otherwise the structurally-matching
-// `match` rule of highest `priority` (int, default 0; ties by declaration order)
-// fires. A fired rule's body replaces the node and the walk does NOT descend into
-// that freshly-produced body during the current pass. Passes repeat until a pass
-// performs zero rewrites (the fixpoint) or until MaxRewritePasses productive
-// passes have run without converging, in which case the file is rejected with
-// `rewrite_rule_nonterminating` (the pass bound — not a static check — is the
-// authoritative termination guard). After convergence the tree contains no
-// `apply_expression_template` ops and no `expression_templates` blocks — Option A
-// round-trip. Any rewrite-target op (e.g. a spatial `D`) that survives the
-// fixpoint into an evaluation position is caught later by the `unlowered_operator`
-// gate (see Evaluate), not here.
+// node the structurally-matching `match` rule of highest `priority` (int,
+// default 0; ties by declaration order) fires and WRITES A REFERENCE to itself
+// (esm-spec §9.6.3 constraint 7) — a leaf-bodied rule writes its leaf; the walk
+// does NOT descend into what it wrote during the current pass. At an
+// `apply_expression_template` reference no rule is tried, but the walk descends
+// into the values of its `bindings` (§9.6.4 rule 4). Passes repeat until a pass
+// performs zero rewrites (the fixpoint); a rewrite at depth > MaxRewritePasses
+// rejects the file with `rewrite_rule_nonterminating`. Then the rules apply
+// inside the bodies of the templates the references reach, once per template
+// instance (§9.6.4 rule 3, template_instances.go). Nothing here substitutes a
+// template body: references survive, and each component keeps its
+// `expression_templates` registry (Option B). Any rewrite-target op (e.g. a
+// spatial `D`) that survives into an evaluation position is caught later by the
+// `unlowered_operator` gate (see Evaluate), not here.
 //
 // Operates on the pre-deserialization `map[string]interface{}` view, so it
 // must run after schema validation but before unmarshaling into the
@@ -532,7 +533,24 @@ func jsonEqual(a, b any) bool {
 // Non-param strings, numbers, and booleans match literally; arrays match
 // elementwise (same length); objects match when every pattern key is present on
 // `node` and matches (extra `node` keys are allowed).
-func matchPattern(pattern, node any, params map[string]struct{}, bindings map[string]any) bool {
+//
+// `bv` is the body view when `node` sits in a template body being rewritten
+// for one instance (esm-spec §9.6.4 rules 3 and 4): there a parameter is a
+// leaf — a metavariable captures it whole, and any other pattern node sees it
+// only as the literal its instance binds in a structural position (and never
+// matches an operand-position parameter).
+func matchPattern(pattern, node any, params map[string]struct{}, bindings map[string]any, bv *bodyView) bool {
+	if ns, ok := node.(string); ok && bv.isParam(ns) {
+		ps, pIsStr := pattern.(string)
+		_, pIsMeta := params[ps]
+		if !(pIsStr && pIsMeta) {
+			lit, has := bv.lit[ns]
+			if !has {
+				return false
+			}
+			return matchPattern(pattern, lit, params, bindings, nil)
+		}
+	}
 	if pb, ok := pattern.(bool); ok {
 		nb, ok := node.(bool)
 		return ok && nb == pb
@@ -561,7 +579,7 @@ func matchPattern(pattern, node any, params map[string]struct{}, bindings map[st
 			return false
 		}
 		for i := range pa {
-			if !matchPattern(pa[i], na[i], params, bindings) {
+			if !matchPattern(pa[i], na[i], params, bindings, bv) {
 				return false
 			}
 		}
@@ -577,7 +595,7 @@ func matchPattern(pattern, node any, params map[string]struct{}, bindings map[st
 			if !present {
 				return false
 			}
-			if !matchPattern(pv, nv, params, bindings) {
+			if !matchPattern(pv, nv, params, bindings, bv) {
 				return false
 			}
 		}
@@ -659,7 +677,11 @@ func strSliceEqual(a, b []string) bool {
 // syntactic and conservative: no shape inference over compound expressions, so
 // eligibility depends only on declarations and is byte-identical across
 // bindings.
-func whereSatisfied(whereC map[string][]string, bindings map[string]any, shapeEnv map[string][]string) bool {
+//
+// Inside a template body (`bv` non-nil) a captured value that is one of the
+// body's parameters satisfies a constraint iff its instance binds a bare
+// variable of exactly that declared shape (esm-spec §9.6.4 rule 3).
+func whereSatisfied(whereC map[string][]string, bindings map[string]any, shapeEnv map[string][]string, bv *bodyView) bool {
 	if whereC == nil {
 		return true
 	}
@@ -671,6 +693,12 @@ func whereSatisfied(whereC map[string][]string, bindings map[string]any, shapeEn
 		bs, ok := b.(string)
 		if !ok {
 			return false
+		}
+		if bv.isParam(bs) {
+			if bv.entries[bs] != shapeEntry(req) {
+				return false
+			}
+			continue
 		}
 		shp, ok := shapeEnv[bs]
 		if !ok || !strSliceEqual(shp, req) {
@@ -816,14 +844,111 @@ func rulePriority(decl map[string]any) int {
 
 // matchRule is a pre-processed auto-applied (`match`) rewrite rule.
 type matchRule struct {
-	pattern  any
-	params   map[string]struct{}
-	body     any
-	priority int
-	declIdx  int
+	// name is the rule's registry name: a firing writes a reference to it
+	// (esm-spec §9.6.3 constraint 7).
+	name    string
+	pattern any
+	params  map[string]struct{}
+	// paramList is `params` in declared order: the keys of the reference a
+	// firing writes.
+	paramList []string
+	body      any
+	priority  int
+	declIdx   int
 	// whereC is the registered `where` shape-constraint map (param → required
 	// shape); nil when the rule carries no `where` block (esm-spec §9.6.1).
 	whereC map[string][]string
+}
+
+// depthRec is one entry of lowering.depth: the reference a firing wrote (held
+// so its address cannot be recycled while the map is live) and its depth.
+type depthRec struct {
+	node map[string]any
+	d    int
+}
+
+// lowering is one component's rewrite state (esm-spec §9.6.3, §9.6.4 rule 3):
+// `named` — every template declaration keyed by name (the registry references
+// resolve against; rule 3 adds its variants here); `rules` — the auto-applied
+// rules pre-sorted into §9.6.3 selection order; `shapeEnv` — the component's
+// static shape environment for `where` constraints; `enums` — the document's
+// `enums` block, for the per-instance `enum` lowering of rule 3; `depth` — the
+// rewrite depth of each reference a firing wrote (the pass that wrote it; a
+// reference the author wrote has depth 0 and no entry), keyed by identity.
+// Mirrors the Julia `_Lowering`.
+type lowering struct {
+	named    map[string]any
+	rules    []matchRule
+	shapeEnv map[string][]string
+	enums    map[string]map[string]int
+	scope    string
+	depth    map[uintptr]depthRec
+}
+
+func (L *lowering) depthOf(n map[string]any) (int, bool) {
+	r, ok := L.depth[reflect.ValueOf(n).Pointer()]
+	return r.d, ok
+}
+
+func (L *lowering) setDepth(n map[string]any, d int) {
+	L.depth[reflect.ValueOf(n).Pointer()] = depthRec{node: n, d: d}
+}
+
+// bodyView is how the rewrite engine sees a template body it rewrites for one
+// template instance (esm-spec §9.6.4 rule 3): `params` — the template's
+// parameters, each a leaf; `lit` — the literal the instance binds to each
+// parameter in a structural position; `entries` — each parameter's instance
+// entry (instanceEntry), which a `where` `shape` constraint reads. Mirrors the
+// Julia `_BodyView`.
+type bodyView struct {
+	params  map[string]struct{}
+	lit     map[string]any
+	entries map[string]string
+}
+
+func (bv *bodyView) isParam(s string) bool {
+	if bv == nil {
+		return false
+	}
+	_, ok := bv.params[s]
+	return ok
+}
+
+// ruleReference is what a firing of `rule` writes in place of the matched node
+// (esm-spec §9.6.3 constraint 7): a reference to the rule bound to what the
+// match captured, a parameter the match never bound being bound to its own
+// name. A rule whose body is a single leaf writes the leaf (for one of its
+// parameters, what that parameter bound): there is no body to share. Mirrors
+// the Julia `_rule_reference`.
+func ruleReference(rule *matchRule, captured map[string]any) any {
+	switch body := rule.body.(type) {
+	case map[string]any, []any:
+		_ = body
+	case string:
+		if _, isParam := rule.params[body]; isParam {
+			if v, ok := captured[body]; ok {
+				return v
+			}
+			return body
+		}
+		return body
+	default:
+		return body
+	}
+	b := make(map[string]any, len(rule.paramList))
+	for _, p := range rule.paramList {
+		if v, ok := captured[p]; ok {
+			b[p] = v
+		} else {
+			b[p] = p
+		}
+	}
+	return map[string]any{
+		"op":       applyExpressionTemplateOp,
+		"args":     []any{},
+		"name":     rule.name,
+		"bindings": b,
+	}
 }
 
 // rewriteMemo memoizes one rewritePass over a (possibly structurally shared)
@@ -831,11 +956,8 @@ type matchRule struct {
 // (reflect.ValueOf(m).Pointer()), so a subtree shared under many parents is
 // rewritten once per pass and its result re-shared. Keys are taken only from
 // the pass's INPUT tree, which stays reachable for the whole pass, so a key
-// can never be recycled mid-pass. Only maps are memoized: every shareable
-// expansion subtree is rooted at an object node, and a bare slice's data
-// pointer is not a safe identity key on its own. Memoization is sound because
-// rewriting is context-free — a node's rewrite result depends only on the
-// subtree itself, never on its position in the document.
+// can never be recycled mid-pass. Memoization is sound because rewriting is
+// context-free — a node's rewrite result depends only on the subtree itself.
 type rewriteMemo map[uintptr]rewriteMemoEntry
 
 type rewriteMemoEntry struct {
@@ -844,30 +966,27 @@ type rewriteMemoEntry struct {
 }
 
 // rewritePass performs one pre-order (outermost-first) rewrite pass over `node`
-// (esm-spec §9.6.3). At each object node the engine first tries to fire a rule AT
-// the node before descending: (1) an `apply_expression_template` op is expanded,
-// OR (2) the first rule in `rules` (pre-sorted highest-priority-first, ties by
-// declaration order) whose `match` pattern structurally matches the node fires.
-// A fired rule's body replaces the node and the walk does NOT descend into that
-// freshly-produced body during this pass. Otherwise it descends into children.
-// The returned bool is true iff any rewrite occurred; `last` records the op of
-// the most recent rewrite, for the non-convergence diagnostic.
+// (esm-spec §9.6.3). At each object node the first rule in L.rules (highest
+// priority first, ties by declaration order) whose `match` pattern matches the
+// node AND whose `where` constraints hold fires; constraint filtering is part
+// of match eligibility (§9.6.3 constraint 2). A firing writes a reference to
+// the rule (ruleReference, constraint 7), recorded in L.depth at depth `pass`,
+// and the walk does not descend into it during this pass. At a reference —
+// authored or written — no pattern matches (§9.6.4 rule 4), but the walk
+// descends into the values of its `bindings`, which are expressions of the
+// call site. `bv` is the template-body view when `node` is a template body
+// being rewritten for one instance (§9.6.4 rule 3), nil at a component's
+// expression positions. `last` records the name of the last rule that fired.
 //
 // The pass is IDENTITY-PRESERVING (returns the same map/slice when no rewrite
-// fired at or below it — the returned bool doubles as "result is a new object")
-// and memoized by pointer identity via `memo`, so structural sharing introduced
-// by substituteParams survives every pass instead of being exponentially
-// unshared by rebuild-everything copying.
-func rewritePass(node any, named map[string]any, rules []matchRule, scope string, last *string, shapeEnv map[string][]string, targetBearing map[string]bool, memo rewriteMemo) (any, bool, error) {
+// fired at or below it — the returned bool doubles as "result is a new
+// object") and memoized by pointer identity. Mirrors the Julia `_rewrite_pass`.
+func rewritePass(node any, L *lowering, pass int, last *string, bv *bodyView, memo rewriteMemo) (any, bool) {
 	switch n := node.(type) {
 	case []any:
 		var out []any
-		changed := false
 		for i, c := range n {
-			nc, ch, err := rewritePass(c, named, rules, scope, last, shapeEnv, targetBearing, memo)
-			if err != nil {
-				return nil, false, err
-			}
+			nc, ch := rewritePass(c, L, pass, last, bv, memo)
 			if ch && out == nil {
 				out = make([]any, len(n))
 				copy(out, n[:i])
@@ -875,120 +994,103 @@ func rewritePass(node any, named map[string]any, rules []matchRule, scope string
 			if out != nil {
 				out[i] = nc
 			}
-			changed = changed || ch
 		}
 		if out == nil {
-			return n, false, nil
+			return n, false
 		}
-		return out, changed, nil
+		return out, true
 	case map[string]any:
 		key := reflect.ValueOf(n).Pointer()
 		if e, hit := memo[key]; hit {
-			return e.out, e.changed, nil
+			return e.out, e.changed
 		}
 		op, _ := n["op"].(string)
-		// (1) Outermost-first: fire a rule AT this node before descending.
 		if op == applyExpressionTemplateOp {
-			// esm-spec §9.6.4 rule 4 (Option B): the engine treats a surviving
-			// (non-eager) reference as a LEAF — it does not descend into its
-			// `bindings`, no rule fires inside it, and it survives the fixpoint.
-			// Eager references were already removed by the pre-pass
-			// (expandEager); a defensive check keeps any eager node that a caller
-			// passed in unexpanded correct.
-			if refIsEager(n, targetBearing) {
-				*last = applyExpressionTemplateOp
-				expanded, err := expandEager(n, named, targetBearing, scope)
-				if err != nil {
-					return nil, false, err
-				}
-				memo[key] = rewriteMemoEntry{out: expanded, changed: true}
-				return expanded, true, nil
+			b, ok := n["bindings"].(map[string]any)
+			if !ok {
+				memo[key] = rewriteMemoEntry{out: n}
+				return n, false
 			}
-			memo[key] = rewriteMemoEntry{out: n, changed: false}
-			return n, false, nil
+			var nb map[string]any
+			for _, bk := range sortedKeys(b) {
+				nv, ch := rewritePass(b[bk], L, pass, last, bv, memo)
+				if ch {
+					if nb == nil {
+						nb = cloneMapAny(b)
+					}
+					nb[bk] = nv
+				}
+			}
+			if nb == nil {
+				memo[key] = rewriteMemoEntry{out: n}
+				return n, false
+			}
+			nn := cloneMapAny(n)
+			nn["bindings"] = nb
+			// The rebuilt reference is the same reference: it keeps its depth.
+			if d, ok := L.depthOf(n); ok {
+				L.setDepth(nn, d)
+			}
+			memo[key] = rewriteMemoEntry{out: nn, changed: true}
+			return nn, true
 		}
-		for i := range rules {
+		for i := range L.rules {
+			rule := &L.rules[i]
 			bindings := map[string]any{}
-			// Constraint filtering is part of match ELIGIBILITY (esm-spec
-			// §9.6.3 constraint 2): a `where`-excluded rule is treated exactly
-			// like a non-matching rule, so the scan proceeds to the next
-			// candidate in priority / declaration order.
-			if matchPattern(rules[i].pattern, n, rules[i].params, bindings) &&
-				whereSatisfied(rules[i].whereC, bindings, shapeEnv) {
-				*last = op
-				// Instantiate by pure substitution (through nested references'
-				// `bindings`; `name` is never a site). An eager reference
-				// introduced by the instantiation expands as part of the same
-				// rewrite (§9.6.4 rule 4) via the pre-pass.
-				fired := substituteParams(rules[i].body, bindings)
-				fired, err := expandEager(fired, named, targetBearing, scope)
-				if err != nil {
-					return nil, false, err
+			if matchPattern(rule.pattern, n, rule.params, bindings, bv) &&
+				whereSatisfied(rule.whereC, bindings, L.shapeEnv, bv) {
+				*last = rule.name
+				r := ruleReference(rule, bindings)
+				if rm, ok := r.(map[string]any); ok && isApplyMap(rm) {
+					L.setDepth(rm, pass)
 				}
-				memo[key] = rewriteMemoEntry{out: fired, changed: true}
-				return fired, true, nil
+				memo[key] = rewriteMemoEntry{out: r, changed: true}
+				return r, true
 			}
 		}
-		// (2) No rule fired here — descend into children.
+		// No rule fired here — descend into children.
 		var out map[string]any
-		for k, v := range n {
-			nv, ch, err := rewritePass(v, named, rules, scope, last, shapeEnv, targetBearing, memo)
-			if err != nil {
-				return nil, false, err
-			}
+		for _, k := range sortedKeys(n) {
+			nv, ch := rewritePass(n[k], L, pass, last, bv, memo)
 			if ch {
 				if out == nil {
-					out = make(map[string]any, len(n))
-					for k2, v2 := range n {
-						out[k2] = v2
-					}
+					out = cloneMapAny(n)
 				}
 				out[k] = nv
 			}
 		}
 		if out == nil {
-			memo[key] = rewriteMemoEntry{out: n, changed: false}
-			return n, false, nil
+			memo[key] = rewriteMemoEntry{out: n}
+			return n, false
 		}
 		memo[key] = rewriteMemoEntry{out: out, changed: true}
-		return out, true, nil
+		return out, true
 	default:
-		return node, false, nil
+		return node, false
 	}
 }
 
 // rewriteToFixpoint drives rewritePass to a fixpoint (esm-spec §9.6.3): repeat
-// pre-order passes until a pass performs zero rewrites, or reject the file with
-// `rewrite_rule_nonterminating` once MaxRewritePasses productive passes have run
-// without converging. This bound — not a static check — is the authoritative
-// termination guard.
-//
-// esm-spec §9.6.4 rule 3 / RFC §7.1 step 5: the eager-expansion pre-pass runs
-// BEFORE the fixpoint and consumes no MaxRewritePasses budget. It removes every
-// eager reference (target-bearing, or T-op in bindings) so the fixpoint and the
-// later `unlowered_operator` gate walk a tree in which no rewrite-target op
-// hides inside a surviving reference.
-func rewriteToFixpoint(node any, named map[string]any, rules []matchRule, scope string, shapeEnv map[string][]string, targetBearing map[string]bool) (any, error) {
+// pre-order passes until a pass performs zero rewrites, returning the rewritten
+// node and the number of productive passes. A rewrite made in pass p has depth
+// p; one whose depth would exceed MaxRewritePasses (a productive pass
+// MaxRewritePasses+1) rejects the file with `rewrite_rule_nonterminating`
+// (§9.6.4 rule 3, "Rewrite depth"). This bound — not a static check — is the
+// authoritative termination guard. Mirrors the Julia `_rewrite_to_fixpoint`.
+func rewriteToFixpoint(node any, L *lowering, scope string, bv *bodyView) (any, int, error) {
 	last := ""
-	current, err := expandEager(node, named, targetBearing, scope)
-	if err != nil {
-		return nil, err
-	}
-	for pass := 0; pass < MaxRewritePasses; pass++ {
-		// Fresh memo per pass: a node's rewrite result is pass-local (its
-		// children may only reach their final form in a later pass).
-		next, changed, err := rewritePass(current, named, rules, scope, &last, shapeEnv, targetBearing, rewriteMemo{})
-		if err != nil {
-			return nil, err
-		}
+	current := node
+	for pass := 1; pass <= MaxRewritePasses+1; pass++ {
+		// Fresh memo per pass: a node's rewrite result is pass-local.
+		next, changed := rewritePass(current, L, pass, &last, bv, rewriteMemo{})
 		current = next
 		if !changed {
-			return current, nil // fixpoint reached
+			return current, pass - 1, nil // fixpoint reached
 		}
 	}
-	return nil, newETErr(
+	return nil, 0, newETErr(
 		CodeRewriteRuleNonterminating,
-		fmt.Sprintf("%s: expression-template rewriting did not converge within MaxRewritePasses=%d passes (last rewritten op '%s'). A `match` rule likely re-introduces its own pattern (esm-spec §9.6.3).", scope, MaxRewritePasses, last),
+		fmt.Sprintf("%s: expression-template rewriting did not converge within MaxRewritePasses=%d passes (last rule fired '%s'). A `match` rule likely re-introduces its own pattern (esm-spec §9.6.3).", scope, MaxRewritePasses, last),
 	)
 }
 
@@ -1290,24 +1392,23 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 			continue
 		}
 		pset := map[string]struct{}{}
-		if pr, ok := decl["params"].([]any); ok {
-			for _, p := range pr {
-				if ps, ok := p.(string); ok {
-					pset[ps] = struct{}{}
-				}
-			}
+		plist := templateParams(decl)
+		for _, ps := range plist {
+			pset[ps] = struct{}{}
 		}
 		whereC, err := registeredWhere(decl, isetNames, scope, name)
 		if err != nil {
 			return nil, nil, err
 		}
 		rules = append(rules, matchRule{
-			pattern:  match,
-			params:   pset,
-			body:     decl["body"],
-			priority: rulePriority(decl),
-			declIdx:  idx,
-			whereC:   whereC,
+			name:      name,
+			paramList: plist,
+			pattern:   match,
+			params:    pset,
+			body:      decl["body"],
+			priority:  rulePriority(decl),
+			declIdx:   idx,
+			whereC:    whereC,
 		})
 	}
 	sort.SliceStable(rules, func(i, j int) bool {
@@ -1381,6 +1482,15 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 	// registered first; a reaction system never overwrites a same-named model
 	// (mirrors the Julia reference `registries`).
 	registries := map[string]map[string]any{}
+	// The document's `enums` block: rule 3 lowers `enum` ops inside template
+	// bodies per instance against it (esm-spec §9.3, §9.6.4 rule 3).
+	enums := rawEnumsBlock(view)
+	type componentLowering struct {
+		comp       map[string]any
+		L          *lowering
+		transforms []map[string]any
+	}
+	var lowerings []*componentLowering
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -1416,50 +1526,68 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			if err != nil {
 				return err
 			}
-			// Target-bearing flags (esm-spec §9.6.4 rule 3) drive the eager
-			// pre-pass and the surviving-reference leaf semantics.
-			targetBearing := templateTargetBearing(named)
-			// esm-spec §9.6.4 rule 1 (Option B): DO NOT delete the component's
-			// `expression_templates` block — it is the retained registered
-			// registry that emit materializes (§9.6.4 rule 5) and Expand
-			// consumes (§9.6.4 rule 2). Skip it (and any residual imports key)
-			// in the field-rewrite loop.
+			L := &lowering{
+				named: named, rules: rules, shapeEnv: shapeEnv, enums: enums,
+				scope: cscope, depth: map[uintptr]depthRec{},
+			}
+			// Outermost-first, priority-ordered, bounded-fixpoint rewrite per
+			// non-template field (esm-spec §9.6.3): each firing writes a
+			// reference to its rule (constraint 7); references are leaves for
+			// matching and the walk descends into their bindings (§9.6.4 rule
+			// 4). The `expression_templates` block is RETAINED (§9.6.4 rule 1).
 			for _, k := range sortedKeys(compObj) {
 				if k == "expression_templates" || k == "expression_template_imports" {
 					continue
 				}
 				scope := fmt.Sprintf("%s.%s.%s", kind, cname, k)
-				rewritten, err := rewriteToFixpoint(compObj[k], named, rules, scope, shapeEnv, targetBearing)
+				rewritten, _, err := rewriteToFixpoint(compObj[k], L, scope, nil)
 				if err != nil {
 					return err
 				}
 				compObj[k] = rewritten
-				// Call-site checks on surviving references (§9.6.9): unknown
-				// name / bindings mismatch. Known surviving references are the
-				// new normal (Option B) — no longer an error.
-				if err := checkSurvivingRefs(compObj[k], named, scope); err != nil {
-					return err
-				}
 			}
+			cl := &componentLowering{comp: compObj, L: L}
 			// Expression transforms of variable_map coupling entries whose
 			// receiving component is this one rewrite to fixpoint with the
-			// same context, as if they were a field of the component. A
-			// template-less receiver leaves the transform unrewritten.
+			// same context, as if they were a field of the component (esm-spec
+			// §10.4). A template-less receiver leaves the transform unrewritten.
 			if len(named) > 0 || len(rules) > 0 {
 				for _, site := range couplingSites[[2]string{kind, cname}] {
 					scope := fmt.Sprintf("coupling[%d].transform", site.idx)
-					rewritten, err := rewriteToFixpoint(site.entry["transform"], named, rules, scope, shapeEnv, targetBearing)
+					rewritten, _, err := rewriteToFixpoint(site.entry["transform"], L, scope, nil)
 					if err != nil {
 						return err
 					}
 					site.entry["transform"] = rewritten
-					if err := checkSurvivingRefs(rewritten, named, scope); err != nil {
-						return err
-					}
+					cl.transforms = append(cl.transforms, site.entry)
 				}
 			}
+			lowerings = append(lowerings, cl)
 			if _, dup := registries[cname]; !dup {
 				registries[cname] = named
+			}
+		}
+	}
+	// esm-spec §9.6.4 rule 3: the rules apply inside the bodies of the
+	// templates the references reach, once per template instance, without
+	// expanding any reference. Then the call-site checks on surviving
+	// references (§9.6.9): unknown name / bindings mismatch, against the
+	// registry as rule 3 left it.
+	for _, cl := range lowerings {
+		if err := applyRule3(cl.comp, cl.L, cl.transforms); err != nil {
+			return err
+		}
+		for _, k := range sortedKeys(cl.comp) {
+			if k == "expression_templates" || k == "expression_template_imports" {
+				continue
+			}
+			if err := checkSurvivingRefs(cl.comp[k], cl.L.named, cl.L.scope+"."+k); err != nil {
+				return err
+			}
+		}
+		for _, entry := range cl.transforms {
+			if err := checkSurvivingRefs(entry["transform"], cl.L.named, cl.L.scope+" coupling transform"); err != nil {
+				return err
 			}
 		}
 	}
@@ -1584,7 +1712,7 @@ func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[s
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
 		return "", nil, err
 	}
-	componentTemplates := captureComponentTemplates(view, orders)
+	componentTemplates := captureComponentTemplates(view, orders, jsonStr)
 	// Expand-at-build (§9.6.4 rule 2 / RFC §7.7): the raw §9.7 pipeline emits the
 	// Option-A image (references replaced by their expansion, registries
 	// stripped) so external conformance runners reproduce the expanded goldens.
@@ -1598,13 +1726,20 @@ func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[s
 
 // captureComponentTemplates snapshots every component's `expression_templates`
 // block, keyed "<section>.<component>", in the DOCUMENT order the components
-// are declared in and, within a component, the resolved template declaration
-// order (imports depth-first post-order, then local declarations) that
-// resolveComponentImports wrote back into `orders`. Components declaring no
-// block are omitted, so the common document yields an empty map and flatten's
-// registry merge is a no-op.
-func captureComponentTemplates(view map[string]any, orders map[string][]string) map[string]*orderedMap {
+// are declared in, each block as emit materializes it (esm-spec §9.6.4 rule 5,
+// materializeComponentBlock): the entries authored in `source` first, in
+// authored order, then the closure of the component's surviving references,
+// sorted — the typed load path's registry, as the Julia
+// `_materialize_components!` gives it. Components with an empty block are
+// omitted, so the common document yields an empty map and flatten's registry
+// merge is a no-op.
+func captureComponentTemplates(view map[string]any, orders map[string][]string, source string) map[string]*orderedMap {
 	out := map[string]*orderedMap{}
+	var authored map[string][]string
+	if origView, err := decodeJSONView([]byte(source)); err == nil {
+		authored = authoredTemplateNames(origView, extractTemplateOrders(source))
+	}
+	received := receivedTransformRefs(view)
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -1615,13 +1750,17 @@ func captureComponentTemplates(view map[string]any, orders map[string][]string) 
 			if !ok {
 				continue
 			}
-			tpl, ok := comp["expression_templates"].(map[string]any)
-			if !ok || len(tpl) == 0 {
+			if tpl, ok := comp["expression_templates"].(map[string]any); !ok || len(tpl) == 0 {
+				continue
+			}
+			mat, _, _ := materializeComponentBlock(
+				comp, authored[kind+"."+cname], received[[2]string{kind, cname}])
+			if mat.len() == 0 {
 				continue
 			}
 			block := newOrderedMap()
-			for _, n := range orderedKeysOf(tpl, orders["/"+kind+"/"+cname+"/expression_templates"]) {
-				block.set(n, deepCopyJSON(tpl[n]))
+			for _, n := range mat.keys {
+				block.set(n, deepCopyJSON(mat.get(n)))
 			}
 			out[kind+"."+cname] = block
 		}

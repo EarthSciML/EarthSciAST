@@ -1,8 +1,8 @@
 {
   "esm": "1.1.0",
   "metadata": {
-    "name": "eager_target_bearing",
-    "description": "esm-spec §9.6.4 rule 3 (RFC out-of-line-expression-templates §9.2). Two match-less templates: `deriv_c` carries a spatial `D` in its body (TARGET-BEARING), so its reference is EAGER — expanded innermost-first in the pre-pass, surfacing the `D`, which the `central` match rule then lowers at load. `scale_c` is target-free, so its reference SURVIVES load and is materialized into the emitted registry. Positive (eager, lowered) + negative (surviving) in one document.",
+    "name": "rewrite_in_template_body",
+    "description": "esm-spec §9.6.4 rule 3 (formerly `eager_target_bearing`). Two match-less templates: `deriv_c` carries a spatial `D` in its body, `scale_c` does not. Both references survive load. The `central` rule applies inside `deriv_c`'s body for its one instance and writes a reference to itself (§9.6.3 constraint 7), so `deriv_c`'s body is rewritten in place to `ref(central, {f: f})` and `central` materializes as a match-less entry in its authored position (§9.6.4 rule 5); `scale_c` is unchanged. `expanded.esm` is the fully lowered tree the eager-expansion engine produced, and stays the Expand oracle.",
     "authors": [
       "out-of-line-expression-templates conformance"
     ]

@@ -102,6 +102,38 @@ function _fw_document(flat)
     return Dict("esm" => "1.3.0", "metadata" => Dict("name" => "written"), "index_sets" => sets, "models" => models)
 end
 
+# The flattened system with its references kept: the equations and field
+# initial conditions as they serialize, and every registry entry they reach,
+# through the bodies of the entries they reach (CONFORMANCE_SPEC §5.60, "The
+# elementwise lift").
+function _fw_refs_form(flat)
+    reg = flat.template_registry
+    reached = Set{String}()
+    queue = String[]
+    visit(e) = EarthSciAST.foreach_subexpr(e) do x
+        x isa EarthSciAST.OpExpr && x.op == "apply_expression_template" &&
+            x.name !== nothing && push!(queue, x.name)
+    end
+    for e in flat.equations
+        visit(e.lhs)
+        visit(e.rhs)
+    end
+    foreach(((_, r),) -> visit(r), flat.field_ics)
+    while !isempty(queue)
+        n = pop!(queue)
+        n in reached && continue
+        push!(reached, n)
+        visit(EarthSciAST.expression_from_json(reg[n]["body"]))
+    end
+    eqs = Any[Dict("lhs" => _fw_wire(e.lhs), "rhs" => _fw_wire(e.rhs)) for e in flat.equations]
+    ics = Any[Dict("target" => t, "rhs" => _fw_wire(r)) for (t, r) in flat.field_ics]
+    tpls = Dict{String, Any}(n => JSON3.read(JSON3.write(reg[n])) for n in reached)
+    return sprint() do io
+        _fw_canonical(io, Dict("equations" => eqs, "field_ics" => ics, "templates" => tpls))
+        print(io, '\n')
+    end
+end
+
 function _fw_rhs(file, compiler)
     prob = EarthSciAST.esm_problem(file, (0.0, 1.0); compiler = compiler)
     prog = EarthSciAST.rhs_program(prob)
@@ -129,11 +161,15 @@ _fw_bits((u, d)) = (reinterpret(UInt64, Float64(u)), reinterpret(UInt64, Float64
 
 @testset "flatten_wire conformance" begin
     cases = JSON3.read(read(joinpath(_FW_DIR, "cases.json"), String))["cases"]
-    @test length(cases) == 5
+    @test length(cases) == 8
     for case in cases
         @testset "$(case["name"])" begin
             file = EarthSciAST.load_path(joinpath(_FW_DIR, case["fixture"]))
-            flat = EarthSciAST.expand_flattened_refs(EarthSciAST.flatten(file))
+            kept = EarthSciAST.flatten(file)
+            if haskey(case, "refs_golden")
+                @test _fw_refs_form(kept) == read(joinpath(_FW_DIR, case["refs_golden"]), String)
+            end
+            flat = EarthSciAST.expand_flattened_refs(kept)
             @test _fw_form(flat) == read(joinpath(_FW_DIR, case["golden"]), String)
             back = EarthSciAST.load_string(JSON3.write(_fw_document(flat)))
             for compiler in (:interpreter, :native)
@@ -200,4 +236,54 @@ end
     rhs = ESM.OpExpr("*", ESM.ASTExpr[ESM.VarExpr("rho"), area])
     @test ESM._fresh_loops(rhs, 2) == ["__p0", "__p1"]
     @test ESM._fresh_loops(ESM.VarExpr("rho"), 1) == ["_p0"]
+end
+
+# The cellwise variants a flatten's lifts make are named once every lift is done,
+# `<name>.cellwise<k>` with `k` in the order of the variants' bodies' canonical
+# bytes (esm-spec §9.6.11, §9.6.4 rule 3), whatever order the lifts met them in:
+# a variant referencing another is named after it, from its final name.
+@testset "cellwise variants are numbered by canonical bytes, not discovery order" begin
+    ESM = EarthSciAST
+    OD = ESM.OrderedDict{String, Any}
+    ref(n, b) = OD("op" => "apply_expression_template", "args" => Any[], "name" => n, "bindings" => b)
+    ph(n, split) = ESM._cw_placeholder(n, split, 0)
+    T = OD("params" => Any["p", "q"], "body" => OD("op" => "+", "args" => Any["p", "q"]))
+    U = OD("params" => Any["a"], "body" => ref("T", OD("p" => "a", "q" => "a")))
+    vq = OD("params" => Any["p", "q", "q_cell"], "body" => OD("op" => "+", "args" => Any["p", "q_cell"]))
+    vp = OD("params" => Any["p", "q", "p_cell"], "body" => OD("op" => "+", "args" => Any["p_cell", "q"]))
+    vu = OD("params" => Any["a", "a_cell"], "body" => ref(ph("T", ["p"]), OD("p" => "a", "q" => "a", "p_cell" => "a_cell")))
+    variants = [
+        ph("U", ["a"]) => vu, ph("T", ["p"]) => vp, ph("T", ["q"]) => vq,
+        # an entry derived from a variant (flatten step 3a) follows its name
+        ph("T", ["q"]) * ".ddt" => OD("params" => Any["p", "q", "q_cell"], "body" => 0),
+    ]
+    # The lifts met the variants in one order, then in the reverse order.
+    results = map(([variants; ], reverse(variants))) do vs
+        es = ["T" => T, "U" => U, vs...]
+        reg = OD(es...)
+        ren = ESM._name_cellwise_variants!(reg)
+        (reg, ren)
+    end
+    (reg1, ren1), (reg2, ren2) = results
+    @test ren1 == ren2
+    @test ESM._canonical_compact(Dict(reg1)) == ESM._canonical_compact(Dict(reg2))
+    @test collect(keys(reg1)) == collect(keys(reg2))
+    # `{"args":["p","q_cell"],...}` < `{"args":["p_cell","q"],...}` bytewise.
+    @test ren1[ph("T", ["q"])] == "T.cellwise1"
+    @test ren1[ph("T", ["p"])] == "T.cellwise2"
+    @test ren1[ph("U", ["a"])] == "U.cellwise1"
+    @test ren1[ph("T", ["q"]) * ".ddt"] == "T.cellwise1.ddt"
+    @test reg1["U.cellwise1"]["body"]["name"] == "T.cellwise2"
+    @test haskey(reg1, "T.cellwise1.ddt")
+    @test !any(k -> occursin('\x1f', k), keys(reg1))
+    # A later pass (shape promotion) adding a variant renumbers with those
+    # already named: a new body sorting first takes `k = 1`.
+    vnew = OD("params" => Any["p", "q", "p_cell", "q_cell"], "body" => OD("op" => "+", "args" => Any["p_cell", "q_cell"]))
+    vnew["body"]["args"] = Any["p", "a"]
+    reg1[ph("T", ["p", "q"])] = vnew
+    ren3 = ESM._name_cellwise_variants!(reg1)
+    @test ren3[ph("T", ["p", "q"])] == "T.cellwise1"
+    @test ren3["T.cellwise1"] == "T.cellwise2" && ren3["T.cellwise2"] == "T.cellwise3"
+    @test ren3["T.cellwise1.ddt"] == "T.cellwise2.ddt"
+    @test reg1["U.cellwise1"]["body"]["name"] == "T.cellwise3"
 end

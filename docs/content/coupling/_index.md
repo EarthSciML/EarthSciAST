@@ -290,7 +290,9 @@ be bound, and a name that is not a role is an error. At flatten time the import
 expands into concrete `variable_map` / `couple` / `operator_compose` / `event`
 edges, exactly as if you had written them inline.
 
-Because that expansion happens *after* the template-rewrite fixpoint, a library
-edge's transform must expand to an **already-lowered** form. A transform
-template that would introduce `grad`, `div`, or a spatial `D` is rejected with
+Because that expansion happens *after* the template-rewrite fixpoint, no rule
+rewrites a library edge's transform: its template references resolve against
+the bound receiving component's registry and stay references, and the templates
+they name must already be **lowered**. A transform referencing a template that
+would introduce `grad`, `div`, or a spatial `D` is rejected with
 `coupling_library_illegal_payload`.
