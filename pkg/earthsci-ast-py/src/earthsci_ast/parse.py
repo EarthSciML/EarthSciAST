@@ -1990,15 +1990,6 @@ def _splice_mounted_forms(doc: dict[str, Any], typed_file: Any) -> bool:
     return spliced
 
 
-def _carries_template_block(comp: Any) -> bool:
-    if not isinstance(comp, dict):
-        return False
-    if isinstance(comp.get("expression_templates"), dict):
-        return True
-    subs = comp.get("subsystems")
-    return isinstance(subs, dict) and any(_carries_template_block(v) for v in subs.values())
-
-
 def _attach_mounted_template_form(templates: _LeafTemplates, parsed: Any, component: Any) -> None:
     """Compute the reference-preserving form of the mounted ``component``
     (resolved from the leaf ``parsed``, its own mounts included) and keep it on
@@ -2011,11 +2002,20 @@ def _attach_mounted_template_form(templates: _LeafTemplates, parsed: Any, compon
     mounts before its fixpoint); then the fixpoint (`lower_expression_
     templates`, references kept); then each component keeps only its
     match-less definitions, and none when no reference reads them
-    (`mounted_registries`); then the edge's remaining steps. Nothing is kept for
-    a component that carries no template block."""
+    (`mounted_registries`); then the edge's remaining steps. A leaf with no
+    template machinery keeps its content as its form too: a `match` rule of a
+    component that mounts it fires on that content (esm-spec §9.6.3), so the
+    mounting document's fixpoint must see it.
+
+    The leaf's own `match` rules fire on its mounts' content in the same
+    fixpoint, so when the leaf's component declares one, its mounted subsystems'
+    typed expressions are taken again from that fixpoint
+    (:func:`_graft_mounted_rewrites`)."""
     from .lower_expression_templates import (
         _has_template_machinery,
+        expand_document,
         lower_expression_templates,
+        marking_template_origins,
         mounted_registries,
     )
 
@@ -2032,14 +2032,127 @@ def _attach_mounted_template_form(templates: _LeafTemplates, parsed: Any, compon
     doc = copy.deepcopy(templates.pre)
     if _splice_mounted_forms(doc, parsed):
         lowered = lower_expression_templates(doc)
+        pre_comp = (templates.pre.get(section) or {}).get(key)
+        if _declares_match_rule(pre_comp):
+            with marking_template_origins():
+                expanded = templates.finish(expand_document(lowered))
+            _graft_mounted_rewrites(pre_comp, (expanded.get(section) or {}).get(key), component)
     elif _has_template_machinery(templates.pre):
         lowered = copy.deepcopy(templates.lowered)
     else:
-        return
+        lowered = doc
     lowered = templates.finish(mounted_registries(lowered))
     form = (lowered.get(section) or {}).get(key)
-    if _carries_template_block(form):
+    if isinstance(form, dict):
         setattr(component, _MOUNTED_FORM_ATTR, form)
+
+
+def _declares_match_rule(comp: Any) -> bool:
+    """Whether the raw component ``comp`` or an authored subsystem below it
+    declares a ``match`` rule (a mount point's own rules fired in its file)."""
+    if not isinstance(comp, dict) or _is_ref_entry(comp):
+        return False
+    blk = comp.get("expression_templates")
+    if isinstance(blk, dict) and any(isinstance(d, dict) and "match" in d for d in blk.values()):
+        return True
+    subs = comp.get("subsystems")
+    return isinstance(subs, dict) and any(_declares_match_rule(v) for v in subs.values())
+
+
+def _graft_mounted_rewrites(pre: Any, expanded: Any, typed: Any) -> None:
+    """Take the typed expressions of each subsystem mounted below the component
+    ``typed`` from ``expanded``, the Expand image of the mounting document's
+    fixpoint run with the mounts spliced in as their forms.
+
+    This binding resolves a mount on the typed tree, from the leaf's own Expand
+    image, after the mounting document's fixpoint has run without the leaf's
+    content. A ``match`` rule of the mounting component fires on that content
+    as on its own (esm-spec §9.6.3: the fixpoint walks the component's
+    subsystems, mounted or authored), and ``expanded`` is where it fired.
+    ``pre`` is the mounting component before the fixpoint: its ``{ref}``
+    entries mark the mount points; an authored subsystem already holds the
+    rewrites, so the walk only passes through it."""
+    if not isinstance(pre, dict) or not isinstance(expanded, dict):
+        return
+    pre_subs = pre.get("subsystems")
+    raw_subs = expanded.get("subsystems")
+    typed_subs = getattr(typed, "subsystems", None)
+    if not (
+        isinstance(pre_subs, dict) and isinstance(raw_subs, dict) and isinstance(typed_subs, dict)
+    ):
+        return
+    for k, pv in pre_subs.items():
+        raw = raw_subs.get(k)
+        t = typed_subs.get(k)
+        if t is None or isinstance(t, dict) or not isinstance(raw, dict) or _is_ref_entry(raw):
+            continue
+        if _is_ref_entry(pv):
+            _graft_component_expressions(t, raw)
+        else:
+            _graft_mounted_rewrites(pv, raw, t)
+
+
+def _graft_component_expressions(dst: Any, raw: dict[str, Any]) -> None:
+    """Replace every expression site of the typed component ``dst`` (and of its
+    subsystems) by the one the raw component ``raw`` holds."""
+    if isinstance(dst, ReactionSystem):
+        src = _parse_reaction_system(raw)
+        for d, s in zip(dst.reactions, src.reactions):
+            d.rate_constant = s.rate_constant
+        dst.constraint_equations[:] = src.constraint_equations
+        sparams = {p.name: p for p in src.parameters}
+        for p in dst.parameters:
+            sp = sparams.get(p.name)
+            if sp is not None:
+                p.update = sp.update
+    else:
+        src = _parse_model(raw)
+        dst.equations[:] = src.equations
+        dst.initialization_equations[:] = src.initialization_equations
+        dst.guesses = src.guesses
+        for vname, var in dst.variables.items():
+            sv = src.variables.get(vname)
+            if sv is not None:
+                var.update = sv.update
+                var.lb = sv.lb
+                var.ub = sv.ub
+    dst.continuous_events[:] = src.continuous_events
+    dst.discrete_events[:] = src.discrete_events
+    for sname, sub in (src.subsystems or {}).items():
+        t = (dst.subsystems or {}).get(sname)
+        raw_sub = (raw.get("subsystems") or {}).get(sname)
+        if (
+            t is None
+            or isinstance(t, dict)
+            or isinstance(sub, dict)
+            or not isinstance(raw_sub, dict)
+        ):
+            continue
+        _graft_component_expressions(t, raw_sub)
+
+
+def _graft_rule_rewrites_into_mounts(pre: dict[str, Any], lowered: Any, esm_file: Any) -> None:
+    """For each top-level component of the root document ``pre`` (before its
+    fixpoint) that declares a ``match`` rule, take its mounted subsystems' typed
+    expressions from the Expand image of ``lowered`` (the fixpoint run with the
+    mounts spliced in; :func:`_graft_mounted_rewrites`)."""
+    from .lower_expression_templates import expand_document, marking_template_origins
+
+    expanded = None
+    for section in ("models", "reaction_systems"):
+        comps = pre.get(section)
+        typed = getattr(esm_file, section, None)
+        if not isinstance(comps, dict) or not isinstance(typed, dict):
+            continue
+        for name, comp in comps.items():
+            if not _declares_match_rule(comp):
+                continue
+            if expanded is None:
+                with marking_template_origins():
+                    expanded = expand_document(lowered)
+            t = typed.get(name)
+            if t is not None:
+                _graft_mounted_rewrites(comp, (expanded.get(section) or {}).get(name), t)
 
 
 def _any_mounted_form(esm_file: Any) -> bool:
@@ -3599,9 +3712,14 @@ def _load_data(
     if _any_mounted_form(esm_file):
         _shadow = copy.deepcopy(_pre_lower)
         if _splice_mounted_forms(_shadow, esm_file):
+            _lowered_shadow = lower_expression_templates(_shadow)
             esm_file.component_templates = _capture_component_templates(
-                lower_expression_templates(_shadow), _authored_templates
+                _lowered_shadow, _authored_templates
             )
+            # A component's `match` rules fire on the content of the models it
+            # mounts (esm-spec §9.6.3), which the typed mounts above took from
+            # each leaf's own Expand image.
+            _graft_rule_rewrites_into_mounts(_pre_lower, _lowered_shadow, esm_file)
     # The mounts have merged; the merge bookkeeping does not outlive the load.
     esm_file.data_sources = dict(esm_file.data_sources)
     # esm-spec §4.9.7 over the RESOLVED tree. The structural pass above ran on
