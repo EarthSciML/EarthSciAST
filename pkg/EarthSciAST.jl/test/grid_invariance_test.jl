@@ -17,7 +17,7 @@
 #     primary emission declined on the node budget, so none was emitted away)
 #     have EQUAL per-kernel structural
 #     signatures: spine (kind, op) preorder, spine/recipe node counts,
-#     descriptor count + kinds, sub-kernel count, bound type. Descriptor
+#     descriptor count + kinds, bound type. Descriptor
 #     VALUES (a boundary wrap delta embeds N) are deliberately excluded;
 #   * the build's cascade counts are identical at both sizes, and both
 #     array equations landed on `:affine` — a size-dependent fallback to
@@ -122,7 +122,6 @@ function _gi_sig(K::ESM._AccKernel)
         acc_kinds = UInt8[d.kind for d in K.acc],
         cell_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.recipes],
         inv_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.inv_recipes],
-        n_subs = length(K.subs),
     )
 end
 # Sorted-by-repr so the comparison pins the kernel SET, not an incidental

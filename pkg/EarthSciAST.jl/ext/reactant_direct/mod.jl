@@ -6,7 +6,7 @@
 # The compiled backend for the out-of-place right-hand side. It walks the same
 # compiled IR the `:oop` closure captured (materialized-observed fill levels, the
 # CSE prelude, the `rhs_list` scalar spines, the `_AccKernel`s with their
-# `_OopAccPlan`s, template sub-kernels, CSR reduces and prefix-scan folds) and
+# `_OopAccPlan`s, CSR reduces and prefix-scan folds) and
 # builds `stablehlo.*` operations directly through
 # `Reactant.MLIR.Dialects.stablehlo`, inside `Reactant.@compile`.
 #
@@ -27,7 +27,7 @@
 #   ops.jl      the elementwise ladder, the ⊕-folds, the host const-fold
 #   closed.jl   the standard-library shapes: a const-array read at a computed
 #               subscript, and the comparison count
-#   emit.jl     the walk — spines, kernels, sub-kernels, reduces, scans, the RHS
+#   emit.jl     the walk — spines, kernels, reduces, scans, the RHS
 #   batch.jl    the LANE-BATCHED scalar surface: the `:oop` build's congruent
 #               per-cell entry groups emitted once over their lane axis
 #   device.jl   the XLA client (cpu/gpu), cell-axis sharding of the flat state

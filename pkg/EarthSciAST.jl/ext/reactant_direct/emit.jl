@@ -1,6 +1,6 @@
 # ========================================================================
 # ext/reactant_direct/emit.jl — the walk: scalar spines, access kernels,
-# template sub-kernels, CSR reduces, prefix scans, and the whole RHS.
+# CSR reduces, prefix scans, and the whole RHS.
 # ========================================================================
 
 # ---- parameters and time -----------------------------------------------------
@@ -78,14 +78,26 @@ struct _DEScalarFrame <: _DEFrame
     cache::Vector{_DEVal}
 end
 
-# One access kernel `K` under its lane plan, with its CSE tiers and its
-# template sub-kernels' runtime.
+# One access kernel `K` under its lane plan, with its CSE tiers.
 struct _DEKernelFrame <: _DEFrame
     K::_E._AccKernel
     plan::_E._OopAccPlan
     inv::Vector{_DEVal}
     cell::Vector{_DEVal}
-    sub::Any                                 # _DESubRT
+end
+
+# A call target is host data: the emitter inlines its body at emission, and it
+# holds nothing to trace. Its body's argument nodes refer back to it, a cycle
+# the tracer's modes that do not consult `seen` would follow without end, so
+# tracing stops at it, as it does at a `Module`.
+function Reactant.make_tracer(
+        seen, @nospecialize(prev::_E._CallTarget), @nospecialize(path), mode; kwargs...
+    )
+    if mode == Reactant.TracedToTypes
+        push!(path, prev)
+        return nothing
+    end
+    return prev
 end
 
 _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal =
@@ -93,8 +105,8 @@ _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal =
 
 _de_acck(
     ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan,
-    invvals::Vector{_DEVal}, cellvals::Vector{_DEVal}, sub
-)::_DEVal = _de_walk(ctx, _DEKernelFrame(K, plan, invvals, cellvals, sub), nd)
+    invvals::Vector{_DEVal}, cellvals::Vector{_DEVal}
+)::_DEVal = _de_walk(ctx, _DEKernelFrame(K, plan, invvals, cellvals), nd)
 
 # The frame's views for the count recognisers and the computed-subscript read.
 _de_keyval(ctx::_DECtx, ::_DEScalarFrame, x::_E._Node) = _de_scalar_keyval(ctx, x)
@@ -152,6 +164,10 @@ function _de_walk(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
         end
         c = _DEVal[_de_walk(ctx, fr, ch) for ch in nd.children]
         return _de_op(ctx, nd, c)
+    elseif k === _E._NK_CALL
+        # A template call: its body with the call's arguments in place,
+        # walked in this frame (`_de_inline_call`).
+        return _de_walk(ctx, fr, _de_inline_call(ctx, nd))
     end
     return _de_leaf(ctx, fr, nd)
 end
@@ -163,21 +179,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEScalarFrame, nd::_E._Node)::_DEVal
     if k === _E._NK_STATE
         return _de_read(ctx, ctx.ue, nd.idx, :state)
     elseif k === _E._NK_CONTRACTION_LOOP
-        cnt = _de_count_loop(ctx, nd)
-        cnt === nothing ||
-            return _de_emit_count(ctx, cnt, _de_walk(ctx, fr, cnt.query))
-        # Emission-time unroll of the static range, in the interpreter's
-        # ascending order. A loop whose BODY is host data never gets here — it
-        # folded above — and a long one lands in `stablehlo.reduce` rather than a
-        # chain of `range` binary ops (see `_de_fold_terms`).
-        spec = nd.payload::_E._ContractLoop
-        body = nd.children[1]
-        terms = _DEVal[]
-        for kk in spec.lo:spec.step:spec.hi
-            spec.ref[] = kk
-            push!(terms, _de_walk(ctx, fr, body))
-        end
-        return _de_fold_terms(ctx, nd.op, nd.literal, terms)
+        return _de_contraction_loop(ctx, fr, nd)
     elseif k === _E._NK_LOOPVAR
         return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
     elseif k === _E._NK_CONST_GATHER
@@ -214,36 +216,94 @@ end
 
 _de_kindname(k::UInt8) = _E._node_kind_name(k)
 
-# ---- template sub-kernels ----------------------------------------------------
-#
-# The per-call runtime for a kernel's template SUB-KERNELS: the parent plan's
-# FLAT transitive sub list
-# with its aligned lane plans, and one CSE tier per sub. The invariant tier is
-# emitted once per kernel by the prologue (as the host evaluator fills it once
-# per call); the per-cell tier is re-emitted at each subcall site, which is the
-# host evaluator's per-cell re-fill in SSA form.
-struct _DESubRT
-    subs::Vector{_E._AccKernel}
-    plans::Vector{_E._OopAccPlan}
-    invvals::Vector{Vector{_DEVal}}
-    cellvals::Vector{Vector{_DEVal}}
-end
-const _DE_NO_SUB = _DESubRT(
-    _E._AccKernel[], _E._OopAccPlan[],
-    Vector{_DEVal}[], Vector{_DEVal}[]
-)
-
-function _de_build_subrt(plan::_E._OopAccPlan)
-    subs = plan.subs
-    isempty(subs) && return _DE_NO_SUB
-    invvals = Vector{Vector{_DEVal}}(undef, length(subs))
-    cellvals = Vector{Vector{_DEVal}}(undef, length(subs))
-    for j in eachindex(subs)
-        S = subs[j]
-        invvals[j] = Vector{_DEVal}(undef, length(S.cse.inv_recipes))
-        cellvals[j] = Vector{_DEVal}(undef, length(S.cse.recipes))
+function _de_contraction_loop(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
+    cnt = _de_count_loop(ctx, nd)
+    cnt === nothing ||
+        return _de_emit_count(ctx, cnt, _de_walk(ctx, fr, cnt.query))
+    # Emission-time unroll of the static range, in the interpreter's
+    # ascending order. A loop whose BODY is host data never gets here — it
+    # folded above — and a long one lands in `stablehlo.reduce` rather than a
+    # chain of `range` binary ops (see `_de_fold_terms`).
+    spec = nd.payload::_E._ContractLoop
+    body = nd.children[1]
+    terms = _DEVal[]
+    for kk in spec.lo:spec.step:spec.hi
+        spec.ref[] = kk
+        push!(terms, _de_walk(ctx, fr, body))
     end
-    return _DESubRT(subs, plan.sub_plans, invvals, cellvals)
+    return _de_fold_terms(ctx, nd.op, nd.literal, terms)
+end
+
+# ---- template calls ------------------------------------------------------------
+
+# The body of the call `nd` (`_NK_CALL`, call.jl) with the call's arguments in
+# place: each argument read (`_NK_ARG`) is the caller's argument node, and each
+# read of an array argument (`_NK_ARG_GATHER`) is the gather of the array the
+# call passes, a const array, a live
+# forcing buffer or a state array. A call in the body passing on an array
+# argument of this one passes the array itself. The interpreter evaluates the
+# body as a pure function of the arguments, so the inlined body denotes the
+# same values; a body is a DAG and stays one.
+function _de_inline_call(ctx::_DECtx, nd::_E._Node)::_E._Node
+    site = nd.payload::_E._CallSite
+    tg = site.target
+    memo = _E._NodeMap{_E._Node}()
+    function arr(j::Int)
+        tg.baseidx[j] == 0 || _de_refuse(
+            ctx, "a template call passing a block array",
+            "a block array's base is a run-time argument; its read has no direct lowering yet."
+        )
+        return site.arrays[tg.passed[j]]
+    end
+    function sub(x::_E._Node)::_E._Node
+        got = get(memo, x, nothing)
+        got === nothing || return got
+        k = x.kind
+        r = if k === _E._NK_ARG
+            x.payload === tg || _de_refuse(
+                ctx, "an argument read of another call in a template call's body",
+                "a body reads only its own arguments."
+            )
+            nd.children[x.idx]
+        elseif k === _E._NK_ARG_GATHER
+            ref = x.payload::_E._ArgGatherRef
+            ref.target === tg || _de_refuse(
+                ctx, "an array argument read of another call in a template call's body",
+                "a body reads only its own arguments."
+            )
+            a = arr(ref.j)
+            ch = _E._Node[sub(c) for c in x.children]
+            if a.kind === :const
+                _E._mknode(kind = _E._NK_CONST_GATHER, payload = a.data::_E._ConstGatherArray, children = ch)
+            elseif a.kind === :live
+                _E._mknode(kind = _E._NK_LIVE_GATHER, payload = a.data::_E._ConstGatherArray, children = ch)
+            elseif a.kind === :state
+                _E._mknode(kind = _E._NK_STATE_GATHER, payload = a.data::_E._StateGather, children = ch)
+            else
+                _de_refuse(
+                    ctx, "a template call passing a $(a.kind) array",
+                    "no arm of the direct walk reads it."
+                )
+            end
+        elseif k === _E._NK_CALL
+            s2 = x.payload::_E._CallSite
+            arrays = _E._ArrArg[
+                (a.data isa _E._FwdArr && (a.data::_E._FwdArr).target === tg) ?
+                    arr((a.data::_E._FwdArr).j) : a for a in s2.arrays
+            ]
+            _E._mknode(
+                kind = k, op = x.op, payload = _E._CallSite(s2.target, arrays),
+                children = _E._Node[sub(c) for c in x.children]
+            )
+        elseif isempty(x.children)
+            x
+        else
+            _E._Node(x.kind, x.op, x.literal, x.idx, x.sym, x.payload, _E._Node[sub(c) for c in x.children])
+        end
+        memo[x] = r
+        return r
+    end
+    return sub(tg.body)
 end
 
 # ---- access kernels ----------------------------------------------------------
@@ -251,7 +311,7 @@ end
 # ---- an access kernel's own leaves -------------------------------------------
 
 function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
-    K = fr.K; plan = fr.plan; sub = fr.sub::_DESubRT
+    K = fr.K; plan = fr.plan
     k = nd.kind
     if k === _E._NK_ACCESS
         a = K.acc[nd.idx]
@@ -278,16 +338,15 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
             # CONST_BOX / LOOP_IDX: frozen lane data, one interned array constant.
             return _de_arrconst(ctx, plan.consts[nd.idx])
         end
-    elseif k === _E._NK_SUBCALL
-        S = nd.payload::_E._AccKernel
-        j = _de_sub_index(ctx, sub.subs, S)
-        sfr = _DEKernelFrame(S, sub.plans[j], sub.invvals[j], sub.cellvals[j], sub)
-        rs = S.cse.recipes
-        for i in eachindex(rs)
-            sfr.cell[i] = _de_walk(ctx, sfr, rs[i])
-        end
-        _de_tally!(ctx, :subcall)
-        return _de_walk(ctx, sfr, S.spine)
+    elseif k === _E._NK_CONTRACTION_LOOP
+        # From a template call's body inlined here (`_de_inline_call`).
+        return _de_contraction_loop(ctx, fr, nd)
+    elseif k === _E._NK_CONST_GATHER
+        # A const array a template call passes, read in its inlined body; a
+        # host-static read has folded above.
+        return _de_cgather(ctx, nd, ch -> _de_walk(ctx, fr, ch), _ -> nothing)
+    elseif k === _E._NK_LOOPVAR
+        return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
     end
     return _de_refuse(
         ctx, "the access-kernel node kind $(_de_kindname(k))",
@@ -295,23 +354,9 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
     )
 end
 
-function _de_sub_index(ctx::_DECtx, subs::Vector{_E._AccKernel}, S::_E._AccKernel)
-    for j in eachindex(subs)
-        subs[j] === S && return j
-    end
-    return _de_refuse(
-        ctx,
-        "_NK_SUBCALL",
-        "the call references a sub-kernel absent from the parent plan's " *
-            "transitive `K.subs` list — a `_collect_subkernels` invariant break, " *
-            "not a coverage gap."
-    )
-end
-
-# One vectorized kernel: the sub-kernels' invariant tiers, then this kernel's
-# invariant and per-cell tiers, the spine, and the scatter into the target slot
-# map. One kernel: sub-kernel invariant tiers, then this kernel's own CSE tiers
-# in slot order, the spine over whole lanes, and ONE write.
+# One vectorized kernel: this kernel's own CSE tiers (invariant, then per-cell)
+# in slot order, the spine over whole lanes, and ONE write into the target slot
+# map.
 function _de_run_kernel!(
         ctx::_DECtx, out::_DEMap, K::_E._AccKernel,
         plan::_E._OopAccPlan
@@ -326,26 +371,16 @@ function _de_run_kernel!(
             "(an unsupported descriptor kind or an unbounded reduce) and lower " *
             "that instead."
     )
-    sub = _de_build_subrt(plan)
-    for j in eachindex(sub.subs)
-        S = sub.subs[j]
-        Sp = sub.plans[j]
-        iv = sub.invvals[j]; cv = sub.cellvals[j]
-        ir = S.cse.inv_recipes
-        for i in eachindex(ir)
-            iv[i] = _de_acck(ctx, ir[i], S, Sp, iv, cv, sub)
-        end
-    end
     cse = K.cse
     invvals = Vector{_DEVal}(undef, length(cse.inv_recipes))
     cellvals = Vector{_DEVal}(undef, length(cse.recipes))
     for i in eachindex(cse.inv_recipes)
-        invvals[i] = _de_acck(ctx, cse.inv_recipes[i], K, plan, invvals, cellvals, sub)
+        invvals[i] = _de_acck(ctx, cse.inv_recipes[i], K, plan, invvals, cellvals)
     end
     for i in eachindex(cse.recipes)
-        cellvals[i] = _de_acck(ctx, cse.recipes[i], K, plan, invvals, cellvals, sub)
+        cellvals[i] = _de_acck(ctx, cse.recipes[i], K, plan, invvals, cellvals)
     end
-    res = _de_acck(ctx, K.spine, K, plan, invvals, cellvals, sub)
+    res = _de_acck(ctx, K.spine, K, plan, invvals, cellvals)
     _de_tally!(ctx, :kernels)
     _de_write!(ctx, out, plan.out_slots, res)
     return nothing

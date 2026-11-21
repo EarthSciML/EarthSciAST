@@ -48,7 +48,7 @@ function _xc_percall_fn(prelude, kernels)
         # the per-cell tiers must be exp-free for the count to be per-call
         @test _xc_count_fn(K.spine) == 0
         @test sum(_xc_count_fn(r) for r in K.cse.recipes; init = 0) == 0
-        return foreach(walk, K.subs)
+        return nothing
     end
     foreach(walk, kernels)
     return total

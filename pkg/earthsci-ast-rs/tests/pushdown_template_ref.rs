@@ -207,8 +207,42 @@ fn bare_factor_name_bindings_are_repointed() {
     );
     assert_eq!(r["metadata"]["x_esd"], lr["metadata"]["x_esd"]);
     assert_eq!(r["index_sets"], lr["index_sets"]);
-    // The generated `distinct` producer is identical…
-    assert_eq!(structural_of(&r), structural_of(&lr));
+    // The generated `distinct` producer is the longhand one but for its
+    // filter: the containment sits in the template body, so the filter is a
+    // reference to the DERIVED template `bin_into_cell__pd_filter` (the body's
+    // comparisons, in the template's params) bound to the full-grid rect
+    // factors — never a copy of the expanded body.
+    let (mut rs, mut ls) = (structural_of(&r), structural_of(&lr));
+    assert_eq!((rs.len(), ls.len()), (1, 1));
+    let rf = rs[0]["rhs"]
+        .as_object_mut()
+        .unwrap()
+        .remove("filter")
+        .unwrap();
+    let lf = ls[0]["rhs"]
+        .as_object_mut()
+        .unwrap()
+        .remove("filter")
+        .unwrap();
+    assert_eq!(rs, ls);
+    assert_eq!(lf["op"], json!("*"));
+    assert_eq!(
+        rf,
+        json!({"op": "apply_expression_template", "name": "bin_into_cell__pd_filter",
+               "args": [], "bindings": {"xmin": "src_W", "ymin": "src_S", "xmax": "src_E",
+                                        "ymax": "src_N", "ptx": "px", "pty": "py"}})
+    );
+    let tpls = r["models"]["Binned"]["expression_templates"]
+        .as_object()
+        .unwrap();
+    assert_eq!(
+        tpls["bin_into_cell__pd_filter"]["params"],
+        json!(["xmin", "ymin", "xmax", "ymax", "ptx", "pty"])
+    );
+    assert_eq!(
+        tpls["bin_into_cell__pd_filter"]["body"]["args"],
+        tpl_before["bin_into_cell"]["body"]["args"][0]["args"][0]["args"]
+    );
     // …and among the DEFINITIONS only E_PM25's body differs.
     let (rdef, ldef) = (defs_of(&r), defs_of(&lr));
     let differing: Vec<&String> = rdef.keys().filter(|k| rdef[*k] != ldef[*k]).collect();
@@ -222,7 +256,9 @@ fn bare_factor_name_bindings_are_repointed() {
     assert_eq!(b["xmin"], json!("pd_cell__src_cells__src_W"));
     assert_eq!(b["ymax"], json!("pd_cell__src_cells__src_N"));
     assert_eq!(b["ptx"], json!("px"));
-    assert_eq!(r["models"]["Binned"]["expression_templates"], tpl_before);
+    let mut authored = tpls.clone();
+    authored.remove("bin_into_cell__pd_filter");
+    assert_eq!(Value::Object(authored), tpl_before);
     // idempotent
     assert!(matches!(
         desugar_pushdown(&r, Some("Binned")).unwrap(),
@@ -265,7 +301,23 @@ fn subscripted_bindings_are_repointed() {
     assert_eq!(b["lo_x"]["args"][0], json!("pd_cell__src_cells__src_W"));
     assert_eq!(b["hi_y"]["args"][0], json!("pd_cell__src_cells__src_N"));
     assert_eq!(b["x"]["args"][0], json!("px")); // records untouched
-    assert_eq!(r["models"]["Binned"]["expression_templates"], tpl_before);
+    // The authored template is untouched; the producer filter is the derived
+    // template of its containment, read with the full-grid subscripted bindings.
+    let mut authored = r["models"]["Binned"]["expression_templates"]
+        .as_object()
+        .unwrap()
+        .clone();
+    let derived = authored
+        .remove("bin2__pd_filter")
+        .expect("derived filter template");
+    assert_eq!(Value::Object(authored), tpl_before);
+    assert_eq!(
+        derived["params"],
+        json!(["lo_x", "lo_y", "hi_x", "hi_y", "x", "y"])
+    );
+    let prod = &structural_of(&r)[0]["rhs"];
+    assert_eq!(prod["filter"]["name"], json!("bin2__pd_filter"));
+    assert_eq!(prod["filter"]["bindings"]["lo_x"], ix("src_W", "c"));
     assert!(matches!(
         desugar_pushdown(&r, Some("Binned")).unwrap(),
         Cow::Borrowed(_)

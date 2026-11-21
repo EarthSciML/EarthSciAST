@@ -1299,11 +1299,22 @@ Emission is separately constrained, and in the opposite direction. The rewrite
 MUST re-point the rect factors by editing the **call site** — the reference's
 `bindings`, and the `faq`'s own `ranges` / `shape` / `args` / `join` — and
 MUST NOT edit the referenced template `body`. The body is shared across call
-sites (one of them being the generated producer `filter`, which keeps the
-FULL-GRID rect references) and is lowered once at the build boundary, which is
-what Option B exists for. Both binding spellings carry a rect factor and both
-MUST be re-pointed: the bare factor name (`{"xmin": "src_W"}`) and the
-subscripted expression (`{"lo_x": index(src_W, c)}`).
+sites and is lowered once at the build boundary, which is what Option B exists
+for. Both binding spellings carry a rect factor and both MUST be re-pointed: the
+bare factor name (`{"xmin": "src_W"}`) and the subscripted expression
+(`{"lo_x": index(src_W, c)}`).
+
+The generated producer `filter` keeps the FULL-GRID rect references. When the
+containment `ifelse` lies inside the body of a template `T`, the filter is NOT
+copied out of the body's expansion: the desugar adds the **derived template**
+`T__pd_filter` to the model's `expression_templates` — `params` the parameters
+of `T` its comparisons read, in `T`'s declared order; `body` those comparisons
+as a `*` (the same form a longhand filter takes) — and the filter is a reference
+to it, each parameter bound exactly as the representative's call site binds it
+before that call site is re-pointed. A containment nested several templates
+deep gets one derived template per template on the way, each body a reference
+to the next. A derived name that would replace a different declaration already
+in the registry is an error.
 
 Consequently a rect factor named **free** in a template body — reachable from
 neither the call site's `bindings` nor the `faq`'s `args` — cannot be

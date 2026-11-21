@@ -18,7 +18,7 @@
 #   contract, XLA is free to reassociate, and `stablehlo.power` is not Julia's
 #   `^`. Five shapes are covered — the conformance fixture, a reaction–diffusion
 #   model (state, parameters, literal-exponent `^`, ghost-boundary kernels), a
-#   LIVE FORCING model through the buffers argument, a template SUB-KERNEL model,
+#   LIVE FORCING model through the buffers argument, a template-call model,
 #   and `log10`.
 #
 #   THE HARD-ERROR PATH. A model the emitter cannot lower raises
@@ -664,24 +664,19 @@ end
         @test err.code != "E_TREEWALK_TRACED_SUBSCRIPT"
     end
 
-    @testset "template sub-kernels (`_NK_SUBCALL`)" begin
+    @testset "template calls (full-rank transport fixture)" begin
         fix = fullrank_per_cell_fixture()
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
         fo, u0, p, _, _ = EarthSciAST.Internal.build(flat; form = :oop)
         fi!, _, _, _, _ = EarthSciAST.Internal.build(flat)
-        # The plan really does carry sub-kernels — otherwise this fixture would
-        # be testing the ordinary kernel path under a different name.
-        plans = getfield(fo.rhs, :acc_plans)
-        @test any(pl -> !isempty(pl.subs), plans)
         n = length(u0)
         u1 = Float64[sin(0.1 * i) + 1.5 for i in 1:n]
         u2 = Float64[0.5 + 0.01 * i + cos(0.3 * i)^2 for i in 1:n]
         d, _ = _de_compare(
-            "template_subkernels", fo, fi!, p,
+            "template_calls", fo, fi!, p,
             [(u1, 0.0), (u2, 0.75)]; census = false
         )
-        @test get(d.stats, :subcall, 0) >= 1
     end
 
     @testset "the read cost model: slices per run, or one cross-producer gather" begin
@@ -889,7 +884,7 @@ end
         # descriptor reads are emitted identically, and the numbers agree to the
         # last bit either way (the `isapprox` above).
         for k in (
-                :kernels, :subcall, :arith, :broadcast_in_dim,
+                :kernels, :arith, :broadcast_in_dim,
                 Symbol("sliceN@kernel.runs"), Symbol("gather@kernel.x"),
                 Symbol("concat@kernel.x"),
             )

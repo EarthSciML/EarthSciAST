@@ -1,7 +1,7 @@
 # Compile-once template tier (RFC out-of-line-expression-templates §5/§7.7
 # "compile references natively", esm-spec §9.6.4 Option B): the affine stencil
 # build compiles each surviving `apply_expression_template` body once per
-# (use site, region class) and calls it as a runtime sub-kernel, instead of
+# (use site, region class) and calls it (a template call, call.jl), instead of
 # fusing the expanded body into every branch spine. This is THE default path —
 # `flatten` always carries references, and the build boundary is the single
 # evaluator-side expansion point. Gate 3 (§12): the result MUST be
@@ -47,6 +47,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                 branches = get(rep.counts, :branch_templates, 0),
                 variants = get(rep.counts, :body_variants, 0),
                 compiles = get(rep.counts, :compile_calls, 0),
+                targets = get(rep.counts, :call_targets, 0),
+                shared = get(rep.counts, :call_targets_shared, 0),
             )
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), probe_states(length(u0)))
@@ -83,21 +85,23 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             @test sum(abs, fast[k]) > 0     # and not trivially zero
         end
 
-        # 5+5+5 replaces 5×5×5: fifteen compiled body variants, and the total
-        # node-lowering count collapses (parents are tiny sub-call spines).
-        @test cfast.variants == 15
-        @test catload.variants == 0
-        @test cfast.compiles < catload.compiles ÷ 4
+        # 5+5+5 replaces 5×5×5: the references are template calls, each
+        # template body compiled once (a call target), never expanded into a
+        # sub-kernel variant per use; the expanded build has no call.
+        @test cfast.variants == 0
+        # Fifteen instances (5 per axis), three compiled bodies: the instances
+        # of one axis differ only in which cells they read (call.jl, lanes).
+        @test cfast.targets == 3 && cfast.shared == 12
+        @test catload.variants == 0 && catload.targets == 0
+        @test cfast.compiles < catload.compiles ÷ 3
     end
 
-    @testset "gate: template sub-kernels take the vectorized acc form" begin
-        # A template-body sub-kernel (`K.subs` / `_NK_SUBCALL`) must not force the
-        # per-cell FALLBACK, which addresses the state one element at a time and
-        # so cannot be compiled. The build plans each variant as its OWN whole-array op over the parent lanes, splicing the
-        # lane-aligned result into the parent operand stream. Pin structurally:
-        # this fixture DOES carry sub-kernels and EVERY acc plan is vectorizable,
-        # which is the property a compiled backend needs — the emitter refuses a
-        # per-cell fallback kernel outright.
+    @testset "gate: template calls take the vectorized acc form" begin
+        # A template call must not force the per-cell FALLBACK, which addresses
+        # the state one element at a time and so cannot be compiled. Pin
+        # structurally: EVERY acc plan is vectorizable, which is the property a
+        # compiled backend needs — the emitter refuses a per-cell fallback
+        # kernel outright.
         FIX = fullrank_per_cell_fixture()
         flat = flatten(load_path(FIX))
         fo, u0, p, _, _ = EarthSciAST.Internal.build(flat; form = :oop)
@@ -105,8 +109,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # is its `rhs` field.
         oplans = getfield(getfield(fo, :rhs), :acc_plans)
         @test !isempty(oplans)
-        @test any(P -> !isempty(P.subs), oplans)     # the tier actually fired here
-        @test all(P -> P.vectorizable, oplans)       # …and none forced the fallback
+        @test all(P -> P.vectorizable, oplans)       # none forced the fallback
     end
 
     @testset "reduced-rank fixture: per-cell fallback stays bit-identical" begin
@@ -129,8 +132,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # NESTED reference (pair_diff — compiled FUSED into its enclosing
         # variant: boundaries are the OUTERMOST expansion roots only, the RFC's
         # granularity) and (b) an all-literal invariant subtree exp(neg(0.3))
-        # (exercises the sub-kernel invariant CSE tier filled by the runner
-        # prologue).
+        # (exercises the invariant CSE tier filled by the runner prologue).
         idx(f, off) = off == 0 ? Dict("op" => "index", "args" => [f, "i"]) :
             Dict(
                 "op" => "index", "args" => [
@@ -253,7 +255,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             # are loop-invariant subtrees — hoisted whole into the parent spine
             # (strictly better than a sub-kernel), exactly as the fused walk
             # treats them.
-            @test cfast.variants == 1
+            # Now calls: no expansion sub-kernel, and at most one compiled
+            # body per template.
+            @test cfast.variants == 0
+            @test 1 <= cfast.targets <= 3
         end
     end
 

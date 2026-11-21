@@ -48,15 +48,7 @@
         # subscript is resolved on its own axis (`_const_gather_sub`). The concrete
         # `::_ConstGatherArray` assert keeps this arm monomorphic; the happy-path
         # read allocates nothing (the guard only throws on failure).
-        cg = n.payload::_ConstGatherArray
-        children = n.children
-        strides = cg.strides
-        off = 1
-        @inbounds for d in eachindex(children)
-            sub = _const_gather_sub(cg, d, round(Int, _eval_node(children[d], u, p, t, T)))
-            off += (sub - 1) * strides[d]
-        end
-        @inbounds return cg.flat[off]
+        return _eval_const_gather_at(n.payload::_ConstGatherArray, n.children, u, p, t, T)
     elseif k === _NK_TIME
         return t
     elseif k === _NK_CACHED
@@ -85,6 +77,12 @@
         return _eval_recur_gather(n, u, p, t, T)
     elseif k === _NK_OP
         return _eval_node_op(n, u, p, t, T)
+    elseif k === _NK_ARG
+        return _eval_arg(n, T)
+    elseif k === _NK_ARG_GATHER
+        return _eval_arg_gather(n, u, p, t, T)
+    elseif k === _NK_CALL
+        return _run_call(c -> _eval_node(c, u, p, t, T), n, u, p, t, T)
     end
     return _unknown_kind(n, "the scalar walker")
 end
@@ -111,9 +109,22 @@ the node.
 # reads `u` at that flat slot. Returns `eltype(u)` on both arms exactly as the
 # `_NK_STATE` leaf does (so the state axis stays derivative-carrying under
 # ForwardDiff and the arm is type-stable); zero per-call allocation.
-function _eval_state_gather(n::_Node, u, p, t, ::Type{T}) where {T}
-    sg = n.payload::_StateGather
-    children = n.children
+_eval_state_gather(n::_Node, u, p, t, ::Type{T}) where {T} =
+    _eval_state_gather_at(n.payload::_StateGather, n.children, u, p, t, T)
+
+# The const or live gather of `cg` at the subscripts `children`.
+@inline function _eval_const_gather_at(cg::_ConstGatherArray, children::Vector{_Node}, u, p, t, ::Type{T}) where {T}
+    strides = cg.strides
+    off = 1
+    @inbounds for d in eachindex(children)
+        sub = _const_gather_sub(cg, d, round(Int, _eval_node(children[d], u, p, t, T)))
+        off += (sub - 1) * strides[d]
+    end
+    @inbounds return cg.flat[off]
+end
+
+# The state gather of `sg` at the subscripts `children`.
+function _eval_state_gather_at(sg::_StateGather, children::Vector{_Node}, u, p, t, ::Type{T}) where {T}
     off = 0
     @inbounds for d in eachindex(children)
         sub = round(Int, _eval_node(children[d], u, p, t, T))

@@ -178,8 +178,17 @@ end
         @test b["lo_x"]["args"][1] == "pd_cell__src_cells__src_W"
         @test b["hi_y"]["args"][1] == "pd_cell__src_cells__src_N"
         @test b["x"]["args"][1] == "px"                          # records untouched
-        # Option B survives: the SHARED body is not edited.
-        @test r["models"]["Binned"]["expression_templates"] == tpl_before
+        # Option B survives: the SHARED body is not edited, and the producer
+        # filter is a reference to the derived template of its containment,
+        # read with the full-grid subscripted bindings (never an expanded copy).
+        tpls = r["models"]["Binned"]["expression_templates"]
+        @test Dict(k => v for (k, v) in tpls if k != "bin2__pd_filter") == tpl_before
+        @test tpls["bin2__pd_filter"]["params"] == Any["lo_x", "lo_y", "hi_x", "hi_y", "x", "y"]
+        prod = only(eq for eq in r["models"]["Binned"]["equations"] if !(eq["lhs"] isa AbstractString))
+        @test prod["rhs"]["filter"]["op"] == "apply_expression_template"
+        @test prod["rhs"]["filter"]["name"] == "bin2__pd_filter"
+        @test prod["rhs"]["filter"]["bindings"]["lo_x"] == jidx("src_W", "c")
+        @test !haskey(prod["rhs"]["filter"]["bindings"], "wgt")
         @test EA.desugar_pushdown(r) === r                       # idempotent
         @test isempty(EA.pushdown_diagnostics(d; model_name = "Binned"))
     end
@@ -232,7 +241,7 @@ end
         @test EA.desugar_pushdown(dense; model_name = "Binned") === dense
 
         # (b) a surviving reference the detector could NOT see through — here
-        #     because the registry is gone, so expansion cannot resolve it. The
+        #     because the registry is gone, so the reference cannot be read. The
         #     document is join-shaped, so this is reported, naming the template.
         orphan = base_doc()
         _define!(
@@ -252,6 +261,55 @@ end
         @test dg[1]["index_set"] == "src_cells"
         # a diagnostic is never a rewrite: the document comes back untouched
         @test EA.desugar_pushdown(orphan; model_name = "Binned") === orphan
+    end
+
+    # ---- the producer filter is a reference, and invents the same support ----
+    # The corpus golden's producer filter is a reference to the derived
+    # template `bin_into_cell__pd_filter` (the containment test of the body),
+    # never an expanded copy. Value invention reads it through the call, as the
+    # build front door prepares the model, and must invent the same members as
+    # the longhand golden's comparisons.
+    @testset "derived filter template invents the longhand support set" begin
+        gdir = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "pushdown", "golden")
+        arrays = Dict{String, Any}(
+            "src_W" => [0.0, 2, 4, 6], "src_E" => [2.0, 4, 6, 8],
+            "src_S" => zeros(4), "src_N" => fill(2.0, 4),
+            "px" => [1.0, 5.0, 9.0], "py" => [1.0, 1.0, 1.0]
+        )
+        members = map(("pushdown_template_body", "pushdown_gated_dense")) do g
+            file = EA.load_document(JSON.parsefile(joinpath(gdir, "$g.rewritten.json")))
+            @test isempty(EA.validate_structural(file))
+            m = EA._select_model(file, "Binned")
+            reg = EA._component_template_reg(file, "Binned")
+            if reg !== nothing
+                @test haskey(reg, "bin_into_cell__pd_filter")
+                m = EA._expansion_copy(m)
+                m, _ = EA._tpl_prepare_model!(
+                    m, copy(reg), file.index_sets, Dict{String, Int}(); refuse = false
+                )
+                # The filter (a reference to the derived template) has a
+                # compiled form: value invention runs it as one kernel per
+                # candidate rather than reading the body through the call.
+                prod = only(
+                    eq.rhs for eq in m.equations
+                        if eq.rhs isa EA.OpExpr && eq.rhs.filter !== nothing
+                )
+                @test EA._tpl_is_call(prod.filter)
+                ctx = EA._ViCtx(
+                    Dict{String, Any}(arrays), Dict{String, Float64}(),
+                    Dict{String, EA.IndexSet}(String(k) => v for (k, v) in file.index_sets),
+                    m.variables, Dict{String, Dict{Any, Any}}(), EA.cadence_seeds(m)
+                )
+                kf = EA._vi_compile_filter(ctx, EA._vi_ranges(prod), prod.filter)
+                @test kf !== nothing
+                # c = 1 holds record 1 (x = 1 in [0, 2)), not record 2 (x = 5).
+                @test EA._vi_truthy(kf(Dict{String, Any}("c" => 1, "r" => 1)))
+                @test !EA._vi_truthy(kf(Dict{String, Any}("c" => 1, "r" => 2)))
+            end
+            vi = EA.materialize_value_invention(m, file.index_sets, arrays, Dict{String, Any}())
+            sort(collect(Int, vi.members["pd_faq__src_cells"]))
+        end
+        @test members[1] == members[2] == [1, 3]
     end
 
     # ---- ACCEPTANCE: the sanctioned spelling flattens AND is recognised ----
@@ -316,8 +374,58 @@ end
             @test haskey(ex, "join")
             @test ex["expr"]["bindings"]["xmin"] == "pd_cell__src_cells__src_W"
         end
-        @test r["models"]["ISRM"]["expression_templates"] ==
-            raw["models"]["ISRM"]["expression_templates"]     # body untouched
+        rt = r["models"]["ISRM"]["expression_templates"]
+        @test Dict(k => v for (k, v) in rt if k != "bin_emissions__pd_filter") ==
+            Dict(raw["models"]["ISRM"]["expression_templates"])   # body untouched
+        @test rt["bin_emissions__pd_filter"]["params"] ==
+            Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty"]
         @test isempty(EA.pushdown_diagnostics(raw; model_name = "ISRM"))
+    end
+
+    # The filter is emitted from the `ifelse` detection finds, in the order of
+    # the expanded body: a binding's containment reached through a parameter
+    # leaf comes before the body's own `ifelse`, and is written in the caller's
+    # scope. A containment reading none of a template's parameters is the
+    # longhand `*` filter, not a derived template of no parameters.
+    @testset "producer filter follows expansion order" begin
+        longhand = Dict{String, Any}("op" => "*", "args" => _contain()["args"])
+        reg = Dict{String, Any}(
+            "T" => Dict{String, Any}(
+                "params" => ["p", "q"],
+                "body" => jop("*", "p", jop("ifelse", jop(">", "q", 0.0), 1.0, 0.0))
+            )
+        )
+        call = _apply(
+            "T", Dict(
+                "p" => jop("ifelse", _contain(), jidx("emis_annual", "r"), 0.0),
+                "q" => jidx("px", "r")
+            )
+        )
+        derived = Dict{String, Any}()
+        @test EA._pd_filter_in(call, reg, derived) == longhand
+        @test isempty(derived)
+
+        reg2 = Dict{String, Any}(
+            "Inner" => Dict{String, Any}("params" => ["a"], "body" => jop("*", "a", 2.0)),
+            "Outer" => Dict{String, Any}(
+                "params" => ["b"], "body" => _apply("Inner", Dict("a" => "b"))
+            )
+        )
+        call2 = _apply("Outer", Dict("b" => jop("ifelse", _contain(), 1.0, 0.0)))
+        @test EA._pd_filter_in(call2, reg2, derived) == longhand
+        @test isempty(derived)
+    end
+
+    @testset "producer filter reading no parameter is inlined" begin
+        reg = Dict{String, Any}(
+            "T" => Dict{String, Any}(
+                "params" => ["w"],
+                "body" => jop("*", jop("ifelse", _contain(), 1.0, 0.0), "w")
+            )
+        )
+        derived = Dict{String, Any}()
+        f = EA._pd_filter_in(_apply("T", Dict("w" => jidx("emis_annual", "r"))), reg, derived)
+        @test f == Dict{String, Any}("op" => "*", "args" => _contain()["args"])
+        @test isempty(derived)
     end
 end

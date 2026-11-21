@@ -63,13 +63,24 @@ _vi_model_assignments(model::Model) =
 # Every `index` target name reachable in a sub-tree (the array a value reads
 # from): `index(NAME, …)` → NAME. Walks EVERY expression-bearing `OpExpr` field
 # via the generated `foreach_subexpr` walker (expression.jl).
+#
+# A template reference's body is read through its frame (`_tpl_foreach_node`,
+# against the build's template table), an array parameter as the name its
+# binding gives: `index(<param>, …)` targets the array the reference binds.
 function _vi_index_targets!(refs, node)
     node isa ASTExpr || return refs
-    foreach_subexpr(node) do n
-        if n isa OpExpr && n.op == "index" && !isempty(n.args) && n.args[1] isa VarExpr
-            push!(refs, n.args[1].name)
+    visit = function (n, fr)
+        if n isa OpExpr && n.op == "index" && !isempty(n.args)
+            t, _ = _tpl_leaf(n.args[1], fr)
+            t isa VarExpr && push!(refs, t.name)
         end
-        nothing
+        return nothing
+    end
+    ct = _call_table()
+    if ct === nothing
+        foreach_subexpr(n -> visit(n, nothing), node)
+    else
+        _tpl_foreach_node(visit, ct.tt, node)
     end
     return refs
 end
@@ -253,6 +264,10 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
     elseif node isa OpExpr
         op = node.op
         args = node.args
+        # A template call: its body with its parameters bound (call.jl).
+        _tpl_is_call(node) && return _eval_through_call(
+            (e, env) -> _vi_eval(e, ctx, env), node, bindings
+        )
         # The registry arity is normative here as on every evaluator.
         _check_op_arity(Symbol(op), length(args))
         if op == "index"
@@ -358,6 +373,13 @@ end
 function _vi_index(node::OpExpr, ctx::_ViCtx, bindings::AbstractDict)
     args = node.args
     name = !isempty(args) && args[1] isa VarExpr ? args[1].name : nothing
+    # An array parameter of a template body (`_eval_through_call`): bound to
+    # the factor name its binding evaluates to (`_vi_eval` returns a bare
+    # factor name as the name), which is the array the body gathers from.
+    if name !== nothing && _tpl_is_sentinel(name) && haskey(bindings, name)
+        v = bindings[name]
+        v isa AbstractString && (name = String(v))
+    end
     if name !== nothing && haskey(ctx.maps, name)
         length(args) == 2 || throw(
             TreeWalkError(
@@ -825,12 +847,40 @@ const _VIC_OPS = Dict{String, Symbol}(
 
 _vi_compile_node(node, ctx::_ViCtx, sym::String) = _vi_compile_node(node, ctx, String[sym])
 
-function _vi_compile_node(node, ctx::_ViCtx, syms::Vector{String})
+# The arguments of a template body being compiled: each parameter slot's
+# binding expression (`"\0arg\0p"`, `"\0free\0n"`), read in the scope
+# `outer` (`nothing`: the caller's own tree).
+struct _ViCArgs
+    args::Dict{String, ASTExpr}
+    outer::Union{Nothing, _ViCArgs}
+end
+
+# A name read in `env`: through the argument slots down to the expression
+# it denotes and the scope that expression is read in.
+function _vi_compile_leaf(e::ASTExpr, env::Union{Nothing, _ViCArgs})
+    while env !== nothing && e isa VarExpr && _tpl_is_sentinel(e.name)
+        a = get(env.args, e.name, nothing)
+        a === nothing && return (nothing, nothing)
+        e, env = a, env.outer
+    end
+    return (e, env)
+end
+
+function _vi_compile_node(node, ctx::_ViCtx, syms::Vector{String}, env::Union{Nothing, _ViCArgs} = nothing)
     if node isa IntExpr
         return _ViC(_VIC_INT; ival = Int(node.value))
     elseif node isa NumExpr
         return _ViC(_VIC_NUM; fval = Float64(node.value))
     elseif node isa VarExpr
+        if env !== nothing
+            # In a template body: a parameter is its binding, compiled in the
+            # caller's scope; any other name is bound by the body itself, which
+            # has no compiled form.
+            _tpl_is_sentinel(node.name) || return nothing
+            a, aenv = _vi_compile_leaf(node, env)
+            a === nothing && return nothing
+            return _vi_compile_node(a, ctx, syms, aenv)
+        end
         name = node.name
         slot = findfirst(==(name), syms)
         slot === nothing || return _ViC(_VIC_SYM; ival = slot)
@@ -840,15 +890,22 @@ function _vi_compile_node(node, ctx::_ViCtx, syms::Vector{String})
         return _ViC(_VIC_NUM; fval = Float64(_vi_param(ctx, name)))
     elseif node isa OpExpr
         args = node.args
+        # A template reference: its prepared body with each parameter its
+        # binding (`_eval_through_call` reads the same body the same way).
+        _tpl_is_call(node) && return _vi_compile_call(node, ctx, syms, env)
         if node.op == "index"
             (length(args) >= 2 && args[1] isa VarExpr) || return nothing
-            name = args[1].name
+            # An array parameter of a template body gathers from the array its
+            # binding names.
+            a, _ = _vi_compile_leaf(args[1], env)
+            (a isa VarExpr && !_tpl_is_sentinel(a.name)) || return nothing
+            name = a.name
             haskey(ctx.maps, name) && return nothing
             arr = get(ctx.const_arrays, name, nothing)
             (arr isa Array{Float64} && ndims(arr) == length(args) - 1) || return nothing
             sub = _ViC[]
             for a in args[2:end]
-                c = _vi_compile_node(a, ctx, syms)
+                c = _vi_compile_node(a, ctx, syms, env)
                 c === nothing && return nothing
                 push!(sub, c)
             end
@@ -861,13 +918,40 @@ function _vi_compile_node(node, ctx::_ViCtx, syms::Vector{String})
         length(args) in (_op_spec(node.op).arity::UnitRange{Int}) || return nothing
         sub = _ViC[]
         for a in args
-            c = _vi_compile_node(a, ctx, syms)
+            c = _vi_compile_node(a, ctx, syms, env)
             c === nothing && return nothing
             push!(sub, c)
         end
         return _ViC(_VIC_OP; op = op, args = sub)
     end
     return nothing
+end
+
+# A template reference compiled through its prepared body: the template's own
+# when it has no structural parameter, the instance's (its frame) for a
+# reference in the caller's own tree. `nothing` (the tree walk) otherwise, or
+# with no template table in reach.
+function _vi_compile_call(node::OpExpr, ctx::_ViCtx, syms::Vector{String}, env::Union{Nothing, _ViCArgs})
+    ct = _call_table()
+    ct === nothing && return nothing
+    def = _tpl_def(ct.tt, node.name)
+    b = node.bindings === nothing ? Dict{String, ASTExpr}() : node.bindings
+    if def.closed !== nothing
+        closed = def.closed::_TplClosed
+        args = Dict{String, ASTExpr}()
+        for p in def.params
+            s = _TPL_ARG * p
+            args[s] = _call_arg(b, s)
+        end
+        for n in closed.free
+            s = _TPL_FREE * n
+            args[s] = _call_arg(b, s)
+        end
+        return _vi_compile_node(closed.body, ctx, syms, _ViCArgs(args, env))
+    end
+    env === nothing || return nothing
+    fr = _tpl_frame(ct.tt, node, nothing)
+    return _vi_compile_node(fr.body, ctx, syms, _ViCArgs(fr.args, nothing))
 end
 
 # Materialise a plain per-element `join` column (see `_vi_detect`'s `columns`)
@@ -934,9 +1018,15 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
         members === nothing || return Relational.distinct(members)
     end
     members = Any[]
+    # The filter compiled once when it has a compiled form over interval /
+    # categorical ranges (`_vi_compile_filter`); the tree walk otherwise.
+    cfilt = (filt !== nothing && join_gates !== nothing && _setup_compile_once_enabled()) ?
+        _vi_compile_filter(ctx, ranges, filt) : nothing
     _vi_enumerate_join(
         ranges, join_gates, ctx, bindings -> begin
-            if filt !== nothing
+            if cfilt !== nothing
+                _vi_truthy(cfilt(bindings)) || return
+            elseif filt !== nothing
                 _vi_truthy(_vi_eval(filt, ctx, bindings)) || return
             end
             if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
@@ -969,6 +1059,30 @@ function _vi_producer_compiled(ctx::_ViCtx, ranges, filt, key, column)
     ck === nothing && return nothing
     ff = cf === nothing ? nothing : _vic_kernel(cf)
     return _vic_produce(lens, ff, _vic_kernel(ck), syms, column)
+end
+
+# A producer's `filter` compiled once over its ranges (each range symbol a
+# slot, as `_vi_producer_compiled` compiles it), as a function of the
+# enumeration's bindings; `nothing` when a range is not interval /
+# categorical or the filter has no compiled form.
+function _vi_compile_filter(ctx::_ViCtx, ranges, filt)
+    syms = _vi_order_syms(ranges)
+    for s in syms
+        spec = ranges[s]
+        spec isa IndexSetRef && isempty(_vi_range_of(spec)) || return nothing
+        is = get(ctx.index_sets, spec.from, nothing)
+        (is !== nothing && is.kind in ("interval", "categorical")) || return nothing
+    end
+    cf = _vi_compile_node(filt, ctx, syms)
+    cf === nothing && return nothing
+    k = _vic_kernel(cf)
+    v = zeros(Int, length(syms))
+    return bindings -> begin
+        for (i, s) in enumerate(syms)
+            v[i] = Int(bindings[s])
+        end
+        k(v)
+    end
 end
 
 # A compiled node as Julia code, compiled once through RuntimeGeneratedFunctions

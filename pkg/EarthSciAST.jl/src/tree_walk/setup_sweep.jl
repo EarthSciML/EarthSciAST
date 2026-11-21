@@ -679,9 +679,9 @@ function _geo_body_callable(body, filt, kernel_cache)
     shape = share && filt === nothing && kernel_cache !== nothing ? _geo_shape_key(body) : nothing
     known = shape === nothing ? missing : get(kernel_cache.byshape, shape[1], missing)
     if known isa Tuple
-        f, order = known
+        f, order, fns = known
         _tally_cascade!(:geo_kernel)
-        return _GeoKernel(f, Tuple(shape[2][i] for i in order)), filt
+        return _GeoKernel(f, Tuple(shape[2][i] for i in order), fns), filt
     end
     if share
         roots = _geo_memoize!(filt === nothing ? _Node[body] : _Node[filt, body])
@@ -691,7 +691,7 @@ function _geo_body_callable(body, filt, kernel_cache)
     kbody = _geo_kernel(body; cache = kernel_cache)
     if shape !== nothing
         kernel_cache.byshape[shape[1]] = kbody === nothing ? nothing :
-            (kbody.f, Int[findfirst(a -> a === s, shape[2]) for s in kbody.srcs])
+            (kbody.f, Int[findfirst(a -> a === s, shape[2]) for s in kbody.srcs], kbody.fns)
     end
     return (kbody === nothing ? body : kbody), filt
 end

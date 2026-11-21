@@ -630,11 +630,13 @@ graph = expression_graph(expression_from_json(parse_math("k (T_(upright(\"wall\"
 ```
 """
 function expression_graph(file::EsmFile; merge_coupled::Bool = false)::Graph{VariableNode, DependencyEdge}
-    # Expand at the boundary (RFC out-of-line-expression-templates §7.7): a
-    # surviving `apply_expression_template` node hides its BODY's free component
-    # variables from `free_variables` (bindings are traversed; the body lives in
-    # the registry), so dependency edges would be incomplete. No-op without refs.
-    file.component_templates === nothing || (file = _expand_refs!(deepcopy(file)))
+    # A surviving `apply_expression_template` node would hide its BODY's free
+    # component variables from `free_variables` (bindings are traversed; the
+    # body lives in the registry). The references are not expanded (esm-spec
+    # §9.6.4 rule 2): each one carries, as implicit bindings, the names its
+    # body reads from its caller (`_tpl_augmented_file`), which is what the
+    # edges are read from. No-op without refs.
+    file = _tpl_augmented_file(file)
 
     b = _ExprGraphBuilder()
     if file.models !== nothing

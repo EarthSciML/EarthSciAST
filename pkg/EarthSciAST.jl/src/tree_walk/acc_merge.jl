@@ -78,6 +78,9 @@ function _struct_sig_token(n::_Node)
         # The merge takes an op's payload from the group's first member, so a
         # payload is part of the structure.
         return n.payload === nothing ? (k, n.op) : (k, n.op, objectid(n.payload))
+    elseif k === _NK_CALL
+        # A template call: cells calling the same target merge argument-wise.
+        return (k, objectid(n.payload))
     elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP ||
             k === _NK_LIVE_GATHER
         # A run-time contraction loop or a ragged loop is confined to scalar
@@ -173,6 +176,9 @@ function _acc_merge_nodes_uncached(
         # read (`_de_is_cgather`, ext/reactant_direct/closed.jl).
         ch = _merge_children(nodes, len, acc, memo)
         return _mknode(kind = _NK_OP, op = n1.op, payload = n1.payload, children = ch)
+    elseif k === _NK_CALL
+        ch = _merge_children(nodes, len, acc, memo)
+        return _mknode(kind = _NK_CALL, op = n1.op, payload = n1.payload, children = ch)
     end
     return _unknown_kind(n1, "the per-cell merge")
 end

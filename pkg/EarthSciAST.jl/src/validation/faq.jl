@@ -21,7 +21,7 @@ convention the reference-integrity pass uses. The `faq_bare_array_operand`
 check runs at the same sites; on an equation's right-hand side the names its
 left-hand side defines are exempt.
 """
-function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{StructuralError}
+function validate_aggregate_semantics(file::EsmFile; views = nothing, tables = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     registry = Set{String}(keys(file.index_sets))
     if file.models !== nothing
@@ -32,13 +32,16 @@ function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{St
                 _pointer("", "models", model_name), registry
             )
             # A template parameter may stand for a range's `from` (esm-spec §9.6.1),
-            # so the index-set name a call binds is checked on the expansion; the
+            # so the index-set name a call binds is checked in each template
+            # instance's body, read through its frame (never expanded); the
             # pointer still names the authored field.
-            view = _units_view(file, model_name, model, views)
-            view === model && continue
+            file.component_templates === nothing && continue
             reg = get(file.component_templates, "models.$model_name", nothing)
             reg === nothing && continue
-            _check_template_index_sets!(errors, model, view, _pointer("", "models", model_name), registry, reg)
+            _check_template_index_sets!(
+                errors, model, _pointer("", "models", model_name), registry,
+                _tpl_component_table(file, "models", model_name, tables)
+            )
         end
     end
     if file.reaction_systems !== nothing
@@ -157,36 +160,28 @@ function _check_site_aggregates!(
 end
 
 # The `undefined_index_set` check of `_check_undefined_index_set!` on every
-# expression site of `model` and its subsystem models (`foreach_expression`)
-# that calls a template, read from the expanded `view`. A
-# field the view leaves unexpanded is expanded here against `reg`.
+# `faq` a template body evaluates at an expression site of `model` and its
+# subsystem models (`foreach_expression`) that calls a template: each instance
+# body read once through its frame (templates/frames.jl `_tpl_foreach_node`),
+# where a structural parameter (a range's `from`) is the name the reference
+# binds. No reference is expanded.
 function _check_template_index_sets!(
-        errors::Vector{StructuralError}, model::Model, view::Model,
-        path::String, registry::Set{String}, reg
+        errors::Vector{StructuralError}, model::Model,
+        path::String, registry::Set{String}, tt
     )
-    templated = Set{String}()
     foreach_expression(model, path) do e, anchor, _
-        _contains_template_reference(e) && push!(templated, anchor)
-        nothing
-    end
-    isempty(templated) && return errors
-    memo = _ExpandCache()
-    foreach_expression(view, path) do e, anchor, _
-        anchor in templated || return nothing
+        _contains_template_reference(e) || return nothing
         any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&
             return nothing
-        if _contains_template_reference(e)
-            e = try
-                _expand_expr_refs(e, reg, nothing, memo)
-            catch err
-                # An unresolvable call is reported by the template checks.
-                err isa ExpressionTemplateError || rethrow()
-                return nothing
+        try
+            _tpl_foreach_node(tt, e) do sub, fr
+                fr === nothing && return
+                sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
+                return
             end
-        end
-        foreach_subexpr_once(e) do sub
-            sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
-            nothing
+        catch err
+            # An unresolvable call is reported by the template checks.
+            err isa ExpressionTemplateError || rethrow()
         end
         return nothing
     end
@@ -281,7 +276,8 @@ into, after the elementwise lift (esm-spec §9.6.11). Order: pre-order over node
 report in.
 """
 function faq_bare_array_operands(
-        expr::ASTExpr, var_shapes::AbstractDict; exclude = (), opaque_applications::Bool = false
+        expr::ASTExpr, var_shapes::AbstractDict; exclude = (), opaque_applications::Bool = false,
+        through_calls::Bool = false
     )
     found = Tuple{String, String, Vector{String}}[]
     shaped = Dict{String, Vector{String}}(
@@ -289,9 +285,15 @@ function faq_bare_array_operands(
             for (n, s) in var_shapes if !isempty(s) && !(String(n) in exclude)
     )
     isempty(shaped) && return found
-    opaque = e -> e.op == "apply_expression_template" ||
+    # `through_calls` (the build): a template reference the build compiles as
+    # a call (tree_walk/call.jl) is a scalar function of its arguments, so an
+    # argument is an operand in place, read the way the body reads its
+    # parameter: elementwise. `validate` reads references as opaque.
+    opaque = e -> (!through_calls && e.op == "apply_expression_template") ||
         (opaque_applications && e.template_origin !== nothing)
-    _faq_bare_walk!(found, expr, shaped, Set{String}(), IdDict{Any, Vector{Set{String}}}(), opaque)
+    _faq_bare_walk!(
+        found, expr, shaped, Set{String}(), IdDict{Any, Vector{Set{String}}}(), opaque
+    )
     return found
 end
 
@@ -303,10 +305,10 @@ function _faq_bare_operands!(
     )
     if e isa VarExpr
         haskey(shaped, e.name) && push!(out, e.name)
-    elseif e isa OpExpr && _is_elementwise_node(e) && !opaque(e)
+    elseif e isa OpExpr && (_is_elementwise_node(e) || _tpl_is_call(e)) && !opaque(e)
         haskey(seen, e) && return out
         seen[e] = nothing
-        for a in e.args
+        for a in _value_operands(e)
             _faq_bare_operands!(out, a, shaped, opaque, seen)
         end
     end

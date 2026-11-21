@@ -139,9 +139,7 @@ end
 _CGTabs() = _CGTabs(DataType[], Vector{Any}[], IdDict{Any, Tuple{Int, Int}}())
 
 # The shared invariant prologue (see `_cg_inv!`): its statements; the
-# invariant-slot local names per kernel object (parent or sub), filled in
-# `_run_acc_kernel!`'s nested-first order (values are recomputed-identical
-# across sharing parents, so one fill suffices), with the kernels in
+# invariant-slot local names per kernel object, with the kernels in
 # registration order for a declined kernel's rollback; the geometry local the
 # prologue already holds for a (field, value) pair (`geo`) and the invariant
 # local already holding an emitted invariant expression (`inv`); and the keys
@@ -164,17 +162,15 @@ _CGPrologue() = _CGPrologue(
 # the slot space the section runs on, or 0 for one plain vector. With `nst > 0`
 # each state read is emitted against the buffer its slots live in
 # (`_cg_side`); `olnext` holds the output-slot extent of every kernel whose
-# loop nest binds `oln` (an affine read's slots are `oln + delta`), `subks` the
-# sub-kernels emitted with a parent's `oln`, and `sidememo` the slot extent of
-# each slot table already scanned.
+# loop nest binds `oln` (an affine read's slots are `oln + delta`), and
+# `sidememo` the slot extent of each slot table already scanned.
 struct _CGSlotSpace
     nst::Int
     olnext::IdDict{Any, Tuple{Int, Int}}
-    subks::IdDict{Any, Bool}
     sidememo::IdDict{Any, Tuple{Int, Int}}
 end
 _CGSlotSpace(nst::Int) = _CGSlotSpace(
-    nst, IdDict{Any, Tuple{Int, Int}}(), IdDict{Any, Bool}(), IdDict{Any, Tuple{Int, Int}}()
+    nst, IdDict{Any, Tuple{Int, Int}}(), IdDict{Any, Tuple{Int, Int}}()
 )
 
 # Where the nest being emitted puts what it hoists, and how it reads slot
@@ -246,12 +242,45 @@ mutable struct _CGFunction
     space::_CGSlotSpace
     nest::_CGNest
     tx::_CGKernelTx
+    # The template call targets emitted so far (`_cg_call_fn!`): target →
+    # (name, position in `helpers`, definition). An entry whose definition a
+    # declined kernel's rollback cut from `helpers` is stale.
+    callfns::IdDict{Any, Tuple{Symbol, Int, Expr}}
+    # Per emitted call function: its count tables and the table of each count
+    # (`_cg_site_count_tables`).
+    callcounts::IdDict{Any, Tuple{Vector{Tuple{Int, Int, Int}}, Vector{Int}}}
+    # The size each INLINED helper (a call function) adds where it is
+    # called: its body's emitted size with the inlined calls in it counted
+    # whole (`_cg_inl_size`). LLVM compiles that body at every call, so the
+    # inline decisions and the per-function node counts count it there.
+    inlsize::Dict{Symbol, Int}
+    # A content number per read table (`_cg_tbl_content`): equal for two
+    # tables with equal entries, by object and by content.
+    tblid::IdDict{Any, Int}
+    tblcontent::Dict{Any, Int}
 end
 _CGFunction(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int = 0) =
     _CGFunction(
     _CGTabs(), Int[], _CGPrologue(), Any[], 0, budget, 0, shared_cache, 0,
-    _CGSlotSpace(nst), _CGNest(), _CGKernelTx(_CGMark(0, 0, 0, 0, 0), Dict{String, Symbol}())
+    _CGSlotSpace(nst), _CGNest(), _CGKernelTx(_CGMark(0, 0, 0, 0, 0), Dict{String, Symbol}()),
+    IdDict{Any, Tuple{Symbol, Int, Expr}}(),
+    IdDict{Any, Tuple{Vector{Tuple{Int, Int, Int}}, Vector{Int}}}(), Dict{Symbol, Int}(),
+    IdDict{Any, Int}(), Dict{Any, Int}()
 )
+
+# The emitted size of `ex` as LLVM sees it: a call of an inlined helper counts
+# that helper's body (`ctx.inlsize`), not one node.
+function _cg_inl_size(ctx::_CGFunction, ex)
+    ex isa Expr || return 1
+    n = 1
+    if ex.head === :call && !isempty(ex.args) && ex.args[1] isa Symbol
+        n += get(ctx.inlsize, ex.args[1]::Symbol, 0)
+    end
+    for a in ex.args
+        n += _cg_inl_size(ctx, a)
+    end
+    return n
+end
 
 _cg_name(ctx::_CGFunction, base::String) = Symbol("_cg", base, ctx.nname += 1)
 
@@ -377,13 +406,11 @@ end
 # ---- Per-kernel-evaluation context ------------------------------------------
 # The cell coordinates as EXPRESSIONS (a loop-variable Symbol or an Int
 # literal), plus the CSE slot → local-name maps for the kernel currently being
-# emitted. `cellsyms` is occurrence-scoped (a template sub-kernel inlined at
-# two call sites gets two disjoint sets of locals, mirroring the interpreter's
-# per-occurrence scratch refill); `invsyms` is kernel-scoped (filled once per
-# call by the prologue, as `_fill_invariant!` does).
+# emitted. `cellsyms` holds the per-cell CSE locals; `invsyms` is
+# kernel-scoped (filled once per call by the prologue, as `_fill_invariant!`
+# does).
 # `subst` is a scan consumer's body (scan_fused.jl): `nothing`, or
-# `Dict(ix => v)` — this kernel's descriptor `ix` reads as the local `v`. A
-# sub-kernel's context never carries one.
+# `Dict(ix => v)` — this kernel's descriptor `ix` reads as the local `v`.
 struct _CGKernCtx
     K::_AccKernel
     oln::Any      # output linear slot
@@ -611,7 +638,7 @@ function _cg_side(ctx::_CGFunction, kc::_CGKernCtx, a::_AccDesc)
     ctx.space.nst > 0 || return :x
     k = a.kind
     if k === _AK_STATE_AFFINE
-        (kc.oln isa Symbol && !haskey(ctx.space.subks, kc.K)) || return :x
+        kc.oln isa Symbol || return :x
         e = get(ctx.space.olnext, kc.K, nothing)
         e === nothing && return :x
         a.idx > 0 && return _cg_slot_side(ctx.space.nst, a.idx, a.idx)
@@ -783,8 +810,8 @@ function _cg_emit(ctx::_CGFunction, kc::_CGKernCtx, nd::_Node)
         op = nd.op
         fnsym = _reducer_fnsym(op)
         return _cg_foldl(fnsym, exprs)
-    elseif k === _NK_SUBCALL
-        return _cg_emit_subcall(ctx, kc, nd.payload::_AccKernel)
+    elseif k === _NK_CALL
+        return _cg_emit_call(ctx, kc, nd)
     elseif k === _NK_OP
         return _cg_emit_op(ctx, kc, nd)
     end
@@ -824,7 +851,7 @@ end
 # `stmts`, registering each local on `kc.cellsyms` so later recipes and the
 # spine resolve their `_NK_CACHED` reads (recipes only ever read LOWER slots, so
 # each name exists before its first read). Shared by the kernel cell body and
-# the subcall inliner.
+# the scan consumers (scan_fused.jl).
 #
 # A recipe keeps the type its expression has, and is NOT converted to the value
 # type `T`. The reference build (`compiler = :interpreter`) has no recipes: it
@@ -845,24 +872,314 @@ function _cg_emit_recipes!(stmts::Vector{Any}, ctx::_CGFunction, kc::_CGKernCtx)
     return stmts
 end
 
-# Template sub-kernel call (`_NK_SUBCALL`): the body is inlined at the call
-# site — its per-cell CSE recipes become occurrence-local locals, then its
-# spine evaluates against its OWN descriptor table, with the parent's cell
-# context. Its invariant tier was emitted once in the prologue (`_cg_inv!`;
-# `K.subs` holds every transitive sub, nested-first).
-function _cg_emit_subcall(ctx::_CGFunction, kc::_CGKernCtx, S::_AccKernel)
-    invsyms = get(ctx.prologue.invdone, S, nothing)
-    invsyms === nothing && _decline(:subcall_order)
-    ctx.space.subks[S] = true
-    inner = _CGKernCtx(
-        S, kc.oln, kc.mi1, kc.mi2, kc.mi3,
-        Symbol[], invsyms, kc.mix
-    )
-    stmts = _cg_emit_recipes!(Any[], ctx, inner)
-    spine = _cg_emit(ctx, inner, S.spine)
-    isempty(stmts) && return spine
-    return Expr(:block, stmts..., spine)
+# ---- Template calls (`_NK_CALL`, call.jl) ---------------------------------------
+# A call target is emitted ONCE per generated function, as a function of its
+# arguments, and every call site calls it: the number of functions is the
+# number of targets (template instances), whatever the number of uses. The
+# body is the interpreter's (`_eval_node` over the target's `_Node`), emitted
+# through the same operator arms, so values are bit-identical; the arguments
+# are emitted in the caller's context and evaluated before the body, as the
+# interpreter evaluates them. A call in a conditional arm sits inside that arm's
+# expression, so it runs only when the arm is taken.
+
+struct _CGCallCtx
+    args::Vector{Symbol}
+    arrs::Vector{Symbol}
+    # The comparison counts over a const array argument (`_cg_count_runtime`):
+    # each distinct (array slot, lo, hi) is a table the call site passes
+    # (`ctabs`, parameters `ctsyms`, each with a flag `ctoks`); `ctocc` lists
+    # the table of every count emitted, for the tallies.
+    ctabs::Vector{Tuple{Int, Int, Int}}
+    ctsyms::Vector{Symbol}
+    ctoks::Vector{Symbol}
+    ctocc::Vector{Int}
+    loops::IdDict{Any, Symbol}   # loop counters, and sub-trees computed once ahead ("A repeated sub-tree")
+    spans::IdDict{Any, Tuple{Int, Int}}
+    share::Any                   # a `_CGShareKeys` (array_contraction.jl, included later)
 end
+_CGCallCtx(args, arrs) = _CGCallCtx(
+    args, arrs, Tuple{Int, Int, Int}[], Symbol[], Symbol[], Int[],
+    IdDict{Any, Symbol}(), IdDict{Any, Tuple{Int, Int}}(), _CGShareKeys()
+)
+
+function _cg_emit(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
+    _cg_budget!(ctx)
+    shared = get(kc.loops, nd, nothing)
+    shared === nothing || return shared
+    k = nd.kind
+    k === _NK_LITERAL && return nd.literal
+    k === _NK_ARG && return kc.args[nd.idx]
+    k === _NK_OP && return _cg_emit_op(ctx, kc, nd)
+    k === _NK_CALL && return _cg_emit_call(ctx, kc, nd)
+    k === _NK_ARG_GATHER && return _cg_arg_gather(ctx, kc, nd)
+    if k === _NK_CONTRACTION_LOOP
+        spec = nd.payload::_ContractLoop
+        rng = spec.lo:spec.step:spec.hi
+        return _cg_contraction_loop(
+            ctx, kc, nd, spec.lo, spec.step, spec.hi;
+            span = isempty(rng) ? nothing : extrema((first(rng), last(rng)))
+        )
+    end
+    if k === _NK_LOOPVAR
+        s = get(kc.loops, nd.payload, nothing)
+        s === nothing && _decline(:loopvar_out_of_scope)
+        return :(Float64($s))
+    end
+    return _decline(:unknown_kind, string(nd.kind))
+end
+# A body is a DAG (an interpolation reads its bracket index many times): each
+# region computes its repeated sub-trees once, as the scalar spine does.
+_cg_emit_region(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
+function _cg_share_leaf(K, kc::_CGCallCtx, nd::_Node)
+    k = nd.kind
+    (k === _NK_LITERAL || k === _NK_ARG) && return 0
+    k === _NK_ARG_GATHER && return _cg_share_obj!(K, nd.payload)
+    return _cg_share_inner(K, nd)
+end
+
+# The call of `nd` from emission context `kc`: the scalar arguments, then each
+# array argument's gather payload (a run-time value, from this function's tabs).
+function _cg_emit_call(ctx::_CGFunction, kc, nd::_Node)
+    site = nd.payload::_CallSite
+    tg = site.target
+    f = _cg_call_fn!(ctx, tg)
+    args = Any[_cg_emit(ctx, kc, c) for c in nd.children]
+    for a in site.arrays
+        if a.data isa _FwdArr
+            # Passed on from the calling body: its own array parameter.
+            push!(args, (kc::_CGCallCtx).arrs[(a.data::_FwdArr).j])
+            continue
+        end
+        kc isa _CGCallCtx && _decline(:call_array_forward)
+        push!(args, _cg_tab!(ctx, a.data))
+    end
+    # The count tables the body searches, built from this site's arrays (none
+    # for a forwarded array: the body then counts entry by entry).
+    for (tab, ok) in _cg_site_count_tables(ctx, site, :count_fold)
+        if kc isa _CGCallCtx
+            push!(args, GlobalRef(@__MODULE__, :_CG_NO_COUNT_TABLE), false)
+        else
+            push!(args, _cg_tab!(ctx, tab), ok)
+        end
+    end
+    # An inlined body is compiled here too: it counts toward this function.
+    ctx.nodes += get(ctx.inlsize, f, 0)
+    return Expr(:call, f, :u, :p, :t, args...)
+end
+
+# `_NK_ARG_GATHER` in a call function: the walker's read
+# (`_eval_state_gather_at` / `_eval_const_gather_at`) of the array parameter,
+# whose bounds and strides are read from it at run time. A state gather tests
+# each subscript before the next is evaluated, as the walker does.
+function _cg_arg_gather(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
+    ref = nd.payload::_ArgGatherRef
+    A = kc.arrs[ref.j]
+    kind = ref.target.arrkinds[ref.j]
+    ch = nd.children
+    subs = Symbol[_cg_name(ctx, "ags") for _ in ch]
+    if kind === :block
+        # A block array: its layout is the target's, its base the argument.
+        sg = ref.target.blocks[ref.j]::_StateGather
+        bs = kc.args[ref.target.baseidx[ref.j]]
+        off = _cg_foldl(:+, Any[:(unsafe_trunc(Int, $bs)), (:(($(subs[d]) - $(sg.lo[d])) * $(sg.strides[d])) for d in eachindex(ch))...])
+        inner = :(@inbounds u[$off])
+        for d in reverse(eachindex(ch))
+            se = d == 1 ? _cg_emit(ctx, kc, ch[d]) : _cg_emit_region(ctx, kc, ch[d])
+            inner = Expr(
+                :let, Expr(:block, :($(subs[d]) = round(Int, $se))),
+                Expr(:block, :(($(sg.lo[d]) <= $(subs[d]) <= $(sg.hi[d])) ? $inner : zero(eltype(u))))
+            )
+        end
+        return inner
+    end
+    if kind === :state
+        off = _cg_foldl(:+, Any[0, (:(($(subs[d]) - $A.lo[$d]) * $A.strides[$d]) for d in eachindex(ch))...])
+        inner = :(@inbounds u[_sg_slot($A, $off)])
+        for d in reverse(eachindex(ch))
+            se = d == 1 ? _cg_emit(ctx, kc, ch[d]) : _cg_emit_region(ctx, kc, ch[d])
+            inner = Expr(
+                :let, Expr(:block, :($(subs[d]) = round(Int, $se))),
+                Expr(:block, :(($A.lo[$d] <= $(subs[d]) <= $A.hi[$d]) ? $inner : zero(eltype(u))))
+            )
+        end
+        return inner
+    end
+    binds = Any[]
+    dims = ref.target.arrdims[ref.j]
+    for d in eachindex(ch)
+        se = d == 1 ? _cg_emit(ctx, kc, ch[d]) : _cg_emit_region(ctx, kc, ch[d])
+        # A subscript whose every value is an integer on the axis (the
+        # array's dimensions are part of the target) reads its element
+        # directly: `round` and the boundary policy both return it unchanged.
+        span = _cg_int_span(kc, ch[d])
+        inside = span !== nothing && d <= length(dims) && 1 <= span[1] && span[2] <= dims[d]
+        inside && _tally_cascade!(:gather_in_range)
+        push!(
+            binds, inside ? :($(subs[d]) = unsafe_trunc(Int, $se)) :
+                :($(subs[d]) = _const_gather_sub($A, $d, round(Int, $se)))
+        )
+    end
+    off = _cg_foldl(:+, Any[1, (:(($(subs[d]) - 1) * $A.strides[$d]) for d in eachindex(ch))...])
+    return Expr(:let, Expr(:block, binds...), Expr(:block, :(@inbounds $A.flat[$off])))
+end
+
+# The emitted function of target `tg` (minted on first use in `ctx`).
+function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
+    got = get(ctx.callfns, tg, nothing)
+    if got !== nothing
+        name, at, def = got
+        if at <= length(ctx.helpers) && ctx.helpers[at] === def
+            _tally_cascade!(:cg_call_shared)
+            return name
+        end
+    end
+    argsyms = Symbol[Symbol("_cga", i) for i in eachindex(tg.slots)]
+    arrsyms = Symbol[Symbol("_cgA", j) for j in eachindex(tg.arrslots)]
+    # A block array is no parameter: its base is a scalar argument.
+    arrparams = Symbol[arrsyms[j] for j in eachindex(tg.arrslots) if tg.passed[j] != 0]
+    kc = _CGCallCtx(argsyms, arrsyms)
+    body = _cg_emit_region(ctx, kc, tg.body)
+    ln = LineNumberNode(0, Symbol("ess-template-call"))
+    # Its emitted size with the inlined calls in it counted whole: a body
+    # that is large once its calls are inlined is called, not inlined.
+    sz = _cg_inl_size(ctx, body)
+    small = sz <= _CG_INSTANCE_INLINE_MAX_NODES
+    small && _count!(:cg_call_fn_inlined)
+    stmts = Any[
+        Expr(:meta, small ? :inline : :no_constprop),
+        Expr(:macrocall, Symbol("@inbounds"), ln, :(return $body)),
+    ]
+    # In the helper namespace (`_cgh…`): never taken for a local to pass along
+    # (`_cg_is_passable`).
+    name = _cg_name(ctx, "htc")
+    small && (ctx.inlsize[name] = sz)
+    fdef = Expr(
+        :function,
+        Expr(:call, name, :u, :p, :t, argsyms..., arrparams..., Iterators.flatten(zip(kc.ctsyms, kc.ctoks))...),
+        Expr(:block, stmts...)
+    )
+    def = Expr(:macrocall, Symbol(small ? "@inline" : "@noinline"), ln, fdef)
+    push!(ctx.helpers, def)
+    ctx.callfns[tg] = (name, length(ctx.helpers), def)
+    ctx.callcounts[tg] = (copy(kc.ctabs), copy(kc.ctocc))
+    _tally_cascade!(:cg_call_fn)
+    return name
+end
+
+const _CG_NO_COUNT_TABLE = Float64[]
+
+# The count tables call site `site` passes to its target's function, in the
+# order of the target's parameters (`ctx.callcounts`): per table `(entries,
+# ok)`, `ok` false when this site's array cannot give the entries (its range
+# leaves the array under a throwing boundary policy), where the body counts
+# entry by entry. Each emitted count is tallied as the const-array count is
+# (`tally` prefix `:count_fold`: `_search` over ascending entries, `_sorted`
+# over a sorted copy; `:count_fold_setup` in setup geometry).
+function _cg_site_count_tables(ctx::_CGFunction, site::_CallSite, tally::Symbol)
+    got = get(ctx.callcounts, site.target, nothing)
+    got === nothing && return Tuple{Vector{Float64}, Bool}[]
+    ctabs, occ = got
+    out = Tuple{Vector{Float64}, Bool, Bool}[]
+    ct = _call_table()
+    for (j, lo, hi) in ctabs
+        a = site.arrays[site.target.passed[j]]
+        if a.data isa _FwdArr
+            push!(out, (Float64[], false, false))
+            continue
+        end
+        build() = (
+            f = _count_const_axis_of(a.data::_ConstGatherArray, lo:hi);
+            f === nothing ? (Float64[], false, false) : (f[1], true, f[2])
+        )
+        # One object per table for the build, so a geometry kernel's sources
+        # (`_geo_shape_key`) and its emission name the same array.
+        push!(out, ct === nothing ? build() : get!(build, (ct::_CallTable).ctabs, (objectid(a.data), lo, hi)))
+    end
+    tally === :none || for k in occ
+        _, ok, asc = out[k]
+        ok || continue
+        _tally_cascade!(tally === :count_fold ? (asc ? :count_fold_search : :count_fold_sorted) : tally)
+    end
+    return Tuple{Vector{Float64}, Bool}[(t, ok) for (t, ok, _) in out]
+end
+
+# The comparison count (`_cg_count_loop`) over a const ARRAY ARGUMENT read at
+# the counter, with step 1: a binary search over the table of the array's
+# entries over the range that the call site passes (`_cg_site_count_tables`,
+# the const-array count's table, `_count_const_axis`), or, when the site
+# could not build it, the comparison per entry. Both are the count, so the
+# bits are the fold's whichever runs.
+function _cg_count_runtime(ctx::_CGFunction, kc::_CGCallCtx, a::_Node, spec, test, neg, rel, xv, xe, kv_loop)
+    (a.kind === _NK_ARG_GATHER && length(a.children) == 1) || return nothing
+    s = a.children[1]
+    (s.kind === _NK_LOOPVAR && s.payload === spec.ref) || return nothing
+    ref = a.payload::_ArgGatherRef
+    ref.target.arrkinds[ref.j] === :const || return nothing
+    spec.step == 1 || return nothing
+    key = (ref.j, spec.lo, spec.hi)
+    k = findfirst(==(key), kc.ctabs)
+    if k === nothing
+        push!(kc.ctabs, key)
+        push!(kc.ctsyms, Symbol("_cgCT", length(kc.ctabs)))
+        push!(kc.ctoks, Symbol("_cgCTok", length(kc.ctabs)))
+        k = length(kc.ctabs)
+    end
+    push!(kc.ctocc, k)
+    tv, okv = kc.ctsyms[k], kc.ctoks[k]
+    nrng = length(spec.lo:spec.hi)
+    search = _cg_count_search(ctx, test, rel, neg, nrng, tv)
+    linear = kv_loop()
+    return quote
+        let
+            local $xv = $xe
+            if $okv
+                $search
+            else
+                $linear
+            end
+        end
+    end
+end
+
+# The binary search for the count over the table `tv` (ascending entries),
+# shared by the const-array count and the array-argument count.
+function _cg_count_search(ctx::_CGFunction, test, rel, neg, nrng, tv)
+    cv, hv, mv = _cg_name(ctx, "cn"), _cg_name(ctx, "ch"), _cg_name(ctx, "cm")
+    return if rel === :<= || rel === :<
+        quote
+            local $cv = 0
+            local $hv = length($tv)
+            while $cv < $hv
+                local $mv = ($cv + $hv + 1) >>> 1
+                if $(test(:(@inbounds $tv[$mv])))
+                    $cv = $mv
+                else
+                    $hv = $mv - 1
+                end
+            end
+            Float64($(neg ? :($nrng - $cv) : cv))
+        end
+    else
+        quote
+            local $cv = 1
+            local $hv = length($tv) + 1
+            while $cv < $hv
+                local $mv = ($cv + $hv) >>> 1
+                if $(test(:(@inbounds $tv[$mv])))
+                    $hv = $mv
+                else
+                    $cv = $mv + 1
+                end
+            end
+            Float64($(neg ? :($nrng - (length($tv) + 1 - $cv)) : :(length($tv) + 1 - $cv)))
+        end
+    end
+end
+
+# Emitted-node size up to which a template call function is inlined at its calls.
+# Measured on a 6-tracer, 400-cell flux template (test fixture, by-value
+# section): out of line, the per-cell call made the right-hand side 4x slower.
+const _CG_INSTANCE_INLINE_MAX_NODES = 2000
 
 # ---- Op application -----------------------------------------------------------
 #
@@ -927,8 +1244,7 @@ function _cg_emit_op(ctx::_CGFunction, kc, nd::_Node)
 end
 
 # ---- Invariant tier → prologue locals (mirrors `_fill_invariant!`) ----------
-# Emitted once per kernel OBJECT (a sub-kernel shared by several parents is
-# recomputed-identical, so one fill is the same values). The dummy cell
+# Emitted once per kernel OBJECT. The dummy cell
 # context (oln=1, midx=(1,1,1)) is `_fill_invariant!`'s — invariant
 # recipes contain no cell-varying access, so it is never consulted, but a
 # hand-built kernel that violates that reproduces the interpreter's reads.
@@ -944,8 +1260,8 @@ function _cg_inv!(ctx::_CGFunction, K::_AccKernel)
     # An invariant whose emitted expression is one the prologue already holds
     # reuses that local: both read the same inputs (fixed slots, tabs,
     # parameters, earlier invariants) through the same operations before any
-    # kernel runs, so they hold the same value. The template sub-kernels a
-    # region-split rule lowers per box repeat the same invariants box after box.
+    # kernel runs, so they hold the same value. The box kernels a region-split
+    # rule lowers repeat the same invariants box after box.
     _cg_with_geosink(ctx, ctx.prologue.stmts) do
         for r in K.cse.inv_recipes
             e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
@@ -989,10 +1305,6 @@ end
 # as long as no two cells share a `du` slot (checked at build — see
 # `_cg_covered_outs_disjoint`).
 function _cg_emit_kernel!(ctx::_CGFunction, K::_AccKernel)
-    # Invariant tiers, nested-first (K.subs holds every transitive sub).
-    for S in K.subs
-        _cg_inv!(ctx, S)
-    end
     invsyms = _cg_inv!(ctx, K)
     # The kernel's geometry locals head its own block, outside every loop, so a
     # chunk sub-function that carries the nest carries them too.
@@ -1057,12 +1369,103 @@ function _cg_scan_consumer_cell(ctx::_CGFunction, cons, oln::Symbol, xv::Symbol)
     return stmts
 end
 
+# A table read a cell makes more than once, read once. The access CSE gives a
+# slot to repeated OPERATORS, never to a bare read, and the kernel-class merge
+# gives every member read its own descriptor; a read through a table costs
+# some seventy emitted nodes (its address, the ghost test and the
+# loop-version ladder). Reads made by the caller of a template call are one
+# argument per read occurrence (call.jl), so a merged stencil cell reads the
+# same table at the same address many times (two face fluxes of a cell read
+# the same neighbours). Descriptors whose keys are equal (`_cg_read_key`: equal
+# tables at the same address) are the same read of the same cell; each such read is made once into a local at the top of the cell,
+# and every use reads the local (`kc.subst`). A read inside an affine
+# reduction is addressed by the reduction's counters, not the cell's, so a
+# descriptor read there is left alone. A read is pure and cannot fail (the
+# table covers every cell of the box), so making it once ahead of its uses
+# gives every use the same value.
+const _CG_SHARED_READ_KINDS = (_AK_STATE_TBL_BOX, _AK_ARR_TBL_BOX, _AK_CONST_BOX, _AK_FORCING_BOX)
+
+# The content number of table `v` in this function (one per distinct entry
+# list; each object hashed once).
+function _cg_tbl_content(ctx::_CGFunction, v)
+    v isa Vector || return objectid(v)
+    got = get(ctx.tblid, v, 0)
+    got == 0 || return got
+    c = get!(ctx.tblcontent, v, length(ctx.tblcontent) + 1)
+    ctx.tblid[v] = c
+    return c
+end
+
+# Two descriptors with equal keys read the same value at every cell: the kind,
+# the address (strides, offset), the table by CONTENT (a merge makes one table
+# object per member read, so equal reads hold equal tables, not one table), and
+# a live buffer by identity.
+function _cg_read_key(ctx::_CGFunction, a::_AccDesc)
+    k = a.kind
+    tbl = k === _AK_STATE_TBL_BOX || k === _AK_ARR_TBL_BOX ? _cg_tbl_content(ctx, a.conn) : 0
+    arr = k === _AK_CONST_BOX ? _cg_tbl_content(ctx, a.arr) :
+        (k === _AK_ARR_TBL_BOX || k === _AK_FORCING_BOX) ? objectid(a.arr) : UInt(0)
+    return (k, tbl, arr, a.s1, a.s2, a.s3, a.off, Tuple(a.sx))
+end
+function _cg_shared_reads!(stmts::Vector{Any}, ctx::_CGFunction, kc::_CGKernCtx)
+    K = kc.K
+    acc = K.acc
+    uses = Dict{Any, Int}()
+    firstidx = Dict{Any, Int}()
+    inred = Set{Int}()
+    seen = IdDict{_Node, Nothing}()
+    function walk(n::_Node, red::Bool)
+        k = n.kind
+        if k === _NK_ACCESS
+            if red
+                push!(inred, n.idx)
+            elseif acc[n.idx].kind in _CG_SHARED_READ_KINDS
+                key = _cg_read_key(ctx, acc[n.idx])
+                uses[key] = get(uses, key, 0) + 1
+                get!(firstidx, key, n.idx)
+            end
+            return
+        end
+        (haskey(seen, n) && !red) && return
+        red || (seen[n] = nothing)
+        r = red || k === _NK_AREDUCE
+        for c in n.children
+            walk(c, r)
+        end
+        return
+    end
+    walk(K.spine, false)
+    for r in K.cse.recipes
+        walk(r, false)
+    end
+    any(>(1), values(uses)) || return kc
+    sub = kc.subst === nothing ? Dict{Int, Any}() : copy(kc.subst)
+    bykey = Dict{Any, Any}()
+    for i in eachindex(acc)
+        acc[i].kind in _CG_SHARED_READ_KINDS || continue
+        i in inred && continue
+        haskey(sub, i) && continue
+        key = _cg_read_key(ctx, acc[i])
+        get(uses, key, 0) > 1 || continue
+        v = get(bykey, key, nothing)
+        if v === nothing
+            r = _cg_name(ctx, "rd")
+            push!(stmts, :(local $r = $(_cg_fetch(ctx, kc, acc[firstidx[key]], (acc, firstidx[key])))))
+            v = bykey[key] = r
+        end
+        sub[i] = v
+    end
+    return _CGKernCtx(kc.K, kc.oln, kc.mi1, kc.mi2, kc.mi3, kc.cellsyms, kc.invsyms, kc.mix, sub)
+end
+
 # One cell's statements: the CSE recipes as locals (converted to T exactly
 # where the interpreter's scratch store converts), then the spine stored into
 # `du[oln]`, or, inside a fused scan's nest (`sm`, a `_CGStoreScan`), folded
 # into the lane's running value.
 function _cg_cell_stmts(ctx::_CGFunction, K::_AccKernel, sm::_CGStore, kc::_CGKernCtx)
-    stmts = _cg_emit_recipes!(Any[], ctx, kc)
+    stmts = Any[]
+    kc = _cg_shared_reads!(stmts, ctx, kc)
+    _cg_emit_recipes!(stmts, ctx, kc)
     val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
     if sm isa _CGStoreDu
         push!(stmts, :(du[$(kc.oln)] = $val))
@@ -1194,7 +1597,7 @@ function _cg_emit_kernel_nest!(
     cs = K.cells
     hdr, av, bv = _cg_nest_header!(ctx, cs, sm)
     _is_outs(cs) && return _cg_emit_outs_nest!(ctx, K, sm, invsyms, hdr, av, bv)
-    _is_cellless(cs) && error("_cg_emit_kernel_nest!: a sub-kernel has no loop nest of its own")
+    _is_cellless(cs) && error("_cg_emit_kernel_nest!: a kernel with no cells has no loop nest")
     # Strided Cartesian box, rank ≤ 3, in `_run_box_kernel!`'s exact iteration
     # order (k-outer, i-inner). The flat cell ordinal `o`
     # of `(i, j, k)` is `(i-i0) + ni·((j-j0) + nj·(k-k0))` — exactly the serial
@@ -1338,8 +1741,7 @@ end
 # Applies when every address is affine in the first two axes with the second
 # stride `len1` times the first — the output's (`strides`) and each
 # box-addressed descriptor's (`s1`, `s2`) — and nothing reads the loop indices
-# themselves (`_AK_LOOP_IDX` on those axes), a per-lane `fn` table, or a
-# template sub-kernel.
+# themselves (`_AK_LOOP_IDX` on those axes) or a per-lane `fn` table.
 function _cg_fuse_leading(K::_AccKernel)
     cs = K.cells
     (_is_outs(cs) || _is_cellless(cs)) && return K
@@ -1348,7 +1750,6 @@ function _cg_fuse_leading(K::_AccKernel)
     _range_shared_code(_range_spec_now()) && return K
     nd = length(cs.strides)
     nd >= 2 || return K
-    isempty(K.subs) || return K
     len1 = length(cs.ranges[1])
     (len1 >= 1 && cs.strides[2] == len1 * cs.strides[1]) || return K
     _cellset_slab(cs, 1) && return K
@@ -1360,11 +1761,6 @@ function _cg_fuse_leading(K::_AccKernel)
             a.dim <= 2 && return K
         end
     end
-    is_sub(n) = n.kind === _NK_SUBCALL
-    (
-        _node_any(is_sub, K.spine) || _anyof(r -> _node_any(is_sub, r), K.cse.recipes) ||
-            _anyof(r -> _node_any(is_sub, r), K.cse.inv_recipes)
-    ) && return K
     j0 = first(cs.ranges[2])
     shift(s1, s2, s3, sx) = (
         s1, s3, isempty(sx) ? 0 : sx[1],
@@ -1407,7 +1803,7 @@ function _cg_fuse_leading(K::_AccKernel)
     strides = Int[cs.strides[1]; cs.strides[3:end]]
     slab = length(cs.slab) >= 2 ? Bool[false; cs.slab[3:end]] : Bool[]
     cells = _CellSet(strides, ranges, cs.base + j0 * cs.strides[2], Int[], slab)
-    return _cg_fuse_leading(_AccKernel(cells, spine, acc, cse, K.subs))
+    return _cg_fuse_leading(_AccKernel(cells, spine, acc, cse))
 end
 
 # ---- Row-fused box kernels ---------------------------------------------------
@@ -1467,9 +1863,6 @@ end
 function _cg_emit_rowgroup!(ctx::_CGFunction, Ks::Vector{_AccKernel})
     invs = Vector{Vector{Symbol}}()
     for K in Ks
-        for S in K.subs
-            _cg_inv!(ctx, S)
-        end
         push!(invs, _cg_inv!(ctx, K))
     end
     geo = Any[]
@@ -1985,7 +2378,7 @@ end
 
 # One cell's work in a kernel, in node evaluations: every node of the spine and
 # of the per-cell CSE recipes counts one, a loop's body counts once per
-# iteration (an affine reduction's or a contraction loop's range), and a template sub-kernel counts its own work.
+# iteration (an affine reduction's or a contraction loop's range).
 # The loop-invariant recipes run once per call and do not count. A rough cost,
 # used only to decide whether a section is worth a thread dispatch.
 function _acc_kernel_work(K::_AccKernel)
@@ -1997,8 +2390,6 @@ function _acc_kernel_work(K::_AccKernel)
 end
 _acc_node_work(root::_Node, K::_AccKernel) =
     _node_fold(root, Int) do nd, kids
-    nd.kind === _NK_SUBCALL && nd.payload isa _AccKernel &&
-        return 1 + _acc_kernel_work(nd.payload::_AccKernel)
     return 1 + sum(kids; init = 0) * _node_loop_reach(nd)
 end
 
@@ -2144,7 +2535,8 @@ end
 # name(params…) … end`, every parameter a plain name — or `nothing`.
 function _cg_inner_def(s)
     s isa Expr || return nothing
-    if s.head === :macrocall && length(s.args) == 3 && s.args[1] === Symbol("@noinline")
+    if s.head === :macrocall && length(s.args) == 3 &&
+            (s.args[1] === Symbol("@noinline") || s.args[1] === Symbol("@inline"))
         s = s.args[3]
     end
     (s isa Expr && s.head === :function && length(s.args) == 2) || return nothing
@@ -2160,7 +2552,10 @@ end
 # Rewrite every call `name(args…)` of an inner definition in `idx` to the
 # by-value call `_cgfns[k](args…, _cgfns)`. `left` counts the names in `idx` met
 # anywhere other than a call head, which the rewrite cannot carry.
-function _cg_calls_by_value(ex, idx::Dict{Symbol, Int}, left::Base.RefValue{Int})
+function _cg_calls_by_value(
+        ex, idx::Dict{Symbol, Int}, left::Base.RefValue{Int},
+        embed::Union{Nothing, Dict{Symbol, Any}} = nothing
+    )
     if ex isa Symbol
         haskey(idx, ex) && (left[] += 1)
         return ex
@@ -2169,14 +2564,33 @@ function _cg_calls_by_value(ex, idx::Dict{Symbol, Int}, left::Base.RefValue{Int}
     if ex.head === :call && !isempty(ex.args)
         f = ex.args[1]
         if f isa Symbol && haskey(idx, f)
-            return Expr(
-                :call, Expr(:ref, _CG_FNS, idx[f]),
-                Any[_cg_calls_by_value(a, idx, left) for a in @view(ex.args[2:end])]...,
-                _CG_FNS
-            )
+            args = Any[_cg_calls_by_value(a, idx, left, embed) for a in @view(ex.args[2:end])]
+            # A template call function is called as itself, embedded (see
+            # `_cg_embed_call_fns`), with no sub-function tuple.
+            embed !== nothing && haskey(embed, f) &&
+                return Expr(:call, embed[f], args..., nothing)
+            return Expr(:call, Expr(:ref, _CG_FNS, idx[f]), args..., _CG_FNS)
         end
     end
-    return Expr(ex.head, Any[_cg_calls_by_value(a, idx, left) for a in ex.args]...)
+    return Expr(ex.head, Any[_cg_calls_by_value(a, idx, left, embed) for a in ex.args]...)
+end
+
+# The template call functions among `defs` as by-value instances, by name,
+# each built after the call functions it calls (by height) and calling them as
+# embedded instances. A call function's definition then reads nothing of its
+# section (no position in the section's sub-function tuple), so one template
+# instance has one content id, and Julia compiles it once per process however
+# many sections call it.
+function _cg_embed_call_fns(defs, idx::Dict{Symbol, Int}, heights::Vector{Int})
+    embed = Dict{Symbol, Any}()
+    order = sort!([k for k in eachindex(defs) if heights[k] > 0]; by = k -> heights[k])
+    for k in order
+        name, params, fb = defs[k]
+        left = Ref(0)
+        def = Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left, embed))
+        embed[name] = only(_cg_subfns(Expr[def], Int[heights[k]]))
+    end
+    return embed
 end
 
 # Choose the transport of a finished generated function `ex`, `function (…,
@@ -2202,22 +2616,33 @@ function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool}
         end
     end
     isempty(defs) && return (ex, nothing)
-    something(by_value, _cg_carry_by_value(ex)) || return (ex, nothing)
+    # A template call function (`_cg_call_fn!`) is always carried by value: an
+    # inner definition is a closure of the generated function, which
+    # RuntimeGeneratedFunctions cannot run while the package precompiles, and
+    # a call target is meant to be one static function.
+    something(by_value, _cg_carry_by_value(ex) || any(d -> _cg_is_call_fn(d[1]), defs)) ||
+        return (ex, nothing)
+    heights = _cg_call_heights(defs)
+    embed = all(iszero, heights) ? nothing : _cg_embed_call_fns(defs, idx, heights)
     left = Ref(0)
     fns = Expr[
-        Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left))
+        Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left, embed))
             for (_, params, fb) in defs
     ]
     stmts = Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])]
     for s in rest
-        push!(stmts, _cg_calls_by_value(s, idx, left))
+        push!(stmts, _cg_calls_by_value(s, idx, left, embed))
     end
     # The emitter only ever calls a sub-function; a bare reference would point
     # at a definition the by-value form does not have.
     left[] == 0 || error("codegen: an emitted sub-function is referenced other than by a call")
     _tally_cascade!(:cg_split_by_value)
-    return (Expr(:function, ex.args[1], Expr(:block, stmts...)), fns)
+    # The heights travel with the definitions only when a call function is
+    # among them (`_cg_pack_fns`).
+    return (Expr(:function, ex.args[1], Expr(:block, stmts...)), all(iszero, heights) ? fns : (fns, heights))
 end
+
+_cg_is_call_fn(name::Symbol) = startswith(String(name), "_cghtc")
 
 # A by-value sub-function: a callable whose call is a generated function of this
 # module, keyed by the CONTENT of its definition — `ID` is a digest of the
@@ -2251,6 +2676,20 @@ end
 struct _CGSubFn{ID}
     def::Expr
 end
+
+# A template call function (`_cg_call_fn!`) by value. Call functions call each
+# other (a template body calls the templates it references), and instance
+# functions call them; through the one generated method of `_CGSubFn` every
+# such call would be that method calling itself with another type parameter,
+# which inference widens (boxed arguments, dynamic dispatch). So a call
+# function is a `_CGSubFnH{H, ID}`, `H` its HEIGHT (1 + the largest height of
+# the call functions it calls), and each height has a generated method of its
+# own: along any call chain the heights strictly fall, so no method calls
+# itself. Heights past `_CG_MAX_CALL_HEIGHT` share its method (correct, slower).
+struct _CGSubFnH{H, ID}
+    def::Expr
+end
+const _CG_MAX_CALL_HEIGHT = 32
 
 mutable struct _CGSubFnTable
     @atomic defs::Dict{UInt128, WeakRef}
@@ -2301,11 +2740,41 @@ function _cg_subfn_register!(ids::Vector{UInt128}, defs::Vector{Expr})
     end
 end
 
-# The sub-functions of one build, as the tuple a body indexes.
-function _cg_subfns(defs::Vector{Expr})
+# The sub-functions of one build, as the tuple a body indexes. `heights[i] > 0`
+# makes entry `i` a call function of that height (`_CGSubFnH`).
+function _cg_subfns(defs::Vector{Expr}, heights::Vector{Int} = zeros(Int, length(defs)))
     ids = UInt128[_cg_subfn_id(d) for d in defs]
     live = _cg_subfn_register!(ids, defs)
-    return Tuple(_CGSubFn{ids[i]}(live[i]) for i in eachindex(ids))
+    return Tuple(
+        heights[i] > 0 ?
+            _CGSubFnH{min(heights[i], _CG_MAX_CALL_HEIGHT), ids[i]}(live[i]) :
+            _CGSubFn{ids[i]}(live[i])
+            for i in eachindex(ids)
+    )
+end
+
+# The height of each inner definition in `defs` (`(name, params, body)`, as
+# `_cg_inner_def` gives them) that is a call function, 0 for the others: 1 +
+# the largest height of the call functions its body calls.
+function _cg_call_heights(defs)
+    idx = Dict{Symbol, Int}(d[1] => k for (k, d) in enumerate(defs))
+    h = zeros(Int, length(defs))
+    function height(k)
+        h[k] != 0 && return h[k]
+        h[k] = 1                       # a cycle cannot occur (the template graph is a DAG)
+        best = 0
+        callees = _cg_collect_syms!(Set{Symbol}(), defs[k][3])
+        for c in callees
+            j = get(idx, c, 0)
+            (j != 0 && _cg_is_call_fn(c)) && (best = max(best, height(j)))
+        end
+        h[k] = best + 1
+        return h[k]
+    end
+    for k in eachindex(defs)
+        _cg_is_call_fn(defs[k][1]) && height(k)
+    end
+    return h
 end
 
 # The registered definition of `id`, or `nothing`. Lock-free (see `_CGSubFn`).
@@ -2321,36 +2790,75 @@ function Serialization.deserialize(
     def = Serialization.deserialize(s)::Expr
     return _CGSubFn{ID}(only(_cg_subfn_register!(UInt128[ID], Expr[def])))
 end
+function Serialization.deserialize(
+        s::Serialization.AbstractSerializer, ::Type{_CGSubFnH{H, ID}}
+    ) where {H, ID}
+    def = Serialization.deserialize(s)::Expr
+    return _CGSubFnH{H, ID}(only(_cg_subfn_register!(UInt128[ID], Expr[def])))
+end
 
 # A deep copy is the instance itself, as for an RGF or any other function; the
 # copy keeps the original's entry alive.
 Base.deepcopy_internal(f::_CGSubFn, ::IdDict) = f
+Base.deepcopy_internal(f::_CGSubFnH, ::IdDict) = f
 
 # The method's own argument and parameter names are not ones the emitter mints
 # (they hold a `#`), so no sub-function parameter or local can rebind them.
-@generated function (::_CGSubFn{var"##id"})(
-        var"##args"::Vararg{Any, var"##n"}
-    ) where {var"##id", var"##n"}
+# The method body of by-value sub-function `id` called with `n` arguments.
+function _cg_subfn_body(id, n::Int)
+    var"##id" = id
+    var"##n" = n
     def = _cg_subfn_def(var"##id")
     def === nothing && error("codegen: by-value sub-function $(var"##id") has no definition")
     params = (def::Expr).args[1].args
     length(params) == var"##n" ||
         error("codegen: by-value sub-function $(var"##id") takes $(length(params)) arguments, called with $(var"##n")")
     args = Symbol("##args")
+    body = def.args[2]
+    # A `meta` heading the definition's body (a template call function's
+    # `inline` or `no_constprop`, `_cg_call_fn!`) must head the method's body to
+    # take effect, so it moves up with `noinline`.
+    metas = Any[]
+    if body isa Expr && body.head === :block && !isempty(body.args) &&
+            body.args[1] isa Expr && (body.args[1]::Expr).head === :meta
+        push!(metas, body.args[1])
+        body = Expr(:block, body.args[2:end]...)
+    end
+    # An inlinable call function carries `inline`; every other sub-function
+    # is compiled on its own.
+    any(m -> m.args == Any[:inline], metas) || pushfirst!(metas, Expr(:meta, :noinline))
     return Expr(
         :block,
         # Compiled on its own, as the inner definition it replaces would be.
-        Expr(:meta, :noinline),
+        metas...,
         Any[:($(params[i]) = @inbounds $args[$i]) for i in 1:var"##n"]...,
-        def.args[2],
+        body,
     )
 end
+
+# Defined after `_cg_subfn_body`: a generator may call only what exists when
+# it is defined.
+@generated function (::_CGSubFn{var"##id"})(
+        var"##args"::Vararg{Any, var"##n"}
+    ) where {var"##id", var"##n"}
+    return _cg_subfn_body(var"##id", var"##n")
+end
+for H in 1:_CG_MAX_CALL_HEIGHT
+    @eval @generated function (::_CGSubFnH{$H, var"##id"})(
+            var"##args"::Vararg{Any, var"##n"}
+        ) where {var"##id", var"##n"}
+        return _cg_subfn_body(var"##id", var"##n")
+    end
+end
+
 
 # The runtime `tabs` tuple, plus — in the by-value transport — the sub-function
 # tuple as one more element: a heterogeneous tuple of concrete callables, so a
 # call site reading it at a LITERAL index resolves its callee statically.
 _cg_pack_fns(tabpack::Tuple, ::Nothing) = tabpack
 _cg_pack_fns(tabpack::Tuple, fns::Vector{Expr}) = (tabpack..., _cg_subfns(fns))
+_cg_pack_fns(tabpack::Tuple, fh::Tuple{Vector{Expr}, Vector{Int}}) =
+    (tabpack..., _cg_subfns(fh[1], fh[2]))
 
 """
     _cg_finish(ctx, args, stmts...; pre = (), by_value = nothing) -> (f, fns)
@@ -2436,7 +2944,7 @@ function _cg_is_spill_call(ex)
     return f isa Symbol && startswith(String(f::Symbol), "_cgh")
 end
 
-# A head that introduces its own scope / bindings (an `_NK_AREDUCE`/subcall body is
+# A head that introduces its own scope / bindings (an `_NK_AREDUCE` body is
 # a `quote` block with a `local` accumulator and a `for` loop var). Partitioning
 # must treat such a node ATOMICALLY — never hoist a sub-expression out of it,
 # since that sub-expression may reference a name bound INSIDE it — so it is
@@ -2578,8 +3086,8 @@ _cg_mark(ctx::_CGFunction) = _CGMark(
 )
 
 # Take the function's emission state back to `m`: a declined kernel's partial
-# prologue statements, its invariant registrations (a later kernel sharing
-# that sub-kernel would otherwise reference rolled-back locals), its split
+# prologue statements, its invariant registrations (a later kernel looking
+# them up would otherwise reference rolled-back locals), its split
 # helpers and its node count.
 function _cg_rollback!(ctx::_CGFunction, m::_CGMark)
     pro = ctx.prologue
@@ -2705,7 +3213,8 @@ function _build_codegen_rhs(
     cap = _codegen_fn_node_cap()
     chunks = Vector{Vector{Any}}()
     cur = Any[]; curcost = 0
-    for (lx, cost) in kloops
+    for (lx, cost0) in kloops
+        cost = _cg_chunk_cost(ctx, lx, cost0)
         if !isempty(cur) && cap > 0 && curcost + cost > cap
             push!(chunks, cur); cur = Any[]; curcost = 0
         end
@@ -2785,6 +3294,19 @@ function _build_codegen_rhs(
     tabpack = _cg_tabpack(ctx, fns)
     return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint, work, rmw)
 end
+
+# A loop nest's weight toward the chunk cap: its emitter cost (spine nodes
+# emitted), or its emitted expression size (inlined call functions counted
+# whole, `_cg_inl_size`) over `_CG_EXPR_PER_NODE`, whichever is larger. The
+# emitter charges one node per state read, but a read through a slot table is
+# some seventy expression nodes (its loop-version ladder); a nest made mostly
+# of such reads (a stencil whose neighbour reads are made by the caller of a
+# template call) was charged a sixth of its size, so one chunk took five times
+# the code of the others and LLVM's time and memory, superlinear in a
+# function's size, went to that one function. Measured on reseact_s: ordinary
+# nests are 4.9 expression nodes per emitted node, table-read nests 16 to 18.
+const _CG_EXPR_PER_NODE = 5
+_cg_chunk_cost(ctx::_CGFunction, lx, cost::Int) = max(cost, cld(_cg_inl_size(ctx, lx), _CG_EXPR_PER_NODE))
 
 # ---- Threaded cell axis for the codegen tier ---------------------------------
 # The verdict, the partition and the dispatch are threading.jl's (the safety

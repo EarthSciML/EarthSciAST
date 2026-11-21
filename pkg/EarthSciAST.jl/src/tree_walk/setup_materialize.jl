@@ -28,6 +28,12 @@ const _GEO_EVAL_OPS = _ops_with(:geo_eval)
 # — i.e. the body cannot be materialized by the setup-time geometry path and
 # needs the general build-time cell evaluator instead.
 function _body_needs_general_eval(e::OpExpr)
+    if _tpl_is_call(e)
+        # A template call (call.jl): its body's operators, and its arguments.
+        _call_body_any_op(op -> !(op in _GEO_EVAL_OPS), e) && return true
+        b = e.bindings
+        return b !== nothing && _anyof(v -> v isa OpExpr && _body_needs_general_eval(v), collect(values(b)))
+    end
     e.op in _GEO_EVAL_OPS || return true
     _anyof(a -> a isa OpExpr && _body_needs_general_eval(a), e.args) && return true
     e.expr_body isa OpExpr && _body_needs_general_eval(e.expr_body::OpExpr) && return true

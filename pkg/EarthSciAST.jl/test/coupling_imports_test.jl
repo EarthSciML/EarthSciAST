@@ -9,6 +9,9 @@ function _uses_var(expr::EarthSciAST.ASTExpr, target::String)
     if expr isa EarthSciAST.VarExpr
         return expr.name == target
     elseif expr isa EarthSciAST.OpExpr
+        # A template reference reads its caller through its bindings.
+        expr.bindings === nothing || any(v -> _uses_var(v, target), values(expr.bindings)) &&
+            return true
         return any(a -> _uses_var(a, target), expr.args)
     end
     return false

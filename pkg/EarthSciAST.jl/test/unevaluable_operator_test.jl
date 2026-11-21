@@ -73,17 +73,20 @@ _uo_compile(e::_UO.ASTExpr) =
             err = caught(() -> _uo_build(rhs))
             @test err isa _UO.TreeWalkError && err.code == "unevaluable_operator"
         end
-        # A surviving template reference is expanded at build against the
-        # document's registry, and refused BY NAME when none reached the build
-        # (`E_TREEWALK_UNRESOLVED_TEMPLATE_REF`); what this pins is that it is
-        # not a hoist candidate that could slip past `_compile_op`.
+        # A surviving template reference is compiled as a call (call.jl): a
+        # pure function of its arguments, hoisted like an operator. With no
+        # template registry in the build it is refused BY NAME wherever it is
+        # compiled (`E_TREEWALK_UNRESOLVED_TEMPLATE_REF`), so a hoist cannot
+        # slip it past a gate either.
         tmpl = _UO.expression_from_json(
             Dict{String, Any}(
                 "op" => "apply_expression_template", "args" => Any[], "name" => "tmpl",
                 "bindings" => Dict{String, Any}()
             )
         )
-        @test !_UO._cse_hoistable(tmpl)
+        @test _UO._cse_hoistable(tmpl)
+        err = caught(() -> _UO._compile(tmpl, Dict{String, Int}(), Set{Symbol}()))
+        @test err isa _UO.TreeWalkError && err.code == "E_TREEWALK_UNRESOLVED_TEMPLATE_REF"
         @test !_UO._cse_hoistable(OpExpr("distinct", _UO.ASTExpr[VarExpr("u")]))
     end
 

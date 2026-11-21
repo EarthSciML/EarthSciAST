@@ -926,6 +926,161 @@ end
 # ---------------------------------------------------------------------------
 
 """
+    _hoist_mounted_templates!(comp, cname)
+
+Merge into the component `comp`'s `expression_templates` block the template
+definitions that models mounted as its subsystems (esm-spec §4.7) brought
+with them. A mounted model keeps its references (the mount does not expand
+them) and its match-less definitions, already closed in its own file, on its
+own `expression_templates` block. Each such block joins `comp`'s by the rule
+flatten uses to merge component registries (`_merge_flat_registry`):
+deep-equal entries are kept once, and a name two non-equal entries share is
+renamed in every owner to `<owner path>.<name>`, with that owner's references
+renamed in lockstep. The owner path of `comp`'s own entries is `cname`, of a
+mounted block its subsystem path below `comp` (`Sub` or `Sub.Inner`).
+
+A mounted body's free names (the mounted model's own variables and
+subsystems) are first written as `comp` reads them (`T` becomes `Sub.T`), so
+the body still reads the mounted model's names once it sits in `comp`'s
+registry (flatten scopes it further, as every body of `comp`). The mounted
+subtree below the mount point keeps naming its own entries; only `comp`'s
+other sites follow `comp`'s renames.
+"""
+function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
+    mounts = Tuple{String, Any}[]          # (subsystem path, subsystem)
+    _collect_mounted_blocks!(mounts, comp, "")
+    isempty(mounts) && return comp
+    newblock, rn = _merge_mounted_blocks(_raw_get(comp, "expression_templates"), cname, mounts)
+    # `comp`'s own sites, outside the mount points.
+    if rn !== nothing
+        for k in collect(keys(comp))
+            k in ("expression_templates", "subsystems") && continue
+            comp[k] = _rename_apply_refs(comp[k], rn)
+        end
+        _rename_outside_mounts!(comp, rn)
+    end
+    for (_, sub) in mounts
+        delete!(sub, "expression_templates")
+    end
+    comp["expression_templates"] = newblock
+    return comp
+end
+
+"""
+    _merge_mounted_blocks(own, cname, mounts) -> (block, own_rename)
+
+The merge `_hoist_mounted_templates!` describes, shared with the typed mount
+path (`resolve_subsystem_refs!`): the component `cname`'s registry `own` (raw,
+or `nothing`) and each mounted raw model of `mounts` (`(path, model)`, the
+model still carrying its `expression_templates`) merged by flatten's rule.
+Each mounted model's own references are renamed here, in place; the caller
+applies `own_rename` (old name => new name, or `nothing`) to the component's
+other sites. `own`'s `match` rules are kept, ahead of the merged entries.
+"""
+function _merge_mounted_blocks(own, cname::String, mounts)
+    blocks = OrderedDict{String, Any}()
+    blocks["models.$cname"] = OrderedDict{String, Any}(
+        string(n) => d for (n, d) in pairs(_is_object(own) ? own : Dict{String, Any}())
+            if _raw_get(d, "match") === nothing
+    )
+    for (path, sub) in mounts
+        blocks["models.$path"] = _mounted_block_as_read_from_parent(sub, path)
+    end
+    merged, rename = _merge_flat_registry(blocks)
+    for (path, sub) in mounts
+        rm = get(rename, path, nothing)
+        rm === nothing && continue
+        for k in collect(keys(sub))
+            k == "expression_templates" && continue
+            sub[k] = _rename_apply_refs(sub[k], rm)
+        end
+    end
+    rn = get(rename, cname, nothing)
+    newblock = OrderedDict{String, Any}()
+    if _is_object(own)
+        for (n, d) in pairs(own)
+            _raw_get(d, "match") === nothing && continue
+            newblock[string(n)] = rn === nothing ? d : _rename_apply_refs(d, rn)
+        end
+    end
+    merge!(newblock, merged)
+    return newblock, rn
+end
+
+# The subsystems below `node` that carry a mounted block, with their paths;
+# a mount point's own subtree is its block's (it was merged when that model
+# was lowered in its own file), so the walk stops there.
+function _collect_mounted_blocks!(out, node, prefix::String)
+    subs = _raw_get(node, "subsystems")
+    _is_object(subs) || return out
+    for (k, sub) in pairs(subs)
+        _is_object(sub) || continue
+        path = isempty(prefix) ? string(k) : "$prefix.$(k)"
+        blk = _raw_get(sub, "expression_templates")
+        if _is_object(blk)
+            push!(out, (path, sub))
+        else
+            _collect_mounted_blocks!(out, sub, path)
+        end
+    end
+    return out
+end
+
+# `comp`'s subsystems with the references outside every mount point renamed
+# by `rn`.
+function _rename_outside_mounts!(node, rn)
+    subs = _raw_get(node, "subsystems")
+    _is_object(subs) || return
+    for (_, sub) in pairs(subs)
+        _is_object(sub) || continue
+        _is_object(_raw_get(sub, "expression_templates")) && continue
+        for k in collect(keys(sub))
+            k == "subsystems" && continue
+            sub[k] = _rename_apply_refs(sub[k], rn)
+        end
+        _rename_outside_mounts!(sub, rn)
+    end
+    return
+end
+
+# The mounted model `sub`'s match-less definitions with each body's free names
+# of `sub` (its variables and subsystems, not the template's parameters)
+# written as its parent reads them, `path.name`.
+function _mounted_block_as_read_from_parent(sub, path::String)
+    blk = _raw_get(sub, "expression_templates")
+    local_names = Set{String}()
+    for key in ("variables", "species", "parameters", "subsystems")
+        v = _raw_get(sub, key)
+        if _is_object(v)
+            union!(local_names, (string(n) for n in keys(v)))
+        elseif _is_array(v)
+            for x in v
+                n = _raw_get(x, "name")
+                n isa AbstractString && push!(local_names, String(n))
+            end
+        end
+    end
+    captures = template_captures(blk)
+    out = OrderedDict{String, Any}()
+    for (n, d) in pairs(blk)
+        _raw_get(d, "match") === nothing || continue
+        body = _raw_get(d, "body")
+        if body === nothing
+            out[string(n)] = d
+            continue
+        end
+        params = Set{String}(_TemplateDecl(d).params)
+        scoped = namespace_expr(
+            expression_from_json(body), path, setdiff(local_names, params); captures = captures
+        )
+        nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(d))
+        nd["body"] = serialize_expression(scoped)
+        out[string(n)] = nd
+    end
+    return out
+end
+
+"""
     lower_expression_templates(raw_data) -> OrderedDict{String,Any}
 
 Run the §9.6.3 rewrite fixpoint over `raw_data` against each component-local
@@ -986,6 +1141,9 @@ function lower_expression_templates(raw_data)
 
     for (compkind, cname, compraw) in _components(root)
         comp = compraw::OrderedDict{String, Any}
+        # A model mounted as a subsystem keeps its references and brings its
+        # template definitions; they join this component's registry here.
+        _hoist_mounted_templates!(comp, cname)
         # Static shape environment for `where` constraint evaluation
         # (esm-spec §9.6.1): declared variable shapes only.
         shape_env = _component_shape_env(comp)

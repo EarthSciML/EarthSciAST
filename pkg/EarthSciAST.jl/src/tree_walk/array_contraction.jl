@@ -45,7 +45,7 @@
 #
 # What the emitter models is the SCALAR `_Node` spine — the kinds `_eval_node`
 # dispatches on. `_cg_emit`'s other method models the ACCESS-KERNEL spine
-# (`_NK_ACCESS` / `_NK_SUBCALL` / `_NK_AREDUCE`), a disjoint set of kinds over the
+# (`_NK_ACCESS` / `_NK_AREDUCE`), a disjoint set of kinds over the
 # same `_Node` type, so the two are methods of one generic function on two
 # context types and the op ladder (`_cg_emit_op` / `_cg_emit_fn`, the registry
 # rows) is shared rather than written twice.
@@ -224,6 +224,8 @@ function _cg_emit(ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node)
         return _cg_foldl(fnsym, exprs)
     elseif k === _NK_RAGGED_LOOP
         return _cg_ragged_loop(ctx, kc, nd)
+    elseif k === _NK_CALL
+        return _cg_emit_call(ctx, kc, nd)
     elseif k === _NK_CACHED
         # The scalar prelude's CSE scratch. A contraction body is compiled with
         # `memo=nothing` and never goes through `_cse_compile_scalar`, so this
@@ -453,6 +455,9 @@ function _cg_share_inner(K::_CGShareKeys, nd::_Node)
         return nd.payload !== nothing ? nothing : 0
     elseif k === _NK_CONTRACTION
         return 0
+    elseif k === _NK_CALL
+        # A template call: the same target over the same arguments.
+        return _cg_share_obj!(K, nd.payload)
     end
     return nothing
 end
@@ -506,13 +511,17 @@ _cg_share_memo(K::_CGShareKeys, env::Vector{Any}) =
 @inline function _cg_lazy_operand(nd::_Node, j::Int)
     k = nd.kind
     k === _NK_OP && return _cse_arg_conditional(nd.op, j)
-    return j >= 2 && (k === _NK_STATE_GATHER || k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER)
+    return j >= 2 && (
+        k === _NK_STATE_GATHER || k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER ||
+            k === _NK_ARG_GATHER
+    )
 end
 
 # A node never worth a local of its own.
 @inline _cg_share_leafkind(nd::_Node) =
     nd.kind === _NK_LITERAL || nd.kind === _NK_STATE || nd.kind === _NK_PARAM ||
-    nd.kind === _NK_TIME || nd.kind === _NK_LOOPVAR || nd.kind === _NK_PARAM_GATHER
+    nd.kind === _NK_TIME || nd.kind === _NK_LOOPVAR || nd.kind === _NK_PARAM_GATHER ||
+    nd.kind === _NK_ARG
 
 # The region's nodes the walk does not descend through: a loop body, a node
 # with no structural key, and a node an enclosing region already bound.
@@ -739,6 +748,31 @@ function _cg_count_loop(ctx::_CGFunction, kc, nd::_Node, lo, st, hi, span)
     xe = _cg_emit(ctx, kc, x)
     # The comparison with the operands in the order the document wrote them.
     test(av) = lk ? Expr(:call, cmp, av, xv) : Expr(:call, cmp, xv, av)
+    # The per-entry count, `x` already in `xv`.
+    function linear_count()
+        kv = _cg_name(ctx, "lk")
+        kc.loops[spec.ref] = kv
+        span === nothing || (kc.spans[spec.ref] = span)
+        ae = try
+            _cg_emit(ctx, kc, a)
+        finally
+            delete!(kc.loops, spec.ref)
+            span === nothing || delete!(kc.spans, spec.ref)
+        end
+        return quote
+            let
+                local $cv = 0
+                for $kv in $lo:$st:$hi
+                    $cv += $(test(ae)) ? $(neg ? 0 : 1) : $(neg ? 1 : 0)
+                end
+                Float64($cv)
+            end
+        end
+    end
+    if kc isa _CGCallCtx
+        r = _cg_count_runtime(ctx, kc, a, spec, test, neg, rel, xv, xe, linear_count)
+        r === nothing || return r
+    end
     found = _cg_count_axis(ctx, kc, a, spec)
     if found !== nothing
         tab, ascending = found
@@ -791,24 +825,11 @@ function _cg_count_loop(ctx::_CGFunction, kc, nd::_Node, lo, st, hi, span)
             end
         end
     end
-    kv = _cg_name(ctx, "lk")
-    kc.loops[spec.ref] = kv
-    span === nothing || (kc.spans[spec.ref] = span)
-    ae = try
-        _cg_emit(ctx, kc, a)
-    finally
-        delete!(kc.loops, spec.ref)
-        span === nothing || delete!(kc.spans, spec.ref)
-    end
     _tally_cascade!(:count_fold_linear)
     return quote
         let
             local $xv = $xe
-            local $cv = 0
-            for $kv in $lo:$st:$hi
-                $cv += $(test(ae)) ? $(neg ? 0 : 1) : $(neg ? 1 : 0)
-            end
-            Float64($cv)
+            $(linear_count())
         end
     end
 end
@@ -841,9 +862,10 @@ function _count_const_axis(a::_Node, spec::_ContractLoop, cg = a.payload)
     (a.kind === _NK_CONST_GATHER && length(a.children) == 1) || return nothing
     s = a.children[1]
     (s.kind === _NK_LOOPVAR && s.payload === spec.ref) || return nothing
-    cg = cg::_ConstGatherArray
+    return _count_const_axis_of(cg::_ConstGatherArray, spec.lo:spec.step:spec.hi)
+end
+function _count_const_axis_of(cg::_ConstGatherArray, rng)
     length(cg.dims) == 1 || return nothing
-    rng = spec.lo:spec.step:spec.hi
     vals = Vector{Float64}(undef, length(rng))
     for (i, k) in enumerate(rng)
         (1 <= k <= cg.dims[1]) ||
@@ -941,6 +963,9 @@ const _CG_SPAN_MAX = 1 << 40
 _cg_span_literal(kc, nd::_Node) = nothing
 _cg_span_literal(kc::_CGScalarCtx, nd::_Node) = nd.literal
 _cg_span_counter(kc, ref) = nothing
+_cg_span_literal(kc::_CGCallCtx, nd::_Node) = nd.literal
+_cg_span_counter(kc::_CGCallCtx, ref) =
+    haskey(kc.loops, ref) ? get(kc.spans, ref, nothing) : nothing
 _cg_span_counter(kc::_CGScalarCtx, ref) =
     haskey(kc.loops, ref) ? get(kc.spans, ref, nothing) : nothing
 

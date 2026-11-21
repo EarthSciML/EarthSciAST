@@ -17,8 +17,8 @@
 #
 # The spine reuses `_Node` (node.jl). The kinds below appear only in an access
 # spine and are handled only by `_eval_acc` (the scalar `_eval_node` never
-# sees them): `_NK_ACCESS` (a leaf; `idx` indexes the kernel's access table),
-# `_NK_SUBCALL` and `_NK_AREDUCE`. Everything else is an ordinary
+# sees them): `_NK_ACCESS` (a leaf; `idx` indexes the kernel's access table)
+# and `_NK_AREDUCE`. Everything else is an ordinary
 # `_NK_OP`/`_NK_LITERAL`.
 #
 # CELL COORDINATES. The evaluator threads, per output cell: `oln` the output
@@ -31,14 +31,6 @@
 
 # Access-spine kinds (disjoint from the scalar node kinds, node.jl).
 const _NK_ACCESS = UInt8(20)   # gather/const via access descriptor (idx = table slot)
-# Out-of-line template sub-kernel call (esm-spec §9.6.4 Option B / RFC
-# out-of-line-expression-templates §7.7 "compile references natively"). `payload`
-# is a SHARED `_AccKernel` holding the template body's access spine, descriptor
-# table, and CSE — compiled once per (use site, region class) and referenced from
-# every box/kernel whose lanes lower to the same descriptors. The evaluator arm
-# recurses into it with the SAME (u, p, t, oln, midx) cell context, so the
-# body computes exactly the scalar sequence the fused (expanded) spine would.
-const _NK_SUBCALL = UInt8(22)  # template-body sub-kernel (payload = _AccKernel)
 # Affine reduction: the ⊕-fold of a contraction whose contracted indices are
 # extra loop dims of the kernel's box (stencil_affine.jl, `_AffineReduce`). The
 # body (`children[1]`) is ONE access spine over the output AND the contracted
@@ -252,8 +244,6 @@ end
 # `du[outs[c]]`, `midx == (c, 1, 1)`, and the box-addressed descriptors
 # (CONST_BOX / STATE_TBL_BOX / ARR_TBL_BOX with s1=1, off=1) index their
 # per-cell tables by that ordinal.
-# A template sub-kernel (`_NK_SUBCALL` payload) runs at its caller's cells and
-# holds no cells of its own (`_no_cells()`, neither shape).
 # `slab[d]` (a box, or empty for "none"): the box is one cell thick on dim d AT
 # THE EDGE of the equation's range there — a boundary slab, which is one cell
 # thick at every grid size. The codegen tier keeps that extent a literal (a
@@ -271,7 +261,6 @@ _CellSet(
     outs::Vector{Int} = Int[]
 ) = _CellSet(strides, ranges, base, outs, Bool[])
 @inline _cellset_slab(cs::_CellSet, d::Int) = d <= length(cs.slab) && cs.slab[d]
-_no_cells() = _CellSet(Int[], UnitRange{Int}[1:0], 0)
 _outs_cells(outs::Vector{Int}) = _CellSet(Int[], UnitRange{Int}[1:length(outs)], 0, outs)
 @inline _is_cellless(cs::_CellSet) = isempty(cs.strides) && isempty(cs.outs)
 @inline _is_outs(cs::_CellSet) = !isempty(cs.outs)
@@ -325,20 +314,10 @@ struct _AccKernel
     spine::_Node               # op tree with _NK_ACCESS / _NK_CACHED leaves
     acc::Vector{_AccDesc}      # descriptor table (spine `_NK_ACCESS.idx` indexes this)
     cse::_AccCSE               # per-cell common-subexpression recipes + scratch
-    # Distinct template-body sub-kernels reachable from `spine`/`cse` (through
-    # `_NK_SUBCALL` payloads, transitively, nested-first). The kernel runners fill
-    # each sub-kernel's loop-invariant CSE tier once per call here, so the subcall
-    # arm only fills the per-cell tier. A sub-kernel shared by several parent
-    # kernels is prepped once per parent — recomputing an invariant is the same
-    # value, never a different one. Empty for every reference-free kernel.
-    subs::Vector{_AccKernel}
 end
-# A kernel with no CSE / no sub-kernels (tests, direct construction, and every
-# reference-free build).
+# A kernel with no CSE (tests and direct construction).
 _AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}) =
-    _AccKernel(cells, spine, acc, _ACC_NO_CSE, _AccKernel[])
-_AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, cse::_AccCSE) =
-    _AccKernel(cells, spine, acc, cse, _AccKernel[])
+    _AccKernel(cells, spine, acc, _ACC_NO_CSE)
 
 # ---- The evaluator ----
 # ELTYPE-GENERIC in the value type `T`, exactly as the scalar `_eval_node`
@@ -393,25 +372,12 @@ function _eval_acc(
         pl = nd.payload
         pl isa _AccScratch && return _acc_scratch_read(pl, nd.idx, T)
         return _cse_read(pl::_CSECache, nd.idx, T)
-    elseif k === _NK_SUBCALL
-        # Template-body sub-kernel: fill the body's per-cell CSE scratch for THIS
-        # cell, then evaluate its spine against its OWN descriptor table. The
-        # invariant tier was filled once per call by the runner prologue
-        # (`K.subs`). Evaluation is single-threaded and the template DAG is
-        # acyclic (esm-spec §9.7.3), so a body is never re-entered
-        # mid-evaluation and its scratch buffers are race-free.
-        S = nd.payload::_AccKernel
-        cse = S.cse
-        if _has_cse(cse)
-            buf = _acc_scratch_buf(cse.scratch, T)
-            rs = cse.recipes
-            @inbounds for i in eachindex(rs)
-                buf[i] = _eval_acc(rs[i], u, p, t, oln, midx, S, T)
-            end
-        end
-        return _eval_acc(S.spine, u, p, t, oln, midx, S, T)
     elseif k === _NK_OP
         return _eval_acc_op(nd, u, p, t, oln, midx, K, T)
+    elseif k === _NK_CALL
+        # A template call: its arguments in this kernel's cell context, its
+        # body (a pure function of them) by the scalar walker.
+        return _run_call(c -> _eval_acc(c, u, p, t, oln, midx, K, T), nd, u, p, t, T)
     end
     return _unknown_kind(nd, "the access-kernel walker")
 end
@@ -554,11 +520,6 @@ _run_acc_kernel!(du, u, p, t, K::_AccKernel) =
 end
 
 function _run_acc_kernel!(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
-    # Sub-kernel prologue (nested-first): each template body's loop-invariant tier
-    # is filled once per call, exactly as the parent's is below.
-    for S in K.subs
-        _fill_invariant!(S, u, p, t, T)
-    end
     _fill_invariant!(K, u, p, t, T)
     cs = K.cells
     if _is_outs(cs)                                 # listed out slots (per-cell merge)
@@ -635,6 +596,8 @@ function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
         n.payload === nothing ? UInt(0) : objectid(n.payload),
         childvns,
     )
+    # A template call is a pure function of its arguments (call.jl).
+    k === _NK_CALL    && return (0x06, objectid(n.payload), childvns)
     return (0xff, objectid(n))     # _NK_CACHED / anything else — never merged
 end
 
@@ -699,9 +662,10 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
             k = n.kind
             inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ? true :
                 k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
-                k === _NK_OP ? all(v -> is_inv[v], childvns) :
+                (k === _NK_OP || k === _NK_CALL) ? all(v -> is_inv[v], childvns) :
                 false
-            push!(counts, 0); push!(is_op, k === _NK_OP); push!(is_inv, inv); push!(rep, n)
+            push!(counts, 0); push!(is_op, k === _NK_OP || k === _NK_CALL)
+            push!(is_inv, inv); push!(rep, n)
         end
         vn_by_pos[p] = vn
     end

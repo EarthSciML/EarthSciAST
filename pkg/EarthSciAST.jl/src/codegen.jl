@@ -27,11 +27,12 @@ function _generate_script(
         reaction_system_emitter::Function,
         emit_data_sources::Bool = false
     )
-    # Expand at the boundary (RFC out-of-line-expression-templates §7.7): the
-    # expression emitters have no `apply_expression_template` arm (the generic
-    # fallback would render `apply_expression_template()`, dropping name and
-    # bindings), so generated code must be the Option-A image. No-op without refs.
-    file.component_templates === nothing || (file = _expand_refs!(deepcopy(file)))
+    # Template references are printed as references (esm-spec §9.6.4): each
+    # template a component references is emitted once, as a Julia function,
+    # and each reference as a call to it (`_cg_template_calls`). Nothing is
+    # expanded. No-op without references.
+    tplfns = Dict{String, Vector{String}}()
+    file.component_templates === nothing || ((file, tplfns) = _cg_template_calls(file))
     lines = String[]
 
     # Header comment
@@ -54,6 +55,7 @@ function _generate_script(
     if !isnothing(file.models) && !isempty(file.models)
         push!(lines, "# Models")
         for (name, model) in file.models
+            append!(lines, get(tplfns, "models.$name", String[]))
             append!(lines, model_emitter(name, model))
             push!(lines, "")
         end
@@ -63,6 +65,7 @@ function _generate_script(
     if !isnothing(file.reaction_systems) && !isempty(file.reaction_systems)
         push!(lines, "# Reaction Systems")
         for (name, reaction_system) in file.reaction_systems
+            append!(lines, get(tplfns, "reaction_systems.$name", String[]))
             append!(lines, reaction_system_emitter(name, reaction_system))
             push!(lines, "")
         end
@@ -94,6 +97,222 @@ function _generate_script(
     end
 
     return join(lines, "\n")
+end
+
+# ---------------------------------------------------------------------------
+# Template references in the printed script
+#
+# A template a component references is printed ONCE, as a Julia function of its
+# parameters (declared order) followed by its implicit parameters — the names
+# its printed body reads from its caller (sorted) — and every reference as a
+# call to that function with the reference's bindings, in the same order. A
+# body's own references are calls too, so the printed functions call one
+# another as the templates do. The functions are defined before the
+# component's system, and the system's equations evaluate the calls when they
+# are built, so a symbolic caller (ModelingToolkit, Catalyst) gets exactly the
+# expression the reference denotes.
+#
+# A parameter in a structural position (a range's index set, `wrt`, a fixed
+# range bound, ...), or one a body passes on to such a parameter of a template
+# it references, is not a runtime value: a reference binds it to a name or a
+# number, and the function printed for that reference is the template's
+# instance with those values substituted (`_tpl_register_instance!`), one
+# function per instance.
+# ---------------------------------------------------------------------------
+
+# The printed functions of one component: the template table, the function
+# name of each template printed (`fnames`, unique across the script through
+# `taken`), and each printed function's line and implicit parameters.
+struct _CgTemplates
+    tt::_TplTable
+    cname::String
+    fnames::Dict{String, String}
+    taken::Set{String}
+    printed::Dict{String, Tuple{String, Vector{String}}}
+    fixed::Dict{String, Vector{String}}
+end
+_CgTemplates(tt::_TplTable, cname::AbstractString, taken::Set{String}) = _CgTemplates(
+    tt, String(cname), Dict{String, String}(), taken,
+    Dict{String, Tuple{String, Vector{String}}}(), Dict{String, Vector{String}}()
+)
+
+# The Julia function name of template `tname` (an instance's name carries its
+# structural values) of the component: its component and template names with
+# every character outside `[A-Za-z0-9_]` an underscore, and a numeric suffix
+# when another template of the script already has that name.
+function _cg_template_fname(ct::_CgTemplates, tname::String)
+    got = get(ct.fnames, tname, nothing)
+    got === nothing || return got
+    s = replace(string(ct.cname, "_", replace(tname, _TPL_INST => "_")), r"[^A-Za-z0-9_]" => "_")
+    isdigit(first(s)) && (s = "_" * s)
+    f, k = s, 1
+    while f in ct.taken
+        k += 1
+        f = string(s, "_", k)
+    end
+    push!(ct.taken, f)
+    ct.fnames[tname] = f
+    return f
+end
+
+# The parameters of template `name` that are not runtime values: its
+# structural parameters, and every parameter a reference in its body passes to
+# such a parameter of the referenced template.
+function _cg_fixed(ct::_CgTemplates, name::String)
+    got = get(ct.fixed, name, nothing)
+    got === nothing || return got
+    def = _tpl_def(ct.tt, name)
+    fixed = Set{String}(def.structural)
+    _cg_fixed_walk!(fixed, ct, _TemplateDecl(ct.tt.reg[name]).body, def.params)
+    out = String[p for p in def.params if p in fixed]
+    ct.fixed[name] = out
+    return out
+end
+function _cg_fixed_walk!(fixed::Set{String}, ct::_CgTemplates, x, params)
+    if x isa AbstractDict
+        if get(x, "op", nothing) == APPLY_EXPRESSION_TEMPLATE_OP
+            callee = get(x, "name", nothing)
+            b = get(x, "bindings", nothing)
+            if callee isa AbstractString && haskey(ct.tt.reg, callee) && b isa AbstractDict
+                for q in _cg_fixed(ct, String(callee))
+                    v = get(b, q, nothing)
+                    for p in params
+                        _raw_count(v, p) > 0 && push!(fixed, p)
+                    end
+                end
+            end
+        end
+        for (k, v) in x
+            _cg_fixed_walk!(fixed, ct, v, params)
+        end
+    elseif x isa AbstractVector
+        for v in x
+            _cg_fixed_walk!(fixed, ct, v, params)
+        end
+    end
+    return fixed
+end
+
+_cg_mismatch(msg) =
+    ExpressionTemplateError(ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH, msg)
+
+# The reference `call` re-pointed at the instance of its template its
+# not-runtime parameters (`_cg_fixed`) select, those bindings dropped; `call`
+# itself when there are none. Each must be bound to a name or a number.
+function _cg_instance(ct::_CgTemplates, call::OpExpr)
+    fixed = _cg_fixed(ct, call.name)
+    isempty(fixed) && return call
+    b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
+    S = Dict{String, Any}()
+    for p in fixed
+        x = get(b, p, nothing)
+        x === nothing && throw(
+            _cg_mismatch("apply_expression_template '$(call.name)' missing binding for param '$p'")
+        )
+        ((x isa VarExpr && !_tpl_is_sentinel(x.name)) || x isa NumExpr || x isa IntExpr) || throw(
+            _cg_mismatch(
+                "apply_expression_template '$(call.name)': parameter '$p' sits in a " *
+                    "structural position and needs a name or a number, not an expression"
+            )
+        )
+        S[p] = serialize_expression(x)
+    end
+    iname = _tpl_register_instance!(ct.tt, call.name, S)
+    return reconstruct(call; name = iname, bindings = Dict{String, ASTExpr}(k => v for (k, v) in b if !haskey(S, k)))
+end
+
+# `e` with every template reference replaced by a plain call
+# `fname(bindings..., implicit parameters...)`, printing each referenced
+# template's function (`_cg_function!`) on the way.
+function _cg_calls(ct::_CgTemplates, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr})
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    out = map_children(c -> _cg_calls(ct, c, memo), e)
+    if _tpl_is_call(out)
+        out = _cg_instance(ct, out)
+        def = _tpl_def(ct.tt, out.name)
+        b = out.bindings === nothing ? Dict{String, ASTExpr}() : out.bindings
+        for p in def.params
+            haskey(b, p) || throw(
+                _cg_mismatch("apply_expression_template '$(out.name)' missing binding for param '$p'")
+            )
+        end
+        free = _cg_function!(ct, def.name)
+        args = ASTExpr[b[p] for p in def.params]
+        for n in free
+            push!(args, get(b, _TPL_FREE * n, VarExpr(n)))
+        end
+        out = OpExpr(_cg_template_fname(ct, def.name), args)
+    end
+    memo[e] = out
+    return out
+end
+
+# Print the function of template `name` (no parameter of which is fixed, see
+# `_cg_fixed`) once; its implicit parameters.
+function _cg_function!(ct::_CgTemplates, name::String)
+    got = get(ct.printed, name, nothing)
+    got === nothing || return got[2]
+    def = _tpl_def(ct.tt, name)
+    decl = _TemplateDecl(ct.tt.reg[name])
+    # The declared body with each parameter a sentinel and each reference in it
+    # a call.
+    body = expression_from_json(_substitute(decl.body, Dict{String, Any}(p => _TPL_ARG * p for p in def.params)))
+    body = _cg_calls(ct, body, IdDict{OpExpr, ASTExpr}())
+    free = sort!(collect(_tpl_free_leaves(body)))
+    # Argument names: the parameters' own; an implicit parameter keeps its
+    # name unless a parameter has it.
+    taken = Set{String}(def.params)
+    m = Dict{String, ASTExpr}(_TPL_ARG * p => VarExpr(p) for p in def.params)
+    argnames = copy(def.params)
+    for n in free
+        a = n
+        while a in taken
+            a *= "_"
+        end
+        push!(taken, a)
+        push!(argnames, a)
+        a == n || (m[n] = VarExpr(a))
+    end
+    body = _tpl_subst_scoped(body, m, IdDict{OpExpr, ASTExpr}())
+    line = "$(_cg_template_fname(ct, name))($(join(argnames, ", "))) = $(format_julia_expression(body))"
+    ct.printed[name] = (line, free)
+    return free
+end
+
+"""
+    _cg_template_calls(file) -> (file′, functions)
+
+`file′`: a copy of `file` whose top-level components print their template
+references as calls; `functions`: per component (`"models.<name>"`,
+`"reaction_systems.<name>"`), the lines defining the functions those calls
+call, one per referenced template (instance).
+"""
+function _cg_template_calls(file::EsmFile)
+    fns = Dict{String, Vector{String}}()
+    out = deepcopy(file)
+    ct = out.component_templates
+    taken = Set{String}()
+    for (kind, comps) in (("models", out.models), ("reaction_systems", out.reaction_systems))
+        comps === nothing && continue
+        for (cname, comp) in comps
+            key = "$kind.$cname"
+            reg = get(ct, key, nothing)
+            reg === nothing && continue
+            cg = _CgTemplates(_TplTable(reg), cname, taken)
+            memo = IdDict{OpExpr, ASTExpr}()
+            map_expressions!(e -> _cg_calls(cg, e, memo), comp; subsystems = false)
+            isempty(cg.printed) && continue
+            lines = String["# Expression templates of $cname"]
+            for name in sort!(collect(keys(cg.printed)))
+                push!(lines, cg.printed[name][1])
+            end
+            push!(lines, "")
+            fns[key] = lines
+        end
+    end
+    return out, fns
 end
 
 """

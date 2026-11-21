@@ -29,7 +29,7 @@ function _subscript_is_runtime(
         push!(binders, String(k))
     end
     isempty(binders) || (inner = union(local_names, binders))
-    for (k, a) in enumerate(o.args)
+    for (k, a) in enumerate(_operands(o))
         if k == 1 && o.op == "index" && a isa VarExpr
             # A gather from anything but a const array (a state, a
             # materialized observed) reads a run-time value.
@@ -325,9 +325,17 @@ _refs_loopvar(e::ASTExpr) =
 function _resolve_state_gather(
         vname::String, lo::Vector{Int}, hi::Vector{Int}, idx_args::Vector{ASTExpr}, rc::_ResolveCtx
     )
-    nd = length(lo)
-    var_map = rc.var_map
     sub_nodes = ASTExpr[_resolve_indices(a, rc) for a in idx_args]
+    return OpExpr(
+        "__state_gather", sub_nodes;
+        value = _Lowered(_NK_STATE_GATHER, _state_gather_payload(vname, lo, hi, rc.var_map))
+    )
+end
+
+# The `_StateGather` of the state array `vname` over `[lo, hi]` in the layout
+# `var_map`.
+function _state_gather_payload(vname::String, lo::Vector{Int}, hi::Vector{Int}, var_map)
+    nd = length(lo)
     slot_flat, run_base, strides = get!(_build_state().slot_tables, vname) do
         dims = Int[hi[d] - lo[d] + 1 for d in 1:nd]
         strd = Vector{Int}(undef, nd)
@@ -363,11 +371,5 @@ function _resolve_state_gather(
         isrun = total > 0 && all(k -> sf[k] == sf[1] + k - 1, eachindex(sf))
         isrun ? (Int[], sf[1], strd) : (sf, 0, strd)
     end
-    return OpExpr(
-        "__state_gather", sub_nodes;
-        value = _Lowered(
-            _NK_STATE_GATHER,
-            _StateGather(slot_flat, run_base, strides, copy(lo), copy(hi), prod(hi .- lo .+ 1))
-        )
-    )
+    return _StateGather(slot_flat, run_base, strides, copy(lo), copy(hi), prod(hi .- lo .+ 1))
 end

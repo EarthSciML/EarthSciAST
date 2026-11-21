@@ -170,6 +170,15 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
             return _mknode(kind = _NK_LITERAL, literal = 0.0)
         elseif op == "faq"
             return _geo_compile_agg(expr, g)
+        elseif _tpl_is_call(expr)
+            # A template call (call.jl): arguments compiled here, body apart.
+            # An array argument is a geometry source (an env array): passed as
+            # the same `_ArrArg` a resolved reference carries.
+            expr = _geo_call_arrays(expr, g)
+            tg = _call_target(expr)
+            return _call_node(
+                tg, _Node[_geo_compile(a, g) for a in _call_args(tg, expr)], _call_arrays(tg, expr)
+            )
         elseif op in _GEO_SCALAR_OPS
             _check_op_arity(Symbol(op), length(expr.args))
             children = _Node[_geo_compile(a, g) for a in expr.args]
@@ -188,6 +197,33 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
             "unsupported expression $(typeof(expr)) in setup-time geometry"
         )
     )
+end
+
+# `call` with each array argument (frames.jl `_TplCallInfo.arrays`) bound to
+# the `__arrarg` marker of its geometry source, read as a const array.
+function _geo_call_arrays(call::OpExpr, g::_GeoCompileCtx)
+    ct = _call_table()
+    # A binding compiled into the instance with its leaves marked
+    # (call.jl `_call_mark_inlined`): its arrays are geometry sources.
+    ct === nothing || (call = _call_mark_inlined(identity, a -> _geo_arrarg(a, g), (ct::_CallTable).tt, call))
+    arrs = ct === nothing ? nothing : _call_array_slots((ct::_CallTable).tt, call)
+    (arrs === nothing || isempty(arrs)) && return call
+    call = _call_with_implicit(call)
+    nb = copy(call.bindings::AbstractDict)
+    for (k, v) in nb
+        ((startswith(k, _TPL_FREE) ? k : _TPL_ARG * k) in arrs) || continue
+        nb[k] = _geo_arrarg(v, g)
+    end
+    return reconstruct(call; bindings = nb)
+end
+
+# The `__arrarg` marker of a geometry source passed as an array argument.
+function _geo_arrarg(v::ASTExpr, g::_GeoCompileCtx)
+    src = _geo_source(v, g)
+    src isa AbstractArray ||
+        _decline(:call_array_args, "a template call passing a ring slice in setup geometry")
+    name = v isa VarExpr ? v.name : "geometry source"
+    return OpExpr("__arrarg", ASTExpr[]; value = _ArrArg(:const, _const_gather_payload(src, name), name))
 end
 
 # A ring/array SOURCE: an env array by name or a partial `index` slice of a
@@ -672,12 +708,13 @@ end
 # Bit-exactness is the contract, as in codegen_kernel.jl: no `@fastmath`, no
 # `muladd`, no reassociation. A body the emitter has no arm for (a ring
 # reference, a gated nested reduction) keeps the walker.
-struct _GeoKernel{F, S}
+struct _GeoKernel{F, S, C}
     f::F
     srcs::S
+    fns::C          # the template call functions (`_CGSubFn`s), or `nothing`
 end
 @inline _geo_body_eval(n::_Node, u) = _eval_node(n, u, nothing, 0.0, Float64)
-@inline _geo_body_eval(k::_GeoKernel, u) = k.f(u, k.srcs)
+@inline _geo_body_eval(k::_GeoKernel, u) = k.f(u, k.srcs, k.fns)
 
 const _GEO_CG_UNARY = Dict{Symbol, Function}(r.sym => r.fn for r in _UNARY_ELEMENTWISE_OPS)
 const _GEO_CG_BINARY = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _BINARY_ELEMENTWISE_OPS)
@@ -708,6 +745,9 @@ mutable struct _GeoCG
     def::Set{Symbol}
     maybe::Set{Symbol}
     cur::Int
+    # Template call targets (call.jl) emitted as local functions, through the
+    # kernel emitter's `_cg_call_fn!`; created on the first call.
+    calls::Any
 end
 
 _geo_cg_var!(g::_GeoCG, p::String) = Symbol("_gk_", p, g.nvar += 1)
@@ -800,6 +840,32 @@ end
 function _geo_cg_raw(g::_GeoCG, n::_Node)
     n.kind == _NK_LITERAL && return n.literal
     n.kind == _NK_STATE && return :(u[$(n.idx)])
+    if n.kind == _NK_CALL
+        # A template call: its arguments here, its target a local function
+        # emitted once (`_cg_call_fn!`), which reads only its arguments.
+        g.calls === nothing && (g.calls = _CGFunction(typemax(Int)))
+        args = Any[_geo_cg(g, c) for c in n.children]
+        site = n.payload::_CallSite
+        # Array arguments are sources, read from `srcs` as `:geo_gather` reads
+        # its own; each const array's ascending flag follows them, as
+        # `_cg_emit_call` passes it.
+        for a in site.arrays
+            k = get!(g.src_ix, a.data) do
+                push!(g.srcs, a.data)
+                length(g.srcs)
+            end
+            push!(args, :(srcs[$k]))
+        end
+        f = _cg_call_fn!(g.calls::_CGFunction, site.target)
+        for (tab, ok) in _cg_site_count_tables(g.calls::_CGFunction, site, :count_fold_setup)
+            k = get!(g.src_ix, tab) do
+                push!(g.srcs, tab)
+                length(g.srcs)
+            end
+            push!(args, :(srcs[$k]), ok)
+        end
+        return Expr(:call, f, nothing, nothing, nothing, args...)
+    end
     n.kind == _NK_OP || _decline(:unknown_kind, string(n.kind))
     op = n.op
     c = n.children
@@ -960,6 +1026,30 @@ function _geo_shape_key(body::_Node)
                 length(arrays)
             end
             push!(key, :src, i, typeof(pl))
+        elseif pl isa _CallSite
+            # A template call: its target (one object per instance for the
+            # build) and its arrays, as sources like a gather's.
+            push!(key, :call, objectid(pl.target))
+            for a in pl.arrays
+                i = get!(aix, a.data) do
+                    push!(arrays, a.data)
+                    length(arrays)
+                end
+                push!(key, :src, i)
+            end
+            # And the count tables its function searches (built from those
+            # arrays, the objects the emission passes).
+            if any(k -> k === :const, pl.target.arrkinds)
+                tmp = _CGFunction(typemax(Int))
+                _cg_call_fn!(tmp, pl.target)
+                for (tab, ok) in _cg_site_count_tables(tmp, pl, :none)
+                    i = get!(aix, tab) do
+                        push!(arrays, tab)
+                        length(arrays)
+                    end
+                    push!(key, :src, i, ok)
+                end
+            end
         elseif n.op === :geo_agg
             sp = pl::_GeoAggSpec
             push!(
@@ -988,23 +1078,40 @@ function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothi
         _NodeMap{Int}(), _NodeMap{Int}(), _NodeMap{UInt64}(), Dict{Int, Int}(),
         _NodeMap{Symbol}(),
         Dict{Int, Vector{Symbol}}(), Any[], IdDict{Any, Int}(), 0,
-        Dict{Symbol, Int}(), Set{Symbol}(), Set{Symbol}(), 0
+        Dict{Symbol, Int}(), Set{Symbol}(), Set{Symbol}(), 0, nothing
     )
     try
         _geo_cg_scan!(g, body, 0)
         e = _geo_cg(g, body)
         top = Any[]
+        # Template call functions travel by value (`_cg_split_transport`): a
+        # `_CGSubFn` per target, passed as the third argument.
+        fns = nothing
+        if g.calls !== nothing
+            defs = Any[_cg_inner_def(d) for d in (g.calls::_CGFunction).helpers]
+            idx = Dict{Symbol, Int}(d[1] => k for (k, d) in enumerate(defs))
+            heights = _cg_call_heights(defs)
+            embed = _cg_embed_call_fns(defs, idx, heights)
+            left = Ref(0)
+            fexs = Expr[
+                Expr(:function, Expr(:tuple, d[2]..., _CG_FNS), _cg_calls_by_value(d[3], idx, left, embed))
+                    for d in defs
+            ]
+            e = _cg_calls_by_value(e, idx, left, embed)
+            left[] == 0 || error("geometry codegen: a call function referenced other than by a call")
+            fns = _cg_subfns(fexs, heights)
+        end
         for m in get(g.resets, 0, Symbol[])
             push!(top, :(local $m::Float64 = 0.0), :(local $(Symbol(m, :_set))::Bool = false))
         end
-        ex = Expr(:function, Expr(:tuple, :u, :srcs), Expr(:block, top..., :(return Float64($e))))
+        ex = Expr(:function, Expr(:tuple, :u, :srcs, _CG_FNS), Expr(:block, top..., :(return Float64($e))))
         f = cache === nothing ? nothing : get(cache.byexpr, ex, nothing)
         if f === nothing
             f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
             cache === nothing || (cache.byexpr[ex] = f)
         end
         _tally_cascade!(:geo_kernel)
-        return _GeoKernel(f, Tuple(g.srcs))
+        return _GeoKernel(f, Tuple(g.srcs), fns)
     catch err
         # A shape the emitter has no form for declines, and so does a body that
         # raises a document-level refusal while it is emitted; the caller walks

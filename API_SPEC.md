@@ -919,6 +919,8 @@ docstring repeats:
 | `symbolic_body_did_not_lower` | the body does not resolve or compile with its indices kept symbolic |
 | `unsupported_op` | an operator the tier has no form for |
 | `unknown_kind` | a compiled node kind the tier has no form for |
+| `call_array_args` | a template call that passes arrays, in a context that has no array arguments (setup geometry) |
+| `call_array_forward` | a template call, inside another call's body, passing on an array that is not that body's own array argument |
 | `unknown_array` | a gather of a name that is not a known array |
 | `malformed_index` | an `index` node with no operand |
 | `subscript_rank_mismatch` | a gather whose subscript count is not the array's rank |
@@ -936,7 +938,6 @@ docstring repeats:
 | `unsupported_desc` | an access descriptor the code generator has no form for |
 | `unsupported_bound` | a loop bound the code generator cannot write |
 | `foreign_scratch` | a read of a scratch buffer the generated function does not own |
-| `subcall_order` | a sub-kernel call emitted before its invariants are in scope |
 | `loopvar_out_of_scope` | a loop variable read outside the loop that binds it |
 | `loop_reentered` | a loop entered again inside its own body |
 | `lane_spec_on_scalar_spine` | a lane descriptor on a scalar spine |

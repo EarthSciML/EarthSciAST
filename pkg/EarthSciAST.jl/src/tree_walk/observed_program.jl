@@ -43,7 +43,6 @@ mutable struct _ObsProgramCtx
     scope::_CompileScope
     n_states::Int
     p::Any                               # the parameter NamedTuple the build bound (the fallback)
-    template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}}
     discrete_caches::Dict{String, Array{Float64}}
     # Every observed definition the build's split published (inlined and
     # materialized), by build name, as authored after lowering.
@@ -51,6 +50,8 @@ mutable struct _ObsProgramCtx
     state_names::Set{String}
     programs::Dict{String, Any}
     lock::ReentrantLock
+    # The build's template call targets (`_CallTable`, call.jl), or `nothing`.
+    calls::Any
 end
 
 """
@@ -150,8 +151,11 @@ end
 # slots under the next. So each program compiles in a child build context
 # (`_child_build_ctx`, compiler.jl) with tables, loop registry and parameter-read
 # sink of its own.
-_build_observed_program(ctx::_ObsProgramCtx, name::String) =
-    _with_build_ctx(() -> _build_observed_program_impl(ctx, name), _child_build_ctx())
+function _build_observed_program(ctx::_ObsProgramCtx, name::String)
+    bc = _child_build_ctx()
+    ctx.calls === nothing || (bc.state.calls = ctx.calls)
+    return _with_build_ctx(() -> _build_observed_program_impl(ctx, name), bc)
+end
 
 function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     model = ctx.model
@@ -242,7 +246,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
         for lvl in _materialized_obs_levels(mat_defs, mat, raw_obs)
             lv = _compile_fill_level(
                 lvl, :dynamic, fill, recurrence, resolved_obs, cs, n_total;
-                label_by_name = true, template_sites = ctx.template_sites
+                label_by_name = true
             )
             push!(
                 levels, _inplace_fill_level(
@@ -283,7 +287,7 @@ function _obs_reaches_recurrence(ctx::_ObsProgramCtx, name::String)
         n = pop!(frontier)
         (n in seen || !haskey(defs, n)) && continue
         push!(seen, n)
-        (n in shaped && recurrence_self_reference_kind(n, defs[n]) === :indexed) &&
+        (n in shaped && recurrence_self_reference_kind(n, defs[n]; templates = _build_templates()) === :indexed) &&
             return true
         append!(frontier, collect(_referenced_var_names(defs[n])))
     end

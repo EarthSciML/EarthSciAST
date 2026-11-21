@@ -570,6 +570,11 @@ file directly and expand at their own boundary, so this is for a consumer that
 wants the expanded DOCUMENT: an emitter, a diff against a fused golden, a
 reader with no template handling of its own. `file` is not modified, and a
 file with no surviving references comes back by identity.
+
+Not for build or analysis paths: esm-spec §9.6.4 rule 2 says builders,
+evaluators and analyses SHOULD NOT expand references (they analyse and compile
+each template once). This is an explicit expansion utility for tools and
+interchange.
 """
 function expanded_file(file::EsmFile)::EsmFile
     file.component_templates === nothing && return file
@@ -609,4 +614,53 @@ function _expand_reaction_system_refs!(
     memo = _expand_cache(memo)
     map_expressions!(e -> _expand_expr_refs(e, reg, sites, memo), rs)
     return
+end
+
+# A copy of `model` whose expression sites a `map_expressions!` rewrite (the
+# build's `_expand_model_refs!`, the validation view's
+# `_tpl_augment_component!`) can rewrite without touching the original. The
+# containers such a rewrite replaces in place (the equation vectors,
+# the variable map, the event vectors, the inline tests and the guesses, and
+# the same in every subsystem model) are copied one level deep; what it only
+# reads or replaces whole — each `Equation`, `ModelVariable`, event and test,
+# the analyses, a non-model subsystem — is shared. A whole `deepcopy` would also
+# copy every inline array the equations carry (a regrid's polygon rings), work
+# that grows with the data.
+function _expansion_copy(model::Model)
+    seen = IdDict{Any, Any}()
+    _share_unexpanded!(seen, model)
+    return Base.deepcopy_internal(model, seen)
+end
+function _share_unexpanded!(seen::IdDict{Any, Any}, m::Model)
+    for eq in m.equations
+        _share_fields!(seen, eq)
+    end
+    for eq in m.initialization_equations
+        _share_fields!(seen, eq)
+    end
+    for (_, v) in m.variables
+        _share_fields!(seen, v)
+    end
+    for x in (m.discrete_events, m.continuous_events, m.tests, m.guesses)
+        seen[x] = copy(x)
+    end
+    seen[m.analyses] = m.analyses
+    for (_, sub) in m.subsystems
+        sub isa Model ? _share_unexpanded!(seen, sub) : (seen[sub] = sub)
+    end
+    return seen
+end
+# `deepcopy` consults `seen` only for a mutable object, so an immutable
+# `Equation` or `ModelVariable` is shared through its fields: each mutable
+# field value (an expression tree, an inline array) is marked as its own copy,
+# and an immutable struct field is shared the same way.
+function _share_fields!(seen::IdDict{Any, Any}, x)
+    if ismutable(x)
+        seen[x] = x
+    elseif isstructtype(typeof(x))
+        for i in 1:nfields(x)
+            isdefined(x, i) && _share_fields!(seen, getfield(x, i))
+        end
+    end
+    return seen
 end

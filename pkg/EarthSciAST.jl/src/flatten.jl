@@ -1045,12 +1045,13 @@ a system is over-determined.
 INVARIANT (esm-spec §9.6.4 Option B): `flatten` ALWAYS carries surviving
 `apply_expression_template` references — MODEL-equation references ride into
 the `FlattenedSystem` (namespacing scopes their `bindings`), resolvable against
-the merged `template_registry` it also carries. Reaction-system RATE references
-never survive: they are expanded eagerly at collect (`_collect_reaction_system!`),
-before namespacing. Consumers that need the Option-A expanded image call
-[`expand_flattened_refs`](@ref) at their own boundary (RFC
-out-of-line-expression-templates §7.7); the tree-walk build expands at its entry
-with site recording (the compile-once tier).
+the merged `template_registry` it also carries. Reaction-system RATE and event
+references survive too: their templates' free names are explicit parameters in
+the merged registry, bound at each reference in the system's scope
+(`_collect_reaction_system!`). Consumers that need the Option-A expanded image
+call [`expand_flattened_refs`](@ref) at their own boundary (RFC
+out-of-line-expression-templates §7.7); the tree-walk build compiles each
+reference as a call.
 """
 function flatten(
         file::EsmFile; base_path::AbstractString = ".",
@@ -1196,8 +1197,20 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
     # component-scoped first (`_scope_component_templates`). Computed before
     # collection because its collision rename must reach each component's
     # reference sites while they are still attributable to their owner.
-    template_registry, template_rename =
-        _merge_flat_registry(_scope_component_templates(file))
+    # Reaction-rate references survive flatten too: each reaction system's
+    # bodies first get their free names as explicit parameters
+    # (`_tpl_explicit_free`), which every rate and event reference then binds
+    # in the system's own scope.
+    scoped = _scope_component_templates(file)
+    rs_added = Dict{String, Dict{String, Vector{String}}}()
+    if scoped !== nothing
+        for (compkey, block) in collect(scoped)
+            parts = split(String(compkey), "."; limit = 2)
+            (length(parts) == 2 && parts[1] == "reaction_systems") || continue
+            scoped[compkey], rs_added[String(parts[2])] = _tpl_explicit_free(block)
+        end
+    end
+    template_registry, template_rename = _merge_flat_registry(scoped)
     st = FlattenState(file, template_registry)
     ct = file.component_templates
     if file.models !== nothing
@@ -1217,8 +1230,11 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
             push!(st.components, name)
             _collect_reaction_system!(
                 st, rsys, name;
-                templates = ct === nothing ? nothing :
-                    get(ct, "reaction_systems.$(name)", nothing)
+                tpl_added = get(rs_added, name, nothing),
+                tpl_rename = get(template_rename, name, nothing),
+                tpl_captures = template_captures(
+                    ct === nothing ? nothing : get(ct, "reaction_systems.$(name)", nothing)
+                )
             )
         end
     end
@@ -1460,11 +1476,9 @@ end
 # are not component variables, so the map never touches them. The caller's
 # `EsmFile` registry is untouched (emit still produces the authored bodies) —
 # this scopes a COPY for the flat registry only. Reaction-system blocks pass
-# through unscoped BY POLICY (the flatten invariant): references survive
-# flatten only in MODEL equations; reaction-RATE references are always expanded
-# eagerly at collect (`_collect_reaction_system!`, before namespacing), so a
-# reaction-system registry entry is never resolved against post-flatten — it
-# rides along solely so the reconstituted document round-trips.
+# through unscoped: their bodies' free names become explicit parameters
+# instead (`_tpl_explicit_free`, in `_collect_components`), bound at every rate
+# and event reference in the system's own scope.
 function _scope_component_templates(file::EsmFile)
     ct = file.component_templates
     ct === nothing && return nothing
@@ -1685,6 +1699,11 @@ structurally identical apply sites expand once and share the result. Pass `nothi
 per-site re-expansion. Sharing is safe here for the same reason it is in
 `_expand_model_refs!` — the expanded set becomes a DAG, which is what interning
 would produce one pass later anyway.
+
+Not for build or analysis paths: esm-spec §9.6.4 rule 2 says builders,
+evaluators and analyses SHOULD NOT expand references (they analyse and compile
+each template once). This is an explicit expansion utility for tools and
+interchange.
 """
 function expand_flattened_refs(
         flat::FlattenedSystem;
