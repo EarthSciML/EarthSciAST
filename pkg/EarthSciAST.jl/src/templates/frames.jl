@@ -240,9 +240,11 @@ end
 function _tpl_whole_faq(a)
     (a isa OpExpr && _is_faq_op(a.op) && a.output_idx !== nothing && !isempty(a.output_idx)) || return nothing
     all(x -> x isa AbstractString, a.output_idx) || return nothing
-    (a.expr_body !== nothing && a.ranges !== nothing && a.filter === nothing && a.join === nothing &&
-        a.join_gates === nothing && a.key === nothing && a.values === nothing && a.lower === nothing &&
-        a.upper === nothing && all(x -> x isa VarExpr, a.args)) || return nothing
+    (
+        a.expr_body !== nothing && a.ranges !== nothing && a.filter === nothing && a.join === nothing &&
+            a.join_gates === nothing && a.key === nothing && a.values === nothing && a.lower === nothing &&
+            a.upper === nothing && all(x -> x isa VarExpr, a.args)
+    ) || return nothing
     outs = String[String(x) for x in a.output_idx]
     (length(a.ranges) == length(outs) && all(o -> haskey(a.ranges, o), outs)) || return nothing
     return outs, a.ranges
@@ -262,8 +264,10 @@ end
 function _tpl_range_same(x, y)
     x isa IndexSetRef && y isa IndexSetRef && return x.from == y.from && x.of == y.of
     x isa AbstractVector && y isa AbstractVector && return length(x) == length(y) &&
-        all(((p, q),) -> (p isa Integer || p isa IntExpr) && (q isa Integer || q isa IntExpr) &&
-        Int(p isa IntExpr ? p.value : p) == Int(q isa IntExpr ? q.value : q), zip(x, y))
+        all(
+        ((p, q),) -> (p isa Integer || p isa IntExpr) && (q isa Integer || q isa IntExpr) &&
+            Int(p isa IntExpr ? p.value : p) == Int(q isa IntExpr ? q.value : q), zip(x, y)
+    )
     return false
 end
 
@@ -348,22 +352,30 @@ function _tpl_structural_ref(tt::_TplTable, call::OpExpr)
         ok || return call
         S[p] = serialize_expression(x)
     end
+    iname = _tpl_register_instance!(tt, call.name, S)
+    nb = Dict{String, ASTExpr}(k => v for (k, v) in b if !haskey(S, k))
+    return reconstruct(call; name = iname, bindings = nb)
+end
+
+# The name of the instance of template `name` with the parameters in `S`
+# (parameter => raw value) substituted, registered in `tt.reg` on first use:
+# the declaration with those values substituted into its body and those
+# parameters dropped.
+function _tpl_register_instance!(tt::_TplTable, name::AbstractString, S::Dict{String, Any})
     skey = join(sort!([k * "=" * _stable_json(v) for (k, v) in S]), ",")
-    iname = string(call.name, _TPL_INST, skey)
+    iname = string(name, _TPL_INST, skey)
     if !haskey(tt.reg, iname)
-        raw = tt.reg[call.name]
+        raw = tt.reg[name]
         decl = _TemplateDecl(raw)
-        sub = Dict{String, Any}(p => v for (p, v) in S)
         nd = OrderedDict{String, Any}()
         for (k, v) in pairs(raw)
             nd[string(k)] = v
         end
         nd["params"] = Any[p for p in decl.params if !haskey(S, p)]
-        nd["body"] = _substitute(decl.body, sub)
+        nd["body"] = _substitute(decl.body, S)
         tt.reg[iname] = nd
     end
-    nb = Dict{String, ASTExpr}(k => v for (k, v) in b if !haskey(S, k))
-    return reconstruct(call; name = iname, bindings = nb)
+    return iname
 end
 
 # `e` with every reference to a structural template re-pointed at its instance
@@ -765,7 +777,7 @@ function _tpl_scope_binders(tt::_TplTable, name)
             haskey(seen, e) && return
             seen[e] = nothing
             union!(out, _bound_symbols(e))
-            foreach_child(walk, e)
+            return foreach_child(walk, e)
         end
         walk(_tpl_names_body(tt, name))
         out
@@ -803,7 +815,7 @@ function _tpl_body_reads(tt::_TplTable, name)
                 end
                 return
             end
-            foreach_child(c -> walk(c, captured), e)
+            return foreach_child(c -> walk(c, captured), e)
         end
         walk(_tpl_names_body(tt, name), Set{String}())
         out
@@ -1081,9 +1093,11 @@ function _tpl_call_info_uncached(tt::_TplTable, name::String)
     if body isa OpExpr && _is_faq_op(body.op) && body.output_idx !== nothing && !isempty(body.output_idx)
         oi = body.output_idx
         all(x -> x isa AbstractString, oi) || return nothing
-        (body.filter === nothing && body.join_gates === nothing && body.join === nothing &&
-            body.key === nothing && body.expr_body !== nothing && all(a -> a isa VarExpr, body.args) &&
-            body.values === nothing && body.lower === nothing && body.upper === nothing) || return nothing
+        (
+            body.filter === nothing && body.join_gates === nothing && body.join === nothing &&
+                body.key === nothing && body.expr_body !== nothing && all(a -> a isa VarExpr, body.args) &&
+                body.values === nothing && body.lower === nothing && body.upper === nothing
+        ) || return nothing
         outs = String[String(x) for x in oi]
         body.ranges === nothing || all(k -> String(k) in outs, keys(body.ranges)) || return nothing
         append!(info.outs, outs)
@@ -1191,8 +1205,10 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
     if _is_faq_op(e.op)
         # A scalar reduction over constant ranges.
         (e.output_idx === nothing || isempty(e.output_idx)) || return false
-        (e.join_gates === nothing && e.join === nothing && e.key === nothing &&
-            e.values === nothing && e.lower === nothing && e.upper === nothing) || return false
+        (
+            e.join_gates === nothing && e.join === nothing && e.key === nothing &&
+                e.values === nothing && e.lower === nothing && e.upper === nothing
+        ) || return false
         (e.expr_body === nothing || e.ranges === nothing) && return false
         isempty(e.args) || all(a -> a isa VarExpr, e.args) || return false
         for (_, rv) in e.ranges
@@ -1337,7 +1353,7 @@ function _tpl_body_binders(tt::_TplTable, name)
             haskey(seen, e) && return
             seen[e] = nothing
             union!(out, _bound_symbols(e))
-            foreach_child(walk, e)
+            return foreach_child(walk, e)
         end
         b = def.closed.body
         # An array-valued body's output indices are no binders of its element
