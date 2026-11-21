@@ -7815,7 +7815,8 @@ flattening inlines a template body, and eager expansion is retired.
    `priority`, in the order of esm-spec §9.6.4 rule 5.
 2. `expanded.esm` — `Expand(load(fixture))`, structurally, under this
    revision's semantics (esm-spec §9.6.4 rules 3 and 4). For every fixture in
-   which no match spans a template boundary, that is the tree the in-place
+   which no match spans a template boundary or lies inside the bindings of a
+   reference the in-place engine left unexpanded, that is the tree the in-place
    engine produced, so the existing goldens MUST NOT be regenerated: that
    they still hold is the evidence that the reference form denotes what the
    inlined form meant (esm-spec §9.6.4 rule 3, "Equivalence"). A new fixture
@@ -7823,9 +7824,11 @@ flattening inlines a template body, and eager expansion is retired.
    change. The cases that differ are pinned only in
    `opacity_rule_replacement/`: a compound pattern around another rule's
    replacement; a structured or ground pattern node at a template parameter;
-   and a compound pattern across a reference to a template whose body holds a
-   rewrite-target op. Its golden is written by hand under the new semantics,
-   and the in-place engine fails it by design.
+   a compound pattern across a reference to a template whose body holds a
+   rewrite-target op; and a rule on a core-op node inside the bindings of an
+   authored reference that survives load, which now fires there where the
+   in-place engine left the binding unrewritten. Its golden is written by
+   hand under the new semantics, and the in-place engine fails it by design.
 
 A harness MUST assert both. Asserting only the emitted golden would accept a
 binding whose references denote the wrong body; asserting only the expanded
@@ -7835,7 +7838,7 @@ golden would accept a binding that still inlines.
 (`rewrite_in_template_body`), two variants of one template
 (`template_instance_variants`), a nonterminating rewrite detected through a
 body (`rewrite_depth_through_bodies`), a rewrite-target op left in a body and
-refused by the build gate (`unlowered_in_template_body`), and the two pinned
+refused by the build gate (`unlowered_in_template_body`), and the pinned
 opacity cases (`opacity_rule_replacement`).
 
 **The elementwise lift (esm-spec §9.6.11).** The `tests/conformance/flatten_wire/`

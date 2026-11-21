@@ -10,7 +10,7 @@
     "authors": [
       "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
     ],
-    "description": "esm-spec §9.6.4 rule 4: the three cases where this revision and the in-place engine differ, each pinned the way this revision decides it. (a) `a_case`: the alias rule `grad_alias` writes `ref(grad_alias, {f: c, d: x})`; the compound rule `godunov` (priority 100, `sqrt(D(u,x)^2)`) never sees a `D` around it, and `central` lowers the `D` inside `grad_alias`'s body (its `wrt` parameter read as the bound literal `x`). The in-place engine wrote `D(c, x)` in place and fired `godunov` in pass 2: `999*c`. (b) `b_structured` and `b_ground`: inside `flux_div`'s body the parameter `F` is a leaf, so neither the structured pattern `D(U*q, x)` of `upwind_Uq` nor the ground pattern `D(c, x)` of `ground_c` matches it; `central` fires, and both instances rewrite the body in place to `ref(central, {f: F})`. The in-place engine expanded the references first and produced `777*c` and `555*g` (`g` unbound, written as itself). (c) `c_case`: `sqrt(ref(sq_grad, {u: c}))` — the reference is a leaf, so `godunov` does not match across it; `central` lowers the `D` inside `sq_grad`'s body. The in-place engine expanded `sq_grad` eagerly and fired `godunov`: `999*c`. `expanded.esm` is written under this revision's semantics; the in-place engine fails it by design.",
+    "description": "esm-spec §9.6.4 rule 4: the four cases where this revision and the in-place engine differ, each pinned the way this revision decides it. (a) `a_case`: the alias rule `grad_alias` writes `ref(grad_alias, {f: c, d: x})`; the compound rule `godunov` (priority 100, `sqrt(D(u,x)^2)`) never sees a `D` around it, and `central` lowers the `D` inside `grad_alias`'s body (its `wrt` parameter read as the bound literal `x`). The in-place engine wrote `D(c, x)` in place and fired `godunov` in pass 2: `999*c`. (b) `b_structured` and `b_ground`: inside `flux_div`'s body the parameter `F` is a leaf, so neither the structured pattern `D(U*q, x)` of `upwind_Uq` nor the ground pattern `D(c, x)` of `ground_c` matches it; `central` fires, and both instances rewrite the body in place to `ref(central, {f: F})`. The in-place engine expanded the references first and produced `777*c` and `555*g` (`g` unbound, written as itself). (c) `c_case`: `sqrt(ref(sq_grad, {u: c}))` — the reference is a leaf, so `godunov` does not match across it; `central` lowers the `D` inside `sq_grad`'s body. The in-place engine expanded `sq_grad` eagerly and fired `godunov`: `999*c`. (d) `d_case`: an authored reference to the match-less `scale2`, whose body `2*w` holds no rewrite-target op, with `w` bound to `exp(c)`; the walk descends into the reference's bindings (§9.6.3 constraint 2), so `exp_lin` fires there and the binding becomes `ref(exp_lin, {p: c})`: `2*(1 + c)`. The in-place engine treated the reference as a surviving leaf (neither the body nor the binding holds a rewrite-target op) and never rewrote its binding: `2*exp(c)`. `expanded.esm` is written under this revision's semantics; the in-place engine fails it by design.",
     "name": "opacity_rule_replacement"
   },
   "models": {
@@ -96,6 +96,24 @@
               }
             ],
             "op": "sqrt"
+          }
+        },
+        {
+          "lhs": "d_case",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "w": {
+                "args": [],
+                "bindings": {
+                  "p": "c"
+                },
+                "name": "exp_lin",
+                "op": "apply_expression_template"
+              }
+            },
+            "name": "scale2",
+            "op": "apply_expression_template"
           }
         }
       ],
@@ -195,6 +213,30 @@
           "params": [
             "u"
           ]
+        },
+        "exp_lin": {
+          "body": {
+            "args": [
+              1,
+              "p"
+            ],
+            "op": "+"
+          },
+          "params": [
+            "p"
+          ]
+        },
+        "scale2": {
+          "body": {
+            "args": [
+              2,
+              "w"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "w"
+          ]
         }
       },
       "variables": {
@@ -236,6 +278,13 @@
           "units": "1"
         },
         "c_case": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "d_case": {
           "shape": [
             "x"
           ],
