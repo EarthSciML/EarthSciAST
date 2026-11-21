@@ -73,9 +73,11 @@ _ref_closure(refnames, named::AbstractDict)::Set{String} =
 """
     _authored_template_names(raw_source) -> Dict{String,Vector{String}}
 
-Per-component MATCH-LESS template names authored in-file in `raw_source`
-(compkind.cname → ordered names). Emit keeps these verbatim as authored entries
-(esm-spec §9.6.4 rule 5); imported/derived templates are materialized instead.
+Per-component template names authored in-file in `raw_source` (compkind.cname
+→ ordered names). Emit keeps these in authored position (esm-spec §9.6.4 rule
+5): a match-less entry always, a `match` rule only when a firing referenced it
+(it is then materialized without `match`, `where` and `priority`);
+imported/derived templates are materialized instead.
 """
 function _authored_template_names(raw_source)::Dict{String, Vector{String}}
     authored = Dict{String, Vector{String}}()
@@ -83,7 +85,7 @@ function _authored_template_names(raw_source)::Dict{String, Vector{String}}
         tpl = _raw_get(comp, "expression_templates")
         (tpl !== nothing && _is_object(tpl)) || continue
         authored["$compkind.$cname"] = String[
-            string(n) for (n, d) in pairs(tpl) if _is_object(d) && _raw_get(d, "match") === nothing
+            string(n) for (n, d) in pairs(tpl) if _is_object(d)
         ]
     end
     return authored
@@ -129,7 +131,10 @@ function _materialize_components!(root, authored::Dict{String, Vector{String}})
 
         emit_block = OrderedDict{String, Any}()
         for n in authored_here
-            haskey(named, n) && (emit_block[n] = named[n])
+            # A `match` rule nothing references still carries its `match`
+            # (a referenced one was materialized without it, §9.6.4 rule 3).
+            haskey(named, n) && _raw_get(named[n], "match") === nothing &&
+                (emit_block[n] = named[n])
         end
         for n in sort(collect(setdiff(materialized, authored_set)))
             emit_block[n] = named[n]
