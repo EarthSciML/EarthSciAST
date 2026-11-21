@@ -63,8 +63,14 @@
 /// A species declaration.
 #let species(name, ..attrs) = _decl("species", name, attrs.named())
 
-/// A path block's value: objects and arrays as nested key and item rows, an
-/// expression (math, `$…$`) as typeset math, any other value as JSON.
+/// Whether a path block's value holds an expression (math, `$…$`) anywhere.
+#let _has-math(v) = if type(v) == content { true } else if type(v) == dictionary {
+  v.values().any(_has-math)
+} else if type(v) == array { v.any(_has-math) } else { false }
+
+/// A path block's value: a part that holds an expression as nested key and
+/// item rows, the expression (math, `$…$`) as typeset math, and any part with
+/// no expression as JSON.
 #let _block-value(v) = {
   let rows(pairs) = grid(
     columns: 2,
@@ -73,11 +79,9 @@
     ..pairs.map(((k, x)) => (raw(k), _block-value(x))).flatten(),
   )
   if type(v) == content { v }
-  else if type(v) == dictionary {
-    if v.len() == 0 { raw("{}") } else { rows(v.pairs().map(((k, x)) => (k + ":", x))) }
-  } else if type(v) == array {
-    if v.len() == 0 { raw("[]") } else { rows(v.map(x => ("-", x))) }
-  } else { raw(json.encode(v)) }
+  else if not _has-math(v) { raw(json.encode(v)) }
+  else if type(v) == dictionary { rows(v.pairs().map(((k, x)) => (k + ":", x))) }
+  else { rows(v.map(x => ("-", x))) }
 }
 
 /// A field of the document with no surface of its own, keyed by its JSON path.
@@ -86,7 +90,9 @@
   inset: 0.6em,
   stroke: 0.5pt + luma(180),
   radius: 2pt,
-  [#text(fill: luma(90), raw(path)) \ #_block-value(value)],
+  [#text(fill: luma(90), raw(path)) \ #if _has-math(value) { _block-value(value) } else {
+      raw(json.encode(value), lang: "json", block: true)
+    }],
 )
 
 #let _labelled(name, body, attrs) = block(
