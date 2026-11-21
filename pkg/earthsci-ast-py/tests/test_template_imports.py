@@ -140,11 +140,6 @@ def _err_code(fn) -> str | None:
         ("import_rename_name_keyed_map_entries", "fixture.esm", "expanded.esm"),
         # §9.3: a library's `enum` ops resolve against the library's own block.
         ("import_library_enum", "fixture.esm", "expanded.esm"),
-        (
-            "import_library_enum",
-            "fixture_importer_redeclares.esm",
-            "expanded_importer_redeclares.esm",
-        ),
     ],
 )
 def test_import_conformance_matches_golden(group, fixture, golden):
@@ -153,6 +148,23 @@ def test_import_conformance_matches_golden(group, fixture, golden):
     got = _canonical_equation_order(_expand_raw(os.path.join(CONF, group, fixture)))
     want = _canonical_equation_order(_read_json(os.path.join(CONF, group, golden)))
     assert got == want
+
+
+def test_import_library_enum_importer_redeclares_matches_golden():
+    """Rule 3 lowers an `enum` op spelled by a parameter per template instance,
+    at load (esm-spec §9.6.4 rule 3), where the golden — written before — still
+    held the op the typed enum lowering lowered afterwards. Both sides are
+    compared with the importer's enums lowered (as the Julia reference does)."""
+    from earthsci_ast.enums import lower_enum_ops_for_file
+
+    fp = os.path.join(CONF, "import_library_enum", "fixture_importer_redeclares.esm")
+    importer = _read_json(fp)
+
+    def lw(x):
+        return _canonical_equation_order(lower_enum_ops_for_file(importer, x))
+
+    want = _read_json(os.path.join(CONF, "import_library_enum", "expanded_importer_redeclares.esm"))
+    assert lw(_expand_raw(fp)) == lw(want)
 
 
 def test_import_smoke_typed_load():

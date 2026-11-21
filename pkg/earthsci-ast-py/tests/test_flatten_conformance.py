@@ -203,11 +203,15 @@ def test_the_template_registry_is_scoped_before_it_is_unioned():
         "conformance/expression_templates/flatten_registry_merge_transitive/fixture_twins.esm"
     )
     flat = flatten(load_path(str(path)))
+    # The rule's firing wrote a reference to the rule (esm-spec §9.6.3
+    # constraint 7), whose body references the wrapper: it renames with it.
     assert set(flat.template_registry) == {
         "A.interior_stencil",
         "A.outer_stencil",
+        "A.d_x_rule",
         "B.interior_stencil",
         "B.outer_stencil",
+        "B.d_x_rule",
     }, "bare names here mean the union was taken before the bodies were scoped"
     body = json.dumps(flat.template_registry["A.interior_stencil"]["body"])
     assert "A.inv_dx" in body and "B.inv_dx" not in body
