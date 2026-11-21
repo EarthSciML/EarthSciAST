@@ -384,6 +384,10 @@ func TestOOL_RulesWriteReferencesGoldens(t *testing.T) {
 		{"template_instance_variants", "fixture.esm", "emitted.esm", "expanded.esm"},
 		{"opacity_rule_replacement", "fixture.esm", "emitted.esm", "expanded.esm"},
 		{"rewrite_depth_through_bodies", "chain_depth_64.esm", "emitted_chain_depth_64.esm", "expanded_chain_depth_64.esm"},
+		// Coupling transforms keep their references (esm-spec §10.4); the
+		// receiving component's block materializes what they name.
+		{"coupling_transform_expression", "fixture.esm", "emitted.esm", "expanded.esm"},
+		{"coupling_transform_rule_and_import", "fixture.esm", "emitted.esm", "expanded.esm"},
 	}
 	for _, c := range cases {
 		t.Run(c.dir+"/"+c.fixture, func(t *testing.T) {
@@ -720,6 +724,7 @@ func TestOOL_EmitIdempotentByteWise(t *testing.T) {
 		{"arrhenius_smoke", "fixture.esm"},
 		{"constrained_match_scope", "fixture.esm"},
 		{"coupling_transform_expression", "fixture.esm"},
+		{"coupling_transform_rule_and_import", "fixture.esm"},
 		{"fixpoint_nested_deriv", "fixture.esm"},
 		{"godunov_beats_inner_deriv", "fixture.esm"},
 		{"import_diamond", "fixture.esm"},
