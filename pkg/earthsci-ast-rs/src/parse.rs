@@ -375,6 +375,9 @@ struct LoadFacts {
     enum_walk_needed: bool,
     /// Whether the document has template machinery.
     has_templates: bool,
+    /// The template names each component authors in-file, read before
+    /// template resolution merges imports (esm-spec §9.6.4 rule 5).
+    authored_templates: std::collections::HashMap<String, Vec<String>>,
     /// Each component's `expression_templates` registry, captured before
     /// expansion removes the blocks.
     component_templates: Option<indexmap::IndexMap<String, Value>>,
@@ -628,6 +631,8 @@ fn pass_scope_injections(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// §9.7.6). An emit source carries no loader-API bindings and mounts nothing
 /// declared.
 fn pass_template_machinery(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    doc.facts.authored_templates =
+        crate::lower_expression_templates::authored_template_names(&doc.value);
     crate::template_imports::resolve_template_machinery_scoped_owned(
         &mut doc.value,
         &doc.base,
@@ -704,8 +709,10 @@ fn pass_lower_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// document with no template machinery has nothing to expand; `expand` would
 /// walk it only to find that out.
 fn pass_expand_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
-    doc.facts.component_templates =
-        crate::lower_expression_templates::capture_component_templates(&doc.value);
+    doc.facts.component_templates = crate::lower_expression_templates::capture_component_templates(
+        &doc.value,
+        &doc.facts.authored_templates,
+    );
     if doc.facts.has_templates {
         let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
         crate::lower_expression_templates::expand(&mut doc.value).map_err(PassError::Schema)?;

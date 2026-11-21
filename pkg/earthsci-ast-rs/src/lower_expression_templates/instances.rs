@@ -21,17 +21,23 @@ use std::collections::{HashMap, HashSet};
 // Canonical bytes (CONFORMANCE_SPEC §5.5.3): compact JSON, keys sorted
 // ---------------------------------------------------------------------------
 
-/// A number in canonical form: an integral, Int64-representable float is
-/// written as an integer (CONFORMANCE_SPEC §5.5.3.1 rule 1), any other number
-/// as the emitted-document writer writes it.
+/// A number in canonical form (CONFORMANCE_SPEC §5.5.3.1): an integer as
+/// written, an integral Int64-representable float as an integer (rule 1), any
+/// other float as its shortest round-tripping digits laid out Julia-style
+/// (rule 2: `1.0e-12`, never `1e-12`).
 fn canonical_number(n: &serde_json::Number, out: &mut String) {
-    if !(n.is_i64() || n.is_u64())
-        && let Some(i) = n.as_f64().and_then(crate::types::canonical_i64)
-    {
-        out.push_str(&i.to_string());
+    if n.is_i64() || n.is_u64() {
+        out.push_str(&n.to_string());
         return;
     }
-    out.push_str(&n.to_string());
+    let Some(f) = n.as_f64() else {
+        out.push_str(&n.to_string());
+        return;
+    };
+    match crate::types::canonical_i64(f) {
+        Some(i) => out.push_str(&i.to_string()),
+        None => out.push_str(&crate::canonicalize::format_julia_float(f)),
+    }
 }
 
 fn canonical_string(s: &str, out: &mut String) {
@@ -789,4 +795,25 @@ pub(super) fn apply_rule3(
         *tree = repoint_refs(tree, &site_refs, &final_, &mut PtrMemo::default());
     }
     Ok(updates)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The variant-ordering bytes spell numbers as CONFORMANCE_SPEC §5.5.3.1
+    /// does: integral floats as integers, other floats Julia-style.
+    #[test]
+    fn canonical_compact_numbers_follow_5_5_3_1() {
+        let v = json!({"b": [1.0e-12, 2.0, 0.25, 1.0e16, 7], "a": -3.5e-6});
+        assert_eq!(
+            canonical_compact_value(&v),
+            r#"{"a":-3.5e-6,"b":[1.0e-12,2,0.25,10000000000000000,7]}"#
+        );
+        assert_eq!(
+            canonical_compact(&to_shared(&v)),
+            canonical_compact_value(&v)
+        );
+    }
 }

@@ -39,7 +39,9 @@ fn ref_closure(
 /// when a firing referenced it (it is then materialized without `match`,
 /// `where` and `priority`); imported/derived templates are materialized
 /// instead. Mirrors `_authored_template_names`.
-fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<String, Vec<String>> {
+pub(crate) fn authored_template_names(
+    raw_source: &Value,
+) -> std::collections::HashMap<String, Vec<String>> {
     let mut authored: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     let Some(root) = raw_source.as_object() else {
@@ -63,6 +65,56 @@ fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<Stri
         }
     }
     authored
+}
+
+/// One component's `expression_templates` block as emit materializes it
+/// (esm-spec §9.6.4 rule 5): the entries authored in-file (`authored_here`,
+/// read off the source before resolution) first, in authored order — a `match`
+/// rule only once rule 3 materialized it without its `match` — then the
+/// transitive closure of the component's surviving references not authored
+/// here, sorted by UTF-8 bytes. Also answers whether the component holds a
+/// surviving reference and whether a non-authored entry was carried (the
+/// §9.6.4 rule-8 stamp). Shared by [`emit_document`] and the typed load path's
+/// registry capture, as the Julia reference `_materialize_components!` is.
+pub(crate) fn materialize_component_block(
+    comp: &Map<String, Value>,
+    authored_here: &[String],
+) -> (Map<String, Value>, bool, bool) {
+    let block = comp.get("expression_templates").and_then(|v| v.as_object());
+    let named = block.map(build_named).unwrap_or_default();
+    // Surviving-reference names across every non-template field.
+    let mut refnames: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (k, v) in comp.iter() {
+        if k == "expression_templates" || k == "expression_template_imports" {
+            continue;
+        }
+        let mut names = Vec::new();
+        collect_apply_names(v, &mut names);
+        refnames.extend(names);
+    }
+    let materialized = ref_closure(&refnames, &named);
+    let authored_set: std::collections::HashSet<&str> =
+        authored_here.iter().map(String::as_str).collect();
+    let mut emit_block = Map::new();
+    let mut carried = false;
+    for n in authored_here {
+        if let Some(decl) = block
+            .and_then(|t| t.get(n))
+            .filter(|d| d.get("match").is_none())
+        {
+            emit_block.insert(n.clone(), decl.clone());
+        }
+    }
+    for n in &materialized {
+        if authored_set.contains(n.as_str()) {
+            continue;
+        }
+        if let Some(decl) = block.and_then(|t| t.get(n)) {
+            emit_block.insert(n.clone(), decl.clone());
+            carried = true;
+        }
+    }
+    (emit_block, !refnames.is_empty(), carried)
 }
 
 /// Produce the reference-preserving, self-contained emitted document (esm-spec
@@ -121,60 +173,9 @@ pub fn emit_document(
                 continue;
             };
             let key = format!("{compkind}.{cname}");
-            let named = comp
-                .get("expression_templates")
-                .and_then(|v| v.as_object())
-                .map(build_named)
-                .unwrap_or_default();
-            // Surviving-reference names across every non-template field.
-            let mut refnames: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
-            for (k, v) in comp.iter() {
-                if k == "expression_templates" || k == "expression_template_imports" {
-                    continue;
-                }
-                let mut names = Vec::new();
-                collect_apply_names(v, &mut names);
-                for n in names {
-                    refnames.insert(n);
-                }
-            }
-            if !refnames.is_empty() {
-                bump = true;
-            }
-            let materialized = ref_closure(&refnames, &named);
             let authored_here = authored.get(&key).cloned().unwrap_or_default();
-            let authored_set: std::collections::HashSet<&str> =
-                authored_here.iter().map(String::as_str).collect();
-
-            // Authored entries first (authored order), then the materialized
-            // closure minus authored, lexicographically sorted. A `match` rule
-            // nothing references still carries its `match` (a referenced one
-            // was materialized without it, §9.6.4 rule 3) and is dropped.
-            let mut emit_block = Map::new();
-            for n in &authored_here {
-                if let Some(decl) = comp
-                    .get("expression_templates")
-                    .and_then(|v| v.as_object())
-                    .and_then(|t| t.get(n))
-                    .filter(|d| d.get("match").is_none())
-                {
-                    emit_block.insert(n.clone(), decl.clone());
-                }
-            }
-            for n in &materialized {
-                if authored_set.contains(n.as_str()) {
-                    continue;
-                }
-                if let Some(decl) = comp
-                    .get("expression_templates")
-                    .and_then(|v| v.as_object())
-                    .and_then(|t| t.get(n))
-                {
-                    emit_block.insert(n.clone(), decl.clone());
-                    bump = true;
-                }
-            }
+            let (emit_block, refs, carried) = materialize_component_block(comp, &authored_here);
+            bump |= refs || carried;
 
             if emit_block.is_empty() {
                 comp.remove("expression_templates");
