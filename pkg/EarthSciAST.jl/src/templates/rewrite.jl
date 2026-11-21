@@ -24,6 +24,13 @@
 
 const APPLY_EXPRESSION_TEMPLATE_OP = "apply_expression_template"
 
+# Every expansion of a template reference made in this process (raw or typed),
+# and the `:tpl_expanded` build count: the explicit expansion utilities
+# (`Expand`, `expand_flattened_refs`, the `:mtk` target) are the only callers
+# expected to move it; load, flatten, validation and build leave it at 0.
+const TEMPLATE_EXPANSIONS = Threads.Atomic{Int}(0)
+_note_expansion!() = (Threads.atomic_add!(TEMPLATE_EXPANSIONS, 1); _count!(:tpl_expanded); nothing)
+
 """
     _BodyView
 
@@ -310,6 +317,7 @@ function _expand_refs_walk(
             end
         end
         expand_pred(newnode) || return newnode
+        _note_expansion!()
         res = _rewrite_json_node(rw, _expand_apply(newnode, named, scope))
         # While marking (a mount's leaf, expanded at load), the root of the
         # expansion records that it came from an application (esm-spec

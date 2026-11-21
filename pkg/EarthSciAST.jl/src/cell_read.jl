@@ -8,15 +8,21 @@
 # index-set name, the walk that reads an expression's operands at the cell, the
 # `faq` that wraps the result, and the rule that names its loop symbols.
 
-# Expands the template references the lift meets, against the flattened
-# system's merged registry, each once. A `nothing` memo expands every
-# reference afresh: the uncached route the cache is checked against.
+# Reads the template references the lifts meet through the flattened system's
+# merged registry, each template analysed once (elementwise_refs.jl); cellwise
+# variants the lift needs are added to that registry. Nothing is expanded.
 struct _ElementwiseContext
     registry::Any
-    memo::_ExpandMemo
+    bodies::Dict{String, Any}          # template => (params, typed body) or nothing
+    roles::Dict{String, Any}           # template => _EwRoles (elementwise_refs.jl)
+    names::Dict{String, Set{String}}   # template => the names its expansion reads, less params
+    cellwise::Dict{Tuple{String, Vector{String}}, Any}   # (template, split) => (variant, map)
 end
 
-_ElementwiseContext(registry) = _ElementwiseContext(registry, _ExpandCache())
+_ElementwiseContext(registry) = _ElementwiseContext(
+    registry, Dict{String, Any}(), Dict{String, Any}(), Dict{String, Set{String}}(),
+    Dict{Tuple{String, Vector{String}}, Any}()
+)
 
 # Op-class memberships for the array rewrites, derived from the registry flags
 # (src/op_registry.jl); memberships are pinned literal-for-literal by
@@ -275,9 +281,12 @@ function _used_names!(out::Set{String}, e, ctx = nothing, seen::IdDict{OpExpr, N
     e isa OpExpr || return out
     haskey(seen, e) && return out
     seen[e] = nothing
-    if e.op == "apply_expression_template"
-        ex = _ew_expansion(e, ctx)
-        ex === nothing || return _used_names!(out, ex, ctx, seen)
+    if e.op == "apply_expression_template" && ctx !== nothing && _ew_template(ctx, e.name) !== nothing
+        # The names of the expansion, without expanding: the body's (less its
+        # parameters, memoized per template) and the bindings' (esm-spec §9.6.11).
+        union!(out, _ew_template_names(ctx, e.name))
+        e.bindings === nothing || foreach(v -> _used_names!(out, v, ctx, seen), values(e.bindings))
+        return out
     end
     union!(out, _bound_symbols(e))
     if e.ranges !== nothing

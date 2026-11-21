@@ -120,6 +120,10 @@ _equation(flat, name) = only(eq for eq in flat.equations if eq.lhs isa EarthSciA
         rhs = _equation(flat, "M.y").rhs
         @test rhs.op == "faq" && length(rhs.output_idx) == 1
         @test only(values(rhs.ranges)).from == "x"
+        # The lift keeps the reference (esm-spec §9.6.11): the body is small.
+        @test length(_distinct_nodes(rhs.expr_body)) < 20
+        # What it denotes, read on the explicit expansion.
+        rhs = _equation(EarthSciAST.expand_flattened_refs(flat), "M.y").rhs
         @test length(_distinct_nodes(rhs.expr_body)) < 100 * _CHAIN_DEPTH
         @test _chain_value(rhs.expr_body) == expected
         gathers = [n for n in keys(_distinct_nodes(rhs.expr_body)) if n.op == "index"]
