@@ -122,7 +122,7 @@ export function printTyp(d: Json): string {
   const doc = toDoc(CAPS_T, d)
   // `Typ.headerT`, `Typ.canonSegs` and `Typ.render`: each construct after a blank line.
   const out: string[] = [`${HEADER}${argsFirstT(doc.front)})\n`]
-  for (const it of items(mathifyDoc(printTypst, rawDoc(prTx, doc)))) {
+  for (const it of items(mathifyDoc(printTypst, () => true, rawDoc(prTx, doc)))) {
     out.push('\n', itemT(it))
     if (!isBlock(it)) out.push('\n')
   }

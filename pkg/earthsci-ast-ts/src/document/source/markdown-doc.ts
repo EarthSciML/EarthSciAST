@@ -164,7 +164,7 @@ export function printMd(d: Json): string {
   // `Md.canonSegs` and `Md.render`: each construct after a blank line, a
   // declaration on a line of its own.
   const out: string[] = [frontMd(doc.front)]
-  for (const it of items(mathifyDoc(printLatex, rawDoc(prMdx, doc)))) {
+  for (const it of items(mathifyDoc(printLatex, yaml.plainMathOk, rawDoc(prMdx, doc)))) {
     out.push('\n', itemMd(it))
     if (!isBlock(it)) out.push('\n')
   }

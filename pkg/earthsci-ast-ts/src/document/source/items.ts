@@ -16,6 +16,7 @@ import type { Kv, Kvs } from './keys.js'
 import {
   ANY,
   COMP_EXPR_PATHS,
+  ELEM,
   TOP_EXPR_PATHS,
   isMathField,
   mapMath,
@@ -177,21 +178,23 @@ export function unitems(front: Kvs, its: readonly RItem[]): Doc<MR> | undefined 
 //
 // `COMP_EXPR_PATHS` and `TOP_EXPR_PATHS` list the expression-valued fields of
 // path blocks. The printer turns a value there into a math leaf when it is a
-// well-formed expression whose math text the container can delimit (`mathOK`);
-// the reader reads every math leaf back, wherever it is.
+// well-formed expression whose math text the container can delimit (`mathOk`
+// and the container's own test: `yaml.plainMathOk` for Markdown); the reader
+// reads every math leaf back, wherever it is.
 
 /** Paths inside a block value. */
 type Paths = readonly (readonly Seg[])[]
 
 /**
  * `Source.stepKey`: the paths below the entry `k` of an object (below an
- * element of an array when `k` is `undefined`, which only {@link ANY} matches).
+ * element of an array when `k` is `undefined`, which {@link ANY} and
+ * {@link ELEM} match).
  */
 export function stepKey(k: string | undefined, ps: Paths): Paths {
   const out: (readonly Seg[])[] = []
   for (const p of ps) {
     if (p.length === 0) continue
-    if (p[0] === ANY || (k !== undefined && p[0] === k)) out.push(p.slice(1))
+    if (p[0] === ANY || (k === undefined ? p[0] === ELEM : p[0] === k)) out.push(p.slice(1))
   }
   return out
 }
@@ -221,78 +224,108 @@ export function atPaths(leaf: (v: Json) => Json, ps: Paths, v: Json): Json {
  * `Source.mathLeaf`: a value at an expression path: its math text, when it is a
  * well-formed expression whose text a container can delimit; otherwise the value.
  */
-export function mathLeaf(prR: (s: Sym, e: Json) => string, s: Sym, v: Json): Json {
+export function mathLeaf(
+  prR: (s: Sym, e: Json) => string,
+  ok: (t: string) => boolean,
+  s: Sym,
+  v: Json,
+): Json {
   if (!isE(v)) return v
   const t = prR(s, v)
-  return mathOk(t) ? jmath(t) : v
+  return mathOk(t) && ok(t) ? jmath(t) : v
 }
 
 /**
  * `Source.mathify`: print a section's path blocks: every expression at one of
  * the paths `ps` (keyed by the block's key) as math under the symbol table `s`.
  */
-export function mathify(prR: (s: Sym, e: Json) => string, s: Sym, ps: Paths, bs: Kvs): Kv[] {
-  const leaf = (v: Json): Json => mathLeaf(prR, s, v)
+export function mathify(
+  prR: (s: Sym, e: Json) => string,
+  ok: (t: string) => boolean,
+  s: Sym,
+  ps: Paths,
+  bs: Kvs,
+): Kv[] {
+  const leaf = (v: Json): Json => mathLeaf(prR, ok, s, v)
   return bs.map(([k, v]) => [k, atPaths(leaf, stepKey(k, ps), v)] as const)
 }
 
-/** `Source.cookV`: every math leaf of a value read back with `ck`. */
+/**
+ * `Source.cookV`: every math leaf of a value read back with `ck`. A value with
+ * no math leaf is returned as it is, not copied.
+ */
 function cookV(ck: (raw: string) => Json | undefined, v: Json): Json | undefined {
   switch (v.t) {
     case 'math':
       return ck(v.s)
     case 'arr': {
-      const xs: Json[] = []
-      for (const x of v.xs) {
+      let xs: Json[] | undefined
+      for (let i = 0; i < v.xs.length; i++) {
+        const x = v.xs[i]!
         const y = cookV(ck, x)
         if (y === undefined) return undefined
+        if (xs === undefined) {
+          if (y === x) continue
+          xs = v.xs.slice(0, i)
+        }
         xs.push(y)
       }
-      return jarr(xs)
+      return xs === undefined ? v : jarr(xs)
     }
     case 'obj': {
       const kvs = cookO(ck, v.kvs)
-      return kvs && jobj(kvs)
+      return kvs === undefined ? undefined : kvs === v.kvs ? v : jobj(kvs)
     }
     default:
       return v
   }
 }
 
-/** `Source.cookO`. */
-function cookO(ck: (raw: string) => Json | undefined, kvs: Kvs): Kv[] | undefined {
-  const out: Kv[] = []
-  for (const [k, x] of kvs) {
+/** `Source.cookO`: `kvs` itself when no value holds a math leaf. */
+function cookO(ck: (raw: string) => Json | undefined, kvs: Kvs): Kvs | undefined {
+  let out: Kv[] | undefined
+  for (let i = 0; i < kvs.length; i++) {
+    const [k, x] = kvs[i]!
     const y = cookV(ck, x)
     if (y === undefined) return undefined
+    if (out === undefined) {
+      if (y === x) continue
+      out = kvs.slice(0, i)
+    }
     out.push([k, y])
   }
-  return out
+  return out ?? kvs
 }
 
 /**
  * `Source.cookBlocks`: read a section's path blocks: every math leaf, wherever
- * it is, read back as an expression under the symbol table `s`.
+ * it is, read back as an expression under the symbol table `s` (`bs` itself
+ * when none holds one).
  */
 export function cookBlocks(
   ckR: (s: Sym, raw: string) => Json | undefined,
   s: Sym,
   bs: Kvs,
-): Kv[] | undefined {
+): Kvs | undefined {
   return cookO((raw) => ckR(s, raw), bs)
 }
 
 /**
  * `Source.mathifyDoc`: print the path blocks of a skeleton: a section's
- * expressions as math under the section's symbol table.
+ * expressions as math under the section's symbol table; `ok` is the
+ * container's test of math text.
  */
-export function mathifyDoc(prR: (s: Sym, e: Json) => string, d: Doc<MR>): Doc<MR> {
+export function mathifyDoc(
+  prR: (s: Sym, e: Json) => string,
+  ok: (t: string) => boolean,
+  d: Doc<MR>,
+): Doc<MR> {
   return {
     ...d,
-    blocks: mathify(prR, topSym(d), TOP_EXPR_PATHS, d.blocks),
+    blocks: mathify(prR, ok, topSym(d), TOP_EXPR_PATHS, d.blocks),
     comps: d.comps.map((c) => ({
       ...c,
-      blocks: mathify(prR, symFor(d, c), COMP_EXPR_PATHS, c.blocks),
+      blocks: mathify(prR, ok, symFor(d, c), COMP_EXPR_PATHS, c.blocks),
     })),
   }
 }
@@ -311,7 +344,7 @@ export function cookDocBlocks(
   for (const c of d.comps) {
     const b = cookBlocks(ckR, symFor(d, c), c.blocks)
     if (b === undefined) return undefined
-    comps.push({ ...c, blocks: b })
+    comps.push(b === c.blocks ? c : { ...c, blocks: b })
   }
   return { ...d, blocks, comps }
 }
