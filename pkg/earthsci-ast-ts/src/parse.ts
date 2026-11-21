@@ -664,10 +664,8 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // registry as a first-class field of the flattened representation. Keyed
   // `"models.<name>"` / `"reaction_systems.<name>"` (the Julia / Python
   // `component_templates` key shape).
-  const componentTemplates = captureComponentTemplates(
-    loweredTemplates,
-    authoredTemplateNames(machineryInput),
-  )
+  const authoredNames = authoredTemplateNames(machineryInput)
+  const componentTemplates = captureComponentTemplates(loweredTemplates, authoredNames)
   const authoredTemplateRhs = captureTemplateApplicationRhs(loweredTemplates)
   const typedData = expandDocument(loweredTemplates) as EsmFile
 
@@ -694,6 +692,17 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   if (Object.keys(componentTemplates).length > 0) {
     Object.defineProperty(loweredData, 'componentTemplates', {
       value: componentTemplates,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
+  // The template names each component authors in the document, which order the
+  // registry `resolveSubsystemRefs` rebuilds once mounted definitions join it
+  // (authored entries first, esm-spec §9.6.4 rule 5). Same sidecar mechanism.
+  if (Object.keys(authoredNames).length > 0) {
+    Object.defineProperty(loweredData, 'authoredTemplateNames', {
+      value: authoredNames,
       enumerable: false,
       writable: true,
       configurable: true,
