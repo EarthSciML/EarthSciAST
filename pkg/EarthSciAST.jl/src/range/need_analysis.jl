@@ -126,6 +126,14 @@ mutable struct _NeedCtx
     # body the walk is in (`nothing` in the equations themselves).
     tt::Any
     scope::Any
+    # Reads inside template bodies that land on one side of a seam: per
+    # (chain, node), where `chain` is the references the walk entered to
+    # reach the body, outermost first (each the reference node as the walk
+    # read it), and `node` the body's `index` node, as `marks` holds the
+    # caller's reads. A body is shared by every use of its instance, so a read
+    # past the seam is served by a seam instance of the body made for that
+    # chain (tile.jl, "Reads past a periodic seam inside a template body").
+    bmarks::Dict{Tuple{Vector{UInt}, UInt}, Tuple{Vector{Any}, Any, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}}}
 end
 
 _NeedCtx(
@@ -138,7 +146,8 @@ _NeedCtx(
     scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need,
     work, scalar_stack, Dict{Tuple{String, Bool}, _Seam}(), ("", ()),
     Any[], IdDict{Any, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}}(),
-    _build_templates(), nothing
+    _build_templates(), nothing,
+    Dict{Tuple{Vector{UInt}, UInt}, Tuple{Vector{Any}, Any, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}}}()
 )
 
 # ---- Reading through template references ----
@@ -183,6 +192,17 @@ function _need_arg(sc::_NeedScope, n::String)
         )
     )
     return v, sc.up
+end
+
+# The references the walk entered to reach scope `sc`, outermost first.
+function _need_chain(sc::_NeedScope)
+    out = Any[]
+    s = sc
+    while s !== nothing
+        push!(out, s.call)
+        s = s.up
+    end
+    return reverse!(out)
 end
 
 # Run `f()` with the walk in scope `sc`.
@@ -258,19 +278,18 @@ function _seam_mark!(ctx::_NeedCtx, n::String, binds::Vector{_Bind})
         end
     end
     any_seam || return nothing
-    if ctx.scope !== nothing && any(b -> b & 0x02 != 0, bits)
-        # A read inside a template body is the body's, shared by every use of
-        # the instance: it cannot be sent to the far block at this use alone.
-        d = findfirst(b -> b & 0x02 != 0, bits)
-        _refuse_rule(
-            _rule_display(n),
-            "tile restriction: template '$((ctx.scope::_NeedScope).fr.name)' reads '$n' " *
-                "past the periodic seam of '$(ctx.shapes[n][d])' within the tile's storage; " *
-                "give the tile a storage box that does not cross the seam"
-        )
+    node, sc = isempty(ctx.idx_stack) ? (nothing, nothing) : ctx.idx_stack[end]
+    d = if sc === nothing
+        get!(() -> Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}(), ctx.marks, node)
+    else
+        # A read a template body makes: recorded for the chain of references
+        # that reached the body (the body is shared; the chain is this use).
+        chain = _need_chain(sc::_NeedScope)
+        k = (UInt[objectid(c) for c in chain], objectid(node))
+        get!(ctx.bmarks, k) do
+            (chain, node, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}())
+        end[3]
     end
-    node = isempty(ctx.idx_stack) ? nothing : ctx.idx_stack[end]
-    d = get!(() -> Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}(), ctx.marks, node)
     k = (n, ctx.tag)
     cur = get(d, k, nothing)
     d[k] = cur === nothing ? bits : cur .| bits
@@ -478,7 +497,7 @@ function _need_walk!(
     e isa OpExpr || return nothing
     o = e::OpExpr
     if o.op == "index" && !isempty(o.args)
-        push!(ctx.idx_stack, o)
+        push!(ctx.idx_stack, (o, ctx.scope))
         try
             _need_index!(ctx, o.args[1], ASTExpr[a for a in o.args[2:end]], env, anchors, rule)
         finally
