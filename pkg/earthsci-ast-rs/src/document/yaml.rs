@@ -11,15 +11,16 @@
 //!   its other entries aligned with its first key; a non-empty array as an
 //!   element starts on the next line, two spaces deeper.
 //!
-//! Strings are always double-quoted with JSON-style escapes; a key is bare when
-//! it is an identifier and not one of YAML's special plain scalars in any
-//! letter case; a key longer than 1024 characters uses the explicit
-//! `? "key"` form. The reader accepts only this layout and well-formed values.
+//! Strings are always double-quoted with JSON-style escapes, so a math leaf
+//! (path blocks only, `Source.mathify`) is the plain scalar `$…$`, its text up
+//! to the next `$` (`Json.mathOK`); a key is bare when it is an identifier and
+//! not one of YAML's special plain scalars in any letter case; a key longer
+//! than 1024 characters uses the explicit `? "key"` form. The reader accepts only this layout and well-formed values.
 //!
 //! The Lean readers carry fuel (`4 * length + 4`) for termination only; every
 //! two nested calls consume a character, so the port recurses without it.
 
-use super::json::Json;
+use super::json::{Json, p_math};
 use super::number;
 use super::source::keys::Kvs;
 use super::strings::{is_ident_start, parse_key, parse_quoted, print_key, quote, spaces};
@@ -59,6 +60,12 @@ pub fn inline(v: &Json) -> Vec<char> {
         Json::Bool(false) => "false".chars().collect(),
         Json::Num(n) => number::print(n),
         Json::Str(s) => quote(false, s),
+        Json::Math(s) => {
+            let mut out = vec!['$'];
+            out.extend(s.chars());
+            out.push('$');
+            out
+        }
         Json::Arr(_) => vec!['[', ']'],
         Json::Obj(_) => vec!['{', '}'],
     }
@@ -191,6 +198,7 @@ pub fn p_inline(input: &[char]) -> Option<(Json, &[char])> {
             _ => None,
         },
         ['"', ..] => parse_quoted(false, input).map(|(s, r)| (Json::Str(s), r)),
+        ['$', r @ ..] => p_math(r),
         _ => number::parse(input).map(|(n, r)| (Json::Num(n), r)),
     }
 }
@@ -298,10 +306,11 @@ pub fn p_top(input: &[char]) -> Option<(Json, &[char])> {
     }
 }
 
-/// `Yaml.decode`: all of the input consumed, and the value well formed.
+/// `Yaml.decode`: all of the input consumed, and the value well formed (math
+/// leaves allowed, `Json.WFm`).
 pub fn decode(s: &[char]) -> Option<Json> {
     match p_top(s) {
-        Some((v, [])) if v.wfb() => Some(v),
+        Some((v, [])) if v.wfmb() => Some(v),
         _ => None,
     }
 }
@@ -323,6 +332,7 @@ mod tests {
             "1.0e-9\n",
             "\"s\"\n",
             "{}\n",
+            "a:\n  - $x + 1$\n",
         ] {
             assert_eq!(rt(t), t);
         }
@@ -330,7 +340,15 @@ mod tests {
 
     #[test]
     fn refusals() {
-        for t in ["a: 1\na: 2\n", "yes: 1\n", "a: 01\n", "a:  1\n", "a: 1"] {
+        for t in [
+            "a: $$\n",
+            "a: $x\\$\n",
+            "a: 1\na: 2\n",
+            "yes: 1\n",
+            "a: 01\n",
+            "a:  1\n",
+            "a: 1",
+        ] {
             let cs: Vec<char> = t.chars().collect();
             assert!(decode(&cs).is_none(), "{t:?}");
         }

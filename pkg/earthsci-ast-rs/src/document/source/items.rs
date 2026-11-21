@@ -8,10 +8,12 @@
 
 use super::keys::Kvs;
 use super::skeleton::{
-    Comp, Decl, Doc, Eqn, Kind, MC, MR, Mx, Role, Rxn, Tm, is_math_field, sym_for, top_sym,
+    COMP_EXPR_PATHS, Comp, Decl, Doc, Eqn, Kind, MC, MR, Mx, PathSeg, Role, Rxn, TOP_EXPR_PATHS,
+    Tm, is_math_field, sym_for, top_sym,
 };
-use crate::document::json::Json;
+use crate::document::json::{Json, math_ok};
 use crate::document::math::Sym;
+use crate::document::math::expr::is_e;
 
 /// `Source.RItem`: one construct of a document. An equation is its math text,
 /// uninterpreted; so is a reaction's rate.
@@ -194,6 +196,140 @@ pub fn raw_doc(pr: &dyn Fn(&Sym, &MC) -> MR, d: &Doc<MC>) -> Doc<MR> {
             })
             .collect(),
     }
+}
+
+// ## Expressions inside path blocks
+//
+// `COMP_EXPR_PATHS` and `TOP_EXPR_PATHS` list the expression-valued fields of
+// path blocks. The printer turns a value there into a math leaf (`Json::Math`)
+// when it is a well-formed expression whose math text the container can
+// delimit (`math_ok`); the reader reads every math leaf back, wherever it is.
+
+/// Paths, as `Notation.Seg` lists.
+type Paths<'a> = Vec<&'a [PathSeg]>;
+
+/// `Source.stepKey`: the paths below the entry `k` of an object (or below an
+/// element, `None`).
+pub fn step_key<'a>(k: Option<&str>, ps: &[&'a [PathSeg]]) -> Paths<'a> {
+    ps.iter()
+        .filter_map(|p| match p.split_first() {
+            Some((PathSeg::Any, q)) => Some(q),
+            Some((PathSeg::Key(k1), q)) if Some(*k1) == k => Some(q),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `Source.atPaths`: `leaf` applied to every value of `v` at one of the paths
+/// `ps` (the shortest first: a value at a path is not looked into); every other
+/// value as it is.
+pub fn at_paths(leaf: &dyn Fn(&Json) -> Json, ps: &[&[PathSeg]], v: &Json) -> Json {
+    if ps.iter().any(|p| p.is_empty()) {
+        return leaf(v);
+    }
+    match v {
+        Json::Arr(xs) => {
+            let q = step_key(None, ps);
+            Json::Arr(xs.iter().map(|x| at_paths(leaf, &q, x)).collect())
+        }
+        Json::Obj(kvs) => Json::Obj(
+            kvs.iter()
+                .map(|(k, x)| (k.clone(), at_paths(leaf, &step_key(Some(k), ps), x)))
+                .collect(),
+        ),
+        _ => v.clone(),
+    }
+}
+
+/// `Source.mathLeaf`: a value at an expression path: its math text, when it is
+/// a well-formed expression whose text a container can delimit; otherwise the
+/// value.
+pub fn math_leaf(pr_r: &dyn Fn(&Sym, &Json) -> String, s: &Sym, v: &Json) -> Json {
+    if is_e(v) {
+        let t = pr_r(s, v);
+        if math_ok(&t) {
+            return Json::Math(t);
+        }
+    }
+    v.clone()
+}
+
+/// `Source.mathify`: print a section's path blocks: every expression at one of
+/// the paths `ps` (keyed by the block's key) as math under the symbol table
+/// `s`.
+pub fn mathify(pr_r: &dyn Fn(&Sym, &Json) -> String, s: &Sym, ps: &[&[PathSeg]], bs: &Kvs) -> Kvs {
+    let leaf = |v: &Json| math_leaf(pr_r, s, v);
+    bs.iter()
+        .map(|(k, v)| (k.clone(), at_paths(&leaf, &step_key(Some(k), ps), v)))
+        .collect()
+}
+
+/// `Source.cookV`: every math leaf of a value read back with `ck`.
+pub fn cook_v(ck: &dyn Fn(&str) -> Option<Json>, v: &Json) -> Option<Json> {
+    match v {
+        Json::Math(t) => ck(t),
+        Json::Arr(xs) => xs
+            .iter()
+            .map(|x| cook_v(ck, x))
+            .collect::<Option<Vec<_>>>()
+            .map(Json::Arr),
+        Json::Obj(kvs) => cook_o(ck, kvs).map(Json::Obj),
+        _ => Some(v.clone()),
+    }
+}
+
+/// `Source.cookO`.
+pub fn cook_o(ck: &dyn Fn(&str) -> Option<Json>, kvs: &Kvs) -> Option<Kvs> {
+    kvs.iter()
+        .map(|(k, v)| cook_v(ck, v).map(|y| (k.clone(), y)))
+        .collect()
+}
+
+/// `Source.cookBlocks`: read a section's path blocks: every math leaf,
+/// wherever it is, read back as an expression under the symbol table `s`.
+pub fn cook_blocks(ck_r: &dyn Fn(&Sym, &str) -> Option<Json>, s: &Sym, bs: &Kvs) -> Option<Kvs> {
+    cook_o(&|t| ck_r(s, t), bs)
+}
+
+/// `Source.mathifyDoc`: print the path blocks of a skeleton: each section's
+/// under its symbol table (a component's, or the document's for the top-level
+/// blocks).
+pub fn mathify_doc(pr_r: &dyn Fn(&Sym, &Json) -> String, d: &Doc<MR>) -> Doc<MR> {
+    let blocks = mathify(pr_r, &top_sym(d), TOP_EXPR_PATHS, &d.blocks);
+    let comps = d
+        .comps
+        .iter()
+        .map(|c| Comp {
+            blocks: mathify(pr_r, &sym_for(d, c), COMP_EXPR_PATHS, &c.blocks),
+            ..c.clone()
+        })
+        .collect();
+    Doc {
+        blocks,
+        comps,
+        ..d.clone()
+    }
+}
+
+/// `Source.cookDocBlocks`: read the path blocks of a skeleton: every math leaf
+/// of a section's blocks under the section's symbol table.
+pub fn cook_doc_blocks(ck_r: &dyn Fn(&Sym, &str) -> Option<Json>, d: &Doc<MR>) -> Option<Doc<MR>> {
+    let blocks = cook_blocks(ck_r, &top_sym(d), &d.blocks)?;
+    let comps = d
+        .comps
+        .iter()
+        .map(|c| {
+            cook_blocks(ck_r, &sym_for(d, c), &c.blocks).map(|b| Comp {
+                blocks: b,
+                ..c.clone()
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Doc {
+        blocks,
+        comps,
+        ..d.clone()
+    })
 }
 
 /// `Source.cookComp`: read a component's math entries under its symbol table;

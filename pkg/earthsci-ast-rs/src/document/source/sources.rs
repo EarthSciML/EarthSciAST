@@ -10,7 +10,7 @@
 
 use std::ops::Range;
 
-use super::items::{Counts, RItem, Spanned, cook_doc_counted, unitems};
+use super::items::{Counts, RItem, Spanned, cook_doc_blocks, cook_doc_counted, unitems};
 use super::keys::Kvs;
 use super::lines::{decode_text, first_crlf};
 use super::skeleton::{Comp, Kind, MC, MR, Mx, decl_field, of_doc};
@@ -90,13 +90,15 @@ fn of_text(ptrs: &[String], counts: &[usize], j: usize) -> Vec<String> {
     ptrs[from..from + counts[j]].to_vec()
 }
 
-/// Read a document as `lex_doc` and `ck` read it, with the pointer and the
+/// Read a document as `lex_doc`, `ck_r` (the math leaves of path blocks,
+/// `cook_doc_blocks`) and `ck` read it, with the pointer and the
 /// byte range of every construct. A construct that reads as several entries
 /// (a display of several equations, a container) has one pointer for each,
 /// all with its range.
 pub fn read_sourced(
     text: &str,
     lex_doc: LexDoc,
+    ck_r: &dyn Fn(&Sym, &str) -> Option<Json>,
     ck: &dyn Fn(&Sym, &MR) -> Option<Vec<MC>>,
 ) -> Option<Sourced> {
     let (chars, offsets) = decode_with_offsets(text);
@@ -107,6 +109,7 @@ pub fn read_sourced(
     );
     let (front, spanned) = lex_doc(&chars)?;
     let raw = unitems(front, spanned.iter().map(|(it, _)| it.clone()).collect())?;
+    let raw = cook_doc_blocks(ck_r, &raw)?;
     let (doc, Counts { top, comps }) = cook_doc_counted(ck, &raw)?;
     let json = of_doc(&doc)?;
 
