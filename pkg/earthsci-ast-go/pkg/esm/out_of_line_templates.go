@@ -1018,10 +1018,9 @@ func sameRef(a, b any) bool {
 //
 // Without it the common multi-model shape silently breaks. Two components
 // import one rule library; the leaf stencil folds differently per component (a
-// rebind, a metaparameter, or the §10.7 component-scoping of its free
-// variables) and renames to `A.leaf` / `B.leaf`, while the intermediate wrapper
-// that REFERENCES the leaf is byte-identical and would dedup under its bare
-// name. That single deduped body then carries a reference the registry no longer
+// rebind or a metaparameter) and renames to `A.leaf` / `B.leaf`, while the
+// intermediate wrapper that REFERENCES the leaf is byte-identical and would
+// dedup under its bare name. That single deduped body then carries a reference the registry no longer
 // holds, and expansion fails with `apply_expression_template_unknown_template`
 // naming a template no component ever mentioned. Renaming the wrapper per owner
 // lets each copy's nested reference be rewritten to its own owner's leaf.
@@ -1071,20 +1070,23 @@ func registryCollisionNames(byname *orderedMap) map[string]bool {
 
 // flattenTemplateRegistries merges every component's `expression_templates`
 // registry of an Option-B loaded document into a single document-scoped merged
-// registry (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4):
-// deep-equal same-name entries dedupe at first occurrence; a colliding name (see
-// registryCollisionNames — non-deep-equal, or reaching one that is) renames its
-// entry in EVERY owning component to `<ComponentPath>.<name>` with references
-// rewritten in lockstep. Returns the rewritten document and the merged registry
-// (the FlattenedSystem's first-class registry field). Match rules are not merged.
-// Mutates `view` in place. Mirrors the Julia `flatten_template_registries`.
+// registry (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4) by
+// mergeFlatRegistry: deep-equal same-name entries are kept once under the bare
+// name; a colliding name (registryCollisionNames — non-deep-equal, or reaching
+// one that is) keeps one entry per distinct definition, named
+// `<first owner's path>.<name>`, with each owner's references rewritten in
+// lockstep. Returns the rewritten document and the merged registry (the
+// FlattenedSystem's first-class registry field). Match rules are not merged.
+// The view carries no declaration order, so components and entries are taken
+// in sorted order. Mutates `view` in place. Mirrors the Julia
+// `flatten_template_registries`.
 func flattenTemplateRegistries(view map[string]any) (map[string]any, *orderedMap) {
 	type compEntry struct {
-		path  string
-		comp  map[string]any
-		named map[string]any
+		path string
+		comp map[string]any
 	}
 	var comps []compEntry
+	var blocks []registryBlock
 	for _, kind := range templateComponentKinds {
 		cs, ok := view[kind].(map[string]any)
 		if !ok {
@@ -1095,77 +1097,26 @@ func flattenTemplateRegistries(view map[string]any) (map[string]any, *orderedMap
 			if !ok {
 				continue
 			}
-			named := map[string]any{}
+			comps = append(comps, compEntry{path: cname, comp: comp})
 			if tpl, ok := comp["expression_templates"].(map[string]any); ok {
-				for n, d := range tpl {
-					if dm, ok := d.(map[string]any); ok {
-						if m, has := dm["match"]; has && m != nil {
-							continue // match rules not merged
-						}
-					}
-					named[n] = d
-				}
+				blocks = append(blocks, registryBlock{path: cname, block: matchlessBlock(tpl, nil)})
 			}
-			comps = append(comps, compEntry{path: cname, comp: comp, named: named})
 		}
 	}
+	merged, rename := mergeFlatRegistry(blocks)
 
-	// Group each template name across components (preserving first-seen order).
-	byname := newOrderedMap()
+	// Rewrite each component's reference sites in lockstep with its renames,
+	// then surrender the per-component blocks to the merged registry.
 	for _, ce := range comps {
-		for _, n := range sortedKeys(ce.named) {
-			var occ []any
-			if ex, ok := byname.get(n).([]any); ok {
-				occ = ex
-			}
-			occ = append(occ, [2]any{ce.path, ce.named[n]})
-			byname.set(n, occ)
-		}
-	}
-
-	merged := newOrderedMap()
-	rename := map[string]map[string]string{} // path => (old => new)
-	names := append([]string(nil), byname.keys...)
-	sort.Strings(names)
-	collide := registryCollisionNames(byname)
-	for _, name := range names {
-		occ, _ := byname.get(name).([]any)
-		if !collide[name] {
-			merged.set(name, occ[0].([2]any)[1]) // deep-equal dedup
-			continue
-		}
-		for _, o := range occ {
-			path := o.([2]any)[0].(string)
-			decl := o.([2]any)[1]
-			newname := path + "." + name
-			merged.set(newname, decl)
-			if rename[path] == nil {
-				rename[path] = map[string]string{}
-			}
-			rename[path][name] = newname
-		}
-	}
-
-	// Rewrite reference sites in lockstep (component expression positions and the
-	// carried bodies of the renamed entries), then surrender the per-component
-	// blocks to the merged registry.
-	for _, ce := range comps {
-		rn := rename[ce.path]
-		if rn != nil {
+		if rn := rename[ce.path]; rn != nil {
 			for _, k := range sortedKeys(ce.comp) {
 				if k == "expression_templates" {
 					continue
 				}
 				ce.comp[k] = renameApplyRefs(ce.comp[k], rn)
 			}
-			for _, newname := range rn {
-				if merged.has(newname) {
-					merged.set(newname, renameApplyRefs(merged.get(newname), rn))
-				}
-			}
 		}
 		delete(ce.comp, "expression_templates")
 	}
-
 	return view, merged
 }

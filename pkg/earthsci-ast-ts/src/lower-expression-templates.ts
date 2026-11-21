@@ -1676,9 +1676,17 @@ function buildRewriteContext(
 
 /** True if any model / reaction_system declares an expression_templates block. */
 function hasExpressionTemplatesBlock(root: Record<string, unknown>): boolean {
+  // A subsystem's own block counts: it joins its component's registry
+  // (`hoistMountedTemplates`).
+  const carries = (node: Record<string, unknown>): boolean => {
+    if (isObject(node.expression_templates)) return true
+    const subs = node.subsystems
+    if (!isObject(subs)) return false
+    return Object.values(subs).some((sub) => isObject(sub) && carries(sub))
+  }
   let found = false
   forEachRawComponent(root, (_kind, _name, comp) => {
-    if (isObject(comp.expression_templates)) found = true
+    if (carries(comp)) found = true
   })
   return found
 }
@@ -1852,6 +1860,10 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   }
   forEachRawComponent(out, (compKind, compName, compRaw) => {
     const comp = compRaw as Component
+    // A model mounted as a subsystem keeps its references and brings its
+    // template definitions (as does an authored subsystem with its own block);
+    // they join this component's registry here (esm-spec §9.6.4 rule 1).
+    hoistMountedTemplates(comp, compName)
     const tplRaw = comp.expression_templates
     const shapeEnv = componentShapeEnv(comp)
     const cscope = `${compKind}.${compName}`
@@ -2365,6 +2377,197 @@ export function registryCollisionNames(
   return collide
 }
 
+/** Is `decl` a match-less (referenceable, esm-spec §9.6.2) template entry? */
+function isMatchless(decl: unknown): boolean {
+  return !(isObject(decl) && decl.match !== undefined && decl.match !== null)
+}
+
+/** The match-less entries of a raw `expression_templates` block, in block order. */
+function matchlessEntries(block: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (!isObject(block)) return out
+  for (const [n, d] of Object.entries(block)) if (isMatchless(d)) out[n] = d
+  return out
+}
+
+/** Result of {@link mergeFlatRegistry}. */
+export interface FlatRegistryMerge {
+  /** The merged registry, in document order. */
+  merged: Record<string, unknown>
+  /** Per owner path, the names it renamed (old name => merged name). */
+  rename: Map<string, Record<string, string>>
+}
+
+/**
+ * Merge per-owner template registries into one (esm-spec §9.6.4 rule 7,
+ * §10.7; esm-libraries-spec §4.7.5 step 4). `blocks` is the ordered list of
+ * (owner path, block) pairs; the owner path names the entries a collision
+ * renames (`<path>.<name>`).
+ *
+ *  - A name whose occurrences are all deep-equal is kept once, under its bare
+ *    name ({@link registryCollisionNames} decides which names collide, closed
+ *    under the reference DAG).
+ *  - A colliding name keeps ONE entry per distinct definition: its occurrences
+ *    are settled callees first, each with its nested references renamed to its
+ *    own owner's entries; an occurrence deep-equal to an earlier group's entry
+ *    joins that group, otherwise it opens a new group named
+ *    `<its owner path>.<name>`. So a definition two owners carry identically
+ *    (a leaf mounted twice) stays one definition, named after its first owner.
+ *
+ * Output order: names in first-occurrence (document) order; a colliding name
+ * emits its groups in order. The caller applies each owner's `rename` to that
+ * owner's reference sites. Mirrors the Julia reference `_merge_flat_registry`.
+ */
+export function mergeFlatRegistry(
+  blocks: readonly { path: string; block: Record<string, unknown> }[],
+): FlatRegistryMerge {
+  const byname = new Map<string, { path: string; decl: unknown }[]>()
+  for (const { path, block } of blocks) {
+    for (const [name, decl] of Object.entries(block)) {
+      let occ = byname.get(name)
+      if (occ === undefined) byname.set(name, (occ = []))
+      occ.push({ path, decl })
+    }
+  }
+  const collide = registryCollisionNames(byname)
+  const rename = new Map<string, Record<string, string>>()
+  const groups = new Map<string, { name: string; decl: unknown }[]>()
+  const settle = (name: string): void => {
+    if (groups.has(name)) return
+    const gs: { name: string; decl: unknown }[] = []
+    for (const { path, decl } of byname.get(name)!) {
+      const rn: Record<string, string> = {}
+      let renamed = false
+      for (const c of collectApplyNames(decl, [])) {
+        if (!collide.has(c) || c === name) continue
+        settle(c)
+        const target = rename.get(path)?.[c]
+        if (target !== undefined) {
+          rn[c] = target
+          renamed = true
+        }
+      }
+      const d = renamed ? renameApplyRefs(decl, rn) : decl
+      let g = gs.find((x) => deepEqual(x.decl, d))
+      if (g === undefined) {
+        g = { name: `${path}.${name}`, decl: d }
+        gs.push(g)
+      }
+      let perOwner = rename.get(path)
+      if (perOwner === undefined) rename.set(path, (perOwner = {}))
+      perOwner[name] = g.name
+    }
+    groups.set(name, gs)
+  }
+  for (const name of byname.keys()) if (collide.has(name)) settle(name)
+  const merged: Record<string, unknown> = {}
+  for (const [name, occ] of byname) {
+    if (collide.has(name)) {
+      for (const g of groups.get(name)!) merged[g.name] = g.decl
+    } else {
+      merged[name] = occ[0]!.decl
+    }
+  }
+  return { merged, rename }
+}
+
+/**
+ * Merge into the component `comp`'s `expression_templates` block the template
+ * definitions its subsystems carry (esm-spec §9.6.4 rule 1): a model mounted as
+ * a subsystem (esm-spec §4.7) keeps its references and brings its match-less
+ * definitions on its own block, and an authored inline subsystem may declare
+ * one too. Every subsystem below `comp` carrying a block joins `comp`'s by
+ * {@link mergeFlatRegistry}; the walk stops at such a subsystem (its own
+ * subtree was merged into its block when it was lowered). Owner paths: `cname`
+ * for `comp`'s own match-less entries, the subsystem path below `comp` (`Sub`,
+ * `Sub.Inner`) for each block.
+ *
+ * Bodies are taken unchanged, in the subsystem's own names: a body's free names
+ * are read in the scope of the subsystem that owns the reference, so a leaf
+ * mounted twice brings one definition. Each mounted subtree's references follow
+ * its own owner's renames; `comp`'s other sites (its own fields and its
+ * subsystems without a block) follow `comp`'s. `comp`'s `match` rules stay
+ * first in the new block; the subsystem blocks are deleted. Mutates `comp`.
+ * Returns `comp`'s own rename map (old name => merged name), `null` when it
+ * renamed nothing, or `undefined` when no subsystem carries a block.
+ *
+ * Mirrors the Julia reference `_hoist_mounted_templates!`.
+ */
+export function hoistMountedTemplates(
+  comp: Record<string, unknown>,
+  cname: string,
+): Record<string, string> | null | undefined {
+  const mounts: [string, Record<string, unknown>][] = []
+  collectMountedBlocks(mounts, comp, '')
+  if (mounts.length === 0) return undefined
+  const own = comp.expression_templates
+  const blocks = [{ path: cname, block: matchlessEntries(own) }]
+  for (const [path, sub] of mounts) {
+    blocks.push({ path, block: matchlessEntries(sub.expression_templates) })
+  }
+  const { merged, rename } = mergeFlatRegistry(blocks)
+  for (const [path, sub] of mounts) {
+    const rm = rename.get(path)
+    if (rm === undefined) continue
+    for (const k of Object.keys(sub)) {
+      if (k === 'expression_templates') continue
+      sub[k] = renameApplyRefs(sub[k], rm)
+    }
+  }
+  const rn = rename.get(cname)
+  const block: Record<string, unknown> = {}
+  if (isObject(own)) {
+    for (const [n, d] of Object.entries(own)) {
+      if (isMatchless(d)) continue
+      block[n] = rn === undefined ? d : renameApplyRefs(d, rn)
+    }
+  }
+  Object.assign(block, merged)
+  if (rn !== undefined) {
+    for (const k of Object.keys(comp)) {
+      if (k === 'expression_templates' || k === 'subsystems') continue
+      comp[k] = renameApplyRefs(comp[k], rn)
+    }
+    renameOutsideMounts(comp, rn)
+  }
+  for (const [, sub] of mounts) delete sub.expression_templates
+  comp.expression_templates = block
+  return rn ?? null
+}
+
+/**
+ * The subsystems below `node` that carry an `expression_templates` block, with
+ * their paths. The walk stops at such a subsystem: its subtree is its block's.
+ */
+function collectMountedBlocks(
+  out: [string, Record<string, unknown>][],
+  node: Record<string, unknown>,
+  prefix: string,
+): void {
+  const subs = node.subsystems
+  if (!isObject(subs)) return
+  for (const [k, sub] of Object.entries(subs)) {
+    if (!isObject(sub)) continue
+    const path = prefix === '' ? k : `${prefix}.${k}`
+    if (isObject(sub.expression_templates)) out.push([path, sub])
+    else collectMountedBlocks(out, sub, path)
+  }
+}
+
+/** `node`'s subsystems with the references outside every block-carrying subtree renamed by `rn`. */
+function renameOutsideMounts(node: Record<string, unknown>, rn: Record<string, string>): void {
+  const subs = node.subsystems
+  if (!isObject(subs)) return
+  for (const sub of Object.values(subs)) {
+    if (!isObject(sub) || isObject(sub.expression_templates)) continue
+    for (const k of Object.keys(sub)) {
+      if (k === 'subsystems') continue
+      sub[k] = renameApplyRefs(sub[k], rn)
+    }
+    renameOutsideMounts(sub, rn)
+  }
+}
+
 /** Result of {@link flattenTemplateRegistries}: the rewritten document + merged registry. */
 export interface FlattenedTemplateRegistries {
   root: Record<string, unknown>
@@ -2375,88 +2578,55 @@ export interface FlattenedTemplateRegistries {
  * The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
  * esm-libraries-spec §4.7.5 step 4). Given an Option-B loaded multi-component
  * document `loaded`, merge every component's match-less `expression_templates`
- * registry into a single document-scoped merged registry:
+ * registry into a single document-scoped merged registry by
+ * {@link mergeFlatRegistry}:
  *
  *  - **Deep-equal dedup at first occurrence** — two components importing one
  *    stencil produce identical folded bodies, kept once under the bare name.
- *  - **Non-deep-equal same-name collision** — both entries are renamed
- *    deterministically to `<ComponentPath>.<name>` and their
- *    `apply_expression_template` references are rewritten in lockstep.
+ *  - **Non-deep-equal same-name collision** — the entries are renamed
+ *    `<ComponentPath>.<name>`, one entry per distinct definition (named after
+ *    its first owner), and every owner's `apply_expression_template`
+ *    references are rewritten in lockstep.
  *  - **Collisions propagate along the reference DAG** — a declaration that
  *    references a colliding name collides too (see
  *    {@link registryCollisionNames}), so a byte-identical wrapper over a
  *    per-component leaf is renamed per owner rather than deduped into one body
  *    whose nested reference no longer resolves.
  *
- * Returns the rewritten document `root` (component reference sites updated) and
+ * The merged registry is in document order: components as the file declares
+ * them, entries as their block declares them. Returns the rewritten document
+ * `root` (component reference sites updated, per-component blocks removed) and
  * the merged registry (the FlattenedSystem's first-class registry field).
  * `match` rules are not merged (only match-less templates are referenceable).
  * Mirrors the Julia reference `flatten_template_registries`.
  */
 export function flattenTemplateRegistries(loaded: object): FlattenedTemplateRegistries {
   const root = deepClone(loaded) as Record<string, unknown>
-  // (path, comp, named)
-  const comps: { path: string; comp: Record<string, unknown>; named: Record<string, unknown> }[] =
-    []
+  const comps: { path: string; comp: Record<string, unknown> }[] = []
+  const blocks: { path: string; block: Record<string, unknown> }[] = []
   for (const compKind of COMP_KINDS) {
     const cs = root[compKind]
     if (!isObject(cs)) continue
     for (const [cname, comp] of Object.entries(cs)) {
       if (!isObject(comp)) continue
-      const named: Record<string, unknown> = {}
+      comps.push({ path: cname, comp })
       const tpl = comp.expression_templates
-      if (isObject(tpl)) {
-        for (const [n, d] of Object.entries(tpl)) {
-          if (isObject(d) && d.match !== undefined) continue // match rules not merged
-          named[n] = d
-        }
-      }
-      comps.push({ path: cname, comp, named })
+      if (!isObject(tpl)) continue
+      blocks.push({ path: cname, block: matchlessEntries(tpl) })
     }
   }
+  const { merged, rename } = mergeFlatRegistry(blocks)
 
-  // Group each template name across components (preserving first-seen path).
-  const byname = new Map<string, { path: string; decl: unknown }[]>()
-  for (const { path, named } of comps) {
-    for (const n of Object.keys(named).sort()) {
-      if (!byname.has(n)) byname.set(n, [])
-      byname.get(n)!.push({ path, decl: named[n] })
-    }
-  }
-
-  const merged: Record<string, unknown> = {}
-  const rename: Record<string, Record<string, string>> = {} // path => (old => new)
-  const collide = registryCollisionNames(byname)
-  for (const name of [...byname.keys()].sort()) {
-    const occ = byname.get(name)!
-    if (collide.has(name)) {
-      for (const { path, decl } of occ) {
-        // collision: owner-path rename
-        const newname = `${path}.${name}`
-        merged[newname] = decl
-        ;(rename[path] ??= {})[name] = newname
-      }
-    } else {
-      merged[name] = occ[0]!.decl // deep-equal dedup
-    }
-  }
-
-  // Rewrite reference sites in lockstep (component expression positions and the
-  // carried bodies of the renamed entries).
+  // Rewrite each component's reference sites in lockstep with its renames, and
+  // drop its now-merged block from the flattened form.
   for (const { path, comp } of comps) {
-    const rn = rename[path]
+    const rn = rename.get(path)
     if (rn) {
       for (const k of Object.keys(comp)) {
         if (k === 'expression_templates') continue
         comp[k] = renameApplyRefs(comp[k], rn)
       }
-      for (const newname of Object.values(rn)) {
-        if (Object.prototype.hasOwnProperty.call(merged, newname)) {
-          merged[newname] = renameApplyRefs(merged[newname], rn)
-        }
-      }
     }
-    // Drop the now-merged per-component block from the flattened form.
     if ('expression_templates' in comp) delete comp.expression_templates
   }
 
