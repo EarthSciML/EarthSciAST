@@ -46,6 +46,22 @@ func oolLoad(t *testing.T, dir string, fixture ...string) map[string]any {
 	return view
 }
 
+// oolFlattenRegistries loads a fixture under Option B and runs the flatten
+// registry merge over it (flattenTemplateRegistries), with the fixture's text
+// as the declaration-order source.
+func oolFlattenRegistries(t *testing.T, dir string, fixture ...string) (map[string]any, *orderedMap) {
+	t.Helper()
+	fx := "fixture.esm"
+	if len(fixture) > 0 {
+		fx = fixture[0]
+	}
+	data, err := os.ReadFile(oolConf(dir, fx))
+	if err != nil {
+		t.Fatalf("read %s/%s: %v", dir, fx, err)
+	}
+	return flattenTemplateRegistries(oolLoad(t, dir, fx), string(data))
+}
+
 // oolEmit emits a fixture's reference-preserving canonical form.
 func oolEmit(t *testing.T, dir string, fixture ...string) string {
 	t.Helper()
@@ -533,8 +549,7 @@ func TestOOL_OpacityPriorityShadowing(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestOOL_FlattenRegistryMerge(t *testing.T) {
-	loaded := oolLoad(t, "flatten_registry_merge")
-	root, merged := flattenTemplateRegistries(loaded)
+	root, merged := oolFlattenRegistries(t, "flatten_registry_merge")
 	got := map[string]bool{}
 	for _, k := range merged.keys {
 		got[k] = true
@@ -588,8 +603,7 @@ func TestOOL_FlattenRegistryMergeTransitive(t *testing.T) {
 		collectApplyNames(&out, x)
 		return out
 	}
-	loaded := oolLoad(t, "flatten_registry_merge_transitive")
-	root, merged := flattenTemplateRegistries(loaded)
+	root, merged := oolFlattenRegistries(t, "flatten_registry_merge_transitive")
 	gotKeys := append([]string(nil), merged.keys...)
 	sort.Strings(gotKeys)
 	wantKeys := []string{"A.d_x_rule", "A.interior_stencil", "A.outer_stencil", "B.d_x_rule", "B.interior_stencil", "B.outer_stencil"}
@@ -660,8 +674,7 @@ func TestOOL_FlattenRegistryMergeIsUnionHalfOnly(t *testing.T) {
 		collectApplyNames(&out, x)
 		return out
 	}
-	loaded := oolLoad(t, "flatten_registry_merge_transitive", "fixture_twins.esm")
-	root, merged := flattenTemplateRegistries(loaded)
+	root, merged := oolFlattenRegistries(t, "flatten_registry_merge_transitive", "fixture_twins.esm")
 	// Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
 	gotKeys := append([]string(nil), merged.keys...)
 	sort.Strings(gotKeys)
@@ -817,5 +830,31 @@ func TestOOL_FlattenClosesTwinBodies(t *testing.T) {
 	blob, _ := json.Marshal(reg["outer_stencil"]["body"])
 	if !strings.Contains(string(blob), `"inv_dx":"inv_dx"`) {
 		t.Errorf("outer_stencil's nested reference must bind inv_dx => inv_dx: %s", blob)
+	}
+}
+
+// -----------------------------------------------------------------------
+// flatten_registry_order (§9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5
+// step 4): the merged registry's ORDER, written by Julia. Components are
+// declared out of alphabetical order (Zulu, Alpha, Mike) with authored entries
+// out of alphabetical order, and Zulu materializes two imported entries. The
+// merge walks components in document order, each block as emit materializes
+// it, so the colliding `s` that Zulu and Mike carry identically is ONE entry
+// named after Zulu, the first owner in document order.
+// -----------------------------------------------------------------------
+
+func TestOOL_FlattenRegistryOrder(t *testing.T) {
+	d := "flatten_registry_order"
+	want := mtrGolden(t, d, "flattened_registry.esm")
+	mtrCompare(t, "Flatten template registry", mtrFlat(t, mtrPath(d, "fixture.esm")), want)
+	root, merged := oolFlattenRegistries(t, d)
+	mtrCompare(t, "flattenTemplateRegistries merged registry", mtrBlock(merged), want)
+	refName := func(comp, v string) any {
+		return oolVarDef(t, root, comp, v).(map[string]any)["name"]
+	}
+	for comp, w := range map[string]string{"Zulu": "Zulu.s", "Mike": "Zulu.s", "Alpha": "Alpha.s"} {
+		if got := refName(comp, "y_s"); got != w {
+			t.Errorf("%s.y_s references %v; want %s", comp, got, w)
+		}
 	}
 }

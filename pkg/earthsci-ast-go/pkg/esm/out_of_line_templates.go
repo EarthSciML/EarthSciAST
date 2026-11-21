@@ -1077,10 +1077,22 @@ func registryCollisionNames(byname *orderedMap) map[string]bool {
 // `<first owner's path>.<name>`, with each owner's references rewritten in
 // lockstep. Returns the rewritten document and the merged registry (the
 // FlattenedSystem's first-class registry field). Match rules are not merged.
-// The view carries no declaration order, so components and entries are taken
-// in sorted order. Mutates `view` in place. Mirrors the Julia
-// `flatten_template_registries`.
-func flattenTemplateRegistries(view map[string]any) (map[string]any, *orderedMap) {
+//
+// Order (esm-libraries-spec §4.7.5 step 4, normative): components in document
+// order (models as `source` declares them, then reaction systems), each
+// component's block as emit materializes it (materializeComponentBlock:
+// authored entries first in authored order, then the materialized ones sorted
+// by UTF-8 bytes). `source` is the document text `view` was loaded from; it
+// carries the declaration order the decoded view has lost. Mutates `view` in
+// place. Mirrors the Julia `flatten_template_registries` over the typed load's
+// `component_templates`.
+func flattenTemplateRegistries(view map[string]any, source string) (map[string]any, *orderedMap) {
+	orders := extractTemplateOrders(source)
+	var authored map[string][]string
+	if origView, err := decodeJSONView([]byte(source)); err == nil {
+		authored = authoredTemplateNames(origView, orders)
+	}
+	received := receivedTransformRefs(view)
 	type compEntry struct {
 		path string
 		comp map[string]any
@@ -1092,14 +1104,19 @@ func flattenTemplateRegistries(view map[string]any) (map[string]any, *orderedMap
 		if !ok {
 			continue
 		}
-		for _, cname := range sortedKeys(cs) {
+		for _, cname := range orderedKeysOf(cs, orders["/"+kind]) {
 			comp, ok := cs[cname].(map[string]any)
 			if !ok {
 				continue
 			}
 			comps = append(comps, compEntry{path: cname, comp: comp})
-			if tpl, ok := comp["expression_templates"].(map[string]any); ok {
-				blocks = append(blocks, registryBlock{path: cname, block: matchlessBlock(tpl, nil)})
+			if _, ok := comp["expression_templates"].(map[string]any); !ok {
+				continue
+			}
+			mat, _, _ := materializeComponentBlock(
+				comp, authored[kind+"."+cname], received[[2]string{kind, cname}])
+			if mat.len() > 0 {
+				blocks = append(blocks, registryBlock{path: cname, block: mat})
 			}
 		}
 	}

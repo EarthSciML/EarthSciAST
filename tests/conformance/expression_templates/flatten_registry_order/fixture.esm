@@ -1,0 +1,293 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "flatten_registry_order",
+    "description": "esm-spec §9.6.4 rule 7 / §10.7 / esm-libraries-spec §4.7.5 step 4: the merged registry's ORDER. Components are declared out of alphabetical order (Zulu, Alpha, Mike) and their authored entries are not alphabetical (Zulu: s, aa; Mike: aa, s); Zulu also materializes two imported entries (lib_z, lib_a), which follow its authored entries sorted by UTF-8 bytes. The merge walks components in document order, each block as emit materializes it: `s` collides (Zulu and Mike carry f+1, Alpha f+2), so Zulu and Mike share ONE entry named after the first owner in document order, `Zulu.s`, and Alpha gets `Alpha.s`; `aa` is deep-equal everywhere and kept once under its bare name.",
+    "authors": [
+      "out-of-line-expression-templates conformance"
+    ]
+  },
+  "models": {
+    "Zulu": {
+      "expression_template_imports": [
+        {
+          "ref": "./lib.esm"
+        }
+      ],
+      "expression_templates": {
+        "s": {
+          "params": [
+            "f"
+          ],
+          "body": {
+            "op": "+",
+            "args": [
+              "f",
+              1
+            ]
+          }
+        },
+        "aa": {
+          "params": [
+            "f"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              2,
+              "f"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "y_s": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "y_aa": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "y_lib_z": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "y_lib_a": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "y_s",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "s",
+            "bindings": {
+              "f": "x"
+            }
+          }
+        },
+        {
+          "lhs": "y_aa",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "aa",
+            "bindings": {
+              "f": "x"
+            }
+          }
+        },
+        {
+          "lhs": "y_lib_z",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "lib_z",
+            "bindings": {
+              "f": "x"
+            }
+          }
+        },
+        {
+          "lhs": "y_lib_a",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "lib_a",
+            "bindings": {
+              "f": "x"
+            }
+          }
+        }
+      ]
+    },
+    "Alpha": {
+      "expression_templates": {
+        "s": {
+          "params": [
+            "f"
+          ],
+          "body": {
+            "op": "+",
+            "args": [
+              "f",
+              2
+            ]
+          }
+        },
+        "aa": {
+          "params": [
+            "f"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              2,
+              "f"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "y_s": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "y_aa": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "y_s",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "s",
+            "bindings": {
+              "f": "x"
+            }
+          }
+        },
+        {
+          "lhs": "y_aa",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "aa",
+            "bindings": {
+              "f": "x"
+            }
+          }
+        }
+      ]
+    },
+    "Mike": {
+      "expression_templates": {
+        "aa": {
+          "params": [
+            "f"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              2,
+              "f"
+            ]
+          }
+        },
+        "s": {
+          "params": [
+            "f"
+          ],
+          "body": {
+            "op": "+",
+            "args": [
+              "f",
+              1
+            ]
+          }
+        }
+      },
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "y_aa": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "y_s": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "y_aa",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "aa",
+            "bindings": {
+              "f": "x"
+            }
+          }
+        },
+        {
+          "lhs": "y_s",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "s",
+            "bindings": {
+              "f": "x"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

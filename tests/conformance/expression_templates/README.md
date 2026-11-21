@@ -435,6 +435,19 @@ Deduping a body that still reads `inv_dx` free would keep one body correct for
 neither model, which is why closing first is normative (esm-spec §10.7,
 esm-libraries-spec §4.7.5 step 4).
 
+### `flatten_registry_order/` (fixture.esm + lib.esm)
+
+The merged registry's **order** (esm-libraries-spec §4.7.5 step 4). Components
+are declared out of alphabetical order (`Zulu`, `Alpha`, `Mike`), authored
+entries out of alphabetical order (`Zulu`: `s`, `aa`; `Mike`: `aa`, `s`), and
+`Zulu` materializes two imported entries, which follow its authored ones sorted
+by UTF-8 bytes (`lib_a`, `lib_z`). The merge walks components in document order,
+each block as emit materializes it. `s` collides (`Zulu` and `Mike` carry
+`f + 1`, `Alpha` `f + 2`): `Zulu` and `Mike` share ONE entry named after the
+first owner in document order, `Zulu.s`, and `Alpha` gets `Alpha.s`; `aa` is
+deep-equal everywhere and kept once. Golden: `flattened_registry.esm`
+(`Zulu.s`, `Alpha.s`, `aa`, `lib_a`, `lib_z`), written by Julia's `flatten`.
+
 ### `mount_registry_merge/` and `mount_shared_definition/` (esm-spec §9.6.4 rule 1)
 
 A mounted leaf (and an authored subsystem with its own block) keeps its
