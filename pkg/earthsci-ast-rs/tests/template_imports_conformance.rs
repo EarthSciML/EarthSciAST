@@ -421,15 +421,28 @@ fn import_library_enum_resolves_in_the_library_scope() {
         expand_raw(&conf(&["import_library_enum", "fixture.esm"])),
         golden(&conf(&["import_library_enum", "expanded.esm"]))
     );
+    // Rule 3 lowers an `enum` op spelled by a parameter per template instance,
+    // at load (esm-spec §9.6.4 rule 3), where the golden — written before —
+    // still held the op the later enum pass lowers. Both sides are compared
+    // with the importer's enums lowered, as the Julia reference suite does.
+    let importer = golden(&conf(&[
+        "import_library_enum",
+        "fixture_importer_redeclares.esm",
+    ]));
+    let lower_importer_enums = |mut v: Value| -> Value {
+        v["enums"] = importer["enums"].clone();
+        earthsci_ast::lower_enums_raw(&mut v).expect("lower the importer's enums");
+        v
+    };
     assert_eq!(
-        expand_raw(&conf(&[
+        lower_importer_enums(expand_raw(&conf(&[
             "import_library_enum",
             "fixture_importer_redeclares.esm"
-        ])),
-        golden(&conf(&[
+        ]))),
+        lower_importer_enums(golden(&conf(&[
             "import_library_enum",
             "expanded_importer_redeclares.esm"
-        ]))
+        ])))
     );
     let f = load_path(conf(&[
         "import_library_enum",

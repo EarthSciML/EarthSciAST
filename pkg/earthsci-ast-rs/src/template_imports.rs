@@ -2271,37 +2271,358 @@ fn process_library(
 }
 
 /// Resolve the `enum` symbols a template library binds in its OWN calls
-/// (esm-spec §9.3). After [`lower_library_template_enums`], the only `enum` ops
-/// left in the library's scope are spelled with a template parameter. A call to
-/// a template that can still produce one binds that parameter here, in the
-/// library, so each of the library's own template bodies has those calls
-/// expanded (the eager expansion esm-spec §9.6.4 rule 3 requires at load anyway)
-/// and the result lowered against the library's block. An op the expansion
-/// leaves spelled with the calling template's own parameter stays open for the
-/// importer's binding. Runs after the body-reference DAG check, so expansion
-/// terminates; every new body is computed before any is replaced.
+/// (esm-spec §9.3, §9.7.5). After [`lower_library_template_enums`], the only
+/// `enum` ops left in the library's scope are spelled with a template
+/// parameter. A call that binds such a parameter to a symbol is an instance
+/// (esm-spec §9.6.4 rule 3: the instance includes the symbols the call binds):
+/// the called template's body is lowered against the library's block for that
+/// instance, without expanding the call, and the call is re-pointed to the
+/// lowered body, registered as `<name>.variant<k>`. The authored template
+/// keeps its body: the importer may still call it with a symbol of its own,
+/// which resolves at the importer's call site. Instances follow the reference
+/// DAG (a call that forwards a bound symbol into another call lowers that one
+/// too). An op the lowering leaves spelled with the calling template's own
+/// parameter stays open for the importer's binding. Runs after the
+/// body-reference DAG check, so the DAG is acyclic. Mirrors the Julia
+/// reference `_expand_library_enum_calls!`.
 fn expand_library_enum_calls(
     library: &Value,
     templates: &mut Map<String, Value>,
     own_names: &[String],
     origin: &str,
 ) -> Result<(), ExpressionTemplateError> {
-    let expanded =
-        crate::lower_expression_templates::expand_enum_bearing_calls(templates, own_names, origin)?;
-    let mut decls = Vec::with_capacity(expanded.len());
-    for (name, body) in expanded {
-        let Some(decl) = templates.get(&name) else {
+    let bearing = crate::lower_expression_templates::enum_bearing_templates(templates);
+    let mut lib = LibraryEnumInstances {
+        library,
+        templates,
+        bearing: &bearing,
+        origin,
+        insts: IndexMap::new(),
+    };
+    let mut own_bodies: Vec<(String, Value)> = Vec::new();
+    for n in own_names {
+        let Some(decl) = lib.templates.get(n).and_then(|d| d.as_object()) else {
             continue;
         };
-        let mut decl = decl.clone();
-        decl["body"] = body;
-        lower_library_template_enums(library, &name, &mut decl, origin)?;
-        decls.push((name, decl));
+        let Some(body) = decl.get("body") else {
+            continue;
+        };
+        let mut refs = Vec::new();
+        compose_collect_apply_names(body, &mut refs);
+        if !refs
+            .iter()
+            .any(|r| bearing.get(r).copied().unwrap_or(false))
+        {
+            continue;
+        }
+        let params = template_params(decl);
+        let body = body.clone();
+        let marked = lib.repoint(&body, &params, &BTreeMap::new())?;
+        own_bodies.push((n.clone(), marked));
     }
-    for (name, decl) in decls {
-        templates.insert(name, decl);
+    let insts = std::mem::take(&mut lib.insts);
+    if insts.is_empty() {
+        return Ok(());
+    }
+    // Name the instances children first: a template after every template its
+    // instances' bodies reference; each distinct lowered body of a template is
+    // `<name>.variant<k>`, k in the order of the bodies' canonical bytes.
+    let mut by_name: IndexMap<String, Vec<String>> = IndexMap::new();
+    for (key, (name, _)) in &insts {
+        by_name.entry(name.clone()).or_default().push(key.clone());
+    }
+    let mut final_: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut done: HashSet<String> = HashSet::new();
+    for t in by_name.keys() {
+        name_library_instances(t, &by_name, &insts, templates, &mut final_, &mut done);
+    }
+    for (n, body) in own_bodies {
+        if let Some(Value::Object(decl)) = templates.get_mut(&n) {
+            decl.insert("body".to_string(), rename_marked_refs(&body, &final_));
+        }
     }
     Ok(())
+}
+
+/// The private key that marks, inside a library instance's lowered body, a
+/// call re-pointed to an instance (its value is the instance key) until the
+/// instance is named. Never survives [`rename_marked_refs`].
+const LIBRARY_INSTANCE_MARK: &str = "\u{0}esm_library_enum_instance";
+
+fn template_params(decl: &Map<String, Value>) -> HashSet<String> {
+    decl.get("params")
+        .and_then(|p| p.as_array())
+        .map(|ps| {
+            ps.iter()
+                .filter_map(|p| p.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The library-edge instances of [`expand_library_enum_calls`]: instance key
+/// (template name and the canonical bytes of the symbols it binds) to the
+/// template's name and its lowered body, whose re-pointed calls carry
+/// [`LIBRARY_INSTANCE_MARK`]; in the order the instances were finished
+/// (children first).
+struct LibraryEnumInstances<'a> {
+    library: &'a Value,
+    templates: &'a Map<String, Value>,
+    bearing: &'a std::collections::HashMap<String, bool>,
+    origin: &'a str,
+    insts: IndexMap<String, (String, Value)>,
+}
+
+impl LibraryEnumInstances<'_> {
+    /// The symbols a call `n` binds to the parameters of its template, as
+    /// literals or through `lits` (the enclosing instance's symbols), or `None`
+    /// when its template cannot produce an `enum` op or it binds none.
+    fn bound_symbols(
+        &self,
+        n: &Map<String, Value>,
+        caller_params: &HashSet<String>,
+        lits: &BTreeMap<String, String>,
+    ) -> Option<(String, BTreeMap<String, String>)> {
+        let name = n.get("name").and_then(|v| v.as_str())?;
+        if !self.bearing.get(name).copied().unwrap_or(false) {
+            return None;
+        }
+        let b = n.get("bindings").and_then(|v| v.as_object())?;
+        let mut syms = BTreeMap::new();
+        for (k, v) in b {
+            let Some(v) = v.as_str() else { continue };
+            if caller_params.contains(v) {
+                if let Some(l) = lits.get(v) {
+                    syms.insert(k.clone(), l.clone());
+                }
+            } else {
+                syms.insert(k.clone(), v.to_string());
+            }
+        }
+        (!syms.is_empty()).then(|| (name.to_string(), syms))
+    }
+
+    /// `body` with each call that binds a symbol marked with the instance it
+    /// names (computed here, children first).
+    fn repoint(
+        &mut self,
+        body: &Value,
+        caller_params: &HashSet<String>,
+        lits: &BTreeMap<String, String>,
+    ) -> Result<Value, ExpressionTemplateError> {
+        match body {
+            Value::Object(o) => {
+                let is_apply = o.get("op").and_then(|v| v.as_str())
+                    == Some(crate::lower_expression_templates::APPLY_OP_NAME);
+                let mut out = Map::new();
+                for (k, v) in o {
+                    if is_apply && k == "name" {
+                        out.insert(k.clone(), v.clone());
+                    } else {
+                        out.insert(k.clone(), self.repoint(v, caller_params, lits)?);
+                    }
+                }
+                if is_apply && let Some((name, syms)) = self.bound_symbols(o, caller_params, lits) {
+                    let key = self.instance(&name, &syms)?;
+                    out.insert(LIBRARY_INSTANCE_MARK.to_string(), Value::String(key));
+                }
+                Ok(Value::Object(out))
+            }
+            Value::Array(a) => Ok(Value::Array(
+                a.iter()
+                    .map(|v| self.repoint(v, caller_params, lits))
+                    .collect::<Result<_, _>>()?,
+            )),
+            _ => Ok(body.clone()),
+        }
+    }
+
+    /// The instance of template `name` binding `syms`: its body with the bound
+    /// symbols written into the `enum` ops that spell them, lowered against the
+    /// library's block, its own calls marked. Returns the instance key.
+    fn instance(
+        &mut self,
+        name: &str,
+        syms: &BTreeMap<String, String>,
+    ) -> Result<String, ExpressionTemplateError> {
+        let Some(decl) = self.templates.get(name).and_then(|d| d.as_object()) else {
+            return Err(err(
+                codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+                format!("{}: template '{name}' is not declared", self.origin),
+            ));
+        };
+        let params: Vec<String> = decl
+            .get("params")
+            .and_then(|p| p.as_array())
+            .map(|ps| {
+                ps.iter()
+                    .filter_map(|p| p.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let lits: BTreeMap<String, String> = params
+            .iter()
+            .filter_map(|p| syms.get(p).map(|s| (p.clone(), s.clone())))
+            .collect();
+        let lits_value = Value::Object(
+            lits.iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect(),
+        );
+        let key = format!(
+            "{name}\u{1f}{}",
+            crate::lower_expression_templates::canonical_compact_value(&lits_value)
+        );
+        if self.insts.contains_key(&key) {
+            return Ok(key);
+        }
+        let mut subst = decl.get("body").cloned().unwrap_or(Value::Null);
+        write_enum_symbols(&mut subst, &lits);
+        let mut open_decl = Value::Object(Map::from_iter([
+            (
+                "params".to_string(),
+                Value::Array(
+                    params
+                        .iter()
+                        .filter(|p| !lits.contains_key(*p))
+                        .map(|p| Value::String(p.clone()))
+                        .collect(),
+                ),
+            ),
+            ("body".to_string(), subst),
+        ]));
+        lower_library_template_enums(self.library, name, &mut open_decl, self.origin)?;
+        let lowered = open_decl
+            .as_object_mut()
+            .and_then(|o| o.remove("body"))
+            .unwrap_or(Value::Null);
+        let caller: HashSet<String> = params.into_iter().collect();
+        let marked = self.repoint(&lowered, &caller, &lits)?;
+        self.insts.insert(key.clone(), (name.to_string(), marked));
+        Ok(key)
+    }
+}
+
+/// Write the symbols `lits` binds into the `enum` ops of `body` whose
+/// arguments spell those parameters.
+fn write_enum_symbols(body: &mut Value, lits: &BTreeMap<String, String>) {
+    match body {
+        Value::Object(o) => {
+            if o.get("op").and_then(|v| v.as_str()) == Some("enum") {
+                if let Some(Value::Array(args)) = o.get_mut("args") {
+                    for a in args.iter_mut() {
+                        if let Some(sym) = a.as_str().and_then(|s| lits.get(s)) {
+                            *a = Value::String(sym.clone());
+                        }
+                    }
+                }
+                return;
+            }
+            for v in o.values_mut() {
+                write_enum_symbols(v, lits);
+            }
+        }
+        Value::Array(a) => {
+            for v in a.iter_mut() {
+                write_enum_symbols(v, lits);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `body` with each marked call re-pointed to the entry its instance was
+/// given (`final_`), and the marks removed.
+fn rename_marked_refs(body: &Value, final_: &std::collections::HashMap<String, String>) -> Value {
+    match body {
+        Value::Object(o) => {
+            let mut out = Map::new();
+            let mark = o.get(LIBRARY_INSTANCE_MARK).and_then(|v| v.as_str());
+            for (k, v) in o {
+                if k == LIBRARY_INSTANCE_MARK {
+                    continue;
+                }
+                if k == "name"
+                    && let Some(key) = mark
+                {
+                    out.insert(k.clone(), Value::String(final_[key].clone()));
+                } else {
+                    out.insert(k.clone(), rename_marked_refs(v, final_));
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(a) => Value::Array(a.iter().map(|v| rename_marked_refs(v, final_)).collect()),
+        _ => body.clone(),
+    }
+}
+
+/// The instance keys marked in `body`, in document order.
+fn marked_instance_keys(body: &Value, out: &mut Vec<String>) {
+    match body {
+        Value::Object(o) => {
+            if let Some(k) = o.get(LIBRARY_INSTANCE_MARK).and_then(|v| v.as_str()) {
+                out.push(k.to_string());
+            }
+            for v in o.values() {
+                marked_instance_keys(v, out);
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|v| marked_instance_keys(v, out)),
+        _ => {}
+    }
+}
+
+/// Name every instance of template `t` (children first): each distinct
+/// lowered body becomes `<t>.variant<k>` in `templates`, numbered by canonical
+/// bytes, with `_` appended while the name is taken.
+fn name_library_instances(
+    t: &str,
+    by_name: &IndexMap<String, Vec<String>>,
+    insts: &IndexMap<String, (String, Value)>,
+    templates: &mut Map<String, Value>,
+    final_: &mut std::collections::HashMap<String, String>,
+    done: &mut HashSet<String>,
+) {
+    if !done.insert(t.to_string()) {
+        return;
+    }
+    for key in &by_name[t] {
+        let mut children = Vec::new();
+        marked_instance_keys(&insts[key].1, &mut children);
+        for ck in children {
+            name_library_instances(&insts[&ck].0, by_name, insts, templates, final_, done);
+        }
+    }
+    let bodies: Vec<Value> = by_name[t]
+        .iter()
+        .map(|k| rename_marked_refs(&insts[k].1, final_))
+        .collect();
+    let canon: Vec<String> = bodies
+        .iter()
+        .map(crate::lower_expression_templates::canonical_compact_value)
+        .collect();
+    let mut distinct = canon.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let mut names: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    for (i, c) in distinct.iter().enumerate() {
+        let mut vn = format!("{t}.variant{}", i + 1);
+        while templates.contains_key(&vn) {
+            vn.push('_');
+        }
+        let mut nd = templates[t].clone();
+        let first = canon
+            .iter()
+            .position(|x| x == c)
+            .expect("distinct of canon");
+        nd["body"] = bodies[first].clone();
+        templates.insert(vn.clone(), nd);
+        names.insert(c.as_str(), vn);
+    }
+    for (k, c) in by_name[t].iter().zip(&canon) {
+        final_.insert(k.clone(), names[c.as_str()].clone());
+    }
 }
 
 /// Lower the `enum` ops in one of a template library's OWN template bodies
