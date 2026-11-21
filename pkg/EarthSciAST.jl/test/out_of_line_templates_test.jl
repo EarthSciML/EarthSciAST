@@ -6,6 +6,7 @@
 
 using Test
 using JSON3
+using OrderedCollections
 using EarthSciAST
 using EarthSciAST: lower_expression_templates, resolve_template_machinery,
     Expand, expand_document, emit_document, emit_esm_string,
@@ -342,6 +343,28 @@ end
         # first-class field (esm-libraries-spec §4.7.5 step 4).
         flat = EarthSciAST.flatten(EarthSciAST.load_path(conf("flatten_registry_merge", "fixture.esm")))
         @test Set(keys(flat.template_registry)) == Set(["sten", "A.s", "B.s"])
+    end
+
+    # -----------------------------------------------------------------------
+    # flatten_registry_order (§9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5
+    # step 4): the merged registry's ORDER, pinned byte for byte (the golden is
+    # shared with the other bindings). Components are declared out of
+    # alphabetical order (Zulu, Alpha, Mike), authored entries out of
+    # alphabetical order, and Zulu materializes two imported entries, which
+    # follow its authored ones sorted by UTF-8 bytes. The colliding `s` that
+    # Zulu and Mike carry identically is ONE entry named after Zulu, the first
+    # owner in document order.
+    # -----------------------------------------------------------------------
+    @testset "flatten_registry_order: document order, emit's block order" begin
+        p = conf("flatten_registry_order", "fixture.esm")
+        flat = EarthSciAST.flatten(EarthSciAST.load_path(p))
+        emitted = emit_esm_string(
+            OrderedDict{String, Any}(
+                "expression_templates" => OrderedDict{String, Any}(flat.template_registry)
+            )
+        )
+        @test emitted == read(conf("flatten_registry_order", "flattened_registry.esm"), String)
+        @test collect(keys(flat.template_registry)) == ["Zulu.s", "Alpha.s", "aa", "lib_a", "lib_z"]
     end
 
     # -----------------------------------------------------------------------
