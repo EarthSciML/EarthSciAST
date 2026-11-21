@@ -1339,6 +1339,12 @@ end
 
 const _TPL_PART = "\0part\0"
 const _TPL_LEAF = "\0leaf\0"
+# A makearray region whose value is a parameter carries it in the skeleton as
+# `"\0rval\0"(param)` (`_tpl_skel_node!`), so the view knows which of its
+# nodes is a binding standing as a region's value (`_tpl_agg_view`): a nested
+# reference's skeleton substitutes its raw binding into the marker, which then
+# still marks it.
+const _TPL_RVAL = "\0rval\0"
 
 _tpl_part_name(name, k::Int) = string(name, _TPL_PART, k)
 
@@ -1412,7 +1418,7 @@ function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
                 # region's cells, a scalar broadcast over them. No part: a
                 # part's body is a scalar read, so a part reading an
                 # array-valued binding cannot compile.
-                v
+                OpExpr(_TPL_RVAL, ASTExpr[v])
             elseif v isa OpExpr && (
                     (_is_faq_op(v.op) && v.output_idx !== nothing && !isempty(v.output_idx)) ||
                         v.op == "makearray" || (_tpl_is_call(v) && !_tpl_is_elem(v))
@@ -1466,8 +1472,12 @@ end
 
 # The view of the reference `call` (above), `nothing` when its template has
 # no skeleton. Leaves are the part calls, each with the reference's bindings
-# and the loop indices it reads bound to the view's loops.
-function _tpl_agg_view(tt::_TplTable, call::OpExpr; lanes::Bool = true)
+# and the loop indices it reads bound to the view's loops. Each region value
+# that is a binding (`_TPL_RVAL`) is pushed to `rvals` when one is given.
+function _tpl_agg_view(
+        tt::_TplTable, call::OpExpr; lanes::Bool = true,
+        rvals::Union{Nothing, Vector{ASTExpr}} = nothing
+    )
     _tpl_is_elem(call) && return nothing
     _tpl_call_info(tt, call.name) === nothing || return nothing
     sk = _tpl_skel(tt, call.name)
@@ -1479,10 +1489,22 @@ function _tpl_agg_view(tt::_TplTable, call::OpExpr; lanes::Bool = true)
             (m[s] = VarExpr(s[(ncodeunits(_TPL_FREE) + 1):end]))
     end
     h = _tpl_subst_scoped(h, m, IdDict{OpExpr, ASTExpr}())
-    # A binding the header carries as it stands (a region's value that is a
-    # parameter, `_tpl_skel_node!`) read as the build reads it in the model:
-    # an array-valued reference through its own view (`_tpl_whole_views`).
-    lanes && (h = _tpl_whole_views(tt, h, IdDict{OpExpr, ASTExpr}()))
+    # A binding standing as a region's value, read as the build reads it in
+    # the model: an array-valued reference through its own view
+    # (`_tpl_whole_views`). With lanes, `call` comes from that walk with its
+    # bindings already read so (`_tpl_whole_views` maps a reference's children
+    # before its view), so only what a nested reference's skeleton wrote
+    # around them is read here: each binding is its own result in the memo.
+    wm = IdDict{OpExpr, ASTExpr}()
+    if lanes && call.bindings !== nothing
+        for (_, b) in call.bindings
+            b isa OpExpr && (wm[b] = b)
+        end
+    end
+    h = _tpl_unmark_rvals(h, IdDict{OpExpr, ASTExpr}()) do x
+        rvals === nothing || push!(rvals, x)
+        return lanes ? _tpl_whole_views(tt, x, wm) : x
+    end
     lm = Dict{String, ASTExpr}()
     for k in 1:n
         leaf = _tpl_part_call(tt, call, _tpl_part_name(call.name, k))
@@ -1490,6 +1512,17 @@ function _tpl_agg_view(tt::_TplTable, call::OpExpr; lanes::Bool = true)
         lm[_TPL_LEAF * string(k)] = leaf
     end
     return _tpl_subst_scoped(h, lm, IdDict{OpExpr, ASTExpr}())
+end
+
+# `h` with each region-value marker (`_TPL_RVAL`) replaced by `f` of the
+# binding it marks.
+function _tpl_unmark_rvals(f, h::ASTExpr, memo::IdDict{OpExpr, ASTExpr})
+    h isa OpExpr || return h
+    r = get(memo, h, nothing)
+    r === nothing || return r
+    r = h.op == _TPL_RVAL ? f(only(h.args)) : map_children(c -> _tpl_unmark_rvals(f, c, memo), h)
+    memo[h] = r
+    return r
 end
 
 # The call of part `pn` of the reference `call`: the reference's bindings of
@@ -1536,11 +1569,14 @@ function _tpl_free_leaves_all(e::ASTExpr)
     return out
 end
 
-# Whether the build reads the reference `call` through its view: it has one
-# and every leaf is a call the build compiles.
+# Whether the build reads the reference `call` through its view: it has one,
+# every leaf is a call the build compiles, and so is every outermost
+# reference in a binding that stands as a region's value (`_TPL_RVAL`: the
+# view reads it as it stands, through its own view).
 function _tpl_agg_called(tt::_TplTable, call::OpExpr)
+    rv = ASTExpr[]
     v = try
-        _tpl_agg_view(tt, call; lanes = false)
+        _tpl_agg_view(tt, call; lanes = false, rvals = rv)
     catch err
         (err isa ExpressionTemplateError || err isa TreeWalkError) || rethrow()
         nothing
@@ -1557,15 +1593,22 @@ function _tpl_agg_called(tt::_TplTable, call::OpExpr)
             ok = _tpl_compiles(tt, x)
             return
         end
-        # A reference the view carries as it stands (a binding that is a
-        # region's value, `_tpl_skel_node!`) compiles on its own terms.
+        return foreach_child(walk, x)
+    end
+    walk(v)
+    function walk_rval(x)
+        ok || return
+        x isa OpExpr || return
+        haskey(seen, x) && return
+        seen[x] = nothing
         if _tpl_is_call(x)
             ok = _tpl_compiles(tt, x)
             return
         end
-        return foreach_child(walk, x)
+        return foreach_child(walk_rval, x)
     end
-    walk(v)
+    empty!(seen)
+    foreach(walk_rval, rv)
     return ok
 end
 
