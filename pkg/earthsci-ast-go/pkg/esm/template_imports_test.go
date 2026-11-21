@@ -90,6 +90,21 @@ func tiGolden(t *testing.T, path string) string {
 	return tiCanonJSON(t, v)
 }
 
+// tiLowerEnums is a canonical document (tiCanonJSON) with its `enum` ops
+// lowered against its own `enums` block (esm-spec §9.3), canonical again.
+func tiLowerEnums(t *testing.T, doc string) string {
+	t.Helper()
+	var v map[string]any
+	if err := json.Unmarshal([]byte(doc), &v); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	out, err := lowerRawEnumOps(v, rawEnumsBlock(v), nil)
+	if err != nil {
+		t.Fatalf("lower enums: %v", err)
+	}
+	return tiCanonJSON(t, out)
+}
+
 func tiErrCode(t *testing.T, err error) string {
 	t.Helper()
 	var etErr *ExpressionTemplateError
@@ -156,6 +171,14 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		t.Run(tc.group+"/"+tc.golden, func(t *testing.T) {
 			got := tiExpandRaw(t, tiConfDir(t, tc.group, tc.fixture))
 			want := tiGolden(t, tiConfDir(t, tc.group, tc.golden))
+			if tc.golden == "expanded_importer_redeclares.esm" {
+				// This golden still holds an `enum` op the importer binds into a
+				// library template: rule 3 now lowers it at load, per instance
+				// (esm-spec §9.6.4 rule 3). Both sides are compared after lowering
+				// the importer's own `enum` ops against its block, as the Julia
+				// reference harness does; the golden is not regenerated.
+				got, want = tiLowerEnums(t, got), tiLowerEnums(t, want)
+			}
 			if got != want {
 				t.Errorf("expanded form diverges from golden:\n got=%s\nwant=%s", got, want)
 			}
