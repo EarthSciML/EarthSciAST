@@ -93,7 +93,7 @@ theorem M_all (c : Ctx) : ∀ n e, sizeOf e < n → isE e = true → M c e
       exact M_openop c kvs o as hop hargs hsk (fun x hm => IH x (hsz x hm) (hx x hm)) hf
         (fun kv hkv hkve => IH kv.2 (hszf kv hkv) hkve) hcf hopn htp hnat hrem hpr
     | esc kvs o as hop hargs hsk hx hf hoOK hrem hdep hsz hpr =>
-      exact M_esc c kvs o as hop hargs hsk (fun x hm => IH x (hsz x hm) (hx x hm)) hoOK hrem hdep hpr
+      exact M_esc c kvs o as hop hargs hsk (fun x hm => IH x (hsz x hm) (hx x hm)) hf hoOK hrem hdep hpr
 
 theorem M_of_isE (c : Ctx) (e : Json) (he : isE e = true) : M c e :=
   M_all c _ e (Nat.lt_succ_self _) he

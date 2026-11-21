@@ -12,7 +12,10 @@ package uses:
 * an array is a ``list``;
 * an object is an :class:`Obj`, a ``list`` of ``(key, value)`` pairs that keeps
   its entry order and its duplicate keys (so a reader can refuse them, as Lean's
-  ``Json.WF`` does).
+  ``Json.WF`` does);
+* a :class:`Math` is the math text of an expression inside a path block
+  (``Json.math``). It exists only between a container's printer or reader and the
+  skeleton: a document never holds one (:func:`wf` is false on it).
 
 Every type test is exact (``type(v) is list``): ``bool`` is a subclass of ``int``
 and :class:`Obj` one of ``list``. :func:`from_plain` and :func:`to_plain` convert at
@@ -53,6 +56,30 @@ class Obj(list):
         return not self.__eq__(other)
 
     __hash__ = None
+
+
+class Math(NamedTuple):
+    """``Json.math``: an expression's math text, as a path block holds it
+    (``$…$`` in both containers)."""
+
+    text: str
+
+
+def math_ok(s: str) -> bool:
+    """``Json.mathOK``: math text a container can delimit with ``$``: not empty,
+    no ``$``, no line break, and not ending in a backslash (which would escape the
+    closing ``$``)."""
+    return s != "" and "$" not in s and "\n" not in s and "\r" not in s and not s.endswith("\\")
+
+
+def math_leaf_at(s: str, i: int):
+    """``Json.pMath``: a math leaf ``$…$`` at ``s[i] == "$"``: the text up to the
+    next ``$``, which must be :func:`math_ok`. ``(Math, position)`` or ``None``."""
+    j = s.find("$", i + 1)
+    if j < 0:
+        return None
+    t = s[i + 1 : j]
+    return (Math(t), j + 1) if math_ok(t) else None
 
 
 def is_int(v: Any) -> bool:
@@ -118,7 +145,7 @@ def keys_distinct(kvs: list) -> bool:
 
 def wf(j: Any) -> bool:
     """``Json.wfb`` / ``Math.jwf``: every number canonical, every object with
-    distinct keys."""
+    distinct keys, and no math leaf."""
     t = type(j)
     if t is int or t is Dec:
         return num_wf(j)
@@ -126,6 +153,21 @@ def wf(j: Any) -> bool:
         return all(wf(x) for x in j)
     if t is Obj:
         return keys_distinct(j) and all(wf(v) for _, v in j)
+    return t is not Math
+
+
+def wfm(j: Any) -> bool:
+    """``Json.wfmb``: :func:`wf`, with math leaves of :func:`math_ok` text allowed
+    (what the codecs print and read)."""
+    t = type(j)
+    if t is int or t is Dec:
+        return num_wf(j)
+    if t is list:
+        return all(wfm(x) for x in j)
+    if t is Obj:
+        return keys_distinct(j) and all(wfm(v) for _, v in j)
+    if t is Math:
+        return math_ok(j.text)
     return True
 
 

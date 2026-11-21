@@ -303,7 +303,7 @@ fn json_toks_into(j: &Json, out: &mut Vec<Tok>) {
         Json::Bool(true) => out.push(Tok::Word("true".into())),
         Json::Bool(false) => out.push(Tok::Word("false".into())),
         Json::Num(n) => out.push(Tok::Num(n.clone())),
-        Json::Str(s) => out.push(Tok::Jstr(s.clone())),
+        Json::Str(s) | Json::Math(s) => out.push(Tok::Jstr(s.clone())),
         Json::Arr(xs) => {
             out.push(kw(Kw::Lbk));
             for (i, x) in xs.iter().enumerate() {

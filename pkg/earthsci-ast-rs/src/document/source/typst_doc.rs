@@ -4,7 +4,9 @@
 //! Markdown documents ([`super::markdown_doc`]).
 
 use super::equation::{eq_expr, eq_sides};
-use super::items::{RItem, Spanned, ck_mx, cook_doc, items, pr_mx, raw_doc, unitems};
+use super::items::{
+    RItem, Spanned, ck_mx, cook_doc, cook_doc_blocks, items, mathify_doc, pr_mx, raw_doc, unitems,
+};
 use super::keys::Kvs;
 use super::lines::decode_text;
 use super::markdown_doc::{comment_ok, with_comment};
@@ -168,7 +170,11 @@ pub fn canon_segs(its: Vec<RItem>) -> Vec<Seg> {
 pub fn print_typ(d: &Json) -> String {
     let doc = to_doc(&CapsT, d);
     let mut out = header_t(&doc.front);
-    out.extend(render(&canon_segs(items(&raw_doc(&pr_tx, &doc)))));
+    out.extend(render(&canon_segs(items(&mathify_doc(
+        &|s, j| print_typst(s, j),
+        &|_| true,
+        raw_doc(&pr_tx, &doc),
+    )))));
     string(&out)
 }
 
@@ -204,6 +210,7 @@ pub fn parse_typ(s: &str) -> Option<Json> {
 /// `Typ.parseItemsT`.
 pub fn parse_items_t(front: Kvs, its: Vec<RItem>) -> Option<Json> {
     let r = unitems(front, its)?;
+    let r = cook_doc_blocks(&|s, raw| parse_typst(s, raw), r)?;
     let d = cook_doc(&ck_tx, &r)?;
     of_doc(&d)
 }

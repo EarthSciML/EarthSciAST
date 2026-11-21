@@ -12,7 +12,17 @@ import { chars, type Chars } from '../number.js'
 import { bareKey } from '../strings.js'
 import * as typstDict from '../typst-dict.js'
 import { eqExpr, eqSides } from './equation.js'
-import { ckMx, cookDoc, items, prMx, rawDoc, unitems, type RItem } from './items.js'
+import {
+  ckMx,
+  cookDoc,
+  cookDocBlocks,
+  items,
+  mathifyDoc,
+  prMx,
+  rawDoc,
+  unitems,
+  type RItem,
+} from './items.js'
 import type { Kvs } from './keys.js'
 import { cookRows } from './multi-line.js'
 import {
@@ -112,7 +122,7 @@ export function printTyp(d: Json): string {
   const doc = toDoc(CAPS_T, d)
   // `Typ.headerT`, `Typ.canonSegs` and `Typ.render`: each construct after a blank line.
   const out: string[] = [`${HEADER}${argsFirstT(doc.front)})\n`]
-  for (const it of items(rawDoc(prTx, doc))) {
+  for (const it of items(mathifyDoc(printTypst, () => true, rawDoc(prTx, doc)))) {
     out.push('\n', itemT(it))
     if (!isBlock(it)) out.push('\n')
   }
@@ -133,7 +143,8 @@ function lexDoc(cs: Chars): [Kvs, RItem[]] | undefined {
 /** `Typ.parseItemsT`. */
 function parseItemsT(front: Kvs, its: readonly RItem[]): Json | undefined {
   const r = unitems(front, its)
-  const d = r === undefined ? undefined : cookDoc(ckTx, r)
+  const rb = r === undefined ? undefined : cookDocBlocks(parseTypst, r)
+  const d = rb === undefined ? undefined : cookDoc(ckTx, rb)
   return d === undefined ? undefined : ofDoc(d)
 }
 

@@ -12,7 +12,10 @@
  *   its other entries aligned with its first key; a non-empty array as an
  *   element starts on the next line, two spaces deeper.
  *
- * Strings are always double-quoted with JSON-style escapes; a key is bare when
+ * Strings are always double-quoted with JSON-style escapes, so a math leaf (path
+ * blocks only) is the plain scalar `$…$`; the printer makes one only of text
+ * that is {@link plainMathOk}, which every YAML 1.2 parser reads as that
+ * string. A key is bare when
  * it is an identifier and not one of YAML's special plain scalars in any letter
  * case; a key longer than 1024 characters uses the explicit `? "key"` form. The
  * reader accepts only this layout and well-formed values.
@@ -25,14 +28,36 @@ import {
   jarr,
   jnum,
   jobj,
-  jsonWfb,
+  jsonWfmb,
   jstr,
+  mathOk,
+  pMath,
   type Json,
   type Kvs,
 } from './json.js'
 import { nested } from './limits.js'
 import { parseNum, printNum, type Chars, type Read } from './number.js'
-import { isIdentStart, parseKey, parseQuoted, printKey, quote, spaces } from './strings.js'
+import {
+  isIdentStart,
+  needsHex,
+  parseKey,
+  parseQuoted,
+  printKey,
+  quote,
+  spaces,
+} from './strings.js'
+
+/**
+ * `Yaml.plainMathOK`: math text YAML holds as the plain scalar `$…$`, which a
+ * YAML 1.2 parser reads as that string: {@link mathOk}, and no `: ` (a mapping
+ * indicator), no ` #` (a comment) and no character of `needsHex`. The Markdown
+ * printer leaves any other expression in its block as JSON.
+ */
+export function plainMathOk(s: string): boolean {
+  if (!mathOk(s) || s.includes(': ') || s.includes(' #')) return false
+  for (const c of s) if (needsHex(c)) return false
+  return true
+}
 
 /** `Yaml.specialWords`. */
 const SPECIAL_WORDS: ReadonlySet<string> = new Set([
@@ -75,6 +100,8 @@ export function inline(v: Json): string {
       return printNum(v.n)
     case 'str':
       return quote(false, v.s)
+    case 'math':
+      return `$${v.s}$`
     case 'arr':
       return '[]'
     case 'obj':
@@ -184,6 +211,8 @@ export function pInline(cs: Chars, i: number): Read<Json> {
       const r = parseQuoted(false, cs, i)
       return r && [jstr(r[0]), r[1]]
     }
+    case '$':
+      return pMath(cs, i)
     default: {
       const r = parseNum(cs, i)
       return r && [jnum(r[0]), r[1]]
@@ -297,9 +326,9 @@ function pTop(cs: Chars, i: number): Read<Json> {
   return r && [jobj([e[0], ...r[0]]), r[1]]
 }
 
-/** `Yaml.decode`: all of the input consumed, and the value well formed. */
+/** `Yaml.decode`: all of the input consumed, and the value well formed (math leaves allowed). */
 export function decode(cs: Chars, start = 0, end = cs.length): Json | undefined {
   const r = pTop(end === cs.length ? cs : cs.slice(0, end), start)
-  if (r === undefined || r[1] !== end || !jsonWfb(r[0])) return undefined
+  if (r === undefined || r[1] !== end || !jsonWfmb(r[0])) return undefined
   return r[0]
 }

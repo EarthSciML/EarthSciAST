@@ -20,21 +20,23 @@ theorem jsonToks_head (v : Json) : ∃ t r, jsonToks v = t :: r ∧ t ≠ .kw .r
   | bool b => cases b <;> exact ⟨_, _, rfl, by simp, by simp⟩
   | num n => exact ⟨_, _, rfl, by simp, by simp⟩
   | str s => exact ⟨_, _, rfl, by simp, by simp⟩
+  | math s => exact ⟨_, _, rfl, by simp, by simp⟩
   | arr xs => exact ⟨_, _, by rw [jsonToks]; rfl, by simp, by simp⟩
   | obj kvs => exact ⟨_, _, by rw [jsonToks]; rfl, by simp, by simp⟩
 
 mutual
-theorem pJson_toks : ∀ (v : Json) (f : Nat) (X : List Tok), 2 * (jsonToks v).length + 2 ≤ f →
+theorem pJson_toks : ∀ (v : Json) (f : Nat) (X : List Tok), v.WF → 2 * (jsonToks v).length + 2 ≤ f →
     pJson f (jsonToks v ++ X) = some (v, X)
-  | .null, f + 1, X, _ => rfl
-  | .bool true, f + 1, X, _ => rfl
-  | .bool false, f + 1, X, _ => rfl
-  | .num n, f + 1, X, _ => rfl
-  | .str s, f + 1, X, _ => rfl
-  | .arr [], f + 1, X, _ => rfl
-  | .arr (v :: vs), f + 1, X, hf => by
+  | .null, f + 1, X, _, _ => rfl
+  | .bool true, f + 1, X, _, _ => rfl
+  | .bool false, f + 1, X, _, _ => rfl
+  | .num n, f + 1, X, _, _ => rfl
+  | .str s, f + 1, X, _, _ => rfl
+  | .math _, _, _, hw, _ => hw.elim
+  | .arr [], f + 1, X, _, _ => rfl
+  | .arr (v :: vs), f + 1, X, hw, hf => by
     obtain ⟨t, r, ht, h1, -⟩ := jsonToks_head v
-    have hit := pItems_toks (v :: vs) f (.kw .rbk :: X) (by
+    have hit := pItems_toks (v :: vs) f (.kw .rbk :: X) hw (by
       simp only [jsonToks, List.length_cons, List.length_append] at hf; omega)
       (by intro r e; cases e) (by simp)
     have hne : jsonItems (v :: vs) ≠ [] := by
@@ -50,9 +52,9 @@ theorem pJson_toks : ∀ (v : Json) (f : Nat) (X : List Tok), 2 * (jsonToks v).l
     rw [he] at hit
     simp only [List.cons_append, List.append_assoc, List.nil_append] at hit ⊢
     rw [pJson.eq_8 _ _ (by intro r'' e; cases e; exact ht' rfl), hit]
-  | .obj [], f + 1, X, _ => rfl
-  | .obj (e :: es), f + 1, X, hf => by
-    have hit := pEntries_toks (e :: es) f (.kw .rb :: X) (by
+  | .obj [], f + 1, X, _, _ => rfl
+  | .obj (e :: es), f + 1, X, hw, hf => by
+    have hit := pEntries_toks (e :: es) f (.kw .rb :: X) hw.2 (by
       simp only [jsonToks, List.length_cons, List.length_append] at hf; omega)
       (by intro r e; cases e) (by simp)
     obtain ⟨k, v⟩ := e
@@ -64,15 +66,16 @@ theorem pJson_toks : ∀ (v : Json) (f : Nat) (X : List Tok), 2 * (jsonToks v).l
     rw [he] at hit
     simp only [List.cons_append, List.append_assoc, List.nil_append] at hit ⊢
     rw [pJson.eq_10 _ _ (by intro r'' e; cases e), hit]
-  | v, 0, X, hf => by simp at hf
+  | v, 0, X, _, hf => by simp at hf
 
-theorem pItems_toks : ∀ (vs : List Json) (f : Nat) (X : List Tok), 2 * (jsonItems vs).length + 3 ≤ f →
+theorem pItems_toks : ∀ (vs : List Json) (f : Nat) (X : List Tok), Json.WFList vs →
+    2 * (jsonItems vs).length + 3 ≤ f →
     (∀ r, X ≠ .kw .comma :: r) → vs ≠ [] →
     pJsonItems f (jsonItems vs ++ X) = some (vs, X)
-  | [], _, _, _, _, hne => absurd rfl hne
-  | [v], f + 1, X, hf, hX, _ => by
+  | [], _, _, _, _, _, hne => absurd rfl hne
+  | [v], f + 1, X, hw, hf, hX, _ => by
     simp only [jsonItems] at hf ⊢
-    rw [pJsonItems, pJson_toks v f X (by omega)]
+    rw [pJsonItems, pJson_toks v f X hw.1 (by omega)]
     cases X with
     | nil => rfl
     | cons t r =>
@@ -81,24 +84,24 @@ theorem pItems_toks : ∀ (vs : List Json) (f : Nat) (X : List Tok), 2 * (jsonIt
       · rename_i heq; simp at heq; exact absurd heq.2.1 this
       · rename_i heq; simp at heq; obtain ⟨rfl, rfl⟩ := heq; rfl
       · rename_i heq; cases heq
-  | v :: w :: ws, f + 1, X, hf, hX, _ => by
+  | v :: w :: ws, f + 1, X, hw, hf, hX, _ => by
     simp only [jsonItems] at hf ⊢
     simp only [List.length_append, List.length_cons] at hf
-    rw [pJsonItems, List.append_assoc, List.cons_append, pJson_toks v f _ (by omega)]
+    rw [pJsonItems, List.append_assoc, List.cons_append, pJson_toks v f _ hw.1 (by omega)]
     simp only
-    rw [pItems_toks (w :: ws) f X (by omega) hX (by simp)]
+    rw [pItems_toks (w :: ws) f X hw.2 (by omega) hX (by simp)]
     rfl
-  | _ :: _, 0, X, hf, _, _ => by simp at hf
+  | _ :: _, 0, X, _, hf, _, _ => by simp at hf
 
-theorem pEntries_toks : ∀ (es : List (String × Json)) (f : Nat) (X : List Tok),
+theorem pEntries_toks : ∀ (es : List (String × Json)) (f : Nat) (X : List Tok), Json.WFObj es →
     2 * (jsonEntries es).length + 3 ≤ f → (∀ r, X ≠ .kw .comma :: r) → es ≠ [] →
     pJsonEntries f (jsonEntries es ++ X) = some (es, X)
-  | [], _, _, _, _, hne => absurd rfl hne
-  | [(k, v)], f + 1, X, hf, hX, _ => by
+  | [], _, _, _, _, _, hne => absurd rfl hne
+  | [(k, v)], f + 1, X, hw, hf, hX, _ => by
     simp only [jsonEntries] at hf ⊢
     simp only [List.length_cons] at hf
     simp only [List.cons_append]
-    rw [pJsonEntries, pJson_toks v f X (by omega)]
+    rw [pJsonEntries, pJson_toks v f X hw.1 (by omega)]
     cases X with
     | nil => rfl
     | cons t r =>
@@ -107,15 +110,15 @@ theorem pEntries_toks : ∀ (es : List (String × Json)) (f : Nat) (X : List Tok
       · rename_i heq; simp at heq; exact absurd heq.2.1 this
       · rename_i heq; simp at heq; obtain ⟨rfl, rfl⟩ := heq; rfl
       · rename_i heq; cases heq
-  | (k, v) :: e :: es, f + 1, X, hf, hX, _ => by
+  | (k, v) :: e :: es, f + 1, X, hw, hf, hX, _ => by
     simp only [jsonEntries] at hf ⊢
     simp only [List.length_append, List.length_cons] at hf
     simp only [List.cons_append, List.append_assoc]
-    rw [pJsonEntries, pJson_toks v f _ (by omega)]
+    rw [pJsonEntries, pJson_toks v f _ hw.1 (by omega)]
     simp only
-    rw [pEntries_toks (e :: es) f X (by omega) hX (by simp)]
+    rw [pEntries_toks (e :: es) f X hw.2 (by omega) hX (by simp)]
     rfl
-  | _ :: _, 0, X, hf, _, _ => by simp at hf
+  | _ :: _, 0, X, _, hf, _, _ => by simp at hf
 end
 
 
@@ -238,9 +241,26 @@ theorem pEscArgs_list (c : Ctx) :
   | _, _, _, 0, hf => by simp at hf
 
 
+/-- The fields of a node with sorted keys, each well formed, are a well-formed object. -/
+theorem fieldsOf_wf {kvs : List (String × Json)} (hs : keysSorted kvs = true)
+    (hf : ∀ kv ∈ fieldsOf kvs, jwf kv.2 = true) : (Json.obj (fieldsOf kvs)).WF := by
+  have hn : (kvs.map Prod.fst).Nodup := by
+    rw [List.Nodup, List.pairwise_map]
+    exact (keysSorted_pairwise kvs hs).imp fun h => ne_of_lt h
+  have hw : ∀ l : List (String × Json), (∀ kv ∈ l, jwf kv.2 = true) → Json.WFObj l := by
+    intro l
+    induction l with
+    | nil => intro _; trivial
+    | cons kv l ih =>
+      obtain ⟨k, v⟩ := kv
+      intro h
+      exact ⟨jwf_sound _ (h _ List.mem_cons_self), ih fun x hx => h x (List.mem_cons_of_mem _ hx)⟩
+  exact ⟨hn.sublist ((List.filter_sublist).map _), hw _ hf⟩
+
 theorem M_esc (c : Ctx) (kvs : List (String × Json)) (o : String) (as : List Json)
     (hop : look "op" kvs = some (.str o)) (hargs : look "args" kvs = some (.arr as))
     (hs : keysSorted kvs = true) (hx : ∀ x ∈ as, M c x)
+    (hfw : ∀ kv ∈ fieldsOf kvs, jwf kv.2 = true)
     (hoOK : opOK o = true) (hrem : removedOps.contains o = false)
     (hdep : deprecatedOps.contains o = false)
     (hpr : pr c (.obj kvs) =
@@ -267,7 +287,7 @@ theorem M_esc (c : Ctx) (kvs : List (String × Json)) (o : String) (as : List Js
         simp only [List.length_append, List.length_cons, List.length_nil] at hf
         have hj := pJson_toks (.obj (fieldsOf kvs)) (g + 1)
           (.kw .rb :: .kw .lb :: (sepBy [.kw .comma] (as.map fun x => (pr c x).at c.sf 1) ++ .kw .rb :: rest))
-          (by unfold need at hf; omega)
+          (fieldsOf_wf hs hfw) (by unfold need at hf; omega)
         have hl := pList_list c (.kw .rb) (fun r => fol1_kw _ .rb (by simp) r) (by simp)
           (Or.inr (Or.inr (Or.inl rfl))) as hx rest (g + 1) (by unfold need at hf ⊢; omega)
         simp only [List.cons_append, List.append_assoc, List.nil_append]

@@ -193,6 +193,7 @@ def jwf : Json → Bool
   | .num n => numOK n
   | .arr xs => jwfList xs
   | .obj kvs => decide (kvs.map Prod.fst).Nodup && jwfObj kvs
+  | .math _ => false
   | _ => true
 
 def jwfList : List Json → Bool
@@ -209,6 +210,7 @@ theorem jwf_sound : ∀ v : Json, jwf v = true → v.WF
   | .null, _ => trivial
   | .bool _, _ => trivial
   | .str _, _ => trivial
+  | .math _, h => by simp [jwf] at h
   | .num n, h => (numOK_iff n).1 h
   | .arr xs, h => jwfList_sound xs h
   | .obj kvs, h => by

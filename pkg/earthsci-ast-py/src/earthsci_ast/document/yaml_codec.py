@@ -10,7 +10,10 @@ Port of ``formal/Esm/Document/Yaml.lean``. The printed text is block-style YAML 
   entries aligned with its first key; a non-empty array as an element starts on
   the next line, two spaces deeper.
 
-Strings are always double-quoted with JSON-style escapes; a key is bare when it is
+Strings are always double-quoted with JSON-style escapes, so a math leaf (path
+blocks only) is the plain scalar ``$…$``; the printer makes one only of text that
+is :func:`plain_math_ok`, which every YAML 1.2 parser reads as that string. A key
+is bare when it is
 an identifier and not one of YAML's special plain scalars in any letter case; a
 key longer than 1024 characters uses the explicit ``? "key"`` form. The reader
 accepts only this layout and well-formed values. No YAML library is involved.
@@ -21,8 +24,8 @@ from __future__ import annotations
 from typing import Any
 
 from . import limits, number
-from .strings import is_ident_start, parse_key, parse_quoted, print_key, quote
-from .value import Dec, Obj, wf
+from .strings import is_ident_start, needs_hex, parse_key, parse_quoted, print_key, quote
+from .value import Dec, Math, Obj, math_leaf_at, math_ok, wfm
 
 #: ``Yaml.specialWords``.
 SPECIAL_WORDS = frozenset({"true", "false", "null", "yes", "no", "on", "off", "y", "n"})
@@ -43,6 +46,14 @@ def _key_part(m: int, k: str, out: list[str]) -> None:
         out.append(p)
 
 
+def plain_math_ok(s: str) -> bool:
+    """``Yaml.plainMathOK``: math text YAML holds as the plain scalar ``$…$``, which a
+    YAML 1.2 parser reads as that string: :func:`math_ok`, and no ``": "`` (a mapping
+    indicator), no ``" #"`` (a comment) and no character of ``needs_hex``. The
+    Markdown printer leaves any other expression in its block as JSON."""
+    return math_ok(s) and not any(needs_hex(c) for c in s) and ": " not in s and " #" not in s
+
+
 def inline(v: Any) -> str:
     """``Yaml.inline``: the one-line spelling of a scalar or an empty container."""
     t = type(v)
@@ -56,6 +67,8 @@ def inline(v: Any) -> str:
         return number.print_num(v)
     if t is str:
         return quote(False, v)
+    if t is Math:
+        return "$" + v.text + "$"
     if t is Obj:
         return "{}"
     return "[]"
@@ -158,6 +171,8 @@ def p_inline(s: str, i: int):
         return (Obj(), i + 2) if s.startswith("{}", i) else None
     if c == '"':
         return parse_quoted(False, s, i)
+    if c == "$":
+        return math_leaf_at(s, i)
     return number.parse(s, i)
 
 
@@ -269,6 +284,6 @@ def decode(s: str):
             r = None if r2 is None else (Obj([e[0], *r2[0]]), r2[1])
         else:
             r = _p_scalar_line(s, 0)
-    if r is None or r[1] != len(s) or not wf(r[0]):
+    if r is None or r[1] != len(s) or not wfm(r[0]):
         return None
     return (r[0],)

@@ -953,7 +953,7 @@ theorem lexOne_tok (prev : Option Char) (t : Tok) (ht : tokOK t) (hl : t ≠ .kw
         · rw [← Latex.isDig_eq] at hd'; simp [merges, isIdC, hd'] at h
       · exact hX.2.2.2 d hd
       · rintro rfl; simp (config := {decide := true}) [merges, isIdC] at h
-    have := TypstDict.pVal_enc 0 j (3 * ((TypstDict.encode j ++ X).length + 1)) X hj hstop (by
+    have := TypstDict.pVal_enc 0 j (3 * ((TypstDict.encode j ++ X).length + 1)) X (Json.WF.wfm hj) hstop (by
       have := TypstDict.size_le 0 j; simp [TypstDict.encode]; omega)
     simp only [TypstDict.encode] at this ⊢
     rw [this]; rfl

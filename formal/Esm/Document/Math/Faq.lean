@@ -111,7 +111,8 @@ theorem of_strs : ∀ (ps : List Json), ps.all (fun p => match p with | .str q =
     simp only [List.all_cons, Bool.and_eq_true] at h
     obtain ⟨qs, e, hq⟩ := of_strs r h.2
     exact ⟨q :: qs, by simp [e], by simp only [List.mem_cons, forall_eq_or_imp]; exact ⟨h.1, hq⟩⟩
-  | .null :: _, h | .bool _ :: _, h | .num _ :: _, h | .arr _ :: _, h | .obj _ :: _, h => by simp at h
+  | .null :: _, h | .bool _ :: _, h | .num _ :: _, h | .arr _ :: _, h | .obj _ :: _, h
+  | .math _ :: _, h => by simp at h
 
 theorem rowToks_fromOf (c : Ctx) (P : Json → Out) (k s : String) (qs : List String) :
     rowToks c P (k, .obj [("from", .str s), ("of", .arr (qs.map .str))]) =
@@ -767,6 +768,7 @@ theorem outRanges_keys (F : FaqForm) : List.Sublist ((outRanges F).map Prod.fst)
     | num _ => simpa [List.filterMap_cons] using ih
     | arr _ => simpa [List.filterMap_cons] using ih
     | obj _ => simpa [List.filterMap_cons] using ih
+    | math _ => simpa [List.filterMap_cons] using ih
 
 theorem mem_outNames {out : List Json} {k : String} : k ∈ outNames out ↔ Json.str k ∈ out := by
   unfold outNames

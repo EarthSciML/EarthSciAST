@@ -998,7 +998,7 @@ func stypItemOk(lim *Lim, it *RItem) bool {
 	case RIDesc, RIComp:
 		return true
 	case RIBlock:
-		return exprJwf(it.V)
+		return jsonWfmb(it.V)
 	case RIDecl:
 		if it.Decl.Kind == DKSub {
 			return stypArgsOk(it.Decl.Attrs)

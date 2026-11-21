@@ -7,7 +7,7 @@
  * and otherwise drops one character of prose.
  */
 
-import { jstr } from '../json.js'
+import { jsonWfmb, jstr } from '../json.js'
 import { jwf, nameOk, parseTypst, printTypst, type Sym } from '../math/index.js'
 import { chars, type Chars, type Read } from '../number.js'
 import { bareKey, isIdent, parseQuoted, quote, readIdent } from '../strings.js'
@@ -590,7 +590,7 @@ export function itemOk(it: RItem): boolean {
     case 'comp':
       return true
     case 'block':
-      return jwf(it.v)
+      return jsonWfmb(it.v)
     case 'decl':
       return it.d.kind === 'sub' ? it.d.attrs.every(argOk) : declOk(it.d)
     case 'eqn':

@@ -9,7 +9,8 @@
  *   `-9223372036854775808` as a float;
  * - strings with Typst escapes (`\u{XXXX}`);
  * - arrays `(a, b)`, `()` empty; dictionaries `(key: v, "quoted key": v)`,
- *   `(:)` empty. A key is bare when it is an identifier and not a Typst keyword.
+ *   `(:)` empty. A key is bare when it is an identifier and not a Typst keyword;
+ * - a math leaf `$…$`, Typst math content (path blocks only).
  *
  * The canonical layout is one element per line, each indented two spaces deeper
  * than the opening line and followed by `,`. The reader skips whitespace between
@@ -24,9 +25,10 @@ import {
   jarr,
   jnum,
   jobj,
-  jsonWfb,
+  jsonWfmb,
   jstr,
   mkInt,
+  pMath,
   type JNum,
   type Json,
 } from './json.js'
@@ -92,6 +94,9 @@ function enc(m: number, v: Json, out: string[]): void {
       return
     case 'str':
       out.push(quote(true, v.s))
+      return
+    case 'math':
+      out.push('$', v.s, '$')
       return
     case 'arr':
       if (v.xs.length === 0) {
@@ -194,6 +199,8 @@ function pValIn(cs: Chars, i: number): Read<Json> {
       const r = parseQuoted(true, cs, i)
       return r && [jstr(r[0]), r[1]]
     }
+    case '$':
+      return pMath(cs, i)
     case 'n':
       return word(cs, i, 'none') ? [JNULL, i + 4] : undefined
     case 't':
@@ -263,10 +270,10 @@ function pEntries(cs: Chars, i: number): Read<[string, Json][]> {
 
 /**
  * `TypstDict.decode`: whitespace, the value, whitespace, end of input. The value
- * must be well formed.
+ * must be well formed (math leaves allowed).
  */
 export function decode(cs: Chars): Json | undefined {
   const r = pVal(cs, skipWs(cs, 0))
-  if (r === undefined || skipWs(cs, r[1]) !== cs.length || !jsonWfb(r[0])) return undefined
+  if (r === undefined || skipWs(cs, r[1]) !== cs.length || !jsonWfmb(r[0])) return undefined
   return r[0]
 }

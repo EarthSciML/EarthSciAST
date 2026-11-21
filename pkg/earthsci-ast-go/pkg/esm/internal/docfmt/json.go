@@ -29,9 +29,37 @@ import (
 	"strings"
 )
 
-// Json is a JSON value (`Esm.Document.Json`): nil, bool, JNum, string, []Json
-// or Obj.
+// Json is a JSON value (`Esm.Document.Json`): nil, bool, JNum, string, []Json,
+// Obj or Math.
 type Json = any
+
+// Math is `Json.math`: an expression's math text, as a path block holds it
+// (`$…$` in both containers). It exists only between a container's printer or
+// reader and the skeleton: a document never holds one ([JsonWfb] is false on
+// it).
+type Math struct{ Text string }
+
+// jsonMathOK is `Json.mathOK`: math text a container can delimit with `$`: not
+// empty, no `$`, no line break, and not ending in a backslash (which would
+// escape the closing `$`).
+func jsonMathOK(s string) bool {
+	return s != "" && !strings.ContainsAny(s, "$\n\r") && !strings.HasSuffix(s, "\\")
+}
+
+// jsonPMath is `Json.pMath`: a math leaf after its `$`: the text up to the
+// next `$`, which must be [jsonMathOK].
+func jsonPMath(r []rune) (Json, []rune, bool) {
+	for i, c := range r {
+		if c == '$' {
+			t := string(r[:i])
+			if !jsonMathOK(t) {
+				return nil, nil, false
+			}
+			return Math{t}, r[i+1:], true
+		}
+	}
+	return nil, nil, false
+}
 
 // KV is one object entry.
 type KV struct {
@@ -152,7 +180,7 @@ func (n JNum) Wfb() bool {
 }
 
 // JsonWfb is `Json.wfb`: every number canonical, every object with distinct
-// keys.
+// keys, and no math leaf.
 func JsonWfb(j Json) bool {
 	switch v := j.(type) {
 	case JNum:
@@ -172,6 +200,35 @@ func JsonWfb(j Json) bool {
 				return false
 			}
 		}
+	case Math:
+		return false
+	}
+	return true
+}
+
+// jsonWfmb is `Json.wfmb`: [JsonWfb], with math leaves of [jsonMathOK] text
+// allowed (what the codecs print and read).
+func jsonWfmb(j Json) bool {
+	switch v := j.(type) {
+	case JNum:
+		return v.Wfb()
+	case []Json:
+		for _, x := range v {
+			if !jsonWfmb(x) {
+				return false
+			}
+		}
+	case Obj:
+		if !jsonKeysDistinct(v) {
+			return false
+		}
+		for _, kv := range v {
+			if !jsonWfmb(kv.V) {
+				return false
+			}
+		}
+	case Math:
+		return jsonMathOK(v.Text)
 	}
 	return true
 }
@@ -381,6 +438,9 @@ func JsonEqual(a, b Json) bool {
 	case string:
 		y, ok := b.(string)
 		return ok && x == y
+	case Math:
+		y, ok := b.(Math)
+		return ok && x == y
 	case JNum:
 		y, ok := b.(JNum)
 		return ok && x.Equal(y)
@@ -433,6 +493,9 @@ func renderInto(j Json, b *strings.Builder) {
 		b.WriteString(string(numPrint(x)))
 	case string:
 		b.WriteString(string(strQuote(false, x)))
+	case Math:
+		// never reached: a document read back holds no math leaf (`Json.WF`)
+		b.WriteString(string(strQuote(false, x.Text)))
 	case []Json:
 		b.WriteByte('[')
 		for i, e := range x {
