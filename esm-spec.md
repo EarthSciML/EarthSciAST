@@ -9,7 +9,8 @@
 > apply inside template bodies once per template instance, replacing eager expansion
 > (§9.6.4 rule 3); mounted leaves keep their references (§9.6.4 rule 1); and the elementwise
 > lift keeps references, reading their bindings at the cell (§9.6.11). For a document in which
-> no match spans a template boundary, `Expand(load(f))` is the same tree as under 2.3.0. This
+> no match spans a template boundary and no rule matches inside the bindings of a reference
+> 2.3.0 left unexpanded, `Expand(load(f))` is the same tree as under 2.3.0. This
 > change's breaking differences are:
 >
 > 1. **A pattern no longer matches across a reference to a template whose body holds a
@@ -21,13 +22,20 @@
 > 3. **Inside a template body, a pattern sees a parameter only through its kind and declared
 >    shape**; a structured or ground pattern node at a parameter no longer matches what the
 >    call site bound (§9.6.4 rule 4, case b).
-> 4. **The reference-preserving (emitted) form changes**: a lowered node is a reference to
+> 4. **A rule now fires inside the `bindings` of a reference that survives load.** 2.3.0
+>    treated a reference it did not expand eagerly as a leaf and never rewrote its bindings,
+>    so a rule on a node a call site bound there (one built only from core ops, since a
+>    rewrite-target op in a binding made the reference eager) did not fire, though it fired
+>    on the same node anywhere else; now the walk descends into a reference's bindings
+>    (§9.6.3 constraint 2), so the rule fires there as it does in the expansion (§9.6.4
+>    rule 4, case d).
+> 5. **The reference-preserving (emitted) form changes**: a lowered node is a reference to
 >    its rule; a referenced rule is emitted as a match-less entry under its name; rewritten
 >    template bodies replace authored ones, and the registry gains `<name>.variant<k>` and
 >    `<name>.cellwise<k>` entries. A consumer that reads a loaded or emitted document
 >    expecting inlined stencils (e.g. one that counts zero `apply_expression_template` nodes)
 >    must expand first.
-> 5. **The flattened system's form changes**: elementwise-lifted equations and mounted leaves
+> 6. **The flattened system's form changes**: elementwise-lifted equations and mounted leaves
 >    keep references; a structural `D` inside a template body is resolved in the body, adding
 >    `p_dt` parameters and bindings and `<name>.ddt` derivative entries; the merged registry
 >    carries them all; `Expand` of the flattened system is unchanged.
@@ -40,8 +48,8 @@
 > the same value its expansion did, though not always to the same tree: a zero term the
 > expansion drops can stay in the body (§9.6.4 rule 3).
 >
-> Differences 1–3 change which rules fire, and so what a document means, wherever they apply;
-> none applies anywhere in the 2026-11 corpus of real models. These semantics are not
+> Differences 1–4 change which rules fire, and so what a document means, wherever they apply;
+> none of 1–3 applies anywhere in the 2026-11 corpus of real models. These semantics are not
 > version-switched: a loader implementing them applies them to every document it accepts, as
 > the reference-preserving load of 0.9.0 did.
 
@@ -5160,7 +5168,7 @@ Required fields:
 4. **Component-local scope.** Templates declared inside — or imported into (§9.7.2) — one `model` / `reaction_system` are visible only within that component's expression positions.
 5. **Pure syntactic substitution.** Every parameter occurrence in `body` — a bare parameter-name string in a variable-reference position, or the string value of a scalar Expression-node field (§9.6.1) — is replaced by the bound argument's AST in source order. Substitution is position-blind and purely syntactic: a declared parameter name shadows any coincident field literal or index symbol inside `body`, no evaluation occurs, and no field-specific admissibility is checked at substitution time — a value substituted into a scalar-field position MUST be a literal admissible for that field, enforced by the §9.6.9 validation discharge, never by the substitution engine. Expansion MUST NOT depend on argument evaluation. Parameter substitution applies inside the `bindings` values of nested `apply_expression_template` references exactly as in any other Expression position; the `name` field is never a substitution site; params shadow as above. Substitution is what `Expand` does (§9.6.4 rule 2) and what a reference denotes; the rewrite engine never substitutes a rule's body into the tree (constraint 7).
 6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry `grad`/`div`/`laplacian`/spatial-`D` as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, and a right-hand-side structural `D` that §4.2's total-derivative resolution left standing (an operand outside its closed set, a name it cannot resolve, or a cyclic chain) — is rejected with diagnostic `unlowered_operator` (naming the op and node path). The walk also covers the body of every template a reachable reference names, as §9.6.4 rule 3 rewrote it, once per template instance; an op left standing there is rejected the same way, naming the op, the template, and the first call site in document order that reaches it. Substitution introduces no op that is not in a body or in a call site's `bindings`, so this walk sees every op `Expand(tree)` contains without expanding anything. This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
-7. **A firing rule writes a reference, never its body.** When rule `R` fires at a node, the engine replaces the node with `{"op": "apply_expression_template", "args": [], "name": N, "bindings": B}`, where `N` is `R`'s registered name in the component (post-rename, §9.7.7) and `B` maps each entry of `R`'s `params` to what the match bound to it: the matched sub-AST for a parameter in an operand position, the matched literal for one in a scalar-field position (§9.6.1). A parameter that occurs nowhere in `R`'s `match` is bound to its own name, so the reference expands to `R`'s body exactly as written there. `Expand` of the reference is `R`'s body with `B` substituted (constraint 5) — the replacement the engine used to write in place — so this constraint changes the reference-preserving form, and with it the emitted document (§9.6.4 rule 5), but not `Expand(load(f))` wherever no match would span a reference boundary (§9.6.4 rule 4): every existing `expanded*.esm` golden of §9.6.7 stands. The written reference is an ordinary reference from then on: later passes rewrite inside its `bindings` (constraint 2), no pattern sees into it (§9.6.4 rule 4), and `R`'s body is rewritten once per instance (§9.6.4 rule 3). A rule whose `body` is a single leaf — a number, a boolean, or a bare string — writes the leaf (for a string that is one of `R`'s `params`, what that parameter bound): there is no body to share, and the reference would be larger than what it stands for.
+7. **A firing rule writes a reference, never its body.** When rule `R` fires at a node, the engine replaces the node with `{"op": "apply_expression_template", "args": [], "name": N, "bindings": B}`, where `N` is `R`'s registered name in the component (post-rename, §9.7.7) and `B` maps each entry of `R`'s `params` to what the match bound to it: the matched sub-AST for a parameter in an operand position, the matched literal for one in a scalar-field position (§9.6.1). A parameter that occurs nowhere in `R`'s `match` is bound to its own name, so the reference expands to `R`'s body exactly as written there. `Expand` of the reference is `R`'s body with `B` substituted (constraint 5) — the replacement the engine used to write in place — so this constraint changes the reference-preserving form, and with it the emitted document (§9.6.4 rule 5), but not `Expand(load(f))` wherever no match would span a reference boundary and none lies inside the bindings of a reference the in-place engine left unexpanded (§9.6.4 rule 4): every existing `expanded*.esm` golden of §9.6.7 stands. The written reference is an ordinary reference from then on: later passes rewrite inside its `bindings` (constraint 2), no pattern sees into it (§9.6.4 rule 4), and `R`'s body is rewritten once per instance (§9.6.4 rule 3). A rule whose `body` is a single leaf — a number, a boolean, or a bare string — writes the leaf (for a string that is one of `R`'s `params`, what that parameter bound): there is no body to share, and the reference would be larger than what it stands for.
 
 #### 9.6.4 Round-trip — Option B (reference-preserving)
 
@@ -5312,10 +5320,11 @@ special-case older versions to recover Option A matching. Motivation and measure
      flatten resolves what is left. Structural `D` is strictly unary (§4.2), so an instance
      whose `wrt` parameter is bound to `"t"` on a `D` with trailing operands is rejected at
      that reference with `operator_arity`.
-   - *Equivalence.* Wherever no match would span a reference boundary (rule 4), `Expand` of
+   - *Equivalence.* Wherever no match would span a reference boundary, and none lies inside
+     the bindings of a reference the in-place engine left unexpanded (rule 4), `Expand` of
      the result equals the tree that substituting each firing rule's body in place, and
-     continuing the fixpoint on the substituted tree, would produce. Where a match would span
-     a boundary, the two differ, and this rule and rule 4 define the result; the
+     continuing the fixpoint on the substituted tree, would produce. Where one would, the two
+     differ, and this rule and rule 4 define the result; the
      `expanded*.esm` goldens of §9.6.7 pin this rule's result in both cases. No existing
      golden contains such a match, so every existing one is unchanged; the
      `opacity_rule_replacement/` fixture pins the cases that differ.
@@ -5335,18 +5344,25 @@ special-case older versions to recover Option A matching. Motivation and measure
 
    **What this changes from in-place rewriting.** An engine that substituted rule bodies in
    place, and expanded references to templates whose bodies held rewrite-target ops, could
-   match across the boundaries this rule closes. Three cases now differ, deliberately: (a) a
-   compound pattern whose inner node would only exist as part of another rule's replacement
-   (a pattern on `sqrt(D(u,x)^2 + …)` around a node that an alias rule rewrites to `D`);
-   (b) inside a template body, a pattern that needs more of a parameter's binding than its
-   kind and declared shape — a structured or ground pattern node at a parameter; and (c) a
-   compound pattern that would have matched a node assembled partly from a call site and
-   partly from the body of a reference that eager expansion used to inline. None occurs in
-   the 2026-11 corpus of real models (EarthSciDiscretizations, EarthSciModels, EqESM, EqIce,
-   EqWeFiC, reseact.esm and others) or in an existing conformance golden; the audit is
-   recorded with this revision's design notes, and `opacity_rule_replacement/` (§9.6.7) pins
-   all three. A pattern that needs one SHOULD be written against the replacement itself, or
-   the template SHOULD take the inner operand as its own parameter.
+   match across the boundaries this rule closes, and never rewrote inside a reference it left
+   unexpanded. Four cases now differ, deliberately: (a) a compound pattern whose inner node
+   would only exist as part of another rule's replacement (a pattern on `sqrt(D(u,x)^2 + …)`
+   around a node that an alias rule rewrites to `D`); (b) inside a template body, a pattern
+   that needs more of a parameter's binding than its kind and declared shape — a structured or
+   ground pattern node at a parameter; (c) a compound pattern that would have matched a node
+   assembled partly from a call site and partly from the body of a reference that eager
+   expansion used to inline; and (d) a rule on a node inside the `bindings` of a reference
+   that survives load — a reference to a template whose body holds no rewrite-target op, whose
+   bindings hold none either, so the node is built from core ops alone — which the in-place
+   engine treated as a leaf and never rewrote, though the rule fired on the same node anywhere
+   else. Cases (a)–(c) no longer fire; case (d) now fires, because the walk descends into a
+   reference's bindings (§9.6.3 constraint 2), so `Expand` of the result is the tree the rule
+   produces on the expansion. None of (a)–(c) occurs in the 2026-11 corpus of real models
+   (EarthSciDiscretizations, EarthSciModels, EqESM, EqIce, EqWeFiC, reseact.esm and others),
+   and none of the four in an existing conformance golden; the audit is recorded with this
+   revision's design notes, and `opacity_rule_replacement/` (§9.6.7) pins all four. A pattern
+   that needs one of (a)–(c) SHOULD be written against the replacement itself, or the template
+   SHOULD take the inner operand as its own parameter.
 
    **Scope of this rule.** Rule 4 governs the §9.6.3 **rewrite-rule engine** and nothing else:
    the `match`-pattern matcher, whose opacity keeps the fixpoint deterministic and
@@ -5635,9 +5651,9 @@ The rules-as-references revision (§9.6.3 constraint 7, §9.6.4 rule 3) adds the
 - `template_instance_variants/` — one template whose body holds a `D`, called with two variables of different declared shapes, and two `where`-scoped rules: two variants `<name>.variant1` / `.variant2`, numbered by canonical serialization, each call site re-pointed.
 - `rewrite_depth_through_bodies/` — invalid: a rule whose body reintroduces its own pattern under the same instance → `rewrite_rule_nonterminating`, naming the rule and the template; and a chain that converges at depth 64 exactly (accepted) beside one at depth 65 (rejected). The accepted chain's `emitted_chain_depth_64.esm` holds a 64-template body-reference chain; every binding loads it and re-emits it byte for byte (emit then load is a fixed point), which holds because `MAX_TEMPLATE_EXPANSION_DEPTH` equals `MAX_REWRITE_PASSES` (§9.7.3).
 - `unlowered_in_template_body/` — invalid at build: a template body holding a `D` that no rule matches → `unlowered_operator`, naming the op, the template and the first call site.
-- `opacity_rule_replacement/` — the cases where this revision and the in-place engine differ, each pinned the way this revision decides it: (a) a compound pattern whose inner node only exists in another rule's replacement does not fire, (b) a structured and a ground pattern node at a template parameter do not match what the call site bound, and (c) a compound pattern that would have assembled across an eagerly expanded reference to a template whose body holds a rewrite-target op does not fire. Its `expanded.esm` is written under this revision's semantics, and the in-place engine would fail it; its description records, case by case, what the in-place engine produced instead.
+- `opacity_rule_replacement/` — the cases where this revision and the in-place engine differ, each pinned the way this revision decides it: (a) a compound pattern whose inner node only exists in another rule's replacement does not fire, (b) a structured and a ground pattern node at a template parameter do not match what the call site bound, (c) a compound pattern that would have assembled across an eagerly expanded reference to a template whose body holds a rewrite-target op does not fire, and (d) a rule on a core-op node inside the bindings of an authored reference that survives load (a match-less template whose body, like the binding, holds no rewrite-target op) fires there, writing a reference into the binding, where the in-place engine left the binding unrewritten. Its `expanded.esm` is written under this revision's semantics, and the in-place engine would fail it; its description records, case by case, what the in-place engine produced instead.
 
-Every `emitted.esm` golden of a fixture in which a rule fires changes under this revision (the lowered node becomes a reference and the rule materializes); every existing `expanded*.esm` golden is unchanged except `import_library_enum/expanded_importer_redeclares.esm` (see above: an importer-bound `enum` op is now lowered per instance at load), because no existing fixture contains a match that spans a reference boundary (checked: `godunov_beats_inner_deriv`, `fixpoint_nested_deriv`, `eager_target_bearing`, `opacity_negative` and `opacity_priority_shadowing` match within one side of every boundary).
+Every `emitted.esm` golden of a fixture in which a rule fires changes under this revision (the lowered node becomes a reference and the rule materializes); every existing `expanded*.esm` golden is unchanged except `import_library_enum/expanded_importer_redeclares.esm` (see above: an importer-bound `enum` op is now lowered per instance at load), because no existing fixture contains a match that spans a reference boundary or lies inside the bindings of a reference the in-place engine left unexpanded (checked: `godunov_beats_inner_deriv`, `fixpoint_nested_deriv`, `eager_target_bearing`, `opacity_negative` and `opacity_priority_shadowing` match within one side of every boundary).
 - `opacity_negative/` — a compound `match` pattern whose shape only assembles across a surviving-reference boundary: MUST NOT fire (§9.6.4 rule 4's pinned divergence).
 - `opacity_priority_shadowing/` — the silent form of the divergence: a high-priority compound rule whose structural fragment is hidden in a target-free reference, plus a lower-priority generic rule; the golden pins that the compound rule does NOT fire and the generic rule DOES (binding the surviving reference whole).
 - `per_instantiation_validation/` — a template parameterized on a scalar field, two call sites, one inadmissible: rejected on the expanded-equivalent check (§9.6.9), naming the offending call site.
