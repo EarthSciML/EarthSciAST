@@ -33,9 +33,12 @@ fn ref_closure(
     out
 }
 
-/// Per-component MATCH-LESS template names authored in-file in `raw_source`
-/// (compkind.cname → ordered names). Emit keeps these verbatim as authored
-/// entries (esm-spec §9.6.4 rule 5). Mirrors `_authored_template_names`.
+/// Per-component template names authored in-file in `raw_source`
+/// (compkind.cname → ordered names). Emit keeps these in authored position
+/// (esm-spec §9.6.4 rule 5): a match-less entry always, a `match` rule only
+/// when a firing referenced it (it is then materialized without `match`,
+/// `where` and `priority`); imported/derived templates are materialized
+/// instead. Mirrors `_authored_template_names`.
 fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<String, Vec<String>> {
     let mut authored: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
@@ -52,7 +55,7 @@ fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<Stri
             };
             let mut names = Vec::new();
             for (n, d) in tpl {
-                if d.as_object().is_some_and(|o| !o.contains_key("match")) {
+                if d.is_object() {
                     names.push(n.clone());
                 }
             }
@@ -144,14 +147,17 @@ pub fn emit_document(
             let authored_set: std::collections::HashSet<&str> =
                 authored_here.iter().map(String::as_str).collect();
 
-            // Authored match-less entries first (authored order), then the
-            // materialized closure minus authored, lexicographically sorted.
+            // Authored entries first (authored order), then the materialized
+            // closure minus authored, lexicographically sorted. A `match` rule
+            // nothing references still carries its `match` (a referenced one
+            // was materialized without it, §9.6.4 rule 3) and is dropped.
             let mut emit_block = Map::new();
             for n in &authored_here {
                 if let Some(decl) = comp
                     .get("expression_templates")
                     .and_then(|v| v.as_object())
                     .and_then(|t| t.get(n))
+                    .filter(|d| d.get("match").is_none())
                 {
                     emit_block.insert(n.clone(), decl.clone());
                 }

@@ -227,6 +227,14 @@ fn attrs_on_rewrite_target_op_bind_as_scalar_metavariables() {
         "#;
     let mut v: Value = serde_json::from_str(src).expect("parse attrs source");
     lower_expression_templates(&mut v).expect("lowering must converge");
+    // The firing wrote a reference to the rule bound to what it captured
+    // (esm-spec §9.6.3 constraint 7): the attr literal `g` bound 1.4.
+    let written = earthsci_ast::observed_definition_json(&v["models"]["m"], "y")
+        .expect("y defining equation")
+        .clone();
+    assert_eq!(written["name"], "lower_custom");
+    assert_eq!(written["bindings"], json!({"f": "u", "g": 1.4}));
+    expand(&mut v).expect("expand");
     let expr = earthsci_ast::observed_definition_json(&v["models"]["m"], "y")
         .expect("y defining equation");
     assert_eq!(*expr, json!({"op": "*", "args": [1.4, "u"]}));

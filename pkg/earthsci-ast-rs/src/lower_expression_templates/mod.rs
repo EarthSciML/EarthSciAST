@@ -9,22 +9,21 @@
 //!
 //! Rewriting is an OUTERMOST-FIRST, PRIORITY-ORDERED, BOUNDED-FIXPOINT process
 //! (esm-spec §9.6.3). One pass (`rewrite_pass`) is a single pre-order
-//! (outermost-first) walk: at each node the engine first tries to fire a rule
-//! AT that node before descending — an `apply_expression_template` op is
-//! expanded, otherwise the `match` rules are consulted and the winner is
-//! selected deterministically (highest `priority`, ties broken by declaration
-//! order). The winner's body replaces the node and the walk does NOT descend
-//! into that freshly-produced body during the current pass. Passes repeat until
-//! a pass performs zero rewrites (the fixpoint) or until `MAX_REWRITE_PASSES`
-//! productive passes have run without converging, in which case the file is
-//! rejected with `rewrite_rule_nonterminating` (the pass bound — not a static
-//! check — is the authoritative termination guard). Because selection and
-//! traversal are fully deterministic, all bindings produce byte-identical
-//! fixpoints. After convergence the tree contains no `apply_expression_template`
-//! ops and no `expression_templates` blocks — downstream consumers see only
-//! normal Expression ASTs (Option A round-trip). Any rewrite-target op (e.g. a
-//! spatial `D`) that survives the fixpoint into an evaluation position is caught
-//! later by the `unlowered_operator` gate, not here.
+//! (outermost-first) walk: at each node the `match` rules are consulted and the
+//! winner is selected deterministically (highest `priority`, ties broken by
+//! declaration order). A firing writes a REFERENCE to the rule, bound to what
+//! the match captured (constraint 7; a rule whose body is a leaf writes the
+//! leaf), and the walk does NOT descend into it during the current pass. A
+//! reference is a leaf for matching; the walk descends into its `bindings`.
+//! Passes repeat until a pass performs zero rewrites; a rewrite at depth above
+//! `MAX_REWRITE_PASSES` rejects the file with `rewrite_rule_nonterminating`.
+//! The rules then apply inside the bodies of the templates the references
+//! reach, once per template instance (§9.6.4 rule 3, `instances.rs`), with
+//! the rewrite depth counted through those bodies. Nothing here expands a
+//! reference: references and each component's `expression_templates` block
+//! survive load (Option B), denote their expansion ([`expand`]), and travel
+//! into emit. Any rewrite-target op (e.g. a spatial `D`) that survives into an
+//! evaluation position is caught later by the `unlowered_operator` gate.
 //!
 //! Operates on the pre-deserialization `serde_json::Value` view, so it must
 //! run after schema validation but before deserializing into typed structs.
@@ -34,6 +33,9 @@ use std::rc::Rc;
 
 const APPLY_OP: &str = "apply_expression_template";
 
+/// The `op` of a template reference node.
+pub(crate) const APPLY_OP_NAME: &str = APPLY_OP;
+
 /// Stable diagnostic codes raised by the expression-template expansion
 /// pass. Mirrors the codes emitted by the TS / Python / Julia / Go bindings.
 pub type ExpressionTemplateError = crate::diagnostic::DiagnosticError;
@@ -42,12 +44,15 @@ use crate::diagnostic::{codes, err};
 
 mod emit;
 mod expand;
+mod instances;
 mod mirror;
 mod refaware;
 mod rewrite;
 
 pub use emit::*;
 pub use expand::*;
+pub(crate) use instances::canonical_compact_value;
+use instances::*;
 pub use mirror::*;
 use refaware::*;
 pub use rewrite::*;
@@ -419,6 +424,9 @@ mod tests {
           }
         });
         lower_expression_templates(&mut v).expect("rewrite");
+        // Each firing wrote a reference (esm-spec §9.6.3 constraint 7); check
+        // what it denotes.
+        expand(&mut v).expect("expand");
         let rhs = &v["models"]["M"]["equations"][0]["rhs"];
         assert_eq!(rhs["op"], json!("deriv"));
         assert_eq!(rhs["args"][0], json!("u")); // operand metavar f -> "u"
@@ -485,6 +493,9 @@ mod tests {
           }
         });
         lower_expression_templates(&mut v).expect("rewrite");
+        // Each firing wrote a reference (esm-spec §9.6.3 constraint 7); check
+        // what it denotes.
+        expand(&mut v).expect("expand");
         let rhs = &v["models"]["M"]["equations"][0]["rhs"];
         assert_eq!(rhs["op"], json!("winner"));
     }
@@ -520,6 +531,9 @@ mod tests {
           }
         });
         lower_expression_templates(&mut v).expect("rewrite");
+        // Each firing wrote a reference (esm-spec §9.6.3 constraint 7); check
+        // what it denotes.
+        expand(&mut v).expect("expand");
         assert_eq!(
             v["models"]["M"]["equations"][0]["rhs"]["op"],
             json!("winner")
@@ -556,6 +570,9 @@ mod tests {
           }
         });
         lower_expression_templates(&mut v).expect("rewrite");
+        // Each firing wrote a reference (esm-spec §9.6.3 constraint 7); check
+        // what it denotes.
+        expand(&mut v).expect("expand");
         let rhs = &v["models"]["M"]["equations"][0]["rhs"];
         // sugar(u) -> inner(u) (pass 1) -> k * u (pass 2).
         assert_eq!(*rhs, json!({"op": "*", "args": ["k", "u"]}));
