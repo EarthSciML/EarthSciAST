@@ -265,6 +265,7 @@ const GROUPS = [
         "mounted_component_tests_test.jl",
         "enum_lowering_test.jl",
         "mount_enums_test.jl",
+        "mount_template_registry_test.jl",
         "mount_element_type_test.jl",
         "toplevel_reaction_system_ref_test.jl",
         "scoped_assertion_variable_test.jl",

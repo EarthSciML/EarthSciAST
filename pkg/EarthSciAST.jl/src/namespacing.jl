@@ -341,6 +341,7 @@ into subsystems, whose templates merged into their owner's registry at load.
 """
 function _collect_model!(
         st, model::Model, prefix::String;
+        tpl_added::Union{Nothing, AbstractDict{String, Vector{String}}} = nothing,
         tpl_rename::Union{Nothing, AbstractDict{String, String}} = nothing,
         tpl_captures::_TplCaptures = _NO_CAPTURES
     )
@@ -351,12 +352,18 @@ function _collect_model!(
         push!(local_names, sub_name)
     end
 
-    # Namespace, then follow the registry rename (identity when there is none).
-    _ns(e) = tpl_rename === nothing ?
-        namespace_expr(e, prefix, local_names; captures = tpl_captures) :
-        _rename_expr_apply_refs(
-            namespace_expr(e, prefix, local_names; captures = tpl_captures), tpl_rename
-        )
+    # A reference binds its template's explicit free names (`_tpl_explicit_free`)
+    # to the same names here, in this (sub)system's scope: the namespacing below
+    # scopes them as it scopes the rest of the expression, so a body's free
+    # names read the names of the subsystem that owns the reference (esm-spec
+    # §9.6.4 rules 1–2), whichever component's registry holds the body. Then
+    # follow the registry rename (identity when there is none).
+    added = tpl_added === nothing ? Dict{String, Vector{String}}() : tpl_added
+    memo = IdDict{OpExpr, ASTExpr}()
+    function _ns(e)
+        r = namespace_expr(_tpl_bind_explicit(e, added, memo), prefix, local_names; captures = tpl_captures)
+        return tpl_rename === nothing ? r : _rename_expr_apply_refs(r, tpl_rename)
+    end
 
     # Index sets are a single document-scoped registry (seeded once by `flatten`
     # from the top-level object) with plain names shared by every component, never
@@ -431,7 +438,7 @@ function _collect_model!(
         sub_model isa Model || continue
         _collect_model!(
             st, sub_model, "$(prefix).$(sub_name)";
-            tpl_rename = tpl_rename, tpl_captures = tpl_captures
+            tpl_added = tpl_added, tpl_rename = tpl_rename, tpl_captures = tpl_captures
         )
     end
     return

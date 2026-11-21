@@ -1409,10 +1409,14 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - Prefix every variable, parameter, and species name with the system name and a dot.
    - Rewrite all equations so that variable references use the dot-namespaced names.
    - For nested subsystems, the prefix is the full path: `Parent.Child.variable`.
-   - **From `esm: 0.9.0` (reference-preserving round-trip, esm-spec §9.6.4):** apply the same
-     renaming map to free variable references inside the component's carried
-     `expression_templates` bodies and inside surviving `apply_expression_template`
-     references' `bindings` (template `params` shadow, exactly as in esm-spec §9.6.1).
+   - **From `esm: 0.9.0` (reference-preserving round-trip, esm-spec §9.6.4):** close the
+     component's carried `expression_templates` bodies (esm-spec §10.7): each body's free
+     variable references become trailing `params`, sorted by UTF-8 bytes, and every surviving
+     `apply_expression_template` reference binds each added parameter to its own name before
+     the reference's site is renamed. Then apply the renaming map of the site — the
+     (sub)system that owns the reference — to the references' `bindings`, the added ones
+     included (template `params` shadow, exactly as in esm-spec §9.6.1). A body's free name is
+     thereby read in the scope of each reference's site, as its expansion would read it.
    - Apply it to the plain-string references a relational `join` carries as well — an `on`
      key column, and an `overlap` clause's `src_env` / `tgt_env` envelope factors. These are
      references encoded as strings rather than as expression children, and they resolve
@@ -1533,14 +1537,21 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - **Metadata** recording which component systems were flattened and which coupling rules were applied.
    - **The merged template registry** (from `esm: 0.9.0`; esm-spec §9.6.4 rule 7, §10.7) as a
      first-class field of the flattened representation: the union of the component registries
-     (post-step-2 scoping) — including the referenced `match` rules each component materializes
+     (each body closed in step 2: its free names made trailing `params`, bound at every
+     reference to the names of the reference's own site, esm-spec §10.7) — including the
+     referenced `match` rules each component materializes
      without their `match`, `where` and `priority`, and the `<name>.variant<k>` entries of
      esm-spec §9.6.4 rule 3, which merge, deduplicate and collide like any other entry — with deep-equal same-name entries deduplicated at first occurrence
-     and any non-deep-equal same-name collision resolved by deterministically renaming **both**
-     entries to `<ComponentPath>.<name>` and rewriting their references in lockstep. A collision
+     and any non-deep-equal same-name collision resolved by deterministically renaming each
+     distinct definition to `<ComponentPath>.<name>`, after the first owner in document order
+     that carries it (owners whose entries are deep-equal once their nested references are
+     renamed share one entry), and rewriting every owner's references in lockstep. A collision
      propagates along the reference DAG: an entry whose body references a colliding name is
-     renamed per owner too, so no deduplicated entry is left holding a reference the merged
-     registry cannot resolve. The references of a `variable_map` expression transform belong to
+     renamed the same way too, so no deduplicated entry is left holding a reference the merged
+     registry cannot resolve. A model mounted as a subsystem (esm-spec §4.7), or an authored
+     subsystem with its own block, brings its definitions in its own names (esm-spec §9.6.4
+     rule 1): mounted twice, it is one definition, whose free names each reference binds in
+     its own subsystem's scope. The references of a `variable_map` expression transform belong to
      its receiving component (the owner of `to`, esm-spec §10.4): its registry carries the
      templates they name, and they are scoped and renamed in lockstep with its entries, so the
      observed that replaces the `to` parameter keeps them. Downstream
@@ -1585,18 +1596,18 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
   follows, so sorting it silently permutes the modeller's axes. A library that
   accumulates the axes into an unordered set and sorts on the way out is
   non-conforming even though its output looks stable.
-- **Ordering (normative).** "Post-step-2 scoping" above is an ordering requirement, not a
-     parenthetical: the step-2 free-variable rename runs on each component's carried bodies
-     **before** the union is taken, and the deep-equal dedup compares the post-scoping bodies.
-     Deduplicating pre-scoping bodies is unsound — two components importing one library, each
-     supplying its own `inv_dx`, carry byte-identical entries whose free `inv_dx` denotes a
-     *different* variable in each, and the single surviving body is correct for neither. Scoping
-     the bodies also makes them non-deep-equal, so the collision rename (and its DAG propagation)
-     is what keeps such an entry per-component. A library MUST apply step 2 to the carried bodies
-     in the same pass that namespaces the component's equations, so the two stay in lockstep.
+- **Ordering (normative).** "Closed in step 2" above is an ordering requirement, not a
+     parenthetical: each component's carried bodies are closed **before** the union is taken,
+     and the deep-equal dedup compares closed bodies. A closed body reads nothing from any
+     scope, so two components importing one library, each supplying its own `inv_dx`, carry one
+     entry whose `inv_dx` parameter each component's references bind to its own variable.
+     Scoping a body to its component instead (prefixing its free names) is unsound: a
+     reference inside a subsystem reads the subsystem's names, and one definition can serve
+     several subsystems. A library MUST bind the added parameters at the reference sites in the
+     same pass that namespaces the component's equations, so the two stay in lockstep.
    - **Applicability.** The requirement binds any library whose flattened representation carries
      the merged registry. A library that expands every reference at load (esm-spec §9.6.4 rule 2)
-     reaches step 4 with no surviving registry and nothing to scope, so the requirement is vacuous
+     reaches step 4 with no surviving registry and nothing to close, so the requirement is vacuous
      for it — and inherited in full the moment it grows a reference-preserving flatten path. A
      library MAY expose the union half alone as a separate function over the un-namespaced
      component view (the `flatten_template_registries` conformance surface); such a function

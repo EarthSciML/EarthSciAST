@@ -7,10 +7,12 @@
 Merge the per-component materialized registries (compkey → block) into the
 single document-scoped registry the flattened representation carries (esm-spec
 §9.6.4 rule 7 / §10.7 / esm-libraries-spec §4.7.5 step 4): deep-equal same-name
-entries dedupe at first occurrence; a colliding name (see
-[`_registry_collision_names`](@ref)) renames its entry in EVERY owning component
-to `<ComponentPath>.<name>`, with nested references inside the renamed bodies
-rewritten in lockstep.
+entries dedupe at first occurrence; for a colliding name (see
+[`_registry_collision_names`](@ref)) the owners whose entries are deep-equal,
+once their nested references are renamed, share ONE entry named
+`<first such owner's path>.<name>` (document order), so a definition two owners
+carry identically (a leaf mounted twice) stays one definition, and each owner's
+references are renamed to its entry in lockstep.
 
 Returns the merged registry AND the per-component rename map
 (`path → (old name => new name)`). The caller MUST apply that map to the owning
@@ -34,21 +36,42 @@ function _merge_flat_registry(component_templates)
         end
     end
     collide = _registry_collision_names(byname)
+    # A colliding name's entries, callees first: each owner's entry with its
+    # nested references renamed to that owner's entries, grouped by deep
+    # equality; a group is one entry, named after its first owner.
+    groups = Dict{String, Vector{Tuple{String, Any}}}()
+    function settle(name::String)
+        haskey(groups, name) && return groups[name]
+        gs = Tuple{String, Any}[]
+        for (path, decl) in byname[name]
+            rn = Dict{String, String}()
+            for c in _collect_apply_names!(String[], decl)
+                (c in collide && c != name) || continue
+                settle(c)
+                new = get(get(rename, path, Dict{String, String}()), c, nothing)
+                new === nothing || (rn[c] = new)
+            end
+            d = isempty(rn) ? decl : _rename_apply_refs(decl, rn)
+            i = findfirst(g -> _json_equal(g[2], d), gs)
+            if i === nothing
+                push!(gs, ("$path.$name", d))
+                i = length(gs)
+            end
+            get!(rename, path, Dict{String, String}())[name] = gs[i][1]
+        end
+        groups[name] = gs
+        return gs
+    end
+    for (name, _) in byname
+        name in collide && settle(name)
+    end
     for (name, occ) in byname
         if name in collide
-            for (path, decl) in occ
-                newname = "$path.$name"
+            for (newname, decl) in groups[name]
                 merged[newname] = decl
-                get!(rename, path, Dict{String, String}())[name] = newname
             end
         else
             merged[name] = occ[1][2]
-        end
-    end
-    # Nested references inside the renamed bodies follow their owner's map.
-    for (_, rn) in rename
-        for (_, new) in rn
-            haskey(merged, new) && (merged[new] = _rename_apply_refs(merged[new], rn))
         end
     end
     return (merged, rename)
@@ -111,8 +134,9 @@ match-less templates are referenceable, §9.6.2), so
 - **deep-equal same-name entries dedupe at first occurrence** — two components
   importing one stencil produce identical folded bodies, kept once under the
   bare name;
-- **a non-deep-equal same-name collision** renames both entries to
-  `<ComponentPath>.<name>`, with their `apply_expression_template` references
+- **a non-deep-equal same-name collision** renames the entries to
+  `<ComponentPath>.<name>`, one entry per distinct definition, named after its
+  first owner, with every owner's `apply_expression_template` references
   rewritten in lockstep (total, deterministic; no new diagnostic);
 - **collisions propagate along the reference DAG** — a declaration that
   references a colliding name collides too (see

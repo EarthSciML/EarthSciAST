@@ -41,8 +41,9 @@ end
 @testset "time derivatives in template bodies resolve without expanding" begin
     flat = _ttd_flat("template_time_derivative")
     reg = flat.template_registry
-    # A parameter under `D` becomes `p_dt`, appended to `params`.
-    @test _ttd_params(reg, "rate") == ["p", "p_dt"]
+    # A parameter under `D` becomes `p_dt`, appended to `params` after the
+    # body's free name `c`, which flatten made a parameter (esm-spec §10.7).
+    @test _ttd_params(reg, "rate") == ["p", "c", "p_dt"]
     # `D` of a reference is a reference to the derivative entry `<S>.ddt`.
     @test _ttd_params(reg, "sq.ddt") == ["q", "q_dt"]
     @test _ttd_params(reg, "sq") == ["q"]

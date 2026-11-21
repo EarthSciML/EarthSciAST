@@ -1321,8 +1321,7 @@ neither the call site's `bindings` nor the `faq`'s `args` — cannot be
 re-pointed, and leaving it would index the compact per-support cell gathers with
 full-grid positions. That is a wrong-numbers defect, so it MUST be rejected, with
 diagnostic `template_body_references_pushdown_rewritten_variable`. The remedy is
-the one §9.6.4's sibling guard `template_body_references_coupling_rewritten_variable`
-already prescribes: bind the value through the template's params.
+to bind the value through the template's params.
 
 **Residual diagnostic.** The desugar MUST NOT decline silently on a document it
 can see is join-shaped. When a `faq` is the rank-1 factor of a `+`-semiring
@@ -5359,23 +5358,18 @@ Consequently:
   library whose result object supports name-keyed reads carries the map on that
   object (Python `Solution.merged_renames`, Rust
   `SolutionMetadata::merged_variable_renames`).
-- **The registry body is refused, not rewritten.** It is authored source the
-  substitution never sees, so a body still naming a merged-away variable would
-  expand at the build boundary into a name the flattened system no longer
-  declares. Rewriting it is not the alternative: the flattened form's registry
-  would then disagree with the expand-at-load image the same document produces,
-  which esm-spec §9.6.4 rule 2 requires to be observably identical. That is the
-  guard `template_body_references_coupling_rewritten_variable` already applies
-  to a `variable_map`-substituted name (§9.6.4); the merged-away names join the
-  same set. A template `param` shadows the outer name (§9.6.1), so a body that
-  BINDS the name is unaffected — which is the first of the two fixes the
-  diagnostic names.
-
-  **All five bindings MUST implement this guard.** A MUST that four of five
-  ignore is not a rule, it is a note about one implementation, and the
-  compliance matrix stops meaning anything. The `template_registry` surface
-  below pins it, so a binding that drops it goes red rather than quietly
-  diverging.
+- **A registry body reads the survivor through its reference.** Flatten closes
+  every carried template body (esm-spec §10.7): a name the body read free — a
+  component variable, merged away or replaced by a `variable_map` — is a
+  parameter of the body, bound at each reference to the name of the reference's
+  own site. The merge and the substitution rewrite that binding like any other
+  site of the equation, so the flattened system, its registry and the
+  expand-at-load image agree, and there is nothing to refuse. The
+  `registry_body_names_the_merged_away_state` case pins it: its tendency reads
+  `Chem.ozone` through the reference, never `Sink.O3`. (Before bodies were
+  closed, a body was scoped to its component and such a document was refused
+  with `template_body_references_coupling_rewritten_variable`; that refusal is
+  withdrawn.)
 
 **Shape.** Structure-comparing and golden-free, like §5.33. Each flatten case
 pins BOTH halves — the dead name survives nowhere, AND the later entry landed on

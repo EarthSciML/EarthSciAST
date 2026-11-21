@@ -1,7 +1,7 @@
 {
   "esm": "2.0.0",
   "metadata": {
-    "description": "The inline twin of fixture.esm: the subsystem Sub is authored in place with its own `expression_templates` block (no `match` rule), which joins Host's registry by the same rule a mounted leaf's does (esm-spec §9.6.4 rule 1): `scale` collides and is renamed in both owners, `rate` follows, `half` is kept once, and Sub's bodies read its names as Host reads them.",
+    "description": "The inline twin of fixture.esm: the subsystem Sub is authored in place with its own `expression_templates` block (no `match` rule), which joins Host's registry by the same rule a mounted leaf's does (esm-spec §9.6.4 rule 1): `scale` collides and is renamed in both owners, `rate` follows, `half` is kept once, and Sub's bodies keep Sub's own names (`k`), read in Sub's scope at Sub's references.",
     "name": "mount_registry_merge_inline"
   },
   "models": {
@@ -80,7 +80,7 @@
         "Sub.rate": {
           "body": {
             "args": [
-              "Sub.k",
+              "k",
               {
                 "args": [],
                 "bindings": {

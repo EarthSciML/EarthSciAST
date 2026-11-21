@@ -402,8 +402,9 @@ end
                 cp(conf(dir, lib), joinpath(d, lib))
             end
             doc = Dict{String, Any}(String(k) => v for (k, v) in pairs(raw))
-            # B becomes a byte-identical twin of A: nothing distinguishes the two
-            # registries until component scoping runs.
+            # B becomes a byte-identical twin of A. Flatten closes every body
+            # (esm-spec §10.7): its free names become parameters each reference
+            # binds in its own scope, so the twins share one entry per template.
             doc["models"] = Dict{String, Any}(
                 "A" => raw["models"]["A"],
                 "B" => raw["models"]["A"]
@@ -412,12 +413,7 @@ end
             open(io -> JSON3.write(io, doc), path, "w")
             flat = EarthSciAST.flatten(EarthSciAST.load_path(path))
             @test Set(keys(flat.template_registry)) ==
-                Set(
-                [
-                    "A.interior_stencil", "A.outer_stencil", "A.d_x_rule",
-                    "B.interior_stencil", "B.outer_stencil", "B.d_x_rule",
-                ]
-            )
+                Set(["interior_stencil", "outer_stencil", "d_x_rule"])
             expanded = EarthSciAST.expand_flattened_refs(flat)
             # Twin models ⇒ twin equation sets, modulo the namespace prefix.
             _ser(eq) = JSON3.write(EarthSciAST.serialize_expression(eq.lhs)) * "~" *
@@ -431,7 +427,7 @@ end
 
     # -----------------------------------------------------------------------
     # flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7,
-    # §10.7): the SCOPING PRECONDITION, with BOTH halves pinned side by side.
+    # §10.7): the CLOSING PRECONDITION, with BOTH halves pinned side by side.
     # Two byte-identical models import the same rule library;
     # `interior_stencil`'s body references the free name `inv_dx`, a model-local
     # parameter that denotes a DIFFERENT variable in each model.
@@ -441,16 +437,11 @@ end
     #     Identical bodies dedupe under their bare names; the returned pair is
     #     self-consistent with the un-namespaced document, and the bodies keep
     #     their free `inv_dx`.
-    #   - the executing `flatten` composes the §10.7 component SCOPING with that
-    #     merge. Scoping rewrites `inv_dx` to `A.inv_dx` / `B.inv_dx`, which
-    #     makes the two copies non-deep-equal and forces the owner-path rename of
-    #     all four entries (the wrapper via the reference-DAG propagation).
-    #
-    # Deduping BEFORE scoping would keep one body whose `inv_dx` is correct for
-    # neither model — which is exactly why the ordering is normative. Julia is
-    # the only binding whose flattened representation carries a registry, so it
-    # is the only one that can pin the composition; the other four pin the union
-    # half against this same fixture (§10.7, "Applicability across bindings").
+    #   - the executing `flatten` composes the §10.7 CLOSING with that merge:
+    #     `inv_dx` becomes a parameter of `interior_stencil` (and, through the
+    #     nested references, of `outer_stencil` and `d_x_rule`), which each
+    #     model's references bind to its own `A.inv_dx` / `B.inv_dx`. The closed
+    #     bodies are identical and are kept once, correct for both models.
     # -----------------------------------------------------------------------
     @testset "registry merge: union half vs. scoping∘merge" begin
         dir = "flatten_registry_merge_transitive"
@@ -467,16 +458,14 @@ end
         @test occursin("\"inv_dx\"", body)
         @test !occursin("A.inv_dx", body) && !occursin("B.inv_dx", body)
 
-        # scoping ∘ merge: the executing flatten renames all four entries, and
-        # every surviving reference resolves against the carried registry.
+        # closing ∘ merge: one closed entry per template, `inv_dx` a parameter
+        # each model's references bind to its own variable.
         flat = EarthSciAST.flatten(EarthSciAST.load_path(conf(dir, "fixture_twins.esm")))
         @test Set(keys(flat.template_registry)) ==
-            Set(
-            [
-                "A.interior_stencil", "A.outer_stencil", "A.d_x_rule",
-                "B.interior_stencil", "B.outer_stencil", "B.d_x_rule",
-            ]
-        )
+            Set(["interior_stencil", "outer_stencil", "d_x_rule"])
+        @test all(n -> "inv_dx" in flat.template_registry[n]["params"], keys(flat.template_registry))
+        rhs = join((JSON3.write(EarthSciAST.serialize_expression(eq.rhs)) for eq in flat.equations), "\n")
+        @test occursin("\"inv_dx\":\"A.inv_dx\"", rhs) && occursin("\"inv_dx\":\"B.inv_dx\"", rhs)
         @test EarthSciAST.expand_flattened_refs(flat) isa EarthSciAST.FlattenedSystem
     end
 
