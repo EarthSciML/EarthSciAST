@@ -1267,6 +1267,10 @@ def lower_expression_templates(file: dict) -> dict:
             if not _is_object(comp):
                 continue
             cscope = f"{compkind}.{cname}"
+            # A subsystem carrying its own block (a mounted leaf's, or an
+            # authored one) joins this component's registry here (esm-spec
+            # §9.6.4 rule 1), bodies unchanged.
+            _hoist_mounted_templates(comp, str(cname))
             templates, match_rules, shape_env = _component_registry(comp, cscope, iset_names)
             L = _Lowering(templates, match_rules, shape_env, enums, cscope)
             for k in list(comp.keys()):
@@ -1701,31 +1705,392 @@ def _registry_collision_names(byname: dict[str, list[tuple[str, Any]]]) -> set[s
     return collide
 
 
+def _merge_flat_registry(
+    blocks: list[tuple[str, Any]],
+) -> tuple[dict[str, Any], dict[str, dict[str, str]]]:
+    """Merge per-owner template blocks into one registry (esm-spec §9.6.4 rule 7,
+    §10.7; esm-libraries-spec §4.7.5 step 4), the rule every registry merge
+    shares: flatten's merged registry, :func:`flatten_template_registries`, and
+    the hoist of subsystem blocks into their top-level component
+    (:func:`_hoist_mounted_templates`).
+
+    ``blocks`` is the ordered list of ``(owner path, block)``; the byname table
+    is built in that (document) order, entries in block order. Deep-equal
+    same-name entries dedupe at first occurrence. For a colliding name (see
+    :func:`_registry_collision_names`) the owners whose entries are deep-equal
+    once their nested references are renamed to that owner's entries share ONE
+    entry, named ``<first such owner's path>.<name>``; colliding names are
+    settled callees first. So a definition two owners carry identically (a leaf
+    mounted twice) stays one definition.
+
+    Returns the merged registry and the per-owner rename map
+    (``path -> {old name: new name}``), which the caller applies to each owner's
+    reference sites. Mirrors the Julia ``_merge_flat_registry``."""
+    byname: dict[str, list[tuple[str, Any]]] = {}
+    for path, block in blocks:
+        if not _is_object(block):
+            continue
+        for name, decl in block.items():
+            byname.setdefault(str(name), []).append((path, decl))
+    collide = _registry_collision_names(byname)
+    rename: dict[str, dict[str, str]] = {}
+    groups: dict[str, list[tuple[str, Any]]] = {}
+
+    def settle(name: str) -> list[tuple[str, Any]]:
+        if name in groups:
+            return groups[name]
+        gs: list[tuple[str, Any]] = []
+        for path, decl in byname[name]:
+            rn: dict[str, str] = {}
+            for c in _collect_apply_names([], decl):
+                if c not in collide or c == name:
+                    continue
+                settle(c)
+                new = rename.get(path, {}).get(c)
+                if new is not None:
+                    rn[c] = new
+            d = _rename_apply_refs(decl, rn) if rn else decl
+            idx = next((i for i, g in enumerate(gs) if _json_equal(g[1], d)), None)
+            if idx is None:
+                gs.append((f"{path}.{name}", d))
+                idx = len(gs) - 1
+            rename.setdefault(path, {})[name] = gs[idx][0]
+        groups[name] = gs
+        return gs
+
+    for name in byname:
+        if name in collide:
+            settle(name)
+    merged: dict[str, Any] = {}
+    for name, occ in byname.items():
+        if name in collide:
+            for newname, decl in groups[name]:
+                merged[newname] = decl
+        else:
+            merged[name] = occ[0][1]
+    return merged, rename
+
+
+def _matchless(block: Any) -> dict[str, Any]:
+    """The match-less entries of a raw ``expression_templates`` block, in
+    block order (only match-less templates are referenceable, §9.6.2)."""
+    if not _is_object(block):
+        return {}
+    return {
+        str(n): d for n, d in block.items() if not (_is_object(d) and d.get("match") is not None)
+    }
+
+
+# ===========================================================================
+# Subsystem blocks join their top-level component (esm-spec §9.6.4 rule 1)
+# ===========================================================================
+
+
+def _collect_mounted_blocks(out: list[tuple[str, dict]], node: Any, prefix: str) -> None:
+    """The subsystems below ``node`` that carry an ``expression_templates``
+    block (a mounted leaf's, or an authored subsystem's own), with their paths
+    below the top-level component. A subsystem with a block owns its subtree's
+    definitions (they were merged into it when it was lowered), so the walk
+    stops there."""
+    subs = node.get("subsystems") if _is_object(node) else None
+    if not _is_object(subs):
+        return
+    for k, sub in subs.items():
+        if not _is_object(sub):
+            continue
+        path = str(k) if not prefix else f"{prefix}.{k}"
+        if _is_object(sub.get("expression_templates")):
+            out.append((path, sub))
+        else:
+            _collect_mounted_blocks(out, sub, path)
+
+
+def _rename_outside_mounts(node: dict, rn: dict[str, str]) -> None:
+    """``node``'s subsystems, outside every subsystem that carries its own block,
+    with their references renamed by ``rn`` (the top-level component's own
+    renames), in place."""
+    subs = node.get("subsystems")
+    if not _is_object(subs):
+        return
+    for _k, sub in subs.items():
+        if not _is_object(sub) or _is_object(sub.get("expression_templates")):
+            continue
+        for k in list(sub.keys()):
+            if k == "subsystems":
+                continue
+            sub[k] = _rename_apply_refs(sub[k], rn)
+        _rename_outside_mounts(sub, rn)
+
+
+def _merge_mounted_blocks(
+    own: Any, cname: str, mounts: list[tuple[str, dict]]
+) -> tuple[dict[str, Any], dict[str, str] | None]:
+    """The merge :func:`_hoist_mounted_templates` describes: the component
+    ``cname``'s own block ``own`` (match-less entries, owner path ``cname``)
+    and each subsystem block of ``mounts`` (``(path, subsystem)``, match-less
+    entries, owner path ``path``) merged by :func:`_merge_flat_registry`, bodies
+    unchanged. Each subsystem's own references (its whole subtree) are renamed
+    here, in place, by its owner's renames. Returns the new block (``own``'s
+    ``match`` rules first, renamed by ``cname``'s renames, then the merged
+    entries) and ``cname``'s renames (or ``None``). Mirrors the Julia
+    ``_merge_mounted_blocks``."""
+    blocks: list[tuple[str, Any]] = [(cname, _matchless(own))]
+    for path, sub in mounts:
+        blocks.append((path, _matchless(sub.get("expression_templates"))))
+    merged, rename = _merge_flat_registry(blocks)
+    for path, sub in mounts:
+        rm = rename.get(path)
+        if not rm:
+            continue
+        for k in list(sub.keys()):
+            if k == "expression_templates":
+                continue
+            sub[k] = _rename_apply_refs(sub[k], rm)
+    rn = rename.get(cname)
+    newblock: dict[str, Any] = {}
+    if _is_object(own):
+        for n, d in own.items():
+            if not (_is_object(d) and d.get("match") is not None):
+                continue
+            newblock[str(n)] = _rename_apply_refs(d, rn) if rn else d
+    newblock.update(merged)
+    return newblock, rn
+
+
+def _hoist_mounted_templates(comp: dict, cname: str) -> dict:
+    """Merge into the top-level component ``comp``'s ``expression_templates``
+    block the definitions its subsystems carry on their own blocks (esm-spec
+    §9.6.4 rule 1): a model mounted as a subsystem (esm-spec §4.7) keeps its
+    references and its match-less definitions, and an authored subsystem may
+    declare its own block. Each joins ``comp``'s by the registry merge
+    (:func:`_merge_flat_registry`), owner path ``cname`` for ``comp``'s own
+    entries and the subsystem path below ``comp`` (``Sub``, ``Sub.Inner``) for
+    each subsystem block.
+
+    Bodies are taken unchanged, in the subsystem's own names: a body's free
+    names are read in the scope of the subsystem that owns the reference, so
+    expanding a subsystem's reference is plain substitution, and a leaf mounted
+    twice brings one definition. Each subsystem subtree's references follow its
+    own owner's renames; ``comp``'s other sites follow ``comp``'s. The subsystem
+    blocks are removed. In place; returns ``comp``. Mirrors the Julia
+    ``_hoist_mounted_templates!``."""
+    mounts: list[tuple[str, dict]] = []
+    _collect_mounted_blocks(mounts, comp, "")
+    if not mounts:
+        return comp
+    newblock, rn = _merge_mounted_blocks(comp.get("expression_templates"), cname, mounts)
+    if rn:
+        for k in list(comp.keys()):
+            if k in ("expression_templates", "subsystems"):
+                continue
+            comp[k] = _rename_apply_refs(comp[k], rn)
+        _rename_outside_mounts(comp, rn)
+    for _path, sub in mounts:
+        sub.pop("expression_templates", None)
+    comp["expression_templates"] = newblock
+    return comp
+
+
+def mounted_registries(doc: Any) -> Any:
+    """The lowered mounted leaf ``doc`` with each top-level component's
+    ``expression_templates`` block kept for the mounting document (esm-spec
+    §9.6.4 rule 1): its match-less entries only (the ``match`` rules have fired
+    in the leaf), and none on a component no reference reads. In place; returns
+    ``doc``. Mirrors the Julia ``_mounted_registries!``."""
+    if not _is_object(doc):
+        return doc
+    for compkind in ("models", "reaction_systems"):
+        comps = doc.get(compkind)
+        if not _is_object(comps):
+            continue
+        for _cname, comp in comps.items():
+            if not _is_object(comp):
+                continue
+            blk = comp.get("expression_templates")
+            if not _is_object(blk):
+                continue
+            keep = _matchless(blk)
+            used = any(
+                bool(_find_apply_paths(v)) for k, v in comp.items() if k != "expression_templates"
+            )
+            if not keep or not used:
+                comp.pop("expression_templates", None)
+            else:
+                comp["expression_templates"] = keep
+    return doc
+
+
+# ===========================================================================
+# Closing template bodies (esm-spec §10.7; esm-libraries-spec §4.7.5 step 2)
+# ===========================================================================
+
+
+def _tpl_binders(node: dict) -> set[str]:
+    """The loop symbols a raw expression node binds for all of its children:
+    its ``output_idx`` names, its ``ranges`` keys and an integral's ``var``."""
+    out: set[str] = set()
+    for x in node.get("output_idx") or ():
+        if isinstance(x, str):
+            out.add(x)
+    ranges = node.get("ranges")
+    if _is_object(ranges):
+        out.update(str(k) for k in ranges.keys())
+    if node.get("op") == "integral" and isinstance(node.get("var"), str):
+        out.add(node["var"])
+    return out
+
+
+def _tpl_children(node: dict) -> Iterator[Any]:
+    """A raw expression node's expression children: ``args``, ``lower`` /
+    ``upper`` / ``expr`` / ``filter`` / ``key``, ``values``, the ``bindings``
+    values of a reference, and the bounds of dense ``ranges`` (the Julia
+    ``foreach_child`` set; ``makearray`` ``regions`` and scalar fields such as
+    ``wrt`` are not reads)."""
+    from .json_walk import iter_child_values
+
+    for field_name, child in iter_child_values(node):
+        if field_name != "regions":
+            yield child
+    ranges = node.get("ranges")
+    if _is_object(ranges):
+        for bounds in ranges.values():
+            if _is_array(bounds):
+                for b in bounds:
+                    if isinstance(b, (str, dict)):
+                        yield b
+
+
+def _tpl_free_leaves(e: Any) -> set[str]:
+    """The variable leaves of the raw expression ``e`` not bound by an enclosing
+    loop binder (:func:`_tpl_binders`); binding values of nested references are
+    read. Mirrors the Julia ``_tpl_free_leaves``."""
+    out: set[str] = set()
+
+    def rec(x: Any, bound: frozenset[str]) -> None:
+        if isinstance(x, str):
+            if x not in bound:
+                out.add(x)
+            return
+        if not _is_object(x):
+            return
+        b = _tpl_binders(x)
+        inner = bound | b if b else bound
+        for c in _tpl_children(x):
+            rec(c, inner)
+
+    rec(e, frozenset())
+    return out
+
+
+def _tpl_bind_explicit(e: Any, added: dict[str, list[str]]) -> Any:
+    """``e`` with every reference to a template of ``added`` binding each added
+    parameter to the same name (``n: "n"``); a binding the reference already has
+    is kept. Identity-preserving: ``e`` itself when nothing changes. Mirrors the
+    Julia ``_tpl_bind_explicit``."""
+    if not added:
+        return e
+
+    def on_object(n: dict, rec) -> Any:
+        out: dict = {k: rec(v) for k, v in n.items()}
+        if all(out[k] is v for k, v in n.items()):
+            out = n
+        name = n.get("name")
+        if n.get("op") == APPLY_OP and isinstance(name, str) and name in added:
+            b = out.get("bindings")
+            b = dict(b) if _is_object(b) else {}
+            changed = False
+            for p in added[name]:
+                if p not in b:
+                    b[p] = p
+                    changed = True
+            if changed:
+                out = dict(out)
+                out["bindings"] = b
+        return out
+
+    return _rewrite_json(e, on_object=on_object, share=True)
+
+
+def tpl_explicit_free(block: Any) -> tuple[Any, dict[str, list[str]]]:
+    """``block`` (a component's raw template registry) with every match-less
+    body CLOSED (esm-spec §10.7; esm-libraries-spec §4.7.5 step 2): a name the
+    body reads from its caller (a variable leaf it does not bind and that is not
+    one of its ``params``, read directly or through a nested reference) is
+    appended, sorted by UTF-8 bytes, to its ``params``, and every nested
+    reference in a body binds its callee's added parameters to the same names
+    (:func:`_tpl_bind_explicit`). Entries are visited in block order, callees
+    (names of the same block a body references) first. Returns the closed block
+    and ``added`` (template name -> the parameters it gained), for the
+    reference sites. Mirrors the Julia ``_tpl_explicit_free``."""
+    added: dict[str, list[str]] = {}
+    if not _is_object(block):
+        return block, added
+    newdecl: dict[str, Any] = {}
+    visiting: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in newdecl or name in visiting:
+            return
+        visiting.add(name)
+        decl = block[name]
+        body = decl.get("body") if _is_object(decl) else None
+        if body is None or decl.get("match") is not None:
+            newdecl[name] = decl
+            return
+        for c in _collect_apply_names([], body):
+            if c in block:
+                visit(c)
+        bound = _tpl_bind_explicit(body, added)
+        raw_params = decl.get("params")
+        params = [p for p in raw_params if isinstance(p, str)] if _is_array(raw_params) else []
+        free = sorted(
+            _tpl_free_leaves(bound) - set(params), key=lambda s: s.encode("utf-8")
+        )
+        if bound is body and not free:
+            newdecl[name] = decl
+            return
+        nd = dict(decl)
+        if bound is not body:
+            nd["body"] = bound
+        if free:
+            nd["params"] = [*(raw_params if _is_array(raw_params) else []), *free]
+            added[name] = free
+        newdecl[name] = nd
+
+    for k in block:
+        visit(str(k))
+    return {str(k): newdecl[str(k)] for k in block}, added
+
+
 def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:
     """The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
     esm-libraries-spec §4.7.5 step 4). Given an Option-B loaded multi-component
-    document ``loaded``, merge every component's ``expression_templates``
-    registry into a single document-scoped merged registry:
+    document ``loaded``, merge every component's match-less
+    ``expression_templates`` entries by :func:`_merge_flat_registry` into a
+    single document-scoped merged registry:
 
     - **Deep-equal dedup at first occurrence** — two components importing one
       stencil produce identical folded bodies, kept once under the bare name.
-    - **Non-deep-equal same-name collision** — both entries are renamed
-      deterministically to ``<ComponentPath>.<name>`` and their
-      ``apply_expression_template`` references are rewritten in lockstep (total,
-      deterministic; no new diagnostic).
+    - **Non-deep-equal same-name collision** — the entries are renamed to
+      ``<ComponentPath>.<name>``, one entry per distinct definition, named after
+      its first owner, with every owner's ``apply_expression_template``
+      references rewritten in lockstep (total, deterministic; no new
+      diagnostic).
     - **Collisions propagate along the reference DAG** — a declaration that
       references a colliding name collides too (see
       :func:`_registry_collision_names`), so a byte-identical wrapper over a
       per-component leaf is renamed per owner rather than deduped into one body
       whose nested reference no longer resolves.
 
-    Returns the rewritten document ``root`` (component reference sites updated)
-    and the merged registry as a dict (the FlattenedSystem's first-class
-    registry field). ``match`` rules are not merged (only match-less templates
-    are referenceable, §9.6.2)."""
+    The merged registry is in document order: components as the file declares
+    them (models, then reaction systems), entries as their block declares them.
+    Returns the rewritten document ``root`` (component reference sites updated,
+    blocks removed) and the merged registry as a dict (the FlattenedSystem's
+    first-class registry field). ``match`` rules are not merged (only
+    match-less templates are referenceable, §9.6.2)."""
     root = copy.deepcopy(loaded)
-    # (path, compkind, cname, comp, named)
-    comps: list[tuple[str, str, str, dict, dict]] = []
+    comps: list[tuple[str, dict]] = []  # (path, comp)
+    blocks: list[tuple[str, Any]] = []
     for compkind in ("models", "reaction_systems"):
         cs = root.get(compkind)
         if not _is_object(cs):
@@ -1733,50 +2098,20 @@ def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:
         for cname, comp in cs.items():
             if not _is_object(comp):
                 continue
-            named: dict[str, Any] = {}
+            comps.append((str(cname), comp))
             tpl = comp.get("expression_templates")
             if _is_object(tpl):
-                for n, d in tpl.items():
-                    if _is_object(d) and d.get("match") is not None:
-                        continue  # match rules not merged
-                    named[str(n)] = d
-            comps.append((cname, compkind, cname, comp, named))
+                blocks.append((str(cname), _matchless(tpl)))
+    merged, rename = _merge_flat_registry(blocks)
 
-    # Group each template name across components (preserving first-seen path).
-    byname: dict[str, list[tuple[str, Any]]] = {}
-    for path, _ck, _cn, _comp, named in comps:
-        for n in sorted(named.keys()):
-            byname.setdefault(n, []).append((path, named[n]))
-
-    merged: dict[str, Any] = {}
-    rename: dict[str, dict[str, str]] = {}  # path => (old => new)
-    collide = _registry_collision_names(byname)
-    for name in sorted(byname.keys()):
-        occ = byname[name]
-        if name in collide:
-            for path, decl in occ:  # collision: owner-path rename
-                newname = f"{path}.{name}"
-                merged[newname] = decl
-                rename.setdefault(path, {})[name] = newname
-        else:
-            merged[name] = occ[0][1]  # deep-equal dedup
-
-    # Rewrite reference sites in lockstep (component expression positions and the
-    # carried bodies of the renamed entries).
-    for path, _ck, _cn, comp, _named in comps:
+    # Rewrite each component's reference sites in lockstep with its renames,
+    # and drop its now-merged block from the flattened form.
+    for path, comp in comps:
         rn = rename.get(path)
-        if rn is not None:
+        if rn:
             for k in list(comp.keys()):
                 if k == "expression_templates":
                     continue
                 comp[k] = _rename_apply_refs(comp[k], rn)
-            # The merged (renamed) bodies owned by this path get their nested
-            # references rewritten too.
-            for _old, new in rn.items():
-                if new in merged:
-                    merged[new] = _rename_apply_refs(merged[new], rn)
-        # Every component surrenders its per-component block to the merged
-        # registry in the flattened form.
         comp.pop("expression_templates", None)
-
     return root, merged
