@@ -834,6 +834,7 @@ end
             """
         )
         f = EarthSciAST.load_path(model_path)
+        EarthSciAST._expand_refs!(f)   # the firing wrote a reference (esm-spec §9.6.3 constraint 7)
         m = f.models["m"]
         @test (observed_definition(m, "d_edge")::OpExpr).op == "*"    # constrained rule fired
         @test (observed_definition(m, "d_cell")::OpExpr).op == "div"  # excluded, survives load

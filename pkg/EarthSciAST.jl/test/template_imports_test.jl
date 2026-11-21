@@ -69,6 +69,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # Typed happy path: index sets merged and folded at the edge bindings.
         f = EarthSciAST.load_path(conf("import_smoke", "fixture.esm"))
         @test f isa EarthSciAST.EsmFile
+        EarthSciAST._expand_refs!(f)   # rule firings write references (esm-spec §9.6.3 constraint 7); check what they denote
         @test f.index_sets["lon"].size == 288
         @test f.index_sets["lat"].size == 181
         # D(c, wrt: lon) lowered to the makearray rule body; D(c, wrt: t) not.
@@ -202,6 +203,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test _expand_raw(conf("import_rename_two_instances", "fixture.esm")) ==
             _golden(conf("import_rename_two_instances", "expanded.esm"))
         f = EarthSciAST.load_path(conf("import_rename_two_instances", "fixture.esm"))
+        EarthSciAST._expand_refs!(f)   # rule firings write references (esm-spec §9.6.3 constraint 7); check what they denote
         # Transitive rename: the index set arrives per instance and the sizes
         # come from each edge's own bindings.
         @test f.index_sets["fine.x"].size == 16
@@ -220,6 +222,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test _expand_raw(conf("import_where_rename_two_instances", "fixture.esm")) ==
             _golden(conf("import_where_rename_two_instances", "expanded.esm"))
         f = EarthSciAST.load_path(conf("import_where_rename_two_instances", "fixture.esm"))
+        EarthSciAST._expand_refs!(f)   # rule firings write references (esm-spec §9.6.3 constraint 7); check what they denote
         # The where-constrained div rule registered under each prefix (its
         # `where.F.shape` rewritten x -> meshA.x / meshB.x in lockstep with the
         # index set) and fired ONLY on its own instance's field.
@@ -276,8 +279,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "import_library_enum: a library's enum ops resolve in the library's block (§9.3)" begin
         @test _expand_raw(conf("import_library_enum", "fixture.esm")) ==
             _golden(conf("import_library_enum", "expanded.esm"))
-        @test _expand_raw(conf("import_library_enum", "fixture_importer_redeclares.esm")) ==
-            _golden(conf("import_library_enum", "expanded_importer_redeclares.esm"))
+        # Rule 3 lowers an `enum` op spelled by a parameter per template instance,
+        # at load (esm-spec §9.6.4 rule 3), where the golden — written before —
+        # still held the op the typed `lower_enums!` lowered afterwards. Both
+        # sides are compared with the importer's enums lowered.
+        let enums = JSON3.read(read(conf("import_library_enum", "fixture_importer_redeclares.esm"), String))["enums"]
+            lw(x) = _normj(EarthSciAST._lower_raw_enum_ops(x, enums, Set{String}()))
+            @test lw(_expand_raw(conf("import_library_enum", "fixture_importer_redeclares.esm"))) ==
+                lw(_golden(conf("import_library_enum", "expanded_importer_redeclares.esm")))
+        end
         # The importer's same-name enum (g_per_hp_hr = 7) does not reach the
         # library body, which keeps the library's 1; the importer's own enum ops,
         # including one bound into the template's parameter, resolve against 7.
@@ -330,6 +340,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test _expand_raw(conf("import_rebind_keyed_factors", "fixture.esm")) ==
             _golden(conf("import_rebind_keyed_factors", "expanded.esm"))
         f = EarthSciAST.load_path(conf("import_rebind_keyed_factors", "fixture.esm"))
+        EarthSciAST._expand_refs!(f)   # rule firings write references (esm-spec §9.6.3 constraint 7); check what they denote
         # The ragged set's keyed factors were rebound in the merged registry...
         @test f.index_sets["nz_of_row"].offsets == "meshA_count"
         @test f.index_sets["nz_of_row"].values == "meshA_cols"
@@ -524,6 +535,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             @test occursin("apply_expression_template", text)     # call sites survive
             @test occursin("central_D_lon_interior", text)         # stencil materialized
             reloaded = EarthSciAST.load_path(tmp)
+            EarthSciAST._expand_refs!(reloaded)
             @test reloaded.index_sets["lon"].size == 288
             @test reloaded.models["Advection"].equations[1].rhs.args[2].op == "makearray"
         finally
@@ -1452,6 +1464,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                                       "rhs": {"op": "scale_by_n", "args": ["x"]}}]}}}"""
                 )
                 f = _load_offline(consumer)
+                EarthSciAST._expand_refs!(f)   # rule firings write references (esm-spec §9.6.3 constraint 7); check what they denote
                 @test f.index_sets["cells"].size == 8
                 y = observed_definition(f.models["M"], "y")
                 @test y isa OpExpr && y.op == "*"
@@ -1484,6 +1497,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                        "subsystems": {"S": {"ref": "https://esm.invalid/models/outer.esm"}}}}}"""
                 )
                 fw = _load_offline(wrapper)
+                EarthSciAST._expand_refs!(fw)
                 sub = fw.models["Top"].subsystems["S"]
                 @test sub isa EarthSciAST.Model
                 w = observed_definition(sub, "w")

@@ -146,6 +146,7 @@ function _tpl_close(tt::_TplTable, name::String, decl::_TemplateDecl, S::Dict{St
     typed = _tpl_augment(tt, typed)
     typed = _tpl_elem_reads(tt, typed)
     typed = _tpl_body_lift(tt, typed, IdDict{OpExpr, ASTExpr}())
+    typed = _tpl_lift_root_ref(tt, typed)
     free = sort!(collect(_tpl_free_leaves(typed)))
     if !isempty(free)
         m = Dict{String, ASTExpr}(n => VarExpr(_TPL_FREE * n) for n in free)
@@ -303,6 +304,37 @@ function _tpl_lift_whole(tt::_TplTable, r::OpExpr)
     return OpExpr(
         "faq", ASTExpr[]; output_idx = Any[oi...], ranges = ranges,
         expr_body = reconstruct(r; args = args)
+    )
+end
+
+# A body that is itself a whole array-valued reference — the body of a rule
+# that forwards to a stencil template, which a firing references (esm-spec
+# §9.6.3 constraint 7) — is that reference read at each output index:
+#
+#     interior(f)  ==  faq(output_idx = o, ranges = R, expr = interior(f)[o])
+#
+# The reference stays a reference (its element call); the template is then
+# array-valued and called through its element like any other.
+function _tpl_lift_root_ref(tt::_TplTable, r::ASTExpr)
+    r isa OpExpr || return r
+    w = _tpl_whole_ref(tt, r)
+    w === nothing && return r
+    outs, rg = w
+    used = Set{String}()
+    foreach_subexpr(x -> x isa VarExpr && push!(used, x.name), r)
+    oi = String[]
+    for k in eachindex(outs)
+        n = string("i", k)
+        while n in used || n in oi
+            n *= "′"
+        end
+        push!(oi, n)
+    end
+    subs = ASTExpr[VarExpr(n) for n in oi]
+    ranges = Dict{String, Any}(n => rg[outs[k]] for (k, n) in enumerate(oi))
+    return OpExpr(
+        "faq", ASTExpr[]; output_idx = Any[oi...], ranges = ranges,
+        expr_body = _elem_call(tt, r, subs)
     )
 end
 

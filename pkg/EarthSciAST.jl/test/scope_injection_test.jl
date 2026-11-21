@@ -163,6 +163,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             "Advection", adv.tests[2].expression_template_imports,
             conf("inject_test_block")
         )
+        EarthSciAST._expand_refs!(e1); EarthSciAST._expand_refs!(e2)   # firings write references
         @test e1.models["Advection"].equations[1].rhs.args[2].op == "makearray"
         @test e2.models["Advection"].equations[1].rhs.args[2].op == "makearray"
         @test e1.index_sets["lon"].size == 288

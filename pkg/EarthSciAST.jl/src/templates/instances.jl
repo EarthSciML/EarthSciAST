@@ -167,11 +167,31 @@ end
 _Rule3State(L::_Lowering) =
     _Rule3State(L, Dict{String, _InstanceResult}(), String[], Dict{String, Set{String}}(), String[])
 
+# The structural parameters of template `name` (`_structural_params`), plus
+# each parameter forwarded whole into a structural parameter of a template its
+# body references (transitively): through the reference the parameter reaches
+# a structural position of the expansion.
 function _template_structural!(st::_Rule3State, name::String, decl)
-    return get!(st.structural, name) do
-        td = _TemplateDecl(decl)
-        _structural_params(td.body, td.params)
+    r = get(st.structural, name, nothing)
+    r === nothing || return r
+    td = _TemplateDecl(decl)
+    S = _structural_params(td.body, td.params)
+    st.structural[name] = S          # a cycle reads the direct set
+    P = Set{String}(td.params)
+    _visit_json(td.body) do _, n
+        _is_apply_node(n) || return true
+        inner = _raw_get(n, "name")
+        b = _raw_get(n, "bindings")
+        (inner isa AbstractString && _is_object(b)) || return true
+        idecl = get(st.L.named, String(inner), nothing)
+        idecl === nothing && return true
+        IS = _template_structural!(st, String(inner), idecl)
+        for (k, v) in pairs(b)
+            v isa AbstractString && String(v) in P && string(k) in IS && push!(S, String(v))
+        end
+        return true
     end
+    return S
 end
 
 _nonterminating(scope, msg) = throw(

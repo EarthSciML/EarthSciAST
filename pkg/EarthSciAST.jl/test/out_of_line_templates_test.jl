@@ -99,7 +99,66 @@ end
         # non-destructive: the loaded view still carries surviving references
         d = loaded
         mk = d["models"]["Advection"]["equations"][1]["rhs"]["args"][2]
-        @test _normj(mk)["op"] == "makearray"
+        @test _isapply(_normj(mk))        # the rule's firing wrote a reference
+    end
+
+    # -----------------------------------------------------------------------
+    # Rules write references (CONFORMANCE_SPEC §5.60; esm-spec §9.6.3
+    # constraint 7, §9.6.4 rule 3): both goldens — the emitted form byte for
+    # byte, and Expand(load) against the expanded oracle.
+    # -----------------------------------------------------------------------
+    @testset "rules write references: emitted and expanded goldens (§5.60)" begin
+        _core(d) = Dict(
+            k => _normj(get(d, k, nothing))
+                for k in ("models", "reaction_systems", "coupling", "index_sets")
+                if haskey(d, k)
+        )
+        for (dir, fix, emitted, expanded) in [
+                ("rewrite_in_template_body", "fixture.esm", "emitted.esm", "expanded.esm"),
+                ("rule_writes_reference", "fixture.esm", "emitted.esm", "expanded.esm"),
+                ("template_instance_variants", "fixture.esm", "emitted.esm", "expanded.esm"),
+                ("opacity_rule_replacement", "fixture.esm", "emitted.esm", "expanded.esm"),
+                ("rewrite_depth_through_bodies", "chain_depth_64.esm",
+                    "emitted_chain_depth_64.esm", "expanded_chain_depth_64.esm"),
+            ]
+            @test _emit(dir, fix) == read(conf(dir, emitted), String)
+            @test _core(Expand(_load(dir, fix))) ==
+                _core(JSON3.read(read(conf(dir, expanded), String)))
+        end
+        # Variants are numbered by canonical bytes and each call site re-pointed.
+        m = _load("template_instance_variants")["models"]["m"]
+        @test _ool_defrhs(m, "du")["name"] == "ddx.variant1"
+        @test _ool_defrhs(m, "dv")["name"] == "ddx.variant2"
+        @test _normj(m["expression_templates"]["ddx.variant1"]["body"])["name"] == "central_1d"
+        # A leaf-bodied rule writes its leaf.
+        e = _normj(_ool_defrhs(_load("rule_writes_reference")["models"]["m"], "e"))
+        @test e == Dict("op" => "*", "args" => Any[0.25, "b"])
+        # Nontermination detected through bodies, and the depth bound.
+        for (dir, fix, errf) in [
+                ("rewrite_depth_through_bodies", "fixture.esm", "error.json"),
+                ("rewrite_depth_through_bodies", "chain_depth_65.esm", "error_chain_depth_65.json"),
+            ]
+            want = JSON3.read(read(conf(dir, errf), String))["code"]
+            got = try
+                _load(dir, fix)
+                nothing
+            catch err
+                err isa ExpressionTemplateError ? err.code : rethrow()
+            end
+            @test got == want
+        end
+        # A rewrite-target op left in a reachable body is refused at build.
+        err = try
+            EarthSciAST.Internal.build(
+                EarthSciAST.flatten(
+                    EarthSciAST.load_path(conf("unlowered_in_template_body", "fixture.esm"))
+                )
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing && occursin("unlowered_operator", sprint(showerror, err))
     end
 
     # -----------------------------------------------------------------------
@@ -123,10 +182,14 @@ end
         @test EarthSciAST._esm_stamp_floor("1.0.0") == "1.0.0"   # at/above: untouched
         @test !haskey(adv, "expression_template_imports")     # imports consumed
         reg = adv["expression_templates"]
-        @test Set(string.(keys(reg))) == Set(["central_D_lon_interior", "dlon_deg"])  # match-less only
-        @test !haskey(reg, "central_D_lon_zero_grad_bc")      # match rule not materialized
-        # Call site intact: the makearray interior region is a surviving ref.
-        interior = adv["equations"][1]["rhs"]["args"][2]["values"][1]
+        # The firing wrote a reference to its rule, which materializes
+        # match-less (esm-spec §9.6.3 constraint 7, §9.6.4 rule 5).
+        @test Set(string.(keys(reg))) ==
+            Set(["central_D_lon_interior", "central_D_lon_zero_grad_bc", "dlon_deg"])
+        @test !haskey(reg["central_D_lon_zero_grad_bc"], "match")
+        site = adv["equations"][1]["rhs"]["args"][2]
+        @test _isapply(site) && site["name"] == "central_D_lon_zero_grad_bc"
+        interior = reg["central_D_lon_zero_grad_bc"]["body"]["values"][1]
         @test _isapply(interior) && interior["name"] == "central_D_lon_interior"
         # idempotency (§9.6.4 rule 5 / RFC gate 2)
         s2 = emit_esm_string(
@@ -146,7 +209,8 @@ end
         @test s == read(conf("emit_rename_dotted_keys", "emitted.esm"), String)
         doc = JSON3.read(s)
         reg = doc["models"]["TwoGrids"]["expression_templates"]
-        @test Set(string.(keys(reg))) == Set(["fine.dx", "coarse.dx"])   # dotted keys
+        @test Set(string.(keys(reg))) ==
+            Set(["fine.dx", "coarse.dx", "fine.central_D_x", "coarse.central_D_x"])   # dotted keys
         @test Set(string.(keys(doc["index_sets"]))) == Set(["fine.x", "coarse.x"])
     end
 
@@ -193,10 +257,11 @@ end
         loaded = _load("opacity_priority_shadowing")
         d = loaded
         flux = _normj(_ool_defrhs(d["models"]["m"], "flux"))
-        @test flux["op"] == "*"
-        @test flux["args"][1] == 1                 # generic marker (NOT compound 999)
-        @test _isapply(flux["args"][2])            # reference bound WHOLE by metavariable f
-        @test flux["args"][2]["name"] == "flux_prod"
+        # The generic rule fired and wrote a reference to itself (esm-spec
+        # §9.6.3 constraint 7), binding the surviving reference WHOLE.
+        @test _isapply(flux) && flux["name"] == "generic"
+        @test _isapply(flux["bindings"]["f"]) && flux["bindings"]["f"]["name"] == "flux_prod"
+        @test _normj(d["models"]["m"]["expression_templates"]["generic"]["body"])["args"][1] == 1  # NOT compound 999
         @test _emit("opacity_priority_shadowing") ==
             read(conf("opacity_priority_shadowing", "emitted.esm"), String)
     end
@@ -240,16 +305,20 @@ end
         root, merged = flatten_template_registries(loaded)
         @test Set(keys(merged)) == Set(
             [
-                "A.interior_stencil", "A.outer_stencil",
-                "B.interior_stencil", "B.outer_stencil",
+                "A.interior_stencil", "A.outer_stencil", "A.d_x_rule",
+                "B.interior_stencil", "B.outer_stencil", "B.d_x_rule",
             ]
         )
+        # The rule's firing wrote a reference to the rule (esm-spec §9.6.3
+        # constraint 7), whose body references the wrapper: it renames with it.
+        @test _names(merged["A.d_x_rule"]["body"]) == ["A.outer_stencil"]
+        @test _names(merged["B.d_x_rule"]["body"]) == ["B.outer_stencil"]
         # Each owner's wrapper reaches its OWN leaf, never the other model's.
         @test _names(merged["A.outer_stencil"]["body"]) == ["A.interior_stencil"]
         @test _names(merged["B.outer_stencil"]["body"]) == ["B.interior_stencil"]
         # Component reference sites follow in lockstep.
-        @test _names(root["models"]["A"]["equations"]) == ["A.outer_stencil"]
-        @test _names(root["models"]["B"]["equations"]) == ["B.outer_stencil"]
+        @test _names(root["models"]["A"]["equations"]) == ["A.d_x_rule"]
+        @test _names(root["models"]["B"]["equations"]) == ["B.d_x_rule"]
 
         # The executing path: the typed FlattenedSystem's registry agrees, and
         # every surviving reference resolves against it, so `expand_flattened_refs`
@@ -289,8 +358,8 @@ end
             @test Set(keys(flat.template_registry)) ==
                 Set(
                 [
-                    "A.interior_stencil", "A.outer_stencil",
-                    "B.interior_stencil", "B.outer_stencil",
+                    "A.interior_stencil", "A.outer_stencil", "A.d_x_rule",
+                    "B.interior_stencil", "B.outer_stencil", "B.d_x_rule",
                 ]
             )
             expanded = EarthSciAST.expand_flattened_refs(flat)
@@ -333,10 +402,10 @@ end
         loaded = _load(dir, "fixture_twins.esm")
         root, merged = flatten_template_registries(loaded)
         # Union half: dedup under the bare names.
-        @test Set(keys(merged)) == Set(["interior_stencil", "outer_stencil"])
+        @test Set(keys(merged)) == Set(["interior_stencil", "outer_stencil", "d_x_rule"])
         @test _names(merged["outer_stencil"]["body"]) == ["interior_stencil"]
-        @test _names(root["models"]["A"]["equations"]) == ["outer_stencil"]
-        @test _names(root["models"]["B"]["equations"]) == ["outer_stencil"]
+        @test _names(root["models"]["A"]["equations"]) == ["d_x_rule"]
+        @test _names(root["models"]["B"]["equations"]) == ["d_x_rule"]
         # …and the free variable is NOT component-scoped by that surface.
         body = JSON3.write(merged["interior_stencil"]["body"])
         @test occursin("\"inv_dx\"", body)
@@ -348,8 +417,8 @@ end
         @test Set(keys(flat.template_registry)) ==
             Set(
             [
-                "A.interior_stencil", "A.outer_stencil",
-                "B.interior_stencil", "B.outer_stencil",
+                "A.interior_stencil", "A.outer_stencil", "A.d_x_rule",
+                "B.interior_stencil", "B.outer_stencil", "B.d_x_rule",
             ]
         )
         @test EarthSciAST.expand_flattened_refs(flat) isa EarthSciAST.FlattenedSystem
@@ -362,7 +431,9 @@ end
         for dir in [
                 "emit_materialized_registry", "emit_rename_dotted_keys",
                 "rewrite_in_template_body", "opacity_negative",
-                "opacity_priority_shadowing",
+                "opacity_priority_shadowing", "rule_writes_reference",
+                "template_instance_variants", "opacity_rule_replacement",
+                "unlowered_in_template_body",
             ]
             s1 = _emit(dir)
             s2 = emit_esm_string(emit_document(JSON3.read(s1), conf(dir)))
@@ -382,7 +453,9 @@ end
         for dir in [
                 "emit_materialized_registry", "emit_rename_dotted_keys",
                 "rewrite_in_template_body", "opacity_negative",
-                "opacity_priority_shadowing",
+                "opacity_priority_shadowing", "rule_writes_reference",
+                "template_instance_variants", "opacity_rule_replacement",
+                "unlowered_in_template_body",
             ]
             f = EarthSciAST.load_path(conf(dir, "fixture.esm"))
             @test f.component_templates !== nothing        # registries survive into typed IR
