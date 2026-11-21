@@ -15,9 +15,13 @@ using EarthSciAST
     dir = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "mount_enums")
     expected = JSON3.read(read(joinpath(dir, "expected.json"), String))
 
+    # The right-hand side defining `dotted` in the EXPANDED document: a load
+    # keeps a template call as a reference (esm-spec §9.6.4 rule 2), whose
+    # instance lowers the `enum` op (rule 3); `expanded_file` gives what it
+    # denotes.
     function defining_rhs(file, dotted::AbstractString)
         parts = split(dotted, ".")
-        node = file.models[String(parts[1])]
+        node = EarthSciAST.expanded_file(file).models[String(parts[1])]
         for sub in parts[2:(end - 1)]
             node = node.subsystems[String(sub)]
         end
