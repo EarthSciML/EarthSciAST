@@ -195,7 +195,7 @@ fn the_flattened_system_on_the_wire_matches_the_shared_golden() {
     let cases: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("cases.json")).unwrap()).unwrap();
     let cases = cases["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 7);
+    assert_eq!(cases.len(), 8);
     for case in cases {
         // A case may also carry a `refs_golden`: the flattened system with its
         // template references kept (esm-spec §9.6.11). This binding expands

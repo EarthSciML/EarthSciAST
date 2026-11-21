@@ -7845,7 +7845,7 @@ the lift of the expansion did. Each case gains a second golden, the flattened
 equations with references kept and the reached registry entries, byte for byte
 across bindings, and the set gains a case whose application binds an array to a
 mixed parameter, pinning the `<name>.cellwise<k>` variant and its `p_cell`
-parameter. A structural time derivative inside a template body is pinned by
+parameter (`mixed_parameter_cellwise`). A structural time derivative inside a template body is pinned by
 a fixture whose flattened golden (after `Expand`) equals the expansion's
 resolution. The rule promises equality in value, not node for node (a zero
 term the expansion drops can stay in the body, esm-spec §9.6.4 rule 3); this

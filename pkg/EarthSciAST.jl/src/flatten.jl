@@ -1320,6 +1320,11 @@ function _finish_flatten(st::FlattenState, pointwise)
         seed = pointwise === nothing ? nothing : pointwise.shapes,
         stale = pointwise === nothing ? () : pointwise.stale
     )
+    # Every lift is done: the cellwise variants they made take their final
+    # names (esm-spec §9.6.11), at every site that references them.
+    renames = _name_cellwise_variants!(st.template_registry)
+    isempty(renames) ||
+        _map_flat_sites!(e -> _rename_expr_apply_refs(e, renames), st; equations = true)
     return FlattenedSystem(;
         independent_variables = ivs,
         state_variables = st.states, parameters = st.params,
@@ -1683,6 +1688,25 @@ function expand_flattened_refs(
         field_ics = Pair{String, ASTExpr}[name => expand(e) for (name, e) in flat.field_ics],
         continuous_events = _map_event_exprs(expand, flat.continuous_events),
         discrete_events = _map_event_exprs(expand, flat.discrete_events)
+    )
+end
+
+# `flat` with every template reference renamed through `renames` (old => new),
+# in each expression site `expand_flattened_refs` rewrites, its initialization
+# equations, and its field initial conditions.
+function _rename_flat_refs(flat::FlattenedSystem, renames::AbstractDict{String, String})
+    isempty(renames) && return flat
+    f = e -> _rename_expr_apply_refs(e, renames)
+    neweqs, newcontribs = _rewrite_flat_equations(f, flat)
+    return FlattenedSystem(
+        flat; equations = neweqs, equation_contributions = newcontribs,
+        state_variables = _map_variable_sites(f, flat.state_variables),
+        parameters = _map_variable_sites(f, flat.parameters),
+        observed_variables = _map_variable_sites(f, flat.observed_variables),
+        field_ics = Pair{String, ASTExpr}[name => f(e) for (name, e) in flat.field_ics],
+        continuous_events = _map_event_exprs(f, flat.continuous_events),
+        discrete_events = _map_event_exprs(f, flat.discrete_events),
+        initialization_equations = _map_equation_sides(f, flat.initialization_equations)
     )
 end
 

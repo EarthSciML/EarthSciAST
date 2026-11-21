@@ -192,9 +192,11 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
             for (k, v) in d if _declares_scalar(v)
     )
 
-    # Expands the template references the elementwise lift meets (esm-spec
-    # §9.6.11).
-    ew = _ElementwiseContext(flat.template_registry)
+    # Reads the template references the elementwise lift meets (esm-spec
+    # §9.6.11). The cellwise variants it adds go to a copy of the registry:
+    # naming them may renumber those flatten named, and the input is untouched.
+    registry = copy(flat.template_registry)
+    ew = _ElementwiseContext(registry)
 
     # The ALGEBRAIC defining equations (bare `x = expr`). State equations
     # (`D(x,t) = …`) don't define x's shape (x keeps its declared shape).
@@ -319,11 +321,15 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
         push!(new_contribs, out_cs)
     end
 
-    return FlattenedSystem(
+    promoted = FlattenedSystem(
         flat; state_variables = new_states, parameters = new_params,
         observed_variables = new_observeds, equations = new_eqs,
-        equation_contributions = new_contribs, index_sets = index_sets
+        equation_contributions = new_contribs, index_sets = index_sets,
+        template_registry = registry
     )
+    # The cellwise variants this pass's lift made take their final names, with
+    # those flatten named (esm-spec §9.6.11).
+    return _rename_flat_refs(promoted, _name_cellwise_variants!(registry))
 end
 
 # `[(output symbol, extent)…]` of a `faq` producer every one of whose output
