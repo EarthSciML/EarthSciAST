@@ -306,7 +306,9 @@ def test_godunov_compound_rule_beats_inner_derivative():
     ``priority:0`` central-difference ``D`` rule can lower either inner ``D``. The
     expanded form is ``godunov_coef * u`` — crucially with NO ``inv_dx`` (which
     only the per-derivative rule emits)."""
-    out = lower_expression_templates(_conf_fixture("godunov_beats_inner_deriv"))
+    # The firing wrote a reference to its rule (esm-spec §9.6.3 constraint 7);
+    # compare what it denotes.
+    out = expand_document(lower_expression_templates(_conf_fixture("godunov_beats_inner_deriv")))
     exp = _conf_fixture("godunov_beats_inner_deriv", "expanded.esm")
     assert out["models"]["m"]["variables"] == exp["models"]["m"]["variables"]
     assert out["models"]["m"]["equations"] == exp["models"]["m"]["equations"]
@@ -321,7 +323,9 @@ def test_nested_derivative_fixpoint_converges_across_passes():
     """laplacian → D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D → stencil
     (pass 2). Exercises the bounded fixpoint: a produced body is re-scanned only in
     a SUBSEQUENT pass."""
-    out = lower_expression_templates(_conf_fixture("fixpoint_nested_deriv"))
+    # Firings write references (esm-spec §9.6.3 constraint 7); compare what
+    # they denote.
+    out = expand_document(lower_expression_templates(_conf_fixture("fixpoint_nested_deriv")))
     exp = _conf_fixture("fixpoint_nested_deriv", "expanded.esm")
     assert out["models"]["m"]["variables"] == exp["models"]["m"]["variables"]
     assert out["models"]["m"]["equations"] == exp["models"]["m"]["equations"]
@@ -466,7 +470,11 @@ def test_attrs_match_binds_scalar_metavariable():
         },
     }
     out = lower_expression_templates(src)
-    assert _defining(out, "m", "y") == {"op": "*", "args": [1.4, "u"]}
+    # The firing wrote a reference binding the scalar metavariable (esm-spec
+    # §9.6.3 constraint 7); its expansion is the substituted body.
+    ref = _defining(out, "m", "y")
+    assert ref["name"] == "lower_custom" and ref["bindings"] == {"f": "u", "g": 1.4}
+    assert _defining(expand_document(out), "m", "y") == {"op": "*", "args": [1.4, "u"]}
 
 
 # ---------------------------------------------------------------------------
@@ -688,7 +696,8 @@ def test_where_constraint_filters_before_priority():
     # it simply never matches a variable's declared shape.
     doc["index_sets"]["cells_nope_unused"] = {"kind": "interval", "size": 1}
     out = lower_expression_templates(doc)
-    expr = _defining(out, "m", "d")
+    assert _defining(out, "m", "d")["name"] == "lo"  # the firing wrote a reference
+    expr = _defining(expand_document(out), "m", "d")
     assert expr["op"] == "*"
     assert expr["args"][0] == "k"  # the low-priority (satisfied) rule fired
 

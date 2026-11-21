@@ -3326,10 +3326,12 @@ def _load_data(
     # Structural validation (runs on the resolved, folded form — §9.6.4)
     _validate_structural(data, file_path=file_path)
 
-    # Run the §9.6.3 rewrite fixpoint under Option B (esm-spec §9.6.4): explicit
-    # target-bearing references are eagerly expanded and `match` rules fired, but
-    # NON-eager `apply_expression_template` references and the per-component
-    # `expression_templates` registries SURVIVE on the returned tree.
+    # Run the §9.6.3 rewrite fixpoint under Option B (esm-spec §9.6.4): `match`
+    # rules fire and each firing writes a reference to its rule (§9.6.3
+    # constraint 7), rules rewrite the template bodies the references reach
+    # (§9.6.4 rule 3), and the `apply_expression_template` references and the
+    # per-component `expression_templates` registries SURVIVE on the returned
+    # tree.
     data = lower_expression_templates(data)
     # Capture the per-component registries while the Option-B image still holds
     # them: `expand_document` below strips every `expression_templates` block,
