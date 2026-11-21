@@ -77,8 +77,7 @@ pub(crate) fn authored_template_names(
 pub(crate) fn received_transform_refs(
     root: &Map<String, Value>,
 ) -> std::collections::HashMap<String, Vec<String>> {
-    let mut out: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
+    let mut out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     let Some(Value::Array(entries)) = root.get("coupling") else {
         return out;
     };
@@ -123,8 +122,7 @@ pub(crate) fn materialize_component_block(
     let block = comp.get("expression_templates").and_then(|v| v.as_object());
     let named = block.map(build_named).unwrap_or_default();
     // Surviving-reference names across every non-template field.
-    let mut refnames: std::collections::BTreeSet<String> =
-        received.iter().cloned().collect();
+    let mut refnames: std::collections::BTreeSet<String> = received.iter().cloned().collect();
     for (k, v) in comp.iter() {
         if k == "expression_templates" || k == "expression_template_imports" {
             continue;
