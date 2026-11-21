@@ -93,15 +93,19 @@ end
 @testset "a makearray region whose value is a parameter bound to an array-valued reference" begin
     N = 8
     T = _tc_d(
-        "interior" => _tc_tpl(["u"], _tc_op(
-            "faq", "u"; output_idx = Any["i"], ranges = _tc_d("i" => Any[2, N - 1]),
-            expr = _tc_op("-", _tc_op("+", _tc_ix("u", _tc_op("-", "i", 1)), _tc_ix("u", _tc_op("+", "i", 1))), _tc_op("*", 2, _tc_ix("u", "i")))
-        )),
-        "frame" => _tc_tpl(["u", "inner"], _tc_d(
-            "op" => "makearray", "args" => Any[],
-            "regions" => Any[Any[Any[2, N - 1]], Any[Any[1, 1]], Any[Any[N, N]]],
-            "values" => Any["inner", _tc_op("-", _tc_ix("u", 1)), _tc_op("-", _tc_ix("u", N))]
-        )),
+        "interior" => _tc_tpl(
+            ["u"], _tc_op(
+                "faq", "u"; output_idx = Any["i"], ranges = _tc_d("i" => Any[2, N - 1]),
+                expr = _tc_op("-", _tc_op("+", _tc_ix("u", _tc_op("-", "i", 1)), _tc_ix("u", _tc_op("+", "i", 1))), _tc_op("*", 2, _tc_ix("u", "i")))
+            )
+        ),
+        "frame" => _tc_tpl(
+            ["u", "inner"], _tc_d(
+                "op" => "makearray", "args" => Any[],
+                "regions" => Any[Any[Any[2, N - 1]], Any[Any[1, 1]], Any[Any[N, N]]],
+                "values" => Any["inner", _tc_op("-", _tc_ix("u", 1)), _tc_op("-", _tc_ix("u", N))]
+            )
+        ),
         "op" => _tc_tpl(["u"], _tc_ref("frame"; u = "u", inner = _tc_ref("interior"; u = "u"))),
     )
     vars = _tc_d("u" => _tc_d("type" => "unknown", "shape" => Any["x"], "default" => 1.0))
@@ -112,16 +116,22 @@ end
 @testset "an aggregate body with a literal output index" begin
     N, S = 6, 3
     T = _tc_d(
-        "lap_s" => _tc_tpl(["u"], _tc_d(
-            "op" => "makearray", "args" => Any[],
-            "regions" => Any[Any[Any[2, N], Any[1, S]], Any[Any[1, 1], Any[1, S]]],
-            "values" => Any[
-                _tc_op("faq", "u"; output_idx = Any["i", "s"], ranges = _tc_d("i" => Any[2, N], "s" => _tc_d("from" => "tr")),
-                    expr = _tc_op("-", _tc_ix("u", _tc_op("-", "i", 1), "s"), _tc_ix("u", "i", "s"))),
-                _tc_op("faq", "u"; output_idx = Any[1, "s"], ranges = _tc_d("s" => _tc_d("from" => "tr")),
-                    expr = _tc_op("-", _tc_op("*", 0.5, _tc_ix("u", 1, "s")))),
-            ]
-        )),
+        "lap_s" => _tc_tpl(
+            ["u"], _tc_d(
+                "op" => "makearray", "args" => Any[],
+                "regions" => Any[Any[Any[2, N], Any[1, S]], Any[Any[1, 1], Any[1, S]]],
+                "values" => Any[
+                    _tc_op(
+                        "faq", "u"; output_idx = Any["i", "s"], ranges = _tc_d("i" => Any[2, N], "s" => _tc_d("from" => "tr")),
+                        expr = _tc_op("-", _tc_ix("u", _tc_op("-", "i", 1), "s"), _tc_ix("u", "i", "s"))
+                    ),
+                    _tc_op(
+                        "faq", "u"; output_idx = Any[1, "s"], ranges = _tc_d("s" => _tc_d("from" => "tr")),
+                        expr = _tc_op("-", _tc_op("*", 0.5, _tc_ix("u", 1, "s")))
+                    ),
+                ]
+            )
+        ),
     )
     vars = _tc_d("u" => _tc_d("type" => "unknown", "shape" => Any["x", "tr"], "default" => 1.0))
     eqs = Any[_tc_d("lhs" => _tc_D("u"), "rhs" => _tc_ref("lap_s"; u = "u"))]
@@ -131,13 +141,19 @@ end
 @testset "an elementwise array observed bound by name to an array parameter" begin
     N = 7
     T = _tc_d(
-        "edges" => _tc_tpl(String[], _tc_op("faq"; output_idx = Any["k"], ranges = _tc_d("k" => _tc_d("from" => "xn")),
-            expr = _tc_op("/", _tc_op("-", "k", 1), N))),
+        "edges" => _tc_tpl(
+            String[], _tc_op(
+                "faq"; output_idx = Any["k"], ranges = _tc_d("k" => _tc_d("from" => "xn")),
+                expr = _tc_op("/", _tc_op("-", "k", 1), N)
+            )
+        ),
         # K on the N + 1 edges, read at both edges of cell i.
-        "edge_mean" => _tc_tpl(["u", "K"], _tc_op(
-            "faq", "u", "K"; output_idx = Any["i"], ranges = _tc_d("i" => _tc_d("from" => "x")),
-            expr = _tc_op("*", _tc_op("+", _tc_ix("K", "i"), _tc_ix("K", _tc_op("+", "i", 1))), _tc_ix("u", "i"))
-        )),
+        "edge_mean" => _tc_tpl(
+            ["u", "K"], _tc_op(
+                "faq", "u", "K"; output_idx = Any["i"], ranges = _tc_d("i" => _tc_d("from" => "x")),
+                expr = _tc_op("*", _tc_op("+", _tc_ix("K", "i"), _tc_ix("K", _tc_op("+", "i", 1))), _tc_ix("u", "i"))
+            )
+        ),
     )
     vars = _tc_d(
         "u" => _tc_d("type" => "unknown", "shape" => Any["x"], "default" => 1.0),
@@ -173,10 +189,12 @@ end
     N = 5
     T = _tc_d(
         "table" => _tc_tpl(String[], _tc_op("const"; value = Any[Any[1.0, 2.0], Any[-1.0, 0.5], Any[0.25, 3.0]])),
-        "mix" => _tc_tpl(["r"], _tc_op(
-            "faq", "r"; output_idx = Any["t", "i"], ranges = _tc_d("t" => _tc_d("from" => "tt"), "i" => _tc_d("from" => "x")),
-            expr = _tc_op("+", _tc_ix(_tc_ref("table"), "t", 1), _tc_op("*", _tc_ix(_tc_ref("table"), "t", 2), _tc_ix("r", "i")))
-        )),
+        "mix" => _tc_tpl(
+            ["r"], _tc_op(
+                "faq", "r"; output_idx = Any["t", "i"], ranges = _tc_d("t" => _tc_d("from" => "tt"), "i" => _tc_d("from" => "x")),
+                expr = _tc_op("+", _tc_ix(_tc_ref("table"), "t", 1), _tc_op("*", _tc_ix(_tc_ref("table"), "t", 2), _tc_ix("r", "i")))
+            )
+        ),
     )
     vars = _tc_d(
         "r" => _tc_d("type" => "unknown", "shape" => Any["x"]),
@@ -186,9 +204,137 @@ end
     eqs = Any[
         _tc_d("lhs" => "r", "rhs" => _tc_op("faq"; output_idx = Any["i"], ranges = _tc_d("i" => _tc_d("from" => "x")), expr = _tc_op("*", 0.1, "i"))),
         _tc_d("lhs" => "m", "rhs" => _tc_ref("mix"; r = "r")),
-        _tc_d("lhs" => _tc_D("u"), "rhs" => _tc_op("faq", "u", "m"; output_idx = Any["t", "i"],
-            ranges = _tc_d("t" => _tc_d("from" => "tt"), "i" => _tc_d("from" => "x")),
-            expr = _tc_op("*", _tc_ix("m", "t", "i"), _tc_ix("u", "t", "i")))),
+        _tc_d(
+            "lhs" => _tc_D("u"), "rhs" => _tc_op(
+                "faq", "u", "m"; output_idx = Any["t", "i"],
+                ranges = _tc_d("t" => _tc_d("from" => "tt"), "i" => _tc_d("from" => "x")),
+                expr = _tc_op("*", _tc_ix("m", "t", "i"), _tc_ix("u", "t", "i"))
+            )
+        ),
     ]
     _tc_check(_tc_doc(vars, eqs, T, Dict("x" => N, "tt" => 3)))
+end
+
+# The edge-mean flux of the testset above, `(K[i] + K[i + 1]) * u[i]`, with K
+# defined by `eqs`: native and interpreter agree bit for bit, match the closed
+# form for the edge values `K`, and expand nothing. Returns the model's fold.
+function _tc_edge_case(vars, eqs, T, K)
+    N = length(K) - 1
+    path = _tc_path(_tc_doc(vars, eqs, T, Dict("x" => N, "xn" => N + 1)))
+    a, ca = _tc_du(path, :native)
+    b, cb = _tc_du(path, :interpreter)
+    @test all(a .=== b)
+    @test get(ca, :tpl_expanded, 0) == 0 && get(cb, :tpl_expanded, 0) == 0
+    u = 1.0 .+ 0.01 .* (1:N)
+    @test isapprox(a, [(K[i] + K[i + 1]) * u[i] for i in 1:N]; rtol = 1.0e-14)
+    model = _TC.load_path(path).models["M"]
+    eqs_t = _TC.Equation[_TC.Equation(_TC.expression_from_json(e["lhs"]), _TC.expression_from_json(e["rhs"])) for e in eqs]
+    return _TC._fold_elementwise_array_observeds(eqs_t, model)
+end
+_tc_edge_mean(params) = _tc_tpl(
+    params, _tc_op(
+        "faq", "u", "K"; output_idx = Any["i"], ranges = _tc_d("i" => _tc_d("from" => "x")),
+        expr = _tc_op("*", _tc_op("+", _tc_ix("K", "i"), _tc_ix("K", _tc_op("+", "i", 1))), _tc_ix("u", "i"))
+    )
+)
+_tc_edges(N) = _tc_tpl(
+    String[], _tc_op(
+        "faq"; output_idx = Any["k"], ranges = _tc_d("k" => _tc_d("from" => "xn")),
+        expr = _tc_op("/", _tc_op("-", "k", 1), N)
+    )
+)
+_tc_arr(sh...) = _tc_d("type" => "unknown", "shape" => Any[sh...])
+_tc_def(out, name) = only(e.rhs for e in out if e.lhs isa _TC.VarExpr && e.lhs.name == name)
+
+@testset "an elementwise array observed a body reads as an implicit name" begin
+    # `flux` declares only `u`; `K` is a name its body reads from the caller.
+    N = 7
+    T = _tc_d("edges" => _tc_edges(N), "flux" => _tc_edge_mean(["u"]))
+    vars = _tc_d("u" => _tc_d("type" => "unknown", "shape" => Any["x"], "default" => 1.0), "ze" => _tc_arr("xn"), "K" => _tc_arr("xn"))
+    eqs = Any[
+        _tc_d("lhs" => "ze", "rhs" => _tc_ref("edges")),
+        _tc_d("lhs" => "K", "rhs" => _tc_op("+", 1.0, "ze")),
+        _tc_d("lhs" => _tc_D("u"), "rhs" => _tc_ref("flux"; u = "u")),
+    ]
+    _tc_edge_case(vars, eqs, T, [1.0 + (k - 1) / N for k in 1:(N + 1)])
+end
+
+@testset "a scalar or aliased array observed bound by name to an array parameter" begin
+    N = 7
+    T = _tc_d("edges" => _tc_edges(N), "edge_mean" => _tc_edge_mean(["u", "K"]))
+    u = "u" => _tc_d("type" => "unknown", "shape" => Any["x"], "default" => 1.0)
+    D = _tc_d("lhs" => _tc_D("u"), "rhs" => _tc_ref("edge_mean"; u = "u", K = "K"))
+    # A number, replicated over K's declared shape.
+    out, folded = _tc_edge_case(_tc_d(u, "K" => _tc_arr("xn")), Any[_tc_d("lhs" => "K", "rhs" => 1.5), D], T, fill(1.5, N + 1))
+    @test !("K" in folded)
+    @test _tc_def(out, "K") isa _TC.OpExpr && _tc_def(out, "K").op == "faq"
+    # A scalar parameter, replicated likewise.
+    vars = _tc_d(u, "K" => _tc_arr("xn"), "c" => _tc_d("type" => "parameter", "default" => 0.5))
+    out, folded = _tc_edge_case(vars, Any[_tc_d("lhs" => "K", "rhs" => "c"), D], T, fill(0.5, N + 1))
+    @test !("K" in folded)
+    # An alias of an observed that folds: K reads the folded body, not `ze`.
+    vars = _tc_d(u, "K" => _tc_arr("xn"), "ze" => _tc_arr("xn"), "zz" => _tc_arr("xn"))
+    eqs = Any[
+        _tc_d("lhs" => "zz", "rhs" => _tc_ref("edges")),
+        _tc_d("lhs" => "ze", "rhs" => _tc_op("+", 1.0, "zz")),
+        _tc_d("lhs" => "K", "rhs" => "ze"), D,
+    ]
+    out, folded = _tc_edge_case(vars, eqs, T, [1.0 + (k - 1) / N for k in 1:(N + 1)])
+    @test "ze" in folded && !("K" in folded)
+    @test !("ze" in _TC.free_variables(_tc_def(out, "K")))
+end
+
+@testset "a bound array observed whose definition reads one that folds" begin
+    # K is lifted to the producer it denotes; `ze` folds. The lift reads `ze`
+    # through its folded body, so it never reads a removed name.
+    N = 7
+    T = _tc_d("edges" => _tc_edges(N), "edge_mean" => _tc_edge_mean(["u", "K"]))
+    vars = _tc_d(
+        "u" => _tc_d("type" => "unknown", "shape" => Any["x"], "default" => 1.0),
+        "K" => _tc_arr("xn"), "ze" => _tc_arr("xn"), "zz" => _tc_arr("xn"),
+    )
+    eqs = Any[
+        _tc_d("lhs" => "zz", "rhs" => _tc_ref("edges")),
+        _tc_d("lhs" => "ze", "rhs" => _tc_op("*", 2.0, "zz")),
+        _tc_d("lhs" => "K", "rhs" => _tc_op("+", 1.0, "ze")),
+        _tc_d("lhs" => _tc_D("u"), "rhs" => _tc_ref("edge_mean"; u = "u", K = "K")),
+    ]
+    out, folded = _tc_edge_case(vars, eqs, T, [1.0 + 2 * (k - 1) / N for k in 1:(N + 1)])
+    @test "ze" in folded && !("K" in folded)
+    kd = _tc_def(out, "K")
+    @test kd isa _TC.OpExpr && kd.op == "faq"
+    @test [a.name for a in kd.args] == ["zz"]
+end
+
+@testset "makearray region values bound to nested region-value references" begin
+    # `frame`'s interior region is its parameter `inner`; `wrap` is a
+    # makearray whose one region is its parameter too. Each level's binding
+    # is read through its own view, once.
+    N = 8
+    T = _tc_d(
+        "interior" => _tc_tpl(
+            ["u"], _tc_op(
+                "faq", "u"; output_idx = Any["i"], ranges = _tc_d("i" => Any[2, N - 1]),
+                expr = _tc_op("-", _tc_op("+", _tc_ix("u", _tc_op("-", "i", 1)), _tc_ix("u", _tc_op("+", "i", 1))), _tc_op("*", 2, _tc_ix("u", "i")))
+            )
+        ),
+        "wrap" => _tc_tpl(
+            ["inner"], _tc_d(
+                "op" => "makearray", "args" => Any[], "regions" => Any[Any[Any[2, N - 1]]], "values" => Any["inner"]
+            )
+        ),
+        "frame" => _tc_tpl(
+            ["u", "inner"], _tc_d(
+                "op" => "makearray", "args" => Any[],
+                "regions" => Any[Any[Any[2, N - 1]], Any[Any[1, 1]], Any[Any[N, N]]],
+                "values" => Any["inner", _tc_op("-", _tc_ix("u", 1)), _tc_op("-", _tc_ix("u", N))]
+            )
+        ),
+        "op" => _tc_tpl(["u"], _tc_ref("frame"; u = "u", inner = _tc_ref("wrap"; inner = _tc_ref("wrap"; inner = _tc_ref("interior"; u = "u"))))),
+    )
+    vars = _tc_d("u" => _tc_d("type" => "unknown", "shape" => Any["x"], "default" => 1.0))
+    # Through the nested template, and bound directly in the model.
+    _tc_check(_tc_doc(vars, Any[_tc_d("lhs" => _tc_D("u"), "rhs" => _tc_ref("op"; u = "u"))], T, Dict("x" => N)))
+    direct = _tc_ref("frame"; u = "u", inner = _tc_ref("wrap"; inner = _tc_ref("wrap"; inner = _tc_ref("interior"; u = "u"))))
+    _tc_check(_tc_doc(vars, Any[_tc_d("lhs" => _tc_D("u"), "rhs" => direct)], T, Dict("x" => N)))
 end
