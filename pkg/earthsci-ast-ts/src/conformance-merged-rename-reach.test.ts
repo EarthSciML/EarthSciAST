@@ -13,9 +13,10 @@
  * STRINGS on the entry object, could still name a spelling that no longer
  * exists. This pins that they RESOLVE to the survivor.
  *
- * Three surfaces bind here — `flatten`, `events_and_updates` and
- * `template_registry`. All three are pure structural transforms, so a
- * rewrite-only port implements them in full. The two RUNTIME surfaces
+ * Two surfaces bind here — `flatten` and `events_and_updates`. Both are pure
+ * structural transforms, so a rewrite-only port implements them in full. (A
+ * surviving template-registry body reads no component name once flatten closes
+ * it, esm-spec §10.7, so the registry case is a `flatten` case.) The two RUNTIME surfaces
  * (`override_keys`, `output_selection`) and `inline_tests` do not: this binding
  * has no simulator, so it has no override-key surface, no result object to read
  * by name, and no inline-test runner.
@@ -47,10 +48,6 @@ interface ReachCase {
   variable_updates?: Record<string, string[]>
   /** `events_and_updates`: spellings no event and no update rule may still name. */
   absent_from_events_and_updates?: string[]
-  /** `template_registry`: the diagnostic code flatten must refuse with. */
-  raises?: string
-  /** `template_registry`: substrings the refusal message must name. */
-  names_in_message?: string[]
 }
 
 interface Manifest {
@@ -62,7 +59,6 @@ interface Manifest {
 const manifest = JSON.parse(readFileSync(join(categoryDir, 'manifest.json'), 'utf-8')) as Manifest
 const flattenCases = manifest.cases.filter((c) => c.surface === 'flatten')
 const eventCases = manifest.cases.filter((c) => c.surface === 'events_and_updates')
-const registryCases = manifest.cases.filter((c) => c.surface === 'template_registry')
 
 function flattenCase(c: ReachCase) {
   return flatten(loadString(readFileSync(join(categoryDir, c.path), 'utf-8')))
@@ -144,11 +140,8 @@ describe('conformance: merged_rename_reach (esm-libraries-spec §4.7.1 step 4)',
     // reason. This binding has no simulator, so it has neither an override-key
     // surface nor a result object to read by name; asserting the exclusion is
     // what keeps it from quietly becoming a gap.
-    for (const surface of ['events_and_updates', 'template_registry'] as const) {
-      expect(manifest.surfaces[surface].bindings).toContain('typescript')
-    }
+    expect(manifest.surfaces.events_and_updates.bindings).toContain('typescript')
     expect(eventCases.length).toBeGreaterThan(0)
-    expect(registryCases.length).toBeGreaterThan(0)
     for (const surface of ['override_keys', 'output_selection', 'inline_tests'] as const) {
       expect(manifest.surfaces[surface].bindings).not.toContain('typescript')
       expect(manifest.surfaces[surface].scope_excluded?.typescript).toBeTruthy()
@@ -240,28 +233,6 @@ describe('conformance: merged_rename_reach (esm-libraries-spec §4.7.1 step 4)',
             eventAndUpdateNames(flat),
             `an event or update still references ${gone}`,
           ).not.toContain(gone)
-        }
-      })
-    })
-  }
-
-  // The `template_registry` surface — the ONE place a rewritten name is REFUSED
-  // rather than resolved. A surviving registry body is authored source that
-  // expands at the BUILD boundary, so rewriting it would silently diverge from
-  // the expand-at-load image of the same document.
-  for (const c of registryCases) {
-    describe(c.id, () => {
-      it('refuses the flatten, naming the template and the variable', () => {
-        let raised: unknown
-        try {
-          flattenCase(c)
-        } catch (error) {
-          raised = error
-        }
-        expect(raised, 'flatten must refuse a stale registry body').toBeInstanceOf(Error)
-        expect((raised as { code?: string }).code).toBe(c.raises)
-        for (const name of c.names_in_message ?? []) {
-          expect((raised as Error).message).toContain(name)
         }
       })
     })
