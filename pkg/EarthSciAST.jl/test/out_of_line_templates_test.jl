@@ -162,6 +162,57 @@ end
     end
 
     # -----------------------------------------------------------------------
+    # Coupling transforms keep their references (esm-spec §10.4): they resolve
+    # against the RECEIVING component, whose emitted block materializes the
+    # templates they name (§9.6.4 rule 5). Emitted golden byte for byte,
+    # Expand(load) against the expanded oracle; load + flatten expand nothing,
+    # the flattened observed carries the references (renamed with its owner on
+    # a registry collision, §10.7) and evaluates as the expanded document does.
+    # -----------------------------------------------------------------------
+    @testset "coupling transforms keep references (§10.4)" begin
+        _core(d) = Dict(
+            k => _normj(get(d, k, nothing))
+                for k in ("models", "reaction_systems", "coupling", "index_sets")
+                if haskey(d, k)
+        )
+        for dir in ("coupling_transform_expression", "coupling_transform_rule_and_import")
+            s = _emit(dir)
+            @test s == read(conf(dir, "emitted.esm"), String)
+            @test _core(Expand(_load(dir))) ==
+                _core(JSON3.read(read(conf(dir, "expanded.esm"), String)))
+            # emit ∘ load is a byte-wise fixed point.
+            @test emit_esm_string(emit_document(JSON3.read(s), conf(dir))) == s
+        end
+        dir = "coupling_transform_rule_and_import"
+        e0 = EarthSciAST.TEMPLATE_EXPANSIONS[]
+        f = EarthSciAST.load_path(conf(dir, "fixture.esm"))
+        tr = f.coupling[1].transform
+        @test tr isa OpExpr && tr.op == "+"
+        @test tr.args[1].op == "apply_expression_template" && tr.args[1].name == "scale_by"
+        @test tr.args[2].op == "apply_expression_template" && tr.args[2].name == "half_rule"
+        @test collect(keys(f.component_templates["models.Sink"])) == ["half_rule", "scale_by"]
+        flat = EarthSciAST.flatten(f)
+        @test EarthSciAST.TEMPLATE_EXPANSIONS[] == e0
+        obs = only(filter(eq -> eq.lhs == VarExpr("Sink.F_in"), flat.equations))
+        @test obs.rhs.args[1].name == "Sink.scale_by"         # follows its owner's rename
+        @test obs.rhs.args[2].name == "half_rule"
+        @test haskey(flat.template_registry, "Sink.scale_by")
+        @test haskey(flat.template_registry, "Src.scale_by")
+        # Native build: the observed evaluates as the expanded document's does.
+        function _ctx_rhs(path)
+            prob = EarthSciAST.esm_problem(path, (0.0, 1.0); compiler = :native)
+            du = zeros(length(prob.u0))
+            prob.f!(du, copy(prob.u0), prob.p, 0.0)
+            return du
+        end
+        for d in ("coupling_transform_expression", "coupling_transform_rule_and_import")
+            got = _ctx_rhs(conf(d, "fixture.esm"))
+            @test got == _ctx_rhs(conf(d, "expanded.esm"))
+            @test got == [d == "coupling_transform_expression" ? 9.5 : 12.75]
+        end
+    end
+
+    # -----------------------------------------------------------------------
     # emit_materialized_registry (§9.6.4 rule 5, §9.6.7)
     # -----------------------------------------------------------------------
     @testset "emit_materialized_registry: imports gone, stencils materialized" begin
