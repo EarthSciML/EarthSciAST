@@ -12,7 +12,9 @@ text is block-style YAML 1.2:
   its other entries aligned with its first key; a non-empty array as an
   element starts on the next line, two spaces deeper.
 
-Strings are always double-quoted with JSON-style escapes; a key is bare when
+Strings are always double-quoted with JSON-style escapes, so a math leaf
+(path blocks only, `Source.mathify`) is the plain scalar `\$…\$`, its text up
+to the next `\$` (`Json.mathOK`); a key is bare when
 it is an identifier and not one of YAML's special plain scalars in any letter
 case; a key longer than 1024 characters uses the explicit `? "key"` form. The
 reader accepts only this layout and well-formed values. The binding needs no
@@ -59,6 +61,7 @@ function inline(v)
     v === false && return collect("false")
     v isa JNum && return DNumber.print(v)
     v isa String && return quote_str(false, v)
+    v isa JMath && return Char['$', v.s..., '$']
     v isa JArr && return Char['[', ']']
     v isa JObj && return Char['{', '}']
     error("not a document value")
@@ -189,6 +192,8 @@ function p_inline(input::Chars)
         return r === nothing ? nothing : (JObj(), r)
     elseif c == '"'
         return parse_quoted(false, input)
+    elseif c == '$'
+        return p_math(drop(input))
     end
     return DNumber.parse(input)
 end
@@ -322,12 +327,13 @@ function p_top(input::Chars)
     return p_scalar_line(input)
 end
 
-"""`Yaml.decode`: all of the input consumed, and the value well formed."""
+"""`Yaml.decode`: all of the input consumed, and the value well formed (math
+leaves allowed, `Json.WFm`)."""
 function decode(s::Chars)
     x = p_top(s)
     x === nothing && return nothing
     v, r = x
-    (isempty(r) && wfb(v)) || return nothing
+    (isempty(r) && wfmb(v)) || return nothing
     return v
 end
 

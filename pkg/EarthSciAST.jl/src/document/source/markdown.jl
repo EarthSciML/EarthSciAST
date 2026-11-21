@@ -958,7 +958,7 @@ with_nl(s::AbstractString) = push!(collect(Char, s), '\n')
 back."""
 function item_ok(it::RItem)
     it isa RDesc && return no_stop(FENCE, with_nl(it.s))
-    it isa RBlock && return jwf(it.v)
+    it isa RBlock && return wfmb(it.v)
     it isa RComp && return !occursin(']', it.name) && !occursin('\n', it.name)
     it isa RDecl && return it.d.kind == D_SUB ? sub_ok(it.d) : decl_ok(it.d)
     if it isa REqn

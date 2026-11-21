@@ -20,7 +20,7 @@ using ..SSkeleton
 using ..SSkeleton: to_doc
 import ..SSkeleton: front_key, desc, comp_name, decl_name, attr, eqn, rxn, plot, tm
 using ..SItems
-using ..SItems: canon_segs, ck_mx, cook_doc, items, parse_items, pr_mx, raw_doc, unitems
+using ..SItems: canon_segs, ck_mx, cook_doc, items, mathify_doc, parse_items, pr_mx, raw_doc, unitems
 using ..SLines: decode_text
 using ..SMarkdownDoc: comment_ok, with_comment
 using ..SMultiLine: cook_rows
@@ -107,7 +107,7 @@ end
 function print_typ(d)
     doc = to_doc(CapsT(), d)
     out = header_t(doc.front)
-    append!(out, render(canon_segs(items(raw_doc(pr_tx, doc)))))
+    append!(out, render(canon_segs(items(mathify_doc((s, j) -> DMath.print_typst(s, j), raw_doc(pr_tx, doc))))))
     return String(out)
 end
 
@@ -132,6 +132,6 @@ function parse_typ(s::AbstractString)
 end
 
 """`Typ.parseItemsT`."""
-parse_items_t(front::Kvs, its) = parse_items(ck_tx, front, its)
+parse_items_t(front::Kvs, its) = parse_items(ck_tx, (s, raw) -> DMath.parse_typst(s, raw), front, its)
 
 end # module STypstDoc
