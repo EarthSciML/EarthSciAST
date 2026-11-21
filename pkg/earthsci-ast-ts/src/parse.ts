@@ -657,6 +657,8 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // downstream consumer (codegen, units, graph, …) sees the Option-A expanded
   // image and remains numerically bit-identical to pre-0.9.0 behavior. The
   // reference-preserving form is what `emitDocument` re-derives from source.
+  // Each component's `match` rules as declared, before the fixpoint fires them.
+  const componentRules = captureComponentRules(data)
   const loweredTemplates = lowerExpressionTemplates(data as object)
   // Capture the per-component `expression_templates` registries while the
   // Option-B image still holds them: `expandDocument` below strips every block,
@@ -692,6 +694,18 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   if (Object.keys(componentTemplates).length > 0) {
     Object.defineProperty(loweredData, 'componentTemplates', {
       value: componentTemplates,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
+  // Each component's `match` rules as declared, including those its own
+  // content referenced (whose `componentTemplates` entry is materialized
+  // match-less): `resolveSubsystemRefs` re-runs them over the content the
+  // component mounts (esm-spec §9.6.3). Same sidecar mechanism.
+  if (Object.keys(componentRules).length > 0) {
+    Object.defineProperty(loweredData, 'componentRules', {
+      value: componentRules,
       enumerable: false,
       writable: true,
       configurable: true,
@@ -886,6 +900,33 @@ function captureComponentTemplates(
       }
       if (Object.keys(block).length === 0) continue
       out[key] = deepClone(block)
+    }
+  }
+  return out
+}
+
+/**
+ * The `match` rules of each component of the resolved document `data` (before
+ * the fixpoint, which materializes a rule it fired without its `match`), keyed as
+ * {@link captureComponentTemplates} keys its registries, each as declared (with
+ * its `match`). Components without a rule are omitted.
+ */
+function captureComponentRules(data: unknown): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {}
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) return out
+  const root = data as Record<string, unknown>
+  for (const section of ['models', 'reaction_systems'] as const) {
+    const comps = root[section]
+    if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
+    for (const [cname, comp] of Object.entries(comps as Record<string, unknown>)) {
+      if (comp === null || typeof comp !== 'object' || Array.isArray(comp)) continue
+      const own = (comp as Record<string, unknown>).expression_templates
+      if (own === null || typeof own !== 'object' || Array.isArray(own)) continue
+      const rules: Record<string, unknown> = {}
+      for (const [n, d] of Object.entries(own as Record<string, unknown>)) {
+        if (d !== null && typeof d === 'object' && 'match' in d) rules[n] = deepClone(d)
+      }
+      if (Object.keys(rules).length > 0) out[`${section}.${cname}`] = rules
     }
   }
   return out
