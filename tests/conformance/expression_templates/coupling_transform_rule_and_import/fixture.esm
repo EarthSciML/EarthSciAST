@@ -1,0 +1,66 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "coupling_transform_rule_and_import",
+    "description": "esm-spec §10.4: a coupling variable_map `transform` keeps its template references; they resolve against the RECEIVING component (Sink, the owner of `to`). The transform invokes `scale_by`, which Sink imports from ./lib_scale.esm and references nowhere else, and Sink's `match` rule `half_rule` fires in the transform (on Sink.offset / 2) and writes a reference to itself (§9.6.3 constraint 7). The emitted document keeps both references in the transform, and Sink's emitted `expression_templates` block holds `half_rule` match-less in its authored position and `scale_by` materialized after it (§9.6.4 rule 5). Src authors its own, different `scale_by` (k + x), so flatten renames both entries per owner and the transform's reference follows its receiving component: Sink.scale_by (esm-libraries-spec §4.7.5). `expanded.esm` is Expand(load(fixture)), the tree the in-place engine produced: the transform 3*Src.F + 0.5*Sink.offset = 12.75.",
+    "authors": [
+      "coupling transforms keep references (esm-spec §10.4, §9.6.4 rule 5)"
+    ]
+  },
+  "models": {
+    "Src": {
+      "expression_templates": {
+        "scale_by": {
+          "params": ["x", "k"],
+          "body": { "op": "+", "args": ["k", "x"] }
+        }
+      },
+      "variables": {
+        "F": { "type": "unknown", "units": "1", "description": "Source field: scale_by(2, 2) = 2 + 2 = 4 under Src's own template." }
+      },
+      "equations": [
+        {
+          "lhs": "F",
+          "rhs": { "op": "apply_expression_template", "args": [], "name": "scale_by", "bindings": { "x": 2, "k": 2 } }
+        }
+      ]
+    },
+    "Sink": {
+      "expression_template_imports": [ { "ref": "./lib_scale.esm" } ],
+      "expression_templates": {
+        "half_rule": {
+          "params": ["a"],
+          "match": { "op": "/", "args": ["a", 2] },
+          "body": { "op": "*", "args": [0.5, "a"] }
+        }
+      },
+      "variables": {
+        "u": { "type": "unknown", "units": "1", "default": 0.0 },
+        "gain": { "type": "parameter", "units": "1", "default": 3.0 },
+        "offset": { "type": "parameter", "units": "1", "default": 1.5 },
+        "F_in": { "type": "parameter", "units": "1", "description": "Receiving target: bound to 3*Src.F + 0.5*Sink.offset = 12.75 by the coupling transform." }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["u"], "wrt": "t" }, "rhs": "F_in" }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Src.F",
+      "to": "Sink.F_in",
+      "transform": {
+        "op": "+",
+        "args": [
+          {
+            "op": "apply_expression_template", "args": [], "name": "scale_by",
+            "bindings": { "x": "Src.F", "k": "Sink.gain" }
+          },
+          { "op": "/", "args": ["Sink.offset", 2] }
+        ]
+      },
+      "description": "Expression transform referencing the receiving component's imported template; Sink's rule fires in it."
+    }
+  ]
+}

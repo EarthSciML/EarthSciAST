@@ -1,0 +1,143 @@
+{
+  "coupling": [
+    {
+      "description": "Expression transform referencing the receiving component's imported template; Sink's rule fires in it.",
+      "from": "Src.F",
+      "to": "Sink.F_in",
+      "transform": {
+        "args": [
+          {
+            "args": [],
+            "bindings": {
+              "k": "Sink.gain",
+              "x": "Src.F"
+            },
+            "name": "scale_by",
+            "op": "apply_expression_template"
+          },
+          {
+            "args": [],
+            "bindings": {
+              "a": "Sink.offset"
+            },
+            "name": "half_rule",
+            "op": "apply_expression_template"
+          }
+        ],
+        "op": "+"
+      },
+      "type": "variable_map"
+    }
+  ],
+  "esm": "1.1.0",
+  "metadata": {
+    "authors": [
+      "coupling transforms keep references (esm-spec §10.4, §9.6.4 rule 5)"
+    ],
+    "description": "esm-spec §10.4: a coupling variable_map `transform` keeps its template references; they resolve against the RECEIVING component (Sink, the owner of `to`). The transform invokes `scale_by`, which Sink imports from ./lib_scale.esm and references nowhere else, and Sink's `match` rule `half_rule` fires in the transform (on Sink.offset / 2) and writes a reference to itself (§9.6.3 constraint 7). The emitted document keeps both references in the transform, and Sink's emitted `expression_templates` block holds `half_rule` match-less in its authored position and `scale_by` materialized after it (§9.6.4 rule 5). Src authors its own, different `scale_by` (k + x), so flatten renames both entries per owner and the transform's reference follows its receiving component: Sink.scale_by (esm-libraries-spec §4.7.5). `expanded.esm` is Expand(load(fixture)), the tree the in-place engine produced: the transform 3*Src.F + 0.5*Sink.offset = 12.75.",
+    "name": "coupling_transform_rule_and_import"
+  },
+  "models": {
+    "Sink": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": "F_in"
+        }
+      ],
+      "expression_templates": {
+        "half_rule": {
+          "body": {
+            "args": [
+              0.5,
+              "a"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "a"
+          ]
+        },
+        "scale_by": {
+          "body": {
+            "args": [
+              "k",
+              "x"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "x",
+            "k"
+          ]
+        }
+      },
+      "variables": {
+        "F_in": {
+          "description": "Receiving target: bound to 3*Src.F + 0.5*Sink.offset = 12.75 by the coupling transform.",
+          "type": "parameter",
+          "units": "1"
+        },
+        "gain": {
+          "default": 3,
+          "type": "parameter",
+          "units": "1"
+        },
+        "offset": {
+          "default": 1.5,
+          "type": "parameter",
+          "units": "1"
+        },
+        "u": {
+          "default": 0,
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    },
+    "Src": {
+      "equations": [
+        {
+          "lhs": "F",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "k": 2,
+              "x": 2
+            },
+            "name": "scale_by",
+            "op": "apply_expression_template"
+          }
+        }
+      ],
+      "expression_templates": {
+        "scale_by": {
+          "body": {
+            "args": [
+              "k",
+              "x"
+            ],
+            "op": "+"
+          },
+          "params": [
+            "x",
+            "k"
+          ]
+        }
+      },
+      "variables": {
+        "F": {
+          "description": "Source field: scale_by(2, 2) = 2 + 2 = 4 under Src's own template.",
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}
