@@ -7,7 +7,8 @@ Port of ``formal/Esm/Document/TypstDict.lean``.
   ``-9223372036854775808`` as a float;
 * strings with Typst escapes (``\\u{XXXX}``);
 * arrays ``(a, b)``, ``()`` empty; dictionaries ``(key: v, "quoted key": v)``,
-  ``(:)`` empty. A key is bare when it is an identifier and not a Typst keyword.
+  ``(:)`` empty. A key is bare when it is an identifier and not a Typst keyword;
+* a math leaf ``$…$``, Typst math content (path blocks only).
 
 The canonical layout is one element per line, each indented two spaces deeper than
 the opening line and followed by ``,``. The reader skips whitespace between
@@ -21,7 +22,7 @@ from typing import Any
 
 from . import limits, number
 from .strings import parse_key, parse_quoted, print_key, quote
-from .value import INT64_MIN, Dec, Obj, wf
+from .value import INT64_MIN, Dec, Math, Obj, math_leaf_at, wfm
 
 #: ``TypstDict.keywords``: Typst keywords, which cannot be bare dictionary keys.
 KEYWORDS = frozenset(
@@ -59,6 +60,8 @@ def _enc(m: int, v: Any, out: list[str]) -> None:
         out.append(print_num(v))
     elif t is str:
         out.append(quote(True, v))
+    elif t is Math:
+        out.append("$" + v.text + "$")
     elif t is Obj:
         if not v:
             out.append("(:)")
@@ -151,6 +154,8 @@ def p_val(s: str, i: int):
             return _p_paren(s, j)
         if c == '"':
             return parse_quoted(True, s, i)
+        if c == "$":
+            return math_leaf_at(s, i)
         if c == "n":
             return (None, i + 4) if s.startswith("none", i) else None
         if c == "t":
@@ -220,8 +225,8 @@ def _p_entries(s: str, i: int):
 
 def decode(s: str):
     """``TypstDict.decode``: whitespace, the value, whitespace, end of input; the
-    value well formed. ``(value,)`` or ``None``."""
+    value well formed (math leaves allowed). ``(value,)`` or ``None``."""
     r = p_val(s, skip_ws(s, 0))
-    if r is None or skip_ws(s, r[1]) != len(s) or not wf(r[0]):
+    if r is None or skip_ws(s, r[1]) != len(s) or not wfm(r[0]):
         return None
     return (r[0],)

@@ -746,7 +746,7 @@ def print_typ(d: Any) -> str:
     """``Typ.printTyp``: print a document as Typst."""
     doc = to_doc(CAPS_T, d)
     out = [HEADER + args_first_t(doc.front) + ")\n"]
-    for it in items(raw_doc(_pr_tx, doc)):
+    for it in items(raw_doc(_pr_tx, print_typst, doc)):
         out.append("\n")
         out.append(item_t(it))
         if not _is_block(it):
@@ -772,5 +772,5 @@ def parse_typ(text: str):
     sk = unitems(r[0], its)
     if sk is None:
         return None
-    d = cook_doc(_ck_tx, sk)
+    d = cook_doc(_ck_tx, parse_typst, sk)
     return None if d is None else of_doc(d)

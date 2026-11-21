@@ -995,7 +995,7 @@ def print_md(d: Any) -> str:
     blank line, a declaration on a line of its own (``Md.canonSegs``)."""
     doc = to_doc(CAPS_MD, d)
     out = [_front_md(doc.front)]
-    for it in items(raw_doc(_pr_mdx, doc)):
+    for it in items(raw_doc(_pr_mdx, print_latex, doc)):
         out.append("\n")
         out.append(item_md(it))
         if not _is_block(it):
@@ -1029,5 +1029,5 @@ def parse_md(text: str):
     sk = unitems(r[0], r[1])
     if sk is None:
         return None
-    d = cook_doc(_ck_mdx, sk)
+    d = cook_doc(_ck_mdx, parse_latex, sk)
     return None if d is None else of_doc(d)

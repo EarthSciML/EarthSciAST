@@ -18,11 +18,24 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ..math import token as K
-from ..math.expr import Sym, is_dig, is_formula, is_letter, name_ok, num_ok
+from ..math.expr import Sym, is_dig, is_e, is_formula, is_letter, name_ok, num_ok
 from ..math.parser import parse_toks
 from ..strings import is_ident_char
-from ..value import Dec, Obj
-from .skeleton import EQN, Comp, Doc, Eqn, Tm, is_math_field, sym_for, top_sym
+from ..value import Dec, Math, Obj, math_ok
+from .keys import FAIL
+from .skeleton import (
+    ANY,
+    COMP_EXPR_PATHS,
+    EQN,
+    TOP_EXPR_PATHS,
+    Comp,
+    Doc,
+    Eqn,
+    Tm,
+    is_math_field,
+    sym_for,
+    top_sym,
+)
 
 # ## Constructs
 
@@ -111,19 +124,101 @@ def unitems(front: list, its: list):
     return Doc(front, desc, blocks, math, comps)
 
 
-def raw_doc(pr: Callable, d: Doc) -> Doc:
-    """``Source.rawDoc``: every math entry printed under its symbol table."""
+def _at_path(v: Any, pat: tuple, leaf: Callable) -> Any:
+    """``Source.atPath``: ``leaf`` applied to every value of ``v`` at the path
+    ``pat`` (a key, or :data:`ANY` for every element of an array and every value
+    of an object); everything else as it is."""
+    if not pat:
+        return leaf(v)
+    seg, rest = pat[0], pat[1:]
+    t = type(v)
+    if seg is ANY:
+        if t is list:
+            return [_at_path(x, rest, leaf) for x in v]
+        if t is Obj:
+            return Obj((k, _at_path(x, rest, leaf)) for k, x in v)
+        return v
+    if t is Obj:
+        return Obj((k, _at_path(x, rest, leaf) if k == seg else x) for k, x in v)
+    return v
+
+
+def mathify(pr_r: Callable, s: Sym, pats: tuple, blocks: list) -> list:
+    """``Source.mathify``: in a section's path blocks, every value at an
+    expression path (``pats``, keyed by the block's key) that is a well-formed
+    expression whose math text (``pr_r`` under ``s``) a container can delimit
+    becomes that math leaf; every other value stays as it is."""
+
+    def leaf(v: Any) -> Any:
+        if not is_e(v):
+            return v
+        t = pr_r(s, v)
+        return Math(t) if math_ok(t) else v
+
+    out = []
+    for k, v in blocks:
+        for p in pats:
+            if p[0] == k:
+                v = _at_path(v, p[1:], leaf)
+        out.append((k, v))
+    return out
+
+
+def _cook_val(ck_r: Callable, s: Sym, v: Any) -> Any:
+    t = type(v)
+    if t is Math:
+        r = ck_r(s, v.text)
+        return FAIL if r is None else r
+    if t is list:
+        out = []
+        for x in v:
+            y = _cook_val(ck_r, s, x)
+            if y is FAIL:
+                return FAIL
+            out.append(y)
+        return out
+    if t is Obj:
+        out = []
+        for k, x in v:
+            y = _cook_val(ck_r, s, x)
+            if y is FAIL:
+                return FAIL
+            out.append((k, y))
+        return Obj(out)
+    return v
+
+
+def cook_blocks(ck_r: Callable, s: Sym, blocks: list):
+    """``Source.cookBlocks``: every math leaf of a section's path blocks read
+    back as an expression under ``s``, wherever it is. ``None`` when one does
+    not read."""
+    out = []
+    for k, v in blocks:
+        y = _cook_val(ck_r, s, v)
+        if y is FAIL:
+            return None
+        out.append((k, y))
+    return out
+
+
+def raw_doc(pr: Callable, pr_r: Callable, d: Doc) -> Doc:
+    """``Source.rawDoc``: every math entry printed under its symbol table, and
+    every expression of a path block that has math (``mathify``)."""
     ts = top_sym(d)
     comps = []
     for c in d.comps:
         s = sym_for(d, c)
-        comps.append(c.with_math([pr(s, m) for m in c.math]))
-    return Doc(d.front, d.desc, d.blocks, [pr(ts, m) for m in d.math], comps)
+        rc = c.with_math([pr(s, m) for m in c.math])
+        rc.blocks = mathify(pr_r, s, COMP_EXPR_PATHS, c.blocks)
+        comps.append(rc)
+    blocks = mathify(pr_r, ts, TOP_EXPR_PATHS, d.blocks)
+    return Doc(d.front, d.desc, blocks, [pr(ts, m) for m in d.math], comps)
 
 
-def cook_doc(ck: Callable, d: Doc):
-    """``Source.cookDoc``: read every math entry of a skeleton; one math text may
-    hold several equations. ``None`` when one does not read."""
+def cook_doc(ck: Callable, ck_r: Callable, d: Doc):
+    """``Source.cookDoc``: read every math entry of a skeleton (one math text may
+    hold several equations) and every math leaf of its path blocks. ``None`` when
+    one does not read."""
     ts = top_sym(d)
     rm = []
     for m in d.math:
@@ -140,8 +235,16 @@ def cook_doc(ck: Callable, d: Doc):
             if r is None:
                 return None
             math.extend(r)
-        cs.append(c.with_math(math))
-    return Doc(d.front, d.desc, d.blocks, rm, cs)
+        cc = c.with_math(math)
+        cb = cook_blocks(ck_r, s, c.blocks)
+        if cb is None:
+            return None
+        cc.blocks = cb
+        cs.append(cc)
+    blocks = cook_blocks(ck_r, ts, d.blocks)
+    if blocks is None:
+        return None
+    return Doc(d.front, d.desc, blocks, rm, cs)
 
 
 def pr_mx(pr_e: Callable, pr_r: Callable, s: Sym, m: tuple) -> tuple:
