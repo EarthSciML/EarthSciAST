@@ -4,8 +4,9 @@
 
 #
 # An abstract interpretation of the equation stream the build compiles (the
-# `parts` the range seam receives: templates expanded, nested reductions
-# hoisted, index-set ranges resolved). Every loop variable is bound to the set
+# `parts` the range seam receives: nested reductions hoisted, index-set
+# ranges resolved; a template reference is read through its instance's body,
+# never expanded — see "Reading through template references" below). Every loop variable is bound to the set
 # of global cells it ranges over (`_Bind`); a subscript's image is computed by
 # evaluating it with `_eval_const_int` over those cells, the function the
 # compiler itself resolves a subscript with, so an affine offset, a `mod` wrap
@@ -120,6 +121,11 @@ mutable struct _NeedCtx
     tag::Tuple{String, Tuple}
     idx_stack::Vector{Any}
     marks::IdDict{Any, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}}
+    # Template references (esm-spec §9.6.4 rule 2): the build's template table
+    # (`nothing` when its model holds no reference) and the instance whose
+    # body the walk is in (`nothing` in the equations themselves).
+    tt::Any
+    scope::Any
 end
 
 _NeedCtx(
@@ -131,8 +137,102 @@ _NeedCtx(
     mode, axes, owned, storage, shapes, extents, states, obs_defs,
     scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need,
     work, scalar_stack, Dict{Tuple{String, Bool}, _Seam}(), ("", ()),
-    Any[], IdDict{Any, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}}()
+    Any[], IdDict{Any, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}}(),
+    _build_templates(), nothing
 )
+
+# ---- Reading through template references ----
+#
+# A reference denotes its expansion, and the walk reads it as such without
+# building it: at a reference it walks the body the build compiles for that
+# instance (templates/frames.jl `_tpl_frame`; with the call's lanes, call.jl
+# `_call_hoist_plan`, so a read the caller makes is walked where the caller
+# makes it, as the tree node the seam rewrite can reach), and at a parameter
+# of the body it walks the call site's binding in the caller's scope. The loop
+# bindings `env` are those of the expansion at that point (a binding is read
+# under the binders the body has open there, as the expansion substitutes it),
+# so a subscript is evaluated as its expansion would be: grounded to the
+# caller's spelling (`_need_ground`), a small expression, never a body.
+
+# One instance being walked: its frame, the reference, the caller's scope.
+struct _NeedScope
+    fr::_TplFrame
+    call::OpExpr
+    up::Union{Nothing, _NeedScope}
+end
+
+_need_is_arg(n::AbstractString) = startswith(n, _TPL_ARG) || startswith(n, _TPL_FREE) ||
+    startswith(n, _TPL_LANE) || startswith(n, _TPL_OUT)
+
+# The binding of the body argument `n` of scope `sc` (read in `sc.up`).
+function _need_arg(sc::_NeedScope, n::String)
+    b = sc.call.bindings
+    if startswith(n, _TPL_ARG)
+        v = b === nothing ? nothing : get(b, n[(ncodeunits(_TPL_ARG) + 1):end], nothing)
+        v === nothing && (v = _tpl_arg(sc.fr, n)[1])
+        return v, sc.up
+    elseif startswith(n, _TPL_FREE)
+        v = b === nothing ? nothing : get(b, n, nothing)
+        return (v === nothing ? VarExpr(n[(ncodeunits(_TPL_FREE) + 1):end]) : v), sc.up
+    end
+    v = b === nothing ? nothing : get(b, n, nothing)
+    v === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_UNBOUND_VARIABLE",
+            "template '$(sc.fr.name)': no binding for $(repr(n))"
+        )
+    )
+    return v, sc.up
+end
+
+# Run `f()` with the walk in scope `sc`.
+function _need_in(f, ctx, sc)
+    old = ctx.scope
+    ctx.scope = sc
+    try
+        return f()
+    finally
+        ctx.scope = old
+    end
+end
+
+# `e`, read in the walk's scope, with every body argument replaced by its
+# binding (grounded in turn): the expression as the caller spells it. For a
+# subscript or a range bound only.
+_need_ground(ctx::_NeedCtx, e) = ctx.scope === nothing ? e : _need_ground(e, ctx.scope)
+_need_ground(e, ::Nothing) = e
+function _need_ground(e, sc::_NeedScope)
+    if e isa VarExpr
+        _need_is_arg(e.name) || return e
+        b, up = _need_arg(sc, e.name)
+        return _need_ground(b, up)
+    end
+    e isa OpExpr || return e
+    return map_children(c -> _need_ground(c, sc), e)
+end
+
+# The body the walk reads for the reference `o` in the walk's scope, its
+# scope, and whether it is an element call read through its whole array
+# body (`:whole`, the element subscripts its `"\0out\0"` bindings) or a body
+# read as it stands (`:body`); `nothing` when the reference cannot be read
+# (no table, or a template the template checks report).
+function _need_enter(ctx::_NeedCtx, o::OpExpr)
+    tt = ctx.tt
+    tt === nothing && return nothing
+    parent = ctx.scope === nothing ? nothing : (ctx.scope::_NeedScope).fr
+    fr = _tpl_frame_or_nothing(tt, o, parent)
+    fr === nothing && return nothing
+    sc = _NeedScope(fr, o, ctx.scope)
+    if _call_has_lanes(o)
+        info = _tpl_call_info(tt, o.name)
+        if info !== nothing
+            S = _call_fixed!(Dict{String, Any}(), o.name, info, o.bindings)
+            hp = _call_hoist_plan(tt, _tpl_def(tt, o.name), S, _call_outs(info, o))
+            return hp.body, sc, :body
+        end
+    end
+    return fr.body, sc, (_tpl_is_elem(o) ? :whole : :body)
+end
 
 # The seam dimension `d` of variable `n` crosses, or `nothing`.
 function _dim_seam(ctx::_NeedCtx, n::String, d::Int)
@@ -158,6 +258,17 @@ function _seam_mark!(ctx::_NeedCtx, n::String, binds::Vector{_Bind})
         end
     end
     any_seam || return nothing
+    if ctx.scope !== nothing && any(b -> b & 0x02 != 0, bits)
+        # A read inside a template body is the body's, shared by every use of
+        # the instance: it cannot be sent to the far block at this use alone.
+        d = findfirst(b -> b & 0x02 != 0, bits)
+        _refuse_rule(
+            _rule_display(n),
+            "tile restriction: template '$((ctx.scope::_NeedScope).fr.name)' reads '$n' " *
+                "past the periodic seam of '$(ctx.shapes[n][d])' within the tile's storage; " *
+                "give the tile a storage box that does not cross the seam"
+        )
+    end
     node = isempty(ctx.idx_stack) ? nothing : ctx.idx_stack[end]
     d = get!(() -> Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}(), ctx.marks, node)
     k = (n, ctx.tag)
@@ -305,6 +416,17 @@ function _bind_sub(
 end
 
 function _is_arrayish(ctx::_NeedCtx, e::ASTExpr)
+    if e isa VarExpr && ctx.scope !== nothing && _need_is_arg((e::VarExpr).name)
+        b, up = _need_arg(ctx.scope, (e::VarExpr).name)
+        return _need_in(() -> _is_arrayish(ctx, b), ctx, up)
+    end
+    if _tpl_is_call(e) && !_tpl_is_elem(e::OpExpr)
+        st = _need_enter(ctx, e::OpExpr)
+        if st !== nothing
+            body, sc, _ = st
+            return _need_in(() -> _is_arrayish(ctx, body), ctx, sc)
+        end
+    end
     e isa VarExpr && return (e::VarExpr).name in ctx.states ||
         haskey(ctx.obs_defs, (e::VarExpr).name) ||
         (e::VarExpr).name in ctx.arrays
@@ -325,12 +447,17 @@ function _need_walk!(
     )
     if e isa VarExpr
         n = (e::VarExpr).name
+        if ctx.scope !== nothing && _need_is_arg(n)
+            b, up = _need_arg(ctx.scope, n)
+            _need_in(() -> _need_walk!(ctx, b, env, anchors, rule), ctx, up)
+            return nothing
+        end
         haskey(env, n) && return nothing
         if haskey(ctx.scalar_defs, n)
             n in ctx.scalar_stack && return nothing
             push!(ctx.scalar_stack, n)
             try
-                _need_walk!(ctx, ctx.scalar_defs[n], env, anchors, n)
+                _need_in(() -> _need_walk!(ctx, ctx.scalar_defs[n], env, anchors, n), ctx, nothing)
             finally
                 delete!(ctx.scalar_stack, n)
             end
@@ -370,8 +497,22 @@ function _need_walk!(
         return nothing
     end
     if _tpl_is_call(o)
-        # A template call: the cells its arguments read (call.jl).
-        foreach(c -> _need_walk!(ctx, c, env, anchors, rule), _read_operands(o))
+        st = _need_enter(ctx, o)
+        if st === nothing
+            # No template table: the cells its arguments read (call.jl).
+            foreach(c -> _need_walk!(ctx, c, env, anchors, rule), _read_operands(o))
+            return nothing
+        end
+        body, sc, how = st
+        if how === :whole
+            # An element call: its array body read at the element subscripts.
+            outs = _tpl_out_bindings(o)
+            foreach(s -> _need_walk!(ctx, s, env, anchors, rule), outs)
+            gsubs = ASTExpr[_need_ground(ctx, s) for s in outs]
+            _need_in(() -> _need_index_g!(ctx, body, gsubs, env, anchors, rule), ctx, sc)
+        else
+            _need_in(() -> _need_walk!(ctx, body, env, anchors, rule), ctx, sc)
+        end
         return nothing
     end
     foreach_child(c -> _need_walk!(ctx, c, env, anchors, rule), o)
@@ -408,7 +549,7 @@ end
 function _region_int(ctx::_NeedCtx, x)
     x isa Integer && return Int(x)
     x isa ASTExpr || return nothing
-    return _const_int_or_nothing(x, Dict{String, Int}(ctx.params), ctx.const_arrays)
+    return _const_int_or_nothing(_need_ground(ctx, x), Dict{String, Int}(ctx.params), ctx.const_arrays)
 end
 
 # `box \ cut` as a list of disjoint boxes.
@@ -468,6 +609,27 @@ function _need_index!(
     )
     for s in subs
         _need_walk!(ctx, s, env, anchors, rule)
+    end
+    gsubs = ctx.scope === nothing ? subs : ASTExpr[_need_ground(ctx, s) for s in subs]
+    return _need_index_g!(ctx, target, gsubs, env, anchors, rule)
+end
+
+# `_need_index!` past the subscripts' own reads, the subscripts grounded (they
+# read no body argument, so they hold in any scope).
+function _need_index_g!(
+        ctx::_NeedCtx, target::ASTExpr, subs::Vector{ASTExpr},
+        env::Dict{String, _Bind}, anchors::Dict{String, String}, rule::String
+    )
+    if target isa VarExpr && ctx.scope !== nothing && _need_is_arg((target::VarExpr).name)
+        b, up = _need_arg(ctx.scope, (target::VarExpr).name)
+        return _need_in(() -> _need_index_g!(ctx, b, subs, env, anchors, rule), ctx, up)
+    end
+    if _tpl_is_call(target) && !_tpl_is_elem(target::OpExpr)
+        st = _need_enter(ctx, target::OpExpr)
+        if st !== nothing
+            body, sc, _ = st
+            return _need_in(() -> _need_index_g!(ctx, body, subs, env, anchors, rule), ctx, sc)
+        end
     end
     if target isa VarExpr
         n = (target::VarExpr).name
@@ -575,7 +737,7 @@ function _need_index!(
     # An elementwise combination of arrays: the index pushes down to each.
     for a in o.args
         if _is_arrayish(ctx, a)
-            _need_index!(ctx, a, subs, env, anchors, rule)
+            _need_index_g!(ctx, a, subs, env, anchors, rule)
         else
             _need_walk!(ctx, a, env, anchors, rule)
         end
@@ -590,13 +752,24 @@ function _need_region_value!(
         ctx::_NeedCtx, val::ASTExpr, box::Vector{UnitRange{Int}},
         subs::Vector{ASTExpr}, env, anchors, rule::String
     )
+    if val isa VarExpr && ctx.scope !== nothing && _need_is_arg((val::VarExpr).name)
+        b, up = _need_arg(ctx.scope, (val::VarExpr).name)
+        return _need_in(() -> _need_region_value!(ctx, b, box, subs, env, anchors, rule), ctx, up)
+    end
+    if _tpl_is_call(val) && !_tpl_is_elem(val::OpExpr)
+        st = _need_enter(ctx, val::OpExpr)
+        if st !== nothing
+            body, sc, _ = st
+            return _need_in(() -> _need_region_value!(ctx, body, box, subs, env, anchors, rule), ctx, sc)
+        end
+    end
     if val isa OpExpr && _is_array_producer(val)
         v = val::OpExpr
         rank = _producer_rank(v)
         if rank > 0
             sel = subs[_region_value_axes(rank, length(subs), d -> length(box[d]) == 1)]
             length(sel) == rank &&
-                return _need_index!(ctx, v, sel, env, anchors, rule)
+                return _need_index_g!(ctx, v, sel, env, anchors, rule)
         end
     end
     return _need_walk!(ctx, val, env, anchors, rule)
