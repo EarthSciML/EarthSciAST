@@ -5182,12 +5182,9 @@
         "x"
       ],
       "template_registry": [
-        "A.d_x_rule",
-        "B.d_x_rule",
-        "A.interior_stencil",
-        "B.interior_stencil",
-        "A.outer_stencil",
-        "B.outer_stencil"
+        "d_x_rule",
+        "interior_stencil",
+        "outer_stencil"
       ],
       "field_ics": [],
       "loader_fields": [],
