@@ -7,7 +7,9 @@ package docfmt
 // itemsItems lists the constructs of a skeleton in the printer's order;
 // itemsUnitems reads a construct sequence back. Math entries are held as the
 // container's math text at this layer; itemsRawDoc prints them under each
-// component's symbol table and itemsCookDoc reads them back.
+// component's symbol table and itemsCookDoc reads them back. itemsMathifyDoc
+// prints the expressions of the path blocks as math leaves and
+// itemsCookDocBlocks reads every math leaf of a path block back.
 
 // RItemKind says which variant an RItem is.
 type RItemKind uint8
@@ -239,6 +241,158 @@ func itemsCookDoc(lim *Lim, ck func(*Lim, *Sym, *MR) ([]MC, bool), d *Doc[MR]) (
 		cs[i] = c
 	}
 	return Doc[MC]{Front: d.Front, HasDesc: d.HasDesc, Desc: d.Desc, Blocks: d.Blocks, Math: rm, Comps: cs}, true
+}
+
+// ## Expressions inside path blocks
+
+// itemsStepKey is `Source.stepKey`: the rests of the paths that continue
+// through an object entry with key k (hasK) or an array element (!hasK).
+func itemsStepKey(k string, hasK bool, ps [][]PathSeg) [][]PathSeg {
+	var out [][]PathSeg
+	for _, p := range ps {
+		if len(p) == 0 {
+			continue
+		}
+		if p[0].Any || (hasK && p[0].Key == k) {
+			out = append(out, p[1:])
+		}
+	}
+	return out
+}
+
+// itemsAtPaths is `Source.atPaths`: leaf applied to every value of v at one of
+// the paths ps (the shortest first: a value at a path is not looked into);
+// every other value as it is.
+func itemsAtPaths(leaf func(Json) Json, ps [][]PathSeg, v Json) Json {
+	if len(ps) == 0 {
+		return v // `atPaths_nil`
+	}
+	for _, p := range ps {
+		if len(p) == 0 {
+			return leaf(v)
+		}
+	}
+	switch x := v.(type) {
+	case []Json:
+		q := itemsStepKey("", false, ps)
+		out := make([]Json, len(x))
+		for i, e := range x {
+			out[i] = itemsAtPaths(leaf, q, e)
+		}
+		return out
+	case Obj:
+		out := make(Obj, len(x))
+		for i, kv := range x {
+			out[i] = KV{kv.K, itemsAtPaths(leaf, itemsStepKey(kv.K, true, ps), kv.V)}
+		}
+		return out
+	}
+	return v
+}
+
+// itemsMathify is `Source.mathify`: in a section's path blocks, every value at
+// one of the paths ps (keyed by the block's key) that is a well-formed
+// expression whose math text (prR under s) a container can delimit becomes
+// that math leaf (`Source.mathLeaf`); every other value stays as it is.
+func itemsMathify(prR func(*Sym, Json) string, s *Sym, ps [][]PathSeg, bs Obj) Obj {
+	leaf := func(v Json) Json {
+		if !exprIsE(v) {
+			return v
+		}
+		if t := prR(s, v); jsonMathOK(t) {
+			return Math{t}
+		}
+		return v
+	}
+	if bs == nil {
+		return nil
+	}
+	out := make(Obj, len(bs))
+	for i, kv := range bs {
+		out[i] = KV{kv.K, itemsAtPaths(leaf, itemsStepKey(kv.K, true, ps), kv.V)}
+	}
+	return out
+}
+
+// itemsCookV is `Source.cookV`: every math leaf of a value read back with ck.
+func itemsCookV(ck func(string) (Json, bool), v Json) (Json, bool) {
+	switch x := v.(type) {
+	case Math:
+		return ck(x.Text)
+	case []Json:
+		out := make([]Json, len(x))
+		for i, e := range x {
+			y, ok := itemsCookV(ck, e)
+			if !ok {
+				return nil, false
+			}
+			out[i] = y
+		}
+		return out, true
+	case Obj:
+		return itemsCookO(ck, x)
+	}
+	return v, true
+}
+
+// itemsCookO is `Source.cookO`.
+func itemsCookO(ck func(string) (Json, bool), kvs Obj) (Obj, bool) {
+	if kvs == nil {
+		return nil, true
+	}
+	out := make(Obj, len(kvs))
+	for i, kv := range kvs {
+		y, ok := itemsCookV(ck, kv.V)
+		if !ok {
+			return nil, false
+		}
+		out[i] = KV{kv.K, y}
+	}
+	return out, true
+}
+
+// itemsCookBlocks is `Source.cookBlocks`: every math leaf of a section's path
+// blocks read back as an expression under s, wherever it is.
+func itemsCookBlocks(lim *Lim, ckR func(*Lim, *Sym, string) (Json, bool), s *Sym, bs Obj) (Obj, bool) {
+	return itemsCookO(func(t string) (Json, bool) { return ckR(lim, s, t) }, bs)
+}
+
+// itemsMathifyDoc is `Source.mathifyDoc`: print the path blocks of a skeleton,
+// each section's under its symbol table (a component's, or the document's for
+// the top-level blocks).
+func itemsMathifyDoc(prR func(*Sym, Json) string, d *Doc[MR]) Doc[MR] {
+	out := *d
+	out.Blocks = itemsMathify(prR, skTopSym(d), skTopExprPaths, d.Blocks)
+	out.Comps = make([]Comp[MR], len(d.Comps))
+	for i := range d.Comps {
+		c := d.Comps[i]
+		c.Blocks = itemsMathify(prR, skSymFor(d, &d.Comps[i]), skCompExprPaths, d.Comps[i].Blocks)
+		out.Comps[i] = c
+	}
+	return out
+}
+
+// itemsCookDocBlocks is `Source.cookDocBlocks`: read the path blocks of a
+// skeleton, every math leaf of a section's blocks under the section's symbol
+// table.
+func itemsCookDocBlocks(lim *Lim, ckR func(*Lim, *Sym, string) (Json, bool), d *Doc[MR]) (Doc[MR], bool) {
+	out := *d
+	bs, ok := itemsCookBlocks(lim, ckR, skTopSym(d), d.Blocks)
+	if !ok {
+		return Doc[MR]{}, false
+	}
+	out.Blocks = bs
+	out.Comps = make([]Comp[MR], len(d.Comps))
+	for i := range d.Comps {
+		c := d.Comps[i]
+		b, ok := itemsCookBlocks(lim, ckR, skSymFor(d, &d.Comps[i]), d.Comps[i].Blocks)
+		if !ok {
+			return Doc[MR]{}, false
+		}
+		c.Blocks = b
+		out.Comps[i] = c
+	}
+	return out, true
 }
 
 // itemsPrMx is `Source.prMx`: a math entry's text, from the equation and

@@ -13,7 +13,9 @@ package docfmt
 //     its other entries aligned with its first key; a non-empty array as an
 //     element starts on the next line, two spaces deeper.
 //
-// Strings are always double-quoted with JSON-style escapes; a key is bare when
+// Strings are always double-quoted with JSON-style escapes, so a math leaf
+// (path blocks only, `Source.mathify`) is the plain scalar `$…$`, its text up
+// to the next `$` (`Json.mathOK`); a key is bare when
 // it is an identifier and not one of YAML's special plain scalars in any
 // letter case; a key longer than 1024 characters uses the explicit `? "key"`
 // form. The reader accepts only this layout and well-formed values.
@@ -79,6 +81,9 @@ func yamlInline(v Json) []rune {
 		return numPrint(x)
 	case string:
 		return strQuote(false, x)
+	case Math:
+		out := append([]rune{'$'}, []rune(x.Text)...)
+		return append(out, '$')
 	case []Json:
 		return []rune("[]")
 	case Obj:
@@ -249,6 +254,8 @@ func yamlPInline(input []rune) (Json, []rune, bool) {
 			return nil, nil, false
 		}
 		return s, r, true
+	case '$':
+		return jsonPMath(input[1:])
 	}
 	n, r, ok := numParse(input)
 	if !ok {
@@ -410,10 +417,10 @@ func yamlPTop(lim *Lim, input []rune) (Json, []rune, bool) {
 }
 
 // yamlDecode is `Yaml.decode`: all of the input consumed, and the value well
-// formed.
+// formed, math leaves allowed (`Json.WFm`).
 func yamlDecode(lim *Lim, s []rune) (Json, bool) {
 	v, r, ok := yamlPTop(lim, s)
-	if !ok || len(r) != 0 || !JsonWfb(v) {
+	if !ok || len(r) != 0 || !jsonWfmb(v) {
 		return nil, false
 	}
 	return v, true
