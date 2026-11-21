@@ -1066,7 +1066,7 @@ function _cg_call_const_gather(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
     for d in eachindex(ch)
         se = d == 1 ? _cg_emit(ctx, kc, ch[d]) : _cg_emit_region(ctx, kc, ch[d])
         span = _cg_int_span(kc, ch[d])
-        inside = span !== nothing && 1 <= span[1] && span[2] <= cg.dims[d]
+        inside = span !== nothing && d <= length(cg.dims) && 1 <= span[1] && span[2] <= cg.dims[d]
         inside && _tally_cascade!(:gather_in_range)
         push!(
             binds, inside ? :($(subs[d]) = unsafe_trunc(Int, $se)) :

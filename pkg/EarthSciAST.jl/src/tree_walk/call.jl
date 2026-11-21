@@ -1389,7 +1389,7 @@ function _tpl_skel_node!(tt::_TplTable, parts, e, raw)
         # An output index is a name the view's loop binds, or an integer
         # literal (a singleton output position, `[1, "s"]`), which binds
         # nothing and stays in the header as it is.
-        all(x -> x isa AbstractString || x isa Integer, e.output_idx) || return nothing
+        all(x -> x isa AbstractString || (x isa Integer && !(x isa Bool)), e.output_idx) || return nothing
         (
             e.expr_body !== nothing && e.key === nothing && e.values === nothing &&
                 e.lower === nothing && e.upper === nothing
