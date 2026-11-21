@@ -185,6 +185,10 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
         'emitted_chain_depth_64.esm',
         'expanded_chain_depth_64.esm',
       ],
+      // Coupling transforms keep their references (esm-spec §10.4); the
+      // receiving component's block materializes what they name.
+      ['coupling_transform_expression', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
+      ['coupling_transform_rule_and_import', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
     ]
     it.each(cases)('%s / %s: emitted == %s, Expand(load) == %s', (dir, fix, emitted, expanded) => {
       expect(emit(dir, fix)).toBe(fs.readFileSync(conf(dir, emitted), 'utf-8'))
@@ -477,6 +481,8 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     'template_instance_variants',
     'opacity_rule_replacement',
     'unlowered_in_template_body',
+    'coupling_transform_expression',
+    'coupling_transform_rule_and_import',
   ])('emit ∘ loadString byte-wise fixed point: %s', (dir) => {
     const s1 = emit(dir)
     const s2 = emitEsmString(emitDocument(JSON.parse(s1), conf(dir)))

@@ -21,6 +21,7 @@ import {
   expandDocument,
   lowerExpressionTemplates,
   materializeComponentBlock,
+  receivedTransformRefs,
   rejectExpressionTemplatesPreV04,
 } from './lower-expression-templates.js'
 import {
@@ -850,15 +851,19 @@ function captureComponentTemplates(
   const out: Record<string, unknown> = {}
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return out
   const root = data as Record<string, unknown>
+  const received = receivedTransformRefs(root)
   for (const section of ['models', 'reaction_systems'] as const) {
     const comps = root[section]
     if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
     for (const [cname, comp] of Object.entries(comps as Record<string, unknown>)) {
       if (comp === null || typeof comp !== 'object' || Array.isArray(comp)) continue
       const key = `${section}.${cname}`
+      const here = received.get(cname) ?? []
+      received.delete(cname)
       const { block } = materializeComponentBlock(
         comp as Record<string, unknown>,
         authored[key] ?? [],
+        here,
       )
       // The rules still carrying `match` (nothing referenced them) follow: a
       // rewrite pass re-run after `{ref}` resolution still needs them, and
