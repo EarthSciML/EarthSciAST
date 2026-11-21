@@ -11,7 +11,9 @@ Port of ``formal/Esm/Document/Yaml.lean``. The printed text is block-style YAML 
   the next line, two spaces deeper.
 
 Strings are always double-quoted with JSON-style escapes, so a math leaf (path
-blocks only) is the plain scalar ``$…$``; a key is bare when it is
+blocks only) is the plain scalar ``$…$``; the printer makes one only of text that
+is :func:`plain_math_ok`, which every YAML 1.2 parser reads as that string. A key
+is bare when it is
 an identifier and not one of YAML's special plain scalars in any letter case; a
 key longer than 1024 characters uses the explicit ``? "key"`` form. The reader
 accepts only this layout and well-formed values. No YAML library is involved.
@@ -22,8 +24,8 @@ from __future__ import annotations
 from typing import Any
 
 from . import limits, number
-from .strings import is_ident_start, parse_key, parse_quoted, print_key, quote
-from .value import Dec, Math, Obj, math_leaf_at, wfm
+from .strings import is_ident_start, needs_hex, parse_key, parse_quoted, print_key, quote
+from .value import Dec, Math, Obj, math_leaf_at, math_ok, wfm
 
 #: ``Yaml.specialWords``.
 SPECIAL_WORDS = frozenset({"true", "false", "null", "yes", "no", "on", "off", "y", "n"})
@@ -42,6 +44,14 @@ def _key_part(m: int, k: str, out: list[str]) -> None:
         out.append("? " + quote(False, k) + "\n" + " " * m)
     else:
         out.append(p)
+
+
+def plain_math_ok(s: str) -> bool:
+    """``Yaml.plainMathOK``: math text YAML holds as the plain scalar ``$…$``, which a
+    YAML 1.2 parser reads as that string: :func:`math_ok`, and no ``": "`` (a mapping
+    indicator), no ``" #"`` (a comment) and no character of ``needs_hex``. The
+    Markdown printer leaves any other expression in its block as JSON."""
+    return math_ok(s) and not any(needs_hex(c) for c in s) and ": " not in s and " #" not in s
 
 
 def inline(v: Any) -> str:

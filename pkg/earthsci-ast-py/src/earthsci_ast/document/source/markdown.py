@@ -997,7 +997,7 @@ def print_md(d: Any) -> str:
     blank line, a declaration on a line of its own (``Md.canonSegs``)."""
     doc = to_doc(CAPS_MD, d)
     out = [_front_md(doc.front)]
-    for it in items(mathify_doc(print_latex, raw_doc(_pr_mdx, doc))):
+    for it in items(mathify_doc(print_latex, yaml.plain_math_ok, raw_doc(_pr_mdx, doc))):
         out.append("\n")
         out.append(item_md(it))
         if not _is_block(it):
