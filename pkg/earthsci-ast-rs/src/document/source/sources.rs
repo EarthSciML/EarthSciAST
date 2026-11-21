@@ -109,7 +109,7 @@ pub fn read_sourced(
     );
     let (front, spanned) = lex_doc(&chars)?;
     let raw = unitems(front, spanned.iter().map(|(it, _)| it.clone()).collect())?;
-    let raw = cook_doc_blocks(ck_r, &raw)?;
+    let raw = cook_doc_blocks(ck_r, raw)?;
     let (doc, Counts { top, comps }) = cook_doc_counted(ck, &raw)?;
     let json = of_doc(&doc)?;
 

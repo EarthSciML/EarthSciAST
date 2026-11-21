@@ -13,17 +13,30 @@
 //!
 //! Strings are always double-quoted with JSON-style escapes, so a math leaf
 //! (path blocks only, `Source.mathify`) is the plain scalar `$…$`, its text up
-//! to the next `$` (`Json.mathOK`); a key is bare when it is an identifier and
-//! not one of YAML's special plain scalars in any letter case; a key longer
-//! than 1024 characters uses the explicit `? "key"` form. The reader accepts only this layout and well-formed values.
+//! to the next `$` (`Json.mathOK`); the printer makes one only of text that is
+//! [`plain_math_ok`], which every YAML 1.2 parser reads as that string. A key
+//! is bare when it is an identifier and not one of YAML's special plain
+//! scalars in any letter case; a key longer than 1024 characters uses the
+//! explicit `? "key"` form. The reader accepts only this layout and
+//! well-formed values.
 //!
 //! The Lean readers carry fuel (`4 * length + 4`) for termination only; every
 //! two nested calls consume a character, so the port recurses without it.
 
-use super::json::{Json, p_math};
+use super::json::{Json, math_ok, p_math};
 use super::number;
 use super::source::keys::Kvs;
-use super::strings::{is_ident_start, parse_key, parse_quoted, print_key, quote, spaces};
+use super::strings::{
+    is_ident_start, needs_hex, parse_key, parse_quoted, print_key, quote, spaces,
+};
+
+/// `Yaml.plainMathOK`: math text YAML holds as the plain scalar `$…$`, which a
+/// YAML 1.2 parser reads as that string: [`math_ok`], and no `: ` (a mapping
+/// indicator), no ` #` (a comment) and no character of `needs_hex`. The
+/// Markdown printer leaves any other expression in its block as JSON.
+pub fn plain_math_ok(s: &str) -> bool {
+    math_ok(s) && !s.chars().any(needs_hex) && !s.contains(": ") && !s.contains(" #")
+}
 
 /// `Yaml.specialWords`.
 pub const SPECIAL_WORDS: &[&str] = &["true", "false", "null", "yes", "no", "on", "off", "y", "n"];

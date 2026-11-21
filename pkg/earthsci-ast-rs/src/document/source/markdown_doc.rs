@@ -257,7 +257,8 @@ pub fn print_md(d: &Json) -> String {
     let mut out = front_md(&doc.front);
     out.extend(render(&canon_segs(items(&mathify_doc(
         &|s, j| print_latex(s, j),
-        &raw_doc(&pr_mdx, &doc),
+        &yaml::plain_math_ok,
+        raw_doc(&pr_mdx, &doc),
     )))));
     string(&out)
 }
@@ -300,7 +301,7 @@ pub fn parse_md(s: &str) -> Option<Json> {
 /// `Md.parseItemsMd`.
 pub fn parse_items_md(front: Kvs, its: Vec<RItem>) -> Option<Json> {
     let r = unitems(front, its)?;
-    let r = cook_doc_blocks(&|s, raw| parse_latex(s, raw), &r)?;
+    let r = cook_doc_blocks(&|s, raw| parse_latex(s, raw), r)?;
     let d = cook_doc(&ck_mdx, &r)?;
     of_doc(&d)
 }

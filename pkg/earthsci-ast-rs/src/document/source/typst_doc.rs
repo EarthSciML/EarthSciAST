@@ -172,7 +172,8 @@ pub fn print_typ(d: &Json) -> String {
     let mut out = header_t(&doc.front);
     out.extend(render(&canon_segs(items(&mathify_doc(
         &|s, j| print_typst(s, j),
-        &raw_doc(&pr_tx, &doc),
+        &|_| true,
+        raw_doc(&pr_tx, &doc),
     )))));
     string(&out)
 }
@@ -209,7 +210,7 @@ pub fn parse_typ(s: &str) -> Option<Json> {
 /// `Typ.parseItemsT`.
 pub fn parse_items_t(front: Kvs, its: Vec<RItem>) -> Option<Json> {
     let r = unitems(front, its)?;
-    let r = cook_doc_blocks(&|s, raw| parse_typst(s, raw), &r)?;
+    let r = cook_doc_blocks(&|s, raw| parse_typst(s, raw), r)?;
     let d = cook_doc(&ck_tx, &r)?;
     of_doc(&d)
 }
