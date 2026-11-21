@@ -407,3 +407,61 @@ def test_unexpandable_reference_in_the_join_position_is_reported():
         assert desugar_pushdown(d, model_name="Binned") is d
     assert any("join-shaped" in str(x.message) for x in w)
     assert any("WHOLESALE" in str(x.message) for x in w)
+
+
+def test_filter_follows_expansion_order():
+    """The producer filter comes from the ``ifelse`` detection found, which
+    walks the EXPANDED body: here the binding of ``p`` (the containment) is
+    reached before the body's own ``ifelse``, so the filter is the
+    containment's comparisons in the caller's scope and no derived template is
+    registered."""
+    from earthsci_ast.pushdown_rewrite import _pd_filter_in
+
+    other = _op(">", "q", 0.0)
+    templates = {
+        "T": {
+            "params": ["p", "q"],
+            "body": _op("*", "p", _op("ifelse", other, 1.0, 0.0)),
+        }
+    }
+    call = _apply(
+        "T",
+        {"p": _op("ifelse", _contain(), _ix("emis_annual", "r"), 0.0), "q": _ix("px", "r")},
+    )
+    derived = {}
+    f = _pd_filter_in(_agg(["c"], _eranges(), call, reduce="+", args=_EARGS), templates, derived)
+    assert f == {"op": "*", "args": _contain()["args"]}
+    assert derived == {}
+
+
+def test_filter_in_binding_of_nested_reference_is_in_caller_scope():
+    """A containment in an outer template's binding, reached through an inner
+    reference's parameter leaf, is written in the outermost scope."""
+    from earthsci_ast.pushdown_rewrite import _pd_filter_in
+
+    templates = {
+        "Inner": {"params": ["a"], "body": _op("*", "a", 2.0)},
+        "Outer": {"params": ["b"], "body": _apply("Inner", {"a": "b"})},
+    }
+    call = _apply("Outer", {"b": _op("ifelse", _contain(), 1.0, 0.0)})
+    derived = {}
+    assert _pd_filter_in(call, templates, derived) == {"op": "*", "args": _contain()["args"]}
+    assert derived == {}
+
+
+def test_filter_reading_no_parameter_is_inlined():
+    """A containment in a template body that reads none of the template's
+    parameters (only free names) is emitted as the longhand ``*`` filter: a
+    derived template of no parameters is not a valid declaration."""
+    from earthsci_ast.pushdown_rewrite import _pd_filter_in
+
+    templates = {
+        "T": {
+            "params": ["w"],
+            "body": _op("*", _op("ifelse", _contain(), 1.0, 0.0), "w"),
+        }
+    }
+    derived = {}
+    f = _pd_filter_in(_apply("T", {"w": _ix("emis_annual", "r")}), templates, derived)
+    assert f == {"op": "*", "args": _contain()["args"]}
+    assert derived == {}
