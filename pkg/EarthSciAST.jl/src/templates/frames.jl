@@ -1297,6 +1297,27 @@ _tpl_array_binding(v::ASTExpr) =
     (v isa VarExpr && !occursin(_TPL_SENTINEL, v.name)) ||
     (v isa OpExpr && v.op == "const" && v.value isa AbstractVector)
 
+# An ARRAY EXPRESSION bound to an array parameter: an elementwise `faq` over
+# its output indices (no reduction, filter or join), whose element is read
+# lazily: where the body reads the parameter at subscripts `s…`, the element
+# with each output index read as `s` is evaluated there, at that cell, and
+# nowhere else (call.jl, "Array expressions compiled into the instance"). No
+# buffer holds it and the body is not inlined. The form alone; with the
+# template table `tt`, also an element the build compiles into the instance
+# (`_tpl_inlinable`).
+function _tpl_array_expr(v::ASTExpr, tt::Union{Nothing, _TplTable} = nothing)
+    (v isa OpExpr && _is_faq_op(v.op)) || return false
+    oi = v.output_idx
+    (oi !== nothing && !isempty(oi) && all(x -> x isa AbstractString, oi)) || return false
+    (
+        v.filter === nothing && v.join_gates === nothing && v.join === nothing &&
+            v.key === nothing && v.expr_body !== nothing && v.values === nothing &&
+            v.lower === nothing && v.upper === nothing && all(a -> a isa VarExpr, v.args)
+    ) || return false
+    v.ranges === nothing || all(k -> String(k) in oi, keys(v.ranges)) || return false
+    return tt === nothing || _tpl_inlinable(v.expr_body, tt)
+end
+
 """
     _tpl_compiles(tt, call::OpExpr) -> Bool
 
@@ -1319,7 +1340,7 @@ function _tpl_compiles(tt::_TplTable, call::OpExpr)
         v === nothing && !(s in info.scalars || s in info.arrays || s in info.fixed) && continue
         v === nothing && return false
         if s in info.arrays
-            _tpl_array_binding(v) || return false
+            _tpl_array_binding(v) || _tpl_array_expr(v, tt) || return false
             continue
         end
         if s in info.fixed
@@ -1344,6 +1365,14 @@ function _tpl_compiles(tt::_TplTable, call::OpExpr)
         # A template call in it stays a call inside the instance, evaluated
         # only where the body reads the parameter (`_tpl_inlinable` with `tt`).
         _tpl_plain_binding(v) || _tpl_inlinable(v, tt) || return false
+    end
+    # An implicit parameter read as an array is bound to the caller's name of
+    # its spelling unless the reference carries it, possibly as an array
+    # expression.
+    for s in info.arrays
+        startswith(s, _TPL_FREE) || continue
+        v = get(b, s, nothing)
+        v === nothing || _tpl_array_binding(v) || _tpl_array_expr(v, tt) || return false
     end
     return true
 end

@@ -540,6 +540,7 @@ end
 # both is refused.
 
 _seam_alias(n::String, far::Vector{Bool}) = "__seam_" * join(Int.(far)) * "__" * n
+_seam_obs_alias(n::String, far::Vector{Bool}) = "__seamobs_" * join(Int.(far)) * "__" * n
 
 struct _SeamRewrite
     ctx::_NeedCtx
@@ -547,6 +548,11 @@ struct _SeamRewrite
     inline::Dict{Tuple{String, Tuple}, ASTExpr}
     # Seam instances made so far, per (chain of references, context).
     inst::Dict{Tuple{Vector{UInt}, Any}, Union{Nothing, String}}
+    # An observed read past the seam inside a template body: the implicit
+    # parameter the seam instance reads it as (`_seam_obs_alias`) => the
+    # observed's definition on that side, the array expression a reference
+    # binds it to.
+    obs::Dict{String, ASTExpr}
 end
 
 # The dimensions on which the read of `n` at `node` lands past the seam in
@@ -610,10 +616,7 @@ function _seam_target(rw::_SeamRewrite, t::ASTExpr, node, tag)
         elseif haskey(ctx.obs_defs, n)
             far = _seam_far_dims(ctx, node, n, tag)
             far === nothing && return t
-            sides = Tuple(far[d] for d in eachindex(far) if _dim_seam(ctx, n, d) !== nothing)
-            return get!(rw.inline, (n, sides)) do
-                _seam_target(rw, ctx.obs_defs[n], nothing, (n, sides))
-            end
+            return _seam_obs_far(rw, n, far)
         end
         return t
     end
@@ -633,6 +636,15 @@ function _seam_target(rw::_SeamRewrite, t::ASTExpr, node, tag)
     return r
 end
 
+# The definition of observed `n` evaluated on the far side `far` of its seams.
+function _seam_obs_far(rw::_SeamRewrite, n::String, far::Vector{Bool})
+    ctx = rw.ctx
+    sides = Tuple(far[d] for d in eachindex(far) if _dim_seam(ctx, n, d) !== nothing)
+    return get!(rw.inline, (n, sides)) do
+        _seam_target(rw, ctx.obs_defs[n], nothing, (n, sides))
+    end
+end
+
 # ---- Reads past a periodic seam inside a template body ----
 #
 # A template reference is compiled once per instance, its body shared by every
@@ -648,10 +660,17 @@ end
 # it whose body does so pointed at that template's seam instance in turn. The
 # far block is a name the body reads from its caller, so it is an implicit
 # parameter of the instance, passed down the chain as every implicit
-# parameter is. The key is the instance body itself: two uses that read past
-# the seam alike share one seam instance, and a reference that reads nothing
-# past the seam (every reference in a tile whose storage crosses no seam)
-# keeps the ordinary instance. No body is expanded.
+# parameter is. An OBSERVED read past the seam is made of the implicit
+# parameter `_seam_obs_alias` instead, which the reference binds to the
+# observed's definition on that side (`_seam_obs_far`, the expression the
+# seam rewrite substitutes for an inlined read): an array expression, which
+# the call evaluates lazily, at the cell the body reads (call.jl, "Array
+# expressions compiled into the instance"); a nested seam instance's
+# reference passes it on as it passes any implicit parameter. The key is the
+# instance body itself: two uses that read past the seam alike share one seam
+# instance, and a reference that reads nothing past the seam (every reference
+# in a tile whose storage crosses no seam) keeps the ordinary instance. No body
+# is expanded.
 
 const _TPL_SEAM = "\0seam\0"
 
@@ -662,7 +681,16 @@ function _seam_call(rw::_SeamRewrite, orig::OpExpr, new::OpExpr, tag)
     name = _seam_instance(rw, orig, Any[orig], tag)
     name === nothing && return new
     _seam_check_lanes(rw.ctx.tt, orig, name)
-    return reconstruct(new; name = name)
+    # Each observed the instance reads past the seam, bound to its far side.
+    def = _tpl_def(rw.ctx.tt, name)
+    nb = nothing
+    for f in def.closed.free
+        v = get(rw.obs, f, nothing)
+        v === nothing && continue
+        nb === nothing && (nb = new.bindings === nothing ? Dict{String, ASTExpr}() : Dict{String, ASTExpr}(new.bindings))
+        nb[_TPL_FREE * f] = v
+    end
+    return nb === nothing ? reconstruct(new; name = name) : reconstruct(new; name = name, bindings = nb)
 end
 
 # The body the need walk read for the reference `call` (`_need_enter`) and the
@@ -741,14 +769,23 @@ function _seam_instance(rw::_SeamRewrite, call::OpExpr, chain::Vector{Any}, tag)
             for n in unique!([k[1] for k in keys(m)])
                 far = _seam_far_dims(ctx, m, n, tag)
                 far === nothing && continue
-                n in ctx.states || _refuse_rule(
-                    _rule_display(n),
-                    "tile restriction: template '$(call.name)' reads the observed '$n' past " *
-                        "the periodic seam within the tile's storage, where a template body " *
-                        "cannot evaluate it; give the tile a storage box that does not cross the seam"
-                )
-                a = _seam_alias(n, far)
-                rw.aliases[a] = (n, far)
+                if n in ctx.states
+                    a = _seam_alias(n, far)
+                    rw.aliases[a] = (n, far)
+                else
+                    a = _seam_obs_alias(n, far)
+                    get!(rw.obs, a) do
+                        e = _seam_obs_far(rw, n, far)
+                        _tpl_array_expr(e, ctx.tt) || _refuse_rule(
+                            _rule_display(n),
+                            "tile restriction: template '$(call.name)' reads the observed '$n' past " *
+                                "the periodic seam within the tile's storage, and its definition there " *
+                                "is no elementwise array expression a template call can evaluate; give " *
+                                "the tile a storage box that does not cross the seam"
+                        )
+                        e
+                    end
+                end
                 direct[node] = a
             end
         end
@@ -842,7 +879,7 @@ end
 function _seam_equations(ctx::_NeedCtx, spec::_TileSpec, eqs::Vector{Equation})
     rw = _SeamRewrite(
         ctx, spec.aliases, Dict{Tuple{String, Tuple}, ASTExpr}(),
-        Dict{Tuple{Vector{UInt}, Any}, Union{Nothing, String}}()
+        Dict{Tuple{Vector{UInt}, Any}, Union{Nothing, String}}(), Dict{String, ASTExpr}()
     )
     out = Equation[]
     for eq in eqs
