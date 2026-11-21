@@ -1417,7 +1417,7 @@ function _tpl_agg_view(tt::_TplTable, call::OpExpr; lanes::Bool = true)
     h = _tpl_subst_scoped(h, m, IdDict{OpExpr, ASTExpr}())
     lm = Dict{String, ASTExpr}()
     for k in 1:n
-        leaf = _tpl_part_call(tt, call, _tpl_part_name(call.name, k))
+        leaf = _tpl_part_forward(tt, _tpl_part_call(tt, call, _tpl_part_name(call.name, k)))
         lanes && _tpl_call_info(tt, leaf.name) !== nothing && (leaf = _tpl_with_lanes(tt, leaf))
         lm[_TPL_LEAF * string(k)] = leaf
     end
@@ -1449,6 +1449,30 @@ function _tpl_part_call(tt::_TplTable, call::OpExpr, pn::String)
         haskey(nb, _TPL_FREE * n) || (nb[_TPL_FREE * n] = VarExpr(n))
     end
     return _tpl_structural_ref(tt, reconstruct(call; name = pn, bindings = nb))
+end
+
+# A FORWARDING part — the part `_tpl_skel_node!` makes for a leaf of a
+# whole-array reference in a body, whose body is that reference's own part
+# call — is read as the part call it forwards to, its bindings read as the
+# outer call binds them (the bindings composed; no body is copied). A rule
+# that forwards to a stencil template (esm-spec §9.6.3 constraint 7) then has
+# the stencil's parts as its view's leaves, called and laned in the caller as
+# the stencil itself is.
+function _tpl_part_forward(tt::_TplTable, leaf::OpExpr)
+    while occursin(_TPL_PART, leaf.name)
+        def = _tpl_def(tt, leaf.name)
+        def.closed === nothing && return leaf
+        body = def.closed.body
+        (_tpl_is_call(body) && !_tpl_is_elem(body::OpExpr) && occursin(_TPL_PART, (body::OpExpr).name)) ||
+            return leaf
+        m = _tpl_sentinel_map(leaf)
+        for n in def.closed.free
+            haskey(m, _TPL_FREE * n) || (m[_TPL_FREE * n] = VarExpr(n))
+        end
+        inner = _tpl_subst_scoped(body, m, IdDict{OpExpr, ASTExpr}())::OpExpr
+        leaf = _tpl_part_call(tt, inner, inner.name)
+    end
+    return leaf
 end
 
 # Every variable leaf name in `e` (sentinels included, binders ignored).
