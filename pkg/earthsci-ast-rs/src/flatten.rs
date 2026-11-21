@@ -1795,8 +1795,8 @@ pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::
         }
     }
 
-    // name -> [(component_path, declaration), ...], in document order.
-    let mut byname: Vec<(String, Vec<(String, serde_json::Value)>)> = Vec::new();
+    // (component path, its scoped match-less block), in document order.
+    let mut blocks: Vec<(String, serde_json::Map<String, serde_json::Value>)> = Vec::new();
     for compkey in &ordered {
         let Some(block) = component_templates.get(compkey).and_then(|v| v.as_object()) else {
             continue;
@@ -1805,6 +1805,7 @@ pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::
         let model = (section == "models")
             .then(|| file.models.as_ref().and_then(|m| m.get(cname)))
             .flatten();
+        let mut scoped_block = serde_json::Map::new();
         for (tname, decl) in block {
             if decl.get("match").is_some_and(|m| !m.is_null()) {
                 continue; // match rules are not referenceable, so not merged
@@ -1829,8 +1830,13 @@ pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::
                     }
                     match serde_json::from_value::<Expr>(body.clone()) {
                         Ok(parsed) => {
-                            let scoped_body =
-                                scope_template_body(&parsed, cname, &locals, &HashSet::new());
+                            let scoped_body = scope_template_body(
+                                &parsed,
+                                cname,
+                                &locals,
+                                &HashSet::new(),
+                                &HashMap::new(),
+                            );
                             match serde_json::to_value(&scoped_body) {
                                 Ok(v) => {
                                     let mut d = decl.clone();
@@ -1851,40 +1857,13 @@ pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::
                 }
                 _ => decl.clone(),
             };
-            match byname.iter_mut().find(|(k, _)| k == tname) {
-                Some((_, occ)) => occ.push((cname.to_string(), scoped)),
-                None => byname.push((tname.clone(), vec![(cname.to_string(), scoped)])),
-            }
+            scoped_block.insert(tname.clone(), scoped);
         }
+        blocks.push((cname.to_string(), scoped_block));
     }
 
-    let collide = crate::lower_expression_templates::registry_collision_names(&byname);
-    let mut merged: IndexMap<String, serde_json::Value> = IndexMap::new();
-    let mut rename: HashMap<String, HashMap<String, String>> = HashMap::new();
-    for (name, occ) in &byname {
-        if collide.contains(name) {
-            for (path, decl) in occ {
-                let newname = format!("{path}.{name}");
-                merged.insert(newname.clone(), decl.clone());
-                rename
-                    .entry(path.clone())
-                    .or_default()
-                    .insert(name.clone(), newname);
-            }
-        } else {
-            merged.insert(name.clone(), occ[0].1.clone()); // deep-equal dedup
-        }
-    }
-    // A renamed body's own nested references follow its OWNER's map, so a
-    // per-owner wrapper reaches its owner's leaf and never the other owner's.
-    for per_owner in rename.values() {
-        for new in per_owner.values() {
-            if let Some(decl) = merged.get_mut(new) {
-                crate::lower_expression_templates::rename_apply_refs(decl, per_owner);
-            }
-        }
-    }
-    merged
+    let (merged, _rename) = crate::lower_expression_templates::merge_flat_registry(&blocks);
+    merged.into_iter().collect()
 }
 
 /// Component-scope ONE carried template body: prefix exactly the references
@@ -1897,11 +1876,18 @@ pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::
 /// `params`, loop symbols, and document-scoped index sets, none of which is a
 /// component local and none of which may be prefixed. The caller removes the
 /// template's `params` from `locals` before calling.
-fn scope_template_body(
+///
+/// `captures` maps a template name to the loop symbols its body binds
+/// ([`template_captures`]): a reference's binding value spelling one of them is
+/// that loop index once substituted, so the reference's bindings see it as
+/// bound. Flatten passes none, as the Julia reference does; the mount hoist
+/// passes the mounted block's.
+pub(crate) fn scope_template_body(
     expr: &Expr,
     prefix: &str,
     locals: &HashSet<String>,
     bound: &HashSet<String>,
+    captures: &HashMap<String, HashSet<String>>,
 ) -> Expr {
     match expr {
         Expr::Number(n) => Expr::Number(*n),
@@ -1922,8 +1908,14 @@ fn scope_template_body(
             node.for_each_binder(Binders::SCOPE, |n| {
                 child_bound.insert(n.to_string());
             });
-            let mut out =
-                node.map_children(&mut |c| scope_template_body(c, prefix, locals, &child_bound));
+            if node.op == crate::lower_expression_templates::APPLY_OP_NAME
+                && let Some(cap) = node.name.as_ref().and_then(|n| captures.get(n))
+            {
+                child_bound.extend(cap.iter().cloned());
+            }
+            let mut out = node.map_children(&mut |c| {
+                scope_template_body(c, prefix, locals, &child_bound, captures)
+            });
             if let Some(join) = &node.join {
                 let binders: HashSet<&str> = node.binders(Binders::LOOP).into_iter().collect();
                 if let Some(ns) = namespace_join_names(join, &binders, prefix, locals) {

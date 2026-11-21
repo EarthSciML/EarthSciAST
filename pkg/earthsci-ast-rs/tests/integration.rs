@@ -197,6 +197,8 @@ mod mount_element_type;
 mod mount_enums;
 #[path = "mount_index_set_rename.rs"]
 mod mount_index_set_rename;
+#[path = "mount_template_registry_conformance.rs"]
+mod mount_template_registry_conformance;
 #[path = "mounted_component_tests.rs"]
 mod mounted_component_tests;
 #[path = "multi_model_ingest.rs"]

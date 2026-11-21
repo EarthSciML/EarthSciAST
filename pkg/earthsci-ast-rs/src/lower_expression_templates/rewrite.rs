@@ -1346,6 +1346,10 @@ fn lower_components(
                 continue;
             };
             let scope_base = format!("{compkind}.{cname}");
+            // A model mounted as a subsystem keeps its references and brings
+            // its template definitions; they join this component's registry
+            // here (esm-spec §9.6.4 rule 1).
+            hoist_mounted_templates(comp, cname);
             // Static shape environment for `where` constraint evaluation
             // (esm-spec §9.6.1): declared variable shapes only.
             let shape_env = component_shape_env(comp);

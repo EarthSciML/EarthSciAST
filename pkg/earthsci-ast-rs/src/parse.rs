@@ -498,9 +498,11 @@ fn pass_data_source_extents(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// `index_sets` do not join the registry until the root has CLOSED — §9.7.6
 /// site 3, "subsystem refs resolve post-close" ([`pass_staged_index_sets`]).
 ///
-/// A mounted leaf is expanded here, so its template expansions are marked here
-/// too (esm-spec §9.6.11; `MarkTemplateOrigins`), and the schema check reads
-/// the document with those marks taken off.
+/// A mounted leaf keeps its references (esm-spec §9.6.4 rule 1); they are
+/// expanded with the root's in [`pass_expand_templates`]. Any expansion mount
+/// resolution does make is marked here (esm-spec §9.6.11;
+/// `MarkTemplateOrigins`), and the schema check reads the document with those
+/// marks taken off.
 ///
 /// A refusal here carries, as its findings, the document's own mount edges
 /// that do not resolve, each at its pointer

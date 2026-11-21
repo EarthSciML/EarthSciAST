@@ -46,6 +46,7 @@ mod emit;
 mod expand;
 mod instances;
 mod mirror;
+mod mounts;
 mod refaware;
 mod rewrite;
 
@@ -54,6 +55,7 @@ pub use expand::*;
 pub(crate) use instances::canonical_compact_value;
 use instances::*;
 pub use mirror::*;
+pub(crate) use mounts::*;
 use refaware::*;
 pub use rewrite::*;
 

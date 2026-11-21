@@ -1,0 +1,49 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "mount_registry_merge",
+    "description": "esm-spec §9.6.4 rule 1 at a §4.7 subsystem mount: the mounted leaf keeps its references, and its template definitions join the mounting component's registry by flatten's registry-merge rule. Host and the mounted Leaf both declare `scale` with different bodies, so both are renamed (`Host.scale`, `Sub.scale`) and every reference follows its owner's rename: Host's own equation, Host's authored subsystem Inner (not a mount point), the leaf's `rate` body, which therefore collides too and becomes `Sub.rate`. `half` is deep-equal in both and is kept once. The leaf's bodies read its names as the parent reads them (`k` becomes `Sub.k`). The leaf's `match` rule fired in the leaf and travels materialized match-less."
+  },
+  "models": {
+    "Host": {
+      "expression_templates": {
+        "scale": {
+          "params": ["x"],
+          "body": {"op": "*", "args": [2, "x"]}
+        },
+        "half": {
+          "params": ["x"],
+          "body": {"op": "/", "args": ["x", 2]}
+        }
+      },
+      "variables": {
+        "y": {"type": "unknown", "units": "1", "default": 1.0},
+        "z": {"type": "unknown", "units": "1", "default": 2.0}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [], "name": "scale", "bindings": {"x": "y"}}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [], "name": "half", "bindings": {"x": "z"}}]}
+        }
+      ],
+      "subsystems": {
+        "Sub": {"ref": "./leaf.esm"},
+        "Inner": {
+          "variables": {
+            "w": {"type": "unknown", "units": "1", "default": 3.0}
+          },
+          "equations": [
+            {
+              "lhs": {"op": "D", "args": ["w"], "wrt": "t"},
+              "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [], "name": "scale", "bindings": {"x": "w"}}]}
+            }
+          ]
+        }
+      }
+    }
+  }
+}

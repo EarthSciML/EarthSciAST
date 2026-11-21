@@ -387,6 +387,68 @@ pub(crate) fn registry_collision_names(
     collide
 }
 
+/// Per owner path, the registry renames (old name → new name) a
+/// [`merge_flat_registry`] made.
+pub(crate) type RegistryRenames =
+    std::collections::HashMap<String, std::collections::HashMap<String, String>>;
+
+/// Merge per-owner match-less registries `blocks` (`(owner path, block)`, in
+/// document order) into one registry, by the rule flatten merges component
+/// registries with (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5
+/// step 4): entries in document order (owners as given, entries as each block
+/// declares them); deep-equal same-name entries kept once, at first occurrence;
+/// a colliding name ([`registry_collision_names`]: not deep-equal, or reaching
+/// one that is) renamed in EVERY owner to `<owner path>.<name>`, with the
+/// renamed bodies' own references following their owner's renames.
+///
+/// Returns the merged registry and each owner's renames, which the caller MUST
+/// apply to that owner's reference sites. Shared by the flattened registry
+/// ([`crate::flatten::merged_template_registry`]) and the mount hoist
+/// ([`hoist_mounted_templates`]). Mirrors the Julia reference
+/// `_merge_flat_registry`.
+pub(crate) fn merge_flat_registry(
+    blocks: &[(String, Map<String, Value>)],
+) -> (Map<String, Value>, RegistryRenames) {
+    let mut byname: Vec<(String, Vec<(String, Value)>)> = Vec::new();
+    let mut slot: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (path, block) in blocks {
+        for (name, decl) in block {
+            let i = *slot.entry(name.clone()).or_insert_with(|| {
+                byname.push((name.clone(), Vec::new()));
+                byname.len() - 1
+            });
+            byname[i].1.push((path.clone(), decl.clone()));
+        }
+    }
+    let collide = registry_collision_names(&byname);
+    let mut merged = Map::new();
+    let mut rename = RegistryRenames::new();
+    for (name, occ) in &byname {
+        if collide.contains(name) {
+            for (path, decl) in occ {
+                let newname = format!("{path}.{name}");
+                merged.insert(newname.clone(), decl.clone());
+                rename
+                    .entry(path.clone())
+                    .or_default()
+                    .insert(name.clone(), newname);
+            }
+        } else {
+            merged.insert(name.clone(), occ[0].1.clone()); // deep-equal dedup
+        }
+    }
+    // A renamed body's own nested references follow its OWNER's map, so a
+    // per-owner wrapper reaches its owner's leaf and never the other owner's.
+    for per_owner in rename.values() {
+        for new in per_owner.values() {
+            if let Some(decl) = merged.get_mut(new) {
+                rename_apply_refs(decl, per_owner);
+            }
+        }
+    }
+    (merged, rename)
+}
+
 /// The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
 /// esm-libraries-spec §4.7.5 step 4). Given an Option-B loaded multi-component
 /// document `loaded`, merge every component's `expression_templates` registry
