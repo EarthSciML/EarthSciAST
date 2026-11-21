@@ -451,6 +451,18 @@ its authored subsystem `Inner`, reads `Host.g` and `Host.Inner.g`. Goldens:
 `loaded_registry.esm` (the mounting component's registry after load), and, for
 the inline form, `inline_emitted.esm` and `inline_flattened_registry.esm`.
 
+### `mount_host_rule/` (esm-spec §9.6.3 at a §4.7 mount)
+
+A `match` rule of the mounting component fires on the content of the models it
+mounts, at any depth, as on an authored subsystem's. Host's rule `cube`
+(`cub(a) -> a*a*a`) matches the `cub` nodes in the mounted leaf Sub's equations
+(one inside the binding of Sub's surviving reference to its own `rate`), in the
+leaf Deep that Sub mounts (inside the reference Sub's own rule `twice` wrote
+there), and in the mounted leaf Bare, which declares no templates. Goldens:
+`loaded_registry.esm` (Host's registry after load: `cube` and `twice`
+materialized match-less), `flattened_registry.esm`, and `expanded.esm`
+(Expand of the load, re-emitted: every `cub` is `a*a*a`).
+
 ## Scope-directed template injection (esm-spec §9.7.10)
 
 These fixtures exercise the assembler- or test-chosen discretization for a

@@ -1,0 +1,20 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "mount_host_rule_plain_leaf",
+    "description": "A leaf mount_host_rule/fixture.esm mounts that declares no templates at all: its `cub` node is matched only by the mounting component's rule `cube`."
+  },
+  "models": {
+    "Plain": {
+      "variables": {
+        "g": {"type": "unknown", "units": "1", "default": 3.0}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["g"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "cub", "args": ["g"]}]}
+        }
+      ]
+    }
+  }
+}
