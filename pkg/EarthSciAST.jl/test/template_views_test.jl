@@ -22,7 +22,7 @@ _tv_ref(n; b...) = _tv_d(
     "op" => "apply_expression_template", "args" => Any[], "name" => n,
     "bindings" => _tv_d((String(k) => v for (k, v) in b)...)
 )
-const _TV_JOIN = Any[_tv_d("overlap" => _tv_d("src_env" => Any["src_poly"], "tgt_env" => Any["tgt_poly"], "eps" => 1e-9))]
+const _TV_JOIN = Any[_tv_d("overlap" => _tv_d("src_env" => Any["src_poly"], "tgt_env" => Any["tgt_poly"], "eps" => 1.0e-9))]
 
 # The conservative-overlap templates (EarthSciDiscretizations
 # regridding/conservative_overlap.esm), over lib/geometry.esm's planar area.
@@ -30,18 +30,30 @@ function _tv_overlap_templates()
     lib = JSON3.read(read(joinpath(pkgdir(_TV), "data", "lib", "geometry.esm"), String), Dict{String, Any})
     t = Dict{String, Any}(lib["expression_templates"])
     IJ = _tv_d("i" => _tv_d("from" => "src_cells"), "j" => _tv_d("from" => "tgt_cells"))
-    t["pairs_gated"] = _tv_d("params" => Any["src_ring", "tgt_ring", "area"], "body" => _tv_op(
-        "faq", "src_ring", "tgt_ring"; semiring = "sum_product", output_idx = Any["i", "j"], ranges = IJ,
-        join = _TV_JOIN, expr = "area"))
-    t["area_planar_ij"] = _tv_d("params" => Any["src_poly", "tgt_poly", "src_nv", "tgt_nv"], "body" => _tv_ref(
-        "overlap_area_planar"; ring_a = "src_poly", cell_a = "i", nv_a = "src_nv", ring_b = "tgt_poly", cell_b = "j", nv_b = "tgt_nv"))
-    t["A_ij_gated_planar"] = _tv_d("params" => Any["src_poly", "tgt_poly", "src_nv", "tgt_nv"], "body" => _tv_ref(
-        "pairs_gated"; src_ring = "src_poly", tgt_ring = "tgt_poly",
-        area = _tv_ref("area_planar_ij"; src_poly = "src_poly", tgt_poly = "tgt_poly", src_nv = "src_nv", tgt_nv = "tgt_nv")))
-    t["apply_gated"] = _tv_d("params" => Any["A_ij", "A_j", "F_src", "src_poly", "tgt_poly", "atol"], "body" => _tv_op(
-        "faq", "A_ij", "A_j", "F_src", "src_poly", "tgt_poly"; semiring = "sum_product", output_idx = Any["j"], ranges = IJ,
-        join = _TV_JOIN, filter = _tv_op(">", _tv_ix("A_ij", "i", "j"), "atol"),
-        expr = _tv_op("/", _tv_op("*", _tv_ix("A_ij", "i", "j"), _tv_ix("F_src", "i")), _tv_ix("A_j", "j"))))
+    t["pairs_gated"] = _tv_d(
+        "params" => Any["src_ring", "tgt_ring", "area"], "body" => _tv_op(
+            "faq", "src_ring", "tgt_ring"; semiring = "sum_product", output_idx = Any["i", "j"], ranges = IJ,
+            join = _TV_JOIN, expr = "area"
+        )
+    )
+    t["area_planar_ij"] = _tv_d(
+        "params" => Any["src_poly", "tgt_poly", "src_nv", "tgt_nv"], "body" => _tv_ref(
+            "overlap_area_planar"; ring_a = "src_poly", cell_a = "i", nv_a = "src_nv", ring_b = "tgt_poly", cell_b = "j", nv_b = "tgt_nv"
+        )
+    )
+    t["A_ij_gated_planar"] = _tv_d(
+        "params" => Any["src_poly", "tgt_poly", "src_nv", "tgt_nv"], "body" => _tv_ref(
+            "pairs_gated"; src_ring = "src_poly", tgt_ring = "tgt_poly",
+            area = _tv_ref("area_planar_ij"; src_poly = "src_poly", tgt_poly = "tgt_poly", src_nv = "src_nv", tgt_nv = "tgt_nv")
+        )
+    )
+    t["apply_gated"] = _tv_d(
+        "params" => Any["A_ij", "A_j", "F_src", "src_poly", "tgt_poly", "atol"], "body" => _tv_op(
+            "faq", "A_ij", "A_j", "F_src", "src_poly", "tgt_poly"; semiring = "sum_product", output_idx = Any["j"], ranges = IJ,
+            join = _TV_JOIN, filter = _tv_op(">", _tv_ix("A_ij", "i", "j"), "atol"),
+            expr = _tv_op("/", _tv_op("*", _tv_ix("A_ij", "i", "j"), _tv_ix("F_src", "i")), _tv_ix("A_j", "j"))
+        )
+    )
     return t
 end
 
@@ -54,7 +66,7 @@ function _tv_overlap_doc(ntracers)
         "tgt_poly" => _tv_d("type" => "unknown", "shape" => Any["tgt_cells", "verts", "coord"]),
         "A_ij" => _tv_d("type" => "unknown", "shape" => Any["src_cells", "tgt_cells"]),
         "A_full" => _tv_d("type" => "unknown", "shape" => Any["tgt_cells"]),
-        "atol" => _tv_d("type" => "parameter", "default" => 1e-12),
+        "atol" => _tv_d("type" => "parameter", "default" => 1.0e-12),
     )
     eqs = Any[
         _tv_d("lhs" => "src_poly", "rhs" => _tv_op("const"; value = _tv_rings([(0.0, 0.0, 1.0, 1.0), (1.0, 0.0, 2.0, 1.0), (0.0, 1.0, 1.0, 2.0), (1.0, 1.0, 2.0, 2.0)]))),
@@ -68,18 +80,28 @@ function _tv_overlap_doc(ntracers)
         vars[v] = _tv_d("type" => "unknown", "shape" => Any["tgt_cells"], "default" => 0.5)
         vars[E] = _tv_d("type" => "unknown", "shape" => Any["tgt_cells"])
         push!(eqs, _tv_d("lhs" => E, "rhs" => _tv_ref("apply_gated"; A_ij = "A_ij", A_j = "A_full", F_src = u, src_poly = "src_poly", tgt_poly = "tgt_poly", atol = "atol")))
-        push!(eqs, _tv_d(
-            "lhs" => _tv_op("faq"; output_idx = Any["i"], ranges = _tv_d("i" => S), expr = _tv_op("D", _tv_ix(u, "i"); wrt = "t")),
-            "rhs" => _tv_op("faq"; output_idx = Any["i"], ranges = _tv_d("i" => S), expr = _tv_op("*", -0.1, _tv_ix(u, "i")))))
-        push!(eqs, _tv_d(
-            "lhs" => _tv_op("faq"; output_idx = Any["j"], ranges = _tv_d("j" => T), expr = _tv_op("D", _tv_ix(v, "j"); wrt = "t")),
-            "rhs" => _tv_op("faq", E; output_idx = Any["j"], ranges = _tv_d("j" => T), expr = _tv_op("-", _tv_ix(E, "j"), _tv_ix(v, "j")))))
+        push!(
+            eqs, _tv_d(
+                "lhs" => _tv_op("faq"; output_idx = Any["i"], ranges = _tv_d("i" => S), expr = _tv_op("D", _tv_ix(u, "i"); wrt = "t")),
+                "rhs" => _tv_op("faq"; output_idx = Any["i"], ranges = _tv_d("i" => S), expr = _tv_op("*", -0.1, _tv_ix(u, "i")))
+            )
+        )
+        push!(
+            eqs, _tv_d(
+                "lhs" => _tv_op("faq"; output_idx = Any["j"], ranges = _tv_d("j" => T), expr = _tv_op("D", _tv_ix(v, "j"); wrt = "t")),
+                "rhs" => _tv_op("faq", E; output_idx = Any["j"], ranges = _tv_d("j" => T), expr = _tv_op("-", _tv_ix(E, "j"), _tv_ix(v, "j")))
+            )
+        )
     end
     model = _tv_d("variables" => vars, "equations" => eqs, "expression_templates" => _tv_overlap_templates())
-    return _tv_d("esm" => "2.0.0", "metadata" => _tv_d("name" => "tv_overlap"),
-        "index_sets" => _tv_d("src_cells" => _tv_d("kind" => "interval", "size" => 4), "tgt_cells" => _tv_d("kind" => "interval", "size" => 3),
-            "verts" => _tv_d("kind" => "interval", "size" => 4), "coord" => _tv_d("kind" => "interval", "size" => 2)),
-        "models" => _tv_d("M" => model))
+    return _tv_d(
+        "esm" => "2.0.0", "metadata" => _tv_d("name" => "tv_overlap"),
+        "index_sets" => _tv_d(
+            "src_cells" => _tv_d("kind" => "interval", "size" => 4), "tgt_cells" => _tv_d("kind" => "interval", "size" => 3),
+            "verts" => _tv_d("kind" => "interval", "size" => 4), "coord" => _tv_d("kind" => "interval", "size" => 2)
+        ),
+        "models" => _tv_d("M" => model)
+    )
 end
 
 # `du` by state name at a perturbed initial state, and the build's counts.

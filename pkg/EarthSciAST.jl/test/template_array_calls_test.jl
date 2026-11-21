@@ -158,33 +158,45 @@ function _ta_elem_document(tracers)
     tpl = Dict{String, Any}(
         # Interior flux and the two boundary rows: the same arithmetic over
         # different cells (one compiled body for all three).
-        "flux" => Dict("params" => Any["q", "U"], "body" => Dict(
-            "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => Dict("i" => Any[2, N - 1]),
-            "expr" => _ta_op("*", ix("U", "i"), _ta_op("-", ix("q", _ta_op("+", "i", 1)), ix("q", _ta_op("-", "i", 1)))),
-        )),
-        "flux_w" => Dict("params" => Any["q", "U", "qbc"], "body" => Dict(
-            "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => Dict("i" => Any[1, 1]),
-            "expr" => _ta_op("*", ix("U", "i"), _ta_op("-", ix("q", 2), ix("qbc", 1))),
-        )),
-        "flux_e" => Dict("params" => Any["q", "U", "qbc"], "body" => Dict(
-            "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => Dict("i" => Any[N, N]),
-            "expr" => _ta_op("*", ix("U", "i"), _ta_op("-", ix("qbc", 1), ix("q", N - 1))),
-        )),
+        "flux" => Dict(
+            "params" => Any["q", "U"], "body" => Dict(
+                "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => Dict("i" => Any[2, N - 1]),
+                "expr" => _ta_op("*", ix("U", "i"), _ta_op("-", ix("q", _ta_op("+", "i", 1)), ix("q", _ta_op("-", "i", 1)))),
+            )
+        ),
+        "flux_w" => Dict(
+            "params" => Any["q", "U", "qbc"], "body" => Dict(
+                "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => Dict("i" => Any[1, 1]),
+                "expr" => _ta_op("*", ix("U", "i"), _ta_op("-", ix("q", 2), ix("qbc", 1))),
+            )
+        ),
+        "flux_e" => Dict(
+            "params" => Any["q", "U", "qbc"], "body" => Dict(
+                "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => Dict("i" => Any[N, N]),
+                "expr" => _ta_op("*", ix("U", "i"), _ta_op("-", ix("qbc", 1), ix("q", N - 1))),
+            )
+        ),
         # A whole-array observed of an array-valued template.
-        "ramp" => Dict("params" => Any[], "body" => Dict(
-            "op" => "faq", "args" => Any[], "output_idx" => Any["g"], "ranges" => Dict("g" => Any[1, N]),
-            "expr" => _ta_op("*", 0.01, "g"),
-        )),
+        "ramp" => Dict(
+            "params" => Any[], "body" => Dict(
+                "op" => "faq", "args" => Any[], "output_idx" => Any["g"], "ranges" => Dict("g" => Any[1, N]),
+                "expr" => _ta_op("*", 0.01, "g"),
+            )
+        ),
         # A reduction over its array argument, called by `outer`, which
         # passes its own array argument on and reads it on one arm only.
-        "colsum" => Dict("params" => Any["a", "w"], "body" => Dict(
-            "op" => "faq", "args" => Any[], "output_idx" => Any[], "ranges" => Dict("m" => Any[1, N]),
-            "expr" => _ta_op("*", ix("w", "m"), ix("a", "m")),
-        )),
-        "outer" => Dict("params" => Any["q", "w", "c"], "body" => _ta_op(
-            "+", _ta_ref("colsum", Dict("a" => "q", "w" => "w")),
-            _ta_op("ifelse", _ta_op(">", "c", 0.5), ix("q", 2), _ta_op("*", 2.0, ix("q", 3)))
-        )),
+        "colsum" => Dict(
+            "params" => Any["a", "w"], "body" => Dict(
+                "op" => "faq", "args" => Any[], "output_idx" => Any[], "ranges" => Dict("m" => Any[1, N]),
+                "expr" => _ta_op("*", ix("w", "m"), ix("a", "m")),
+            )
+        ),
+        "outer" => Dict(
+            "params" => Any["q", "w", "c"], "body" => _ta_op(
+                "+", _ta_ref("colsum", Dict("a" => "q", "w" => "w")),
+                _ta_op("ifelse", _ta_op(">", "c", 0.5), ix("q", 2), _ta_op("*", 2.0, ix("q", 3)))
+            )
+        ),
         # Reads `x` on one arm only: a compound binding is part of the instance.
         "pick" => Dict("params" => Any["c", "x"], "body" => _ta_op("ifelse", _ta_op(">", "c", 0.5), _ta_op("^", "x", 2), 0.0)),
     )
@@ -213,11 +225,15 @@ function _ta_elem_document(tracers)
             _ta_op("*", 1.0e-3, _ta_ref("pick", Dict("c" => "kc", "x" => _ta_op("+", _ta_op("*", "kc", 2.0), "i")))),
             ix("r", "i")
         )
-        push!(eqs, Dict(
-            "lhs" => Dict("op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]),
-                "expr" => Dict("op" => "D", "args" => Any[ix(q, "i")], "wrt" => "t")),
-            "rhs" => Dict("op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]), "expr" => rhs),
-        ))
+        push!(
+            eqs, Dict(
+                "lhs" => Dict(
+                    "op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]),
+                    "expr" => Dict("op" => "D", "args" => Any[ix(q, "i")], "wrt" => "t")
+                ),
+                "rhs" => Dict("op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]), "expr" => rhs),
+            )
+        )
     end
     return Dict(
         "esm" => "2.0.0", "metadata" => Dict("name" => "template_element_calls_1d"),
@@ -260,24 +276,34 @@ function _ta_inner_elem_document(tracers)
     N = _TA_N
     ix(a, s...) = _ta_op("index", a, s...)
     tpl = Dict{String, Any}(
-        "sm" => Dict("params" => Any["q"], "body" => Dict(
-            "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => Dict("i" => Any[1, N]),
-            "expr" => _ta_op("*", 0.5, _ta_op("+", ix("q", _ta_op("-", "i", 1)), ix("q", _ta_op("+", "i", 1)))),
-        )),
-        "useelem" => Dict("params" => Any["q", "c"], "body" => _ta_op(
-            "*", "c", _ta_op("-", ix(_ta_ref("sm", Dict("q" => "q")), "i"), ix("q", "i"))
-        )),
+        "sm" => Dict(
+            "params" => Any["q"], "body" => Dict(
+                "op" => "faq", "args" => Any[], "output_idx" => Any["i"], "ranges" => Dict("i" => Any[1, N]),
+                "expr" => _ta_op("*", 0.5, _ta_op("+", ix("q", _ta_op("-", "i", 1)), ix("q", _ta_op("+", "i", 1)))),
+            )
+        ),
+        "useelem" => Dict(
+            "params" => Any["q", "c"], "body" => _ta_op(
+                "*", "c", _ta_op("-", ix(_ta_ref("sm", Dict("q" => "q")), "i"), ix("q", "i"))
+            )
+        ),
     )
     vars = Dict{String, Any}("kc" => Dict("type" => "parameter", "units" => "1", "default" => 0.7))
     eqs = Any[]
     for (n, q) in enumerate(tracers)
         vars[q] = Dict("type" => "unknown", "units" => "1", "shape" => Any["x"], "default" => 1.0 + 0.1 * n)
-        push!(eqs, Dict(
-            "lhs" => Dict("op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]),
-                "expr" => Dict("op" => "D", "args" => Any[ix(q, "i")], "wrt" => "t")),
-            "rhs" => Dict("op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]),
-                "expr" => _ta_op("-", _ta_ref("useelem", Dict("q" => q, "c" => "kc")), _ta_op("*", 0.05, ix(q, "i")))),
-        ))
+        push!(
+            eqs, Dict(
+                "lhs" => Dict(
+                    "op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]),
+                    "expr" => Dict("op" => "D", "args" => Any[ix(q, "i")], "wrt" => "t")
+                ),
+                "rhs" => Dict(
+                    "op" => "faq", "output_idx" => Any["i"], "args" => Any[], "ranges" => Dict("i" => Any[1, N]),
+                    "expr" => _ta_op("-", _ta_ref("useelem", Dict("q" => q, "c" => "kc")), _ta_op("*", 0.05, ix(q, "i")))
+                ),
+            )
+        )
     end
     return Dict(
         "esm" => "2.0.0", "metadata" => Dict("name" => "template_inner_element_calls_1d"),
@@ -320,10 +346,12 @@ end
 # no structural parameter left.
 @testset "structural parameters: one template per structural value" begin
     reg = EarthSciAST.OrderedDict{String, Any}(
-        "ramp" => Dict{String, Any}("params" => Any["n", "s"], "body" => Dict{String, Any}(
-            "op" => "faq", "args" => Any[], "output_idx" => Any["n"], "ranges" => Dict{String, Any}("n" => Any[1, 4]),
-            "expr" => _ta_op("*", "s", "n")
-        )),
+        "ramp" => Dict{String, Any}(
+            "params" => Any["n", "s"], "body" => Dict{String, Any}(
+                "op" => "faq", "args" => Any[], "output_idx" => Any["n"], "ranges" => Dict{String, Any}("n" => Any[1, 4]),
+                "expr" => _ta_op("*", "s", "n")
+            )
+        ),
     )
     tt = EarthSciAST._TplTable(reg)
     @test EarthSciAST._tpl_def(tt, "ramp").structural == ["n"]

@@ -1432,6 +1432,7 @@ function _cg_shared_reads!(stmts::Vector{Any}, ctx::_CGFunction, kc::_CGKernCtx)
         for c in n.children
             walk(c, r)
         end
+        return
     end
     walk(K.spine, false)
     for r in K.cse.recipes
