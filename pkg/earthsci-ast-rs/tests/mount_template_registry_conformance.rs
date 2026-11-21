@@ -229,3 +229,62 @@ fn mount_shared_definition_reads_each_sites_own_names() {
         json!({"op": "-", "args": [{"op": "*", "args": ["g", "w"]}]})
     );
 }
+
+/// Number-tolerant structural equality (Julia writes an integral float in an
+/// operand position as an integer).
+fn json_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|w| json_eq(v, w)))
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(v, w)| json_eq(v, w))
+        }
+        _ => a == b,
+    }
+}
+
+/// esm-spec §9.6.3: Host's `match` rule `cube` fires on the content of the
+/// models Host mounts, at any depth (Sub, Sub's own mount Deep, and Bare,
+/// which declares no templates), as on an authored subsystem's.
+#[test]
+fn mount_host_rule_fires_in_the_mounted_content() {
+    let c = "mount_host_rule";
+    assert_eq!(
+        loaded_registry(c, "fixture.esm"),
+        read(c, "loaded_registry.esm")
+    );
+    assert_eq!(
+        flattened_registry(c, "fixture.esm"),
+        read(c, "flattened_registry.esm")
+    );
+    let golden: Value = serde_json::from_str(&read(c, "expanded.esm")).expect("parse golden");
+    let value = expanded_value(c, "fixture.esm");
+    assert!(
+        json_eq(&value, &golden),
+        "Expand of the mounted document != expanded.esm:\n{}",
+        serde_json::to_string_pretty(&value).unwrap()
+    );
+    // Expand of the typed load gives the same document.
+    let file = load_path(dir(c).join("fixture.esm")).expect("load");
+    let mut loaded: Value =
+        serde_json::from_str(&earthsci_ast::to_json(&file).expect("save")).expect("parse");
+    expand(&mut loaded).expect("expand");
+    assert!(
+        json_eq(&loaded["models"], &golden["models"]),
+        "Expand of the load != expanded.esm:\n{}",
+        serde_json::to_string_pretty(&loaded["models"]).unwrap()
+    );
+    let n = du(&file);
+    let expanded = load_string(&value.to_string()).expect("load expanded");
+    assert_eq!(n, du(&expanded));
+    assert_eq!(n["Host.y"], -(1.5f64.powi(3)));
+    assert_eq!(n["Host.Sub.c"], -1.0);
+    assert_eq!(n["Host.Sub.d"], -1.0);
+    assert_eq!(n["Host.Sub.e"], -(0.25 * 8.0));
+    assert_eq!(n["Host.Sub.Deep.h"], -(2.0 * 0.125));
+    assert_eq!(n["Host.Bare.g"], -27.0);
+}

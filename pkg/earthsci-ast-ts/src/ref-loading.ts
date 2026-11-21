@@ -1678,6 +1678,7 @@ function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<stri
   if (mountingComponents.size === 0) return
   const sidecars = file as {
     componentTemplates?: Record<string, unknown>
+    componentRules?: Record<string, Record<string, unknown>>
     authoredTemplateNames?: Record<string, string[]>
   }
   const root = file as unknown as Record<string, unknown>
@@ -1697,6 +1698,17 @@ function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<stri
     const work: Record<string, unknown> = { ...comp }
     if (own !== undefined) work.expression_templates = deepClone(own)
     else delete work.expression_templates
+    // The component's `match` rules fire on the content it mounts as on its
+    // own (esm-spec §9.6.3), including a rule its own content already
+    // referenced, which the snapshot holds materialized match-less.
+    const rules = sidecars.componentRules?.[key]
+    const rulesRestored = rules !== undefined && Object.keys(rules).length > 0
+    if (rulesRestored) {
+      work.expression_templates = {
+        ...(isPlainObject(work.expression_templates) ? work.expression_templates : {}),
+        ...deepClone(rules),
+      }
+    }
     const rn = hoistMountedTemplates(work, name)
     const block = work.expression_templates
     if (!isPlainObject(block) || Object.keys(block).length === 0) {
@@ -1715,7 +1727,7 @@ function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<stri
     const lowered = lowerExpressionTemplates(single)
     // The registry the component now carries, when mounted definitions joined
     // it (or it is a top-level mount, whose block the load never captured).
-    if (rn !== undefined || !isPlainObject(snapshot)) {
+    if (rn !== undefined || rulesRestored || !isPlainObject(snapshot)) {
       const lcomp = (lowered[section] as Record<string, unknown>)[name] as Record<string, unknown>
       const roots = isPlainObject(snapshot)
         ? Object.keys(snapshot)

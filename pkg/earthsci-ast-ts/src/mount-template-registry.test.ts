@@ -19,6 +19,7 @@ import { fixturesDir } from './test-helpers.js'
 import { loadPath } from './parse.js'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
 import { flatten } from './flatten.js'
+import { toJson } from './serialize.js'
 import type { EsmFile } from './types.js'
 
 const conf = (...parts: string[]) => fixturesDir('conformance', 'expression_templates', ...parts)
@@ -129,5 +130,20 @@ describe('mounted template registries (esm-spec §9.6.4 rule 1)', () => {
     expect(rhsOf(host, 'y')).toEqual({ op: '-', args: [{ op: '*', args: [2, 'y'] }] })
     expect(rhsOf(host, 'z')).toEqual({ op: '-', args: [{ op: '*', args: ['g', 'z'] }] })
     expect(rhsOf(subs.Inner!, 'w')).toEqual({ op: '-', args: [{ op: '*', args: ['g', 'w'] }] })
+  })
+
+  it("mount_host_rule: the mounting component's rule fires in its mounts", () => {
+    // esm-spec §9.6.3: Host's `match` rule `cube` fires on the content of the
+    // models Host mounts, at any depth (Sub, Sub's own mount Deep, and Bare,
+    // which declares no templates), as on an authored subsystem's.
+    expect(loadedRegistry('mount_host_rule', 'fixture.esm')).toBe(
+      golden('mount_host_rule', 'loaded_registry.esm'),
+    )
+    expect(flatRegistry('mount_host_rule', 'fixture.esm')).toBe(
+      golden('mount_host_rule', 'flattened_registry.esm'),
+    )
+    expect(JSON.parse(toJson(load('mount_host_rule', 'fixture.esm')))).toEqual(
+      JSON.parse(golden('mount_host_rule', 'expanded.esm')),
+    )
   })
 })

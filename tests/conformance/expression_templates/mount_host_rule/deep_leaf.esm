@@ -1,0 +1,20 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "mount_host_rule_deep_leaf",
+    "description": "The leaf mount_host_rule/leaf.esm mounts in turn. It declares no templates; its one equation holds a `dbl` node (matched by the rule `twice` of the leaf that mounts it) around a `cub` node (matched by the rule `cube` of the component two mounts up)."
+  },
+  "models": {
+    "Deep": {
+      "variables": {
+        "h": {"type": "unknown", "units": "1", "default": 0.5}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["h"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "dbl", "args": [{"op": "cub", "args": ["h"]}]}]}
+        }
+      ]
+    }
+  }
+}

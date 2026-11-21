@@ -107,7 +107,9 @@ class TestMountSharedDefinition:
         from earthsci_ast.serialize import _serialize_expression
 
         host = load_path(_p(self.case, "fixture.esm")).models["Host"]
-        sub1 = json.dumps([_serialize_expression(eq.rhs) for eq in host.subsystems["Sub1"].equations])
+        sub1 = json.dumps(
+            [_serialize_expression(eq.rhs) for eq in host.subsystems["Sub1"].equations]
+        )
         assert '"k"' in sub1
         inner = json.dumps(
             [_serialize_expression(eq.rhs) for eq in host.subsystems["Inner"].equations]
@@ -133,3 +135,63 @@ class TestMountSharedDefinition:
         assert du["Host.y"] == -2.0
         assert du["Host.z"] == -1.0
         assert du["Host.Inner.w"] == -9.0
+
+
+class TestMountHostRule:
+    """esm-spec §9.6.3: a `match` rule of the mounting component fires on the
+    content of the models it mounts, at any depth (Sub, Sub's own mount Deep,
+    and Bare, which declares no templates)."""
+
+    case = "mount_host_rule"
+
+    def test_loaded_registry(self):
+        assert _loaded(_p(self.case, "fixture.esm")) == _golden(self.case, "loaded_registry.esm")
+
+    def test_flattened_registry(self):
+        assert _flat(_p(self.case, "fixture.esm")) == _golden(self.case, "flattened_registry.esm")
+
+    def test_expanded(self):
+        from earthsci_ast.serialize import _serialize_esm_file
+
+        got = _serialize_esm_file(load_path(_p(self.case, "fixture.esm")))
+        assert got == json.loads(_golden(self.case, "expanded.esm"))
+
+    def test_values(self):
+        du = _du(_p(self.case, "fixture.esm"))
+        assert du["Host.y"] == -(1.5**3)
+        assert du["Host.Sub.c"] == -1.0
+        assert du["Host.Sub.d"] == -1.0
+        assert du["Host.Sub.e"] == -(0.25 * 2.0**3)
+        assert du["Host.Sub.Deep.h"] == -(2 * 0.5**3)
+        assert du["Host.Bare.g"] == -(3.0**3)
+
+    def test_leaf_rule_fires_in_its_mount_under_a_host_without_rules(self, tmp_path):
+        """The leaf's own rule `twice` fires on Deep's content when the leaf is
+        mounted under a component that declares no rule."""
+        from earthsci_ast.serialize import _serialize_expression
+
+        doc = {
+            "esm": "2.0.0",
+            "metadata": {"name": "plain_host"},
+            "models": {
+                "Top": {
+                    "variables": {"q": {"type": "unknown", "units": "1", "default": 1.0}},
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["q"], "wrt": "t"},
+                            "rhs": {"op": "-", "args": ["q"]},
+                        }
+                    ],
+                    "subsystems": {"Sub": {"ref": _p(self.case, "leaf.esm")}},
+                }
+            },
+        }
+        p = tmp_path / "top.esm"
+        p.write_text(json.dumps(doc), encoding="utf-8")
+        deep = load_path(str(p)).models["Top"].subsystems["Sub"].subsystems["Deep"]
+        assert _serialize_expression(deep.equations[0].rhs) == {
+            "op": "-",
+            "args": [
+                {"op": "+", "args": [{"op": "cub", "args": ["h"]}, {"op": "cub", "args": ["h"]}]}
+            ],
+        }

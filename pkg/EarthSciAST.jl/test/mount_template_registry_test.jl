@@ -75,4 +75,28 @@ end
             @test n["Host.Sub.c"] == -(0.25 * 3.0 * 1.0)
         end
     end
+
+    @testset "mount_host_rule: the mounting component's rule fires in its mounts" begin
+        # esm-spec §9.6.3: Host's `match` rule `cube` fires on the content of
+        # the models Host mounts, at any depth (Sub, Sub's own mount Deep, and
+        # Bare, which declares no templates), as on an authored subsystem's.
+        d = "mount_host_rule"
+        p = _mtr(d, "fixture.esm")
+        @test _mtr_loaded(p) == read(_mtr(d, "loaded_registry.esm"), String)
+        @test _mtr_flat(p) == read(_mtr(d, "flattened_registry.esm"), String)
+        file = EarthSciAST.load_path(p)
+        @test EarthSciAST.emit_esm_string(EarthSciAST.serialize_esm_file(EarthSciAST.expanded_file(file))) ==
+            read(_mtr(d, "expanded.esm"), String)
+        sub = file.models["Host"].subsystems["Sub"]
+        @test sub.equations[1].rhs.args[1].op == "apply_expression_template"
+        @test sub.equations[1].rhs.args[1].name == "cube"
+        n = _mtr_du(file)
+        @test n == _mtr_du(EarthSciAST.expanded_file(file))
+        @test n["Host.y"] == -(1.5^3)
+        @test n["Host.Sub.c"] == -1.0
+        @test n["Host.Sub.d"] == -1.0
+        @test n["Host.Sub.e"] == -(0.25 * 2.0^3)
+        @test n["Host.Sub.Deep.h"] == -(2 * 0.5^3)
+        @test n["Host.Bare.g"] == -(3.0^3)
+    end
 end

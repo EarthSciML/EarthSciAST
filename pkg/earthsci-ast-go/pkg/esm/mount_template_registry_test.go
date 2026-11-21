@@ -230,3 +230,15 @@ func TestMountRegistryMergeTypedPath(t *testing.T) {
 		t.Error("the mounted Sub still carries its block after the merge")
 	}
 }
+
+// mount_host_rule (esm-spec §9.6.3): Host's `match` rule `cube` fires on the
+// content of the models Host mounts, at any depth (Sub, Sub's own mount Deep,
+// and Bare, which declares no templates), as on an authored subsystem's.
+func TestMountHostRule(t *testing.T) {
+	d := "mount_host_rule"
+	p := mtrPath(d, "fixture.esm")
+	file, loaded := mtrLoaded(t, p)
+	mtrCompare(t, "loaded registry of models.Host", loaded, mtrGolden(t, d, "loaded_registry.esm"))
+	mtrCompare(t, "flattened registry", mtrFlat(t, p), mtrGolden(t, d, "flattened_registry.esm"))
+	siCompareSansMetadata(t, file, mtrPath(d, "expanded.esm"))
+}
