@@ -607,21 +607,22 @@ fn flatten_registry_merge_transitive_collisions_propagate() {
 
 // ---------------------------------------------------------------------------
 // flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7, §10.7):
-// the SCOPING PRECONDITION, pinned. Two byte-identical models import the same
-// rule library; `interior_stencil`'s body references the free name `inv_dx`,
-// which is a model-local parameter and so denotes a DIFFERENT variable in each.
+// the CLOSING PRECONDITION, with both halves pinned side by side. Two
+// byte-identical models import the same rule library; `interior_stencil`'s
+// body references the free name `inv_dx`, which is a model-local parameter and
+// so denotes a DIFFERENT variable in each.
 //
-// `flatten_template_registries` is the UNION half only, over the un-namespaced
-// component view: identical bodies dedupe under their bare names, and the pair
-// it returns is self-consistent with the un-namespaced document. Rust reaches
-// this surface only from conformance — `parse` runs Expand-at-build (§9.6.4
-// rule 2) so the typed IR never carries a surviving reference and
-// `FlattenedSystem` carries no registry, which is why no scoping step exists
-// here and none is required (§10.7, "Applicability across bindings"). The Julia
-// twin of this test also pins the scoping∘merge composition, which its
-// reference-preserving `flatten` does carry; if Rust ever grows that path it
-// inherits the obligation, and this test is what will fail if the merge is fed
-// unscoped bodies from it.
+// - `flatten_template_registries` is the UNION half only, over the
+//   un-namespaced component view: identical bodies dedupe under their bare
+//   names, and the bodies keep their free `inv_dx`.
+// - the executing `flatten` composes the §10.7 CLOSING with that merge:
+//   `inv_dx` becomes a parameter of `interior_stencil` (and, through the
+//   nested references, of `outer_stencil` and `d_x_rule`), which each model's
+//   references bind to its own `A.inv_dx` / `B.inv_dx`. The closed bodies are
+//   identical and are kept once, correct for both models. (This binding
+//   expands every reference at load, so its flattened equations carry no
+//   reference whose bindings could be checked; the Julia twin of this test
+//   checks them.)
 // ---------------------------------------------------------------------------
 #[test]
 fn flatten_registry_merge_is_the_union_half_only() {
@@ -655,6 +656,28 @@ fn flatten_registry_merge_is_the_union_half_only() {
         !body.contains("A.inv_dx") && !body.contains("B.inv_dx"),
         "{body}"
     );
+
+    // closing ∘ merge: one closed entry per template, `inv_dx` a parameter of
+    // each.
+    let flat = earthsci_ast::flatten(
+        &earthsci_ast::load_path(
+            conf("flatten_registry_merge_transitive").join("fixture_twins.esm"),
+        )
+        .expect("load"),
+    )
+    .expect("flatten");
+    let keys: std::collections::HashSet<&str> =
+        flat.template_registry.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["interior_stencil", "outer_stencil", "d_x_rule"]
+            .into_iter()
+            .collect()
+    );
+    for (name, decl) in &flat.template_registry {
+        let params = decl["params"].as_array().expect("params");
+        assert!(params.iter().any(|p| p == "inv_dx"), "{name}: {decl}");
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1134,8 +1134,8 @@ fn compile_branch<'c>(
 /// Both names are IMPLICITLY DECLARED in every model's expression scope
 /// (§4.9.1), and every consumer in this crate resolves them by name BEFORE it
 /// consults the loop bindings: `simulate_array/eval.rs::lookup_variable` and
-/// `lookup_array_ref`, the two `tape/lower.rs` sites, `units.rs`, `simulate/resolve.rs`, and the scoping walkers
-/// `flatten.rs::namespace_expr_scoped` / `scope_template_body`
+/// `lookup_array_ref`, the two `tape/lower.rs` sites, `units.rs`, `simulate/resolve.rs`, and the scoping walker
+/// `flatten.rs::namespace_expr_scoped`
 /// (`if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name)`). A
 /// `ranges` key or `output_idx` entry spelled with one of those names therefore
 /// declares a loop the body can never address: every read of the symbol inside

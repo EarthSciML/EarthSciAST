@@ -1,9 +1,6 @@
 use super::*;
 
-use std::collections::{HashMap, HashSet};
-
-use crate::binders::Binders;
-use crate::types::Expr;
+use std::collections::HashMap;
 
 // ===========================================================================
 // Template definitions across a §4.7 mount edge (esm-spec §9.6.4 rule 1)
@@ -59,94 +56,6 @@ fn has_apply_op(v: &Value) -> bool {
     let mut names = Vec::new();
     collect_apply_names(v, &mut names);
     !names.is_empty()
-}
-
-/// For each template of `block`, the loop symbols its body binds (`output_idx`
-/// entries, `ranges` keys, `integral` variables). Template application is
-/// substitution, so a name in a reference's binding value that the body binds
-/// is that loop index once substituted, not a variable of the component.
-/// Mirrors the Julia reference `template_captures`.
-pub(crate) fn template_captures(block: &Map<String, Value>) -> HashMap<String, HashSet<String>> {
-    fn walk(e: &Expr, out: &mut HashSet<String>) {
-        if let Expr::Operator(node) = e {
-            node.for_each_binder(Binders::SCOPE, |n| {
-                out.insert(n.to_string());
-            });
-            node.for_each_child(&mut |c| walk(c, out));
-        }
-    }
-    let mut out = HashMap::new();
-    for (name, decl) in block {
-        let Some(body) = decl.get("body") else {
-            continue;
-        };
-        let Ok(body) = serde_json::from_value::<Expr>(body.clone()) else {
-            continue;
-        };
-        let mut bound = HashSet::new();
-        walk(&body, &mut bound);
-        if !bound.is_empty() {
-            out.insert(name.clone(), bound);
-        }
-    }
-    out
-}
-
-/// The mounted model `sub`'s match-less definitions with each body's free
-/// names of `sub` (its variables, species, parameters and subsystems — not the
-/// template's parameters) written as its parent reads them, `path.name`.
-/// Mirrors the Julia reference `_mounted_block_as_read_from_parent`.
-fn mounted_block_as_read_from_parent(sub: &Map<String, Value>, path: &str) -> Map<String, Value> {
-    let Some(Value::Object(block)) = sub.get("expression_templates") else {
-        return Map::new();
-    };
-    let mut local_names: HashSet<String> = HashSet::new();
-    for key in ["variables", "species", "parameters", "subsystems"] {
-        match sub.get(key) {
-            Some(Value::Object(o)) => local_names.extend(o.keys().cloned()),
-            Some(Value::Array(a)) => local_names.extend(
-                a.iter()
-                    .filter_map(|x| x.get("name").and_then(Value::as_str))
-                    .map(str::to_string),
-            ),
-            _ => {}
-        }
-    }
-    let captures = template_captures(block);
-    let mut out = Map::new();
-    for (name, decl) in block {
-        if decl.get("match").is_some() {
-            continue;
-        }
-        let Some(body) = decl.get("body") else {
-            out.insert(name.clone(), decl.clone());
-            continue;
-        };
-        let params: HashSet<&str> = decl
-            .get("params")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        let locals: HashSet<String> = local_names
-            .iter()
-            .filter(|n| !params.contains(n.as_str()))
-            .cloned()
-            .collect();
-        // A body that is not an Expression is carried verbatim, as flatten's
-        // registry scoping carries it.
-        let scoped = serde_json::from_value::<Expr>(body.clone())
-            .ok()
-            .map(|e| {
-                crate::flatten::scope_template_body(&e, path, &locals, &HashSet::new(), &captures)
-            })
-            .and_then(|e| serde_json::to_value(&e).ok());
-        let mut nd = decl.clone();
-        if let (Some(scoped), Some(obj)) = (scoped, nd.as_object_mut()) {
-            obj.insert("body".to_string(), scoped);
-        }
-        out.insert(name.clone(), nd);
-    }
-    out
 }
 
 /// The subsystems below `node` that carry a template block — a mount point,
@@ -223,16 +132,19 @@ fn rename_outside_mounts(node: &mut Map<String, Value>, rn: &HashMap<String, Str
 /// definitions that models mounted as its subsystems (esm-spec §4.7) brought
 /// with them (esm-spec §9.6.4 rule 1). Each mounted block joins `comp`'s by
 /// flatten's registry-merge rule ([`merge_flat_registry`]): deep-equal entries
-/// are kept once, and a name two non-equal entries share is renamed in every
-/// owner to `<owner path>.<name>`, with that owner's references renamed in
-/// lockstep. The owner path of `comp`'s own entries is `cname`, of a mounted
-/// block its subsystem path below `comp` (`Sub` or `Sub.Inner`).
+/// are kept once, and a name two non-equal entries share is renamed to
+/// `<owner path>.<name>`, one entry per distinct definition (named after its
+/// first owner), with each owner's references renamed in lockstep. The owner
+/// path of `comp`'s own entries is `cname`, of a mounted block its subsystem
+/// path below `comp` (`Sub` or `Sub.Inner`).
 ///
-/// A mounted body's free names are first written as `comp` reads them (`T`
-/// becomes `Sub.T`). The mounted subtree keeps naming its own entries (under
-/// its renames); only `comp`'s other sites follow `comp`'s renames. `comp`'s
-/// `match` rules stay, ahead of the merged entries. Mirrors the Julia reference
-/// `_hoist_mounted_templates!`.
+/// A mounted body keeps the mounted model's own names: its free names are read
+/// in the scope of the subsystem that owns the reference, as an authored
+/// body's are at its call site, so a leaf mounted twice brings two identical
+/// blocks, which keep one definition. The mounted subtree keeps naming its own
+/// entries (under its renames); only `comp`'s other sites follow `comp`'s
+/// renames. `comp`'s `match` rules stay, ahead of the merged entries. Mirrors
+/// the Julia reference `_hoist_mounted_templates!`.
 pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str) {
     let mut mounts: Vec<Vec<String>> = Vec::new();
     collect_mounted_blocks(comp, &[], &mut mounts);
@@ -254,7 +166,16 @@ pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str
     for path in &mounts {
         let p = path.join(".");
         let sub = subsystem_at_mut(comp, path).expect("collected mount point");
-        let block = mounted_block_as_read_from_parent(sub, &p);
+        let block: Map<String, Value> = sub
+            .get("expression_templates")
+            .and_then(Value::as_object)
+            .map(|b| {
+                b.iter()
+                    .filter(|(_, d)| d.get("match").is_none())
+                    .map(|(n, d)| (n.clone(), d.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
         blocks.push((p, block));
     }
     let (merged, rename) = merge_flat_registry(&blocks);
@@ -295,54 +216,4 @@ pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str
         rename_outside_mounts(comp, rn);
     }
     comp.insert("expression_templates".to_string(), Value::Object(newblock));
-}
-
-/// The component registry `block` as a site inside its subsystem at `path`
-/// reads it: in each body, a free name under that subsystem (`path.n`, as
-/// [`hoist_mounted_templates`] writes a mounted body's names, or as an
-/// authored body spells a name under it) is spelled as the subsystem reads it
-/// (`n`). The rename touches variable names only, and only bodies that hold
-/// such a name. Used by this binding's load-time expansion ([`expand`]) when it
-/// expands a reference that sits inside a subsystem, so that the expansion
-/// reads what the reference-preserving form reads in the owning component's
-/// scope (`<component>.<path>.n` after flatten).
-pub(crate) fn registry_read_from_subsystem(
-    block: &Map<String, Value>,
-    path: &str,
-) -> Map<String, Value> {
-    fn mentions(v: &Value, dotted: &str) -> bool {
-        match v {
-            Value::String(s) => s.starts_with(dotted),
-            Value::Array(a) => a.iter().any(|x| mentions(x, dotted)),
-            Value::Object(o) => o.values().any(|x| mentions(x, dotted)),
-            _ => false,
-        }
-    }
-    fn rebase(e: &Expr, dotted: &str) -> Expr {
-        match e {
-            Expr::Variable(n) => match n.strip_prefix(dotted) {
-                Some(rest) => Expr::Variable(rest.to_string()),
-                None => e.clone(),
-            },
-            Expr::Operator(node) => Expr::operator(node.map_children(&mut |c| rebase(c, dotted))),
-            _ => e.clone(),
-        }
-    }
-    let dotted = format!("{path}.");
-    let mut out = block.clone();
-    for decl in out.values_mut() {
-        let Some(body) = decl.get("body").filter(|b| mentions(b, &dotted)) else {
-            continue;
-        };
-        let Some(rebased) = serde_json::from_value::<Expr>(body.clone())
-            .ok()
-            .and_then(|e| serde_json::to_value(rebase(&e, &dotted)).ok())
-        else {
-            continue;
-        };
-        if let Some(obj) = decl.as_object_mut() {
-            obj.insert("body".to_string(), rebased);
-        }
-    }
-    out
 }
