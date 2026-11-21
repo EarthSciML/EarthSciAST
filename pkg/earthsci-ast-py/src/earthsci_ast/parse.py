@@ -2966,12 +2966,16 @@ def _capture_component_templates(
     Components with an empty block are omitted, so the common document yields
     ``{}`` and flatten's registry merge is a no-op.
     """
-    from .lower_expression_templates import materialize_component_block
+    from .lower_expression_templates import (
+        materialize_component_block,
+        received_transform_refs,
+    )
 
     authored = authored or {}
     out: dict[str, Any] = {}
     if not isinstance(data, dict):
         return out
+    received = received_transform_refs(data)
     for section in ("models", "reaction_systems"):
         comps = data.get(section)
         if not isinstance(comps, dict):
@@ -2979,10 +2983,13 @@ def _capture_component_templates(
         for cname, comp in comps.items():
             if not isinstance(comp, dict):
                 continue
+            refs = received.pop(cname, None)
             block = comp.get("expression_templates")
             if not (isinstance(block, dict) and block):
                 continue
-            mat, _, _ = materialize_component_block(comp, authored.get(f"{section}.{cname}", []))
+            mat, _, _ = materialize_component_block(
+                comp, authored.get(f"{section}.{cname}", []), refs
+            )
             if mat:
                 out[f"{section}.{cname}"] = copy.deepcopy(mat)
     return out
