@@ -281,10 +281,19 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       },
       { op: 'grad', args: ['c'], dim: 'x' },
     )
-    const out = lowerExpressionTemplates(file) as any
+    const lowered = lowerExpressionTemplates(file) as any
     // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at loadString.
-    expect('expression_templates' in out.models.M).toBe(true)
-    // f → "c" (operand); dx unbound by `match`, so it stays a bare ref.
+    expect('expression_templates' in lowered.models.M).toBe(true)
+    // The firing wrote a reference to the rule (esm-spec §9.6.3 constraint 7);
+    // an unbound param is bound to its own name.
+    expect(lowered.models.M.equations[0].rhs).toEqual({
+      op: 'apply_expression_template',
+      args: [],
+      name: 'central_grad_x',
+      bindings: { f: 'c', dx: 'dx' },
+    })
+    // What it denotes: f → "c" (operand); dx unbound by `match`, a bare ref.
+    const out = expandDocument(lowered) as any
     expect(out.models.M.equations[0].rhs).toEqual({
       op: '/',
       args: [{ op: '-', args: ['c', 'c'] }, 'dx'],
@@ -302,7 +311,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       },
       { op: 'grad', args: [{ op: '+', args: ['a', 'b'] }], dim: 'x' },
     )
-    const out = lowerExpressionTemplates(file) as any
+    const out = expandDocument(lowerExpressionTemplates(file)) as any
     expect(out.models.M.equations[0].rhs).toEqual({
       op: 'makearray',
       args: [
@@ -323,7 +332,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       },
       { op: 'grad', args: ['c'], dim: 'y' },
     )
-    const out = lowerExpressionTemplates(file) as any
+    const out = expandDocument(lowerExpressionTemplates(file)) as any
     // d → "y" (scalar field literal), substituted into the body's `along` field.
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'index', args: ['c'], along: 'y' })
   })
@@ -344,7 +353,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       },
       { op: 'grad', args: ['c'], dim: 'x' },
     )
-    const out = lowerExpressionTemplates(file) as any
+    const out = expandDocument(lowerExpressionTemplates(file)) as any
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'sin', args: ['c'] })
   })
 
@@ -367,7 +376,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       },
       { op: 'grad', args: ['c'], dim: 'x' },
     )
-    const out = lowerExpressionTemplates(file) as any
+    const out = expandDocument(lowerExpressionTemplates(file)) as any
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'abs', args: ['c'] })
   })
 
@@ -391,7 +400,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       },
       { op: 'grad', args: ['c'], dim: 'x' },
     )
-    const out = lowerExpressionTemplates(file) as any
+    const out = expandDocument(lowerExpressionTemplates(file)) as any
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'cos', args: ['c'] })
   })
 
@@ -440,7 +449,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
         },
       },
     }
-    const out = lowerExpressionTemplates(file) as any
+    const out = expandDocument(lowerExpressionTemplates(file)) as any
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'makearray', args: ['c'] })
     expect(out.models.M.equations[1].rhs).toEqual({ op: 'grad', args: ['c'], dim: 'y' })
   })
@@ -496,9 +505,11 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
   const fixtureText = (name: string) =>
     fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8')
   // Mirror the Julia driver `_lower_conf`: parse the fixture and run the
-  // loadString-time lowering directly.
+  // loadString-time lowering directly, then Expand — rule firings write
+  // references (esm-spec §9.6.3 constraint 7), so the tree they denote is
+  // compared.
   const lowerFixture = (name: string) =>
-    lowerExpressionTemplates(JSON.parse(fixtureText(name))) as any
+    expandDocument(lowerExpressionTemplates(JSON.parse(fixtureText(name)))) as any
   const expandedModel = (name: string) =>
     JSON.parse(fs.readFileSync(path.join(confDir, name, 'expanded.esm'), 'utf8')).models.m
   const expandedVars = (name: string) => expandedModel(name).variables
@@ -622,10 +633,12 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
         },
       },
     }
-    const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
-    expect(definingRhs(out.models.m, 'y')).toEqual({ op: '*', args: [1.4, 'u'] })
+    const lowered = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
     // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at loadString.
-    expect('expression_templates' in out.models.m).toBe(true)
+    expect('expression_templates' in lowered.models.m).toBe(true)
+    // The firing wrote a reference to the rule (esm-spec §9.6.3 constraint 7).
+    const out = expandDocument(lowered) as any
+    expect(definingRhs(out.models.m, 'y')).toEqual({ op: '*', args: [1.4, 'u'] })
   })
 })
 
@@ -716,7 +729,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
         },
       ],
     }
-    const out = lowerExpressionTemplates(src) as any
+    const out = expandDocument(lowerExpressionTemplates(src)) as any
     expect(out.coupling[0].transform).toEqual({
       op: '*',
       args: [2.0, { op: '*', args: [2.0, 'Src.F'] }],
@@ -1036,7 +1049,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
         },
       },
     }
-    const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
+    const out = expandDocument(lowerExpressionTemplates(JSON.parse(JSON.stringify(src)))) as any
     expect(definingRhs(out.models.m, 'd')).toEqual({ op: 'generic_div', args: ['F_cell'] })
   })
 
@@ -1176,7 +1189,7 @@ describe('rulePriority — non-finite priority does not poison rule selection', 
         },
       },
     }
-    const out = lowerExpressionTemplates(file) as any
+    const out = expandDocument(lowerExpressionTemplates(file)) as any
     expect(out.models.m.equations[0].rhs).toEqual({ op: 'from_five', args: ['z'] })
   })
 })
