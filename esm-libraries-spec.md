@@ -1489,7 +1489,11 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    `D` inside a template body, or applied to a reference, is resolved in the body without
    expanding, by esm-spec §9.6.4 rule 3 ("Time derivatives"): a parameter's derivative becomes a
    `p_dt` parameter that each reference binds to the resolution of its own operand, and a
-   reference's derivative becomes a reference to the template's `<name>.ddt` entry.
+   reference's derivative becomes a reference to the template's `<name>.ddt` entry. The result
+   equals the expansion's resolution in value, not always node for node: the zero terms and unit
+   factors this step drops as it combines resolutions are dropped in the body too, but a `p_dt`
+   bound to `0` is still a parameter there, so a term the expansion drops (`0*x` in `D(k*x)`) can
+   stay in the body.
 
    **`ic` right-hand sides are resolved too.** An `ic` equation (esm-spec §11.4) is still in the
    equation list when this step runs, and step 4 classifies it out into `field_ics` afterwards, so

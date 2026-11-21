@@ -140,6 +140,9 @@ def _err_code(fn) -> str | None:
         ("import_rename_name_keyed_map_entries", "fixture.esm", "expanded.esm"),
         # §9.3: a library's `enum` ops resolve against the library's own block.
         ("import_library_enum", "fixture.esm", "expanded.esm"),
+        # Rule 3 lowers an `enum` op spelled by a parameter per template
+        # instance, at load (esm-spec §9.6.4 rule 3); the golden carries it.
+        ("import_library_enum", "fixture_importer_redeclares.esm", "expanded_importer_redeclares.esm"),
     ],
 )
 def test_import_conformance_matches_golden(group, fixture, golden):
@@ -148,23 +151,6 @@ def test_import_conformance_matches_golden(group, fixture, golden):
     got = _canonical_equation_order(_expand_raw(os.path.join(CONF, group, fixture)))
     want = _canonical_equation_order(_read_json(os.path.join(CONF, group, golden)))
     assert got == want
-
-
-def test_import_library_enum_importer_redeclares_matches_golden():
-    """Rule 3 lowers an `enum` op spelled by a parameter per template instance,
-    at load (esm-spec §9.6.4 rule 3), where the golden — written before — still
-    held the op the typed enum lowering lowered afterwards. Both sides are
-    compared with the importer's enums lowered (as the Julia reference does)."""
-    from earthsci_ast.enums import lower_enum_ops_for_file
-
-    fp = os.path.join(CONF, "import_library_enum", "fixture_importer_redeclares.esm")
-    importer = _read_json(fp)
-
-    def lw(x):
-        return _canonical_equation_order(lower_enum_ops_for_file(importer, x))
-
-    want = _read_json(os.path.join(CONF, "import_library_enum", "expanded_importer_redeclares.esm"))
-    assert lw(_expand_raw(fp)) == lw(want)
 
 
 def test_import_smoke_typed_load():
@@ -908,7 +894,7 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
 
     # Exactly MAX_TEMPLATE_EXPANSION_DEPTH templates chain: accepted; one
     # more: template_body_expansion_too_deep. The depth counts TEMPLATES on
-    # the longest chain — a 33-template chain is rejected, 32 accepted (the
+    # the longest chain — a 65-template chain is rejected, 64 accepted (the
     # shared generated fixture pins the reject side; this pins the boundary).
     assert lower_expression_templates(_chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH)) is not None
     assert (
@@ -945,15 +931,15 @@ def test_cross_file_chains_accumulate_depth_under_option_b(tmp_path):
     check-only), an imported library's chain does NOT arrive closed — its
     references are preserved, so the §9.7.3 depth check in the CONSUMING scope
     spans the full cross-file chain. A consumer template referencing the head of
-    a 31-deep library chain composes to depth 32 (accepted); referencing the
-    head of a 32-deep chain composes to depth 33 and is rejected with
+    a 63-deep library chain composes to depth 64 (accepted); referencing the
+    head of a 64-deep chain composes to depth 65 and is rejected with
     `template_body_expansion_too_deep`. (This inverts the pre-0.9.0 Option-A
     behavior, where inlined-closed library bodies counted as depth-1 leaves; the
     Julia reference dropped the old assertion for the same reason.)"""
-    # 31-deep library + head reference = 32 templates on the chain → accepted.
+    # 63-deep library + head reference = 64 templates on the chain → accepted.
     f = load_path(_chainlib_consumer(tmp_path / "ok", MAX_TEMPLATE_EXPANSION_DEPTH - 1))
     assert "M" in f.models
-    # 32-deep library + head reference = 33 → rejected in the consuming scope.
+    # 64-deep library + head reference = 65 → rejected in the consuming scope.
     assert (
         _err_code(
             lambda: load_path(_chainlib_consumer(tmp_path / "bad", MAX_TEMPLATE_EXPANSION_DEPTH))

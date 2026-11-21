@@ -595,12 +595,14 @@ export function validateTemplates(
 
 /**
  * Maximum template-body reference-chain depth (counted in TEMPLATES along the
- * longest chain, so a 33-template chain is rejected while a 32-template chain
+ * longest chain, so a 65-template chain is rejected while a 64-template chain
  * is accepted) before a file is rejected with
  * `template_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
- * across all bindings.
+ * across all bindings. It equals `MAX_REWRITE_PASSES`: a rewrite of depth `d`
+ * writes a body-reference chain `d` templates deep, so every document the
+ * rewriter accepts also reloads once emitted with its references.
  */
-export const MAX_TEMPLATE_EXPANSION_DEPTH = 32
+export const MAX_TEMPLATE_EXPANSION_DEPTH = 64
 
 /** Collect the `name`s of every `apply_expression_template` node in a tree. */
 export function collectApplyNames(x: Json, out: string[]): string[] {

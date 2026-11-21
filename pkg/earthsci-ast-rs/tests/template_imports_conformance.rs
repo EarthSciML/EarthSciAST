@@ -8,7 +8,7 @@
 //! `tests/conformance/expression_templates/` against the Julia-generated
 //! goldens, the resolver-level invalid fixtures under
 //! `tests/invalid/template_imports/` via `expected_errors.json`, and the
-//! unit-level pinned semantics (exact 32/33 depth boundary, fold exactness,
+//! unit-level pinned semantics (exact 64/65 depth boundary, fold exactness,
 //! expression-position substitution staying an AST, `only` visibility,
 //! diamond bindings, the 0.8.0 version gate).
 
@@ -422,27 +422,16 @@ fn import_library_enum_resolves_in_the_library_scope() {
         golden(&conf(&["import_library_enum", "expanded.esm"]))
     );
     // Rule 3 lowers an `enum` op spelled by a parameter per template instance,
-    // at load (esm-spec §9.6.4 rule 3), where the golden — written before —
-    // still held the op the later enum pass lowers. Both sides are compared
-    // with the importer's enums lowered, as the Julia reference suite does.
-    let importer = golden(&conf(&[
-        "import_library_enum",
-        "fixture_importer_redeclares.esm",
-    ]));
-    let lower_importer_enums = |mut v: Value| -> Value {
-        v["enums"] = importer["enums"].clone();
-        earthsci_ast::lower_enums_raw(&mut v).expect("lower the importer's enums");
-        v
-    };
+    // at load (esm-spec §9.6.4 rule 3); the golden carries it lowered.
     assert_eq!(
-        lower_importer_enums(expand_raw(&conf(&[
+        expand_raw(&conf(&[
             "import_library_enum",
             "fixture_importer_redeclares.esm"
-        ]))),
-        lower_importer_enums(golden(&conf(&[
+        ])),
+        golden(&conf(&[
             "import_library_enum",
             "expanded_importer_redeclares.esm"
-        ])))
+        ]))
     );
     let f = load_path(conf(&[
         "import_library_enum",
@@ -1470,9 +1459,9 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
     // more: template_body_expansion_too_deep (the shared generated fixture
     // pins the reject side; this pins the boundary).
     let mut ok = chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH);
-    lower_expression_templates(&mut ok).expect("32-template chain accepted");
+    lower_expression_templates(&mut ok).expect("64-template chain accepted");
     let mut too_deep = chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH + 1);
-    let e = lower_expression_templates(&mut too_deep).expect_err("33-template chain rejected");
+    let e = lower_expression_templates(&mut too_deep).expect_err("65-template chain rejected");
     assert_eq!(e.code, "template_body_expansion_too_deep");
 
     // A body may not reference a `match` rule by name.

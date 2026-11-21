@@ -68,21 +68,17 @@
         {
           "lhs": "importerBoundCode",
           "rhs": {
-            "args": [
-              "activity_unit",
-              "g_per_gallon"
-            ],
-            "op": "enum"
+            "args": [],
+            "op": "const",
+            "value": 9
           }
         },
         {
           "lhs": "forwardedCode",
           "rhs": {
-            "args": [
-              "activity_unit",
-              "g_per_gallon"
-            ],
-            "op": "enum"
+            "args": [],
+            "op": "const",
+            "value": 9
           }
         }
       ],

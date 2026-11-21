@@ -390,6 +390,13 @@ func TestOOL_RulesWriteReferencesGoldens(t *testing.T) {
 			if got, want := oolEmit(t, c.dir, c.fixture), mustRead(t, c.dir, c.emitted); got != want {
 				t.Errorf("emit != %s (byte-exact)\n--- got ---\n%s\n--- want ---\n%s", c.emitted, got, want)
 			}
+			// Emit then load is a fixed point: the emitted form reloads and
+			// re-emits byte for byte. For the depth-64 chain this holds only
+			// because the body-nesting bound equals MaxRewritePasses (esm-spec
+			// §9.7.3): its emitted form is a 64-template body-reference chain.
+			if got, want := oolEmit(t, c.dir, c.emitted), mustRead(t, c.dir, c.emitted); got != want {
+				t.Errorf("re-emit of %s is not a fixed point\n--- got ---\n%s\n--- want ---\n%s", c.emitted, got, want)
+			}
 			loaded := oolLoad(t, c.dir, c.fixture)
 			if rpCount(loaded, "", "apply_expression_template") == 0 {
 				t.Errorf("no surviving reference: the loaded form must keep the references firings wrote")

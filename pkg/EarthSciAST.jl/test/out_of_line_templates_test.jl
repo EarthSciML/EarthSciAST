@@ -122,6 +122,11 @@ end
                     "emitted_chain_depth_64.esm", "expanded_chain_depth_64.esm"),
             ]
             @test _emit(dir, fix) == read(conf(dir, emitted), String)
+            # Emit then load is a fixed point: the emitted form reloads and
+            # re-emits byte for byte. For the depth-64 chain this holds only
+            # because the body-nesting bound equals MAX_REWRITE_PASSES (esm-spec
+            # §9.7.3): its emitted form is a 64-template body-reference chain.
+            @test _emit(dir, emitted) == read(conf(dir, emitted), String)
             @test _core(Expand(_load(dir, fix))) ==
                 _core(JSON3.read(read(conf(dir, expanded), String)))
         end

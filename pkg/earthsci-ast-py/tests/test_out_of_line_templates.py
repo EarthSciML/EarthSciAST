@@ -158,6 +158,11 @@ _RULES_WRITE_REFERENCES_CASES = [
 @pytest.mark.parametrize("dir_,fix,emitted,expanded", _RULES_WRITE_REFERENCES_CASES)
 def test_rules_write_references_goldens(dir_, fix, emitted, expanded):
     assert _emit(dir_, fix) == open(_conf(dir_, emitted), encoding="utf-8").read()
+    # Emit then load is a fixed point: the emitted form reloads and re-emits
+    # byte for byte. For the depth-64 chain this holds only because the
+    # body-nesting bound equals MAX_REWRITE_PASSES (esm-spec §9.7.3): its
+    # emitted form is a 64-template body-reference chain.
+    assert _emit(dir_, emitted) == open(_conf(dir_, emitted), encoding="utf-8").read()
     got = _core(expand_document(_load(dir_, fix)))
     want = _core(json.loads(open(_conf(dir_, expanded), encoding="utf-8").read()))
     assert got == want

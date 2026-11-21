@@ -121,6 +121,24 @@ pass and never converges. Asserts the engine rejects the file with
 `rewrite_rule_nonterminating` once `MAX_REWRITE_PASSES = 64` productive passes have
 run — nontermination is caught by the pass bound, NOT by a static pre-check.
 
+### `rewrite_depth_through_bodies/` (error.json, error_chain_depth_65.json, emitted_chain_depth_64.esm, expanded_chain_depth_64.esm)
+
+Rewrite depth counted through template bodies (esm-spec §9.6.4 rule 3).
+`fixture.esm` holds a rule whose body reintroduces its own pattern under the
+same instance: rejected with `rewrite_rule_nonterminating`, naming the rule and
+the template (`error.json`). `chain_depth_64.esm` is a chain of 64 rules, each
+firing inside the body of the one before, so its deepest rewrite has depth 64 =
+`MAX_REWRITE_PASSES` and it is accepted; `chain_depth_65.esm` adds one rule and
+is rejected (`error_chain_depth_65.json`).
+
+The accepted chain's emitted form, `emitted_chain_depth_64.esm`, is a
+64-template body-reference chain. Each binding checks that emit then load is a
+fixed point on it: the emitted file loads and re-emits byte for byte. That holds
+because the body-nesting limit `MAX_TEMPLATE_EXPANSION_DEPTH`
+(`template_body_expansion_too_deep`, esm-spec §9.7.3) is 64, equal to
+`MAX_REWRITE_PASSES`: one nesting limit, so anything the rewriter accepts also
+reloads. Under the old body limit of 32 the emitted form was rejected.
+
 ### `unlowered_operator/` (error.json, `unlowered_operator`, evaluate)
 
 A spatial `D(u, wrt=x)` in an equation RHS with no rewrite rule. Loads cleanly, but
@@ -329,11 +347,14 @@ goldens carry `gallonCode` as `{op: const, value: 2}`.
 `fixture_importer_redeclares.esm` declares `activity_unit` itself with
 `g_per_hp_hr = 7` and `g_per_gallon = 9`: the library's template still computes
 with 1 and the library's own call with 2, while every symbol the importer
-spells stays an `enum` op in the golden and lowers against the importer's block
-at typed load: a bare `enum` op (7), one bound into the template's `unit_code`
-parameter (7), a symbol bound into `activity_code` (9), and one bound through
-`code_via`'s forwarded parameter (9). Each binding's suite pins those typed
-values beside the golden.
+spells resolves against the importer's block. An `enum` op the importer writes
+whole stays an `enum` op in the golden and lowers at typed load: a bare `enum`
+op (7) and one bound into the template's `unit_code` parameter (7). A symbol
+the importer binds into the parameter-spelled `enum` op of `activity_code` (9),
+directly or through `code_via`'s forwarded parameter (9), is lowered at load,
+once per template instance (esm-spec §9.6.4 rule 3), so the golden carries
+`{op: const, value: 9}` for both. Each binding's suite compares the golden
+directly and pins the typed values beside it.
 
 ### `import_library_enum_undeclared/` (error.json, `unknown_enum`, load)
 

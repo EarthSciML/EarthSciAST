@@ -188,6 +188,11 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     ]
     it.each(cases)('%s / %s: emitted == %s, Expand(load) == %s', (dir, fix, emitted, expanded) => {
       expect(emit(dir, fix)).toBe(fs.readFileSync(conf(dir, emitted), 'utf-8'))
+      // Emit then load is a fixed point: the emitted form reloads and re-emits
+      // byte for byte. For the depth-64 chain this holds only because the
+      // body-nesting bound equals MAX_REWRITE_PASSES (esm-spec §9.7.3): its
+      // emitted form is a 64-template body-reference chain.
+      expect(emit(dir, emitted)).toBe(fs.readFileSync(conf(dir, emitted), 'utf-8'))
       expect(core(expandDocument(loadRefPreserving(dir, fix)))).toEqual(
         core(JSON.parse(fs.readFileSync(conf(dir, expanded), 'utf-8'))),
       )

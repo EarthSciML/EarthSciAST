@@ -11,7 +11,7 @@
 #   * one frame per template instance: two uses with the same bindings share
 #     one, different bindings do not, and a parameter in a structural
 #     position is substituted into that instance's body;
-#   * a walk through the frames visits each instance body once, so a 32-deep
+#   * a walk through the frames visits each instance body once, so a 64-deep
 #     doubling chain stays linear;
 #   * the dependency graph and range selection read through references this
 #     way.

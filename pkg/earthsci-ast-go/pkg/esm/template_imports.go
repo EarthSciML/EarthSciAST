@@ -42,11 +42,13 @@ package esm
 // EarthSciAST.jl/src/template_imports.jl.
 
 // MaxTemplateExpansionDepth is the maximum template-body reference-chain depth
-// (counted in TEMPLATES along the longest chain, so a 33-template chain is
-// rejected and a 32-template chain is accepted) before a file is rejected with
+// (counted in TEMPLATES along the longest chain, so a 65-template chain is
+// rejected and a 64-template chain is accepted) before a file is rejected with
 // `template_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
-// across all bindings.
-const MaxTemplateExpansionDepth = 32
+// across all bindings. It equals MaxRewritePasses: a rewrite of depth d writes
+// a body-reference chain d templates deep, so every document the rewriter
+// accepts also reloads once emitted with its references.
+const MaxTemplateExpansionDepth = 64
 
 var templateComponentKinds = []string{"models", "reaction_systems"}
 

@@ -279,15 +279,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "import_library_enum: a library's enum ops resolve in the library's block (§9.3)" begin
         @test _expand_raw(conf("import_library_enum", "fixture.esm")) ==
             _golden(conf("import_library_enum", "expanded.esm"))
-        # Rule 3 lowers an `enum` op spelled by a parameter per template instance,
-        # at load (esm-spec §9.6.4 rule 3), where the golden — written before —
-        # still held the op the typed `lower_enums!` lowered afterwards. Both
-        # sides are compared with the importer's enums lowered.
-        let enums = JSON3.read(read(conf("import_library_enum", "fixture_importer_redeclares.esm"), String))["enums"]
-            lw(x) = _normj(EarthSciAST._lower_raw_enum_ops(x, enums, Set{String}()))
-            @test lw(_expand_raw(conf("import_library_enum", "fixture_importer_redeclares.esm"))) ==
-                lw(_golden(conf("import_library_enum", "expanded_importer_redeclares.esm")))
-        end
+        # Rule 3 lowers an `enum` op spelled by a parameter per template
+        # instance, at load (esm-spec §9.6.4 rule 3); the golden carries it lowered.
+        @test _expand_raw(conf("import_library_enum", "fixture_importer_redeclares.esm")) ==
+            _golden(conf("import_library_enum", "expanded_importer_redeclares.esm"))
         # The importer's same-name enum (g_per_hp_hr = 7) does not reach the
         # library body, which keeps the library's 1; the importer's own enum ops,
         # including one bound into the template's parameter, resolve against 7.

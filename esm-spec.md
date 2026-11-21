@@ -32,8 +32,13 @@
 >    `p_dt` parameters and bindings and `<name>.ddt` derivative entries; the merged registry
 >    carries them all; `Expand` of the flattened system is unchanged.
 >
+> `MAX_TEMPLATE_EXPANSION_DEPTH` rises from 32 to 64, equal to `MAX_REWRITE_PASSES`, so that
+> a document's emitted form, whose body-reference chains are as deep as its deepest rewrite,
+> always reloads (§9.7.3). This only accepts more documents.
+>
 > A template body holding a structural time derivative is still accepted, and resolves to
-> exactly what its expansion did (§9.6.4 rule 3).
+> the same value its expansion did, though not always to the same tree: a zero term the
+> expansion drops can stay in the body (§9.6.4 rule 3).
 >
 > Differences 1–3 change which rules fire, and so what a document means, wherever they apply;
 > none applies anywhere in the 2026-11 corpus of real models. These semantics are not
@@ -5260,9 +5265,19 @@ special-case older versions to recover Option A matching. Motivation and measure
      `p_dt` bindings. This depends on the template alone (which parameters sit under a
      structural `D` is read from the body), plus the `wrt` literal where `wrt` is a
      parameter, so it is done once per template instance. **It equals the expansion's
-     resolution exactly**: §4.2's recursion is structural, so resolving `D(e[p := b])`
+     resolution in value**: §4.2's recursion is structural, so resolving `D(e[p := b])`
      visits the nodes of `e` as resolving `D(e)` in the body does and, at each place `b` was
-     substituted, yields the resolution of `D(b)` — which is what `p_dt` is bound to.
+     substituted, yields the resolution of `D(b)` — which is what `p_dt` is bound to. The
+     two are equal in value, not always node for node. A binding drops a term that is `0`
+     and a factor that is `1` as it combines resolutions, and it keeps doing so here; but in
+     the body a parameter's derivative is the parameter `p_dt`, not the `0` or `1` it is
+     bound to, so a term the expansion drops can stay in the body. Take a body `D(p*q)`
+     referenced with `p` bound to a parameter `k` and `q` to a state `x` whose tendency is
+     `f`. The expansion resolves `D(k*x)` to `0*x + k*f` and drops the zero term, leaving
+     `k*f`. The body resolves to `p_dt*q + p*q_dt`, and the reference binds `p_dt` to `0` and
+     `q_dt` to `f`, so it denotes `0*x + k*f` with the zero term kept. Both evaluate to the
+     same number everywhere, which is what this rule promises; the folding itself is not
+     changed, and a check of the rule compares values, not trees.
      Free names in the body are flatten-scoped names of the system (§10.7), resolved against
      the same equations; cycles are detected over names exactly as at a call site.
 
@@ -5549,7 +5564,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `template_import_rebind_unknown_name` | An import edge's `rebind` names a name that does not occur free in the imported declarations — including a key that names a *declared* name, which is a rename, not a rebind (§9.7.7). |
 | `template_import_rename_collision` | Renaming/rebinding produced a collision: two names of one namespace mapped onto one target, or a renamed/rebound name collides with a name still in use inside the imported declarations (a remaining free name, bound index symbol, template param, or another target) (§9.7.7). |
 | `template_import_rename_invalid` | A `prefix` or rename/rebind target is not a valid dotted identifier, a rename/rebind map is malformed, or a `rebind` key addresses a bound index symbol (§9.7.7). |
-| `template_body_expansion_too_deep` | Body-reference chain exceeds `MAX_TEMPLATE_EXPANSION_DEPTH` (32) (§9.7.3). |
+| `template_body_expansion_too_deep` | Body-reference chain exceeds `MAX_TEMPLATE_EXPANSION_DEPTH` (64, equal to `MAX_REWRITE_PASSES`) (§9.7.3). |
 | `metaparameter_unbound` | A metaparameter is still open at the root document's close, after edge bindings, API bindings, and defaults (§9.7.6). NOT raised on the §9.6.4-rule-5 *generic load* — a template-library file (§9.7.1) loaded as the root with no loader-API bindings — where metaparameters stay open by design; nor at an import/subsystem edge that simply leaves a name unbound (it re-exports upward, §9.7.6 site 2). |
 | `metaparameter_type_error` | A metaparameter binding is not an integer; a fold divides inexactly or overflows 64-bit; or a metaparameter expression uses an op outside `+ - * /` (§9.7.6). |
 | `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name, or with a loop symbol (§9.7.6). |
@@ -5581,7 +5596,7 @@ The import-renaming RFC adds (see `docs/content/rfcs/template-import-renaming.md
 - `import_rebind_keyed_factors/` — an MPAS-style ragged keyed-factor rule with its factor contract rebound to the consumer's `meshA_*` arrays (§9.7.7).
 - `import_rename_diamond/` — identical renamed edges dedupe; a differently-renamed edge registers distinctly; the equal-priority tie between two axis-less rule instances is pinned by the §9.7.4 order (§9.7.7).
 - `import_rename_integral_axis/` — one cumulative-`integral` rule library instantiated twice (prefix `col`/`row`, rename `x` → `lev`/`lat`, N = 4/3); transitive rename through the match's `var` and bare-axis-name `upper` bound, so each instance fires only on its own axis (§9.7.7).
-- `import_library_enum/` — a library that declares an enum, names it in its own template body, and binds a symbol into a parameter-spelled `enum` op in its own call: the importer loads without the enum (`expanded.esm`), and an importer redeclaring the enum with different values does not change the library's constants (its own `enum` op and its own call), while every symbol the importer spells, including one it binds directly or through a forwarded parameter, resolves against the importer's block (`expanded_importer_redeclares.esm`) (§9.3).
+- `import_library_enum/` — a library that declares an enum, names it in its own template body, and binds a symbol into a parameter-spelled `enum` op in its own call: the importer loads without the enum (`expanded.esm`), and an importer redeclaring the enum with different values does not change the library's constants (its own `enum` op and its own call), while every symbol the importer spells, including one it binds directly or through a forwarded parameter, resolves against the importer's block (`expanded_importer_redeclares.esm`) (§9.3). In that golden a symbol the importer binds into a library template's parameter-spelled `enum` op (directly or through a forwarded parameter) is already lowered to the importer's constant, because rule 3 lowers it once per template instance at load (§9.6.4 rule 3); an `enum` op the importer writes whole, in an equation or as a binding, stays an `enum` op, lowered at typed load.
 - `import_library_enum_undeclared/` — invalid: a library body naming an enum the library does not declare → `unknown_enum` at load, reported against the library and the template, whether or not the importer declares that enum (§9.3).
 
 The match-scoping RFC adds (see `docs/content/rfcs/match-pattern-scoping-constraints.md`):
@@ -5601,11 +5616,11 @@ The rules-as-references revision (§9.6.3 constraint 7, §9.6.4 rule 3) adds the
 
 - `rule_writes_reference/` — one rule fired at three sites with different operands: three references to the rule, one materialized body; a leaf-bodied rule writes its leaf.
 - `template_instance_variants/` — one template whose body holds a `D`, called with two variables of different declared shapes, and two `where`-scoped rules: two variants `<name>.variant1` / `.variant2`, numbered by canonical serialization, each call site re-pointed.
-- `rewrite_depth_through_bodies/` — invalid: a rule whose body reintroduces its own pattern under the same instance → `rewrite_rule_nonterminating`, naming the rule and the template; and a chain that converges at depth 64 exactly (accepted) beside one at depth 65 (rejected).
+- `rewrite_depth_through_bodies/` — invalid: a rule whose body reintroduces its own pattern under the same instance → `rewrite_rule_nonterminating`, naming the rule and the template; and a chain that converges at depth 64 exactly (accepted) beside one at depth 65 (rejected). The accepted chain's `emitted_chain_depth_64.esm` holds a 64-template body-reference chain; every binding loads it and re-emits it byte for byte (emit then load is a fixed point), which holds because `MAX_TEMPLATE_EXPANSION_DEPTH` equals `MAX_REWRITE_PASSES` (§9.7.3).
 - `unlowered_in_template_body/` — invalid at build: a template body holding a `D` that no rule matches → `unlowered_operator`, naming the op, the template and the first call site.
 - `opacity_rule_replacement/` — the cases where this revision and the in-place engine differ, each pinned the way this revision decides it: (a) a compound pattern whose inner node only exists in another rule's replacement does not fire, (b) a structured and a ground pattern node at a template parameter do not match what the call site bound, and (c) a compound pattern that would have assembled across an eagerly expanded reference to a template whose body holds a rewrite-target op does not fire. Its `expanded.esm` is written under this revision's semantics, and the in-place engine would fail it; its description records, case by case, what the in-place engine produced instead.
 
-Every `emitted.esm` golden of a fixture in which a rule fires changes under this revision (the lowered node becomes a reference and the rule materializes); every existing `expanded*.esm` golden is unchanged, because no existing fixture contains a match that spans a reference boundary (checked: `godunov_beats_inner_deriv`, `fixpoint_nested_deriv`, `eager_target_bearing`, `opacity_negative` and `opacity_priority_shadowing` match within one side of every boundary).
+Every `emitted.esm` golden of a fixture in which a rule fires changes under this revision (the lowered node becomes a reference and the rule materializes); every existing `expanded*.esm` golden is unchanged except `import_library_enum/expanded_importer_redeclares.esm` (see above: an importer-bound `enum` op is now lowered per instance at load), because no existing fixture contains a match that spans a reference boundary (checked: `godunov_beats_inner_deriv`, `fixpoint_nested_deriv`, `eager_target_bearing`, `opacity_negative` and `opacity_priority_shadowing` match within one side of every boundary).
 - `opacity_negative/` — a compound `match` pattern whose shape only assembles across a surviving-reference boundary: MUST NOT fire (§9.6.4 rule 4's pinned divergence).
 - `opacity_priority_shadowing/` — the silent form of the divergence: a high-priority compound rule whose structural fragment is hidden in a target-free reference, plus a lower-priority generic rule; the golden pins that the compound rule does NOT fire and the generic rule DOES (binding the surviving reference whole).
 - `per_instantiation_validation/` — a template parameterized on a scalar field, two call sites, one inadmissible: rejected on the expanded-equivalent check (§9.6.9), naming the offending call site.
@@ -5784,7 +5799,7 @@ An **ordered array** appearing (i) inside a `model` or `reaction_system`, or (ii
 
 #### 9.7.3 Registration-time body checking
 
-A template `body` MAY contain `apply_expression_template` nodes referencing other templates that are **in scope** (declared locally or imported) and **match-less**. After the effective sequence (§9.7.4) is fixed and before the §9.6.3 fixpoint runs, the loader builds the body-reference graph, rejects cycles (`apply_expression_template_recursive_body`), and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 32` (`template_body_expansion_too_deep`). Bodies are **not** inlined (from `esm: 0.9.0`; pre-0.9.0 loaders inlined here in topological order — substitution is confluent, so the result was order-independent). Because nothing inlines at a library boundary anymore, the depth bound is measured on the **full merged cross-file reference graph**: a chain deeper than 32 across files is rejected even though each file's local chain is shallow (under Option A each library's own composition closed its bodies at its edge, resetting the count — a deliberate, corner-case-only behavioral change of 0.9.0). A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_expression_template` nodes.
+A template `body` MAY contain `apply_expression_template` nodes referencing other templates that are **in scope** (declared locally or imported) and **match-less**. After the effective sequence (§9.7.4) is fixed and before the §9.6.3 fixpoint runs, the loader builds the body-reference graph, rejects cycles (`apply_expression_template_recursive_body`), and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 64` templates (`template_body_expansion_too_deep`). The bound equals `MAX_REWRITE_PASSES` (§9.6.3) on purpose: there is one nesting limit. A rewrite of depth `d` (§9.6.4 rule 3) leaves a body-reference chain `d` templates deep, so every document the rewriter accepts also reloads once emitted with its references; with a smaller body bound, a document could load and then fail to load from its own emitted form. Bodies are **not** inlined (from `esm: 0.9.0`; pre-0.9.0 loaders inlined here in topological order — substitution is confluent, so the result was order-independent). Because nothing inlines at a library boundary anymore, the depth bound is measured on the **full merged cross-file reference graph**: a chain deeper than 64 across files is rejected even though each file's local chain is shallow (under Option A each library's own composition closed its bodies at its edge, resetting the count — a deliberate, corner-case-only behavioral change of 0.9.0). A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_expression_template` nodes.
 
 #### 9.7.4 Effective declaration order
 

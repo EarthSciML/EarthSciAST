@@ -1,7 +1,7 @@
 # Flatten on a deep chain of expression templates, each referencing the one
 # below twice (esm-spec §9.7.3 allows a chain of MAX_TEMPLATE_EXPANSION_DEPTH).
 # Loaded, the chain's expansions share their subtrees: O(depth) distinct nodes,
-# but as a tree the 32-deep chain below has about 2^41 nodes. Flatten's
+# but as a tree the 64-deep chain below has about 2^73 nodes. Flatten's
 # elementwise-application pass (esm-spec §9.6.11) walks every template
 # application's expansion, visiting each shared subtree once; walked as a tree,
 # flatten would never finish on this document.

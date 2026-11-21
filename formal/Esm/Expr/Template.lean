@@ -31,7 +31,7 @@ A template body may reference other match-less templates in scope (§9.7.3); a
 reference denotes its expansion (§9.6.4 rule 2). `expandRefs lib fuel`
 replaces every reference, bindings first, by the expansion of the template
 `lib` names, recursively, `fuel` levels deep (§9.7.3 bounds a chain at
-`MAX_TEMPLATE_EXPANSION_DEPTH = 32`); a reference left at depth 0, or one
+`MAX_TEMPLATE_EXPANSION_DEPTH = 64`); a reference left at depth 0, or one
 naming no template of `lib`, is an error. `expandIn` and `evalApplyIn` are
 `expand` and `evalApply` followed by it.
 -/

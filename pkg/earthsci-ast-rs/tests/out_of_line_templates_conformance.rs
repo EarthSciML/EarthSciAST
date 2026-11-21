@@ -337,6 +337,15 @@ fn rules_write_references_emitted_and_expanded_goldens() {
             std::fs::read_to_string(conf(dir).join(emitted)).unwrap(),
             "[{dir}/{fix}] emitted golden"
         );
+        // Emit then load is a fixed point: the emitted form reloads and re-emits
+        // byte for byte. For the depth-64 chain this holds only because the
+        // body-nesting bound equals MAX_REWRITE_PASSES (esm-spec §9.7.3): its
+        // emitted form is a 64-template body-reference chain.
+        assert_eq!(
+            emit(dir, emitted),
+            std::fs::read_to_string(conf(dir).join(emitted)).unwrap(),
+            "[{dir}/{emitted}] emit then load is not a fixed point"
+        );
         let mut loaded = load_b(dir, fix).unwrap_or_else(|e| panic!("[{dir}/{fix}] load: {e}"));
         oob::expand(&mut loaded).unwrap_or_else(|e| panic!("[{dir}/{fix}] expand: {e}"));
         let golden: Value =
