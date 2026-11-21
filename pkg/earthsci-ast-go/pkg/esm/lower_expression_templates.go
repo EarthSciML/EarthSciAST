@@ -1502,6 +1502,11 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 				continue
 			}
 			cscope := fmt.Sprintf("%s.%s", kind, cname)
+			// esm-spec §9.6.4 rule 1: a model mounted as a subsystem (or an
+			// authored subsystem with its own block) keeps its references and
+			// brings its template definitions; they join this component's
+			// registry here, before its fixpoint (hoistMountedTemplates).
+			hoistMountedTemplates(compObj, cname, "/"+kind+"/"+cname, orders)
 			// Static shape environment for `where` constraint evaluation
 			// (esm-spec §9.6.1): declared variable shapes only.
 			shapeEnv := componentShapeEnv(compObj)
@@ -1661,7 +1666,7 @@ func applyExpressionTemplatesToJSON(jsonStr string) (string, error) {
 func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int64) (string, error) {
 	// nil: this entry point is handed raw text with no authored set captured for
 	// it, so the §4.7 mount context is computed from that text below.
-	out, _, err := resolveAndLowerJSONCapturing(jsonStr, basePath, metaparameters, nil)
+	out, _, err := resolveAndLowerJSONCapturing(jsonStr, basePath, metaparameters, nil, nil)
 	return out, err
 }
 
@@ -1674,8 +1679,13 @@ func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int
 // representation (esm-libraries-spec §4.7.5 step 4), and Expand-at-build
 // deletes exactly the inputs that merge needs. Capturing them here is the only
 // point at which they still exist: `expandDocument` runs two lines below.
+//
+// `authoredOrders` (may be nil) is the document's authored key-order table when
+// jsonStr is a re-encoding (a root whose §4.7 mounts were inlined, whose keys
+// the encoder sorted): it overlays the order read off jsonStr, so the lowering
+// and the registry merge of a mounting component see declaration order.
 func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[string]int64,
-	authoredMountDeclared map[string]bool) (string, map[string]*orderedMap, error) {
+	authoredMountDeclared map[string]bool, authoredOrders map[string][]string) (string, map[string]*orderedMap, error) {
 	var view map[string]any
 	dec := json.NewDecoder(strings.NewReader(jsonStr))
 	dec.UseNumber()
@@ -1683,6 +1693,9 @@ func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[s
 		return "", nil, fmt.Errorf("template resolution pass: %w", err)
 	}
 	orders := extractTemplateOrders(jsonStr)
+	for p, keys := range authoredOrders {
+		orders[p] = keys
+	}
 	// esm-spec §9.7.10 form B: fold any coupling-entry injection into the target
 	// components' own `expression_template_imports` BEFORE resolution, so the
 	// ordinary import resolver + §9.6.3 fixpoint lower the target under the

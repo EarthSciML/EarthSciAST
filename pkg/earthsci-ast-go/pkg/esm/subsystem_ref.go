@@ -98,6 +98,11 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 			return fmt.Errorf("model %q subsystems: %w", modelName, err)
 		}
 		file.graftMountedOrders(prefix, landed)
+		// esm-spec §9.6.4 rule 1: the mounted leaves' definitions join the
+		// model's registry.
+		if err := file.mergeTypedMountedTemplates("models", modelName, model.Subsystems); err != nil {
+			return fmt.Errorf("model %q subsystems: %w", modelName, err)
+		}
 	}
 
 	// Resolve subsystems in reaction systems (rs.Subsystems is likewise mutated
@@ -109,6 +114,9 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
 		}
 		file.graftMountedOrders(prefix, landed)
+		if err := file.mergeTypedMountedTemplates("reaction_systems", rsName, rs.Subsystems); err != nil {
+			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
+		}
 	}
 
 	return nil
@@ -349,6 +357,10 @@ func inlineTopLevelRefs(file *ESMFile, basePath string, visited map[string]bool,
 			// merely discarded but never interpreted — this document is not the
 			// one that gets to say whether they are well-formed.
 			delete(resolvedRaw, "tests")
+			if err := file.landTypedTopLevelTemplates(form.section, name, resolvedRaw,
+				landed[name]["/expression_templates"]); err != nil {
+				return withETPath(err, at)
+			}
 			b, err := json.Marshal(resolvedRaw)
 			if err != nil {
 				return fmt.Errorf("%s %q: re-encoding resolved ref %q: %w", form.noun, name, ref, err)
@@ -1027,11 +1039,13 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
 			return err
 		}
-		// Expand-at-build (§9.6.4 rule 2 / RFC §7.7): a mounted subsystem is
-		// inlined into the importing document as a fully-expanded (Option-A
-		// image) component, so its surviving references and per-component
-		// registries are resolved away here.
-		expandDocument(view)
+		// esm-spec §9.6.4 rule 1: the leaf keeps its references. Each of its
+		// components keeps its match-less template definitions (closed in the
+		// leaf's own file, its `match` rules already fired), which the mounting
+		// document merges into its own registry when it lowers the mounting
+		// component (hoistMountedTemplates), or, for a top-level mount, carries
+		// as that component's own block.
+		mountedRegistries(view)
 
 		// esm-spec §9.3: the referenced document's `enum` ops resolve against
 		// ITS OWN `enums` block, here, while that block is still at hand. The

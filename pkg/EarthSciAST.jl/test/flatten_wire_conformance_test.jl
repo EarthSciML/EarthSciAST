@@ -167,6 +167,9 @@ _fw_bits((u, d)) = (reinterpret(UInt64, Float64(u)), reinterpret(UInt64, Float64
             file = EarthSciAST.load_path(joinpath(_FW_DIR, case["fixture"]))
             kept = EarthSciAST.flatten(file)
             if haskey(case, "refs_golden")
+                # `ESM_REGEN_FLATTEN_WIRE_REFS=1` rewrites the refs goldens.
+                get(ENV, "ESM_REGEN_FLATTEN_WIRE_REFS", "") == "1" &&
+                    write(joinpath(_FW_DIR, case["refs_golden"]), _fw_refs_form(kept))
                 @test _fw_refs_form(kept) == read(joinpath(_FW_DIR, case["refs_golden"]), String)
             end
             flat = EarthSciAST.expand_flattened_refs(kept)

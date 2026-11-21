@@ -644,20 +644,14 @@ func TestOOL_FlattenRegistryMergeTransitive(t *testing.T) {
 
 // -----------------------------------------------------------------------
 // flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7, §10.7):
-// the SCOPING PRECONDITION, pinned. Two byte-identical models import the same
+// the CLOSING PRECONDITION, pinned. Two byte-identical models import the same
 // rule library; `interior_stencil`'s body references the free name `inv_dx`,
 // which is a model-local parameter and so denotes a DIFFERENT variable in each.
 //
 // flattenTemplateRegistries is the UNION half only, over the un-namespaced
 // component view: identical bodies dedupe under their bare names, and the pair
-// it returns is self-consistent with the un-namespaced document. Go reaches this
-// surface only from conformance — LowerExpressionTemplates runs Expand-at-build
-// (§9.6.4 rule 2) so the load path never leaves a surviving reference, and Go's
-// flatten carries no registry, so no scoping step exists here and none is
-// required (§10.7, "Applicability across bindings"). The Julia twin of this test
-// also pins the scoping∘merge composition, which its reference-preserving
-// `flatten` does carry; a binding that grows that path inherits the obligation,
-// and this test is what will fail if the merge is fed unscoped bodies from it.
+// it returns is self-consistent with the un-namespaced document. Flatten's own
+// registry closes every body first (TestOOL_FlattenClosesTwinBodies below).
 // -----------------------------------------------------------------------
 
 func TestOOL_FlattenRegistryMergeIsUnionHalfOnly(t *testing.T) {
@@ -786,5 +780,42 @@ func TestOpInTCoreOps(t *testing.T) {
 		if !opInT(op) {
 			t.Errorf("opInT(%q) = false, want true (rewrite target)", op)
 		}
+	}
+}
+
+// Flatten closes every carried body before the merge (esm-spec §10.7;
+// esm-libraries-spec §4.7.5 steps 2 and 4): the twins' `inv_dx` becomes a
+// trailing parameter of `interior_stencil`, which the nested references of
+// `outer_stencil` and `d_x_rule` bind to the same name, so the closed bodies
+// are identical and kept once, correct for both models.
+func TestOOL_FlattenClosesTwinBodies(t *testing.T) {
+	file, err := LoadPath(oolConf("flatten_registry_merge_transitive", "fixture_twins.esm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flat, err := Flatten(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := map[string]map[string]any{}
+	var names []string
+	for _, e := range flat.TemplateRegistry {
+		names = append(names, e.Name)
+		reg[e.Name] = e.Declaration.(map[string]any)
+	}
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+	if want := []string{"d_x_rule", "interior_stencil", "outer_stencil"}; !reflect.DeepEqual(sorted, want) {
+		t.Fatalf("flattened registry = %v; want one closed entry per template %v", names, want)
+	}
+	for _, n := range sorted {
+		params := templateParams(reg[n])
+		if len(params) == 0 || params[len(params)-1] != "inv_dx" {
+			t.Errorf("%s params = %v; want inv_dx appended", n, params)
+		}
+	}
+	blob, _ := json.Marshal(reg["outer_stencil"]["body"])
+	if !strings.Contains(string(blob), `"inv_dx":"inv_dx"`) {
+		t.Errorf("outer_stencil's nested reference must bind inv_dx => inv_dx: %s", blob)
 	}
 }

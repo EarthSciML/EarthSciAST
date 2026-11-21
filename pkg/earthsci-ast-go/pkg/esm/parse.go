@@ -467,7 +467,7 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	authoredTemplateRHS := authoredTemplateApplications(view)
 
 	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters,
-		authoredMountDeclared)
+		authoredMountDeclared, o.authoredKeyOrders)
 	if err != nil {
 		return nil, err
 	}

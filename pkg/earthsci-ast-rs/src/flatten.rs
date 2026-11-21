@@ -372,17 +372,6 @@ pub enum FlattenError {
         target: String,
     },
 
-    /// A SURVIVING `expression_templates` registry body names a variable a
-    /// coupling rule rewrote out of the flattened equations (esm-spec §9.6.4,
-    /// CONFORMANCE_SPEC §5.35).
-    ///
-    /// Carries the stable `template_body_references_coupling_rewritten_variable`
-    /// diagnostic code. Not `#[from]`: [`FlattenError::CouplingImport`] already
-    /// owns the blanket conversion from [`crate::diagnostic::DiagnosticError`],
-    /// and a §9.6.4 refusal is not a §10.11 import failure.
-    #[error("{0}")]
-    ExpressionTemplate(crate::diagnostic::DiagnosticError),
-
     /// A data-fed parameter's record shape, decided only once
     /// `coupling_import` edges are expanded, breaks esm-spec §8.5.1: a
     /// misplaced record axis (`record_axis_misplaced`), a record axis on a
@@ -406,9 +395,7 @@ impl FlattenError {
         Some(match self {
             FlattenError::UnloweredOperator { .. } => codes::UNLOWERED_OPERATOR,
             FlattenError::DomainUnitMismatch { .. } => codes::DOMAIN_UNIT_MISMATCH,
-            FlattenError::CouplingImport(d)
-            | FlattenError::ExpressionTemplate(d)
-            | FlattenError::RecordsPerSample(d) => d.code,
+            FlattenError::CouplingImport(d) | FlattenError::RecordsPerSample(d) => d.code,
             FlattenError::CoupleMultiplicativeNoTendency { .. } => {
                 "couple_multiplicative_no_tendency"
             }
@@ -486,12 +473,10 @@ pub struct FlattenMetadata {
     /// NAMED-transform `variable_map`'s substituted `to`, and every merged-away
     /// spelling of [`FlattenMetadata::merged_variable_renames`].
     ///
-    /// Only the registry guard reads it
-    /// ([`check_registry_coupling_rewrites`]): a surviving
-    /// `expression_templates` body is authored source no substitution reaches,
-    /// so a body naming one of these is REFUSED rather than resolved
-    /// (CONFORMANCE_SPEC §5.35). Not a consumer-facing map, unlike
-    /// `merged_variable_renames`: it says a name is GONE, not where it went.
+    /// Provenance: it says a name is GONE, not where it went (unlike
+    /// `merged_variable_renames`). A carried template-registry body reads no
+    /// component name (flatten closes every body, esm-spec §10.7), so no
+    /// registry body can name one of these.
     /// The Rust twin of Python's `FlattenMetadata.coupling_rewritten_names` and
     /// Julia's local `map_rewritten_names`.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -672,11 +657,12 @@ pub struct FlattenedSystem {
     pub index_sets: IndexMap<String, IndexSet>,
     /// The MERGED expression-template registry (esm-spec §9.6.4 rule 7, §10.7;
     /// esm-libraries-spec §4.7.5 step 4): the union of the per-component
-    /// registries with each model's carried bodies component-SCOPED first,
-    /// deep-equal same-name entries deduplicated at first occurrence, and a
-    /// non-deep-equal same-name collision renamed to `<ComponentPath>.<name>`
-    /// in every owning component with the rename propagated along the
-    /// reference DAG. See [`merged_template_registry`].
+    /// registries with every carried body CLOSED first (its free names made
+    /// explicit trailing parameters), deep-equal same-name entries
+    /// deduplicated at first occurrence, and a non-deep-equal same-name
+    /// collision renamed to `<ComponentPath>.<name>`, one entry per distinct
+    /// definition named after its first owner, with the rename propagated
+    /// along the reference DAG. See [`merged_template_registry`].
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub template_registry: IndexMap<String, serde_json::Value>,
     /// The provider-served loaded fields this system consumes (esm-spec §8.5):
@@ -1094,11 +1080,10 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         lifted_shapes,
     } = parts;
 
-    // Phase 5f: the MERGED expression-template registry (esm-spec §9.6.4 rule 7)
-    // ...and the ONE place a coupling-rewritten name is REFUSED rather than
-    // resolved. See [`check_registry_coupling_rewrites`].
+    // Phase 5f: the MERGED expression-template registry (esm-spec §9.6.4 rule
+    // 7, §10.7). Its bodies are closed, so they read no component name a
+    // coupling rule rewrote. See [`merged_template_registry`].
     let template_registry = merged_template_registry(file);
-    check_registry_coupling_rewrites(&template_registry, &coupling_rewritten_names)?;
 
     let equation_lifted: Vec<bool> = if equations.iter().any(|fe| fe.lifted) {
         equations.iter().map(|fe| fe.lifted).collect()
@@ -1633,132 +1618,23 @@ impl ShapeInference<'_, '_> {
     }
 }
 
-/// Keys of an expression node whose STRING value names something other than a
-/// variable, so a raw-body walk must not read them as references.
-const TEMPLATE_BODY_NON_OPERAND_KEYS: &[&str] =
-    &["op", "wrt", "dim", "fn", "id", "name", "semiring", "reduce"];
-
-/// Every variable name a RAW (unparsed) template body references.
-///
-/// The registry holds bodies as JSON rather than as [`Expr`], so this walks the
-/// JSON: a bare string in an OPERAND position is a variable reference. A
-/// structural key (`op`, `wrt`, `fn`, …) names an operator, an axis or a
-/// registry id and is skipped. Mirrors Python
-/// `flatten.py::_template_body_var_names`.
-fn template_body_var_names(body: &serde_json::Value) -> BTreeSet<String> {
-    fn walk(node: &serde_json::Value, operand: bool, out: &mut BTreeSet<String>) {
-        match node {
-            serde_json::Value::String(name) if operand => {
-                out.insert(name.clone());
-            }
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    walk(item, operand, out);
-                }
-            }
-            serde_json::Value::Object(map) => {
-                for (key, value) in map {
-                    walk(
-                        value,
-                        !TEMPLATE_BODY_NON_OPERAND_KEYS.contains(&key.as_str()),
-                        out,
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut out = BTreeSet::new();
-    walk(body, false, &mut out);
-    out
-}
-
-/// Refuse a SURVIVING registry body that names a coupling-rewritten variable.
-///
-/// A `variable_map` substitution and an `operator_compose` renaming match both
-/// DELETE a name from the flattened tables and rewrite the equations off it. A
-/// surviving `expression_templates` body is a shadow copy of authored source
-/// that no equation walk reaches, and it expands at the BUILD boundary rather
-/// than at flatten — so a body still naming a deleted variable would expand,
-/// later and elsewhere, into a name the flattened system does not declare (for
-/// `param_to_var` / `conversion_factor`, an unbound variable deep in the build;
-/// for the scaling transforms, a silent semantic divergence from the
-/// expand-at-load image).
-///
-/// This is the ONE site where such a reference is REFUSED rather than resolved
-/// (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
-/// silently diverge from the expand-at-load image the same document produces
-/// with reference-preserving expansion disabled. A template `param` SHADOWS the
-/// outer name (esm-spec §9.6.1), so a body that BINDS the name through its
-/// params is fine — which is exactly the fix the message names.
-///
-/// Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites` and Python
-/// `flatten.py::_check_registry_coupling_rewrites`.
-fn check_registry_coupling_rewrites(
-    registry: &IndexMap<String, serde_json::Value>,
-    rewritten: &BTreeSet<String>,
-) -> Result<(), FlattenError> {
-    if registry.is_empty() || rewritten.is_empty() {
-        return Ok(());
-    }
-    // Sorted, so the template a multi-entry registry reports is not a function
-    // of document order — the peer bindings sort here for the same reason.
-    let mut names: Vec<&String> = registry.keys().collect();
-    names.sort_unstable();
-    for tname in names {
-        let Some(decl) = registry[tname.as_str()].as_object() else {
-            continue;
-        };
-        let Some(body) = decl.get("body") else {
-            continue;
-        };
-        let params: BTreeSet<&str> = decl
-            .get("params")
-            .and_then(|p| p.as_array())
-            .map(|entries| entries.iter().filter_map(|v| v.as_str()).collect())
-            .unwrap_or_default();
-        let hits: Vec<String> = template_body_var_names(body)
-            .into_iter()
-            .filter(|name| !params.contains(name.as_str()) && rewritten.contains(name))
-            .collect();
-        if !hits.is_empty() {
-            return Err(FlattenError::ExpressionTemplate(crate::diagnostic::err(
-                crate::diagnostic::codes::TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
-                format!(
-                    "expression template '{tname}' body references '{}', which a coupling rule \
-                     rewrote in the flattened equations; the registry body would expand to a \
-                     stale name at the build boundary. Bind the value through the template's \
-                     params, or expand the reference before coupling (esm-spec §9.6.4).",
-                    hits.join("', '")
-                ),
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// The MERGED expression-template registry of the flattened representation
-/// (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4).
+/// (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 steps 2 and 4).
 ///
 /// Union of the per-component registries [captured at load]
 /// (`EsmFile::component_templates`), in this order:
 ///
-/// 1. **Scope, THEN union.** Each MODEL block's bodies are component-scoped
-///    first ([`scope_template_body`]), because the dedup below compares
-///    POST-scoping bodies. Step 4 calls this an ordering requirement rather
-///    than a parenthetical, and it is load-bearing: two components importing
-///    one library each supply their own free `inv_dx`, so their carried entries
-///    are byte-identical pre-scoping and deduplicate to a single body that is
-///    correct for NEITHER. Scoping also makes them non-deep-equal, which is
-///    what routes them into the collision rename and keeps an entry per owner.
-///    Reaction-system blocks pass through UNSCOPED by policy, mirroring the
-///    Julia reference and the Python oracle: a rate-law reference is expanded
-///    eagerly at collect, so a reaction-system entry is never resolved against
-///    the post-flatten scope.
+/// 1. **Close, THEN union.** Every component's carried bodies (models and
+///    reaction systems alike) are closed first ([`close_template_bodies`]):
+///    a name a body reads free becomes an explicit trailing parameter, which
+///    each reference binds to the same name in its own site's scope. A body's
+///    free names are read in the scope of the reference's site (a subsystem's
+///    reference reads the subsystem's names), so one definition can serve
+///    several subsystems and several components.
 /// 2. **Deep-equal dedup at first occurrence.**
-/// 3. **Collision rename** to `<ComponentPath>.<name>` in EVERY owning
-///    component, propagated along the reference DAG
-///    ([`crate::lower_expression_templates::registry_collision_names`]) so no
+/// 3. **Collision rename** to `<ComponentPath>.<name>`, one entry per distinct
+///    definition, named after its first owner, propagated along the reference
+///    DAG ([`crate::lower_expression_templates::merge_flat_registry`]) so no
 ///    surviving body holds a reference the merged registry cannot resolve.
 ///
 /// `match` rules are excluded: only match-less templates are referenceable
@@ -1770,11 +1646,12 @@ fn check_registry_coupling_rewrites(
 ///
 /// Rust's typed build path expands every surviving reference at load (RFC
 /// out-of-line-expression-templates §7.7), so no equation reaching here carries
-/// an `apply_expression_template` node and the rename has no COMPONENT
-/// reference site left to rewrite — step 4's "Applicability" paragraph says
-/// exactly this. The registry is still carried, because the field is normative
-/// and a consumer must be able to reconstitute the reference-preserving
-/// document from the flattened form alone.
+/// an `apply_expression_template` node and neither the rename nor the added
+/// bindings have a COMPONENT reference site left to rewrite — step 4's
+/// "Applicability" paragraph says exactly this. The registry is still carried,
+/// closed, because the field is normative and a consumer must be able to
+/// reconstitute the reference-preserving document from the flattened form
+/// alone.
 pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::Value> {
     let Some(component_templates) = &file.component_templates else {
         return IndexMap::new();
@@ -1795,136 +1672,191 @@ pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::
         }
     }
 
-    // (component path, its scoped match-less block), in document order.
+    // (component path, its closed match-less block), in document order.
     let mut blocks: Vec<(String, serde_json::Map<String, serde_json::Value>)> = Vec::new();
     for compkey in &ordered {
         let Some(block) = component_templates.get(compkey).and_then(|v| v.as_object()) else {
             continue;
         };
-        let (section, cname) = compkey.split_once('.').unwrap_or(("", compkey.as_str()));
-        let model = (section == "models")
-            .then(|| file.models.as_ref().and_then(|m| m.get(cname)))
-            .flatten();
-        let mut scoped_block = serde_json::Map::new();
-        for (tname, decl) in block {
-            if decl.get("match").is_some_and(|m| !m.is_null()) {
-                continue; // match rules are not referenceable, so not merged
-            }
-            let scoped = match (model, decl.get("body")) {
-                (Some(model), Some(body)) => {
-                    let params: HashSet<String> = decl
-                        .get("params")
-                        .and_then(|p| p.as_array())
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|v| v.as_str().map(str::to_string))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let mut locals: HashSet<String> = model.variables.keys().cloned().collect();
-                    if let Some(subs) = &model.subsystems {
-                        locals.extend(subs.keys().cloned());
-                    }
-                    for p in &params {
-                        locals.remove(p);
-                    }
-                    match serde_json::from_value::<Expr>(body.clone()) {
-                        Ok(parsed) => {
-                            let scoped_body = scope_template_body(
-                                &parsed,
-                                cname,
-                                &locals,
-                                &HashSet::new(),
-                                &HashMap::new(),
-                            );
-                            match serde_json::to_value(&scoped_body) {
-                                Ok(v) => {
-                                    let mut d = decl.clone();
-                                    if let Some(obj) = d.as_object_mut() {
-                                        obj.insert("body".to_string(), v);
-                                    }
-                                    d
-                                }
-                                // A body that will not re-serialize is carried
-                                // verbatim rather than dropped: the registry is
-                                // provenance, and losing an entry is worse than
-                                // carrying an unscoped one.
-                                Err(_) => decl.clone(),
-                            }
-                        }
-                        Err(_) => decl.clone(),
-                    }
-                }
-                _ => decl.clone(),
-            };
-            scoped_block.insert(tname.clone(), scoped);
-        }
-        blocks.push((cname.to_string(), scoped_block));
+        let cname = compkey.split_once('.').map_or(compkey.as_str(), |(_, c)| c);
+        let (closed, _added) = close_template_bodies(block);
+        let closed = closed
+            .into_iter()
+            // match rules are not referenceable, so not merged
+            .filter(|(_, decl)| !decl.get("match").is_some_and(|m| !m.is_null()))
+            .collect();
+        blocks.push((cname.to_string(), closed));
     }
 
     let (merged, _rename) = crate::lower_expression_templates::merge_flat_registry(&blocks);
     merged.into_iter().collect()
 }
 
-/// Component-scope ONE carried template body: prefix exactly the references
-/// that name one of the OWNING component's locals.
+/// `block` (a component's carried template registry) with every match-less
+/// body's free names made EXPLICIT parameters (esm-spec §10.7;
+/// esm-libraries-spec §4.7.5 step 2), and the parameters each changed template
+/// gained.
 ///
-/// Unlike [`namespace_expr`] — which prefixes every bare reference except an
-/// explicit leave-alone set — this is a WHITELIST, matching the Julia
-/// `namespace_expr(body, cname, local_names)` and the Python oracle's
-/// `_scope_template_body`: a body legitimately references its own formal
-/// `params`, loop symbols, and document-scoped index sets, none of which is a
-/// component local and none of which may be prefixed. The caller removes the
-/// template's `params` from `locals` before calling.
+/// Entries are visited in block order, callees (templates of `block` the body
+/// references) first. A body's free names are the variable leaves it reads and
+/// does not bind itself (an enclosing `output_idx`, `ranges` key or `integral`
+/// variable binds every name below it), binding values of nested references
+/// included, that are not its parameters; first every nested reference binds
+/// its callee's added parameters to the same names ([`bind_added_params`]).
+/// The free names, sorted by UTF-8 bytes, are appended to `params`; the body
+/// is rewritten only when a nested reference gained a binding. A declaration
+/// with no body, or with a `match`, is unchanged.
 ///
-/// `captures` maps a template name to the loop symbols its body binds
-/// ([`template_captures`]): a reference's binding value spelling one of them is
-/// that loop index once substituted, so the reference's bindings see it as
-/// bound. Flatten passes none, as the Julia reference does; the mount hoist
-/// passes the mounted block's.
-pub(crate) fn scope_template_body(
-    expr: &Expr,
-    prefix: &str,
-    locals: &HashSet<String>,
-    bound: &HashSet<String>,
-    captures: &HashMap<String, HashSet<String>>,
-) -> Expr {
-    match expr {
-        Expr::Number(n) => Expr::Number(*n),
-        Expr::Integer(n) => Expr::Integer(*n),
-        Expr::Variable(name) => {
-            if bound.contains(name) {
-                return Expr::Variable(name.clone());
-            }
-            let head = name.split('.').next().unwrap_or(name.as_str());
-            if locals.contains(head) {
-                Expr::Variable(format!("{prefix}.{name}"))
-            } else {
-                Expr::Variable(name.clone())
-            }
-        }
-        Expr::Operator(node) => {
-            let mut child_bound = bound.clone();
-            node.for_each_binder(Binders::SCOPE, |n| {
-                child_bound.insert(n.to_string());
-            });
+/// Expansion substitutes a body into its call site, whose scope then names the
+/// body's free names; binding each free name to itself at the site gives the
+/// same names in the same scope, so a reference that binds the added
+/// parameters denotes the same expansion. Mirrors the Julia reference
+/// `_tpl_explicit_free`.
+pub(crate) fn close_template_bodies(
+    block: &serde_json::Map<String, serde_json::Value>,
+) -> (
+    serde_json::Map<String, serde_json::Value>,
+    HashMap<String, Vec<String>>,
+) {
+    struct Close<'a> {
+        block: &'a serde_json::Map<String, serde_json::Value>,
+        out: HashMap<String, serde_json::Value>,
+        visiting: HashSet<String>,
+        added: HashMap<String, Vec<String>>,
+    }
+    fn callees(e: &Expr, out: &mut Vec<String>) {
+        if let Expr::Operator(node) = e {
             if node.op == crate::lower_expression_templates::APPLY_OP_NAME
-                && let Some(cap) = node.name.as_ref().and_then(|n| captures.get(n))
+                && let Some(n) = &node.name
             {
-                child_bound.extend(cap.iter().cloned());
+                out.push(n.clone());
             }
-            let mut out = node.map_children(&mut |c| {
-                scope_template_body(c, prefix, locals, &child_bound, captures)
-            });
-            if let Some(join) = &node.join {
-                let binders: HashSet<&str> = node.binders(Binders::LOOP).into_iter().collect();
-                if let Some(ns) = namespace_join_names(join, &binders, prefix, locals) {
-                    out.join = Some(ns);
-                }
-            }
-            Expr::operator(out)
+            node.for_each_child(&mut |c| callees(c, out));
         }
     }
+    fn free_leaves(e: &Expr, bound: &HashSet<String>, out: &mut BTreeSet<String>) {
+        match e {
+            Expr::Variable(n) => {
+                // `\0`-prefixed names are internal sentinels, never reads.
+                if !bound.contains(n) && !n.starts_with('\0') {
+                    out.insert(n.clone());
+                }
+            }
+            Expr::Operator(node) => {
+                let binders = node.binders(Binders::SCOPE);
+                if binders.is_empty() {
+                    node.for_each_child(&mut |c| free_leaves(c, bound, out));
+                } else {
+                    let mut inner = bound.clone();
+                    inner.extend(binders.into_iter().map(str::to_string));
+                    node.for_each_child(&mut |c| free_leaves(c, &inner, out));
+                }
+            }
+            _ => {}
+        }
+    }
+    impl Close<'_> {
+        fn visit(&mut self, name: &str) {
+            if self.out.contains_key(name) || !self.visiting.insert(name.to_string()) {
+                return;
+            }
+            let decl = &self.block[name];
+            let body = decl.get("body");
+            let has_match = decl.get("match").is_some_and(|m| !m.is_null());
+            let parsed = match body {
+                Some(b) if !has_match => serde_json::from_value::<Expr>(b.clone()).ok(),
+                _ => None,
+            };
+            // No body, a `match` rule, or a body that is not an Expression:
+            // carried verbatim.
+            let Some(typed) = parsed else {
+                self.out.insert(name.to_string(), decl.clone());
+                return;
+            };
+            let mut cs = Vec::new();
+            callees(&typed, &mut cs);
+            for c in cs {
+                if self.block.contains_key(&c) {
+                    self.visit(&c);
+                }
+            }
+            let bound = bind_added_params(&typed, &self.added);
+            let params: Vec<String> = decl
+                .get("params")
+                .and_then(|p| p.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut free = BTreeSet::new();
+            free_leaves(&bound, &HashSet::new(), &mut free);
+            let free: Vec<String> = free.into_iter().filter(|n| !params.contains(n)).collect();
+            let body_changed = bound != typed;
+            if !body_changed && free.is_empty() {
+                self.out.insert(name.to_string(), decl.clone());
+                return;
+            }
+            let mut nd = decl.clone();
+            if let Some(obj) = nd.as_object_mut() {
+                if body_changed && let Ok(v) = serde_json::to_value(&bound) {
+                    obj.insert("body".to_string(), v);
+                }
+                if !free.is_empty() {
+                    let all = params
+                        .iter()
+                        .chain(free.iter())
+                        .map(|n| serde_json::Value::String(n.clone()))
+                        .collect();
+                    obj.insert("params".to_string(), serde_json::Value::Array(all));
+                }
+            }
+            if !free.is_empty() {
+                self.added.insert(name.to_string(), free);
+            }
+            self.out.insert(name.to_string(), nd);
+        }
+    }
+    let mut st = Close {
+        block,
+        out: HashMap::new(),
+        visiting: HashSet::new(),
+        added: HashMap::new(),
+    };
+    for name in block.keys() {
+        st.visit(name);
+    }
+    let Close { mut out, added, .. } = st;
+    let closed = block
+        .keys()
+        .map(|n| (n.clone(), out.remove(n).unwrap_or_else(|| block[n].clone())))
+        .collect();
+    (closed, added)
+}
+
+/// `e` with every reference to a template of `added` ([`close_template_bodies`])
+/// binding each added parameter to the same name, `n => n`. A binding the
+/// reference already has is kept. Mirrors the Julia reference
+/// `_tpl_bind_explicit`.
+fn bind_added_params(e: &Expr, added: &HashMap<String, Vec<String>>) -> Expr {
+    let Expr::Operator(node) = e else {
+        return e.clone();
+    };
+    if added.is_empty() {
+        return e.clone();
+    }
+    let mut out = node.map_children(&mut |c| bind_added_params(c, added));
+    if out.op == crate::lower_expression_templates::APPLY_OP_NAME
+        && let Some(names) = out.name.as_ref().and_then(|n| added.get(n))
+    {
+        let b = out.bindings.get_or_insert_with(Default::default);
+        for n in names {
+            b.entry(n.clone())
+                .or_insert_with(|| Expr::Variable(n.clone()));
+        }
+    }
+    Expr::operator(out)
 }
 
 /// Phase 5e of [`flatten`]: the independent variables of the flattened system
@@ -2232,9 +2164,8 @@ fn apply_coupling_entries(
     per_system: &mut Vec<SystemBlock>,
 ) -> Result<CouplingOutcome, FlattenError> {
     let mut coupling_rules_applied = Vec::new();
-    // Every name a coupling rule rewrote OUT of the equations, for the registry
-    // guard alone (see [`FlattenMetadata::coupling_rewritten_names`]). Julia
-    // calls this local `map_rewritten_names`.
+    // Every name a coupling rule rewrote OUT of the equations (see
+    // [`FlattenMetadata::coupling_rewritten_names`]).
     let mut coupling_rewritten_names: BTreeSet<String> = BTreeSet::new();
     // The document-wide merge map: every state spelling an `operator_compose`
     // renaming match has DELETED, mapped onto the survivor (issue #230). It

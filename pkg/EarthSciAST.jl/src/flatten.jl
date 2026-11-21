@@ -1089,25 +1089,27 @@ end
 # against the collected tables, before any coupling consumes a spelling; record
 # the data-fed parameters.
 function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
-    # The merged template registry (esm-spec §9.6.4 rule 7, §10.7), its bodies
-    # component-scoped first (`_scope_component_templates`). Computed before
-    # collection because its collision rename must reach each component's
-    # reference sites while they are still attributable to their owner.
-    # Reaction-rate references survive flatten too: each reaction system's
-    # bodies first get their free names as explicit parameters
-    # (`_tpl_explicit_free`), which every rate and event reference then binds
-    # in the system's own scope.
-    scoped = _scope_component_templates(file)
-    rs_added = Dict{String, Dict{String, Vector{String}}}()
+    # The merged template registry (esm-spec §9.6.4 rule 7, §10.7;
+    # esm-libraries-spec §4.7.5 step 4). A body's free names are read in the
+    # scope of each reference's site (a subsystem's reference reads the
+    # subsystem's names, and one definition can serve several subsystems), so
+    # every body first gets its free names as explicit parameters
+    # (`_tpl_explicit_free`), which every reference then binds in its own
+    # site's scope as it is namespaced. Computed before collection because the
+    # collision rename must reach each component's reference sites while they
+    # are still attributable to their owner.
+    ct0 = file.component_templates
+    scoped = ct0 === nothing ? nothing : OrderedDict{String, Any}(String(k) => v for (k, v) in ct0)
+    tpl_added = Dict{String, Dict{String, Vector{String}}}()
     if scoped !== nothing
         for (compkey, block) in collect(scoped)
             parts = split(String(compkey), "."; limit = 2)
-            (length(parts) == 2 && parts[1] == "reaction_systems") || continue
-            scoped[compkey], rs_added[String(parts[2])] = _tpl_explicit_free(block)
+            length(parts) == 2 || continue
+            scoped[compkey], tpl_added[String(parts[2])] = _tpl_explicit_free(block)
         end
     end
     template_registry, template_rename = _merge_flat_registry(scoped)
-    file = _own_transform_refs(file, template_rename, rs_added)
+    file = _own_transform_refs(file, template_rename, tpl_added)
     st = FlattenState(file, template_registry)
     ct = file.component_templates
     if file.models !== nothing
@@ -1115,6 +1117,7 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
             push!(st.components, name)
             _collect_model!(
                 st, model, name;
+                tpl_added = get(tpl_added, name, nothing),
                 tpl_rename = get(template_rename, name, nothing),
                 tpl_captures = template_captures(
                     ct === nothing ? nothing : get(ct, "models.$(name)", nothing)
@@ -1127,7 +1130,7 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
             push!(st.components, name)
             _collect_reaction_system!(
                 st, rsys, name;
-                tpl_added = get(rs_added, name, nothing),
+                tpl_added = get(tpl_added, name, nothing),
                 tpl_rename = get(template_rename, name, nothing),
                 tpl_captures = template_captures(
                     ct === nothing ? nothing : get(ct, "reaction_systems.$(name)", nothing)
@@ -1143,21 +1146,20 @@ end
 # The `apply_expression_template` references of a `variable_map` expression
 # transform are owned by the RECEIVING component (the first segment of `to`,
 # esm-spec §10.4), whose registry they resolve against: they follow that
-# component's slice of the registry collision rename (§9.6.4 rule 7, §10.7) and,
-# for a reaction system, bind its templates' explicit free names
-# (`_tpl_explicit_free`) to the system's scoped names, as its own rate
-# references do. The transform's other references are fully scoped already
+# component's slice of the registry collision rename (§9.6.4 rule 7, §10.7) and
+# bind its templates' explicit free names (`_tpl_explicit_free`) to the
+# component's scoped names, as its own references do. The transform's other references are fully scoped already
 # (§10.4), so nothing else is namespaced. Library edges (§10.10) arrive here
 # role-substituted and are treated the same way.
-function _own_transform_refs(file::EsmFile, template_rename, rs_added)
-    (isempty(template_rename) && isempty(rs_added)) && return file
+function _own_transform_refs(file::EsmFile, template_rename, tpl_added)
+    (isempty(template_rename) && isempty(tpl_added)) && return file
     changed = false
     coupling = CouplingEntry[]
     for entry in file.coupling
         if entry isa CouplingVariableMap && entry.transform isa ASTExpr
             owner = String(first(split(entry.to, "."; limit = 2)))
             tr = entry.transform::ASTExpr
-            added = get(rs_added, owner, nothing)
+            added = get(tpl_added, owner, nothing)
             if added !== nothing && !isempty(added)
                 tr = _tpl_bind_explicit(tr, added)
                 tr = _scope_added_bindings(tr, added, owner)
@@ -1179,7 +1181,7 @@ function _own_transform_refs(file::EsmFile, template_rename, rs_added)
 end
 
 # The bindings `_tpl_bind_explicit` added (a free name bound to itself) are
-# names of the receiving system `owner`: scope them `owner.name`.
+# names of the receiving component `owner`: scope them `owner.name`.
 function _scope_added_bindings(e::ASTExpr, added, owner::String)
     e isa OpExpr || return e
     out = map_children(c -> _scope_added_bindings(c, added, owner), e)::OpExpr
@@ -1250,9 +1252,10 @@ function _apply_coupling!(st::FlattenState)
         )
     end
 
-    # Names a `variable_map` substitution replaced in the equations (an
-    # expression `transform` keeps its `to` references, so it is exempt).
-    rewritten = Set{String}()
+    # A template-registry body reads no component name (`_tpl_explicit_free`
+    # made its free names parameters its references bind), so a replaced or
+    # merged-away name it read is in a reference's bindings, where the rewrites
+    # below reach it like any other site.
     shapeless = _data_fed_without_shape(file)
     for (k, entry) in enumerate(file.coupling)
         entry isa CouplingVariableMap || continue
@@ -1262,18 +1265,10 @@ function _apply_coupling!(st::FlattenState)
             observeds = st.observeds, index = k - 1, shapeless = shapeless
         )
         resolved.transform isa ASTExpr && continue
-        push!(rewritten, resolved.to)
         # Every other site naming the replaced parameter follows the
         # replacement the equations took (esm-libraries-spec §4.7.5).
         _map_flat_sites!(_variable_map_rewrite(resolved), st)
     end
-    # A surviving template-registry body is authored source no rewrite above
-    # reaches: one that still names a replaced or merged-away variable would
-    # expand at the build boundary into a name the system no longer declares.
-    # Refused, not rewritten, so the result cannot diverge from the
-    # expand-at-load image.
-    union!(rewritten, keys(st.merged_renames))
-    _check_registry_coupling_rewrites(st.template_registry, rewritten)
     return st
 end
 
@@ -1419,120 +1414,6 @@ end
 # ========================================
 # FlattenedSystem → runnable single-model ESM document
 # ========================================
-
-# esm-spec §9.6.4 rule 7 / §10.7: registry bodies are COMPONENT-SCOPED source —
-# their free variable references resolve in the owning component's namespace,
-# exactly as the expand-at-load image does (load-time expansion splices the body
-# into the component's equations BEFORE flatten renames them). The flattened
-# registry must therefore carry bodies whose free variables are renamed with the
-# SAME (prefix, local-name) map `_collect_model!` applies to the component's
-# equations — otherwise a body spliced at the BUILD boundary (the
-# reference-preserving fast path, or `expand_flattened_refs`) references bare
-# names the flat var_map does not contain. Template formal params are EXCLUDED
-# from the rename set: they are the template's own scope, substituted at
-# expansion, never component variables. Nested reference BINDINGS inside a body
-# are scoped by `namespace_expr`'s apply arm; body-local aggregate loop names
-# are not component variables, so the map never touches them. The caller's
-# `EsmFile` registry is untouched (emit still produces the authored bodies) —
-# this scopes a COPY for the flat registry only. Reaction-system blocks pass
-# through unscoped: their bodies' free names become explicit parameters
-# instead (`_tpl_explicit_free`, in `_collect_components`), bound at every rate
-# and event reference in the system's own scope.
-function _scope_component_templates(file::EsmFile)
-    ct = file.component_templates
-    ct === nothing && return nothing
-    # OrderedDict, iterated in the order the parser recorded the components:
-    # `_merge_flat_registry` consumes this map positionally now that §4.7.5
-    # step 4 makes the merged registry document-ordered.
-    out = OrderedDict{String, Any}()
-    for (compkey, block) in ct
-        parts = split(String(compkey), "."; limit = 2)
-        model = length(parts) == 2 && parts[1] == "models" && file.models !== nothing ?
-            get(file.models, String(parts[2]), nothing) : nothing
-        if !(model isa Model) || !_is_object(block)
-            out[String(compkey)] = block
-            continue
-        end
-        cname = String(parts[2])
-        local_names = Set{String}(keys(model.variables))
-        for (sub_name, _) in model.subsystems
-            push!(local_names, sub_name)
-        end
-        newblock = OrderedDict{String, Any}()
-        for (tname, decl) in pairs(block)
-            body_raw = _raw_get(decl, "body")
-            if body_raw === nothing
-                newblock[string(tname)] = decl
-                continue
-            end
-            pnames = Set{String}()
-            params_raw = _raw_get(decl, "params")
-            if params_raw isa AbstractVector
-                for p in params_raw
-                    p isa AbstractString && push!(pnames, String(p))
-                end
-            end
-            scoped = namespace_expr(
-                expression_from_json(body_raw), cname,
-                setdiff(local_names, pnames)
-            )
-            nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl))
-            nd["body"] = serialize_expression(scoped)
-            newblock[string(tname)] = nd
-        end
-        out[String(compkey)] = newblock
-    end
-    return out
-end
-
-"""
-    _check_registry_coupling_rewrites(registry, rewritten)
-
-Shadow-registry validation (flatten-time, cheap): `_substitute_variable_map!`
-rewrites a coupling `variable_map`'s `to` name in every VISIBLE equation AST,
-but a surviving template-registry body is authored source the substitution
-never touches. If such a body still references a rewritten name, its expansion
-at the build boundary would surface a STALE reference (for `param_to_var` /
-`conversion_factor`, a deleted parameter → `E_TREEWALK_UNBOUND_VARIABLE` deep
-in the build; for the scaling transforms, a silent semantic divergence from the
-Expand-at-load image). Throw a clear error naming the template and the variable
-instead. Free names are collected with the generated walkers
-(`foreach_subexpr` descends `bindings` and `ranges`); the template's own formal
-`params` are its private scope and excluded.
-"""
-function _check_registry_coupling_rewrites(registry, rewritten::Set{String})
-    (isempty(registry) || isempty(rewritten)) && return nothing
-    for tname in sort!(collect(keys(registry)))
-        decl = registry[tname]
-        _is_object(decl) || continue
-        body_raw = _raw_get(decl, "body")
-        body_raw === nothing && continue
-        pnames = Set{String}()
-        params_raw = _raw_get(decl, "params")
-        if params_raw isa AbstractVector
-            for p in params_raw
-                p isa AbstractString && push!(pnames, String(p))
-            end
-        end
-        names = Set{String}()
-        foreach_subexpr(expression_from_json(body_raw)) do x
-            x isa VarExpr && push!(names, x.name)
-            nothing
-        end
-        hits = sort!(collect(intersect(setdiff(names, pnames), rewritten)))
-        isempty(hits) || throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
-                "expression template '$(String(tname))' body references " *
-                    "'$(join(hits, "', '"))', which a coupling rule rewrote in " *
-                    "the flattened equations; the registry body would expand to a stale " *
-                    "name at the build boundary. Bind the value through the template's " *
-                    "params, or expand the reference before coupling (esm-spec §9.6.4)."
-            )
-        )
-    end
-    return nothing
-end
 
 """
     flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}

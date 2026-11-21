@@ -409,14 +409,13 @@ merged registry no longer contains, and expansion would fail with
 `apply_expression_template_unknown_template` naming a stencil no model ever
 mentioned. All four entries must therefore be owner-path renamed
 (`A.outer_stencil` → `A.interior_stencil`, `B.outer_stencil` →
-`B.interior_stencil`) with the component reference sites following. The same
-collision arises without any `rebind` once flatten applies the §10.7
-component-scoping to a body's free variables — which is why a document that
-loads and runs as a single model can break the moment a second model is added.
+`B.interior_stencil`) with the component reference sites following. Owners
+whose entries are deep-equal once their nested references are renamed share one
+renamed entry, named after the first of them in document order.
 
 ### `flatten_registry_merge_transitive/fixture_twins.esm`
 
-The **scoping precondition**, isolated: the same two models with no `rebind`, so
+The **closing precondition**, isolated: the same two models with no `rebind`, so
 their registries are byte-identical. `interior_stencil`'s body references the
 free name `inv_dx`, a model-local parameter that denotes a *different* variable
 in each model. The fixture pins the two layers of §10.7 against each other:
@@ -426,18 +425,31 @@ in each model. The fixture pins the two layers of §10.7 against each other:
   identical bodies and dedupes them under their bare names
   (`{interior_stencil, outer_stencil}`), leaving the free `inv_dx` alone. The
   pair it returns is self-consistent with the un-namespaced document.
-- **scoping ∘ merge** — Julia's executing `flatten`, the only binding whose
-  flattened representation carries a registry, applies the §10.7 component
-  scoping first. That rewrites `inv_dx` to `A.inv_dx` / `B.inv_dx`, makes the
-  copies non-deep-equal, and forces the owner-path rename of all four entries
-  (the wrapper via the reference-DAG propagation above).
+- **closing ∘ merge** — the executing `flatten` closes every body first: `inv_dx`
+  becomes a trailing parameter of `interior_stencil`, and through the nested
+  references of `outer_stencil` and `d_x_rule`, which each model's references
+  bind to its own `A.inv_dx` / `B.inv_dx`. The closed bodies are identical and are
+  kept once, correct for both models.
 
-Deduping *before* scoping would keep one body whose `inv_dx` is correct for
-neither model, which is why the ordering is normative (esm-spec §10.7,
-esm-libraries-spec §4.7.5 step 4). The four bindings that expand every reference
-at load carry no registry into flatten and so have nothing to scope; they pin
-the union half here, and inherit the composition the moment they grow a
-reference-preserving flatten path.
+Deduping a body that still reads `inv_dx` free would keep one body correct for
+neither model, which is why closing first is normative (esm-spec §10.7,
+esm-libraries-spec §4.7.5 step 4).
+
+### `mount_registry_merge/` and `mount_shared_definition/` (esm-spec §9.6.4 rule 1)
+
+A mounted leaf (and an authored subsystem with its own block) keeps its
+references; its definitions join the mounting component's registry in the leaf's
+own names, by the merge above. `mount_registry_merge` pins a collision (`scale`),
+a deep-equal entry kept once (`half`), the propagation to `rate`, and a leaf
+`match` rule that travels materialized; `inline_form.esm` is its authored-subsystem
+twin. `mount_shared_definition` mounts one leaf twice: each template is ONE
+definition, whose free `k` each mount's references read in their own scope (a
+coupling gives `Sub2.k` another value), the colliding `rate` is one entry
+`Sub1.rate` serving both mounts, and Host's `pull`, referenced from Host and from
+its authored subsystem `Inner`, reads `Host.g` and `Host.Inner.g`. Goldens:
+`flattened_registry.esm` (the flattened registry, closed bodies),
+`loaded_registry.esm` (the mounting component's registry after load), and, for
+the inline form, `inline_emitted.esm` and `inline_flattened_registry.esm`.
 
 ## Scope-directed template injection (esm-spec §9.7.10)
 

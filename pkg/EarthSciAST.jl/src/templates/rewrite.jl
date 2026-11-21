@@ -946,16 +946,17 @@ them) and its match-less definitions, already closed in its own file, on its
 own `expression_templates` block. Each such block joins `comp`'s by the rule
 flatten uses to merge component registries (`_merge_flat_registry`):
 deep-equal entries are kept once, and a name two non-equal entries share is
-renamed in every owner to `<owner path>.<name>`, with that owner's references
-renamed in lockstep. The owner path of `comp`'s own entries is `cname`, of a
-mounted block its subsystem path below `comp` (`Sub` or `Sub.Inner`).
+renamed to `<owner path>.<name>`, one entry per distinct definition (named
+after its first owner), with each owner's references renamed in lockstep. The
+owner path of `comp`'s own entries is `cname`, of a mounted block its
+subsystem path below `comp` (`Sub` or `Sub.Inner`).
 
-A mounted body's free names (the mounted model's own variables and
-subsystems) are first written as `comp` reads them (`T` becomes `Sub.T`), so
-the body still reads the mounted model's names once it sits in `comp`'s
-registry (flatten scopes it further, as every body of `comp`). The mounted
-subtree below the mount point keeps naming its own entries; only `comp`'s
-other sites follow `comp`'s renames.
+A mounted body keeps the mounted model's own names: its free names are read in
+the scope of the subsystem that owns the reference, as an authored body's are
+at its call site (esm-spec §9.6.4 rule 1). So a leaf mounted twice brings two
+identical blocks, which keep one definition. The mounted subtree below the
+mount point keeps naming its own entries; only `comp`'s other sites follow
+`comp`'s renames.
 """
 function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
     mounts = Tuple{String, Any}[]          # (subsystem path, subsystem)
@@ -995,7 +996,10 @@ function _merge_mounted_blocks(own, cname::String, mounts)
             if _raw_get(d, "match") === nothing
     )
     for (path, sub) in mounts
-        blocks["models.$path"] = _mounted_block_as_read_from_parent(sub, path)
+        blocks["models.$path"] = OrderedDict{String, Any}(
+            string(n) => d for (n, d) in pairs(_raw_get(sub, "expression_templates"))
+                if _raw_get(d, "match") === nothing
+        )
     end
     merged, rename = _merge_flat_registry(blocks)
     for (path, sub) in mounts
@@ -1052,43 +1056,6 @@ function _rename_outside_mounts!(node, rn)
         _rename_outside_mounts!(sub, rn)
     end
     return
-end
-
-# The mounted model `sub`'s match-less definitions with each body's free names
-# of `sub` (its variables and subsystems, not the template's parameters)
-# written as its parent reads them, `path.name`.
-function _mounted_block_as_read_from_parent(sub, path::String)
-    blk = _raw_get(sub, "expression_templates")
-    local_names = Set{String}()
-    for key in ("variables", "species", "parameters", "subsystems")
-        v = _raw_get(sub, key)
-        if _is_object(v)
-            union!(local_names, (string(n) for n in keys(v)))
-        elseif _is_array(v)
-            for x in v
-                n = _raw_get(x, "name")
-                n isa AbstractString && push!(local_names, String(n))
-            end
-        end
-    end
-    captures = template_captures(blk)
-    out = OrderedDict{String, Any}()
-    for (n, d) in pairs(blk)
-        _raw_get(d, "match") === nothing || continue
-        body = _raw_get(d, "body")
-        if body === nothing
-            out[string(n)] = d
-            continue
-        end
-        params = Set{String}(_TemplateDecl(d).params)
-        scoped = namespace_expr(
-            expression_from_json(body), path, setdiff(local_names, params); captures = captures
-        )
-        nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(d))
-        nd["body"] = serialize_expression(scoped)
-        out[string(n)] = nd
-    end
-    return out
 end
 
 """
