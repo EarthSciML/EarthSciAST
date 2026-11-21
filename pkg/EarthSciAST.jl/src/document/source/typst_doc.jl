@@ -107,7 +107,7 @@ end
 function print_typ(d)
     doc = to_doc(CapsT(), d)
     out = header_t(doc.front)
-    append!(out, render(canon_segs(items(mathify_doc((s, j) -> DMath.print_typst(s, j), raw_doc(pr_tx, doc))))))
+    append!(out, render(canon_segs(items(mathify_doc((s, j) -> DMath.print_typst(s, j), Returns(true), raw_doc(pr_tx, doc))))))
     return String(out)
 end
 

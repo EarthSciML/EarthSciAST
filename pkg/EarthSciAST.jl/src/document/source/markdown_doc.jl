@@ -190,7 +190,7 @@ end
 function print_md(d)
     doc = to_doc(CapsMd(), d)
     out = front_md(doc.front)
-    append!(out, render(canon_segs(items(mathify_doc((s, j) -> DMath.print_latex(s, j), raw_doc(pr_mdx, doc))))))
+    append!(out, render(canon_segs(items(mathify_doc((s, j) -> DMath.print_latex(s, j), DYaml.plain_math_ok, raw_doc(pr_mdx, doc))))))
     return String(out)
 end
 

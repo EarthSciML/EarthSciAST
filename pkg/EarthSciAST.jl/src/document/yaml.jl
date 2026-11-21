@@ -14,7 +14,9 @@ text is block-style YAML 1.2:
 
 Strings are always double-quoted with JSON-style escapes, so a math leaf
 (path blocks only, `Source.mathify`) is the plain scalar `\$…\$`, its text up
-to the next `\$` (`Json.mathOK`); a key is bare when
+to the next `\$` (`Json.mathOK`); the printer makes one only of text that is
+[`plain_math_ok`](@ref), which every YAML 1.2 parser reads as that string. A
+key is bare when
 it is an identifier and not one of YAML's special plain scalars in any letter
 case; a key longer than 1024 characters uses the explicit `? "key"` form. The
 reader accepts only this layout and well-formed values. The binding needs no
@@ -25,7 +27,7 @@ module DYaml
 using ..DJson
 import ..DNumber
 using ..DLimits: nested
-using ..DStrings: is_ident_start, parse_key, parse_quoted, print_key, quote_str, spaces
+using ..DStrings: is_ident_start, needs_hex, parse_key, parse_quoted, print_key, quote_str, spaces
 
 """`Yaml.specialWords`."""
 const SPECIAL_WORDS = ("true", "false", "null", "yes", "no", "on", "off", "y", "n")
@@ -53,6 +55,13 @@ function key_part(m::Int, k::AbstractString, out::Vector{Char})
     end
     return out
 end
+
+"""`Yaml.plainMathOK`: math text YAML holds as the plain scalar `\$…\$`, which a
+YAML 1.2 parser reads as that string: [`math_ok`](@ref), and no `: ` (a mapping
+indicator), no ` #` (a comment) and no character of `needs_hex`. The Markdown
+printer leaves any other expression in its block as JSON."""
+plain_math_ok(s::AbstractString) =
+    math_ok(s) && !any(needs_hex, s) && !occursin(": ", s) && !occursin(" #", s)
 
 """`Yaml.inline`: the one-line spelling of a scalar or an empty container."""
 function inline(v)

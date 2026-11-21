@@ -15,7 +15,7 @@ import ..DLimits
 using ..MExpr: Sym, is_e
 using ..SSkeleton
 using ..SSkeleton: is_math_field, sym_for, top_sym, map_math, scope, mscope,
-    ANY, COMP_EXPR_PATHS, TOP_EXPR_PATHS
+    ANY, ELEM, COMP_EXPR_PATHS, TOP_EXPR_PATHS
 
 export RItem, RDesc, RBlock, RComp, RDecl, REqn, REqx, RRxn, RPlot, RTm
 
@@ -180,16 +180,17 @@ end
 # `COMP_EXPR_PATHS` and `TOP_EXPR_PATHS` list the expression-valued fields of
 # path blocks. The printer turns a value there into a math leaf (`JMath`) when
 # it is a well-formed expression whose math text the container can delimit
-# (`math_ok`); the reader reads every math leaf back, wherever it is.
+# (`math_ok` and the container's own test: `DYaml.plain_math_ok` for
+# Markdown); the reader reads every math leaf back, wherever it is.
 
 """`Source.stepKey`: the paths below the entry `k` of an object (or below an
-array element, `k === nothing`)."""
+array element, `k === nothing`, which `ANY` and `ELEM` match)."""
 function step_key(k::Union{Nothing, AbstractString}, ps)
     out = Vector{Any}[]
     for p in ps
         isempty(p) && continue
         h = p[1]
-        if h === ANY || (k !== nothing && h == k)
+        if h === ANY || (k === nothing ? h === ELEM : h == k)
             push!(out, p[2:end])
         end
     end
@@ -212,51 +213,56 @@ function at_paths(leaf, ps, v)
 end
 
 """`Source.mathLeaf`: a value at an expression path: its math text (`pr_r`
-under `s`), when it is a well-formed expression whose text a container can
-delimit; otherwise the value."""
-function math_leaf(pr_r, s::Sym, v)
+under `s`), when it is a well-formed expression whose text the container can
+delimit (`math_ok` and `ok`); otherwise the value."""
+function math_leaf(pr_r, ok, s::Sym, v)
     is_e(v) || return v
     t = pr_r(s, v)
-    return math_ok(t) ? JMath(t) : v
+    return math_ok(t) && ok(t) ? JMath(t) : v
 end
 
 """`Source.mathify`: print a section's path blocks: every expression at one of
 the paths `ps` (keyed by the block's key) as math under the symbol table
 `s`."""
-mathify(pr_r, s::Sym, ps, bs) =
-    Kvs([k => at_paths(v -> math_leaf(pr_r, s, v), step_key(k, ps), v) for (k, v) in bs])
+mathify(pr_r, ok, s::Sym, ps, bs) =
+    Kvs([k => at_paths(v -> math_leaf(pr_r, ok, s, v), step_key(k, ps), v) for (k, v) in bs])
 
 """`Source.cookV`: every math leaf of a value read back with `ck` (`nothing`
-when one does not read)."""
+when one does not read). A value with no math leaf is returned as it is, not
+copied."""
 function cook_v(ck, v)
     if v isa JMath
         r = ck(v.s)
         r === nothing && return refused_block_math!(v.s)
         return r
     elseif v isa JArr
-        xs = Any[]
-        for x in v.xs
+        xs = nothing
+        for (i, x) in enumerate(v.xs)
             y = cook_v(ck, x)
             y === nothing && return nothing
+            y === x && xs === nothing && continue
+            xs === nothing && (xs = Any[v.xs[j] for j in 1:(i - 1)])
             push!(xs, y)
         end
-        return JArr(xs)
+        return xs === nothing ? v : JArr(xs)
     elseif v isa JObj
         y = cook_o(ck, v.kvs)
-        return y === nothing ? nothing : JObj(y)
+        return y === nothing ? nothing : y === v.kvs ? v : JObj(y)
     end
     return v
 end
 
-"""`Source.cookO`."""
+"""`Source.cookO`: `kvs` itself when no value holds a math leaf."""
 function cook_o(ck, kvs)
-    out = Kvs()
-    for (k, x) in kvs
+    out = nothing
+    for (i, (k, x)) in enumerate(kvs)
         y = cook_v(ck, x)
         y === nothing && return nothing
+        y === x && out === nothing && continue
+        out === nothing && (out = Kvs(kvs[1:(i - 1)]))
         push!(out, k => y)
     end
-    return out
+    return out === nothing ? kvs : out
 end
 
 # Record a math leaf of a path block that does not read, for the diagnostic;
@@ -273,11 +279,13 @@ cook_blocks(ck_r, s::Sym, bs) = cook_o(raw -> ck_r(s, raw), bs)
 """`Source.mathifyDoc`: print the path blocks of a skeleton, each section's under
 its symbol table (a component's, or the document's for the top-level
 blocks)."""
-function mathify_doc(pr_r, d::Doc{P}) where {P}
-    blocks = mathify(pr_r, top_sym(d), TOP_EXPR_PATHS, d.blocks)
+function mathify_doc(pr_r, ok, d::Doc{P}) where {P}
+    blocks = mathify(pr_r, ok, top_sym(d), TOP_EXPR_PATHS, d.blocks)
     comps = Comp{P}[
-        Comp{P}(c.kind, c.name, c.desc, c.decls, c.math, c.math_blocks,
-            mathify(pr_r, sym_for(d, c), COMP_EXPR_PATHS, c.blocks)) for c in d.comps
+        Comp{P}(
+            c.kind, c.name, c.desc, c.decls, c.math, c.math_blocks,
+            mathify(pr_r, ok, sym_for(d, c), COMP_EXPR_PATHS, c.blocks)
+        ) for c in d.comps
     ]
     return Doc{P}(d.front, d.desc, blocks, d.math, comps)
 end
@@ -292,7 +300,7 @@ function cook_doc_blocks(ck_r, d::Doc{P}) where {P}
     for c in d.comps
         b = cook_blocks(ck_r, sym_for(d, c), c.blocks)
         b === nothing && return nothing
-        push!(cs, Comp{P}(c.kind, c.name, c.desc, c.decls, c.math, c.math_blocks, b))
+        push!(cs, b === c.blocks ? c : Comp{P}(c.kind, c.name, c.desc, c.decls, c.math, c.math_blocks, b))
     end
     return Doc{P}(d.front, d.desc, bs, d.math, cs)
 end
