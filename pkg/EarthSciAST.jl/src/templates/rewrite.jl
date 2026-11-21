@@ -281,6 +281,48 @@ function _transitive_op_flags(
     end
 end
 
+"""
+    _expand_refs_walk(node, named, scope, expand_pred, memo) -> node
+
+The ONE memoized, sharing-preserving reference-expansion walk behind
+[`_expand_all`](@ref) and the library-edge `enum` expansion. Innermost-first: an
+`apply_expression_template` node's `bindings` are rewritten before the node
+itself is considered; a node for which `expand_pred(node)` holds is expanded
+by pure substitution (`_expand_apply`) and its instantiated body re-walked;
+any other reference is returned intact. Unchanged subtrees are returned by
+identity and the memo preserves DAG sharing.
+"""
+function _expand_refs_walk(
+        node, named::AbstractDict, scope::String,
+        expand_pred, memo::IdDict{Any, Any}
+    )
+    return _rewrite_json(node; memo = memo, leaves = false) do rw, n
+        _is_apply_node(n) || return _JSON_DESCEND
+        # Innermost-first: rewrite references inside the bindings first.
+        b = _raw_get(n, "bindings")
+        newnode = n
+        if b !== nothing && _is_object(b)
+            nb = _rewrite_json_children(rw, b)
+            if nb !== b
+                newnode = OrderedDict{String, Any}(
+                    string(k) => (string(k) == "bindings" ? nb : v) for (k, v) in pairs(n)
+                )
+            end
+        end
+        expand_pred(newnode) || return newnode
+        res = _rewrite_json_node(rw, _expand_apply(newnode, named, scope))
+        # While marking (a mount's leaf, expanded at load), the root of the
+        # expansion records that it came from an application (esm-spec
+        # §9.6.11), as `_expand_expr_refs` does on typed trees.
+        if _marking_template_origins() && _is_object(res)
+            marked = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(res))
+            marked[_TEMPLATE_ORIGIN_WIRE_KEY] = string(_raw_get(newnode, "name"))
+            res = marked
+        end
+        return res
+    end
+end
+
 # ---------------------------------------------------------------------------
 # Full expansion — `Expand` (esm-spec §9.6.4 rule 2)
 # ---------------------------------------------------------------------------

@@ -1,0 +1,260 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "rule_writes_reference",
+    "description": "esm-spec §9.6.3 constraint 7: one rule (`central`) fires at three sites with different operands (`a`, `b`, `2*c`). Each firing writes a reference to the rule bound to what its match captured, so the emitted document holds three references and one materialized body: `central` emitted as a match-less entry in its authored position. Two leaf-bodied rules write their leaf instead of a reference: `dx_const` (body `0.25`) writes the number, `same` (body `u`, a parameter) writes what `u` bound. `expanded.esm` is Expand(load(fixture)), the tree the in-place engine produced.",
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "expression_templates": {
+        "central": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "x"
+          },
+          "body": {
+            "op": "faq",
+            "args": [
+              "f"
+            ],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "f",
+                    {
+                      "op": "+",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "f",
+                    {
+                      "op": "-",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "dx_const": {
+          "params": [
+            "u"
+          ],
+          "match": {
+            "op": "dx_of",
+            "args": [
+              "u"
+            ]
+          },
+          "body": 0.25
+        },
+        "same": {
+          "params": [
+            "u"
+          ],
+          "match": {
+            "op": "same_as",
+            "args": [
+              "u"
+            ]
+          },
+          "body": "u"
+        }
+      },
+      "variables": {
+        "a": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 0.5
+        },
+        "b": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 1.5
+        },
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 2.5
+        },
+        "da": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        },
+        "db": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        },
+        "dc": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        },
+        "e": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "a"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "a"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "b"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "b"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "c"
+            ]
+          }
+        },
+        {
+          "lhs": "da",
+          "rhs": {
+            "op": "D",
+            "args": [
+              "a"
+            ],
+            "wrt": "x"
+          }
+        },
+        {
+          "lhs": "db",
+          "rhs": {
+            "op": "D",
+            "args": [
+              "b"
+            ],
+            "wrt": "x"
+          }
+        },
+        {
+          "lhs": "dc",
+          "rhs": {
+            "op": "D",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  2,
+                  "c"
+                ]
+              }
+            ],
+            "wrt": "x"
+          }
+        },
+        {
+          "lhs": "e",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "dx_of",
+                "args": [
+                  "a"
+                ]
+              },
+              {
+                "op": "same_as",
+                "args": [
+                  "b"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

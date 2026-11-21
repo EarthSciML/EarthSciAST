@@ -1,0 +1,335 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "opacity_rule_replacement",
+    "description": "esm-spec §9.6.4 rule 4: the three cases where this revision and the in-place engine differ, each pinned the way this revision decides it. (a) `a_case`: the alias rule `grad_alias` writes `ref(grad_alias, {f: c, d: x})`; the compound rule `godunov` (priority 100, `sqrt(D(u,x)^2)`) never sees a `D` around it, and `central` lowers the `D` inside `grad_alias`'s body (its `wrt` parameter read as the bound literal `x`). The in-place engine wrote `D(c, x)` in place and fired `godunov` in pass 2: `999*c`. (b) `b_structured` and `b_ground`: inside `flux_div`'s body the parameter `F` is a leaf, so neither the structured pattern `D(U*q, x)` of `upwind_Uq` nor the ground pattern `D(c, x)` of `ground_c` matches it; `central` fires, and both instances rewrite the body in place to `ref(central, {f: F})`. The in-place engine expanded the references first and produced `777*c` and `555*g` (`g` unbound, written as itself). (c) `c_case`: `sqrt(ref(sq_grad, {u: c}))` — the reference is a leaf, so `godunov` does not match across it; `central` lowers the `D` inside `sq_grad`'s body. The in-place engine expanded `sq_grad` eagerly and fired `godunov`: `999*c`. `expanded.esm` is written under this revision's semantics; the in-place engine fails it by design.",
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "expression_templates": {
+        "godunov": {
+          "params": [
+            "u"
+          ],
+          "priority": 100,
+          "match": {
+            "op": "sqrt",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  {
+                    "op": "D",
+                    "args": [
+                      "u"
+                    ],
+                    "wrt": "x"
+                  },
+                  2
+                ]
+              }
+            ]
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              999,
+              "u"
+            ]
+          }
+        },
+        "upwind_Uq": {
+          "params": [
+            "U",
+            "q"
+          ],
+          "priority": 10,
+          "match": {
+            "op": "D",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "U",
+                  "q"
+                ]
+              }
+            ],
+            "wrt": "x"
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              777,
+              "q"
+            ]
+          }
+        },
+        "ground_c": {
+          "params": [
+            "g"
+          ],
+          "priority": 20,
+          "match": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "x"
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              555,
+              "g"
+            ]
+          }
+        },
+        "grad_alias": {
+          "params": [
+            "f",
+            "d"
+          ],
+          "match": {
+            "op": "grad",
+            "args": [
+              "f"
+            ],
+            "dim": "d"
+          },
+          "body": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "d"
+          }
+        },
+        "central": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "x"
+          },
+          "body": {
+            "op": "faq",
+            "args": [
+              "f"
+            ],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "f",
+                    {
+                      "op": "+",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "f",
+                    {
+                      "op": "-",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "flux_div": {
+          "params": [
+            "F"
+          ],
+          "body": {
+            "op": "D",
+            "args": [
+              "F"
+            ],
+            "wrt": "x"
+          }
+        },
+        "sq_grad": {
+          "params": [
+            "u"
+          ],
+          "body": {
+            "op": "^",
+            "args": [
+              {
+                "op": "D",
+                "args": [
+                  "u"
+                ],
+                "wrt": "x"
+              },
+              2
+            ]
+          }
+        }
+      },
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 0.5
+        },
+        "U": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 1.5
+        },
+        "a_case": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        },
+        "b_structured": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        },
+        "b_ground": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        },
+        "c_case": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "c"
+            ]
+          }
+        },
+        {
+          "lhs": "a_case",
+          "rhs": {
+            "op": "sqrt",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  {
+                    "op": "grad",
+                    "args": [
+                      "c"
+                    ],
+                    "dim": "x"
+                  },
+                  2
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "b_structured",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "flux_div",
+            "bindings": {
+              "F": {
+                "op": "*",
+                "args": [
+                  "U",
+                  "c"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "lhs": "b_ground",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "flux_div",
+            "bindings": {
+              "F": "c"
+            }
+          }
+        },
+        {
+          "lhs": "c_case",
+          "rhs": {
+            "op": "sqrt",
+            "args": [
+              {
+                "op": "apply_expression_template",
+                "args": [],
+                "name": "sq_grad",
+                "bindings": {
+                  "u": "c"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

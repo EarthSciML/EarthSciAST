@@ -151,23 +151,22 @@ end
     end
 
     # -----------------------------------------------------------------------
-    # eager_target_bearing (§9.6.4 rule 3, §9.6.7): positive + negative.
+    # rewrite_in_template_body (§9.6.4 rule 3, §9.6.7; formerly
+    # eager_target_bearing): both references survive; the `central` rule
+    # rewrites `deriv_c`'s body in place to a reference to itself.
     # -----------------------------------------------------------------------
-    @testset "eager_target_bearing: eager expands+lowers, target-free survives" begin
-        loaded = _load("eager_target_bearing")
-        d = loaded
-        m = d["models"]["m"]
-        # POSITIVE: deriv_c (D-bearing) reference eagerly expanded, then the D
-        # lowered by the `central` rule → an aggregate. No surviving ref.
+    @testset "rewrite_in_template_body: rules rewrite the body, both references survive" begin
+        loaded = _load("rewrite_in_template_body")
+        m = loaded["models"]["m"]
         deager = _normj(_ool_defrhs(m, "d_eager"))
-        @test deager["op"] == "index"
-        @test deager["args"][1]["op"] == "faq"
-        # NEGATIVE: scale_c (target-free) reference SURVIVES.
+        @test _isapply(deager["args"][1]) && deager["args"][1]["name"] == "deriv_c"
+        body = _normj(m["expression_templates"]["deriv_c"]["body"])
+        @test _isapply(body) && body["name"] == "central" && body["bindings"] == Dict("f" => "f")
+        @test !haskey(m["expression_templates"]["central"], "match")
         dsurv = _normj(_ool_defrhs(m, "d_survive"))
         @test _isapply(dsurv["args"][1]) && dsurv["args"][1]["name"] == "scale_c"
-        # Emit golden.
-        @test _emit("eager_target_bearing") ==
-            read(conf("eager_target_bearing", "emitted.esm"), String)
+        @test _emit("rewrite_in_template_body") ==
+            read(conf("rewrite_in_template_body", "emitted.esm"), String)
     end
 
     # -----------------------------------------------------------------------
@@ -362,7 +361,7 @@ end
     @testset "emit ∘ load byte-wise fixed point (all emit fixtures)" begin
         for dir in [
                 "emit_materialized_registry", "emit_rename_dotted_keys",
-                "eager_target_bearing", "opacity_negative",
+                "rewrite_in_template_body", "opacity_negative",
                 "opacity_priority_shadowing",
             ]
             s1 = _emit(dir)
@@ -382,7 +381,7 @@ end
     @testset "typed save is reference-preserving, byte-identical to emit_document" begin
         for dir in [
                 "emit_materialized_registry", "emit_rename_dotted_keys",
-                "eager_target_bearing", "opacity_negative",
+                "rewrite_in_template_body", "opacity_negative",
                 "opacity_priority_shadowing",
             ]
             f = EarthSciAST.load_path(conf(dir, "fixture.esm"))

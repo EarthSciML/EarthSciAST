@@ -1,0 +1,85 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    },
+    "y": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "metadata": {
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ],
+    "description": "esm-spec §9.6.3 constraint 6, §9.6.4 rule 3: the template `ddy` holds `D(f, wrt y)` and no rule matches a `D` along `y`. The document loads (loading is permissive) and the reference to `ddy` survives with its body unrewritten; the build gate walks the reachable body and rejects it with `unlowered_operator`, naming the op, the template and the first call site.",
+    "name": "unlowered_in_template_body"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "u"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "dy",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "u"
+            },
+            "name": "ddy",
+            "op": "apply_expression_template"
+          }
+        }
+      ],
+      "expression_templates": {
+        "ddy": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "op": "D",
+            "wrt": "y"
+          },
+          "params": [
+            "f"
+          ]
+        }
+      },
+      "variables": {
+        "dy": {
+          "shape": [
+            "x",
+            "y"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "u": {
+          "default": 0.5,
+          "shape": [
+            "x",
+            "y"
+          ],
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

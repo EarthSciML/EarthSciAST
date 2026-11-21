@@ -1,0 +1,5 @@
+{
+  "code": "rewrite_rule_nonterminating",
+  "stage": "load",
+  "description": "fixture.esm: the rule `grow` re-introduces its own pattern in its body; rewriting its body for the instance the call site names needs that same instance again, so the load is rejected (esm-spec §9.6.4 rule 3, Rewrite depth), naming the rule and the template."
+}
