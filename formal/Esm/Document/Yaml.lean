@@ -22,7 +22,9 @@ Scalars: `null`, `true`, `false`, numbers in the canonical spelling (`Number.pri
 and strings ALWAYS double-quoted with JSON-style escapes (`\uXXXX` for the characters
 of `Strings.needsHex`), which avoids YAML's implicit typing. Because a string is always
 quoted, a math leaf (path blocks only, `Source.mathify`) is the plain scalar `$…$`, its
-text up to the next `$` (`Json.mathOK`). A key is bare when it
+text up to the next `$` (`Json.mathOK`). The printer makes a math leaf only of text that
+is `plainMathOK`, so that every YAML 1.2 parser reads it as the string `$…$`; the reader
+takes any `Json.mathOK` text. A key is bare when it
 matches `[A-Za-z_][A-Za-z0-9_]*` and is not, in any letter case, one of YAML's
 special plain scalars (`true false null yes no on off y n`); otherwise it is quoted
 like a string. A key whose spelling is longer than 1024 characters (YAML's limit on
@@ -57,6 +59,25 @@ form: `? "key"` on its own line, then the `:` on the next line at the same
 indentation. -/
 def keyPart (m : Nat) (k : String) : List Char :=
   if longKey k then '?' :: ' ' :: quote false k ++ '\n' :: spaces m else printKey false reserved k
+
+/-- Some character `a` directly followed by `b`. -/
+def hasPair (a b : Char) : List Char → Bool
+  | [] => false
+  | x :: r => (x == a && r.head? == some b) || hasPair a b r
+
+/-- Math text YAML holds as the plain scalar `$…$`, which a YAML 1.2 parser reads as
+that string: `Json.mathOK`, and no `: ` (a mapping indicator in a plain scalar), no
+` #` (the start of a comment) and no character of `needsHex` (one YAML does not allow
+unescaped, or reads as a line break; the tab is one). The Markdown printer leaves an
+expression whose math is not `plainMathOK` as JSON in its block (`Source.mathify`). -/
+def plainMathOK (s : String) : Bool :=
+  Json.mathOK s && !s.toList.any needsHex && !hasPair ':' ' ' s.toList &&
+    !hasPair ' ' '#' s.toList
+
+example : plainMathOK "c \\exp(-u)" = true := by decide +kernel
+example : plainMathOK "\\esm{*}{{\\text{\"id\"}: \\text{\"t\"}}}{a}" = false := by decide +kernel
+example : plainMathOK "a #b" = false := by decide +kernel
+example : plainMathOK "a:b" = true := by decide +kernel
 
 /-- The one-line spelling of a scalar or an empty container. (A non-empty container
 is never printed inline; it gets `[]`/`{}` here only to keep the function total.) -/
@@ -159,7 +180,7 @@ def pInline : List Char → Option (Json × List Char)
       | '}' :: r' => some (.obj [], r')
       | _ => none
     else if c = '"' then (parseQuoted false (c :: r)).map fun p => (.str p.1, p.2)
-    else if c = '$' then pMath r
+    else if c = '$' then Json.pMath r
     else (Number.parse (c :: r)).map fun p => (.num p.1, p.2)
 
 /-- A scalar and the end of its line. -/
@@ -405,7 +426,7 @@ theorem pInline_inline (v : Json) (hi : isInl v = true) (hv : v.WFm) (rest : Lis
     simp only [pInline, (by decide : ('$' = 'n') = False), (by decide : ('$' = 't') = False),
       (by decide : ('$' = 'f') = False), (by decide : ('$' = '[') = False),
       (by decide : ('$' = '{') = False), (by decide : ('$' = '"') = False), ite_false, ite_true]
-    exact pMath_math s _ hv
+    exact Json.pMath_math s _ hv
   | .num n =>
     obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
     have hp := Number.parse_print n ('\n' :: rest) hv (fun c hc => by cases hc; decide)

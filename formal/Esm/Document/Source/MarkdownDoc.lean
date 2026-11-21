@@ -164,10 +164,11 @@ its own. -/
 def canonSegs (its : List RItem) : List Seg :=
   its.flatMap (fun it => [.prose ['\n'], .item it] ++ (if isBlock it then [] else [.prose ['\n']]))
 
-/-- **Print a document as Markdown.** -/
+/-- **Print a document as Markdown.** An expression in a path block is math when its text
+is `Yaml.plainMathOK`, so the block stays YAML that any YAML 1.2 parser reads. -/
 def printMd (d : Json) : String :=
   let D := toDoc capsMd d
-  String.ofList (frontMd D.front ++ render (canonSegs (items (mathifyDoc (fun S j => printLatex S j) (rawDoc prMdx D)))))
+  String.ofList (frontMd D.front ++ render (canonSegs (items (mathifyDoc (fun S j => printLatex S j) Yaml.plainMathOK (rawDoc prMdx D)))))
 
 /-- Read the front matter and the constructs. -/
 def lexDoc (s : List Char) : Option (List (String × Json) × List RItem) :=
@@ -363,10 +364,10 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
     obtain ⟨c0, hc0, rfl⟩ := hc
     exact jwf_sound _ (hok.cblocks c0 hc0 kv hkv).2
   rw [decode_front, lexDoc_front _ hok.frontWF _ (valid_canon _ (items_mathifyDoc_ok itemOK
-    (fun _ _ => rfl) _ _ (items_ok _ hok) hbW hcW) true), segItems_canon]
+    (fun _ _ => rfl) _ _ _ (items_ok _ hok) hbW hcW) true), segItems_canon]
   simp only [Option.bind_eq_bind, Option.bind_some]
-  have hR := unitems_items (mathifyDoc (fun S j => printLatex S j) (rawDoc prMdx (toDoc capsMd d)))
-    (itemsOK_mathifyDoc _ _ (by
+  have hR := unitems_items (mathifyDoc (fun S j => printLatex S j) Yaml.plainMathOK (rawDoc prMdx (toDoc capsMd d)))
+    (itemsOK_mathifyDoc _ _ _ (by
     refine ⟨fun c hc => ?_, ?_⟩
     · simp only [rawDoc, List.mem_map] at hc
       obtain ⟨c0, hc0, rfl⟩ := hc
@@ -376,11 +377,11 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
       obtain ⟨m0, hm0, rfl⟩ := hm
       obtain ⟨-, -, t, rfl⟩ := hok.rmath m0 hm0
       exact ⟨_, rfl⟩))
-  rw [show (mathifyDoc (fun S j => printLatex S j) (rawDoc prMdx (toDoc capsMd d))).front =
+  rw [show (mathifyDoc (fun S j => printLatex S j) Yaml.plainMathOK (rawDoc prMdx (toDoc capsMd d))).front =
     (toDoc capsMd d).front from rfl] at hR
   rw [hR]
   simp only [Option.bind_some]
-  rw [cookDocBlocks_mathifyDoc (fun S j => printLatex S j) (fun S raw => parseLatex S raw)
+  rw [cookDocBlocks_mathifyDoc (fun S j => printLatex S j) Yaml.plainMathOK (fun S raw => parseLatex S raw)
     (fun S e he => parseLatex_printLatex S e he) _ hbW hcW]
   simp only [Option.bind_some]
   have hck : ∀ S m, capsMd.item S m = true → mathWF m = true → ckMdx S (prMdx S m) = some [m] := by

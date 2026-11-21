@@ -441,16 +441,19 @@ def skeleton : List SkeletonRow := [
 
 Decided 2026-11-13 ("expression-valued fields inside blocks are math strings"), spelled
 2026-11-20: a field of a path block whose schema type is `Expression` holds math when its
-value is a well-formed expression whose math text a container can delimit
-(`Json.mathOK`): `$…$` in a Typst dictionary (Typst math content) and the plain scalar
-`$…$` in YAML (where a string is always double-quoted). Every other value there stays as
-it is. The math is printed under the section's symbol table (a component's, or the
+value is a well-formed expression whose math text the container can delimit: `$…$` in a
+Typst dictionary (Typst math content) for text that is `Json.mathOK`, and the plain
+scalar `$…$` in YAML (where a string is always double-quoted) for text that is
+`Yaml.plainMathOK` (no `: ` or ` #`, which a YAML parser would read as a mapping or a
+comment). Every other value there stays as it is. The math is printed under the section's symbol table (a component's, or the
 document's for a top-level block). The reader reads every math leaf back under the same
 table, wherever it is (`Source.cookBlocks`); a math leaf anywhere else is refused (the
 document read back is not canonical).
 
 The fields are listed as paths from the block's key: `Seg.key k` steps into the entry
-`k` of an object, `Seg.any` into every element of an array and every value of an object.
+`k` of an object, `Seg.any` into every element of an array and every value of an object,
+and `Seg.elem` into every element of an array only (a field that is either one object or
+an array of them, `ParameterUpdateSpec`, whose object form's own keys are not elements).
 Fields with a surface of their own (equations, reactions, templates and rules, which fall
 back to a block only when their math cannot be printed natively) are not listed. -/
 
@@ -458,13 +461,15 @@ back to a block only when their math cannot be printed natively) are not listed.
 inductive Seg where
   | key (k : String)
   | any
+  | elem
   deriving DecidableEq, Repr
 
 open Seg in
 /-- The expression-valued fields of a component's path blocks (esm-schema.json:
 `Assertion.reference`, `ContinuousEvent.conditions`, `AffectEquation.rhs`,
 `DiscreteEventTrigger.expression`, `Model.guesses`, `ParameterUpdate.expression` and
-`.when`). -/
+`.when`, `DataSourceBinding.unit_conversion` under `ParameterUpdate.from`; an update is
+one rule or an array of them, `ParameterUpdateSpec`). -/
 def compExprPaths : List (List Seg) := [
   [key "continuous_events", any, key "affect_neg", any, key "rhs"],
   [key "continuous_events", any, key "affects", any, key "rhs"],
@@ -473,10 +478,18 @@ def compExprPaths : List (List Seg) := [
   [key "discrete_events", any, key "trigger", key "expression"],
   [key "guesses", any],
   [key "parameters", any, key "update", key "expression"],
+  [key "parameters", any, key "update", key "from", key "unit_conversion"],
   [key "parameters", any, key "update", key "when"],
+  [key "parameters", any, key "update", elem, key "expression"],
+  [key "parameters", any, key "update", elem, key "from", key "unit_conversion"],
+  [key "parameters", any, key "update", elem, key "when"],
   [key "tests", any, key "assertions", any, key "reference"],
   [key "variables", any, key "update", key "expression"],
-  [key "variables", any, key "update", key "when"]
+  [key "variables", any, key "update", key "from", key "unit_conversion"],
+  [key "variables", any, key "update", key "when"],
+  [key "variables", any, key "update", elem, key "expression"],
+  [key "variables", any, key "update", elem, key "from", key "unit_conversion"],
+  [key "variables", any, key "update", elem, key "when"]
 ]
 
 open Seg in

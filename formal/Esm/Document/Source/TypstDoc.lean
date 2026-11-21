@@ -94,10 +94,11 @@ def headerT (front : List (String × Json)) : List Char := header ++ argsFirstT 
 def canonSegs (its : List RItem) : List Seg :=
   its.flatMap (fun it => [.prose ['\n'], .item it] ++ (if isBlock it then [] else [.prose ['\n']]))
 
-/-- **Print a document as Typst.** -/
+/-- **Print a document as Typst.** An expression in a path block is math whenever its text
+is `Json.mathOK`: Typst math content needs no other test. -/
 def printTyp (d : Json) : String :=
   let D := toDoc capsT d
-  String.ofList (headerT D.front ++ render (canonSegs (items (mathifyDoc (fun S j => printTypst S j) (rawDoc prTx D)))))
+  String.ofList (headerT D.front ++ render (canonSegs (items (mathifyDoc (fun S j => printTypst S j) (fun _ => true) (rawDoc prTx D)))))
 
 /-- Read the header and the constructs. -/
 def lexDoc (s : List Char) : Option (List (String × Json) × List RItem) :=
@@ -300,10 +301,10 @@ theorem parseTyp_printTyp (d : Json) (hd : canonDoc d = true) : parseTyp (printT
     obtain ⟨c0, hc0, rfl⟩ := hc
     exact jwf_sound _ (hok.cblocks c0 hc0 kv hkv).2
   rw [decode_headerT, lexDoc_front _ hfront _ (valid_canon _ (items_mathifyDoc_ok itemOK
-    (fun _ _ => rfl) _ _ (items_ok _ hok) hbW hcW) true), segItems_canon]
+    (fun _ _ => rfl) _ _ _ (items_ok _ hok) hbW hcW) true), segItems_canon]
   simp only [Option.bind_eq_bind, Option.bind_some]
-  have hR := unitems_items (mathifyDoc (fun S j => printTypst S j) (rawDoc prTx (toDoc capsT d)))
-    (itemsOK_mathifyDoc _ _ (by
+  have hR := unitems_items (mathifyDoc (fun S j => printTypst S j) (fun _ => true) (rawDoc prTx (toDoc capsT d)))
+    (itemsOK_mathifyDoc _ _ _ (by
     refine ⟨fun c hc => ?_, ?_⟩
     · simp only [rawDoc, List.mem_map] at hc
       obtain ⟨c0, hc0, rfl⟩ := hc
@@ -313,11 +314,11 @@ theorem parseTyp_printTyp (d : Json) (hd : canonDoc d = true) : parseTyp (printT
       obtain ⟨m0, hm0, rfl⟩ := hm
       obtain ⟨-, -, t, rfl⟩ := hok.rmath m0 hm0
       exact ⟨_, rfl⟩))
-  rw [show (mathifyDoc (fun S j => printTypst S j) (rawDoc prTx (toDoc capsT d))).front =
+  rw [show (mathifyDoc (fun S j => printTypst S j) (fun _ => true) (rawDoc prTx (toDoc capsT d))).front =
     (toDoc capsT d).front from rfl] at hR
   rw [hR]
   simp only [Option.bind_some]
-  rw [cookDocBlocks_mathifyDoc (fun S j => printTypst S j) (fun S raw => parseTypst S raw)
+  rw [cookDocBlocks_mathifyDoc (fun S j => printTypst S j) (fun _ => true) (fun S raw => parseTypst S raw)
     (fun S e he => parseTypst_printTypst S e he) _ hbW hcW]
   simp only [Option.bind_some]
   have hck : ∀ S m, capsT.item S m = true → mathWF m = true → ckTx S (prTx S m) = some [m] := by

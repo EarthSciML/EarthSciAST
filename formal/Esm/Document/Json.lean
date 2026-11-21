@@ -92,6 +92,8 @@ inductive Json where
   | math (s : String)
   deriving Repr
 
+namespace Json
+
 /-- Math text a container can delimit with `$`: not empty, no `$`, no line break, and
 not ending in a backslash (which would escape the closing `$`). -/
 def mathOK (s : String) : Bool :=
@@ -123,8 +125,6 @@ theorem pMath_math (s : String) (r : List Char) (h : mathOK s = true) :
   have hd : s.toList.contains '$' = false := by
     simp only [mathOK, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1.1.2
   simp [pMath, mathBody_append _ _ hd, String.ofList_toList, h]
-
-namespace Json
 
 mutual
 /-- Well formed: every number is canonical, every object has distinct keys, and there is

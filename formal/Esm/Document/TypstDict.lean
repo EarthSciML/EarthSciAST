@@ -153,7 +153,7 @@ def pVal : Nat → List Char → Option (Json × List Char)
       | some r' => some (.num (.int int64Min), r')
       | none => pParen f (skipWs r)
     else if c = '"' then (parseQuoted true (c :: r)).map fun p => (.str p.1, p.2)
-    else if c = '$' then pMath r
+    else if c = '$' then Json.pMath r
     else if c = 'n' then
       match r with
       | 'o' :: 'n' :: 'e' :: r' => some (.null, r')
@@ -468,7 +468,7 @@ theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WFm 
     simp only [enc, List.cons_append, List.append_assoc]
     simp only [pVal, (by decide : ('$' = '(') = False), (by decide : ('$' = '"') = False),
       ite_false, ite_true]
-    exact pMath_math s rest hv
+    exact Json.pMath_math s rest hv
   | .num n, f + 1, rest, hv, hr, _ => by
     by_cases hm : n = .int int64Min
     · subst hm

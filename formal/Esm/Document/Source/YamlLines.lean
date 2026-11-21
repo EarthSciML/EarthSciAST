@@ -67,10 +67,10 @@ theorem print_noNL (n : JNum) : '\n' ∉ Number.print n := by
         exact ⟨digits_noNL _, by decide, digits_noNL _⟩
 
 /-- Math text a container can delimit has no newline. -/
-theorem mathOK_noNL {s : String} (h : mathOK s = true) : '\n' ∉ s.toList := by
+theorem mathOK_noNL {s : String} (h : Json.mathOK s = true) : '\n' ∉ s.toList := by
   intro hm
   have hc : s.toList.contains '\n' = true := by simpa using hm
-  rw [mathOK, hc] at h
+  rw [Json.mathOK, hc] at h
   simp at h
 
 theorem inline_noNL (v : Json) (hv : v.WFm) : '\n' ∉ Yaml.inline v := by
