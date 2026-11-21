@@ -102,6 +102,38 @@ function _fw_document(flat)
     return Dict("esm" => "1.3.0", "metadata" => Dict("name" => "written"), "index_sets" => sets, "models" => models)
 end
 
+# The flattened system with its references kept: the equations and field
+# initial conditions as they serialize, and every registry entry they reach,
+# through the bodies of the entries they reach (CONFORMANCE_SPEC §5.60, "The
+# elementwise lift").
+function _fw_refs_form(flat)
+    reg = flat.template_registry
+    reached = Set{String}()
+    queue = String[]
+    visit(e) = EarthSciAST.foreach_subexpr(e) do x
+        x isa EarthSciAST.OpExpr && x.op == "apply_expression_template" &&
+            x.name !== nothing && push!(queue, x.name)
+    end
+    for e in flat.equations
+        visit(e.lhs)
+        visit(e.rhs)
+    end
+    foreach(((_, r),) -> visit(r), flat.field_ics)
+    while !isempty(queue)
+        n = pop!(queue)
+        n in reached && continue
+        push!(reached, n)
+        visit(EarthSciAST.expression_from_json(reg[n]["body"]))
+    end
+    eqs = Any[Dict("lhs" => _fw_wire(e.lhs), "rhs" => _fw_wire(e.rhs)) for e in flat.equations]
+    ics = Any[Dict("target" => t, "rhs" => _fw_wire(r)) for (t, r) in flat.field_ics]
+    tpls = Dict{String, Any}(n => JSON3.read(JSON3.write(reg[n])) for n in reached)
+    return sprint() do io
+        _fw_canonical(io, Dict("equations" => eqs, "field_ics" => ics, "templates" => tpls))
+        print(io, '\n')
+    end
+end
+
 function _fw_rhs(file, compiler)
     prob = EarthSciAST.esm_problem(file, (0.0, 1.0); compiler = compiler)
     prog = EarthSciAST.rhs_program(prob)
@@ -129,11 +161,15 @@ _fw_bits((u, d)) = (reinterpret(UInt64, Float64(u)), reinterpret(UInt64, Float64
 
 @testset "flatten_wire conformance" begin
     cases = JSON3.read(read(joinpath(_FW_DIR, "cases.json"), String))["cases"]
-    @test length(cases) == 5
+    @test length(cases) == 7
     for case in cases
         @testset "$(case["name"])" begin
             file = EarthSciAST.load_path(joinpath(_FW_DIR, case["fixture"]))
-            flat = EarthSciAST.expand_flattened_refs(EarthSciAST.flatten(file))
+            kept = EarthSciAST.flatten(file)
+            if haskey(case, "refs_golden")
+                @test _fw_refs_form(kept) == read(joinpath(_FW_DIR, case["refs_golden"]), String)
+            end
+            flat = EarthSciAST.expand_flattened_refs(kept)
             @test _fw_form(flat) == read(joinpath(_FW_DIR, case["golden"]), String)
             back = EarthSciAST.load_string(JSON3.write(_fw_document(flat)))
             for compiler in (:interpreter, :native)

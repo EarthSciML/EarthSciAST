@@ -58,6 +58,7 @@ const GROUPS = [
         "flatten_test.jl",
         "flatten_conformance_test.jl",
         "flatten_wire_conformance_test.jl",
+        "template_time_derivative_test.jl",
         "term_provenance_test.jl",
         "operator_compose_merge_conformance_test.jl",
         "merged_rename_reach_conformance_test.jl",
