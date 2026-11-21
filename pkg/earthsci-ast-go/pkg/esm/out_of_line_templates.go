@@ -593,6 +593,24 @@ func authoredTemplateNames(origView map[string]any, orders map[string][]string) 
 	return authored
 }
 
+// receivedTransformRefs gives, per component ({kind, name}), the template names
+// referenced by the `variable_map` transforms it RECEIVES — the receiver
+// collectCouplingTransformSites pairs each entry with. The transforms keep
+// their references (esm-spec §10.4); the receiving component owns them, so its
+// emitted block materializes their closure (§9.6.4 rule 5). Mirrors the Julia
+// reference `_received_transform_refs`.
+func receivedTransformRefs(view map[string]any) map[[2]string][]string {
+	out := map[[2]string][]string{}
+	for key, sites := range collectCouplingTransformSites(view) {
+		var refs []string
+		for _, s := range sites {
+			collectApplyNames(&refs, s.entry["transform"])
+		}
+		out[key] = refs
+	}
+	return out
+}
+
 // materializeComponentBlock computes one Option-B loaded component's emitted
 // `expression_templates` block (esm-spec §9.6.4 rule 5): the entries authored
 // in-file (`authoredHere`, authored order) first — a `match` rule only once a
@@ -601,8 +619,10 @@ func authoredTemplateNames(origView map[string]any, orders map[string][]string) 
 // here, sorted by UTF-8 bytes. Also reports whether the component carries any
 // surviving reference and whether any non-authored entry was materialized
 // (the §9.6.4 rule 8 version stamp). Shared by emit and the typed load path,
-// as the Julia `_materialize_components!` is.
-func materializeComponentBlock(comp map[string]any, authoredHere []string) (*orderedMap, bool, bool) {
+// as the Julia `_materialize_components!` is. `received` names the references
+// of the coupling transforms the component receives (receivedTransformRefs),
+// which count as its own.
+func materializeComponentBlock(comp map[string]any, authoredHere, received []string) (*orderedMap, bool, bool) {
 	named := map[string]any{}
 	if tpl, ok := comp["expression_templates"].(map[string]any); ok {
 		for n, d := range tpl {
@@ -610,6 +630,9 @@ func materializeComponentBlock(comp map[string]any, authoredHere []string) (*ord
 		}
 	}
 	refnames := map[string]bool{}
+	for _, r := range received {
+		refnames[r] = true
+	}
 	for _, k := range sortedKeys(comp) {
 		if k == "expression_templates" || k == "expression_template_imports" {
 			continue
@@ -669,6 +692,7 @@ func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (ma
 	}
 
 	bump := false
+	received := receivedTransformRefs(view)
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -680,7 +704,8 @@ func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (ma
 				continue
 			}
 			key := kind + "." + cname
-			emitBlock, hasRefs, hasMaterialized := materializeComponentBlock(comp, authored[key])
+			emitBlock, hasRefs, hasMaterialized := materializeComponentBlock(
+				comp, authored[key], received[[2]string{kind, cname}])
 			if hasRefs || hasMaterialized {
 				bump = true
 			}

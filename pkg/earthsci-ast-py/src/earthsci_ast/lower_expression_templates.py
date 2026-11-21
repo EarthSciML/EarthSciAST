@@ -1457,8 +1457,23 @@ def _authored_template_names(raw_source: Any) -> dict[str, list[str]]:
     return authored
 
 
+def received_transform_refs(root: Any) -> dict[str, list[str]]:
+    """The template names referenced by the ``variable_map`` transforms each
+    component RECEIVES, keyed by component name (the first segment of ``to``;
+    the first component of that name, models before reaction systems, as the
+    lowering pairs them). The transforms keep their references (esm-spec
+    §10.4); the receiving component owns them, so its emitted block
+    materializes their closure (§9.6.4 rule 5)."""
+    out: dict[str, list[str]] = {}
+    if not _is_object(root):
+        return out
+    for _idx, entry, comp_name in _variable_map_transforms(root):
+        _collect_apply_names(out.setdefault(comp_name, []), entry["transform"])
+    return out
+
+
 def materialize_component_block(
-    comp: dict, authored_here: list[str]
+    comp: dict, authored_here: list[str], received: list[str] | None = None
 ) -> tuple[dict[str, Any], bool, bool]:
     """One Option-B loaded component's emitted ``expression_templates`` block
     (esm-spec §9.6.4 rule 5): the entries authored in-file (``authored_here``,
@@ -1469,13 +1484,15 @@ def materialize_component_block(
     and whether any non-authored entry was materialized (the §9.6.4 rule 8
     version stamp). Shared by :func:`emit_document` and the typed load path's
     registry (the one flatten merges), as the Julia ``_materialize_components!``
-    is. ``comp`` is not modified."""
+    is. ``received`` names the references of the coupling transforms the
+    component receives (:func:`received_transform_refs`), which count as its
+    own. ``comp`` is not modified."""
     tpl = comp.get("expression_templates")
     named: dict[str, Any] = {}
     if _is_object(tpl):
         for n, d in tpl.items():
             named[str(n)] = d
-    refnames: set[str] = set()
+    refnames: set[str] = set(received or ())
     for k, v in comp.items():
         if k in ("expression_templates", "expression_template_imports"):
             continue
@@ -1524,6 +1541,7 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
     loaded = lower_expression_templates(raw_source if resolved is None else resolved)
     root = loaded
     bump = False
+    received = received_transform_refs(root)
 
     for compkind in ("models", "reaction_systems"):
         comps = root.get(compkind)
@@ -1533,7 +1551,7 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
             if not _is_object(comp):
                 continue
             emit_block, has_refs, has_materialized = materialize_component_block(
-                comp, authored.get(f"{compkind}.{cname}", [])
+                comp, authored.get(f"{compkind}.{cname}", []), received.pop(cname, None)
             )
             if has_refs or has_materialized:
                 bump = True

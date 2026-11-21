@@ -67,6 +67,42 @@ pub(crate) fn authored_template_names(
     authored
 }
 
+/// The template names referenced by the `variable_map` transforms each
+/// component RECEIVES, keyed by component name (the first segment of `to`; the
+/// first component of that name, models before reaction systems, as the
+/// lowering pairs them). The transforms keep their references (esm-spec
+/// §10.4); the receiving component owns them, so its emitted block
+/// materializes their closure (§9.6.4 rule 5). Mirrors the Julia reference
+/// `_received_transform_refs`.
+pub(crate) fn received_transform_refs(
+    root: &Map<String, Value>,
+) -> std::collections::HashMap<String, Vec<String>> {
+    let mut out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let Some(Value::Array(entries)) = root.get("coupling") else {
+        return out;
+    };
+    for entry in entries {
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
+        if obj.get("type").and_then(|v| v.as_str()) != Some("variable_map") {
+            continue;
+        }
+        let Some(transform) = obj.get("transform").filter(|t| t.is_object()) else {
+            continue;
+        };
+        let Some(comp_name) = obj
+            .get("to")
+            .and_then(|v| v.as_str())
+            .map(|t| t.split('.').next().unwrap_or(""))
+        else {
+            continue;
+        };
+        collect_apply_names(transform, out.entry(comp_name.to_string()).or_default());
+    }
+    out
+}
+
 /// One component's `expression_templates` block as emit materializes it
 /// (esm-spec §9.6.4 rule 5): the entries authored in-file (`authored_here`,
 /// read off the source before resolution) first, in authored order — a `match`
@@ -76,14 +112,17 @@ pub(crate) fn authored_template_names(
 /// surviving reference and whether a non-authored entry was carried (the
 /// §9.6.4 rule-8 stamp). Shared by [`emit_document`] and the typed load path's
 /// registry capture, as the Julia reference `_materialize_components!` is.
+/// `received` names the references of the coupling transforms the component
+/// receives ([`received_transform_refs`]), which count as its own.
 pub(crate) fn materialize_component_block(
     comp: &Map<String, Value>,
     authored_here: &[String],
+    received: &[String],
 ) -> (Map<String, Value>, bool, bool) {
     let block = comp.get("expression_templates").and_then(|v| v.as_object());
     let named = block.map(build_named).unwrap_or_default();
     // Surviving-reference names across every non-template field.
-    let mut refnames: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut refnames: std::collections::BTreeSet<String> = received.iter().cloned().collect();
     for (k, v) in comp.iter() {
         if k == "expression_templates" || k == "expression_template_imports" {
             continue;
@@ -163,6 +202,7 @@ pub fn emit_document(
         return Ok(loaded);
     };
     let mut bump = false;
+    let mut received = received_transform_refs(root);
 
     for compkind in ["models", "reaction_systems"] {
         let Some(Value::Object(comps)) = root.get_mut(compkind) else {
@@ -174,7 +214,9 @@ pub fn emit_document(
             };
             let key = format!("{compkind}.{cname}");
             let authored_here = authored.get(&key).cloned().unwrap_or_default();
-            let (emit_block, refs, carried) = materialize_component_block(comp, &authored_here);
+            let here = received.remove(cname.as_str()).unwrap_or_default();
+            let (emit_block, refs, carried) =
+                materialize_component_block(comp, &authored_here, &here);
             bump |= refs || carried;
 
             if emit_block.is_empty() {

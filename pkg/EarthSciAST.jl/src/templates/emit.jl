@@ -111,10 +111,14 @@ function _materialize_components!(root, authored::Dict{String, Vector{String}})
     # ordered), and `_components` walks the raw document's own order.
     blocks = OrderedDict{String, OrderedDict{String, Any}}()
     bump = false
+    # The references of the coupling `variable_map` transforms a component
+    # RECEIVES (the owner of the entry's `to`, esm-spec §10.4) are its own: they
+    # resolve against its registry, so its block materializes their closure too.
+    received = _received_transform_refs(root)
     for (compkind, cname, comp) in _components(root)
         key = "$compkind.$cname"
         named = _component_templates(comp)
-        refnames = Set{String}()
+        refnames = Set{String}(pop!(received, cname, String[]))
         for (k, v) in comp
             (
                 string(k) == "expression_templates" ||
@@ -217,28 +221,16 @@ function _variable_map_transforms(root)
     return out
 end
 
-"""
-    _expand_coupling_transform_refs!(root)
-
-Expand surviving `apply_expression_template` references inside `variable_map`
-coupling `transform`s (esm-spec §10.4) against the RECEIVING component's registry.
-Coupling is not a component, so these references cannot be per-component
-materialized (§9.6.4 rule 5); expanding them at load keeps the coupling section
-self-contained. Called by the typed load path before `_materialize_components!`
-strips the component registries.
-"""
-function _expand_coupling_transform_refs!(root)
-    for (_, entry, tr, comp_name) in _variable_map_transforms(root)
-        comp = nothing
-        for (_, cname, c) in _components(root)
-            cname == comp_name && (comp = c; break)
-        end
-        comp === nothing && continue
-        _is_object(_raw_get(comp, "expression_templates")) || continue
-        named = _component_templates(comp)
-        entry["transform"] = _expand_all(tr, named, "coupling.transform")
+# The template names referenced by the `variable_map` transforms each component
+# receives, keyed by component name (the first segment of `to`, matched to the
+# first component of that name, as the lowering pairs them). The transforms keep
+# their references (esm-spec §10.4); the receiving component owns them.
+function _received_transform_refs(root)
+    out = Dict{String, Vector{String}}()
+    for (_, _, tr, comp_name) in _variable_map_transforms(root)
+        _collect_apply_names!(get!(out, comp_name, String[]), tr)
     end
-    return
+    return out
 end
 
 """

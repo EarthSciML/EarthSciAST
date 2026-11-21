@@ -240,8 +240,8 @@ def test_conformance_fixture_matches_expanded_form():
 def test_coupling_transform_expression_conformance_fixture_matches_expanded_form():
     """The v0.8.0 variable_map expression-transform widening (esm-spec
     §10.4/§10.5): a coupling `transform` invoking a template declared by the
-    RECEIVING component expands at load against that component's registry
-    (§9.6.4). Cross-binding golden:
+    RECEIVING component resolves against that component's registry; Expand
+    gives the inline form (§9.6.4, §10.4). Cross-binding golden:
     tests/conformance/expression_templates/coupling_transform_expression/expanded.esm.
     """
     case = CONFORMANCE_DIR / "expression_templates" / "coupling_transform_expression"

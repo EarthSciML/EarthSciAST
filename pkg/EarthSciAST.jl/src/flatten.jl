@@ -1107,6 +1107,7 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
         end
     end
     template_registry, template_rename = _merge_flat_registry(scoped)
+    file = _own_transform_refs(file, template_rename, rs_added)
     st = FlattenState(file, template_registry)
     ct = file.component_templates
     if file.models !== nothing
@@ -1137,6 +1138,63 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
     _check_variable_map_endpoints(file, st.states, st.params, st.observeds)
     st.loader_fields = _loader_fields(file, st.params, records)
     return st
+end
+
+# The `apply_expression_template` references of a `variable_map` expression
+# transform are owned by the RECEIVING component (the first segment of `to`,
+# esm-spec §10.4), whose registry they resolve against: they follow that
+# component's slice of the registry collision rename (§9.6.4 rule 7, §10.7) and,
+# for a reaction system, bind its templates' explicit free names
+# (`_tpl_explicit_free`) to the system's scoped names, as its own rate
+# references do. The transform's other references are fully scoped already
+# (§10.4), so nothing else is namespaced. Library edges (§10.10) arrive here
+# role-substituted and are treated the same way.
+function _own_transform_refs(file::EsmFile, template_rename, rs_added)
+    (isempty(template_rename) && isempty(rs_added)) && return file
+    changed = false
+    coupling = CouplingEntry[]
+    for entry in file.coupling
+        if entry isa CouplingVariableMap && entry.transform isa ASTExpr
+            owner = String(first(split(entry.to, "."; limit = 2)))
+            tr = entry.transform::ASTExpr
+            added = get(rs_added, owner, nothing)
+            if added !== nothing && !isempty(added)
+                tr = _tpl_bind_explicit(tr, added)
+                tr = _scope_added_bindings(tr, added, owner)
+            end
+            rn = get(template_rename, owner, nothing)
+            rn === nothing || (tr = _rename_expr_apply_refs(tr, rn))
+            if tr !== entry.transform
+                changed = true
+                entry = CouplingVariableMap(
+                    entry.from, entry.to, tr;
+                    factor = entry.factor, description = entry.description,
+                    lifting = entry.lifting
+                )
+            end
+        end
+        push!(coupling, entry)
+    end
+    return changed ? reconstruct(file; coupling = coupling) : file
+end
+
+# The bindings `_tpl_bind_explicit` added (a free name bound to itself) are
+# names of the receiving system `owner`: scope them `owner.name`.
+function _scope_added_bindings(e::ASTExpr, added, owner::String)
+    e isa OpExpr || return e
+    out = map_children(c -> _scope_added_bindings(c, added, owner), e)::OpExpr
+    if _tpl_is_call(out) && out.name isa AbstractString && out.bindings !== nothing
+        names = get(added, String(out.name), nothing)
+        if names !== nothing
+            b = copy(out.bindings)
+            for n in names
+                v = get(b, n, nothing)
+                v isa VarExpr && v.name == n && (b[n] = VarExpr("$owner.$n"))
+            end
+            out = reconstruct(out; bindings = b)
+        end
+    end
+    return out
 end
 
 # Step 3: apply the coupling entries, by kind in the order §4.7 fixes

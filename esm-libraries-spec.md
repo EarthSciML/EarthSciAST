@@ -898,7 +898,7 @@ text.
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`) |
 | `subsystem_ref_is_coupling_library` | A §4.7 subsystem `ref` targets a coupling-library file |
 | `template_import_is_coupling_library` | A §9.7.2 template import targets a coupling-library file |
-| `coupling_library_illegal_payload` | A coupling-library file declares a forbidden payload (`models`/`reaction_systems`/`data_sources`/`domain`/`index_sets`/`metaparameters`/`expression_templates`), contains a `callback` entry or an edge-level `expression_template_imports` map, or carries a transform template that would expand to a rewrite-target operator (esm-spec §10.9) |
+| `coupling_library_illegal_payload` | A coupling-library file declares a forbidden payload (`models`/`reaction_systems`/`data_sources`/`domain`/`index_sets`/`metaparameters`/`expression_templates`), contains a `callback` entry or an edge-level `expression_template_imports` map, or carries a transform referencing a template that would introduce a rewrite-target operator (esm-spec §10.9) |
 | `coupling_library_nested_import` | A coupling-library file contains a `coupling_import` entry |
 | `coupling_edge_unknown_role` | A library edge's top-level system segment, at an occurrence site, is not a declared role |
 | `coupling_role_unused` | A declared role appears at no occurrence site in any library edge |
@@ -1443,9 +1443,10 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    library purity are checked at this step, raising the esm-spec §10.11 diagnostics
    (`coupling_import_unresolved`, `coupling_import_not_library`, `coupling_import_role_unbound`,
    `coupling_import_unknown_role`, `coupling_import_bind_not_a_component`,
-   `coupling_library_illegal_payload`, …). A library edge's transform templates
-   (`apply_expression_template`) expand here against the **bound** `to` owner's template registry,
-   to an already-lowered form (esm-spec §10.4 carve-out). After this sub-step every entry in the
+   `coupling_library_illegal_payload`, …). A library edge's transform references
+   (`apply_expression_template`) resolve here against the **bound** `to` owner's template registry
+   and stay references, owned by that component as an inline edge's are (esm-spec §10.4
+   carve-out); the templates they reference are already lowered. After this sub-step every entry in the
    sequence is an ordinary coupling entry; the `coupling_import` source entry is retained only in
    the *source* document (esm-spec §10.10.3), never in the flattened system. The expansion is a
    pure structural rewrite over ordered inputs and does not disturb the commutativity of the
@@ -1539,7 +1540,10 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      entries to `<ComponentPath>.<name>` and rewriting their references in lockstep. A collision
      propagates along the reference DAG: an entry whose body references a colliding name is
      renamed per owner too, so no deduplicated entry is left holding a reference the merged
-     registry cannot resolve. Downstream
+     registry cannot resolve. The references of a `variable_map` expression transform belong to
+     its receiving component (the owner of `to`, esm-spec §10.4): its registry carries the
+     templates they name, and they are scoped and renamed in lockstep with its entries, so the
+     observed that replaces the `to` parameter keeps them. Downstream
      consumers — graph construction, simulation backends, emit — resolve surviving
      `apply_expression_template` references against this registry. Builders, evaluators and
      analyses SHOULD NOT expand them: they SHOULD evaluate each referenced template natively,

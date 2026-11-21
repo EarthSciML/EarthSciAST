@@ -168,6 +168,42 @@ def test_rules_write_references_goldens(dir_, fix, emitted, expanded):
     assert got == want
 
 
+# ---------------------------------------------------------------------------
+# Coupling transforms keep their references (esm-spec §10.4): they resolve
+# against the RECEIVING component, whose emitted block materializes the
+# templates they name (§9.6.4 rule 5) — the emitted golden byte for byte, and
+# Expand(load) against the expanded oracle.
+# ---------------------------------------------------------------------------
+_COUPLING_TRANSFORM_CASES = [
+    "coupling_transform_expression",
+    "coupling_transform_rule_and_import",
+]
+
+
+@pytest.mark.parametrize("dir_", _COUPLING_TRANSFORM_CASES)
+def test_coupling_transform_goldens(dir_):
+    assert _emit(dir_) == open(_conf(dir_, "emitted.esm"), encoding="utf-8").read()
+    got = _core(expand_document(_load(dir_)))
+    want = _core(json.loads(open(_conf(dir_, "expanded.esm"), encoding="utf-8").read()))
+    assert got == want
+
+
+def test_coupling_transform_keeps_references_and_receiver_registry():
+    """The transform keeps both references (the imported template's and the one
+    the receiving component's rule wrote), and the receiving component's typed
+    registry — built as emit's block — holds the rule and the imported
+    template."""
+    from earthsci_ast import load_path
+
+    loaded = _load("coupling_transform_rule_and_import")
+    tr = loaded["coupling"][0]["transform"]
+    assert _isapply(tr["args"][0]) and tr["args"][0]["name"] == "scale_by"
+    assert _isapply(tr["args"][1]) and tr["args"][1]["name"] == "half_rule"
+    f = load_path(_conf("coupling_transform_rule_and_import", "fixture.esm"))
+    assert list(f.component_templates["models.Sink"]) == ["half_rule", "scale_by"]
+    assert list(f.component_templates["models.Src"]) == ["scale_by"]
+
+
 def test_template_instance_variants_repoint_call_sites():
     """Variants are numbered by canonical bytes and each call site re-pointed."""
     m = _load("template_instance_variants")["models"]["m"]
@@ -434,6 +470,8 @@ def test_flatten_registry_merge_is_the_union_half_only():
         "template_instance_variants",
         "opacity_rule_replacement",
         "unlowered_in_template_body",
+        "coupling_transform_expression",
+        "coupling_transform_rule_and_import",
     ],
 )
 def test_emit_load_byte_wise_fixed_point(dir_):

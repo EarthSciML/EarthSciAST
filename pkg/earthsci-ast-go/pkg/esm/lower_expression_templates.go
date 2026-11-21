@@ -1739,6 +1739,7 @@ func captureComponentTemplates(view map[string]any, orders map[string][]string, 
 	if origView, err := decodeJSONView([]byte(source)); err == nil {
 		authored = authoredTemplateNames(origView, extractTemplateOrders(source))
 	}
+	received := receivedTransformRefs(view)
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -1752,7 +1753,8 @@ func captureComponentTemplates(view map[string]any, orders map[string][]string, 
 			if tpl, ok := comp["expression_templates"].(map[string]any); !ok || len(tpl) == 0 {
 				continue
 			}
-			mat, _, _ := materializeComponentBlock(comp, authored[kind+"."+cname])
+			mat, _, _ := materializeComponentBlock(
+				comp, authored[kind+"."+cname], received[[2]string{kind, cname}])
 			if mat.len() == 0 {
 				continue
 			}

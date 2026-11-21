@@ -2065,21 +2065,53 @@ export function authoredTemplateNames(rawSource: unknown): Record<string, string
 }
 
 /**
+ * The template names referenced by the `variable_map` transforms each
+ * component RECEIVES, keyed by component name (the first segment of `to`; the
+ * first component of that name, models before reaction systems, as the
+ * lowering pairs them). The transforms keep their references (esm-spec
+ * §10.4); the receiving component owns them, so its emitted block
+ * materializes their closure (§9.6.4 rule 5). Mirrors the Julia reference
+ * `_received_transform_refs`.
+ */
+export function receivedTransformRefs(root: Record<string, unknown>): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  const coupling = root.coupling
+  if (!Array.isArray(coupling)) return out
+  for (const entry of coupling) {
+    if (!isObject(entry) || entry.type !== 'variable_map') continue
+    if (!isObject(entry.transform)) continue
+    const to = entry.to
+    if (typeof to !== 'string') continue
+    const receiver = to.split('.')[0] ?? ''
+    let names = out.get(receiver)
+    if (names === undefined) {
+      names = []
+      out.set(receiver, names)
+    }
+    collectApplyNames(entry.transform as Json, names)
+  }
+  return out
+}
+
+/**
  * The emitted `expression_templates` block of one Option-B loaded component
  * (esm-spec §9.6.4 rule 5): authored entries first in authored order (a
  * `match` rule only once rule 3 materialized it match-less), then the closure
  * of its references not authored here, sorted by UTF-8 bytes. `referenced` is
  * whether the component carries a surviving reference, `materialized` whether
- * a non-authored entry was added. Shared by emit ({@link buildEmittedDocument})
+ * a non-authored entry was added. `received` names the references of the
+ * coupling transforms the component receives ({@link receivedTransformRefs}),
+ * which count as its own. Shared by emit ({@link buildEmittedDocument})
  * and the typed load path's per-component registry capture. Does not mutate
  * `comp`. Mirrors the Python/Rust `materialize_component_block`.
  */
 export function materializeComponentBlock(
   comp: Record<string, unknown>,
   authoredHere: readonly string[],
+  received: readonly string[] = [],
 ): { block: Record<string, unknown>; referenced: boolean; materialized: boolean } {
   const named = namedRegistry(comp)
-  const refnames = new Set<string>()
+  const refnames = new Set<string>(received)
   for (const [k, v] of Object.entries(comp)) {
     if (k === 'expression_templates' || k === 'expression_template_imports') continue
     for (const r of collectApplyNames(v, [])) refnames.add(r)
@@ -2122,6 +2154,7 @@ export function buildEmittedDocument(
 ): Record<string, unknown> {
   const root = loaded
   let bump = false
+  const received = receivedTransformRefs(root)
 
   for (const compKind of COMP_KINDS) {
     const comps = root[compKind]
@@ -2129,11 +2162,13 @@ export function buildEmittedDocument(
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
       const key = `${compKind}.${cname}`
+      const here = received.get(cname) ?? []
+      received.delete(cname)
       const {
         block: emitBlock,
         referenced,
         materialized,
-      } = materializeComponentBlock(comp, authored[key] ?? [])
+      } = materializeComponentBlock(comp, authored[key] ?? [], here)
       if (referenced || materialized) bump = true
 
       if (Object.keys(emitBlock).length === 0) {
