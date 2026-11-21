@@ -842,6 +842,51 @@ function _tpl_body_reads(tt::_TplTable, name)
     end
 end
 
+# The parameter sentinels the expansion of `name` reads ONLY in index space:
+# inside a subscript of an `index` (its operands after the array), directly or
+# through a nested reference that reads its own parameter only there. Where the
+# expansion substitutes such a binding, every name in it is a loop index of
+# that `index` (the reference check's subscript-position rule,
+# validation/references.jl `_bound_index_symbols`), so the binding binds the
+# caller to no name of its scope.
+function _tpl_index_reads(tt::_TplTable, name)
+    memo = _tpl_memo(tt, nothing, :index_reads, () -> Dict{String, Set{String}}())
+    haskey(memo, String(name)) && return memo[String(name)]
+    memo[String(name)] = Set{String}()      # (the template graph is acyclic)
+    inidx = Set{String}()
+    outside = Set{String}()
+    function walk(e, idx::Bool)
+        if e isa VarExpr
+            _tpl_is_sentinel(e.name) && push!(idx ? inidx : outside, e.name)
+            return
+        end
+        e isa OpExpr || return
+        if _tpl_is_call(e)
+            foreach(a -> walk(a, idx), e.args)
+            b = e.bindings
+            b === nothing && return
+            inner = try
+                _tpl_index_reads(tt, e.name)
+            catch err
+                err isa ExpressionTemplateError || rethrow()
+                Set{String}()
+            end
+            for (k, v) in b
+                _tpl_reads_binding(tt, e, k) || continue
+                walk(v, idx || _tpl_binding_sentinel(k) in inner)
+            end
+            return
+        end
+        for (j, a) in enumerate(e.args)
+            walk(a, idx || (e.op == "index" && j >= 2))
+        end
+        foreach_child(c -> any(x -> x === c, e.args) || walk(c, false), e)
+        return
+    end
+    walk(_tpl_names_body(tt, name), false)
+    return memo[String(name)] = setdiff(inidx, outside)
+end
+
 """
     _tpl_ground(tt, e, fr) -> ASTExpr
 

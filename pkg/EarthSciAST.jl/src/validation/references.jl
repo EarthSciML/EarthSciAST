@@ -622,6 +622,17 @@ function _check_expression_references!(
                     end
                     isempty(binders) || (sc = _RefScope(sc.base, sc, collect(binders)))
                 end
+                # A binding the expansion reads only in a subscript: its names
+                # are index space there (`_bound_index_symbols`).
+                if sc !== nothing
+                    only_idx = try
+                        _tpl_binding_sentinel(k) in _tpl_index_reads(templates, expr.name)
+                    catch err
+                        err isa ExpressionTemplateError || rethrow()
+                        false
+                    end
+                    only_idx && (sc = _RefScope(sc.base, sc, _collect_index_names!(String[], b[k])))
+                end
                 _check_expression_references!(errors, file, b[k], path, anchor, sc, templates)
             end
         end
