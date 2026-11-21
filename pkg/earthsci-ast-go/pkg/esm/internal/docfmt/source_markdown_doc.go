@@ -259,7 +259,7 @@ func mdDocPrintMd(lim *Lim, d Json) string {
 	doc := skToDoc(lim, capsMd{}, d)
 	out := mdDocFrontMd(doc.Front)
 	r0 := itemsRawDoc(mdDocPrMdx, &doc)
-	raw := itemsMathifyDoc(mathPrintLatex, &r0)
+	raw := itemsMathifyDoc(mathPrintLatex, yamlPlainMathOK, &r0)
 	out = append(out, mdRender(mdDocCanonSegs(itemsItems(&raw)))...)
 	return string(out)
 }

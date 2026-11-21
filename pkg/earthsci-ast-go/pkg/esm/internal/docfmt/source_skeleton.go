@@ -198,11 +198,13 @@ func skIsMathField(k string) bool { return slices.Contains(skMathFields, k) }
 
 // ## Expressions inside path blocks
 
-// PathSeg is `Notation.Seg`: a path segment, a key or (Any) every element of an
-// array and every value of an object.
+// PathSeg is `Notation.Seg`: a path segment, a key, (Any) every element of an
+// array and every value of an object, or (Elem) every element of an array
+// only.
 type PathSeg struct {
-	Any bool
-	Key string
+	Any  bool
+	Elem bool
+	Key  string
 }
 
 // segKey is `Seg.key`.
@@ -211,10 +213,14 @@ func segKey(k string) PathSeg { return PathSeg{Key: k} }
 // segAny is `Seg.any`.
 var segAny = PathSeg{Any: true}
 
+// segElem is `Seg.elem`: the array form of a field that is one object or an
+// array of them.
+var segElem = PathSeg{Elem: true}
+
 // skCompExprPaths is `Notation.compExprPaths`: the expression-valued fields of
-// a component's path blocks, as paths from the block's key (esm-schema.json). A
-// value there that is a well-formed expression prints as math
-// (`Source.mathify`).
+// a component's path blocks, as paths from the block's key (esm-schema.json;
+// an update is one rule or an array of them). A value there that is a
+// well-formed expression prints as math (`Source.mathify`).
 var skCompExprPaths = [][]PathSeg{
 	{segKey("continuous_events"), segAny, segKey("affect_neg"), segAny, segKey("rhs")},
 	{segKey("continuous_events"), segAny, segKey("affects"), segAny, segKey("rhs")},
@@ -223,10 +229,18 @@ var skCompExprPaths = [][]PathSeg{
 	{segKey("discrete_events"), segAny, segKey("trigger"), segKey("expression")},
 	{segKey("guesses"), segAny},
 	{segKey("parameters"), segAny, segKey("update"), segKey("expression")},
+	{segKey("parameters"), segAny, segKey("update"), segKey("from"), segKey("unit_conversion")},
 	{segKey("parameters"), segAny, segKey("update"), segKey("when")},
+	{segKey("parameters"), segAny, segKey("update"), segElem, segKey("expression")},
+	{segKey("parameters"), segAny, segKey("update"), segElem, segKey("from"), segKey("unit_conversion")},
+	{segKey("parameters"), segAny, segKey("update"), segElem, segKey("when")},
 	{segKey("tests"), segAny, segKey("assertions"), segAny, segKey("reference")},
 	{segKey("variables"), segAny, segKey("update"), segKey("expression")},
+	{segKey("variables"), segAny, segKey("update"), segKey("from"), segKey("unit_conversion")},
 	{segKey("variables"), segAny, segKey("update"), segKey("when")},
+	{segKey("variables"), segAny, segKey("update"), segElem, segKey("expression")},
+	{segKey("variables"), segAny, segKey("update"), segElem, segKey("from"), segKey("unit_conversion")},
+	{segKey("variables"), segAny, segKey("update"), segElem, segKey("when")},
 }
 
 // skTopExprPaths is `Notation.topExprPaths`: the same for the document's

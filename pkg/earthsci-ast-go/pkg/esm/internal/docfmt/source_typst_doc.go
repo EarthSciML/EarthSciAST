@@ -131,7 +131,7 @@ func typDocPrintTyp(lim *Lim, d Json) string {
 	doc := skToDoc(lim, capsT{}, d)
 	out := typDocHeaderT(doc.Front)
 	r0 := itemsRawDoc(typDocPrTx, &doc)
-	raw := itemsMathifyDoc(mathPrintTypst, &r0)
+	raw := itemsMathifyDoc(mathPrintTypst, func(string) bool { return true }, &r0)
 	out = append(out, stypRender(typDocCanonSegs(itemsItems(&raw)))...)
 	return string(out)
 }

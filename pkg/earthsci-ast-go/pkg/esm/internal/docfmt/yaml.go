@@ -15,12 +15,26 @@ package docfmt
 //
 // Strings are always double-quoted with JSON-style escapes, so a math leaf
 // (path blocks only, `Source.mathify`) is the plain scalar `$…$`, its text up
-// to the next `$` (`Json.mathOK`); a key is bare when
+// to the next `$` (`Json.mathOK`); the printer makes one only of text that is
+// yamlPlainMathOK, which every YAML 1.2 parser reads as that string. A key is
+// bare when
 // it is an identifier and not one of YAML's special plain scalars in any
 // letter case; a key longer than 1024 characters uses the explicit `? "key"`
 // form. The reader accepts only this layout and well-formed values.
 
 import "strings"
+
+// yamlPlainMathOK is `Yaml.plainMathOK`: math text YAML holds as the plain
+// scalar `$…$`, which a YAML 1.2 parser reads as that string: jsonMathOK, and
+// no `: ` (a mapping indicator), no ` #` (a comment) and no character of
+// strNeedsHex. The Markdown printer leaves any other expression in its block as
+// JSON.
+func yamlPlainMathOK(s string) bool {
+	if !jsonMathOK(s) || strings.Contains(s, ": ") || strings.Contains(s, " #") {
+		return false
+	}
+	return !strings.ContainsFunc(s, strNeedsHex)
+}
 
 // yamlSpecialWords is `Yaml.specialWords`.
 var yamlSpecialWords = []string{"true", "false", "null", "yes", "no", "on", "off", "y", "n"}
