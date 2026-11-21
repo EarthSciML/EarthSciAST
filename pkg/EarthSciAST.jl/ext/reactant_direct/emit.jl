@@ -86,6 +86,14 @@ struct _DEKernelFrame <: _DEFrame
     cell::Vector{_DEVal}
 end
 
+# The body of a template call (`_NK_CALL`) reached from frame `outer`: `args`
+# are the call's arguments, lowered in `outer`. The body is a pure function of
+# them (call.jl), read as the interpreter reads it, by the scalar walker's arms.
+struct _DECallFrame <: _DEFrame
+    args::Vector{_DEVal}
+    outer::_DEFrame
+end
+
 _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal =
     _de_walk(ctx, _DEScalarFrame(cache), nd)
 
@@ -97,17 +105,25 @@ _de_acck(
 # The frame's views for the count recognisers and the computed-subscript read.
 _de_keyval(ctx::_DECtx, ::_DEScalarFrame, x::_E._Node) = _de_scalar_keyval(ctx, x)
 _de_keyval(::_DECtx, fr::_DEKernelFrame, x::_E._Node) = _de_acck_keyval(x, fr.K, fr.plan)
+_de_keyval(ctx::_DECtx, ::_DECallFrame, x::_E._Node) = _de_scalar_keyval(ctx, x)
 _de_same(::_DEScalarFrame, a::_E._Node, b::_E._Node) = _de_same_node(a, b)
 _de_same(fr::_DEKernelFrame, a::_E._Node, b::_E._Node) = _de_acck_same(a, b, fr.K, fr.plan)
+_de_same(::_DECallFrame, a::_E._Node, b::_E._Node) = _de_same_node(a, b)
 _de_resolve(::_DEScalarFrame, x::_E._Node) = x
 _de_resolve(fr::_DEKernelFrame, x::_E._Node) = _de_acck_term(x, fr.K)
+_de_resolve(::_DECallFrame, x::_E._Node) = x
 _de_cached_term(::_DEScalarFrame, ::_E._Node) = nothing
 _de_cached_term(fr::_DEKernelFrame, x::_E._Node) = _de_acck_cached(x, fr.K)
+_de_cached_term(::_DECallFrame, ::_E._Node) = nothing
 
 # A CSE read.
 _de_cached(::_DECtx, fr::_DEScalarFrame, nd::_E._Node) = fr.cache[nd.idx]
 _de_cached(::_DECtx, fr::_DEKernelFrame, nd::_E._Node) =
     nd.payload === fr.K.cse.scratch ? fr.cell[nd.idx] : fr.inv[nd.idx]
+_de_cached(ctx::_DECtx, ::_DECallFrame, ::_E._Node) = _de_refuse(
+    ctx, "a CSE read in a template call's body",
+    "a call body is compiled without a CSE prelude, so none is expected there."
+)
 
 function _de_count(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)
     return _de_count_unrolled(
@@ -150,6 +166,17 @@ function _de_walk(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
         end
         c = _DEVal[_de_walk(ctx, fr, ch) for ch in nd.children]
         return _de_op(ctx, nd, c)
+    elseif k === _E._NK_CALL
+        # A template call: its arguments in this frame, then its body over
+        # them, inlined at emission (the interpreter evaluates the arguments
+        # before the body as well).
+        site = nd.payload::_E._CallSite
+        isempty(site.arrays) || _de_refuse(
+            ctx, "a template call with an array argument",
+            "a call body's gather from an array argument has no direct lowering yet."
+        )
+        args = _DEVal[_de_walk(ctx, fr, ch) for ch in nd.children]
+        return _de_walk(ctx, _DECallFrame(args, fr), site.target.body)
     end
     return _de_leaf(ctx, fr, nd)
 end
@@ -161,21 +188,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEScalarFrame, nd::_E._Node)::_DEVal
     if k === _E._NK_STATE
         return _de_read(ctx, ctx.ue, nd.idx, :state)
     elseif k === _E._NK_CONTRACTION_LOOP
-        cnt = _de_count_loop(ctx, nd)
-        cnt === nothing ||
-            return _de_emit_count(ctx, cnt, _de_walk(ctx, fr, cnt.query))
-        # Emission-time unroll of the static range, in the interpreter's
-        # ascending order. A loop whose BODY is host data never gets here — it
-        # folded above — and a long one lands in `stablehlo.reduce` rather than a
-        # chain of `range` binary ops (see `_de_fold_terms`).
-        spec = nd.payload::_E._ContractLoop
-        body = nd.children[1]
-        terms = _DEVal[]
-        for kk in spec.lo:spec.step:spec.hi
-            spec.ref[] = kk
-            push!(terms, _de_walk(ctx, fr, body))
-        end
-        return _de_fold_terms(ctx, nd.op, nd.literal, terms)
+        return _de_contraction_loop(ctx, fr, nd)
     elseif k === _E._NK_LOOPVAR
         return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
     elseif k === _E._NK_CONST_GATHER
@@ -211,6 +224,41 @@ function _de_leaf(ctx::_DECtx, fr::_DEScalarFrame, nd::_E._Node)::_DEVal
 end
 
 _de_kindname(k::UInt8) = _E._node_kind_name(k)
+
+function _de_contraction_loop(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
+    cnt = _de_count_loop(ctx, nd)
+    cnt === nothing ||
+        return _de_emit_count(ctx, cnt, _de_walk(ctx, fr, cnt.query))
+    # Emission-time unroll of the static range, in the interpreter's
+    # ascending order. A loop whose BODY is host data never gets here — it
+    # folded above — and a long one lands in `stablehlo.reduce` rather than a
+    # chain of `range` binary ops (see `_de_fold_terms`).
+    spec = nd.payload::_E._ContractLoop
+    body = nd.children[1]
+    terms = _DEVal[]
+    for kk in spec.lo:spec.step:spec.hi
+        spec.ref[] = kk
+        push!(terms, _de_walk(ctx, fr, body))
+    end
+    return _de_fold_terms(ctx, nd.op, nd.literal, terms)
+end
+
+# ---- a template call body's own leaves ----------------------------------------
+
+function _de_leaf(ctx::_DECtx, fr::_DECallFrame, nd::_E._Node)::_DEVal
+    k = nd.kind
+    if k === _E._NK_ARG
+        return fr.args[nd.idx]
+    elseif k === _E._NK_CONTRACTION_LOOP
+        return _de_contraction_loop(ctx, fr, nd)
+    elseif k === _E._NK_LOOPVAR
+        return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
+    end
+    return _de_refuse(
+        ctx, "the template-call body node kind $(_de_kindname(k))",
+        "no arm of the call-body walk lowers it."
+    )
+end
 
 # ---- access kernels ----------------------------------------------------------
 
