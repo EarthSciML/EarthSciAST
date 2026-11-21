@@ -66,7 +66,10 @@ func TestReferencePreserving_ExpandEqualsFused(t *testing.T) {
 		"arrhenius_smoke",
 		"scalar_field_param",
 		"opacity_priority_shadowing",
-		"eager_target_bearing",
+		"rewrite_in_template_body",
+		"rule_writes_reference",
+		"template_instance_variants",
+		"opacity_rule_replacement",
 		"coupling_transform_expression",
 	} {
 		t.Run(group, func(t *testing.T) {

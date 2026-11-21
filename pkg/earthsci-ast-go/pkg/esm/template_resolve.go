@@ -482,7 +482,7 @@ func processLibrary(view map[string]any, fileOrders map[string][]string,
 	if err := composeTemplateBodies(scope.templates.m, origin); err != nil {
 		return nil, err
 	}
-	if err := expandLibraryEnumCalls(view, scope.templates.m, tpl, origin); err != nil {
+	if err := expandLibraryEnumCalls(view, scope.templates, tpl, origin); err != nil {
 		return nil, err
 	}
 	// In the library's own scope, before an importing edge's `bindings`
@@ -545,28 +545,186 @@ func lowerLibraryTemplateBody(library map[string]any, name string, decl map[stri
 	return lowered, nil
 }
 
-// expandLibraryEnumCalls resolves the `enum` symbols a template library binds in
-// its OWN calls (esm-spec §9.3). After lowerLibraryTemplateEnums, the only
-// `enum` ops left in the library's scope are spelled with a template parameter.
-// A call to a template that can still produce one binds that parameter here, in
-// the library, so each of the library's own template bodies has those calls
-// expanded (the eager expansion esm-spec §9.6.4 rule 3 requires at load anyway)
-// and the result lowered against the library's block. An op the expansion leaves
-// spelled with the calling template's own parameter stays open for the
-// importer's binding. Runs after composeTemplateBodies, so the reference DAG is
-// acyclic; every new body is computed from the registry before any is replaced.
-func expandLibraryEnumCalls(library, named, own map[string]any, origin string) error {
+// expandLibraryEnumCalls resolves the `enum` symbols a template library binds
+// in its OWN calls (esm-spec §9.3, §9.7.5). After lowerLibraryTemplateEnums,
+// the only `enum` ops left in the library's scope are spelled with a template
+// parameter. A call that binds such a parameter to a symbol is an instance
+// (esm-spec §9.6.4 rule 3: the instance includes the symbols the call binds):
+// the called template's body is lowered against the library's block for that
+// instance, without expanding the call, and the call is re-pointed to the
+// lowered body, registered as `<name>.variant<k>`. The authored template keeps
+// its body: the importer may still call it with a symbol of its own, which
+// resolves at the importer's call site. Instances follow the reference DAG (a
+// call that forwards a bound symbol into another call lowers that one too). An
+// op the lowering leaves spelled with the calling template's own parameter
+// stays open for the importer's binding. Runs after composeTemplateBodies, so
+// the reference DAG is acyclic. Mirrors the Julia `_expand_library_enum_calls!`.
+func expandLibraryEnumCalls(library map[string]any, named *orderedMap, own map[string]any, origin string) error {
 	if len(own) == 0 {
 		return nil
 	}
-	bearing := templateOpBearing(named, func(op string) bool { return op == OpEnum })
-	expand := func(n map[string]any) bool {
-		name, _ := n["name"].(string)
-		return bearing[name]
+	bearing := templateOpBearing(named.m, func(op string) bool { return op == OpEnum })
+	type instKey struct{ name, lits string }
+	type inst struct {
+		body any
+		refs map[uintptr]libRef
 	}
-	bodies := map[string]any{}
+	insts := map[instKey]*inst{}
+	var instOrder []instKey
+
+	// boundSymbols is the symbols a reference n binds to the parameters of its
+	// template, as literals or through lits (the enclosing instance's symbols).
+	boundSymbols := func(n map[string]any, callerParams map[string]bool, lits map[string]string) (string, map[string]string, bool) {
+		nm, ok := n["name"].(string)
+		if !ok || !bearing[nm] {
+			return "", nil, false
+		}
+		b, ok := n["bindings"].(map[string]any)
+		if !ok {
+			return "", nil, false
+		}
+		syms := map[string]string{}
+		for k, v := range b {
+			vs, ok := v.(string)
+			if !ok {
+				continue
+			}
+			if callerParams[vs] {
+				if l, has := lits[vs]; has {
+					syms[k] = l
+				}
+			} else {
+				syms[k] = vs
+			}
+		}
+		if len(syms) == 0 {
+			return "", nil, false
+		}
+		return nm, syms, true
+	}
+
+	var instance func(name string, syms map[string]string) (instKey, error)
+	var repoint func(body any, callerParams map[string]bool, lits map[string]string) (any, map[uintptr]libRef, error)
+	repoint = func(body any, callerParams map[string]bool, lits map[string]string) (any, map[uintptr]libRef, error) {
+		refs := map[uintptr]libRef{}
+		memo := map[uintptr]any{}
+		var walk func(x any) (any, bool, error)
+		walk = func(x any) (any, bool, error) {
+			switch v := x.(type) {
+			case []any:
+				var out []any
+				for i, c := range v {
+					nc, ch, err := walk(c)
+					if err != nil {
+						return nil, false, err
+					}
+					if ch && out == nil {
+						out = make([]any, len(v))
+						copy(out, v[:i])
+					}
+					if out != nil {
+						out[i] = nc
+					}
+				}
+				if out == nil {
+					return v, false, nil
+				}
+				return out, true, nil
+			case map[string]any:
+				key := mapPtr(v)
+				if r, hit := memo[key]; hit {
+					rm, _ := r.(map[string]any)
+					return r, rm == nil || mapPtr(rm) != key, nil
+				}
+				var out map[string]any
+				apply := isApplyMap(v)
+				for _, k := range sortedKeys(v) {
+					if apply && k == "name" {
+						continue
+					}
+					nv, ch, err := walk(v[k])
+					if err != nil {
+						return nil, false, err
+					}
+					if ch {
+						if out == nil {
+							out = cloneMapAny(v)
+						}
+						out[k] = nv
+					}
+				}
+				if apply {
+					if nm, syms, ok := boundSymbols(v, callerParams, lits); ok {
+						ik, err := instance(nm, syms)
+						if err != nil {
+							return nil, false, err
+						}
+						if out == nil {
+							out = cloneMapAny(v)
+						}
+						refs[mapPtr(out)] = libRef{node: out, key: ik.name + "\x1f" + ik.lits}
+					}
+				}
+				if out == nil {
+					memo[key] = v
+					return v, false, nil
+				}
+				memo[key] = out
+				return out, true, nil
+			}
+			return x, false, nil
+		}
+		out, _, err := walk(body)
+		return out, refs, err
+	}
+	instance = func(name string, syms map[string]string) (instKey, error) {
+		decl, _ := named.get(name).(map[string]any)
+		params := templateParams(decl)
+		lits := map[string]string{}
+		litsAny := map[string]any{}
+		for _, p := range params {
+			if v, ok := syms[p]; ok {
+				lits[p] = v
+				litsAny[p] = v
+			}
+		}
+		key := instKey{name, canonicalCompact(litsAny)}
+		if _, ok := insts[key]; ok {
+			return key, nil
+		}
+		body := decl["body"]
+		// The bound symbols, written into the `enum` ops that spell them.
+		subst := substituteEnumArgs(body, lits)
+		var openParams []any
+		callerParams := map[string]bool{}
+		for _, p := range params {
+			callerParams[p] = true
+			if _, ok := lits[p]; !ok {
+				openParams = append(openParams, p)
+			}
+		}
+		openDecl := map[string]any{"params": openParams, "body": subst}
+		lowered, err := lowerLibraryTemplateBody(library, name, openDecl, subst, origin)
+		if err != nil {
+			return key, err
+		}
+		lowered, refs, err := repoint(lowered, callerParams, lits)
+		if err != nil {
+			return key, err
+		}
+		insts[key] = &inst{body: lowered, refs: refs}
+		instOrder = append(instOrder, key)
+		return key, nil
+	}
+
+	type ownEntry struct {
+		name string
+		body any
+		refs map[uintptr]libRef
+	}
+	var ownRefs []ownEntry
 	for _, name := range sortedKeys(own) {
-		decl, ok := named[name].(map[string]any)
+		decl, ok := named.get(name).(map[string]any)
 		if !ok {
 			continue
 		}
@@ -574,10 +732,10 @@ func expandLibraryEnumCalls(library, named, own map[string]any, origin string) e
 		if !has {
 			continue
 		}
-		var refs []string
-		collectApplyNames(&refs, body)
+		var refnames []string
+		collectApplyNames(&refnames, body)
 		calls := false
-		for _, r := range refs {
+		for _, r := range refnames {
 			if bearing[r] {
 				calls = true
 				break
@@ -586,22 +744,168 @@ func expandLibraryEnumCalls(library, named, own map[string]any, origin string) e
 		if !calls {
 			continue
 		}
-		expanded, _, err := expandRefsShared(body, named, origin, expandMemo{}, expand)
+		callerParams := map[string]bool{}
+		for _, p := range templateParams(decl) {
+			callerParams[p] = true
+		}
+		rb, refs, err := repoint(body, callerParams, map[string]string{})
 		if err != nil {
 			return err
 		}
-		lowered, err := lowerLibraryTemplateBody(library, name, decl, expanded, origin)
-		if err != nil {
-			return err
-		}
-		bodies[name] = lowered
+		ownRefs = append(ownRefs, ownEntry{name, rb, refs})
 	}
-	for _, name := range sortedKeys(bodies) {
-		decl := cloneMapAny(named[name].(map[string]any))
-		decl["body"] = bodies[name]
-		named[name] = decl
+	if len(insts) == 0 {
+		return nil
+	}
+	// Name the instances children first: a template after every template its
+	// instances' bodies reference; each distinct lowered body of a template is
+	// `<name>.variant<k>`, k in the order of the bodies' canonical bytes.
+	final := map[string]string{}
+	rename := func(body any, refs map[uintptr]libRef) any {
+		irefs := make(map[uintptr]instRef, len(refs))
+		for p, r := range refs {
+			irefs[p] = instRef{node: r.node, key: r.key}
+		}
+		return repointRefs(body, irefs, final)
+	}
+	var tnames []string
+	byName := map[string][]instKey{}
+	for _, k := range instOrder {
+		if _, ok := byName[k.name]; !ok {
+			tnames = append(tnames, k.name)
+		}
+		byName[k.name] = append(byName[k.name], k)
+	}
+	done := map[string]bool{}
+	var nameTemplate func(t string)
+	nameTemplate = func(t string) {
+		if done[t] {
+			return
+		}
+		done[t] = true
+		for _, k := range byName[t] {
+			for _, r := range insts[k].refs {
+				nameTemplate(strings.SplitN(r.key, "\x1f", 2)[0])
+			}
+		}
+		bodies := make([]any, len(byName[t]))
+		canon := make([]string, len(byName[t]))
+		for i, k := range byName[t] {
+			bodies[i] = rename(insts[k].body, insts[k].refs)
+			canon[i] = canonicalCompact(bodies[i])
+		}
+		seen := map[string]bool{}
+		var distinct []string
+		for _, c := range canon {
+			if !seen[c] {
+				seen[c] = true
+				distinct = append(distinct, c)
+			}
+		}
+		sort.Strings(distinct)
+		names := map[string]string{}
+		for i, c := range distinct {
+			vn := fmt.Sprintf("%s.variant%d", t, i+1)
+			for named.has(vn) {
+				vn += "_"
+			}
+			nd := cloneMapAny(named.get(t).(map[string]any))
+			for j := range canon {
+				if canon[j] == c {
+					nd["body"] = bodies[j]
+					break
+				}
+			}
+			named.set(vn, nd)
+			names[c] = vn
+		}
+		for i, k := range byName[t] {
+			final[k.name+"\x1f"+k.lits] = names[canon[i]]
+		}
+	}
+	for _, t := range tnames {
+		nameTemplate(t)
+	}
+	for _, e := range ownRefs {
+		decl := cloneMapAny(named.get(e.name).(map[string]any))
+		decl["body"] = rename(e.body, e.refs)
+		named.set(e.name, decl)
 	}
 	return nil
+}
+
+// libRef is one re-pointed reference of the library-edge `enum` lowering: the
+// reference node (held by identity) and the instance key it names.
+type libRef struct {
+	node map[string]any
+	key  string
+}
+
+// substituteEnumArgs is body with each `enum` op argument that names a key of
+// lits replaced by its symbol. Identity-preserving where nothing changes.
+func substituteEnumArgs(body any, lits map[string]string) any {
+	var walk func(x any) (any, bool)
+	walk = func(x any) (any, bool) {
+		switch v := x.(type) {
+		case []any:
+			var out []any
+			for i, c := range v {
+				nc, ch := walk(c)
+				if ch && out == nil {
+					out = make([]any, len(v))
+					copy(out, v[:i])
+				}
+				if out != nil {
+					out[i] = nc
+				}
+			}
+			if out == nil {
+				return v, false
+			}
+			return out, true
+		case map[string]any:
+			if op, _ := v["op"].(string); op == OpEnum {
+				args, ok := v["args"].([]any)
+				if !ok {
+					return v, false
+				}
+				var na []any
+				for i, a := range args {
+					if s, ok := a.(string); ok {
+						if l, has := lits[s]; has {
+							if na == nil {
+								na = append([]any(nil), args...)
+							}
+							na[i] = l
+						}
+					}
+				}
+				if na == nil {
+					return v, false
+				}
+				n2 := cloneMapAny(v)
+				n2["args"] = na
+				return n2, true
+			}
+			var out map[string]any
+			for _, k := range sortedKeys(v) {
+				nv, ch := walk(v[k])
+				if ch {
+					if out == nil {
+						out = cloneMapAny(v)
+					}
+					out[k] = nv
+				}
+			}
+			if out == nil {
+				return v, false
+			}
+			return out, true
+		}
+		return x, false
+	}
+	out, _ := walk(body)
+	return out
 }
 
 // ---------------------------------------------------------------------------
