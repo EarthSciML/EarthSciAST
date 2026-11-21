@@ -25,12 +25,14 @@ from .items import (
     RSurf,
     ck_mx,
     cook_doc,
+    cook_doc_blocks,
     cook_rows,
     eq_expr,
     eq_sides,
     id_char,
     id_ok,
     items,
+    mathify_doc,
     p_piece,
     p_side,
     pr_mx,
@@ -995,7 +997,7 @@ def print_md(d: Any) -> str:
     blank line, a declaration on a line of its own (``Md.canonSegs``)."""
     doc = to_doc(CAPS_MD, d)
     out = [_front_md(doc.front)]
-    for it in items(raw_doc(_pr_mdx, print_latex, doc)):
+    for it in items(mathify_doc(print_latex, raw_doc(_pr_mdx, doc))):
         out.append("\n")
         out.append(item_md(it))
         if not _is_block(it):
@@ -1029,5 +1031,8 @@ def parse_md(text: str):
     sk = unitems(r[0], r[1])
     if sk is None:
         return None
-    d = cook_doc(_ck_mdx, parse_latex, sk)
+    sk = cook_doc_blocks(parse_latex, sk)
+    if sk is None:
+        return None
+    d = cook_doc(_ck_mdx, sk)
     return None if d is None else of_doc(d)

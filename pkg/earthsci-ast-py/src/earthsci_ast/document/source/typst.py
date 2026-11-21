@@ -21,12 +21,14 @@ from .items import (
     RSurf,
     ck_mx,
     cook_doc,
+    cook_doc_blocks,
     cook_rows,
     eq_expr,
     eq_sides,
     id_char,
     id_ok,
     items,
+    mathify_doc,
     p_piece,
     p_side,
     pr_mx,
@@ -746,7 +748,7 @@ def print_typ(d: Any) -> str:
     """``Typ.printTyp``: print a document as Typst."""
     doc = to_doc(CAPS_T, d)
     out = [HEADER + args_first_t(doc.front) + ")\n"]
-    for it in items(raw_doc(_pr_tx, print_typst, doc)):
+    for it in items(mathify_doc(print_typst, raw_doc(_pr_tx, doc))):
         out.append("\n")
         out.append(item_t(it))
         if not _is_block(it):
@@ -772,5 +774,8 @@ def parse_typ(text: str):
     sk = unitems(r[0], its)
     if sk is None:
         return None
-    d = cook_doc(_ck_tx, parse_typst, sk)
+    sk = cook_doc_blocks(parse_typst, sk)
+    if sk is None:
+        return None
+    d = cook_doc(_ck_tx, sk)
     return None if d is None else of_doc(d)
