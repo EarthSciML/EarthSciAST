@@ -30,10 +30,10 @@ function expand_document(loaded)
     for (compkind, cname, comp) in _components(root)
         named = comp_named[(compkind, cname)]
         for k in collect(keys(comp))
-            (k == "expression_templates" || k == "expression_template_imports") && continue
+            (k == "operators" || k == "operator_imports") && continue
             comp[k] = _expand_all(comp[k], named, "$compkind.$cname.$k")
         end
-        haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
+        haskey(comp, "operators") && delete!(comp, "operators")
     end
 
     for (i, entry, tr, comp_name) in _variable_map_transforms(root)
@@ -82,7 +82,7 @@ imported/derived templates are materialized instead.
 function _authored_template_names(raw_source)::Dict{String, Vector{String}}
     authored = Dict{String, Vector{String}}()
     for (compkind, cname, comp) in _components(raw_source)
-        tpl = _raw_get(comp, "expression_templates")
+        tpl = _raw_get(comp, "operators")
         (tpl !== nothing && _is_object(tpl)) || continue
         authored["$compkind.$cname"] = String[
             string(n) for (n, d) in pairs(tpl) if _is_object(d)
@@ -121,8 +121,8 @@ function _materialize_components!(root, authored::Dict{String, Vector{String}})
         refnames = Set{String}(pop!(received, cname, String[]))
         for (k, v) in comp
             (
-                string(k) == "expression_templates" ||
-                    string(k) == "expression_template_imports"
+                string(k) == "operators" ||
+                    string(k) == "operator_imports"
             ) && continue
             for r in _collect_apply_names!(String[], v)
                 push!(refnames, r)
@@ -146,15 +146,16 @@ function _materialize_components!(root, authored::Dict{String, Vector{String}})
         end
 
         if isempty(emit_block)
-            haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
+            haskey(comp, "operators") && delete!(comp, "operators")
         else
-            comp["expression_templates"] = emit_block
+            comp["operators"] = emit_block
             blocks[key] = emit_block
+            bump = true
         end
-        haskey(comp, "expression_template_imports") &&
-            delete!(comp, "expression_template_imports")
+        haskey(comp, "operator_imports") &&
+            delete!(comp, "operator_imports")
     end
-    haskey(root, "expression_template_imports") && delete!(root, "expression_template_imports")
+    haskey(root, "operator_imports") && delete!(root, "operator_imports")
     return (blocks, bump)
 end
 
@@ -241,7 +242,10 @@ carrying a surviving `apply_expression_template` reference or a materialized
 `expression_templates` block is stamped to AT LEAST this (esm-spec §9.6.4 rule
 8).
 """
-const TEMPLATE_MACHINERY_MIN_ESM = "0.9.0"
+# esm 2.4.0: an emitted document writes the names `operators` and
+# `apply_operator` (esm-spec §9.6.5, §9.6.12), so it declares 2.4.0 or later;
+# this floor subsumes the 0.9.0 floor of the Option-B machinery (§9.6.4 rule 8).
+const TEMPLATE_MACHINERY_MIN_ESM = "2.4.0"
 
 """
     _esm_stamp_floor(declared) -> String
@@ -292,7 +296,12 @@ function emit_document(raw_source, base_path::AbstractString)
     # native tree. The processed path already returns one.
     root = loaded === src ? _to_ordered(loaded)::OrderedDict{String, Any} : loaded
     _blocks, bump = _materialize_components!(root, authored)
-    bump && (root["esm"] = _esm_stamp_floor(get(root, "esm", nothing)))
+    for (_, _, comp) in _components(root)
+        haskey(comp, "operators") && (comp["operators"] = _without_private_keys(comp["operators"]))
+    end
+    # A library's top-level `operators` block is written under the new name too
+    # (esm-spec §9.6.5, §9.6.12).
+    (bump || haskey(root, "operators")) && (root["esm"] = _esm_stamp_floor(get(root, "esm", nothing)))
     return root
 end
 
@@ -317,7 +326,7 @@ function _emit_write(io::IO, x, indent::Int; preserve::Bool = false)
             print(io, pad1, JSON3.write(string(k)), ": ")
             _emit_write(
                 io, x[k], indent + 1;
-                preserve = (string(k) == "expression_templates")
+                preserve = (string(k) == "operators")
             )
             i < length(ks) && print(io, ",")
             print(io, "\n")

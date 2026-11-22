@@ -550,7 +550,7 @@ pub(super) fn lit(v: &[f64]) -> Value {
 
 /// `name` applied with `bindings`.
 pub(super) fn apply(name: &str, bindings: Value) -> Value {
-    json!({"op": "apply_expression_template", "args": [], "name": name, "bindings": bindings})
+    json!({"op": "apply_operator", "args": [], "name": name, "bindings": bindings})
 }
 
 /// The `expression_templates` of the repository library `lib/<file>`.
@@ -560,7 +560,7 @@ pub(super) fn library(file: &str) -> Value {
         .join(file);
     let text = std::fs::read_to_string(&path).expect("library file");
     let lib: Value = serde_json::from_str(&text).expect("library parses");
-    lib["expression_templates"].clone()
+    lib["operators"].clone()
 }
 
 /// A one-model document named `name`, with `domain` when given.

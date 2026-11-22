@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from earthsci_ast.parse import rewrite_old_spellings
 from earthsci_ast.pushdown_rewrite import desugar_pushdown, pushdown_diagnostics
 
 _TESTS_DIR = Path(__file__).resolve().parents[3] / "tests"
@@ -74,6 +75,10 @@ def test_pushdown_rewrite_matches_golden(fixture):
 
         if fires:
             golden = json.loads((_TESTS_DIR / fixture["golden"]).read_text())
+            # The goldens may spell the esm-2.3 names; the rewrite reads its input
+            # through the esm-2.4.0 old-spelling pass and writes the new names
+            # (esm-spec §9.6.12), so the golden is read the same way.
+            rewrite_old_spellings(golden)
             assert rewritten is not doc, "the pattern must fire on the input fixture"
             diffs = _deep_eq(rewritten, golden)
             assert not diffs, "rewritten document differs from golden:\n" + "\n".join(diffs[:40])

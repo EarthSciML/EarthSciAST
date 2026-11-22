@@ -126,6 +126,7 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
         bindings: _,
         // Load provenance, never on the wire (Julia lists it ignored too).
         template_origin: _,
+        definition_units: _,
         // NON-EMISSIBLE — no wire slot; a set value fails canonical emission
         // closed. Checked below in struct-declaration order.
         int_var,
@@ -863,8 +864,8 @@ const DOCUMENT_MAP_KEYS: &[&str] = &[
     "coupling_roles",
     "data_sources",
     "enums",
-    "expression_template_imports",
-    "expression_templates",
+    "operator_imports",
+    "operators",
     "guesses",
     "index_set_rename",
     "index_sets",
@@ -920,7 +921,10 @@ fn canonical_numbers(value: &serde_json::Value) -> serde_json::Value {
 /// them: a scalar one becomes the bare literal, an array one a `const` without
 /// `units`. The deprecated operators are rewritten (esm-spec §4.2): a `neg`
 /// node with one argument becomes unary `-`, a `pow` node with two becomes `^`,
-/// and a `broadcast` of `neg` with one argument maps `-`. Every number,
+/// and a `broadcast` of `neg` with one argument maps `-`; the esm-2.3 names
+/// (`expression_templates`, `expression_template_imports`,
+/// `apply_expression_template`, a spatial `D`, `δ`, `∂`) are read as the esm
+/// 2.4.0 ones (esm-spec §9.6.12). Every number,
 /// free-form objects included, takes its canonical form (CONFORMANCE
 /// §5.5.3.1): an integral value in `Int64` is an integer (`0.0` is `0`). Nothing
 /// else changes. These are the rules of Lean `Adapter.Doc.spellRules` (the
@@ -987,7 +991,12 @@ pub fn canonicalize_document(doc: &serde_json::Value) -> serde_json::Value {
                 .and_then(|v| v.as_str())
                 .is_some_and(|u| crate::units::canonical_unit_spelling(u) == "1")
     }
-    canonical_numbers(&walk(doc, false))
+    // The old spellings are read as the esm 2.4.0 names (esm-spec §9.6.12,
+    // §4.2), as a load reads them (Lean `Adapter.Doc.spellRules`).
+    match crate::old_spellings::read_silently(doc) {
+        Some(read) => canonical_numbers(&walk(&read, false)),
+        None => canonical_numbers(&walk(doc, false)),
+    }
 }
 
 #[cfg(test)]
@@ -1411,7 +1420,7 @@ mod tests {
         let mut bindings = std::collections::HashMap::new();
         bindings.insert("t".to_string(), Expr::Variable("z".into()));
         let tolerated = Expr::operator(ExpressionNode {
-            op: "apply_expression_template".into(),
+            op: "apply_operator".into(),
             args: vec![Expr::Variable("x".into())],
             bindings: Some(bindings),
             ..ExpressionNode::default()

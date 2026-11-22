@@ -239,7 +239,7 @@ function _namespace_expr(
     # A template call's bindings are substituted into its body, so a binding
     # name the body binds as a loop symbol is that loop index (see
     # `template_captures`), not the component variable of the same name.
-    if expr.op == "apply_expression_template" && expr.name !== nothing
+    if expr.op == "apply_operator" && expr.name !== nothing
         cap = get(captures, expr.name::String, nothing)
         if cap !== nothing
             for b in cap

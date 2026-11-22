@@ -469,7 +469,8 @@ end
         "sin" => K.KSin, "cos" => K.KCos, "tan" => K.KTan, "arcsin" => K.KAsin, "arccos" => K.KAcos,
         "arctan" => K.KAtan, "sinh" => K.KSinh, "cosh" => K.KCosh, "tanh" => K.KTanh, "min" => K.KMin,
         "max" => K.KMax, "lfloor" => K.KLfloor, "rfloor" => K.KRfloor, "lceil" => K.KLceil,
-        "rceil" => K.KRceil, "partial" => K.KPdiff, "dot" => K.KDotacc, "sum" => K.KSum,
+        "rceil" => K.KRceil, "partial" => K.KPdiff, "nabla" => K.KNabla, "dot" => K.KDotacc,
+        "sum" => K.KSum,
         "prod" => K.KProd, "in" => K.KInn, "substack" => K.KSubstack, "limits" => K.KLimitsL,
     )
     @test L.PUNCT == Dict{Char, K.Kw}(
@@ -482,7 +483,8 @@ end
         "sqrt" => K.KSqrt, "exp" => K.KExp, "ln" => K.KLn, "log" => K.KLog, "sin" => K.KSin,
         "cos" => K.KCos, "tan" => K.KTan, "arcsin" => K.KAsin, "arccos" => K.KAcos, "arctan" => K.KAtan,
         "sinh" => K.KSinh, "cosh" => K.KCosh, "tanh" => K.KTanh, "min" => K.KMin, "max" => K.KMax,
-        "abs" => K.KAbs, "floor" => K.KFloor, "ceil" => K.KCeil, "partial" => K.KPdiff, "dif" => K.KDif,
+        "abs" => K.KAbs, "floor" => K.KFloor, "ceil" => K.KCeil, "partial" => K.KPdiff,
+        "nabla" => K.KNabla, "dif" => K.KDif,
         "cases" => K.KCases, "vec" => K.KVec, "mat" => K.KMat, "sum" => K.KSum, "product" => K.KProd,
         "in" => K.KInn, "limits" => K.KLimits, "lr" => K.KLr,
     )

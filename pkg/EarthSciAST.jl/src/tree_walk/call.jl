@@ -291,7 +291,7 @@ function _call_arg(b::AbstractDict, s::String)
         v = get(b, p, nothing)
         v === nothing && throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "apply_expression_template missing binding for param '$p'"
             )
         )

@@ -39,7 +39,7 @@ const LIBRARY_FORBIDDEN_KEYS = [
   'domain',
   'index_sets',
   'metaparameters',
-  'expression_templates',
+  'operators',
 ] as const
 
 /** Coupling-entry types a library edge MAY carry (esm-spec §10.9). */
@@ -107,9 +107,9 @@ function rewriteExprInPlace(expr: unknown, fn: RefFn): unknown {
   if (Array.isArray(node.args)) {
     node.args = (node.args as unknown[]).map((a) => rewriteExprInPlace(a, fn))
   }
-  // `apply_expression_template` bindings VALUES are free-variable targets
+  // `apply_operator` bindings VALUES are free-variable targets
   // (esm-spec §10.10.2) — Expressions in their own right.
-  if (node.op === 'apply_expression_template' && isObject(node.bindings)) {
+  if (node.op === 'apply_operator' && isObject(node.bindings)) {
     const b = node.bindings
     for (const k of Object.keys(b)) b[k] = rewriteExprInPlace(b[k], fn)
   }
@@ -207,7 +207,7 @@ function forEachExprRef(expr: unknown, visit: RefVisit): void {
   if (Array.isArray(expr.args)) {
     for (const a of expr.args) forEachExprRef(a, visit)
   }
-  if (expr.op === 'apply_expression_template' && isObject(expr.bindings)) {
+  if (expr.op === 'apply_operator' && isObject(expr.bindings)) {
     const b = expr.bindings
     for (const k of Object.keys(b)) forEachExprRef(b[k], visit)
   }
@@ -438,10 +438,10 @@ function expandOne(
         `coupling-library '${ref}' contains a nested coupling_import (v1 forbids layering, esm-spec §10.9)`,
       )
     }
-    if (type === 'callback' || 'expression_template_imports' in edge) {
+    if (type === 'callback' || 'operator_imports' in edge) {
       throw new EsmMachineryError(
         ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
-        `coupling-library '${ref}' edge of type '${String(type)}' is not role-substitutable (no callback entries or edge-level expression_template_imports, esm-spec §10.9)`,
+        `coupling-library '${ref}' edge of type '${String(type)}' is not role-substitutable (no callback entries or edge-level operator_imports, esm-spec §10.9)`,
       )
     }
     if (typeof type !== 'string' || !ROLE_BEARING_TYPES.has(type)) {

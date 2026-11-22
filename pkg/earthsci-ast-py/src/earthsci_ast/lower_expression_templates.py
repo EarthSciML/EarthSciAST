@@ -46,18 +46,21 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import copy
+import json
 import re
 from collections.abc import Iterator
 from typing import Any
 
 from .error_handling import (
-    APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-    APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-    APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
     MAKEARRAY_REGION_INVERTED,
+    OPERATOR_ARITY_MISMATCH,
+    OPERATOR_BINDINGS_MISMATCH,
+    OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET,
+    OPERATOR_DEFINES_CORE_OP,
+    OPERATOR_INVALID_DEFINITION,
+    OPERATOR_UNKNOWN_DEFINITION,
+    OPERATOR_VERSION_TOO_OLD,
     REWRITE_RULE_NONTERMINATING,
-    TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
 )
 
 # ``ExpressionTemplateError`` + the JSON-walk primitives + ``APPLY_OP`` now live
@@ -94,9 +97,9 @@ def _assert_no_nested_apply(body: Any, template_name: str, path: str) -> None:
     def _check(node: dict, p: str) -> None:
         if node.get("op") == APPLY_OP:
             raise ExpressionTemplateError(
-                APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                f"expression_templates.{template_name}: `match` contains an "
-                f"'apply_expression_template' node at {p}; match patterns "
+                OPERATOR_INVALID_DEFINITION,
+                f"operators.{template_name}: `match` contains an "
+                f"'apply_operator' node at {p}; match patterns "
                 "MUST NOT reference templates (esm-spec §9.7.3)",
             )
 
@@ -107,34 +110,34 @@ def _validate_templates(templates: dict, scope: str) -> None:
     for name, decl in templates.items():
         if not _is_object(decl):
             raise ExpressionTemplateError(
-                APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                f"{scope}.expression_templates.{name}: entry must be an object with params + body",
+                OPERATOR_INVALID_DEFINITION,
+                f"{scope}.operators.{name}: entry must be an object with params + body",
             )
         # ``params`` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
         # template is a named constant fragment (common in library files).
         params = decl.get("params")
         if not isinstance(params, list):
             raise ExpressionTemplateError(
-                APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                f"{scope}.expression_templates.{name}: 'params' must be an array of strings",
+                OPERATOR_INVALID_DEFINITION,
+                f"{scope}.operators.{name}: 'params' must be an array of strings",
             )
         seen: set[str] = set()
         for p in params:
             if not isinstance(p, str) or not p:
                 raise ExpressionTemplateError(
-                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    f"{scope}.expression_templates.{name}: param names must be non-empty strings",
+                    OPERATOR_INVALID_DEFINITION,
+                    f"{scope}.operators.{name}: param names must be non-empty strings",
                 )
             if p in seen:
                 raise ExpressionTemplateError(
-                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    f"{scope}.expression_templates.{name}: param '{p}' is declared twice",
+                    OPERATOR_INVALID_DEFINITION,
+                    f"{scope}.operators.{name}: param '{p}' is declared twice",
                 )
             seen.add(p)
         if "body" not in decl:
             raise ExpressionTemplateError(
-                APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                f"{scope}.expression_templates.{name}: 'body' is required",
+                OPERATOR_INVALID_DEFINITION,
+                f"{scope}.operators.{name}: 'body' is required",
             )
         # A body MAY reference other match-less in-scope templates via
         # apply_expression_template nodes (esm-spec §9.7.3); those are checked
@@ -151,8 +154,8 @@ def _validate_templates(templates: dict, scope: str) -> None:
             match = decl["match"]
             if not (isinstance(match, str) or _is_object(match)):
                 raise ExpressionTemplateError(
-                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    f"{scope}.expression_templates.{name}: 'match' must be a "
+                    OPERATOR_INVALID_DEFINITION,
+                    f"{scope}.operators.{name}: 'match' must be a "
                     "pattern Expression (a metavariable string or an op node)",
                 )
             _assert_no_nested_apply(match, name, "/match")
@@ -164,18 +167,13 @@ def _validate_templates(templates: dict, scope: str) -> None:
         # `index_sets` registry is in scope) — see :func:`_registered_where`.
         if "where" in decl:
             whr = decl["where"]
-            if "match" not in decl:
-                raise ExpressionTemplateError(
-                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    f"{scope}.expression_templates.{name}: 'where' is only "
-                    "admissible alongside 'match' — constraints scope an "
-                    "auto-applied rewrite rule, not a named fragment "
-                    "(esm-spec §9.6.1)",
-                )
+            # esm 2.4.0 (esm-spec §9.6.3 constraint 2, §9.6.8): a `where` scopes
+            # a match-less definition too, at a call of the defined operator it
+            # defines.
             if not (_is_object(whr) and whr):
                 raise ExpressionTemplateError(
-                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    f"{scope}.expression_templates.{name}: 'where' must be a "
+                    OPERATOR_INVALID_DEFINITION,
+                    f"{scope}.operators.{name}: 'where' must be a "
                     "non-empty object mapping declared params to constraint "
                     "objects",
                 )
@@ -183,15 +181,15 @@ def _validate_templates(templates: dict, scope: str) -> None:
                 ps = str(p)
                 if ps not in seen:
                     raise ExpressionTemplateError(
-                        APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        f"{scope}.expression_templates.{name}: 'where' "
+                        OPERATOR_INVALID_DEFINITION,
+                        f"{scope}.operators.{name}: 'where' "
                         f"constrains '{ps}', which is not a declared param "
                         "(esm-spec §9.6.1)",
                     )
                 if not _is_object(cobj):
                     raise ExpressionTemplateError(
-                        APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        f"{scope}.expression_templates.{name}: where.{ps} must "
+                        OPERATOR_INVALID_DEFINITION,
+                        f"{scope}.operators.{name}: where.{ps} must "
                         "be a constraint object (v1 admits exactly the 'shape' "
                         "kind)",
                     )
@@ -199,23 +197,23 @@ def _validate_templates(templates: dict, scope: str) -> None:
                 if ckeys != {"shape"}:
                     kinds = ", ".join(sorted(ckeys))
                     raise ExpressionTemplateError(
-                        APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        f"{scope}.expression_templates.{name}: where.{ps} "
+                        OPERATOR_INVALID_DEFINITION,
+                        f"{scope}.operators.{name}: where.{ps} "
                         f"carries constraint kind(s) {kinds}; the v1 constraint "
                         "vocabulary is exactly {shape} (esm-spec §9.6.1)",
                     )
                 shp = cobj.get("shape")
                 if not (_is_array(shp) and shp):
                     raise ExpressionTemplateError(
-                        APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        f"{scope}.expression_templates.{name}: where.{ps}.shape "
+                        OPERATOR_INVALID_DEFINITION,
+                        f"{scope}.operators.{name}: where.{ps}.shape "
                         "must be a non-empty array of index-set names",
                     )
                 for s in shp:
                     if not (isinstance(s, str) and s):
                         raise ExpressionTemplateError(
-                            APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                            f"{scope}.expression_templates.{name}: "
+                            OPERATOR_INVALID_DEFINITION,
+                            f"{scope}.operators.{name}: "
                             f"where.{ps}.shape entries must be non-empty strings",
                         )
 
@@ -389,8 +387,8 @@ def _registered_where(
         for s in req:
             if s not in iset_names:
                 raise ExpressionTemplateError(
-                    TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
-                    f"{scope}.expression_templates.{tname}: where.{p}.shape "
+                    OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET,
+                    f"{scope}.operators.{tname}: where.{p}.shape "
                     f"names index set '{s}', which the consuming document's "
                     "index_sets registry does not declare "
                     "(esm-spec §9.6.1/§9.6.6)",
@@ -420,6 +418,7 @@ class MatchRule:
         "priority",
         "decl_index",
         "where_c",
+        "exact",
     )
 
     def __init__(
@@ -432,6 +431,7 @@ class MatchRule:
         decl_index: int,
         where_c: dict[str, list] | None = None,
         param_list: list[str] | None = None,
+        exact: bool = False,
     ) -> None:
         self.name = name
         self.pattern = pattern
@@ -445,6 +445,93 @@ class MatchRule:
         # Registered `where` match-scoping constraint (param -> required shape),
         # or None (esm-spec §9.6.1). See :func:`_registered_where`.
         self.where_c = where_c
+        # esm 2.4.0 (esm-spec §9.6.3 constraint 2, §9.6.12): a match-less
+        # definition is eligible at a CALL of the defined operator it defines —
+        # ``pattern`` is ``{op: defines, args: params}`` and the node must carry
+        # no field besides ``op`` and ``args``.
+        self.exact = exact
+
+
+def _selection_key(rule: MatchRule) -> tuple[int, int, int]:
+    """The §9.6.3 selection key: highest ``priority``, then a definition
+    carrying a ``where`` before one without (esm 2.4.0), then declaration
+    order."""
+    return (-rule.priority, 1 if rule.where_c is None else 0, rule.decl_index)
+
+
+def _is_core_op(op: Any) -> bool:
+    """True iff ``op`` names a core operator (esm-spec §4.2: the closed,
+    evaluable set every binding's evaluator implements, pinned here as
+    :data:`earthsci_ast.op_registry.OPS`). Every other ``op`` names a defined
+    operator (§9.6.12). The reference node ``apply_operator`` is neither."""
+    from . import op_registry
+
+    return isinstance(op, str) and op != APPLY_OP and op_registry.is_known(op)
+
+
+def _match_root_op(decl: Any) -> str | None:
+    """The root ``op`` of a definition's ``match``, or ``None``."""
+    m = decl.get("match") if _is_object(decl) else None
+    if not _is_object(m):
+        return None
+    op = m.get("op")
+    return op if isinstance(op, str) else None
+
+
+def _definition_defines(name: str, decl: Any) -> str:
+    """The defined operator an ``operators`` entry is a definition of (esm-spec
+    §9.6.1 ``defines``): its written ``defines``; else the root ``op`` of its
+    ``match`` when that is not a core op; else its key."""
+    d = decl.get("defines") if _is_object(decl) else None
+    if isinstance(d, str):
+        return d
+    r = _match_root_op(decl)
+    if r is not None and not _is_core_op(r):
+        return r
+    return str(name)
+
+
+def _with_defines(name: str, decl: Any) -> Any:
+    """``decl`` carrying its ``defines`` (inferred under ``name`` when absent),
+    a copy when it had none."""
+    if not _is_object(decl) or decl.get("defines") is not None:
+        return decl
+    nd = dict(decl)
+    nd["defines"] = _definition_defines(name, decl)
+    return nd
+
+
+def _is_reference_only(decl: Any) -> bool:
+    """A definition reached by explicit references only (esm-spec §9.6.1
+    ``reference_only``): never a call rule, no arity, no core-name check."""
+    return _is_object(decl) and decl.get("reference_only") is True
+
+
+def _check_defines_not_core(name: str, decl: Any, scope: str) -> None:
+    """esm-spec §9.6.12 "Core names are reserved": a definition whose
+    ``defines``, written or inferred, is a core operator's name is
+    ``operator_defines_core_op``. A rule whose ``match`` is rooted at a core op
+    defines no callable name, so its ``defines`` is provenance only and is not
+    checked. A ``reference_only`` definition is reached by no call."""
+    if _is_reference_only(decl):
+        return
+    r = _match_root_op(decl)
+    if r is not None and _is_core_op(r):
+        return
+    d = _definition_defines(name, decl)
+    if _is_core_op(d):
+        raise ExpressionTemplateError(
+            OPERATOR_DEFINES_CORE_OP,
+            f"{scope}.operators.{name}: defines the core operator '{d}'; a definition "
+            "may not define a core operator's name (esm-spec §9.6.12, "
+            '"Core names are reserved")',
+        )
+
+
+def _only_op_args(n: dict) -> bool:
+    """Whether ``n`` is a call shape a match-less definition can bind: an
+    ``op`` and ``args``, no other field (esm-spec §9.6.3 constraint 2)."""
+    return all(k in ("op", "args") for k in n)
 
 
 def _merge_bindings(acc: dict, new: dict) -> bool:
@@ -530,35 +617,81 @@ def _rule_priority(decl: dict) -> int:
     return 0
 
 
-def _build_match_rules(templates: dict, scope: str, iset_names: set) -> list:
-    """Collect the ``match``-carrying templates as auto-applied rewrite rules,
-    pre-sorted for deterministic selection (esm-spec §9.6.3): highest
-    ``priority`` first, ties broken by DECLARATION order (earliest wins). The
-    ``_rewrite_pass`` walk then fires the FIRST rule in this order that matches a
-    node AND whose ``where`` constraints hold. Each rule's ``where`` block is
-    normalized and its index-set names resolved against the consuming document's
-    merged registry (``iset_names``; ``template_constraint_unknown_index_set``).
-    Nontermination is NOT checked here — the bounded fixpoint
-    (``MAX_REWRITE_PASSES``) is the sole termination guard."""
+def _build_match_rules(
+    templates: dict, scope: str, iset_names: set, mounted_only: frozenset[str] = frozenset()
+) -> tuple[list, dict[str, list], dict[str, set[int]]]:
+    """Register one component's definitions (esm-spec §9.6.3, §9.6.12), in
+    DECLARATION order, as:
+
+    - the ``match`` rules, auto-applied rewrite rules;
+    - the CALL rules: each match-less definition whose ``defines`` is not a
+      core op, eligible at a call of that defined operator (pattern
+      ``{op: defines, args: params}``, the node carrying nothing else), grouped
+      by ``defines``;
+    - the arity table: the operand counts the definitions of each defined
+      operator take (esm-spec §9.6.12 "Arity").
+
+    Each list is sorted into §9.6.3 selection order (:func:`_selection_key`):
+    highest ``priority``, a definition with a ``where`` before one without,
+    declaration order. Each definition's ``where`` block is normalized and its
+    index-set names resolved against the consuming document's merged registry
+    (``iset_names``; ``operator_constraint_unknown_index_set``). Nontermination
+    is NOT checked here — the bounded fixpoint (``MAX_REWRITE_PASSES``) is the
+    sole termination guard.
+
+    ``mounted_only`` names the entries only mounted subsystems contributed
+    (:func:`_hoist_mounted_templates`). Definitions are component-local
+    (esm-spec §9.6.3 constraint 4): such an entry is reached by the mounted
+    subtree's references, so it is neither a call rule nor an arity here."""
     rules: list = []
+    call_rules: dict[str, list] = {}
+    arities: dict[str, set[int]] = {}
     for decl_index, (name, decl) in enumerate(templates.items()):
+        params = list(decl["params"])
+        defines = _definition_defines(name, decl)
         if "match" not in decl:
+            if _is_reference_only(decl):
+                # reached only through an explicit reference (§9.6.1)
+                continue
+            if name in mounted_only:
+                continue
+            arities.setdefault(defines, set()).add(len(params))
+            if not _is_core_op(defines) and defines != APPLY_OP:
+                call_rules.setdefault(defines, []).append(
+                    MatchRule(
+                        name,
+                        {"op": defines, "args": list(params)},
+                        set(params),
+                        decl["body"],
+                        _rule_priority(decl),
+                        decl_index,
+                        _registered_where(decl, iset_names, scope, name),
+                        params,
+                        exact=True,
+                    )
+                )
             continue
+        rop = _match_root_op(decl)
+        if rop is not None and not _is_core_op(rop):
+            margs = decl["match"].get("args")
+            arities.setdefault(rop, set()).add(len(margs) if _is_array(margs) else 0)
         where_c = _registered_where(decl, iset_names, scope, name)
         rules.append(
             MatchRule(
                 name,
                 decl["match"],
-                set(decl["params"]),
+                set(params),
                 decl["body"],
                 _rule_priority(decl),
                 decl_index,
                 where_c,
-                list(decl["params"]),
+                params,
             )
         )
-    rules.sort(key=lambda r: (-r.priority, r.decl_index))
-    return rules
+    rules.sort(key=_selection_key)
+    for v in call_rules.values():
+        v.sort(key=_selection_key)
+    return rules, call_rules, arities
 
 
 def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
@@ -592,41 +725,41 @@ def _validate_apply_ref(
     name = node.get("name")
     if not isinstance(name, str) or not name:
         raise ExpressionTemplateError(
-            APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-            f"{scope}: apply_expression_template node missing or empty 'name'",
+            OPERATOR_INVALID_DEFINITION,
+            f"{scope}: apply_operator node missing or empty 'name'",
         )
     decl = templates.get(name)
     if decl is None:
         raise ExpressionTemplateError(
-            APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-            f"{scope}: apply_expression_template references undeclared template '{name}'",
+            OPERATOR_UNKNOWN_DEFINITION,
+            f"{scope}: apply_operator references undeclared template '{name}'",
         )
     if reject_match_rule and _is_object(decl) and decl.get("match") is not None:
         raise ExpressionTemplateError(
-            APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-            f"{scope}: apply_expression_template references '{name}', a `match` "
+            OPERATOR_UNKNOWN_DEFINITION,
+            f"{scope}: apply_operator references '{name}', a `match` "
             "rewrite rule — only match-less templates are invocable by name "
             "(esm-spec §9.6.2)",
         )
     bindings = node.get("bindings")
     if not _is_object(bindings):
         raise ExpressionTemplateError(
-            APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-            f"{scope}: apply_expression_template '{name}' missing 'bindings' object",
+            OPERATOR_BINDINGS_MISMATCH,
+            f"{scope}: apply_operator '{name}' missing 'bindings' object",
         )
     declared = set(decl.get("params", []))
     provided = set(bindings.keys())
     for p in decl.get("params", []):
         if p not in provided:
             raise ExpressionTemplateError(
-                APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                f"{scope}: apply_expression_template '{name}' missing binding for param '{p}'",
+                OPERATOR_BINDINGS_MISMATCH,
+                f"{scope}: apply_operator '{name}' missing binding for param '{p}'",
             )
     for p in provided:
         if p not in declared:
             raise ExpressionTemplateError(
-                APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                f"{scope}: apply_expression_template '{name}' supplies unknown param '{p}'",
+                OPERATOR_BINDINGS_MISMATCH,
+                f"{scope}: apply_operator '{name}' supplies unknown param '{p}'",
             )
 
 
@@ -712,6 +845,62 @@ def _template_bearing(named: dict, direct_pred) -> dict[str, bool]:
 #: in an authored document.
 TEMPLATE_ORIGIN_KEY = "__esm_template_origin"
 
+#: The private key on which a load marks the root of the expansion of a call
+#: whose definition has a unit expression, or a fixed one (``partial`` /
+#: ``integral``), with what unit analysis needs to type the call
+#: (``ExprNode.template_call``, esm-spec §9.6.12 "Units").
+TEMPLATE_CALL_KEY = "__esm_template_call"
+
+
+#: The private registry-entry key on which a materialized ``partial`` /
+#: ``integral`` rule keeps the fixed unit expression its stripped ``match``
+#: gave (``template_instances._match_stripped``). The schema refuses it in an
+#: authored document, and the emitted registry drops it.
+FIXED_UNITS_KEY = "__esm_fixed_units"
+
+
+def _fixed_unit_expr(decl: Any) -> Any:
+    """The fixed unit expression of ``partial`` / ``integral`` (esm-spec §4.2) a
+    definition of either must agree with, read off its ``match`` pattern: the
+    pattern's operand over (or times) its axis field; ``None`` otherwise. A
+    rule a firing materialized has lost its ``match`` and carries the
+    expression under :data:`FIXED_UNITS_KEY` instead."""
+    if _is_object(decl) and decl.get(FIXED_UNITS_KEY) is not None:
+        return decl[FIXED_UNITS_KEY]
+    m = decl.get("match") if _is_object(decl) else None
+    if not _is_object(m):
+        return None
+    args = m.get("args")
+    if not (_is_array(args) and args):
+        return None
+    op = m.get("op")
+    if op == "partial" and m.get("wrt") is not None:
+        return {"op": "/", "args": [args[0], m["wrt"]]}
+    if op == "integral" and m.get("var") is not None:
+        return {"op": "*", "args": [args[0], m["var"]]}
+    return None
+
+
+def _template_call_mark(name: str, decl: Any, bindings: Any) -> dict | None:
+    """The unit provenance a load marks a call's expansion root with
+    (:data:`TEMPLATE_CALL_KEY`), or ``None`` when the definition has neither a
+    unit expression nor a fixed one."""
+    if not _is_object(decl):
+        return None
+    units = decl.get("units")
+    fixed = _fixed_unit_expr(decl)
+    if units is None and fixed is None:
+        return None
+    return {
+        "name": name,
+        "defines": _definition_defines(name, decl),
+        "params": list(decl.get("params") or []),
+        "bindings": bindings if _is_object(bindings) else {},
+        "units": units,
+        "fixed": fixed,
+    }
+
+
 _MARK_TEMPLATE_ORIGINS: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_MARK_TEMPLATE_ORIGINS", default=False
 )
@@ -776,8 +965,22 @@ def _expand(
             if should_expand(newnode):
                 body = _expand_apply(newnode, templates, scope)
                 expanded = recurse(body)
-                if mark and isinstance(expanded, dict):
-                    expanded = {**expanded, TEMPLATE_ORIGIN_KEY: newnode["name"]}
+                if mark:
+                    call = _template_call_mark(
+                        newnode["name"], templates.get(newnode["name"]), newnode.get("bindings")
+                    )
+                    if not isinstance(expanded, dict) and call is not None:
+                        # A leaf cannot carry the unit record, and without it
+                        # the call is typed by its body instead of its unit
+                        # expression. Hold it in a one-operand `+`, which folds
+                        # to the identity (esm-spec §4.2); the serializer
+                        # writes the leaf back.
+                        expanded = {"op": "+", "args": [expanded]}
+                    if isinstance(expanded, dict):
+                        extra = {TEMPLATE_ORIGIN_KEY: newnode["name"]}
+                        if call is not None:
+                            extra[TEMPLATE_CALL_KEY] = call
+                        expanded = {**expanded, **extra}
                 return expanded
             return newnode
         changed = False
@@ -824,13 +1027,40 @@ class _Lowering:
     ``variable_map`` transform against the RECEIVING component (esm-spec
     §10.4)."""
 
-    __slots__ = ("named", "match_rules", "shape_env", "enums", "scope", "depth")
+    __slots__ = (
+        "named",
+        "match_rules",
+        "call_rules",
+        "arities",
+        "mounted_only",
+        "shape_env",
+        "enums",
+        "scope",
+        "depth",
+    )
 
     def __init__(
-        self, named: dict, match_rules: list, shape_env: dict, enums: Any, scope: str
+        self,
+        named: dict,
+        match_rules: list,
+        shape_env: dict,
+        enums: Any,
+        scope: str,
+        call_rules: dict[str, list] | None = None,
+        arities: dict[str, set[int]] | None = None,
+        mounted_only: frozenset[str] = frozenset(),
     ) -> None:
         self.named = named
         self.match_rules = match_rules
+        # Match-less definitions by the defined operator they define, each list
+        # in §9.6.3 selection order (esm 2.4.0 calls by operator name).
+        self.call_rules = call_rules or {}
+        # Operand counts the definitions of each defined operator take
+        # (esm-spec §9.6.12 "Arity").
+        self.arities = arities or {}
+        # Registry entries only mounted subsystems contributed: reached by the
+        # mounted subtree's references, never by a call in this component.
+        self.mounted_only = mounted_only
         self.shape_env = shape_env
         self.enums = enums
         self.scope = scope
@@ -938,15 +1168,14 @@ def _rewrite_pass(
             L.set_depth(nn, d)  # the same reference, rebuilt
         memo[id(node)] = (node, nn, True)
         return nn, True
-    for rule in L.match_rules:
-        binds = _match(rule.pattern, node, rule.params, bv)
-        if binds is not None and _where_satisfied(rule.where_c, binds, L.shape_env, bv):
-            last[0] = rule.name
-            r = _rule_reference(rule, binds)
-            if _is_object(r) and r.get("op") == APPLY_OP:
-                L.set_depth(r, pass_no)
-            memo[id(node)] = (node, r, True)
-            return r, True
+    win, binds = _select_definition(L, node, bv)
+    if win is not None:
+        last[0] = win.name
+        r = _rule_reference(win, binds)
+        if _is_object(r) and r.get("op") == APPLY_OP:
+            L.set_depth(r, pass_no)
+        memo[id(node)] = (node, r, True)
+        return r, True
     # No rule fired here — descend into children.
     changed = False
     out = {}
@@ -958,6 +1187,162 @@ def _rewrite_pass(
         out = node  # identity-preserving
     memo[id(node)] = (node, out, changed)
     return out, changed
+
+
+def _select_definition(L: _Lowering, n: dict, bv: _BodyView | None) -> tuple:
+    """The definition that resolves node ``n`` (esm-spec §9.6.3 constraint 2,
+    §9.6.12): among the ``match`` rules whose pattern matches and the
+    match-less definitions of the defined operator ``n`` calls that take its
+    operands, those whose ``where`` holds, the first in :func:`_selection_key`
+    order. Returns ``(rule, bindings)`` or ``(None, None)``."""
+    best = None
+    bestb = None
+    for rule in L.match_rules:
+        b = _match(rule.pattern, n, rule.params, bv)
+        if b is not None and _where_satisfied(rule.where_c, b, L.shape_env, bv):
+            best, bestb = rule, b
+            break
+    op = n.get("op")
+    calls = L.call_rules.get(op) if isinstance(op, str) and op else None
+    if calls and _only_op_args(n):
+        for rule in calls:
+            if best is not None and _selection_key(best) < _selection_key(rule):
+                break
+            b = _match(rule.pattern, n, rule.params, bv)
+            if b is not None and _where_satisfied(rule.where_c, b, L.shape_env, bv):
+                best, bestb = rule, b
+                break
+    return best, bestb
+
+
+def _check_call_arity(node: Any, L: _Lowering, scope: str) -> None:
+    """esm-spec §9.6.12 "Arity": a call of a defined operator ``N`` that
+    survives the fixpoint, when definitions of ``N`` are in scope and none takes
+    the call's operand count, is ``operator_arity_mismatch`` at load. A name
+    with no definition in scope is a placeholder, whatever its arity."""
+    if not L.arities:
+        return
+
+    def _visit(n: dict, _path: str) -> None:
+        op = n.get("op")
+        if not isinstance(op, str):
+            return
+        counts = L.arities.get(op)
+        if counts is None or _is_core_op(op):
+            return
+        args = n.get("args")
+        k = len(args) if _is_array(args) else 0
+        if k in counts:
+            return
+        raise ExpressionTemplateError(
+            OPERATOR_ARITY_MISMATCH,
+            f"{scope}: a call of the defined operator '{op}' carries {k} operand(s), but "
+            f"its definitions in scope take {', '.join(str(c) for c in sorted(counts))} "
+            "(esm-spec §9.6.12)",
+        )
+
+    _walk_json(node, on_obj=_visit, dedup=True)
+
+
+def _reached_definitions(out: set[str], node: Any, named: dict) -> set[str]:
+    """The registry entries ``node``'s references reach, transitively through
+    bodies."""
+    for r in _collect_apply_names([], node):
+        if r in out:
+            continue
+        d = named.get(r)
+        if d is None:
+            continue
+        out.add(r)
+        _reached_definitions(out, d.get("body") if _is_object(d) else None, named)
+    return out
+
+
+def _show_names(x: Any) -> str:
+    """A list of names as a diagnostic prints it (``["x", "y"]``)."""
+    if isinstance(x, list):
+        return "[" + ", ".join(_show_names(v) for v in x) + "]"
+    if isinstance(x, str):
+        return json.dumps(x, ensure_ascii=False)
+    return str(x)
+
+
+def _where_reason(whr: Any, b: dict, shape_env: dict) -> str:
+    """Why a definition's ``where`` did not hold for the operands ``b``."""
+    if whr is None:
+        return "holds (the definition was not selected)"
+    for p, c in whr.items():
+        want = c.get("shape") if _is_object(c) else None
+        got = b.get(str(p))
+        if isinstance(got, str):
+            shp = shape_env.get(got)
+            shown = "none" if shp is None else _show_names(shp)
+            what = f"('{got}') has declared shape {shown}"
+        else:
+            what = "is not a bare variable"
+        return f"{p}.shape = {_show_names(want)} fails: the operand bound to {p} {what}"
+    return "fails"
+
+
+def explain_unresolved_call(call: Any, registry: Any, shape_env: dict | None = None) -> str:
+    """The ``unlowered_operator`` explanation of esm-spec §9.6.6 for an
+    unresolved call ``call`` (raw JSON) of a defined operator: every definition
+    of it in ``registry`` (name -> raw entry), sorted by name, with the reason
+    it was not eligible there — its ``match`` did not match, its ``where``
+    failed (naming the constraint), or its arity or call shape differed. With
+    no definition of the operator in ``registry``: a placeholder."""
+    if not _is_object(call):
+        return ""
+    op = call.get("op")
+    if not isinstance(op, str):
+        return ""
+    # esm-spec §9.6.12: emit and flatten keep only the definitions a reference
+    # reaches, so an unreferenced definition is no longer here to list.
+    note = "; definitions no reference reached were removed by emit and flatten and are not listed"
+    placeholder = f"no definition of '{op}' is in scope (a placeholder){note}"
+    if not _is_object(registry):
+        return placeholder
+    shape_env = shape_env or {}
+    args = call.get("args")
+    k = len(args) if _is_array(args) else 0
+    lines: list[str] = []
+    for name in sorted(str(n) for n in registry):
+        decl = registry[name]
+        if not _is_object(decl):
+            continue
+        params = [str(x) for x in decl.get("params") or []]
+        m = decl.get("match")
+        if m is not None:
+            if _match_root_op(decl) != op:
+                continue
+            b = _match(m, call, set(params))
+            if b is None:
+                lines.append(f"'{name}': its match does not match the call")
+                continue
+            reason = _where_reason(decl.get("where"), b, shape_env)
+            lines.append(f"'{name}': its where constraint {reason}")
+        else:
+            if _definition_defines(name, decl) != op:
+                continue
+            if _is_reference_only(decl):
+                lines.append(
+                    f"'{name}': reference-only, reached by explicit references, never by a call"
+                )
+            elif len(params) != k:
+                lines.append(f"'{name}': takes {len(params)} operand(s), the call carries {k}")
+            elif not _only_op_args(call):
+                extra = sorted(str(x) for x in call if str(x) not in ("op", "args"))
+                lines.append(
+                    f"'{name}': has no match, so it binds operands only, and the call "
+                    f"carries {', '.join(extra)}"
+                )
+            else:
+                b = dict(zip(params, args or []))
+                reason = _where_reason(decl.get("where"), b, shape_env)
+                lines.append(f"'{name}': its where constraint {reason}")
+    if not lines:
+        return placeholder
+    return f"definitions of '{op}' in scope: " + "; ".join(lines) + note
 
 
 def _rewrite_to_fixpoint(
@@ -1026,48 +1411,88 @@ def reject_expression_templates_pre_v04(view: Any) -> None:
         if not _is_object(comps):
             continue
         for cname, comp in comps.items():
-            if _is_object(comp) and "expression_templates" in comp:
-                offences.append(f"/{compkind}/{cname}/expression_templates")
+            if _is_object(comp) and "operators" in comp:
+                offences.append(f"/{compkind}/{cname}/operators")
     offences.extend(_find_apply_paths(view))
 
     if offences:
         raise ExpressionTemplateError(
-            APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
-            f"expression_templates / apply_expression_template require esm >= "
+            OPERATOR_VERSION_TOO_OLD,
+            f"operators / apply_operator require esm >= "
             f"0.4.0; file declares {esm}. Offending paths: {', '.join(offences)}",
         )
 
 
 def _has_template_machinery(file: dict) -> bool:
-    """True if the document carries anything the §9.6.3 engine must process: any
-    component with a NON-EMPTY ``expression_templates`` block (so match-less
-    named fragments and `where`-carrying rules are still validated / composed at
-    load, even absent an explicit invocation) or any ``apply_expression_template``
-    op anywhere. Mirrors the Julia reference ``_has_template_machinery`` so the
-    accept/validate decision is identical across bindings."""
+    """True if the document carries anything the §9.6.3 engine must process: a
+    NON-EMPTY ``operators`` block on any component or on any of its subsystems,
+    at any depth (so match-less named fragments and `where`-carrying rules are
+    still validated / composed at load, even absent an explicit invocation, and
+    an inline subsystem's calls resolve to its own definitions), or any
+    ``apply_operator`` op anywhere. Mirrors the Julia reference
+    ``_has_template_machinery`` so the accept/validate decision is identical
+    across bindings."""
+
+    def _has_block(comp: Any) -> bool:
+        if not _is_object(comp):
+            return False
+        tplraw = comp.get("operators")
+        if _is_object(tplraw) and len(tplraw) > 0:
+            return True
+        subs = comp.get("subsystems")
+        return _is_object(subs) and any(_has_block(sub) for sub in subs.values())
+
     for compkind in ("models", "reaction_systems"):
         comps = file.get(compkind)
-        if not _is_object(comps):
-            continue
-        for comp in comps.values():
-            tplraw = _is_object(comp) and comp.get("expression_templates")
-            if _is_object(tplraw) and len(tplraw) > 0:
-                return True
+        if _is_object(comps) and any(_has_block(comp) for comp in comps.values()):
+            return True
     return bool(_find_apply_paths(file))
 
 
-def _component_registry(comp: dict, scope: str, iset_names: set) -> tuple[dict, list, dict]:
-    """Build one component's rewrite registry from its ``expression_templates``
-    block: the validated + body-CHECKED named-template dict, the pre-sorted
+def _mark_subsystem_owned(comp: dict, L: _Lowering) -> dict:
+    """esm-spec §9.6.1 / §9.6.4 rule 5: an entry only subsystems own (hoisted
+    from a mounted or authored subsystem's block) is written on the component as
+    ``reference_only``, so the written document's registry makes it no callable
+    definition there and emit → load is a fixed point. In place."""
+    if not L.mounted_only:
+        return comp
+    block = comp.get("operators")
+    if not _is_object(block):
+        return comp
+    for n in L.mounted_only:
+        d = block.get(n)
+        if not _is_object(d) or _is_reference_only(d):
+            continue
+        nd = dict(d)
+        nd["reference_only"] = True
+        block[n] = nd
+        if n in L.named:
+            L.named[n] = nd
+    return comp
+
+
+def _component_registry(
+    comp: dict, scope: str, iset_names: set, mounted_only: frozenset[str] = frozenset()
+) -> tuple[dict, list, dict, dict[str, list], dict[str, set[int]]]:
+    """Build one component's rewrite registry from its ``operators`` block: the
+    validated + body-CHECKED named-definition dict, the pre-sorted
     ``match``-rule list (with registered ``where`` constraints resolved against
-    ``iset_names``), and the static shape environment for ``where`` evaluation
-    (esm-spec §9.6.1). A component without a block yields
-    ``({}, [], shape_env)``.
+    ``iset_names``), the static shape environment for ``where`` evaluation
+    (esm-spec §9.6.1), the call rules by defined operator and the arity table
+    (esm-spec §9.6.12). A component without a block yields
+    ``({}, [], shape_env, {}, {})``.
+
+    esm 2.4.0 (esm-spec §9.6.12): every definition records the defined operator
+    it defines — an entry without ``defines`` is replaced, in the component's
+    block too, by a copy carrying the inferred one — and a definition defining
+    a core operator's name is ``operator_defines_core_op``.
     """
     shape_env = _component_shape_env(comp)
-    tplraw = comp.get("expression_templates")
+    tplraw = comp.get("operators")
     templates: dict[str, Any] = {}
     match_rules: list = []
+    call_rules: dict[str, list] = {}
+    arities: dict[str, set[int]] = {}
     if _is_object(tplraw):
         for tname, tdecl in tplraw.items():
             templates[tname] = tdecl
@@ -1077,8 +1502,17 @@ def _component_registry(comp: dict, scope: str, iset_names: set) -> tuple[dict, 
         # match-less templates). Bodies are NOT inlined — references are
         # preserved (§9.6.4).
         _compose_template_bodies(templates, scope)
-        match_rules = _build_match_rules(templates, scope, iset_names)
-    return templates, match_rules, shape_env
+        for tname in list(templates):
+            decl0 = templates[tname]
+            _check_defines_not_core(tname, decl0, scope)
+            decl = _with_defines(tname, decl0)
+            if decl is not decl0:
+                templates[tname] = decl
+                tplraw[tname] = decl
+        match_rules, call_rules, arities = _build_match_rules(
+            templates, scope, iset_names, mounted_only
+        )
+    return templates, match_rules, shape_env, call_rules, arities
 
 
 def _variable_map_transforms(out: dict) -> Iterator[tuple[int, dict, str]]:
@@ -1102,7 +1536,7 @@ def _variable_map_transforms(out: dict) -> Iterator[tuple[int, dict, str]]:
 #: The post-expansion validator skips ``expression_templates`` blocks: those
 #: hold pre-substitution trees where a param may legally occupy a scalar field
 #: (a makearray bound); enforcement is on the expanded form only.
-_EXPR_TEMPLATES_SKIP = frozenset({"expression_templates"})
+_EXPR_TEMPLATES_SKIP = frozenset({"operators"})
 
 
 def _validate_makearray_regions(x: Any, path: str = "") -> None:
@@ -1174,7 +1608,7 @@ def _validate_makearray_regions_in_registries(registries: Any) -> None:
         for tname, decl in templates.items():
             body = decl.get("body") if _is_object(decl) else None
             if body is not None:
-                _validate_makearray_regions(body, f"expression_templates.{tname}/body")
+                _validate_makearray_regions(body, f"operators.{tname}/body")
 
 
 def lower_expression_templates(file: dict) -> dict:
@@ -1199,8 +1633,11 @@ def lower_expression_templates(file: dict) -> dict:
 
     Pre-condition: the input has been schema-validated.
     """
+    from .parse import wire_old_spellings
     from .template_instances import apply_rule3
 
+    # Old spellings (esm-spec §9.6.12) when the caller skipped the wire boundary.
+    file = wire_old_spellings(file)
     reject_expression_templates_pre_v04(file)
 
     if not _is_object(file):
@@ -1244,11 +1681,20 @@ def lower_expression_templates(file: dict) -> dict:
             # A subsystem carrying its own block (a mounted leaf's, or an
             # authored one) joins this component's registry here (esm-spec
             # §9.6.4 rule 1), bodies unchanged.
-            _hoist_mounted_templates(comp, str(cname))
-            templates, match_rules, shape_env = _component_registry(comp, cscope, iset_names)
-            L = _Lowering(templates, match_rules, shape_env, enums, cscope)
+            mounted_only, scopes = _hoist_mounted_templates(comp, str(cname))
+            templates, match_rules, shape_env, call_rules, arities = _component_registry(
+                comp, cscope, iset_names, mounted_only
+            )
+            L = _Lowering(
+                templates, match_rules, shape_env, enums, cscope, call_rules, arities, mounted_only
+            )
+            # A subsystem's subtree first, where its own definitions resolve
+            # calls too (§9.6.3 constraint 4); the component pass below then
+            # finds nothing more to rewrite there.
+            for path, sub, names in scopes:
+                _lower_subsystem_scope(sub, L, mounted_only - names, iset_names, path)
             for k in list(comp.keys()):
-                if k == "expression_templates":
+                if k == "operators":
                     continue
                 comp[k], _ = _rewrite_to_fixpoint(comp[k], L, f"{cscope}.{k}")
             lowerings.append((comp, L, []))
@@ -1278,11 +1724,29 @@ def lower_expression_templates(file: dict) -> dict:
         # Call-site checks on surviving references (§9.6.9): unknown name /
         # bindings mismatch, against the registry as rule 3 left it.
         for k in list(comp.keys()):
-            if k == "expression_templates":
+            if k == "operators":
                 continue
             _check_surviving_refs(comp[k], L.named, f"{L.scope}.{k}")
         for entry in transforms:
             _check_surviving_refs(entry["transform"], L.named, f"{L.scope} coupling transform")
+        # esm-spec §9.6.12 "Arity": surviving calls in the component, in the
+        # transforms it receives, and in the bodies its references reach.
+        if L.arities:
+            reached: set[str] = set()
+            for k in list(comp.keys()):
+                if k == "operators":
+                    continue
+                _check_call_arity(comp[k], L, f"{L.scope}.{k}")
+                _reached_definitions(reached, comp[k], L.named)
+            for entry in transforms:
+                _check_call_arity(entry["transform"], L, f"{L.scope} coupling transform")
+                _reached_definitions(reached, entry["transform"], L.named)
+            for r in sorted(reached):
+                # A mounted definition's body was checked in its own component.
+                if r in L.mounted_only:
+                    continue
+                _check_call_arity(L.named[r].get("body"), L, f"{L.scope}.operators.{r}")
+        _mark_subsystem_owned(comp, L)
 
     # Validation discharge (esm-spec §9.6.9): makearray-region checks on the
     # reference-preserving form. Region bounds cannot carry template params, so
@@ -1321,7 +1785,7 @@ def expand_document(loaded: Any) -> Any:
             if not _is_object(comp):
                 continue
             named: dict[str, Any] = {}
-            tpl = comp.get("expression_templates")
+            tpl = comp.get("operators")
             if _is_object(tpl):
                 for n, d in tpl.items():
                     named[str(n)] = d
@@ -1337,10 +1801,10 @@ def expand_document(loaded: Any) -> Any:
             named = comp_named[(compkind, cname)]
             scope = f"{compkind}.{cname}"
             for k in list(comp.keys()):
-                if k in ("expression_templates", "expression_template_imports"):
+                if k in ("operators", "operator_imports"):
                     continue
                 comp[k] = _expand_all(comp[k], named, f"{scope}.{k}")
-            comp.pop("expression_templates", None)
+            comp.pop("operators", None)
 
     coupling = root.get("coupling")
     # A coupling transform is not a component expression: its expansions are
@@ -1423,7 +1887,7 @@ def _authored_template_names(raw_source: Any) -> dict[str, list[str]]:
         for cname, comp in comps.items():
             if not _is_object(comp):
                 continue
-            tpl = comp.get("expression_templates")
+            tpl = comp.get("operators")
             if not _is_object(tpl):
                 continue
             names: list[str] = []
@@ -1465,14 +1929,14 @@ def materialize_component_block(
     is. ``received`` names the references of the coupling transforms the
     component receives (:func:`received_transform_refs`), which count as its
     own. ``comp`` is not modified."""
-    tpl = comp.get("expression_templates")
+    tpl = comp.get("operators")
     named: dict[str, Any] = {}
     if _is_object(tpl):
         for n, d in tpl.items():
             named[str(n)] = d
     refnames: set[str] = set(received or ())
     for k, v in comp.items():
-        if k in ("expression_templates", "expression_template_imports"):
+        if k in ("operators", "operator_imports"):
             continue
         for r in _collect_apply_names([], v):
             refnames.add(r)
@@ -1483,11 +1947,25 @@ def materialize_component_block(
         # A `match` rule nothing references still carries its `match` (a
         # referenced one was materialized without it, §9.6.4 rule 3).
         if n in named and not (_is_object(named[n]) and named[n].get("match") is not None):
-            block[n] = named[n]
+            block[n] = _without_private_keys(named[n])
     mat_names = sorted(materialized - authored_set)
     for n in mat_names:
-        block[n] = named[n]
+        block[n] = _without_private_keys(named[n])
     return block, bool(refnames), bool(mat_names)
+
+
+def _without_private_keys(decl: Any) -> Any:
+    """A registry entry as a writer emits it: without :data:`FIXED_UNITS_KEY`."""
+    if _is_object(decl) and FIXED_UNITS_KEY in decl:
+        return {k: v for k, v in decl.items() if k != FIXED_UNITS_KEY}
+    return decl
+
+
+#: The esm version an emitted or loaded document carrying an `operators` block
+#: or a surviving reference declares at least (esm-spec §9.6.4 rule 8): esm
+#: 2.4.0 writes the names `operators` and `apply_operator` (§9.6.5, §9.6.12),
+#: which subsumes rule 8's 0.9.0 floor.
+_OPERATORS_MIN_ESM: tuple[int, int, int] = (2, 4, 0)
 
 
 def emit_document(raw_source: Any, base_path: str) -> dict:
@@ -1535,12 +2013,13 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
                 bump = True
 
             if emit_block:
-                comp["expression_templates"] = emit_block
+                comp["operators"] = emit_block
+                bump = True
             else:
-                comp.pop("expression_templates", None)
-            comp.pop("expression_template_imports", None)
+                comp.pop("operators", None)
+            comp.pop("operator_imports", None)
 
-    root.pop("expression_template_imports", None)
+    root.pop("operator_imports", None)
     if bump:
         # The §9.6.4 rule-8 emit stamp is a FLOOR, not an assignment: an emitted
         # document carrying a surviving reference or a materialized entry "MUST
@@ -1560,10 +2039,14 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
         # rejects every 0.x document at load, so anything reaching emit already
         # declares >= 1.0.0. It is written out anyway so the rule is stated
         # where it is applied rather than resting on that coincidence.
-        _RULE8_FLOOR = (0, 9, 0)
+        #
+        # esm 2.4.0: an emitted document writes the names `operators` and
+        # `apply_operator` (esm-spec §9.6.5, §9.6.12), so a document carrying an
+        # `operators` block or a surviving reference declares 2.4.0 or later;
+        # this floor subsumes the 0.9.0 floor of rule 8.
         declared = _parse_semver_tuple(root.get("esm"))
-        if declared is None or declared < _RULE8_FLOOR:
-            root["esm"] = ".".join(str(v) for v in _RULE8_FLOOR)
+        if declared is None or declared < _OPERATORS_MIN_ESM:
+            root["esm"] = ".".join(str(v) for v in _OPERATORS_MIN_ESM)
     return root
 
 
@@ -1773,7 +2256,7 @@ def _collect_mounted_blocks(out: list[tuple[str, dict]], node: Any, prefix: str)
         if not _is_object(sub):
             continue
         path = str(k) if not prefix else f"{prefix}.{k}"
-        if _is_object(sub.get("expression_templates")):
+        if _is_object(sub.get("operators")):
             out.append((path, sub))
         else:
             _collect_mounted_blocks(out, sub, path)
@@ -1787,7 +2270,7 @@ def _rename_outside_mounts(node: dict, rn: dict[str, str]) -> None:
     if not _is_object(subs):
         return
     for _k, sub in subs.items():
-        if not _is_object(sub) or _is_object(sub.get("expression_templates")):
+        if not _is_object(sub) or _is_object(sub.get("operators")):
             continue
         for k in list(sub.keys()):
             if k == "subsystems":
@@ -1798,7 +2281,7 @@ def _rename_outside_mounts(node: dict, rn: dict[str, str]) -> None:
 
 def _merge_mounted_blocks(
     own: Any, cname: str, mounts: list[tuple[str, dict]]
-) -> tuple[dict[str, Any], dict[str, str] | None]:
+) -> tuple[dict[str, Any], dict[str, str] | None, list[frozenset[str]]]:
     """The merge :func:`_hoist_mounted_templates` describes: the component
     ``cname``'s own block ``own`` (match-less entries, owner path ``cname``)
     and each subsystem block of ``mounts`` (``(path, subsystem)``, match-less
@@ -1806,18 +2289,29 @@ def _merge_mounted_blocks(
     unchanged. Each subsystem's own references (its whole subtree) are renamed
     here, in place, by its owner's renames. Returns the new block (``own``'s
     ``match`` rules first, renamed by ``cname``'s renames, then the merged
-    entries) and ``cname``'s renames (or ``None``). Mirrors the Julia
-    ``_merge_mounted_blocks``."""
-    blocks: list[tuple[str, Any]] = [(cname, _matchless(own))]
+    entries), ``cname``'s renames (or ``None``), and, per entry of
+    ``mounts``, the merged names of that subsystem's own entries. Mirrors the
+    Julia ``_merge_mounted_blocks``."""
+
+    # Each entry records the defined operator it defines under the key it was
+    # declared with, before a collision rename (esm-spec §9.6.12 "Provenance").
+    def _defined(block: dict[str, Any]) -> dict[str, Any]:
+        return {n: _with_defines(n, d) for n, d in block.items()}
+
+    blocks: list[tuple[str, Any]] = [(cname, _defined(_matchless(own)))]
     for path, sub in mounts:
-        blocks.append((path, _matchless(sub.get("expression_templates"))))
+        blocks.append((path, _defined(_matchless(sub.get("operators")))))
     merged, rename = _merge_flat_registry(blocks)
+    owned = [
+        frozenset((rename.get(path) or {}).get(str(n), str(n)) for n in blk)
+        for (path, blk) in blocks[1:]
+    ]
     for path, sub in mounts:
         rm = rename.get(path)
         if not rm:
             continue
         for k in list(sub.keys()):
-            if k == "expression_templates":
+            if k == "operators":
                 continue
             sub[k] = _rename_apply_refs(sub[k], rm)
     rn = rename.get(cname)
@@ -1828,10 +2322,29 @@ def _merge_mounted_blocks(
                 continue
             newblock[str(n)] = _rename_apply_refs(d, rn) if rn else d
     newblock.update(merged)
-    return newblock, rn
+    return newblock, rn, owned
 
 
-def _hoist_mounted_templates(comp: dict, cname: str) -> dict:
+def _lower_subsystem_scope(
+    sub: dict, L: _Lowering, mounted_only: frozenset[str], iset_names: set, path: str
+) -> None:
+    """Rewrite the subtree of the subsystem at ``path`` of ``L``'s component to
+    its fixpoint, in place, with the component's definitions and the
+    subsystem's own as call rules (``mounted_only`` names the entries that stay
+    out of scope there), and check its surviving calls' arity against the same
+    definitions (esm-spec §9.6.3 constraint 4, §9.6.12)."""
+    rules, call_rules, arities = _build_match_rules(L.named, L.scope, iset_names, mounted_only)
+    Ls = _Lowering(L.named, rules, L.shape_env, L.enums, L.scope, call_rules, arities, mounted_only)
+    Ls.depth = L.depth
+    scope = f"{L.scope}.subsystems.{path}"
+    for k in list(sub.keys()):
+        sub[k], _ = _rewrite_to_fixpoint(sub[k], Ls, f"{scope}.{k}")
+        _check_call_arity(sub[k], Ls, f"{scope}.{k}")
+
+
+def _hoist_mounted_templates(
+    comp: dict, cname: str
+) -> tuple[frozenset[str], list[tuple[str, dict, frozenset[str]]]]:
     """Merge into the top-level component ``comp``'s ``expression_templates``
     block the definitions its subsystems carry on their own blocks (esm-spec
     §9.6.4 rule 1): a model mounted as a subsystem (esm-spec §4.7) keeps its
@@ -1846,23 +2359,39 @@ def _hoist_mounted_templates(comp: dict, cname: str) -> dict:
     expanding a subsystem's reference is plain substitution, and a leaf mounted
     twice brings one definition. Each subsystem subtree's references follow its
     own owner's renames; ``comp``'s other sites follow ``comp``'s. The subsystem
-    blocks are removed. In place; returns ``comp``. Mirrors the Julia
+    blocks are removed. In place.
+
+    Returns ``(mounted_only, scopes)``: the names of the merged entries only
+    subsystem blocks contributed, and, for each subsystem that contributed
+    any, ``(path, subsystem, names)``. Definitions are component-local
+    (esm-spec §9.6.3 constraint 4): a call resolves to, and an arity counts,
+    only the definitions owned by ``comp`` or by the subsystem whose subtree
+    holds the call, so a subsystem's entries are no definitions of their
+    operators elsewhere in ``comp`` (§9.6.12). Mirrors the Julia
     ``_hoist_mounted_templates!``."""
     mounts: list[tuple[str, dict]] = []
     _collect_mounted_blocks(mounts, comp, "")
     if not mounts:
-        return comp
-    newblock, rn = _merge_mounted_blocks(comp.get("expression_templates"), cname, mounts)
+        return frozenset(), []
+    own = comp.get("operators")
+    newblock, rn, owned = _merge_mounted_blocks(own, cname, mounts)
+    own_names = {(rn or {}).get(str(n), str(n)) for n in own} if _is_object(own) else set()
     if rn:
         for k in list(comp.keys()):
-            if k in ("expression_templates", "subsystems"):
+            if k in ("operators", "subsystems"):
                 continue
             comp[k] = _rename_apply_refs(comp[k], rn)
         _rename_outside_mounts(comp, rn)
     for _path, sub in mounts:
-        sub.pop("expression_templates", None)
-    comp["expression_templates"] = newblock
-    return comp
+        sub.pop("operators", None)
+    comp["operators"] = newblock
+    mounted_only = frozenset(n for n in newblock if n not in own_names)
+    scopes = [
+        (path, sub, names & mounted_only)
+        for (path, sub), names in zip(mounts, owned)
+        if names & mounted_only
+    ]
+    return mounted_only, scopes
 
 
 def mounted_registries(doc: Any) -> Any:
@@ -1880,17 +2409,15 @@ def mounted_registries(doc: Any) -> Any:
         for _cname, comp in comps.items():
             if not _is_object(comp):
                 continue
-            blk = comp.get("expression_templates")
+            blk = comp.get("operators")
             if not _is_object(blk):
                 continue
             keep = _matchless(blk)
-            used = any(
-                bool(_find_apply_paths(v)) for k, v in comp.items() if k != "expression_templates"
-            )
+            used = any(bool(_find_apply_paths(v)) for k, v in comp.items() if k != "operators")
             if not keep or not used:
-                comp.pop("expression_templates", None)
+                comp.pop("operators", None)
             else:
-                comp["expression_templates"] = keep
+                comp["operators"] = keep
     return doc
 
 
@@ -2104,7 +2631,7 @@ def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:
             if not _is_object(comp):
                 continue
             comps.append((str(cname), comp))
-            tpl = comp.get("expression_templates")
+            tpl = comp.get("operators")
             if _is_object(tpl):
                 blocks.append((str(cname), _matchless(tpl)))
     merged, rename = _merge_flat_registry(blocks)
@@ -2115,8 +2642,8 @@ def flatten_template_registries(loaded: Any) -> tuple[dict, dict]:
         rn = rename.get(path)
         if rn:
             for k in list(comp.keys()):
-                if k == "expression_templates":
+                if k == "operators":
                     continue
                 comp[k] = _rename_apply_refs(comp[k], rn)
-        comp.pop("expression_templates", None)
+        comp.pop("operators", None)
     return root, merged

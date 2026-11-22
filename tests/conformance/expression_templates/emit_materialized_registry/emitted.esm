@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "index_sets": {
     "lat": {
       "kind": "interval",
@@ -38,14 +38,14 @@
                   "f": "c"
                 },
                 "name": "central_D_lon_zero_grad_bc",
-                "op": "apply_expression_template"
+                "op": "apply_operator"
               }
             ],
             "op": "*"
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "central_D_lon_interior": {
           "body": {
             "args": [
@@ -93,7 +93,7 @@
                       "args": [],
                       "bindings": {},
                       "name": "dlon_deg",
-                      "op": "apply_expression_template"
+                      "op": "apply_operator"
                     }
                   ],
                   "op": "*"
@@ -116,6 +116,7 @@
               }
             }
           },
+          "defines": "central_D_lon_interior",
           "params": [
             "f"
           ]
@@ -163,7 +164,7 @@
                   "f": "f"
                 },
                 "name": "central_D_lon_interior",
-                "op": "apply_expression_template"
+                "op": "apply_operator"
               },
               {
                 "args": [
@@ -196,7 +197,7 @@
                       "args": [],
                       "bindings": {},
                       "name": "dlon_deg",
-                      "op": "apply_expression_template"
+                      "op": "apply_operator"
                     }
                   ],
                   "op": "/"
@@ -248,7 +249,7 @@
                       "args": [],
                       "bindings": {},
                       "name": "dlon_deg",
-                      "op": "apply_expression_template"
+                      "op": "apply_operator"
                     }
                   ],
                   "op": "/"
@@ -265,9 +266,11 @@
               }
             ]
           },
+          "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "dlon_deg": {
           "body": {
@@ -277,6 +280,7 @@
             ],
             "op": "/"
           },
+          "defines": "dlon_deg",
           "params": []
         }
       },

@@ -103,10 +103,7 @@ fn read_doc(path: &Path) -> Value {
 fn single_model(path: &Path, model: &str) -> Value {
     let mut doc = read_doc(path);
     let mut m = doc["models"][model].clone();
-    if let Some(imports) = m
-        .get_mut("expression_template_imports")
-        .and_then(Value::as_array_mut)
-    {
+    if let Some(imports) = m.get_mut("operator_imports").and_then(Value::as_array_mut) {
         for imp in imports {
             if imp["ref"]
                 .as_str()
@@ -247,7 +244,7 @@ fn rank_of_each(members: &[i64]) -> Vec<f64> {
         variables.insert(name.clone(), json!({"type": "unknown", "units": "1"}));
         equations.push(json!({
             "lhs": name,
-            "rhs": {"op": "apply_expression_template", "args": [], "name": "rank_of",
+            "rhs": {"op": "apply_operator", "args": [], "name": "rank_of",
                     "bindings": {"x": x,
                                  "members": {"op": "const", "args": [], "value": members},
                                  "n": members.len()}}
@@ -257,7 +254,7 @@ fn rank_of_each(members: &[i64]) -> Vec<f64> {
         "esm": "2.0.0",
         "metadata": {"name": "rank_of_probe", "authors": ["test"]},
         "models": {"M": {
-            "expression_template_imports": [{"ref": library()}],
+            "operator_imports": [{"ref": library()}],
             "variables": variables,
             "equations": equations
         }}
@@ -405,7 +402,7 @@ fn check_vi_only(
         .unwrap_or_else(|e| panic!("{label}: load: {e}"));
     let mut expanded = serde_json::to_value(&file).unwrap();
     assert!(
-        !expanded.to_string().contains("apply_expression_template"),
+        !expanded.to_string().contains("apply_operator"),
         "{label}: templates not expanded at load"
     );
     expanded["index_sets"] = tp_doc["index_sets"].clone();

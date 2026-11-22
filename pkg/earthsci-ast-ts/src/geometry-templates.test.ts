@@ -17,7 +17,7 @@ import { REPO_ROOT } from './test-helpers.js'
 
 // Test-local substitution oracle: every string other than an `op` name that
 // equals a parameter is replaced by its binding. The geometry templates carry no
-// nested `apply_expression_template`, whose `name` would be exempt.
+// nested `apply_operator`, whose `name` would be exempt.
 function substitute(body: unknown, bindings: Record<string, unknown>): unknown {
   if (typeof body === 'string') return Object.hasOwn(bindings, body) ? bindings[body] : body
   if (Array.isArray(body)) return body.map((v) => substitute(v, bindings))
@@ -36,11 +36,11 @@ function expandRefs(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(expandRefs)
   if (node !== null && typeof node === 'object') {
     const n = node as Record<string, unknown>
-    if (n.op === 'apply_expression_template') {
+    if (n.op === 'apply_operator') {
       const bindings: Record<string, unknown> = {}
       for (const [k, v] of Object.entries((n.bindings ?? {}) as Record<string, unknown>))
         bindings[k] = expandRefs(v)
-      return expandRefs(substitute(library.expression_templates[n.name as string].body, bindings))
+      return expandRefs(substitute(library.operators[n.name as string].body, bindings))
     }
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(n)) out[k] = expandRefs(v)
@@ -111,9 +111,7 @@ describe('lib/geometry.esm templates expand in the geometry_templates fixtures',
         seen++
         const [name, bindings] = tc.calls[eq.lhs]!
         const got = JSON.parse(JSON.stringify(eq.rhs)) as { expr: unknown }
-        const want = JSON.parse(
-          JSON.stringify(substitute(library.expression_templates[name].body, bindings)),
-        )
+        const want = JSON.parse(JSON.stringify(substitute(library.operators[name].body, bindings)))
         expect(expandRefs(got.expr), eq.lhs).toEqual(expandRefs(want))
       }
       expect(seen).toBe(Object.keys(tc.calls).length)

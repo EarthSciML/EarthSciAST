@@ -1,0 +1,75 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "placeholder_call",
+    "description": "esm-spec §9.6.12 'Placeholders': calls of `input_T` (no operands) and `partial` (no definition in scope) load, validate and round-trip unchanged (emitted.esm); the document is refused only if evaluated, with `unlowered_operator` (error.json, stage evaluate). A definition of an unrelated operator is in scope and changes nothing.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "description": "Field"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Test input"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "partial",
+            "args": [
+              "u"
+            ],
+            "wrt": "x"
+          }
+        },
+        {
+          "lhs": "T",
+          "rhs": {
+            "op": "input_T",
+            "args": []
+          }
+        }
+      ],
+      "operators": {
+        "unused": {
+          "params": [
+            "a"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              2,
+              "a"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

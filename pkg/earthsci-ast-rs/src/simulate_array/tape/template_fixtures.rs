@@ -43,7 +43,7 @@ pub(super) fn calendar_doc(t0: f64) -> Value {
             "rhs": faq(&["l"], l.clone(), op("-", vec![call, ix(&s, vec![json!("l")])]))}));
     }
     let mut model = json!({"variables": vars, "equations": eqs});
-    model["expression_templates"] = library("calendar.esm");
+    model["operators"] = library("calendar.esm");
     document(
         "calendar_on_the_tape",
         json!({"lev": {"kind": "interval", "size": 24}}),
@@ -115,7 +115,7 @@ pub(super) fn overlap_doc(spherical: bool) -> Value {
         }
     }
     let mut model = json!({"variables": vars, "equations": eqs});
-    model["expression_templates"] = library("geometry.esm");
+    model["operators"] = library("geometry.esm");
     document(
         "overlap_on_the_tape",
         json!({"sc": {"kind": "interval", "size": 4}, "tc": {"kind": "interval", "size": 9},
@@ -163,7 +163,7 @@ pub(super) fn argmin_doc() -> Value {
                  ix("x", vec![json!("i")])]))}
         ]
     });
-    model["expression_templates"] = library("relational.esm");
+    model["operators"] = library("relational.esm");
     document(
         "argmin_on_the_tape",
         json!({"p": {"kind": "interval", "size": 7}, "g": {"kind": "interval", "size": 6}}),
@@ -228,7 +228,7 @@ pub(super) fn relational_doc() -> Value {
              "rhs": cell(op("-", vec![op("*", vec![json!(0.01), ix("y", vec![json!("i")])]), x()]))}
         ]
     });
-    model["expression_templates"] = library("relational.esm");
+    model["operators"] = library("relational.esm");
     document(
         "relational_on_the_tape",
         json!({"p": {"kind": "interval", "size": 7}, "g": {"kind": "interval", "size": 6}}),
@@ -264,7 +264,7 @@ pub(super) enum Lookup {
 
 /// The lookup at queries `x` (and `y`, for bilinear).
 fn lookup(which: Lookup, x: Value, y: Value) -> Value {
-    let apply = |name: &str, b: Value| json!({"op": "apply_expression_template", "args": [], "name": name, "bindings": b});
+    let apply = |name: &str, b: Value| json!({"op": "apply_operator", "args": [], "name": name, "bindings": b});
     match which {
         Lookup::Searchsorted => apply(
             "searchsorted",
@@ -332,7 +332,7 @@ pub(super) fn lookup_model(which: Lookup, cells: Option<i64>, nan: bool) -> Valu
             {"lhs": d_lhs("w"), "rhs": per_cell(op("*", vec![json!(-0.05), at("w")]))}
         ]
     });
-    m["expression_templates"] = library("interp.esm");
+    m["operators"] = library("interp.esm");
     json!({
         "esm": "2.0.0",
         "metadata": {"name": "interp_template_on_the_tape"},

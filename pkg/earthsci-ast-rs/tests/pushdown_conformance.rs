@@ -89,7 +89,11 @@ fn pushdown_goldens_match_and_rewrite_is_idempotent_and_pure() {
 
         let out = desugar_pushdown(&input, model_name).unwrap_or_else(|e| panic!("{id}: {e}"));
         if fires {
-            let golden = common::read_json(dir.join("../..").join(fx["golden"].as_str().unwrap()));
+            let mut golden =
+                common::read_json(dir.join("../..").join(fx["golden"].as_str().unwrap()));
+            // The goldens predate esm 2.4.0: read them through the wire
+            // spellings, as the rewrite reads its input (esm-spec §9.6.12).
+            common::read_old_spellings(&mut golden);
             // 2–3: rewrite fires and matches the golden by value.
             assert!(
                 matches!(out, Cow::Owned(_)),

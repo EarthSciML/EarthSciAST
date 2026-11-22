@@ -377,7 +377,7 @@ fn reproj_wrapper_doc(lib_file_name: &str, params: &Value) -> Result<Value, Stri
         for a in args {
             bindings.insert(a.to_string(), json!(a));
         }
-        json!({"op": "apply_expression_template", "args": [], "name": tpl,
+        json!({"op": "apply_operator", "args": [], "name": tpl,
                "bindings": bindings})
     };
     Ok(json!({
@@ -385,7 +385,7 @@ fn reproj_wrapper_doc(lib_file_name: &str, params: &Value) -> Result<Value, Stri
         "metadata": {"name": "lambert_conformal_eval",
                      "description": "Runner-built template invocation (manifest fixture: null)."},
         "models": {"Reproject": {
-            "expression_template_imports": [{"ref": lib_file_name}],
+            "operator_imports": [{"ref": lib_file_name}],
             "variables": {
                 "lon": {"type": "parameter", "units": "deg", "default": 0.0},
                 "lat": {"type": "parameter", "units": "deg", "default": 0.0},

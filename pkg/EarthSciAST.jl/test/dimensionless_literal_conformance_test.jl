@@ -86,7 +86,7 @@ _dl_decay(id, species, k) = Dict{String, Any}(
                     "parameters" => Dict{String, Any}(
                         "kA" => Dict{String, Any}("units" => "1/s", "default" => 1.0)
                     ),
-                    "expression_templates" => Dict{String, Any}(
+                    "operators" => Dict{String, Any}(
                         "celsius" => Dict{String, Any}(
                             "params" => Any["x"],
                             "body" => Dict{String, Any}("op" => "-", "args" => Any["x", 273.15])
@@ -108,7 +108,7 @@ _dl_decay(id, species, k) = Dict{String, Any}(
                                 Dict{String, Any}(
                                     "lhs" => "Tc",
                                     "rhs" => Dict{String, Any}(
-                                        "op" => "apply_expression_template", "args" => Any[],
+                                        "op" => "apply_operator", "args" => Any[],
                                         "name" => "celsius",
                                         "bindings" => Dict{String, Any}("x" => "T")
                                     )

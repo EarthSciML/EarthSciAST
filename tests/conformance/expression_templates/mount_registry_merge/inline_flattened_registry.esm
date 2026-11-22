@@ -1,5 +1,5 @@
 {
-  "expression_templates": {
+  "operators": {
     "half": {
       "body": {
         "args": [
@@ -8,6 +8,7 @@
         ],
         "op": "/"
       },
+      "defines": "half",
       "params": [
         "x"
       ]
@@ -20,6 +21,7 @@
         ],
         "op": "*"
       },
+      "defines": "scale",
       "params": [
         "x"
       ]
@@ -34,15 +36,17 @@
               "x": "x"
             },
             "name": "Sub.scale",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         ],
         "op": "*"
       },
+      "defines": "rate",
       "params": [
         "x",
         "k"
-      ]
+      ],
+      "reference_only": true
     },
     "Sub.scale": {
       "body": {
@@ -52,9 +56,11 @@
         ],
         "op": "*"
       },
+      "defines": "scale",
       "params": [
         "x"
-      ]
+      ],
+      "reference_only": true
     }
   }
 }

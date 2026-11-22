@@ -149,7 +149,7 @@
     { "id": "coupling/advanced_coupling",                   "path": "coupling/advanced_coupling.esm",                   "tags": ["coupling", "esm-umm"] },
     { "id": "coupling/coupling_resolution_algorithm",       "path": "coupling/coupling_resolution_algorithm.esm",       "tags": ["coupling", "esm-umm"] },
     { "id": "coupling/complete_coupling_types",             "path": "coupling/complete_coupling_types.esm",             "tags": ["coupling", "esm-umm"] },
-    { "id": "coupling/multi_step_coupling_chains_fixtures", "path": "coupling/multi_step_coupling_chains_fixtures.esm", "tags": ["coupling", "multi-step", "esm-umm"] },
+    { "id": "coupling/multi_step_coupling_chains_fixtures", "path": "coupling/multi_step_coupling_chains_fixtures.esm", "tags": ["coupling", "multi-step", "esm-umm", "transforming"], "load_transforms": [{ "transform": "old_spellings", "spec": "esm-spec 4.2, 9.6.12", "detail": "A `D` with a spatial `wrt` is read as `partial` at the wire boundary (esm 2.4.0, 'Reading earlier documents'), so save writes `partial`. All five bindings." }] },
 
     { "id": "end_to_end/coupled_atmospheric_system",        "path": "end_to_end/coupled_atmospheric_system.esm",        "tags": ["end_to_end", "coupling", "esm-umm"] },
     { "id": "end_to_end/ocean_atmosphere_biogeochemistry",  "path": "end_to_end/ocean_atmosphere_biogeochemistry.esm",  "tags": ["end_to_end", "coupling", "esm-umm", "divergent"] },
@@ -261,8 +261,8 @@
         { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'", "detail": "the {ref} mount is inlined. TypeScript's loadString leaves the {ref} stub, so its adapter resolves the mounts before checking saved_esm." }
       ] },
 
-    { "id": "valid/expression_templates_arrhenius", "path": "valid/expression_templates_arrhenius.esm", "tags": ["expression_templates", "divergent"] },
-    { "id": "valid/template_import_lib", "path": "valid/template_import_lib.esm", "tags": ["expression_templates", "template-library", "divergent"] },
-    { "id": "valid/template_import_rename_lib", "path": "valid/template_import_rename_lib.esm", "tags": ["expression_templates", "template-library", "divergent"] }
+    { "id": "valid/expression_templates_arrhenius", "path": "valid/expression_templates_arrhenius.esm", "tags": ["expression_templates", "divergent", "transforming"], "load_transforms": [{ "transform": "old_spellings", "spec": "esm-spec 9.6.12", "detail": "`expression_templates` and `apply_expression_template` are read as `operators` and `apply_operator` (esm 2.4.0, 'Old names (no refusal)'); save writes only the new names, records each definition's `defines`, and stamps esm 2.4.0. All five bindings." }] },
+    { "id": "valid/template_import_lib", "path": "valid/template_import_lib.esm", "tags": ["expression_templates", "template-library", "divergent", "transforming"], "load_transforms": [{ "transform": "old_spellings", "spec": "esm-spec 9.6.12", "detail": "The top-level `expression_templates` (and `apply_expression_template` in bodies) are read as `operators` / `apply_operator` (esm 2.4.0, 'Old names (no refusal)'); save writes only the new names. All five bindings." }] },
+    { "id": "valid/template_import_rename_lib", "path": "valid/template_import_rename_lib.esm", "tags": ["expression_templates", "template-library", "divergent", "transforming"], "load_transforms": [{ "transform": "old_spellings", "spec": "esm-spec 9.6.12", "detail": "The top-level `expression_templates` (and `apply_expression_template` in bodies) are read as `operators` / `apply_operator` (esm 2.4.0, 'Old names (no refusal)'); save writes only the new names. All five bindings." }] }
   ]
 }

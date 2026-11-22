@@ -36,7 +36,7 @@ function _rt_template_values(op::String, values)
         ]
     )
     model = Dict{String, Any}(
-        "expression_template_imports" => Any[Dict{String, Any}("ref" => "relational.esm")],
+        "operator_imports" => Any[Dict{String, Any}("ref" => "relational.esm")],
         "variables" => Dict{String, Any}(
             "r" => Dict{String, Any}("type" => "unknown", "units" => "1", "default" => 0.0)
         ),
@@ -44,7 +44,7 @@ function _rt_template_values(op::String, values)
             Dict{String, Any}(
                 "lhs" => Dict{String, Any}("op" => "D", "args" => Any["r"], "wrt" => "t"),
                 "rhs" => Dict{String, Any}(
-                    "op" => "apply_expression_template", "args" => Any[], "name" => op,
+                    "op" => "apply_operator", "args" => Any[], "name" => op,
                     "bindings" => Dict{String, Any}("f" => f, "n" => length(values))
                 )
             ),

@@ -37,7 +37,7 @@ export function isInlineModel(v: Model | SubsystemRef): v is Model {
 // Descending the aggregate bodies is only sound because the bound-symbol
 // collector (collectIndexSymbols) now models EVERY binder those bodies can
 // introduce — aggregate `output_idx`/`ranges`, `index` element positions, and
-// `apply_expression_template` `bindings` parameter names. Every such name is a
+// `apply_operator` `bindings` parameter names. Every such name is a
 // scoped iteration/invention symbol, NOT a declared variable, so
 // validateReferenceIntegrity treats it as bound and does not flag it — keeping
 // emitted diagnostics byte-identical to the old `args`-only walkers on valid
@@ -82,7 +82,7 @@ export function extractVariableReferences(expr: Expression): string[] {
  * Binders modelled:
  *   - `faq` `output_idx` entries and `ranges` keys (loop variables);
  *   - `index(array, i, j, …)` element positions after the array head;
- *   - `apply_expression_template` `bindings` parameter names.
+ *   - `apply_operator` `bindings` parameter names.
  */
 export function collectIndexSymbols(expr: Expression): Set<string> {
   const symbols = new Set<string>()
@@ -122,7 +122,7 @@ export function collectIndexSymbols(expr: Expression): Set<string> {
       }
     }
 
-    // apply_expression_template bindings map its formal parameter names, which
+    // apply_operator bindings map its formal parameter names, which
     // are template-local and not references in the enclosing scope.
     if (node.bindings && typeof node.bindings === 'object') {
       for (const key of Object.keys(node.bindings)) symbols.add(key)

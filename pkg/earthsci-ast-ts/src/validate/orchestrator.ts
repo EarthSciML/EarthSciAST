@@ -133,6 +133,19 @@ function promoteUnitWarningsToErrors(warnings: UnitWarning[]): StructuralError[]
         code: ERROR_CODES.UNIT_INCONSISTENCY,
         details: { equation: warning.equation || '' },
       })
+    } else if (
+      warning.code === ERROR_CODES.DEFINITION_UNIT_MISMATCH &&
+      warning.severity !== 'warning'
+    ) {
+      // esm-spec §9.6.12 "Units": a definition whose determinable body unit
+      // disagrees with its unit expression (or with the fixed unit expression
+      // of `partial` / `integral`) is an error under its own code.
+      errors.push({
+        path,
+        message: warning.message,
+        code: ERROR_CODES.DEFINITION_UNIT_MISMATCH,
+        details: {},
+      })
     }
   }
   return errors
@@ -444,7 +457,7 @@ function convertSchemaError(error: SchemaError): ValidationError {
  */
 export interface ValidateOptions {
   /**
-   * Base directory that relative `{ref}` targets and `expression_template_imports`
+   * Base directory that relative `{ref}` targets and `operator_imports`
    * resolve against — normally the directory of the file being validated.
    *
    * WITHOUT it, `validate()` does no file I/O: it cannot open a ref target, so it
@@ -636,6 +649,14 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
 
         // Promote unit incompatibility warnings to structural errors
         structural_errors.push(...promoteUnitWarningsToErrors(unit_warnings))
+        // A `definition_unit_mismatch` promoted above is an error, not a
+        // warning: only its warning form (an undeterminable body) stays here.
+        for (let i = unit_warnings.length - 1; i >= 0; i--) {
+          const w = unit_warnings[i]!
+          if (w.code === ERROR_CODES.DEFINITION_UNIT_MISMATCH && w.severity !== 'warning') {
+            unit_warnings.splice(i, 1)
+          }
+        }
 
         // Bare numeric literals read as dimensionless (esm-spec §4.8.6):
         // warnings only at this stage, added after the promotion above so they

@@ -227,24 +227,31 @@ const ERROR_CODES = (
 
     # ── Expression templates (esm-spec §9.6) + the §9.6.4 post-expansion
     #    validators (templates/declarations.jl, templates/rewrite.jl). ──────
-    APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE = "apply_expression_template_unknown_template",
-    APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH = "apply_expression_template_bindings_mismatch",
-    APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY = "apply_expression_template_recursive_body",
-    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION = "apply_expression_template_invalid_declaration",
-    APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD = "apply_expression_template_version_too_old",
+    OPERATOR_UNKNOWN_DEFINITION = "operator_unknown_definition",
+    OPERATOR_BINDINGS_MISMATCH = "operator_bindings_mismatch",
+    OPERATOR_RECURSIVE_BODY = "operator_recursive_body",
+    OPERATOR_INVALID_DEFINITION = "operator_invalid_definition",
+    OPERATOR_VERSION_TOO_OLD = "operator_version_too_old",
     REWRITE_RULE_NONTERMINATING = "rewrite_rule_nonterminating",
-    TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "template_constraint_unknown_index_set",
+    # esm 2.4.0 one operator type (esm-spec §9.6.12): a call whose operator has
+    # definitions in scope, none taking its operand count; a definition whose
+    # body unit disagrees with its unit expression; an old field spelling.
+    OPERATOR_ARITY_MISMATCH = "operator_arity_mismatch",
+    OPERATOR_DEFINES_CORE_OP = "operator_defines_core_op",
+    DEFINITION_UNIT_MISMATCH = "definition_unit_mismatch",
+    DEPRECATED_FIELD = "deprecated_field",
+    OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET = "operator_constraint_unknown_index_set",
     MAKEARRAY_REGION_INVERTED = "makearray_region_inverted",
     # Flatten-time shadow-registry guard (flatten.jl): a surviving registry
     # body references a variable a coupling `variable_map` rewrote in the
     # flattened equations (esm-spec §9.6.4 / §10.4).
-    TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE = "template_body_references_coupling_rewritten_variable",
+    OPERATOR_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE = "operator_body_references_coupling_rewritten_variable",
     # Projection-pushdown desugar post-condition (pushdown_rewrite.jl): a rect
     # factor the rewrite must re-point onto the generated per-support cell
     # gathers is named FREE in a template body instead of bound at the call
     # site, so the call-site-only rewrite cannot reach it (esm-spec §9.6.4
     # Option B / CONFORMANCE_SPEC §5.5.7).
-    TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = "template_body_references_pushdown_rewritten_variable",
+    OPERATOR_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = "operator_body_references_pushdown_rewritten_variable",
 
     # ── Document-scoped solver hints (esm-spec §2.2; solver.jl). ─────────
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old",
@@ -272,25 +279,25 @@ const ERROR_CODES = (
 
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
     #    templates/imports.jl, templates/metaparameters.jl). ───────────────
-    TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old",
-    TEMPLATE_IMPORT_UNRESOLVED = "template_import_unresolved",
-    TEMPLATE_IMPORT_NOT_LIBRARY = "template_import_not_library",
-    TEMPLATE_IMPORT_IS_COUPLING_LIBRARY = "template_import_is_coupling_library",
-    TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload",
-    TEMPLATE_IMPORT_CYCLE = "template_import_cycle",
-    TEMPLATE_IMPORT_NAME_CONFLICT = "template_import_name_conflict",
-    TEMPLATE_IMPORT_UNKNOWN_NAME = "template_import_unknown_name",
-    TEMPLATE_IMPORT_INDEX_SET_CONFLICT = "template_import_index_set_conflict",
-    TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME = "template_import_rename_unknown_name",
-    TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME = "template_import_rebind_unknown_name",
-    TEMPLATE_IMPORT_RENAME_COLLISION = "template_import_rename_collision",
-    TEMPLATE_IMPORT_RENAME_INVALID = "template_import_rename_invalid",
-    TEMPLATE_INJECT_TARGET_UNKNOWN = "template_inject_target_unknown",
-    TEMPLATE_INJECT_TARGET_NOT_COMPONENT = "template_inject_target_not_component",
+    OPERATOR_IMPORT_VERSION_TOO_OLD = "operator_import_version_too_old",
+    OPERATOR_IMPORT_UNRESOLVED = "operator_import_unresolved",
+    OPERATOR_IMPORT_NOT_LIBRARY = "operator_import_not_library",
+    OPERATOR_IMPORT_IS_COUPLING_LIBRARY = "operator_import_is_coupling_library",
+    OPERATOR_LIBRARY_ILLEGAL_PAYLOAD = "operator_library_illegal_payload",
+    OPERATOR_IMPORT_CYCLE = "operator_import_cycle",
+    OPERATOR_IMPORT_NAME_CONFLICT = "operator_import_name_conflict",
+    OPERATOR_IMPORT_UNKNOWN_NAME = "operator_import_unknown_name",
+    OPERATOR_IMPORT_INDEX_SET_CONFLICT = "operator_import_index_set_conflict",
+    OPERATOR_IMPORT_RENAME_UNKNOWN_NAME = "operator_import_rename_unknown_name",
+    OPERATOR_IMPORT_REBIND_UNKNOWN_NAME = "operator_import_rebind_unknown_name",
+    OPERATOR_IMPORT_RENAME_COLLISION = "operator_import_rename_collision",
+    OPERATOR_IMPORT_RENAME_INVALID = "operator_import_rename_invalid",
+    OPERATOR_INJECT_TARGET_UNKNOWN = "operator_inject_target_unknown",
+    OPERATOR_INJECT_TARGET_NOT_COMPONENT = "operator_inject_target_not_component",
     # Registered for cross-binding parity: Rust raises it, Julia's inject
-    # validator currently folds the case into TEMPLATE_INJECT_TARGET_NOT_COMPONENT.
-    TEMPLATE_INJECT_TARGET_IS_LOADER = "template_inject_target_is_loader",
-    TEMPLATE_BODY_EXPANSION_TOO_DEEP = "template_body_expansion_too_deep",
+    # validator currently folds the case into OPERATOR_INJECT_TARGET_NOT_COMPONENT.
+    OPERATOR_INJECT_TARGET_IS_LOADER = "operator_inject_target_is_loader",
+    OPERATOR_BODY_EXPANSION_TOO_DEEP = "operator_body_expansion_too_deep",
     METAPARAMETER_UNBOUND = "metaparameter_unbound",
     METAPARAMETER_TYPE_ERROR = "metaparameter_type_error",
     METAPARAMETER_NAME_CONFLICT = "metaparameter_name_conflict",
@@ -317,7 +324,7 @@ const ERROR_CODES = (
 
     # ── Subsystem-reference / index-set checks raised as an
     #    `ExpressionTemplateError` from the load pipeline (parse.jl). ───────
-    SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY = "subsystem_ref_is_template_library",
+    SUBSYSTEM_REF_IS_OPERATOR_LIBRARY = "subsystem_ref_is_operator_library",
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library",
     SUBSYSTEM_INDEX_SET_CONFLICT = "subsystem_index_set_conflict",
     # A mount edge's `index_set_rename` names an index set the RESOLVED mounted
@@ -506,6 +513,50 @@ uses a registered code.
 """
 error_code_names()::Vector{String} = sort!(collect(String, values(ERROR_CODES)))
 
+
+"""
+    ERROR_CODE_ALIASES
+
+The codes esm 2.4.0 renamed (esm-spec §9.6.6, "Renamed codes"): old spelling →
+new. A binding reports the new code; a harness or tool that matches an old
+spelling treats it as the new one ([`canonical_error_code`](@ref)).
+"""
+const ERROR_CODE_ALIASES = Dict{String, String}(
+    "apply_expression_template_unknown_template" => "operator_unknown_definition",
+    "apply_expression_template_bindings_mismatch" => "operator_bindings_mismatch",
+    "apply_expression_template_recursive_body" => "operator_recursive_body",
+    "apply_expression_template_invalid_declaration" => "operator_invalid_definition",
+    "apply_expression_template_version_too_old" => "operator_version_too_old",
+    "template_constraint_unknown_index_set" => "operator_constraint_unknown_index_set",
+    "template_body_expansion_too_deep" => "operator_body_expansion_too_deep",
+    "template_library_illegal_payload" => "operator_library_illegal_payload",
+    "subsystem_ref_is_template_library" => "subsystem_ref_is_operator_library",
+    "template_inject_target_unknown" => "operator_inject_target_unknown",
+    "template_inject_target_not_component" => "operator_inject_target_not_component",
+    "template_inject_target_is_loader" => "operator_inject_target_is_loader",
+    "template_body_references_coupling_rewritten_variable" => "operator_body_references_coupling_rewritten_variable",
+    "template_body_references_pushdown_rewritten_variable" => "operator_body_references_pushdown_rewritten_variable",
+    "template_import_unknown_name" => "operator_import_unknown_name",
+    "template_import_not_library" => "operator_import_not_library",
+    "template_import_index_set_conflict" => "operator_import_index_set_conflict",
+    "template_import_unresolved" => "operator_import_unresolved",
+    "template_import_rename_unknown_name" => "operator_import_rename_unknown_name",
+    "template_import_rename_invalid" => "operator_import_rename_invalid",
+    "template_import_rename_collision" => "operator_import_rename_collision",
+    "template_import_name_conflict" => "operator_import_name_conflict",
+    "template_import_version_too_old" => "operator_import_version_too_old",
+    "template_import_rebind_unknown_name" => "operator_import_rebind_unknown_name",
+    "template_import_cycle" => "operator_import_cycle",
+    "template_import_is_coupling_library" => "operator_import_is_coupling_library",
+)
+
+"""
+    canonical_error_code(code) -> String
+
+The current spelling of a diagnostic code: `code` itself, or the new code an
+old esm-2.3 spelling is an alias of (esm-spec §9.6.6).
+"""
+canonical_error_code(code::AbstractString) = get(ERROR_CODE_ALIASES, String(code), String(code))
 
 """
     _LOCAL_ERROR_CODES

@@ -49,7 +49,7 @@
     {
       "id": "spec.9.6.1.where-shape-rename",
       "section": "9.6.1",
-      "quote": "a rename applied at an `expression_template_imports` edge MUST rewrite the imported templates' `where.*.shape` entries together with the imported `index_sets` and range references",
+      "quote": "a rename applied at an `operator_imports` edge MUST rewrite the imported definitions' `where.*.shape` entries together with the imported `index_sets` and range references",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -69,7 +69,7 @@
     {
       "id": "spec.9.6.3.match-no-apply-node",
       "section": "9.6.3",
-      "quote": "`match` patterns MUST NOT contain `apply_expression_template` nodes. Because selection",
+      "quote": "`match` patterns MUST NOT contain `apply_operator` nodes. Because selection",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -88,7 +88,7 @@
     {
       "id": "spec.9.6.3.bindings-cover-params",
       "section": "9.6.3",
-      "quote": "Bindings MUST cover every entry of the template's `params` exactly — no missing keys, no extras.",
+      "quote": "Bindings MUST cover every entry of the definition's `params` exactly — no missing keys, no extras.",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -124,7 +124,7 @@
     {
       "id": "spec.9.6.4.load-does-not-expand",
       "section": "9.6.4",
-      "quote": "metaparameters and run the §9.6.3 fixpoint as before, but MUST NOT expand `apply_expression_template` nodes.",
+      "quote": "metaparameters and run the §9.6.3 fixpoint as before, but MUST NOT expand `apply_operator` nodes.",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -160,7 +160,7 @@
     {
       "id": "spec.9.6.4.decisions-on-expand",
       "section": "9.6.4",
-      "quote": "consumer whose *decisions* depend on the shape of an expression MUST therefore reach those decisions as it would on `Expand(tree)`, not on the reference-preserving tree read as if a reference were a leaf, or its behavior becomes a function of the author's factoring — which rule 2 forbids (\"all observable behavior MUST be as if evaluated on `Expand(tree)`\"). The projection-pushdown desugar (CONFORMANCE_SPEC §5.5.7) is the worked example: **whether the pushdown fires MUST NOT depend on whether the author factored the binning body through a template.**",
+      "quote": "consumer whose *decisions* depend on the shape of an expression MUST therefore reach those decisions as it would on `Expand(tree)`, not on the reference-preserving tree read as if a reference were a leaf, or its behavior becomes a function of the author's factoring — which rule 2 forbids (\"all observable behavior MUST be as if evaluated on `Expand(tree)`\"). The projection-pushdown desugar (CONFORMANCE_SPEC §5.5.7) is the worked example: **whether the pushdown fires MUST NOT depend on whether the author factored the binning body through a definition.**",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -249,7 +249,7 @@
     {
       "id": "spec.9.6.4.version-stamp",
       "section": "9.6.4",
-      "quote": "`apply_expression_template` call site or any **materialized** registry entry MUST declare `esm: 0.9.0` or later",
+      "quote": "`apply_operator` call site or any **materialized** registry entry MUST declare `esm: 0.9.0` or later",
       "class": "semantic",
       "phase": 4,
       "area": "round_trip",
@@ -258,7 +258,7 @@
     {
       "id": "spec.9.6.5.version-gate-0-4-0",
       "section": "9.6.5",
-      "quote": "Files declaring `esm: 0.3.x` or earlier MUST be rejected by all five bindings if they carry either construct, with diagnostic `apply_expression_template_version_too_old`.",
+      "quote": "Files declaring `esm: 0.3.x` or earlier MUST be rejected by all five bindings if they carry either construct, with diagnostic `operator_version_too_old`.",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -267,7 +267,7 @@
     {
       "id": "spec.9.6.5.version-gate-0-8-0",
       "section": "9.6.5",
-      "quote": "Files declaring an earlier version MUST be rejected by all five bindings if they carry any of these constructs, with diagnostic `template_import_version_too_old`.",
+      "quote": "Files declaring an earlier version MUST be rejected by all five bindings if they carry any of these constructs, with diagnostic `operator_import_version_too_old`.",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -387,11 +387,28 @@
     {
       "id": "spec.9.6.6.library-illegal-payload-load-fails",
       "section": "9.6.6",
-      "quote": "loading MUST fail rather than leave the templates silently inert. The message MUST name the offending keys.",
+      "quote": "loading MUST fail rather than leave the definitions silently inert. The message MUST name the offending keys.",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
       "note": "A document with top-level expression_templates beside models/reaction_systems/data_sources/coupling/domain is rejected with template_library_illegal_payload naming those keys."
+    },
+    {
+      "id": "spec.9.6.6.unlowered-operator-message",
+      "section": "9.6.6",
+      "quote": "The message MUST name the defined operator and the call",
+      "class": "out_of_scope",
+      "area": "diagnostics",
+      "note": "The wording of a diagnostic message (which definitions it lists and why) is not modelled; the code unlowered_operator is."
+    },
+    {
+      "id": "spec.9.6.6.renamed-codes-alias",
+      "section": "9.6.6",
+      "quote": "matches the old spelling MUST treat it as the new one.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "diagnostics",
+      "note": "Each renamed diagnostic code (template_* to operator_*) is an alias of its new code: a consumer matching the old spelling accepts the new one."
     },
     {
       "id": "spec.9.6.6.subsystem-index-set-conflict-message",
@@ -545,7 +562,7 @@
     {
       "id": "spec.9.7.2.url-ref-unsupported",
       "section": "9.7.2",
-      "quote": "a binding without remote support MUST reject them with `template_import_unresolved`",
+      "quote": "a binding without remote support MUST reject them with `operator_import_unresolved`",
       "class": "out_of_scope",
       "area": "rewrite",
       "note": "Remote fetch is a binding I/O capability, not format semantics."
@@ -553,7 +570,7 @@
     {
       "id": "spec.9.7.3.match-no-apply-node-registration",
       "section": "9.7.3",
-      "quote": "A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_expression_template` nodes.",
+      "quote": "A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_operator` nodes.",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -673,7 +690,7 @@
     {
       "id": "spec.9.7.7.rename-post-names-distinct",
       "section": "9.7.7",
-      "quote": "Within each namespace (templates, index sets, metaparameters) the post-rename names MUST be distinct",
+      "quote": "Within each namespace (definitions, index sets, metaparameters) the post-rename names MUST be distinct",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -710,7 +727,7 @@
     {
       "id": "spec.9.7.10.injected-ref-is-library",
       "section": "9.7.10",
-      "quote": "the injected `ref` MUST resolve to a template-library file (§9.7.1)",
+      "quote": "the injected `ref` MUST resolve to an operator-library file (§9.7.1)",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -755,7 +772,7 @@
     {
       "id": "spec.9.8.2.calendar-domain",
       "section": "9.8.2",
-      "quote": "Each public template of `lib/calendar.esm` (`year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`, `seconds_since_midnight`) MUST evaluate to NaN for a NaN or infinite `t` and for a finite `t` with `|t| >= 2^52` s.",
+      "quote": "Each public definition of `lib/calendar.esm` (`year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`, `seconds_since_midnight`) MUST evaluate to NaN for a NaN or infinite `t` and for a finite `t` with `|t| >= 2^52` s.",
       "class": "semantic",
       "phase": 5,
       "area": "closed_functions",
@@ -764,7 +781,7 @@
     {
       "id": "spec.9.8.2.calendar-fields",
       "section": "9.8.2",
-      "quote": "For finite `t` with `|t| < 2^52` s, the integer templates MUST evaluate exactly, in binary64, to the field of the UTC instant `t`: `year` the proleptic-Gregorian year in astronomical numbering (0 is 1 BC); `month` in 1..12 (1 is January); `day` the day of the month in 1..31; `hour` in 0..23; `minute` in 0..59; `second` in 0..59 (no leap-second slot); `day_of_year` in 1..366 (1 is January 1); `is_leap_year` 1 when the year is divisible by 4 and not by 100 unless by 400, else 0; and `seconds_since_midnight` the whole second of the day `s`, in 0..86399, in seconds.",
+      "quote": "For finite `t` with `|t| < 2^52` s, the integer definitions MUST evaluate exactly, in binary64, to the field of the UTC instant `t`: `year` the proleptic-Gregorian year in astronomical numbering (0 is 1 BC); `month` in 1..12 (1 is January); `day` the day of the month in 1..31; `hour` in 0..23; `minute` in 0..59; `second` in 0..59 (no leap-second slot); `day_of_year` in 1..366 (1 is January 1); `is_leap_year` 1 when the year is divisible by 4 and not by 100 unless by 400, else 0; and `seconds_since_midnight` the whole second of the day `s`, in 0..86399, in seconds.",
       "class": "semantic",
       "phase": 5,
       "area": "closed_functions",
@@ -827,7 +844,7 @@
     {
       "id": "spec.9.8.4.overlap-convex-only",
       "section": "9.8.4",
-      "quote": "The overlap templates MUST be applied to convex polygons, and on the sphere to polygons that each lie within a hemisphere.",
+      "quote": "The overlap definitions MUST be applied to convex polygons, and on the sphere to polygons that each lie within a hemisphere.",
       "class": "semantic",
       "phase": 5,
       "area": "closed_functions",
@@ -845,7 +862,7 @@
     {
       "id": "spec.9.8.4.overlap-planar-tolerance",
       "section": "9.8.4",
-      "quote": "In the planar template a vertex `p` MUST count as on the line of edge `a -> b` when `|(b - a) × (p - a)|` is at most `1e-12 · L1(b - a) · (L1(p) + L1(q) + L1(a))`, with `p -> q` the edge being clipped and `L1` the sum of absolute coordinates.",
+      "quote": "In the planar definition a vertex `p` MUST count as on the line of edge `a -> b` when `|(b - a) × (p - a)|` is at most `1e-12 · L1(b - a) · (L1(p) + L1(q) + L1(a))`, with `p -> q` the edge being clipped and `L1` the sum of absolute coordinates.",
       "class": "semantic",
       "phase": 5,
       "area": "closed_functions",
@@ -937,11 +954,11 @@
     {
       "id": "spec.10.4.library-transform-lowered",
       "section": "10.4",
-      "quote": "so the templates it references MUST already be lowered",
+      "quote": "so the definitions it references MUST already be lowered",
       "class": "semantic",
       "phase": 5,
       "area": "coupling",
-      "note": "A coupling-library edge transform whose templates would introduce grad/div/spatial D is rejected with coupling_library_illegal_payload."
+      "note": "A coupling-library edge transform whose referenced definitions would introduce grad/div/partial is rejected with coupling_library_illegal_payload."
     },
     {
       "id": "spec.10.5.reserved-lifting-refused-at-build",
@@ -1017,11 +1034,11 @@
     {
       "id": "spec.10.9.coupling-library-transform-lowered",
       "section": "10.9",
-      "quote": "references MUST already be lowered; a transform whose references reach a template that would",
+      "quote": "references MUST already be lowered; a transform whose references reach a definition that would",
       "class": "semantic",
       "phase": 5,
       "area": "coupling",
-      "note": "Same as spec.10.4.library-transform-lowered: a library edge transform template introducing a rewrite-target op is coupling_library_illegal_payload."
+      "note": "Same as spec.10.4.library-transform-lowered: a library edge transform whose definitions introduce a rewrite-target operator is coupling_library_illegal_payload."
     },
     {
       "id": "spec.10.10.1.every-role-bound",

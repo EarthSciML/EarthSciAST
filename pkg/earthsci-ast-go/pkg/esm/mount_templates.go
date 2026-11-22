@@ -131,7 +131,7 @@ func mergeFlatRegistry(blocks []registryBlock) (*orderedMap, map[string]map[stri
 	return merged, rename
 }
 
-// matchlessBlock is a raw `expression_templates` block's match-less entries, in
+// matchlessBlock is a raw `operators` block's match-less entries, in
 // declaration order `order` (names absent from it follow, sorted).
 func matchlessBlock(tpl map[string]any, order []string) *orderedMap {
 	out := newOrderedMap()
@@ -139,13 +139,16 @@ func matchlessBlock(tpl map[string]any, order []string) *orderedMap {
 		if d, ok := tpl[n].(map[string]any); ok && declHasMatch(d) {
 			continue
 		}
-		out.set(n, tpl[n])
+		// Each entry records the defined operator it defines under the key it
+		// was declared with, before a collision rename (esm-spec §9.6.12
+		// "Provenance").
+		out.set(n, withDefines(n, tpl[n]))
 	}
 	return out
 }
 
 // mountedRegistries keeps, on each component of a lowered mounted leaf, the
-// `expression_templates` block the mounting document merges: its match-less
+// `operators` block the mounting document merges: its match-less
 // entries only (the `match` rules have fired in the leaf), and none on a
 // component no reference reads. Mutates view. Mirrors the Julia
 // `_mounted_registries!`.
@@ -157,7 +160,7 @@ func mountedRegistries(view map[string]any) {
 			if !ok {
 				continue
 			}
-			tpl, ok := comp["expression_templates"].(map[string]any)
+			tpl, ok := comp["operators"].(map[string]any)
 			if !ok {
 				continue
 			}
@@ -170,22 +173,22 @@ func mountedRegistries(view map[string]any) {
 			}
 			used := false
 			for k, v := range comp {
-				if k != "expression_templates" && containsApplyOp(v) {
+				if k != "operators" && containsApplyOp(v) {
 					used = true
 					break
 				}
 			}
 			if len(keep) == 0 || !used {
-				delete(comp, "expression_templates")
+				delete(comp, "operators")
 			} else {
-				comp["expression_templates"] = keep
+				comp["operators"] = keep
 			}
 		}
 	}
 }
 
 // mountedBlock is a subsystem below a top-level component that carries its own
-// `expression_templates` block, with its path below the component and the JSON
+// `operators` block, with its path below the component and the JSON
 // pointer it sits at (for its declaration order).
 type mountedBlock struct {
 	path string
@@ -212,7 +215,7 @@ func collectMountedBlocks(out []mountedBlock, node map[string]any, prefix, ptr s
 			path = prefix + "." + k
 		}
 		subPtr := ptr + "/subsystems/" + k
-		if _, ok := sub["expression_templates"].(map[string]any); ok {
+		if _, ok := sub["operators"].(map[string]any); ok {
 			out = append(out, mountedBlock{path: path, ptr: subPtr, sub: sub})
 		} else {
 			out = collectMountedBlocks(out, sub, path, subPtr, orders)
@@ -234,7 +237,7 @@ func renameOutsideMounts(node map[string]any, rn map[string]string) {
 		if !ok {
 			continue
 		}
-		if _, ok := sub["expression_templates"].(map[string]any); ok {
+		if _, ok := sub["operators"].(map[string]any); ok {
 			continue
 		}
 		for _, f := range sortedKeys(sub) {
@@ -251,22 +254,38 @@ func renameOutsideMounts(node map[string]any, rn map[string]string) {
 // declaration order ownOrder) with each mounted block, by mergeFlatRegistry.
 // Each mounted subsystem's own references are renamed here, in place; the
 // caller applies the returned rename (or nil) to the component's other sites.
-// own's `match` rules are kept, ahead of the merged entries. Mirrors the Julia
-// `_merge_mounted_blocks`.
-func mergeMountedBlocks(own map[string]any, ownOrder []string, cname string, mounts []mountedBlock, orders map[string][]string) (*orderedMap, map[string]string) {
+// own's `match` rules are kept, ahead of the merged entries. Also returns, for
+// each merged match-less entry, the owner paths that contributed it (cname for
+// own's). Mirrors the Julia `_merge_mounted_blocks`.
+func mergeMountedBlocks(own map[string]any, ownOrder []string, cname string, mounts []mountedBlock, orders map[string][]string) (*orderedMap, map[string]string, map[string]map[string]bool) {
 	blocks := []registryBlock{{path: cname, block: matchlessBlock(own, ownOrder)}}
 	for _, m := range mounts {
-		tpl, _ := m.sub["expression_templates"].(map[string]any)
-		blocks = append(blocks, registryBlock{path: m.path, block: matchlessBlock(tpl, orders[m.ptr+"/expression_templates"])})
+		tpl, _ := m.sub["operators"].(map[string]any)
+		blocks = append(blocks, registryBlock{path: m.path, block: matchlessBlock(tpl, orders[m.ptr+"/operators"])})
 	}
 	merged, rename := mergeFlatRegistry(blocks)
+	owners := map[string]map[string]bool{}
+	for _, b := range blocks {
+		if b.block == nil {
+			continue
+		}
+		for _, n := range b.block.keys {
+			if nn, ok := rename[b.path][n]; ok {
+				n = nn
+			}
+			if owners[n] == nil {
+				owners[n] = map[string]bool{}
+			}
+			owners[n][b.path] = true
+		}
+	}
 	for _, m := range mounts {
 		rm := rename[m.path]
 		if rm == nil {
 			continue
 		}
 		for _, k := range sortedKeys(m.sub) {
-			if k == "expression_templates" {
+			if k == "operators" {
 				continue
 			}
 			m.sub[k] = renameApplyRefs(m.sub[k], rm)
@@ -288,11 +307,11 @@ func mergeMountedBlocks(own map[string]any, ownOrder []string, cname string, mou
 	for _, n := range merged.keys {
 		newblock.set(n, merged.get(n))
 	}
-	return newblock, rn
+	return newblock, rn, owners
 }
 
 // hoistMountedTemplates merges into the top-level component comp's
-// `expression_templates` block the blocks its subsystems carry (a mounted
+// `operators` block the blocks its subsystems carry (a mounted
 // leaf's, or an authored subsystem's own), esm-spec §9.6.4 rule 1. Owner
 // paths: comp's own match-less entries under cname, each subsystem block under
 // its subsystem path below comp. Bodies are taken unchanged. Each mounted
@@ -301,17 +320,34 @@ func mergeMountedBlocks(own map[string]any, ownOrder []string, cname string, mou
 // subsystem blocks are deleted. `ptr` is comp's JSON pointer; `orders` (may be
 // nil) supplies declaration order and receives the merged block's. Mirrors the
 // Julia `_hoist_mounted_templates!`.
-func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[string][]string) {
+//
+// Returns, for each merged entry a subsystem block contributed, its owner
+// paths: "" for comp itself, else the subsystem path below comp (nil when
+// nothing is mounted). Definitions are component-local (esm-spec §9.6.3
+// constraint 4): a call resolves to, and an arity counts, only the definitions
+// comp owns or a subsystem on the path to the call site owns (definitionScope),
+// so a mounted leaf's definitions serve the leaf's subtree, never comp's calls.
+func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[string][]string) definitionOwners {
 	mounts := collectMountedBlocks(nil, comp, "", ptr, orders)
 	if len(mounts) == 0 {
-		return
+		return nil
 	}
-	own, _ := comp["expression_templates"].(map[string]any)
-	ownOrder := orders[ptr+"/expression_templates"]
-	newblock, rn := mergeMountedBlocks(own, ownOrder, cname, mounts, orders)
+	own, _ := comp["operators"].(map[string]any)
+	ownOrder := orders[ptr+"/operators"]
+	newblock, rn, byOwner := mergeMountedBlocks(own, ownOrder, cname, mounts, orders)
+	owners := definitionOwners{}
+	for n, ps := range byOwner {
+		owners[n] = map[string]bool{}
+		for p := range ps {
+			if p == cname {
+				p = ""
+			}
+			owners[n][p] = true
+		}
+	}
 	if rn != nil {
 		for _, k := range sortedKeys(comp) {
-			if k == "expression_templates" || k == "subsystems" {
+			if k == "operators" || k == "subsystems" {
 				continue
 			}
 			comp[k] = renameApplyRefs(comp[k], rn)
@@ -319,16 +355,75 @@ func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[st
 		renameOutsideMounts(comp, rn)
 	}
 	for _, m := range mounts {
-		delete(m.sub, "expression_templates")
+		delete(m.sub, "operators")
 	}
 	block := make(map[string]any, newblock.len())
 	for _, n := range newblock.keys {
 		block[n] = newblock.get(n)
 	}
-	comp["expression_templates"] = block
+	comp["operators"] = block
 	if orders != nil {
-		orders[ptr+"/expression_templates"] = append([]string(nil), newblock.keys...)
+		orders[ptr+"/operators"] = append([]string(nil), newblock.keys...)
 	}
+	return owners
+}
+
+// definitionOwners maps a merged registry entry to the owner paths that
+// contributed it: "" for the mounting component, else a subsystem path below it
+// (`Sub`, `Sub.Inner`). An entry absent from it is the component's own.
+type definitionOwners map[string]map[string]bool
+
+// markSubsystemOwned writes every merged entry of comp's block that only
+// subsystems own (no "" owner) with `reference_only: true`: such an entry is
+// no definition in scope at comp's own sites (esm-spec §9.6.3 constraint 4),
+// and once written it must stay that way through emit → load (a fixed point).
+// Mirrors the Julia `_mark_subsystem_owned!`.
+func markSubsystemOwned(comp map[string]any, L *lowering) {
+	if len(L.owners) == 0 {
+		return
+	}
+	block, ok := comp["operators"].(map[string]any)
+	if !ok {
+		return
+	}
+	for _, n := range sortedKeys(L.owners) {
+		if L.owners[n][""] {
+			continue
+		}
+		d, ok := block[n].(map[string]any)
+		if !ok || isReferenceOnly(d) {
+			continue
+		}
+		nd := cloneMapAny(d)
+		nd["reference_only"] = true
+		block[n] = nd
+		if _, has := L.named[n]; has {
+			L.named[n] = nd
+		}
+	}
+}
+
+// hiddenAt is the set of entries no owner on the path to a call site at
+// subsystem path `path` ("" for the component's own fields) contributed: the
+// entries that are not definitions in scope there.
+func (o definitionOwners) hiddenAt(path string) map[string]bool {
+	if o == nil {
+		return nil
+	}
+	hidden := map[string]bool{}
+	for n, ps := range o {
+		visible := false
+		for p := range ps {
+			if p == "" || p == path || strings.HasPrefix(path, p+".") {
+				visible = true
+				break
+			}
+		}
+		if !visible {
+			hidden[n] = true
+		}
+	}
+	return hidden
 }
 
 // ---------------------------------------------------------------------------
@@ -641,19 +736,31 @@ func (esm *ESMFile) mergeTypedMountedTemplates(kind, name string, subsystems map
 		}
 		ownOrder = blk.keys
 	}
-	block, _ := mergeMountedBlocks(own, ownOrder, name, mounts, esm.keyOrders)
+	block, _, byOwner := mergeMountedBlocks(own, ownOrder, name, mounts, esm.keyOrders)
 	named := make(map[string]any, block.len())
 	for _, n := range block.keys {
 		named[n] = block.get(n)
 	}
 	for _, m := range mounts {
-		delete(m.sub, "expression_templates")
+		delete(m.sub, "operators")
 		for _, k := range sortedKeys(m.sub) {
 			res, err := expandAll(m.sub[k], named, key+"."+m.path+"."+k)
 			if err != nil {
 				return err
 			}
 			m.sub[k] = res
+		}
+	}
+	// An entry only subsystems own is reference-only on the component's block
+	// (markSubsystemOwned), as the load writes it.
+	for _, n := range block.keys {
+		if ps, ok := byOwner[n]; !ok || ps[name] {
+			continue
+		}
+		if d, ok := block.get(n).(map[string]any); ok && !isReferenceOnly(d) {
+			nd := cloneMapAny(d)
+			nd["reference_only"] = true
+			block.set(n, nd)
 		}
 	}
 	if esm.componentTemplates == nil {
@@ -670,11 +777,11 @@ func (esm *ESMFile) mergeTypedMountedTemplates(kind, name string, subsystems map
 // its references are expanded against it, as the load expands a top-level
 // component's (Expand-at-build). `order` is the block's declaration order.
 func (esm *ESMFile) landTypedTopLevelTemplates(section, name string, comp map[string]any, order []string) error {
-	tpl, ok := comp["expression_templates"].(map[string]any)
+	tpl, ok := comp["operators"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	delete(comp, "expression_templates")
+	delete(comp, "operators")
 	key := section + "." + name
 	for _, k := range sortedKeys(comp) {
 		res, err := expandAll(comp[k], tpl, key+"."+k)

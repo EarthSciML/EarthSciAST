@@ -240,7 +240,12 @@ function _instance!(
     bv = _BodyView(Set{String}(params), lits, Dict{String, String}(zip(params, entries)))
     body = _raw_get(decl, "body")
     body = _lower_body_enums(body, bv, st.L.enums)
+    body = _instance_partial(body, bv)
+    # The body is read with the definitions of the site that owns it.
+    site = st.L.site[]
+    st.L.site[] = _owner_site(st.L, name)
     rewritten, passes = _rewrite_to_fixpoint(body, st.L, tscope; bv = bv)
+    st.L.site[] = site
     refs = IdDict{Any, String}()
     height = passes
     _visit_json(rewritten) do _, n
@@ -260,6 +265,29 @@ function _instance!(
     st.done[key] = res
     push!(st.order, key)
     return res
+end
+
+"""
+    _instance_partial(body, bv) -> body′
+
+esm-spec §4.2 "Reading earlier documents": a `D` whose `wrt` is one of the
+definition's `params` is decided per instance — where the instance binds that
+parameter to an axis name other than `"t"`, the `D` reads as `partial` in this
+instance (the wire boundary left it as written). Bound to `"t"`, it stays the
+time derivative.
+"""
+function _instance_partial(body, bv::_BodyView)
+    return _rewrite_json(body; leaves = false) do rw, n
+        _raw_get(n, "op") == "D" || return _JSON_DESCEND
+        w = _raw_get(n, "wrt")
+        (w isa AbstractString && String(w) in bv.params) || return _JSON_DESCEND
+        lit = get(bv.lit, String(w), _NO_LIT)
+        (lit isa AbstractString && lit != "t") || return _JSON_DESCEND
+        nn = _rewrite_json_children(rw, n)
+        n2 = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(nn))
+        n2["op"] = "partial"
+        return n2
+    end
 end
 
 """
@@ -400,9 +428,41 @@ function _rule3_exposed(st::_Rule3State, by_template, order)
     return visible
 end
 
-_match_stripped(decl) = OrderedDict{String, Any}(
-    string(k) => v for (k, v) in pairs(decl) if !(string(k) in ("match", "where", "priority"))
-)
+# A materialized entry: the rule (or variant) without its `match`, `where` and
+# `priority`, marked `reference_only` (esm-spec §9.6.1, §9.6.4 rule 5) so that
+# reloading the emitted document makes it no callable definition of its
+# operator: emit → load → emit is exact. A rule for `partial` / `integral`
+# keeps the fixed unit expression its `match` gave under a private key, so
+# the unit checker still holds the firing's references to it (esm-spec §4.2,
+# §9.6.12 "Units"); no writer emits that key (`_without_private_keys`).
+function _match_stripped(decl)
+    nd = OrderedDict{String, Any}(
+        string(k) => v for (k, v) in pairs(decl) if !(string(k) in ("match", "where", "priority"))
+    )
+    nd["reference_only"] = true
+    fixed = _fixed_unit_expr(decl)
+    fixed === nothing || (nd[_FIXED_UNITS_KEY] = fixed)
+    return nd
+end
+
+# The private registry-entry key of `_match_stripped`.
+const _FIXED_UNITS_KEY = "__esm_fixed_units"
+
+# `block` (an `operators` registry) as a writer emits it: each entry without the
+# private keys a load keeps on it. Returns `block` itself when no entry has one.
+function _without_private_keys(block)
+    _is_object(block) || return block
+    any(d -> _is_object(d) && _raw_get(d, _FIXED_UNITS_KEY) !== nothing, values(block)) ||
+        return block
+    out = OrderedDict{String, Any}()
+    for (n, d) in pairs(block)
+        out[string(n)] = (_is_object(d) && _raw_get(d, _FIXED_UNITS_KEY) !== nothing) ?
+            OrderedDict{String, Any}(
+                string(k) => v for (k, v) in pairs(d) if string(k) != _FIXED_UNITS_KEY
+            ) : d
+    end
+    return out
+end
 
 """
     _apply_rule3!(comp, L, transforms)
@@ -417,7 +477,7 @@ references, materialize each referenced `match` rule without its `match`,
 function _apply_rule3!(comp, L::_Lowering, transforms)
     st = _Rule3State(L)
     site_refs = IdDict{Any, String}()
-    fields = String[string(k) for k in keys(comp) if string(k) != "expression_templates"]
+    fields = String[string(k) for k in keys(comp) if string(k) != "operators"]
     sites = Any[(comp, k) for k in fields]
     for e in transforms
         push!(sites, (e, "transform"))
@@ -444,7 +504,7 @@ function _apply_rule3!(comp, L::_Lowering, transforms)
         push!(get!(by_template, st.done[k].name, String[]), k)
     end
     final = Dict{String, String}()
-    block = get!(comp, "expression_templates") do
+    block = get!(comp, "operators") do
         OrderedDict{String, Any}()
     end
     taken = Set{String}(keys(L.named))

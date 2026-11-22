@@ -43,12 +43,14 @@ from . import op_registry
 from .error_handling import (
     AMBIGUOUS_SUBSYSTEM_REF,
     DATA_SOURCE_MERGE_CONFLICT,
+    DEPRECATED_FIELD,
     DEPRECATED_OP,
     DEPRECATED_SYSTEM_KIND,
     ELEMENT_TYPE_UNCARRIED,
+    OPERATOR_INVALID_DEFINITION,
     REMOVED_OP,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
-    SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+    SUBSYSTEM_REF_IS_OPERATOR_LIBRARY,
     UNRESOLVED_SUBSYSTEM_REF,
 )
 from .errors import EarthSciAstError, ParseError
@@ -642,9 +644,7 @@ def _parse_test(data: dict[str, Any]) -> Test:
         # discretization this test runs under. Retained (not consumed at load)
         # so the PDE runner can build a per-test ephemeral instance and so the
         # field survives round-trip.
-        expression_template_imports=copy.deepcopy(
-            data.get("expression_template_imports", []) or []
-        ),
+        expression_template_imports=copy.deepcopy(data.get("operator_imports", []) or []),
     )
 
 
@@ -732,9 +732,7 @@ def _parse_analysis(data: dict[str, Any]) -> Analysis:
         # esm-spec §9.7.10 form C / §6.6.6: raw §9.7.2 import entries naming the
         # discretization this analysis runs under. Retained (not consumed at load)
         # so the field survives round-trip, mirroring _parse_test above.
-        expression_template_imports=copy.deepcopy(
-            data.get("expression_template_imports", []) or []
-        ),
+        expression_template_imports=copy.deepcopy(data.get("operator_imports", []) or []),
     )
 
 
@@ -1076,29 +1074,6 @@ def _parse_data_source(source_data: dict[str, Any]) -> DataSource:
     )
 
 
-def _parse_operator(operator_data: dict[str, Any], name: str = "") -> Operator:
-    """Parse an operator from JSON data."""
-    # Use schema fields directly
-    operator_id = operator_data.get("operator_id", "")
-    needed_vars = operator_data.get("needed_vars", [])
-    modifies = operator_data.get("modifies")
-    config = operator_data.get("config", {})
-    description = operator_data.get("description")
-    reference = None
-    if "reference" in operator_data:
-        reference = _parse_reference(operator_data["reference"])
-
-    return Operator(
-        operator_id=operator_id,
-        needed_vars=needed_vars,
-        name=name,
-        modifies=modifies,
-        reference=reference,
-        config=config,
-        description=description,
-    )
-
-
 def _parse_registered_function(rf_data: dict[str, Any]) -> RegisteredFunction:
     """Parse a registered_functions entry from JSON data (esm-spec §9.2)."""
     from .esm_types import RegisteredFunction, RegisteredFunctionSignature
@@ -1430,11 +1405,11 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
             source.name = source_name
             data_sources[source_name] = source
 
-    # Parse operators
-    operators = []
-    if "operators" in data:
-        for op_name, op_data in data["operators"].items():
-            operators.append(_parse_operator(op_data, op_name))
+    # A top-level `operators` block is the definition payload of an operator
+    # library (esm-spec §9.6.12, §9.7.1), captured verbatim by the load as
+    # ``EsmFile.expression_templates`` — never the pre-0.3.0 runtime-operator
+    # registry, which no loaded document can carry.
+    operators: list[Operator] = []
 
     # Parse registered_functions (esm-spec §9.2 — DEPRECATED in v0.3.0)
     registered_functions = {}
@@ -1597,7 +1572,7 @@ def _subsystem_ref_injected_imports(sub_value: dict[str, Any]) -> list[Any]:
     injects into the REFERENCED component's own template scope. Returned as a
     list of raw dicts (empty when absent); schema-validated as an array of
     TemplateImport before this runs."""
-    raw = sub_value.get("expression_template_imports")
+    raw = sub_value.get("operator_imports")
     if isinstance(raw, list):
         return list(raw)
     return []
@@ -1760,9 +1735,9 @@ def _load_ref_data(
     # reference mechanisms are disjoint (esm-spec §9.7.1).
     if _is_template_library_doc(ref_data):
         raise ExpressionTemplateError(
-            SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+            SUBSYSTEM_REF_IS_OPERATOR_LIBRARY,
             f"Subsystem ref '{ref_str}' targets a template-library file; "
-            "libraries are imported via expression_template_imports "
+            "libraries are imported via operator_imports "
             "(esm-spec §9.7.1)",
         )
 
@@ -2086,7 +2061,7 @@ def _declares_match_rule(comp: Any) -> bool:
     declares a ``match`` rule (a mount point's own rules fired in its file)."""
     if not isinstance(comp, dict) or _is_ref_entry(comp):
         return False
-    blk = comp.get("expression_templates")
+    blk = comp.get("operators")
     if isinstance(blk, dict) and any(isinstance(d, dict) and "match" in d for d in blk.values()):
         return True
     subs = comp.get("subsystems")
@@ -3321,7 +3296,7 @@ def _capture_component_templates(
             if not isinstance(comp, dict):
                 continue
             refs = received.pop(cname, None)
-            block = comp.get("expression_templates")
+            block = comp.get("operators")
             if not (isinstance(block, dict) and block):
                 continue
             mat, _, _ = materialize_component_block(
@@ -3606,7 +3581,7 @@ def _load_data(
     # declarations (§9.6.4 rule 5), and they survive `parse -> emit` VERBATIM.
     # Both §9.7 resolution and template lowering consume them, so they must be
     # captured HERE, on the raw document, while they are still visible.
-    _raw_expression_templates = copy.deepcopy(data.get("expression_templates") or {})
+    _raw_expression_templates = copy.deepcopy(data.get("operators") or {})
     # esm-spec §10.9 `coupling_roles`, captured on the same grounds and written
     # back verbatim: presence of the key is the sole positive identifier of the
     # coupling-library file kind, so dropping it makes a library unrepresentable.
@@ -3709,6 +3684,15 @@ def _load_data(
     # `"models.<name>"` / `"reaction_systems.<name>"` (the Julia
     # `component_templates` key shape).
     _raw_component_templates = _capture_component_templates(data, _authored_templates)
+    # esm 2.4.0 (esm-spec §9.6.5, §9.6.12): a loaded document that keeps a
+    # component `operators` block is written with the esm-2.4.0 names, so it
+    # declares 2.4.0 or later — the floor `emit_document` stamps (§9.6.4 rule 8).
+    if _raw_component_templates and isinstance(data, dict):
+        from .lower_expression_templates import _OPERATORS_MIN_ESM, _parse_semver_tuple
+
+        declared = _parse_semver_tuple(data.get("esm"))
+        if declared is None or declared < _OPERATORS_MIN_ESM:
+            data["esm"] = ".".join(str(v) for v in _OPERATORS_MIN_ESM)
     # esm-spec §9.6.4 Option B: the typed IR / build path (simulate, flatten,
     # codegen) is Expand-at-build (RFC out-of-line-expression-templates §7.7) —
     # call `Expand` once here so `_parse_esm_data` sees the fully-expanded
@@ -3777,6 +3761,17 @@ def _load_data(
             # mounts (esm-spec §9.6.3), which the typed mounts above took from
             # each leaf's own Expand image.
             _graft_rule_rewrites_into_mounts(_pre_lower, _lowered_shadow, esm_file)
+            # The esm-2.4.0 floor of an `operators` block (see above), now that
+            # the mounts' definitions have joined the registries.
+            if esm_file.component_templates:
+                from .lower_expression_templates import (
+                    _OPERATORS_MIN_ESM,
+                    _parse_semver_tuple,
+                )
+
+                declared = _parse_semver_tuple(esm_file.version)
+                if declared is None or declared < _OPERATORS_MIN_ESM:
+                    esm_file.version = ".".join(str(v) for v in _OPERATORS_MIN_ESM)
     _drop_mounted_forms(esm_file)
     # The mounts have merged; the merge bookkeeping does not outlive the load.
     esm_file.data_sources = dict(esm_file.data_sources)
@@ -3987,6 +3982,229 @@ def reject_removed_constructs(data: object) -> None:
     raise err
 
 
+# ---------------------------------------------------------------------------
+# esm 2.4.0 "one operator type": old spellings read at the wire boundary
+# (esm-spec §9.6.12 "Old names (no refusal)", §4.2 "Reading earlier documents")
+# ---------------------------------------------------------------------------
+
+#: Old field spelling -> new (warning ``deprecated_field``).
+_DEPRECATED_FIELDS: tuple[tuple[str, str], ...] = (
+    ("expression_templates", "operators"),
+    ("expression_template_imports", "operator_imports"),
+)
+#: The old op spelling of the reference node (warning ``deprecated_op``).
+_OLD_APPLY_OP = "apply_expression_template"
+#: The other spellings of the spatial derivative (warning ``deprecated_op``).
+_PARTIAL_SPELLINGS = frozenset({"δ", "∂"})
+
+
+def _old_spelling_name_maps() -> frozenset[str]:
+    """Objects whose keys are author-chosen names, not fields: a field spelling
+    is never renamed among them (a variable may be called
+    ``expression_templates``)."""
+    from .template_imports import _NAME_KEYED_MAP_KEYS
+
+    return _NAME_KEYED_MAP_KEYS | {
+        "models",
+        "reaction_systems",
+        "data_sources",
+        "index_sets",
+        "enums",
+        "metaparameters",
+        "domains",
+        "coupling_roles",
+    }
+
+
+def _rename_field_inplace(node: dict, old: str, new: str) -> bool:
+    """Rename the key ``old`` of ``node`` to ``new`` in place, keeping its
+    position. Both spellings in one object is ``operator_invalid_definition``:
+    there is nothing to choose between silently."""
+    if old not in node:
+        return False
+    if new in node:
+        raise ExpressionTemplateError(
+            OPERATOR_INVALID_DEFINITION,
+            f"an object carries both `{old}` and its esm-2.4.0 spelling `{new}`; "
+            f"write only `{new}` (esm-spec §9.6.12)",
+        )
+    items = list(node.items())
+    node.clear()
+    for k, v in items:
+        node[new if k == old else k] = v
+    return True
+
+
+def _document_iv_rename(doc: object) -> str | None:
+    """The document's own renamed independent variable
+    (``domain.independent_variable`` when declared and not ``"t"``), or ``None``
+    (esm-spec §4.2 "The derivative axis")."""
+    if not isinstance(doc, dict):
+        return None
+    dom = doc.get("domain")
+    if not isinstance(dom, dict):
+        return None
+    iv = dom.get("independent_variable")
+    return iv if isinstance(iv, str) and iv != "t" else None
+
+
+def _old_spellings_walk(
+    node: object,
+    at: str,
+    namemap: bool,
+    params: frozenset[str] | None,
+    name_maps: frozenset[str],
+    fsites: list[str],
+    osites: list[str],
+    iv: str | None = None,
+) -> None:
+    if isinstance(node, dict):
+        if not namemap:
+            for old, new in _DEPRECATED_FIELDS:
+                if _rename_field_inplace(node, old, new):
+                    fsites.append(f"{at}/{_pointer_token(new)} ({old})")
+            op = node.get("op")
+            if isinstance(op, str):
+                if op == _OLD_APPLY_OP:
+                    node["op"] = "apply_operator"
+                    osites.append(f"{at} ({op})")
+                elif op in _PARTIAL_SPELLINGS:
+                    node["op"] = "partial"
+                    osites.append(f"{at} ({op})")
+                elif op == "D":
+                    w = node.get("wrt")
+                    is_param = isinstance(w, str) and params is not None and w in params
+                    if w is not None and iv is not None and w == iv and not is_param:
+                        # esm-spec §4.2 "The derivative axis": a `wrt` naming the
+                        # document's renamed independent variable is the time
+                        # derivative, read with the literal axis (no warning).
+                        node["wrt"] = "t"
+                    elif (
+                        w is not None
+                        and w != "t"
+                        and not (isinstance(w, str) and params is not None and w in params)
+                    ):
+                        node["op"] = "partial"
+                        osites.append(f"{at} (D)")
+        for k, v in node.items():
+            if not isinstance(v, (dict, list)):
+                continue
+            ks = str(k)
+            here = f"{at}/{_pointer_token(ks)}"
+            if not namemap and ks == "operators" and isinstance(v, dict):
+                # A definition block: each entry's own params decide a `D` whose
+                # `wrt` names one of them (decided per instance, §9.6.4 rule 3).
+                for dn, dv in v.items():
+                    if not isinstance(dv, (dict, list)):
+                        continue
+                    p = dv.get("params") if isinstance(dv, dict) else None
+                    P = (
+                        frozenset(x for x in p if isinstance(x, str))
+                        if isinstance(p, list)
+                        else None
+                    )
+                    _old_spellings_walk(
+                        dv,
+                        f"{here}/{_pointer_token(dn)}",
+                        False,
+                        P,
+                        name_maps,
+                        fsites,
+                        osites,
+                        iv,
+                    )
+                continue
+            _old_spellings_walk(
+                v, here, (not namemap) and ks in name_maps, params, name_maps, fsites, osites, iv
+            )
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            if isinstance(v, (dict, list)):
+                _old_spellings_walk(v, f"{at}/{i}", False, params, name_maps, fsites, osites, iv)
+
+
+def rewrite_old_spellings(data: object) -> tuple[list[str], list[str]]:
+    """esm 2.4.0 (esm-spec §9.6.12, §4.2): read the spellings an earlier
+    document wrote, IN PLACE, on every document a load touches, never refusing
+    one:
+
+    - the field ``expression_templates`` as ``operators`` and
+      ``expression_template_imports`` as ``operator_imports``, keeping the key's
+      position, wherever a field of that name appears (never among the keys of
+      a name-keyed map);
+    - the op ``apply_expression_template`` as ``apply_operator``, and the
+      spatial derivative — a ``D`` whose ``wrt`` is present and is not the
+      literal ``"t"``, and the spellings ``δ`` and ``∂`` — as ``partial``,
+      every other field kept. A ``D`` whose ``wrt`` is one of the enclosing
+      definition's ``params`` is left as written: it is decided per definition
+      instance (§9.6.4 rule 3, ``template_instances._instance_partial``).
+    - a ``D`` whose ``wrt`` names the document's own renamed independent
+      variable (``domain.independent_variable``, a string other than ``"t"``)
+      as the time derivative ``wrt: "t"`` (esm-spec §4.2 "The derivative
+      axis"), with no warning and no site.
+
+    Returns ``(field sites, op sites)``, each ``<pointer> (<old spelling>)``.
+    Idempotent: a second pass finds nothing."""
+    fsites: list[str] = []
+    osites: list[str] = []
+    _old_spellings_walk(
+        data, "", False, None, _old_spelling_name_maps(), fsites, osites, _document_iv_rename(data)
+    )
+    return fsites, osites
+
+
+def _warn_old_spellings(fsites: list[str], osites: list[str]) -> None:
+    """One ``deprecated_field`` and one ``deprecated_op`` warning per document,
+    each naming every site it read."""
+    if fsites:
+        warnings.warn(
+            f"{DEPRECATED_FIELD}: the fields `expression_templates` and "
+            "`expression_template_imports` are read as `operators` and "
+            "`operator_imports` (esm 2.4.0, esm-spec §9.6.12). Read at: " + ", ".join(fsites) + ".",
+            EsmDeprecationWarning,
+            stacklevel=4,
+        )
+    if osites:
+        warnings.warn(
+            f"{DEPRECATED_OP}: `apply_expression_template` is read as `apply_operator`, "
+            "and a spatial `D` (and `δ`, `∂`) as `partial` (esm 2.4.0, esm-spec §4.2, "
+            "§9.6.12). Rewritten at: " + ", ".join(osites) + ".",
+            EsmDeprecationWarning,
+            stacklevel=4,
+        )
+
+
+def _has_old_spellings(x: object) -> bool:
+    if isinstance(x, dict):
+        if "expression_templates" in x or "expression_template_imports" in x:
+            return True
+        op = x.get("op")
+        if isinstance(op, str):
+            if op == _OLD_APPLY_OP or op in _PARTIAL_SPELLINGS:
+                return True
+            if op == "D":
+                w = x.get("wrt")
+                if w is not None and w != "t":
+                    return True
+        return any(_has_old_spellings(v) for v in x.values() if isinstance(v, (dict, list)))
+    if isinstance(x, list):
+        return any(_has_old_spellings(v) for v in x if isinstance(v, (dict, list)))
+    return False
+
+
+def wire_old_spellings(raw: Any) -> Any:
+    """``raw`` itself when it spells nothing an earlier document wrote
+    (esm-spec §9.6.12, §4.2), else a deep copy read through
+    :func:`rewrite_old_spellings` (with its warnings). For entry points a
+    caller may reach without the load's wire boundary
+    (``lower_expression_templates``, ``resolve_template_machinery``)."""
+    if not isinstance(raw, dict) or not _has_old_spellings(raw):
+        return raw
+    doc = copy.deepcopy(raw)
+    _warn_old_spellings(*rewrite_old_spellings(doc))
+    return doc
+
+
 def _rewrite_deprecated(node: object, at: str, sites: list[str]) -> None:
     if isinstance(node, dict):
         op = node.get("op")
@@ -4095,8 +4313,14 @@ def prepare_document_ops(data: object) -> None:
        identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
        rewrite-target op: the document would load silently and fail much later
        as ``unlowered_operator``, or never.
-    2. Deprecated spellings are rewritten IN PLACE (esm-spec §4.2
-       "Deprecated ops", :func:`rewrite_deprecated_ops`): ``neg`` to unary
+    2. The esm-2.3 spellings are read as the esm-2.4.0 ones, IN PLACE
+       (esm-spec §9.6.12, §4.2, :func:`rewrite_old_spellings`):
+       ``expression_templates`` / ``expression_template_imports`` as
+       ``operators`` / ``operator_imports`` (one ``deprecated_field``
+       warning), ``apply_expression_template`` as ``apply_operator`` and a
+       spatial ``D`` (and ``δ``, ``∂``) as ``partial`` (one ``deprecated_op``
+       warning). Then deprecated op spellings are rewritten IN PLACE (esm-spec
+       §4.2 "Deprecated ops", :func:`rewrite_deprecated_ops`): ``neg`` to unary
        ``-``, ``pow`` to ``^``, a ``broadcast`` ``fn`` of ``neg`` to ``-``,
        with one ``deprecated_op`` warning for the document naming every site.
     3. The ``faq`` version gate — ``faq`` arrives at esm 1.1.0 (esm-spec
@@ -4108,6 +4332,7 @@ def prepare_document_ops(data: object) -> None:
     See ``docs/content/rfcs/faq-node-rename.md``.
     """
     reject_removed_constructs(data)
+    _warn_old_spellings(*rewrite_old_spellings(data))
     _warn_deprecated_ops(rewrite_deprecated_ops(data))
     _warn_deprecated_system_kind(deprecated_system_kind_sites(data))
     faq_at = _find_op(data, "faq")

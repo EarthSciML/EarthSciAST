@@ -13,14 +13,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 function _rsw_candidate(doc)::Bool
     doc isa AbstractDict || return false
-    for k in ("expression_template_imports", "expression_templates", "metaparameters", "enums")
+    for k in ("operator_imports", "operators", "metaparameters", "enums")
         haskey(doc, k) && return false
     end
     haskey(doc, "reaction_systems") && return false
     mounts = false
     walk(c) = begin
-        haskey(c, "expression_template_imports") && return false
-        haskey(c, "expression_templates") && return false
+        haskey(c, "operator_imports") && return false
+        haskey(c, "operators") && return false
         subs = get(c, "subsystems", nothing)
         subs isa AbstractDict || return true
         for (_, s) in pairs(subs)

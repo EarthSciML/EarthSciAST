@@ -218,9 +218,7 @@ fn print_math_reproduces_the_display() {
             let models = esm["models"].as_object().expect("a math case has models");
             assert_eq!(models.len(), 1, "{id}: a math case has one model");
             let model = models.values().next().expect("one model");
-            if model.get("expression_templates").is_some()
-                || esm.get("expression_templates").is_some()
-            {
+            if model.get("operators").is_some() || esm.get("operators").is_some() {
                 skipped += 1;
                 continue;
             }

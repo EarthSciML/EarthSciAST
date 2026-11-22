@@ -1,0 +1,115 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "old_names",
+    "description": "esm-spec §9.6.12 'Old names (no refusal)', §4.2 'Reading earlier documents': this document spells `expression_templates`, `expression_template_imports`, `apply_expression_template`, a spatial `D` (in an equation and in a rule's match) and `δ`. It loads with the warnings `deprecated_field` and `deprecated_op`, and its emitted form (emitted.esm) is byte-identical to that of new_names.esm, the same document in the esm 2.4 spellings.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "expression_template_imports": [
+        {
+          "ref": "lib_old.esm"
+        }
+      ],
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "description": "Field"
+        },
+        "w": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Scalar"
+        },
+        "h": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Halved"
+        },
+        "g": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "description": "Gradient"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "x"
+          }
+        },
+        {
+          "lhs": "h",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "halve",
+            "bindings": {
+              "a": "w"
+            }
+          }
+        },
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "δ",
+            "args": [
+              "u"
+            ],
+            "wrt": "x"
+          }
+        }
+      ],
+      "expression_templates": {
+        "diff_x": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "x"
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              0.5,
+              "f"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

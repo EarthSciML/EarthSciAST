@@ -184,7 +184,7 @@ fn an_equi_join_over_ingested_columns_in_the_pipeline_is_taped() {
 /// `overlap_area_planar` (`lib/geometry.esm`) of record ring `r` with grid
 /// cell ring `c`.
 fn overlap_area() -> Value {
-    json!({"op": "apply_expression_template", "args": [], "name": "overlap_area_planar",
+    json!({"op": "apply_operator", "args": [], "name": "overlap_area_planar",
            "bindings": {"ring_a": "pring", "cell_a": "r", "nv_a": 4,
                         "ring_b": "cring", "cell_b": "c", "nv_b": 4}})
 }
@@ -192,7 +192,7 @@ fn overlap_area() -> Value {
 /// `model_doc` importing `lib/geometry.esm`.
 fn geometry_doc(index_sets: Value, variables: Value, equations: Value) -> Value {
     let mut doc = model_doc(index_sets, variables, equations);
-    doc["models"]["M"]["expression_template_imports"] =
+    doc["models"]["M"]["operator_imports"] =
         json!([{"ref": "esm:std/geometry.esm", "only": ["overlap_area_planar"]}]);
     doc
 }

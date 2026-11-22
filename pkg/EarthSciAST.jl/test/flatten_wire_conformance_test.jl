@@ -111,7 +111,7 @@ function _fw_refs_form(flat)
     reached = Set{String}()
     queue = String[]
     visit(e) = EarthSciAST.foreach_subexpr(e) do x
-        x isa EarthSciAST.OpExpr && x.op == "apply_expression_template" &&
+        x isa EarthSciAST.OpExpr && x.op == "apply_operator" &&
             x.name !== nothing && push!(queue, x.name)
     end
     for e in flat.equations
@@ -248,7 +248,7 @@ end
 @testset "cellwise variants are numbered by canonical bytes, not discovery order" begin
     ESM = EarthSciAST
     OD = ESM.OrderedDict{String, Any}
-    ref(n, b) = OD("op" => "apply_expression_template", "args" => Any[], "name" => n, "bindings" => b)
+    ref(n, b) = OD("op" => "apply_operator", "args" => Any[], "name" => n, "bindings" => b)
     ph(n, split) = ESM._cw_placeholder(n, split, 0)
     T = OD("params" => Any["p", "q"], "body" => OD("op" => "+", "args" => Any["p", "q"]))
     U = OD("params" => Any["a"], "body" => ref("T", OD("p" => "a", "q" => "a")))

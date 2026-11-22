@@ -39,6 +39,7 @@
 //! construction. Closing that needs the reference-preserving emit path, not a
 //! type change here.
 
+use crate::common;
 use earthsci_ast::*;
 use serde_json::Value;
 
@@ -116,8 +117,11 @@ fn assert_lossless_round_trip(name: &str, fixture: &str) -> EsmFile {
     let reparsed: EsmFile =
         load_string(&serialized).unwrap_or_else(|e| panic!("{name}: failed to reparse: {e}"));
 
-    let original: Value = serde_json::from_str(fixture)
+    let mut original: Value = serde_json::from_str(fixture)
         .unwrap_or_else(|e| panic!("{name}: fixture is not JSON: {e}"));
+    // A load reads the old spellings as the esm 2.4.0 names (esm-spec
+    // §9.6.12, §4.2), and saves those.
+    common::read_old_spellings(&mut original);
     let round_tripped: Value = serde_json::from_str(&serialized)
         .unwrap_or_else(|e| panic!("{name}: serialized output is not JSON: {e}"));
 
@@ -141,7 +145,7 @@ fn assert_round_trip_consuming_imports(name: &str, fixture: &str) {
     fn call_sites(v: &Value, path: &str, out: &mut Vec<String>) {
         match v {
             Value::Object(m) => {
-                if m.get("op").and_then(Value::as_str) == Some("apply_expression_template") {
+                if m.get("op").and_then(Value::as_str) == Some("apply_operator") {
                     out.push(path.to_string());
                     return;
                 }
@@ -163,8 +167,9 @@ fn assert_round_trip_consuming_imports(name: &str, fixture: &str) {
     let serialized =
         to_json(&parsed).unwrap_or_else(|e| panic!("{name}: failed to serialize: {e}"));
     load_string(&serialized).unwrap_or_else(|e| panic!("{name}: failed to reparse: {e}"));
-    let original: Value = serde_json::from_str(fixture)
+    let mut original: Value = serde_json::from_str(fixture)
         .unwrap_or_else(|e| panic!("{name}: fixture is not JSON: {e}"));
+    common::read_old_spellings(&mut original);
     let round_tripped: Value = serde_json::from_str(&serialized)
         .unwrap_or_else(|e| panic!("{name}: serialized output is not JSON: {e}"));
 
@@ -181,10 +186,15 @@ fn assert_round_trip_consuming_imports(name: &str, fixture: &str) {
         assert!(inner.is_empty(), "{name}: {site} saved an unexpanded call");
         *expected.pointer_mut(site).unwrap() = expansion.clone();
     }
+    // The §9.6.4 rule-8 stamp is a floor of esm 2.4.0 on a document carrying
+    // template machinery (esm-spec §9.6.5).
+    if round_tripped["esm"] == "2.4.0" {
+        expected["esm"] = round_tripped["esm"].clone();
+    }
     let models = expected["models"].as_object_mut().expect("models");
     for m in models.values_mut() {
         if let Some(m) = m.as_object_mut() {
-            m.remove("expression_template_imports");
+            m.remove("operator_imports");
         }
     }
 

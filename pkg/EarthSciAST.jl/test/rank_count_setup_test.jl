@@ -31,7 +31,7 @@ const _RC_LIB = joinpath(TESTUTILS_REPO_ROOT, "lib")
 _rc_op(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
 _rc_ix(a, s...) = _rc_op("index", a, s...)
 _rc_apply(name; b...) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
 )
 _rc_faq(e, out, ranges; kw...) = Dict{String, Any}(
@@ -47,7 +47,7 @@ const _RC_NOCOMPILE = _RC._plan_with(_RC._compiler_plan(:native); setup_map_comp
 # in-memory build takes a model's own `expression_templates`).
 _rc_templates(names...) = begin
     lib = JSON3.read(read(joinpath(_RC_LIB, "relational.esm"), String), Dict{String, Any})
-    Dict{String, Any}(n => lib["expression_templates"][n] for n in names)
+    Dict{String, Any}(n => lib["operators"][n] for n in names)
 end
 
 _rc_same(a, b) = keys(a) == keys(b) && all(a[k] === b[k] for k in keys(a))
@@ -144,7 +144,7 @@ function _rc_mesh_doc(n, spelling)
     model = Dict{String, Any}("variables" => vars, "equations" => eqs)
     if spelling === :const
         push!(eqs, Dict("lhs" => "face_edge_rank", "rhs" => jconst([[rank[(lo[f][k], hi[f][k])] for k in 1:3] for f in 1:F])))
-        model["expression_templates"] = _rc_templates("edge_key")
+        model["operators"] = _rc_templates("edge_key")
     else
         vars["edge_members"] = Dict("type" => "parameter", "shape" => Any["edges"], "default" => 0.0)
         edges_set["member_factor"] = "edge_members"
@@ -157,7 +157,7 @@ function _rc_mesh_doc(n, spelling)
                 )
             )
         )
-        model["expression_templates"] = _rc_templates("edge_key", "rank_of_set")
+        model["operators"] = _rc_templates("edge_key", "rank_of_set")
     end
     return Dict{String, Any}(
         "esm" => "2.0.0", "metadata" => Dict("name" => "mesh_rank_$(spelling)"),
@@ -302,7 +302,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
             "models" => Dict(
                 "M" => Dict{String, Any}(
                     "variables" => vars, "equations" => eqs,
-                    "expression_templates" => _rc_templates("rank_of")
+                    "operators" => _rc_templates("rank_of")
                 )
             )
         )
@@ -363,7 +363,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
             Dict("lhs" => _rc_op("D", "u"; wrt = "t"), "rhs" => _rc_op("-", "acc", "u")),
         ]
         model = Dict{String, Any}("variables" => vars, "equations" => eqs)
-        model["expression_templates"] = _rc_templates(which)
+        model["operators"] = _rc_templates(which)
         if lo != 1
             # The template's own [1, n] ranges rewritten to [lo, n].
             walk(x) = x isa AbstractDict ?
@@ -372,7 +372,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
                     foreach(walk, values(x))
                 ) :
                 x isa AbstractVector ? foreach(walk, x) : nothing
-            walk(model["expression_templates"][which])
+            walk(model["operators"][which])
         end
         return Dict{String, Any}(
             "esm" => "2.0.0", "metadata" => Dict("name" => "arg_$(which)"),

@@ -586,7 +586,7 @@ end
 function _model_has_surviving_refs(model::Model)
     found = false
     check(e) = e === nothing || found ? nothing : foreach_subexpr_once(e) do x
-            x isa OpExpr && x.op == "apply_expression_template" && (found = true)
+            x isa OpExpr && x.op == "apply_operator" && (found = true)
             nothing
     end
     for eqs in (model.equations, model.initialization_equations)

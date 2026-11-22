@@ -291,7 +291,10 @@ def is_implicit_lhs(lhs: Any) -> bool:
 
 
 def _is_spatial_d(expr: Any) -> bool:
-    return _op(expr) == "D" and not _is_time_derivative(expr)
+    """A spatial derivative: a ``partial`` call (esm-spec §4.2), or a ``D`` built
+    in code whose ``wrt`` is present and is not ``"t"`` (a loaded document reads
+    such a ``D`` as ``partial``)."""
+    return _op(expr) == "partial" or (_op(expr) == "D" and not _is_time_derivative(expr))
 
 
 def _lhs(equation: Any) -> Any:

@@ -17,7 +17,7 @@ func faqBareDoc(expr string) string {
    "v":{"type":"parameter","units":"1","shape":["a_rows"],"default":[1.0,2.0]},
    "w":{"type":"parameter","units":"1","shape":["a_rows"],"default":[10.0,20.0]},
    "out":{"type":"unknown","units":"1","shape":["a_rows"]}},
-  "expression_templates":{"twice":{"params":["x"],"body":{"op":"*","args":[2.0,"x"]}}},
+  "operators":{"twice":{"params":["x"],"body":{"op":"*","args":[2.0,"x"]}}},
   "equations":[{"lhs":"out","rhs":{"op":"faq","args":[],"semiring":"sum_product",
    "output_idx":["i"],"ranges":{"i":{"from":"a_rows"}},"expr":` + expr + `}}]}}}`
 }
@@ -41,7 +41,7 @@ func faqBareFindings(t *testing.T, doc string) []StructuralError {
 // the array bound to its argument is not a bare read, although load has
 // already expanded the application into `2 * v`.
 func TestFAQBareArrayOperandTemplateApplicationOpaque(t *testing.T) {
-	apply := `{"op":"apply_expression_template","args":[],"name":"twice","bindings":{"x":"v"}}`
+	apply := `{"op":"apply_operator","args":[],"name":"twice","bindings":{"x":"v"}}`
 	if got := faqBareFindings(t, faqBareDoc(`{"op":"+","args":[`+apply+`,{"op":"index","args":["w","i"]}]}`)); len(got) != 0 {
 		t.Fatalf("template argument reported as a bare read: %+v", got)
 	}
@@ -56,7 +56,7 @@ func TestFAQBareArrayOperandTemplateApplicationOpaque(t *testing.T) {
 // The authored-form record reaches a template application inside an inline
 // subsystem too.
 func TestFAQBareArrayOperandTemplateOpaqueInSubsystem(t *testing.T) {
-	inner := faqBareDoc(`{"op":"+","args":[{"op":"apply_expression_template","args":[],"name":"twice","bindings":{"x":"v"}},"w"]}`)
+	inner := faqBareDoc(`{"op":"+","args":[{"op":"apply_operator","args":[],"name":"twice","bindings":{"x":"v"}},"w"]}`)
 	file, err := LoadString(inner)
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -66,7 +66,7 @@ func TestFAQBareArrayOperandTemplateOpaqueInSubsystem(t *testing.T) {
 	}
 	view := map[string]any{"models": map[string]any{"Host": map[string]any{
 		"subsystems": map[string]any{"Probe": map[string]any{"equations": []any{
-			map[string]any{"lhs": "out", "rhs": map[string]any{"op": "apply_expression_template", "name": "twice"}},
+			map[string]any{"lhs": "out", "rhs": map[string]any{"op": "apply_operator", "name": "twice"}},
 		}}},
 	}}}
 	if _, ok := authoredTemplateApplications(view)["/models/Host/subsystems/Probe/equations/0"]; !ok {

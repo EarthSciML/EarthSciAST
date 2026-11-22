@@ -36,7 +36,7 @@
 //!
 //! Remote (`http(s)://`) template-library refs are not fetched (this crate
 //! carries no HTTP client, matching the subsystem-ref loader): they are
-//! rejected as `template_import_unresolved`.
+//! rejected as `operator_import_unresolved`.
 
 use crate::lower_expression_templates::{
     ExpressionTemplateError, collect_apply_names as compose_collect_apply_names,
@@ -51,7 +51,7 @@ const COMPONENT_KINDS: [&str; 2] = ["models", "reaction_systems"];
 
 /// The `apply_expression_template` op string — the named-template invocation
 /// node whose `name` field the §9.7.7 rename walk rewrites.
-const APPLY_OP: &str = "apply_expression_template";
+const APPLY_OP: &str = "apply_operator";
 
 /// A template-library file MUST NOT declare any of these (esm-spec §9.7.1).
 const LIBRARY_FORBIDDEN_KEYS: [&str; 5] = [
@@ -86,7 +86,7 @@ const PROTECTED_KEYS: [&str; 11] = [
     "kind",
     "description",
     "name",
-    "expression_template_imports",
+    "operator_imports",
     "metaparameters",
     "only",
     // `where` match-scoping constraints (esm-spec §9.6.1) carry index-set NAMES,
@@ -113,7 +113,10 @@ const RENAME_AXIS_KEYS: [&str; 3] = ["wrt", "dim", "var"];
 /// Opaque to substitution AND copied verbatim by the rename walk. The document
 /// math printer sends a call-form node carrying `id` or `expect_cadence` to the
 /// escape form by this list.
-pub(crate) const NODE_HEADER_KEYS: [&str; 3] = ["op", "id", "expect_cadence"];
+///
+/// `defines` (esm 2.4.0, esm-spec §9.6.1) names the defined operator an
+/// `operators` entry is a definition of: a name, never an expression position.
+pub(crate) const NODE_HEADER_KEYS: [&str; 4] = ["op", "id", "expect_cadence", "defines"];
 
 /// Closed-registry ids / literal enums PARAMETERIZING the node's op. Like
 /// [`NODE_HEADER_KEYS`] these are names rather than values, so they are opaque
@@ -179,13 +182,13 @@ const OPAQUE_KEYS: [&str; 32] = [
 /// so it is never tested with [`is_meta_subst_skipped`]: a variable named
 /// `source` or a template param named `label` still has its value substituted.
 /// A key that is also skipped (`where`, `rename`, …) is skipped whole.
-const NAME_KEYED_MAP_KEYS: [&str; 19] = [
+const NAME_KEYED_MAP_KEYS: [&str; 20] = [
     "variables",
     "species",
     "parameters",
     "guesses",
     "subsystems",
-    "expression_templates",
+    "operators",
     "ranges",
     "bindings",
     "config",
@@ -199,6 +202,8 @@ const NAME_KEYED_MAP_KEYS: [&str; 19] = [
     "index_set_rename",
     "url_substitutions",
     "where",
+    // The old spelling of `operators` (read as it at the wire boundary).
+    "expression_templates",
 ];
 
 /// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
@@ -254,7 +259,7 @@ use crate::ref_reader::lexical_normalize;
 /// `expression_template_imports`, top-level `expression_templates`
 /// (template-library files), and `metaparameters` arrive at `esm: 0.8.0`;
 /// files declaring an earlier version that carry any of them are rejected
-/// with `template_import_version_too_old` (esm-spec §9.6.5). Mirrors
+/// with `operator_import_version_too_old` (esm-spec §9.6.5). Mirrors
 /// [`crate::lower_expression_templates::reject_expression_templates_pre_v04`]
 /// for the §9.7 constructs.
 pub fn reject_template_imports_pre_v08(view: &Value) -> Result<(), ExpressionTemplateError> {
@@ -267,11 +272,7 @@ pub fn reject_template_imports_pre_v08(view: &Value) -> Result<(), ExpressionTem
 pub(crate) fn template_import_offences(view: &Value) -> Option<String> {
     let obj = view.as_object()?;
     let mut offences: Vec<String> = Vec::new();
-    for key in [
-        "expression_templates",
-        "metaparameters",
-        "expression_template_imports",
-    ] {
+    for key in ["operators", "metaparameters", "operator_imports"] {
         if obj.contains_key(key) {
             offences.push(format!("/{key}"));
         }
@@ -280,9 +281,9 @@ pub(crate) fn template_import_offences(view: &Value) -> Option<String> {
         if let Some(comps) = obj.get(compkind).and_then(|v| v.as_object()) {
             for (cname, comp) in comps {
                 if let Some(comp_obj) = comp.as_object()
-                    && comp_obj.contains_key("expression_template_imports")
+                    && comp_obj.contains_key("operator_imports")
                 {
-                    offences.push(format!("/{compkind}/{cname}/expression_template_imports"));
+                    offences.push(format!("/{compkind}/{cname}/operator_imports"));
                 }
             }
         }
@@ -295,17 +296,16 @@ pub(crate) fn template_import_offences(view: &Value) -> Option<String> {
 /// systems / loaders / coupling / domain) is checked separately at import
 /// edges.
 pub fn is_template_library_doc(raw: &Value) -> bool {
-    raw.as_object()
-        .is_some_and(|o| o.contains_key("expression_templates"))
+    raw.as_object().is_some_and(|o| o.contains_key("operators"))
 }
 
 /// A document carrying top-level `expression_templates` is a template-library
 /// file (esm-spec §9.7.1), which MUST NOT declare `models`, `reaction_systems`,
 /// `data_sources`, `coupling`, or `domain`. Rewrite rules are component-local
 /// (§9.6.3 constraint 4), so beside a component the block is visible to
-/// nothing: the document is rejected with `template_library_illegal_payload`
+/// nothing: the document is rejected with `operator_library_illegal_payload`
 /// rather than loaded with the templates silently inert. An import target is
-/// held to the same rule at the edge, as `template_import_not_library`.
+/// held to the same rule at the edge, as `operator_import_not_library`.
 pub(crate) fn reject_impure_template_library(view: &Value) -> Result<(), ExpressionTemplateError> {
     if !is_template_library_doc(view) {
         return Ok(());
@@ -319,9 +319,9 @@ pub(crate) fn reject_impure_template_library(view: &Value) -> Result<(), Express
         return Ok(());
     }
     Err(err(
-        codes::TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
+        codes::OPERATOR_LIBRARY_ILLEGAL_PAYLOAD,
         format!(
-            "top-level `expression_templates` makes this document a template-library file, which MUST NOT declare {} (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own `expression_templates` block (§9.6.1), or move them to a template-library file and import it with `expression_template_imports` (§9.7.2)",
+            "top-level `operators` makes this document a template-library file, which MUST NOT declare {} (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own `operators` block (§9.6.1), or move them to a template-library file and import it with `operator_imports` (§9.7.2)",
             present.join(", ")
         ),
     ))
@@ -652,7 +652,7 @@ pub(crate) fn require_meta_expr(v: &Value, ctx: &str) -> Result<Value, Expressio
 /// environment `env` (name → int) — the importing document's metaparameter
 /// scope (esm-spec §9.7.6 binding value flow). Substitutes the env names, then
 /// folds with the exact-integer [`try_fold`] arithmetic (`/` must divide
-/// exactly; 64-bit overflow is an error). Raises `template_import_unknown_name`
+/// exactly; 64-bit overflow is an error). Raises `operator_import_unknown_name`
 /// if the expression references a name absent from `env` — the mount-edge typo
 /// failure, keeping error locality at the edge that authored the expression.
 /// Mirrors the Python `eval_meta_expr`.
@@ -679,7 +679,7 @@ pub(crate) fn eval_meta_expr(
                 free.into_iter().collect::<Vec<_>>().join(", ")
             };
             Err(err(
-                codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
+                codes::OPERATOR_IMPORT_UNKNOWN_NAME,
                 format!(
                     "{ctx}: metaparameter expression references {free_list} not in the importing \
                      document's metaparameter scope (esm-spec §9.7.6)"
@@ -833,7 +833,7 @@ fn is_name_segment(seg: &str) -> bool {
 
 /// Read a `rename` / `rebind` map (name → dotted-identifier target). An empty
 /// or absent map (or JSON `null`) is empty; a non-object, an empty key, or a
-/// non-dotted-identifier target is `template_import_rename_invalid`. Order is
+/// non-dotted-identifier target is `operator_import_rename_invalid`. Order is
 /// preserved (serde_json `preserve_order` source → `IndexMap`). Mirrors the
 /// Julia `_name_map`.
 fn name_map(
@@ -847,7 +847,7 @@ fn name_map(
     };
     let Some(obj) = raw.as_object() else {
         return Err(err(
-            codes::TEMPLATE_IMPORT_RENAME_INVALID,
+            codes::OPERATOR_IMPORT_RENAME_INVALID,
             format!(
                 "{where_}: `{field}` must be an object mapping names to names (esm-spec §9.7.7)"
             ),
@@ -856,14 +856,14 @@ fn name_map(
     for (k, v) in obj {
         if k.is_empty() {
             return Err(err(
-                codes::TEMPLATE_IMPORT_RENAME_INVALID,
+                codes::OPERATOR_IMPORT_RENAME_INVALID,
                 format!("{where_}: `{field}` has an empty key (esm-spec §9.7.7)"),
             ));
         }
         let valid_target = v.as_str().is_some_and(is_valid_dotted_name);
         if !valid_target {
             return Err(err(
-                codes::TEMPLATE_IMPORT_RENAME_INVALID,
+                codes::OPERATOR_IMPORT_RENAME_INVALID,
                 format!(
                     "{where_}: `{field}`.{k} target {v} is not a valid dotted identifier \
                      (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"
@@ -893,7 +893,7 @@ fn name_map(
 /// `shape` entries are mapped through `isetmap` (an unmapped name stays as
 /// spelled). Without this the rule body/registry would use the renamed set while
 /// `where` still named the original, and registration would fail with
-/// `template_constraint_unknown_index_set`.
+/// `operator_constraint_unknown_index_set`.
 ///
 /// Hand-rolled rather than `crate::json_visit`: nearly every object entry has
 /// a key-dependent substitution or skip rule.
@@ -1300,7 +1300,7 @@ pub(crate) fn apply_mount_index_set_rename(
         let final_name = changed.get(name).cloned().unwrap_or_else(|| name.clone());
         if finals.contains(&final_name) {
             return Err(err(
-                codes::TEMPLATE_IMPORT_RENAME_COLLISION,
+                codes::OPERATOR_IMPORT_RENAME_COLLISION,
                 format!(
                     "{where_}: `index_set_rename` maps two index sets onto '{final_name}'; \
                      post-rename names must be distinct within one mount edge \
@@ -1446,7 +1446,7 @@ fn apply_edge_renames(
         Some(v) => {
             if !v.as_str().is_some_and(is_valid_dotted_name) {
                 return Err(err(
-                    codes::TEMPLATE_IMPORT_RENAME_INVALID,
+                    codes::OPERATOR_IMPORT_RENAME_INVALID,
                     format!(
                         "{where_}: `prefix` {v} is not a valid dotted identifier (segments \
                          [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"
@@ -1496,7 +1496,7 @@ fn exported_names(scope: &TemplateScope) -> std::collections::HashSet<String> {
 }
 
 /// `rename` keys must name a surviving exported name (typo protection,
-/// esm-spec §9.7.7) — `template_import_rename_unknown_name` otherwise.
+/// esm-spec §9.7.7) — `operator_import_rename_unknown_name` otherwise.
 fn check_rename_keys_exported(
     rename: &IndexMap<String, String>,
     exported: &std::collections::HashSet<String>,
@@ -1505,7 +1505,7 @@ fn check_rename_keys_exported(
     for k in rename.keys() {
         if !exported.contains(k) {
             return Err(err(
-                codes::TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
+                codes::OPERATOR_IMPORT_RENAME_UNKNOWN_NAME,
                 format!(
                     "{where_}: `rename` names '{k}', which the target does not export at this \
                      edge (the surviving exports are templates after `only`, index sets, and \
@@ -1553,7 +1553,7 @@ fn build_final_name_maps(
 }
 
 /// Per-namespace final-name uniqueness: two distinct original names mapping
-/// to the same final name is `template_import_rename_collision` (esm-spec
+/// to the same final name is `operator_import_rename_collision` (esm-spec
 /// §9.7.7).
 fn check_final_name_uniqueness(
     maps: &EdgeNameMaps,
@@ -1568,7 +1568,7 @@ fn check_final_name_uniqueness(
         for (o, n) in m {
             if let Some(prev) = seen.get(n) {
                 return Err(err(
-                    codes::TEMPLATE_IMPORT_RENAME_COLLISION,
+                    codes::OPERATOR_IMPORT_RENAME_COLLISION,
                     format!(
                         "{where_}: {what} names '{prev}' and '{o}' both map to '{n}' after \
                          renaming (esm-spec §9.7.7)"
@@ -1633,9 +1633,9 @@ fn collect_name_inventory(scope: &TemplateScope) -> NameInventory {
 }
 
 /// `rebind` keys must denote free names (typo protection, esm-spec §9.7.7):
-/// a declared name is `template_import_rebind_unknown_name` (use `rename`
-/// for those), a bound index symbol is `template_import_rename_invalid`, and
-/// a name not occurring free is `template_import_rebind_unknown_name`.
+/// a declared name is `operator_import_rebind_unknown_name` (use `rename`
+/// for those), a bound index symbol is `operator_import_rename_invalid`, and
+/// a name not occurring free is `operator_import_rebind_unknown_name`.
 fn check_rebind_keys(
     rebind: &IndexMap<String, String>,
     exported: &std::collections::HashSet<String>,
@@ -1645,7 +1645,7 @@ fn check_rebind_keys(
     for k in rebind.keys() {
         if exported.contains(k) {
             return Err(err(
-                codes::TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
+                codes::OPERATOR_IMPORT_REBIND_UNKNOWN_NAME,
                 format!(
                     "{where_}: `rebind` names '{k}', a declared name of the target (template / \
                      index set / metaparameter) — `rebind` addresses only free names; use \
@@ -1655,7 +1655,7 @@ fn check_rebind_keys(
         }
         if inventory.bound.contains(k) {
             return Err(err(
-                codes::TEMPLATE_IMPORT_RENAME_INVALID,
+                codes::OPERATOR_IMPORT_RENAME_INVALID,
                 format!(
                     "{where_}: `rebind` key '{k}' is a bound index symbol (`output_idx` / \
                      `ranges`) of an imported template, not a free name (esm-spec §9.7.7)"
@@ -1664,7 +1664,7 @@ fn check_rebind_keys(
         }
         if !inventory.free.contains(k) {
             return Err(err(
-                codes::TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
+                codes::OPERATOR_IMPORT_REBIND_UNKNOWN_NAME,
                 format!(
                     "{where_}: `rebind` names '{k}', which does not occur free in the imported \
                      declarations (esm-spec §9.7.7)"
@@ -1678,7 +1678,7 @@ fn check_rebind_keys(
 /// Freshness guard: every renamed metaparameter and rebound free name must
 /// be fresh — colliding with a remaining free name, a bound index symbol, a
 /// template param, or another rename/rebind target would capture or merge
-/// distinct names (`template_import_rename_collision`, esm-spec §9.7.7).
+/// distinct names (`operator_import_rename_collision`, esm-spec §9.7.7).
 fn check_new_name_freshness(
     rebind: &IndexMap<String, String>,
     metamap: &IndexMap<String, String>,
@@ -1708,7 +1708,7 @@ fn check_new_name_freshness(
     for t in &newnames {
         if taken.contains(t) {
             return Err(err(
-                codes::TEMPLATE_IMPORT_RENAME_COLLISION,
+                codes::OPERATOR_IMPORT_RENAME_COLLISION,
                 format!(
                     "{where_}: renamed/rebound name '{t}' collides with a name still in use \
                      inside the imported declarations (a remaining free name, a bound index \
@@ -1757,14 +1757,21 @@ fn apply_scope_substitution(
 
     let mut newt = Map::new();
     for (n, d) in &scope.templates {
-        let nd = rename_decl(d, &varmap, &iset_changed, &tpl_changed);
-        newt.insert(
-            maps.tplmap
-                .get(n)
-                .expect("tplmap covers every template")
-                .clone(),
-            nd,
-        );
+        let mut nd = rename_decl(d, &varmap, &iset_changed, &tpl_changed);
+        let renamed = maps.tplmap.get(n).expect("tplmap covers every template");
+        // esm 2.4.0 (esm-spec §9.6.12 "Provenance"): the defined operator a
+        // definition defines is decided in the library's own scope, so renaming
+        // its key on import does not change it.
+        if renamed != n
+            && let Value::Object(obj) = &mut nd
+            && !obj.contains_key("defines")
+        {
+            obj.insert(
+                "defines".to_string(),
+                Value::String(crate::lower_expression_templates::definition_defines(n, d)),
+            );
+        }
+        newt.insert(renamed.clone(), nd);
     }
     scope.templates = newt;
 
@@ -1841,7 +1848,7 @@ fn merge_named(
         // occurrence; a non-equal collision is a conflict (esm-spec
         // §9.7.4/§9.7.5). An index set's `"records": false` is its absent
         // `records` (esm-spec §8.5.1).
-        let same = if code == codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT {
+        let same = if code == codes::OPERATOR_IMPORT_INDEX_SET_CONFLICT {
             crate::ref_loading::index_set_decls_equal(existing, &decl)
         } else {
             *existing == decl
@@ -1871,7 +1878,7 @@ fn merge_scope(
             &mut dst.templates,
             &n,
             d,
-            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
+            codes::OPERATOR_IMPORT_NAME_CONFLICT,
             "template",
             origin,
         )?;
@@ -1881,7 +1888,7 @@ fn merge_scope(
             &mut dst.index_sets,
             &n,
             d,
-            codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+            codes::OPERATOR_IMPORT_INDEX_SET_CONFLICT,
             "index set",
             origin,
         )?;
@@ -1891,7 +1898,7 @@ fn merge_scope(
             &mut dst.metaparams,
             &n,
             d,
-            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
+            codes::OPERATOR_IMPORT_NAME_CONFLICT,
             "metaparameter",
             origin,
         )?;
@@ -1950,11 +1957,11 @@ fn load_import_raw(
     let ref_str: &str = &expanded;
     let read_error = |e: RefError| match e {
         RefError::Bundled(why) => err(
-            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            codes::OPERATOR_IMPORT_UNRESOLVED,
             format!("{origin}: failed to load template-library ref '{ref_str}': {why}"),
         ),
         RefError::Remote => err(
-            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            codes::OPERATOR_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: failed to load template-library ref '{ref_str}': remote refs \
                  are not fetched by the Rust loader; download the file and import it by \
@@ -1962,7 +1969,7 @@ fn load_import_raw(
             ),
         ),
         RefError::Missing { path, err: e } | RefError::Read { path, err: e } => err(
-            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            codes::OPERATOR_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: template-library file not found or unreadable: {} (from ref \
                  '{ref_str}'): {e}",
@@ -1970,7 +1977,7 @@ fn load_import_raw(
             ),
         ),
         RefError::Parse { path, err: e } => err(
-            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            codes::OPERATOR_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: template-library ref '{}' did not parse: {e}",
                 path.display()
@@ -1993,7 +2000,7 @@ fn load_import_raw(
                 // carry expression nodes — so it gets the same wire-boundary
                 // treatment as the root (docs/content/rfcs/faq-node-rename.md §5.2).
                 crate::ref_reader::OpenError::Wire(e) => err(
-                    codes::TEMPLATE_IMPORT_UNRESOLVED,
+                    codes::OPERATOR_IMPORT_UNRESOLVED,
                     format!("{origin}: {}: {e}", located.identity.display()),
                 ),
                 crate::ref_reader::OpenError::Gate(e) => e,
@@ -2015,20 +2022,16 @@ fn resolve_import_entry(
 ) -> Result<TemplateScope, ExpressionTemplateError> {
     let Some(entry_obj) = entry.as_object() else {
         return Err(err(
-            codes::TEMPLATE_IMPORT_UNRESOLVED,
-            format!(
-                "{origin}: expression_template_imports entries must be objects with a `ref` field"
-            ),
+            codes::OPERATOR_IMPORT_UNRESOLVED,
+            format!("{origin}: operator_imports entries must be objects with a `ref` field"),
         ));
     };
     let ref_str = match entry_obj.get("ref").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s,
         _ => {
             return Err(err(
-                codes::TEMPLATE_IMPORT_UNRESOLVED,
-                format!(
-                    "{origin}: expression_template_imports entry requires a non-empty string `ref`"
-                ),
+                codes::OPERATOR_IMPORT_UNRESOLVED,
+                format!("{origin}: operator_imports entry requires a non-empty string `ref`"),
             ));
         }
     };
@@ -2037,7 +2040,7 @@ fn resolve_import_entry(
         let mut cyc: Vec<String> = stack[pos..].to_vec();
         cyc.push(canonical);
         return Err(err(
-            codes::TEMPLATE_IMPORT_CYCLE,
+            codes::OPERATOR_IMPORT_CYCLE,
             format!(
                 "{origin}: import-graph cycle detected: {} (esm-spec §9.7.2)",
                 cyc.join(" -> ")
@@ -2052,7 +2055,7 @@ fn resolve_import_entry(
     // `coupling_import` coupling entry, not as a template library (esm-spec §10.9).
     if crate::coupling_imports::is_coupling_library_doc(&raw) {
         return Err(err(
-            codes::TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
+            codes::OPERATOR_IMPORT_IS_COUPLING_LIBRARY,
             format!(
                 "{origin}: import target '{ref_str}' is a coupling-library file (has \
                  `coupling_roles`), not a template library (esm-spec §10.9)"
@@ -2063,9 +2066,9 @@ fn resolve_import_entry(
     // disjoint — a component/subsystem file is not importable as a library.
     if !is_template_library_doc(&raw) {
         return Err(err(
-            codes::TEMPLATE_IMPORT_NOT_LIBRARY,
+            codes::OPERATOR_IMPORT_NOT_LIBRARY,
             format!(
-                "{origin}: import target '{ref_str}' lacks top-level `expression_templates` — \
+                "{origin}: import target '{ref_str}' lacks top-level `operators` — \
                  not a template-library file (esm-spec §9.7.1)"
             ),
         ));
@@ -2073,7 +2076,7 @@ fn resolve_import_entry(
     for k in LIBRARY_FORBIDDEN_KEYS {
         if raw.get(k).is_some() {
             return Err(err(
-                codes::TEMPLATE_IMPORT_NOT_LIBRARY,
+                codes::OPERATOR_IMPORT_NOT_LIBRARY,
                 format!(
                     "{origin}: import target '{ref_str}' declares `{k}` — not a pure \
                      template-library file (esm-spec §9.7.1)"
@@ -2083,7 +2086,7 @@ fn resolve_import_entry(
     }
     if let Err(e) = crate::parse::validate_schema(&raw) {
         return Err(err(
-            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            codes::OPERATOR_IMPORT_UNRESOLVED,
             format!("{origin}: import target '{ref_str}' failed schema validation: {e}"),
         ));
     }
@@ -2103,7 +2106,7 @@ fn resolve_import_entry(
         for (name, v) in bindings {
             if !scope.metaparams.contains_key(name) {
                 return Err(err(
-                    codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
+                    codes::OPERATOR_IMPORT_UNKNOWN_NAME,
                     format!(
                         "{origin}: import of '{ref_str}' binds metaparameter '{name}', which \
                          the target neither declares nor re-exports (esm-spec §9.7.6)"
@@ -2136,7 +2139,7 @@ fn resolve_import_entry(
         for n in &keep {
             if !scope.templates.contains_key(n) {
                 return Err(err(
-                    codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
+                    codes::OPERATOR_IMPORT_UNKNOWN_NAME,
                     format!(
                         "{origin}: `only` names template '{n}', which '{ref_str}' does not \
                          declare (esm-spec §9.7.2)"
@@ -2205,10 +2208,7 @@ fn process_library(
     origin: &str,
 ) -> Result<TemplateScope, ExpressionTemplateError> {
     let mut scope = TemplateScope::default();
-    if let Some(imports) = raw
-        .get("expression_template_imports")
-        .and_then(|v| v.as_array())
-    {
+    if let Some(imports) = raw.get("operator_imports").and_then(|v| v.as_array()) {
         for entry in imports {
             let sub = resolve_import_entry(entry, dir, stack, origin)?;
             merge_scope(&mut scope, sub, origin)?;
@@ -2216,7 +2216,7 @@ fn process_library(
     }
 
     let mut own = Map::new();
-    if let Some(tpl) = raw.get("expression_templates").and_then(|v| v.as_object()) {
+    if let Some(tpl) = raw.get("operators").and_then(|v| v.as_object()) {
         for (n, d) in tpl {
             own.insert(n.clone(), d.clone());
         }
@@ -2230,7 +2230,7 @@ fn process_library(
             &mut scope.templates,
             &n,
             d,
-            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
+            codes::OPERATOR_IMPORT_NAME_CONFLICT,
             "template",
             origin,
         )?;
@@ -2242,7 +2242,7 @@ fn process_library(
                 &mut scope.index_sets,
                 n,
                 d.clone(),
-                codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+                codes::OPERATOR_IMPORT_INDEX_SET_CONFLICT,
                 "index set",
                 origin,
             )?;
@@ -2254,7 +2254,7 @@ fn process_library(
             &mut scope.metaparams,
             &n,
             d,
-            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
+            codes::OPERATOR_IMPORT_NAME_CONFLICT,
             "metaparameter",
             origin,
         )?;
@@ -2264,7 +2264,7 @@ fn process_library(
     // downstream `only` filtering can hide a referenced template.
     validate_template_body_references(&scope.templates, origin)?;
     let own_names: Vec<String> = raw
-        .get("expression_templates")
+        .get("operators")
         .and_then(|v| v.as_object())
         .map(|t| t.keys().cloned().collect())
         .unwrap_or_default();
@@ -2452,7 +2452,7 @@ impl LibraryEnumInstances<'_> {
     ) -> Result<String, ExpressionTemplateError> {
         let Some(decl) = self.templates.get(name).and_then(|d| d.as_object()) else {
             return Err(err(
-                codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+                codes::OPERATOR_UNKNOWN_DEFINITION,
                 format!("{}: template '{name}' is not declared", self.origin),
             ));
         };
@@ -2672,9 +2672,9 @@ fn has_import_machinery(raw: &Value) -> bool {
     let Some(obj) = raw.as_object() else {
         return false;
     };
-    if obj.contains_key("expression_templates")
+    if obj.contains_key("operators")
         || obj.contains_key("metaparameters")
-        || obj.contains_key("expression_template_imports")
+        || obj.contains_key("operator_imports")
     {
         return true;
     }
@@ -2683,7 +2683,7 @@ fn has_import_machinery(raw: &Value) -> bool {
             for (_, comp) in comps {
                 if comp
                     .as_object()
-                    .is_some_and(|c| c.contains_key("expression_template_imports"))
+                    .is_some_and(|c| c.contains_key("operator_imports"))
                 {
                     return true;
                 }
@@ -2814,10 +2814,7 @@ fn visit_import_edges(
     if !follow_imports {
         return;
     }
-    let Some(entries) = holder
-        .get("expression_template_imports")
-        .and_then(|v| v.as_array())
-    else {
+    let Some(entries) = holder.get("operator_imports").and_then(|v| v.as_array()) else {
         return;
     };
     for entry in entries {
@@ -2847,7 +2844,7 @@ fn visit_mount_ref(
     // caller that widens a mount edge's site-4 check with this set runs it on a
     // leaf whose nested refs the loader resolves FIRST (`walk_top_level`
     // before the leaf's close), so the bad ref is reported with its own code
-    // before the forwarded binding's `template_import_unknown_name` check
+    // before the forwarded binding's `operator_import_unknown_name` check
     // could fire.
     let expanded = crate::ref_reader::expand(ref_str);
     let Ok(located) = crate::ref_reader::locate(&expanded, base_path) else {
@@ -2928,7 +2925,7 @@ pub(crate) fn document_declares_an_extent(raw: &Value) -> bool {
 /// metaparameter nobody declares used to validate clean and fail only when the
 /// file was finally read, with a diagnostic about the loader API rather than
 /// about the typo. The condition is decidable from the document alone, so it is
-/// decided at load: `template_import_unknown_name`, the code §9.7.6 already
+/// decided at load: `operator_import_unknown_name`, the code §9.7.6 already
 /// gives an unknown name at a binding site. No new code — this IS that
 /// condition, checked earlier.
 pub(crate) fn check_data_source_extents(
@@ -2967,7 +2964,7 @@ pub(crate) fn check_data_source_extents(
             continue;
         }
         return Err(err(
-            codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
+            codes::OPERATOR_IMPORT_UNKNOWN_NAME,
             format!(
                 "data_sources.{key}.extent binds metaparameter '{name}', which neither this \
                  document nor any document it mounts declares (esm-spec §8.9.4, §9.7.6)"
@@ -3002,6 +2999,19 @@ pub fn resolve_template_machinery(
     base_path: &Path,
     metaparameters: &BTreeMap<String, i64>,
 ) -> Result<Option<Value>, ExpressionTemplateError> {
+    // Old spellings (esm-spec §9.6.12) when the caller skipped the wire
+    // boundary.
+    if crate::old_spellings::has_old_spellings(raw_data) {
+        let mut read = raw_data.clone();
+        crate::old_spellings::wire_old_spellings(&mut read)?;
+        return resolve_template_machinery_scoped(
+            &read,
+            base_path,
+            metaparameters,
+            &BTreeSet::new(),
+            false,
+        );
+    }
     resolve_template_machinery_scoped(raw_data, base_path, metaparameters, &BTreeSet::new(), false)
 }
 
@@ -3037,7 +3047,7 @@ pub(crate) fn resolve_template_machinery_scoped(
             .collect();
         if !unknown.is_empty() {
             return Err(err(
-                codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
+                codes::OPERATOR_IMPORT_UNKNOWN_NAME,
                 format!(
                     "loader API binds metaparameter(s) {} which neither this document nor any \
                      document it mounts declares (esm-spec §9.7.6)",
@@ -3127,7 +3137,7 @@ fn resolve_machinery_owned(
     // Snapshot the §9.7.1 DECLARATIONS exactly as authored, before any phase
     // below composes a body or folds a metaparameter into the working copies.
     // These are restored verbatim at the end — see esm-spec §9.6.4 rule 5 there.
-    let original_templates = root.get("expression_templates").cloned();
+    let original_templates = root.get("operators").cloned();
     let original_metaparameters = root.get("metaparameters").cloned();
 
     let mut doc_isets: Map<String, Value> = root
@@ -3137,7 +3147,7 @@ fn resolve_machinery_owned(
         .unwrap_or_default();
 
     // --- top-level templates + imports (root template-library file) ---
-    let is_library = root.contains_key("expression_templates");
+    let is_library = root.contains_key("operators");
     let mut top_templates =
         resolve_top_level_scope(&root, base_path, &mut stack, &mut doc_meta, &mut doc_isets)?;
 
@@ -3210,7 +3220,7 @@ fn resolve_machinery_owned(
     // emitting that would round-trip a library to a DIFFERENT (expanded) library.
     // Verbatim means verbatim.
     if let Some(templates) = original_templates {
-        root.insert("expression_templates".to_string(), templates);
+        root.insert("operators".to_string(), templates);
     }
     if let Some(metaparams) = original_metaparameters {
         root.insert("metaparameters".to_string(), metaparams);
@@ -3219,7 +3229,7 @@ fn resolve_machinery_owned(
     // `expression_template_imports`, by contrast, IS a load-time construct
     // consumed by the fixpoint — an import directive, not a declaration — and
     // correctly does not survive (§9.7.6 round-trip).
-    root.remove("expression_template_imports");
+    root.remove("operator_imports");
     if !doc_isets.is_empty() {
         root.insert("index_sets".to_string(), Value::Object(doc_isets));
     }
@@ -3239,12 +3249,12 @@ fn resolve_top_level_scope(
     doc_meta: &mut Map<String, Value>,
     doc_isets: &mut Map<String, Value>,
 ) -> Result<Map<String, Value>, ExpressionTemplateError> {
-    if !root.contains_key("expression_templates") {
+    if !root.contains_key("operators") {
         return Ok(Map::new());
     }
     let mut top_scope = TemplateScope::default();
     if let Some(imports) = root
-        .get("expression_template_imports")
+        .get("operator_imports")
         .and_then(|v| v.as_array())
         .cloned()
     {
@@ -3254,7 +3264,7 @@ fn resolve_top_level_scope(
         }
     }
     let mut own = Map::new();
-    if let Some(tpl) = root.get("expression_templates").and_then(|v| v.as_object()) {
+    if let Some(tpl) = root.get("operators").and_then(|v| v.as_object()) {
         for (n, d) in tpl {
             own.insert(n.clone(), d.clone());
         }
@@ -3265,7 +3275,7 @@ fn resolve_top_level_scope(
             &mut top_scope.templates,
             &n,
             d,
-            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
+            codes::OPERATOR_IMPORT_NAME_CONFLICT,
             "template",
             "document",
         )?;
@@ -3275,7 +3285,7 @@ fn resolve_top_level_scope(
             doc_isets,
             &n,
             d,
-            codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+            codes::OPERATOR_IMPORT_INDEX_SET_CONFLICT,
             "index set",
             "document",
         )?;
@@ -3285,7 +3295,7 @@ fn resolve_top_level_scope(
             doc_meta,
             &n,
             d,
-            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
+            codes::OPERATOR_IMPORT_NAME_CONFLICT,
             "metaparameter",
             "document",
         )?;
@@ -3304,7 +3314,7 @@ pub(crate) fn component_effective_templates(
     origin: &str,
 ) -> Option<Result<Map<String, Value>, ExpressionTemplateError>> {
     let entries = comp
-        .get("expression_template_imports")
+        .get("operator_imports")
         .and_then(Value::as_array)
         .filter(|a| !a.is_empty())?;
     let resolve = || {
@@ -3314,7 +3324,7 @@ pub(crate) fn component_effective_templates(
             let sub = resolve_import_entry(entry, base_path, &mut stack, origin)?;
             merge_scope(&mut scope, sub, origin)?;
         }
-        if let Some(own) = comp.get("expression_templates").and_then(Value::as_object) {
+        if let Some(own) = comp.get("operators").and_then(Value::as_object) {
             for (n, d) in own {
                 scope.templates.insert(n.clone(), d.clone());
             }
@@ -3348,7 +3358,7 @@ fn resolve_component_imports(
             let Some(Value::Object(comp)) = comps.get(&cname) else {
                 continue;
             };
-            let Some(imports) = comp.get("expression_template_imports").cloned() else {
+            let Some(imports) = comp.get("operator_imports").cloned() else {
                 continue;
             };
             let mut cscope = TemplateScope::default();
@@ -3358,7 +3368,7 @@ fn resolve_component_imports(
                     merge_scope(&mut cscope, sub, &corigin)?;
                 }
             }
-            if let Some(tpl) = comp.get("expression_templates").and_then(|v| v.as_object()) {
+            if let Some(tpl) = comp.get("operators").and_then(|v| v.as_object()) {
                 let mut own = Map::new();
                 for (n, d) in tpl {
                     own.insert(n.clone(), d.clone());
@@ -3369,7 +3379,7 @@ fn resolve_component_imports(
                         &mut cscope.templates,
                         &n,
                         d,
-                        codes::TEMPLATE_IMPORT_NAME_CONFLICT,
+                        codes::OPERATOR_IMPORT_NAME_CONFLICT,
                         "template",
                         &corigin,
                     )?;
@@ -3380,7 +3390,7 @@ fn resolve_component_imports(
                     doc_isets,
                     &n,
                     d,
-                    codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+                    codes::OPERATOR_IMPORT_INDEX_SET_CONFLICT,
                     "index set",
                     &corigin,
                 )?;
@@ -3390,7 +3400,7 @@ fn resolve_component_imports(
                     doc_meta,
                     &n,
                     d,
-                    codes::TEMPLATE_IMPORT_NAME_CONFLICT,
+                    codes::OPERATOR_IMPORT_NAME_CONFLICT,
                     "metaparameter",
                     &corigin,
                 )?;
@@ -3400,11 +3410,8 @@ fn resolve_component_imports(
             // the preserve_order Map key order IS the §9.6.3 declaration
             // order.
             if let Some(Value::Object(comp)) = comps.get_mut(&cname) {
-                comp.insert(
-                    "expression_templates".to_string(),
-                    Value::Object(cscope.templates),
-                );
-                comp.remove("expression_template_imports");
+                comp.insert("operators".to_string(), Value::Object(cscope.templates));
+                comp.remove("operator_imports");
             }
         }
     }
@@ -3414,7 +3421,7 @@ fn resolve_component_imports(
 /// Phase 3 of [`resolve_template_machinery`]: close the document's
 /// metaparameters (§9.7.6 sites 4-5). Loader-API bindings win, then
 /// declaration defaults; a loader-API binding for a name NO document in the
-/// assembly declares is `template_import_unknown_name`, and any name still open
+/// assembly declares is `operator_import_unknown_name`, and any name still open
 /// afterwards is `metaparameter_unbound`. Returns the closed name → value map.
 ///
 /// `mount_declared` is the set of metaparameter names declared by the documents
@@ -3425,7 +3432,7 @@ fn resolve_component_imports(
 /// the leaf declares. Such a name is accepted and CONSUMED here — it closes
 /// nothing in this scope, so it is absent from the returned map (which is built
 /// from `doc_meta` alone). A name in NEITHER set is still a typo and still
-/// raises `template_import_unknown_name`: bindings never invent metaparameters.
+/// raises `operator_import_unknown_name`: bindings never invent metaparameters.
 fn close_document_metaparams(
     doc_meta: &Map<String, Value>,
     metaparameters: &BTreeMap<String, i64>,
@@ -3434,7 +3441,7 @@ fn close_document_metaparams(
     for k in metaparameters.keys() {
         if !doc_meta.contains_key(k) && !mount_declared.contains(k) {
             return Err(err(
-                codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
+                codes::OPERATOR_IMPORT_UNKNOWN_NAME,
                 format!(
                     "loader API binds metaparameter '{k}', which neither this document nor any \
                      document it mounts declares (esm-spec §9.7.6)"
@@ -3579,9 +3586,7 @@ fn substitute_closed_metaparams(
             };
             let keys: Vec<String> = comp.keys().cloned().collect();
             for k in keys {
-                if k == "expression_templates"
-                    && comp.get(&k).map(Value::is_object).unwrap_or(false)
-                {
+                if k == "operators" && comp.get(&k).map(Value::is_object).unwrap_or(false) {
                     if let Some(Value::Object(tpl)) = comp.get_mut(&k) {
                         let tnames: Vec<String> = tpl.keys().cloned().collect();
                         for tn in tnames {
@@ -3663,15 +3668,12 @@ fn fold_closed_document(
 /// own imports first, then the injected list).
 fn append_component_imports(comp: &mut Map<String, Value>, imports: &[Value]) {
     let mut base: Vec<Value> = comp
-        .get("expression_template_imports")
+        .get("operator_imports")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     base.extend(imports.iter().cloned());
-    comp.insert(
-        "expression_template_imports".to_string(),
-        Value::Array(base),
-    );
+    comp.insert("operator_imports".to_string(), Value::Array(base));
 }
 
 /// esm-spec §9.7.10 form A: append the subsystem-ref edge's injected §9.7.2
@@ -3758,11 +3760,11 @@ fn collect_scoped_owners(x: &Value, out: &mut std::collections::HashSet<String>)
 /// (removed from the entry) so form B does not survive `parse → emit`.
 ///
 /// Diagnostics (esm-spec §9.6.6): a key naming no system the entry references is
-/// `template_inject_target_unknown`; a key resolving to a data loader is
-/// `template_inject_target_is_loader`; a key resolving to neither model,
-/// reaction system, nor loader is `template_inject_target_not_component`. Only
+/// `operator_inject_target_unknown`; a key resolving to a data loader is
+/// `operator_inject_target_is_loader`; a key resolving to neither model,
+/// reaction system, nor loader is `operator_inject_target_not_component`. Only
 /// TOP-LEVEL system targets are resolved by this binding — a nested
-/// `Parent.Child` key is out of scope (RFC §8.3) → `template_inject_target_not_component`.
+/// `Parent.Child` key is out of scope (RFC §8.3) → `operator_inject_target_not_component`.
 fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplateError> {
     let Some(root_obj) = root.as_object_mut() else {
         return Ok(false);
@@ -3773,7 +3775,7 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
         .is_some_and(|arr| {
             arr.iter().any(|e| {
                 e.as_object()
-                    .is_some_and(|o| o.contains_key("expression_template_imports"))
+                    .is_some_and(|o| o.contains_key("operator_imports"))
             })
         });
     if !has_injection {
@@ -3810,13 +3812,13 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
             let Some(entry_obj) = entry.as_object_mut() else {
                 continue;
             };
-            let Some(inj_val) = entry_obj.get("expression_template_imports").cloned() else {
+            let Some(inj_val) = entry_obj.get("operator_imports").cloned() else {
                 continue;
             };
             let Some(inj_map) = inj_val.as_object() else {
                 return Err(err(
-                    codes::TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
-                    "coupling entry `expression_template_imports` must be a map from a target \
+                    codes::OPERATOR_INJECT_TARGET_NOT_COMPONENT,
+                    "coupling entry `operator_imports` must be a map from a target \
                      system name to a list of imports (esm-spec §9.7.10 / §10.8)",
                 ));
             };
@@ -3831,9 +3833,9 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
                         refs.join(", ")
                     };
                     return Err(err(
-                        codes::TEMPLATE_INJECT_TARGET_UNKNOWN,
+                        codes::OPERATOR_INJECT_TARGET_UNKNOWN,
                         format!(
-                            "coupling entry `expression_template_imports` key '{target}' names no \
+                            "coupling entry `operator_imports` key '{target}' names no \
                              system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry \
                              references: {refs_str}."
                         ),
@@ -3845,18 +3847,18 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
                     "reaction_systems"
                 } else if loader_keys.contains(target) {
                     return Err(err(
-                        codes::TEMPLATE_INJECT_TARGET_IS_LOADER,
+                        codes::OPERATOR_INJECT_TARGET_IS_LOADER,
                         format!(
-                            "coupling entry `expression_template_imports` key '{target}' resolves \
+                            "coupling entry `operator_imports` key '{target}' resolves \
                              to a data loader, which is pure I/O with no expression positions to \
                              rewrite (esm-spec §9.7.10 / §14)."
                         ),
                     ));
                 } else {
                     return Err(err(
-                        codes::TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
+                        codes::OPERATOR_INJECT_TARGET_NOT_COMPONENT,
                         format!(
-                            "coupling entry `expression_template_imports` key '{target}' resolves \
+                            "coupling entry `operator_imports` key '{target}' resolves \
                              to neither a top-level model, reaction system, nor data loader \
                              (esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope."
                         ),
@@ -3864,16 +3866,16 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
                 };
                 let Some(imports_arr) = imports_val.as_array() else {
                     return Err(err(
-                        codes::TEMPLATE_IMPORT_NOT_LIBRARY,
+                        codes::OPERATOR_IMPORT_NOT_LIBRARY,
                         format!(
-                            "coupling entry `expression_template_imports` value for '{target}' \
+                            "coupling entry `operator_imports` value for '{target}' \
                              must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8)."
                         ),
                     ));
                 };
                 plan.push((compkind, target.clone(), imports_arr.clone()));
             }
-            entry_obj.remove("expression_template_imports");
+            entry_obj.remove("operator_imports");
         }
     }
 
@@ -4116,7 +4118,7 @@ mod tests {
             (
                 json!({"op": "*", "args": ["NZ", "NY"]}),
                 env(&[("NX", 18), ("NY", 20)]),
-                "template_import_unknown_name",
+                "operator_import_unknown_name",
             ),
             // Inexact division is rejected.
             (

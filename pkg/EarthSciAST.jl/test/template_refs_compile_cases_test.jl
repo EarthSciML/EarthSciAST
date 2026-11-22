@@ -22,7 +22,7 @@ _tc_d(p...) = Dict{String, Any}(p...)
 _tc_op(o, a...; kw...) = _tc_d("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
 _tc_ix(a, s...) = _tc_op("index", a, s...)
 _tc_ref(n; b...) = _tc_d(
-    "op" => "apply_expression_template", "args" => Any[], "name" => n,
+    "op" => "apply_operator", "args" => Any[], "name" => n,
     "bindings" => _tc_d((String(k) => v for (k, v) in b)...)
 )
 _tc_tpl(params, body) = _tc_d("params" => Any[params...], "body" => body)
@@ -32,7 +32,7 @@ function _tc_doc(vars, eqs, templates, sets)
     return _tc_d(
         "esm" => "2.3.0", "metadata" => _tc_d("name" => "tc"),
         "index_sets" => _tc_d((k => _tc_d("kind" => "interval", "size" => n) for (k, n) in sets)...),
-        "models" => _tc_d("M" => _tc_d("variables" => vars, "equations" => eqs, "expression_templates" => templates))
+        "models" => _tc_d("M" => _tc_d("variables" => vars, "equations" => eqs, "operators" => templates))
     )
 end
 function _tc_path(doc)

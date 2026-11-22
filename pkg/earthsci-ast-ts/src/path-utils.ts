@@ -43,7 +43,7 @@ const ENV_REF_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
  *    `$VAR` is ordinary ref text and is never expanded.
  * 2. A SET variable is replaced by its value; an UNSET one is left LITERAL.
  *    Leaving it literal is what makes the failure honest: the ref then fails
- *    with the ordinary unresolved diagnostic (`template_import_unresolved` /
+ *    with the ordinary unresolved diagnostic (`operator_import_unresolved` /
  *    `coupling_import_unresolved` / `unresolved_subsystem_ref`) naming the
  *    `${VAR}` text the author wrote, rather than misresolving against an empty
  *    string and reporting a path nobody spelled.

@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "index_sets": {
     "coarse.x": {
       "kind": "interval",
@@ -31,7 +31,7 @@
               "f": "cf"
             },
             "name": "fine.central_D_x",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         },
         {
@@ -48,11 +48,11 @@
               "f": "cc"
             },
             "name": "coarse.central_D_x",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "coarse.central_D_x": {
           "body": {
             "args": [
@@ -98,7 +98,7 @@
                       "args": [],
                       "bindings": {},
                       "name": "coarse.dx",
-                      "op": "apply_expression_template"
+                      "op": "apply_operator"
                     }
                   ],
                   "op": "*"
@@ -117,9 +117,11 @@
               ]
             }
           },
+          "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "coarse.dx": {
           "body": {
@@ -129,6 +131,7 @@
             ],
             "op": "/"
           },
+          "defines": "dx",
           "params": []
         },
         "fine.central_D_x": {
@@ -176,7 +179,7 @@
                       "args": [],
                       "bindings": {},
                       "name": "fine.dx",
-                      "op": "apply_expression_template"
+                      "op": "apply_operator"
                     }
                   ],
                   "op": "*"
@@ -195,9 +198,11 @@
               ]
             }
           },
+          "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "fine.dx": {
           "body": {
@@ -207,6 +212,7 @@
             ],
             "op": "/"
           },
+          "defines": "dx",
           "params": []
         }
       },

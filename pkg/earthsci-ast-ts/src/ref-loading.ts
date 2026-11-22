@@ -28,6 +28,7 @@ import {
   hoistMountedTemplates,
   indexSetDeclEqual,
   lowerExpressionTemplates,
+  atLeastEmitVersion,
   materializeComponentBlock,
 } from './lower-expression-templates.js'
 import { deepClone } from './object-utils.js'
@@ -540,7 +541,7 @@ function mergeSubsystemIndexSets(
  * ref bindings before this runs (a symbolic `NX*NY` arrives here as `18*20`),
  * so the fold below closes against an empty env; a free name that survived the
  * substitution is a genuine mount-edge typo and folds to
- * `template_import_unknown_name`, reported at the edge.
+ * `operator_import_unknown_name`, reported at the edge.
  */
 function readEdgeBindings(sub: { bindings?: unknown }, scope: string): Record<string, number> {
   const out: Record<string, number> = {}
@@ -566,7 +567,7 @@ function readEdgeBindings(sub: { bindings?: unknown }, scope: string): Record<st
  * Both halves matter. Restricting to the leaf's declarations is what keeps an
  * assembler's unrelated metaparameter from silently resizing a leaf axis the
  * edge never bound — and keeps a leaf that declares nothing from being handed a
- * name it would refuse as `template_import_unknown_name`. Reading the loader-API
+ * name it would refuse as `operator_import_unknown_name`. Reading the loader-API
  * map ALONE — never the mounting document's own declared defaults — is the other
  * half: a default is the assembler's value for the assembler's scope, and §4.7
  * gives the edge `bindings` field for deliberately forwarding one.
@@ -586,7 +587,7 @@ function backfillLeafBindings(
 }
 
 /**
- * Read the optional `expression_template_imports` off a `{ ref, ... }`
+ * Read the optional `operator_imports` off a `{ ref, ... }`
  * subsystem edge (esm-spec §9.7.10 form A): raw §9.7.2 import entries injected
  * into the REFERENCED component's own template scope so a mounted
  * discretization-agnostic PDE leaf is lowered under the assembler-chosen
@@ -600,15 +601,15 @@ function backfillLeafBindings(
  * entry; the caller's document is not changed.
  */
 function readEdgeInjectedImports(
-  sub: { expression_template_imports?: unknown },
+  sub: { operator_imports?: unknown },
   mountingBase: string,
 ): unknown[] {
-  const raw = sub.expression_template_imports
+  const raw = sub.operator_imports
   if (raw === undefined || raw === null) return []
   if (!Array.isArray(raw)) {
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
-      'subsystem-ref `expression_template_imports` must be a list of §9.7.2 import entries (esm-spec §9.7.10)',
+      ERROR_CODES.OPERATOR_IMPORT_NOT_LIBRARY,
+      'subsystem-ref `operator_imports` must be a list of §9.7.2 import entries (esm-spec §9.7.10)',
     )
   }
   return raw.map((entry) => anchorInjectedImport(entry, mountingBase))
@@ -641,7 +642,7 @@ function anchorInjectedImport(entry: unknown, mountingBase: string): unknown {
 }
 
 /**
- * The lowered leaf `doc` with each top-level component's `expression_templates`
+ * The lowered leaf `doc` with each top-level component's `operators`
  * block kept for the mounting document (esm-spec §9.6.4 rule 1): its
  * match-less entries only (the `match` rules have fired in the leaf), and none
  * on a component no reference reads. Mutates and returns `doc`. Mirrors the
@@ -653,15 +654,15 @@ function mountedRegistries(doc: Record<string, unknown>): Record<string, unknown
     if (!isPlainObject(comps)) continue
     for (const comp of Object.values(comps)) {
       if (!isPlainObject(comp)) continue
-      const blk = comp.expression_templates
+      const blk = comp.operators
       if (!isPlainObject(blk)) continue
       const keep: Record<string, unknown> = {}
       for (const [n, d] of Object.entries(blk)) if (!carriesMatch(d)) keep[n] = d
       const used = Object.keys(comp).some(
-        (k) => k !== 'expression_templates' && collectApplyNames(comp[k], []).length > 0,
+        (k) => k !== 'operators' && collectApplyNames(comp[k], []).length > 0,
       )
-      if (Object.keys(keep).length === 0 || !used) delete comp.expression_templates
-      else comp.expression_templates = keep
+      if (Object.keys(keep).length === 0 || !used) delete comp.operators
+      else comp.operators = keep
     }
   }
   return doc
@@ -681,7 +682,7 @@ function carriesMatch(decl: unknown): boolean {
  * Post-parse handling shared by model / reaction-system ref resolution:
  *
  * 1. A §4.7 subsystem ref MUST NOT target a template-library file — the two
- *    reference mechanisms are disjoint (`subsystem_ref_is_template_library`,
+ *    reference mechanisms are disjoint (`subsystem_ref_is_operator_library`,
  *    esm-spec §9.7.1).
  * 2. The referenced document's §9.7 machinery (template imports and
  *    metaparameters) is resolved in the referenced file's own directory,
@@ -723,8 +724,8 @@ function resolveRefDocument(
       : `${mountForm.charAt(0).toUpperCase()}${mountForm.slice(1)} ref '${ref}'`
   if (isTemplateLibraryDoc(parsed)) {
     throw new EsmMachineryError(
-      ERROR_CODES.SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
-      `${mountLabel} targets a template-library file; libraries are imported via expression_template_imports (esm-spec §9.7.1)`,
+      ERROR_CODES.SUBSYSTEM_REF_IS_OPERATOR_LIBRARY,
+      `${mountLabel} targets a template-library file; libraries are imported via operator_imports (esm-spec §9.7.1)`,
     )
   }
   if (isCouplingLibraryDoc(parsed)) {
@@ -740,7 +741,7 @@ function resolveRefDocument(
   // processing", so the referenced document's OWN nested mounts are inlined
   // HERE, ahead of the §9.7.10 injection and the §9.6.3 fixpoint below.
   // §9.7.10 defines the injection as "as if the target had added those entries
-  // to the END of its own `expression_template_imports`", and a component's own
+  // to the END of its own `operator_imports`", and a component's own
   // imports lower a rewrite-target inside a component it mounts — so the
   // fixpoint has to see the mounted content or the two halves of that sentence
   // disagree (issue #311).
@@ -790,7 +791,7 @@ function resolveRefDocument(
   // never bound. An explicit edge `binding` overrides the backfill.
   // `resolveTemplateMachinery` returns null when the document carries no
   // §9.7 machinery (and rejects non-empty bindings against such a document
-  // with `template_import_unknown_name`).
+  // with `operator_import_unknown_name`).
   //
   // `mountedLeaf: true` — this IS a §4.7 mount edge. The leaf resolves in its
   // own scope, but its `index_sets` then merge into the MOUNTING document's
@@ -874,7 +875,7 @@ const NO_MOUNT_META: MountMeta = { api: {}, forwarded: {} }
  * closes here and goes no further — overridden by (b) this edge's own
  * `bindings` whose name the leaf does not declare but a document in its mount
  * tree does. A name neither the leaf nor its mount tree declares is left to the
- * leaf's site-4 check, which reports it as `template_import_unknown_name`.
+ * leaf's site-4 check, which reports it as `operator_import_unknown_name`.
  *
  * The mount tree is read only when (b) can be non-empty, i.e. when the edge
  * binds a name the leaf does not declare, so an ordinary mount pays no extra
@@ -1044,7 +1045,7 @@ function mountFormBlock(mountForm: MountForm): string {
 interface RefEdge {
   ref?: string
   bindings?: unknown
-  expression_template_imports?: unknown
+  operator_imports?: unknown
   /** esm-spec §4.7 "Mount-edge index-set renaming" — index-set name → importer-visible name. */
   index_set_rename?: unknown
   /** esm-spec §4.7 "Binding a data source's location at the mount" — placeholder → text. */
@@ -1680,11 +1681,11 @@ function componentsWithSubsystemRefs(file: EsmFile): Set<string> {
  * WHY THE REWRITE PASS. In this binding `loadPath` / `loadString` do not
  * resolve `{ ref }` mounts — `resolveSubsystemRefs` is a separate entry point,
  * run after the load has already lowered the document — so a rule a component
- * declares in its own `expression_template_imports` never reached a
+ * declares in its own `operator_imports` never reached a
  * rewrite-target inside a component it mounts. That is issue #311's CONTROL
  * case, and §9.7.10 defines the mount-edge injection by reference to it ("as if
  * the target had added those entries to the end of its own
- * `expression_template_imports`"), so the two must agree.
+ * `operator_imports`"), so the two must agree.
  *
  * SAFE TO REPEAT. Only components recorded as mounting a `{ ref }` before
  * resolution are touched, and the pass is a fixpoint: content the load already
@@ -1709,27 +1710,28 @@ function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<stri
     const snapshot = sidecars.componentTemplates?.[key]
     const own = isPlainObject(snapshot)
       ? snapshot
-      : isPlainObject(comp.expression_templates)
-        ? comp.expression_templates
+      : isPlainObject(comp.operators)
+        ? comp.operators
         : undefined
     const work: Record<string, unknown> = { ...comp }
-    if (own !== undefined) work.expression_templates = deepClone(own)
-    else delete work.expression_templates
+    if (own !== undefined) work.operators = deepClone(own)
+    else delete work.operators
     // The component's `match` rules fire on the content it mounts as on its
     // own (esm-spec §9.6.3), including a rule its own content already
     // referenced, which the snapshot holds materialized match-less.
     const rules = sidecars.componentRules?.[key]
     const rulesRestored = rules !== undefined && Object.keys(rules).length > 0
     if (rulesRestored) {
-      work.expression_templates = {
-        ...(isPlainObject(work.expression_templates) ? work.expression_templates : {}),
+      work.operators = {
+        ...(isPlainObject(work.operators) ? work.operators : {}),
         ...deepClone(rules),
       }
     }
-    const rn = hoistMountedTemplates(work, name)
-    const block = work.expression_templates
+    const owners = new Map<string, Set<string>>()
+    const rn = hoistMountedTemplates(work, name, owners)
+    const block = work.operators
     if (!isPlainObject(block) || Object.keys(block).length === 0) {
-      delete comp.expression_templates
+      delete comp.operators
       continue
     }
     // A one-component document carrying just what the rewrite pass consults: the
@@ -1741,7 +1743,7 @@ function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<stri
       index_sets: root.index_sets,
       [section]: { [name]: work },
     }
-    const lowered = lowerExpressionTemplates(single)
+    const lowered = lowerExpressionTemplates(single, { owners: new Map([[key, owners]]) })
     // The registry the component now carries, when mounted definitions joined
     // it (or it is a top-level mount, whose block the load never captured).
     if (rn !== undefined || rulesRestored || !isPlainObject(snapshot)) {
@@ -1759,7 +1761,7 @@ function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<stri
     const expanded = expandDocument(lowered) as Record<string, unknown>
     const out = (expanded[section] as Record<string, unknown> | undefined)?.[name]
     if (isPlainObject(out)) {
-      delete out.expression_templates
+      delete out.operators
       comps[name] = out
     }
   }
@@ -1778,7 +1780,7 @@ function registrySnapshot(
   roots: readonly string[],
 ): Record<string, unknown> {
   const { block } = materializeComponentBlock(comp, authored, roots)
-  const own = comp.expression_templates
+  const own = comp.operators
   if (isPlainObject(own)) {
     for (const [n, d] of Object.entries(own)) {
       if (n in block) continue
@@ -1800,8 +1802,15 @@ function setComponentTemplates(file: EsmFile, key: string, block: Record<string,
       configurable: true,
     })
   }
-  if (Object.keys(block).length === 0) delete holder.componentTemplates![key]
-  else holder.componentTemplates![key] = block
+  if (Object.keys(block).length === 0) {
+    delete holder.componentTemplates![key]
+  } else {
+    holder.componentTemplates![key] = block
+    // esm-spec §9.6.4 rule 8, §9.6.5: a component keeping an `operators` block
+    // stamps the document at least 2.4.0, as the load and emit stamp it.
+    const doc = file as unknown as Record<string, unknown>
+    doc.esm = atLeastEmitVersion(doc.esm)
+  }
 }
 
 /**
@@ -2074,7 +2083,7 @@ function resolveReactionSystemRefs(
 /**
  * esm-spec §9.7.10 form C: build a throwaway `EsmFile` in which component
  * `mname` has the run's `imports` (raw §9.7.2 entries) appended to its own
- * `expression_template_imports`, so the ordinary import resolver + §9.6.3
+ * `operator_imports`, so the ordinary import resolver + §9.6.3
  * fixpoint lower its rewrite-targets under the run-chosen discretization. The
  * persisted `file` is never mutated. This is what lets one test/analysis suite
  * exercise a discretization-agnostic PDE leaf under several schemes with no
@@ -2131,7 +2140,7 @@ export async function ephemeralInjectedFile(
     // diagnostic, consistent with the surrounding `EsmMachineryError`
     // convention (message preserved).
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_INJECT_TARGET_UNKNOWN,
+      ERROR_CODES.OPERATOR_INJECT_TARGET_UNKNOWN,
       `component '${mname}' not found for per-run injection (esm-spec §9.7.10)`,
     )
   }

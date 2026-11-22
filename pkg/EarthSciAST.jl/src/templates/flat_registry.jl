@@ -158,7 +158,7 @@ function flatten_template_registries(loaded)
     blocks = OrderedDict{String, Any}()                    # compkey => match-less block
     for (compkind, cname, comp) in _components(root)
         push!(comps, (cname, comp::OrderedDict{String, Any}))
-        tpl = _raw_get(comp, "expression_templates")
+        tpl = _raw_get(comp, "operators")
         _is_object(tpl) || continue
         blocks["$compkind.$cname"] = OrderedDict{String, Any}(
             string(n) => d for (n, d) in pairs(tpl) if _raw_get(d, "match") === nothing
@@ -172,11 +172,11 @@ function flatten_template_registries(loaded)
         rn = get(rename, path, nothing)
         if rn !== nothing
             for k in collect(keys(comp))
-                k == "expression_templates" && continue
+                k == "operators" && continue
                 comp[k] = _rename_apply_refs(comp[k], rn)
             end
         end
-        delete!(comp, "expression_templates")
+        delete!(comp, "operators")
     end
     return (root, merged)
 end

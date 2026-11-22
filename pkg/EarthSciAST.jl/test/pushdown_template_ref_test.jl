@@ -29,7 +29,7 @@ const EA = EarthSciAST
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 _apply(name, bindings) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(bindings)
 )
 function _agg(output_idx, ranges, expr; reduce = nothing, args = String[], extra...)
@@ -138,7 +138,7 @@ end
     @testset "subscripted bindings" begin
         d = base_doc()
         m = d["models"]["Binned"]
-        m["expression_templates"] = Dict{String, Any}(
+        m["operators"] = Dict{String, Any}(
             "bin2" => Dict{String, Any}(
                 "params" => Any["lo_x", "lo_y", "hi_x", "hi_y", "x", "y", "wgt"],
                 "body" => jop(
@@ -166,7 +166,7 @@ end
                 reduce = "+", args = _EARGS
             )
         )
-        tpl_before = deepcopy(m["expression_templates"])
+        tpl_before = deepcopy(m["operators"])
 
         r = EA.desugar_pushdown(d; model_name = "Binned")
         @test r !== d                                            # it fired
@@ -181,11 +181,11 @@ end
         # Option B survives: the SHARED body is not edited, and the producer
         # filter is a reference to the derived template of its containment,
         # read with the full-grid subscripted bindings (never an expanded copy).
-        tpls = r["models"]["Binned"]["expression_templates"]
+        tpls = r["models"]["Binned"]["operators"]
         @test Dict(k => v for (k, v) in tpls if k != "bin2__pd_filter") == tpl_before
         @test tpls["bin2__pd_filter"]["params"] == Any["lo_x", "lo_y", "hi_x", "hi_y", "x", "y"]
         prod = only(eq for eq in r["models"]["Binned"]["equations"] if !(eq["lhs"] isa AbstractString))
-        @test prod["rhs"]["filter"]["op"] == "apply_expression_template"
+        @test prod["rhs"]["filter"]["op"] == "apply_operator"
         @test prod["rhs"]["filter"]["name"] == "bin2__pd_filter"
         @test prod["rhs"]["filter"]["bindings"]["lo_x"] == jidx("src_W", "c")
         @test !haskey(prod["rhs"]["filter"]["bindings"], "wgt")
@@ -201,7 +201,7 @@ end
     @testset "rect factor free in the template body is rejected" begin
         d = base_doc()
         m = d["models"]["Binned"]
-        m["expression_templates"] = Dict{String, Any}(
+        m["operators"] = Dict{String, Any}(
             "bin3" => Dict{String, Any}(
                 "params" => Any["wgt"],
                 "body" => jop("*", jop("ifelse", _contain(), 1.0, 0.0), jidx("wgt", "r"))
@@ -219,7 +219,7 @@ end
             e
         end
         @test err isa EA.ExpressionTemplateError
-        @test err.code == "template_body_references_pushdown_rewritten_variable"
+        @test err.code == "operator_body_references_pushdown_rewritten_variable"
         @test occursin("src_W", err.message)
         @test occursin("E_PM25", err.message)
         @test occursin("Bind the value through the template's params", err.message)
@@ -330,7 +330,7 @@ end
             jop("<=", jidx("xmin", "c"), jidx("ptx", "r")), jop("<", jidx("ptx", "r"), jidx("xmax", "c")),
             jop("<=", jidx("ymin", "c"), jidx("pty", "r")), jop("<", jidx("pty", "r"), jidx("ymax", "c"))
         )
-        m["expression_templates"] = Dict{String, Any}(
+        m["operators"] = Dict{String, Any}(
             "bin_emissions" => Dict{String, Any}(
                 "params" => Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "tot", "frac"],
                 "body" => jop(
@@ -374,9 +374,9 @@ end
             @test haskey(ex, "join")
             @test ex["expr"]["bindings"]["xmin"] == "pd_cell__src_cells__src_W"
         end
-        rt = r["models"]["ISRM"]["expression_templates"]
+        rt = r["models"]["ISRM"]["operators"]
         @test Dict(k => v for (k, v) in rt if k != "bin_emissions__pd_filter") ==
-            Dict(raw["models"]["ISRM"]["expression_templates"])   # body untouched
+            Dict(raw["models"]["ISRM"]["operators"])   # body untouched
         @test rt["bin_emissions__pd_filter"]["params"] ==
             Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty"]
         @test isempty(EA.pushdown_diagnostics(raw; model_name = "ISRM"))

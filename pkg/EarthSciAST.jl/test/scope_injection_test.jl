@@ -48,14 +48,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
         # The leaf loads standalone with its D intact (agnostic; unlowered).
         leaf = EarthSciAST.load_path(conf("inject_subsystem_ref", "leaf.esm"))
-        @test leaf.models["Advection"].equations[1].rhs.args[2].op == "D"
+        @test leaf.models["Advection"].equations[1].rhs.args[2].op == "partial"
 
         # Negative twin: mounting WITHOUT injection loads cleanly (the D
         # survives — the op namespace is open); the unlowered_operator gate is
         # an evaluation-time concern, not a load error.
         ni = EarthSciAST.load_path(conf("inject_subsystem_ref", "no_inject.esm"))
         @test ni.models["Assembly"].subsystems["Runoff"] isa EarthSciAST.Model
-        @test ni.models["Assembly"].subsystems["Runoff"].equations[1].rhs.args[2].op == "D"
+        @test ni.models["Assembly"].subsystems["Runoff"].equations[1].rhs.args[2].op == "partial"
     end
 
     @testset "form A — the injected ref resolves against the mounting directory" begin
@@ -113,7 +113,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test f.models["Emit"].equations[1].lhs.op == "D"
         # The injection map is consumed — form B does not survive parse → emit.
         ser = serialize_esm_file(f)
-        @test !haskey(ser["coupling"][1], "expression_template_imports")
+        @test !haskey(ser["coupling"][1], "operator_imports")
         @test _normj(ser) == _golden(conf("inject_coupling_entry", "expanded.esm"))
 
         # Diagnostics.
@@ -122,7 +122,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 conf("inject_coupling_entry", "neg_target_unknown.esm")
             )
         ) ==
-            "template_inject_target_unknown"
+            "operator_inject_target_unknown"
         # esm 1.0.0 retires `template_inject_target_is_loader`: a data source is
         # not a component, so it cannot be referenced by a coupling entry at all
         # and a key naming one is reported as `template_inject_target_unknown`
@@ -134,8 +134,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             )
         ) in
             (
-            "template_inject_target_not_component",
-            "template_inject_target_unknown",
+            "operator_inject_target_not_component",
+            "operator_inject_target_unknown",
         )
     end
 
@@ -144,7 +144,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         adv = f.models["Advection"]
         # The enclosing component round-trips with its D INTACT (form C does not
         # lower it at load) and each test keeps its import field (survives emit).
-        @test adv.equations[1].rhs.args[2].op == "D"
+        @test adv.equations[1].rhs.args[2].op == "partial"
         @test length(adv.tests) == 2
         @test all(!isempty(t.expression_template_imports) for t in adv.tests)
         @test _normj(serialize_esm_file(f)) ==
@@ -169,6 +169,6 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test e1.index_sets["lon"].size == 288
         @test e2.index_sets["lon"].size == 144
         # The persisted file is untouched by the ephemeral builds.
-        @test f.models["Advection"].equations[1].rhs.args[2].op == "D"
+        @test f.models["Advection"].equations[1].rhs.args[2].op == "partial"
     end
 end

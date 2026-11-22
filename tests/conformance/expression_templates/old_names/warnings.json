@@ -1,0 +1,7 @@
+{
+  "warnings": [
+    "deprecated_field",
+    "deprecated_op"
+  ],
+  "description": "Loading fixture.esm warns deprecated_field (expression_templates, expression_template_imports, in the document and in lib_old.esm) and deprecated_op (apply_expression_template, the spatial D in the equation and in the match, and δ). Loading new_names.esm warns neither."
+}

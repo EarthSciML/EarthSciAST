@@ -139,11 +139,11 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     expect(json.includes('SourceModel')).toBe(true)
     expect(json.includes('SinkModel')).toBe(true)
 
-    // variable_map: from/to and the apply_expression_template bindings VALUES.
+    // variable_map: from/to and the apply_operator bindings VALUES.
     const vm = expanded.find((e) => e.type === 'variable_map')
     expect(vm.from).toBe('SourceModel.sigma')
     expect(vm.to).toBe('SinkModel.sigma')
-    expect(vm.transform.op).toBe('apply_expression_template')
+    expect(vm.transform.op).toBe('apply_operator')
     expect(vm.transform.bindings.src).toBe('SourceModel.sigma')
     expect(vm.transform.bindings.weights).toBe('SinkModel.w_regrid')
 
@@ -289,10 +289,10 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     )
   })
 
-  it('template import targeting a coupling library -> template_import_is_coupling_library', () => {
+  it('template import targeting a coupling library -> operator_import_is_coupling_library', () => {
     const p = cl('template_import_to_library.esm')
     expect(errCode(() => loadString(readText(p), { basePath: path.dirname(p) }))).toBe(
-      'template_import_is_coupling_library',
+      'operator_import_is_coupling_library',
     )
   })
 

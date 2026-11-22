@@ -1,0 +1,24 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "new_names_lib",
+    "description": "The same library written with the esm 2.4 spellings.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "operators": {
+    "halve": {
+      "params": [
+        "a"
+      ],
+      "body": {
+        "op": "/",
+        "args": [
+          "a",
+          2
+        ]
+      }
+    }
+  }
+}

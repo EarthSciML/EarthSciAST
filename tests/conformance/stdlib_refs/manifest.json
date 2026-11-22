@@ -45,35 +45,35 @@
       "id": "import_unknown_file",
       "fixture": "import_unknown_file.esm",
       "expect": "error",
-      "code": "template_import_unresolved",
+      "code": "operator_import_unresolved",
       "driver": "load"
     },
     {
       "id": "import_other_namespace",
       "fixture": "import_other_namespace.esm",
       "expect": "error",
-      "code": "template_import_unresolved",
+      "code": "operator_import_unresolved",
       "driver": "load"
     },
     {
       "id": "import_no_namespace",
       "fixture": "import_no_namespace.esm",
       "expect": "error",
-      "code": "template_import_unresolved",
+      "code": "operator_import_unresolved",
       "driver": "load"
     },
     {
       "id": "import_parent_segment",
       "fixture": "import_parent_segment.esm",
       "expect": "error",
-      "code": "template_import_unresolved",
+      "code": "operator_import_unresolved",
       "driver": "load"
     },
     {
       "id": "import_env_not_expanded",
       "fixture": "import_env_not_expanded.esm",
       "expect": "error",
-      "code": "template_import_unresolved",
+      "code": "operator_import_unresolved",
       "driver": "load",
       "env": {
         "ESM_STDLIB_TEST_NAME": "interp.esm"

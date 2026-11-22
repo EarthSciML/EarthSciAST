@@ -50,7 +50,7 @@ def _emit(dir_: str, fixture: str = "fixture.esm") -> str:
 
 
 def _isapply(x) -> bool:
-    return isinstance(x, dict) and x.get("op") == "apply_expression_template"
+    return isinstance(x, dict) and x.get("op") == "apply_operator"
 
 
 def _defining(doc: dict, model: str, var: str):
@@ -210,7 +210,7 @@ def test_template_instance_variants_repoint_call_sites():
     m = _load("template_instance_variants")["models"]["m"]
     assert _defining({"models": {"m": m}}, "m", "du")["name"] == "ddx.variant1"
     assert _defining({"models": {"m": m}}, "m", "dv")["name"] == "ddx.variant2"
-    assert m["expression_templates"]["ddx.variant1"]["body"]["name"] == "central_1d"
+    assert m["operators"]["ddx.variant1"]["body"]["name"] == "central_1d"
 
 
 def test_canonical_compact_numbers_follow_5_5_3_1():
@@ -273,15 +273,14 @@ def test_emit_materialized_registry():
     assert s == open(_conf("emit_materialized_registry", "emitted.esm"), encoding="utf-8").read()
     doc = json.loads(s)
     adv = doc["models"]["Advection"]
-    # Rule 8 version stamp: emitting a surviving reference requires Option B,
-    # i.e. `esm >= 0.9.0`. It is a FLOOR, not an assignment (§9.6.4 rule 8:
-    # "0.9.0 OR LATER") — the source keeps its own version rather than being
-    # stamped up to whatever the library currently implements, or down to an
-    # unloadable 0.9.0. This fixture is 1.1.0: its imported rules lower to
-    # `faq`, which requires 1.1.0.
-    assert doc["esm"] == "1.1.0"
-    assert "expression_template_imports" not in adv  # imports consumed
-    reg = adv["expression_templates"]
+    # Rule 8 version stamp: an emitted `operators` block or surviving reference
+    # is written with the esm-2.4.0 names, so the document declares `esm >=
+    # 2.4.0` (esm-spec §9.6.5, §9.6.12). It is a FLOOR, not an assignment: a
+    # source already at or above it keeps its own version. This fixture
+    # declares 1.1.0, below the floor.
+    assert doc["esm"] == "2.4.0"
+    assert "operator_imports" not in adv  # imports consumed
+    reg = adv["operators"]
     # The firing wrote a reference to its rule, which materializes match-less
     # (esm-spec §9.6.3 constraint 7, §9.6.4 rule 5).
     assert set(reg.keys()) == {
@@ -306,7 +305,7 @@ def test_emit_rename_dotted_keys():
     s = _emit("emit_rename_dotted_keys")
     assert s == open(_conf("emit_rename_dotted_keys", "emitted.esm"), encoding="utf-8").read()
     doc = json.loads(s)
-    reg = doc["models"]["TwoGrids"]["expression_templates"]
+    reg = doc["models"]["TwoGrids"]["operators"]
     assert set(reg.keys()) == {
         "fine.dx",
         "coarse.dx",
@@ -326,9 +325,9 @@ def test_rewrite_in_template_body():
     m = loaded["models"]["m"]
     deager = _defining(loaded, "m", "d_eager")
     assert _isapply(deager["args"][0]) and deager["args"][0]["name"] == "deriv_c"
-    body = m["expression_templates"]["deriv_c"]["body"]
+    body = m["operators"]["deriv_c"]["body"]
     assert _isapply(body) and body["name"] == "central" and body["bindings"] == {"f": "f"}
-    assert "match" not in m["expression_templates"]["central"]
+    assert "match" not in m["operators"]["central"]
     dsurv = _defining(loaded, "m", "d_survive")
     assert _isapply(dsurv["args"][0]) and dsurv["args"][0]["name"] == "scale_c"
     assert (
@@ -344,7 +343,9 @@ def test_rewrite_in_template_body():
 def test_opacity_negative():
     loaded = _load("opacity_negative")
     flux = _defining(loaded, "m", "flux")
-    assert flux["op"] == "D"  # compound did NOT fire (no marker 999)
+    assert (
+        flux["op"] == "partial"
+    )  # spatial D read as partial; compound did NOT fire (no marker 999)
     assert _isapply(flux["args"][0])  # its arg is the surviving reference
     assert flux["args"][0]["name"] == "flux_prod"
     assert (
@@ -365,7 +366,7 @@ def test_opacity_priority_shadowing():
     # constraint 7), binding the surviving reference WHOLE.
     assert _isapply(flux) and flux["name"] == "generic"
     assert _isapply(flux["bindings"]["f"]) and flux["bindings"]["f"]["name"] == "flux_prod"
-    generic = loaded["models"]["m"]["expression_templates"]["generic"]
+    generic = loaded["models"]["m"]["operators"]["generic"]
     assert generic["body"]["args"][0] == 1  # generic marker (NOT compound 999)
     assert (
         _emit("opacity_priority_shadowing")
@@ -387,8 +388,8 @@ def test_flatten_registry_merge():
     assert _defining(root, "A", "ya")["name"] == "sten"
     assert _defining(root, "B", "yb")["name"] == "sten"
     # per-component blocks surrendered to the merged registry
-    assert "expression_templates" not in root["models"]["A"]
-    assert "expression_templates" not in root["models"]["B"]
+    assert "operators" not in root["models"]["A"]
+    assert "operators" not in root["models"]["B"]
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +398,7 @@ def test_flatten_registry_merge():
 # per model (B rebinds its free `inv_dx`) and collides; the byte-identical
 # `outer_stencil` that REFERENCES it must collide too — a single deduped
 # `outer_stencil` would carry a reference the merged registry no longer holds,
-# and expansion would fail with `apply_expression_template_unknown_template`
+# and expansion would fail with `operator_unknown_definition`
 # naming a transitively imported stencil no model ever mentioned.
 # ---------------------------------------------------------------------------
 def test_flatten_registry_merge_transitive_collisions_propagate():

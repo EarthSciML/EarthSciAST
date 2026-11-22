@@ -1748,6 +1748,32 @@ function _derivative_rule(expr, var_units, findings)
     return var_dim / wrt_dim
 end
 
+# `partial(f, b…; wrt: x)` has the unit `[f]/[x]` (esm-spec §4.2); trailing
+# operands never enter it. `integral(f; var: v, …)` has `[f]·[v]`. A coordinate
+# with no declared unit makes the result undeterminable.
+function _axis_unit(var_units, axis)
+    axis isa AbstractString || return nothing
+    haskey(var_units, axis) || return nothing
+    return _absolute_unit(parse_units(var_units[axis]))
+end
+function _partial_rule(expr, var_units, findings)
+    isempty(expr.args) && return nothing
+    f = _expr_dimensions!(findings, expr.args[1], var_units)
+    for a in expr.args[2:end]
+        _expr_dimensions!(findings, a, var_units)
+    end
+    w = _axis_unit(var_units, expr.wrt)
+    (f === nothing || w === nothing) && return nothing
+    return f / w
+end
+function _integral_rule(expr, var_units, findings)
+    isempty(expr.args) && return nothing
+    f = _expr_dimensions!(findings, expr.args[1], var_units)
+    v = _axis_unit(var_units, expr.int_var)
+    (f === nothing || v === nothing) && return nothing
+    return f * v
+end
+
 # The five dimensional-rule op classes, DERIVED from the op registry's
 # `dim_class` column (src/op_registry.jl, `_ops_with_dim_class`); memberships
 # are pinned literal-for-literal by test/op_registry_test.jl.
@@ -1815,6 +1841,11 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
         # and scale (esm-spec §4.8.3) — under either literal rule.
         "ic" => _preserve_dimension_rule,
         "D" => _derivative_rule,
+        # esm 2.4.0 (esm-spec §4.2): the fixed unit expressions of the defined
+        # operators `partial` ([f]/[wrt]) and `integral` ([f]·[var]), which hold
+        # resolved or not.
+        "partial" => _partial_rule,
+        "integral" => _integral_rule,
         # A `const` that DECLARES its units has that unit (esm-spec §4.8.5).
         "const" => _const_units_rule,
     )
@@ -2085,11 +2116,148 @@ function _tpl_call_unit!(findings, call::OpExpr, var_units)
             push!(findings, x)
         end
     end
+    # esm 2.4.0 (esm-spec §4.8.3, §9.6.12): a call's unit is its definition's
+    # unit expression, evaluated from the bindings' units without evaluating the
+    # body; the body's unit is checked against it.
+    u = _definition_call_unit!(findings, call, fr, args, u, var_units)
     # An element call's subscripts, walked as `index` walks them.
     for s in _tpl_out_bindings(call)
         _expr_dimensions!(findings, s, var_units)
     end
     return u
+end
+
+# The raw registry entry a reference names, or `nothing`.
+function _tpl_decl(sc, name)
+    reg = sc.tt.reg
+    (reg === nothing || !(name isa AbstractString) || !haskey(reg, name)) && return nothing
+    return reg[name]
+end
+
+# The unit a definition parameter stands for at one call (esm-spec §9.6.1
+# `units`): the unit of what the call binds to it — an operand's unit, or, for a
+# parameter in a structural position bound to an axis name, that coordinate's.
+function _param_unit(p::String, call::OpExpr, args, var_units)
+    a = get(args, _TPL_ARG * p, nothing)
+    a === nothing || return a[1]
+    b = call.bindings === nothing ? nothing : get(call.bindings, p, nothing)
+    b isa VarExpr || return nothing
+    haskey(var_units, b.name) || return nothing
+    return _absolute_unit(parse_units(var_units[b.name]))
+end
+
+# Evaluate a unit expression (raw JSON over params, names, unit-bearing `const`,
+# `*`, `/`, `^` with a constant exponent). `nothing` when undeterminable.
+function _eval_unit_expr(x, params::Set{String}, punit, var_units)
+    if x isa AbstractString
+        s = String(x)
+        s in params && return punit(s)
+        haskey(var_units, s) || return nothing
+        return _absolute_unit(parse_units(var_units[s]))
+    elseif x isa Number && !(x isa Bool)
+        return Unitful.NoUnits
+    elseif _is_object(x)
+        op = _raw_get(x, "op")
+        args = _raw_get(x, "args")
+        if op == "const"
+            us = _raw_get(x, "units")
+            return us isa AbstractString ? _absolute_unit(parse_units(us)) : Unitful.NoUnits
+        end
+        (args !== nothing && _is_array(args)) || return nothing
+        if op == "*" || op == "/"
+            vals = Any[_eval_unit_expr(a, params, punit, var_units) for a in args]
+            any(v -> v === nothing, vals) && return nothing
+            isempty(vals) && return nothing
+            op == "*" && return reduce(*, vals)
+            length(vals) == 2 || return nothing
+            return vals[1] / vals[2]
+        elseif op == "^" && length(args) == 2
+            b = _eval_unit_expr(args[1], params, punit, var_units)
+            e = args[2]
+            (b === nothing || !(e isa Number) || e isa Bool) && return nothing
+            return b^(e isa Integer ? Int(e) : rationalize(Float64(e)))
+        end
+    end
+    return nothing
+end
+
+# The fixed unit expression of `partial` / `integral` (esm-spec §4.2) a
+# definition of either must agree with, read off its `match` pattern: the
+# pattern's operand over (or times) its axis field. A rule a firing
+# materialized has lost its `match` and carries the expression it gave instead
+# (`_match_stripped`).
+function _fixed_unit_expr(decl)
+    kept = _raw_get(decl, _FIXED_UNITS_KEY)
+    kept === nothing || return kept
+    m = _raw_get(decl, "match")
+    (m !== nothing && _is_object(m)) || return nothing
+    op = _raw_get(m, "op")
+    args = _raw_get(m, "args")
+    (args !== nothing && _is_array(args) && !isempty(args)) || return nothing
+    if op == "partial"
+        w = _raw_get(m, "wrt")
+        w === nothing && return nothing
+        return OrderedDict{String, Any}("op" => "/", "args" => Any[args[1], w])
+    elseif op == "integral"
+        v = _raw_get(m, "var")
+        v === nothing && return nothing
+        return OrderedDict{String, Any}("op" => "*", "args" => Any[args[1], v])
+    end
+    return nothing
+end
+
+# The prefix of a `definition_unit_mismatch` WARNING carried through a findings
+# list (esm-spec §9.6.12: the body's unit is undeterminable). Every reader of a
+# findings list sorts these out (`_split_unit_warnings`); they never count as
+# a provable inconsistency.
+const _DEFINITION_UNIT_WARNING = "definition_unit_mismatch (warning)"
+_is_unit_warning(m) = m isa AbstractString && startswith(m, _DEFINITION_UNIT_WARNING)
+
+# A call's unit (esm-spec §9.6.12 "Units"): the definition's unit expression when
+# it has one, else the body's unit `body_u`; a disagreement between them, or
+# with the fixed expression of `partial` / `integral`, is
+# `definition_unit_mismatch` — an error when the body's unit is determinable, a
+# warning when it is not.
+function _definition_call_unit!(findings, call::OpExpr, fr, args, body_u, var_units)
+    sc = _tpl_unit_scope(var_units)
+    decl = _tpl_decl(sc, call.name)
+    decl === nothing && return body_u
+    uexpr = _raw_get(decl, "units")
+    fixed = _fixed_unit_expr(decl)
+    (uexpr === nothing && fixed === nothing) && return body_u
+    params = Set{String}(_TemplateDecl(decl).params)
+    punit = p -> _param_unit(p, call, args, var_units)
+    declared = uexpr === nothing ? nothing : _eval_unit_expr(uexpr, params, punit, var_units)
+    fixed_u = fixed === nothing ? nothing : _eval_unit_expr(fixed, params, punit, var_units)
+    call_u = uexpr !== nothing ? declared : body_u
+    for (what, want) in (("its unit expression", declared), ("the fixed unit expression of '$(_raw_get(decl, "defines"))'", fixed_u))
+        want === nothing && continue
+        if body_u === nothing
+            push!(
+                findings,
+                "$(_DEFINITION_UNIT_WARNING): the body of definition '$(call.name)' has an " *
+                    "undeterminable unit, so it cannot be checked against $what " *
+                    "('$(_ustr(want))') (esm-spec §9.6.12)"
+            )
+        elseif !_same_unit(body_u, want)
+            push!(
+                findings,
+                "definition_unit_mismatch: the body of definition '$(call.name)' has unit " *
+                    "'$(_ustr(body_u))', but $what gives '$(_ustr(want))' (esm-spec §9.6.12)"
+            )
+        end
+    end
+    # A unit expression must itself agree with the fixed one of partial/integral.
+    if declared !== nothing && fixed_u !== nothing && !_same_unit(declared, fixed_u)
+        push!(
+            findings,
+            "definition_unit_mismatch: the unit expression of definition '$(call.name)' " *
+                "gives '$(_ustr(declared))', but the fixed unit expression of " *
+                "'$(_raw_get(decl, "defines"))' gives '$(_ustr(fixed_u))' (esm-spec §4.2)"
+        )
+    end
+    call_u === nothing || return call_u
+    return fixed_u === nothing ? body_u : fixed_u
 end
 
 # The engine proper. Returns the expression's dimension, or `nothing` when it
@@ -2179,7 +2347,7 @@ function expression_unit_findings(
     )::Vector{String}
     findings = String[]
     _expr_dimensions!(findings, expr, _with_literal_rule(var_units, dimensionless_literals))
-    return findings
+    return filter!(!_is_unit_warning, findings)
 end
 
 """
@@ -2301,7 +2469,7 @@ end
 # anywhere in the site, internal or between the sides.
 function _site_findings(lhs, rhs, var_units)::Vector{String}
     internal, comparison = _site_check(lhs, rhs, var_units)
-    return vcat(internal, comparison)
+    return filter(!_is_unit_warning, vcat(internal, comparison))
 end
 
 # The operand `x` when `lhs` is `D(x)` taken with respect to an independent
@@ -2360,6 +2528,12 @@ The [`UnitFinding`](@ref) `code` for a PROVABLE dimensional inconsistency
 [`validate`](@ref).
 """
 const UNIT_DIMENSION_MISMATCH = ERROR_CODES.UNIT_INCONSISTENCY
+
+# A finding the definition-unit check made (esm-spec §9.6.12) carries its own
+# code, `definition_unit_mismatch`; every other is `unit_inconsistency`.
+_unit_finding_code(msg::AbstractString) =
+    startswith(msg, "definition_unit_mismatch:") ? ERROR_CODES.DEFINITION_UNIT_MISMATCH :
+    UNIT_DIMENSION_MISMATCH
 
 """
     UNIT_PARSE_ERROR::String
@@ -2545,6 +2719,11 @@ end
 function _unit_site!(errors, warnings, c, pointer, p, kind, lhs, rhs, env)
     internal, comparison = _site_check(lhs, rhs, env)
     sub = _unit_site_subpath(p, kind)
+    # esm-spec §9.6.12: an undeterminable definition body is a warning.
+    for m in unique(filter(_is_unit_warning, internal))
+        push!(warnings, UnitFinding(sub, string(pointer, "/", sub, ": ", m), ERROR_CODES.DEFINITION_UNIT_MISMATCH))
+    end
+    filter!(!_is_unit_warning, internal)
     if !(isempty(internal) && isempty(comparison))
         if kind === :equation_rhs && c isa Model && lhs isa VarExpr &&
                 haskey(c.variables, lhs.name)
@@ -2553,18 +2732,18 @@ function _unit_site!(errors, warnings, c, pointer, p, kind, lhs, rhs, env)
                 push!(
                     errors, UnitFinding(
                         _pointer("variables", name), "$msg (variable '$name')",
-                        UNIT_DIMENSION_MISMATCH
+                        _unit_finding_code(msg)
                     )
                 )
             end
         elseif kind === :update_when || kind === :update_expression
             field = kind === :update_when ? "when" : "expression"
             for msg in internal
-                push!(errors, UnitFinding(sub, "$msg ($(_update_site_label(c, p)), field '$field')", UNIT_DIMENSION_MISMATCH))
+                push!(errors, UnitFinding(sub, "$msg ($(_update_site_label(c, p)), field '$field')", _unit_finding_code(msg)))
             end
         else
             for msg in vcat(internal, comparison)
-                push!(errors, UnitFinding(sub, msg, UNIT_DIMENSION_MISMATCH))
+                push!(errors, UnitFinding(sub, msg, _unit_finding_code(msg)))
             end
         end
         return

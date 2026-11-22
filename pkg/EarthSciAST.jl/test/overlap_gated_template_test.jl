@@ -53,7 +53,7 @@ function _binning_data(nx, nrec)
 end
 
 _area(nv) = _d(
-    "op" => "apply_expression_template", "args" => Any[], "name" => "overlap_area_planar",
+    "op" => "apply_operator", "args" => Any[], "name" => "overlap_area_planar",
     "bindings" => _d(
         "ring_a" => "pring", "cell_a" => "r", "nv_a" => nv,
         "ring_b" => "cring", "cell_b" => "c", "nv_b" => nv
@@ -122,7 +122,7 @@ function _binning_doc(nx, nrec; expr = _area(4), rhs = false)
         "models" => _d(
             "M" => _d(
                 "variables" => vars, "equations" => Any[eq],
-                "expression_template_imports" => Any[
+                "operator_imports" => Any[
                     _d("ref" => "esm:std/geometry.esm", "only" => Any["overlap_area_planar"]),
                 ]
             )

@@ -75,7 +75,7 @@ describe('metaparameter-expression helpers (§9.7.6)', () => {
     [{ op: '*', args: [] }, {}, 'metaparameter_type_error'],
     [1.5, {}, 'metaparameter_type_error'],
     // Unknown free name is caught at fold time.
-    [{ op: '*', args: ['NZ', 'NY'] }, { NX: 18, NY: 20 }, 'template_import_unknown_name'],
+    [{ op: '*', args: ['NZ', 'NY'] }, { NX: 18, NY: 20 }, 'operator_import_unknown_name'],
     // Inexact division is rejected.
     [{ op: '/', args: ['NX', 7] }, { NX: 18 }, 'metaparameter_type_error'],
   ] as [unknown, Record<string, number>, string][])(
@@ -101,7 +101,7 @@ function libGrid() {
     metadata: { name: 'lib_grid' },
     metaparameters: { GX: { type: 'integer', default: 2 } },
     index_sets: { cells: { kind: 'interval', size: 'GX' } },
-    expression_templates: {
+    operators: {
       one: { params: [], body: { op: 'const', value: 1, args: [] } },
     },
   }
@@ -117,7 +117,7 @@ function modelImporting(binding: unknown) {
     },
     models: {
       M: {
-        expression_template_imports: [{ ref: './lib_grid.esm', bindings: { GX: binding } }],
+        operator_imports: [{ ref: './lib_grid.esm', bindings: { GX: binding } }],
         variables: { a: { type: 'parameter', shape: ['cells'], default: 0.0 } },
         equations: [],
       },
@@ -235,6 +235,6 @@ describe('subsystem-edge metaparameter-expression bindings (§9.7.6 site 3)', ()
       const f = loadParent(doc, { NX: 18 })
       await resolveSubsystemRefs(f, dir)
     })
-    expect(code).toBe('template_import_unknown_name')
+    expect(code).toBe('operator_import_unknown_name')
   })
 })

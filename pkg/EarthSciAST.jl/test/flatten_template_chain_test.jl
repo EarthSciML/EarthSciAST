@@ -12,7 +12,7 @@ using EarthSciAST
 const _CHAIN_DEPTH = EarthSciAST.MAX_TEMPLATE_EXPANSION_DEPTH
 
 _chain_ref(n) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => n,
+    "op" => "apply_operator", "args" => Any[], "name" => n,
     "bindings" => Dict{String, Any}()
 )
 _chain_plus(a, b) = Dict{String, Any}("op" => "+", "args" => Any[a, b])
@@ -44,7 +44,7 @@ function _chain_document(depth; observed = false, shaped = false)
     doc = Dict{String, Any}(
         "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "template_chain"),
         "models" => Dict{String, Any}(
-            "M" => Dict{String, Any}("variables" => vars, "expression_templates" => ts, "equations" => eqs)
+            "M" => Dict{String, Any}("variables" => vars, "operators" => ts, "equations" => eqs)
         )
     )
     if shaped
@@ -97,7 +97,7 @@ _equation(flat, name) = only(eq for eq in flat.equations if eq.lhs isa EarthSciA
         # The references survive flatten (esm-spec §9.6.4), with every template.
         eq = only(flat.equations)
         @test eq.rhs isa EarthSciAST.OpExpr && eq.rhs.op == "+"
-        @test all(a -> a isa EarthSciAST.OpExpr && a.op == "apply_expression_template" && a.name == "shared_1", eq.rhs.args)
+        @test all(a -> a isa EarthSciAST.OpExpr && a.op == "apply_operator" && a.name == "shared_1", eq.rhs.args)
         @test length(flat.template_registry) == _CHAIN_DEPTH
     end
 
@@ -107,7 +107,7 @@ _equation(flat, name) = only(eq for eq in flat.equations if eq.lhs isa EarthSciA
         @test t < 10
         # A scalar chain applies nothing elementwise: `y` is left as written.
         rhs = _equation(flat, "M.y").rhs
-        @test rhs.op == "+" && all(a -> a.op == "apply_expression_template", rhs.args)
+        @test rhs.op == "+" && all(a -> a.op == "apply_operator", rhs.args)
     end
 
     @testset "an elementwise application, lifted" begin

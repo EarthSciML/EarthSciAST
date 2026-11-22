@@ -15,7 +15,7 @@ loosest first (spec §4.1.1, `Notation.precedence`):
 | 3 | a comparison |
 | 4 | `+` chain, binary `-` |
 | 5 | `*` chain (juxtaposition, `\cdot` before a factor that starts with a digit or sign), unary `-` |
-| 6 | `not`; a derivative applied to a parenthesized operand |
+| 6 | `not`; a derivative applied to a parenthesized operand; a `\nabla` form (its operand at level 9) |
 | 7 | Typst fraction `a/b` and Typst `(dif N)/(dif t)`; a negative literal and a quantity (as the base of a power or an index they are parenthesized, and as a Typst fraction operand) |
 | 8 | power |
 | 9 | index (subscript or brackets) |
@@ -242,7 +242,7 @@ def coreOps : List String :=
   "asinh", "acosh", "atanh", "atan2", "min", "max",
   "D", "ic", "Pre", "enum", "const",
   "faq", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
-  "apply_expression_template"]
+  "apply_operator"]
 
 /-- A name `\operatorname{…}` can carry: identifier characters and dots. -/
 def opnOK (s : String) : Bool :=
@@ -398,10 +398,16 @@ theorem fields_lt {kv : String × Json} {kvs : List (String × Json)} (h : kv �
 theorem snd_lt (kv : String × Json) : sizeOf kv.2 < sizeOf kv := by
   obtain ⟨k, v⟩ := kv; simp only [Prod.mk.sizeOf_spec]; omega
 
+/-- The four defined operators with a `\nabla` form (spec §1.2): `grad`, `div`,
+`laplacian`, `curl`. -/
+inductive NabK where
+  | grad | div | lap | curl
+  deriving DecidableEq
+
 /-- How a plain node (`op` and `args` only) prints, by its operator. -/
 inductive OpK where
   | minus | div | pow | lnot | tru | fls | ite | ic | index
-  | cmp (k : Kw) | un (k : Kw) | plus | times | land | lor | mm (k : Kw) | call | other
+  | cmp (k : Kw) | un (k : Kw) | plus | times | land | lor | mm (k : Kw) | nab (n : NabK) | call | other
   deriving DecidableEq
 
 /-- Unary functions with a native spelling: their keyword (`log10` is `\log_{10}`). -/
@@ -412,7 +418,8 @@ def unKw : List (String × Kw) :=
 def kindTable : List (String × OpK) :=
   [("-", .minus), ("/", .div), ("^", .pow), ("not", .lnot), ("true", .tru), ("false", .fls),
     ("ifelse", .ite), ("ic", .ic), ("index", .index), ("+", .plus), ("*", .times),
-    ("and", .land), ("or", .lor), ("min", .mm .min), ("max", .mm .max)]
+    ("and", .land), ("or", .lor), ("min", .mm .min), ("max", .mm .max),
+    ("grad", .nab .grad), ("div", .nab .div), ("laplacian", .nab .lap), ("curl", .nab .curl)]
 
 def kindOf (o : String) : OpK :=
   match cmpKw.lookup o, unKw.lookup o, kindTable.lookup o with
@@ -575,11 +582,46 @@ def dSpace (sf : Sf) (w : List Tok) (a : Out) : Out :=
     else
       mkOut sf 6 ([.kw .lpg, .kw .pdiff, .kw .rp, .kw .slash, .kw .lpg, .kw .pdiff] ++ w ++ [.kw .rp] ++ grp sf (a.at sf 1))
 
-/-- A spatial derivative with trailing operands: `\operatorname{D}_{x}(u, a, b)`. -/
+/-- `partial` with trailing operands: `\partial_{x}(u, a, b)` / `partial_(x)(u, a, b)`. -/
 def dCall (sf : Sf) (w : List Tok) (args : List (List Tok)) : List Tok :=
   match sf with
-  | .latex => [.opn "D", .kw .us, .kw .lb] ++ w ++ [.kw .rb] ++ callToks sf [] args
-  | .typst => [.opn "D", .kw .us, .kw .lpg] ++ w ++ [.kw .rp] ++ callToks sf [] args
+  | .latex => [.kw .pdiff, .kw .us, .kw .lb] ++ w ++ [.kw .rb] ++ callToks sf [] args
+  | .typst => [.kw .pdiff, .kw .us, .kw .lpg] ++ w ++ [.kw .rp] ++ callToks sf [] args
+
+/-- The operator a `\nabla` form stands for. -/
+def nabName : NabK → String
+  | .grad => "grad"
+  | .div => "div"
+  | .lap => "laplacian"
+  | .curl => "curl"
+
+/-- What a `\nabla` form writes before its operand: `\nabla`, `\nabla \cdot`,
+`\nabla^{2}`, `\nabla \times` (Typst `nabla`, `nabla dot`, `nabla^2`, `nabla times`). -/
+def nabHead (sf : Sf) : NabK → List Tok
+  | .grad => [.kw .nabla]
+  | .div => [.kw .nabla, .kw .cdot]
+  | .lap =>
+    match sf with
+    | .latex => [.kw .nabla, .kw .caret, .kw .lb, .num (.int 2), .kw .rb]
+    | .typst => [.kw .nabla, .kw .caret, .num (.int 2)]
+  | .curl => [.kw .nabla, .kw .times]
+
+/-- An operand printed at the level of a power base, `t`; after the `\times` of a curl, one
+that starts with a number in parentheses. -/
+def nabArg9 (sf : Sf) (n : NabK) (t : List Tok) : List Tok :=
+  if n = .curl ∧ startsNum t = true then grp sf t else t
+
+/-- The printed form starts with `\nabla`. -/
+def startsNabla : List Tok → Bool
+  | .kw .nabla :: _ => true
+  | _ => false
+
+/-- The operand of a `\nabla` form: another `\nabla` form as it is (`\nabla \cdot \nabla u`
+is `div(grad(u))`), anything else at the level of a power base. After `\times` an operand
+that starts with a number is parenthesized too, so that no `\times 10^{…}` follows a token
+(the lexers read a number's scientific tail there). -/
+def nabArg (sf : Sf) (n : NabK) (o : Out) : List Tok :=
+  if startsNabla o.toks = true ∧ 6 ≤ o.lvl then o.toks else nabArg9 sf n (o.at sf 9)
 
 /-- The quantity `3\,\mathrm{m/s}` / `3 thin upright("m") thin upright("s")^(-1)`: the
 number, then the unit as one token. -/
@@ -1296,19 +1338,21 @@ def pr (c : Ctx) (e : Json) : Out :=
         if 2 ≤ xs.length then
           mkOut sf 10 (callToks sf [.kw k] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 1))
         else opn ()
+      | .nab n, [a] => mkOut sf 6 (nabHead sf n ++ nabArg sf n (pr c a))
       | .call, xs => mkOut sf 10 (callToks sf [.opn o] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 4))
       | _, _ => opn ()
     | [("args", .arr as), ("op", .str "D"), ("wrt", .str w)] =>
       match as with
-      | [a] =>
-        if w = "t" then dTime sf (pr c a)
-        else if nameOK w then dSpace sf (nameToks c w) (pr c a)
-        else esc ()
+      | [a] => if w = "t" then dTime sf (pr c a) else esc ()
+      | _ => esc ()
+    | [("args", .arr as), ("op", .str "partial"), ("wrt", .str w)] =>
+      match as with
+      | [a] => if w ≠ "t" ∧ nameOK w then dSpace sf (nameToks c w) (pr c a) else opn ()
       | a :: b :: r =>
         if w ≠ "t" ∧ nameOK w then
           mkOut sf 10 (dCall sf (nameToks c w) ((a :: b :: r).attach.map fun ⟨x, _⟩ => (pr c x).at sf 4))
-        else esc ()
-      | [] => esc ()
+        else opn ()
+      | [] => opn ()
     | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)] =>
       if unitsOK sf u then mkOut sf 7 (qtyToks n (factorsOf u)) else opn ()
     | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)] =>
@@ -1319,7 +1363,7 @@ def pr (c : Ctx) (e : Json) : Out :=
       match arrForm (.arr xs) with
       | some af => mkOut sf 10 (arrToks sf af)
       | none => opn ()
-    | [("args", .arr []), ("bindings", .obj bs), ("name", .str n), ("op", .str "apply_expression_template")] =>
+    | [("args", .arr []), ("bindings", .obj bs), ("name", .str n), ("op", .str "apply_operator")] =>
       if tnameOK n && keysSorted bs && bs.all (fun kv => isE kv.2) then
         let vals := bs.attach.map fun ⟨kv, _⟩ => (kv.1, (pr c kv.2).at sf 4)
         match positional c.S n bs with

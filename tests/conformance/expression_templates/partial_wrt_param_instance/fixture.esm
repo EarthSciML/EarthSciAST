@@ -1,0 +1,130 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "partial_wrt_param_instance",
+    "description": "esm-spec §4.2 'Reading earlier documents': the body of `deriv` holds D(f, wrt: d) with `d` a parameter, left as written at the wire boundary. The instance binding d to \"x\" reads it as partial(f, wrt: x), which the rule `central_x` lowers; the instance binding d to \"t\" keeps the time derivative. The two instances rewrite to different bodies, so they become `deriv.variant1` / `deriv.variant2`.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "description": "Field"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.1,
+          "description": "Rate"
+        },
+        "gx": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "description": "Spatial derivative of u"
+        },
+        "gt": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "description": "Time derivative of u"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1,
+              "k",
+              "u"
+            ]
+          }
+        },
+        {
+          "lhs": "gx",
+          "rhs": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "deriv",
+            "bindings": {
+              "f": "u",
+              "d": "x"
+            }
+          }
+        },
+        {
+          "lhs": "gt",
+          "rhs": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "deriv",
+            "bindings": {
+              "f": "u",
+              "d": "t"
+            }
+          }
+        }
+      ],
+      "operators": {
+        "deriv": {
+          "params": [
+            "f",
+            "d"
+          ],
+          "body": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "d"
+          }
+        },
+        "central_x": {
+          "params": [
+            "q"
+          ],
+          "match": {
+            "op": "partial",
+            "args": [
+              "q"
+            ],
+            "wrt": "x"
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              0.5,
+              "q"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

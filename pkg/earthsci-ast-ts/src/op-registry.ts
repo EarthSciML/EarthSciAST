@@ -50,7 +50,7 @@ export interface OpInfo {
    * (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and
    * `broadcast` ITSELF — a self-referential `fn: 'broadcast'` would recurse
    * forever); the form/lowering ops (`D`, `ic`, `Pre`, `const`, `true`,
-   * `false`, `enum`, `apply_expression_template`); the word spelling `pow` of
+   * `false`, `enum`, `apply_operator`); the word spelling `pow` of
    * `^`, which evaluates but is not a `broadcast` `fn` in any binding; and the
    * relational op `distinct`. `=` is likewise NOT scalar: `=` is not a
    * spelling of `==` (nor `**` of `^`) — it carries no evaluator and is not an
@@ -166,20 +166,6 @@ export const OPS: Record<string, OpInfo> = {
     cost: 15,
     evaluate: (args) => {
       if (args[0] <= 0) throw new Error('log argument must be positive')
-      return Math.log(args[0])
-    },
-  },
-  // `ln` is the natural logarithm under its alternate spelling — a DISTINCT
-  // registered name, not an alias (the registry has no alias mechanism). It is
-  // carried in the schema's `broadcast.fn` scalar subset and is already
-  // dimension-analysed by `units.ts`, so registering it here is what lets one
-  // name be both checked and evaluated instead of half-known.
-  ln: {
-    arity: { min: 1, max: 1 },
-    scalar: true,
-    cost: 15,
-    evaluate: (args) => {
-      if (args[0] <= 0) throw new Error('ln argument must be positive')
       return Math.log(args[0])
     },
   },
@@ -351,7 +337,6 @@ export const OPS: Record<string, OpInfo> = {
     cost: 2,
     evaluate: (args) => (args[0] !== args[1] ? 1 : 0),
   },
-  '=': { arity: { min: 2, max: 2 } },
   // A CONNECTIVE needs two things to connect. The §4.2 conditionals table reads
   // "| `and`, `or`, `not` | `[a, b]` or `[a]` |" — one Args cell shared by three
   // ops, where `[a]` is `not`'s unary form and `[a, b]` is `and`/`or`'s binary
@@ -412,6 +397,82 @@ export function isRewriteTargetDerivative(node: { op: string; wrt?: string }): b
 
 /** Arity bounds a REWRITE-TARGET `D` relaxes to (esm-spec §4.2 "Arity of `D`"). */
 export const REWRITE_TARGET_DERIVATIVE_ARITY: OpArity = { min: 1, max: null }
+
+/**
+ * The core operators (esm-spec §4.2): the closed, evaluable set every
+ * binding's evaluator implements. Every other `op` names a defined operator
+ * (§9.6.12), given by definitions. Pinned to the Julia reference's op registry
+ * (`_op_spec(op) !== nothing`), the deprecated word spellings `pow` and `neg`
+ * included. `partial`, `integral` and `apply_operator` are not core ops.
+ */
+export const CORE_OPS: ReadonlySet<string> = new Set([
+  '+',
+  '-',
+  '*',
+  '/',
+  '^',
+  'pow',
+  'neg',
+  '<',
+  '<=',
+  '>',
+  '>=',
+  '==',
+  '!=',
+  'and',
+  'or',
+  'not',
+  'ifelse',
+  'Pre',
+  'sin',
+  'cos',
+  'tan',
+  'asin',
+  'acos',
+  'atan',
+  'atan2',
+  'sinh',
+  'cosh',
+  'tanh',
+  'asinh',
+  'acosh',
+  'atanh',
+  'exp',
+  'log',
+  'log10',
+  'sqrt',
+  'abs',
+  'sign',
+  'floor',
+  'ceil',
+  'min',
+  'max',
+  'index',
+  'makearray',
+  'faq',
+  'pi',
+  'π',
+  'e',
+  'true',
+  'false',
+  'const',
+  'enum',
+  'D',
+  'ic',
+  'broadcast',
+  'reshape',
+  'transpose',
+  'concat',
+  'distinct',
+])
+
+/**
+ * Whether `op` names a core operator (esm-spec §4.2). Every other op names a
+ * defined operator (§9.6.12).
+ */
+export function isCoreOp(op: string): boolean {
+  return CORE_OPS.has(op)
+}
 
 /** Registry entry for an operator, or undefined for unknown ops. */
 export function getOpInfo(op: string): OpInfo | undefined {

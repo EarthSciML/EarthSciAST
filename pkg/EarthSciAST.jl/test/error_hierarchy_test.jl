@@ -197,7 +197,7 @@ include("testutils.jl")
         for c in (
                 "undefined_variable", "equation_count_mismatch",
                 "unit_inconsistency", "unit_parse_error",
-                "unresolved_subsystem_ref", "template_import_unresolved",
+                "unresolved_subsystem_ref", "operator_import_unresolved",
                 "coupling_library_illegal_payload", "removed_op",
                 "metaparameter_type_error", "unlowered_operator",
             )
@@ -218,6 +218,10 @@ include("testutils.jl")
         # Guard the extraction: a heading or table-layout change that matched
         # nothing would pass the membership check vacuously.
         @test length(codes) >= 30
-        @test isempty(setdiff(Set(codes), Set(error_code_names())))
+        # The "Renamed codes" table (esm 2.4.0) lists old codes: each is an
+        # alias of a registered new code (`ERROR_CODE_ALIASES`).
+        known = union(Set(error_code_names()), Set(keys(EarthSciAST.ERROR_CODE_ALIASES)))
+        @test isempty(setdiff(Set(codes), known))
+        @test all(v -> v in error_code_names(), values(EarthSciAST.ERROR_CODE_ALIASES))
     end
 end

@@ -71,8 +71,8 @@ const _WORKLOAD_BINNING = """{"esm": "$SCHEMA_VERSION", "metadata": {"name": "pw
   "px1": {"type": "parameter", "units": "1", "default": 0.0, "shape": ["recs"]},
   "py1": {"type": "parameter", "units": "1", "default": 0.0, "shape": ["recs"]}},
 "equations": [
-  {"lhs": "out", "rhs": {"op": "faq", "args": [], "output_idx": ["c"], "ranges": {"c": {"from": "cells"}, "r": {"from": "recs"}}, "expr": {"op": "apply_expression_template", "args": [], "name": "overlap_area_planar", "bindings": {"ring_a": "pring", "cell_a": "r", "nv_a": 4, "ring_b": "cring", "cell_b": "c", "nv_b": 4}}, "reduce": "+", "join": [{"overlap": {"src_env": ["px0", "py0", "px1", "py1"], "tgt_env": ["cx0", "cy0", "cx1", "cy1"], "eps": 0.0}}]}}],
-"expression_template_imports": [{"ref": "esm:std/geometry.esm", "only": ["overlap_area_planar"]}]}}}"""
+  {"lhs": "out", "rhs": {"op": "faq", "args": [], "output_idx": ["c"], "ranges": {"c": {"from": "cells"}, "r": {"from": "recs"}}, "expr": {"op": "apply_operator", "args": [], "name": "overlap_area_planar", "bindings": {"ring_a": "pring", "cell_a": "r", "nv_a": 4, "ring_b": "cring", "cell_b": "c", "nv_b": 4}}, "reduce": "+", "join": [{"overlap": {"src_env": ["px0", "py0", "px1", "py1"], "tgt_env": ["cx0", "cy0", "cx1", "cy1"], "eps": 0.0}}]}}],
+"operator_imports": [{"ref": "esm:std/geometry.esm", "only": ["overlap_area_planar"]}]}}}"""
 
 # Two unit squares side by side (the cells) and two rectangles (the records),
 # as the ring and envelope arrays the binning document reads.

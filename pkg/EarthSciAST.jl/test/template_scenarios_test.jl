@@ -54,7 +54,7 @@ function _ts_build(ref, name, calls, params; compiler)
             eqs, Dict{String, Any}(
                 "lhs" => Dict{String, Any}("op" => "D", "args" => Any["s_$i"], "wrt" => "t"),
                 "rhs" => Dict{String, Any}(
-                    "op" => "apply_expression_template", "args" => Any[],
+                    "op" => "apply_operator", "args" => Any[],
                     "name" => name, "bindings" => bindings
                 )
             )
@@ -65,7 +65,7 @@ function _ts_build(ref, name, calls, params; compiler)
         "metadata" => Dict{String, Any}("name" => "template_scenarios", "authors" => Any["t"]),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
-                "expression_template_imports" => Any[Dict{String, Any}("ref" => ref, "only" => Any[name])],
+                "operator_imports" => Any[Dict{String, Any}("ref" => ref, "only" => Any[name])],
                 "variables" => vars,
                 "equations" => eqs,
             )

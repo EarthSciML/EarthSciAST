@@ -714,7 +714,7 @@ fn mesh_rank_template_doc(n: usize) -> Value {
         .map(|f| f.iter().map(|e| e.1).collect())
         .collect();
     let fl = json!({"f": {"from": "faces"}, "le": {"from": "local_edges"}});
-    let key = json!({"op": "apply_expression_template", "args": [], "name": "edge_key",
+    let key = json!({"op": "apply_operator", "args": [], "name": "edge_key",
         "bindings": {"u": ix("edge_lo", vec![json!("f"), json!("le")]),
                      "v": ix("edge_hi", vec![json!("f"), json!("le")]), "lo": 1, "n": nv}});
     let unknown = |shape: Value| json!({"type": "unknown", "shape": shape});
@@ -728,7 +728,7 @@ fn mesh_rank_template_doc(n: usize) -> Value {
             "edge_ids": {"kind": "interval", "size": ne}
         },
         "models": {"MeshRank": {
-            "expression_template_imports": [
+            "operator_imports": [
                 {"ref": "esm:std/relational.esm", "only": ["edge_key", "rank_of_set"]}
             ],
             "variables": {
@@ -755,7 +755,7 @@ fn mesh_rank_template_doc(n: usize) -> Value {
                 {"lhs": ix("face_edge_rank", vec![json!("f"), json!("le")]),
                  "rhs": {"op": "faq", "args": ["edge_lo", "edge_hi", "edge_members"], "output_idx": ["f", "le"],
                          "ranges": fl,
-                         "expr": {"op": "apply_expression_template", "args": [], "name": "rank_of_set",
+                         "expr": {"op": "apply_operator", "args": [], "name": "rank_of_set",
                                   "bindings": {"x": key, "members": "edge_members", "S": "edges"}}}},
                 {"lhs": {"op": "D", "args": ["n_edges"], "wrt": "t"},
                  "rhs": {"op": "faq", "args": [], "output_idx": [], "ranges": {"e": {"from": "edges"}},

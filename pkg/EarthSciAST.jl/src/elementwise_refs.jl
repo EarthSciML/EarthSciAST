@@ -79,7 +79,7 @@ function _ew_classify!(e, val::Bool, bound::Set{String}, P, vals, arrs, free, ct
     e isa OpExpr || return
     rec(x, v = val, b = bound) = _ew_classify!(x, v, b, P, vals, arrs, free, ctx)
     op = e.op
-    if op == "apply_expression_template"
+    if op == "apply_operator"
         r = _ew_roles(ctx, e.name)
         b = e.bindings === nothing ? Dict{String, ASTExpr}() : e.bindings
         if r === nothing
@@ -168,6 +168,7 @@ function _ew_cellwise!(ctx, name::String, split::Vector{String})
     for f in ("match", "where", "priority")
         delete!(decl, f)
     end
+    decl["reference_only"] = true   # reached by its references only (esm-spec §9.6.1)
     decl["params"] = Any[params..., (m[x] for x in split)...]
     decl["body"] = serialize_expression(nbody)
     # A placeholder name, a function of the variant alone: a lift of this
@@ -198,7 +199,7 @@ function _ew_cell_subst(e, val::Bool, bound::Set{String}, m::Dict{String, String
     val || return e
     rec(x, v = val, b = bound) = _ew_cell_subst(x, v, b, m, ctx)
     op = e.op
-    if op == "apply_expression_template"
+    if op == "apply_operator"
         r = _ew_roles(ctx, e.name)
         r === nothing && return e
         b = e.bindings === nothing ? Dict{String, ASTExpr}() : e.bindings
@@ -319,7 +320,7 @@ _cw_placeholder(name::AbstractString, split::Vector{String}, n::Int) =
 # Every `apply_expression_template` name a raw JSON value holds.
 function _cw_raw_refs!(acc::Set{String}, x)
     if _is_object(x)
-        if _raw_get(x, "op") == "apply_expression_template"
+        if _raw_get(x, "op") == "apply_operator"
             n = _raw_get(x, "name")
             n isa AbstractString && push!(acc, String(n))
         end
@@ -338,7 +339,7 @@ function _cw_raw_rename(x, ren::AbstractDict{String, String})
     if _is_object(x)
         out = OrderedDict{String, Any}()
         changed = false
-        isref = _raw_get(x, "op") == "apply_expression_template"
+        isref = _raw_get(x, "op") == "apply_operator"
         for (k, v) in pairs(x)
             ks = string(k)
             nv = if isref && ks == "name" && v isa AbstractString && haskey(ren, String(v))

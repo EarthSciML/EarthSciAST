@@ -17,7 +17,7 @@ const _MTR_DIR = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "e
 
 _mtr(dir, f) = joinpath(_MTR_DIR, dir, f)
 _mtr_block(reg) = EarthSciAST.emit_esm_string(
-    OrderedDict{String, Any}("expression_templates" => OrderedDict{String, Any}(reg))
+    OrderedDict{String, Any}("operators" => OrderedDict{String, Any}(reg))
 )
 _mtr_flat(p) = _mtr_block(EarthSciAST.flatten(EarthSciAST.load_path(p)).template_registry)
 _mtr_loaded(p) = _mtr_block(EarthSciAST.load_path(p).component_templates["models.Host"])
@@ -88,7 +88,7 @@ end
         @test EarthSciAST.emit_esm_string(EarthSciAST.serialize_esm_file(EarthSciAST.expanded_file(file))) ==
             read(_mtr(d, "expanded.esm"), String)
         sub = file.models["Host"].subsystems["Sub"]
-        @test sub.equations[1].rhs.args[1].op == "apply_expression_template"
+        @test sub.equations[1].rhs.args[1].op == "apply_operator"
         @test sub.equations[1].rhs.args[1].name == "cube"
         n = _mtr_du(file)
         @test n == _mtr_du(EarthSciAST.expanded_file(file))

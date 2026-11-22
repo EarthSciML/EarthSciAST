@@ -217,7 +217,7 @@ func seedEdgeBindings(bindings map[string]int64, decls any, apiMeta, forwarded m
 // or its default. The loader-API bindings are NOT part of this map: they reach
 // every depth (§9.7.6 site 4) and travel beside it unchanged. An explicit name
 // declared nowhere in the mount tree is not forwarded and stays
-// `template_import_unknown_name` at the edge that wrote it. Read off the
+// `operator_import_unknown_name` at the edge that wrote it. Read off the
 // AUTHORED leaf, before its mounts are inlined.
 func forwardBindingsThroughMounts(view map[string]any, baseDir string, explicit, forwarded map[string]int64) (map[string]int64, map[string]bool) {
 	decls, _ := view["metaparameters"].(map[string]any)

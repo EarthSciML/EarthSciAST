@@ -221,10 +221,10 @@ fn assert_no_nested_apply(
         Value::Object(obj) => {
             if obj.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP) {
                 return Err(err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                    codes::OPERATOR_INVALID_DEFINITION,
                     format!(
-                        "expression_templates.{template_name}: `match` contains an \
-                         'apply_expression_template' node at {path}; match patterns MUST NOT \
+                        "operators.{template_name}: `match` contains an \
+                         'apply_operator' node at {path}; match patterns MUST NOT \
                          reference templates (esm-spec §9.7.3)"
                     ),
                 ));
@@ -245,9 +245,9 @@ pub(crate) fn validate_templates(
     for (name, decl) in templates {
         let decl_obj = decl.as_object().ok_or_else(|| {
             err(
-                codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                codes::OPERATOR_INVALID_DEFINITION,
                 format!(
-                    "{scope}.expression_templates.{name}: entry must be an object \
+                    "{scope}.operators.{name}: entry must be an object \
                      with params + body"
                 ),
             )
@@ -259,40 +259,40 @@ pub(crate) fn validate_templates(
             .and_then(|p| p.as_array())
             .ok_or_else(|| {
                 err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    format!("{scope}.expression_templates.{name}: 'params' must be an array"),
+                    codes::OPERATOR_INVALID_DEFINITION,
+                    format!("{scope}.operators.{name}: 'params' must be an array"),
                 )
             })?;
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for p in params {
             let p_str = p.as_str().ok_or_else(|| {
                 err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    format!("{scope}.expression_templates.{name}: param names must be strings"),
+                    codes::OPERATOR_INVALID_DEFINITION,
+                    format!("{scope}.operators.{name}: param names must be strings"),
                 )
             })?;
             if p_str.is_empty() {
                 return Err(err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    format!("{scope}.expression_templates.{name}: param names must be non-empty"),
+                    codes::OPERATOR_INVALID_DEFINITION,
+                    format!("{scope}.operators.{name}: param names must be non-empty"),
                 ));
             }
             if !seen.insert(p_str) {
                 return Err(err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    format!("{scope}.expression_templates.{name}: param '{p_str}' declared twice"),
+                    codes::OPERATOR_INVALID_DEFINITION,
+                    format!("{scope}.operators.{name}: param '{p_str}' declared twice"),
                 ));
             }
         }
         let _body = decl_obj.get("body").ok_or_else(|| {
             err(
-                codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                format!("{scope}.expression_templates.{name}: 'body' is required"),
+                codes::OPERATOR_INVALID_DEFINITION,
+                format!("{scope}.operators.{name}: 'body' is required"),
             )
         })?;
         // A body MAY reference other match-less in-scope templates via
         // apply_expression_template nodes (esm-spec §9.7.3); the reference
-        // graph is checked (acyclic — `apply_expression_template_recursive_body`
+        // graph is checked (acyclic — `operator_recursive_body`
         // — and depth <= MAX_TEMPLATE_EXPANSION_DEPTH) at registration by
         // `validate_template_body_references`, with the references themselves
         // preserved uninlined (§9.6.4 rule 2).
@@ -311,21 +311,14 @@ pub(crate) fn validate_templates(
         // scope) — see [`registered_where`]. A JSON `null` `where` is treated as
         // absent (matching the Julia `get(decl, "where", nothing)`).
         if let Some(whr) = decl_obj.get("where").filter(|v| !v.is_null()) {
-            if decl_obj.get("match").is_none() {
-                return Err(err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    format!(
-                        "{scope}.expression_templates.{name}: 'where' is only admissible \
-                         alongside 'match' — constraints scope an auto-applied rewrite rule, not \
-                         a named fragment (esm-spec §9.6.1)"
-                    ),
-                ));
-            }
+            // esm 2.4.0 (esm-spec §9.6.3 constraint 2, §9.6.8): a `where`
+            // scopes a match-less definition too, at a call of the defined
+            // operator it defines.
             let whr_obj = whr.as_object().filter(|o| !o.is_empty()).ok_or_else(|| {
                 err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                    codes::OPERATOR_INVALID_DEFINITION,
                     format!(
-                        "{scope}.expression_templates.{name}: 'where' must be a non-empty object \
+                        "{scope}.operators.{name}: 'where' must be a non-empty object \
                          mapping declared params to constraint objects"
                     ),
                 )
@@ -333,18 +326,18 @@ pub(crate) fn validate_templates(
             for (p, cobj) in whr_obj {
                 if !seen.contains(p.as_str()) {
                     return Err(err(
-                        codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                        codes::OPERATOR_INVALID_DEFINITION,
                         format!(
-                            "{scope}.expression_templates.{name}: 'where' constrains '{p}', which \
+                            "{scope}.operators.{name}: 'where' constrains '{p}', which \
                              is not a declared param (esm-spec §9.6.1)"
                         ),
                     ));
                 }
                 let cobj_obj = cobj.as_object().ok_or_else(|| {
                     err(
-                        codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                        codes::OPERATOR_INVALID_DEFINITION,
                         format!(
-                            "{scope}.expression_templates.{name}: where.{p} must be a constraint \
+                            "{scope}.operators.{name}: where.{p} must be a constraint \
                              object (v1 admits exactly the 'shape' kind)"
                         ),
                     )
@@ -354,9 +347,9 @@ pub(crate) fn validate_templates(
                     let mut kinds: Vec<&str> = cobj_obj.keys().map(String::as_str).collect();
                     kinds.sort_unstable();
                     return Err(err(
-                        codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                        codes::OPERATOR_INVALID_DEFINITION,
                         format!(
-                            "{scope}.expression_templates.{name}: where.{p} carries constraint \
+                            "{scope}.operators.{name}: where.{p} carries constraint \
                              kind(s) {}; the v1 constraint vocabulary is exactly {{shape}} \
                              (esm-spec §9.6.1)",
                             kinds.join(", ")
@@ -369,9 +362,9 @@ pub(crate) fn validate_templates(
                     .filter(|a| !a.is_empty())
                     .ok_or_else(|| {
                         err(
-                            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                            codes::OPERATOR_INVALID_DEFINITION,
                             format!(
-                                "{scope}.expression_templates.{name}: where.{p}.shape must be a \
+                                "{scope}.operators.{name}: where.{p}.shape must be a \
                                  non-empty array of index-set names"
                             ),
                         )
@@ -379,9 +372,9 @@ pub(crate) fn validate_templates(
                 for s in shp {
                     if s.as_str().is_none_or(|s| s.is_empty()) {
                         return Err(err(
-                            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                            codes::OPERATOR_INVALID_DEFINITION,
                             format!(
-                                "{scope}.expression_templates.{name}: where.{p}.shape entries \
+                                "{scope}.operators.{name}: where.{p}.shape entries \
                                  must be non-empty strings"
                             ),
                         ));
@@ -396,7 +389,7 @@ pub(crate) fn validate_templates(
 /// Maximum template-body reference-chain depth (counted in TEMPLATES along
 /// the longest chain, so a 65-template chain is rejected while a 64-template
 /// chain is accepted) before a file is rejected with
-/// `template_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
+/// `operator_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
 /// across all bindings. It equals `MAX_REWRITE_PASSES`: a rewrite of depth `d`
 /// writes a body-reference chain `d` templates deep, so every document the
 /// rewriter accepts also reloads once emitted with its references.
@@ -417,10 +410,10 @@ pub(crate) fn collect_apply_names(x: &Value, out: &mut Vec<String>) {
 /// Registration-time body-reference **validation** (esm-spec §9.7.3, Option B
 /// / esm 0.9.0): template bodies MAY reference other in-scope MATCH-LESS
 /// templates via `apply_expression_template` nodes. Builds the body-reference
-/// graph, rejects cycles (`apply_expression_template_recursive_body`),
+/// graph, rejects cycles (`operator_recursive_body`),
 /// references to undeclared or `match`-bearing templates
-/// (`apply_expression_template_unknown_template`), and chains deeper than
-/// `MAX_TEMPLATE_EXPANSION_DEPTH` templates (`template_body_expansion_too_deep`).
+/// (`operator_unknown_definition`), and chains deeper than
+/// `MAX_TEMPLATE_EXPANSION_DEPTH` templates (`operator_body_expansion_too_deep`).
 ///
 /// From `esm: 0.9.0` (RFC out-of-line-expression-templates §7.1 step 4) bodies
 /// are **NOT inlined** — the references are preserved uninlined and denote
@@ -455,18 +448,18 @@ pub(crate) fn validate_template_body_references(
         for r in rs {
             let Some(tdecl) = templates.get(r) else {
                 return Err(err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+                    codes::OPERATOR_UNKNOWN_DEFINITION,
                     format!(
-                        "{scope}.expression_templates.{name}: body references undeclared \
+                        "{scope}.operators.{name}: body references undeclared \
                          template '{r}' (esm-spec §9.7.3)"
                     ),
                 ));
             };
             if tdecl.get("match").is_some() {
                 return Err(err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+                    codes::OPERATOR_UNKNOWN_DEFINITION,
                     format!(
-                        "{scope}.expression_templates.{name}: body references '{r}', a `match` \
+                        "{scope}.operators.{name}: body references '{r}', a `match` \
                          rewrite rule — only match-less templates are invocable by name \
                          (esm-spec §9.7.3)"
                     ),
@@ -490,9 +483,9 @@ pub(crate) fn validate_template_body_references(
                 let mut cyc: Vec<String> = chain[start..].to_vec();
                 cyc.push(name.to_string());
                 Err(err(
-                    codes::APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
+                    codes::OPERATOR_RECURSIVE_BODY,
                     format!(
-                        "{scope}.expression_templates: template-body reference cycle {} \
+                        "{scope}.operators: template-body reference cycle {} \
                          (esm-spec §9.7.3)",
                         cyc.join(" -> ")
                     ),
@@ -513,9 +506,9 @@ pub(crate) fn validate_template_body_references(
                 depth.insert(name.to_string(), d);
                 if d > MAX_TEMPLATE_EXPANSION_DEPTH {
                     return Err(err(
-                        codes::TEMPLATE_BODY_EXPANSION_TOO_DEEP,
+                        codes::OPERATOR_BODY_EXPANSION_TOO_DEEP,
                         format!(
-                            "{scope}.expression_templates.{name}: body-reference chain of {d} \
+                            "{scope}.operators.{name}: body-reference chain of {d} \
                              templates exceeds \
                              MAX_TEMPLATE_EXPANSION_DEPTH={MAX_TEMPLATE_EXPANSION_DEPTH} \
                              (esm-spec §9.7.3)"

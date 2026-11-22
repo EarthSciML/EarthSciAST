@@ -1,0 +1,115 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "new_names",
+    "description": "The esm 2.4 spelling of old_names (fixture.esm): its emitted form is emitted.esm too.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "operator_imports": [
+        {
+          "ref": "lib_new.esm"
+        }
+      ],
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "description": "Field"
+        },
+        "w": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Scalar"
+        },
+        "h": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Halved"
+        },
+        "g": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "description": "Gradient"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "partial",
+            "args": [
+              "u"
+            ],
+            "wrt": "x"
+          }
+        },
+        {
+          "lhs": "h",
+          "rhs": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "halve",
+            "bindings": {
+              "a": "w"
+            }
+          }
+        },
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "partial",
+            "args": [
+              "u"
+            ],
+            "wrt": "x"
+          }
+        }
+      ],
+      "operators": {
+        "diff_x": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "partial",
+            "args": [
+              "f"
+            ],
+            "wrt": "x"
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              0.5,
+              "f"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

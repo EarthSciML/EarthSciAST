@@ -67,7 +67,7 @@
                 "args": [
                   "c"
                 ],
-                "op": "D",
+                "op": "partial",
                 "wrt": "lev"
               },
               {

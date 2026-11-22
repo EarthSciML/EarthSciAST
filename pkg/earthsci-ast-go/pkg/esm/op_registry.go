@@ -58,7 +58,7 @@ const opBroadcast = "broadcast"
 //     element-wise" is not defined for them, and a self-referential
 //     `fn: "broadcast"` would recurse forever;
 //   - the form / lowering ops (`D`, `ic`, `Pre`, `const`, `true`, `false`,
-//     `enum`, `apply_expression_template`) — consumed by system assembly or a
+//     `enum`, `apply_operator`) — consumed by system assembly or a
 //     lowering pass, never evaluated element-wise;
 //   - the build-time relational op `distinct`.
 //

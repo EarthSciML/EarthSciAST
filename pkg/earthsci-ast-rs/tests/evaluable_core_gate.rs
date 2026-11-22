@@ -107,8 +107,8 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
         ("ic", json!({ "op": "ic", "args": ["row"] })),
         ("enum", json!({ "op": "enum", "args": ["colors", "red"] })),
         (
-            "apply_expression_template",
-            json!({ "op": "apply_expression_template", "args": [], "name": "tmpl" }),
+            "apply_operator",
+            json!({ "op": "apply_operator", "args": [], "name": "tmpl" }),
         ),
     ];
 
@@ -250,9 +250,9 @@ fn no_scalar_document_both_validates_and_returns_nan() {
             json!({ "op": "enum", "args": ["colors", "red"] }),
         ),
         (
-            "apply_expression_template",
+            "apply_operator",
             Yes,
-            json!({ "op": "apply_expression_template", "args": [], "name": "tmpl" }),
+            json!({ "op": "apply_operator", "args": [], "name": "tmpl" }),
         ),
     ];
 

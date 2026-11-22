@@ -94,7 +94,7 @@ func canonicalCompactWrite(b *strings.Builder, x any) {
 // Small raw-JSON helpers
 // ---------------------------------------------------------------------------
 
-// isApplyMap reports whether m is an `apply_expression_template` node.
+// isApplyMap reports whether m is an `apply_operator` node.
 func isApplyMap(m map[string]any) bool {
 	op, _ := m["op"].(string)
 	return op == applyExpressionTemplateOp
@@ -114,7 +114,7 @@ func templateParams(decl map[string]any) []string {
 
 func mapPtr(m map[string]any) uintptr { return reflect.ValueOf(m).Pointer() }
 
-// visitApplyNodes calls fn on every `apply_expression_template` node of x in
+// visitApplyNodes calls fn on every `apply_operator` node of x in
 // pre-order (object keys in sorted order), each object identity once,
 // descending into every field (a reference's `bindings` included). A non-nil
 // error from fn stops the walk.
@@ -350,11 +350,11 @@ func resolveApplySite(node map[string]any, templates map[string]any, scope strin
 		name, ok := node["name"].(string)
 		if !ok || name == "" {
 			return "", nil, nil, newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("%s: apply_expression_template node missing 'name'", scope))
+				fmt.Sprintf("%s: apply_operator node missing 'name'", scope))
 		}
 		if _, ok := templates[name]; !ok {
 			return "", nil, nil, newETErr(CodeApplyExpressionTemplateUnknownTemplate,
-				fmt.Sprintf("%s: apply_expression_template references undeclared template '%s'", scope, name))
+				fmt.Sprintf("%s: apply_operator references undeclared template '%s'", scope, name))
 		}
 		// The bindings check is validateApplyRef's, on a declaration whose
 		// `match` it does not look at.
@@ -401,7 +401,7 @@ func (st *rule3State) instance(name string, decl map[string]any, params, entries
 	if r, ok := st.done[key]; ok {
 		return r, nil
 	}
-	tscope := st.L.scope + ".expression_templates." + name
+	tscope := st.L.scope + ".operators." + name
 	if st.active[key] {
 		return nil, nonterminating(tscope, fmt.Sprintf(
 			"rewriting template '%s' needs the same template instance again — a `match` rule re-introduces its own pattern through the template's body", name))
@@ -416,6 +416,7 @@ func (st *rule3State) instance(name string, decl map[string]any, params, entries
 	if err != nil {
 		return nil, err
 	}
+	body = instancePartial(body, bv)
 	rewritten, passes, err := rewriteToFixpoint(body, st.L, tscope, bv)
 	if err != nil {
 		return nil, err
@@ -530,6 +531,64 @@ func lowerBodyEnums(body any, bv *bodyView, enums map[string]map[string]int) (an
 	return out, err
 }
 
+// instancePartial is esm-spec §4.2 "Reading earlier documents" for one
+// definition instance: a `D` whose `wrt` is one of the definition's params is
+// decided per instance — where the instance binds that param to an axis name
+// other than "t", the `D` reads as `partial` in this instance (the wire
+// boundary left it as written). Bound to "t", it stays the time derivative.
+// Identity-preserving. Mirrors the Julia `_instance_partial`.
+func instancePartial(body any, bv *bodyView) any {
+	var walk func(x any) (any, bool)
+	walk = func(x any) (any, bool) {
+		switch v := x.(type) {
+		case []any:
+			var out []any
+			for i, c := range v {
+				nc, ch := walk(c)
+				if ch && out == nil {
+					out = make([]any, len(v))
+					copy(out, v[:i])
+				}
+				if out != nil {
+					out[i] = nc
+				}
+			}
+			if out == nil {
+				return v, false
+			}
+			return out, true
+		case map[string]any:
+			var out map[string]any
+			for _, k := range sortedKeys(v) {
+				nv, ch := walk(v[k])
+				if ch {
+					if out == nil {
+						out = cloneMapAny(v)
+					}
+					out[k] = nv
+				}
+			}
+			if op, _ := v["op"].(string); op == OpDerivative {
+				if w, ok := v["wrt"].(string); ok && bv.isParam(w) {
+					if lit, ok := bv.lit[w].(string); ok && lit != DefaultIndepVar {
+						if out == nil {
+							out = cloneMapAny(v)
+						}
+						out["op"] = opPartial
+					}
+				}
+			}
+			if out == nil {
+				return v, false
+			}
+			return out, true
+		}
+		return x, false
+	}
+	out, _ := walk(body)
+	return out
+}
+
 // repointRefs is `x` with every reference re-pointed to the entry its instance
 // was given: `refs` maps a reference node (by identity) to its instance key,
 // `final` an instance key to the registry name its body lives under.
@@ -600,15 +659,19 @@ func repointRefs(x any, refs map[uintptr]instRef, final map[string]string) any {
 }
 
 // matchStripped is a declaration without its `match`, `where` and `priority`:
-// how a referenced rule is materialized (esm-spec §9.6.4 rule 3).
+// how a referenced rule (or a variant) is materialized (esm-spec §9.6.4 rule
+// 3), marked `reference_only` (esm-spec §9.6.1) so that reloading an emitted
+// document makes it no callable definition of its operator: emit → load →
+// emit is exact. Mirrors the Julia `_match_stripped`.
 func matchStripped(decl map[string]any) map[string]any {
-	out := make(map[string]any, len(decl))
+	out := make(map[string]any, len(decl)+1)
 	for k, v := range decl {
 		if k == "match" || k == "where" || k == "priority" {
 			continue
 		}
 		out[k] = v
 	}
+	out["reference_only"] = true
 	return out
 }
 
@@ -793,7 +856,7 @@ func applyRule3(comp map[string]any, L *lowering, transforms []map[string]any) e
 	}
 	var sites []site
 	for _, k := range sortedKeys(comp) {
-		if k == "expression_templates" || k == "expression_template_imports" {
+		if k == "operators" || k == "operator_imports" {
 			continue
 		}
 		sites = append(sites, site{comp, k, L.scope + "." + k})
@@ -835,10 +898,10 @@ func applyRule3(comp map[string]any, L *lowering, transforms []map[string]any) e
 		byTemplate[t] = append(byTemplate[t], k)
 	}
 	final := map[string]string{}
-	block, ok := comp["expression_templates"].(map[string]any)
+	block, ok := comp["operators"].(map[string]any)
 	if !ok {
 		block = map[string]any{}
-		comp["expression_templates"] = block
+		comp["operators"] = block
 	}
 	taken := map[string]bool{}
 	for n := range L.named {

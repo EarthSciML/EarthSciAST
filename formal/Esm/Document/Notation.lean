@@ -44,6 +44,33 @@ Decisions of record (2026-11-15), array notation:
 * `broadcast`, `reshape`, `transpose`, `concat` and every `faq`, `makearray` or `const`
   without a native shape use the call form with named fields; the escape form is left for
   annotated nodes, non-identifier field keys and shapes no notation covers.
+
+Operators in the source formats (esm-spec §1.2, draft 2.4.0; "one operator type", §9.6.12):
+
+* `D` is only the time derivative. The spatial derivative is the defined operator `partial`
+  (spec §4.2): `\frac{\partial u}{\partial x}` / `(partial u)/(partial x)`, and with trailing
+  operands `\partial_{x}(u, a, b)` / `partial_(x)(u, a, b)`. A fraction of differentials along an
+  axis other than `t` reads as `partial`; along `t`, with `\mathrm{d}` / `dif` (or the
+  `\partial` variant), as `D`. The earlier trailing-operand form `\operatorname{D}_{x}(…)` /
+  `op("D")_(x)(…)` is read as `partial` and never printed. A `D` node whose `wrt` is not `t`
+  (which a loader reads as `partial`, `Adapter.Doc.spellRules`) prints in the escape form.
+* The defined operators `grad`, `div`, `laplacian`, `curl` with one operand and no field print
+  `\nabla f`, `\nabla \cdot F`, `\nabla^{2} u`, `\nabla \times F` / `nabla f`, `nabla dot F`,
+  `nabla^2 u`, `nabla times F`, at the level of `not`, the operand at the level of a power
+  base (parenthesized unless it is a postfix form or an atom), except that an operand which
+  is itself a `\nabla` form is written as it is. They are trees, not identities:
+  `\nabla \cdot \nabla u` is `div(grad(u))`, not `laplacian(u)`. A `\nabla` form as the base of a
+  power or an index is parenthesized (`\left(\nabla f\right)^{2}`); `\nabla f^{2}` is refused
+  on input. After the
+  `\times` of a curl an operand that starts with a number is parenthesized too
+  (`\nabla \times \left(2\right)`), so that no `\times 10^{…}` follows a token: the lexers read
+  that as a number's scientific tail.
+* Any other call of a defined operator prints in the call form. A call whose operator name is
+  also the key of a definition with known `params` prints in the escape form, since the call
+  form would read back as a reference to that definition (`callCond` in
+  `Esm.Document.Math.Print` requires the symbol table to have no parameters for the name).
+* The reference is `apply_operator` (the old `apply_expression_template` is read as it by a
+  loader, `Adapter.Doc.spellRules`, never printed).
 -/
 
 namespace Esm.Document.Notation
@@ -150,9 +177,10 @@ def coreOps : List OpRow := [
   { op := "D", shape := r#"wrt "t" (or absent, normalized to "t")"#, tier := native,
     latex := r"\frac{\mathrm{d} N}{\mathrm{d} t}; compound operand \frac{\mathrm{d}}{\mathrm{d} t}\left(…\right)",
     typst := "(dif N)/(dif t)" },
-  { op := "D", shape := "spatial wrt", tier := native,
-    latex := r"\frac{\partial u}{\partial x}; with trailing operands \operatorname{D}_{x}(u, a, b)",
-    typst := r#"(partial u)/(partial x); with trailing operands op("D")_(x)(u, a, b)"# },
+  { op := "D", shape := r#"any other wrt (read as partial by a loader, spec §4.2 "Reading earlier documents")"#,
+    tier := escape,
+    latex := r"the escape form \esm{D}{fields}{u}; the earlier \operatorname{D}_{x}(u, a, b) is read as partial",
+    typst := r#"the escape form esm.node("D", #(…), u); the earlier op("D")_(x)(u, a, b) is read as partial"# },
   { op := "ic", tier := native, latex := "N(t_{0}) = …, equation left-hand side only",
     typst := "N(t_0) = …" },
   { op := "Pre", tier := call, latex := r"\operatorname{Pre}(x)", typst := r#"op("Pre")(x)"# },
@@ -190,7 +218,7 @@ def coreOps : List OpRow := [
   { op := "transpose", tier := call, latex := r"\operatorname{transpose}(A)", typst := r#"op("transpose")(A)"# },
   { op := "concat", tier := call, latex := r"\operatorname{concat}(a, b; \mathrm{axis} = 0)",
     typst := r#"op("concat")(a, b; upright("axis") = 0)"# },
-  { op := "apply_expression_template", tier := call,
+  { op := "apply_operator", tier := call,
     latex := r"\operatorname{name}(args), positional when the parameters are known, named otherwise; with no bindings and no known parameters the bare \operatorname{name}",
     typst := r#"op("name")(args); bare op("name")"# }
 ]
@@ -207,8 +235,33 @@ def coreOpNames : List String := [
   "asinh", "acosh", "atanh", "atan2", "min", "max",
   "D", "ic", "Pre", "enum", "const",
   "faq", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
-  "apply_expression_template"
+  "apply_operator"
 ]
+
+open Tier in
+/-- The defined operators (spec §9.6.12) with a notation of their own (spec §1.2). Every other
+call of a defined operator, and these outside the shapes listed, use the call form; a call
+named like a definition key with known parameters uses the escape form. -/
+def definedOps : List OpRow := [
+  { op := "partial", shape := r#"one operand, wrt a name other than "t", no other field"#, tier := native,
+    latex := r"\frac{\partial u}{\partial x}; compound operand \frac{\partial}{\partial x}\left(…\right)",
+    typst := "(partial u)/(partial x)" },
+  { op := "partial", shape := r#"trailing operands, wrt a name other than "t", no other field"#, tier := native,
+    latex := r"\partial_{x}(u, a, b)", typst := "partial_(x)(u, a, b)" },
+  { op := "grad", shape := "one operand, no field", tier := native,
+    latex := r"\nabla f", typst := "nabla f" },
+  { op := "div", shape := "one operand, no field", tier := native,
+    latex := r"\nabla \cdot F", typst := "nabla dot F" },
+  { op := "laplacian", shape := "one operand, no field", tier := native,
+    latex := r"\nabla^{2} u", typst := "nabla^2 u" },
+  { op := "curl", shape := "one operand, no field", tier := native,
+    latex := r"\nabla \times F", typst := "nabla times F" },
+  { op := "any other", shape := "any other call", tier := call,
+    latex := r"\operatorname{name}(args; fields)", typst := r#"op("name")(args; fields)"# }
+]
+
+/-- No defined operator with a notation of its own is a core operator. -/
+theorem definedOps_not_core : ∀ r ∈ definedOps, r.op ∉ coreOpNames := by decide +kernel
 
 /-- Any node carrying `id` or `expect_cadence` prints in its normal notation wrapped
 in an annotation (the escape tier's wrapper), whatever its operator. -/
@@ -416,10 +469,10 @@ def skeleton : List SkeletonRow := [
   { field := "reactions", home := .reactionLine,
     markdown := r"one line per reaction, $$\ce{A + B ->[{$k$}] C}$$ {#id key=value}",
     typst := "one line per reaction, #ce[A + B ->[$k$] C] <id>; with other fields #reaction(key: value)[#ce[…]] <id>" },
-  { field := "expression_templates (without match), of a component or of the document", home := .templateDefinition,
+  { field := "operators (without match), of a component or of the document; defines, units and any other field are attributes (units, an expression, as its JSON value)", home := .templateDefinition,
     markdown := r#"$$, \operatorname{f}(a, b) \coloneqq body on one line, then $$; with other fields (description) the display sits in a container directive holding them, :::template{description="…"} … :::"#,
     typst := r#"$ op("f")(a, b) := body $; with other fields #template(description: "…")[$ op("f")(a, b) := body $]"# },
-  { field := "expression_templates (with match), of a component or of the document", home := .ruleDirective,
+  { field := "operators (with match), of a component or of the document", home := .ruleDirective,
     markdown := r#"$$, \text{rule } \operatorname{r}: \; lhs \Rightarrow rhs on one line, then $$; params, where, priority and any other field in a container directive around it, :::rule{params='["u"]' priority=1} … :::"#,
     typst := r#"#rule("r", $lhs$, $rhs$, params: ("u",), priority: 1, …)"# },
   { field := "subsystems (by ref)", home := .subsystemDirective,
@@ -530,7 +583,7 @@ def topExprPaths : List (List Seg) := [
   the display). Typst: named arguments (a template with fields is `#template(…)[$ … $]`).
 * A template or rule prints natively only when its header reads back as written (checked
   by printing it and reading it back) and its math has no `$` or line break; otherwise the
-  whole `expression_templates` field is one path block. A display whose math would read as
+  whole `operators` field is one path block. A display whose math would read as
   a template header is never printed as an equation (the equations field falls back). -/
 
 def templateLatex : String := r"\operatorname{upwind\_flux}(u, c) \coloneqq c u"
@@ -604,7 +657,11 @@ def variants : List Variant := [
   { spelling := r#"\mathit{name}, italic("name") for any name"#, surface := .both,
     readsAs := "that name (the explicit name shape); bare juxtaposition that could be one name or a product of several is rejected" },
   { spelling := "named template arguments, in any order", surface := .both,
-    readsAs := "apply_expression_template, the bindings sorted (two arguments with one name are refused)" },
+    readsAs := "apply_operator, the bindings sorted (two arguments with one name are refused)" },
+  { spelling := r#"\operatorname{D}_{x}(u, a, b), op("D")_(x)(u, a, b): the earlier trailing-operand form"#,
+    surface := .both, readsAs := r"partial(u, a, b; wrt: x), as \partial_{x}(u, a, b)" },
+  { spelling := r"\frac{\partial N}{\partial x}, (partial N)/(partial x), \frac{dN}{dx}: a derivative along an axis other than t",
+    surface := .both, readsAs := "partial(N; wrt: x), never D" },
   { spelling := r#"a native operator in the call form: \operatorname{exp}(x), op("exp")(x)"#, surface := .both,
     readsAs := "the native node, exp(x)" },
   { spelling := "per-model declarations table", surface := .markdown, readsAs := "the declarations" },
@@ -660,7 +717,12 @@ def spellingRules : List SpellingRule := [
   { from_ := "neg(x)", into := "-(x)", corpusCount := 53 },
   { from_ := "const scalar with no units", into := "the bare number", corpusCount := 18 },
   { from_ := "D with wrt absent", into := r#"D with wrt "t""#, corpusCount := 4 },
-  { from_ := "pow(x, n)", into := "x ^ n", corpusCount := 1 }
+  { from_ := "pow(x, n)", into := "x ^ n", corpusCount := 1 },
+  { from_ := "apply_expression_template (spec §9.6.12, old name)", into := "apply_operator", corpusCount := 804 },
+  { from_ := "expression_template_imports (old name)", into := "operator_imports", corpusCount := 212 },
+  { from_ := "expression_templates (old name)", into := "operators", corpusCount := 196 },
+  { from_ := r#"D with wrt present and not "t" (spec §4.2, unless the wrt is a parameter of the enclosing definition), δ, ∂"#,
+    into := "partial", corpusCount := 140 }
 ]
 
 end Esm.Document.Notation

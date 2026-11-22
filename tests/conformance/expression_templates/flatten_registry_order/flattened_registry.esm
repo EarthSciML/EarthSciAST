@@ -1,5 +1,5 @@
 {
-  "expression_templates": {
+  "operators": {
     "Zulu.s": {
       "body": {
         "args": [
@@ -8,6 +8,7 @@
         ],
         "op": "+"
       },
+      "defines": "s",
       "params": [
         "f"
       ]
@@ -20,6 +21,7 @@
         ],
         "op": "+"
       },
+      "defines": "s",
       "params": [
         "f"
       ]
@@ -32,6 +34,7 @@
         ],
         "op": "*"
       },
+      "defines": "aa",
       "params": [
         "f"
       ]
@@ -44,6 +47,7 @@
         ],
         "op": "*"
       },
+      "defines": "lib_a",
       "params": [
         "f"
       ]
@@ -56,6 +60,7 @@
         ],
         "op": "*"
       },
+      "defines": "lib_z",
       "params": [
         "f"
       ]

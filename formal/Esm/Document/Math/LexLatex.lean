@@ -817,6 +817,11 @@ theorem lexOne_kw (k : Kw) (hk : kwOK k = true) (X : List Char)
     rw [hc, List.cons_append, lexOne_ctrl _ (by decide) (by decide) X
       (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide))]
     rfl
+  case nabla =>
+    have hc : kwChars .nabla = '\\' :: "nabla".toList := by decide
+    rw [hc, List.cons_append, lexOne_ctrl _ (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide))]
+    rfl
   case dif => exact absurd hk (by decide)
   case dotacc =>
     have hc : kwChars .dotacc = '\\' :: "dot".toList := by decide
@@ -1130,6 +1135,11 @@ theorem skipWs_kw (k : Kw) (hk : kwOK k = true) (X : List Char)
   case ceil => exact absurd hk (by decide)
   case pdiff =>
     have hc : kwChars .pdiff = '\\' :: "partial".toList := by decide
+    rw [hc, List.cons_append]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) X
+      (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide)) n
+  case nabla =>
+    have hc : kwChars .nabla = '\\' :: "nabla".toList := by decide
     rw [hc, List.cons_append]
     exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) X
       (fun d hd => by have := hX d hd; simp [merges, endsAlpha, kwChars] at this; exact this (by decide)) n
@@ -1559,6 +1569,84 @@ theorem sciExp_times_end : sciExp (tokChars (.kw .times)) = none := by
   rw [skipSp_spOK _ _ (by decide), dropP_append]
   simp [skipSp, dropP]
 
+/-- `skipSp` stops at a spelling that starts with a non-space character other than `\`, or
+with `\` and a character that is not a spacing command; there is no `10` then. -/
+theorem noTen_pre (P Y : List Char) (h1 : spOK P = true) (h2 : clash "10".toList P = true) :
+    dropP "10".toList (skipSp (P ++ Y)) = none := by
+  rw [skipSp_spOK P Y h1, dropP_clash _ _ _ h2]
+
+/-- A token that is not a number starts with no `10`, after any spacing. -/
+theorem noTen_tok (u : Tok) (hu : tokOK u ∨ u = .kw .times) (hn : startsNum [u] = false)
+    (Y : List Char) : dropP "10".toList (skipSp (tokChars u ++ Y)) = none := by
+  rcases hu with hu | rfl
+  swap
+  · exact noTen_pre (tokChars (.kw .times)) Y (by decide) (by decide)
+  cases u with
+  | num _ => simp [startsNum] at hn
+  | letter c =>
+    have hf := letter_facts (show isLetter c = true from hu)
+    simp only [tokChars, List.singleton_append]
+    rw [skipSp_plain _ _ (isWsL_letter hu) hf.2.1]
+    have : c ≠ '1' := by intro e; subst e; exact absurd (show isLetter '1' = true from hu) (by decide)
+    simp [dropP, Ne.symm this]
+  | greek g =>
+    obtain ⟨hl, hne, -⟩ := greek_facts g hu
+    obtain ⟨d, g', hg⟩ := List.exists_cons_of_ne_nil hne
+    have hd' := hl d (by simp [hg])
+    simp only [tokChars, hg, List.cons_append]
+    rw [skipSp_bs d _ (by
+      intro h
+      rcases h with rfl | rfl | rfl | rfl | rfl <;> exact absurd hd' (by decide))]
+    simp [dropP]
+  | word s =>
+    obtain ⟨hl, h2⟩ := (show s.toList.all isLetter = true ∧ 2 ≤ s.toList.length from hu)
+    obtain ⟨c0, rest, hs⟩ : ∃ c0 rest, s.toList = c0 :: rest := by
+      match h : s.toList, h2 with
+      | c0 :: rest, _ => exact ⟨c0, rest, rfl⟩
+    have hc := List.all_eq_true.1 hl c0 (by simp [hs])
+    have hf := letter_facts hc
+    simp only [tokChars, hs, List.cons_append]
+    rw [skipSp_plain _ _ (isWsL_letter hc) hf.2.1]
+    have : c0 ≠ '1' := by intro e; subst e; exact absurd hc (by decide)
+    simp [dropP, Ne.symm this]
+  | it s => simp only [tokChars, List.append_assoc]; exact noTen_pre _ _ (by decide) (by decide)
+  | rm raw => simp only [tokChars, List.append_assoc]; exact noTen_pre _ _ (by decide) (by decide)
+  | opn s => simp only [tokChars, List.append_assoc]; exact noTen_pre _ _ (by decide) (by decide)
+  | txt s => simp only [tokChars, List.append_assoc]; exact noTen_pre _ _ (by decide) (by decide)
+  | esc o => simp only [tokChars, List.append_assoc]; exact noTen_pre _ _ (by decide) (by decide)
+  | jstr s => simp only [tokChars, strL, List.append_assoc]; exact noTen_pre _ _ (by decide) (by decide)
+  | units l =>
+    simp only [tokChars]
+    rw [show "\\,\\mathrm{".toList ++ Esm.Units.latexBody l ++ ['}'] ++ Y =
+        '\\' :: ',' :: ("\\mathrm{".toList ++ (Esm.Units.latexBody l ++ '}' :: Y)) by simp, skipSp_comma]
+    exact noTen_pre _ _ (by decide) (by decide)
+  | kw k =>
+    simp only [tokChars]
+    cases k <;> first
+      | (exfalso; simp [tokOK, kwOK] at hu; done)
+      | exact noTen_pre _ _ (by decide) (by decide)
+      | (simp only [kwChars, List.append_assoc]; exact noTen_pre _ _ (by decide) (by decide))
+  | ups _ => exact absurd hu id
+  | code _ => exact absurd hu id
+
+/-- `\times` before a token that is not a number: no scientific tail. -/
+theorem sciExp_times_tok (S : List Char) (hS : S = [] ∨ S = [' ']) (u : Tok)
+    (hu : tokOK u ∨ u = .kw .times) (hn : startsNum [u] = false) (Y : List Char) :
+    sciExp (tokChars (.kw .times) ++ (S ++ (tokChars u ++ Y))) = none := by
+  have hc : tokChars (.kw .times) ++ (S ++ (tokChars u ++ Y)) =
+      "\\times".toList ++ (S ++ (tokChars u ++ Y)) := rfl
+  rw [hc]
+  unfold sciExp
+  rw [skipSp_spOK _ _ (by decide), dropP_append]
+  have h10 : dropP "10".toList (skipSp (S ++ (tokChars u ++ Y))) = none := by
+    rcases hS with rfl | rfl
+    · exact noTen_tok u hu hn Y
+    · rw [List.singleton_append, skipSp_space]; exact noTen_tok u hu hn Y
+  simp only []
+  split
+  · rfl
+  · rw [h10]
+
 theorem tok_head_times : ∃ c r, tokChars (.kw .times) = c :: r ∧ c ≠ ' ' :=
   ⟨'\\', "times".toList, rfl, by decide⟩
 
@@ -1568,7 +1656,7 @@ theorem tok_head_times : ∃ c r, tokChars (.kw .times) = c :: r ∧ c ≠ ' ' :
 a row break: never by a number, so no number before it reads `\times 10^{…}` as its
 scientific tail. -/
 def TN : List Tok → Prop
-  | t :: u :: r => (t = .kw .times → u = .kw .lbk ∨ u = .kw .amp ∨ u = .kw .nl) ∧ TN (u :: r)
+  | t :: u :: r => (t = .kw .times → startsNum [u] = false) ∧ TN (u :: r)
   | _ => True
 
 /-- The tokens of the lexer lemma: LaTeX tokens, and `\times` where `TN` allows it. -/
@@ -1598,8 +1686,8 @@ theorem TN_sep (k : Kw) (hk : k = .amp ∨ k = .nl) (b : List Tok) (hb : TN b) :
 theorem TN_app_sep (k : Kw) (hk : k = .amp ∨ k = .nl) : ∀ (a b : List Tok), TN a → TN b →
     TN (a ++ .kw k :: b)
   | [], b, _, hb => TN_sep k hk b hb
-  | [t], b, _, hb => ⟨(fun _ => by rcases hk with rfl | rfl <;> simp), TN_sep k hk b hb⟩
-  | t :: u :: a, b, ha, hb => ⟨ha.1, TN_app_sep k hk (u :: a) b ha.2 hb⟩
+  | [_], b, _, hb => ⟨(fun _ => rfl), TN_sep k hk b hb⟩
+  | _ :: u :: a, b, ha, hb => ⟨ha.1, TN_app_sep k hk (u :: a) b ha.2 hb⟩
 
 theorem merges_space (t : Tok) : merges t ' ' = false := by
   unfold merges
@@ -1679,19 +1767,12 @@ theorem lexAux_render : ∀ (ts : List Tok), (∀ t ∈ ts, tokOK t ∨ t = .kw 
           | nil => rw [renderAux.eq_2]; exact sciExp_times_end
           | cons u r' =>
             have hu' := hu.1 rfl
-            have hW : (∃ r, renderAux (some (.kw .times)) (u :: r') = '[' :: r) ∨
-                (∃ r, renderAux (some (.kw .times)) (u :: r') = '&' :: r) ∨
-                (∃ r, renderAux (some (.kw .times)) (u :: r') = '\\' :: '\\' :: r) := by
-              obtain ⟨Y', hY'⟩ := renderAux_head (some (.kw .times)) u r'
-              rw [hY']
-              rcases hu' with rfl | rfl | rfl
-              · exact Or.inl ⟨_, rfl⟩
-              · exact Or.inr (Or.inl ⟨_, rfl⟩)
-              · exact Or.inr (Or.inr ⟨_, rfl⟩)
-            rw [renderAux.eq_3, List.append_assoc]
+            obtain ⟨Y', hY'⟩ := renderAux_head (some (.kw .times)) u r'
+            have huok := hok u (by simp)
+            rw [renderAux.eq_3, List.append_assoc, hY']
             split
-            · exact sciExp_times [' '] _ (Or.inr rfl) hW
-            · exact sciExp_times [] _ (Or.inl rfl) hW
+            · exact sciExp_times_tok [' '] (Or.inr rfl) u huok hu' Y'
+            · exact sciExp_times_tok [] (Or.inl rfl) u huok hu' Y'
       rcases hZ with rfl | rfl
       · exact key
       · simp only [List.singleton_append]; rw [sciExp_space]; exact key

@@ -75,10 +75,20 @@ function _reject_unlowered_operators(
             what = "'$(i === nothing ? node.op : ops[i])' in the body of template " *
                 "'$(node.name)' (or one it references), reached from a reference"
         end
+        if !_tpl_is_call(node) && node.op != "D"
+            # esm-spec §9.6.6: list each definition of the defined operator in
+            # scope and why it was not eligible at this call.
+            ct = _call_table()
+            reg = ct === nothing ? nothing : ct.tt.reg
+            shapes = Dict{String, Vector{String}}(
+                String(n) => v.shape for (n, v) in model.variables if v.shape !== nothing
+            )
+            what *= " (" * _explain_unresolved_call(serialize_expression(node), reg, shapes) * ")"
+        end
         throw(
             TreeWalkError(
                 ERROR_CODES.UNLOWERED_OPERATOR,
-                "unlowered rewrite-target operator $what in the equation for " *
+                "unlowered call of the defined operator $what in the equation for " *
                     "$(eq.lhs): no rewrite rule lowered it before evaluation (esm-spec §9.6.3 " *
                     "constraint 6 / §9.6.8). The gate walks every equation, including an " *
                     "observed nothing reads."

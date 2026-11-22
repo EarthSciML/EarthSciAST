@@ -13,7 +13,7 @@ levels, loosest first (spec §4.1.1):
 | 3 | a comparison |
 | 4 | `+` chain, binary `-` |
 | 5 | `*` chain, unary `-` |
-| 6 | `not`; a derivative applied to a parenthesized operand |
+| 6 | `not`; a derivative applied to a parenthesized operand; a `\\nabla` form (its operand at level 9) |
 | 7 | Typst fraction; a negative literal and a quantity |
 | 8 | power |
 | 9 | index |
@@ -301,7 +301,7 @@ const CORE_OPS = Set{String}(
         "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh",
         "acosh", "atanh", "atan2", "min", "max", "D", "ic", "Pre", "enum", "const", "faq",
         "makearray", "index", "broadcast", "reshape", "transpose", "concat",
-        "apply_expression_template",
+        "apply_operator",
     ]
 )
 
@@ -504,6 +504,7 @@ const KIND_TABLE = (
     ("true", OpK(:Tru)), ("false", OpK(:Fls)), ("ifelse", OpK(:Ite)), ("ic", OpK(:Ic)),
     ("index", OpK(:Index)), ("+", OpK(:Plus)), ("*", OpK(:Times)), ("and", OpK(:Land)),
     ("or", OpK(:Lor)), ("min", OpK(:Mm, KMin)), ("max", OpK(:Mm, KMax)),
+    ("grad", OpK(:Nab)), ("div", OpK(:Nab)), ("laplacian", OpK(:Nab)), ("curl", OpK(:Nab)),
 )
 
 """`Math.kindOf`."""
@@ -726,7 +727,7 @@ function d_time(sf::Sf, a::Out)
     )
 end
 
-"""`Math.dSpace`: the spatial derivative along the axis printed `w`."""
+"""`Math.dSpace`: `partial` with one operand, along the axis printed `w`."""
 function d_space(sf::Sf, w, a::Out)
     a1 = out_at(a, sf, 1)
     if sf == SF_LATEX
@@ -761,16 +762,39 @@ function d_space(sf::Sf, w, a::Out)
     )
 end
 
-"""`Math.dCall`: a spatial derivative with trailing operands:
-`\\operatorname{D}_{x}(u, a, b)`."""
+"""`Math.dCall`: `partial` with trailing operands: `\\partial_{x}(u, a, b)` /
+`partial_(x)(u, a, b)`."""
 function d_call(sf::Sf, w, args)
     open = sf == SF_LATEX ? KLb : KLpg
     close = sf == SF_LATEX ? KRb : KRp
-    out = Tok[TOpn("D"), kw(KUs), kw(open)]
+    out = Tok[kw(KPdiff), kw(KUs), kw(open)]
     append!(out, w)
     push!(out, kw(close))
     append!(out, call_toks(sf, Tok[], args))
     return out
+end
+
+"""`Math.nabHead`: what a `\\nabla` form writes before its operand (`o` is `grad`,
+`div`, `laplacian` or `curl`): `\\nabla`, `\\nabla \\cdot`, `\\nabla^{2}`, `\\nabla \\times`
+(Typst `nabla`, `nabla dot`, `nabla^2`, `nabla times`)."""
+function nab_head(sf::Sf, o::AbstractString)
+    o == "grad" && return Tok[kw(KNabla)]
+    o == "div" && return Tok[kw(KNabla), kw(KCdot)]
+    o == "curl" && return Tok[kw(KNabla), kw(KTimes)]
+    sf == SF_LATEX && return Tok[kw(KNabla), kw(KCaret), kw(KLb), TNum(JInt(2)), kw(KRb)]
+    return Tok[kw(KNabla), kw(KCaret), TNum(JInt(2))]
+end
+
+"""`Math.nabArg`: the operand of a `\\nabla` form: another `\\nabla` form as it is
+(`\\nabla \\cdot \\nabla u` is `div(grad(u))`), anything else at the level of a power
+base; after the `\\times` of a curl, an operand that starts with a number in
+parentheses (`Math.nabArg9`)."""
+function nab_arg(sf::Sf, o::AbstractString, a::Out)
+    if !isempty(a.toks) && iskw(a.toks[1], KNabla) && 6 <= a.lvl
+        return a.toks
+    end
+    t = out_at(a, sf, 9)
+    return (o == "curl" && starts_num(t)) ? grp(sf, t) : t
 end
 
 """`Math.qtyToks`: the quantity: the number, then the unit as one token."""
@@ -1374,26 +1398,25 @@ function pr(c::Ctx, e)
         args, w = field(1, "args"), field(3, "wrt")
         if args isa JArr && str_at(2, "op", "D") && w isa String
             as = args.xs
+            (length(as) == 1 && w == "t") && return d_time(sf, pr(c, as[1]))
+            return pr_esc(c, kvs)
+        elseif args isa JArr && str_at(2, "op", "partial") && w isa String
+            as = args.xs
             if length(as) == 1
-                a = as[1]
-                if w == "t"
-                    return d_time(sf, pr(c, a))
-                elseif name_ok(w)
-                    return d_space(sf, name_toks(c, w), pr(c, a))
-                end
-                return pr_esc(c, kvs)
+                (w != "t" && name_ok(w)) && return d_space(sf, name_toks(c, w), pr(c, as[1]))
+                return pr_opn(c, kvs)
             elseif length(as) >= 2
                 if w != "t" && name_ok(w)
                     return mk_out(10, d_call(sf, name_toks(c, w), [pa(c, 4, x) for x in as]))
                 end
-                return pr_esc(c, kvs)
+                return pr_opn(c, kvs)
             end
-            return pr_esc(c, kvs)
+            return pr_opn(c, kvs)
         end
     elseif n == 4
         if empty_args()
             bs, nm = field(2, "bindings"), field(3, "name")
-            if bs isa JObj && nm isa String && str_at(4, "op", "apply_expression_template")
+            if bs isa JObj && nm isa String && str_at(4, "op", "apply_operator")
                 return pr_template(c, nm, bs.kvs, kvs)
             end
         end
@@ -1548,13 +1571,15 @@ function pr_plain(c::Ctx, o::String, args::Vector{Any}, kvs)
     elseif tag === :Mm
         2 <= na || return pr_opn(c, kvs)
         return mk_out(10, call_toks(sf, Tok[kw(k.k)], [pa(c, 1, x) for x in args]))
+    elseif tag === :Nab && na == 1
+        return mk_out(6, tc(nab_head(sf, o), nab_arg(sf, o, pr(c, args[1]))))
     elseif tag === :Call
         return mk_out(10, call_toks(sf, Tok[TOpn(o)], [pa(c, 4, x) for x in args]))
     end
     return pr_opn(c, kvs)
 end
 
-# The `apply_expression_template` case of `Math.pr`.
+# The `apply_operator` case of `Math.pr`.
 function pr_template(c::Ctx, n::String, bs, kvs)
     sf = c.sf
     if !(tname_ok(n) && keys_sorted(bs) && all(kv -> is_e(kv.second), bs))

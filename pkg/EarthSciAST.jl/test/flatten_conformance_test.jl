@@ -942,7 +942,7 @@ end
         diff(v) = _fe(
             "+",
             _fe("*", "DiffusionSystem.kh", _fe("laplacian", "$c.$v")),
-            _fe("*", "DiffusionSystem.kv", _fD("$c.$v"; wrt = "z")),
+            _fe("*", "DiffusionSystem.kv", _fe("partial", "$c.$v"; wrt = "z")),
         )
         @test _fjson(flat.equations) == [
             _feq(_fD("$c.O3"), _fe("+", _fe("*", -1, "$c.k1", "$c.O3"), diff("O3"))),

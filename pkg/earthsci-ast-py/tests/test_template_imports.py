@@ -23,7 +23,12 @@ from earthsci_ast.lower_expression_templates import (
     expand_document,
     lower_expression_templates,
 )
-from earthsci_ast.parse import SchemaValidationError, load_path, load_string
+from earthsci_ast.parse import (
+    SchemaValidationError,
+    load_path,
+    load_string,
+    rewrite_old_spellings,
+)
 from earthsci_ast.serialize import _serialize_esm_file, emit_esm_string, to_json
 from earthsci_ast.template_imports import (
     _META_SUBST_SKIP_KEYS,
@@ -266,7 +271,7 @@ def test_loader_api_bindings_and_defaults():
     # Binding a name the document does not declare is an error.
     assert (
         _err_code(lambda: load_path(problem, metaparameters={"Q": 1}))
-        == "template_import_unknown_name"
+        == "operator_import_unknown_name"
     )
 
 
@@ -282,10 +287,10 @@ def test_round_trip_emits_expanded_folded_form():
     """
     f = load_path(os.path.join(CONF, "import_smoke", "fixture.esm"))
     text = to_json(f)
-    assert "expression_template_imports" not in text
+    assert "operator_imports" not in text
     assert "metaparameters" not in text
-    assert "expression_templates" not in text
-    assert "apply_expression_template" not in text
+    assert "operators" not in text
+    assert "apply_operator" not in text
     reloaded = load_string(text)
     assert reloaded.index_sets["lon"]["size"] == 288
     assert reloaded.models["Advection"].equations[0].rhs.args[1].op == "makearray"
@@ -314,33 +319,35 @@ def test_template_library_round_trips_to_itself(lib):
     """
     path = os.path.join(VALID_DIR, lib)
     on_disk = _read_json(path)
-    assert on_disk.get("expression_templates"), f"{lib} must author the registry to pin anything"
+    # The fixture may spell the esm-2.3 names; it is read as a load reads it
+    # (esm-spec §9.6.12), and the library round-trips to that reading.
+    rewrite_old_spellings(on_disk)
+    assert on_disk.get("operators"), f"{lib} must author the registry to pin anything"
     assert on_disk.get("metaparameters"), f"{lib} must author metaparameters to pin anything"
 
     # The resolver's own output — the tree every downstream pass and the emit
     # surface see.
     resolved = resolve_template_machinery(on_disk, os.path.dirname(path))
     assert resolved is not None
-    assert resolved["expression_templates"] == on_disk["expression_templates"]
+    assert resolved["operators"] == on_disk["operators"]
     assert resolved["metaparameters"] == on_disk["metaparameters"]
     # The import EDGE, by contrast, is consumed.
-    assert "expression_template_imports" not in resolved
+    assert "operator_imports" not in resolved
 
     # The reference-preserving EMIT surface (the cross-binding byte-identity
     # surface): the emitted document keeps both declarations and is itself a
     # legal, loadable document — the property that was actually broken.
     emitted = emit_document(_read_json(path), os.path.dirname(path))
-    assert emitted["expression_templates"] == on_disk["expression_templates"]
+    assert emitted["operators"] == on_disk["operators"]
     assert emitted["metaparameters"] == on_disk["metaparameters"]
-    assert any(
-        k in emitted
-        for k in ("models", "reaction_systems", "data_sources", "operators", "expression_templates")
-    ), f"{lib}: emitted form carries none of the five top-level payload keys"
+    assert any(k in emitted for k in ("models", "reaction_systems", "data_sources", "operators")), (
+        f"{lib}: emitted form carries none of the five top-level payload keys"
+    )
     load_string(emit_esm_string(emitted), base_path=os.path.dirname(path))
 
     # ...and the typed load -> save surface.
     typed = json.loads(to_json(load_path(path)))
-    assert typed["expression_templates"] == on_disk["expression_templates"]
+    assert typed["operators"] == on_disk["operators"]
     assert typed["metaparameters"] == on_disk["metaparameters"]
 
 
@@ -371,7 +378,7 @@ def test_import_where_rename_carries_where_shape():
     """§9.7.7: importing a `where`-constrained rule twice under prefix rewrites
     each instance's ``where.F.shape`` from x to meshA.x / meshB.x in lockstep
     with the index set, so each rule registers and fires ONLY on its own field.
-    Without the rewrite this raised template_constraint_unknown_index_set."""
+    Without the rewrite this raised operator_constraint_unknown_index_set."""
     d = _expand_raw(os.path.join(CONF, "import_where_rename_two_instances", "fixture.esm"))
     va = _defining(d, "TwoGrids", "div_A")
     vb = _defining(d, "TwoGrids", "div_B")
@@ -417,7 +424,7 @@ def test_import_where_rename_unknown_index_set_rejected():
                 os.path.join(CONF, "import_where_rename_unknown_index_set", "fixture.esm")
             )
         )
-        == "template_constraint_unknown_index_set"
+        == "operator_constraint_unknown_index_set"
     )
 
 
@@ -502,9 +509,9 @@ def test_invalid_template_import_fixture(fname):
 def test_invalid_fixture_set_covers_the_reachable_code_table():
     """The fixture set exercises every REACHABLE §9.6.6 / §9.7 code.
 
-    Two codes are deliberately absent. `template_import_unresolved` is exercised
+    Two codes are deliberately absent. `operator_import_unresolved` is exercised
     by the unit tests below — a missing file is not representable as a fixture.
-    `template_import_version_too_old` is RETIRED as unreachable: it gated files
+    `operator_import_version_too_old` is RETIRED as unreachable: it gated files
     declaring an esm version older than `expression_template_imports`, and from
     1.0.0 such a file is rejected by the major-version gate in `load` long before
     the template resolver sees it, so no document can reach the code. Its fixture
@@ -514,23 +521,23 @@ def test_invalid_fixture_set_covers_the_reachable_code_table():
     expected = _read_json(str(conftest.INVALID_DIR / "expected_errors.json"))
     seen = {expected[f]["resolver_error_code"] for f in _invalid_fixture_names()}
     for code in [
-        "template_import_not_library",
-        "template_library_illegal_payload",
-        "subsystem_ref_is_template_library",
-        "template_import_cycle",
-        "template_import_name_conflict",
-        "template_import_unknown_name",
-        "template_import_index_set_conflict",
-        "apply_expression_template_recursive_body",
-        "template_body_expansion_too_deep",
+        "operator_import_not_library",
+        "operator_library_illegal_payload",
+        "subsystem_ref_is_operator_library",
+        "operator_import_cycle",
+        "operator_import_name_conflict",
+        "operator_import_unknown_name",
+        "operator_import_index_set_conflict",
+        "operator_recursive_body",
+        "operator_body_expansion_too_deep",
         "metaparameter_unbound",
         "metaparameter_type_error",
         "metaparameter_name_conflict",
         # §9.7.7 import renaming / namespacing / free-name rebinding
-        "template_import_rename_unknown_name",
-        "template_import_rebind_unknown_name",
-        "template_import_rename_collision",
-        "template_import_rename_invalid",
+        "operator_import_rename_unknown_name",
+        "operator_import_rebind_unknown_name",
+        "operator_import_rename_collision",
+        "operator_import_rename_invalid",
     ]:
         assert code in seen
 
@@ -558,11 +565,11 @@ def _model_json(extra_model_fields: str = "", top_fields: str = "") -> str:
 
 def test_template_import_unresolved_missing_and_unparsable_ref(tmp_path):
     p = tmp_path / "m.esm"
-    p.write_text(_model_json('\n"expression_template_imports": [{"ref": "./nope.esm"}],'))
-    assert _err_code(lambda: load_path(str(p))) == "template_import_unresolved"
+    p.write_text(_model_json('\n"operator_imports": [{"ref": "./nope.esm"}],'))
+    assert _err_code(lambda: load_path(str(p))) == "operator_import_unresolved"
     (tmp_path / "junk.esm").write_text("{not json")
-    p.write_text(_model_json('\n"expression_template_imports": [{"ref": "./junk.esm"}],'))
-    assert _err_code(lambda: load_path(str(p))) == "template_import_unresolved"
+    p.write_text(_model_json('\n"operator_imports": [{"ref": "./junk.esm"}],'))
+    assert _err_code(lambda: load_path(str(p))) == "operator_import_unresolved"
 
 
 def test_only_filters_visibility_not_internal_wiring(tmp_path):
@@ -571,7 +578,7 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
             {
                 "esm": "1.0.0",
                 "metadata": {"name": "lib"},
-                "expression_templates": {
+                "operators": {
                     "t_inner": {"params": [], "body": 7},
                     "t_keep": {
                         "params": [],
@@ -580,7 +587,7 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
                             "args": [
                                 2,
                                 {
-                                    "op": "apply_expression_template",
+                                    "op": "apply_operator",
                                     "args": [],
                                     "name": "t_inner",
                                     "bindings": {},
@@ -599,12 +606,10 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
     # (t_inner) along and the reference SURVIVES; Expand yields 2 * 7 (the
     # Option-A image, §9.6.4 rule 2).
     p = tmp_path / "m.esm"
-    p.write_text(
-        _model_json('\n"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],')
-    )
+    p.write_text(_model_json('\n"operator_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],'))
     raw = json.loads(p.read_text())
     resolved = resolve_template_machinery(raw, str(tmp_path))
-    tpl = resolved["models"]["M"]["expression_templates"]
+    tpl = resolved["models"]["M"]["operators"]
     # t_keep kept explicitly; t_inner carried by the reference closure;
     # t_drop (unreferenced, filtered) is gone.
     assert set(tpl.keys()) == {"t_keep", "t_inner"}
@@ -612,7 +617,7 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
         "op": "*",
         "args": [
             2,
-            {"op": "apply_expression_template", "args": [], "name": "t_inner", "bindings": {}},
+            {"op": "apply_operator", "args": [], "name": "t_inner", "bindings": {}},
         ],
     }
     assert tpl["t_inner"]["body"] == 7
@@ -624,13 +629,13 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
     p2 = tmp_path / "m2.esm"
     p2.write_text(
         _model_json(
-            '\n"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],\n'
-            '"expression_templates": {"local_uses_drop": {"params": [],\n'
-            '  "body": {"op": "apply_expression_template", "args": [], '
+            '\n"operator_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],\n'
+            '"operators": {"local_uses_drop": {"params": [],\n'
+            '  "body": {"op": "apply_operator", "args": [], '
             '"name": "t_drop", "bindings": {}}}},'
         )
     )
-    assert _err_code(lambda: load_path(str(p2))) == "apply_expression_template_unknown_template"
+    assert _err_code(lambda: load_path(str(p2))) == "operator_unknown_definition"
 
 
 def test_diamond_with_conflicting_edge_bindings_rejected(tmp_path):
@@ -641,26 +646,26 @@ def test_diamond_with_conflicting_edge_bindings_rejected(tmp_path):
                 "metadata": {"name": "grid"},
                 "metaparameters": {"NC": {"type": "integer"}},
                 "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
-                "expression_templates": {"nc": {"params": [], "body": "NC"}},
+                "operators": {"nc": {"params": [], "body": "NC"}},
             }
         )
     )
     p = tmp_path / "m.esm"
     p.write_text(
         _model_json(
-            '\n"expression_template_imports": ['
+            '\n"operator_imports": ['
             '{"ref": "./grid.esm", "bindings": {"NC": 4}},'
             '{"ref": "./grid.esm", "bindings": {"NC": 8}}],'
         )
     )
     assert _err_code(lambda: load_path(str(p))) in (
-        "template_import_name_conflict",
-        "template_import_index_set_conflict",
+        "operator_import_name_conflict",
+        "operator_import_index_set_conflict",
     )
     # Equal instantiation on both edges dedups cleanly.
     p.write_text(
         _model_json(
-            '\n"expression_template_imports": ['
+            '\n"operator_imports": ['
             '{"ref": "./grid.esm", "bindings": {"NC": 4}},'
             '{"ref": "./grid.esm", "bindings": {"NC": 4}}],'
         )
@@ -676,24 +681,18 @@ def test_edge_bindings_unknown_names_and_non_integers(tmp_path):
                 "esm": "1.0.0",
                 "metadata": {"name": "lib"},
                 "metaparameters": {"N": {"type": "integer", "default": 8}},
-                "expression_templates": {"n": {"params": [], "body": "N"}},
+                "operators": {"n": {"params": [], "body": "N"}},
             }
         )
     )
     p = tmp_path / "m.esm"
-    p.write_text(
-        _model_json(
-            '\n"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],'
-        )
-    )
-    assert _err_code(lambda: load_path(str(p))) == "template_import_unknown_name"
+    p.write_text(_model_json('\n"operator_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],'))
+    assert _err_code(lambda: load_path(str(p))) == "operator_import_unknown_name"
     # A non-integer binding is schema-invalid (TemplateImport.bindings is
     # integer-typed), so `load` rejects at schema validation; the
     # resolver-level backstop still reports metaparameter_type_error.
     p.write_text(
-        _model_json(
-            '\n"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],'
-        )
+        _model_json('\n"operator_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],')
     )
     with pytest.raises(SchemaValidationError):
         load_path(str(p))
@@ -804,7 +803,7 @@ def _chain_doc(n: int) -> dict:
             tpl[name] = {
                 "params": [],
                 "body": {
-                    "op": "apply_expression_template",
+                    "op": "apply_operator",
                     "args": [],
                     "name": f"c_{i + 1:02d}",
                     "bindings": {},
@@ -815,7 +814,7 @@ def _chain_doc(n: int) -> dict:
         "metadata": {"name": "chain"},
         "models": {
             "M": {
-                "expression_templates": tpl,
+                "operators": tpl,
                 "variables": {"x": {"type": "unknown", "default": 0.5}},
                 "equations": [
                     {
@@ -835,7 +834,7 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
         "metadata": {"name": "chain3"},
         "models": {
             "M": {
-                "expression_templates": {
+                "operators": {
                     "c1": {
                         "params": [],
                         "body": {
@@ -843,7 +842,7 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
                             "args": [
                                 1,
                                 {
-                                    "op": "apply_expression_template",
+                                    "op": "apply_operator",
                                     "args": [],
                                     "name": "c2",
                                     "bindings": {},
@@ -858,7 +857,7 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
                             "args": [
                                 2,
                                 {
-                                    "op": "apply_expression_template",
+                                    "op": "apply_operator",
                                     "args": [],
                                     "name": "c3",
                                     "bindings": {},
@@ -880,7 +879,7 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
                     {
                         "lhs": "y",
                         "rhs": {
-                            "op": "apply_expression_template",
+                            "op": "apply_operator",
                             "args": [],
                             "name": "c1",
                             "bindings": {},
@@ -897,13 +896,13 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
     assert _defining(out, "M", "y") == {"op": "+", "args": [1, {"op": "+", "args": [2, 3]}]}
 
     # Exactly MAX_TEMPLATE_EXPANSION_DEPTH templates chain: accepted; one
-    # more: template_body_expansion_too_deep. The depth counts TEMPLATES on
+    # more: operator_body_expansion_too_deep. The depth counts TEMPLATES on
     # the longest chain — a 65-template chain is rejected, 64 accepted (the
     # shared generated fixture pins the reject side; this pins the boundary).
     assert lower_expression_templates(_chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH)) is not None
     assert (
         _err_code(lambda: lower_expression_templates(_chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH + 1)))
-        == "template_body_expansion_too_deep"
+        == "operator_body_expansion_too_deep"
     )
 
 
@@ -915,15 +914,15 @@ def _chainlib_consumer(tmp_path, chain_len):
     lib_doc = {
         "esm": "1.0.0",
         "metadata": {"name": "chainlib"},
-        "expression_templates": lib["models"]["M"]["expression_templates"],
+        "operators": lib["models"]["M"]["operators"],
     }
     (tmp_path / "chainlib.esm").write_text(json.dumps(lib_doc))
     consumer = tmp_path / "m.esm"
     consumer.write_text(
         _model_json(
-            '\n"expression_template_imports": [{"ref": "./chainlib.esm"}],\n'
-            '"expression_templates": {"uses_head": {"params": [],\n'
-            '  "body": {"op": "apply_expression_template", "args": [], '
+            '\n"operator_imports": [{"ref": "./chainlib.esm"}],\n'
+            '"operators": {"uses_head": {"params": [],\n'
+            '  "body": {"op": "apply_operator", "args": [], '
             '"name": "c_01", "bindings": {}}}},'
         )
     )
@@ -937,7 +936,7 @@ def test_cross_file_chains_accumulate_depth_under_option_b(tmp_path):
     spans the full cross-file chain. A consumer template referencing the head of
     a 63-deep library chain composes to depth 64 (accepted); referencing the
     head of a 64-deep chain composes to depth 65 and is rejected with
-    `template_body_expansion_too_deep`. (This inverts the pre-0.9.0 Option-A
+    `operator_body_expansion_too_deep`. (This inverts the pre-0.9.0 Option-A
     behavior, where inlined-closed library bodies counted as depth-1 leaves; the
     Julia reference dropped the old assertion for the same reason.)"""
     # 63-deep library + head reference = 64 templates on the chain → accepted.
@@ -948,7 +947,7 @@ def test_cross_file_chains_accumulate_depth_under_option_b(tmp_path):
         _err_code(
             lambda: load_path(_chainlib_consumer(tmp_path / "bad", MAX_TEMPLATE_EXPANSION_DEPTH))
         )
-        == "template_body_expansion_too_deep"
+        == "operator_body_expansion_too_deep"
     )
 
 
@@ -962,7 +961,7 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
             {
                 "esm": "1.0.0",
                 "metadata": {"name": "lib_first"},
-                "expression_templates": {
+                "operators": {
                     "z_rule": {
                         "params": ["f"],
                         "match": {"op": "lowerme", "args": ["f"]},
@@ -977,7 +976,7 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
             {
                 "esm": "1.0.0",
                 "metadata": {"name": "lib_second"},
-                "expression_templates": {
+                "operators": {
                     "a_rule": {
                         "params": ["f"],
                         "match": {"op": "lowerme", "args": ["f"]},
@@ -995,7 +994,7 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
                 "metadata": {"name": "order"},
                 "models": {
                     "M": {
-                        "expression_template_imports": [
+                        "operator_imports": [
                             {"ref": "./lib_first.esm"},
                             {"ref": "./lib_second.esm"},
                         ],
@@ -1024,36 +1023,30 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
 def test_body_may_not_reference_match_rule():
     doc = json.loads(
         _model_json(
-            '\n"expression_templates": {'
+            '\n"operators": {'
             '"rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},'
             ' "body": {"op": "*", "args": [2, "f"]}},'
-            '"uses_rule": {"params": [], "body": {"op": "apply_expression_template",'
+            '"uses_rule": {"params": [], "body": {"op": "apply_operator",'
             ' "args": [], "name": "rule", "bindings": {"f": 1}}}},'
         )
     )
-    assert (
-        _err_code(lambda: lower_expression_templates(doc))
-        == "apply_expression_template_unknown_template"
-    )
+    assert _err_code(lambda: lower_expression_templates(doc)) == "operator_unknown_definition"
 
 
 def test_match_pattern_may_not_contain_apply_node():
     """esm-spec §9.7.3: match patterns MUST NOT reference templates — the
-    match-with-apply rejection is now apply_expression_template_invalid_declaration."""
+    match-with-apply rejection is now operator_invalid_definition."""
     doc = json.loads(
         _model_json(
-            '\n"expression_templates": {'
+            '\n"operators": {'
             '"frag": {"params": [], "body": 1},'
             '"rule": {"params": ["f"],'
-            ' "match": {"op": "lowerme", "args": [{"op": "apply_expression_template",'
+            ' "match": {"op": "lowerme", "args": [{"op": "apply_operator",'
             ' "args": [], "name": "frag", "bindings": {}}]},'
             ' "body": {"op": "*", "args": [2, "f"]}}},'
         )
     )
-    assert (
-        _err_code(lambda: lower_expression_templates(doc))
-        == "apply_expression_template_invalid_declaration"
-    )
+    assert _err_code(lambda: lower_expression_templates(doc)) == "operator_invalid_definition"
 
 
 def test_version_gate_flags_every_v097_construct():
@@ -1066,7 +1059,7 @@ def test_version_gate_flags_every_v097_construct():
     """
     for snippet in [
         '"metaparameters": {"N": {"type": "integer"}},',
-        '"expression_templates": {"t": {"params": [], "body": 1}},',
+        '"operators": {"t": {"params": [], "body": 1}},',
     ]:
         doc = json.loads(f"""
         {{"esm": "0.7.0", "metadata": {{"name": "old"}},{snippet}
@@ -1074,13 +1067,13 @@ def test_version_gate_flags_every_v097_construct():
                           "equations": []}}}}}}""")
         assert (
             _err_code(lambda: reject_template_imports_pre_v08(doc))
-            == "template_import_version_too_old"
+            == "operator_import_version_too_old"
         )
     # 0.8.0-and-later files pass the gate; 1.0.0 is what a real file declares.
     ok = json.loads("""
     {"esm": "1.0.0", "metadata": {"name": "new"},
      "metaparameters": {"N": {"type": "integer", "default": 1}},
-     "expression_templates": {"t": {"params": [], "body": 1}}}""")
+     "operators": {"t": {"params": [], "body": 1}}}""")
     assert reject_template_imports_pre_v08(ok) is None
 
 
@@ -1102,9 +1095,9 @@ def test_root_templates_beside_component_payload_rejected(key, snippet):
     template-library file, which declares none of these keys (esm-spec §9.7.1).
     Rules are component-local (§9.6.3 constraint 4), so beside a component the
     block would be visible to nothing; loading refuses it instead."""
-    head = '{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, '
+    head = '{"esm": "1.0.0", "metadata": {"name": "impure"}, "operators": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, '
     assert (
-        _err_code(lambda: load_string(head + snippet + "}")) == "template_library_illegal_payload"
+        _err_code(lambda: load_string(head + snippet + "}")) == "operator_library_illegal_payload"
     ), key
 
 
@@ -1113,8 +1106,7 @@ def test_zero_parameter_templates_are_legal():
     template is a named constant fragment."""
     doc = json.loads(
         _model_json(
-            '\n"expression_templates": {"two": {"params": [], "body": 2}},'
-            '"initialization_equations": [],'
+            '\n"operators": {"two": {"params": [], "body": 2}},"initialization_equations": [],'
         )
     )
     doc["models"]["M"]["variables"]["y"] = {"type": "unknown", "units": "1"}
@@ -1122,7 +1114,7 @@ def test_zero_parameter_templates_are_legal():
         {
             "lhs": "y",
             "rhs": {
-                "op": "apply_expression_template",
+                "op": "apply_operator",
                 "args": [],
                 "name": "two",
                 "bindings": {},

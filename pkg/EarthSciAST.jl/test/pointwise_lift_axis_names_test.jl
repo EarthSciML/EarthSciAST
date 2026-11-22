@@ -285,7 +285,7 @@ end
     {"esm": "2.3.0", "metadata": {"name": "lift_app"},
      "index_sets": {"x": {"kind": "interval", "size": 3}},
      "models": {"C": {
-       "expression_templates": {"twice": {"params": ["f"], "body": {"op": "*", "args": [2, "f"]}}},
+       "operators": {"twice": {"params": ["f"], "body": {"op": "*", "args": [2, "f"]}}},
        "variables": {
          "a": {"type": "unknown", "units": "1", "default": 0.0},
          "b": {"type": "unknown", "units": "1", "default": 0.0},
@@ -293,7 +293,7 @@ end
        "equations": [
          {"lhs": {"op": "D", "args": ["a"], "wrt": "t"}, "rhs": "u"},
          {"lhs": {"op": "D", "args": ["b"], "wrt": "t"},
-          "rhs": {"op": "apply_expression_template", "args": [], "name": "twice", "bindings": {"f": "u"}}}]}}}
+          "rhs": {"op": "apply_operator", "args": [], "name": "twice", "bindings": {"f": "u"}}}]}}}
     """
     prob = ESM.esm_problem(ESM.load_string(doc), (0.0, 1.0))
     du = zeros(length(prob.u0))

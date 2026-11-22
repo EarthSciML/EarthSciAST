@@ -16,7 +16,7 @@ import (
 // re-implement — three parallel copies of the same URL detection + stat/IsDir +
 // ReadFile logic that differ only in which diagnostic code they wrap the
 // failure in. loadRefBytes returns PLAIN wrapped errors; each caller re-wraps
-// the result in its own spec diagnostic (template_import_unresolved /
+// the result in its own spec diagnostic (operator_import_unresolved /
 // coupling_import_unresolved / the subsystem-ref message).
 
 // isRemoteRef reports whether ref is an http(s) URL (as opposed to a local
@@ -41,7 +41,7 @@ var refEnvToken = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 //   - A SET variable is replaced by its value (a variable set to the empty
 //     string expands to the empty string). An UNSET variable is left LITERAL,
 //     so the ref goes on to fail with the ordinary unresolved diagnostic —
-//     `template_import_unresolved`, `coupling_import_unresolved` or the
+//     `operator_import_unresolved`, `coupling_import_unresolved` or the
 //     subsystem-ref error — naming the `${VAR}` text the document actually
 //     carries, rather than misresolving against an empty string.
 //   - Expansion runs BEFORE the remote-vs-local classification and before a
@@ -52,7 +52,7 @@ var refEnvToken = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 //
 // This is an OPTIONAL loader capability on the same footing as URL refs, and it
 // reaches every §4.7 ref mechanism — subsystem and top-level `{ref}` mounts,
-// `expression_template_imports` (§9.7.2) and `coupling_import` (§10.10) — via
+// `operator_imports` (§9.7.2) and `coupling_import` (§10.10) — via
 // the two chokepoints below. A `data_sources` entry's `url_template` is NOT a
 // §4.7 ref and deliberately does not get this: §8.2.1 refuses a `${` there
 // outright (data_source_urls.go).

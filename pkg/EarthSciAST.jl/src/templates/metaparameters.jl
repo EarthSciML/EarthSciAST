@@ -95,7 +95,7 @@ const _STRUCTURAL_FIELDS = (
     "kind" => :protected,
     "description" => :protected,
     "name" => :protected,
-    "expression_template_imports" => :protected,
+    "operator_imports" => :protected,
     "metaparameters" => :protected,
     "only" => :protected,
     # `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
@@ -123,6 +123,8 @@ const _STRUCTURAL_FIELDS = (
     # `expect_cadence` (`EXPRESSION_NODE_ANNOTATIONS`) are the same kind of
     # node-level annotation.
     "op" => :node,
+    # esm 2.4.0: the defined operator a definition defines (esm-spec §9.6.1).
+    "defines" => :node,
     (k => :node for k in EXPRESSION_NODE_ANNOTATIONS)...,
     "reduce" => :registry,
     "semiring" => :registry,
@@ -204,9 +206,11 @@ const _META_SUBST_SKIP_KEYS = Set{String}(
 const _NAME_KEYED_MAP_KEYS = Set{String}(
     [
         "variables", "species", "parameters", "guesses", "subsystems",
-        "expression_templates", "ranges", "bindings", "config", "coords",
+        "operators", "ranges", "bindings", "config", "coords",
         "initial_conditions", "parameter_overrides", "pinned_coords", "map",
         "rename", "rebind", "index_set_rename", "url_substitutions", "where",
+        # The old spelling of `operators` (read as it at the wire boundary).
+        "expression_templates",
     ]
 )
 
@@ -476,7 +480,7 @@ function eval_meta_expr(expr, env::AbstractDict{String, <:Integer}, ctx::String)
         free = sort(unique(String[n for n in _collect_names!(String[], expr) if !haskey(env, n)]))
         throw(
             ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+                ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
                 "$ctx: metaparameter expression references " *
                     "$(isempty(free) ? "a name" : join(free, ", ")) not in the importing " *
                     "document's metaparameter scope (esm-spec §9.7.6)"
@@ -609,7 +613,7 @@ function _close_document_metaparams(
     for k in sort(collect(keys(api)))
         (haskey(doc_meta, k) || k in mount_declared) || throw(
             ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+                ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
                 "loader API binds metaparameter '$k', which neither this document " *
                     "nor any document it mounts declares (esm-spec §9.7.6)"
             )
@@ -701,7 +705,7 @@ function _substitute_closed_metaparams!(
     )
     isempty(values) && return doc_isets
     for (_, _, comp) in _components(root), k in collect(keys(comp))
-        if k == "expression_templates" && _is_object(comp[k])
+        if k == "operators" && _is_object(comp[k])
             tpl = comp[k]
             for (tn, td) in collect(pairs(tpl))
                 tpl[tn] = _substitute_metaparams_decl(td, values)

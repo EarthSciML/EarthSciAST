@@ -38,7 +38,7 @@ The two forms are a deliberate, load-bearing distinction, not an accident:
 * The template / coupling / enum codes are attached as bare
   ``code=`` strings on ``ExpressionTemplateError`` (the cross-binding raise
   path), where consumers pass the constant directly -- e.g.
-  ``code=TEMPLATE_IMPORT_UNRESOLVED`` -- so bare ``str`` constants avoid a
+  ``code=OPERATOR_IMPORT_UNRESOLVED`` -- so bare ``str`` constants avoid a
   ``.value`` unwrap at every raise site and keep the five importer modules
   (``lower_expression_templates``, ``coupling_imports``,
   ``enums``, ``template_imports``, ``parse``) unchanged.
@@ -52,6 +52,7 @@ without creating an import cycle.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
 
@@ -171,21 +172,30 @@ class ErrorCode(Enum):
 # ``ExpressionTemplateError`` from ``lower_expression_templates.py``.
 # ===========================================================================
 
-APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION = "apply_expression_template_invalid_declaration"
-APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE = "apply_expression_template_unknown_template"
-APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH = "apply_expression_template_bindings_mismatch"
-APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY = "apply_expression_template_recursive_body"
-APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD = "apply_expression_template_version_too_old"
+OPERATOR_INVALID_DEFINITION = "operator_invalid_definition"
+OPERATOR_UNKNOWN_DEFINITION = "operator_unknown_definition"
+OPERATOR_BINDINGS_MISMATCH = "operator_bindings_mismatch"
+OPERATOR_RECURSIVE_BODY = "operator_recursive_body"
+OPERATOR_VERSION_TOO_OLD = "operator_version_too_old"
 REWRITE_RULE_NONTERMINATING = "rewrite_rule_nonterminating"
-TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "template_constraint_unknown_index_set"
+# esm 2.4.0 one operator type (esm-spec §9.6.12): a call whose defined operator
+# has definitions in scope, none taking its operand count; a definition that
+# defines a core operator's name; a definition whose body unit disagrees with
+# its unit expression (or the fixed one of `partial` / `integral`); an old field
+# spelling read at the wire boundary (a WARNING, like ``deprecated_op``).
+OPERATOR_ARITY_MISMATCH = "operator_arity_mismatch"
+OPERATOR_DEFINES_CORE_OP = "operator_defines_core_op"
+DEFINITION_UNIT_MISMATCH = "definition_unit_mismatch"
+DEPRECATED_FIELD = "deprecated_field"
+OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET = "operator_constraint_unknown_index_set"
 MAKEARRAY_REGION_INVERTED = "makearray_region_inverted"
 # Projection-pushdown desugar post-condition (``pushdown_rewrite.py``,
 # CONFORMANCE_SPEC §5.5.7): a rect factor the rewrite must re-point onto the
 # generated per-support cell gathers is named FREE in a template body instead of
 # bound at the call site, so the call-site-only rewrite cannot reach it
 # (esm-spec §9.6.4 Option B).
-TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = (
-    "template_body_references_pushdown_rewritten_variable"
+OPERATOR_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = (
+    "operator_body_references_pushdown_rewritten_variable"
 )
 
 # A SURVIVING registry body that names a variable a COUPLING rule rewrote out of
@@ -195,8 +205,8 @@ TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = (
 # build boundary, so it would expand into a name the flattened system no longer
 # declares. Refused rather than rewritten, because rewriting authored source
 # would diverge from the expand-at-load image (CONFORMANCE_SPEC §5.35).
-TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE = (
-    "template_body_references_coupling_rewritten_variable"
+OPERATOR_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE = (
+    "operator_body_references_coupling_rewritten_variable"
 )
 
 # ===========================================================================
@@ -270,28 +280,28 @@ DEPRECATED_SYSTEM_KIND = "deprecated_system_kind"
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
 # ``ExpressionTemplateError`` from ``template_imports.py`` (and
-# ``subsystem_ref_is_template_library`` from ``parse.py``).
+# ``subsystem_ref_is_operator_library`` from ``parse.py``).
 # ===========================================================================
 
-TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old"
-TEMPLATE_IMPORT_UNRESOLVED = "template_import_unresolved"
-TEMPLATE_IMPORT_NOT_LIBRARY = "template_import_not_library"
-SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY = "subsystem_ref_is_template_library"
-TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload"
-TEMPLATE_IMPORT_CYCLE = "template_import_cycle"
-TEMPLATE_IMPORT_NAME_CONFLICT = "template_import_name_conflict"
-TEMPLATE_IMPORT_UNKNOWN_NAME = "template_import_unknown_name"
-TEMPLATE_IMPORT_INDEX_SET_CONFLICT = "template_import_index_set_conflict"
-TEMPLATE_BODY_EXPANSION_TOO_DEEP = "template_body_expansion_too_deep"
+OPERATOR_IMPORT_VERSION_TOO_OLD = "operator_import_version_too_old"
+OPERATOR_IMPORT_UNRESOLVED = "operator_import_unresolved"
+OPERATOR_IMPORT_NOT_LIBRARY = "operator_import_not_library"
+SUBSYSTEM_REF_IS_OPERATOR_LIBRARY = "subsystem_ref_is_operator_library"
+OPERATOR_LIBRARY_ILLEGAL_PAYLOAD = "operator_library_illegal_payload"
+OPERATOR_IMPORT_CYCLE = "operator_import_cycle"
+OPERATOR_IMPORT_NAME_CONFLICT = "operator_import_name_conflict"
+OPERATOR_IMPORT_UNKNOWN_NAME = "operator_import_unknown_name"
+OPERATOR_IMPORT_INDEX_SET_CONFLICT = "operator_import_index_set_conflict"
+OPERATOR_BODY_EXPANSION_TOO_DEEP = "operator_body_expansion_too_deep"
 METAPARAMETER_UNBOUND = "metaparameter_unbound"
 METAPARAMETER_TYPE_ERROR = "metaparameter_type_error"
 METAPARAMETER_NAME_CONFLICT = "metaparameter_name_conflict"
 
 # Import-renaming codes (esm-spec §9.7.7).
-TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME = "template_import_rename_unknown_name"
-TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME = "template_import_rebind_unknown_name"
-TEMPLATE_IMPORT_RENAME_COLLISION = "template_import_rename_collision"
-TEMPLATE_IMPORT_RENAME_INVALID = "template_import_rename_invalid"
+OPERATOR_IMPORT_RENAME_UNKNOWN_NAME = "operator_import_rename_unknown_name"
+OPERATOR_IMPORT_REBIND_UNKNOWN_NAME = "operator_import_rebind_unknown_name"
+OPERATOR_IMPORT_RENAME_COLLISION = "operator_import_rename_collision"
+OPERATOR_IMPORT_RENAME_INVALID = "operator_import_rename_invalid"
 
 # Mount-edge index-set renaming (esm-spec §4.7 "Mount-edge index-set
 # renaming"): the mount-edge mirror of `template_import_rename_unknown_name`.
@@ -328,12 +338,13 @@ ELEMENT_TYPE_UNCARRIED = "element_type_uncarried"
 # (CONFORMANCE_SPEC §5.18.2): refused rather than evaluated in binary64.
 FLOAT32_UNSUPPORTED = "float32_unsupported"
 
-# Scope-injection codes (esm-spec §9.7.10). `template_inject_target_is_loader`
-# is RETIRED in 1.0.0: a data source is not a component, so it can no longer be
-# an injection target at all and needs no diagnostic of its own -- such a key
-# resolves to nothing and is `template_inject_target_not_component`.
-TEMPLATE_INJECT_TARGET_UNKNOWN = "template_inject_target_unknown"
-TEMPLATE_INJECT_TARGET_NOT_COMPONENT = "template_inject_target_not_component"
+# Scope-injection codes (esm-spec §9.7.10). `operator_inject_target_is_loader`
+# is RETIRED in 1.0.0 in this binding: a data source is not a component, so it
+# can no longer be an injection target at all and needs no diagnostic of its
+# own -- such a key resolves to nothing and is
+# `operator_inject_target_not_component`.
+OPERATOR_INJECT_TARGET_UNKNOWN = "operator_inject_target_unknown"
+OPERATOR_INJECT_TARGET_NOT_COMPONENT = "operator_inject_target_not_component"
 
 # ===========================================================================
 # Coupling-library / coupling_import role-binding codes (esm-spec §10.9–§10.11;
@@ -347,7 +358,7 @@ TEMPLATE_INJECT_TARGET_NOT_COMPONENT = "template_inject_target_not_component"
 COUPLING_IMPORT_UNRESOLVED = "coupling_import_unresolved"
 COUPLING_IMPORT_NOT_LIBRARY = "coupling_import_not_library"
 SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library"
-TEMPLATE_IMPORT_IS_COUPLING_LIBRARY = "template_import_is_coupling_library"
+OPERATOR_IMPORT_IS_COUPLING_LIBRARY = "operator_import_is_coupling_library"
 COUPLING_LIBRARY_ILLEGAL_PAYLOAD = "coupling_library_illegal_payload"
 COUPLING_LIBRARY_NESTED_IMPORT = "coupling_library_nested_import"
 COUPLING_EDGE_UNKNOWN_ROLE = "coupling_edge_unknown_role"
@@ -735,6 +746,52 @@ def _build_error_codes() -> _ErrorCodeRegistry:
         if name.isupper() and not name.startswith("_") and isinstance(value, str):
             put(name, value)
     return _ErrorCodeRegistry(collected)
+
+
+#: The codes esm 2.4.0 renamed (esm-spec §9.6.6, "Renamed codes"): old
+#: spelling -> new. This binding reports only the new code; a harness or tool
+#: that matches an old spelling treats it as the new one
+#: (:func:`canonical_error_code`).
+ERROR_CODE_ALIASES: Mapping[str, str] = MappingProxyType(
+    {
+        "apply_expression_template_unknown_template": "operator_unknown_definition",
+        "apply_expression_template_bindings_mismatch": "operator_bindings_mismatch",
+        "apply_expression_template_recursive_body": "operator_recursive_body",
+        "apply_expression_template_invalid_declaration": "operator_invalid_definition",
+        "apply_expression_template_version_too_old": "operator_version_too_old",
+        "template_constraint_unknown_index_set": "operator_constraint_unknown_index_set",
+        "template_body_expansion_too_deep": "operator_body_expansion_too_deep",
+        "template_library_illegal_payload": "operator_library_illegal_payload",
+        "subsystem_ref_is_template_library": "subsystem_ref_is_operator_library",
+        "template_inject_target_unknown": "operator_inject_target_unknown",
+        "template_inject_target_not_component": "operator_inject_target_not_component",
+        "template_inject_target_is_loader": "operator_inject_target_is_loader",
+        "template_body_references_coupling_rewritten_variable": (
+            "operator_body_references_coupling_rewritten_variable"
+        ),
+        "template_body_references_pushdown_rewritten_variable": (
+            "operator_body_references_pushdown_rewritten_variable"
+        ),
+        "template_import_unknown_name": "operator_import_unknown_name",
+        "template_import_not_library": "operator_import_not_library",
+        "template_import_index_set_conflict": "operator_import_index_set_conflict",
+        "template_import_unresolved": "operator_import_unresolved",
+        "template_import_rename_unknown_name": "operator_import_rename_unknown_name",
+        "template_import_rename_invalid": "operator_import_rename_invalid",
+        "template_import_rename_collision": "operator_import_rename_collision",
+        "template_import_name_conflict": "operator_import_name_conflict",
+        "template_import_version_too_old": "operator_import_version_too_old",
+        "template_import_rebind_unknown_name": "operator_import_rebind_unknown_name",
+        "template_import_cycle": "operator_import_cycle",
+        "template_import_is_coupling_library": "operator_import_is_coupling_library",
+    }
+)
+
+
+def canonical_error_code(code: str) -> str:
+    """The current spelling of a diagnostic code: ``code`` itself, or the new
+    code an old esm-2.3 spelling is an alias of (esm-spec §9.6.6)."""
+    return ERROR_CODE_ALIASES.get(code, code)
 
 
 #: Every diagnostic code this binding can emit, keyed by its SCREAMING_SNAKE

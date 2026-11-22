@@ -26,7 +26,7 @@ pub(crate) fn strip_component_template_blocks(value: &mut Value) {
         };
         for (_, comp_value) in comps.iter_mut() {
             if let Value::Object(comp) = comp_value {
-                comp.remove("expression_templates");
+                comp.remove("operators");
             }
         }
     }
@@ -47,11 +47,18 @@ pub(crate) fn strip_component_template_blocks(value: &mut Value) {
 /// build the step-4 merged registry. Components whose materialized block is
 /// empty are omitted; returns `None` when none remains, so a document without
 /// templates costs nothing.
-pub fn capture_component_templates(
+///
+/// Also answers whether the document takes the §9.6.4 rule-8 version stamp:
+/// a component holds a surviving reference or a non-empty materialized block
+/// ([`stamp_rule8_floor`]), as emit decides it.
+pub(crate) fn capture_component_templates_stamped(
     value: &Value,
     authored: &std::collections::HashMap<String, Vec<String>>,
-) -> Option<indexmap::IndexMap<String, Value>> {
-    let root = value.as_object()?;
+) -> (Option<indexmap::IndexMap<String, Value>>, bool) {
+    let mut bump = false;
+    let Some(root) = value.as_object() else {
+        return (None, false);
+    };
     let mut out: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
     let mut received = super::emit::received_transform_refs(root);
     for compkind in ["models", "reaction_systems"] {
@@ -64,20 +71,21 @@ pub fn capture_component_templates(
             };
             let here_refs = received.remove(cname.as_str()).unwrap_or_default();
             if comp
-                .get("expression_templates")
+                .get("operators")
                 .is_none_or(|t| t.as_object().is_none_or(|t| t.is_empty()))
             {
                 continue;
             }
             let key = format!("{compkind}.{cname}");
             let here = authored.get(&key).map(Vec::as_slice).unwrap_or(&[]);
-            let (block, _, _) = materialize_component_block(comp, here, &here_refs);
+            let (block, refs, carried) = materialize_component_block(comp, here, &here_refs);
+            bump |= refs || carried || !block.is_empty();
             if !block.is_empty() {
                 out.insert(key, Value::Object(block));
             }
         }
     }
-    (!out.is_empty()).then_some(out)
+    ((!out.is_empty()).then_some(out), bump)
 }
 
 /// The private JSON key on which a load marks the root of each template
@@ -127,14 +135,24 @@ impl Drop for MarkTemplateOrigins {
     }
 }
 
-/// How many template-origin marks this thread has placed so far.
+/// How many template-origin marks (and [`FIXED_UNITS_KEY`] fields) this
+/// thread has placed so far.
 pub(crate) fn template_origins_placed() -> u64 {
     MARKS_PLACED.with(std::cell::Cell::get)
 }
 
+/// The private JSON key on which a load records, beside a
+/// [`TEMPLATE_ORIGIN_KEY`] mark, what the dimensional checker needs from the
+/// definition the expanded reference named
+/// ([`crate::types::ExpressionNode::definition_units`]). Placed only with a
+/// mark, and removed with it.
+pub(crate) const DEFINITION_UNITS_KEY: &str = "__esm_definition_units";
+
 /// `expansion` marked as the root of an expansion of `name`, when marking is
-/// on and it is an object; otherwise unchanged.
-pub(super) fn mark_template_origin(expansion: Sv, name: &str) -> Sv {
+/// on and it is an object; otherwise unchanged. `units` is the definition's
+/// [`DEFINITION_UNITS_KEY`] record, when it has one
+/// ([`definition_units_mark`]).
+pub(super) fn mark_template_origin(expansion: Sv, name: &str, units: Option<Sv>) -> Sv {
     if !MARKING.with(std::cell::Cell::get) {
         return expansion;
     }
@@ -143,15 +161,136 @@ pub(super) fn mark_template_origin(expansion: Sv, name: &str) -> Sv {
     };
     let mut out: Vec<(String, Sv)> = fields
         .iter()
-        .filter(|(k, _)| k != TEMPLATE_ORIGIN_KEY)
+        .filter(|(k, _)| k != TEMPLATE_ORIGIN_KEY && (units.is_none() || k != DEFINITION_UNITS_KEY))
         .cloned()
         .collect();
     out.push((
         TEMPLATE_ORIGIN_KEY.to_string(),
         Rc::new(SNode::Str(format!("{}{name}", template_origin_nonce()))),
     ));
+    if let Some(units) = units {
+        out.push((DEFINITION_UNITS_KEY.to_string(), units));
+    }
     MARKS_PLACED.with(|c| c.set(c.get() + 1));
     Rc::new(SNode::Obj(out))
+}
+
+/// The [`DEFINITION_UNITS_KEY`] record of a reference to `name` (esm-spec
+/// §9.6.12 "Units"), when marking is on and its definition `decl` carries a
+/// unit expression or is a definition of `partial` / `integral`: the
+/// definition's name and `defines`, what the reference bound to each
+/// parameter (`bindings`, already expanded), its unit expression, and the
+/// fixed unit expression its `match` gives (the operand over, or times, the
+/// axis field). `None` otherwise.
+pub(super) fn definition_units_mark(
+    name: &str,
+    decl: Option<&Sv>,
+    bindings: Option<&Sv>,
+) -> Option<Sv> {
+    if !MARKING.with(std::cell::Cell::get) {
+        return None;
+    }
+    let SNode::Obj(fields) = &**decl? else {
+        return None;
+    };
+    let units = obj_get(fields, "units").cloned();
+    let fixed = kept_fixed_units(fields).or_else(|| match_fixed_units(fields));
+    if units.is_none() && fixed.is_none() {
+        return None;
+    }
+    let mut rec = vec![("name".to_string(), Rc::new(SNode::Str(name.to_string())))];
+    if let Some(d) = obj_get(fields, "defines") {
+        rec.push(("defines".to_string(), d.clone()));
+    }
+    if let Some(b) = bindings {
+        rec.push(("bindings".to_string(), b.clone()));
+    }
+    if let Some(u) = units {
+        rec.push(("units".to_string(), u));
+    }
+    if let Some(f) = fixed {
+        rec.push(("fixed".to_string(), f));
+    }
+    Some(Rc::new(SNode::Obj(rec)))
+}
+
+/// The private JSON key on which a materialized `partial` / `integral` rule
+/// (a `match` rule a firing referenced, kept without its `match`) keeps the
+/// fixed unit expression its `match` gave (esm-spec §4.2, §9.6.12 "Units"),
+/// so the references the firing wrote are still held to it. Its value is
+/// `[<`template_origin_nonce`>, <expression>]`, so a key an author wrote is
+/// never taken for one; no writer emits it ([`strip_fixed_units`]).
+pub(crate) const FIXED_UNITS_KEY: &str = "__esm_fixed_units";
+
+/// The fixed unit expression of `partial` / `integral` a definition's `match`
+/// gives (esm-spec §4.2): the pattern's operand over (`partial`) or times
+/// (`integral`) its axis field. `None` for any other definition.
+pub(super) fn match_fixed_units(fields: &[(String, Sv)]) -> Option<Sv> {
+    let SNode::Obj(m) = &**obj_get(fields, "match")? else {
+        return None;
+    };
+    let (axis, op) = match obj_op(m)? {
+        "partial" => ("wrt", "/"),
+        "integral" => ("var", "*"),
+        _ => return None,
+    };
+    let SNode::Arr(args) = &**obj_get(m, "args")? else {
+        return None;
+    };
+    let first = args.first()?.clone();
+    let ax = obj_get(m, axis)?.clone();
+    Some(Rc::new(SNode::Obj(vec![
+        ("op".to_string(), Rc::new(SNode::Str(op.to_string()))),
+        ("args".to_string(), Rc::new(SNode::Arr(vec![first, ax]))),
+    ])))
+}
+
+/// The [`FIXED_UNITS_KEY`] field recording `fixed` on a materialized rule.
+/// Counts as a mark ([`template_origins_placed`]): a mounted leaf's registry
+/// carries it into the document the schema check reads.
+pub(super) fn fixed_units_field(fixed: Sv) -> (String, Sv) {
+    MARKS_PLACED.with(|c| c.set(c.get() + 1));
+    let nonce = Rc::new(SNode::Str(template_origin_nonce().to_string()));
+    (
+        FIXED_UNITS_KEY.to_string(),
+        Rc::new(SNode::Arr(vec![nonce, fixed])),
+    )
+}
+
+/// The fixed unit expression a materialized rule kept ([`FIXED_UNITS_KEY`]).
+fn kept_fixed_units(fields: &[(String, Sv)]) -> Option<Sv> {
+    let SNode::Arr(v) = &**obj_get(fields, FIXED_UNITS_KEY)? else {
+        return None;
+    };
+    match v.as_slice() {
+        [n, fixed] if matches!(&**n, SNode::Str(s) if s == template_origin_nonce()) => {
+            Some(fixed.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Whether `v` is a [`FIXED_UNITS_KEY`] value this process wrote.
+fn is_kept_fixed_units(v: &Value) -> bool {
+    v.as_array()
+        .and_then(|a| a.first())
+        .and_then(Value::as_str)
+        .is_some_and(|s| s == template_origin_nonce())
+}
+
+/// `value` with every [`FIXED_UNITS_KEY`] field this process wrote removed:
+/// a registry, or a whole document, as a writer emits it.
+pub(crate) fn strip_fixed_units(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.get(FIXED_UNITS_KEY).is_some_and(is_kept_fixed_units) {
+                map.shift_remove(FIXED_UNITS_KEY);
+            }
+            map.values_mut().for_each(strip_fixed_units);
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_fixed_units),
+        _ => {}
+    }
 }
 
 /// `value` with every template-origin mark this process placed removed: the
@@ -166,6 +305,10 @@ pub(crate) fn strip_template_origins(value: &mut Value) {
                 .is_some_and(|s| s.starts_with(template_origin_nonce()))
             {
                 map.remove(TEMPLATE_ORIGIN_KEY);
+                map.remove(DEFINITION_UNITS_KEY);
+            }
+            if map.get(FIXED_UNITS_KEY).is_some_and(is_kept_fixed_units) {
+                map.shift_remove(FIXED_UNITS_KEY);
             }
             map.values_mut().for_each(strip_template_origins);
         }
@@ -201,7 +344,7 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
         if let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) {
             for (cname, comp) in comps {
                 let named = comp
-                    .get("expression_templates")
+                    .get("operators")
                     .and_then(|v| v.as_object())
                     .map(build_named)
                     .unwrap_or_default();
@@ -229,7 +372,7 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
             let scope = format!("{compkind}.{cname}");
             let keys: Vec<String> = comp.keys().cloned().collect();
             for k in keys {
-                if k == "expression_templates" || k == "expression_template_imports" {
+                if k == "operators" || k == "operator_imports" {
                     continue;
                 }
                 let Some(child) = comp.get_mut(&k) else {
@@ -256,7 +399,7 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
                     unpark_plain(child, parked);
                 }
             }
-            comp.remove("expression_templates");
+            comp.remove("operators");
         }
     }
 

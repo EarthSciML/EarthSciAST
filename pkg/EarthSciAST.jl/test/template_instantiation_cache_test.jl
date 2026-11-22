@@ -70,7 +70,7 @@ end
 
 _tic_op(o, args...; kw...) = Dict{String, Any}("op" => o, "args" => Any[args...], (string(k) => v for (k, v) in kw)...)
 _tic_apply(name; b...) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(string(k) => v for (k, v) in b)
 )
 
@@ -124,7 +124,7 @@ function _tic_interp_doc(; xs = nothing)
     return _tic_doc(
         Dict(
             "variables" => vars, "equations" => eqs,
-            "expression_template_imports" => Any[Dict("ref" => "esm:std/interp.esm", "only" => ["linear", "bilinear"])],
+            "operator_imports" => Any[Dict("ref" => "esm:std/interp.esm", "only" => ["linear", "bilinear"])],
         )
     )
 end
@@ -195,7 +195,7 @@ end
             Dict("lhs" => _tic_op("D", "u"; wrt = "t"), "rhs" => _tic_op("-", _tic_op("*", 0.01, _tic_op("+", "q", "y")), "u")),
         ]
         doc = _tic_doc(
-            Dict("variables" => vars, "equations" => eqs, "expression_templates" => tpl);
+            Dict("variables" => vars, "equations" => eqs, "operators" => tpl);
             index_sets = Dict("s" => Dict("kind" => "interval", "size" => 4))
         )
         file = load_path(_tic_load(doc))
@@ -207,7 +207,7 @@ end
         @test _tic_agree(file) == 1
         # A site whose bindings name something other than the params goes direct.
         site = ESM.OpExpr(
-            "apply_expression_template", ESM.ASTExpr[]; name = "scaled",
+            "apply_operator", ESM.ASTExpr[]; name = "scaled",
             bindings = Dict{String, ESM.ASTExpr}("a" => ESM.VarExpr("u"))
         )
         @test ESM._tpl_instantiate(site, "scaled", Dict{String, Any}("a" => "u"), reg, nothing, cache) === nothing
@@ -245,7 +245,7 @@ end
             Dict("lhs" => "q", "rhs" => _tic_op("+", _tic_apply("outer"; a = _tic_op("*", "u", "u")), _tic_apply("outer"; a = "u"))),
             Dict("lhs" => _tic_op("D", "u"; wrt = "t"), "rhs" => _tic_op("-", "q", "u")),
         ]
-        file = load_path(_tic_load(_tic_doc(Dict("variables" => vars, "equations" => eqs, "expression_templates" => tpl))))
+        file = load_path(_tic_load(_tic_doc(Dict("variables" => vars, "equations" => eqs, "operators" => tpl))))
         reg = file.component_templates["models.M"]
         @test _tic_agree(file) == 1
         @test _tic_marking(() -> _tic_agree(file)) == 1
@@ -258,7 +258,7 @@ end
         # Unmarked and marked expansions never share a cache entry.
         cache = ESM._ExpandCache()
         site = ESM.OpExpr(
-            "apply_expression_template", ESM.ASTExpr[]; name = "outer",
+            "apply_operator", ESM.ASTExpr[]; name = "outer",
             bindings = Dict{String, ESM.ASTExpr}("a" => ESM.VarExpr("u"))
         )
         plain = ESM._expand_expr_refs(site, reg, nothing, cache)
@@ -280,7 +280,7 @@ end
             flat = ESM.flatten(load_path(joinpath(d, f)))
             @test ESM.TEMPLATE_EXPANSIONS[] == e0
             isempty(flat.template_registry) && continue
-            n += count(eq -> occursin("apply_expression_template", ESM.JSON3.write(ESM.serialize_expression(eq.rhs))), flat.equations)
+            n += count(eq -> occursin("apply_operator", ESM.JSON3.write(ESM.serialize_expression(eq.rhs))), flat.equations)
         end
         @test n > 0
     end

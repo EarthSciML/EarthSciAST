@@ -38,9 +38,11 @@ from .json_walk import (
 )
 from .lower_expression_templates import (
     _NO_LIT,
+    FIXED_UNITS_KEY,
     MAX_REWRITE_PASSES,
     _BodyView,
     _canonical_compact,
+    _fixed_unit_expr,
     _Lowering,
     _rewrite_to_fixpoint,
     _shape_entry,
@@ -231,7 +233,7 @@ def _instance(
     r = st.done.get(key)
     if r is not None:
         return r
-    tscope = f"{st.L.scope}.expression_templates.{name}"
+    tscope = f"{st.L.scope}.operators.{name}"
     if key in st.active:
         raise _nonterminating(
             tscope,
@@ -241,6 +243,7 @@ def _instance(
     st.active.append(key)
     bv = _BodyView(set(params), lits, dict(zip(params, entries)))
     body = _lower_body_enums(decl.get("body"), bv, st.L.enums)
+    body = _instance_partial(body, bv)
     rewritten, passes = _rewrite_to_fixpoint(body, st.L, tscope, bv=bv)
     refs: dict[int, tuple[Any, str]] = {}
     height = [passes]
@@ -303,6 +306,30 @@ def _lower_body_enums(body: Any, bv: _BodyView, enums: Any) -> Any:
         n2 = dict(n)
         n2["args"] = resolved
         return lower_enum_op(n2, enums)
+
+    return _rewrite_json(body, on_object=on_object, share=True)
+
+
+def _instance_partial(body: Any, bv: _BodyView) -> Any:
+    """esm-spec §4.2 "Reading earlier documents": a ``D`` whose ``wrt`` is one
+    of the definition's ``params`` is decided per instance — where the instance
+    binds that parameter to an axis name other than ``"t"``, the ``D`` reads as
+    ``partial`` in this instance (the wire boundary left it as written). Bound
+    to ``"t"``, it stays the time derivative."""
+
+    def on_object(n: dict, recurse) -> Any:
+        rebuilt = _rebuild_children(n, recurse)
+        if n.get("op") != "D":
+            return rebuilt
+        w = n.get("wrt")
+        if not (isinstance(w, str) and w in bv.params):
+            return rebuilt
+        lit = bv.lit.get(w, _NO_LIT)
+        if not (isinstance(lit, str) and lit != "t"):
+            return rebuilt
+        n2 = dict(rebuilt)
+        n2["op"] = "partial"
+        return n2
 
     return _rewrite_json(body, on_object=on_object, share=True)
 
@@ -431,7 +458,20 @@ def _rule3_exposed(
 
 
 def _match_stripped(decl: dict) -> dict:
-    return {k: v for k, v in decl.items() if k not in ("match", "where", "priority")}
+    """A materialized entry: the rule (or variant) without its ``match``,
+    ``where`` and ``priority``, marked ``reference_only`` (esm-spec §9.6.1,
+    §9.6.4 rule 5) so that reloading the emitted document makes it no callable
+    definition of its operator: emit → load → emit is exact. A rule for
+    ``partial`` / ``integral`` keeps the fixed unit expression its ``match`` gave
+    under a private key, so the unit checker still holds the firing's references
+    to it (esm-spec §4.2, §9.6.12 "Units"); the emitted registry drops that key
+    (:func:`~earthsci_ast.lower_expression_templates.materialize_component_block`)."""
+    nd = {k: v for k, v in decl.items() if k not in ("match", "where", "priority")}
+    fixed = _fixed_unit_expr(decl)
+    if fixed is not None:
+        nd[FIXED_UNITS_KEY] = fixed
+    nd["reference_only"] = True
+    return nd
 
 
 def apply_rule3(comp: dict, L: _Lowering, transforms: list[dict]) -> dict:
@@ -445,7 +485,7 @@ def apply_rule3(comp: dict, L: _Lowering, transforms: list[dict]) -> dict:
     st = _Rule3State(L)
     site_refs: dict[int, tuple[Any, str]] = {}
     sites: list[tuple[dict, str, str]] = [
-        (comp, k, f"{L.scope}.{k}") for k in list(comp.keys()) if k != "expression_templates"
+        (comp, k, f"{L.scope}.{k}") for k in list(comp.keys()) if k != "operators"
     ]
     for e in transforms:
         sites.append((e, "transform", f"{L.scope} coupling transform"))
@@ -474,10 +514,10 @@ def apply_rule3(comp: dict, L: _Lowering, transforms: list[dict]) -> dict:
     for k in st.order:
         by_template.setdefault(st.done[k].name, []).append(k)
     final: dict[str, str] = {}
-    block = comp.get("expression_templates")
+    block = comp.get("operators")
     if not _is_object(block):
         block = {}
-        comp["expression_templates"] = block
+        comp["operators"] = block
     taken = set(L.named.keys())
     order = _rule3_template_order(st, by_template)
     exposed = _rule3_exposed(st, by_template, order)

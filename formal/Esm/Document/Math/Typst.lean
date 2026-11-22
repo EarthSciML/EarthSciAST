@@ -51,7 +51,7 @@ def kwChars : Kw → List Char
   | .asin => "arcsin".toList | .acos => "arccos".toList | .atan => "arctan".toList
   | .sinh => "sinh".toList | .cosh => "cosh".toList | .tanh => "tanh".toList
   | .min => "min".toList | .max => "max".toList | .abs => "abs".toList
-  | .floor => "floor".toList | .ceil => "ceil".toList | .pdiff => "partial".toList
+  | .floor => "floor".toList | .ceil => "ceil".toList | .pdiff => "partial".toList | .nabla => "nabla".toList
   | .dif => "dif".toList | .cases => "cases".toList | .esmnode => "esm.node".toList
   | .vec => "vec".toList | .mat => "mat".toList
   | .sum => "sum".toList | .prod => "product".toList | .inn => "in".toList
@@ -161,7 +161,7 @@ def identKw : List (String × Kw) :=
     ("sqrt", .sqrt), ("exp", .exp), ("ln", .ln), ("log", .log), ("sin", .sin), ("cos", .cos),
     ("tan", .tan), ("arcsin", .asin), ("arccos", .acos), ("arctan", .atan), ("sinh", .sinh),
     ("cosh", .cosh), ("tanh", .tanh), ("min", .min), ("max", .max), ("abs", .abs),
-    ("floor", .floor), ("ceil", .ceil), ("partial", .pdiff), ("dif", .dif), ("cases", .cases),
+    ("floor", .floor), ("ceil", .ceil), ("partial", .pdiff), ("nabla", .nabla), ("dif", .dif), ("cases", .cases),
     ("vec", .vec), ("mat", .mat), ("sum", .sum), ("product", .prod), ("in", .inn),
     ("limits", .limits), ("lr", .lr)]
 

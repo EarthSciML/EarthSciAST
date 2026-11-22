@@ -578,8 +578,8 @@
       "class": "semantic",
       "phase": 5,
       "area": "other",
-      "note": "One predicate decides the derivative axis everywhere (classification, units, equation balance, DAE analysis): D with wrt absent or \"t\" is the time derivative, any other wrt (including the declared independent variable's name) is a spatial rewrite target.",
-      "concern": "The section says wrt \"t\" is always the structural time derivative, yet its rationale says reading wrt: \"t\" as the independent variable in a document that renames it to s and declares t as air temperature would leave d/d(air temperature) unwritable, which implies wrt \"t\" should then mean the declared variable t; and a derivative along the renamed independent variable is made a spatial rewrite target, so in such a document it is unclear what the time derivative is with respect to."
+      "note": "One predicate decides the derivative axis everywhere (classification, units, equation balance, DAE analysis): D with wrt absent or \"t\" is the time derivative; a D whose wrt names the document's declared independent variable is read at load as wrt \"t\", so it is the time derivative too; any other wrt is read as partial, a spatial rewrite target.",
+      "concern": "The rationale says reading wrt: \"t\" as the independent variable in a document that renames it to s and declares t as air temperature would leave d/d(air temperature) unwritable, but under the literal rule it is unwritable anyway: wrt \"t\" on D is the time derivative and a partial's wrt is never \"t\", so the section does not say how a derivative with respect to a declared variable named t is written."
     },
     {
       "id": "conf.5.44.1.no-structural-assertion",
@@ -899,6 +899,14 @@
       "note": "The expanded goldens of fixtures with no cross-boundary match stay those of the in-place engine, as evidence the reference form denotes the inlined meaning."
     },
     {
+      "id": "conf.5.62.core-names-fixtures",
+      "section": "5.62",
+      "quote": "Every binding that loads documents MUST assert all three.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "The operator_defines_core_op fixtures (two refused, one compound rule exempt) are asserted by every loading binding; the reservation itself is not in the Lean model (no definition registry), a follow-up."
+    },
+    {
       "id": "conf.5.60.assert-both-goldens",
       "section": "5.60",
       "quote": "A harness MUST assert both.",
@@ -909,7 +917,7 @@
     {
       "id": "conf.5.60.non-vacuity",
       "section": "5.60",
-      "quote": "**Non-vacuity.** The set MUST include a rule firing inside a template body",
+      "quote": "**Non-vacuity.** The set MUST include a rule firing inside a definition body",
       "class": "out_of_scope",
       "area": "conformance_harness",
       "note": "Non-vacuity of the rule-firing fixture set."

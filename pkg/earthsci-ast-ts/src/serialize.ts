@@ -93,7 +93,7 @@ export function toJson(file: EsmFile, options?: ToJsonOptions): string {
  * The NON-SCHEMA, loader-populated fields an `EsmFile` may carry that must
  * never reach the wire. Currently just `componentTemplates` (see
  * `EsmFile.componentTemplates` in `types.ts`): it is a load-time snapshot of
- * the per-component `expression_templates` blocks kept for flatten's merged
+ * the per-component `operators` blocks kept for flatten's merged
  * registry, not a document field, and emitting it would break the
  * load → `toJson` → load round trip against `esm-schema.json`.
  */

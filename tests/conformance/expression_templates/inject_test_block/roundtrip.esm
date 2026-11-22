@@ -27,7 +27,7 @@
                 "args": [
                   "c"
                 ],
-                "op": "D",
+                "op": "partial",
                 "wrt": "lon"
               }
             ],
@@ -44,13 +44,13 @@
               "time": 10.0,
               "tolerance": {
                 "rel": 0.0,
-                "abs": 1.0e-6
+                "abs": 1e-06
               },
               "variable": "c"
             }
           ],
           "description": "Constant field is preserved under central differences on the 288x181 grid.",
-          "expression_template_imports": [
+          "operator_imports": [
             {
               "bindings": {
                 "NLAT": 181,
@@ -79,13 +79,13 @@
               "time": 10.0,
               "tolerance": {
                 "rel": 0.0,
-                "abs": 1.0e-6
+                "abs": 1e-06
               },
               "variable": "c"
             }
           ],
           "description": "Same suite, coarser 144x91 grid — one suite, many schemes.",
-          "expression_template_imports": [
+          "operator_imports": [
             {
               "bindings": {
                 "NLAT": 91,

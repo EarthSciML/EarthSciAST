@@ -157,12 +157,13 @@ end
     @testset "an imported template library passes the same op boundary" begin
         valid = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid")
         consumer = read(joinpath(valid, "template_import_minimal.esm"), String)
-        lib = JSON3.read(read(joinpath(valid, "template_import_lib.esm"), String), Dict{String, Any})
+        # Read through the esm-2.4.0 spellings (the fixture writes `expression_templates`).
+        lib = EarthSciAST._wire_old_spellings(JSON3.read(read(joinpath(valid, "template_import_lib.esm"), String), Dict{String, Any}))
         mktempdir() do dir
             write(joinpath(dir, "template_import_minimal.esm"), consumer)
             # `arrayop` in a library body is refused by name.
             bad = deepcopy(lib)
-            bad["expression_templates"]["n_cells"]["body"] =
+            bad["operators"]["n_cells"]["body"] =
                 Dict{String, Any}("op" => "arrayop", "args" => Any["N"])
             write(joinpath(dir, "template_import_lib.esm"), JSON3.write(bad))
             err = _removed_op_error(
@@ -172,7 +173,7 @@ end
             @test occursin("removed_op", sprint(showerror, err))
             # A deprecated `pow` in a library body is rewritten, with the warning.
             dep = deepcopy(lib)
-            dep["expression_templates"]["n_cells"]["body"] =
+            dep["operators"]["n_cells"]["body"] =
                 Dict{String, Any}("op" => "pow", "args" => Any["N", 1])
             write(joinpath(dir, "template_import_lib.esm"), JSON3.write(dep))
             file = @test_logs (:warn, r"deprecated_op") match_mode = :any EarthSciAST.load_path(

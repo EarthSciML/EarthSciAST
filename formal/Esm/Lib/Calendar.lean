@@ -2,7 +2,7 @@
 -- regenerate, and `--check` in the formal CI workflow keeps this file current.
 import Esm.Expr.Template
 
-/-! The expression templates of `lib/calendar.esm` as `Esm.Expr.Template` values
+/-! The operator definitions of `lib/calendar.esm` as `Esm.Expr.Template` values
 (esm-spec §9.6.1, §9.7.1), transcribed node for node. -/
 
 namespace Esm.Lib.Calendar

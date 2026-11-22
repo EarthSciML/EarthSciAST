@@ -103,14 +103,14 @@ def test_component_function_tables_is_removed_op_naming_the_field():
 
 
 def test_removed_op_inside_a_template_body_is_rejected():
-    doc = _doc({"op": "apply_expression_template", "args": [], "name": "t", "bindings": {}})
+    doc = _doc({"op": "apply_operator", "args": [], "name": "t", "bindings": {}})
     doc["esm"] = "1.3.0"
-    doc["models"]["M"]["expression_templates"] = {
+    doc["models"]["M"]["operators"] = {
         "t": {"params": [], "body": {"op": "fn", "name": "datetime.year", "args": ["t"]}}
     }
     err = _load_error(doc)
     assert err.code == "removed_op"
-    assert "/models/M/expression_templates/t/body" in str(err)
+    assert "/models/M/operators/t/body" in str(err)
 
 
 def test_arrayop_keeps_its_own_message():

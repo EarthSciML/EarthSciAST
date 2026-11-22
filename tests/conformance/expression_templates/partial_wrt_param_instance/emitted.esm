@@ -1,0 +1,157 @@
+{
+  "esm": "2.4.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "one-operator-type conformance"
+    ],
+    "description": "esm-spec §4.2 'Reading earlier documents': the body of `deriv` holds D(f, wrt: d) with `d` a parameter, left as written at the wire boundary. The instance binding d to \"x\" reads it as partial(f, wrt: x), which the rule `central_x` lowers; the instance binding d to \"t\" keeps the time derivative. The two instances rewrite to different bodies, so they become `deriv.variant1` / `deriv.variant2`.",
+    "name": "partial_wrt_param_instance"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              -1,
+              "k",
+              "u"
+            ],
+            "op": "*"
+          }
+        },
+        {
+          "lhs": "gx",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "d": "x",
+              "f": "u"
+            },
+            "name": "deriv.variant2",
+            "op": "apply_operator"
+          }
+        },
+        {
+          "lhs": "gt",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "d": "t",
+              "f": "u"
+            },
+            "name": "deriv.variant1",
+            "op": "apply_operator"
+          }
+        }
+      ],
+      "operators": {
+        "deriv": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "op": "D",
+            "wrt": "d"
+          },
+          "defines": "deriv",
+          "params": [
+            "f",
+            "d"
+          ]
+        },
+        "central_x": {
+          "body": {
+            "args": [
+              0.5,
+              "q"
+            ],
+            "op": "*"
+          },
+          "defines": "partial",
+          "params": [
+            "q"
+          ],
+          "reference_only": true
+        },
+        "deriv.variant1": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "op": "D",
+            "wrt": "d"
+          },
+          "defines": "deriv",
+          "params": [
+            "f",
+            "d"
+          ],
+          "reference_only": true
+        },
+        "deriv.variant2": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "q": "f"
+            },
+            "name": "central_x",
+            "op": "apply_operator"
+          },
+          "defines": "deriv",
+          "params": [
+            "f",
+            "d"
+          ],
+          "reference_only": true
+        }
+      },
+      "variables": {
+        "gt": {
+          "description": "Time derivative of u",
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "gx": {
+          "description": "Spatial derivative of u",
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "k": {
+          "default": 0.1,
+          "description": "Rate",
+          "type": "parameter",
+          "units": "1"
+        },
+        "u": {
+          "default": 1,
+          "description": "Field",
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

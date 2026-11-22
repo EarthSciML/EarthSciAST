@@ -1367,6 +1367,11 @@ UNIT_FINDING_ANALYSIS = "analysis"
 #: numeric literal is read as dimensionless (esm-spec §4.8.6). A WARNING at this
 #: stage: validity is decided by the current rule alone.
 UNIT_FINDING_DIMENSIONLESS_LITERAL = "units_dimensionless_literal_mismatch"
+#: A definition's body unit disagrees with its unit expression, or a unit
+#: expression with the fixed one of ``partial`` / ``integral`` (esm-spec
+#: §9.6.12 "Units"). An error when the body's unit is determinable (the file is
+#: wrong); a WARNING, under the same code, when it is not.
+UNIT_FINDING_DEFINITION_UNIT_MISMATCH = "definition_unit_mismatch"
 
 
 @dataclass
@@ -1393,6 +1398,9 @@ class UnitFinding:
     #: as results are folded together; the structural error carries this one,
     #: since its path already names the component.
     raw_message: str = ""
+    #: Recorded by :meth:`UnitValidationResult.add_warning`: advisory, never a
+    #: defect in the file, whatever its code.
+    advisory: bool = False
 
     def __post_init__(self) -> None:
         if not self.raw_message:
@@ -1444,7 +1452,9 @@ class UnitValidationResult:
         ``findings``."""
         self.warnings.append(message)
         self.findings.append(
-            UnitFinding(code, message, lhs_units, rhs_units, path, dict(details or {}))
+            UnitFinding(
+                code, message, lhs_units, rhs_units, path, dict(details or {}), advisory=True
+            )
         )
 
     def extend(self, other: UnitValidationResult, *, path: str = "", prefix: str = "") -> None:
@@ -1742,6 +1752,10 @@ class UnitValidator:
         self.scoped_units: Mapping[str, ScopedUnit] = {}
         # The current component's declared unit strings, as written.
         self._declared_spelling: dict[str, str] = {}
+        # esm-spec §9.6.12 "Units": `definition_unit_mismatch` findings the
+        # typer met at a definition's call, as ``(is_error, message)``, drained
+        # into the result of the site being checked (:meth:`_drain_definition_findings`).
+        self._definition_findings: list[tuple[bool, str]] = []
 
     def validate_esm_file(self, esm_file: EsmFile) -> UnitValidationResult:
         """
@@ -1891,6 +1905,7 @@ class UnitValidator:
                 definition,
                 compare_declared=var_name not in blamed,
             )
+        self._drain_definition_findings(result, pointer)
 
         result.is_valid = len(result.errors) == 0
         return result
@@ -1952,6 +1967,7 @@ class UnitValidator:
         try:
             typed = self._type(definition)
         except DimensionalMismatchError as exc:
+            self._drain_definition_findings(result, path)
             # A provable inconsistency INSIDE the expression (adding metres to
             # kilograms, a transcendental with a dimensional argument).
             result.add_error(
@@ -1962,12 +1978,14 @@ class UnitValidator:
             )
             return
         except pint.PintError as exc:
+            self._drain_definition_findings(result, path)
             result.add_warning(
                 UNIT_FINDING_ANALYSIS,
                 f"Could not validate dimensions for {name}: {exc}",
                 path=path,
             )
             return
+        self._drain_definition_findings(result, path)
 
         declared_unit = self.known_units.get(name) if var.units else None
         if declared_unit is None or not compare_declared:
@@ -2166,6 +2184,7 @@ class UnitValidator:
             path = f"{pointer}/reactions/{i}"
             result.extend(self._validate_reaction(reaction), path=path)
             self._check_mass_action_rate(result, path, rs, reaction)
+        self._drain_definition_findings(result, pointer)
 
         result.is_valid = len(result.errors) == 0
         return result
@@ -2257,6 +2276,7 @@ class UnitValidator:
         string does not parse, as ``(name, units, error)``; those names stay
         undeterminable."""
         self.known_units = {}
+        self._definition_findings.clear()
         self.scoped_units = (scoped or ScopedUnits(None)).for_component(component)
         self._declared_spelling = _declared_units(component)
         unparseable = []
@@ -2352,6 +2372,7 @@ class UnitValidator:
                 UNIT_FINDING_ANALYSIS,
                 f"Could not validate dimensions for equation {equation_id}: {e}",
             )
+        self._drain_definition_findings(result)
 
         result.is_valid = len(result.errors) == 0
         return result
@@ -2396,6 +2417,7 @@ class UnitValidator:
             result.add_warning(
                 UNIT_FINDING_ANALYSIS, f"Could not validate dimensions for {context}: {e}"
             )
+        self._drain_definition_findings(result)
 
         result.is_valid = len(result.errors) == 0
         return result
@@ -2476,9 +2498,154 @@ class UnitValidator:
             return None
 
         if isinstance(expr, ExprNode):
-            return self._type_node(expr)
+            typed = self._type_node(expr)
+            if expr.template_call is not None:
+                typed = self._definition_call_unit(expr.template_call, typed)
+            return typed
 
         return None
+
+    # --- definition unit expressions (esm-spec §4.8.3, §9.6.12 "Units") -------
+
+    def _param_typed(self, call: dict, param: str) -> _Typed | None:
+        """The unit a definition parameter stands for at one call: the unit of
+        what the call binds to it — an operand's unit, or, for a parameter in a
+        structural position bound to an axis name, that coordinate's declared
+        unit."""
+        bindings = call.get("bindings") or {}
+        if param not in bindings:
+            return None
+        from .parse import _parse_expression
+
+        return self._type(_parse_expression(bindings[param]))
+
+    def _eval_unit_expr(self, x: Any, call: dict) -> _Typed | None:
+        """Evaluate a unit expression (raw JSON over the definition's params,
+        declared names, unit-bearing ``const``, ``*``, binary ``/`` and ``^``
+        with a constant exponent); ``None`` when undeterminable."""
+        params = set(call.get("params") or [])
+        if isinstance(x, str):
+            if x in params:
+                return self._param_typed(call, x)
+            unit = self._unit_of(x)
+            return None if unit is None else _Typed(unit.dimensionality, exact_scale_of(unit))
+        if isinstance(x, (int, float)) and not isinstance(x, bool):
+            return self._dimensionless
+        if not isinstance(x, dict):
+            return None
+        op = x.get("op")
+        args = x.get("args")
+        if op == "const":
+            us = x.get("units")
+            if not isinstance(us, str):
+                return self._dimensionless
+            try:
+                unit = parse_unit(us)
+            except UnparseableUnitError:
+                return None
+            return _Typed(unit.dimensionality, exact_scale_of(unit))
+        if not isinstance(args, list):
+            return None
+        if op in ("*", "/"):
+            vals = [self._eval_unit_expr(a, call) for a in args]
+            if not vals or any(v is None for v in vals):
+                return None
+            if op == "*":
+                dim, scale = vals[0]
+                for v in vals[1:]:
+                    dim, scale = dim * v.dim, scale * v.scale
+                return _Typed(dim, scale)
+            if len(vals) != 2:
+                return None
+            return _Typed(vals[0].dim / vals[1].dim, vals[0].scale / vals[1].scale)
+        if op == "^" and len(args) == 2:
+            base = self._eval_unit_expr(args[0], call)
+            e = args[1]
+            if base is None or isinstance(e, bool) or not isinstance(e, (int, float)):
+                return None
+            power = Fraction(e).limit_denominator() if isinstance(e, float) else Fraction(e)
+            dim_exp = power.numerator if power.denominator == 1 else float(power)
+            return _Typed(base.dim**dim_exp, base.scale**power)
+        return None
+
+    def _same_unit(self, a: _Typed, b: _Typed) -> bool:
+        return self._dimensions_compatible(a.dim, b.dim) and a.scale == b.scale
+
+    @staticmethod
+    def _show_unit(u: _Typed) -> str:
+        return f"{u.dim} at scale {u.scale}"
+
+    def _definition_call_unit(self, call: dict, body_u: _Typed | None) -> _Typed | None:
+        """A call's unit (esm-spec §9.6.12 "Units"): the definition's unit
+        expression when it has one, else the body's unit ``body_u``; a
+        disagreement between them, or with the fixed unit expression of
+        ``partial`` / ``integral``, is ``definition_unit_mismatch`` — an error
+        when the body's unit is determinable, a warning when it is not."""
+        uexpr = call.get("units")
+        fixed = call.get("fixed")
+        if uexpr is None and fixed is None:
+            return body_u
+        name = call.get("name")
+        declared = None if uexpr is None else self._eval_unit_expr(uexpr, call)
+        fixed_u = None if fixed is None else self._eval_unit_expr(fixed, call)
+        # The call's unit: its unit expression, else the fixed one of
+        # partial / integral, else its body's.
+        if uexpr is not None:
+            call_u = declared
+        else:
+            call_u = fixed_u if fixed_u is not None else body_u
+        for what, want in (
+            ("its unit expression", declared),
+            (f"the fixed unit expression of '{call.get('defines')}'", fixed_u),
+        ):
+            if want is None:
+                continue
+            if body_u is None:
+                self._definition_findings.append(
+                    (
+                        False,
+                        f"{UNIT_FINDING_DEFINITION_UNIT_MISMATCH} (warning): the body of "
+                        f"definition '{name}' has an undeterminable unit, so it cannot be "
+                        f"checked against {what} ('{self._show_unit(want)}') "
+                        "(esm-spec §9.6.12)",
+                    )
+                )
+            elif not self._same_unit(body_u, want):
+                self._definition_findings.append(
+                    (
+                        True,
+                        f"{UNIT_FINDING_DEFINITION_UNIT_MISMATCH}: the body of definition "
+                        f"'{name}' has unit '{self._show_unit(body_u)}', but {what} gives "
+                        f"'{self._show_unit(want)}' (esm-spec §9.6.12)",
+                    )
+                )
+        # A unit expression must itself agree with the fixed one of
+        # partial / integral.
+        if declared is not None and fixed_u is not None and not self._same_unit(declared, fixed_u):
+            self._definition_findings.append(
+                (
+                    True,
+                    f"{UNIT_FINDING_DEFINITION_UNIT_MISMATCH}: the unit expression of "
+                    f"definition '{name}' gives '{self._show_unit(declared)}', but the fixed "
+                    f"unit expression of '{call.get('defines')}' gives "
+                    f"'{self._show_unit(fixed_u)}' (esm-spec §4.2)",
+                )
+            )
+        if call_u is None:
+            return body_u if fixed is None else (fixed_u if fixed_u is not None else body_u)
+        return call_u
+
+    def _drain_definition_findings(self, result: UnitValidationResult, path: str = "") -> None:
+        """Move the ``definition_unit_mismatch`` findings the typer met into
+        ``result`` at ``path``: an error each, and each warning once."""
+        seen: set[str] = set()
+        for is_error, msg in self._definition_findings:
+            if is_error:
+                result.add_error(UNIT_FINDING_DEFINITION_UNIT_MISMATCH, msg, path=path)
+            elif msg not in seen:
+                seen.add(msg)
+                result.add_warning(UNIT_FINDING_DEFINITION_UNIT_MISMATCH, msg, path=path)
+        self._definition_findings.clear()
 
     def _literal_type(self, value: Any) -> _Typed | None:
         """The unit of a bare numeric literal (or a unit-less ``const``):
@@ -2760,9 +2927,26 @@ class UnitValidator:
                 args[0].dim / wrt_unit.dimensionality, args[0].scale / exact_scale_of(wrt_unit)
             )
 
-        # Structural / array / query / rewrite-target ops (index, aggregate,
-        # const, makearray, integral, ...) carry no dimensional
-        # rule here. Report UNKNOWN, not dimensionless.
+        if op == "partial":
+            # esm 2.4.0 (esm-spec §4.2): `partial(f, b…; wrt: x)` has the unit
+            # [f]/[x], resolved or not; trailing operands never enter it (they
+            # were typed above for their own findings). A coordinate with no
+            # declared unit makes it undeterminable.
+            w = self._unit_of(node.wrt) if isinstance(node.wrt, str) else None
+            if args[0] is None or w is None:
+                return None
+            return _Typed(args[0].dim / w.dimensionality, args[0].scale / exact_scale_of(w))
+
+        if op == "integral":
+            # `integral(f; var: v, …)` has the unit [f]·[v] (esm-spec §4.2).
+            v = self._unit_of(node.var) if isinstance(node.var, str) else None
+            if args[0] is None or v is None:
+                return None
+            return _Typed(args[0].dim * v.dimensionality, args[0].scale * exact_scale_of(v))
+
+        # Structural / array / query ops (index, aggregate, const, makearray,
+        # ...) and every other defined operator carry no dimensional rule
+        # here. Report UNKNOWN, not dimensionless.
         return None
 
     def _type_array_element(self, node: ExprNode) -> _Typed | None:

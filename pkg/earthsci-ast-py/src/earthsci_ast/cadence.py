@@ -358,7 +358,7 @@ def child_exprs(node: Mapping[str, Any]) -> Iterator[Any]:
         yield from values
     # A template body reads only its bindings, so a call's class is the join of
     # its bindings' classes.
-    if node.get("op") == "apply_expression_template":
+    if node.get("op") == "apply_operator":
         bindings = node.get("bindings")
         if isinstance(bindings, Mapping):
             yield from bindings.values()
@@ -692,7 +692,15 @@ def model_from_doc(doc: Mapping[str, Any], model_name: str) -> dict[str, Any]:
 
     Returns a shallow copy with ``data_sources`` and ``index_sets`` added (the
     parsed document is left unmutated). Raises :class:`CadenceError` if the model
-    is absent."""
+    is absent.
+
+    The document is read through the esm-2.4.0 wire boundary's old-spelling
+    pass first (esm-spec §9.6.12, §4.2: ``apply_expression_template`` as
+    ``apply_operator``, a spatial ``D`` as ``partial``), on a copy when it spells
+    one, so a call's bindings are its children whichever spelling it has."""
+    from .parse import wire_old_spellings
+
+    doc = wire_old_spellings(doc) if isinstance(doc, dict) else doc
     models = doc.get("models", {}) or {}
     if model_name not in models:
         raise CadenceError(f"model {model_name!r} not found")

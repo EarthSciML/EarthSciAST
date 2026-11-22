@@ -1,5 +1,5 @@
 {
-  "expression_templates": {
+  "operators": {
     "bin": {
       "body": {
         "args": [],
@@ -134,6 +134,7 @@
         },
         "reduce": "+"
       },
+      "defines": "bin",
       "params": [
         "v",
         "E",
@@ -176,6 +177,7 @@
         },
         "semiring": "sum_product"
       },
+      "defines": "matches",
       "params": [
         "tbl_year",
         "want"

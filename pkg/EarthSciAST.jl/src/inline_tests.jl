@@ -598,6 +598,10 @@ function _ephemeral_injected_file(
     raw = source_path !== nothing ?
         _to_native_json(_parse_document_text(read(String(source_path), String), String(source_path))) :
         serialize_esm_file(file)
+    # The old spellings read as the new ones first (esm-spec §9.6.12), so a
+    # component's `expression_template_imports` and the test's appended
+    # `operator_imports` are one list, not two spellings of one field.
+    raw = _wire_old_spellings(raw)
     injected = false
     for kind in ("models", "reaction_systems")
         comps = get(raw, kind, nothing)
@@ -605,12 +609,12 @@ function _ephemeral_injected_file(
         haskey(comps, String(mname)) || continue
         comp = comps[String(mname)]
         comp isa AbstractDict || continue
-        existing = get(comp, "expression_template_imports", nothing)
+        existing = get(comp, "operator_imports", nothing)
         base = existing === nothing ? Any[] : Any[e for e in existing]
         for e in imports
             push!(base, _to_native_json(e))
         end
-        comp["expression_template_imports"] = base
+        comp["operator_imports"] = base
         injected = true
         break
     end

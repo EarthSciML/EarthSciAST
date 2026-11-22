@@ -721,7 +721,7 @@ end
                     )
                 )
                 @test _err(() -> EarthSciAST.load_path(p; metaparameters = Dict("NX" => 18))) ==
-                    "template_import_unknown_name"
+                    "operator_import_unknown_name"
             finally
                 rm(tmp, recursive = true, force = true)
             end

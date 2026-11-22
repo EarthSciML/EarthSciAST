@@ -50,9 +50,7 @@ def test_arrays_over_unrelated_index_sets_are_refused():
         "index_sets": {"a": {"kind": "interval", "size": 2}, "b": {"kind": "interval", "size": 3}},
         "models": {
             "M": {
-                "expression_template_imports": [
-                    {"ref": "esm:std/interp.esm", "only": ["bilinear"]}
-                ],
+                "operator_imports": [{"ref": "esm:std/interp.esm", "only": ["bilinear"]}],
                 "variables": {
                     "px": {"type": "parameter", "shape": ["a"], "default": [0.5, 1.5]},
                     "py": {"type": "parameter", "shape": ["b"], "default": [10.0, 15.0, 20.0]},
@@ -63,7 +61,7 @@ def test_arrays_over_unrelated_index_sets_are_refused():
                     {
                         "lhs": "B",
                         "rhs": {
-                            "op": "apply_expression_template",
+                            "op": "apply_operator",
                             "args": [],
                             "name": "bilinear",
                             "bindings": {
@@ -97,9 +95,9 @@ def _const(v):
 def _model_doc(variables, equations, templates=None, imports=None):
     model = {"variables": variables, "equations": equations}
     if templates is not None:
-        model["expression_templates"] = templates
+        model["operators"] = templates
     if imports is not None:
-        model["expression_template_imports"] = imports
+        model["operator_imports"] = imports
     return {
         "esm": "1.2.0",
         "metadata": {"name": "taa_probe"},
@@ -119,7 +117,7 @@ def test_an_anonymous_array_argument_is_refused():
             {
                 "lhs": "y",
                 "rhs": {
-                    "op": "apply_expression_template",
+                    "op": "apply_operator",
                     "args": [],
                     "name": "linear",
                     "bindings": {
@@ -157,7 +155,7 @@ def test_a_template_over_geometry_operands_is_not_lifted(compiler):
             {
                 "lhs": "area",
                 "rhs": {
-                    "op": "apply_expression_template",
+                    "op": "apply_operator",
                     "args": [],
                     "name": "overlap",
                     "bindings": {"a": "pa", "b": "pb"},

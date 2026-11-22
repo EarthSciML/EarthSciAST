@@ -1,6 +1,6 @@
 /**
  * Load-time resolution for esm-spec §9.7: template-library files, cross-file
- * `expression_template_imports`, and load-time `metaparameters`
+ * `operator_imports`, and load-time `metaparameters`
  * (docs/content/rfcs/template-library-imports.md; esm-libraries-spec §2.1c).
  *
  * Everything here resolves BEFORE the §9.6.3 rewrite fixpoint
@@ -16,8 +16,8 @@
  *      invoked per component from `lowerExpressionTemplates`);
  *   5. the §9.6.3 fixpoint on fully-concrete trees.
  *
- * Round-trip is Option A: `expression_template_imports`, `metaparameters`, and
- * top-level `expression_templates` do not survive `parse → emit`; the emitted
+ * Round-trip is Option A: `operator_imports`, `metaparameters`, and
+ * top-level `operators` do not survive `parse → emit`; the emitted
  * form is the expanded, folded document.
  *
  * All diagnostics are raised as `EsmMachineryError` with the stable
@@ -28,7 +28,7 @@
  * the `load*` entry points): under Node the built-in `fs` module is obtained via
  * `process.getBuiltinModule`; other environments must supply a `readFile`
  * hook. Remote (`http(s)://`) template-library refs are not fetchable from a
- * synchronous loader and are rejected as `template_import_unresolved`.
+ * synchronous loader and are rejected as `operator_import_unresolved`.
  */
 
 import {
@@ -38,6 +38,7 @@ import {
   collectApplyNames,
   composeTemplateBodies,
   deepEqual,
+  definitionDefines,
   indexSetDeclEqual,
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
@@ -65,6 +66,7 @@ import {
 import { STDLIB_BASE, classifyStdRef, readStdRef } from './stdlib.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { prepareDocumentOps } from './parse.js'
+import { NAME_KEYED_MAP_KEYS, wireOldSpellings } from './old-spellings.js'
 import { rejectConstUnitsPreV12 } from './solver.js'
 
 type Json = unknown
@@ -103,7 +105,7 @@ export interface TemplateResolveOptions {
   readFile?: ((path: string) => string) | undefined
   /**
    * Schema validator applied to each import target (a target failing schema
-   * validation is `template_import_unresolved`, mirroring the Julia
+   * validation is `operator_import_unresolved`, mirroring the Julia
    * reference). Supplied by the `load*` entry points; optional for direct/raw use.
    */
   validateSchema?: ((raw: unknown) => TemplateSchemaError[]) | undefined
@@ -157,10 +159,10 @@ function asInt(v: unknown): number | undefined {
 // ---------------------------------------------------------------------------
 
 /**
- * `expression_template_imports`, top-level `expression_templates`
+ * `operator_imports`, top-level `operators`
  * (template-library files), and `metaparameters` arrive at `esm: 0.8.0`;
  * files declaring an earlier version that carry any of them are rejected
- * with `template_import_version_too_old` (esm-spec §9.6.5). Mirrors
+ * with `operator_import_version_too_old` (esm-spec §9.6.5). Mirrors
  * `rejectExpressionTemplatesPreV04` for the §9.7 constructs.
  */
 export function rejectTemplateImportsPreV08(view: unknown): void {
@@ -173,52 +175,61 @@ export function rejectTemplateImportsPreV08(view: unknown): void {
   const minor = Number(m[2])
   if (!(major === 0 && minor < 8)) return
 
+  // The gate applies to the esm-2.4.0 names and their old spellings alike
+  // (esm-spec §9.6.5).
   const offences: string[] = []
-  if ('expression_templates' in view) offences.push('/expression_templates')
-  if ('metaparameters' in view) offences.push('/metaparameters')
-  if ('expression_template_imports' in view) offences.push('/expression_template_imports')
+  for (const k of [
+    'operators',
+    'expression_templates',
+    'metaparameters',
+    'operator_imports',
+    'expression_template_imports',
+  ]) {
+    if (k in view) offences.push(`/${k}`)
+  }
   for (const compKind of COMPONENT_KINDS) {
     const comps = view[compKind]
     if (!isObject(comps)) continue
     for (const [cname, comp] of Object.entries(comps)) {
-      if (isObject(comp) && 'expression_template_imports' in comp) {
-        offences.push(`/${compKind}/${cname}/expression_template_imports`)
+      if (!isObject(comp)) continue
+      for (const k of ['operator_imports', 'expression_template_imports']) {
+        if (k in comp) offences.push(`/${compKind}/${cname}/${k}`)
       }
     }
   }
   if (offences.length === 0) return
   throw new EsmMachineryError(
-    ERROR_CODES.TEMPLATE_IMPORT_VERSION_TOO_OLD,
-    `expression_template_imports / top-level expression_templates / metaparameters require esm >= 0.8.0; file declares ${esm}. Offending paths: ${offences.join(', ')}`,
+    ERROR_CODES.OPERATOR_IMPORT_VERSION_TOO_OLD,
+    `operator_imports / top-level operators / metaparameters (or their old spellings) require esm >= 0.8.0; file declares ${esm}. Offending paths: ${offences.join(', ')}`,
   )
 }
 
 /**
  * True when `raw` has the template-library-file FORM (top-level
- * `expression_templates`, esm-spec §9.7.1). Purity (no models / reaction
+ * `operators`, esm-spec §9.7.1). Purity (no models / reaction
  * systems / loaders / coupling / domain) is checked separately at import
  * edges.
  */
 export function isTemplateLibraryDoc(raw: unknown): boolean {
-  return isObject(raw) && 'expression_templates' in raw
+  return isObject(raw) && 'operators' in raw
 }
 
 /**
- * A document carrying top-level `expression_templates` is a template-library
+ * A document carrying top-level `operators` is a template-library
  * file (esm-spec §9.7.1), which MUST NOT declare `models`, `reaction_systems`,
  * `data_sources`, `coupling`, or `domain`. Rewrite rules are component-local
  * (§9.6.3 constraint 4), so beside a component the block is visible to
- * nothing: the document is rejected with `template_library_illegal_payload`
+ * nothing: the document is rejected with `operator_library_illegal_payload`
  * rather than loaded with the templates silently inert. An import target is
- * held to the same rule at the edge, as `template_import_not_library`.
+ * held to the same rule at the edge, as `operator_import_not_library`.
  */
 export function rejectImpureTemplateLibrary(view: unknown): void {
   if (!isObject(view) || !isTemplateLibraryDoc(view)) return
   const present = LIBRARY_FORBIDDEN_KEYS.filter((k) => k in view)
   if (present.length === 0) return
   throw new EsmMachineryError(
-    ERROR_CODES.TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
-    `top-level \`expression_templates\` makes this document a template-library file, which MUST NOT declare ${present.map((k) => `\`${k}\``).join(', ')} (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own \`expression_templates\` block (§9.6.1), or move them to a template-library file and import it with \`expression_template_imports\` (§9.7.2)`,
+    ERROR_CODES.OPERATOR_LIBRARY_ILLEGAL_PAYLOAD,
+    `top-level \`operators\` makes this document a template-library file, which MUST NOT declare ${present.map((k) => `\`${k}\``).join(', ')} (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own \`operators\` block (§9.6.1), or move them to a template-library file and import it with \`operator_imports\` (§9.7.2)`,
   )
 }
 
@@ -295,7 +306,7 @@ const PROTECTED_KEYS = [
   'kind',
   'description',
   'name',
-  'expression_template_imports',
+  'operator_imports',
   'metaparameters',
   'only',
   // `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
@@ -318,7 +329,9 @@ const AXIS_KEYS = ['wrt', 'dim', 'var'] as const
 // `{"op": "max", …}` into `{"op": 3, …}`, which then dies in the typed load with
 // a raw "cannot unmarshal number into `op`" instead of a diagnostic. Opaque to
 // substitution AND copied verbatim by the rename walk.
-const NODE_HEADER_KEYS = ['op', ...EXPRESSION_NODE_ANNOTATIONS] as const
+// `defines` (esm 2.4.0, esm-spec §9.6.1) names the defined operator a
+// definition is a definition of: an operator name, like `op`.
+const NODE_HEADER_KEYS = ['op', 'defines', ...EXPRESSION_NODE_ANNOTATIONS] as const
 
 // Closed-registry ids / literal enums PARAMETERIZING the node's op. Like the
 // node-header fields these are names rather than values, so they are opaque to
@@ -408,32 +421,9 @@ export const META_SUBST_SKIP_KEYS: ReadonlySet<string> = new Set<string>([
   ...OPAQUE_KEYS,
 ])
 
-// Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
-// loop symbols, template params, …). A map key is a declared name, not a field,
-// so it is never looked up in `META_SUBST_SKIP_KEYS`: a variable named `source`
-// or a template param named `label` still has its value substituted. A key in
-// both sets (`where`, `rename`, …) is skipped whole.
-export const NAME_KEYED_MAP_KEYS: ReadonlySet<string> = new Set<string>([
-  'variables',
-  'species',
-  'parameters',
-  'guesses',
-  'subsystems',
-  'expression_templates',
-  'ranges',
-  'bindings',
-  'config',
-  'coords',
-  'initial_conditions',
-  'parameter_overrides',
-  'pinned_coords',
-  'map',
-  'rename',
-  'rebind',
-  'index_set_rename',
-  'url_substitutions',
-  'where',
-])
+// `NAME_KEYED_MAP_KEYS` (keys whose value is a map keyed by author-chosen names)
+// lives in `old-spellings.ts`, which the wire boundary shares.
+export { NAME_KEYED_MAP_KEYS }
 
 /**
  * Substitute closed metaparameter names — appearing as bare strings, the
@@ -477,7 +467,7 @@ function substituteMetaparamsField(k: string, v: Json, values: Record<string, Js
 }
 
 /**
- * Metaparameter substitution over one `expression_templates` entry: the
+ * Metaparameter substitution over one `operators` entry: the
  * template's own `params` shadow like-named metaparameters inside its `body`
  * and `match` (a param is the inner binder; substitution must not capture it).
  */
@@ -662,7 +652,7 @@ export function requireMetaExpr(v: Json, ctx: string): Json {
  * environment `env` (name → int) — the importing document's metaparameter
  * scope (esm-spec §9.7.6 binding value flow). Substitutes the env names, then
  * folds with the exact-integer `tryFold` arithmetic (`/` must divide exactly;
- * 64-bit overflow is an error). Throws `template_import_unknown_name` if the
+ * 64-bit overflow is an error). Throws `operator_import_unknown_name` if the
  * expression references a name absent from `env` — the mount-edge typo
  * failure, keeping error locality at the edge that authored the expression.
  */
@@ -675,7 +665,7 @@ export function evalMetaExpr(expr: Json, env: Record<string, number>, ctx: strin
       ),
     ].sort()
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+      ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
       `${ctx}: metaparameter expression references ${
         free.join(', ') || 'a name'
       } not in the importing document's metaparameter scope (esm-spec §9.7.6)`,
@@ -813,14 +803,14 @@ function mergeNamed(
 
 function mergeScope(dst: TemplateScope, src: TemplateScope, origin: string): void {
   for (const [n, d] of Object.entries(src.templates)) {
-    mergeNamed(dst.templates, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, 'template', origin)
+    mergeNamed(dst.templates, n, d, ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT, 'template', origin)
   }
   for (const [n, d] of Object.entries(src.indexSets)) {
     mergeNamed(
       dst.indexSets,
       n,
       d,
-      ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+      ERROR_CODES.OPERATOR_IMPORT_INDEX_SET_CONFLICT,
       'index set',
       origin,
     )
@@ -830,7 +820,7 @@ function mergeScope(dst: TemplateScope, src: TemplateScope, origin: string): voi
       dst.metaparams,
       n,
       d,
-      ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+      ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT,
       'metaparameter',
       origin,
     )
@@ -889,7 +879,7 @@ function loadImportRaw(
     // the Rust binding's remote-ref stance): download the library first and
     // import it by local path.
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
+      ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED,
       `${origin}: failed to load template-library ref '${ref}': remote refs are not fetchable from the synchronous loader; download the file and import it by local path`,
     )
   }
@@ -899,7 +889,7 @@ function loadImportRaw(
     content = std !== undefined ? readStdRef(ref, std) : (opts.readFile ?? readFileSyncNode)(path)
   } catch (e) {
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
+      ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED,
       `${origin}: template-library file not found or unreadable: ${path} (from ref '${ref}'): ${e instanceof Error ? e.message : String(e)}`,
     )
   }
@@ -911,7 +901,7 @@ function loadImportRaw(
     // A source document refused for a removed operator keeps its own code.
     if (e instanceof EsmDiagnosticError && e.code === ERROR_CODES.REMOVED_OP) throw e
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
+      ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED,
       `${origin}: template-library ref '${path}' did not parse: ${e instanceof Error ? e.message : String(e)}`,
     )
   }
@@ -927,7 +917,7 @@ function loadImportRaw(
 // docs/content/rfcs/template-import-renaming.md
 // ---------------------------------------------------------------------------
 
-const APPLY_EXPRESSION_TEMPLATE_OP = 'apply_expression_template'
+const APPLY_EXPRESSION_TEMPLATE_OP = 'apply_operator'
 
 const NAME_SEGMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -947,20 +937,20 @@ function nameMap(raw: unknown, field: string, where: string): Record<string, str
   if (raw === undefined || raw === null) return out
   if (!isObject(raw)) {
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+      ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID,
       `${where}: \`${field}\` must be an object mapping names to names (esm-spec §9.7.7)`,
     )
   }
   for (const [k, v] of Object.entries(raw)) {
     if (k.length === 0) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+        ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID,
         `${where}: \`${field}\` has an empty key (esm-spec §9.7.7)`,
       )
     }
     if (!(typeof v === 'string' && isValidDottedName(v))) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+        ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID,
         `${where}: \`${field}\`.${k} target ${JSON.stringify(v)} is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)`,
       )
     }
@@ -1001,7 +991,7 @@ const RENAME_PROTECTED_KEYS = new Set<string>([
  * reference positions (`{"from": …}` values, the `wrt`/`dim`/`var` axis fields,
  * a bare-axis-name `integral` `lower`/`upper` bound, and the `where.*.shape`
  * match-scoping index-set names, in `body` and `match`
- * alike); `tplmap` rewrites `apply_expression_template.name`. Structural scalar
+ * alike); `tplmap` rewrites `apply_operator.name`. Structural scalar
  * fields (`RENAME_PROTECTED_KEYS`) and bound-index lists (range `of`) are never
  * rewritten. Pure syntactic substitution — no evaluation.
  *
@@ -1013,7 +1003,7 @@ const RENAME_PROTECTED_KEYS = new Set<string>([
  * `shape` entries are mapped through `isetmap` (an unmapped name stays as
  * spelled). Without this the rule body/registry would use the renamed set while
  * `where` still named the original, and registration would fail with
- * `template_constraint_unknown_index_set`.
+ * `operator_constraint_unknown_index_set`.
  */
 /**
  * Is `v` a join clause's `on` — a list of `[left, right]` key-column pairs
@@ -1252,7 +1242,7 @@ function collectRefNames(out: Set<string>, x: Json, shadowed: Set<string>): Set<
  * references in `from`/`wrt`/`dim`/`var` and registry `of` lists, open-metaparameter
  * names in expression positions, keyed-factor and other free names in
  * variable-reference positions and registry `offsets`/`values`,
- * `apply_expression_template.name` references). Runs after `bindings`
+ * `apply_operator.name` references). Runs after `bindings`
  * instantiation and `only` filtering, before the §9.7.4/§9.7.5 merge, so dedup
  * and conflict detection operate on post-rename names. Pure load-time
  * substitution: determinism, §9.6.3 ordering, and the expansion-depth bound are
@@ -1316,7 +1306,7 @@ function parseEdgeRenameMaps(
     !(typeof prefixRaw === 'string' && isValidDottedName(prefixRaw))
   ) {
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+      ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID,
       `${where}: \`prefix\` ${JSON.stringify(prefixRaw)} is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)`,
     )
   }
@@ -1333,7 +1323,7 @@ function requireRenameKeysExported(
   for (const k of Object.keys(rename)) {
     if (!exported.has(k)) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
+        ERROR_CODES.OPERATOR_IMPORT_RENAME_UNKNOWN_NAME,
         `${where}: \`rename\` names '${k}', which the target does not export at this edge (the surviving exports are templates after \`only\`, index sets, and metaparameters left open by this edge's \`bindings\`; esm-spec §9.7.7)`,
       )
     }
@@ -1375,7 +1365,7 @@ function buildEdgeNameMaps(
     for (const [o, n] of Object.entries(m)) {
       if (Object.prototype.hasOwnProperty.call(seen, n)) {
         throw new EsmMachineryError(
-          ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
+          ERROR_CODES.OPERATOR_IMPORT_RENAME_COLLISION,
           `${where}: ${what} names '${seen[n]}' and '${o}' both map to '${n}' after renaming (esm-spec §9.7.7)`,
         )
       }
@@ -1420,19 +1410,19 @@ function requireRebindKeysFree(
   for (const k of Object.keys(rebind)) {
     if (exported.has(k)) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
+        ERROR_CODES.OPERATOR_IMPORT_REBIND_UNKNOWN_NAME,
         `${where}: \`rebind\` names '${k}', a declared name of the target (template / index set / metaparameter) — \`rebind\` addresses only free names; use \`rename\` for declared names (esm-spec §9.7.7)`,
       )
     }
     if (surviving.bound.has(k)) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+        ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID,
         `${where}: \`rebind\` key '${k}' is a bound index symbol (\`output_idx\` / \`ranges\`) of an imported template, not a free name (esm-spec §9.7.7)`,
       )
     }
     if (!surviving.free.has(k)) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
+        ERROR_CODES.OPERATOR_IMPORT_REBIND_UNKNOWN_NAME,
         `${where}: \`rebind\` names '${k}', which does not occur free in the imported declarations (esm-spec §9.7.7)`,
       )
     }
@@ -1456,7 +1446,7 @@ function checkRenameFreshness(
   for (const t of newnames) {
     if (taken.has(t)) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
+        ERROR_CODES.OPERATOR_IMPORT_RENAME_COLLISION,
         `${where}: renamed/rebound name '${t}' collides with a name still in use inside the imported declarations (a remaining free name, a bound index symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)`,
       )
     }
@@ -1484,7 +1474,14 @@ function applyRenameToScope(
 
   const renamedTemplates: JsonObject = {}
   for (const [n, d] of Object.entries(scope.templates)) {
-    renamedTemplates[tplmap[n]!] = renameDecl(d, varmap, isetChanged, tplChanged)
+    let nd = renameDecl(d, varmap, isetChanged, tplChanged)
+    // esm 2.4.0 (esm-spec §9.6.12 "Provenance"): the defined operator a
+    // definition defines is decided in the library's own scope, so renaming
+    // its key on import does not change it.
+    if (tplmap[n] !== n && isObject(nd) && nd.defines === undefined) {
+      nd = { ...nd, defines: definitionDefines(n, d) }
+    }
+    renamedTemplates[tplmap[n]!] = nd
   }
   scope.templates = renamedTemplates
 
@@ -1513,7 +1510,7 @@ function applyRenameToScope(
 }
 
 /**
- * Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load
+ * Resolve ONE `operator_imports` entry (esm-spec §9.7.2): load
  * the target (path-scoped cycle detection over canonical refs, as §4.7),
  * verify library purity, resolve the target recursively in its own scope,
  * instantiate at this edge's `bindings`, apply `only` visibility filtering,
@@ -1528,15 +1525,15 @@ function resolveImportEntry(
 ): TemplateScope {
   if (!isObject(entry)) {
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-      `${origin}: expression_template_imports entries must be objects with a \`ref\` field`,
+      ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED,
+      `${origin}: operator_imports entries must be objects with a \`ref\` field`,
     )
   }
   const refRaw = entry.ref
   if (typeof refRaw !== 'string' || refRaw.length === 0) {
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-      `${origin}: expression_template_imports entry requires a non-empty string \`ref\``,
+      ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED,
+      `${origin}: operator_imports entry requires a non-empty string \`ref\``,
     )
   }
   // esm-spec §4.7 `${VAR}` expansion, ONCE, where the ref leaves the document —
@@ -1548,7 +1545,7 @@ function resolveImportEntry(
   if (stack.includes(canonical)) {
     const cyc = [...stack.slice(stack.indexOf(canonical)), canonical]
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_CYCLE,
+      ERROR_CODES.OPERATOR_IMPORT_CYCLE,
       `${origin}: import-graph cycle detected: ${cyc.join(' -> ')} (esm-spec §9.7.2)`,
     )
   }
@@ -1567,20 +1564,20 @@ function resolveImportEntry(
   // as a template library.
   if (isObject(raw) && 'coupling_roles' in raw) {
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
+      ERROR_CODES.OPERATOR_IMPORT_IS_COUPLING_LIBRARY,
       `${origin}: import target '${ref}' is a coupling-library file (has \`coupling_roles\`), not a template library (esm-spec §10.9)`,
     )
   }
   if (!isTemplateLibraryDoc(raw)) {
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
-      `${origin}: import target '${ref}' lacks top-level \`expression_templates\` — not a template-library file (esm-spec §9.7.1)`,
+      ERROR_CODES.OPERATOR_IMPORT_NOT_LIBRARY,
+      `${origin}: import target '${ref}' lacks top-level \`operators\` — not a template-library file (esm-spec §9.7.1)`,
     )
   }
   for (const k of LIBRARY_FORBIDDEN_KEYS) {
     if (isObject(raw) && k in raw) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
+        ERROR_CODES.OPERATOR_IMPORT_NOT_LIBRARY,
         `${origin}: import target '${ref}' declares \`${k}\` — not a pure template-library file (esm-spec §9.7.1)`,
       )
     }
@@ -1589,7 +1586,7 @@ function resolveImportEntry(
     const schemaErrors = opts.validateSchema(raw)
     if (schemaErrors.length > 0) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
+        ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED,
         `${origin}: import target '${ref}' failed schema validation: ${schemaErrors[0]!.path}: ${schemaErrors[0]!.message}`,
       )
     }
@@ -1614,7 +1611,7 @@ function resolveImportEntry(
     for (const [name, v] of Object.entries(bindingsRaw)) {
       if (!Object.prototype.hasOwnProperty.call(scope.metaparams, name)) {
         throw new EsmMachineryError(
-          ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+          ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
           `${origin}: import of '${ref}' binds metaparameter '${name}', which the target neither declares nor re-exports (esm-spec §9.7.6)`,
         )
       }
@@ -1636,7 +1633,7 @@ function resolveImportEntry(
     for (const n of keep) {
       if (!Object.prototype.hasOwnProperty.call(scope.templates, n)) {
         throw new EsmMachineryError(
-          ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+          ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
           `${origin}: \`only\` names template '${n}', which '${ref}' does not declare (esm-spec §9.7.2)`,
         )
       }
@@ -1679,7 +1676,7 @@ function resolveImportEntry(
 /**
  * Resolve one component's or library's OWN template scope (esm-spec §9.7.4):
  * its `imports` (depth-first post-order) merged first, then its own
- * `expression_templates` validated and appended in declaration order. Shared by
+ * `operators` validated and appended in declaration order. Shared by
  * `processLibrary` (recursive library files) and the root / per-component
  * blocks of `resolveTemplateMachinery`.
  *
@@ -1717,7 +1714,7 @@ function buildScope(
     for (const n of Object.keys(own)) own[n] = transformOwn(n, own[n])
   }
   for (const [n, d] of Object.entries(own)) {
-    mergeNamed(scope.templates, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, 'template', origin)
+    mergeNamed(scope.templates, n, d, ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT, 'template', origin)
   }
   return scope
 }
@@ -1737,8 +1734,8 @@ function processLibrary(
   origin: string,
   opts: TemplateResolveOptions,
 ): TemplateScope {
-  const importsRaw = isObject(raw) ? raw.expression_template_imports : undefined
-  const ownRaw = isObject(raw) ? raw.expression_templates : undefined
+  const importsRaw = isObject(raw) ? raw.operator_imports : undefined
+  const ownRaw = isObject(raw) ? raw.operators : undefined
   const scope = buildScope(importsRaw, ownRaw, dir, stack, origin, opts, true, (name, decl) =>
     lowerLibraryTemplateEnums(raw, name, decl, origin),
   )
@@ -1749,7 +1746,7 @@ function processLibrary(
         scope.indexSets,
         n,
         deepClone(d),
-        ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+        ERROR_CODES.OPERATOR_IMPORT_INDEX_SET_CONFLICT,
         'index set',
         origin,
       )
@@ -1761,7 +1758,7 @@ function processLibrary(
       scope.metaparams,
       n,
       d,
-      ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+      ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT,
       'metaparameter',
       origin,
     )
@@ -1839,7 +1836,7 @@ function expandLibraryEnumCalls(
   ): { body: Json; refs: Map<object, string> } => {
     const refs = new Map<object, string>()
     const out = rewriteJson(body, (rw, n) => {
-      if (n.op !== 'apply_expression_template') return JSON_DESCEND
+      if (n.op !== 'apply_operator') return JSON_DESCEND
       let nn = rewriteJsonChildren(rw, n, 'name') as JsonObject
       const bs = boundSymbols(n, callerParams, lits)
       if (bs === null) return nn
@@ -1886,7 +1883,7 @@ function expandLibraryEnumCalls(
   const final = new Map<string, string>()
   const rename = (body: Json, refs: Map<object, string>): Json =>
     rewriteJson(body, (rw, n) => {
-      if (n.op !== 'apply_expression_template') return JSON_DESCEND
+      if (n.op !== 'apply_operator') return JSON_DESCEND
       const nn = rewriteJsonChildren(rw, n, 'name') as JsonObject
       const key = refs.get(n)
       if (key === undefined) return nn
@@ -1982,18 +1979,14 @@ export type MountDeclaredOptions = TemplateResolveOptions & {
 
 function hasImportMachinery(raw: unknown): boolean {
   if (!isObject(raw)) return false
-  if (
-    'expression_templates' in raw ||
-    'metaparameters' in raw ||
-    'expression_template_imports' in raw
-  ) {
+  if ('operators' in raw || 'metaparameters' in raw || 'operator_imports' in raw) {
     return true
   }
   for (const compKind of COMPONENT_KINDS) {
     const comps = raw[compKind]
     if (!isObject(comps)) continue
     for (const comp of Object.values(comps)) {
-      if (isObject(comp) && 'expression_template_imports' in comp) return true
+      if (isObject(comp) && 'operator_imports' in comp) return true
     }
   }
   return false
@@ -2086,7 +2079,7 @@ export function collectMountDeclaredMetaparameters(
   // The §9.7.2 import edges one scope carries, when asked for.
   const visitImports = (holder: Record<string, unknown>): void => {
     if (!followImports) return
-    const entries = holder.expression_template_imports
+    const entries = holder.operator_imports
     if (!Array.isArray(entries)) return
     for (const entry of entries) visitRef(entry, false)
   }
@@ -2104,7 +2097,7 @@ export function collectMountDeclaredMetaparameters(
     }
   }
 
-  visitImports(raw) // a DOCUMENT-level `expression_template_imports`
+  visitImports(raw) // a DOCUMENT-level `operator_imports`
   for (const compKind of COMPONENT_KINDS) {
     const comps = raw[compKind]
     if (!isObject(comps)) continue
@@ -2233,7 +2226,7 @@ export function documentDeclaresAnExtent(raw: unknown): boolean {
  * metaparameter nobody declares used to validate clean and fail only when the
  * file was read, with a diagnostic about the loader API rather than about the
  * typo. This is the same condition checked statically, off the document alone,
- * so `validate` refuses it: `template_import_unknown_name`, the code §9.7.6
+ * so `validate` refuses it: `operator_import_unknown_name`, the code §9.7.6
  * already gives an unknown name at a binding site.
  *
  * Reachable in full here even though `extent` DISCOVERY is not implemented in
@@ -2275,7 +2268,7 @@ export function checkDataSourceExtents(
     )
     if (reachable.has(name)) continue
     throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+      ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
       `data_sources.${key}.extent binds metaparameter '${name}', which neither this document nor any document it mounts declares (esm-spec §8.9.4, §9.7.6)`,
     )
   }
@@ -2291,8 +2284,8 @@ export function checkDataSourceExtents(
  * §9.7.3 body composition.
  *
  * Returns an order-preserving plain-object tree ready for
- * `lowerExpressionTemplates` with `expression_template_imports`,
- * `metaparameters`, and top-level `expression_templates` consumed (Option A
+ * `lowerExpressionTemplates` with `operator_imports`,
+ * `metaparameters`, and top-level `operators` consumed (Option A
  * round-trip: none survives `parse → emit`), or `null` when the document
  * carries no §9.7 machinery and needs no rewrite.
  */
@@ -2301,6 +2294,8 @@ export function resolveTemplateMachinery(
   basePath: string,
   options: TemplateResolveOptions = {},
 ): JsonObject | null {
+  // Old spellings (esm-spec §9.6.12) when the caller skipped the wire boundary.
+  rawData = wireOldSpellings(rawData)
   const api = readApiBindings(options)
   const mountDeclared = options.mountDeclared ?? EMPTY_NAME_SET
 
@@ -2314,7 +2309,7 @@ export function resolveTemplateMachinery(
       .sort()
     if (unknown.length > 0) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+        ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
         `loader API binds metaparameter(s) ${unknown.join(', ')} which neither this document nor any document it mounts declares (esm-spec §9.7.6)`,
       )
     }
@@ -2330,8 +2325,7 @@ export function resolveTemplateMachinery(
   // verbatim by `finalizeDocument`, so a template-library file round-trips to
   // ITSELF. (Taken here, at the one point the clone is still untouched — a
   // snapshot after folding would preserve the folded form, not the authored one.)
-  const declaredTemplates =
-    'expression_templates' in root ? deepClone(root.expression_templates) : undefined
+  const declaredTemplates = 'operators' in root ? deepClone(root.operators) : undefined
   const declaredMetaparams = 'metaparameters' in root ? deepClone(root.metaparameters) : undefined
 
   // Phase 1 — collect this document's metaparameter + index-set registries.
@@ -2339,7 +2333,7 @@ export function resolveTemplateMachinery(
   const docIsets = collectRootIndexSets(root)
 
   // Phase 2 — root template-library file: its own imports + templates.
-  const isLibrary = 'expression_templates' in root
+  const isLibrary = 'operators' in root
   const topTemplates = isLibrary
     ? resolveRootLibraryScope(root, docIsets, docMeta, baseDir, stack, options)
     : {}
@@ -2361,7 +2355,7 @@ export function resolveTemplateMachinery(
   // (§4.7 "Index-set merge"), so an axis this scope cannot size stays symbolic
   // instead of being `metaparameter_unbound` here. Without it, whether a mounted
   // leaf accepts an assembler-scoped axis turned on `hasImportMachinery` — a
-  // whole-document boolean — so adding an `expression_template_imports` entry
+  // whole-document boolean — so adding an `operator_imports` entry
   // for a library the leaf never calls changed whether the leaf's shape
   // resolved.
   foldClosedDocument(
@@ -2388,8 +2382,8 @@ export function resolveTemplateMachinery(
  * document `rawSource` (a fixture, or an already-emitted document for the
  * idempotency property; relative import refs resolve against `basePath`). Loads
  * `rawSource` under Option B, then materializes each component's surviving
- * reference closure into its `expression_templates` block, drops consumed
- * imports, and version-stamps `esm: 0.9.0` when any reference/materialized entry
+ * reference closure into its `operators` block, drops consumed
+ * imports, and version-stamps `esm: 2.4.0` when any reference or `operators` block
  * remains (§9.6.4 rule 8). `emitEsmString ∘ emitDocument` is a byte-wise fixed
  * point under reload. Mirrors the Julia reference `emit_document`.
  *
@@ -2443,8 +2437,8 @@ function resolveRootLibraryScope(
   options: TemplateResolveOptions,
 ): JsonObject {
   const topScope = buildScope(
-    root.expression_template_imports,
-    root.expression_templates,
+    root.operator_imports,
+    root.operators,
     baseDir,
     stack,
     DOCUMENT_ORIGIN,
@@ -2456,7 +2450,7 @@ function resolveRootLibraryScope(
       docIsets,
       n,
       d,
-      ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+      ERROR_CODES.OPERATOR_IMPORT_INDEX_SET_CONFLICT,
       'index set',
       DOCUMENT_ORIGIN,
     )
@@ -2466,7 +2460,7 @@ function resolveRootLibraryScope(
       docMeta,
       n,
       d,
-      ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+      ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT,
       'metaparameter',
       DOCUMENT_ORIGIN,
     )
@@ -2476,7 +2470,7 @@ function resolveRootLibraryScope(
 
 /**
  * Phase 3 — resolve each model / reaction-system component's own
- * `expression_template_imports` (esm-spec §9.7.2), merging index sets and
+ * `operator_imports` (esm-spec §9.7.2), merging index sets and
  * metaparameters into the document registries and replacing the component's
  * import list with its effective template block.
  */
@@ -2494,33 +2488,25 @@ function resolvePerComponentImports(
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
       // esm-spec §4.7: a `models.<k>` entry that is a bare `{ ref }` is a MOUNT
-      // EDGE, not a component, and its `expression_template_imports` are a
+      // EDGE, not a component, and its `operator_imports` are a
       // §9.7.10 form-A INJECTION addressed to the leaf the edge mounts — not an
       // import this document resolves in its own scope. Consuming them here
-      // (which ended `delete comp.expression_template_imports`) meant the edge
+      // (which ended `delete comp.operator_imports`) meant the edge
       // reached the ref resolver with its injection already gone, so a form-A
       // injection at this mount form lowered nothing at all, even with the
       // rewrite-target in the mounted leaf's own equation. The same
       // `ref`-with-no-`variables` discriminator `isTopLevelMountEdge` uses.
       if (typeof comp.ref === 'string' && comp.variables === undefined) continue
-      const imports = comp.expression_template_imports
+      const imports = comp.operator_imports
       if (imports === undefined) continue
       const corigin = `${compKind}.${cname}`
-      const cscope = buildScope(
-        imports,
-        comp.expression_templates,
-        baseDir,
-        stack,
-        corigin,
-        options,
-        false,
-      )
+      const cscope = buildScope(imports, comp.operators, baseDir, stack, corigin, options, false)
       for (const [n, d] of Object.entries(cscope.indexSets)) {
         mergeNamed(
           docIsets,
           n,
           d,
-          ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+          ERROR_CODES.OPERATOR_IMPORT_INDEX_SET_CONFLICT,
           'index set',
           corigin,
         )
@@ -2530,7 +2516,7 @@ function resolvePerComponentImports(
           docMeta,
           n,
           d,
-          ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+          ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT,
           'metaparameter',
           corigin,
         )
@@ -2538,15 +2524,15 @@ function resolvePerComponentImports(
       // The effective sequence (imports depth-first post-order, then local
       // declarations) becomes the component's template block; plain-object
       // key order IS the §9.6.3 declaration order.
-      comp.expression_templates = cscope.templates
-      delete comp.expression_template_imports
+      comp.operators = cscope.templates
+      delete comp.operator_imports
     }
   }
 }
 
 /**
  * Phase 4 — close the document's metaparameters (§9.7.6 sites 4-5): loader-API
- * bindings win, then `default`s. Throws `template_import_unknown_name` for an
+ * bindings win, then `default`s. Throws `operator_import_unknown_name` for an
  * API binding of an undeclared name, `metaparameter_unbound` if any remains
  * open. Returns the closed name → integer environment.
  *
@@ -2557,7 +2543,7 @@ function resolvePerComponentImports(
  * the names the leaf declares. Such a name is accepted and CONSUMED here — it
  * closes nothing in this scope, so it is absent from the returned environment.
  * A name in NEITHER set is still a typo and still raises
- * `template_import_unknown_name`: bindings never invent metaparameters.
+ * `operator_import_unknown_name`: bindings never invent metaparameters.
  */
 function closeMetaparameters(
   docMeta: JsonObject,
@@ -2567,7 +2553,7 @@ function closeMetaparameters(
   for (const k of Object.keys(api).sort()) {
     if (!Object.prototype.hasOwnProperty.call(docMeta, k) && !mountDeclared.has(k)) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+        ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
         `loader API binds metaparameter '${k}', which neither this document nor any document it mounts declares (esm-spec §9.7.6)`,
       )
     }
@@ -2673,7 +2659,7 @@ function substituteClosedValues(
     for (const comp of Object.values(comps)) {
       if (!isObject(comp)) continue
       for (const k of Object.keys(comp)) {
-        if (k === 'expression_templates' && isObject(comp[k])) {
+        if (k === 'operators' && isObject(comp[k])) {
           const tpl = comp[k] as JsonObject
           for (const [tn, td] of Object.entries(tpl)) {
             tpl[tn] = substituteMetaparamsDecl(td, values)
@@ -2723,7 +2709,7 @@ function foldClosedDocument(
     }
   }
   for (const [tn, td] of Object.entries(topTemplates)) {
-    foldStructuralSites(td, `document.expression_templates.${tn}`)
+    foldStructuralSites(td, `document.operators.${tn}`)
   }
   foldIndexSetSizes(docIsets, DOCUMENT_ORIGIN, openPolicy)
 }
@@ -2734,9 +2720,9 @@ function foldClosedDocument(
  *
  * esm-spec §9.6.4 rule 5. This module used to strip every §9.7 construct on the
  * way out, on the theory that Option A means "nothing §9.7 survives parse → emit".
- * That conflated a DECLARATION with a CALL SITE. A top-level `expression_templates`
+ * That conflated a DECLARATION with a CALL SITE. A top-level `operators`
  * registry and a top-level `metaparameters` block are declarations — peers of
- * `index_sets` — not `apply_expression_template` invocations. Deleting them meant a
+ * `index_sets` — not `apply_operator` invocations. Deleting them meant a
  * pure template-library file emitted as `{esm, metadata, index_sets}`: a document
  * carrying NONE of the five top-level payload keys, which the schema's top-level
  * `anyOf` rejects. With §9.6.4 rule 4 (schema validation runs on the post-expansion
@@ -2744,7 +2730,7 @@ function foldClosedDocument(
  * the instant it was loaded and re-emitted. A document kind that cannot round-trip to
  * itself is not a document kind.
  *
- * So: `expression_template_imports` is a call site and IS expanded away; the
+ * So: `operator_imports` is a call site and IS expanded away; the
  * registry and `metaparameters` are declarations and are restored VERBATIM from the
  * pre-fold snapshots. The index-set registry is attached folded, as before — index
  * sets are not §9.7 machinery and their sizes are genuinely resolved by it.
@@ -2764,13 +2750,13 @@ function finalizeDocument(
   }
 
   // CALL SITE — Option A expands it, so it does not survive.
-  delete root.expression_template_imports
+  delete root.operator_imports
 
   // DECLARATIONS — restored exactly as authored (§9.6.4 rule 5).
   if (declaredTemplates !== undefined) {
-    root.expression_templates = declaredTemplates as JsonObject
+    root.operators = declaredTemplates as JsonObject
   } else {
-    delete root.expression_templates
+    delete root.operators
   }
   if (declaredMetaparams !== undefined) {
     root.metaparameters = declaredMetaparams as JsonObject
@@ -2790,7 +2776,7 @@ function finalizeDocument(
 // entry (form B), or a §6.6/§6.7 test/analysis (form C) — may register imports
 // into a TARGET component's own scope without editing the leaf. Forms A/B are
 // applied here, at the raw-data level, BEFORE `resolveTemplateMachinery`: each
-// widens the target component's `expression_template_imports` in the §9.7.10
+// widens the target component's `operator_imports` in the §9.7.10
 // merge order (the target's own imports first, then the subsystem-ref edge,
 // then coupling entries in `coupling`-array order), so the ordinary import
 // resolver + §9.6.3 fixpoint lower the target's rewrite-targets with no engine
@@ -2802,7 +2788,7 @@ function finalizeDocument(
  * True iff a scope-directed injection (esm-spec §9.7.10) must be applied to
  * `raw` before template resolution: a non-empty subsystem-ref edge list
  * `injected` (form A), or any `coupling` entry carrying an
- * `expression_template_imports` map (form B).
+ * `operator_imports` map (form B).
  */
 function hasScopeInjection(raw: unknown, injected: readonly unknown[]): boolean {
   if (injected.length > 0) return true
@@ -2810,14 +2796,14 @@ function hasScopeInjection(raw: unknown, injected: readonly unknown[]): boolean 
   const coupling = raw.coupling
   if (!Array.isArray(coupling)) return false
   for (const entry of coupling) {
-    if (isObject(entry) && 'expression_template_imports' in entry) return true
+    if (isObject(entry) && 'operator_imports' in entry) return true
   }
   return false
 }
 
 /**
  * Append raw §9.7.2 import entries to a component's own
- * `expression_template_imports` (esm-spec §9.7.10 merge order: the target's
+ * `operator_imports` (esm-spec §9.7.10 merge order: the target's
  * own imports first, then the injected list). Each appended entry is
  * DEEP-CLONED so the caller's `imports` array is never captured by reference
  * into the mutated component. `comp` is mutated in place.
@@ -2826,16 +2812,16 @@ function hasScopeInjection(raw: unknown, injected: readonly unknown[]): boolean 
  * the same clone-based append instead of pushing entries by reference.
  */
 export function appendComponentImports(comp: JsonObject, imports: readonly unknown[]): void {
-  const existing = comp.expression_template_imports
+  const existing = comp.operator_imports
   const base: unknown[] = Array.isArray(existing) ? [...existing] : []
   for (const e of imports) base.push(deepClone(e))
-  comp.expression_template_imports = base
+  comp.operator_imports = base
 }
 
 /**
  * esm-spec §9.7.10 form A: append the subsystem-ref edge's injected §9.7.2
  * import entries to the single top-level component's own
- * `expression_template_imports`, so the referenced document is lowered under
+ * `operator_imports`, so the referenced document is lowered under
  * the assembler-chosen discretization. A referenced subsystem file holds
  * exactly one top-level model or reaction system (§4.7), the implicit target;
  * a loader-only referenced file has no expression positions, so the injection
@@ -2902,16 +2888,16 @@ function couplingReferencedSystems(entry: JsonObject): Set<string> {
 
 /**
  * esm-spec §9.7.10 form B / §10.8: for each `coupling` entry carrying an
- * `expression_template_imports` map `{ <target>: [imports...] }`, resolve
+ * `operator_imports` map `{ <target>: [imports...] }`, resolve
  * each target key to a top-level system and append its imports to that
- * system's own `expression_template_imports` (merge order §9.7.10). The map
+ * system's own `operator_imports` (merge order §9.7.10). The map
  * is consumed here (deleted from the entry) so form B does not survive
  * `parse → emit`.
  *
  * Diagnostics (esm-spec §9.6.6): a key naming no system the entry references
- * is `template_inject_target_unknown`; a key resolving to a data loader is
- * `template_inject_target_not_component`; a key resolving to neither model,
- * reaction system, nor loader is `template_inject_target_not_component`. Only
+ * is `operator_inject_target_unknown`; a key resolving to a data loader is
+ * `operator_inject_target_not_component`; a key resolving to neither model,
+ * reaction system, nor loader is `operator_inject_target_not_component`. Only
  * top-level system targets are resolved by this binding — a nested
  * `Parent.Child` key is out of scope (RFC §8.3) → `..._not_component`.
  */
@@ -2924,20 +2910,20 @@ function applyCouplingInjections(root: JsonObject): void {
     isObject(d) && Object.prototype.hasOwnProperty.call(d, k)
   for (const entry of coupling) {
     if (!isObject(entry)) continue
-    const inj = entry.expression_template_imports
+    const inj = entry.operator_imports
     if (inj === undefined || inj === null) continue
     if (!isObject(inj)) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
-        'coupling entry `expression_template_imports` must be a map from a target system name to a list of imports (esm-spec §9.7.10 / §10.8)',
+        ERROR_CODES.OPERATOR_INJECT_TARGET_NOT_COMPONENT,
+        'coupling entry `operator_imports` must be a map from a target system name to a list of imports (esm-spec §9.7.10 / §10.8)',
       )
     }
     const referenced = couplingReferencedSystems(entry)
     for (const [tname, imports] of Object.entries(inj)) {
       if (!referenced.has(tname)) {
         throw new EsmMachineryError(
-          ERROR_CODES.TEMPLATE_INJECT_TARGET_UNKNOWN,
-          `coupling entry \`expression_template_imports\` key '${tname}' names no system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry references: ${
+          ERROR_CODES.OPERATOR_INJECT_TARGET_UNKNOWN,
+          `coupling entry \`operator_imports\` key '${tname}' names no system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry references: ${
             referenced.size === 0 ? '(none)' : [...referenced].sort().join(', ')
           }.`,
         )
@@ -2949,25 +2935,25 @@ function applyCouplingInjections(root: JsonObject): void {
         comp = (rsystems as JsonObject)[tname]
       } else {
         throw new EsmMachineryError(
-          ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
-          `coupling entry \`expression_template_imports\` key '${tname}' resolves to neither a top-level model nor a reaction system (esm-spec §9.7.10). Nested \`Parent.Child\` targets are out of scope.`,
+          ERROR_CODES.OPERATOR_INJECT_TARGET_NOT_COMPONENT,
+          `coupling entry \`operator_imports\` key '${tname}' resolves to neither a top-level model nor a reaction system (esm-spec §9.7.10). Nested \`Parent.Child\` targets are out of scope.`,
         )
       }
       if (!isObject(comp)) {
         throw new EsmMachineryError(
-          ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
-          `coupling entry \`expression_template_imports\` key '${tname}' does not name a component object (esm-spec §9.7.10).`,
+          ERROR_CODES.OPERATOR_INJECT_TARGET_NOT_COMPONENT,
+          `coupling entry \`operator_imports\` key '${tname}' does not name a component object (esm-spec §9.7.10).`,
         )
       }
       if (!Array.isArray(imports)) {
         throw new EsmMachineryError(
-          ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
-          `coupling entry \`expression_template_imports\` value for '${tname}' must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8).`,
+          ERROR_CODES.OPERATOR_IMPORT_NOT_LIBRARY,
+          `coupling entry \`operator_imports\` value for '${tname}' must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8).`,
         )
       }
       appendComponentImports(comp, imports)
     }
-    delete entry.expression_template_imports
+    delete entry.operator_imports
   }
 }
 
@@ -2975,7 +2961,7 @@ function applyCouplingInjections(root: JsonObject): void {
  * esm-spec §9.7.10 forms A + B: if `raw` needs a scope-directed injection (a
  * non-empty subsystem-ref edge list `injected`, or a coupling entry carrying
  * an injection map), return a fresh plain-object tree with the injected
- * imports folded into the target components' own `expression_template_imports`,
+ * imports folded into the target components' own `operator_imports`,
  * ready for `resolveTemplateMachinery`. Returns `null` when no injection
  * applies, so the caller keeps its original fast path.
  */
@@ -3128,7 +3114,7 @@ export function applyMountIndexSetRename(
     const final = name in changed ? changed[name] : name
     if (finals.has(final)) {
       throw new EsmMachineryError(
-        ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
+        ERROR_CODES.OPERATOR_IMPORT_RENAME_COLLISION,
         `${where}: \`index_set_rename\` maps two index sets onto '${final}'; post-rename names must be distinct within one mount edge (esm-spec §4.7 / §9.7.7)`,
       )
     }

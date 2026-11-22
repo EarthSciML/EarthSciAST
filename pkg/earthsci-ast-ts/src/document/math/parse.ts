@@ -173,6 +173,8 @@ const ATOM_START_KW: ReadonlySet<Kw> = new Set<Kw>([
   'Limits',
   'Lbkg',
   'Lr',
+  'Nabla',
+  'Pdiff',
 ])
 
 /** `Math.atomStart`: tokens that can start an operand of a product. */
@@ -439,7 +441,7 @@ export function qty(n: JNum, l: readonly Factor[]): Json {
   ])
 }
 
-/** `Math.dNode`: a derivative node. */
+/** `Math.dNode`: a time-derivative node (`dNode x "t"`). */
 export function dNode(x: Json, w: string): Json {
   return jobj([
     ['args', jarr([x])],
@@ -448,13 +450,30 @@ export function dNode(x: Json, w: string): Json {
   ])
 }
 
-/** `Math.tNode`: a template application node. */
+/** `Math.pNode`: a `partial` node, the spatial derivative (spec §4.2). */
+export function pNode(x: Json, w: string): Json {
+  return jobj([
+    ['args', jarr([x])],
+    ['op', jstr('partial')],
+    ['wrt', jstr(w)],
+  ])
+}
+
+/**
+ * `Math.derivNode`: the derivative a fraction of differentials reads as: the
+ * time derivative `D` along `t`, `partial` along any other axis.
+ */
+export function derivNode(x: Json, w: string): Json {
+  return w === 't' ? dNode(x, 't') : pNode(x, w)
+}
+
+/** `Math.tNode`: a reference node (`apply_operator`, spec §9.6.2). */
 export function tNode(n: string, bs: readonly Kv[]): Json {
   return jobj([
     ['args', jarr([])],
     ['bindings', jobj(bs)],
     ['name', jstr(n)],
-    ['op', jstr('apply_expression_template')],
+    ['op', jstr('apply_operator')],
   ])
 }
 
@@ -554,11 +573,11 @@ export function keyOf(c: Ctx, ts: Toks, i: number): P<string> {
   return undefined
 }
 
-/** `Math.dCallNode`: a spatial derivative with trailing operands. */
+/** `Math.dCallNode`: `partial` with trailing operands. */
 export function dCallNode(w: string, xs: readonly Json[]): Json {
   return jobj([
     ['args', jarr(xs)],
-    ['op', jstr('D')],
+    ['op', jstr('partial')],
     ['wrt', jstr(w)],
   ])
 }
@@ -631,13 +650,13 @@ export function pItalicD(c: Ctx, ts: Toks, i: number): P<Json> {
     const r = dName(c, 'Rb', ts, i)
     if (r === undefined || !isKwTok(ts[r[1]], 'Lb')) return undefined
     const r2 = dName(c, 'Rb', ts, r[1] + 1)
-    return r2 && [dNode(jstr(r[0]), r2[0]), r2[1]]
+    return r2 && [derivNode(jstr(r[0]), r2[0]), r2[1]]
   }
   const r = dName(c, 'Rp', ts, i)
   if (r === undefined || !isKwTok(ts[r[1]], 'Slash') || !isKwTok(ts[r[1] + 1], 'Lpg'))
     return undefined
   const r2 = dName(c, 'Rp', ts, r[1] + 2)
-  return r2 && [dNode(jstr(r[0]), r2[0]), r2[1]]
+  return r2 && [derivNode(jstr(r[0]), r2[0]), r2[1]]
 }
 
 /** `Math.Row`: a row of a reduction's subscript, or an output entry. */
@@ -890,7 +909,7 @@ function pMulIn(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   }
 }
 
-/** `Math.pNot`: level 6, `not`. */
+/** `Math.pNot`: level 6, `not`, and the `\nabla` forms, whose operand is read at level 9. */
 export function pNot(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   if (f === 0) return undefined
   f -= 1
@@ -899,8 +918,41 @@ export function pNot(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
       const r = pNot(c, f, ts, i + 1)
       return r && [node('not', [r[0]]), r[1]]
     }
+    if (isKwTok(ts[i], 'Nabla')) {
+      const [o, j] = nabTail(c.sf, ts, i + 1)
+      const r = pNabArg(c, f, ts, j)
+      return r && [node(o, [r[0]]), r[1]]
+    }
     return pFrac(c, f, ts, i)
   })
+}
+
+/**
+ * `Math.nabTail`: after `\nabla`: which form it is (`\cdot` div, `\times`
+ * curl, `^{2}` laplacian, nothing grad), and where its operand starts.
+ */
+export function nabTail(sf: Sf, ts: Toks, i: number): [string, number] {
+  if (isKwTok(ts[i], 'Cdot')) return ['div', i + 1]
+  if (isKwTok(ts[i], 'Times')) return ['curl', i + 1]
+  const two = (t: Tok | undefined): boolean => t?.t === 'num' && t.n.k === 'int' && t.n.v === 2n
+  if (
+    sf === 'latex' &&
+    isKwTok(ts[i], 'Caret') &&
+    isKwTok(ts[i + 1], 'Lb') &&
+    two(ts[i + 2]) &&
+    isKwTok(ts[i + 3], 'Rb')
+  )
+    return ['laplacian', i + 4]
+  if (sf === 'typst' && isKwTok(ts[i], 'Caret') && two(ts[i + 1])) return ['laplacian', i + 2]
+  return ['grad', i]
+}
+
+/** `Math.pNabArg`: the operand of a `\nabla` form: another `\nabla` form, or a postfix-level operand. */
+export function pNabArg(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
+  if (f === 0) return undefined
+  f -= 1
+  if (isKwTok(ts[i], 'Nabla')) return pNot(c, f, ts, i)
+  return pPost(c, f, ts, i)
 }
 
 /** `Math.pFrac`: level 7, the Typst fraction, grouping to the left (`fracLoop`). */
@@ -1153,7 +1205,10 @@ export function pOpn(c: Ctx, f: number, n: string, ts: Toks, i: number): P<Json>
   return bare
 }
 
-/** `Math.pDCall`: `\operatorname{D}_{x}(u, a, b)` after the `_`. */
+/**
+ * `Math.pDCall`: `\partial_{x}(u, a, b)`, and the earlier `\operatorname{D}_{x}(u, a, b)`
+ * (read, never printed), after the `_`: `partial` with trailing operands.
+ */
 export function pDCall(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
   if (f === 0) return undefined
   f -= 1
@@ -1246,6 +1301,7 @@ export function pPrim(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
         const j = i + 1
         if (c.sf === 'typst') {
           if (isKwTok(t1, 'Dif')) return pDT(c, f, 'Dif', ts, j + 1)
+          if (isKwTok(t1, 'Pdiff') && isKwTok(ts[j + 1], 'Us')) return parenClose(j)
           if (isKwTok(t1, 'Pdiff')) return pDT(c, f, 'Pdiff', ts, j + 1)
           if (t1?.t === 'letter' && t1.c === 'd') return pItalicD(c, ts, j) ?? parenClose(j)
         }
@@ -1257,6 +1313,10 @@ export function pPrim(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
       }
       case 'Frac':
         if (isKwTok(t1, 'Lb')) return pFracL(c, f, ts, i + 2)
+        break
+      case 'Pdiff':
+        // `\partial_{x}(u, a, b)` / `partial_(x)(u, a, b)`: `partial` with trailing operands.
+        if (isKwTok(t1, 'Us')) return pDCall(c, f, ts, i + 2)
         break
       case 'Sqrt':
         if (c.sf === 'latex') return isKwTok(t1, 'Lb') ? closed(i + 2, 'Rb', 'sqrt') : undefined
@@ -1641,6 +1701,16 @@ export function pFracL(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
       ? pDApply(c, f, w[0], ts, w[1] + 1)
       : undefined
   }
+  if (isKwTok(t0, 'Pdiff') && isKwTok(ts[i + 1], 'Us')) {
+    // A quotient whose numerator starts with `\partial_{x}(…)`.
+    const x = pOr(c, f, ts, i)
+    if (x === undefined || !isKwTok(ts[x[1]], 'Rb') || !isKwTok(ts[x[1] + 1], 'Lb'))
+      return undefined
+    const y = pOr(c, f, ts, x[1] + 2)
+    return y !== undefined && isKwTok(ts[y[1]], 'Rb')
+      ? [node('/', [x[0], y[0]]), y[1] + 1]
+      : undefined
+  }
   if (isKwTok(t0, 'Pdiff')) {
     const r = pOr(c, f, ts, i + 1)
     if (r === undefined) return undefined
@@ -1648,7 +1718,9 @@ export function pFracL(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
     if (!(isKwTok(ts[j], 'Rb') && isKwTok(ts[j + 1], 'Lb') && isKwTok(ts[j + 2], 'Pdiff')))
       return undefined
     const w = pName(c.sf, ts, j + 3)
-    return w !== undefined && isKwTok(ts[w[1]], 'Rb') ? [dNode(r[0], w[0]), w[1] + 1] : undefined
+    return w !== undefined && isKwTok(ts[w[1]], 'Rb')
+      ? [derivNode(r[0], w[0]), w[1] + 1]
+      : undefined
   }
   const d = pItalicD(c, ts, i)
   if (d !== undefined) return d
@@ -1689,7 +1761,7 @@ export function pDT(c: Ctx, f: number, k: Kw, ts: Toks, i: number): P<Json> {
   const r = pOr(c, f, ts, i)
   if (r === undefined) return undefined
   const w = tail(r[1])
-  return w && [dNode(r[0], w[0]), w[1]]
+  return w && [derivNode(r[0], w[0]), w[1]]
 }
 
 /** `Math.pDApply`: a derivative operator applied to a parenthesized operand. */
@@ -1698,7 +1770,7 @@ export function pDApply(c: Ctx, f: number, w: string, ts: Toks, i: number): P<Js
   f -= 1
   if (!isKwTok(ts[i], 'Lpg')) return undefined
   const r = pOr(c, f, ts, i + 1)
-  return r !== undefined && isRp(ts[r[1]]) ? [dNode(r[0], w), r[1] + 1] : undefined
+  return r !== undefined && isRp(ts[r[1]]) ? [derivNode(r[0], w), r[1] + 1] : undefined
 }
 
 /** `Math.pCases`: `cases` rows; a chain re-nests to the right. */

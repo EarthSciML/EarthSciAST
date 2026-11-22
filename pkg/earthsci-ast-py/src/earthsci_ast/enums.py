@@ -170,9 +170,7 @@ def lower_mounted_document_enums(document: dict[str, Any]) -> dict[str, Any]:
         if node.get("op") == "enum":
             return lower_enum_ops_for_file(document, node)
         return {
-            k: lower_templates(v)
-            if k == "expression_templates" and isinstance(v, dict)
-            else walk(v)
+            k: lower_templates(v) if k == "operators" and isinstance(v, dict) else walk(v)
             for k, v in node.items()
         }
 

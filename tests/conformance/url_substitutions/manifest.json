@@ -412,7 +412,7 @@
       "id": "binding_through_unknown",
       "path": "../../invalid/url_substitution_binding_through_unknown.esm",
       "expect": "refused",
-      "error_code": "template_import_unknown_name",
+      "error_code": "operator_import_unknown_name",
       "message_contains": [
         "n_rwos"
       ]

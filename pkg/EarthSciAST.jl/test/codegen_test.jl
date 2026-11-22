@@ -168,7 +168,7 @@ const _CG = EarthSciAST
             "metadata" => Dict{String, Any}("name" => "codegen_tpl"),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
-                    "expression_templates" => Dict{String, Any}(
+                    "operators" => Dict{String, Any}(
                         "scale" => Dict{String, Any}(
                             "params" => Any["x"],
                             "body" => Dict{String, Any}("op" => "*", "args" => Any["k", "x"])
@@ -183,7 +183,7 @@ const _CG = EarthSciAST
                         Dict{String, Any}(
                             "lhs" => Dict{String, Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
                             "rhs" => Dict{String, Any}(
-                                "op" => "apply_expression_template",
+                                "op" => "apply_operator",
                                 "args" => Any[], "name" => "scale",
                                 "bindings" => Dict{String, Any}("x" => "z")
                             )
@@ -202,7 +202,7 @@ const _CG = EarthSciAST
         @test occursin("M_scale(x, k) = k * x", code)     # the template, once
         @test occursin("D(y) ~ M_scale(z, k)", code)      # the reference, a call
         @test !occursin("k * z", code)                    # not expanded
-        @test !occursin("apply_expression_template", code)
+        @test !occursin("apply_operator", code)
         @test file.component_templates !== nothing
         # The printed function and call evaluate to what the reference denotes
         # (k * z with k = 0.5, z = 2.0).
@@ -222,7 +222,7 @@ const _CG = EarthSciAST
             "metadata" => Dict{String, Any}("name" => "codegen_tpl_nested"),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
-                    "expression_templates" => Dict{String, Any}(
+                    "operators" => Dict{String, Any}(
                         "inner" => Dict{String, Any}(
                             "params" => Any["y"],
                             "body" => Dict{String, Any}("op" => "+", "args" => Any["y", "x"])
@@ -233,7 +233,7 @@ const _CG = EarthSciAST
                                 "op" => "*", "args" => Any[
                                     2.0,
                                     Dict{String, Any}(
-                                        "op" => "apply_expression_template", "args" => Any[],
+                                        "op" => "apply_operator", "args" => Any[],
                                         "name" => "inner", "bindings" => Dict{String, Any}("y" => "x")
                                     ),
                                 ]
@@ -248,7 +248,7 @@ const _CG = EarthSciAST
                         Dict{String, Any}(
                             "lhs" => Dict{String, Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
                             "rhs" => Dict{String, Any}(
-                                "op" => "apply_expression_template", "args" => Any[],
+                                "op" => "apply_operator", "args" => Any[],
                                 "name" => "outer", "bindings" => Dict{String, Any}("x" => "z")
                             )
                         ),
@@ -261,7 +261,7 @@ const _CG = EarthSciAST
         @test occursin("M_inner(y, x) = y + x", code)
         @test occursin(r"M_outer\(x, x_\) = 2(\.0)? \* M_inner\(x, x_\)", code)
         @test occursin("D(z) ~ M_outer(z, x)", code)
-        @test !occursin("apply_expression_template", code)
+        @test !occursin("apply_operator", code)
         # Expanded, the right-hand side is 2 * (z + x).
         mod = Module()
         for l in split(code, '\n')
@@ -402,7 +402,7 @@ const _CG = EarthSciAST
             e
         end
         @test err isa _CG.ExpressionTemplateError
-        @test err.code == "apply_expression_template_bindings_mismatch"
+        @test err.code == "operator_bindings_mismatch"
         @test occursin("'x'", err.message)
     end
 end

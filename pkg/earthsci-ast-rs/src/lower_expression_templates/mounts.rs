@@ -31,7 +31,7 @@ pub(crate) fn mounted_registries(doc: &mut Value) {
             let Value::Object(comp) = comp else {
                 continue;
             };
-            let Some(Value::Object(block)) = comp.get("expression_templates") else {
+            let Some(Value::Object(block)) = comp.get("operators") else {
                 continue;
             };
             let keep: Map<String, Value> = block
@@ -41,11 +41,11 @@ pub(crate) fn mounted_registries(doc: &mut Value) {
                 .collect();
             let used = comp
                 .iter()
-                .any(|(k, v)| k != "expression_templates" && has_apply_op(v));
+                .any(|(k, v)| k != "operators" && has_apply_op(v));
             if keep.is_empty() || !used {
-                comp.shift_remove("expression_templates");
+                comp.shift_remove("operators");
             } else {
-                comp.insert("expression_templates".to_string(), Value::Object(keep));
+                comp.insert("operators".to_string(), Value::Object(keep));
             }
         }
     }
@@ -76,10 +76,7 @@ fn collect_mounted_blocks(
         };
         let mut path = prefix.to_vec();
         path.push(k.clone());
-        if sub
-            .get("expression_templates")
-            .is_some_and(Value::is_object)
-        {
+        if sub.get("operators").is_some_and(Value::is_object) {
             out.push(path);
         } else {
             collect_mounted_blocks(sub, &path, out);
@@ -113,10 +110,7 @@ fn rename_outside_mounts(node: &mut Map<String, Value>, rn: &HashMap<String, Str
         let Value::Object(sub) = sub else {
             continue;
         };
-        if sub
-            .get("expression_templates")
-            .is_some_and(Value::is_object)
-        {
+        if sub.get("operators").is_some_and(Value::is_object) {
             continue;
         }
         for (k, v) in sub.iter_mut() {
@@ -128,7 +122,29 @@ fn rename_outside_mounts(node: &mut Map<String, Value>, rn: &HashMap<String, Str
     }
 }
 
-/// Merge into the component `comp`'s `expression_templates` block the template
+/// `decl` carrying its `defines`, inferred under `name` when absent (esm-spec
+/// §9.6.12). Mirrors the Julia reference `_with_defines`.
+pub(crate) fn with_defines(name: &str, decl: &Value) -> Value {
+    match decl {
+        Value::Object(obj) if !obj.contains_key("defines") => {
+            let mut nd = obj.clone();
+            nd.insert(
+                "defines".to_string(),
+                Value::String(definition_defines(name, decl)),
+            );
+            Value::Object(nd)
+        }
+        _ => decl.clone(),
+    }
+}
+
+/// Per merged registry entry, the owner paths that carry it: `""` for the
+/// mounting component itself, `Sub` or `Sub.Inner` for a subsystem below it.
+/// An entry with no record (no subsystem block was merged) is the
+/// component's own.
+pub(crate) type Owners = HashMap<String, Vec<String>>;
+
+/// Merge into the component `comp`'s `operators` block the template
 /// definitions that models mounted as its subsystems (esm-spec §4.7) brought
 /// with them (esm-spec §9.6.4 rule 1). Each mounted block joins `comp`'s by
 /// flatten's registry-merge rule ([`merge_flat_registry`]): deep-equal entries
@@ -145,40 +161,62 @@ fn rename_outside_mounts(node: &mut Map<String, Value>, rn: &HashMap<String, Str
 /// entries (under its renames); only `comp`'s other sites follow `comp`'s
 /// renames. `comp`'s `match` rules stay, ahead of the merged entries. Mirrors
 /// the Julia reference `_hoist_mounted_templates!`.
-pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str) {
+///
+/// Returns the owners of each merged match-less entry ([`Owners`]). A
+/// definition a subsystem brought is local to that subsystem (esm-spec §4.7,
+/// §9.6.12): it resolves a call, and counts for an arity, only at a position
+/// inside that subsystem; references reach it from anywhere.
+pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str) -> Owners {
     let mut mounts: Vec<Vec<String>> = Vec::new();
     collect_mounted_blocks(comp, &[], &mut mounts);
     if mounts.is_empty() {
-        return;
+        return Owners::new();
     }
     let own: Map<String, Value> = comp
-        .get("expression_templates")
+        .get("operators")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    // Each entry records the defined operator it defines under the key it was
+    // declared with, before a collision rename (esm-spec §9.6.12
+    // "Provenance").
     let mut blocks: Vec<(String, Map<String, Value>)> = vec![(
         cname.to_string(),
         own.iter()
             .filter(|(_, d)| d.get("match").is_none())
-            .map(|(n, d)| (n.clone(), d.clone()))
+            .map(|(n, d)| (n.clone(), with_defines(n, d)))
             .collect(),
     )];
     for path in &mounts {
         let p = path.join(".");
         let sub = subsystem_at_mut(comp, path).expect("collected mount point");
         let block: Map<String, Value> = sub
-            .get("expression_templates")
+            .get("operators")
             .and_then(Value::as_object)
             .map(|b| {
                 b.iter()
                     .filter(|(_, d)| d.get("match").is_none())
-                    .map(|(n, d)| (n.clone(), d.clone()))
+                    .map(|(n, d)| (n.clone(), with_defines(n, d)))
                     .collect()
             })
             .unwrap_or_default();
         blocks.push((p, block));
     }
     let (merged, rename) = merge_flat_registry(&blocks);
+    // The owners of each merged entry, under its merged name: `""` for
+    // `comp` itself, the subsystem path below `comp` for a mounted block.
+    let mut owners = Owners::new();
+    for (path, block) in &blocks {
+        let rm = rename.get(path);
+        let owner = if path == cname { "" } else { path.as_str() };
+        for n in block.keys() {
+            let key = rm.and_then(|m| m.get(n)).unwrap_or(n);
+            let os = owners.entry(key.clone()).or_default();
+            if !os.iter().any(|o| o == owner) {
+                os.push(owner.to_string());
+            }
+        }
+    }
     // Each mounted model's own references follow its renames; its block has
     // joined `comp`'s.
     for path in &mounts {
@@ -186,12 +224,12 @@ pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str
         let sub = subsystem_at_mut(comp, path).expect("collected mount point");
         if let Some(rm) = rename.get(&p) {
             for (k, v) in sub.iter_mut() {
-                if k != "expression_templates" {
+                if k != "operators" {
                     rename_apply_refs(v, rm);
                 }
             }
         }
-        sub.shift_remove("expression_templates");
+        sub.shift_remove("operators");
     }
     let rn = rename.get(cname);
     let mut newblock = Map::new();
@@ -209,11 +247,12 @@ pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str
     // `comp`'s own sites, outside the mount points.
     if let Some(rn) = rn {
         for (k, v) in comp.iter_mut() {
-            if k != "expression_templates" && k != "subsystems" {
+            if k != "operators" && k != "subsystems" {
                 rename_apply_refs(v, rn);
             }
         }
         rename_outside_mounts(comp, rn);
     }
-    comp.insert("expression_templates".to_string(), Value::Object(newblock));
+    comp.insert("operators".to_string(), Value::Object(newblock));
+    owners
 }

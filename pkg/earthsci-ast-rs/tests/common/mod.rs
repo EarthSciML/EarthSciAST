@@ -329,3 +329,101 @@ pub fn nodes_with_op<'a>(value: &'a serde_json::Value, op: &str) -> Vec<&'a serd
     walk(value, op, &mut out);
     out
 }
+
+/// `doc` read through the esm 2.4.0 wire spellings (esm-spec §9.6.12 "Old
+/// names", §4.2 "Reading earlier documents"), as a load reads it: the fields
+/// `expression_templates` / `expression_template_imports` as `operators` /
+/// `operator_imports` (never among a name-keyed map's keys), the op
+/// `apply_expression_template` as `apply_operator`, and `δ`, `∂` and a `D`
+/// whose `wrt` is present, not `"t"` and not a param of the enclosing
+/// definition as `partial`. For comparing a document as written with what a
+/// load writes back.
+#[allow(dead_code)]
+pub fn read_old_spellings(doc: &mut Value) {
+    const NAME_MAPS: [&str; 27] = [
+        "variables",
+        "species",
+        "parameters",
+        "guesses",
+        "subsystems",
+        "operators",
+        "ranges",
+        "bindings",
+        "config",
+        "coords",
+        "initial_conditions",
+        "parameter_overrides",
+        "pinned_coords",
+        "map",
+        "rename",
+        "rebind",
+        "index_set_rename",
+        "url_substitutions",
+        "where",
+        "models",
+        "reaction_systems",
+        "data_sources",
+        "index_sets",
+        "enums",
+        "metaparameters",
+        "domains",
+        "coupling_roles",
+    ];
+    fn walk(node: &mut Value, namemap: bool, params: Option<&[String]>) {
+        match node {
+            Value::Object(map) => {
+                if !namemap {
+                    for (old, new) in [
+                        ("expression_templates", "operators"),
+                        ("expression_template_imports", "operator_imports"),
+                    ] {
+                        if map.contains_key(old) {
+                            let entries = std::mem::take(map);
+                            for (k, v) in entries {
+                                map.insert(if k == old { new.to_string() } else { k }, v);
+                            }
+                        }
+                    }
+                    let new_op = match map.get("op").and_then(Value::as_str) {
+                        Some("apply_expression_template") => Some("apply_operator"),
+                        Some("δ" | "∂") => Some("partial"),
+                        Some("D") => match map.get("wrt") {
+                            None | Some(Value::Null) => None,
+                            Some(Value::String(w))
+                                if w == "t" || params.is_some_and(|p| p.contains(w)) =>
+                            {
+                                None
+                            }
+                            Some(_) => Some("partial"),
+                        },
+                        _ => None,
+                    };
+                    if let Some(op) = new_op {
+                        map.insert("op".to_string(), Value::from(op));
+                    }
+                }
+                for (k, v) in map.iter_mut() {
+                    if !namemap
+                        && k == "operators"
+                        && let Value::Object(defs) = v
+                    {
+                        for dv in defs.values_mut() {
+                            let p: Option<Vec<String>> =
+                                dv.get("params").and_then(Value::as_array).map(|a| {
+                                    a.iter()
+                                        .filter_map(|x| x.as_str().map(str::to_string))
+                                        .collect()
+                                });
+                            walk(dv, false, p.as_deref());
+                        }
+                        continue;
+                    }
+                    walk(v, !namemap && NAME_MAPS.contains(&k.as_str()), params);
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|v| walk(v, false, params)),
+            _ => {}
+        }
+    }
+    walk(doc, false, None);
+}

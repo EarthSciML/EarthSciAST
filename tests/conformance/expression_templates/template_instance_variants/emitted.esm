@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "index_sets": {
     "x": {
       "kind": "interval",
@@ -58,7 +58,7 @@
               "f": "u"
             },
             "name": "ddx.variant1",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         },
         {
@@ -69,19 +69,20 @@
               "f": "v"
             },
             "name": "ddx.variant2",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "ddx": {
           "body": {
             "args": [
               "f"
             ],
-            "op": "D",
+            "op": "partial",
             "wrt": "x"
           },
+          "defines": "ddx",
           "params": [
             "f"
           ]
@@ -132,9 +133,11 @@
               }
             }
           },
+          "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "central_2d": {
           "body": {
@@ -188,9 +191,11 @@
               }
             }
           },
+          "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "ddx.variant1": {
           "body": {
@@ -199,11 +204,13 @@
               "f": "f"
             },
             "name": "central_1d",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "ddx",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "ddx.variant2": {
           "body": {
@@ -212,11 +219,13 @@
               "f": "f"
             },
             "name": "central_2d",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "ddx",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         }
       },
       "variables": {

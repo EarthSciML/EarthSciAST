@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "index_sets": {},
   "metadata": {
     "authors": [
@@ -34,11 +34,11 @@
               "f": "u"
             },
             "name": "r1",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "r1": {
           "body": {
             "args": [],
@@ -46,11 +46,13 @@
               "f": "f"
             },
             "name": "r2",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s1",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r2": {
           "body": {
@@ -59,11 +61,13 @@
               "f": "f"
             },
             "name": "r3",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s2",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r3": {
           "body": {
@@ -72,11 +76,13 @@
               "f": "f"
             },
             "name": "r4",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s3",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r4": {
           "body": {
@@ -85,11 +91,13 @@
               "f": "f"
             },
             "name": "r5",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s4",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r5": {
           "body": {
@@ -98,11 +106,13 @@
               "f": "f"
             },
             "name": "r6",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s5",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r6": {
           "body": {
@@ -111,11 +121,13 @@
               "f": "f"
             },
             "name": "r7",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s6",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r7": {
           "body": {
@@ -124,11 +136,13 @@
               "f": "f"
             },
             "name": "r8",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s7",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r8": {
           "body": {
@@ -137,11 +151,13 @@
               "f": "f"
             },
             "name": "r9",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s8",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r9": {
           "body": {
@@ -150,11 +166,13 @@
               "f": "f"
             },
             "name": "r10",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s9",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r10": {
           "body": {
@@ -163,11 +181,13 @@
               "f": "f"
             },
             "name": "r11",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s10",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r11": {
           "body": {
@@ -176,11 +196,13 @@
               "f": "f"
             },
             "name": "r12",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s11",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r12": {
           "body": {
@@ -189,11 +211,13 @@
               "f": "f"
             },
             "name": "r13",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s12",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r13": {
           "body": {
@@ -202,11 +226,13 @@
               "f": "f"
             },
             "name": "r14",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s13",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r14": {
           "body": {
@@ -215,11 +241,13 @@
               "f": "f"
             },
             "name": "r15",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s14",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r15": {
           "body": {
@@ -228,11 +256,13 @@
               "f": "f"
             },
             "name": "r16",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s15",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r16": {
           "body": {
@@ -241,11 +271,13 @@
               "f": "f"
             },
             "name": "r17",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s16",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r17": {
           "body": {
@@ -254,11 +286,13 @@
               "f": "f"
             },
             "name": "r18",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s17",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r18": {
           "body": {
@@ -267,11 +301,13 @@
               "f": "f"
             },
             "name": "r19",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s18",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r19": {
           "body": {
@@ -280,11 +316,13 @@
               "f": "f"
             },
             "name": "r20",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s19",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r20": {
           "body": {
@@ -293,11 +331,13 @@
               "f": "f"
             },
             "name": "r21",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s20",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r21": {
           "body": {
@@ -306,11 +346,13 @@
               "f": "f"
             },
             "name": "r22",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s21",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r22": {
           "body": {
@@ -319,11 +361,13 @@
               "f": "f"
             },
             "name": "r23",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s22",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r23": {
           "body": {
@@ -332,11 +376,13 @@
               "f": "f"
             },
             "name": "r24",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s23",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r24": {
           "body": {
@@ -345,11 +391,13 @@
               "f": "f"
             },
             "name": "r25",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s24",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r25": {
           "body": {
@@ -358,11 +406,13 @@
               "f": "f"
             },
             "name": "r26",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s25",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r26": {
           "body": {
@@ -371,11 +421,13 @@
               "f": "f"
             },
             "name": "r27",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s26",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r27": {
           "body": {
@@ -384,11 +436,13 @@
               "f": "f"
             },
             "name": "r28",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s27",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r28": {
           "body": {
@@ -397,11 +451,13 @@
               "f": "f"
             },
             "name": "r29",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s28",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r29": {
           "body": {
@@ -410,11 +466,13 @@
               "f": "f"
             },
             "name": "r30",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s29",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r30": {
           "body": {
@@ -423,11 +481,13 @@
               "f": "f"
             },
             "name": "r31",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s30",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r31": {
           "body": {
@@ -436,11 +496,13 @@
               "f": "f"
             },
             "name": "r32",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s31",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r32": {
           "body": {
@@ -449,11 +511,13 @@
               "f": "f"
             },
             "name": "r33",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s32",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r33": {
           "body": {
@@ -462,11 +526,13 @@
               "f": "f"
             },
             "name": "r34",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s33",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r34": {
           "body": {
@@ -475,11 +541,13 @@
               "f": "f"
             },
             "name": "r35",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s34",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r35": {
           "body": {
@@ -488,11 +556,13 @@
               "f": "f"
             },
             "name": "r36",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s35",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r36": {
           "body": {
@@ -501,11 +571,13 @@
               "f": "f"
             },
             "name": "r37",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s36",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r37": {
           "body": {
@@ -514,11 +586,13 @@
               "f": "f"
             },
             "name": "r38",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s37",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r38": {
           "body": {
@@ -527,11 +601,13 @@
               "f": "f"
             },
             "name": "r39",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s38",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r39": {
           "body": {
@@ -540,11 +616,13 @@
               "f": "f"
             },
             "name": "r40",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s39",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r40": {
           "body": {
@@ -553,11 +631,13 @@
               "f": "f"
             },
             "name": "r41",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s40",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r41": {
           "body": {
@@ -566,11 +646,13 @@
               "f": "f"
             },
             "name": "r42",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s41",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r42": {
           "body": {
@@ -579,11 +661,13 @@
               "f": "f"
             },
             "name": "r43",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s42",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r43": {
           "body": {
@@ -592,11 +676,13 @@
               "f": "f"
             },
             "name": "r44",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s43",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r44": {
           "body": {
@@ -605,11 +691,13 @@
               "f": "f"
             },
             "name": "r45",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s44",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r45": {
           "body": {
@@ -618,11 +706,13 @@
               "f": "f"
             },
             "name": "r46",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s45",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r46": {
           "body": {
@@ -631,11 +721,13 @@
               "f": "f"
             },
             "name": "r47",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s46",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r47": {
           "body": {
@@ -644,11 +736,13 @@
               "f": "f"
             },
             "name": "r48",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s47",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r48": {
           "body": {
@@ -657,11 +751,13 @@
               "f": "f"
             },
             "name": "r49",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s48",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r49": {
           "body": {
@@ -670,11 +766,13 @@
               "f": "f"
             },
             "name": "r50",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s49",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r50": {
           "body": {
@@ -683,11 +781,13 @@
               "f": "f"
             },
             "name": "r51",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s50",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r51": {
           "body": {
@@ -696,11 +796,13 @@
               "f": "f"
             },
             "name": "r52",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s51",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r52": {
           "body": {
@@ -709,11 +811,13 @@
               "f": "f"
             },
             "name": "r53",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s52",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r53": {
           "body": {
@@ -722,11 +826,13 @@
               "f": "f"
             },
             "name": "r54",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s53",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r54": {
           "body": {
@@ -735,11 +841,13 @@
               "f": "f"
             },
             "name": "r55",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s54",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r55": {
           "body": {
@@ -748,11 +856,13 @@
               "f": "f"
             },
             "name": "r56",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s55",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r56": {
           "body": {
@@ -761,11 +871,13 @@
               "f": "f"
             },
             "name": "r57",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s56",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r57": {
           "body": {
@@ -774,11 +886,13 @@
               "f": "f"
             },
             "name": "r58",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s57",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r58": {
           "body": {
@@ -787,11 +901,13 @@
               "f": "f"
             },
             "name": "r59",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s58",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r59": {
           "body": {
@@ -800,11 +916,13 @@
               "f": "f"
             },
             "name": "r60",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s59",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r60": {
           "body": {
@@ -813,11 +931,13 @@
               "f": "f"
             },
             "name": "r61",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s60",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r61": {
           "body": {
@@ -826,11 +946,13 @@
               "f": "f"
             },
             "name": "r62",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s61",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r62": {
           "body": {
@@ -839,11 +961,13 @@
               "f": "f"
             },
             "name": "r63",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s62",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r63": {
           "body": {
@@ -852,11 +976,13 @@
               "f": "f"
             },
             "name": "r64",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "s63",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "r64": {
           "body": {
@@ -866,9 +992,11 @@
             ],
             "op": "*"
           },
+          "defines": "s64",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         }
       },
       "variables": {

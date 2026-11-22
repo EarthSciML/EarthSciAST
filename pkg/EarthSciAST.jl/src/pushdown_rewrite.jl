@@ -51,7 +51,11 @@ function desugar_pushdown(esm::AbstractDict; model_name = nothing)
     # from BOTH `esm_problem` (which runs it before flattening/provider
     # classification) and the `_build_evaluator` front door.
     _pushdown_record(esm) === nothing || return esm
-    an = _pd_analyze(esm, model_name)
+    # The analysis and the rewrite both read the esm 2.4.0 names (`operators`,
+    # `apply_operator`); a document still in the old spellings is renamed first
+    # (esm-spec §9.6.12), so its template-body containment is found.
+    doc = _wire_old_spellings(esm)
+    an = _pd_analyze(doc, model_name)
     an === nothing && return esm
     # RESIDUAL DIAGNOSTICS (CONFORMANCE_SPEC §5.5.7 "residual diagnostic"): a
     # join-shaped aggregate the recogniser could NOT read is reported here, not
@@ -61,7 +65,7 @@ function desugar_pushdown(esm::AbstractDict; model_name = nothing)
         @warn _pd_diagnostic_message(d)
     end
     an.plan === nothing && return esm
-    return _pd_apply(esm, an.mname, an.plan, an.registry)
+    return _pd_apply(doc, an.mname, an.plan, an.registry)
 end
 
 """
@@ -1025,10 +1029,10 @@ end
 # rather than overwritten.
 function _pd_register_derived!(model::AbstractDict, derived::AbstractDict, reg)
     isempty(derived) && return nothing
-    blk = get(model, "expression_templates", nothing)
+    blk = get(model, "operators", nothing)
     if !(blk isa AbstractDict)
         blk = OrderedDict{String, Any}()
-        model["expression_templates"] = blk
+        model["operators"] = blk
     end
     for (k, v) in derived
         old = get(blk, k, nothing)
@@ -1132,7 +1136,7 @@ function _pd_assert_rects_rebound(
     names = sort!(collect(stale))
     throw(
         ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
+            ERROR_CODES.OPERATOR_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
             "projection-pushdown desugar: the binning aggregate '$(Ename)' still reads " *
                 "'$(join(names, "', '"))' after its reduction axis was re-pointed onto the " *
                 "generated derived support set. Those references live in an expression-template " *

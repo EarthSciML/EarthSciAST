@@ -133,6 +133,18 @@ class ExprNode:
         repr=False,
         metadata={"kind": "internal", "wire": "__esm_template_origin"},
     )
+    # Load provenance, never on the wire: at the root of the expansion of a call
+    # whose definition has a unit expression (esm-spec §9.6.1 `units`, esm
+    # 2.4.0), what unit analysis needs to type the call without the reference —
+    # ``{"name", "defines", "params", "bindings", "units", "fixed"}`` (raw JSON;
+    # ``bindings`` the call's expanded operands, esm-spec §9.6.12 "Units"). Not
+    # part of node equality.
+    template_call: dict[str, Any] | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+        metadata={"kind": "internal", "wire": "__esm_template_call"},
+    )
 
     def __str__(self) -> str:
         """The expression as Typst math (``print_math`` under its own names)."""
@@ -203,6 +215,7 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "value",
     "units",
     "template_origin",
+    "template_call",
 )
 
 #: The ExprNode fields that annotate a node rather than parameterize its op: its
@@ -1302,6 +1315,10 @@ class EsmFile:
     # is consumed by a parameter whose `update` names it, never by a coupling
     # edge or a subsystem mount.
     data_sources: dict[str, DataSource] = field(default_factory=dict)
+    # The pre-0.3.0 runtime-operator registry. No document carries it (a
+    # top-level `operators` block is the definition payload, held in
+    # ``expression_templates``), so a load leaves it empty and the serializer
+    # never writes it.
     operators: list[Operator] = field(default_factory=list)
     registered_functions: dict[str, RegisteredFunction] = field(default_factory=dict)
     coupling: list[CouplingEntry] = field(default_factory=list)

@@ -29,7 +29,7 @@ func (e *EvaluationError) DiagnosticCode() string { return e.Code }
 // expression, including those reachable ONLY through a sidecar (non-`args`)
 // field — an aggregate's `expr`/`filter`/`key`/`join`, an integral's
 // `lower`/`upper`, a makearray's `values`, an
-// apply_expression_template's `bindings`, … The walk is the shared
+// apply_operator's `bindings`, … The walk is the shared
 // field-preserving one (mapExprChildren), so a name can never again hide from
 // it in a field the walker was not taught about (audit G1 — and G2, where a
 // false-negative Contains made the DAE contract delete a still-referenced
@@ -541,7 +541,7 @@ func evalLazyOp(node ExprNode, bindings map[string]float64) (float64, error) {
 var closedNonScalarOps = map[string]struct{}{
 	"faq": {}, "makearray": {}, "index": {}, "broadcast": {}, "reshape": {},
 	"transpose": {}, "concat": {}, "distinct": {},
-	"apply_expression_template": {}, "ic": {},
+	"apply_operator": {}, "ic": {},
 }
 
 // tryConstantFolding evaluates a node whose op is in arithOpTable and whose
@@ -582,17 +582,33 @@ func tryConstantFolding(node ExprNode) (Expression, bool) {
 // `unlowered_operator` or `unevaluable_operator`, including one sitting in an
 // `ifelse` branch that evaluation would not have taken.
 func Evaluate(expr Expression, bindings map[string]float64) (float64, error) {
-	if err := checkEvaluable(expr); err != nil {
+	return evaluateIn(expr, bindings, nil)
+}
+
+// operatorScope is the definitions in scope of an evaluated expression: the
+// registry (name → raw entry) and the declared shapes its `where` constraints
+// read. It is read only to explain an `unlowered_operator` refusal (esm-spec
+// §9.6.6); nil means no definition is in scope.
+type operatorScope struct {
+	registry map[string]any
+	shapeEnv map[string][]string
+}
+
+// evaluateIn is Evaluate with the definitions in scope of expr, which an
+// `unlowered_operator` refusal lists with the reason each was not eligible.
+func evaluateIn(expr Expression, bindings map[string]float64, scope *operatorScope) (float64, error) {
+	if err := checkEvaluableIn(expr, scope); err != nil {
 		return 0, err
 	}
 	return evaluateExpr(expr, bindings)
 }
 
-// checkEvaluable returns the diagnostic for the first operator (pre-order) in
-// expr that this scalar evaluator cannot evaluate, or nil. An op outside the
-// §4.2 evaluable core reports `unlowered_operator`; a core op with no rule here
+// checkEvaluableIn returns the diagnostic for the first operator (pre-order)
+// in expr that this scalar evaluator cannot evaluate, or nil; scope holds the
+// definitions in scope of expr (nil for none). An op outside the §4.2
+// evaluable core reports `unlowered_operator`; a core op with no rule here
 // reports `unevaluable_operator`. It evaluates nothing.
-func checkEvaluable(expr Expression) error {
+func checkEvaluableIn(expr Expression, scope *operatorScope) error {
 	node, ok := asExprNode(expr)
 	if !ok {
 		return nil
@@ -611,15 +627,15 @@ func checkEvaluable(expr Expression) error {
 		if _, ok := constVectorIndex(node); !ok {
 			return unevaluableOpError(node)
 		}
-		return checkEvaluable(node.Args[1])
+		return checkEvaluableIn(node.Args[1], scope)
 	}
 	_, lazy := lazyOps[node.Op]
 	_, arith := arithOpTable[node.Op]
 	if !lazy && !arith {
-		return unevaluableOpError(node)
+		return unevaluableOpErrorIn(node, scope)
 	}
 	for _, arg := range node.Args {
-		if err := checkEvaluable(arg); err != nil {
+		if err := checkEvaluableIn(arg, scope); err != nil {
 			return err
 		}
 	}
@@ -671,7 +687,7 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 	case "D":
 		// esm-spec §4.2 / §9.6.8: `D` is evaluable-core only in its STRUCTURAL
 		// equation-LHS role. One reaching the evaluator is an unlowered
-		// rewrite target (checkEvaluable refuses it before evaluation).
+		// rewrite target (checkEvaluableIn refuses it before evaluation).
 		return 0, unloweredDerivativeError(node)
 	}
 
@@ -793,8 +809,15 @@ func unloweredDerivativeError(node ExprNode) error {
 //     sugar, a user op such as `godunov_hamiltonian`) that a rewrite rule was
 //     supposed to eliminate before evaluation. It gets the spec-pinned,
 //     cross-binding `unlowered_operator` code — the same one the dedicated `D`
-//     arm emits above — instead of an untyped "unknown operation".
+//     arm emits above — instead of an untyped "unknown operation". The message
+//     names the call and lists each definition of the operator in scope with
+//     why it was not eligible (esm-spec §9.6.6; explainUnresolvedCall).
 func unevaluableOpError(node ExprNode) error {
+	return unevaluableOpErrorIn(node, nil)
+}
+
+// unevaluableOpErrorIn is unevaluableOpError with the definitions in scope.
+func unevaluableOpErrorIn(node ExprNode, scope *operatorScope) error {
 	if _, closed := closedNonScalarOps[node.Op]; closed {
 		return &EvaluationError{
 			Code: CodeUnevaluableOperator,
@@ -804,11 +827,26 @@ func unevaluableOpError(node ExprNode) error {
 				"(esm-spec §4.2 / §9.6.6).", node.Op),
 		}
 	}
+	callText, why := "", ""
+	if b, err := json.Marshal(node); err == nil {
+		callText = " " + string(b)
+		if call, err := decodeJSONView(b); err == nil {
+			var reg map[string]any
+			var shapes map[string][]string
+			if scope != nil {
+				reg, shapes = scope.registry, scope.shapeEnv
+			}
+			why = explainUnresolvedCall(call, reg, shapes)
+		}
+	}
+	if why != "" {
+		why = " (" + why + ")"
+	}
 	return &EvaluationError{
 		Code: CodeUnloweredOperator,
-		Message: fmt.Sprintf("unlowered rewrite-target operator '%s' reached evaluation: it is not in the "+
-			"closed evaluable core, so a rewrite rule must eliminate it before evaluation "+
-			"(esm-spec §4.2 / §9.6.8).", node.Op),
+		Message: fmt.Sprintf("unlowered call%s of the defined operator '%s'%s reached evaluation: it is "+
+			"not a core operator, so a definition in scope must resolve it before evaluation "+
+			"(esm-spec §4.2 / §9.6.8 / §9.6.12).", callText, node.Op, why),
 	}
 }
 

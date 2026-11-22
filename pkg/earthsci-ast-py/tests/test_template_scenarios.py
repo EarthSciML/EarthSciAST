@@ -82,7 +82,7 @@ def _agrees(actual: float, expected: float, tol: dict) -> bool:
 
 
 def _template_free(rhs: Any) -> bool:
-    return not any(getattr(n, "op", None) == "apply_expression_template" for n in walk(rhs))
+    return not any(getattr(n, "op", None) == "apply_operator" for n in walk(rhs))
 
 
 # --- interp
@@ -127,7 +127,7 @@ def _interp_doc(name: str, calls: list[tuple[dict, dict]]) -> dict:
             {
                 "lhs": f"out_{i}",
                 "rhs": {
-                    "op": "apply_expression_template",
+                    "op": "apply_operator",
                     "args": [],
                     "name": name,
                     "bindings": bindings,
@@ -139,7 +139,7 @@ def _interp_doc(name: str, calls: list[tuple[dict, dict]]) -> dict:
         "metadata": {"name": f"interp_{name}_scenarios"},
         "models": {
             "Probe": {
-                "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": [name]}],
+                "operator_imports": [{"ref": "esm:std/interp.esm", "only": [name]}],
                 "variables": variables,
                 "equations": equations,
             }
@@ -239,7 +239,7 @@ def _calendar_rhs(field: str) -> Any:
         "metadata": {"name": f"datetime_{field}_scenarios"},
         "models": {
             "Probe": {
-                "expression_template_imports": [{"ref": "esm:std/calendar.esm", "only": [field]}],
+                "operator_imports": [{"ref": "esm:std/calendar.esm", "only": [field]}],
                 "variables": {
                     "tu": {"type": "parameter", "default": 0.0, "units": "s"},
                     "y": {"type": "unknown", "units": "1"},
@@ -248,7 +248,7 @@ def _calendar_rhs(field: str) -> Any:
                     {
                         "lhs": "y",
                         "rhs": {
-                            "op": "apply_expression_template",
+                            "op": "apply_operator",
                             "args": [],
                             "name": field,
                             "bindings": {"t": "tu"},

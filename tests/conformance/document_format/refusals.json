@@ -116,6 +116,14 @@
       "error": "removed_op"
     },
     {
+      "id": "nabla_power_operand",
+      "kind": "refusal",
+      "description": "A nabla form's operand is read at the level of a power base, so \\nabla x^{2} is refused (grad of a power prints \\nabla \\left(x^{2}\\right)).",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\nabla x^{2}\n$$\n",
+      "error": "parse_error"
+    },
+    {
       "id": "removed_fn_typst",
       "kind": "refusal",
       "description": "A removed operator in the Typst call form.",

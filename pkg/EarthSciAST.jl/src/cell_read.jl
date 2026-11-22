@@ -281,7 +281,7 @@ function _used_names!(out::Set{String}, e, ctx = nothing, seen::IdDict{OpExpr, N
     e isa OpExpr || return out
     haskey(seen, e) && return out
     seen[e] = nothing
-    if e.op == "apply_expression_template" && ctx !== nothing && _ew_template(ctx, e.name) !== nothing
+    if e.op == "apply_operator" && ctx !== nothing && _ew_template(ctx, e.name) !== nothing
         # The names of the expansion, without expanding: the body's (less its
         # parameters, memoized per template) and the bindings' (esm-spec §9.6.11).
         union!(out, _ew_template_names(ctx, e.name))

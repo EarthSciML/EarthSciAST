@@ -316,11 +316,10 @@ func TestDocumentFormatPrintMath(t *testing.T) {
 			for _, m := range models {
 				model = m.(map[string]any)
 			}
-			if _, ok := model["expression_templates"]; ok {
-				skipped++
-				continue
-			}
-			if _, ok := esm["expression_templates"]; ok {
+			// PrintMath / ParseMath take names only (API_SPEC.md): a case
+			// with a definition block in scope reads differently, so it is
+			// checked through the document round trip only.
+			if hasOperatorBlock(model) || hasOperatorBlock(esm) {
 				skipped++
 				continue
 			}
@@ -642,4 +641,13 @@ func TestParseMathRefusesAsADocumentReadDoes(t *testing.T) {
 	if c, m := code(deep, DocumentTypst); c != CodeParseError {
 		t.Errorf("deep: %s %s", c, m)
 	}
+}
+
+// hasOperatorBlock reports whether a raw document object carries a definition
+// block, in either spelling (`operators`, or the old `expression_templates`
+// read as it, esm-spec §9.6.12).
+func hasOperatorBlock(m map[string]any) bool {
+	_, a := m["operators"]
+	_, b := m["expression_templates"]
+	return a || b
 }

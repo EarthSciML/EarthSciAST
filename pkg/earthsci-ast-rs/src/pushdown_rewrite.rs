@@ -407,13 +407,13 @@ fn pd_register_derived(
     let m = model
         .as_object_mut()
         .ok_or_else(|| PushdownRewriteError("model is not an object".into()))?;
-    if !m.get("expression_templates").is_some_and(Value::is_object) {
-        m.insert("expression_templates".into(), Value::Object(Map::new()));
+    if !m.get("operators").is_some_and(Value::is_object) {
+        m.insert("operators".into(), Value::Object(Map::new()));
     }
     let blk = m
-        .get_mut("expression_templates")
+        .get_mut("operators")
         .and_then(Value::as_object_mut)
-        .expect("expression_templates is an object");
+        .expect("operators is an object");
     for (k, v) in derived {
         let old = blk.get(&k).or_else(|| templates.and_then(|t| t.get(&k)));
         if let Some(old) = old
@@ -775,7 +775,7 @@ fn pd_detect_binning(
 // --------------------------------------------------------------------------- //
 
 /// The op name of a surviving expression-template reference.
-const APPLY_OP: &str = "apply_expression_template";
+const APPLY_OP: &str = "apply_operator";
 
 /// The component template registry of `model`, or `None`.
 ///
@@ -793,7 +793,7 @@ const APPLY_OP: &str = "apply_expression_template";
 /// and the pass declines rather than raises.
 fn pd_templates(model: &Value) -> Option<Cow<'_, Map<String, Value>>> {
     let own = model
-        .get("expression_templates")
+        .get("operators")
         .and_then(Value::as_object)
         .filter(|m| !m.is_empty());
     let base = std::env::current_dir().unwrap_or_default();
@@ -982,7 +982,7 @@ pub fn pd_diagnostic_message(d: &Value) -> String {
     let why = if g("reason") == "surviving_template_reference" {
         let tpl = d.get("template").and_then(Value::as_str);
         format!(
-            "its body carries a surviving `apply_expression_template` reference{} \
+            "its body carries a surviving `apply_operator` reference{} \
 that could not be expanded for matching",
             match tpl {
                 Some(t) => format!(" to '{t}'"),
@@ -1648,7 +1648,7 @@ fn pd_assert_rects_rebound(
     }
     let names: Vec<&str> = stale.iter().map(String::as_str).collect();
     Err(PushdownRewriteError(format!(
-        "[template_body_references_pushdown_rewritten_variable] projection-pushdown desugar: the binning aggregate '{ename}' still reads '{}' after its reduction axis was re-pointed onto the generated derived support set. Those references live in an expression-template BODY, not in the call site's `bindings`, so the rewrite — which edits call sites only, to keep the template body shared and singly-lowered (esm-spec §9.6.4 Option B) — cannot re-point them, and they would index the compact per-support cell gathers with full-grid positions. Bind the value through the template's params, or write the binning body longhand.",
+        "[operator_body_references_pushdown_rewritten_variable] projection-pushdown desugar: the binning aggregate '{ename}' still reads '{}' after its reduction axis was re-pointed onto the generated derived support set. Those references live in an expression-template BODY, not in the call site's `bindings`, so the rewrite — which edits call sites only, to keep the template body shared and singly-lowered (esm-spec §9.6.4 Option B) — cannot re-point them, and they would index the compact per-support cell gathers with full-grid positions. Bind the value through the template's params, or write the binning body longhand.",
         names.join("', '")
     )))
 }
@@ -2128,6 +2128,14 @@ pub fn desugar_pushdown<'a>(
     esm: &'a Value,
     model_name: Option<&str>,
 ) -> Result<Cow<'a, Value>, PushdownRewriteError> {
+    // A document as written may spell its definitions and references with
+    // the esm-2.3 names (esm-spec §9.6.12): it is read as a load reads it.
+    if let Some(read) = crate::old_spellings::read_silently(esm) {
+        return Ok(match desugar_pushdown(&read, model_name)? {
+            Cow::Borrowed(_) => Cow::Borrowed(esm),
+            Cow::Owned(v) => Cow::Owned(v),
+        });
+    }
     if !esm.is_object() || pushdown_record(esm).is_some() {
         return Ok(Cow::Borrowed(esm));
     }
@@ -2176,6 +2184,9 @@ pub fn desugar_pushdown<'a>(
 /// deliberately — for one that simply is NOT join-shaped: "no join here" is not
 /// a defect.
 pub fn pushdown_diagnostics(esm: &Value, model_name: Option<&str>) -> Vec<Value> {
+    if let Some(read) = crate::old_spellings::read_silently(esm) {
+        return pushdown_diagnostics(&read, model_name);
+    }
     if !esm.is_object() || pushdown_record(esm).is_some() {
         return Vec::new();
     }

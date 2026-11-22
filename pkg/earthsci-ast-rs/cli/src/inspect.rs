@@ -383,14 +383,6 @@ pub(crate) fn run_extract(
         extracted_esm.data_sources = Some(extracted_dl);
     }
 
-    if let Some(ref operators) = esm_file.operators
-        && let Some(op) = operators.get(&component)
-    {
-        let mut extracted_op = indexmap::IndexMap::new();
-        extracted_op.insert(component.clone(), op.clone());
-        extracted_esm.operators = Some(extracted_op);
-    }
-
     let output_content = to_json(&extracted_esm)?;
 
     if let Some(output_path) = output {
@@ -619,8 +611,12 @@ pub(crate) fn run_info(file: PathBuf) -> Result<(), Box<dyn std::error::Error>> 
         println!("Data Loaders: {} component(s)", data_sources.len());
     }
 
-    if let Some(ref operators) = esm_file.operators {
-        println!("Operators: {} component(s)", operators.len());
+    if let Some(operators) = esm_file
+        .expression_templates
+        .as_ref()
+        .and_then(|o| o.as_object())
+    {
+        println!("Operators: {} definition(s)", operators.len());
     }
 
     if let Some(ref coupling) = esm_file.coupling {

@@ -60,6 +60,15 @@ theorem good_times {B : List Tok} (hB : Good (.kw .lbk :: B)) : Good (.kw .times
   · exact Or.inr rfl
   · exact hB.1 u (by simpa using hu)
 
+/-- `times` before a list that does not start with a number (the operand of a curl). -/
+theorem good_times_tok {u : Tok} {B : List Tok} (hB : Good (u :: B)) (hu : startsNum [u] = false)
+    (hlp : u ≠ .kw .lp) : Good (.kw .times :: u :: B) := by
+  refine ⟨fun v hv => ?_, ⟨(fun e => absurd e hlp), (fun h => by simp [isUnits] at h), (fun _ => hu), hB.2⟩⟩
+  simp only [List.mem_cons] at hv
+  rcases hv with rfl | hv
+  · exact Or.inr rfl
+  · exact hB.1 v (by simpa using hv)
+
 theorem good_cons_lp {t : Tok} {B : List Tok} (ht : tokOK t) (hc : callEnd t = true) (hB : Good B)
     (hn : Nice B) : Good (t :: .kw .lp :: B) := by
   refine ⟨fun u hu => ?_, ⟨fun _ => hc, fun h => by simp [isUnits] at h ⊢, fun e => absurd e (tok_ne_times ht),
@@ -109,6 +118,8 @@ theorem callEnd_opn (s : String) : callEnd (.opn s) = true := by
   rw [show "op(".toList ++ Strings.quote true s ++ [')'] = ("op(".toList ++ Strings.quote true s) ++ [')'] by simp,
     List.getLast?_concat]
   rfl
+theorem tokOK_num2 : tokOK (.num (.int 2)) := by
+  show JNum.InInt64 2; unfold JNum.InInt64; decide
 
 /-- Close `Good`, `Nice` and fact goals about a printed template from the pieces in
 the context. -/
@@ -753,6 +764,65 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
       obtain ⟨hA, hAn, hAne⟩ := CH a (sizeOf_node_lt (by simp)) ha 6
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok (good_cons rfl hA hAn) hselfN.1 hselfN.2
+    | nab o n a ho ha hpr =>
+      simp only [hc] at hpr
+      obtain ⟨hA, hAn, hAne⟩ := CH a (sizeOf_node_lt (by simp)) ha 9
+      rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
+      refine mk_ok ?_ hselfN.1 hselfN.2
+      unfold nabArg
+      by_cases hN6 : startsNabla (pr c a).toks = true ∧ 6 ≤ (pr c a).lvl
+      · rw [ite_eq_left hN6]
+        obtain ⟨hB, hBn, hBne⟩ := CH a (sizeOf_node_lt (by simp)) ha 6
+        rw [at_eq, iteT hN6.2] at hB hBn hBne
+        obtain ⟨tr, htr⟩ : ∃ tr, (pr c a).toks = .kw .nabla :: tr := by
+          have h1 := hN6.1
+          cases ht : (pr c a).toks with
+          | nil => rw [ht] at h1; simp [startsNabla] at h1
+          | cons u us =>
+            rw [ht] at h1
+            cases u with
+            | kw k => cases k <;> simp [startsNabla] at h1 ⊢
+            | _ => simp [startsNabla] at h1
+        cases n with
+        | grad =>
+          simp only [nabHead, List.cons_append, List.nil_append]
+          exact good_cons rfl hB hBn
+        | div =>
+          simp only [nabHead, List.cons_append, List.nil_append]
+          exact good_cons rfl (good_cons rfl hB hBn) (nice_cons _ (by simp) rfl)
+        | lap =>
+          simp only [nabHead, List.cons_append, List.nil_append]
+          exact good_cons rfl (good_cons rfl (good_cons tokOK_num2 hB hBn) (nice_cons _ (by simp) rfl))
+            (nice_cons _ (by simp) rfl)
+        | curl =>
+          simp only [nabHead, List.cons_append, List.nil_append]
+          rw [htr] at hB ⊢
+          exact good_cons rfl (good_times_tok hB rfl (by simp)) (nice_cons _ (by simp) rfl)
+      · rw [ite_eq_right hN6]
+        cases n with
+        | grad =>
+          simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
+          exact good_cons rfl hA hAn
+        | div =>
+          simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
+          exact good_cons rfl (good_cons rfl hA hAn) (nice_cons _ (by simp) rfl)
+        | lap =>
+          simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
+          exact good_cons rfl (good_cons rfl (good_cons tokOK_num2 hA hAn) (nice_cons _ (by simp) rfl))
+            (nice_cons _ (by simp) rfl)
+        | curl =>
+          simp only [nabHead, nabArg9, true_and, List.cons_append, List.nil_append]
+          by_cases hs : startsNum ((pr c a).at .typst 9) = true
+          · rw [ite_eq_left hs]
+            have hG := good_grp hA hAn
+            simp only [grp, reduceCtorEq, ↓reduceIte] at hG ⊢
+            exact good_cons rfl (good_times_tok hG rfl (by simp)) (nice_cons _ (by simp) rfl)
+          · rw [ite_eq_right hs]
+            obtain ⟨u, r, he⟩ := List.exists_cons_of_ne_nil hAne
+            rw [he] at hA hs ⊢
+            have hu : startsNum [u] = false := by cases u <;> simp_all [startsNum]
+            have hlp : u ≠ .kw .lp := ((hAn u (by rw [he]; rfl)).1)
+            exact good_cons rfl (good_times_tok hA hu hlp) (nice_cons _ (by simp) rfl)
     | tru o ho hpr =>
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok (good_single (tokOK_txt _ (by decide))) hselfN.1 hselfN.2
@@ -913,7 +983,7 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
         exact good_append hF.1 hG (nice_cons _ (by simp) rfl)
     | dSpace w a hw hwn ha hpr =>
       simp only [hc] at hpr
-      obtain ⟨hA, hAn, hAne⟩ := CH a (sizeOf_dNode_lt a _) ha 1
+      obtain ⟨hA, hAn, hAne⟩ := CH a (sizeOf_pNode_lt a _) ha 1
       have hG := good_grp hA hAn
       obtain ⟨hW, hWn, hWl⟩ := good_nameToks c hc w
       rw [hpr] at hselfN ⊢
@@ -934,18 +1004,18 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
     | dCall w xs hw hwn hl hx hpr =>
       simp only [hc] at hpr
       obtain ⟨hW, hWn, hWl⟩ := good_nameToks c hc w
-      have hF : Good [Tok.opn "D", .kw .us, .kw .lpg] ∧ Nice [Tok.opn "D", .kw .us, .kw .lpg] := by fixed
-      have hH : Good ([Tok.opn "D", .kw .us, .kw .lpg] ++ nameToks c w ++ [.kw .rp]) :=
+      have hF : Good [Tok.kw .pdiff, .kw .us, .kw .lpg] ∧ Nice [Tok.kw .pdiff, .kw .us, .kw .lpg] := by fixed
+      have hH : Good ([Tok.kw .pdiff, .kw .us, .kw .lpg] ++ nameToks c w ++ [.kw .rp]) :=
         good_append (good_append hF.1 hW hWn) (good_single rfl) (nice_cons _ (by simp) rfl)
-      have hS := good_callToks ([Tok.opn "D", .kw .us, .kw .lpg] ++ nameToks c w ++ [.kw .rp]) hH
+      have hS := good_callToks ([Tok.kw .pdiff, .kw .us, .kw .lpg] ++ nameToks c w ++ [.kw .rp]) hH
         (lastCall_append _ ⟨by simp, fun u hu => by simp at hu; subst hu; rfl⟩) (nice_append _ (nice_append _ hF.2 (by simp)) (by simp))
         (xs.map fun x => (pr c x).at .typst 4) (fun y hy => by
           obtain ⟨x, hm, rfl⟩ := List.mem_map.1 hy
           exact ⟨(CH x (sizeOf_dCallNode_lt hm) (hx x hm) 4).1, (CH x (sizeOf_dCallNode_lt hm) (hx x hm) 4).2.1⟩)
       rw [hpr] at hselfN ⊢; simp only [mkOut, dCall] at hselfN ⊢
-      have e : [Tok.opn "D", .kw .us, .kw .lpg] ++ nameToks c w ++ [.kw .rp] ++
+      have e : [Tok.kw .pdiff, .kw .us, .kw .lpg] ++ nameToks c w ++ [.kw .rp] ++
           callToks .typst [] (xs.map fun x => (pr c x).at .typst 4) =
-          callToks .typst ([Tok.opn "D", .kw .us, .kw .lpg] ++ nameToks c w ++ [.kw .rp])
+          callToks .typst ([Tok.kw .pdiff, .kw .us, .kw .lpg] ++ nameToks c w ++ [.kw .rp])
             (xs.map fun x => (pr c x).at .typst 4) := by simp [callToks]
       rw [e] at hselfN ⊢
       exact mk_ok hS.1 hselfN.1 hselfN.2

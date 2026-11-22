@@ -374,7 +374,7 @@ function _rrt_tpl_seam_doc(nx::Int)
     off(k) = k == 0 ? "i" : Dict("op" => (k > 0 ? "+" : "-"), "args" => Any["i", abs(k)])
     lap3(a, b, c) = Dict("op" => "+", "args" => Any[a, Dict("op" => "*", "args" => Any[-2, b]), c])
     ref(name) = Dict(
-        "op" => "apply_expression_template", "args" => Any[], "name" => name,
+        "op" => "apply_operator", "args" => Any[], "name" => name,
         "bindings" => Dict("f" => "f")
     )
     elem(r, e) = Dict(
@@ -425,7 +425,7 @@ function _rrt_tpl_seam_doc(nx::Int)
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx)),
         "models" => Dict(
             "T" => Dict(
-                "expression_templates" => tpl,
+                "operators" => tpl,
                 "variables" => Dict(
                     "q" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.5),
                     "k" => Dict("type" => "parameter", "default" => 0.25)

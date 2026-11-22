@@ -87,7 +87,7 @@ func psAtomStart(t Tok) bool {
 		case KwLpg, KwLp, KwLbk, KwLnot, KwFrac, KwSqrt, KwExp, KwLn, KwLog, KwSin, KwCos,
 			KwTan, KwAsin, KwAcos, KwAtan, KwSinh, KwCosh, KwTanh, KwMin, KwMax, KwLabs,
 			KwLfloor, KwLceil, KwAbs, KwFloor, KwCeil, KwDotacc, KwBcases, KwCases,
-			KwEsmnode, KwBmat, KwVec, KwMat, KwSum, KwProd, KwLimits, KwLbkg, KwLr:
+			KwEsmnode, KwBmat, KwVec, KwMat, KwSum, KwProd, KwLimits, KwLbkg, KwLr, KwNabla, KwPdiff:
 			return true
 		}
 	}
@@ -385,14 +385,28 @@ func psQty(n JNum, l []Factor) Json {
 	return Obj{{"args", []Json{}}, {"op", "const"}, {"units", unitspell.Spell(l)}, {"value", n}}
 }
 
-// psDNode is `Math.dNode`: a derivative node.
+// psDNode is `Math.dNode`: a time-derivative node (`psDNode(x, "t")`).
 func psDNode(x Json, w string) Json {
 	return Obj{{"args", []Json{x}}, {"op", "D"}, {"wrt", w}}
 }
 
-// psTNode is `Math.tNode`: a template application node.
+// psPNode is `Math.pNode`: a `partial` node, the spatial derivative (spec §4.2).
+func psPNode(x Json, w string) Json {
+	return Obj{{"args", []Json{x}}, {"op", "partial"}, {"wrt", w}}
+}
+
+// psDerivNode is `Math.derivNode`: the derivative a fraction of differentials
+// reads as: the time derivative `D` along `t`, `partial` along any other axis.
+func psDerivNode(x Json, w string) Json {
+	if w == "t" {
+		return psDNode(x, "t")
+	}
+	return psPNode(x, w)
+}
+
+// psTNode is `Math.tNode`: a reference node (`apply_operator`, spec §9.6.2).
 func psTNode(n string, bs Obj) Json {
-	return Obj{{"args", []Json{}}, {"bindings", bs}, {"name", n}, {"op", "apply_expression_template"}}
+	return Obj{{"args", []Json{}}, {"bindings", bs}, {"name", n}, {"op", "apply_operator"}}
 }
 
 // psConstNode is `Math.constNode`: the value, and the units when there are
@@ -528,10 +542,26 @@ func psKeyOf(c Ctx, ts []Tok) (string, []Tok, bool) {
 	return "", nil, false
 }
 
-// psDCallNode is `Math.dCallNode`: a spatial derivative with trailing
-// operands.
+// psDCallNode is `Math.dCallNode`: `partial` with trailing operands.
 func psDCallNode(w string, xs []Json) Json {
-	return Obj{{"args", xs}, {"op", "D"}, {"wrt", w}}
+	return Obj{{"args", xs}, {"op", "partial"}, {"wrt", w}}
+}
+
+// psNabTail is `Math.nabTail`: after `\nabla`, which form it is (`\cdot` div,
+// `\times` curl, `^{2}` laplacian, nothing grad) and the tokens of its operand.
+func psNabTail(sf Sf, r []Tok) (string, []Tok) {
+	switch {
+	case at(r, 0, KwCdot):
+		return "div", r[1:]
+	case at(r, 0, KwTimes):
+		return "curl", r[1:]
+	case sf == SfLatex && len(r) >= 4 && r[0].isKw(KwCaret) && r[1].isKw(KwLb) && r[2].K == TNum &&
+		r[2].N.IsInt(2) && r[3].isKw(KwRb):
+		return "laplacian", r[4:]
+	case sf == SfTypst && len(r) >= 2 && r[0].isKw(KwCaret) && r[1].K == TNum && r[1].N.IsInt(2):
+		return "laplacian", r[2:]
+	}
+	return "grad", r
 }
 
 func psDeclared(c Ctx, n string) bool { return slices.Contains(c.s.Names, n) }
@@ -622,7 +652,7 @@ func psPItalicD(c Ctx, r []Tok) (Json, []Tok, bool) {
 		if !ok {
 			return nil, nil, false
 		}
-		return psDNode(n, w), r2, true
+		return psDerivNode(n, w), r2, true
 	}
 	n, r0, ok := psDName(c, KwRp, r)
 	if !ok || !atKws(r0, KwSlash, KwLpg) {
@@ -632,7 +662,7 @@ func psPItalicD(c Ctx, r []Tok) (Json, []Tok, bool) {
 	if !ok {
 		return nil, nil, false
 	}
-	return psDNode(n, w), r2, true
+	return psDerivNode(n, w), r2, true
 }
 
 // Row is `Math.Row`: a row of a reduction's subscript (a range, when IsRng),
@@ -1041,7 +1071,28 @@ func psPNot(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		}
 		return prNode("not", []Json{x}), r2, true
 	}
+	if at(ts, 0, KwNabla) {
+		o, rest := psNabTail(c.sf, ts[1:])
+		x, r2, ok := psPNabArg(c, f, rest)
+		if !ok {
+			return nil, nil, false
+		}
+		return prNode(o, []Json{x}), r2, true
+	}
 	return psPFrac(c, f, ts)
+}
+
+// psPNabArg is `Math.pNabArg`: the operand of a `\nabla` form: another
+// `\nabla` form, or a postfix-level operand.
+func psPNabArg(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
+	if f == 0 {
+		return nil, nil, false
+	}
+	f--
+	if at(ts, 0, KwNabla) {
+		return psPNot(c, f, ts)
+	}
+	return psPPost(c, f, ts)
 }
 
 // psPFrac is `Math.pFrac`: level 7, the Typst fraction, grouping to the left.
@@ -1623,6 +1674,13 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		if c.sf == SfTypst && at(r, 0, KwDif) {
 			return psPDt(c, f, KwDif, r[1:])
 		}
+		if c.sf == SfTypst && atKws(r, KwPdiff, KwUs) {
+			x, r2, ok := psPOr(c, f, r)
+			if ok && len(r2) > 0 && psIsRp(r2[0]) {
+				return x, r2[1:], true
+			}
+			return fail()
+		}
 		if c.sf == SfTypst && at(r, 0, KwPdiff) {
 			return psPDt(c, f, KwPdiff, r[1:])
 		}
@@ -1643,6 +1701,9 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 	}
 	if t0.isKw(KwFrac) && at(r, 0, KwLb) {
 		return psPFracL(c, f, r[1:])
+	}
+	if t0.isKw(KwPdiff) && at(r, 0, KwUs) {
+		return psPDCall(c, f, r[1:])
 	}
 	if t0.isKw(KwSqrt) {
 		switch {
@@ -2063,12 +2124,22 @@ func psPFracL(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		}
 		return nil, nil, false
 	}
+	if atKws(ts, KwPdiff, KwUs) {
+		x, r1, ok := psPOr(c, f, ts)
+		if ok && atKws(r1, KwRb, KwLb) {
+			y, r2, ok := psPOr(c, f, r1[2:])
+			if ok && at(r2, 0, KwRb) {
+				return prNode("/", []Json{x, y}), r2[1:], true
+			}
+		}
+		return nil, nil, false
+	}
 	if at(ts, 0, KwPdiff) {
 		x, r, ok := psPOr(c, f, ts[1:])
 		if ok && atKws(r, KwRb, KwLb, KwPdiff) {
 			w, r2, ok := psPName(c.sf, r[3:])
 			if ok && at(r2, 0, KwRb) {
-				return psDNode(x, w), r2[1:], true
+				return psDerivNode(x, w), r2[1:], true
 			}
 		}
 		return nil, nil, false
@@ -2111,7 +2182,7 @@ func psPDt(c Ctx, f int, k Kw, ts []Tok) (Json, []Tok, bool) {
 	if !ok || !at(r2, 0, KwRp) || (k == KwDif && w != "t") {
 		return nil, nil, false
 	}
-	return psDNode(x, w), r2[1:], true
+	return psDerivNode(x, w), r2[1:], true
 }
 
 // psPDApply is `Math.pDApply`: a derivative operator applied to a
@@ -2123,7 +2194,7 @@ func psPDApply(c Ctx, f int, w string, ts []Tok) (Json, []Tok, bool) {
 	f--
 	x, r, ok := psPOr(c, f, ts[1:])
 	if ok && len(r) > 0 && psIsRp(r[0]) {
-		return psDNode(x, w), r[1:], true
+		return psDerivNode(x, w), r[1:], true
 	}
 	return nil, nil, false
 }

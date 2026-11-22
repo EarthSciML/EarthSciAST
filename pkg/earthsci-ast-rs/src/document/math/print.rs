@@ -627,8 +627,20 @@ pub enum OpK {
     Land,
     Lor,
     Mm(Kw),
+    /// A `\nabla` form (`Math.OpK.nab`).
+    Nab(NabK),
     Call,
     Other,
+}
+
+/// `Math.NabK`: the four defined operators with a `\nabla` form (esm-spec
+/// §1.2): `grad`, `div`, `laplacian`, `curl`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NabK {
+    Grad,
+    Div,
+    Lap,
+    Curl,
 }
 
 /// `Math.kindOf` (with `Math.fnKw`, `Math.unKw`, `Math.cmpKw`,
@@ -637,6 +649,13 @@ pub enum OpK {
 /// (`log10` is `\log_{10}`); an open-tier name is [`OpK::Other`].
 pub fn kind_of(o: &str) -> OpK {
     use crate::op_registry::{Comparison as C, CoreOp, OtherOp as O, UnaryFn as F};
+    match o {
+        "grad" => return OpK::Nab(NabK::Grad),
+        "div" => return OpK::Nab(NabK::Div),
+        "laplacian" => return OpK::Nab(NabK::Lap),
+        "curl" => return OpK::Nab(NabK::Curl),
+        _ => {}
+    }
     let Some(core) = CoreOp::from_name(o) else {
         return OpK::Other;
     };
@@ -1113,16 +1132,53 @@ pub fn d_space(sf: Sf, w: &[Tok], a: &Out) -> Out {
     }
 }
 
-/// `Math.dCall`: a spatial derivative with trailing operands:
-/// `\operatorname{D}_{x}(u, a, b)`.
+/// `Math.dCall`: `partial` with trailing operands: `\partial_{x}(u, a, b)` /
+/// `partial_(x)(u, a, b)`.
 pub fn d_call(sf: Sf, w: &[Tok], args: Vec<Vec<Tok>>) -> Vec<Tok> {
     let open = if sf == Sf::Latex { Kw::Lb } else { Kw::Lpg };
     let close = if sf == Sf::Latex { Kw::Rb } else { Kw::Rp };
-    let mut out = vec![Tok::Opn("D".into()), kw(Kw::Us), kw(open)];
+    let mut out = vec![kw(Kw::Pdiff), kw(Kw::Us), kw(open)];
     out.extend_from_slice(w);
     out.push(kw(close));
     out.extend(call_toks(sf, vec![], args));
     out
+}
+
+/// `Math.nabHead`: what a `\nabla` form writes before its operand: `\nabla`,
+/// `\nabla \cdot`, `\nabla^{2}`, `\nabla \times` (Typst `nabla`, `nabla dot`,
+/// `nabla^2`, `nabla times`).
+pub fn nab_head(sf: Sf, n: NabK) -> Vec<Tok> {
+    match n {
+        NabK::Grad => vec![kw(Kw::Nabla)],
+        NabK::Div => vec![kw(Kw::Nabla), kw(Kw::Cdot)],
+        NabK::Lap => match sf {
+            Sf::Latex => vec![
+                kw(Kw::Nabla),
+                kw(Kw::Caret),
+                kw(Kw::Lb),
+                Tok::Num(JNum::Int(2)),
+                kw(Kw::Rb),
+            ],
+            Sf::Typst => vec![kw(Kw::Nabla), kw(Kw::Caret), Tok::Num(JNum::Int(2))],
+        },
+        NabK::Curl => vec![kw(Kw::Nabla), kw(Kw::Times)],
+    }
+}
+
+/// `Math.nabArg`: the operand of a `\nabla` form — another `\nabla` form as it
+/// is (`\nabla \cdot \nabla u` is `div(grad(u))`), anything else at the level of
+/// a power base; after the `\times` of a curl, an operand that starts with a
+/// number in parentheses (`Math.nabArg9`), so that no `\times 10^{…}` follows.
+pub fn nab_arg(sf: Sf, n: NabK, o: &Out) -> Vec<Tok> {
+    if matches!(o.toks.first(), Some(Tok::Kw(Kw::Nabla))) && 6 <= o.lvl {
+        return o.toks.clone();
+    }
+    let t = o.at(sf, 9);
+    if n == NabK::Curl && starts_num(&t) {
+        grp(sf, &t)
+    } else {
+        t
+    }
 }
 
 /// `Math.qtyToks`: the quantity: the number, then the unit as one token.
@@ -2041,17 +2097,27 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
             }
         }
         3 => {
+            // `D` is the time derivative only; a `D` along any other axis
+            // prints in the escape form (esm-spec §1.2).
             if let (Some(Json::Arr(args)), true, Some(Json::Str(w))) =
                 (field(0, "args"), str_at(1, "op", "D"), field(2, "wrt"))
             {
                 return match args.as_slice() {
+                    [a] if w == "t" => d_time(sf, &pr(c, a)),
+                    _ => esc(),
+                };
+            }
+            if let (Some(Json::Arr(args)), true, Some(Json::Str(w))) = (
+                field(0, "args"),
+                str_at(1, "op", "partial"),
+                field(2, "wrt"),
+            ) {
+                return match args.as_slice() {
                     [a] => {
-                        if w == "t" {
-                            d_time(sf, &pr(c, a))
-                        } else if name_ok(w) {
+                        if w != "t" && name_ok(w) {
                             d_space(sf, &name_toks(c, w), &pr(c, a))
                         } else {
-                            esc()
+                            opn()
                         }
                     }
                     [_, _, ..] => {
@@ -2065,10 +2131,10 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
                                 ),
                             )
                         } else {
-                            esc()
+                            opn()
                         }
                     }
-                    [] => esc(),
+                    [] => opn(),
                 };
             }
             if empty_args()
@@ -2113,7 +2179,7 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
                 && let (Some(Json::Obj(bs)), Some(Json::Str(n)), true) = (
                     field(1, "bindings"),
                     field(2, "name"),
-                    str_at(3, "op", "apply_expression_template"),
+                    str_at(3, "op", "apply_operator"),
                 )
             {
                 return pr_template(c, n, bs, &esc);
@@ -2250,6 +2316,7 @@ fn pr_plain(c: Ctx, o: &str, args: &[Json], opn: &dyn Fn() -> Out, esc: &dyn Fn(
                 opn()
             }
         }
+        (OpK::Nab(n), [a]) => mk_out(6, cat(&[&nab_head(sf, n), &nab_arg(sf, n, &pr(c, a))])),
         (OpK::Call, _) => mk_out(
             10,
             call_toks(
@@ -2262,7 +2329,7 @@ fn pr_plain(c: Ctx, o: &str, args: &[Json], opn: &dyn Fn() -> Out, esc: &dyn Fn(
     }
 }
 
-/// The `apply_expression_template` case of `Math.pr`.
+/// The `apply_operator` case of `Math.pr`.
 fn pr_template(c: Ctx, n: &str, bs: &[(String, Json)], esc: &dyn Fn() -> Out) -> Out {
     let sf = c.sf;
     if !(tname_ok(n) && keys_sorted(bs) && bs.iter().all(|kv| is_e(&kv.1))) {

@@ -239,6 +239,7 @@
       "ExpressionNode.expect_cadence",
       "ExpressionNode.id",
       "ExpressionNode.op",
+      "ExpressionTemplate.defines",
       "MetaparameterExpression|2.op"
     ],
     "reference": [
@@ -280,6 +281,7 @@
     "unit": [
       "Coordinate.units",
       "ExpressionNode.units",
+      "ExpressionTemplate.units",
       "ModelVariable.default_units",
       "ModelVariable.units",
       "Parameter.default_units",
@@ -291,11 +293,11 @@
   "verbatim_keys": {
     "metadata": "Document or component metadata: an object of free-form documentation, never an expression.",
     "metaparameters": "The metaparameter declarations themselves.",
-    "expression_template_imports": "Import edges; their bindings fold at the edge (9.7.6 site 1), not through this walk.",
     "where": "A template's match-scoping constraints: index-set names (9.6.1).",
     "attrs": "Named scalar attributes of an open rewrite-target op, mirroring the fixed dim/side/wrt/var slots.",
     "members": "A categorical index set's member enumeration: literal member values, not references.",
-    "side": "A fixed rewrite-target slot (see ExpressionNode.attrs) carried by raw documents before validation; not a schema property."
+    "side": "A fixed rewrite-target slot (see ExpressionNode.attrs) carried by raw documents before validation; not a schema property.",
+    "operator_imports": "Import edges (`operator_imports`; the old spelling `expression_template_imports` is renamed at the wire boundary); their bindings fold at the edge (9.7.6 site 1), not through this walk."
   },
   "exposed_structural_sites": {},
   "skip_keys": [
@@ -303,13 +305,13 @@
     "attrs",
     "citation",
     "default_units",
+    "defines",
     "description",
     "dim",
     "direction",
     "doi",
     "element_type",
     "expect_cadence",
-    "expression_template_imports",
     "file_variable",
     "fn",
     "format",
@@ -331,6 +333,7 @@
     "on",
     "only",
     "op",
+    "operator_imports",
     "output_idx",
     "params",
     "path",
@@ -365,6 +368,7 @@
     "index_set_rename",
     "initial_conditions",
     "map",
+    "operators",
     "parameter_overrides",
     "parameters",
     "pinned_coords",
@@ -376,5 +380,8 @@
     "url_substitutions",
     "variables",
     "where"
-  ]
+  ],
+  "structural_expressions": {
+    "ExpressionTemplate.units": "A definition's unit expression (esm-spec §9.6.1, esm 2.4.0) shares the key `units` with the declared unit strings, which must be skipped; its names stand for units, never values, and a metaparameter has no unit, so it is copied verbatim like every `units` field."
+  }
 }

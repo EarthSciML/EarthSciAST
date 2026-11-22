@@ -201,21 +201,21 @@ func withStdlib(t *testing.T, files map[string]string) {
 func stdTemplateLib(name, importRef string) string {
 	imports := ""
 	if importRef != "" {
-		imports = `"expression_template_imports": [{"ref": "` + importRef + `"}],`
+		imports = `"operator_imports": [{"ref": "` + importRef + `"}],`
 	}
 	return `{"esm": "1.1.0", "metadata": {"name": "` + name + `"}, ` + imports + `
-  "expression_templates": {"` + name + `_twice": {"params": ["x"],
+  "operators": {"` + name + `_twice": {"params": ["x"],
     "body": {"op": "*", "args": [2, "x"]}}}}`
 }
 
 const stdConsumer = `{"esm": "1.1.0", "metadata": {"name": "consumer"},
   "models": {"M": {
-    "expression_template_imports": [{"ref": "esm:std/a.esm"}],
+    "operator_imports": [{"ref": "esm:std/a.esm"}],
     "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0},
                   "y": {"type": "unknown", "units": "1"}},
     "equations": [
       {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": {"op": "-", "args": ["x"]}},
-      {"lhs": "y", "rhs": {"op": "apply_expression_template", "args": [], "name": "b_twice",
+      {"lhs": "y", "rhs": {"op": "apply_operator", "args": [], "name": "b_twice",
         "bindings": {"x": "x"}}}]}}}`
 
 func TestStdlibSiblingRefs(t *testing.T) {
@@ -238,8 +238,8 @@ func TestStdlibRefLeavingTheBundleIsUnresolved(t *testing.T) {
 		"b.esm": stdTemplateLib("b", ""),
 	})
 	_, err := LoadString(stdConsumer)
-	if code := stdErrCode(err); code != "template_import_unresolved" {
-		t.Fatalf("code = %s; want template_import_unresolved", code)
+	if code := stdErrCode(err); code != "operator_import_unresolved" {
+		t.Fatalf("code = %s; want operator_import_unresolved", code)
 	}
 }
 
@@ -249,8 +249,8 @@ func TestStdlibRefCycleByIdentity(t *testing.T) {
 		"b.esm": stdTemplateLib("b", "./a.esm"),
 	})
 	_, err := LoadString(stdConsumer)
-	if code := stdErrCode(err); code != "template_import_cycle" {
-		t.Fatalf("code = %s; want template_import_cycle", code)
+	if code := stdErrCode(err); code != "operator_import_cycle" {
+		t.Fatalf("code = %s; want operator_import_cycle", code)
 	}
 }
 

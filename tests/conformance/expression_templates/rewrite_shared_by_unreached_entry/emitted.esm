@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "index_sets": {
     "x": {
       "kind": "interval",
@@ -54,7 +54,7 @@
               "f": "u"
             },
             "name": "ddx.variant1",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         },
         {
@@ -65,19 +65,20 @@
               "g": "w"
             },
             "name": "outer.variant1",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "ddx": {
           "body": {
             "args": [
               "f"
             ],
-            "op": "D",
+            "op": "partial",
             "wrt": "x"
           },
+          "defines": "ddx",
           "params": [
             "f"
           ]
@@ -89,8 +90,9 @@
               "f": "g"
             },
             "name": "ddx",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "wrap",
           "params": [
             "g"
           ]
@@ -100,9 +102,10 @@
             "args": [
               "f"
             ],
-            "op": "D",
+            "op": "partial",
             "wrt": "x"
           },
+          "defines": "inner",
           "params": [
             "f"
           ]
@@ -114,8 +117,9 @@
               "f": "g"
             },
             "name": "inner",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "outer",
           "params": [
             "g"
           ]
@@ -127,8 +131,9 @@
               "g": "h"
             },
             "name": "outer",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "hidden",
           "params": [
             "h"
           ]
@@ -179,9 +184,11 @@
               }
             }
           },
+          "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "ddx.variant1": {
           "body": {
@@ -190,11 +197,13 @@
               "f": "f"
             },
             "name": "central_1d",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "ddx",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "inner.variant1": {
           "body": {
@@ -203,11 +212,13 @@
               "f": "f"
             },
             "name": "central_1d",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "inner",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "outer.variant1": {
           "body": {
@@ -216,11 +227,13 @@
               "f": "g"
             },
             "name": "inner.variant1",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "outer",
           "params": [
             "g"
-          ]
+          ],
+          "reference_only": true
         }
       },
       "variables": {

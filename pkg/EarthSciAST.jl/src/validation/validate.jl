@@ -305,7 +305,9 @@ function _push_dimensionless_literal_warnings!(
         return unit_warnings
     end
     for (path, message) in found
-        push!(unit_warnings, UnitWarning(path, UNIT_FINDING_DIMENSIONLESS_LITERAL, message))
+        code = occursin(_DEFINITION_UNIT_WARNING, message) ?
+            ERROR_CODES.DEFINITION_UNIT_MISMATCH : UNIT_FINDING_DIMENSIONLESS_LITERAL
+        push!(unit_warnings, UnitWarning(path, code, message))
     end
     return unit_warnings
 end

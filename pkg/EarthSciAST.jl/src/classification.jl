@@ -91,10 +91,11 @@ absent (esm-spec §4.2: an absent `wrt` means `t`)."""
 _is_time_derivative(e::ASTExpr)::Bool =
     e isa OpExpr && e.op == "D" && (e.wrt === nothing || e.wrt == "t")
 
-"""True iff `e` is a SPATIAL derivative — a `D` whose `wrt` is present and is
-not `"t"` (esm-spec §6.3.1)."""
+"""True iff `e` is a SPATIAL derivative — a `partial` call (esm-spec §4.2), or a
+`D` built in code whose `wrt` is present and is not `"t"` (a loaded document
+reads such a `D` as `partial`)."""
 _is_spatial_derivative(e::ASTExpr)::Bool =
-    e isa OpExpr && e.op == "D" && e.wrt !== nothing && e.wrt != "t"
+    e isa OpExpr && (e.op == "partial" || e.op == "D") && e.wrt !== nothing && e.wrt != "t"
 
 """
     _LhsShape

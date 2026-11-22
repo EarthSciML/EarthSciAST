@@ -368,10 +368,10 @@ func TestTemplateImport_IsCouplingLibrary(t *testing.T) {
 	dir := t.TempDir()
 	writeFileString(t, filepath.Join(dir, "clib.esm"), couplingLibJSON)
 	p := filepath.Join(dir, "m.esm")
-	writeFileString(t, p, tiModelJSON(`"expression_template_imports": [{"ref": "./clib.esm"}],`, ""))
+	writeFileString(t, p, tiModelJSON(`"operator_imports": [{"ref": "./clib.esm"}],`, ""))
 	_, err := LoadPath(p)
-	if code := couplingErrCode(t, err); code != "template_import_is_coupling_library" {
-		t.Errorf("code = %s; want template_import_is_coupling_library", code)
+	if code := couplingErrCode(t, err); code != "operator_import_is_coupling_library" {
+		t.Errorf("code = %s; want operator_import_is_coupling_library", code)
 	}
 }
 

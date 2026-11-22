@@ -108,7 +108,7 @@ function _ref_enter(w::_RefWalk, e::OpExpr, frame)
     for p in params
         p in given || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "apply_expression_template '$name' missing binding for param '$p'"
             )
         )
@@ -116,7 +116,7 @@ function _ref_enter(w::_RefWalk, e::OpExpr, frame)
     for p in given
         p in params || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "apply_expression_template '$name' supplies unknown param '$p'"
             )
         )

@@ -562,6 +562,9 @@ function coerce_esm_file(
     # A typed constructor refuses a bad value with an `ArgumentError`, which is
     # right for a caller building it in Julia; reached from a document, the
     # same refusal is about the document, so it leaves as a `ParseError`.
+    # An in-memory document may spell what an earlier one wrote (esm-spec
+    # §9.6.12): read it as the wire boundary does.
+    data = _wire_old_spellings(data)
     try
         return _coerce_esm_file(data, document_base)
     catch e
@@ -595,19 +598,6 @@ function _coerce_esm_file(data::Any, document_base::Union{Nothing, AbstractStrin
 
     data_sources = _maybe(_raw_get(data, "data_sources", nothing)) do dl
         Dict{String, DataSource}(string(k) => coerce_data_source(v) for (k, v) in pairs(dl))
-    end
-
-    # The format has no top-level `operators` block (esm-spec §9 closure;
-    # `docs/content/rfcs/closed-function-registry.md` §6). A document carrying
-    # one is refused.
-    if _raw_get(data, "operators", nothing) !== nothing
-        throw(
-            ParseError(
-                "`operators` block is not valid in v0.3.0+ " *
-                    "(removed by esm-spec §9 closure). Migrate per " *
-                    "`docs/content/rfcs/closed-function-registry.md` §6."
-            )
-        )
     end
 
     if _raw_get(data, "registered_functions", nothing) !== nothing
@@ -672,7 +662,7 @@ function _coerce_esm_file(data::Any, document_base::Union{Nothing, AbstractStrin
             )
             comps_raw === nothing && continue
             for (k, v) in pairs(comps_raw)
-                tpl = _raw_get(v, "expression_templates", nothing)
+                tpl = _raw_get(v, "operators", nothing)
                 tpl === nothing && continue
                 # Native String-keyed form: the registry is probed with String
                 # names (`haskey(reg, name)`) and read with `_raw_get`, and the
@@ -859,7 +849,7 @@ function _coerce_subsystem_entry(name::String, v)
         # (`_resolve_mount_edge`) threads them into the referenced document's load and the
         # §9.6.3 fixpoint consumes them before the mounted form is set.
         injected = Any[]
-        imports_raw = _raw_get(v, "expression_template_imports", nothing)
+        imports_raw = _raw_get(v, "operator_imports", nothing)
         if imports_raw !== nothing
             injected = Any[_to_native_json(e) for e in imports_raw]
         end
@@ -880,7 +870,7 @@ function _coerce_subsystem_entry(name::String, v)
                 OrderedDict{String, String}()
             _is_object(rename_raw) || throw(
                 ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+                    ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID,
                     "subsystems.$(name): `index_set_rename` must be an object mapping " *
                         "index-set names to names (esm-spec §4.7)"
                 )

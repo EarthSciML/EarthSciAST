@@ -208,7 +208,7 @@ function _serialize_subsystem(v)::Dict{String, Any}
         )
         isempty(v.expression_template_imports) ||
             (
-            out["expression_template_imports"] =
+            out["operator_imports"] =
                 [_to_native_json(e) for e in v.expression_template_imports]
         )
         # Mount-edge index-set renaming (esm-spec §4.7): same fate — it survives
@@ -453,7 +453,7 @@ function serialize_esm_file(file::EsmFile)::Dict{String, Any}
     # top-level `anyOf` rejects, making a conforming library file unrepresentable
     # once loaded. A library must round-trip to itself.
     if file.expression_templates !== nothing && !isempty(file.expression_templates)
-        result["expression_templates"] = file.expression_templates
+        result["operators"] = file.expression_templates
     end
     if file.metaparameters !== nothing && !isempty(file.metaparameters)
         result["metaparameters"] = file.metaparameters
@@ -491,8 +491,13 @@ function serialize_esm_file(file::EsmFile)::Dict{String, Any}
             haskey(result, compkind) || continue
             comp = result[compkind]
             (comp isa AbstractDict && haskey(comp, cname)) || continue
-            comp[cname]["expression_templates"] = block
+            comp[cname]["operators"] = _without_private_keys(block)
         end
+    end
+    # esm-spec §9.6.5, §9.6.12: a document written with an `operators` block
+    # (a library's top-level one included) declares at least 2.4.0.
+    if haskey(result, "operators") || file.component_templates !== nothing
+        result["esm"] = _esm_stamp_floor(result["esm"])
     end
 
     return result

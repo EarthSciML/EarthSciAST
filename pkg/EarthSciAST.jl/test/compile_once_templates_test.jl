@@ -147,7 +147,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 8)),
             "models" => Dict(
                 "T" => Dict(
-                    "expression_templates" => Dict(
+                    "operators" => Dict(
                         "pair_diff" => Dict(
                             "params" => ["f", "w"],
                             "body" => Dict(
@@ -170,7 +170,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                                             ]
                                         ),
                                         Dict(
-                                            "op" => "apply_expression_template", "args" => [],
+                                            "op" => "apply_operator", "args" => [],
                                             "name" => "pair_diff",
                                             "bindings" => Dict("f" => "f", "w" => 0.25)
                                         ),
@@ -202,15 +202,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                                 "regions" => [[[2, 7]], [[1, 1]], [[8, 8]]],
                                 "values" => [
                                     Dict(
-                                        "op" => "apply_expression_template", "args" => [],
+                                        "op" => "apply_operator", "args" => [],
                                         "name" => "flux_int", "bindings" => Dict("f" => "f")
                                     ),
                                     Dict(
-                                        "op" => "apply_expression_template", "args" => [],
+                                        "op" => "apply_operator", "args" => [],
                                         "name" => "flux_lo", "bindings" => Dict("f" => "f")
                                     ),
                                     Dict(
-                                        "op" => "apply_expression_template", "args" => [],
+                                        "op" => "apply_operator", "args" => [],
                                         "name" => "flux_hi", "bindings" => Dict("f" => "f")
                                     ),
                                 ]
@@ -278,7 +278,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                         Dict(
                             "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
                             "rhs" => Dict(
-                                "op" => "apply_expression_template", "args" => [],
+                                "op" => "apply_operator", "args" => [],
                                 "name" => "ghost", "bindings" => Dict()
                             )
                         ),
@@ -323,7 +323,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                         "A" => Dict("units" => "1", "default" => 1.0),
                         "B" => Dict("units" => "1", "default" => 0.0)
                     ),
-                    "expression_templates" => Dict(
+                    "operators" => Dict(
                         "krate" => Dict(
                             "params" => ["kk"],
                             # kk * (T / 300): kk is the template param (bound to Chem.k),
@@ -342,7 +342,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                             "substrates" => [Dict("stoichiometry" => 1, "species" => "A")],
                             "products" => [Dict("stoichiometry" => 1, "species" => "B")],
                             "rate" => Dict(
-                                "op" => "apply_expression_template", "args" => [],
+                                "op" => "apply_operator", "args" => [],
                                 "name" => "krate", "bindings" => Dict("kk" => "k")
                             )
                         ),
@@ -403,7 +403,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             "metadata" => Dict("name" => "shadow_registry_guard"),
             "models" => Dict(
                 "M" => Dict(
-                    "expression_templates" => Dict(
+                    "operators" => Dict(
                         "scaleT" => Dict(
                             "params" => ["kk"],
                             # kk is the template's own param; T is the MODEL's param,
@@ -432,7 +432,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                             "rhs" => Dict(
                                 "op" => "-", "args" => [
                                     Dict(
-                                        "op" => "apply_expression_template", "args" => [],
+                                        "op" => "apply_operator", "args" => [],
                                         "name" => "scaleT",
                                         "bindings" => Dict("kk" => 0.5)
                                     ),

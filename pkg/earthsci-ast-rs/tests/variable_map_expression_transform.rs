@@ -446,7 +446,7 @@ fn lower_templates_expands_coupling_transform_against_receiving_component() {
                     "F_in": {"type": "parameter"},
                     "u": {"type": "unknown", "default": 0.0}
                 },
-                "expression_templates": {
+                "operators": {
                     "double_plus": {
                         "params": ["x", "off"],
                         "body": {"op": "+", "args": [{"op": "*", "args": [2.0, "x"]}, "off"]}
@@ -462,7 +462,7 @@ fn lower_templates_expands_coupling_transform_against_receiving_component() {
             "from": "Src.F",
             "to": "Sink.F_in",
             "transform": {
-                "op": "apply_expression_template",
+                "op": "apply_operator",
                 "name": "double_plus",
                 "args": [],
                 "bindings": {"x": "Src.F", "off": "Sink.offset"}
@@ -484,7 +484,7 @@ fn lower_templates_expands_coupling_transform_against_receiving_component() {
         json!({"op": "+", "args": [{"op": "*", "args": [2.0, "Src.F"]}, "Sink.offset"]})
     );
     // The receiving component's templates block is stripped by `expand`.
-    assert!(doc["models"]["Sink"].get("expression_templates").is_none());
+    assert!(doc["models"]["Sink"].get("operators").is_none());
 }
 
 #[test]
@@ -502,7 +502,7 @@ fn lower_templates_leaves_apply_free_coupling_transform_untouched() {
                 "variables": {"F": {"type": "unknown"}},
                 // Give Src a template so the pass has machinery to run — the
                 // RECEIVING component (Sink) still has none.
-                "expression_templates": {
+                "operators": {
                     "quadruple": {"params": ["x"], "body": {"op": "*", "args": [4.0, "x"]}}
                 },
                 "equations": [

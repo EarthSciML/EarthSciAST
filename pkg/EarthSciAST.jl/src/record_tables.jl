@@ -658,7 +658,7 @@ const RECORD_FIELD_TABLES = (
             # per-run config and DO survive parse → emit (unlike a component's
             # own imports, which the load-time fixpoint consumes).
             (
-                f = :expression_template_imports, wire = "expression_template_imports", kind = :raw_vec,
+                f = :expression_template_imports, wire = "operator_imports", kind = :raw_vec,
                 mode = :opt_empty, default = :(Any[]), emit = :nonempty,
             ),
         ),

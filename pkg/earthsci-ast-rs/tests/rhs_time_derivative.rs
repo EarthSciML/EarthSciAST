@@ -249,7 +249,8 @@ fn a_spatial_derivative_is_left_for_the_discretization_rule() {
     let canon = common::canon(&flat.equations[0].rhs);
     let rendered = canon.to_string();
     assert!(
-        common::nodes_with_op(&canon, "D")
+        // A spatial `D` is read as `partial` at load (esm-spec §4.2).
+        common::nodes_with_op(&canon, "partial")
             .iter()
             .any(|d| d["wrt"] == "x" && d["args"] == json!(["M.u"])),
         "the spatial derivative must survive flatten, got `{rendered}`"

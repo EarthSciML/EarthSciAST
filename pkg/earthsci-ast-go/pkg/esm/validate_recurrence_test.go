@@ -265,7 +265,7 @@ func TestRecurrenceAdmittedShapes(t *testing.T) {
 }
 
 // TestRecurrenceIgnoresApplyExpressionTemplate pins a deliberate EXCLUSION from
-// the cell-restriction blocking list. `apply_expression_template`'s operands ride
+// the cell-restriction blocking list. `apply_operator`'s operands ride
 // the `bindings` field, which this walk does not visit — and must not start
 // visiting unilaterally, since five bindings mirror the field set and §5.19.5
 // requires exact agreement — so blocking the op was a rule that barely reached
@@ -279,7 +279,7 @@ func TestRecurrenceIgnoresApplyExpressionTemplate(t *testing.T) {
 		Args: []any{selfRead(ExprNode{Op: "-", Args: []any{"k", int64(1)}})},
 	})))
 	for _, e := range recurrenceFindings(t, file) {
-		t.Errorf("apply_expression_template should not block cell restriction: [%s] %s at %s",
+		t.Errorf("apply_operator should not block cell restriction: [%s] %s at %s",
 			e.Code, e.Message, e.Path)
 	}
 }

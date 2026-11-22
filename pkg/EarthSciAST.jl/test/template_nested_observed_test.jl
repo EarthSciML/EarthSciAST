@@ -58,7 +58,7 @@ function nested_doc(n::Int; tests::Bool = false)
         Any[0.0, 40.0, 70.0, 82.0, 85.0], Any[0.0, 15.0, 60.0, 78.0, 80.0],
     ]
     look = Dict{String, Any}(
-        "op" => "apply_expression_template", "args" => Any[], "name" => "bilinear",
+        "op" => "apply_operator", "args" => Any[], "name" => "bilinear",
         "bindings" => Dict{String, Any}(
             "table" => jconst(tab), "axis_x" => jconst([0.0, 0.2, 0.5, 1.0]),
             "axis_y" => jconst([0.0, 1.0, 2.0, 3.0, 4.0]),
@@ -95,7 +95,7 @@ function nested_doc(n::Int; tests::Bool = false)
     ]
     model = Dict{String, Any}(
         "variables" => vars, "equations" => eqs,
-        "expression_template_imports" => Any[
+        "operator_imports" => Any[
             Dict{String, Any}("ref" => joinpath(REPO, "lib", "interp.esm"), "only" => Any["bilinear"]),
         ],
     )

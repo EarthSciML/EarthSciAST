@@ -140,9 +140,9 @@ const ESM = EarthSciAST
         ),
         (
             field = :name,
-            json = """{"op":"apply_expression_template","args":[],"name":"linear","bindings":{"x":1.5}}""",
+            json = """{"op":"apply_operator","args":[],"name":"linear","bindings":{"x":1.5}}""",
             expected = "linear",
-            cop = "apply_expression_template", cargs = E(), kw = (name = "linear",),
+            cop = "apply_operator", cargs = E(), kw = (name = "linear",),
         ),
         (
             field = :value,

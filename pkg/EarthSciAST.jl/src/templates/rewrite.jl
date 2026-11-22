@@ -22,7 +22,7 @@
 # the registry the build resolves them against. A rewrite-target op that
 # survives into an evaluation position is refused later (`unlowered_operator`).
 
-const APPLY_EXPRESSION_TEMPLATE_OP = "apply_expression_template"
+const APPLY_EXPRESSION_TEMPLATE_OP = "apply_operator"
 
 # Every expansion of a template reference made in this process (raw or typed),
 # and the `:tpl_expanded` build count: the explicit expansion utilities
@@ -115,7 +115,7 @@ function _resolve_apply_site(
     name_raw = _raw_get(node, "name")
     name_raw === nothing && throw(
         ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+            ERROR_CODES.OPERATOR_INVALID_DEFINITION,
             "$scope: apply_expression_template node missing 'name'"
         )
     )
@@ -123,14 +123,14 @@ function _resolve_apply_site(
     decl = get(templates, name, nothing)
     decl === nothing && throw(
         ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+            ERROR_CODES.OPERATOR_UNKNOWN_DEFINITION,
             "$scope: apply_expression_template references undeclared template '$name'"
         )
     )
     if reject_match_rule && _raw_get(decl, "match") !== nothing
         throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+                ERROR_CODES.OPERATOR_UNKNOWN_DEFINITION,
                 "$scope: apply_expression_template references '$name', a `match` " *
                     "rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)"
             )
@@ -139,7 +139,7 @@ function _resolve_apply_site(
     bindings_raw = _raw_get(node, "bindings")
     (bindings_raw === nothing || !_is_object(bindings_raw)) && throw(
         ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+            ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
             "$scope: apply_expression_template '$name' missing 'bindings' object"
         )
     )
@@ -149,7 +149,7 @@ function _resolve_apply_site(
     for p in decl_params
         p in provided || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "$scope: apply_expression_template '$name' missing binding for param '$p'"
             )
         )
@@ -157,7 +157,7 @@ function _resolve_apply_site(
     for p in provided
         p in declared || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "$scope: apply_expression_template '$name' supplies unknown param '$p'"
             )
         )
@@ -546,7 +546,7 @@ function _registered_where(
         for s in req
             s in iset_names || throw(
                 ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
+                    ERROR_CODES.OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET,
                     "$scope.expression_templates.$tname: where.$(string(p)).shape " *
                         "names index set '$s', which the consuming document's " *
                         "index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)"
@@ -602,6 +602,84 @@ struct _RewriteRule
     priority::Int
     decl_index::Int
     where_clause::Union{Nothing, Dict{String, Vector{String}}}
+    # esm 2.4.0 (esm-spec §9.6.3 constraint 2, §9.6.12): a match-less
+    # definition is eligible at a CALL of the defined operator it defines —
+    # `pattern` is `{op: defines, args: params}` and the node must carry no
+    # field besides `op` and `args` (`exact`).
+    exact::Bool
+end
+
+# The §9.6.3 selection key: highest `priority`, then a definition carrying a
+# `where` before one without (esm 2.4.0), then declaration order.
+_selection_key(r::_RewriteRule) = (-r.priority, r.where_clause === nothing ? 1 : 0, r.decl_index)
+
+"""
+    _is_core_op(op) -> Bool
+
+True iff `op` names a core operator (esm-spec §4.2: the closed, evaluable set
+every binding's evaluator implements). Every other `op` names a defined
+operator (§9.6.12).
+"""
+_is_core_op(op::AbstractString) = _op_spec(String(op)) !== nothing
+
+# The root `op` of a definition's `match`, or `nothing`.
+function _match_root_op(decl)
+    m = _raw_get(decl, "match")
+    (m !== nothing && _is_object(m)) || return nothing
+    op = _raw_get(m, "op")
+    return op isa AbstractString ? String(op) : nothing
+end
+
+"""
+    _definition_defines(name, decl) -> String
+
+The defined operator an `operators` entry is a definition of (esm-spec §9.6.1
+`defines`): its written `defines`; else the root `op` of its `match` when that
+is not a core op; else its key.
+"""
+function _definition_defines(name::AbstractString, decl)::String
+    d = _raw_get(decl, "defines")
+    d isa AbstractString && return String(d)
+    r = _match_root_op(decl)
+    (r !== nothing && !_is_core_op(r)) && return r
+    return String(name)
+end
+
+"""
+    _check_defines_not_core(name, decl, scope)
+
+esm-spec §9.6.12 "Core names are reserved": a definition whose `defines`,
+written or inferred, is a core operator's name is `operator_defines_core_op`.
+A rule whose `match` is rooted at a core op defines no callable name, so its
+`defines` is provenance only and is not checked.
+"""
+_is_reference_only(decl) = _raw_get(decl, "reference_only") === true
+
+function _check_defines_not_core(name::AbstractString, decl, scope::AbstractString)
+    # A `reference_only` definition is reached by no call (esm-spec §9.6.1).
+    _is_reference_only(decl) && return nothing
+    r = _match_root_op(decl)
+    (r !== nothing && _is_core_op(r)) && return nothing
+    d = _definition_defines(name, decl)
+    _is_core_op(d) && throw(
+        ExpressionTemplateError(
+            ERROR_CODES.OPERATOR_DEFINES_CORE_OP,
+            "$scope.operators.$name: defines the core operator '$d'; a definition " *
+                "may not define a core operator's name (esm-spec §9.6.12, " *
+                "\"Core names are reserved\")"
+        )
+    )
+    return nothing
+end
+
+# Whether `n` is a call shape a match-less definition can bind: an `op` and
+# `args`, no other field (esm-spec §9.6.3 constraint 2).
+function _only_op_args(n)::Bool
+    for (k, _) in pairs(n)
+        ks = string(k)
+        (ks == "op" || ks == "args") || return false
+    end
+    return true
 end
 
 """
@@ -621,11 +699,39 @@ against the RECEIVING component (esm-spec §10.4).
 struct _Lowering
     named::Dict{String, Any}
     match_rules::Vector{_RewriteRule}
+    # Match-less definitions by the defined operator they define, each list in
+    # §9.6.3 selection order (esm 2.4.0 calls by operator name).
+    call_rules::Dict{String, Vector{_RewriteRule}}
+    # Operand counts the definitions of each defined operator take
+    # (esm-spec §9.6.12 "Arity").
+    arities::Dict{String, Set{Int}}
+    # Registry entries only subsystems own (merged from a mounted or an
+    # authored subsystem's block, `_hoist_mounted_templates!`), with their
+    # owner paths below the component. Such an entry resolves a call, and
+    # counts for an arity, only at a site within one of its owners (esm-spec
+    # §9.6.3 constraint 4); every other entry is the component's own.
+    owners::Dict{String, Vector{String}}
+    # Operand counts of the subsystem-owned definitions: op => (count, owners).
+    sub_arities::Dict{String, Vector{Tuple{Int, Vector{String}}}}
+    # The subsystem path of the site being rewritten; "" is the component's own.
+    site::Base.RefValue{String}
     shape_env::Dict{String, Vector{String}}
     enums::Any
     scope::String
     depth::IdDict{Any, Int}
 end
+
+# Is the subsystem path `site` at or below the owner path `owner`?
+_path_within(site::String, owner::String) = site == owner || startswith(site, owner * ".")
+
+# Is the registry entry `name` a definition at the site `L` is rewriting?
+function _visible_at_site(L::_Lowering, name::String)
+    o = get(L.owners, name, nothing)
+    return o === nothing || any(p -> _path_within(L.site[], p), o)
+end
+
+# The site whose definitions a registry entry's body is read with.
+_owner_site(L::_Lowering, name::String) = (o = get(L.owners, name, nothing); o === nothing ? "" : first(o))
 
 """
     _rule_reference(rule, captured) -> node
@@ -692,20 +798,183 @@ function _rewrite_pass(
             d === nothing || (L.depth[nn] = d)
             return nn
         end
-        for rule in L.match_rules
-            bindings = Dict{String, Any}()
-            if _match_pattern(rule.pattern, n, rule.params, bindings, bv) &&
-                    _where_satisfied(rule.where_clause, bindings, L.shape_env, bv)
-                last[] = rule.name
-                changed[] = true
-                r = _rule_reference(rule, bindings)
-                _is_apply_node(r) && (L.depth[r] = pass)
-                return r
-            end
+        win, wb = _select_definition(L, n, op_str, bv)
+        if win !== nothing
+            last[] = win.name
+            changed[] = true
+            r = _rule_reference(win, wb)
+            _is_apply_node(r) && (L.depth[r] = pass)
+            return r
         end
         return _JSON_DESCEND
     end
     return (out, changed[])
+end
+
+"""
+    _check_call_arity(node, L, scope)
+
+esm-spec §9.6.12 "Arity": a call of a defined operator `N` that survives the
+fixpoint, when definitions of `N` are in scope and none takes the call's
+operand count, is `operator_arity_mismatch` at load. A name with no definition
+in scope is a placeholder, whatever its arity.
+"""
+function _check_call_arity(node, L::_Lowering, scope::AbstractString)
+    (isempty(L.arities) && isempty(L.sub_arities)) && return nothing
+    _visit_json(node) do _, n
+        _is_object(n) || return true
+        op = _raw_get(n, "op")
+        op isa AbstractString || return true
+        counts = _site_arities(L, String(op))
+        counts === nothing && return true
+        _is_core_op(op) && return true
+        args = _raw_get(n, "args")
+        k = (args === nothing || !_is_array(args)) ? 0 : length(args)
+        k in counts && return true
+        throw(
+            ExpressionTemplateError(
+                ERROR_CODES.OPERATOR_ARITY_MISMATCH,
+                "$scope: a call of the defined operator '$op' carries $k operand(s), but " *
+                    "its definitions in scope take $(join(sort!(collect(counts)), ", ")) " *
+                    "(esm-spec §9.6.12)"
+            )
+        )
+    end
+    return nothing
+end
+
+# The operand counts the definitions of `op` visible at `L`'s site take, or
+# `nothing` when none is.
+function _site_arities(L::_Lowering, op::String)
+    own = get(L.arities, op, nothing)
+    subs = get(L.sub_arities, op, nothing)
+    subs === nothing && return own
+    counts = own === nothing ? Set{Int}() : copy(own)
+    site = L.site[]
+    for (k, owners) in subs
+        any(p -> _path_within(site, p), owners) && push!(counts, k)
+    end
+    return isempty(counts) ? nothing : counts
+end
+
+# The registry entries a node's references reach, transitively through bodies.
+function _reached_definitions!(out::Set{String}, node, named::AbstractDict)
+    for r in _collect_apply_names!(String[], node)
+        r in out && continue
+        d = get(named, r, nothing)
+        d === nothing && continue
+        push!(out, r)
+        _reached_definitions!(out, _raw_get(d, "body"), named)
+    end
+    return out
+end
+
+"""
+    _explain_unresolved_call(call, registry, shape_env) -> String
+
+The `unlowered_operator` explanation of esm-spec §9.6.6 for an unresolved call
+`call` (raw JSON) of a defined operator: every definition of it in `registry`
+(name => raw entry) with the reason it was not eligible there — its `match`
+did not match, its `where` failed (naming the constraint), or its arity or
+call shape differed. Empty registry entries for the operator: a placeholder.
+"""
+function _explain_unresolved_call(call, registry, shape_env = _EMPTY_SHAPE_ENV)::String
+    op = _raw_get(call, "op")
+    op isa AbstractString || return ""
+    args = _raw_get(call, "args")
+    k = (args === nothing || !_is_array(args)) ? 0 : length(args)
+    lines = String[]
+    registry === nothing && return "no definition of '$op' is in scope (a placeholder); definitions no reference reached were removed by emit and flatten and are not listed"
+    for name in sort!(String[string(n) for n in keys(registry)])
+        decl = registry[name]
+        _is_object(decl) || continue
+        td = _TemplateDecl(decl)
+        m = td.match
+        rop = _match_root_op(decl)
+        if m !== nothing
+            rop == op || continue
+            b = Dict{String, Any}()
+            if !_match_pattern(m, call, Set{String}(td.params), b)
+                push!(lines, "'$name': its match does not match the call")
+                continue
+            end
+            whr = _raw_get(decl, "where")
+            push!(lines, "'$name': its where constraint " * _where_reason(whr, b, shape_env))
+        else
+            _definition_defines(name, decl) == op || continue
+            if _is_reference_only(decl)
+                push!(lines, "'$name': reference-only, reached by explicit references, never by a call")
+            elseif length(td.params) != k
+                push!(lines, "'$name': takes $(length(td.params)) operand(s), the call carries $k")
+            elseif !_only_op_args(call)
+                extra = sort!([string(x) for (x, _) in pairs(call) if !(string(x) in ("op", "args"))])
+                push!(lines, "'$name': has no match, so it binds operands only, and the call carries $(join(extra, ", "))")
+            else
+                b = Dict{String, Any}(p => a for (p, a) in zip(td.params, args))
+                push!(lines, "'$name': its where constraint " * _where_reason(_raw_get(decl, "where"), b, shape_env))
+            end
+        end
+    end
+    # esm-spec §9.6.12: emit and flatten keep only the definitions a reference
+    # reaches, so an unreferenced definition is no longer here to list.
+    note = "; definitions no reference reached were removed by emit and flatten and are not listed"
+    isempty(lines) && return "no definition of '$op' is in scope (a placeholder)" * note
+    return "definitions of '$op' in scope: " * join(lines, "; ") * note
+end
+
+# A shape list as a message writes it: `[edges, cells]`.
+_shape_text(shp) = "[" * join((string(s) for s in shp), ", ") * "]"
+
+# Why a `where` block excluded a definition whose pattern matched: its first
+# constraint that fails, naming the operand's declared shape (esm-spec §9.6.6).
+function _where_reason(whr, b::Dict{String, Any}, shape_env)::String
+    whr === nothing && return "holds (the definition was not selected)"
+    for (p, c) in pairs(whr)
+        want = _raw_get(c, "shape")
+        want_v = want isa AbstractVector ? String[string(s) for s in want] : nothing
+        got = get(b, string(p), nothing)
+        shp = got isa AbstractString ? get(shape_env, String(got), nothing) : nothing
+        shp !== nothing && shp == want_v && continue
+        want_s = want isa AbstractVector ? _shape_text(want) : string(want)
+        return "$(p).shape = $(want_s) fails: the operand bound to $p " *
+            (got isa AbstractString ? "('$got') has declared shape $(shp === nothing ? "none" : _shape_text(shp))" : "is not a bare variable")
+    end
+    return "holds (the definition was not selected)"
+end
+
+"""
+    _select_definition(L, n, op, bv) -> (rule, bindings) or (nothing, nothing)
+
+The definition that resolves node `n` (esm-spec §9.6.3 constraint 2, §9.6.12):
+among the `match` rules whose pattern matches and the match-less definitions of
+the defined operator `op` that take `n`'s operands, those whose `where` holds,
+the first in [`_selection_key`](@ref) order.
+"""
+function _select_definition(L::_Lowering, n, op::String, bv::Union{Nothing, _BodyView})
+    best = nothing
+    bestb = nothing
+    for rule in L.match_rules
+        b = Dict{String, Any}()
+        if _match_pattern(rule.pattern, n, rule.params, b, bv) &&
+                _where_satisfied(rule.where_clause, b, L.shape_env, bv)
+            best, bestb = rule, b
+            break
+        end
+    end
+    calls = isempty(op) ? nothing : get(L.call_rules, op, nothing)
+    if calls !== nothing && _only_op_args(n)
+        for rule in calls
+            _visible_at_site(L, rule.name) || continue
+            best !== nothing && _selection_key(best) < _selection_key(rule) && break
+            b = Dict{String, Any}()
+            if _match_pattern(rule.pattern, n, rule.params, b, bv) &&
+                    _where_satisfied(rule.where_clause, b, L.shape_env, bv)
+                best, bestb = rule, b
+                break
+            end
+        end
+    end
+    return (best, bestb)
 end
 
 """
@@ -768,8 +1037,10 @@ function _has_template_machinery(raw_data)
     raw_data === nothing && return false
     _is_object(raw_data) || return false
     for (_, _, comp) in _components(raw_data)
-        tpl = _raw_get(comp, "expression_templates")
+        tpl = _raw_get(comp, "operators")
         _is_object(tpl) && !isempty(tpl) && return true
+        # A subsystem's own block (authored, or brought by a mount).
+        isempty(_collect_mounted_blocks!(Tuple{String, Any}[], comp, "")) || return true
     end
     return _has_apply_op(raw_data)
 end
@@ -799,7 +1070,7 @@ function _validate_makearray_regions(x, path::String = "")
     _visit_json(x; path = path) do key, n, ptr
         # Template bodies and matches are pre-substitution trees, whose bounds
         # may carry metaparameter names or fold later (esm-spec §9.7.6).
-        key == "expression_templates" && return false
+        key == "operators" && return false
         _is_object(n) || return true
         op = _raw_get(n, "op")
         (op !== nothing && string(op) == "makearray") || return true
@@ -936,8 +1207,58 @@ end
 # Public API
 # ---------------------------------------------------------------------------
 
+# The expression sites of the component `comp` with the subsystem path each
+# sits at ("" for the component's own fields): `(holder, key, path)`, in
+# document order, the registry and the subsystem maps themselves excluded.
+function _component_sites(comp)
+    out = Tuple{Any, Any, String}[]
+    _push_sites!(out, comp, "")
+    return out
+end
+
+function _push_sites!(out, node, path::String)
+    for k in collect(keys(node))
+        sk = string(k)
+        sk == "operators" && continue
+        if sk == "subsystems" && _is_object(node[k])
+            subs = node[k]
+            for (sn, sub) in pairs(subs)
+                sp = isempty(path) ? string(sn) : "$path.$(sn)"
+                if _is_object(sub)
+                    _push_sites!(out, sub, sp)
+                else
+                    push!(out, (subs, sn, path))
+                end
+            end
+        else
+            push!(out, (node, k, path))
+        end
+    end
+    return out
+end
+
+_site_label(path::String, k) = isempty(path) ? string(k) : "subsystems.$path.$(k)"
+
+# esm-spec §9.6.1 / §9.6.4 rule 5: an entry only subsystems own is written on
+# the component as `reference_only`, so the written document's registry makes
+# it no callable definition there and emit → load is a fixed point.
+function _mark_subsystem_owned!(comp, L::_Lowering)
+    isempty(L.owners) && return comp
+    block = _raw_get(comp, "operators")
+    _is_object(block) || return comp
+    for n in keys(L.owners)
+        d = _raw_get(block, n)
+        (_is_object(d) && !_is_reference_only(d)) || continue
+        nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(d))
+        nd["reference_only"] = true
+        block[n] = nd
+        haskey(L.named, n) && (L.named[n] = nd)
+    end
+    return comp
+end
+
 """
-    _hoist_mounted_templates!(comp, cname)
+    _hoist_mounted_templates!(comp, cname) -> Dict{String,Vector{String}}
 
 Merge into the component `comp`'s `expression_templates` block the template
 definitions that models mounted as its subsystems (esm-spec §4.7) brought
@@ -957,29 +1278,34 @@ at its call site (esm-spec §9.6.4 rule 1). So a leaf mounted twice brings two
 identical blocks, which keep one definition. The mounted subtree below the
 mount point keeps naming its own entries; only `comp`'s other sites follow
 `comp`'s renames.
+
+Returns the merged entries only subsystems own, each with its owner paths.
+Definitions are component-local (esm-spec §9.6.3 constraint 4): such an entry
+resolves a call, and counts for an arity (§9.6.12), only at a site within one
+of its owners, never at `comp`'s own sites.
 """
 function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
     mounts = Tuple{String, Any}[]          # (subsystem path, subsystem)
     _collect_mounted_blocks!(mounts, comp, "")
-    isempty(mounts) && return comp
-    newblock, rn = _merge_mounted_blocks(_raw_get(comp, "expression_templates"), cname, mounts)
+    isempty(mounts) && return Dict{String, Vector{String}}()
+    newblock, rn, owners = _merge_mounted_blocks(_raw_get(comp, "operators"), cname, mounts)
     # `comp`'s own sites, outside the mount points.
     if rn !== nothing
         for k in collect(keys(comp))
-            k in ("expression_templates", "subsystems") && continue
+            k in ("operators", "subsystems") && continue
             comp[k] = _rename_apply_refs(comp[k], rn)
         end
         _rename_outside_mounts!(comp, rn)
     end
     for (_, sub) in mounts
-        delete!(sub, "expression_templates")
+        delete!(sub, "operators")
     end
-    comp["expression_templates"] = newblock
-    return comp
+    comp["operators"] = newblock
+    return owners
 end
 
 """
-    _merge_mounted_blocks(own, cname, mounts) -> (block, own_rename)
+    _merge_mounted_blocks(own, cname, mounts) -> (block, own_rename, owners)
 
 The merge `_hoist_mounted_templates!` describes, shared with the typed mount
 path (`resolve_subsystem_refs!`): the component `cname`'s registry `own` (raw,
@@ -988,16 +1314,29 @@ model still carrying its `expression_templates`) merged by flatten's rule.
 Each mounted model's own references are renamed here, in place; the caller
 applies `own_rename` (old name => new name, or `nothing`) to the component's
 other sites. `own`'s `match` rules are kept, ahead of the merged entries.
+`owners` maps each merged entry no entry of `own` became to the paths of the
+mounted models that brought it.
 """
+# `decl` carrying its `defines` (inferred under `name` when absent).
+function _with_defines(name::String, decl)
+    (_is_object(decl) && _raw_get(decl, "defines") === nothing) || return decl
+    nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl))
+    nd["defines"] = _definition_defines(name, decl)
+    return nd
+end
+
 function _merge_mounted_blocks(own, cname::String, mounts)
     blocks = OrderedDict{String, Any}()
+    # Each entry records the defined operator it defines under the key it was
+    # declared with, before a collision rename (esm-spec §9.6.12 "Provenance").
     blocks["models.$cname"] = OrderedDict{String, Any}(
-        string(n) => d for (n, d) in pairs(_is_object(own) ? own : Dict{String, Any}())
+        string(n) => _with_defines(string(n), d)
+            for (n, d) in pairs(_is_object(own) ? own : Dict{String, Any}())
             if _raw_get(d, "match") === nothing
     )
     for (path, sub) in mounts
         blocks["models.$path"] = OrderedDict{String, Any}(
-            string(n) => d for (n, d) in pairs(_raw_get(sub, "expression_templates"))
+            string(n) => _with_defines(string(n), d) for (n, d) in pairs(_raw_get(sub, "operators"))
                 if _raw_get(d, "match") === nothing
         )
     end
@@ -1006,11 +1345,28 @@ function _merge_mounted_blocks(own, cname::String, mounts)
         rm = get(rename, path, nothing)
         rm === nothing && continue
         for k in collect(keys(sub))
-            k == "expression_templates" && continue
+            k == "operators" && continue
             sub[k] = _rename_apply_refs(sub[k], rm)
         end
     end
     rn = get(rename, cname, nothing)
+    own_names = Set{String}()
+    if _is_object(own)
+        for (n, _) in pairs(own)
+            push!(own_names, rn === nothing ? string(n) : get(rn, string(n), string(n)))
+        end
+    end
+    owners = Dict{String, Vector{String}}()
+    for (path, sub) in mounts
+        rm = get(rename, path, nothing)
+        for (n, d) in pairs(_raw_get(sub, "operators"))
+            _raw_get(d, "match") === nothing || continue
+            nn = rm === nothing ? string(n) : get(rm, string(n), string(n))
+            nn in own_names && continue
+            ps = get!(owners, nn, String[])
+            path in ps || push!(ps, path)
+        end
+    end
     newblock = OrderedDict{String, Any}()
     if _is_object(own)
         for (n, d) in pairs(own)
@@ -1019,7 +1375,7 @@ function _merge_mounted_blocks(own, cname::String, mounts)
         end
     end
     merge!(newblock, merged)
-    return newblock, rn
+    return newblock, rn, owners
 end
 
 # The subsystems below `node` that carry a mounted block, with their paths;
@@ -1031,7 +1387,7 @@ function _collect_mounted_blocks!(out, node, prefix::String)
     for (k, sub) in pairs(subs)
         _is_object(sub) || continue
         path = isempty(prefix) ? string(k) : "$prefix.$(k)"
-        blk = _raw_get(sub, "expression_templates")
+        blk = _raw_get(sub, "operators")
         if _is_object(blk)
             push!(out, (path, sub))
         else
@@ -1048,7 +1404,7 @@ function _rename_outside_mounts!(node, rn)
     _is_object(subs) || return
     for (_, sub) in pairs(subs)
         _is_object(sub) || continue
-        _is_object(_raw_get(sub, "expression_templates")) && continue
+        _is_object(_raw_get(sub, "operators")) && continue
         for k in collect(keys(sub))
             k == "subsystems" && continue
             sub[k] = _rename_apply_refs(sub[k], rn)
@@ -1083,6 +1439,8 @@ Throws [`ExpressionTemplateError`](@ref) on any of:
 - declaration is malformed (params missing, body missing, etc.)
 """
 function lower_expression_templates(raw_data)
+    # Old spellings (esm-spec §9.6.12) when the caller skipped the wire boundary.
+    raw_data = _wire_old_spellings(raw_data)
     reject_expression_templates_pre_v04(raw_data)
 
     # Fast path: files that neither declare `expression_templates` blocks
@@ -1123,17 +1481,20 @@ function lower_expression_templates(raw_data)
         comp = compraw::OrderedDict{String, Any}
         # A model mounted as a subsystem keeps its references and brings its
         # template definitions; they join this component's registry here.
-        _hoist_mounted_templates!(comp, cname)
+        owners = _hoist_mounted_templates!(comp, cname)
         # Static shape environment for `where` constraint evaluation
         # (esm-spec §9.6.1): declared variable shapes only.
         shape_env = _component_shape_env(comp)
-        tplraw = get(comp, "expression_templates", nothing)
+        tplraw = get(comp, "operators", nothing)
         # `named`       — every template keyed by name, consulted by
         #                 `apply_expression_template` (order-independent).
         # `match_rules` — the auto-applied `match` rules, in template
         #                 DECLARATION order (esm-spec §9.6.3).
         named = Dict{String, Any}()
         match_rules = _RewriteRule[]
+        call_rules = Dict{String, Vector{_RewriteRule}}()
+        arities = Dict{String, Set{Int}}()
+        sub_arities = Dict{String, Vector{Tuple{Int, Vector{String}}}}()
         if _is_object(tplraw)
             # `root` is order-preserving (`_to_ordered`), so this map's key
             # order IS the authored declaration order — the `match`-rule
@@ -1149,11 +1510,46 @@ function lower_expression_templates(raw_data)
             # inlined — references are preserved (§9.6.4).
             _check_template_body_graph(templates, "$compkind.$cname")
             decl_index = 0
-            for (tname, decl) in templates
+            for (tname, decl0) in templates
                 decl_index += 1
+                # esm 2.4.0 (esm-spec §9.6.12): every definition records the
+                # defined operator it defines; a core operator's name is reserved.
+                _check_defines_not_core(tname, decl0, "$compkind.$cname")
+                decl = decl0
+                if _raw_get(decl0, "defines") === nothing
+                    decl = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl0))
+                    decl["defines"] = _definition_defines(tname, decl0)
+                    tplraw[tname] = decl
+                end
                 named[tname] = decl
                 td = _TemplateDecl(decl)
                 m = td.match
+                defines = _definition_defines(tname, decl)
+                rop = _match_root_op(decl)
+                refonly = _is_reference_only(decl)
+                if m === nothing && refonly
+                    # reached only through an explicit reference (§9.6.1)
+                elseif m === nothing && haskey(owners, tname)
+                    push!(get!(sub_arities, defines, Tuple{Int, Vector{String}}[]), (length(td.params), owners[tname]))
+                elseif m === nothing
+                    push!(get!(arities, defines, Set{Int}()), length(td.params))
+                elseif rop !== nothing && !_is_core_op(rop)
+                    margs = _raw_get(m, "args")
+                    push!(get!(arities, rop, Set{Int}()), margs === nothing ? 0 : length(margs))
+                end
+                if m === nothing && !refonly && !_is_core_op(defines) && defines != APPLY_EXPRESSION_TEMPLATE_OP
+                    push!(
+                        get!(call_rules, defines, _RewriteRule[]),
+                        _RewriteRule(
+                            tname,
+                            OrderedDict{String, Any}("op" => defines, "args" => Any[td.params...]),
+                            Set{String}(td.params), String[td.params...], td.body,
+                            _rule_priority(decl), decl_index,
+                            _registered_where(decl, iset_names, "$compkind.$cname", tname),
+                            true
+                        )
+                    )
+                end
                 if m !== nothing
                     # `where` registration: normalize constraints and
                     # resolve every referenced index-set name against the
@@ -1167,26 +1563,35 @@ function lower_expression_templates(raw_data)
                         match_rules,
                         _RewriteRule(
                             tname, m, Set{String}(td.params), String[td.params...], td.body,
-                            _rule_priority(decl), decl_index, where_c
+                            _rule_priority(decl), decl_index, where_c, false
                         )
                     )
                 end
             end
             # Deterministic selection order (esm-spec §9.6.3): highest
-            # `priority` first, ties broken by declaration order (earliest
-            # wins). `_rewrite_pass` then takes the FIRST matching rule.
-            sort!(match_rules, by = r -> (-r.priority, r.decl_index))
+            # `priority` first, then a definition with a `where` before one
+            # without (esm 2.4.0), then declaration order (earliest wins).
+            # `_select_definition` takes the FIRST eligible definition.
+            sort!(match_rules, by = _selection_key)
+            for v in values(call_rules)
+                sort!(v, by = _selection_key)
+            end
         end
         cscope = "$compkind.$cname"
-        L = _Lowering(named, match_rules, shape_env, enums, cscope, IdDict{Any, Int}())
+        L = _Lowering(
+            named, match_rules, call_rules, arities, owners, sub_arities, Ref(""),
+            shape_env, enums, cscope,
+            IdDict{Any, Int}()
+        )
         # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
         # non-template field (esm-spec §9.6.3): each firing writes a reference
         # to its rule (constraint 7); references are leaves for matching and
         # the walk descends into their bindings (§9.6.4 rule 4).
-        for k in collect(keys(comp))
-            k == "expression_templates" && continue
-            comp[k], _ = _rewrite_to_fixpoint(comp[k], L, "$cscope.$k")
+        for (holder, k, path) in _component_sites(comp)
+            L.site[] = path
+            holder[k], _ = _rewrite_to_fixpoint(holder[k], L, "$cscope.$(_site_label(path, k))")
         end
+        L.site[] = ""
         push!(lowerings, (comp, L, Any[]))
         haskey(by_name, cname) || (by_name[cname] = length(lowerings))
     end
@@ -1213,12 +1618,33 @@ function lower_expression_templates(raw_data)
         # Call-site checks on surviving references (§9.6.9): unknown name /
         # bindings mismatch, against the registry as rule 3 left it.
         for k in collect(keys(comp))
-            k == "expression_templates" && continue
+            k == "operators" && continue
             _check_surviving_refs(comp[k], L.named, "$(L.scope).$k")
         end
         for entry in transforms
             _check_surviving_refs(entry["transform"], L.named, "$(L.scope) coupling transform")
         end
+        # esm-spec §9.6.12 "Arity": surviving calls in the component, in the
+        # transforms it receives, and in the bodies its references reach.
+        if !isempty(L.arities) || !isempty(L.sub_arities)
+            reached = Set{String}()
+            for (holder, k, path) in _component_sites(comp)
+                L.site[] = path
+                _check_call_arity(holder[k], L, "$(L.scope).$(_site_label(path, k))")
+                _reached_definitions!(reached, holder[k], L.named)
+            end
+            L.site[] = ""
+            for entry in transforms
+                _check_call_arity(entry["transform"], L, "$(L.scope) coupling transform")
+                _reached_definitions!(reached, entry["transform"], L.named)
+            end
+            for r in sort!(collect(reached))
+                L.site[] = _owner_site(L, r)
+                _check_call_arity(_raw_get(L.named[r], "body"), L, "$(L.scope).operators.$r")
+            end
+            L.site[] = ""
+        end
+        _mark_subsystem_owned!(comp, L)
     end
 
     # Validation discharge (esm-spec §9.6.9): the makearray-region check on the

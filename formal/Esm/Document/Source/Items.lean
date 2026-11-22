@@ -581,10 +581,10 @@ def cookDocBlocks {α ρ : Type} (ckR : Sym → String → Option Json) (D : Doc
   pure { D with blocks := bs, comps := cs }
 
 /-- No expression path ends at a block, and none starts at the blocks the symbol tables
-read (`index_sets`, `variables`, `species`, `parameters`, `expression_templates`). -/
+read (`index_sets`, `variables`, `species`, `parameters`, `operators`). -/
 theorem stepKey_table :
     (stepKey (some "index_sets") Notation.topExprPaths).contains [] = false ∧
-    stepKey (some "expression_templates") Notation.topExprPaths = [] ∧
+    stepKey (some "operators") Notation.topExprPaths = [] ∧
     (stepKey (some "variables") Notation.compExprPaths).contains [] = false ∧
     (stepKey (some "species") Notation.compExprPaths).contains [] = false ∧
     (stepKey (some "parameters") Notation.compExprPaths).contains [] = false := by

@@ -63,7 +63,7 @@ fn importer(import_ref: &str) -> String {
         "metadata": { "name": "env_var_ref_importer",
                       "description": "Imports a template library through a ref (esm-spec 4.7)." },
         "models": { "M": {
-            "expression_template_imports": [ { "ref": import_ref } ],
+            "operator_imports": [ { "ref": import_ref } ],
             "variables": { "x": { "type": "unknown", "units": "1", "default": 1.0 },
                            "y": { "type": "unknown", "units": "1" } },
             "equations": [

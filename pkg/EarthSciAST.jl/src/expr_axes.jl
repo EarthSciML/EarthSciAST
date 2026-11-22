@@ -92,7 +92,7 @@ function _expr_axes(env::_ShapeEnv, e::ASTExpr)::Union{Vector{String}, Nothing}
     e isa VarExpr && return _name_axes(env, e.name)
     e isa OpExpr || return nothing
     op = e.op
-    if env.ctx !== nothing && (op == "apply_expression_template" || e.template_origin !== nothing)
+    if env.ctx !== nothing && (op == "apply_operator" || e.template_origin !== nothing)
         return _union_axes(env, _application_operands(e, env.known, env.ctx))
     elseif op == "const"
         return e.value isa Number ? String[] : nothing

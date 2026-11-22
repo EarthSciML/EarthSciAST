@@ -73,7 +73,7 @@
                 "ymin": "src_S"
               },
               "name": "bin_into_cell__pd_filter",
-              "op": "apply_expression_template"
+              "op": "apply_operator"
             },
             "id": "pd_faq__src_cells",
             "join": [
@@ -133,7 +133,7 @@
                 "ymin": "pd_cell__src_cells__src_S"
               },
               "name": "bin_into_cell",
-              "op": "apply_expression_template"
+              "op": "apply_operator"
             },
             "join": [
               {
@@ -334,7 +334,7 @@
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "bin_into_cell": {
           "body": {
             "args": [

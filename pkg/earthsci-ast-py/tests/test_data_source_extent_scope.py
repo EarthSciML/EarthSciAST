@@ -24,6 +24,7 @@ implement.
 """
 
 import json
+import warnings
 
 import pytest
 from conftest import FIXTURES_ROOT
@@ -59,11 +60,11 @@ def test_a_mounted_leafs_metaparameter_need_not_be_restated_by_the_root():
 
 def test_a_loader_api_binding_no_document_declares_is_still_refused():
     """Widening the check must not delete it. A name neither the root nor
-    anything it mounts declares is still `template_import_unknown_name` —
+    anything it mounts declares is still `operator_import_unknown_name` —
     §9.7.6: bindings never invent metaparameters, a typo fails loudly."""
     with pytest.raises(Exception) as excinfo:
         load_path(str(_DIR / "extent_root_toplevel.esm"), metaparameters={"N_RECS": 3})
-    assert "template_import_unknown_name" in str(excinfo.value)
+    assert "operator_import_unknown_name" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +136,7 @@ def test_an_extent_naming_an_undeclared_metaparameter_is_refused_at_load():
     with pytest.raises(Exception) as excinfo:
         load_path(str(_DIR / "extent_undeclared_root.esm"))
     msg = str(excinfo.value)
-    assert "template_import_unknown_name" in msg
+    assert "operator_import_unknown_name" in msg
     assert "N_RECS" in msg
 
 
@@ -154,7 +155,7 @@ def test_a_loader_binding_the_leaf_does_not_declare_is_not_forwarded_to_it():
 
     Here the assembler declares `N_REC` and the leaf it mounts declares nothing.
     Forwarding the whole loader-API map into the leaf's close would raise
-    `template_import_unknown_name` against a leaf that never asked for the name
+    `operator_import_unknown_name` against a leaf that never asked for the name
     — and, worse, would let an assembler's unrelated metaparameter silently
     resize a leaf axis the edge never bound (esm-spec §4.7).
     """
@@ -286,7 +287,7 @@ def test_the_purest_typo_is_caught_and_stays_caught():
     with pytest.raises(Exception) as excinfo:
         load_path(str(_DIR / "extent_typo_no_mount.esm"))
     msg = str(excinfo.value)
-    assert "template_import_unknown_name" in msg
+    assert "operator_import_unknown_name" in msg
     assert "N_RECS" in msg
 
 
@@ -307,3 +308,30 @@ def test_a_leafs_nested_contribution_folds_at_the_edge_bound_value():
         doc = load_path(str(_DIR / name))
         assert doc.index_sets["own"]["size"] == 7, name
         assert doc.index_sets["lev"]["size"] == 7, name
+
+
+def test_an_extent_reexported_through_an_old_spelled_import_chain(tmp_path):
+    """The re-export walk reads each document it reaches in the esm-2.4.0
+    spellings (esm-spec §9.6.12): an intermediate library that imports the
+    declaring one under ``expression_template_imports`` still carries `N_REC`
+    up to the root."""
+    root = json.loads((_DIR / "extent_reexport_root.esm").read_text())
+    ingest = root["models"]["Ingest"]
+    ingest.pop("expression_template_imports", None)
+    ingest["operator_imports"] = [{"ref": "./lib_a.esm"}]
+    (tmp_path / "root.esm").write_text(json.dumps(root))
+    (tmp_path / "lib_b.esm").write_text((_DIR / "extent_reexport_lib.esm").read_text())
+    (tmp_path / "lib_a.esm").write_text(
+        json.dumps(
+            {
+                "esm": "2.4.0",
+                "metadata": {"name": "LibA"},
+                "expression_template_imports": [{"ref": "./lib_b.esm"}],
+                "expression_templates": {"three": {"params": [], "body": 3.0}},
+            }
+        )
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        doc = load_path(str(tmp_path / "root.esm"), metaparameters={"N_REC": 3})
+    assert _records(doc)["size"] == 3

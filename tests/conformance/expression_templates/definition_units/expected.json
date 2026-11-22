@@ -1,0 +1,21 @@
+{
+  "fixture.esm": {
+    "errors": [],
+    "warnings": []
+  },
+  "body_mismatch.esm": {
+    "errors": [
+      "definition_unit_mismatch"
+    ],
+    "warnings": []
+  },
+  "call_unit_from_expression.esm": {
+    "errors": [
+      "unit_inconsistency"
+    ],
+    "warnings": [
+      "definition_unit_mismatch"
+    ]
+  },
+  "description": "validate() error codes and unit-warning codes per file (esm-spec §9.6.12 'Units')."
+}

@@ -83,7 +83,7 @@ end
             _extent_load("extent_root_toplevel.esm"; metaparameters = Dict("N_RECS" => 3))
         )
         @test err isa ExpressionTemplateError
-        @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
+        @test err.code == ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME
         @test occursin("N_RECS", err.message)
     end
 
@@ -159,7 +159,7 @@ end
         # site (no new diagnostic code).
         err = caught(() -> _extent_load("extent_undeclared_root.esm"))
         @test err isa ExpressionTemplateError
-        @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
+        @test err.code == ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME
         @test occursin("N_RECS", err.message)
         @test occursin("EGU_Emis", err.message)   # names the site, not just the name
     end
@@ -371,7 +371,7 @@ end
         # tree.
         err = caught(() -> _extent_load("extent_typo_no_mount.esm"))
         @test err isa ExpressionTemplateError
-        @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
+        @test err.code == ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME
         @test occursin("N_RECS", err.message)
     end
 

@@ -470,6 +470,21 @@ def _expr_to_sympy(
             wrt_symbol = _expr_to_sympy(wrt, symbol_map, structural_ops=structural_ops)
             return sp.Derivative(sympy_args[0], wrt_symbol)
 
+        # `partial(f; wrt: x)` (esm-spec §4.2) is the spatial derivative a loaded
+        # document spells for a `D` with a spatial `wrt`: under the symbolic
+        # contract it is the same `sp.Derivative` such a `D` gives. A call with
+        # trailing operands (boundary values a definition consumes) stays an
+        # opaque placeholder below.
+        if (
+            expr.op == "partial"
+            and structural_ops
+            and len(expr.args) == 1
+            and isinstance(expr.wrt, str)
+        ):
+            operand = _expr_to_sympy(expr.args[0], symbol_map, structural_ops=structural_ops)
+            wrt_symbol = _expr_to_sympy(expr.wrt, symbol_map, structural_ops=structural_ops)
+            return sp.Derivative(operand, wrt_symbol)
+
         # Every OTHER non-evaluable-core op is an ordinary open-tier
         # rewrite-target with NO privilege — integral, curl AND any custom op
         # such as `godunov_hamiltonian` are handled by the SAME path (esm-spec §4.2). On

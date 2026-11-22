@@ -454,7 +454,7 @@ function spatial_dims_in_expr(expr::ASTExpr)::Vector{Symbol}
             d = Symbol(x.dim)
             (d in dims) || push!(dims, d)
         end
-        if x.op == "D" && x.wrt !== nothing && x.wrt != "t"
+        if x.wrt !== nothing && x.wrt != "t"
             d = Symbol(x.wrt)
             (d in dims) || push!(dims, d)
         end
@@ -1100,7 +1100,8 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
         for (compkey, block) in collect(scoped)
             parts = split(String(compkey), "."; limit = 2)
             length(parts) == 2 || continue
-            scoped[compkey], tpl_added[String(parts[2])] = _tpl_explicit_free(block)
+            # The flattened registry is written as is: no load-private key.
+            scoped[compkey], tpl_added[String(parts[2])] = _tpl_explicit_free(_without_private_keys(block))
         end
     end
     template_registry, template_rename = _merge_flat_registry(scoped)
@@ -1484,7 +1485,7 @@ function flattened_to_esm(
     # `EsmFile.component_templates` and the impl entry expands with site
     # recording). Absent for every reference-free system.
     if !isempty(flat.template_registry)
-        model["expression_templates"] =
+        model["operators"] =
             OrderedDict{String, Any}(String(k) => v for (k, v) in flat.template_registry)
     end
 

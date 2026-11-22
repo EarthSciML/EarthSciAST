@@ -1,0 +1,24 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "old_names_lib",
+    "description": "A library written with the esm 2.3 spellings.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "expression_templates": {
+    "halve": {
+      "params": [
+        "a"
+      ],
+      "body": {
+        "op": "/",
+        "args": [
+          "a",
+          2
+        ]
+      }
+    }
+  }
+}

@@ -342,7 +342,7 @@ _ALL: tuple[OpSpec, ...] = (
     ),
     # --- expression templates (esm-spec §9.6) ---
     OpSpec(
-        "apply_expression_template",
+        "apply_operator",
         "template",
         "nullary",
         note="args empty; `name`/`bindings` fields; expanded at load",

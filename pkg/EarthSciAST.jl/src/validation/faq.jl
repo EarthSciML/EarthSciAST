@@ -289,7 +289,7 @@ function faq_bare_array_operands(
     # a call (tree_walk/call.jl) is a scalar function of its arguments, so an
     # argument is an operand in place, read the way the body reads its
     # parameter: elementwise. `validate` reads references as opaque.
-    opaque = e -> (!through_calls && e.op == "apply_expression_template") ||
+    opaque = e -> (!through_calls && e.op == "apply_operator") ||
         (opaque_applications && e.template_origin !== nothing)
     _faq_bare_walk!(
         found, expr, shaped, Set{String}(), IdDict{Any, Vector{Set{String}}}(), opaque
@@ -400,7 +400,7 @@ end
 function _contains_template_reference(expr::ASTExpr)
     found = false
     foreach_subexpr_once(expr) do e
-        e isa OpExpr && e.op == "apply_expression_template" && (found = true)
+        e isa OpExpr && e.op == "apply_operator" && (found = true)
         nothing
     end
     return found

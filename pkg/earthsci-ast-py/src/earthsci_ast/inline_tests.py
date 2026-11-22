@@ -78,7 +78,7 @@ from .esm_types import EsmFile, Expr, ExprNode, Tolerance
 from .expr_walk import iter_children
 from .flatten import flatten
 from .json_walk import decode_document
-from .parse import load_path, load_string
+from .parse import load_path, load_string, rewrite_old_spellings
 from .problem import DEFAULT_ALG, esm_problem, solve
 from .simulation import BuildInspection, _eval_buildtime_field, observed_at_state
 from .simulation_common import ReturnCode, dotted_suffixes
@@ -1391,6 +1391,10 @@ def _ephemeral_injected_file(
     if source_path is not None:
         with open(source_path, encoding="utf-8") as fh:
             raw = decode_document(fh.read(), source_path)
+        # The load already warned about these spellings. Read them as the
+        # esm-2.4.0 ones before appending under `operator_imports`, else a
+        # component that wrote `expression_template_imports` holds both.
+        rewrite_old_spellings(raw)
     else:
         raw = _serialize_esm_file(file)
 
@@ -1402,11 +1406,11 @@ def _ephemeral_injected_file(
         comp = comps[mname]
         if not isinstance(comp, dict):
             continue
-        existing = comp.get("expression_template_imports")
+        existing = comp.get("operator_imports")
         base = list(existing) if isinstance(existing, list) else []
         for e in imports:
             base.append(copy.deepcopy(e))
-        comp["expression_template_imports"] = base
+        comp["operator_imports"] = base
         injected = True
         break
     if not injected:

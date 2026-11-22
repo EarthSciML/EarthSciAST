@@ -303,7 +303,7 @@ CORE_OPS = frozenset(
         "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
         "asinh", "acosh", "atanh", "atan2", "min", "max", "D", "ic", "Pre", "enum", "const",
         "faq", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
-        "apply_expression_template",
+        "apply_operator",
     }
 )  # fmt: skip
 
@@ -480,6 +480,8 @@ def mul_toks(xs: list) -> list:
 # Math.OpK: the printer kind of a plain node's operator.
 _MINUS, _DIV, _POW, _LNOT, _TRU, _FLS, _ITE, _IC, _INDEX = range(9)
 _CMP, _UN, _PLUS, _TIMES, _LAND, _LOR, _MM, _CALL, _OTHER = range(9, 18)
+#: ``Math.OpK.nab``: the four defined operators with a ``\nabla`` form (spec §1.2).
+_NAB = 18
 
 _UN_KW = {
     **FN_KW,
@@ -506,6 +508,10 @@ _KIND_TABLE = {
     "or": (_LOR, None),
     "min": (_MM, K.MIN),
     "max": (_MM, K.MAX),
+    "grad": (_NAB, "grad"),
+    "div": (_NAB, "div"),
+    "laplacian": (_NAB, "lap"),
+    "curl": (_NAB, "curl"),
 }
 
 
@@ -712,10 +718,38 @@ def d_space(sf: str, w: list, a: Out) -> Out:
 
 
 def d_call(sf: str, w: list, args: list) -> list:
-    """``Math.dCall``: ``\\operatorname{D}_{x}(u, a, b)``."""
+    """``Math.dCall``: ``partial`` with trailing operands, ``\\partial_{x}(u, a, b)`` /
+    ``partial_(x)(u, a, b)``."""
     if sf == K.LATEX:
-        return [("opn", "D"), K.US, K.LB, *w, K.RB, *call_toks(sf, [], args)]
-    return [("opn", "D"), K.US, K.LPG, *w, K.RP, *call_toks(sf, [], args)]
+        return [K.PDIFF, K.US, K.LB, *w, K.RB, *call_toks(sf, [], args)]
+    return [K.PDIFF, K.US, K.LPG, *w, K.RP, *call_toks(sf, [], args)]
+
+
+def nab_head(sf: str, n: str) -> list:
+    """``Math.nabHead``: what a ``\\nabla`` form writes before its operand:
+    ``\\nabla``, ``\\nabla \\cdot``, ``\\nabla^{2}``, ``\\nabla \\times`` (Typst ``nabla``,
+    ``nabla dot``, ``nabla^2``, ``nabla times``)."""
+    if n == "grad":
+        return [K.NABLA]
+    if n == "div":
+        return [K.NABLA, K.CDOT]
+    if n == "lap":
+        if sf == K.LATEX:
+            return [K.NABLA, K.CARET, K.LB, ("num", 2), K.RB]
+        return [K.NABLA, K.CARET, ("num", 2)]
+    return [K.NABLA, K.TIMES]
+
+
+def nab_arg(sf: str, n: str, o: Out) -> list:
+    """``Math.nabArg``: the operand of a ``\\nabla`` form: another ``\\nabla`` form as
+    it is (``\\nabla \\cdot \\nabla u`` is ``div(grad(u))``), anything else at the
+    level of a power base; after the ``\\times`` of a curl, an operand that starts
+    with a number in parentheses (the lexers read a number's scientific tail
+    there)."""
+    if o.toks and o.toks[0] == K.NABLA and o.lvl >= 6:
+        return o.toks
+    t = o.at(sf, 9)
+    return grp(sf, t) if n == "curl" and starts_num(t) else t
 
 
 # ## Constant arrays
@@ -1374,18 +1408,28 @@ def pr(c: Ctx, e: Any) -> Out:
             and k2 == "wrt"
             and type(v2) is str
         ):
+            # `D` is the time derivative only; any other `D` is the escape form.
+            if len(args) == 1 and v2 == "t":
+                return d_time(sf, pr(c, args[0]))
+            return _esc(c, kvs)
+        if (
+            k0 == "args"
+            and type(args) is list
+            and k1 == "op"
+            and o == "partial"
+            and k2 == "wrt"
+            and type(v2) is str
+        ):
+            # `partial` (spec §4.2): the fraction of differentials with one
+            # operand, `\partial_{x}(u, a, b)` with trailing operands.
             w = v2
             if len(args) == 1:
-                if w == "t":
-                    return d_time(sf, pr(c, args[0]))
-                if name_ok(w):
-                    return d_space(sf, name_toks(c, w), pr(c, args[0]))
-                return _esc(c, kvs)
-            if len(args) >= 2:
                 if w != "t" and name_ok(w):
-                    return Out(10, d_call(sf, name_toks(c, w), [pa(c, 4, x) for x in args]))
-                return _esc(c, kvs)
-            return _esc(c, kvs)
+                    return d_space(sf, name_toks(c, w), pr(c, args[0]))
+                return _opn(c, kvs)
+            if len(args) >= 2 and w != "t" and name_ok(w):
+                return Out(10, d_call(sf, name_toks(c, w), [pa(c, 4, x) for x in args]))
+            return _opn(c, kvs)
         if (
             k0 == "args"
             and type(args) is list
@@ -1419,7 +1463,7 @@ def pr(c: Ctx, e: Any) -> Out:
             and k2 == "name"
             and type(v2) is str
             and k3 == "op"
-            and v3 == "apply_expression_template"
+            and v3 == "apply_operator"
         ):
             return _pr_template(c, kvs, v2, v1)
     f = faq_form(kvs)
@@ -1512,13 +1556,16 @@ def _pr_plain(c: Ctx, kvs: Obj, o: str, args: list) -> Out:
         if na >= 2:
             return Out(10, call_toks(sf, [kw], [pa(c, 1, x) for x in args]))
         return _opn(c, kvs)
+    elif kind == _NAB:
+        if na == 1:
+            return Out(6, [*nab_head(sf, kw), *nab_arg(sf, kw, pr(c, args[0]))])
     elif kind == _CALL:
         return Out(10, call_toks(sf, [("opn", o)], [pa(c, 4, x) for x in args]))
     return _opn(c, kvs)
 
 
 def _pr_template(c: Ctx, kvs: Obj, n: str, bs: Obj) -> Out:
-    """The ``apply_expression_template`` case of ``Math.pr``."""
+    """The ``apply_operator`` case of ``Math.pr``."""
     sf = c.sf
     if not (tname_ok(n) and keys_sorted(bs) and all(is_e(v) for _, v in bs)):
         return _esc(c, kvs)

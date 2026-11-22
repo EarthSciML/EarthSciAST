@@ -66,13 +66,13 @@ def _template_value(op: str, values: list) -> float:
         "metadata": {"name": "relational_template_probe"},
         "models": {
             "M": {
-                "expression_template_imports": [{"ref": str(LIBRARY)}],
+                "operator_imports": [{"ref": str(LIBRARY)}],
                 "variables": {"r": {"type": "unknown", "units": "1", "default": 0.0}},
                 "equations": [
                     {
                         "lhs": {"op": "D", "args": ["r"], "wrt": "t"},
                         "rhs": {
-                            "op": "apply_expression_template",
+                            "op": "apply_operator",
                             "args": [],
                             "name": op,
                             "bindings": {"f": f, "n": len(values)},
@@ -83,7 +83,7 @@ def _template_value(op: str, values: list) -> float:
         },
     }
     (eq,) = load_string(json.dumps(doc)).models["M"].equations
-    assert not any(getattr(n, "op", None) == "apply_expression_template" for n in walk(eq.rhs)), (
+    assert not any(getattr(n, "op", None) == "apply_operator" for n in walk(eq.rhs)), (
         "the template reference survived load"
     )
     with warnings.catch_warnings():

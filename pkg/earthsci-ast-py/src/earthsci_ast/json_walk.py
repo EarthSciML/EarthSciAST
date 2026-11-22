@@ -36,7 +36,7 @@ from .stdlib import in_bundle_ref_path, is_std_ref, std_ref_path
 
 #: The op-name of an ``apply_expression_template`` node (esm-spec §9.6). Shared
 #: by the §9.6 lowering pass and the §9.7 import machinery.
-APPLY_OP = "apply_expression_template"
+APPLY_OP = "apply_operator"
 
 
 class ExpressionTemplateError(EarthSciAstError):

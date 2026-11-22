@@ -1,8 +1,8 @@
 {
-  "esm": "2.0.0",
+  "esm": "2.4.0",
   "metadata": {
     "name": "Solar",
-    "description": "Standard-library solar-geometry subsystem. Computes solar declination δ, the equation of time, and the solar zenith angle θ_z given latitude (degrees north), longitude (degrees east of prime meridian), and a UTC scalar time `t_utc`. The algorithm is the Spencer-/NOAA-style Fourier series for δ and EoT; its calendar fields come from the pure-AST `day_of_year`, `hour`, `minute` and `second` templates of lib/calendar.esm (imported with `expression_template_imports`; exact for |t_utc| < 2^52 s, and NaN outside), and the rest is the §4.2 elementary-function ops, so all bindings agree to ≤ 10 ulp on the transcendental composition. Includable via §4.7 reference; see docs/standard_library.md.",
+    "description": "Standard-library solar-geometry subsystem. Computes solar declination δ, the equation of time, and the solar zenith angle θ_z given latitude (degrees north), longitude (degrees east of prime meridian), and a UTC scalar time `t_utc`. The algorithm is the Spencer-/NOAA-style Fourier series for δ and EoT; its calendar fields come from the pure-AST `day_of_year`, `hour`, `minute` and `second` templates of lib/calendar.esm (imported with `operator_imports`; exact for |t_utc| < 2^52 s, and NaN outside), and the rest is the §4.2 elementary-function ops, so all bindings agree to ≤ 10 ulp on the transcendental composition. Includable via §4.7 reference; see docs/standard_library.md.",
     "authors": [
       "EarthSciML"
     ],
@@ -25,7 +25,7 @@
   },
   "models": {
     "Solar": {
-      "expression_template_imports": [
+      "operator_imports": [
         {
           "ref": "esm:std/calendar.esm",
           "only": [
@@ -156,7 +156,7 @@
         {
           "lhs": "day_of_year",
           "rhs": {
-            "op": "apply_expression_template",
+            "op": "apply_operator",
             "args": [],
             "name": "day_of_year",
             "bindings": {
@@ -167,7 +167,7 @@
         {
           "lhs": "hour",
           "rhs": {
-            "op": "apply_expression_template",
+            "op": "apply_operator",
             "args": [],
             "name": "hour",
             "bindings": {
@@ -178,7 +178,7 @@
         {
           "lhs": "minute",
           "rhs": {
-            "op": "apply_expression_template",
+            "op": "apply_operator",
             "args": [],
             "name": "minute",
             "bindings": {
@@ -189,7 +189,7 @@
         {
           "lhs": "second",
           "rhs": {
-            "op": "apply_expression_template",
+            "op": "apply_operator",
             "args": [],
             "name": "second",
             "bindings": {

@@ -106,6 +106,9 @@ pub mod data_output {
 /// The structured diagnostic carrier every raise site funnels through.
 pub mod diagnostic {
     pub use crate::diagnostic::DiagnosticError;
+    /// The codes esm 2.4.0 renamed, old spelling → new (esm-spec §9.6.6), and
+    /// the current spelling of a code.
+    pub use crate::diagnostic::{ERROR_CODE_ALIASES, canonical_error_code};
 }
 
 /// Document-editing operations with no root re-export. The four event

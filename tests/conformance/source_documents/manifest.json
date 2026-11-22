@@ -62,7 +62,7 @@
       "id": "import_json_content",
       "fixture": "import_json_content.esm",
       "expect": "error",
-      "code": "template_import_unresolved",
+      "code": "operator_import_unresolved",
       "driver": "load"
     },
     {

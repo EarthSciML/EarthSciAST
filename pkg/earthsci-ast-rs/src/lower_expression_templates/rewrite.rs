@@ -192,6 +192,98 @@ struct MatchRule {
     /// required shape (ordered index-set names). `None` when the rule carries
     /// no `where` block. Checked as part of match eligibility.
     where_c: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    /// The definition's position in its block (1-based), the last component
+    /// of the §9.6.3 selection key.
+    decl_index: usize,
+}
+
+impl MatchRule {
+    /// The §9.6.3 selection key: highest `priority` first, then a definition
+    /// carrying a `where` before one without (esm 2.4.0), then declaration
+    /// order. Mirrors the Julia reference `_selection_key`.
+    fn selection_key(&self) -> (std::cmp::Reverse<i64>, u8, usize) {
+        (
+            std::cmp::Reverse(self.priority),
+            u8::from(self.where_c.is_none()),
+            self.decl_index,
+        )
+    }
+}
+
+/// Is `op` a core operator (esm-spec §4.2: the closed, evaluable set every
+/// binding's evaluator implements)? Every other `op` names a defined operator,
+/// given by definitions (§9.6.12). The reference node `apply_operator` is
+/// neither: it names a definition, not an operator. Mirrors the Julia
+/// reference `_is_core_op`.
+pub(crate) fn is_core_operator(op: &str) -> bool {
+    op != APPLY_OP && crate::op_registry::CoreOp::from_name(op).is_some()
+}
+
+/// The root `op` of a definition's `match`, when it is a string.
+pub(super) fn match_root_op(decl: &Map<String, Value>) -> Option<&str> {
+    decl.get("match")?.as_object()?.get("op")?.as_str()
+}
+
+/// The defined operator an `operators` entry is a definition of (esm-spec
+/// §9.6.1 `defines`): its written `defines`; else the root `op` of its `match`
+/// when that is not a core operator; else its key. Mirrors the Julia reference
+/// `_definition_defines`.
+pub(crate) fn definition_defines(name: &str, decl: &Value) -> String {
+    let Some(obj) = decl.as_object() else {
+        return name.to_string();
+    };
+    if let Some(d) = obj.get("defines").and_then(Value::as_str) {
+        return d.to_string();
+    }
+    match match_root_op(obj) {
+        Some(r) if !is_core_operator(r) => r.to_string(),
+        _ => name.to_string(),
+    }
+}
+
+/// esm-spec §9.6.12 "Core names are reserved": a definition whose `defines`,
+/// written or inferred, is a core operator's name is
+/// `operator_defines_core_op`. A rule whose `match` is rooted at a core
+/// operator defines no callable name, so its `defines` is provenance only and
+/// is not checked. Mirrors the Julia reference `_check_defines_not_core`.
+fn check_defines_not_core(
+    name: &str,
+    decl: &Value,
+    scope: &str,
+) -> Result<(), ExpressionTemplateError> {
+    // A `reference_only` definition is reached by no call (esm-spec §9.6.1).
+    if is_reference_only(decl) {
+        return Ok(());
+    }
+    if let Some(obj) = decl.as_object()
+        && match_root_op(obj).is_some_and(is_core_operator)
+    {
+        return Ok(());
+    }
+    let d = definition_defines(name, decl);
+    if is_core_operator(&d) {
+        return Err(err(
+            codes::OPERATOR_DEFINES_CORE_OP,
+            format!(
+                "{scope}.operators.{name}: defines the core operator '{d}'; a definition may \
+                 not define a core operator's name (esm-spec §9.6.12, \"Core names are \
+                 reserved\")"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether an `operators` entry is `reference_only` (esm-spec §9.6.1): reached
+/// by explicit references only, never by a call of the operator it defines.
+pub(crate) fn is_reference_only(decl: &Value) -> bool {
+    decl.get("reference_only") == Some(&Value::Bool(true))
+}
+
+/// Whether a node is a call shape a match-less definition can bind: an `op`
+/// and `args`, no other field (esm-spec §9.6.3 constraint 2).
+fn only_op_args(fields: &[(String, Sv)]) -> bool {
+    fields.iter().all(|(k, _)| k == "op" || k == "args")
 }
 
 /// How the rewrite engine sees a template body it rewrites for one template
@@ -221,11 +313,28 @@ pub(super) struct BodyView {
 pub(super) struct Lowering {
     pub(super) named: Named,
     rules: Vec<MatchRule>,
+    /// Match-less definitions by the defined operator they define, each list
+    /// in §9.6.3 selection order (esm 2.4.0: a call of a defined operator by
+    /// name resolves to one of its definitions).
+    call_rules: std::collections::HashMap<String, Vec<MatchRule>>,
+    /// The operand count each definition of each defined operator takes,
+    /// with the definition's name (esm-spec §9.6.12 "Arity").
+    arities: Arities,
+    /// The owners of the entries subsystems brought ([`Owners`]).
+    owners: Owners,
+    /// The subsystem paths (`""`: the component itself) whose positions the
+    /// rewrite is at: a definition resolves a call, and counts for its
+    /// arity, only when one of its owners encloses one of them.
+    call_scope: std::cell::RefCell<Vec<String>>,
     shape_env: std::collections::BTreeMap<String, Vec<String>>,
     pub(super) enums: Option<Value>,
     pub(super) scope: String,
     depth: std::cell::RefCell<PtrMemo<usize>>,
 }
+
+/// Per defined operator, the operand count each of its definitions takes and
+/// the definition's name.
+type Arities = std::collections::HashMap<String, Vec<(usize, String)>>;
 
 impl Lowering {
     /// The rewrite depth recorded for the reference `n` (the pass that wrote
@@ -241,6 +350,60 @@ impl Lowering {
     /// The component's static shape environment.
     pub(super) fn shape_env(&self) -> &std::collections::BTreeMap<String, Vec<String>> {
         &self.shape_env
+    }
+
+    /// Whether any definition can fire at a node: a `match` rule, or a
+    /// match-less definition callable by its operator's name.
+    pub(super) fn has_rules(&self) -> bool {
+        !self.rules.is_empty() || !self.call_rules.is_empty()
+    }
+
+    /// Whether the definition `name` is in scope for a call at the current
+    /// call scope (esm-spec §4.7, §9.6.12): it is the component's own, or a
+    /// subsystem that owns it encloses the call.
+    fn callable_here(&self, name: &str) -> bool {
+        let Some(owners) = self.owners.get(name) else {
+            return true;
+        };
+        let scope = self.call_scope.borrow();
+        owners.iter().any(|o| {
+            o.is_empty()
+                || scope.iter().any(|s| {
+                    s.strip_prefix(o.as_str())
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+                })
+        })
+    }
+
+    /// Whether a subsystem owns a definition the component does not, so the
+    /// call scope varies across the component's positions.
+    fn has_local_definitions(&self) -> bool {
+        self.owners
+            .values()
+            .any(|os| os.iter().all(|o| !o.is_empty()))
+    }
+
+    /// The call scope of the body of the registry entry `name`: its owners.
+    pub(super) fn owner_scope(&self, name: &str) -> Vec<String> {
+        self.owners
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| vec![String::new()])
+    }
+
+    /// The entry `variant` (a rewritten instance of `of`) has `of`'s owners.
+    pub(super) fn inherit_owners(&mut self, variant: &str, of: &str) {
+        if let Some(os) = self.owners.get(of).cloned() {
+            self.owners.insert(variant.to_string(), os);
+        }
+    }
+
+    /// `f` run with the call scope `scope`, the previous one restored after.
+    pub(super) fn with_call_scope<T>(&self, scope: Vec<String>, f: impl FnOnce() -> T) -> T {
+        let prev = self.call_scope.replace(scope);
+        let out = f();
+        self.call_scope.replace(prev);
+        out
     }
 }
 
@@ -338,7 +501,7 @@ fn where_satisfied(
 /// Normalize a template's `where` block into the registered constraint map
 /// (param → required shape), checking every referenced index-set name against
 /// the CONSUMING document's merged `index_sets` registry (`iset_names`). An
-/// unknown name is `template_constraint_unknown_index_set` (esm-spec
+/// unknown name is `operator_constraint_unknown_index_set` (esm-spec
 /// §9.6.1/§9.6.6) — raised here, at rule registration in the consuming
 /// component, not when a library file is loaded standalone. Returns `None` when
 /// the decl carries no `where` block. The `where` block is already
@@ -366,9 +529,9 @@ fn registered_where(
         for s in &req {
             if !iset_names.contains(s) {
                 return Err(err(
-                    codes::TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
+                    codes::OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET,
                     format!(
-                        "{scope}.expression_templates.{tname}: where.{p}.shape names index set \
+                        "{scope}.operators.{tname}: where.{p}.shape names index set \
                          '{s}', which the consuming document's index_sets registry does not \
                          declare (esm-spec §9.6.1/§9.6.6)"
                     ),
@@ -380,28 +543,45 @@ fn registered_where(
     Ok(Some(out))
 }
 
-/// Collect the auto-applied `match` rules from a component's templates in
-/// declaration order (serde_json's `preserve_order` feature keeps source
-/// order), then pre-sort them by descending `priority` with ties broken by
-/// declaration order (a stable sort preserves push order for equal
-/// priorities). Each rule's `where` block is normalized and its referenced
-/// index sets resolved against the consuming document's registry (`iset_names`)
-/// at registration — an unknown name is `template_constraint_unknown_index_set`
-/// (esm-spec §9.6.1). The old static self-reintroduction / nontermination
-/// pre-check is GONE — the bounded fixpoint (`MAX_REWRITE_PASSES`) is now the
-/// sole termination guard (esm-spec §9.6.3).
-fn collect_match_rules(
+/// The rules of one component (esm-spec §9.6.3, §9.6.12).
+struct Rules {
+    /// The `match` rules, in §9.6.3 selection order.
+    rules: Vec<MatchRule>,
+    /// The match-less definitions callable by their operator's name, grouped
+    /// by it, each group in selection order.
+    call_rules: std::collections::HashMap<String, Vec<MatchRule>>,
+    /// The operand count each defined operator's definitions take.
+    arities: Arities,
+}
+
+/// Register a component's definitions in declaration order (serde_json's
+/// `preserve_order` feature keeps source order). Each entry with a `match` is
+/// an auto-applied rule; each match-less entry whose `defines` is not a core
+/// operator is callable at a call of that operator — its pattern is
+/// `{op: defines, args: params}`, and the call may carry no other field
+/// (esm-spec §9.6.3 constraint 2, §9.6.12). Both kinds are sorted by
+/// [`MatchRule::selection_key`]. Each rule's `where` block is normalized and
+/// its referenced index sets resolved against the consuming document's
+/// registry (`iset_names`) at registration — an unknown name is
+/// `operator_constraint_unknown_index_set` (esm-spec §9.6.1). The arity table
+/// records the operand count of every match-less definition under the operator
+/// it defines and of every `match` rule rooted at a defined operator. The
+/// bounded fixpoint (`MAX_REWRITE_PASSES`) is the sole termination guard
+/// (esm-spec §9.6.3). Mirrors the registration loop of the Julia reference
+/// `lower_expression_templates`.
+fn collect_rules(
     templates: &Map<String, Value>,
     named: &Named,
     iset_names: &std::collections::HashSet<String>,
     scope: &str,
-) -> Result<Vec<MatchRule>, ExpressionTemplateError> {
+) -> Result<Rules, ExpressionTemplateError> {
     let mut rules = Vec::new();
-    for (name, decl) in templates {
+    let mut call_rules: std::collections::HashMap<String, Vec<MatchRule>> =
+        std::collections::HashMap::new();
+    let mut arities = Arities::new();
+    for (decl_index, (name, decl)) in templates.iter().enumerate() {
+        let decl_index = decl_index + 1;
         let Some(obj) = decl.as_object() else {
-            continue;
-        };
-        let Some(pattern) = obj.get("match") else {
             continue;
         };
         let param_list: Vec<String> = obj
@@ -420,22 +600,256 @@ fn collect_match_rules(
             .get(name)
             .map(decl_body)
             .unwrap_or_else(|| Rc::new(SNode::Null));
-        let where_c = registered_where(obj, iset_names, scope, name)?;
-        rules.push(MatchRule {
-            name: name.clone(),
-            param_set,
-            param_list,
-            pattern: pattern.clone(),
-            body,
-            priority: rule_priority(obj),
-            where_c,
-        });
+        let defines = definition_defines(name, decl);
+        match obj.get("match") {
+            // Reached only through an explicit reference (§9.6.1): no call
+            // rule, no arity.
+            None if is_reference_only(decl) => {}
+            None => {
+                arities
+                    .entry(defines.clone())
+                    .or_default()
+                    .push((param_list.len(), name.clone()));
+                if !is_core_operator(&defines) && defines != APPLY_OP {
+                    let pattern = serde_json::json!({
+                        "op": defines,
+                        "args": param_list.clone(),
+                    });
+                    let where_c = registered_where(obj, iset_names, scope, name)?;
+                    call_rules.entry(defines).or_default().push(MatchRule {
+                        name: name.clone(),
+                        param_set,
+                        param_list,
+                        pattern,
+                        body,
+                        priority: rule_priority(obj),
+                        where_c,
+                        decl_index,
+                    });
+                }
+            }
+            Some(pattern) => {
+                if let Some(rop) = match_root_op(obj)
+                    && !is_core_operator(rop)
+                {
+                    let n = pattern
+                        .get("args")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len);
+                    arities
+                        .entry(rop.to_string())
+                        .or_default()
+                        .push((n, name.clone()));
+                }
+                let where_c = registered_where(obj, iset_names, scope, name)?;
+                rules.push(MatchRule {
+                    name: name.clone(),
+                    param_set,
+                    param_list,
+                    pattern: pattern.clone(),
+                    body,
+                    priority: rule_priority(obj),
+                    where_c,
+                    decl_index,
+                });
+            }
+        }
     }
-    // Deterministic selection order (esm-spec §9.6.3): highest `priority` first,
-    // ties broken by declaration order. `sort_by_key` is stable, so equal
-    // priorities retain their push (declaration) order.
-    rules.sort_by_key(|r| std::cmp::Reverse(r.priority));
-    Ok(rules)
+    // Deterministic selection order (esm-spec §9.6.3): highest `priority`
+    // first, then a definition with a `where` before one without (esm 2.4.0),
+    // then declaration order (earliest wins).
+    rules.sort_by_key(MatchRule::selection_key);
+    for v in call_rules.values_mut() {
+        v.sort_by_key(MatchRule::selection_key);
+    }
+    Ok(Rules {
+        rules,
+        call_rules,
+        arities,
+    })
+}
+
+/// The definition that resolves the object node `node` (esm-spec §9.6.3
+/// constraint 2, §9.6.12): among the `match` rules whose pattern matches and
+/// the match-less definitions of the defined operator `node` calls that take
+/// its operands, those whose `where` holds, the first in
+/// [`MatchRule::selection_key`] order, with what it bound. Mirrors the Julia
+/// reference `_select_definition`.
+fn select_definition<'l>(
+    l: &'l Lowering,
+    node: &Sv,
+    fields: &[(String, Sv)],
+    bv: Option<&BodyView>,
+) -> Option<(&'l MatchRule, Binds)> {
+    let mut best: Option<(&MatchRule, Binds)> = None;
+    for rule in &l.rules {
+        let mut binds = Binds::new();
+        if try_match(&rule.pattern, node, &rule.param_set, &mut binds, bv)
+            && where_satisfied(&rule.where_c, &binds, &l.shape_env, bv)
+        {
+            best = Some((rule, binds));
+            break;
+        }
+    }
+    if let Some(op) = obj_op(fields)
+        && let Some(calls) = l.call_rules.get(op)
+        && only_op_args(fields)
+    {
+        for rule in calls {
+            if let Some((b, _)) = &best
+                && b.selection_key() < rule.selection_key()
+            {
+                break;
+            }
+            if !l.callable_here(&rule.name) {
+                continue;
+            }
+            let mut binds = Binds::new();
+            if try_match(&rule.pattern, node, &rule.param_set, &mut binds, bv)
+                && where_satisfied(&rule.where_c, &binds, &l.shape_env, bv)
+            {
+                best = Some((rule, binds));
+                break;
+            }
+        }
+    }
+    best
+}
+
+/// The `unlowered_operator` explanation of esm-spec §9.6.6 for an unresolved
+/// call `call` (raw JSON) of a defined operator: every definition of it in
+/// `registry` (name → raw entry), sorted by name, with the reason it was not
+/// eligible there — its `match` did not match, its `where` failed (naming the
+/// constraint), or its arity or call shape differed. No definition of the
+/// operator in the registry: a placeholder. Mirrors the Julia reference
+/// `_explain_unresolved_call`.
+pub(crate) fn explain_unresolved_call(
+    call: &Value,
+    registry: &indexmap::IndexMap<String, Value>,
+    shape_env: &std::collections::BTreeMap<String, Vec<String>>,
+) -> String {
+    let Some(op) = call.get("op").and_then(Value::as_str) else {
+        return String::new();
+    };
+    let args: &[Value] = call
+        .get("args")
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice);
+    let k = args.len();
+    let target = to_shared(call);
+    let mut names: Vec<&String> = registry.keys().collect();
+    names.sort_unstable();
+    let mut lines = Vec::new();
+    for name in names {
+        let decl = &registry[name.as_str()];
+        let Some(obj) = decl.as_object() else {
+            continue;
+        };
+        let params: Vec<String> = obj
+            .get("params")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|p| p.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let param_set: std::collections::HashSet<String> = params.iter().cloned().collect();
+        let whr = obj.get("where");
+        if let Some(m) = obj.get("match") {
+            if match_root_op(obj) != Some(op) {
+                continue;
+            }
+            let mut b = Binds::new();
+            if !try_match(m, &target, &param_set, &mut b, None) {
+                lines.push(format!("'{name}': its match does not match the call"));
+                continue;
+            }
+            lines.push(format!(
+                "'{name}': its where constraint {}",
+                where_reason(whr, &b, shape_env)
+            ));
+        } else {
+            if definition_defines(name, decl) != op {
+                continue;
+            }
+            if is_reference_only(decl) {
+                lines.push(format!(
+                    "'{name}': reference-only, reached by explicit references, never by a call"
+                ));
+                continue;
+            }
+            let call_obj = call.as_object();
+            let extra: Vec<&str> = call_obj
+                .map(|o| {
+                    let mut v: Vec<&str> = o
+                        .keys()
+                        .map(String::as_str)
+                        .filter(|x| *x != "op" && *x != "args")
+                        .collect();
+                    v.sort_unstable();
+                    v
+                })
+                .unwrap_or_default();
+            if params.len() != k {
+                lines.push(format!(
+                    "'{name}': takes {} operand(s), the call carries {k}",
+                    params.len()
+                ));
+            } else if !extra.is_empty() {
+                lines.push(format!(
+                    "'{name}': has no match, so it binds operands only, and the call carries {}",
+                    extra.join(", ")
+                ));
+            } else {
+                let b: Binds = params
+                    .iter()
+                    .zip(args)
+                    .map(|(p, a)| (p.clone(), to_shared(a)))
+                    .collect();
+                lines.push(format!(
+                    "'{name}': its where constraint {}",
+                    where_reason(whr, &b, shape_env)
+                ));
+            }
+        }
+    }
+    // esm-spec §9.6.12: emit and flatten keep only the definitions a reference
+    // reaches, so an unreferenced definition is no longer here to list.
+    let note = "; definitions no reference reached were removed by emit and flatten and are not \
+                listed";
+    if lines.is_empty() {
+        return format!("no definition of '{op}' is in scope (a placeholder){note}");
+    }
+    format!("definitions of '{op}' in scope: {}{note}", lines.join("; "))
+}
+
+/// Why a definition's `where` did not hold at a call (its first constraint).
+fn where_reason(
+    whr: Option<&Value>,
+    b: &Binds,
+    shape_env: &std::collections::BTreeMap<String, Vec<String>>,
+) -> String {
+    let Some(whr) = whr.and_then(Value::as_object) else {
+        return "holds (the definition was not selected)".to_string();
+    };
+    let Some((p, c)) = whr.iter().next() else {
+        return "fails".to_string();
+    };
+    let want = c
+        .get("shape")
+        .map_or_else(|| "null".to_string(), Value::to_string);
+    match binds_get(b, p).map(|v| &**v) {
+        Some(SNode::Str(got)) => {
+            let shp = shape_env
+                .get(got)
+                .map_or_else(|| "none".to_string(), |s| format!("{s:?}"));
+            format!(
+                "{p}.shape = {want} fails: the operand bound to {p} ('{got}') has declared shape {shp}"
+            )
+        }
+        _ => format!("{p}.shape = {want} fails: the operand bound to {p} is not a bare variable"),
+    }
 }
 
 /// Structurally match `pattern` against `target`, binding metavariables (names
@@ -530,25 +944,25 @@ fn expand_apply(
     }
     .ok_or_else(|| {
         err(
-            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-            format!("{scope}: apply_expression_template node missing or empty 'name'"),
+            codes::OPERATOR_INVALID_DEFINITION,
+            format!("{scope}: apply_operator node missing or empty 'name'"),
         )
     })?;
     if name.is_empty() {
         return Err(err(
-            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-            format!("{scope}: apply_expression_template 'name' must be non-empty"),
+            codes::OPERATOR_INVALID_DEFINITION,
+            format!("{scope}: apply_operator 'name' must be non-empty"),
         ));
     }
     let decl = named.get(name).ok_or_else(|| {
         err(
-            codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-            format!("{scope}: apply_expression_template references undeclared template '{name}'"),
+            codes::OPERATOR_UNKNOWN_DEFINITION,
+            format!("{scope}: apply_operator references undeclared template '{name}'"),
         )
     })?;
     let SNode::Obj(decl_fields) = &**decl else {
         return Err(err(
-            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+            codes::OPERATOR_INVALID_DEFINITION,
             format!("{scope}: template '{name}' declaration is not an object"),
         ));
     };
@@ -556,8 +970,8 @@ fn expand_apply(
         Some(SNode::Obj(fields)) => fields,
         _ => {
             return Err(err(
-                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                format!("{scope}: apply_expression_template '{name}' missing 'bindings' object"),
+                codes::OPERATOR_BINDINGS_MISMATCH,
+                format!("{scope}: apply_operator '{name}' missing 'bindings' object"),
             ));
         }
     };
@@ -578,18 +992,16 @@ fn expand_apply(
     for p in &params {
         if !provided.contains(p) {
             return Err(err(
-                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                format!(
-                    "{scope}: apply_expression_template '{name}' missing binding for param '{p}'"
-                ),
+                codes::OPERATOR_BINDINGS_MISMATCH,
+                format!("{scope}: apply_operator '{name}' missing binding for param '{p}'"),
             ));
         }
     }
     for (p, _) in bindings {
         if !declared.contains(p.as_str()) {
             return Err(err(
-                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                format!("{scope}: apply_expression_template '{name}' supplies unknown param '{p}'"),
+                codes::OPERATOR_BINDINGS_MISMATCH,
+                format!("{scope}: apply_operator '{name}' supplies unknown param '{p}'"),
             ));
         }
     }
@@ -635,7 +1047,14 @@ pub(super) fn expand_all(
                 let body = expand_apply(&newfields, named, scope)?;
                 let expanded = expand_all(&body, named, scope, memo)?;
                 match obj_get(&newfields, "name").map(|v| &**v) {
-                    Some(SNode::Str(name)) => mark_template_origin(expanded, name),
+                    Some(SNode::Str(name)) => {
+                        let units = definition_units_mark(
+                            name,
+                            named.get(name),
+                            obj_get(&newfields, "bindings"),
+                        );
+                        mark_template_origin(expanded, name, units)
+                    }
                     _ => expanded,
                 }
             } else {
@@ -712,22 +1131,22 @@ pub(super) fn resolve_apply_site(
         Some(SNode::Str(s)) => s.clone(),
         _ => {
             return Err(err(
-                codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                format!("{scope}: apply_expression_template node missing 'name'"),
+                codes::OPERATOR_INVALID_DEFINITION,
+                format!("{scope}: apply_operator node missing 'name'"),
             ));
         }
     };
     let decl = named.get(&name).ok_or_else(|| {
         err(
-            codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-            format!("{scope}: apply_expression_template references undeclared template '{name}'"),
+            codes::OPERATOR_UNKNOWN_DEFINITION,
+            format!("{scope}: apply_operator references undeclared template '{name}'"),
         )
     })?;
     if reject_match_rule && decl_has_match(decl) {
         return Err(err(
-            codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+            codes::OPERATOR_UNKNOWN_DEFINITION,
             format!(
-                "{scope}: apply_expression_template references '{name}', a `match` rewrite rule — \
+                "{scope}: apply_operator references '{name}', a `match` rewrite rule — \
                  only match-less templates are invocable by name (esm-spec §9.6.2)"
             ),
         ));
@@ -736,8 +1155,8 @@ pub(super) fn resolve_apply_site(
         Some(SNode::Obj(b)) => b.clone(),
         _ => {
             return Err(err(
-                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                format!("{scope}: apply_expression_template '{name}' missing 'bindings' object"),
+                codes::OPERATOR_BINDINGS_MISMATCH,
+                format!("{scope}: apply_operator '{name}' missing 'bindings' object"),
             ));
         }
     };
@@ -748,18 +1167,16 @@ pub(super) fn resolve_apply_site(
     for p in &params {
         if !provided.contains(p.as_str()) {
             return Err(err(
-                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                format!(
-                    "{scope}: apply_expression_template '{name}' missing binding for param '{p}'"
-                ),
+                codes::OPERATOR_BINDINGS_MISMATCH,
+                format!("{scope}: apply_operator '{name}' missing binding for param '{p}'"),
             ));
         }
     }
     for (p, _) in &bindings {
         if !declared.contains(p.as_str()) {
             return Err(err(
-                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                format!("{scope}: apply_expression_template '{name}' supplies unknown param '{p}'"),
+                codes::OPERATOR_BINDINGS_MISMATCH,
+                format!("{scope}: apply_operator '{name}' supplies unknown param '{p}'"),
             ));
         }
     }
@@ -945,19 +1362,14 @@ fn rewrite_pass(
                 memo.insert(node, (res.clone(), changed, changed.then(|| last.clone())));
                 return (res, changed);
             }
-            for rule in &l.rules {
-                let mut binds = Binds::new();
-                if try_match(&rule.pattern, node, &rule.param_set, &mut binds, bv)
-                    && where_satisfied(&rule.where_c, &binds, &l.shape_env, bv)
-                {
-                    *last = rule.name.clone();
-                    let res = rule_reference(rule, &binds);
-                    if matches!(&*res, SNode::Obj(f) if obj_op(f) == Some(APPLY_OP)) {
-                        l.set_depth(&res, pass);
-                    }
-                    memo.insert(node, (res.clone(), true, Some(last.clone())));
-                    return (res, true);
+            if let Some((rule, binds)) = select_definition(l, node, fields, bv) {
+                *last = rule.name.clone();
+                let res = rule_reference(rule, &binds);
+                if matches!(&*res, SNode::Obj(f) if obj_op(f) == Some(APPLY_OP)) {
+                    l.set_depth(&res, pass);
                 }
+                memo.insert(node, (res.clone(), true, Some(last.clone())));
+                return (res, true);
             }
             // No rule fired here — descend into children.
             let mut changed = false;
@@ -993,7 +1405,7 @@ pub(super) fn rewrite_to_fixpoint(
     scope: &str,
     bv: Option<&BodyView>,
 ) -> Result<(Sv, usize), ExpressionTemplateError> {
-    if l.rules.is_empty() {
+    if !l.has_rules() {
         return Ok((node.clone(), 0));
     }
     let mut current = node.clone();
@@ -1046,9 +1458,9 @@ pub(crate) fn expression_template_offences(view: &Value) -> Option<String> {
         if let Some(comps) = obj.get(compkind).and_then(|v| v.as_object()) {
             for (cname, comp) in comps {
                 if let Some(comp_obj) = comp.as_object()
-                    && comp_obj.contains_key("expression_templates")
+                    && comp_obj.contains_key("operators")
                 {
-                    offences.push(format!("/{compkind}/{cname}/expression_templates"));
+                    offences.push(format!("/{compkind}/{cname}/operators"));
                 }
             }
         }
@@ -1093,34 +1505,40 @@ pub fn expand_against_registry(
 }
 
 /// True if `value` declares any non-empty `expression_templates` block
-/// (component-level or top-level). With [`scan_without_templates`] finding no
-/// `apply_expression_template` op anywhere, this is the Julia reference's
-/// `_has_template_machinery`.
+/// (top-level, a component's, or a subsystem's at any depth). With
+/// [`scan_without_templates`] finding no `apply_expression_template` op
+/// anywhere, this is the Julia reference's `_has_template_machinery`.
 fn declares_templates(value: &Value) -> bool {
     let Some(obj) = value.as_object() else {
         return false;
     };
     if obj
-        .get("expression_templates")
+        .get("operators")
         .and_then(|v| v.as_object())
         .is_some_and(|t| !t.is_empty())
     {
         return true;
     }
     for compkind in ["models", "reaction_systems"] {
-        if let Some(comps) = obj.get(compkind).and_then(|v| v.as_object()) {
-            for (_, comp) in comps {
-                if comp
-                    .get("expression_templates")
-                    .and_then(|v| v.as_object())
-                    .is_some_and(|t| !t.is_empty())
-                {
-                    return true;
-                }
-            }
+        if let Some(comps) = obj.get(compkind).and_then(|v| v.as_object())
+            && comps.values().any(component_declares_templates)
+        {
+            return true;
         }
     }
     false
+}
+
+/// Whether the component `comp`, or a subsystem of it at any depth, declares
+/// a non-empty `operators` block.
+fn component_declares_templates(comp: &Value) -> bool {
+    comp.get("operators")
+        .and_then(|v| v.as_object())
+        .is_some_and(|t| !t.is_empty())
+        || comp
+            .get("subsystems")
+            .and_then(|v| v.as_object())
+            .is_some_and(|subs| subs.values().any(component_declares_templates))
 }
 
 /// The fast path's one walk over a document that declares no templates: does
@@ -1163,7 +1581,7 @@ fn scan_without_templates(
                 out.makearray = check_makearray_regions(obj, at).err();
             }
             for (k, v) in obj {
-                let skip = in_templates || k == "expression_templates";
+                let skip = in_templates || k == "operators";
                 scan_without_templates(v, &JsonPath::Key(at, k), skip, out, visit);
                 if out.uses_apply {
                     return;
@@ -1186,6 +1604,15 @@ fn scan_without_templates(
 ///
 /// Pre-condition: the input has been schema-validated.
 pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTemplateError> {
+    lower_expression_templates_found(value)?;
+    strip_fixed_units(value);
+    Ok(())
+}
+
+/// [`lower_expression_templates`] for a mounted leaf: its registries keep the
+/// fixed unit expressions of its materialized `partial` / `integral` rules
+/// ([`FIXED_UNITS_KEY`]) for the mounting document's expansion.
+pub(crate) fn lower_mounted_leaf(value: &mut Value) -> Result<(), ExpressionTemplateError> {
     lower_expression_templates_found(value).map(|_| ())
 }
 
@@ -1197,6 +1624,10 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
 pub(crate) fn lower_expression_templates_found(
     value: &mut Value,
 ) -> Result<bool, ExpressionTemplateError> {
+    // Old spellings (esm-spec §9.6.12) when the caller skipped the wire
+    // boundary (the load's own pass runs after it, through
+    // `lower_expression_templates_visiting`).
+    crate::old_spellings::wire_old_spellings(value)?;
     lower_expression_templates_visiting(value, &mut |_, _| {}).map(|(found, _)| found)
 }
 
@@ -1270,6 +1701,14 @@ enum SiteField {
         cname: String,
         key: String,
     },
+    /// A field `key` of the subsystem at the key path `path` below the
+    /// component `compkind.cname`.
+    Sub {
+        compkind: &'static str,
+        cname: String,
+        path: Vec<String>,
+        key: String,
+    },
     /// The `transform` of the `coupling` entry at this index.
     Transform(usize),
 }
@@ -1285,26 +1724,77 @@ struct Site {
     tree: Sv,
     parked: Vec<(usize, Value)>,
     scope: String,
+    /// The subsystem path below the component the position is in (`""`: the
+    /// component's own field, or a coupling transform).
+    call_scope: String,
 }
 
 fn site_slot<'a>(root: &'a mut Map<String, Value>, field: &SiteField) -> Option<&'a mut Value> {
     match field {
         SiteField::Comp {
-            compkind,
-            cname,
-            key,
-        } => root
-            .get_mut(*compkind)?
-            .as_object_mut()?
-            .get_mut(cname)?
-            .as_object_mut()?
-            .get_mut(key),
+            compkind, cname, ..
+        }
+        | SiteField::Sub {
+            compkind, cname, ..
+        } => comp_slot(
+            root.get_mut(*compkind)?
+                .as_object_mut()?
+                .get_mut(cname)?
+                .as_object_mut()?,
+            field,
+        ),
         SiteField::Transform(i) => root
             .get_mut("coupling")?
             .as_array_mut()?
             .get_mut(*i)?
             .as_object_mut()?
             .get_mut("transform"),
+    }
+}
+
+/// The slot of the component field or subsystem field `field` in its
+/// component `comp`.
+fn comp_slot<'a>(comp: &'a mut Map<String, Value>, field: &SiteField) -> Option<&'a mut Value> {
+    match field {
+        SiteField::Comp { key, .. } => comp.get_mut(key),
+        SiteField::Sub { path, key, .. } => {
+            let mut node = comp;
+            for k in path {
+                node = node
+                    .get_mut("subsystems")?
+                    .as_object_mut()?
+                    .get_mut(k)?
+                    .as_object_mut()?;
+            }
+            node.get_mut(key)
+        }
+        SiteField::Transform(_) => None,
+    }
+}
+
+/// Every field below `node`'s subsystems, at any depth, other than a
+/// `subsystems` map itself, as `(subsystem key path, field key)` in document
+/// order.
+fn subsystem_fields(
+    node: &Map<String, Value>,
+    prefix: &[String],
+    out: &mut Vec<(Vec<String>, String)>,
+) {
+    let Some(Value::Object(subs)) = node.get("subsystems") else {
+        return;
+    };
+    for (k, sub) in subs {
+        let Value::Object(sub) = sub else {
+            continue;
+        };
+        let mut path = prefix.to_vec();
+        path.push(k.clone());
+        for f in sub.keys() {
+            if f != "subsystems" {
+                out.push((path.clone(), f.clone()));
+            }
+        }
+        subsystem_fields(sub, &path, out);
     }
 }
 
@@ -1324,7 +1814,7 @@ fn lower_components(
 ) -> Result<(), ExpressionTemplateError> {
     // The consuming document's merged index_sets registry (post-§9.7.5): the
     // namespace `where` shape constraints resolve against at registration
-    // (esm-spec §9.6.1 — `template_constraint_unknown_index_set` for a name not
+    // (esm-spec §9.6.1 — `operator_constraint_unknown_index_set` for a name not
     // declared here).
     let iset_names: std::collections::HashSet<String> = root
         .get("index_sets")
@@ -1349,15 +1839,15 @@ fn lower_components(
             // A model mounted as a subsystem keeps its references and brings
             // its template definitions; they join this component's registry
             // here (esm-spec §9.6.4 rule 1).
-            hoist_mounted_templates(comp, cname);
+            let owners = hoist_mounted_templates(comp, cname);
             // Static shape environment for `where` constraint evaluation
             // (esm-spec §9.6.1): declared variable shapes only.
             let shape_env = component_shape_env(comp);
             // esm-spec §9.6.4 rule 1 (Option B): DO NOT remove the block — it is
             // the retained registered registry that emit materializes (rule 5)
             // and Expand consumes (rule 2). CLONE it to build the registries.
-            let templates: Map<String, Value> = comp
-                .get("expression_templates")
+            let mut templates: Map<String, Value> = comp
+                .get("operators")
                 .and_then(|v| v.as_object())
                 .cloned()
                 .unwrap_or_default();
@@ -1367,11 +1857,36 @@ fn lower_components(
             // references resolve to match-less templates). Bodies are NOT
             // inlined — references are preserved (§9.6.4).
             validate_template_body_references(&templates, &scope_base)?;
+            // esm 2.4.0 (esm-spec §9.6.12): every definition records the
+            // defined operator it defines, written onto its registry entry;
+            // a core operator's name is reserved.
+            let mut inferred = false;
+            for (tname, decl) in templates.iter_mut() {
+                check_defines_not_core(tname, decl, &scope_base)?;
+                if let Value::Object(obj) = decl
+                    && !obj.contains_key("defines")
+                {
+                    let d = definition_defines(tname, &Value::Object(obj.clone()));
+                    obj.insert("defines".to_string(), Value::String(d));
+                    inferred = true;
+                }
+            }
+            if inferred {
+                comp.insert("operators".to_string(), Value::Object(templates.clone()));
+            }
             let named = build_named(&templates);
-            let rules = collect_match_rules(&templates, &named, &iset_names, &scope_base)?;
+            let Rules {
+                rules,
+                call_rules,
+                arities,
+            } = collect_rules(&templates, &named, &iset_names, &scope_base)?;
             let l = Lowering {
                 named,
                 rules,
+                call_rules,
+                arities,
+                owners,
+                call_scope: std::cell::RefCell::new(vec![String::new()]),
                 shape_env,
                 enums: enums.clone(),
                 scope: scope_base.clone(),
@@ -1382,30 +1897,63 @@ fn lower_components(
             // non-template field (esm-spec §9.6.3): each firing writes a
             // reference to its rule; references are leaves for matching and
             // the walk descends into their bindings (§9.6.4 rule 4).
-            let keys: Vec<String> = comp.keys().cloned().collect();
-            for k in keys {
-                if k == "expression_templates" {
+            // When a subsystem owns a definition the component does not, each
+            // subsystem's fields are positions of their own, rewritten in that
+            // subsystem's call scope (esm-spec §4.7, §9.6.12).
+            let mut fields: Vec<(Vec<String>, String)> = Vec::new();
+            for k in comp.keys() {
+                if k == "operators" {
                     continue;
                 }
-                let Some(child) = comp.get_mut(&k) else {
-                    continue;
-                };
-                let parked = park_plain(child, !l.rules.is_empty());
-                let orig = to_shared(child);
-                let scope = format!("{scope_base}.{k}");
-                sites.push(Site {
-                    comp: idx,
-                    field: SiteField::Comp {
+                if k == "subsystems" && l.has_local_definitions() {
+                    subsystem_fields(comp, &[], &mut fields);
+                } else {
+                    fields.push((Vec::new(), k.clone()));
+                }
+            }
+            for (path, k) in fields {
+                let field = if path.is_empty() {
+                    SiteField::Comp {
                         compkind,
                         cname: cname.clone(),
                         key: k,
-                    },
+                    }
+                } else {
+                    SiteField::Sub {
+                        compkind,
+                        cname: cname.clone(),
+                        path,
+                        key: k,
+                    }
+                };
+                let Some(child) = comp_slot(comp, &field) else {
+                    continue;
+                };
+                let parked = park_plain(child, l.has_rules());
+                let orig = to_shared(child);
+                let (scope, call_scope) = match &field {
+                    SiteField::Sub { path, key, .. } => (
+                        format!(
+                            "{scope_base}.subsystems.{}.{key}",
+                            path.join(".subsystems.")
+                        ),
+                        path.join("."),
+                    ),
+                    SiteField::Comp { key, .. } => (format!("{scope_base}.{key}"), String::new()),
+                    SiteField::Transform(_) => unreachable!("a component field"),
+                };
+                sites.push(Site {
+                    comp: idx,
+                    field,
                     orig: orig.clone(),
                     tree: orig.clone(),
                     parked,
                     scope: scope.clone(),
+                    call_scope: call_scope.clone(),
                 });
-                let (tree, _) = rewrite_to_fixpoint(&orig, &l, &scope, None)?;
+                let (tree, _) = l.with_call_scope(vec![call_scope], || {
+                    rewrite_to_fixpoint(&orig, &l, &scope, None)
+                })?;
                 sites.last_mut().expect("just pushed").tree = tree;
             }
             by_name.entry(cname.clone()).or_insert(idx);
@@ -1449,6 +1997,7 @@ fn lower_components(
                 tree,
                 parked: Vec::new(),
                 scope,
+                call_scope: String::new(),
             });
         }
     }
@@ -1464,7 +2013,7 @@ fn lower_components(
             .filter(|s| s.comp == li)
             .map(|s| {
                 let scope = match &s.field {
-                    SiteField::Comp { .. } => s.scope.clone(),
+                    SiteField::Comp { .. } | SiteField::Sub { .. } => s.scope.clone(),
                     SiteField::Transform(_) => format!("{} coupling transform", l.scope),
                 };
                 (scope, s.tree.clone())
@@ -1481,7 +2030,7 @@ fn lower_components(
                 .and_then(|c| c.get_mut(cname.as_str()))
         {
             let block = comp
-                .entry("expression_templates")
+                .entry("operators")
                 .or_insert_with(|| Value::Object(Map::new()));
             if let Value::Object(block) = block {
                 for (n, decl) in updates {
@@ -1493,13 +2042,142 @@ fn lower_components(
         // bindings mismatch, against the registry as rule 3 left it.
         for s in sites.iter().filter(|s| s.comp == li) {
             let scope = match &s.field {
-                SiteField::Comp { .. } => s.scope.clone(),
+                SiteField::Comp { .. } | SiteField::Sub { .. } => s.scope.clone(),
                 SiteField::Transform(_) => format!("{} coupling transform", l.scope),
             };
             check_surviving_refs(&s.tree, &l.named, &scope, &mut PtrSet::default())?;
         }
+        // esm-spec §9.6.12 "Arity": surviving calls in the component, in the
+        // transforms it receives, and in the bodies its references reach.
+        if !l.arities.is_empty() {
+            let mut reached = std::collections::BTreeSet::new();
+            for s in sites.iter().filter(|s| s.comp == li) {
+                let scope = match &s.field {
+                    SiteField::Comp { .. } | SiteField::Sub { .. } => s.scope.clone(),
+                    SiteField::Transform(_) => format!("{} coupling transform", l.scope),
+                };
+                l.with_call_scope(vec![s.call_scope.clone()], || {
+                    check_call_arity(&s.tree, l, &scope, &mut PtrSet::default())
+                })?;
+                reached_definitions(&mut reached, &s.tree, &l.named);
+            }
+            for r in &reached {
+                let body = decl_body(&l.named[r]);
+                let scope = format!("{}.operators.{r}", l.scope);
+                l.with_call_scope(l.owner_scope(r), || {
+                    check_call_arity(&body, l, &scope, &mut PtrSet::default())
+                })?;
+            }
+        }
+        // An entry only subsystems own is no callable definition of the
+        // component (esm-spec §9.6.3 constraint 4): it is written
+        // `reference_only` (§9.6.1), so the loaded, emitted and flattened
+        // registries say so and emit → load is a fixed point. Mirrors the
+        // Julia reference `_mark_subsystem_owned!`.
+        let sub_owned: Vec<&String> = l
+            .owners
+            .iter()
+            .filter(|(_, os)| !os.iter().any(String::is_empty))
+            .map(|(n, _)| n)
+            .collect();
+        if !sub_owned.is_empty()
+            && let Some(Value::Object(block)) = root
+                .get_mut(*compkind)
+                .and_then(|c| c.as_object_mut())
+                .and_then(|c| c.get_mut(cname.as_str()))
+                .and_then(|c| c.get_mut("operators"))
+        {
+            for n in sub_owned {
+                if let Some(Value::Object(d)) = block.get_mut(n.as_str())
+                    && d.get("reference_only") != Some(&Value::Bool(true))
+                {
+                    d.insert("reference_only".to_string(), Value::Bool(true));
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// esm-spec §9.6.12 "Arity": a call of a defined operator `N` that survives
+/// the fixpoint, when definitions of `N` are in scope and none takes the call's
+/// operand count, is `operator_arity_mismatch` at load. A name with no
+/// definition in scope is a placeholder, whatever its arity. Mirrors the Julia
+/// reference `_check_call_arity`.
+fn check_call_arity(
+    node: &Sv,
+    l: &Lowering,
+    scope: &str,
+    seen: &mut PtrSet,
+) -> Result<(), ExpressionTemplateError> {
+    match &**node {
+        SNode::Arr(items) => {
+            if !seen.insert(node) {
+                return Ok(());
+            }
+            for c in items {
+                check_call_arity(c, l, scope, seen)?;
+            }
+        }
+        SNode::Obj(fields) => {
+            if !seen.insert(node) {
+                return Ok(());
+            }
+            let counts: Option<std::collections::BTreeSet<usize>> = obj_op(fields)
+                .filter(|op| !is_core_operator(op))
+                .and_then(|op| l.arities.get(op))
+                .map(|defs| {
+                    defs.iter()
+                        .filter(|(_, n)| l.callable_here(n))
+                        .map(|(k, _)| *k)
+                        .collect()
+                })
+                .filter(|c: &std::collections::BTreeSet<usize>| !c.is_empty());
+            if let Some(op) = obj_op(fields)
+                && let Some(counts) = counts
+            {
+                let k = match obj_get(fields, "args").map(|a| &**a) {
+                    Some(SNode::Arr(a)) => a.len(),
+                    Some(SNode::Data(v)) => v.as_array().map_or(0, Vec::len),
+                    _ => 0,
+                };
+                if !counts.contains(&k) {
+                    let takes: Vec<String> = counts.iter().map(usize::to_string).collect();
+                    return Err(err(
+                        codes::OPERATOR_ARITY_MISMATCH,
+                        format!(
+                            "{scope}: a call of the defined operator '{op}' carries {k} \
+                             operand(s), but its definitions in scope take {} (esm-spec \
+                             §9.6.12)",
+                            takes.join(", ")
+                        ),
+                    ));
+                }
+            }
+            for (_, v) in fields {
+                check_call_arity(v, l, scope, seen)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The registry entries a node's references reach, transitively through
+/// bodies. Mirrors the Julia reference `_reached_definitions!`.
+fn reached_definitions(out: &mut std::collections::BTreeSet<String>, node: &Sv, named: &Named) {
+    let mut names = Vec::new();
+    collect_apply_names_sv(node, &mut names, &mut PtrSet::default());
+    for r in names {
+        if out.contains(&r) {
+            continue;
+        }
+        let Some(d) = named.get(&r) else {
+            continue;
+        };
+        out.insert(r);
+        reached_definitions(out, &decl_body(d), named);
+    }
 }
 
 /// Post-expansion validator (esm-spec §4.3.2 / §9.6.4): every `makearray`
@@ -1540,7 +2218,7 @@ fn validate_makearray_regions_at(
             for (k, v) in obj {
                 // Template bodies/matches are pre-substitution trees; bounds may
                 // legally carry metaparameter names or fold later (§9.7.6).
-                if k == "expression_templates" {
+                if k == "operators" {
                     continue;
                 }
                 validate_makearray_regions_at(v, &JsonPath::Key(at, k))?;

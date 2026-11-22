@@ -58,11 +58,11 @@ fn template_values(op: &str, values: &[Value], label: &str) -> [f64; 2] {
         "esm": "2.0.0",
         "metadata": {"name": "relational_template_probe", "authors": ["test"]},
         "models": {"M": {
-            "expression_template_imports": [{"ref": library()}],
+            "operator_imports": [{"ref": library()}],
             "variables": {"y": {"type": "unknown", "default": 0.0}},
             "equations": [{
                 "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
-                "rhs": {"op": "apply_expression_template", "args": [], "name": op,
+                "rhs": {"op": "apply_operator", "args": [], "name": op,
                         "bindings": {"f": f, "n": values.len()}}
             }]
         }}

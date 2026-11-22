@@ -100,7 +100,7 @@ _tpl_memo(tt::_TplTable, ::Nothing, key::Symbol, mk) = get!(mk, tt.root_memos, k
 _tpl_memo(::_TplTable, fr::_TplFrame, key::Symbol, mk) = get!(mk, fr.memos, key)
 
 _tpl_unknown(name) = ExpressionTemplateError(
-    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+    ERROR_CODES.OPERATOR_UNKNOWN_DEFINITION,
     "apply_expression_template references template '$(name === nothing ? "?" : name)' " *
         "with no in-scope registry entry"
 )
@@ -112,7 +112,7 @@ function _tpl_def(tt::_TplTable, name)
     (tt.reg !== nothing && haskey(tt.reg, name)) || throw(_tpl_unknown(name))
     String(name) in tt.preparing && throw(
         ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+            ERROR_CODES.OPERATOR_INVALID_DEFINITION,
             "expression template '$name' references itself"
         )
     )
@@ -646,7 +646,7 @@ function _tpl_frame(tt::_TplTable, call::OpExpr, parent::Union{Nothing, _TplFram
     for p in def.params
         haskey(bind, p) || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "apply_expression_template '$name' missing binding for param '$p'"
             )
         )
@@ -657,7 +657,7 @@ function _tpl_frame(tt::_TplTable, call::OpExpr, parent::Union{Nothing, _TplFram
     for k in keys(bind)
         (k in def.params || startswith(k, _TPL_FREE) || startswith(k, _TPL_OUT) || startswith(k, _TPL_LANE)) || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "apply_expression_template '$name' supplies unknown param '$k'"
             )
         )
@@ -667,7 +667,7 @@ function _tpl_frame(tt::_TplTable, call::OpExpr, parent::Union{Nothing, _TplFram
         x, xf = _tpl_leaf(bind[p], parent)
         (x isa VarExpr || x isa NumExpr || x isa IntExpr) || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "apply_expression_template '$name': parameter '$p' sits in a " *
                     "structural position and needs a name or a number, not an expression"
             )

@@ -137,7 +137,7 @@ func lowerMountedDocumentEnums(document map[string]any) error {
 }
 
 func lowerMountedEnumOps(key string, node any, enums map[string]map[string]int) (any, error) {
-	if tpl, ok := node.(map[string]any); ok && key == "expression_templates" {
+	if tpl, ok := node.(map[string]any); ok && key == "operators" {
 		for name, rawDecl := range tpl {
 			decl, ok := rawDecl.(map[string]any)
 			if !ok {

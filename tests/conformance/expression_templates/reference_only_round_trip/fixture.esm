@@ -1,0 +1,156 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "reference_only_round_trip",
+    "description": "esm-spec §9.6.1 `reference_only`, §9.6.4 rule 5: the rule `fv_div_edges` (a `where` on edge fields) fires on div(F) but not on div(G), which stays a call; the compound rule `exp`, rooted at the core op `sqrt`, fires on sqrt(x^2). Emit writes both rules match-less and `reference_only`, so on reload neither becomes a callable definition (div(G) stays a call, and `exp` is not refused as a definition of a core operator): emitted.esm re-emits byte for byte.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "edges": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "F": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "edges"
+          ],
+          "description": "variable"
+        },
+        "G": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "shape": [
+            "cells"
+          ],
+          "description": "variable"
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "variable"
+        },
+        "d1": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "edges"
+          ],
+          "description": "variable"
+        },
+        "d2": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "variable"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "variable"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "d1",
+          "rhs": {
+            "op": "div",
+            "args": [
+              "F"
+            ]
+          }
+        },
+        {
+          "lhs": "d2",
+          "rhs": {
+            "op": "div",
+            "args": [
+              "G"
+            ]
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "sqrt",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  "x",
+                  2
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "operators": {
+        "fv_div_edges": {
+          "params": [
+            "Q"
+          ],
+          "match": {
+            "op": "div",
+            "args": [
+              "Q"
+            ]
+          },
+          "where": {
+            "Q": {
+              "shape": [
+                "edges"
+              ]
+            }
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              2,
+              "Q"
+            ]
+          }
+        },
+        "exp": {
+          "params": [
+            "a"
+          ],
+          "match": {
+            "op": "sqrt",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  "a",
+                  2
+                ]
+              }
+            ]
+          },
+          "body": {
+            "op": "abs",
+            "args": [
+              "a"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

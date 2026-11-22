@@ -306,7 +306,7 @@ const ARRAY_CHILD_KEYS = ['args', 'values'] as const
 
 /**
  * `ExpressionNode` fields holding a string-keyed MAP of child expressions
- * (`apply_expression_template.bindings`).
+ * (`apply_operator.bindings`).
  */
 const MAP_CHILD_KEYS = ['bindings'] as const
 

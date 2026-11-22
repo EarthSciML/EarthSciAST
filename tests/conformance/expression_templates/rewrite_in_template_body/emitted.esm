@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "index_sets": {
     "x": {
       "kind": "interval",
@@ -41,7 +41,7 @@
                   "f": "c"
                 },
                 "name": "deriv_c",
-                "op": "apply_expression_template"
+                "op": "apply_operator"
               },
               "i"
             ],
@@ -59,7 +59,7 @@
                   "k": 2
                 },
                 "name": "scale_c",
-                "op": "apply_expression_template"
+                "op": "apply_operator"
               },
               "i"
             ],
@@ -67,7 +67,7 @@
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "central": {
           "body": {
             "args": [
@@ -114,9 +114,11 @@
               }
             }
           },
+          "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "deriv_c": {
           "body": {
@@ -125,8 +127,9 @@
               "f": "f"
             },
             "name": "central",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "deriv_c",
           "params": [
             "f"
           ]
@@ -139,6 +142,7 @@
             ],
             "op": "*"
           },
+          "defines": "scale_c",
           "params": [
             "f",
             "k"

@@ -25,7 +25,7 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
-import { ERROR_CODES } from './errors.js'
+import { ERROR_CODES, ERROR_CODE_ALIASES } from './errors.js'
 
 const SRC = path.dirname(fileURLToPath(import.meta.url))
 const SPEC = path.resolve(SRC, '../../../esm-spec.md')
@@ -261,8 +261,15 @@ describe('diagnostic code registry coverage', () => {
     // Guard the extraction: a heading or table-layout change that matched
     // nothing would pass the membership check vacuously.
     expect(codes.length).toBeGreaterThanOrEqual(30)
-    const registered = new Set<string>(Object.values(ERROR_CODES))
+    // An old code of the "Renamed codes" table (esm 2.4.0) is registered as an
+    // alias of a registered new code (`ERROR_CODE_ALIASES`).
+    const registered = new Set<string>([
+      ...Object.values(ERROR_CODES),
+      ...Object.keys(ERROR_CODE_ALIASES),
+    ])
     expect(codes.filter((c) => !registered.has(c))).toEqual([])
+    const values = new Set<string>(Object.values(ERROR_CODES))
+    expect(Object.values(ERROR_CODE_ALIASES).filter((c) => !values.has(c))).toEqual([])
   })
 
   it('reports registry entries nothing raises (advisory)', () => {

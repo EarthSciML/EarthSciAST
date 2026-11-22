@@ -76,7 +76,7 @@ struct Rxn
     attrs::Kvs
 end
 
-"""`Source.Tm`: an entry of `expression_templates`: a template
+"""`Source.Tm`: an entry of `operators`: a template
 (`lhs === nothing`) or a rewrite rule (`lhs` the match)."""
 struct Tm
     name::String
@@ -109,7 +109,7 @@ end
 field(m::MxEq) = field(m.role)
 field(::MxRxn) = "reactions"
 field(::MxPlot) = "analyses"
-field(::MxTm) = "expression_templates"
+field(::MxTm) = "operators"
 
 """`Mx.key`."""
 key(m::MxTm) = m.t.name
@@ -121,8 +121,8 @@ head(::Mx) = nothing
 
 """`Source.mathFields`."""
 const MATH_FIELDS = (
-    "analyses", "constraint_equations", "equations", "expression_templates",
-    "initialization_equations", "reactions",
+    "analyses", "constraint_equations", "equations", "initialization_equations",
+    "operators", "reactions",
 )
 
 """`k ∈ mathFields`."""
@@ -259,10 +259,10 @@ function heads(ms)
 end
 
 """`Source.rootTs`."""
-root_ts(root, rm) = vcat(templates_of(look("expression_templates", root)), heads(rm))
+root_ts(root, rm) = vcat(templates_of(look("operators", root)), heads(rm))
 
 """`Source.compTs`."""
-comp_ts(c::Comp) = vcat(templates_of(look("expression_templates", c.math_blocks)), heads(c.math))
+comp_ts(c::Comp) = vcat(templates_of(look("operators", c.math_blocks)), heads(c.math))
 
 """`Source.symWith`."""
 function sym_with(root, rt, c::Comp, ct)
@@ -428,7 +428,7 @@ function str_list(xs)
     return out
 end
 
-"""`Source.tmOf`: the template or rule an entry of `expression_templates` is,
+"""`Source.tmOf`: the template or rule an entry of `operators` is,
 checked by printing it back."""
 function tm_of(n::AbstractString, v)
     v isa JObj || return nothing
@@ -455,8 +455,8 @@ item_json(m::MxPlot) = plot_json(m.a)
 item_json(m::MxTm) = tm_json(m.t)
 
 """`Source.fieldJson`: an object keyed by the entries' names for
-`expression_templates`, a list otherwise."""
-field_json(f::AbstractString, ms) = f == "expression_templates" ?
+`operators`, a list otherwise."""
+field_json(f::AbstractString, ms) = f == "operators" ?
     JObj(Kvs([key(m) => item_json(m) for m in ms])) : JArr(Any[item_json(m) for m in ms])
 
 """`Source.roleOf`."""
@@ -493,14 +493,14 @@ natively."""
 function math_of(caps::Caps, s::Sym, f::AbstractString, v)
     ms = Any[]
     if v isa JArr && !isempty(v.xs)
-        f == "expression_templates" && return nothing
+        f == "operators" && return nothing
         for x in v.xs
             m = item_of(f, x)
             m === nothing && return nothing
             push!(ms, m)
         end
     elseif v isa JObj && !isempty(v.kvs)
-        f != "expression_templates" && return nothing
+        f != "operators" && return nothing
         for kv in v.kvs
             m = tm_item(kv)
             m === nothing && return nothing
@@ -633,7 +633,7 @@ end
 
 """`Source.compSym`."""
 comp_sym(root, rt, k::Kind, caps::Caps, name, kvs) =
-    sym_with(root, rt, comp_base(caps, k, name, kvs), templates_of(look("expression_templates", kvs)))
+    sym_with(root, rt, comp_base(caps, k, name, kvs), templates_of(look("operators", kvs)))
 
 """`Source.compOf`: a component, with its math fields decided."""
 function comp_of(caps::Caps, root, rt, k::Kind, name, kvs)
@@ -652,13 +652,13 @@ pick_comp(caps::Caps, n::AbstractString, v) =
     (v isa JObj && comp_name(caps, n)) ? (String(n), copy(v.kvs)) : nothing
 
 """`Source.topSymOf`."""
-top_sym_of(kvs) = Sym(keys_of(look("index_sets", kvs)), templates_of(look("expression_templates", kvs)))
+top_sym_of(kvs) = Sym(keys_of(look("index_sets", kvs)), templates_of(look("operators", kvs)))
 
 """`Source.topMath`: the top-level templates, when every one prints natively."""
 function top_math(caps::Caps, kvs)
-    v = look("expression_templates", kvs)
+    v = look("operators", kvs)
     v === nothing && return nothing
-    return math_of(caps, top_sym_of(kvs), "expression_templates", v)
+    return math_of(caps, top_sym_of(kvs), "operators", v)
 end
 
 """`Source.rootBlock`."""
@@ -670,7 +670,7 @@ function root_block(caps::Caps, tn::Bool, kv)
         r = split_opt((n, v) -> pick_comp(caps, n, v), kv.second)[2]
         return r === nothing ? nothing : (k => r)
     end
-    (k == "expression_templates" && tn) && return nothing
+    (k == "operators" && tn) && return nothing
     return kv
 end
 
@@ -691,7 +691,7 @@ function to_doc(caps::Caps, d)
     m = meta_of(caps, look("metadata", kvs))
     tmath = top_math(caps, kvs)
     blocks = root_blocks(caps, tmath !== nothing, kvs)
-    rt = templates_of(look("expression_templates", kvs))
+    rt = templates_of(look("operators", kvs))
     function comps(k::Kind, f)
         out = Comp{AsRead}[]
         for (n, ckvs) in split_opt((n, v) -> pick_comp(caps, n, v), look(f, kvs))[1]
@@ -800,7 +800,7 @@ function of_doc(d::Doc{AsRead})
     rss = join_field(back_comp, rs, something(rr))
     rss === nothing && return nothing
     tkv = isempty(d.math) ? Kvs() :
-        Kvs(["expression_templates" => field_json("expression_templates", d.math)])
+        Kvs(["operators" => field_json("operators", d.math)])
     kvs = esm_kv
     append!(kvs, meta_kv)
     append!(kvs, opt_kv("models", something(models)))

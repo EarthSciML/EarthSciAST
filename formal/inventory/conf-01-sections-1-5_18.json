@@ -432,7 +432,7 @@
     {
       "id": "conf.5.5.7.pushdown-sees-through-templates",
       "section": "5.5.7",
-      "quote": "**Whether the pushdown fires MUST NOT depend on whether the author factored > the binning body through an `expression_templates` entry.** A binding > implementation MUST recognise a factored body exactly as it recognises the > body's expansion",
+      "quote": "**Whether the pushdown fires MUST NOT depend on whether the author factored > the binning body through an `operators` entry.** A binding > implementation MUST recognise a factored body exactly as it recognises the > body's expansion",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -441,7 +441,7 @@
     {
       "id": "conf.5.5.7.repoint-call-site-not-body",
       "section": "5.5.7",
-      "quote": "The rewrite MUST re-point the rect factors by editing the **call site** — the reference's `bindings`, and the `faq`'s own `ranges` / `shape` / `args` / `join` — and MUST NOT edit the referenced template `body`.",
+      "quote": "The rewrite MUST re-point the rect factors by editing the **call site** — the reference's `bindings`, and the `faq`'s own `ranges` / `shape` / `args` / `join` — and MUST NOT edit the referenced definition `body`.",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -459,7 +459,7 @@
     {
       "id": "conf.5.5.7.free-rect-factor-rejected",
       "section": "5.5.7",
-      "quote": "That is a wrong-numbers defect, so it MUST be rejected, with diagnostic `template_body_references_pushdown_rewritten_variable`",
+      "quote": "That is a wrong-numbers defect, so it MUST be rejected, with diagnostic `operator_body_references_pushdown_rewritten_variable`",
       "class": "semantic",
       "phase": 4,
       "area": "diagnostics",

@@ -95,13 +95,16 @@ inductive V (c : Ctx) : Json → Prop where
       (hx : ∀ x ∈ xs, isE x = true)
       (hpr : pr c (node o xs) = mkOut c.sf 10 (callToks c.sf [.kw k] (xs.map fun x => (pr c x).at c.sf 1))) :
       V c (node o xs)
+  | nab (o : String) (n : NabK) (a : Json) (ho : kindOf o = .nab n) (ha : isE a = true)
+      (hpr : pr c (node o [a]) = mkOut c.sf 6 (nabHead c.sf n ++ nabArg c.sf n (pr c a))) :
+      V c (node o [a])
   | call (o : String) (xs : List Json) (ho : kindOf o = .call) (hx : ∀ x ∈ xs, isE x = true)
       (hpr : pr c (node o xs) = mkOut c.sf 10 (callToks c.sf [.opn o] (xs.map fun x => (pr c x).at c.sf 4))) :
       V c (node o xs)
   | dTime (a : Json) (ha : isE a = true)
       (hpr : pr c (dNode a "t") = dTime c.sf (pr c a)) : V c (dNode a "t")
   | dSpace (w : String) (a : Json) (hw : w ≠ "t") (hwn : nameOK w = true) (ha : isE a = true)
-      (hpr : pr c (dNode a w) = dSpace c.sf (nameToks c w) (pr c a)) : V c (dNode a w)
+      (hpr : pr c (pNode a w) = dSpace c.sf (nameToks c w) (pr c a)) : V c (pNode a w)
   | dCall (w : String) (xs : List Json) (hw : w ≠ "t") (hwn : nameOK w = true) (hl : 2 ≤ xs.length)
       (hx : ∀ x ∈ xs, isE x = true)
       (hpr : pr c (dCallNode w xs) =
@@ -392,6 +395,7 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
         · rename_i hl
           exact V.mm o _ _ ho hl hx (by unfold node; rw [hpr, attach_map_eq _ (fun x => Out.at c.sf 1 (pr c x))])
         · exact fbOpn _ hpr rfl
+      next n a ho => exact V.nab o n a ho (hx a (by simp)) hpr
       next _ ho =>
         exact V.call o _ ho hx (by unfold node; rw [hpr, attach_map_eq _ (fun x => Out.at c.sf 4 (pr c x))])
       next => exact fbOpn _ hpr rfl
@@ -402,18 +406,23 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
         split at hpr
         · rename_i hw; subst hw
           exact V.dTime a (hx a (by simp)) hpr
+        · exact fbEsc _ hpr rfl
+      · exact fbEsc _ hpr rfl
+    · rename_i as w
+      have hx : ∀ a ∈ as, isE a = true := isE_args h (by simp [look])
+      split at hpr
+      · rename_i a
+        split at hpr
         · rename_i hw
-          split at hpr
-          · rename_i hwn
-            exact V.dSpace w a hw hwn (hx a (by simp)) hpr
-          · exact fbEsc _ hpr rfl
+          exact V.dSpace w a hw.1 hw.2 (hx a (by simp)) hpr
+        · exact fbOpn _ hpr rfl
       · rename_i a b r
         split at hpr
         · rename_i hw
           exact V.dCall w (a :: b :: r) hw.1 hw.2 (by simp) hx
             (by unfold dCallNode; rw [hpr, attach_map_eq (a :: b :: r) (fun x => Out.at c.sf 4 (pr c x))])
-        · exact fbEsc _ hpr rfl
-      · exact fbEsc _ hpr rfl
+        · exact fbOpn _ hpr rfl
+      · exact fbOpn _ hpr rfl
     · rename_i u n
       split at hpr
       · rename_i hu

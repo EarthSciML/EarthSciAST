@@ -33,11 +33,11 @@ function _plr_pair(; params, body, bindings)
     ref = _plr_load()
     ma = ref["models"]["Wind"]["equations"][1]["rhs"]
     tbody = body(ma)
-    ref["models"]["Wind"]["expression_templates"] = Dict{String, Any}(
+    ref["models"]["Wind"]["operators"] = Dict{String, Any}(
         "adv" => Dict{String, Any}("params" => Any[params...], "body" => tbody)
     )
     ref["models"]["Wind"]["equations"][1]["rhs"] = Dict{String, Any}(
-        "op" => "apply_expression_template", "args" => Any[], "name" => "adv",
+        "op" => "apply_operator", "args" => Any[], "name" => "adv",
         "bindings" => Dict{String, Any}(bindings)
     )
     inline = _plr_load()
@@ -78,7 +78,7 @@ function _plr_check(dir, tag, ref, inline; compilers = (:native, :interpreter))
     # The reference survives, read per cell at the lift's loops.
     @test any(
         t -> t isa _PLR.OpExpr && t.op == "index" && t.args[1] isa _PLR.OpExpr &&
-            t.args[1].op == "apply_expression_template" &&
+            t.args[1].op == "apply_operator" &&
             [a.name for a in t.args[2:end]] == er.rhs.output_idx,
         er.rhs.expr_body.args
     )
@@ -120,7 +120,7 @@ end
             )
             # `ranges` keys are not substitution sites: give the body's range
             # the bound name, as an author writing for this binding would.
-            for d in (ref["models"]["Wind"]["expression_templates"]["adv"]["body"],)
+            for d in (ref["models"]["Wind"]["operators"]["adv"]["body"],)
                 f = d["values"][1]
                 f["ranges"] = Dict{String, Any}("m" => f["ranges"]["i"], "j" => f["ranges"]["j"])
             end
@@ -140,7 +140,7 @@ end
                 bindings = ["q" => "_var", "w" => "u", "i" => "m"]
             )
             for f in (
-                    ref["models"]["Wind"]["expression_templates"]["adv"]["body"]["values"][1],
+                    ref["models"]["Wind"]["operators"]["adv"]["body"]["values"][1],
                     inline["models"]["Wind"]["equations"][1]["rhs"]["values"][1],
                 )
                 haskey(f["ranges"], "i") && (f["ranges"] = Dict{String, Any}("m" => f["ranges"]["i"], "j" => f["ranges"]["j"]))
@@ -184,9 +184,9 @@ end
             write(path, _PLR.JSON3.write(ref))
             e1 = err(() -> _PLR.flatten(_PLR.load_path(path)))
             @test e1 isa _PLR.ExpressionTemplateError
-            reg = ref["models"]["Wind"]["expression_templates"]
+            reg = ref["models"]["Wind"]["operators"]
             bad = _PLR.OpExpr(
-                "apply_expression_template", _PLR.ASTExpr[];
+                "apply_operator", _PLR.ASTExpr[];
                 name = "adv", bindings = Dict{String, _PLR.ASTExpr}("q" => _PLR.VarExpr("c"))
             )
             e2 = err(() -> _PLR._collect_makearrays!(Tuple{_PLR.OpExpr, Any}[], bad, _PLR._RefWalk(reg)))

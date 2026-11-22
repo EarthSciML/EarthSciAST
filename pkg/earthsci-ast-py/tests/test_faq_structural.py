@@ -74,7 +74,7 @@ def test_agnostic_leaf_aggregate_range_is_not_undefined_index_set() -> None:
     at mount / test time (§6.6.6), so an `aggregate` range naming a set the
     document does not declare is NOT decidable at standalone load and MUST NOT
     be reported as ``undefined_index_set`` — mirroring §9.6.1, where
-    ``template_constraint_unknown_index_set`` does not run for a library file
+    ``operator_constraint_unknown_index_set`` does not run for a library file
     validated standalone. Before issue #185 the check resolved against
     ``data["index_sets"]`` unconditionally, so every conforming leaf was
     rejected at ``load_path()``.
@@ -180,7 +180,7 @@ def _bare_operand_doc(filter_expr, *, templates=None, a_size=2):
         ],
     }
     if templates:
-        model["expression_templates"] = templates
+        model["operators"] = templates
     return {
         "esm": "1.2.0",
         "metadata": {"name": "bare_operand", "authors": ["test"]},
@@ -202,7 +202,7 @@ def test_faq_bare_filter_through_a_template_is_refused_at_build() -> None:
 
     gate = {"op": "ifelse", "args": [{"op": ">", "args": ["x", 1.5]}, 1.0, 0.0]}
     doc = _bare_operand_doc(
-        {"op": "apply_expression_template", "args": [], "name": "gate", "bindings": {"x": "a_val"}},
+        {"op": "apply_operator", "args": [], "name": "gate", "bindings": {"x": "a_val"}},
         templates={"gate": {"params": ["x"], "body": gate}},
     )
     for compiler in ("interpreter", "native"):
@@ -273,11 +273,9 @@ def test_derivative_state_delivered_bare_by_a_template_is_refused_at_build() -> 
     doc = json.loads((INVALID_DIR / "faq" / "bare_array_operand_derivative.esm").read_text())
     model = doc["models"]["Probe"]
     del model["equations"][1:], model["variables"]["z"]
-    model["expression_templates"] = {
-        "twice": {"params": ["x"], "body": {"op": "*", "args": [2.0, "x"]}}
-    }
+    model["operators"] = {"twice": {"params": ["x"], "body": {"op": "*", "args": [2.0, "x"]}}}
     model["equations"][0]["rhs"]["expr"]["args"][1] = {
-        "op": "apply_expression_template",
+        "op": "apply_operator",
         "args": [],
         "name": "twice",
         "bindings": {"x": "y"},

@@ -379,7 +379,7 @@ var prCoreOps = map[string]bool{
 	"atanh": true, "atan2": true, "min": true, "max": true, "D": true, "ic": true,
 	"Pre": true, "enum": true, "const": true, "faq": true, "makearray": true,
 	"index": true, "broadcast": true, "reshape": true, "transpose": true, "concat": true,
-	"apply_expression_template": true,
+	"apply_operator": true,
 }
 
 // prOpnOk is `Math.opnOK`: a name `\operatorname{…}` can carry: identifier
@@ -645,6 +645,9 @@ const (
 	OpLand
 	OpLor
 	OpMm
+	// OpNab: one of the four defined operators with a `\nabla` form (grad,
+	// div, laplacian, curl); OpK.N names it.
+	OpNab
 	OpCall
 	OpOther
 )
@@ -653,6 +656,7 @@ const (
 type OpK struct {
 	K OpKind
 	W Kw
+	N string
 }
 
 // prUnKw is `Math.unKw`: unary functions with a native spelling (`log10` is
@@ -685,6 +689,8 @@ var prKindTable = map[string]OpK{
 	"true": {K: OpTru}, "false": {K: OpFls}, "ifelse": {K: OpIte}, "ic": {K: OpIc},
 	"index": {K: OpIndex}, "+": {K: OpPlus}, "*": {K: OpTimes}, "and": {K: OpLand},
 	"or": {K: OpLor}, "min": {K: OpMm, W: KwMin}, "max": {K: OpMm, W: KwMax},
+	"grad": {K: OpNab, N: "grad"}, "div": {K: OpNab, N: "div"},
+	"laplacian": {K: OpNab, N: "laplacian"}, "curl": {K: OpNab, N: "curl"},
 }
 
 // prKindOf is `Math.kindOf`.
@@ -951,17 +957,50 @@ func prDSpace(sf Sf, w []Tok, a Out) Out {
 	return prMkOut(6, cat(kws(KwLpg, KwPdiff, KwRp, KwSlash, KwLpg, KwPdiff), w, kws(KwRp), prGrp(sf, a1)))
 }
 
-// prDCall is `Math.dCall`: a spatial derivative with trailing operands:
-// `\operatorname{D}_{x}(u, a, b)`.
+// prDCall is `Math.dCall`: `partial` with trailing operands:
+// `\partial_{x}(u, a, b)` / `partial_(x)(u, a, b)`.
 func prDCall(sf Sf, w []Tok, args [][]Tok) []Tok {
 	open, closeK := KwLpg, KwRp
 	if sf == SfLatex {
 		open, closeK = KwLb, KwRb
 	}
-	out := []Tok{tOpn("D"), tKw(KwUs), tKw(open)}
+	out := []Tok{tKw(KwPdiff), tKw(KwUs), tKw(open)}
 	out = append(out, w...)
 	out = append(out, tKw(closeK))
 	return append(out, prCallToks(sf, nil, args)...)
+}
+
+// prNabHead is `Math.nabHead`: what a `\nabla` form writes before its operand:
+// `\nabla`, `\nabla \cdot`, `\nabla^{2}`, `\nabla \times` (Typst `nabla`,
+// `nabla dot`, `nabla^2`, `nabla times`).
+func prNabHead(sf Sf, n string) []Tok {
+	switch n {
+	case "div":
+		return kws(KwNabla, KwCdot)
+	case "laplacian":
+		if sf == SfLatex {
+			return []Tok{tKw(KwNabla), tKw(KwCaret), tKw(KwLb), tNum(IntNum(2)), tKw(KwRb)}
+		}
+		return []Tok{tKw(KwNabla), tKw(KwCaret), tNum(IntNum(2))}
+	case "curl":
+		return kws(KwNabla, KwTimes)
+	}
+	return kws(KwNabla)
+}
+
+// prNabArg is `Math.nabArg`: the operand of a `\nabla` form: another
+// `\nabla` form as it is (`\nabla \cdot \nabla u` is div(grad(u))), anything
+// else at the level of a power base; after the `\times` of a curl, an operand
+// that starts with a number is parenthesized.
+func prNabArg(sf Sf, n string, o Out) []Tok {
+	if len(o.toks) > 0 && o.toks[0].K == TKw && o.toks[0].W == KwNabla && o.lvl >= 6 {
+		return o.toks
+	}
+	t := o.at(sf, 9)
+	if n == "curl" && prStartsNum(t) {
+		return prGrp(sf, t)
+	}
+	return t
 }
 
 // prQtyToks is `Math.qtyToks`: the quantity: the number, then the unit as one
@@ -1878,14 +1917,20 @@ func prPr(c Ctx, e Json) Out {
 		args, ok1 := a.([]Json)
 		w, ok2 := wv.(string)
 		if ok1 && strAt(1, "op", "D") && ok2 {
+			// `D` is the time derivative only; a `D` with any other `wrt` is
+			// written in the escape form (a document reads it as `partial`).
+			if len(args) == 1 && w == "t" {
+				return prDTime(sf, prPr(c, args[0]))
+			}
+			return esc()
+		}
+		if ok1 && strAt(1, "op", "partial") && ok2 {
 			switch {
 			case len(args) == 1:
-				if w == "t" {
-					return prDTime(sf, prPr(c, args[0]))
-				} else if exprNameOk(w) {
+				if w != "t" && exprNameOk(w) {
 					return prDSpace(sf, prNameToks(c, w), prPr(c, args[0]))
 				}
-				return esc()
+				return opn()
 			case len(args) >= 2:
 				if w != "t" && exprNameOk(w) {
 					ap := make([][]Tok, len(args))
@@ -1894,9 +1939,9 @@ func prPr(c Ctx, e Json) Out {
 					}
 					return prMkOut(10, prDCall(sf, prNameToks(c, w), ap))
 				}
-				return esc()
+				return opn()
 			default:
-				return esc()
+				return opn()
 			}
 		}
 		if emptyArgs() && strAt(1, "op", "const") {
@@ -1928,7 +1973,7 @@ func prPr(c Ctx, e Json) Out {
 			nv, _ := field(2, "name")
 			bs, ok1 := bv.(Obj)
 			n, ok2 := nv.(string)
-			if ok1 && ok2 && strAt(3, "op", "apply_expression_template") {
+			if ok1 && ok2 && strAt(3, "op", "apply_operator") {
 				return prTemplate(c, n, bs, esc)
 			}
 		}
@@ -2116,6 +2161,11 @@ func prPlain(c Ctx, o string, args []Json, opn, esc func() Out) Out {
 			return prMkOut(10, prCallToks(sf, kws(k.W), ap))
 		}
 		return opn()
+	case OpNab:
+		if len(args) == 1 {
+			return prMkOut(6, cat(prNabHead(sf, k.N), prNabArg(sf, k.N, prPr(c, args[0]))))
+		}
+		return opn()
 	case OpCall:
 		ap := make([][]Tok, len(args))
 		for i, x := range args {
@@ -2126,7 +2176,7 @@ func prPlain(c Ctx, o string, args []Json, opn, esc func() Out) Out {
 	return opn()
 }
 
-// prTemplate is the `apply_expression_template` case of `Math.pr`.
+// prTemplate is the `apply_operator` case of `Math.pr`.
 func prTemplate(c Ctx, n string, bs Obj, esc func() Out) Out {
 	sf := c.sf
 	if !prTnameOk(n) || !exprKeysSorted(bs) {

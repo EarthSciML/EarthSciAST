@@ -92,7 +92,7 @@ fn scalar_lookup_doc(n: i64, body: Value) -> Value {
                    "rhs": op("*", vec![json!(-0.1), json!("s")])}),
         ],
     );
-    d["models"]["M"]["expression_templates"] = library("interp.esm");
+    d["models"]["M"]["operators"] = library("interp.esm");
     d
 }
 

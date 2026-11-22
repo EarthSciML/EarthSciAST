@@ -52,7 +52,7 @@ func isValidDottedName(s string) bool {
 // nameMap normalizes a `rename` / `rebind` object into a name→name map, checking
 // the §9.7.7 target grammar (values are valid dotted identifiers; keys are
 // non-empty but never grammar-checked). A non-object raises
-// `template_import_rename_invalid`.
+// `operator_import_rename_invalid`.
 func nameMap(raw any, field, where string) (map[string]string, error) {
 	out := map[string]string{}
 	if raw == nil {
@@ -108,7 +108,7 @@ func isetRenamed(s string, isetmap map[string]string) string {
 // index-set reference positions (`{"from": …}` values, the `wrt`/`dim`/`var`
 // axis fields, a bare-axis-name `integral` `lower`/`upper` bound, and the
 // `where.*.shape` match-scoping index-set names, in `body` and
-// `match` alike); `tplmap` rewrites `apply_expression_template.name`. Structural
+// `match` alike); `tplmap` rewrites `apply_operator.name`. Structural
 // scalar fields (renameProtectedKeys) and bound-index lists (range `of`) are
 // never rewritten. Pure syntactic substitution — no evaluation.
 //
@@ -119,7 +119,7 @@ func isetRenamed(s string, isetmap map[string]string) string {
 // KEYS (param names) are copied verbatim while each constraint's `shape` entries
 // are mapped through `isetmap` (an unmapped name stays as spelled). Without this
 // the rule body/registry would use the renamed set while `where` still named the
-// original, and registration would fail with template_constraint_unknown_index_set.
+// original, and registration would fail with operator_constraint_unknown_index_set.
 // isJoinOnPairs reports whether v is a join clause's `on` — a list of
 // `[left, right]` key-column pairs (esm-spec §4.9.5). `on` occurs in exactly one
 // place in the schema, a `join` clause, and its shape is unambiguous, so the key
@@ -443,7 +443,7 @@ func collectRefNames(out map[string]struct{}, x any, shadowed map[string]struct{
 // declarations (index-set references in `from`/`wrt`/`dim`/`var` and registry `of`
 // lists, open-metaparameter names in expression positions, keyed-factor and
 // other free names in variable-reference positions and registry
-// `offsets`/`values`, `apply_expression_template.name` references). Runs after
+// `offsets`/`values`, `apply_operator.name` references). Runs after
 // `bindings` instantiation and `only` filtering, before the §9.7.4/§9.7.5 merge,
 // so dedup and conflict detection operate on post-rename names. Mutates scope in
 // place and returns it. Mirrors the Julia reference `_apply_edge_renames!`.
@@ -584,7 +584,22 @@ func applyEdgeRenames(scope *templateScope, entry map[string]any, origin, ref st
 
 	newT := newOrderedMap()
 	for _, n := range scope.templates.keys {
-		newT.set(tplmap[n], renameDecl(scope.templates.get(n), varmap, isetChanged, tplChanged))
+		nd := renameDecl(scope.templates.get(n), varmap, isetChanged, tplChanged)
+		// esm 2.4.0 (esm-spec §9.6.12 "Provenance"): the defined operator a
+		// definition defines is decided in the library's own scope, so renaming
+		// its key on import does not change it.
+		if tplmap[n] != n {
+			if orig, ok := scope.templates.get(n).(map[string]any); ok {
+				if ndm, ok := nd.(map[string]any); ok {
+					if _, has := ndm["defines"]; !has {
+						ndm = cloneMapAny(ndm)
+						ndm["defines"] = definitionDefines(n, orig)
+						nd = ndm
+					}
+				}
+			}
+		}
+		newT.set(tplmap[n], nd)
 	}
 	scope.templates = newT
 
@@ -665,7 +680,7 @@ func scopeNameInventory(scope *templateScope) (free, bound, paramsAll map[string
 // its key) must not collide with a name still in use inside the imported
 // declarations — a remaining free name (other than the one being rebound), a
 // bound index symbol, a template param, or another rename/rebind target. A
-// collision is `template_import_rename_collision`.
+// collision is `operator_import_rename_collision`.
 func checkRenameFreshness(scope *templateScope, free, bound, paramsAll map[string]struct{}, rebind, metamap map[string]string, where string) error {
 	taken := map[string]struct{}{}
 	for k := range free {
