@@ -54,7 +54,33 @@ var documentFreeKeys = map[string]bool{
 // written. The input is not mutated and nothing else changes.
 // These are the rules of Lean `Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
 func CanonicalizeDocument(doc any) any {
-	return canonicalDocumentNumbers(canonicalizeDocumentValue(doc, false))
+	return canonicalDocumentNumbers(canonicalizeDocumentValue(newSpellingValue(doc), false))
+}
+
+// newSpellingValue is doc read in its esm-2.4.0 spelling (esm-spec §9.6.12,
+// §4.2 "Reading earlier documents": `expression_templates` as `operators`, a
+// spatial `D` as `partial`, …), silently; doc itself when it spells nothing old.
+func newSpellingValue(doc any) any {
+	switch doc.(type) {
+	case map[string]any, []any:
+	default:
+		return doc
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return doc
+	}
+	out := newSpellingText(string(raw))
+	if out == string(raw) {
+		return doc
+	}
+	dec := json.NewDecoder(strings.NewReader(out))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return doc
+	}
+	return v
 }
 
 // canonicalDocumentNumber is a JSON number in canonical form (CONFORMANCE

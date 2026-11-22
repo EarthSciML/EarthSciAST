@@ -316,11 +316,10 @@ func TestDocumentFormatPrintMath(t *testing.T) {
 			for _, m := range models {
 				model = m.(map[string]any)
 			}
-			if hasOperatorBlock(model) {
-				skipped++
-				continue
-			}
-			if hasOperatorBlock(esm) {
+			// PrintMath / ParseMath take names only (API_SPEC.md): a case
+			// with a definition block in scope reads differently, so it is
+			// checked through the document round trip only.
+			if hasOperatorBlock(model) || hasOperatorBlock(esm) {
 				skipped++
 				continue
 			}
