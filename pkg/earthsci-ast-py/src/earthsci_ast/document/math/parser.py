@@ -81,7 +81,7 @@ _ATOM_START_KW = frozenset(
         K.LPG, K.LP, K.LBK, K.LNOT, K.FRAC, K.SQRT, K.EXP, K.LN, K.LOG, K.SIN, K.COS, K.TAN,
         K.ASIN, K.ACOS, K.ATAN, K.SINH, K.COSH, K.TANH, K.MIN, K.MAX, K.LABS, K.LFLOOR,
         K.LCEIL, K.ABS, K.FLOOR, K.CEIL, K.DOTACC, K.BCASES, K.CASES, K.ESMNODE, K.BMAT,
-        K.VEC, K.MAT, K.SUM, K.PROD, K.LIMITS, K.LBKG, K.LR,
+        K.VEC, K.MAT, K.SUM, K.PROD, K.LIMITS, K.LBKG, K.LR, K.NABLA, K.PDIFF,
     }
 )  # fmt: skip
 
@@ -303,8 +303,37 @@ def qty(n: Any, fs: tuple) -> Obj:
 
 
 def d_node(x: Any, w: str) -> Obj:
-    """``Math.dNode``: a derivative node."""
+    """``Math.dNode``: a time-derivative node (``d_node(x, "t")``)."""
     return Obj([("args", [x]), ("op", "D"), ("wrt", w)])
+
+
+def p_node(x: Any, w: str) -> Obj:
+    """``Math.pNode``: a ``partial`` node, the spatial derivative (spec §4.2)."""
+    return Obj([("args", [x]), ("op", "partial"), ("wrt", w)])
+
+
+def deriv_node(x: Any, w: str) -> Obj:
+    """``Math.derivNode``: the derivative a fraction of differentials reads as:
+    the time derivative ``D`` along ``t``, ``partial`` along any other axis."""
+    return d_node(x, "t") if w == "t" else p_node(x, w)
+
+
+def nab_tail(sf: str, ts: list, i: int) -> tuple:
+    """``Math.nabTail``: after ``\\nabla``, which form it is (``\\cdot`` div,
+    ``\\times`` curl, ``^{2}`` laplacian, nothing grad) and where its operand
+    starts."""
+    t = _at(ts, i)
+    if t == K.CDOT:
+        return "div", i + 1
+    if t == K.TIMES:
+        return "curl", i + 1
+    if t == K.CARET:
+        if sf == K.LATEX:
+            if _at(ts, i + 1) == K.LB and _is_int(_at(ts, i + 2), 2) and _at(ts, i + 3) == K.RB:
+                return "laplacian", i + 4
+        elif _is_int(_at(ts, i + 1), 2):
+            return "laplacian", i + 2
+    return "grad", i
 
 
 def t_node(n: str, bs: list) -> Obj:
@@ -474,13 +503,13 @@ def _p_italic_d(c: Ctx, ts: list, i: int):
         if r is not None and _at(ts, r[1]) == K.LB:
             r2 = _d_name(c, K.RB, ts, r[1] + 1)
             if r2 is not None:
-                return d_node(r[0], r2[0]), r2[1]
+                return deriv_node(r[0], r2[0]), r2[1]
         return None
     r = _d_name(c, K.RP, ts, i)
     if r is not None and _at(ts, r[1]) == K.SLASH and _at(ts, r[1] + 1) == K.LPG:
         r2 = _d_name(c, K.RP, ts, r[1] + 2)
         if r2 is not None:
-            return d_node(r[0], r2[0]), r2[1]
+            return deriv_node(r[0], r2[0]), r2[1]
     return None
 
 
@@ -733,19 +762,36 @@ def p_mul(c: Ctx, f: int, ts: list, i: int):
 
 
 def p_not(c: Ctx, f: int, ts: list, i: int):
-    """``Math.pNot``: level 6, ``not``."""
+    """``Math.pNot``: level 6, ``not``, and the ``\\nabla`` forms, whose operand is
+    read at level 9."""
     if f == 0:
         return None
     f -= 1
     if not limits.enter():
         return None
     try:
-        if _at(ts, i) == K.LNOT:
+        t = _at(ts, i)
+        if t == K.LNOT:
             r = p_not(c, f, ts, i + 1)
             return None if r is None else (node("not", [r[0]]), r[1])
+        if t == K.NABLA:
+            o, j = nab_tail(c.sf, ts, i + 1)
+            r = _p_nab_arg(c, f, ts, j)
+            return None if r is None else (node(o, [r[0]]), r[1])
         return p_frac(c, f, ts, i)
     finally:
         limits.leave()
+
+
+def _p_nab_arg(c: Ctx, f: int, ts: list, i: int):
+    """``Math.pNabArg``: the operand of a ``\\nabla`` form: another ``\\nabla``
+    form, or a postfix-level operand."""
+    if f == 0:
+        return None
+    f -= 1
+    if _at(ts, i) == K.NABLA:
+        return p_not(c, f, ts, i)
+    return p_post(c, f, ts, i)
 
 
 def p_frac(c: Ctx, f: int, ts: list, i: int):
@@ -1037,7 +1083,9 @@ def _bare_ok(c: Ctx, n: str) -> bool:
 
 
 def _p_d_call(c: Ctx, f: int, ts: list, i: int):
-    """``Math.pDCall``: ``\\operatorname{D}_{x}(u, a, b)`` after the ``_``."""
+    """``Math.pDCall``: ``\\partial_{x}(u, a, b)``, and the earlier
+    ``\\operatorname{D}_{x}(u, a, b)`` (read, never printed), after the ``_``:
+    ``partial`` with trailing operands."""
     if f == 0:
         return None
     f -= 1
@@ -1060,7 +1108,7 @@ def _p_d_call(c: Ctx, f: int, ts: list, i: int):
     xs = _all_pos(r2[0])
     if xs is None:
         return None
-    return Obj([("args", xs), ("op", "D"), ("wrt", w)]), r2[1] + 1
+    return Obj([("args", xs), ("op", "partial"), ("wrt", w)]), r2[1] + 1
 
 
 def _op_allowed(o: str) -> bool:
@@ -1163,6 +1211,11 @@ def p_prim(c: Ctx, f: int, ts: list, i: int):
         if sf == K.TYPST:
             if t1 == K.DIF:
                 return _p_dt(c, f, K.DIF, ts, i + 2)
+            if t1 == K.PDIFF and _at(ts, i + 2) == K.US:
+                r = p_or(c, f, ts, i + 1)
+                if r is not None and is_rp(_at(ts, r[1])):
+                    return r[0], r[1] + 1
+                return None
             if t1 == K.PDIFF:
                 return _p_dt(c, f, K.PDIFF, ts, i + 2)
             if t1 == ("letter", "d"):
@@ -1180,6 +1233,8 @@ def p_prim(c: Ctx, f: int, ts: list, i: int):
         return None
     if t == K.FRAC and t1 == K.LB:
         return _p_frac_l(c, f, ts, i + 2)
+    if t == K.PDIFF and t1 == K.US:
+        return _p_d_call(c, f, ts, i + 2)
     if t == K.SQRT:
         if sf == K.LATEX:
             if t1 == K.LB:
@@ -1562,6 +1617,16 @@ def _p_frac_l(c: Ctx, f: int, ts: list, i: int):
             if r is not None and _at(ts, r[1]) == K.RB:
                 return _p_d_apply(c, f, r[0], ts, r[1] + 1)
             return None
+        if _at(ts, i + 1) == K.US:
+            # `\frac{\partial_{x}(…)…}{…}`: a quotient whose numerator starts
+            # with the trailing-operand form.
+            r = p_or(c, f, ts, i)
+            if r is None or _at(ts, r[1]) != K.RB or _at(ts, r[1] + 1) != K.LB:
+                return None
+            r2 = p_or(c, f, ts, r[1] + 2)
+            if r2 is None or _at(ts, r2[1]) != K.RB:
+                return None
+            return node("/", [r[0], r2[0]]), r2[1] + 1
         r = p_or(c, f, ts, i + 1)
         if r is None:
             return None
@@ -1569,7 +1634,7 @@ def _p_frac_l(c: Ctx, f: int, ts: list, i: int):
         if _at(ts, j) == K.RB and _at(ts, j + 1) == K.LB and _at(ts, j + 2) == K.PDIFF:
             r2 = p_name(c.sf, ts, j + 3)
             if r2 is not None and _at(ts, r2[1]) == K.RB:
-                return d_node(r[0], r2[0]), r2[1] + 1
+                return deriv_node(r[0], r2[0]), r2[1] + 1
         return None
     r = _p_italic_d(c, ts, i)
     if r is not None:
@@ -1621,7 +1686,7 @@ def _p_dt(c: Ctx, f: int, k: str, ts: list, i: int):
         return None
     if k == K.DIF and r2[0] != "t":
         return None
-    return d_node(r[0], r2[0]), r2[1] + 1
+    return deriv_node(r[0], r2[0]), r2[1] + 1
 
 
 def _p_d_apply(c: Ctx, f: int, w: str, ts: list, i: int):
@@ -1634,7 +1699,7 @@ def _p_d_apply(c: Ctx, f: int, w: str, ts: list, i: int):
         return None
     r = p_or(c, f, ts, i + 1)
     if r is not None and is_rp(_at(ts, r[1])):
-        return d_node(r[0], w), r[1] + 1
+        return deriv_node(r[0], w), r[1] + 1
     return None
 
 

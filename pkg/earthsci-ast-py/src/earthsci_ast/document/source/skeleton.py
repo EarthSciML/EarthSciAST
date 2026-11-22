@@ -154,8 +154,8 @@ MATH_FIELDS = (
     "analyses",
     "constraint_equations",
     "equations",
-    "operators",
     "initialization_equations",
+    "operators",
     "reactions",
 )
 _MATH_FIELD_SET = frozenset(MATH_FIELDS)
