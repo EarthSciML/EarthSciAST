@@ -18,9 +18,8 @@
 //! - **Evaluable core (closed).** Everything in [`CoreOp`], whose
 //!   [`CoreOp::info`] holds one row per operator. Adding one is a spec change. A core op with the wrong arity is a hard error
 //!   ([`OpError::Arity`]).
-//! - **Rewrite-target (open).** Everything else — the sugar ops
-//!   `grad`/`div`/`laplacian`/`curl`/`∇`/`integral`, a *spatial* `D`, and any
-//!   user-defined op. These have **no evaluator**; they MUST be eliminated by a
+//! - **Rewrite-target (open).** Everything else — `integral`, a *spatial*
+//!   `D`, and any user-defined op. These have **no evaluator**; they MUST be eliminated by a
 //!   rewrite rule (§9.6) before evaluation. Reaching an evaluator with one still
 //!   present is [`OpError::Unlowered`] → diagnostic `unlowered_operator`.
 //!
@@ -83,7 +82,7 @@ pub enum OpError {
         /// What the spec says it takes.
         expected: String,
     },
-    /// A rewrite-target op (sugar, spatial `D`, user op, or a typo) reached
+    /// A rewrite-target op (spatial `D`, `integral`, user op, or a typo) reached
     /// evaluation without being lowered. Diagnostic code `unlowered_operator`.
     Unlowered {
         /// The operator name.
@@ -331,7 +330,7 @@ named_ops! {
 
 /// An evaluable-core operator (esm-spec §4.2): the closed set of `op` strings
 /// a legal AST may carry after rewriting. Every other name is an open-tier
-/// rewrite target (sugar, a user op, or a typo).
+/// rewrite target (`integral`, a user op, or a typo).
 ///
 /// [`ExpressionNode::core_op`] reads one off a node. The wire format keeps
 /// `op` a string; this enum is how the crate decides what that string means,
@@ -732,7 +731,7 @@ pub fn is_rewrite_target_derivative(node: &ExpressionNode) -> bool {
 ///
 /// # Errors
 ///
-/// [`OpError::Unlowered`] for an open-tier op (sugar, spatial `D`, user op, or a
+/// [`OpError::Unlowered`] for an open-tier op (spatial `D`, `integral`, user op, or a
 /// misspelling); [`OpError::Arity`] for a core op with the wrong argument count.
 pub fn check_node(node: &ExpressionNode) -> Result<(), OpError> {
     let op = node.op.as_str();
@@ -745,8 +744,8 @@ pub fn check_node(node: &ExpressionNode) -> Result<(), OpError> {
     }
 
     let Some(arity) = core.map(|c| c.info().arity) else {
-        // Open tier: the named sugar ops and anything unrecognised (including a
-        // typo) share one diagnostic — `unlowered_operator` (§9.6.3 c.6).
+        // Open tier: `integral`, user ops and anything unrecognised (including
+        // a typo) share one diagnostic — `unlowered_operator` (§9.6.3 c.6).
         return Err(OpError::Unlowered { op: op.to_string() });
     };
 
@@ -888,10 +887,10 @@ mod tests {
     }
 
     #[test]
-    fn sugar_and_spatial_d_are_unlowered() {
+    fn user_ops_and_spatial_d_are_unlowered() {
         for j in [
-            serde_json::json!({"op": "grad", "args": ["u"], "dim": "x"}),
-            serde_json::json!({"op": "laplacian", "args": ["u"]}),
+            serde_json::json!({"op": "godunov_hamiltonian", "args": ["u"], "dim": "x"}),
+            serde_json::json!({"op": "integral", "args": ["u"], "dim": "x"}),
             serde_json::json!({"op": "D", "args": ["u"], "wrt": "x"}),
         ] {
             assert!(
@@ -1139,7 +1138,11 @@ mod tests {
     /// not registry ops at all: an open-tier rewrite target and a typo.
     #[test]
     fn non_pointwise_ops_are_not_scalar_operators() {
-        for op in NOT_SCALAR.iter().copied().chain(["grad", "not_a_real_op"]) {
+        for op in NOT_SCALAR
+            .iter()
+            .copied()
+            .chain(["godunov_hamiltonian", "not_a_real_op"])
+        {
             assert!(
                 !is_scalar_operator(op),
                 "`{op}` must NOT be usable as a `broadcast` fn"

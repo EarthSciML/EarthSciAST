@@ -1561,10 +1561,10 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
   because "an undiscretized spatial operator never reaches step 4". That was one
   binding's stricter behaviour written up as though it were the format, and it
   contradicts §4.7.6, which normatively tells libraries to scan equations for
-  `grad` / `div` / `laplacian` / `D` with `wrt != "t"` and add each referenced
+  `D` with `wrt != "t"` (and for axis names in any node's `dim` field) and add each referenced
   spatial dimension. §4.7.6 governs: a model carrying undiscretized spatial
-  operators is a PDE, `system_kind` has a `"pde"` value for exactly that case,
-  and refusing to flatten it makes `PDESystem` construction unreachable.
+  operators still flattens (its `system_kind` is derived without regard to
+  them, esm-spec §6.3.1).
   Within the list, `t` comes first and the remaining spatial axes follow in
   **document order** — the order the scan first encounters them, which is the
   order the document names them in. `full_coupled` flattens to
@@ -1943,7 +1943,7 @@ Variables:       GEOSFP.T, GEOSFP.u, GEOSFP.v
 Equations:
   D(SimpleOzone.O3, t)  = -SimpleOzone.k_NO_O3 * SimpleOzone.O3 * SimpleOzone.NO
                           + SimpleOzone.jNO2 * SimpleOzone.NO2
-                          + (-GEOSFP.u * grad(SimpleOzone.O3, x) - GEOSFP.v * grad(SimpleOzone.O3, y))
+                          + (-GEOSFP.u * D(SimpleOzone.O3, x) - GEOSFP.v * D(SimpleOzone.O3, y))
 
   D(SimpleOzone.NO, t)  = [chemistry terms] + [advection terms]
   D(SimpleOzone.NO2, t) = [chemistry terms] + [advection terms]
@@ -2002,7 +2002,7 @@ A single `.esm` file may still combine systems living on different spatial dimen
 
 **Independent-variable computation.** After coupling, libraries compute the flattened system's `independent_variables` by:
 1. Starting with `[:t]`.
-2. Scanning every equation for spatial operators (`grad`, `div`, `laplacian`, or `D` with `wrt ≠ "t"`) and adding each referenced spatial dimension.
+2. Scanning every equation for spatial derivatives (`D` with `wrt ≠ "t"`) and for axis names in any node's `dim` field, and adding each referenced spatial dimension.
 3. Scanning every `domains` entry in the file for spatial axes and adding them.
 
 The result is `[:t]` for purely 0D systems and `[:t, :x, :y, …]` for PDE systems. This is what tells a downstream constructor whether it has an ODE or a PDE.
@@ -2492,7 +2492,7 @@ interface ExprNode {
   op: string;
   args: Expr[];
   wrt?: string;  // for D
-  dim?: string;  // for grad
+  dim?: string;  // axis-naming field of an open-tier op
 }
 
 // Discriminated union for coupling

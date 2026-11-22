@@ -7,7 +7,7 @@ Array broadcast semantics (esm-spec §4.3.4), document-wide. Two families:
 
 **The `broadcast.fn` contract.** `fn` is parsed as an opaque string, so a
 `broadcast` naming a nonexistent operator (`"not_a_real_op"`), naming a
-STRUCTURAL operator (`faq`, `index`, `makearray`, `grad`, …), carrying no
+STRUCTURAL operator (`faq`, `index`, `makearray`, `D`, …), carrying no
 `fn` at all, or handing its operator the wrong number of operands is reported
 here rather than at evaluation. The contract itself is
 [`_broadcast_fn_problem`](@ref) (op_registry.jl) — the same predicate the
@@ -171,7 +171,7 @@ end
 # whose `fn` is one, esm-spec §4.3.4) — and report every array-variable leaf
 # declared over an index set absent from the result `axes`. Anything that is not
 # a scalar operator ends the walk: an `index` gather and the array producers
-# carry their own indexing, and an unlowered rewrite target (`div`/`grad`/a
+# carry their own indexing, and an unlowered rewrite target (a spatial `D`/a
 # user op) consumes WHOLE arrays under its own contract — none of them is a broadcast, so
 # an operand of a different rank there is not a defect. This mirrors exactly
 # where `_wrap_bare_array_refs` (shape_promotion.jl) applies its `_AxisAlign`.

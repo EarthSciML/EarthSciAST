@@ -967,7 +967,7 @@ mod op_dispatch_equivalence {
         #[rustfmt::skip]
         const OTHERS: &[&str] = &[
             "D", "Pre", "arrayop", "reshape", "transpose", "concat", "integral",
-            "grad", "distinct", "ic", "enum", "apply_expression_template",
+            "godunov_hamiltonian", "distinct", "ic", "enum", "apply_expression_template",
             "", " ", "PLUS", "Log", "expp",
         ];
         for op in OTHERS {

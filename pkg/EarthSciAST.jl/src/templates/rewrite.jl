@@ -200,7 +200,7 @@ references are handled through the §9.7.3 reference DAG, not by op membership.
 const _REWRITE_TARGET_OPS =
     Set{String}(
     [
-        "D", "grad", "div", "laplacian", "integral", "enum",
+        "D", "integral", "enum",
     ]
 )
 

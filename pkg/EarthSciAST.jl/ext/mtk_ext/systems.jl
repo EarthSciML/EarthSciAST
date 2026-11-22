@@ -13,28 +13,6 @@ _spatial_system_msg(flat::FlattenedSystem, ctor::String) =
     "ODE systems only and this binding has no PDE constructor: discretize the " *
     "spatial operators (a `faq` stencil over an index set) first."
 
-# Spatial differential operators (`grad`/`div`/`laplacian`) must be rewritten
-# by discretization rules into `faq` stencils before a system is built.
-# Meeting one here means that rewrite did not happen; say so instead of
-# letting the operator reach the lowering, which has no arm for it.
-function _assert_no_spatial_ops(flat::FlattenedSystem)
-    for eq in flat.equations
-        for side in (eq.lhs, eq.rhs)
-            spatial_op = _find_spatial_op(side)
-            spatial_op === nothing || throw(
-                SimulateError(
-                    "UnreachableSpatialOperatorError: encountered '$(spatial_op)' " *
-                        "node in simulation evaluation. Spatial operators must be " *
-                        "rewritten by ESD discretization rules before reaching the " *
-                        "simulator. Pipeline contract violated.",
-                    ERROR_CODES.UNLOWERED_OPERATOR
-                )
-            )
-        end
-    end
-    return nothing
-end
-
 # ---- Route `ic(var) = <initial value>` equations out of the ODE set ----
 # (esm-spec v0.8.0) An `ic`-LHS equation declares an initial value (u0 /
 # variable default), NOT an ODE right-hand side. Mirror the tree-walk
@@ -228,8 +206,6 @@ function ModelingToolkit.System(
     flat = expand_flattened_refs(flat)
     _has_spatial_ivs(flat) &&
         throw(SimulateError(_spatial_system_msg(flat, "ModelingToolkit.System"), ERROR_CODES.UNSUPPORTED_CONSTRUCT))
-
-    _assert_no_spatial_ops(flat)
 
     (; lowering, states, parameters, observed) = _build_var_dict(flat)
     L = lowering

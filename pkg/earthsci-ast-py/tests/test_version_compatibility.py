@@ -68,18 +68,22 @@ class TestVersionCompatibility:
         version_1_2_0_const_units.esm until esm 1.3.0, and
         version_2_0_0_baseline.esm until esm 2.1.0,
         version_2_1_0_variable_bounds.esm until esm 2.2.0, and
-        version_2_2_0_pointwise_lift.esm until esm 2.3.0.
-
-        The 2.3.0 fixture spells unary minus with the deprecated `neg`, so
-        its load also warns `deprecated_op` (not a version warning); the
-        matrix lists the pointers that warning names, and
-        test_deprecated_op_fixtures checks them.
+        version_2_2_0_pointwise_lift.esm until esm 2.3.0, and
+        version_2_3_0_deprecated_neg.esm until esm 2.4.0.
         """
-        fixture = load_fixture("version_2_3_0_deprecated_neg.esm")
+        fixture = load_fixture("version_2_4_0_baseline.esm")
         assert fixture["esm"] == _EXPECTED_VERSION
         with no_version_warning():
             result = load_document(fixture)
         assert result.esm == _EXPECTED_VERSION
+
+        # The 2.3.0 fixture spells unary minus with the deprecated `neg`, so
+        # its load also warns `deprecated_op` (not a version warning); the
+        # matrix lists the pointers that warning names, and
+        # test_deprecated_op_fixtures checks them.
+        with no_version_warning():
+            result = load_document(load_fixture("version_2_3_0_deprecated_neg.esm"))
+        assert result.esm == "2.3.0"
 
         # The earlier minor of the current major loads as written, with no
         # warning.

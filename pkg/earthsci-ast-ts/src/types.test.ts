@@ -13,10 +13,11 @@ describe('ESM Format Types', () => {
     // model variable (§6.3.2) to 2.1.0, and the widened pointwise lift (§10.5)
     // to 2.2.0, and the deprecated `neg` / `pow` (§4.2), the canonical unit
     // spelling (§4.8.2) and the Markdown / Typst source formats (§1.2) to
-    // 2.3.0. The embedded schema `$id` (and
+    // 2.3.0, and the removal of `grad`, `div` and `laplacian` to 2.4.0. The
+    // embedded schema `$id` (and
     // therefore SCHEMA_VERSION) tracks it. The npm package version is a
     // different number and lives in LIBRARY_VERSION.
-    expect(SCHEMA_VERSION).toBe('2.3.0')
+    expect(SCHEMA_VERSION).toBe('2.4.0')
   })
 
   it('should handle Expr type correctly', () => {

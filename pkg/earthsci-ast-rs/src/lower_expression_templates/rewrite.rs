@@ -10,13 +10,11 @@ use crate::json_visit::JsonPath;
 /// derived from "not in the core": the structural derivative `D` (a SPATIAL `D`
 /// is a rewrite target) and the load-eliminated form `enum` (esm-spec §4.5).
 ///
-/// The open rewrite-target sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/
-/// `integral`) and any unregistered custom op are DELIBERATELY not hand-listed
-/// here — [`op_in_t`] derives them from "not in the evaluable core"
-/// (`!is_core_op`), so the sugar vocabulary lives in exactly one place
-/// (`op_registry`) and this list never drifts from it (that is precisely why a
-/// hand-list previously carried `grad`/`div`/`laplacian`/`integral` but silently
-/// omitted `curl`/`∇`). `apply_expression_template` itself is excluded.
+/// The open rewrite-target ops (`integral`, and any unregistered custom op) are
+/// DELIBERATELY not hand-listed here — [`op_in_t`] derives them from "not in
+/// the evaluable core" (`!is_core_op`), so the vocabulary lives in exactly one
+/// place (`op_registry`) and this list never drifts from it.
+/// `apply_expression_template` itself is excluded.
 const REWRITE_TARGET_OPS: [&str; 2] = ["D", "enum"];
 
 /// True iff op string `op` is a member of the rewrite-target tier **T**

@@ -233,8 +233,8 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
 ///   [`crate::value_invention`] before evaluation;
 /// * form / lowering ops (`ic`, `enum`, `apply_expression_template`) —
 ///   consumed by their lowering passes;
-/// * the open rewrite-target tier (`grad`, `div`, `laplacian`, a typo'd
-///   `"expp"`, a user op) — must be lowered to a stencil first.
+/// * the open rewrite-target tier (`integral`, a typo'd `"expp"`, a user op)
+///   — must be lowered to a stencil first.
 #[must_use]
 pub fn is_evaluable_op(op: &str) -> bool {
     use crate::op_registry::{CoreOp, OtherOp as O};
@@ -276,7 +276,7 @@ pub fn is_evaluable_op(op: &str) -> bool {
 /// the evaluator. It layers two checks:
 ///
 /// 1. [`check_no_spatial_ops`] (the shared [`crate::op_registry`] gate) — the
-///    open rewrite-target tier (sugar ops, a spatial `D`, a user op, a typo) and
+///    open rewrite-target tier (a spatial `D`, `integral`, a user op, a typo) and
 ///    illegal arities.
 /// 2. [`is_evaluable_op`] — evaluable-core ops that are legal in an AST but have
 ///    no rule in THIS evaluator because an earlier pipeline stage was supposed to
@@ -2148,7 +2148,7 @@ pub(super) fn eval_const(node: &ExpressionNode) -> Value {
 /// This is the crate's one UNGATED evaluation entry point — it takes a raw
 /// [`Expr`] that never passed through `from_model`'s compile-time gate — so it
 /// applies [`check_evaluable`] itself. An operator the interpreter cannot
-/// evaluate (a typo, an unlowered `grad`, or an `ic`/`enum` that an earlier
+/// evaluate (a typo, an unlowered spatial `D`, or an `ic`/`enum` that an earlier
 /// pipeline stage should have eliminated) is reported here rather
 /// than silently evaluating to `NaN`.
 pub fn eval_expression(
@@ -5366,14 +5366,19 @@ mod evaluability_gate_tests {
         );
     }
 
-    /// An unlowered rewrite-target sugar op reaching evaluation is reported,
-    /// not answered with the NaN sentinel.
+    /// An unlowered spatial `D` reaching evaluation is reported, not answered
+    /// with the NaN sentinel.
     #[test]
     fn unlowered_spatial_op_is_rejected_not_nan() {
-        let err = eval_it(&node("grad", vec![Expr::Variable("c".into())]))
-            .expect_err("an unlowered spatial operator must not evaluate");
+        let spatial_d = Expr::operator(ExpressionNode {
+            op: "D".to_string(),
+            args: vec![Expr::Variable("c".into())],
+            wrt: Some("x".to_string()),
+            ..ExpressionNode::default()
+        });
+        let err = eval_it(&spatial_d).expect_err("an unlowered spatial operator must not evaluate");
         assert!(
-            matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "grad"),
+            matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "D"),
             "{err:?}"
         );
     }
