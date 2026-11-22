@@ -191,7 +191,9 @@ Build a `ModelingToolkit.System` (an ODE system) from a flattened ESM system.
 Raises a `SimulateError` (code `unsupported_construct`) when the flattened
 system has a continuous spatial independent variable: this binding has no PDE
 constructor, so a spatial document must be discretized (a `faq` stencil over
-an index set) first. Every other document construct the lowering cannot
+an index set) first. An equation using an operator the lowering has no arm for
+(an open-tier name no rule rewrote, such as `grad`) is a `SimulateError` with
+code `unlowered_operator`. Every other document construct the lowering cannot
 express is a `SimulateError` with a code as well.
 """
 function ModelingToolkit.System(
@@ -206,6 +208,21 @@ function ModelingToolkit.System(
     flat = expand_flattened_refs(flat)
     _has_spatial_ivs(flat) &&
         throw(SimulateError(_spatial_system_msg(flat, "ModelingToolkit.System"), ERROR_CODES.UNSUPPORTED_CONSTRUCT))
+    # An operator no arm of the lowering covers (an open-tier name such as
+    # `grad`, or any other a rule should have rewritten) is refused by name
+    # before lowering starts, rather than surfacing from inside it.
+    unlowered = _mtk_first_unlowered_op(flat)
+    if unlowered !== nothing
+        eq, op = unlowered
+        throw(
+            SimulateError(
+                "equation $(_mtk_equation_label(eq)) uses the operator `$(op)`, which " *
+                    "has no ModelingToolkit lowering: a rule must rewrite it into the " *
+                    "core vocabulary before the system is built (esm-spec §4.2)",
+                ERROR_CODES.UNLOWERED_OPERATOR
+            )
+        )
+    end
 
     (; lowering, states, parameters, observed) = _build_var_dict(flat)
     L = lowering
