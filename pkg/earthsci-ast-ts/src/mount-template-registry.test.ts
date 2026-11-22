@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest'
 import { emitEsmString, lowerExpressionTemplates } from './lower-expression-templates.js'
 import { emitDocument } from './template-imports.js'
 import { fixturesDir } from './test-helpers.js'
-import { loadPath } from './parse.js'
+import { loadPath, loadString } from './parse.js'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
 import { flatten } from './flatten.js'
 import { toJson } from './serialize.js'
@@ -220,6 +220,17 @@ describe('mounted template registries (esm-spec §9.6.4 rule 1)', () => {
         name: 'scale',
         bindings: { x: 'c' },
       })
+    })
+
+    it('a document whose only block sits on a nested authored subsystem is lowered', () => {
+      const doc = host(['y'], {
+        variables: {},
+        equations: [],
+        subsystems: { Deep: leaf.models.Leaf },
+      })
+      const h = (loadString(JSON.stringify(doc)).models as Record<string, Comp>).Host!
+      expect(rhsOf(h, 'y')).toEqual({ op: 'scale', args: ['y'] })
+      expect(rhsOf(h.subsystems!.Sub!.subsystems!.Deep!, 'c')).toEqual({ op: '*', args: [3, 'c'] })
     })
   })
 })
