@@ -368,6 +368,37 @@ end
     end
 
     # -----------------------------------------------------------------------
+    # flatten_closes_join_names (§10.7; esm-libraries-spec §4.7.5 step 2): a
+    # body's `join` clauses name component variables the body reads nowhere
+    # else (an overlap gate's envelope factors, an `on` clause's key columns).
+    # Closing makes them parameters, like the body's variable leaves, so each
+    # component's reference binds its own (`Alpha.bW`, `Beta.bW`) and the two
+    # components' identical blocks merge into one entry each. Expanding the
+    # flattened system gives the expansion the component-scoped bodies gave
+    # (the `flattened_expanded.esm` golden, written before bodies were closed).
+    # -----------------------------------------------------------------------
+    @testset "flatten_closes_join_names: join names are closed like leaves" begin
+        d = "flatten_closes_join_names"
+        flat = EarthSciAST.flatten(EarthSciAST.load_path(conf(d, "fixture.esm")))
+        emitted = emit_esm_string(
+            OrderedDict{String, Any}(
+                "expression_templates" => OrderedDict{String, Any}(flat.template_registry)
+            )
+        )
+        @test emitted == read(conf(d, "flattened_registry.esm"), String)
+        @test collect(flat.template_registry["matches"]["params"]) == ["tbl_year", "want"]
+        x = EarthSciAST.expand_flattened_refs(flat)
+        eqs = Any[
+            OrderedDict{String, Any}(
+                    "lhs" => EarthSciAST.serialize_expression(eq.lhs),
+                    "rhs" => EarthSciAST.serialize_expression(eq.rhs)
+                ) for eq in x.equations
+        ]
+        @test emit_esm_string(OrderedDict{String, Any}("equations" => eqs)) ==
+            read(conf(d, "flattened_expanded.esm"), String)
+    end
+
+    # -----------------------------------------------------------------------
     # flatten_registry_merge_transitive (§9.6.4 rule 7, §10.7): TWO models in
     # ONE document import the same rule library. `interior_stencil` folds
     # differently per model (B rebinds its free `inv_dx`) and collides; the

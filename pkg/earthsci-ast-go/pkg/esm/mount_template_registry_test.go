@@ -242,3 +242,12 @@ func TestMountHostRule(t *testing.T) {
 	mtrCompare(t, "flattened registry", mtrFlat(t, p), mtrGolden(t, d, "flattened_registry.esm"))
 	siCompareSansMetadata(t, file, mtrPath(d, "expanded.esm"))
 }
+
+// TestFlattenClosesJoinNames: esm-spec §10.7, a body's `join` clauses name
+// component variables it reads nowhere else (an overlap gate's envelope
+// factors, an `on` clause's key columns); closing makes them parameters, as
+// it does the body's variable leaves.
+func TestFlattenClosesJoinNames(t *testing.T) {
+	d := "flatten_closes_join_names"
+	mtrCompare(t, "flattened registry", mtrFlat(t, mtrPath(d, "fixture.esm")), mtrGolden(t, d, "flattened_registry.esm"))
+}

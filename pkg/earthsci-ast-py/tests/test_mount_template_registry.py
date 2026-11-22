@@ -195,3 +195,14 @@ class TestMountHostRule:
                 {"op": "+", "args": [{"op": "cub", "args": ["h"]}, {"op": "cub", "args": ["h"]}]}
             ],
         }
+
+
+class TestFlattenClosesJoinNames:
+    """esm-spec §10.7: a body's `join` clauses name component variables it reads
+    nowhere else (an overlap gate's envelope factors, an `on` clause's key
+    columns); closing makes them parameters like the body's variable leaves."""
+
+    case = "flatten_closes_join_names"
+
+    def test_flattened_registry(self):
+        assert _flat(_p(self.case, "fixture.esm")) == _golden(self.case, "flattened_registry.esm")

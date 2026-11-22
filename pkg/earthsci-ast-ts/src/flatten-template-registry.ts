@@ -78,9 +78,31 @@ function exprChildren(node: Record<string, unknown>): unknown[] {
 }
 
 /**
- * The names a raw expression reads as variable leaves and does not bind
- * itself (a node's binders bind all of its children). Binding values of
- * nested references are reads. Mirrors the Julia `_tpl_free_leaves`.
+ * The plain-string names a raw node's `join` clauses carry: each `on` clause's
+ * key columns and each `overlap` clause's `src_env` / `tgt_env` envelope
+ * factors (a clause's `syms` are binders, not reads).
+ */
+function joinNames(node: Record<string, unknown>): string[] {
+  const out: string[] = []
+  if (!Array.isArray(node.join)) return out
+  for (const clause of node.join as unknown[]) {
+    if (!isObj(clause)) continue
+    if (Array.isArray(clause.on)) {
+      for (const pair of clause.on as unknown[]) out.push(...asStringList(pair))
+    }
+    if (isObj(clause.overlap)) {
+      out.push(...asStringList(clause.overlap.src_env), ...asStringList(clause.overlap.tgt_env))
+    }
+  }
+  return out
+}
+
+/**
+ * The names a raw expression reads and does not bind itself (a node's binders
+ * bind all of its children and its own `join`): its variable leaves, and the
+ * `join` key columns and overlap envelope factors, which name variables
+ * exactly as a leaf does. Binding values of nested references are reads.
+ * Mirrors the Julia `_tpl_free_leaves` and `_tpl_free_join_names`.
  */
 function freeLeaves(x: unknown, bound: ReadonlySet<string>, out: Set<string>): void {
   if (typeof x === 'string') {
@@ -90,6 +112,9 @@ function freeLeaves(x: unknown, bound: ReadonlySet<string>, out: Set<string>): v
   if (!isObj(x) || isNumericLiteral(x) || typeof x.op !== 'string') return
   const b = boundSymbols(x)
   const inner = b.length === 0 ? bound : new Set([...bound, ...b])
+  for (const n of joinNames(x)) {
+    if (!inner.has(n) && !n.startsWith(SENTINEL_PREFIX)) out.add(n)
+  }
   for (const c of exprChildren(x)) freeLeaves(c, inner, out)
 }
 
@@ -139,8 +164,9 @@ export function bindExplicit(x: unknown, added: ReadonlyMap<string, readonly str
  * free names made EXPLICIT parameters (esm-spec §10.7; esm-libraries-spec
  * §4.7.5 step 2). Entries are visited in block order, callees (templates of
  * this block the body references) first. A name a body reads from its caller
- * (a variable leaf it does not bind and that is not one of its parameters,
- * read directly or through a nested reference) is appended, sorted by UTF-8
+ * (a variable leaf, or a `join` key column or overlap envelope factor, that it
+ * does not bind and that is not one of its parameters, read directly or
+ * through a nested reference) is appended, sorted by UTF-8
  * bytes, to its `params`, and every nested reference in a body binds its
  * callee's added parameters to the same names ({@link bindExplicit}). A decl
  * with no body or with `match` is unchanged. `added` maps each changed template

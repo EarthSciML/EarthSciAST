@@ -1698,7 +1698,8 @@ pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::
 /// gained.
 ///
 /// Entries are visited in block order, callees (templates of `block` the body
-/// references) first. A body's free names are the variable leaves it reads and
+/// references) first. A body's free names are the variable leaves it reads, and
+/// the `join` key columns and overlap envelope factors it names, that it
 /// does not bind itself (an enclosing `output_idx`, `ranges` key or `integral`
 /// variable binds every name below it), binding values of nested references
 /// included, that are not its parameters; first every nested reference binds
@@ -1744,13 +1745,37 @@ pub(crate) fn close_template_bodies(
             }
             Expr::Operator(node) => {
                 let binders = node.binders(Binders::SCOPE);
-                if binders.is_empty() {
-                    node.for_each_child(&mut |c| free_leaves(c, bound, out));
+                let inner_owned;
+                let inner = if binders.is_empty() {
+                    bound
                 } else {
-                    let mut inner = bound.clone();
-                    inner.extend(binders.into_iter().map(str::to_string));
-                    node.for_each_child(&mut |c| free_leaves(c, &inner, out));
+                    let mut i = bound.clone();
+                    i.extend(binders.into_iter().map(str::to_string));
+                    inner_owned = i;
+                    &inner_owned
+                };
+                // A `join` clause's key columns and overlap envelope factors
+                // are plain strings that read variables as a leaf does (the
+                // names `namespace_join_names` scopes); one naming a loop
+                // symbol of this node or an enclosing one is a binder.
+                if let Some(join) = &node.join {
+                    let mut add = |n: &String| {
+                        if !inner.contains(n) && !n.starts_with('\0') {
+                            out.insert(n.clone());
+                        }
+                    };
+                    for c in join {
+                        for [l, r] in &c.on {
+                            add(l);
+                            add(r);
+                        }
+                        if let Some(ov) = &c.overlap {
+                            ov.src_env.iter().for_each(&mut add);
+                            ov.tgt_env.iter().for_each(&mut add);
+                        }
+                    }
                 }
+                node.for_each_child(&mut |c| free_leaves(c, inner, out));
             }
             _ => {}
         }

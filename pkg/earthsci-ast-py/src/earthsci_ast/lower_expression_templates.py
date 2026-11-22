@@ -1961,9 +1961,11 @@ def _tpl_children(node: dict) -> Iterator[Any]:
 
 
 def _tpl_free_leaves(e: Any) -> set[str]:
-    """The variable leaves of the raw expression ``e`` not bound by an enclosing
-    loop binder (:func:`_tpl_binders`); binding values of nested references are
-    read. Mirrors the Julia ``_tpl_free_leaves``."""
+    """The variable leaves of the raw expression ``e``, and the ``join`` key
+    columns and overlap envelope factors it names (:func:`_tpl_join_names`),
+    not bound by an enclosing loop binder or the node's own
+    (:func:`_tpl_binders`); binding values of nested references are read.
+    Mirrors the Julia ``_tpl_free_leaves`` and ``_tpl_free_join_names``."""
     out: set[str] = set()
 
     def rec(x: Any, bound: frozenset[str]) -> None:
@@ -1975,10 +1977,40 @@ def _tpl_free_leaves(e: Any) -> set[str]:
             return
         b = _tpl_binders(x)
         inner = bound | b if b else bound
+        for n in _tpl_join_names(x):
+            if n not in inner and not n.startswith("\0"):
+                out.add(n)
         for c in _tpl_children(x):
             rec(c, inner)
 
     rec(e, frozenset())
+    return out
+
+
+def _tpl_join_names(node: dict) -> list[str]:
+    """The plain-string names a raw node's ``join`` clauses carry: each ``on``
+    clause's key columns and each ``overlap`` clause's ``src_env`` /
+    ``tgt_env`` envelope factors. They name variables exactly as a leaf does
+    (the names component namespacing scopes); a clause's ``syms`` are binders.
+    Mirrors the Julia ``_tpl_free_join_names``."""
+    out: list[str] = []
+    join = node.get("join")
+    if not _is_array(join):
+        return out
+    for clause in join:
+        if not _is_object(clause):
+            continue
+        on = clause.get("on")
+        if _is_array(on):
+            for pair in on:
+                if _is_array(pair):
+                    out.extend(s for s in pair if isinstance(s, str))
+        ov = clause.get("overlap")
+        if _is_object(ov):
+            for k in ("src_env", "tgt_env"):
+                v = ov.get(k)
+                if _is_array(v):
+                    out.extend(s for s in v if isinstance(s, str))
     return out
 
 
@@ -2014,8 +2046,9 @@ def _tpl_bind_explicit(e: Any, added: dict[str, list[str]]) -> Any:
 def tpl_explicit_free(block: Any) -> tuple[Any, dict[str, list[str]]]:
     """``block`` (a component's raw template registry) with every match-less
     body CLOSED (esm-spec §10.7; esm-libraries-spec §4.7.5 step 2): a name the
-    body reads from its caller (a variable leaf it does not bind and that is not
-    one of its ``params``, read directly or through a nested reference) is
+    body reads from its caller (a variable leaf, or a ``join`` key column or
+    overlap envelope factor, that it does not bind and that is not one of its
+    ``params``, read directly or through a nested reference) is
     appended, sorted by UTF-8 bytes, to its ``params``, and every nested
     reference in a body binds its callee's added parameters to the same names
     (:func:`_tpl_bind_explicit`). Entries are visited in block order, callees

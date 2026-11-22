@@ -121,7 +121,8 @@ function _tpl_def(tt::_TplTable, name)
         decl = _TemplateDecl(tt.reg[name])
         raw = decl.body
         typed = expression_from_json(raw)
-        structural = String[p for p in decl.params if _raw_count(raw, p) != _leaf_count(typed, p)]
+        fed = _tpl_feeds_structural(tt, typed)
+        structural = String[p for p in decl.params if _raw_count(raw, p) != _leaf_count(typed, p) || p in fed]
         closed = isempty(structural) ? _tpl_close(tt, String(name), decl, Dict{String, Any}()) : nothing
         d = _TplDef(String(name), decl.params, structural, closed)
         tt.defs[String(name)] = d
@@ -131,14 +132,40 @@ function _tpl_def(tt::_TplTable, name)
     end
 end
 
+# The names `body` passes, as a bare name, to a structural parameter of a
+# template it references: `T(q = p)` with `q` structural in `T`. Such a `p`,
+# when it is a parameter of the body's template, is structural there too —
+# its value lands in `T`'s structural position — so the reference is read
+# through an instance of the body's template, in which `T(q = <name>)` is
+# itself re-pointed at `T`'s instance. (Closing makes a `join` name a body
+# reads a parameter, `_tpl_explicit_free`, and an enclosing template that
+# passes its own parameter on is the common shape.)
+function _tpl_feeds_structural(tt::_TplTable, body::ASTExpr)
+    fed = Set{String}()
+    visit(x) = begin
+        (_tpl_is_call(x) && x.name isa AbstractString && x.bindings !== nothing &&
+            tt.reg !== nothing && haskey(tt.reg, x.name)) || return nothing
+        for q in _tpl_def(tt, x.name).structural
+            v = get(x.bindings, q, nothing)
+            v isa VarExpr && push!(fed, v.name)
+        end
+        return nothing
+    end
+    visit(body)
+    foreach_subexpr(visit, body)
+    return fed
+end
+
 # The prepared body of `name` with the structural parameters substituted by
-# `S` (parameter => raw value).
+# `S` (parameter => raw value). A nested reference whose structural bindings
+# are then names or numbers reads its instance (`_tpl_structural_refs`).
 function _tpl_close(tt::_TplTable, name::String, decl::_TemplateDecl, S::Dict{String, Any})
     sub = Dict{String, Any}()
     for p in decl.params
         sub[p] = haskey(S, p) ? S[p] : _TPL_ARG * p
     end
     typed = expression_from_json(_substitute(decl.body, sub))
+    typed = _tpl_structural_refs(tt, typed)
     # `broadcast(fn = F, …)` is `F(…)` (esm-spec §4.3.4), lowered in a body as
     # the build lowers it in the model's own tree (an invalid `fn` is left for
     # the build to refuse).
@@ -391,7 +418,13 @@ function _tpl_structural_ref(tt::_TplTable, call::OpExpr)
             nd[string(k)] = v
         end
         nd["params"] = Any[p for p in decl.params if !haskey(S, p)]
-        nd["body"] = _substitute(decl.body, sub)
+        body = _substitute(decl.body, sub)
+        # A nested reference the substitution gave name or number structural
+        # bindings (`_tpl_feeds_structural`) reads its own instance, in the
+        # declaration too: the view parts are cut from it (`_tpl_skel`).
+        tb = expression_from_json(body)
+        rb = _tpl_structural_refs(tt, tb)
+        nd["body"] = rb === tb ? body : serialize_expression(rb)
         tt.reg[iname] = nd
     end
     nb = Dict{String, ASTExpr}(k => v for (k, v) in b if !haskey(S, k))
@@ -433,6 +466,44 @@ function _tpl_free_leaves!(out, e::ASTExpr, bound::Set{String}, seen)
         inner = union(bound, b)
         foreach_child(c -> _tpl_free_leaves!(out, c, inner, seen), e)
     end
+    return
+end
+
+# The names `e` reads through a `join` clause and does not bind itself: an
+# `on` clause's key columns and an `overlap` clause's envelope factors. They
+# are plain strings, not variable leaves, yet name variables exactly as a leaf
+# does — the same names component namespacing scopes (`_namespace_join`). A
+# column naming a loop symbol of its node or of an enclosing one is a binder,
+# not a read.
+function _tpl_free_join_names(e::ASTExpr)
+    out = Set{String}()
+    _tpl_free_join_names!(out, e, Set{String}(), IdDict{OpExpr, Nothing}())
+    return out
+end
+function _tpl_free_join_names!(out, e::ASTExpr, bound::Set{String}, seen)
+    e isa OpExpr || return
+    b = _bound_symbols(e)
+    inner = isempty(b) ? bound : union(bound, b)
+    if isempty(inner)
+        # A shared node under no binder reads the same names.
+        haskey(seen, e) && return
+        seen[e] = nothing
+    end
+    if e.join !== nothing
+        add(n) = (s = String(n); (s in inner || _tpl_is_sentinel(s)) || push!(out, s); nothing)
+        for clause in e.join
+            if clause isa _OverlapJoinSpec
+                foreach(add, clause.src_env)
+                foreach(add, clause.tgt_env)
+            else
+                for (l, r) in clause
+                    add(l)
+                    add(r)
+                end
+            end
+        end
+    end
+    foreach_child(c -> _tpl_free_join_names!(out, c, inner, seen), e)
     return
 end
 
@@ -977,8 +1048,9 @@ end
 
 `block` (a component's raw template registry) with every match-less body's
 free names made EXPLICIT parameters: a name a body reads from its caller (a
-variable leaf it does not bind and that is not one of its parameters, read
-directly or through a nested reference) is appended, sorted, to its `params`,
+variable leaf, or a `join` key column or overlap envelope factor, that it does
+not bind and that is not one of its parameters, read directly or through a
+nested reference) is appended, sorted, to its `params`,
 and every nested reference in a body binds its callee's added parameters to
 the same names (`_tpl_bind_explicit`). `added` maps each changed template to
 the parameters it gained, for the call sites (`_tpl_bind_explicit`).
@@ -1013,7 +1085,7 @@ function _tpl_explicit_free(block)
             _raw_haskey(block, c) && visit(c)
         end
         bound = _tpl_bind_explicit(typed, added)
-        free = sort!(collect(setdiff(_tpl_free_leaves(bound), td.params)))
+        free = sort!(collect(setdiff(union(_tpl_free_leaves(bound), _tpl_free_join_names(bound)), td.params)))
         if bound === typed && isempty(free)
             newdecl[name] = decl
             return

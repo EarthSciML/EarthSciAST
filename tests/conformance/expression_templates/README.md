@@ -448,6 +448,22 @@ first owner in document order, `Zulu.s`, and `Alpha` gets `Alpha.s`; `aa` is
 deep-equal everywhere and kept once. Golden: `flattened_registry.esm`
 (`Zulu.s`, `Alpha.s`, `aa`, `lib_a`, `lib_z`), written by Julia's `flatten`.
 
+### `flatten_closes_join_names/` (esm-spec §10.7; esm-libraries-spec §4.7.5 step 2)
+
+Closing a body covers the names its `join` clauses carry, not only its variable
+leaves: an `overlap` clause's `src_env` / `tgt_env` envelope factors and an `on`
+clause's key columns name component variables exactly as a leaf does (the names
+component namespacing scopes). Two components `Alpha` and `Beta` carry the same
+block: `bin` gates an overlap reduction on envelopes `bW`, `bS`, `bE`, `bN`
+that its expression never reads, and `matches` counts `on`-join matches of
+`want` and `tbl_year`, which appear only in the join. Those names become
+trailing parameters (`matches` gains `tbl_year`, `want`), so each component's
+reference binds its own (`Alpha.bW`, `Beta.bW`) and the identical blocks merge
+into one entry each. Goldens: `flattened_registry.esm` (written by Julia's
+`flatten`), and `flattened_expanded.esm`, the flattened system's equations
+after `expand_flattened_refs`, written before bodies were closed (when each
+body was scoped to its component); closing must not change it.
+
 ### `mount_registry_merge/` and `mount_shared_definition/` (esm-spec §9.6.4 rule 1)
 
 A mounted leaf (and an authored subsystem with its own block) keeps its

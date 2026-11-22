@@ -288,3 +288,16 @@ fn mount_host_rule_fires_in_the_mounted_content() {
     assert_eq!(n["Host.Sub.Deep.h"], -(2.0 * 0.125));
     assert_eq!(n["Host.Bare.g"], -27.0);
 }
+
+/// esm-spec §10.7: a body's `join` clauses name component variables it reads
+/// nowhere else (an overlap gate's envelope factors, an `on` clause's key
+/// columns); closing makes them parameters, as it does the body's variable
+/// leaves.
+#[test]
+fn flatten_closes_join_names() {
+    let c = "flatten_closes_join_names";
+    assert_eq!(
+        flattened_registry(c, "fixture.esm"),
+        read(c, "flattened_registry.esm")
+    );
+}

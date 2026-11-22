@@ -336,9 +336,10 @@ func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[st
 // ---------------------------------------------------------------------------
 
 // tplExplicitFree returns block with every match-less body's free names made
-// explicit parameters: a name a body reads from its caller (a variable leaf it
-// does not bind and that is not one of its parameters, read directly or
-// through a nested reference) is appended, sorted, to its `params`, and every
+// explicit parameters: a name a body reads from its caller (a variable leaf,
+// or a `join` key column or overlap envelope factor, that it does not bind and
+// that is not one of its parameters, read directly or through a nested
+// reference) is appended, sorted, to its `params`, and every
 // nested reference in a body binds its callee's added parameters to the same
 // names (tplBindExplicit). `added` maps each changed template to the
 // parameters it gained. Entries are visited in block order, callees first.
@@ -494,17 +495,57 @@ func tplBindExplicit(node any, added map[string][]string) (any, bool) {
 // tplExprChildKeys are the expression-bearing fields of a raw operator node
 // (the Julia OPEXPR_FIELD_TABLE rows of kind expr, expr_vec, expr_map and
 // ranges). Scalar fields (`wrt`, `dim`, `var`, `output_idx`, `name`, `fn`,
-// `value`, `units`, `join`, `regions`, `shape`, `attrs`, ...) carry no reads.
+// `value`, `units`, `join`, `regions`, `shape`, `attrs`, ...) are not
+// expression children; `join` names are read by tplJoinNames.
 var tplExprChildKeys = map[string]bool{
 	"args": true, "lower": true, "upper": true, "expr": true, "values": true,
 	"filter": true, "key": true, "bindings": true, "ranges": true,
 }
 
-// tplFreeLeaves adds to out the names a raw expression reads as variable
-// leaves and does not bind itself: a node's binders (`output_idx` strings,
-// `ranges` keys, the integral variable `var`) bind all of its children;
-// binding values of nested references are reads. Mirrors the Julia
-// `_tpl_free_leaves`.
+// tplJoinNames returns the plain-string names a raw node's `join` clauses
+// carry: each `on` clause's key columns and each `overlap` clause's
+// `src_env` / `tgt_env` envelope factors. They name variables exactly as a
+// leaf does (the names component namespacing scopes); a clause's `syms` are
+// binders, not reads. Mirrors the Julia `_tpl_free_join_names`.
+func tplJoinNames(n map[string]any) []string {
+	var out []string
+	strs := func(v any) {
+		if items, ok := v.([]any); ok {
+			for _, it := range items {
+				if s, ok := it.(string); ok {
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	clauses, ok := n["join"].([]any)
+	if !ok {
+		return nil
+	}
+	for _, c := range clauses {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if on, ok := cm["on"].([]any); ok {
+			for _, pair := range on {
+				strs(pair)
+			}
+		}
+		if ov, ok := cm["overlap"].(map[string]any); ok {
+			strs(ov["src_env"])
+			strs(ov["tgt_env"])
+		}
+	}
+	return out
+}
+
+// tplFreeLeaves adds to out the names a raw expression reads and does not
+// bind itself: its variable leaves, and the `join` key columns and overlap
+// envelope factors it names (tplJoinNames). A node's binders (`output_idx`
+// strings, `ranges` keys, the integral variable `var`) bind all of its
+// children and its own `join`; binding values of nested references are reads.
+// Mirrors the Julia `_tpl_free_leaves` and `_tpl_free_join_names`.
 func tplFreeLeaves(node any, bound map[string]bool, out map[string]bool) {
 	switch n := node.(type) {
 	case string:
@@ -528,6 +569,11 @@ func tplFreeLeaves(node any, bound map[string]bool, out map[string]bool) {
 			}
 			for _, b := range binders {
 				inner[b] = true
+			}
+		}
+		for _, j := range tplJoinNames(n) {
+			if !inner[j] && !strings.HasPrefix(j, "\x00") {
+				out[j] = true
 			}
 		}
 		for k, v := range n {

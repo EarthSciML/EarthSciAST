@@ -146,4 +146,13 @@ describe('mounted template registries (esm-spec §9.6.4 rule 1)', () => {
       JSON.parse(golden('mount_host_rule', 'expanded.esm')),
     )
   })
+
+  it('flatten_closes_join_names: join names are closed like variable leaves', () => {
+    // esm-spec §10.7: a body's `join` clauses name component variables it reads
+    // nowhere else (overlap envelope factors, `on` key columns); closing makes
+    // them parameters, as it does the body's variable leaves.
+    expect(flatRegistry('flatten_closes_join_names', 'fixture.esm')).toBe(
+      golden('flatten_closes_join_names', 'flattened_registry.esm'),
+    )
+  })
 })
