@@ -4,7 +4,8 @@
     python3 formal/scripts/gen-lib-templates.py            # write the Lean file
     python3 formal/scripts/gen-lib-templates.py --check    # fail if it is stale
 
-Reads the `expression_templates` of each library file in `TARGETS`
+Reads the `operators` of each library file in `TARGETS` (the block an earlier
+revision called `expression_templates`, still read as its alias, esm-spec §9.6.12)
 (`lib/interp.esm`, `lib/calendar.esm`, …) and writes its Lean file
 (`formal/Esm/Lib/Interp.lean`, …), one `Esm.Expr.Template` per template, its body
 transcribed node for node into `Esm.Expr.Ast` (formal/Esm/Expr/Core.lean). The
@@ -17,7 +18,7 @@ fails the Lean build.
 
 A node outside what `Esm.Expr.Ast` carries (an op field other than `op`,
 `args`, a `faq`'s `output_idx`/`reduce`/`ranges`/`filter`/`expr`, an
-`apply_expression_template`'s `name`/`bindings`, or a `const`'s `value` and
+`apply_operator`'s (or the old `apply_expression_template`'s) `name`/`bindings`, or a `const`'s `value` and
 `units`; `units` is dropped, as evaluation does not read it) is an error here rather than a silent drop, as is a missing field
 the transcription needs and a literal `-0.0`: `Ast.num` is an integer mantissa
 and a decimal exponent, which has no negative zero.
@@ -130,12 +131,12 @@ def ast(e, indent, path):
                                     for i, a in enumerate(e.get("args", []))) + "])",
         ]
         return "\n".join(lines)
-    if op == "apply_expression_template":
+    if op in ("apply_operator", "apply_expression_template"):
         extra = set(e) - {"op", "args", "name", "bindings"}
         if extra or e.get("args", []) != []:
-            raise Unsupported(f"{path}: apply_expression_template fields {sorted(extra)}")
+            raise Unsupported(f"{path}: {op} fields {sorted(extra)}")
         if not isinstance(e.get("name"), str) or not isinstance(e.get("bindings"), dict):
-            raise Unsupported(f"{path}: apply_expression_template needs a name and bindings")
+            raise Unsupported(f"{path}: {op} needs a name and bindings")
         binds = "Binds.nil"
         for k, v in reversed(list(e["bindings"].items())):
             binds = f"(Binds.cons {lean_str(k)} {ast(v, 0, f'{path}.bindings.{k}')} {binds})"
@@ -157,7 +158,7 @@ def generate(src, ns):
         "-- regenerate, and `--check` in the formal CI workflow keeps this file current.",
         "import Esm.Expr.Template",
         "",
-        "/-! The expression templates of `" + src + "` as `Esm.Expr.Template` values",
+        "/-! The operator definitions of `" + src + "` as `Esm.Expr.Template` values",
         "(esm-spec §9.6.1, §9.7.1), transcribed node for node. -/",
         "",
         f"namespace {ns}",
@@ -166,8 +167,9 @@ def generate(src, ns):
         "",
     ]
     names = []
-    for name, t in doc.get("expression_templates", {}).items():
-        where = f"expression_templates.{name}"
+    key = "operators" if "operators" in doc else "expression_templates"
+    for name, t in doc.get(key, {}).items():
+        where = f"{key}.{name}"
         if not isinstance(t, dict):
             raise Unsupported(f"{where}: not a template object")
         if "match" in t or "where" in t:
