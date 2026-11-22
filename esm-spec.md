@@ -1,6 +1,23 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 2.3.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.4.0**
+
+> **2.4.0: `grad`, `div` and `laplacian` are ordinary names.** The JSON form
+> does not change. The format no longer names `grad`, `div` and `laplacian` as
+> rewrite-target sugar with a defined meaning (§4.2): they are ordinary
+> open-tier operator names, exactly like any user op. A document using one
+> still loads, a rewrite rule may still match one, and one that reaches
+> evaluation unlowered is still rejected with `unlowered_operator`. What
+> changes is that no binding treats them specially any more: no binding
+> lowers `grad` itself (the Julia ModelingToolkit path used to turn it into a
+> `Differential`). A spatial derivative is written with spatial `D`.
+>
+> 2.4.0 also drops the `"pde"` system kind (§6.3.1): the derived kinds are
+> `"sde"`, `"nonlinear"` and `"ode"`, and a spatial derivative (spatial `D`
+> or any of the three names) no longer changes a model's kind. A model that
+> declares `system_kind: "pde"` still loads, with the warning
+> `deprecated_system_kind`; the value is ignored. See `MIGRATION.md`,
+> "esm 2.4.0". Every 2.3.0 document is a valid 2.4.0 document.
 
 > **Proposed for 2.4.0 (not additive: the behaviour differences are listed below).** The
 > version line above, and `esm-schema.json`, stay at 2.3.0 until the release that adopts
@@ -161,7 +178,7 @@ source document is a lossless spelling of it.
 
 ```json
 {
-  "esm": "2.3.0",
+  "esm": "2.4.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
@@ -741,8 +758,7 @@ Every `op` string belongs to one of **two tiers**:
   set is closed: adding one is a spec change, and each binding pins it as its evaluator's op
   registry.
 - **Rewrite-target (open).** Any other `op` identifier — a spatial `D` on a right-hand
-  side, the sugar ops `grad`/`div`/`laplacian`/`integral`, or a user op such as
-  `godunov_hamiltonian`. A rewrite-target op has **no** evaluator; it MUST be eliminated by
+  side, `integral`, or a user op such as `godunov_hamiltonian`. A rewrite-target op has **no** evaluator; it MUST be eliminated by
   a rewrite rule (§9.6) before evaluation. Loading is permissive — a file MAY load with
   rewrite-target ops still present (e.g. a coupling or scoping example that never simulates)
   — but one that reaches evaluation/compilation without having been lowered is rejected with
@@ -949,23 +965,29 @@ A `D` in a **`match` pattern** is subject to exactly the same rule: a pattern
 `{"op":"D","args":[...],"wrt":"t"}` is a structural time derivative and must be unary, while a
 pattern with a spatial (or parameter-valued) `wrt` may carry trailing wildcards.
 
-`grad`, `div`, `laplacian`, and `integral` are **not** built-in operators — they are optional
-**rewrite-target sugar** (open tier, §4.2). `grad(f, dim:x)` is just `D(f, wrt:x)`;
-`div`/`laplacian` are sums/compositions of `D` (`div(F)=ΣᵢD(Fᵢ,xᵢ)`,
-`laplacian(u)=ΣᵢD(D(u,xᵢ),xᵢ)`); `integral` is a PIDE term. This format ships **no** rewrite
-rules for them — the discretization std-lib lives in
-[EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations). See §9.6.8.
+**Spatial operators are written with `D`.** The format defines no gradient, divergence or
+Laplacian operator. Names such as `grad`, `div` and `laplacian` are ordinary open-tier
+operator names with no meaning of their own (until esm 2.4.0 the format named them as sugar
+for sums of `D`; it no longer does). A gradient component is `D(f, wrt: x)`; a Cartesian divergence is Σᵢ
+`D(Fᵢ, wrt: xᵢ)`; a Laplacian is Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`, which the bounded fixpoint
+(§9.6.3) lowers inner `D` first. A scheme that is not a sum of per-axis derivatives — a
+finite-volume divergence on an unstructured mesh, a metric Laplacian discretized as one
+stencil — is a user op (any non-core identifier, `div` included) lowered by a rewrite rule. `integral` is
+not a built-in operator either: it is an open-tier rewrite target for a PIDE term. This
+format ships **no** rewrite rules for spatial `D` or `integral` — the discretization std-lib
+lives in [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations).
+See §9.6.8.
 
-As open-tier rewrite targets these sugar ops (and every user rewrite-target op) carry **no**
-privilege of any kind over the enclosing evaluator, checker, or flattener. Specifically: their
-result dimension is UNDETERMINABLE until they are lowered — they have **no** dimensional rule
-(§4.8.3 "any other op"), so a checker MUST report their dimension as `unknown` and skip the
-enclosing check (§4.8.4), never inventing a coordinate-divided dimension; their `dim`/`var`
-fields are ordinary axis-naming scalar fields resolved **structurally by field, not by op name**
-(§4.9.1); and system dimensionality / independent variables are derived from variable shapes over
-`index_sets` (§11.2), never from the presence of these op names. A binding MUST NOT single these
-names out — `grad`/`div`/`laplacian`/`curl`/`integral` are matched, lowered, and checked by the
-same machinery as any other rewrite-target op.
+`integral` and every user rewrite-target op carry **no** privilege of any kind over the
+enclosing evaluator, checker, or flattener. Specifically: their result dimension is
+UNDETERMINABLE until they are lowered — they have **no** dimensional rule (§4.8.3 "any other
+op"), so a checker MUST report their dimension as `unknown` and skip the enclosing check
+(§4.8.4), never inventing a coordinate-divided dimension; their `dim`/`var` fields are
+ordinary axis-naming scalar fields resolved **structurally by field, not by op name**
+(§4.9.1); and system dimensionality / independent variables are derived from variable shapes
+over `index_sets` (§11.2), never from the presence of an op name. A binding MUST NOT single
+these names out — `integral`, `grad`, `div`, `laplacian`, `curl` or any other open-tier name is matched, lowered, and
+checked by the same machinery as any other rewrite-target op.
 
 The `integral` op encodes a spatial partial integral for use in partial integro-differential equations (PIDEs).
 `args[0]` is the integrand expression; `var` names the spatial dimension variable being integrated over;
@@ -3055,7 +3077,7 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 | `continuous_events` | | Continuous events (see Section 5.2) |
 | `initialization_equations` | | Equations that hold only at t=0, solved before time-stepping begins. Typical uses: aerosol equilibrium / plume-rise style models (`system_kind='nonlinear'`) that need extra constraints for initialization, and ODE models whose initial state is determined by solving an auxiliary system. |
 | `guesses` | | Initial-guess seeds for nonlinear solvers during initialization, keyed by variable name. Values are `Expression` graphs (numbers, strings, or nodes). |
-| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — at least one `wiener`-updated parameter), `"pde"` (spatial domain + differential operators). Each binding's MTK integration uses the **kind** to select between `System`, `NonlinearSystem`, `SDESystem`, and `PDESystem` constructors — the kind **derived** from the equations and parameter updates by §6.3.1, not this field. From 1.0.0 the field is a *declaration* of something the document already determines: a binding uses the derivation when the field is absent and reports `system_kind_mismatch` when a present field contradicts it (§6.3.1), so **declaring it never changes how a document runs**. Writing `"nonlinear"` on a model that already has no time-derivative equation is therefore correctly a no-op, and writing it on one that does is an error rather than a request. A `"nonlinear"` model has NO time-derivative equations at all; its equation balance is unknowns-vs-equations and every algebraic LHS counts (§4.9.4). |
+| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — at least one `wiener`-updated parameter). `"pde"` is **deprecated** (esm 2.4.0): a document declaring it still loads, with the warning `deprecated_system_kind`, and the value is ignored (the model is its derived kind, and no `system_kind_mismatch` is reported for it). Each binding's MTK integration uses the **kind** to select between `System`, `NonlinearSystem` and `SDESystem` constructors — the kind **derived** from the equations and parameter updates by §6.3.1, not this field. From 1.0.0 the field is a *declaration* of something the document already determines: a binding uses the derivation when the field is absent and reports `system_kind_mismatch` when a present field contradicts it (§6.3.1), so **declaring it never changes how a document runs**. Writing `"nonlinear"` on a model that already has no time-derivative equation is therefore correctly a no-op, and writing it on one that does is an error rather than a request. A `"nonlinear"` model has NO time-derivative equations at all; its equation balance is unknowns-vs-equations and every algebraic LHS counts (§4.9.4). |
 | `subsystems` | | Named child models (subsystems), keyed by unique identifier. Each subsystem can be defined inline or included by reference (see Section 4.7). Enables hierarchical composition — variables in subsystems are referenced via dot notation (see Section 4.6). |
 | `tolerance` | | Model-level default numerical tolerance used by tests (see Section 6.6). Object with optional `abs` and/or `rel` fields. |
 | `tests` | | Inline validation tests that exercise this model in isolation (see Section 6.6). |
@@ -3251,40 +3273,30 @@ materialized by their own engine and are outside this rule. CONFORMANCE_SPEC.md 
 | `constant_parameters(model)` | neither — plain constants |
 
 **System kind.** `system_kind(model)` derives what the `system_kind` field
-declares, testing four conditions **in this order** and taking the first that
+declares, testing three conditions **in this order** and taking the first that
 holds:
 
 | # | Condition | Result |
 |---|---|---|
 | 1 | any parameter in `brownian_parameters` | `"sde"` |
-| 2 | any equation contains a **spatial derivative** | `"pde"` |
-| 3 | no time-derivative equation at all | `"nonlinear"` |
-| 4 | otherwise | `"ode"` |
+| 2 | no time-derivative equation at all | `"nonlinear"` |
+| 3 | otherwise | `"ode"` |
 
-A **spatial derivative** is a `D` node whose `wrt` is present and is not `"t"`,
-or one of the `grad` / `div` / `laplacian` sugar ops (§4.2). It is detected
-anywhere in an equation's LHS or RHS, and the walk descends every Expression
-child, not just `args` (§4.9.5).
-
-Two points about this rule are load-bearing, because both were previously left
-to each binding to guess:
-
-- **It is stated in terms of the equations, not a domain block.** Earlier drafts
-  said "a spatial domain plus differential operators", but v0.8.0 removed
-  `Domain.spatial`, and since then `domain` has carried only
-  `independent_variable`, `temporal`, `element_type`, and `array_type` — nothing
-  spatial. There is no spatial domain to test, so a binding written to that
-  wording could not implement the `"pde"` branch at all. The differential
-  operators in the equations are the whole signal.
-- **The order puts `"pde"` before `"nonlinear"`.** A steady-state PDE
-  (`laplacian(u) ~ f`, no ∂/∂t) has no time-derivative equation and would
-  otherwise fall through to `"nonlinear"`. It is a PDE, and MTK's `PDESystem`
-  is what it maps to. `"sde"` still wins over `"pde"`: there is no
-  `SPDESystem` constructor to select, so a model that is both is assembled as
-  an SDE.
+Spatial derivatives play no part: a model is spatial through its variables'
+shapes (§11.2), and a spatial `D` is lowered by a discretization rule before
+anything is assembled (§9.6.8). Until esm 2.4.0 a fourth kind, `"pde"`, was
+derived from a spatial derivative in the equations; it is gone, because its only
+consumer was a `PDESystem` constructor choice that the discretize-then-integrate
+pipeline does not need.
 
 A binding uses the derivation when the field is absent, and reports
-`system_kind_mismatch` when a present field contradicts it.
+`system_kind_mismatch` when a present field contradicts it. **A declared `"pde"`
+is deprecated and ignored (normative):** a loader MUST NOT refuse it; it warns
+once per document with `deprecated_system_kind`, naming every such model by the
+JSON pointer of its `system_kind` field; the declared kind then reads as absent
+(the model is its derived kind) and `system_kind_mismatch` is never reported for
+it. The field is kept as written, so `emit` writes it back unchanged. Fixture:
+`tests/conformance/classification/fixtures/system_kind_pde.esm`.
 
 These functions are the *only* sanctioned way to ask these questions. A site
 that used to branch on `variable.type == "state"` calls `is_ode_state`; one that
@@ -3768,7 +3780,7 @@ Worked example — 1-D heat equation `u_t = α u_xx` on `x ∈ [0, 1]` with `u(x
 
 #### 6.6.6 Running a discretization-agnostic PDE component (test injection)
 
-A reusable PDE leaf is written against the operator sugar (`grad`, `div`, `laplacian`, spatial `D`) and deliberately imports **no** discretization, so it can be composed under different schemes (§9.7.10). Such a component is un-runnable in isolation — its rewrite-targets have no `match` rule to lower them (`unlowered_operator`, §9.6.3 constraint 6) — so its inline tests could not run against any concrete scheme. A `Test` therefore MAY carry an `expression_template_imports` array (§9.7.2 shape) naming the discretization library to lower the enclosing component under, **for that test's run only**:
+A reusable PDE leaf is written against spatial `D` (and user rewrite-target ops) and deliberately imports **no** discretization, so it can be composed under different schemes (§9.7.10). Such a component is un-runnable in isolation — its rewrite-targets have no `match` rule to lower them (`unlowered_operator`, §9.6.3 constraint 6) — so its inline tests could not run against any concrete scheme. A `Test` therefore MAY carry an `expression_template_imports` array (§9.7.2 shape) naming the discretization library to lower the enclosing component under, **for that test's run only**:
 
 ```json
 {
@@ -5097,9 +5109,9 @@ An `expression_templates` entry is a **rewrite rule**: a set of metavariable `pa
 |---|---|---|
 | **Variable substitution** | a bare metavariable | binding a name → AST |
 | **Named template expansion** | *absent* | an explicit `apply_expression_template` node |
-| **Operator lowering** (e.g. `grad`, `div`, `laplacian`) | an operator pattern like `{op:"grad", args:["f"], dim:"d"}` | auto-applied wherever the pattern matches |
+| **Operator lowering** (e.g. a spatial `D`, `integral`, a user op) | an operator pattern like `{op:"D", args:["f"], wrt:"x"}` | auto-applied wherever the pattern matches |
 
-The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary rewrite rule** that lowers a rewrite-target op (a spatial `D` on a right-hand side, or the `grad`/`div`/`laplacian` sugar, §4.2) into a `faq` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
+The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary rewrite rule** that lowers a rewrite-target op (a spatial `D` on a right-hand side, `integral`, or a user op, §4.2) into a `faq` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
 
 **No step of this mechanism inlines a body.** A firing rule replaces the matched node with a *reference* to the rule, bound to what the match captured (§9.6.3 constraint 7); rules apply inside template bodies once per template instance, not by expanding references into the tree (§9.6.4 rule 3). A reference denotes its expansion (§9.6.4 rule 2), so what a document means is unchanged by this; what changes is that one discretization rule applied at many sites is one body, shared, in the loaded and the emitted document.
 
@@ -5732,17 +5744,7 @@ This is still "no boundary-condition declaration anywhere in the format": the cl
 
 Both selectors filter **before** the §9.6.3 priority/declaration-order selection, and both compose with the `unlowered_operator` gate unchanged: if the only candidate rule for a spatial `D`/`div` is constraint-excluded (or ground-mismatched), the node is simply not rewritten, the fixpoint converges with the rewrite-target intact, and the pre-evaluation gate rejects it exactly as if no rule had been imported at all. An unsatisfied constraint is never itself an error.
 
-**`grad`/`div`/`laplacian` are not privileged** — they are not evaluable-core ops and this format ships no rules for them. They exist only as *optional author sugar*, definable by a one-line rewrite rule, e.g.:
-
-```json
-"grad_is_Dx": {
-  "params": ["f"],
-  "match": { "op": "grad", "args": ["f"], "dim": "x" },
-  "body":  { "op": "D",    "args": ["f"], "wrt": "x" }
-}
-```
-
-after which the ordinary `D`-discretization rules apply. `div`/`laplacian` are sugar for sums/compositions of `D`; the bounded fixpoint (§9.6.3) lowers the resulting nested `D`s on subsequent passes. A rule author MAY instead match `laplacian` directly and emit a one-shot 5-point stencil — the open namespace (§4.2) permits either.
+**Gradient, divergence and Laplacian are written with `D`.** The format defines no gradient, divergence or Laplacian operator (§4.2); `grad`, `div` and `laplacian` are ordinary user-op names. A gradient component is `D(f, wrt: x)`, a Cartesian divergence Σᵢ `D(Fᵢ, wrt: xᵢ)`, and a Laplacian Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`; the ordinary `D`-discretization rules apply to each term, and the bounded fixpoint (§9.6.3) lowers nested `D`s on subsequent passes. A rule author who wants a one-shot multi-axis stencil (a 5-point Laplacian, an unstructured-mesh divergence) declares a user op for it (any name, `laplacian` or `div` included) and matches that op — the open namespace (§4.2) permits it, and the user op carries no privilege.
 
 **Determinism.** Lowering is the outermost-first, priority-ordered, bounded-fixpoint rewrite of §9.6.3. Two bindings lowering the same file MUST produce byte-identical post-lowering documents — the references firings wrote, the rewritten template bodies and the names of their variants (§9.6.3 constraint 7, §9.6.4 rule 3) — and therefore byte-identical expansions (or the same non-convergence / `unlowered_operator` rejection).
 
@@ -6175,7 +6177,7 @@ The coupling section defines how models and reaction systems connect to form a `
 }
 ```
 
-Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier drafts expressed as `operator_apply` coupling entries are now expressed via `grad`/`div`/`laplacian` PDE operators in the model equations, lowered by discretization rewrite rules (§9.6.8).
+Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier drafts expressed as `operator_apply` coupling entries are now expressed as spatial `D` terms (or user rewrite-target ops) in the model equations, lowered by discretization rewrite rules (§9.6.8).
 
 ### 10.1 Coupling Types
 
@@ -6356,7 +6358,7 @@ The last dot-separated segment is always the variable name; all preceding segmen
 
 - **Graph construction** — the expression graph (Section 4.8.2 of the library spec) operates on the flattened system to produce cross-system dependency edges.
 - **Coupled system validation** — checking that all coupling references resolve, no variables are orphaned, and equation–unknown balance holds across the full system.
-- **Simulation** — Julia libraries might convert the flattened system to a single MTK `ODESystem` (for 0D/ODE-only systems) or `PDESystem` (for systems with spatial derivatives), using MTK's native namespace separator (`₊`) in place of dots.
+- **Simulation** — Julia libraries might convert the flattened system to a single MTK `ODESystem` (after any spatial derivatives have been discretized), using MTK's native namespace separator (`₊`) in place of dots.
 - **Export and display** — pretty-printing the full coupled system as a single set of equations.
 
 **Template registries flatten with their components** (from `esm: 0.9.0`, §9.6.4 rule 7). A carried template body's free variable references (names it reads that are neither its `params` nor loop symbols it binds) are read at each reference's site, in the scope of the (sub)system that owns the reference (§9.6.4 rules 1–2), and one definition may serve references in several scopes — a leaf mounted twice, or a component's template referenced from one of its subsystems. Flatten therefore **closes** every carried body before the merge: its free names become trailing `params`, sorted by UTF-8 bytes, a nested reference in a body binding its callee's added parameters to the same names; and every surviving reference binds each added parameter to its own name, which the variable-renaming map flatten applies to the reference's site then scopes with the rest of the site's expression (template `params` shadow, exactly as in §9.6.1). A body `k * x` with `params: ["x"]`, referenced from `Host.Sub1` and from `Host.Sub2`, flattens to ONE entry with `params: ["x", "k"]`, bound `k: "Host.Sub1.k"` at the first site and `k: "Host.Sub2.k"` at the second. Component registries then merge into the flattened document: deep-equal same-name entries dedupe at first occurrence — the common case, two components importing one stencil; on a non-deep-equal same-name collision each distinct definition is renamed deterministically to `<ComponentPath>.<name>` after the first owner, in document order, that carries it (owners whose entries are deep-equal once their own nested references are renamed share that one entry), rewriting every owner's references in lockstep. **Collisions propagate along the reference DAG:** a declaration whose body references a colliding name is itself treated as colliding, in every component that carries it, and is renamed as above too — otherwise a byte-identical wrapper over per-component leaves would dedupe under its bare name and its single surviving body would reference a name the merged registry no longer holds. Equivalently: a name that survives under its bare spelling never reaches a renamed one. The rename is total and deterministic; there is no new diagnostic. The flattened representation carries the merged registry as a first-class field, and downstream consumers (graph construction, simulation backends, emit) resolve surviving references against it.
@@ -6830,7 +6832,7 @@ Pinned by `tests/conformance/ic_at_start/` (CONFORMANCE_SPEC §5.56).
 
 ### 11.5 Boundary conditions
 
-Boundary conditions are **not** a declarable construct — there is no `boundary_conditions` field and no boundary-condition op. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so the boundary condition lives **inside the discretization rewrite rule** that lowers `grad`/`div`/`laplacian` to a `faq` + `makearray` stencil: the interior region is the stencil, and the boundary-face `makearray` regions encode the BC (Dirichlet → fixed value; Neumann/zero-gradient → one-sided difference; Robin → the solved boundary expression; a seam shared with another variable → an `index` into that variable; periodic → the gather's periodic policy, no override). See §9.6.8. A boundary condition therefore cannot be specified anywhere outside its discretization rule.
+Boundary conditions are **not** a declarable construct — there is no `boundary_conditions` field and no boundary-condition op. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so the boundary condition lives **inside the discretization rewrite rule** that lowers a spatial `D` (or a user op) to a `faq` + `makearray` stencil: the interior region is the stencil, and the boundary-face `makearray` regions encode the BC (Dirichlet → fixed value; Neumann/zero-gradient → one-sided difference; Robin → the solved boundary expression; a seam shared with another variable → an `index` into that variable; periodic → the gather's periodic policy, no override). See §9.6.8. A boundary condition therefore cannot be specified anywhere outside its discretization rule.
 
 **BCs from data.** The boundary-face value may be an `index` into a **data-fed parameter** (one whose `update` draws from a `data_sources` entry) exactly as it may index any other variable — so a Dirichlet or seam boundary value can be supplied from data (`index(O3_boundary, …)` in the boundary region). This is the same index-into-another-variable mechanism; it needs no special construct.
 
@@ -7036,7 +7038,7 @@ and **update handlers** (§5.5), which run control logic at update time. (A sour
 is pure I/O — it does not regrid; transferring its fields onto a model's target
 grid is a model concern, §8.) The `.esm` file declares *what* they provide and
 *what* they need, but delegates *how* to the runtime. Everything else is math in
-the file. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed via `grad`/`div`/`laplacian` PDE operators in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are expression templates (§9.6), most from the standard library (§9.7.1), whose bodies are trees of §4.2 operators.
+the file. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed as spatial `D` terms (or user rewrite-target ops) in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are expression templates (§9.6), most from the standard library (§9.7.1), whose bodies are trees of §4.2 operators.
 
 ### Expression AST over string math
 
@@ -7068,7 +7070,7 @@ Many physical parameterizations are algebraic or ODE systems with no intrinsic s
 
 ### Coupled systems flatten to a single equation system
 
-The composition of multiple models and reaction systems resolves to a **single flat equation system** with dot-namespaced variables (`Atmosphere.Chemistry.O3`). This is not merely a convenience — it is the canonical intermediate representation that all downstream operations (simulation, validation, graph construction) consume. Dot-namespacing preserves provenance (you can always trace a variable back to its originating component) while producing a system that maps directly to a single solver object (MTK `ODESystem` or `PDESystem` in Julia, a single ODE integrator call in Python). The separation between modular component definitions (in the `.esm` file) and the unified flat system (produced by flattening) mirrors the distinction between source code and compiled output: the file is for humans and version control, the flattened system is for machines and solvers.
+The composition of multiple models and reaction systems resolves to a **single flat equation system** with dot-namespaced variables (`Atmosphere.Chemistry.O3`). This is not merely a convenience — it is the canonical intermediate representation that all downstream operations (simulation, validation, graph construction) consume. Dot-namespacing preserves provenance (you can always trace a variable back to its originating component) while producing a system that maps directly to a single solver object (an MTK `ODESystem` in Julia, a single ODE integrator call in Python). The separation between modular component definitions (in the `.esm` file) and the unified flat system (produced by flattening) mirrors the distinction between source code and compiled output: the file is for humans and version control, the flattened system is for machines and solvers.
 
 ---
 

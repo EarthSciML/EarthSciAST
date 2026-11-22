@@ -334,8 +334,8 @@ func TestApplyDAEContract_DomainIndepVar(t *testing.T) {
 		Domain:   &Domain{IndependentVariable: &iv},
 	}
 	got := file.Models["M"]
-	if k := SystemKind(&got); k != SystemKindPDE {
-		t.Errorf("SystemKind = %q, want %q: a `wrt` other than the literal `t` is spatial", k, SystemKindPDE)
+	if k := SystemKind(&got); k != SystemKindNonlinear {
+		t.Errorf("SystemKind = %q, want %q: a `wrt` other than the literal `t` is spatial, so the model has no time derivative", k, SystemKindNonlinear)
 	}
 	if states := ODEStates(&got); len(states) != 0 {
 		t.Errorf("ODEStates = %v, want none: a spatial derivative names no ODE state", states)
@@ -349,6 +349,6 @@ func TestApplyDAEContract_DomainIndepVar(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if info.AlgebraicEquationCount != 0 || info.PerModel["M"] != 0 {
-		t.Errorf("a `pde` model is outside the DAE contract, got %+v", info)
+		t.Errorf("a `nonlinear` model is outside the DAE contract, got %+v", info)
 	}
 }

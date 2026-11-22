@@ -69,7 +69,7 @@ parameter_names(model::Model)::Vector{String} = parameters(model)
 # | `D(u, t)`, `D(u[i])`, `faq{expr: D(index(u,i))}` | `(:derivative, "u")` |
 # | `"y"`, `index(y,i)`, `faq{expr: index(y,i)}` | `(:definition, "y")` |
 # | `ic(u)` | `(:none, "")` — an initial condition defines no dynamics |
-# | `H*H*SO4`, `laplacian(phi)`, anything else | `(:implicit, "")` |
+# | `H*H*SO4`, `D(D(phi, x), x)`, anything else | `(:implicit, "")` |
 
 """Strip the array-addressing wrappers (`index` / `faq`) and the
 vectorising `faq` from an LHS, returning the node they address."""
@@ -92,14 +92,9 @@ _is_time_derivative(e::ASTExpr)::Bool =
     e isa OpExpr && e.op == "D" && (e.wrt === nothing || e.wrt == "t")
 
 """True iff `e` is a SPATIAL derivative — a `D` whose `wrt` is present and is
-not `"t"`, or one of the `grad` / `div` / `laplacian` sugar ops (esm-spec
-§6.3.1). Both spellings count: they are open-tier rewrite targets, so neither
-is canonical."""
+not `"t"` (esm-spec §6.3.1)."""
 _is_spatial_derivative(e::ASTExpr)::Bool =
-    e isa OpExpr && (
-    (e.op == "D" && e.wrt !== nothing && e.wrt != "t") ||
-        e.op == "grad" || e.op == "div" || e.op == "laplacian"
-)
+    e isa OpExpr && e.op == "D" && e.wrt !== nothing && e.wrt != "t"
 
 """
     _LhsShape
@@ -398,8 +393,7 @@ _equation_has(pred, eq::Equation)::Bool =
     has_spatial_derivative(model::Model) -> Bool
 
 True iff some equation of `model` contains a spatial derivative anywhere in its
-LHS or RHS — a `D` whose `wrt` is present and is not `"t"`, or a `grad` / `div`
-/ `laplacian` sugar op (esm-spec §6.3.1).
+LHS or RHS — a `D` whose `wrt` is present and is not `"t"` (esm-spec §6.3.1).
 """
 has_spatial_derivative(model::Model)::Bool =
     any(eq -> _equation_has(_is_spatial_derivative, eq), model.equations)
@@ -416,20 +410,17 @@ has_time_derivative(model::Model)::Bool =
 """
     system_kind(model::Model) -> String
 
-Derive what the `system_kind` field declares (esm-spec §6.3.1). Four conditions
-tested **in this order**, first match winning:
+Derive what the `system_kind` field declares (esm-spec §6.3.1). Three
+conditions tested **in this order**, first match winning:
 
 | # | Condition | Result |
 |---|---|---|
 | 1 | any parameter in [`brownian_parameters`](@ref) | `"sde"` |
-| 2 | any equation contains a spatial derivative | `"pde"` |
-| 3 | no time-derivative equation at all | `"nonlinear"` |
-| 4 | otherwise | `"ode"` |
+| 2 | no time-derivative equation at all | `"nonlinear"` |
+| 3 | otherwise | `"ode"` |
 
-Both orderings are load-bearing. `"pde"` precedes `"nonlinear"` so a
-steady-state PDE (`laplacian(phi) ~ f`, no ∂/∂t) is a PDE rather than falling
-through to `"nonlinear"`. `"sde"` precedes `"pde"` because there is no
-`SPDESystem` constructor to select, so a model that is both assembles as an SDE.
+There is no `"pde"` kind (removed at esm 2.4.0): a spatial derivative does not
+change the derived kind.
 
 The rule is stated over the EQUATIONS and not over a `domain` block: `domain`
 says nothing about space, so a domain-based test is not implementable.
@@ -441,7 +432,6 @@ present field contradicts it.
 """
 function system_kind(model::Model)::String
     isempty(brownian_parameters(model)) || return "sde"
-    has_spatial_derivative(model) && return "pde"
     has_time_derivative(model) || return "nonlinear"
     return "ode"
 end
@@ -450,7 +440,9 @@ end
     declared_system_kind(model::Model) -> Union{String,Nothing}
 
 The `system_kind` the model DECLARES, verbatim, or `nothing` when the field is
-absent. No derivation happens here: this is the raw field read, the question
+absent. A declared `"pde"` (deprecated at esm 2.4.0 and ignored, with the
+load-time warning `deprecated_system_kind`) counts as absent, so it is
+`nothing` too. No derivation happens here: this is the raw field read, the question
 `validate` asks when it needs to know whether the author committed to a kind at
 all.
 
@@ -458,7 +450,8 @@ Contrast [`system_kind`](@ref), which ignores the field and derives the kind
 from the equations and parameters, and [`effective_system_kind`](@ref), which
 composes the two.
 """
-declared_system_kind(model::Model)::Union{String, Nothing} = model.system_kind
+declared_system_kind(model::Model)::Union{String, Nothing} =
+    model.system_kind == "pde" ? nothing : model.system_kind
 
 """
     effective_system_kind(model::Model) -> String

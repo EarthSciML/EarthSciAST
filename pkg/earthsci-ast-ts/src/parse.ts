@@ -1291,6 +1291,39 @@ export function deprecatedOpWarning(sites: readonly string[]): string {
   )
 }
 
+/**
+ * JSON pointers (`/models/<name>/system_kind`, and `.../subsystems/<name>/...`
+ * for a nested model) of every model in `doc` that declares the deprecated
+ * `"system_kind": "pde"` (esm 2.4.0), in document order. The field is left as
+ * written; classification reads it as absent.
+ */
+export function findDeprecatedSystemKinds(doc: unknown): string[] {
+  const sites: string[] = []
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+  const visit = (model: unknown, at: string): void => {
+    if (!isObj(model)) return
+    if (model.system_kind === 'pde') sites.push(`${at}/system_kind`)
+    const subs = model.subsystems
+    if (isObj(subs)) {
+      for (const [k, sub] of Object.entries(subs)) visit(sub, `${at}/subsystems/${pointerToken(k)}`)
+    }
+  }
+  if (isObj(doc) && isObj(doc.models)) {
+    for (const [k, model] of Object.entries(doc.models)) visit(model, `/models/${pointerToken(k)}`)
+  }
+  return sites
+}
+
+/** The load-time `deprecated_system_kind` warning naming the models at `sites`. */
+export function deprecatedSystemKindWarning(sites: readonly string[]): string {
+  return (
+    `${ERROR_CODES.DEPRECATED_SYSTEM_KIND}: the \`system_kind\` value "pde" is deprecated ` +
+    '(esm 2.4.0) and ignored; the model is treated as its derived kind. ' +
+    `Declared at: ${sites.join(', ')}.`
+  )
+}
+
 /** Options for {@link prepareDocumentOps}. */
 export interface PrepareDocumentOpsOptions {
   /**
@@ -1320,6 +1353,11 @@ export interface PrepareDocumentOpsOptions {
  * 3. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
  *    (esm-spec §2.2.4).
  *
+ * Between steps 2 and 3, a model declaring the deprecated `"system_kind":
+ * "pde"` (esm 2.4.0) draws ONE `deprecated_system_kind` warning for the
+ * document, naming every such model ({@link findDeprecatedSystemKinds}); the
+ * field is kept as written.
+ *
  * The document is modified only by step 2.
  */
 export function prepareDocumentOps(doc: unknown, options?: PrepareDocumentOpsOptions): void {
@@ -1328,6 +1366,10 @@ export function prepareDocumentOps(doc: unknown, options?: PrepareDocumentOpsOpt
   const deprecated = rewriteDeprecatedOps(doc)
   if (deprecated.length > 0 && options?.warn !== false) {
     console.warn(deprecatedOpWarning(deprecated))
+  }
+  const pdeKinds = findDeprecatedSystemKinds(doc)
+  if (pdeKinds.length > 0 && options?.warn !== false) {
+    console.warn(deprecatedSystemKindWarning(pdeKinds))
   }
   const faqAt = findOp(doc, 'faq')
   if (faqAt !== null && declaredBelowV11(doc)) {

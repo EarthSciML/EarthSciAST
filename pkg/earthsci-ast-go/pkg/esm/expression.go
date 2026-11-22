@@ -9,8 +9,8 @@ import (
 
 // EvaluationError is raised by the scalar evaluator when an expression cannot be
 // evaluated. The Code field carries a stable diagnostic code — in particular
-// `unlowered_operator` when a rewrite-target op (a spatial/RHS `D`, or
-// grad/div/laplacian/integral sugar) reaches evaluation without having been
+// `unlowered_operator` when a rewrite-target op (a spatial/RHS `D`, the
+// `integral` sugar, or a user op) reaches evaluation without having been
 // lowered to a stencil by a rewrite rule (esm-spec §4.2 / §9.6.8). The gate fires
 // before evaluation, not at load: loading such a file stays permissive.
 type EvaluationError struct {
@@ -309,7 +309,7 @@ func logApply(a []float64) (float64, error) {
 // arithOpTable is the single source of truth for the scalar-evaluable /
 // foldable operator set (esm-spec §4.2) AND for the arity of every SCALAR
 // operator the format admits. Non-evaluable ops handled before argument
-// evaluation (const/enum/D/grad/div/laplacian) are intentionally absent.
+// evaluation (const/enum/D) are intentionally absent.
 //
 // The structural validator reads the bounds here through scalarOpArity
 // (op_registry.go) to decide whether a `broadcast` node's `fn`/`args` pair is
@@ -789,13 +789,11 @@ func unloweredDerivativeError(node ExprNode) error {
 //
 //   - a CLOSED-core array/query op (faq, makearray, index, …) has real
 //     semantics but no scalar evaluator in this binding (`unevaluable_operator`);
-//   - ANY other identifier is OPEN-tier — a rewrite target (the spatial-calculus
-//     sugar grad/div/laplacian, the `integral` sugar, a user op such as
-//     `godunov_hamiltonian`) that a rewrite rule was supposed to eliminate
-//     before evaluation. It gets the spec-pinned, cross-binding
-//     `unlowered_operator` code — the same one the dedicated `D` arm emits above,
-//     which grad/div/laplacian now reach generically — instead of an untyped
-//     "unknown operation".
+//   - ANY other identifier is OPEN-tier — a rewrite target (the `integral`
+//     sugar, a user op such as `godunov_hamiltonian`) that a rewrite rule was
+//     supposed to eliminate before evaluation. It gets the spec-pinned,
+//     cross-binding `unlowered_operator` code — the same one the dedicated `D`
+//     arm emits above — instead of an untyped "unknown operation".
 func unevaluableOpError(node ExprNode) error {
 	if _, closed := closedNonScalarOps[node.Op]; closed {
 		return &EvaluationError{

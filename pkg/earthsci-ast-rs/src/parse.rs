@@ -1873,8 +1873,47 @@ pub(crate) fn prepare_document_ops_scanned(
     if let Some(warning) = deprecated_op_warning(&scan.deprecated) {
         eprintln!("warning: {warning}");
     }
+    // 4. A model declaring `"system_kind": "pde"` (deprecated at esm 2.4.0):
+    //    ONE warning per document naming every such model; the field is kept.
+    if let Some(warning) = deprecated_system_kind_warning(value) {
+        eprintln!("warning: {warning}");
+    }
     Ok(facts)
 }
+
+/// The `deprecated_system_kind` load warning for one document: every model
+/// that declares `"system_kind": "pde"`, by JSON pointer, or `None` when no
+/// model does. The value is ignored for classification (the model takes its
+/// derived kind) and is kept as written.
+pub(crate) fn deprecated_system_kind_warning(value: &serde_json::Value) -> Option<String> {
+    let sites: Vec<String> = value
+        .get("models")
+        .and_then(|m| m.as_object())
+        .into_iter()
+        .flatten()
+        .filter(|(_, model)| {
+            model.get("system_kind").and_then(|k| k.as_str()) == Some(DEPRECATED_SYSTEM_KIND)
+        })
+        .map(|(name, _)| {
+            format!(
+                "/models/{}/system_kind",
+                name.replace('~', "~0").replace('/', "~1")
+            )
+        })
+        .collect();
+    (!sites.is_empty()).then(|| {
+        format!(
+            "deprecated_system_kind: the `system_kind` value \"pde\" is deprecated (esm \
+             2.4.0) and ignored; the model is treated as its derived kind (esm-spec §6.3.1). \
+             Declared at: {}.",
+            sites.join(", ")
+        )
+    })
+}
+
+/// The `system_kind` value esm 2.4.0 deprecated: there is no `pde` kind any
+/// more, so a declared `"pde"` counts as absent.
+pub(crate) const DEPRECATED_SYSTEM_KIND: &str = "pde";
 
 /// The expression ops esm 2.0.0 removed (esm-spec, "2.0.0 is a break"):
 /// `aggregate`, the pre-1.1.0 spelling of `faq`, and the external functions,
@@ -2212,6 +2251,39 @@ mod tests {
         assert!(e.contains("file declares 1.0.0"), "{e}");
         let v = run(json!({"esm": "2.0.0", "a": {"op": "faq"}})).unwrap();
         assert_eq!(v, json!({"esm": "2.0.0", "a": {"op": "faq"}}));
+    }
+
+    /// A declared `"system_kind": "pde"` warns once per document, naming every
+    /// such model by pointer, and is kept as written.
+    #[test]
+    fn a_declared_pde_system_kind_warns_once_and_is_kept() {
+        use serde_json::json;
+        let doc = json!({"esm": "2.4.0", "models": {
+            "A": {"system_kind": "pde"}, "B": {"system_kind": "ode"}, "C/x": {"system_kind": "pde"}
+        }});
+        let w = deprecated_system_kind_warning(&doc).expect("a warning");
+        assert!(w.starts_with("deprecated_system_kind: "), "{w}");
+        assert!(
+            w.ends_with("Declared at: /models/A/system_kind, /models/C~1x/system_kind."),
+            "{w}"
+        );
+        assert!(
+            deprecated_system_kind_warning(&json!({"models": {"B": {"system_kind": "ode"}}}))
+                .is_none()
+        );
+
+        let src = r#"{"esm": "2.4.0", "metadata": {"name": "P"},
+            "models": {"M": {"system_kind": "pde", "variables": {"u": {"type": "unknown"}},
+                "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "u"}]}}}"#;
+        let file = load_string(src).expect("a declared pde loads");
+        let model = &file.models.as_ref().unwrap()["M"];
+        assert_eq!(model.system_kind.as_deref(), Some("pde"), "kept as written");
+        assert_eq!(crate::classification::declared_system_kind(model), None);
+        assert_eq!(
+            crate::classification::system_kind_mismatch(model),
+            None,
+            "a declared pde never mismatches"
+        );
     }
 
     #[test]

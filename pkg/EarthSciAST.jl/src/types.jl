@@ -66,7 +66,7 @@ bundled schema's `\$id`, which the `SCHEMA_VERSION tracks the bundled schema`
 test enforces. NOT the version of this PACKAGE — that is
 [`LIBRARY_VERSION`](@ref).
 """
-const SCHEMA_VERSION = "2.3.0"
+const SCHEMA_VERSION = "2.4.0"
 
 """
     LIBRARY_VERSION
@@ -290,7 +290,7 @@ an optional keyword (default `nothing`) that only some operators use. The
 - `op`: operator name (e.g., "+", "*", "log", "D", "faq")
 - `args`: vector of argument expressions
 - `wrt`: variable name for differentiation (optional; for `D`)
-- `dim`: dimension for spatial operators (optional; for `grad`, `div`)
+- `dim`: dimension for spatial operators (optional; for `bc`, `integral`, user ops)
 - `int_var`: integration variable name (optional; for `integral`, matches JSON field "var")
 - `lower`: lower integration bound expression (optional; for `integral`)
 - `upper`: upper integration bound expression (optional; for `integral`)

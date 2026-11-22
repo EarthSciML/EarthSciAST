@@ -43,6 +43,7 @@ from .error_handling import (
     AMBIGUOUS_SUBSYSTEM_REF,
     DATA_SOURCE_MERGE_CONFLICT,
     DEPRECATED_OP,
+    DEPRECATED_SYSTEM_KIND,
     ELEMENT_TYPE_UNCARRIED,
     REMOVED_OP,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
@@ -3986,6 +3987,42 @@ def _warn_deprecated_ops(sites: list[str]) -> None:
     )
 
 
+def _pde_system_kind_sites(models: object, at: str, sites: list[str]) -> None:
+    if not isinstance(models, dict):
+        return
+    for name, model in models.items():
+        if not isinstance(model, dict):
+            continue
+        here = f"{at}/{_pointer_token(name)}"
+        if model.get("system_kind") == "pde":
+            sites.append(f"{here}/system_kind")
+        _pde_system_kind_sites(model.get("subsystems"), f"{here}/subsystems", sites)
+
+
+def deprecated_system_kind_sites(data: object) -> list[str]:
+    """The JSON pointer of every model ``system_kind`` field in ``data`` that
+    declares ``"pde"`` (deprecated at esm 2.4.0), in document order."""
+    sites: list[str] = []
+    if isinstance(data, dict):
+        _pde_system_kind_sites(data.get("models"), "/models", sites)
+    return sites
+
+
+def _warn_deprecated_system_kind(sites: list[str]) -> None:
+    """The one ``deprecated_system_kind`` warning for a document, naming every
+    model that declares ``system_kind: "pde"``. The field is kept as written;
+    classification treats it as absent."""
+    if not sites:
+        return
+    warnings.warn(
+        f'{DEPRECATED_SYSTEM_KIND}: the system_kind value "pde" is deprecated '
+        "(esm 2.4.0) and ignored; the model is treated as its derived kind "
+        "(esm-spec §6.3.1). Declared at: " + ", ".join(sites) + ".",
+        EsmDeprecationWarning,
+        stacklevel=4,
+    )
+
+
 def prepare_document_ops(data: object) -> None:
     """The wire boundary for expression-node ``op`` spellings, applied to EVERY
     document — root, ``{ref}``-loaded child, template library, coupling library.
@@ -4008,10 +4045,14 @@ def prepare_document_ops(data: object) -> None:
     3. The ``faq`` version gate — ``faq`` arrives at esm 1.1.0 (esm-spec
        §2.2.4, same rule as the top-level ``solver`` block).
 
+    It also issues the one ``deprecated_system_kind`` warning for a document
+    whose models declare ``system_kind: "pde"`` (deprecated at esm 2.4.0).
+
     See ``docs/content/rfcs/faq-node-rename.md``.
     """
     reject_removed_constructs(data)
     _warn_deprecated_ops(rewrite_deprecated_ops(data))
+    _warn_deprecated_system_kind(deprecated_system_kind_sites(data))
     faq_at = _find_op(data, "faq")
     if faq_at is not None and _version_below_v11(data):
         declared = data.get("esm") if isinstance(data, dict) else None

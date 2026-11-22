@@ -15,8 +15,10 @@ carries three coordinated bodies of change:
 
 It also carries changes to the **`.esm` document format** itself, which
 affect your documents rather than your code: the **esm 2.0.0** break, which
-removes every external function from the expression AST (next section), and
-two smaller changes in Part II.
+removes every external function from the expression AST (next section), two
+smaller changes in Part II, and **esm 2.4.0**, after which `grad`, `div`
+and `laplacian` are ordinary operator names and the `"pde"` system kind is
+gone (Part IV, "esm 2.4.0").
 
 This guide is organised for someone with a working codebase who wants to know
 what breaks and what to write instead. If you have five minutes, read Part I.
@@ -1560,6 +1562,26 @@ binding.
 the same thing; replace them with `-` and `^` to silence the warning. A
 consumer that compares canonical forms byte for byte now sees units in the
 canonical spelling and no `units` on a dimensionless `const`.
+
+## esm 2.4.0: `grad`, `div` and `laplacian` are ordinary operator names; no `"pde"` system kind
+
+| Kind | What |
+|---|---|
+| `format` | **No on-disk change.** Every 2.3.0 document is a valid 2.4.0 document. Two changes: `grad`, `div` and `laplacian` become ordinary operator names, and the `"pde"` system kind is dropped. The format no longer names `grad`, `div` and `laplacian` as rewrite-target sugar for sums of `D` (esm-spec §4.2): they are ordinary open-tier operator names, exactly like any operator you invent. |
+| `semantics` | A document using one still loads; a rewrite rule may still match one; one that reaches evaluation unlowered is still refused with `unlowered_operator`. What changes is that no binding treats the three names specially: |
+| `semantics` | **The `"pde"` system kind is dropped** (esm-spec §6.3.1). `system_kind` derives `"sde"`, `"nonlinear"` or `"ode"`, in that order; a spatial derivative (spatial `D`, or any of the three names) no longer makes a model `"pde"`. A transient model with spatial derivatives is now `"ode"`, a steady-state one (no time derivative) `"nonlinear"`. The `PDESystem` constructor choice is gone from the bindings. |
+| `semantics` | **A declared `system_kind: "pde"` is deprecated and ignored.** The document still loads, with one warning per document, `deprecated_system_kind`, naming each such model; the declared kind reads as absent, the model is its derived kind, and `system_kind_mismatch` is never reported for it. The schema keeps `"pde"` in the enum. |
+| `semantics` | **Julia ModelingToolkit.** `grad` is no longer lowered to an MTK `Differential`; like any user op it must be rewritten first. |
+| `deleted` | Name-based lists of the three in the bindings (Julia's op-registry rows and rewrite-target list, Python's `classification.SPATIAL_DERIVATIVE_OPS`, and the classification and implicit-equation lists of TypeScript, Go and Rust). |
+| `format` | Unchanged by name: units (any open-tier op already had an undetermined dimension), independent-variable discovery (an axis named in any node's `dim` field is still collected), and import axis renaming of `dim`. |
+
+**What to do.** Remove `system_kind: "pde"` declarations (or leave them; they
+are ignored with a warning) and stop branching on a `"pde"` kind in code that
+calls `system_kind`. Where a spatial derivative was written with one of the
+three names expecting it to mean something, write the derivative with spatial `D`
+(`grad(f, dim: x)` as `D(f, wrt: x)`, a divergence as a sum of `D` per axis, a
+Laplacian as a sum of `D(D(u, wrt: x_i), wrt: x_i)`), or keep the name as an
+operator lowered by your own rewrite rule.
 
 ---
 

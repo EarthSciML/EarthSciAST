@@ -334,7 +334,7 @@ def _strippable_implicit(lhs: Any) -> bool:
     while isinstance(body, dict) and body.get("op") == "faq" and body.get("expr") is not None:
         body = body["expr"]
     op = body.get("op") if isinstance(body, dict) else getattr(body, "op", None)
-    return op not in ("ic", "D", "grad", "div", "laplacian")
+    return op not in ("ic", "D")
 
 
 def strip_document(file: Any, classes: list[str]) -> tuple[Any, StrippedConstructs, Any]:

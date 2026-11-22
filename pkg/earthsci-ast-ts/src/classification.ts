@@ -30,11 +30,12 @@ export type ParameterClass = 'brownian' | 'discrete' | 'sampled' | 'constant'
 /** The three derived unknown categories (esm-spec §6.3.1). */
 export type UnknownClass = 'ode_state' | 'observed' | 'algebraic'
 
-/** The MTK system type a model maps to. */
-export type SystemKind = 'ode' | 'nonlinear' | 'sde' | 'pde'
-
-/** Sugar spellings of a spatial differential operator (esm-spec §4.2). */
-const SPATIAL_SUGAR_OPS = new Set(['grad', 'div', 'laplacian'])
+/**
+ * The MTK system type a model maps to. A model may still DECLARE the
+ * deprecated value `"pde"` (esm 2.4.0); it is ignored ({@link declaredSystemKind}
+ * reads it as absent), so it is not a kind.
+ */
+export type SystemKind = 'ode' | 'nonlinear' | 'sde'
 
 function isExpressionNode(e: unknown): e is ExpressionNode {
   return typeof e === 'object' && e !== null && typeof (e as { op?: unknown }).op === 'string'
@@ -128,28 +129,6 @@ function baseVariableName(expr: Expression): string | undefined {
 /** True when any equation LHS in the model is a time derivative. */
 function hasTimeDerivative(model: Model): boolean {
   return equationsOf(model).some((eq) => derivativeTarget(eq.lhs) !== undefined)
-}
-
-/**
- * True when an expression contains a SPATIAL differential operator: a `D` whose
- * `wrt` is present and is not `t`, or one of the `grad` / `div` / `laplacian`
- * sugar ops.
- */
-function containsSpatialDerivative(expr: Expression): boolean {
-  if (!isExpressionNode(expr)) return false
-
-  if (expr.op === 'D' && expr.wrt !== undefined && expr.wrt !== 't') return true
-  if (SPATIAL_SUGAR_OPS.has(expr.op)) return true
-
-  for (const arg of expr.args ?? []) {
-    if (containsSpatialDerivative(arg)) return true
-  }
-  // Sub-expression-bearing fields that are not in `args`.
-  for (const key of ['expr', 'filter', 'lower', 'upper'] as const) {
-    const sub = (expr as Record<string, unknown>)[key]
-    if (sub !== undefined && containsSpatialDerivative(sub as Expression)) return true
-  }
-  return false
 }
 
 // ---------------------------------------------------------------------------
@@ -332,34 +311,28 @@ export function constantParameters(model: Model): string[] {
  * (`tests/conformance/classification/manifest.json`, `system_kind_order`):
  *
  *   1. `sde`       — any Brownian parameter.
- *   2. `pde`       — any equation contains a spatial derivative.
- *   3. `nonlinear` — no time-derivative equation at all.
- *   4. `ode`       — otherwise.
+ *   2. `nonlinear` — no time-derivative equation at all.
+ *   3. `ode`       — otherwise.
  *
- * Two orderings that look equivalent are not. `pde` is tested BEFORE
- * `nonlinear`, so a steady-state PDE (`laplacian(phi) ~ f`, no time derivative)
- * is `pde`. `sde` is tested BEFORE `pde`, so a model carrying both a wiener
- * parameter and a spatial derivative is `sde` — not because it is not spatial,
- * but because there is no SPDESystem constructor to select.
- *
- * Detection is a property of the EQUATIONS and never of the `domain` block,
- * which carries nothing spatial.
+ * Spatial derivatives do not affect the kind: there is no `pde` kind (dropped
+ * at esm 2.4.0), so a model with a spatial `D` is classified by the same rules
+ * as any other.
  */
 export function systemKind(model: Model): SystemKind {
   if (brownianParameters(model).length > 0) return 'sde'
-
-  const spatial = equationsOf(model).some(
-    (eq) => containsSpatialDerivative(eq.lhs) || containsSpatialDerivative(eq.rhs),
-  )
-  if (spatial) return 'pde'
-
   if (!hasTimeDerivative(model)) return 'nonlinear'
   return 'ode'
 }
 
-/** The model's explicit `system_kind` field, or `null` when absent. */
+/**
+ * The model's explicit `system_kind` field, or `null` when absent. The
+ * deprecated value `"pde"` (esm 2.4.0) counts as absent: the loader warns
+ * `deprecated_system_kind` and the model is treated as its derived kind.
+ */
 export function declaredSystemKind(model: Model): SystemKind | null {
-  return (model.system_kind as SystemKind | undefined) ?? null
+  const declared = model.system_kind as string | undefined
+  if (declared === undefined || declared === 'pde') return null
+  return declared as SystemKind
 }
 
 /**

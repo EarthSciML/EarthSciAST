@@ -75,7 +75,7 @@ type DAEInfo struct {
 // ApplyDAEContract does not run the RFC §11 discretization pipeline: it is
 // intended to be composed with discretize() when that lands in Go, or called
 // standalone by tools that need DAE factoring on an already discretized model.
-// Models carrying an explicit non-ODE SystemKind ("nonlinear", "sde", "pde")
+// Models carrying an explicit non-ODE SystemKind ("nonlinear", "sde")
 // are skipped — the DAE contract only applies to would-be ODE systems.
 func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 	info := DAEInfo{
@@ -274,7 +274,7 @@ func isDifferentialEquation(eq Equation) bool {
 }
 
 // isDAETargetSystem reports whether the DAE contract applies to model.
-// Systems that are nonlinear, SDE, or PDE are handed off to other solver stacks
+// Systems that are nonlinear or SDE are handed off to other solver stacks
 // and are outside the DAE/ODE classification contract.
 //
 // The kind is the EFFECTIVE one (classify.go): the declared `system_kind` when

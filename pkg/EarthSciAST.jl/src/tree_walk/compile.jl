@@ -279,7 +279,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
         )
     end
     # An op that is not evaluable core (esm-spec §4.2 / §9.6.6) is an unlowered
-    # rewrite target: `grad`/`div`/`laplacian`, `integral`, or any open-namespace
+    # rewrite target: `integral`, or any open-namespace
     # op with no registry row (`_op_in_T`). A discretization rule must lower it
     # first. A registered core form with no scalar meaning reports
     # `unevaluable_operator` instead, from the arms above or the gate below.

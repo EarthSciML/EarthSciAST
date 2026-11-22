@@ -254,8 +254,7 @@ class UnsupportedMappingError(FlattenError):
 
     Core-tier libraries (the Python tier) only implement ``broadcast`` and
     ``identity`` mappings; ``slice``, ``project``, and ``regrid`` raise this
-    error, as do spatial operators (``grad``, ``div``, ``laplacian``) when
-    encountered during a Core-tier flatten — see spec §4.7.6.
+    error — see spec §4.7.6.
     """
 
 
@@ -285,7 +284,7 @@ class UnsupportedDimensionalityError(FlattenError):
 
     Raised by esm_problem() when the flattened system still contains a spatial
     independent variable. Such a system carries an *undiscretized* spatial
-    operator (a spatial ``D`` or ``grad``/``div``/``laplacian`` sugar) that no
+    operator (a spatial ``D`` or another open-tier rewrite-target op) that no
     discretization rule reduced to a stencil, so it surfaces the uniform
     cross-binding ``code = "unlowered_operator"`` diagnostic (esm-spec §4.2 /
     §9.6.8).
@@ -600,8 +599,9 @@ class FlattenedSystem:
     independent_variables:
         Independent variables of the flattened system. Always contains ``"t"``
         for temporal evolution; spatial independent variables (``"x"``, ``"y"``,
-        ``"z"``) appear only when the equations contain spatial derivative
-        operators (``grad``, ``div``, ``laplacian``).
+        ``"z"``) appear only when the equations contain an unlowered spatial
+        differential (a ``D`` with a spatial ``wrt``, or a node naming an axis in
+        its ``dim`` field).
     state_variables:
         The SOLVED-FOR VECTOR, keyed by dot-namespaced name: the differential
         unknowns, PLUS ``algebraic_variables``, PLUS any arrayed observed that
@@ -716,7 +716,7 @@ class FlattenedSystem:
     def system_kind(self) -> str:
         """The flattened system's derived MTK system kind (esm-spec §6.3.1),
         computed by :func:`classification.system_kind` over the flattened
-        variables and equations — "sde" / "pde" / "nonlinear" / "ode", tested in
+        variables and equations — "sde" / "nonlinear" / "ode", tested in
         that order.
 
         Available on the flattened form precisely because `brownian_parameters`
@@ -971,7 +971,7 @@ def _spatial_dims_in_expr(expr: Expr) -> list[str]:
     differential in ``expr``.
 
     Harvested STRUCTURALLY from every node's ``dim`` axis field (esm-spec §4.9.1),
-    NOT from a list of op names: the open-tier sugar ops grad/div/laplacian/curl
+    NOT from a list of op names: open-tier ops (``integral``, ``curl``, user ops)
     carry no spatial-detection privilege, so the signal is the ordinary
     axis-naming ``dim`` scalar field (which only an undiscretized differential
     node carries — no evaluable-core op uses it). A discretized system has already
@@ -996,8 +996,7 @@ def _spatial_dims_in_expr(expr: Expr) -> list[str]:
                 out.append(node.dim)
         # `wrt` is the OTHER axis-naming scalar field, and a differential taken
         # with respect to anything but time names a spatial axis exactly as
-        # `dim` does. §4.7.6 step 2 lists it alongside grad/div/laplacian:
-        # "`D` with `wrt != "t"`".
+        # `dim` does. §4.7.6 step 2: "`D` with `wrt != "t"`".
         #
         # This is not a return to op-name matching -- the docstring's argument
         # stands, and `wrt` is a structural field test, not a name test. It was
@@ -3141,7 +3140,7 @@ def _derive_independent_vars(flat: FlattenedSystem) -> None:
     Time is always present; a spatial dimension is added when an UNDISCRETIZED
     spatial differential still names it. That signal is derived STRUCTURALLY from
     the ``dim`` axis field carried by such a node (esm-spec §4.9.1) — never from a
-    hardcoded op-name list — so no sugar op is privileged over a custom
+    hardcoded op-name list — so no open-tier op is privileged over a custom
     rewrite-target op. A discretized (array) system carries no such ``dim`` node
     and correctly stays a pure ODE (``independent_variables == ["t"]``).
     """
@@ -3963,7 +3962,7 @@ def _expand_operator_compose_placeholders(
     """Expand ``_var`` placeholders in B's equations against A's state variables.
 
     Spec §4.7.1 placeholder expansion: an equation like ``D(_var, t) =
-    -u·grad(_var, x)`` in system B is cloned once per state variable in system
+    -u·D(_var, wrt: x)`` in system B is cloned once per state variable in system
     A, with ``_var`` substituted for the actual (namespaced) variable name.
     """
     if not entry.systems or len(entry.systems) < 2:
@@ -4005,7 +4004,7 @@ def _expand_operator_compose_placeholders(
 # (reactions -> generic ``D(sp)=Σ terms``; then ``operator_compose`` merges each
 # species' reaction ODE with the spatial operator's advection makearray). What
 # operator_compose does NOT do is array-ify the result: the merged
-# ``D(sp) = <reaction> + <-u·makearray(grad(sp))>`` still has a SCALAR ``sp``
+# ``D(sp) = <reaction> + <-u·makearray(D(sp, wrt: x))>`` still has a SCALAR ``sp``
 # while its advection makearray indexes ``sp`` per grid cell. This pass performs
 # the ``lifting:"pointwise"`` promotion — wrapping each merged state ODE in an
 # ``faq`` over the grid, indexing the bare reaction species per cell and

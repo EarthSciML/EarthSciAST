@@ -222,6 +222,7 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 	// One `deprecated_records_per_sample` warning for this load, after the
 	// mounts, so a mounted component's sites are named with the root's.
 	warnDeprecatedRecordsPerSample(esmFile)
+	warnDeprecatedSystemKind(esmFile)
 	return esmFile, nil
 }
 
@@ -331,6 +332,7 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// One `deprecated_records_per_sample` warning for this load (LoadPath
 	// warns for its own; it does not come through here).
 	warnDeprecatedRecordsPerSample(file)
+	warnDeprecatedSystemKind(file)
 	return file, nil
 }
 
