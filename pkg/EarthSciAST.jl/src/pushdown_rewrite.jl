@@ -51,7 +51,11 @@ function desugar_pushdown(esm::AbstractDict; model_name = nothing)
     # from BOTH `esm_problem` (which runs it before flattening/provider
     # classification) and the `_build_evaluator` front door.
     _pushdown_record(esm) === nothing || return esm
-    an = _pd_analyze(esm, model_name)
+    # The analysis and the rewrite both read the esm 2.4.0 names (`operators`,
+    # `apply_operator`); a document still in the old spellings is renamed first
+    # (esm-spec §9.6.12), so its template-body containment is found.
+    doc = _wire_old_spellings(esm)
+    an = _pd_analyze(doc, model_name)
     an === nothing && return esm
     # RESIDUAL DIAGNOSTICS (CONFORMANCE_SPEC §5.5.7 "residual diagnostic"): a
     # join-shaped aggregate the recogniser could NOT read is reported here, not
@@ -61,7 +65,7 @@ function desugar_pushdown(esm::AbstractDict; model_name = nothing)
         @warn _pd_diagnostic_message(d)
     end
     an.plan === nothing && return esm
-    return _pd_apply(esm, an.mname, an.plan, an.registry)
+    return _pd_apply(doc, an.mname, an.plan, an.registry)
 end
 
 """

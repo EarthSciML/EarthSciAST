@@ -157,7 +157,7 @@
                             "ring_b": "rec_ring"
                           },
                           "name": "overlap_area_planar",
-                          "op": "apply_expression_template"
+                          "op": "apply_operator"
                         },
                         {
                           "args": [
@@ -349,7 +349,7 @@
           }
         }
       ],
-      "expression_template_imports": [
+      "operator_imports": [
         {
           "only": [
             "overlap_area_planar"

@@ -44,7 +44,7 @@
                 "ymin": "src_S"
               },
               "name": "bin_into_cell",
-              "op": "apply_expression_template"
+              "op": "apply_operator"
             },
             "op": "faq",
             "output_idx": [
@@ -104,7 +104,7 @@
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "bin_into_cell": {
           "body": {
             "args": [

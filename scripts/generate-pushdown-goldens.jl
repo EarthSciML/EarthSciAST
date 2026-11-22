@@ -619,7 +619,7 @@ function build_polygon_area_doc()
                     "*", _ix("emis_annual", "r"),
                     _op(
                         "/", Dict(
-                            "op" => "apply_expression_template",
+                            "op" => "apply_operator",
                             "args" => Any[],
                             "name" => "overlap_area_planar",
                             "bindings" => Dict(
@@ -640,7 +640,7 @@ function build_polygon_area_doc()
     # The MIRROR stays as `build_envelope_overlap_doc` left it: a per-record
     # aggregate keeps the FULL cell axis, so nothing about it is re-pointed and
     # it needs no gathers even though it reads cell factors.
-    d["models"]["Binned"]["expression_template_imports"] = Any[
+    d["models"]["Binned"]["operator_imports"] = Any[
         Dict("ref" => "esm:std/geometry.esm", "only" => ["overlap_area_planar"]),
     ]
     _split_observeds!(d["models"]["Binned"])
@@ -651,7 +651,7 @@ end
 # TEMPLATE-FACTORED forward fixture — the ACCEPTANCE case.
 #
 # Byte-for-byte the same math as `pushdown_gated_dense`, but the binning body is
-# factored through an `expression_templates` entry with the four rect factors and
+# factored through an `operators` entry with the four rect factors and
 # the two point coordinates passed as BINDINGS. Under esm-spec §9.6.4 Option B
 # that reference SURVIVES load and reaches `desugar_pushdown` unexpanded; §9.6.4
 # rule 2 (a reference denotes its expansion) governs this consumer, so the
@@ -686,7 +686,7 @@ function build_template_body_doc()
         _op("<=", _ix("ymin", "c"), _ix("pty", "r")),
         _op("<", _ix("pty", "r"), _ix("ymax", "c"))
     )
-    m["expression_templates"] = Dict{String, Any}(
+    m["operators"] = Dict{String, Any}(
         "bin_into_cell" => Dict{String, Any}(
             "params" => Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "wgt"],
             "body" => _op("*", _op("ifelse", tpl_contain, 1.0, 0.0), _ix("wgt", "r"))
@@ -697,7 +697,7 @@ function build_template_body_doc()
             ["c"],
             Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
             Dict{String, Any}(
-                "op" => "apply_expression_template", "args" => Any[],
+                "op" => "apply_operator", "args" => Any[],
                 "name" => "bin_into_cell",
                 "bindings" => Dict{String, Any}(
                     "xmin" => "src_W", "ymin" => "src_S",
