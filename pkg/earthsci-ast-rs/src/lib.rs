@@ -114,6 +114,7 @@ pub(crate) mod flatten;
 pub(crate) mod graph;
 pub(crate) mod inline_test_checks;
 pub mod intern;
+pub mod operator_refs;
 pub(crate) mod join;
 pub(crate) mod json_visit;
 pub(crate) mod lower_enums;

@@ -722,12 +722,7 @@ fn pass_expand_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
     if stamp && let Some(root) = doc.value.as_object_mut() {
         crate::lower_expression_templates::stamp_rule8_floor(root);
     }
-    if doc.facts.has_templates {
-        let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
-        crate::lower_expression_templates::expand(&mut doc.value).map_err(PassError::Schema)?;
-    } else {
-        crate::lower_expression_templates::strip_component_template_blocks(&mut doc.value);
-    }
+    crate::lower_expression_templates::strip_component_template_blocks(&mut doc.value);
     Ok(())
 }
 
