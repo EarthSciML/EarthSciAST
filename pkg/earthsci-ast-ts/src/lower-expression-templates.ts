@@ -2229,7 +2229,7 @@ export function expandDocument<T extends object>(loaded: T): T {
     if (!isObject(comps)) continue
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
-      compNamed.set(`${compKind} ${cname}`, namedRegistry(comp))
+      compNamed.set(`${compKind}\u0000${cname}`, namedRegistry(comp))
     }
   }
 
@@ -2238,7 +2238,7 @@ export function expandDocument<T extends object>(loaded: T): T {
     if (!isObject(comps)) continue
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
-      const named = compNamed.get(`${compKind} ${cname}`)!
+      const named = compNamed.get(`${compKind}\u0000${cname}`)!
       const scope = `${compKind}.${cname}`
       for (const k of Object.keys(comp)) {
         if (k === 'operators' || k === 'operator_imports') continue
@@ -2258,7 +2258,8 @@ export function expandDocument<T extends object>(loaded: T): T {
       if (typeof to !== 'string') continue
       const receiver = to.split('.')[0] ?? ''
       const named =
-        compNamed.get(`models ${receiver}`) ?? compNamed.get(`reaction_systems ${receiver}`)
+        compNamed.get(`models\u0000${receiver}`) ??
+        compNamed.get(`reaction_systems\u0000${receiver}`)
       if (!named) continue
       entry.transform = expandAllNode(entry.transform, named, `coupling[${i}].transform`)
     }
