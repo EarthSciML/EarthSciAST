@@ -178,6 +178,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
       ['rewrite_in_template_body', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
       ['rule_writes_reference', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
       ['template_instance_variants', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
+      ['rewrite_shared_by_unreached_entry', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
       ['opacity_rule_replacement', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
       [
         'rewrite_depth_through_bodies',

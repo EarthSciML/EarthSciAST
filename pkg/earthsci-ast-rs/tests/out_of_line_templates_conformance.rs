@@ -320,6 +320,12 @@ fn rules_write_references_emitted_and_expanded_goldens() {
             "expanded.esm",
         ),
         (
+            "rewrite_shared_by_unreached_entry",
+            "fixture.esm",
+            "emitted.esm",
+            "expanded.esm",
+        ),
+        (
             "opacity_rule_replacement",
             "fixture.esm",
             "emitted.esm",

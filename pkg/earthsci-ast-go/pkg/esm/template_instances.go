@@ -11,8 +11,10 @@ package esm
 // kind of what is bound (a bare variable with its declared shape, a literal,
 // any other expression). Each instance's body is rewritten once; inside it a
 // parameter is a leaf (bodyView). When every reachable instance of a template
-// rewrites to the same body, that body replaces the template's in place;
-// otherwise each distinct body becomes `<name>.variant<k>`, numbered by
+// rewrites to the same body, that body replaces the template's in place —
+// unless a registry entry rule 3 leaves as authored still references the
+// template, directly or through such entries; otherwise each distinct body
+// becomes `<name>.variant<k>`, numbered by
 // canonical bytes, and every reference is re-pointed to the entry of its
 // instance. Mirrors the Julia reference EarthSciAST.jl/src/templates/instances.jl.
 
@@ -615,6 +617,108 @@ func declHasMatch(decl map[string]any) bool {
 	return has && m != nil
 }
 
+// rule3Multi is the templates whose reached instances rewrite to more than one
+// distinct body. Naming each single-bodied template in place or as
+// `<name>.variant1` renames every reference to it alike, so which bodies are
+// distinct does not depend on that choice: this provisional pass names every
+// single-bodied template in place. Mirrors the Julia `_rule3_multi`.
+func (st *rule3State) rule3Multi(byTemplate map[string][]string, order []string) map[string]bool {
+	final := map[string]string{}
+	multi := map[string]bool{}
+	for _, t := range order {
+		keysT := byTemplate[t]
+		canon := make([]string, len(keysT))
+		for i, k := range keysT {
+			canon[i] = canonicalCompact(repointRefs(st.done[k].body, st.done[k].refs, final))
+		}
+		set := map[string]bool{}
+		var distinct []string
+		for _, c := range canon {
+			if !set[c] {
+				set[c] = true
+				distinct = append(distinct, c)
+			}
+		}
+		if len(distinct) == 1 {
+			for _, k := range keysT {
+				final[k] = t
+			}
+			continue
+		}
+		sort.Strings(distinct)
+		multi[t] = true
+		for i, k := range keysT {
+			final[k] = fmt.Sprintf("%s\x1f%d", t, sort.SearchStrings(distinct, canon[i])+1)
+		}
+	}
+	return multi
+}
+
+// rule3Exposed is the reached match-less templates whose authored body stays
+// reachable from a registry entry that rule 3 does not rewrite under its own
+// name (esm-spec §9.6.4 rule 3): a match-less entry no reference reaches, one
+// whose instances took variants, and, transitively, any reached template such
+// an entry references. Such a template keeps its authored body; a single
+// rewritten body is registered as `<name>.variant1` instead. Mirrors the Julia
+// `_rule3_exposed`.
+func (st *rule3State) rule3Exposed(byTemplate map[string][]string, order []string) map[string]bool {
+	named := st.L.named
+	matchless := func(n string) bool {
+		d, ok := named[n].(map[string]any)
+		return ok && !declHasMatch(d)
+	}
+	memo := map[string][]string{}
+	refsOf := func(n string) []string {
+		if r, ok := memo[n]; ok {
+			return r
+		}
+		var names []string
+		if d, ok := named[n].(map[string]any); ok {
+			collectApplyNames(&names, d["body"])
+		}
+		var r []string
+		for _, x := range names {
+			if _, reached := byTemplate[x]; reached && matchless(x) {
+				r = append(r, x)
+			}
+		}
+		memo[n] = r
+		return r
+	}
+	var stack []string
+	for n := range named {
+		if _, reached := byTemplate[n]; !reached && matchless(n) {
+			stack = append(stack, n)
+		}
+	}
+	needMulti := false
+	for t := range byTemplate {
+		if matchless(t) && len(refsOf(t)) > 0 {
+			needMulti = true
+			break
+		}
+	}
+	if needMulti {
+		for t := range st.rule3Multi(byTemplate, order) {
+			if matchless(t) {
+				stack = append(stack, t)
+			}
+		}
+	}
+	visible := map[string]bool{}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, r := range refsOf(n) {
+			if !visible[r] {
+				visible[r] = true
+				stack = append(stack, r)
+			}
+		}
+	}
+	return visible
+}
+
 // rule3TemplateOrder is the template-level order in which instances are
 // named: a template after every template its instances' bodies reference. A
 // cycle is a rule that re-introduces itself through a template body. Mirrors
@@ -744,6 +848,7 @@ func applyRule3(comp map[string]any, L *lowering, transforms []map[string]any) e
 	if err != nil {
 		return err
 	}
+	exposed := st.rule3Exposed(byTemplate, order)
 	for _, t := range order {
 		keysT := byTemplate[t]
 		bodies := make([]any, len(keysT))
@@ -762,7 +867,7 @@ func applyRule3(comp map[string]any, L *lowering, transforms []map[string]any) e
 		}
 		sort.Strings(distinct)
 		decl, _ := L.named[t].(map[string]any)
-		if len(distinct) == 1 {
+		if len(distinct) == 1 && !(exposed[t] && distinct[0] != canonicalCompact(decl["body"])) {
 			for _, k := range keysT {
 				final[k] = t
 			}

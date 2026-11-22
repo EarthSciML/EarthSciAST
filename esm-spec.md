@@ -5292,7 +5292,13 @@ special-case older versions to recover Option A matching. Motivation and measure
      serialization (CONFORMANCE_SPEC §5.5.3) and `_` appended to the name until it names no
      other entry, and each reference is re-pointed to the entry of its instance. A body in
      which nothing fires is left unchanged, and a template that no reference reaches is not
-     rewritten.
+     rewritten. A template's body is replaced in place only if no match-less registry entry
+     that keeps its authored body (one no reference reaches, or one whose instances took
+     variants) references the template, directly or through such entries; otherwise the one
+     rewritten body is registered as `<name>.variant1` and the reached references are
+     re-pointed to it, so that a reference reaching the template through that entry — in
+     this document, or in one that mounts or flattens it — expands the authored body, which
+     was never rewritten for that reference's instance.
    - *Rewrite depth.* A rewrite made in pass `p` of the fixpoint on a component's
      expression positions has depth `p`. A rewrite made in pass `q` of the fixpoint on an
      instance's body has depth `d + q`, where `d` is the depth of the rewrite that wrote the
@@ -5694,6 +5700,7 @@ The rules-as-references revision (§9.6.3 constraint 7, §9.6.4 rule 3) adds the
 
 - `rule_writes_reference/` — one rule fired at three sites with different operands: three references to the rule, one materialized body; a leaf-bodied rule writes its leaf.
 - `template_instance_variants/` — one template whose body holds a `D`, called with two variables of different declared shapes, and two `where`-scoped rules: two variants `<name>.variant1` / `.variant2`, numbered by canonical serialization, each call site re-pointed.
+- `rewrite_shared_by_unreached_entry/` — one template whose body holds a `D`, reached by a single instance, and referenced by an authored match-less entry that nothing in the component references; and the same through a chain of two reached templates: each reached template keeps its authored body and the rewritten body is registered as `<name>.variant1`, each call site re-pointed (§9.6.4 rule 3, "Where the result lives"). Its `expanded.esm` is written under this revision's semantics; no fixture of this revision needs the in-place engine for it, because the expansion is the same either way.
 - `rewrite_depth_through_bodies/` — invalid: a rule whose body reintroduces its own pattern under the same instance → `rewrite_rule_nonterminating`, naming the rule and the template; and a chain that converges at depth 64 exactly (accepted) beside one at depth 65 (rejected). The accepted chain's `emitted_chain_depth_64.esm` holds a 64-template body-reference chain; every binding loads it and re-emits it byte for byte (emit then load is a fixed point), which holds because `MAX_TEMPLATE_EXPANSION_DEPTH` equals `MAX_REWRITE_PASSES` (§9.7.3).
 - `unlowered_in_template_body/` — invalid at build: a template body holding a `D` that no rule matches → `unlowered_operator`, naming the op, the template and the first call site.
 - `opacity_rule_replacement/` — the cases where this revision and the in-place engine differ, each pinned the way this revision decides it: (a) a compound pattern whose inner node only exists in another rule's replacement does not fire, (b) a structured and a ground pattern node at a template parameter do not match what the call site bound, (c) a compound pattern that would have assembled across an eagerly expanded reference to a template whose body holds a rewrite-target op does not fire, and (d) a rule on a core-op node inside the bindings of an authored reference that survives load (a match-less template whose body, like the binding, holds no rewrite-target op) fires there, writing a reference into the binding, where the in-place engine left the binding unrewritten. Its `expanded.esm` is written under this revision's semantics, and the in-place engine would fail it; its description records, case by case, what the in-place engine produced instead.

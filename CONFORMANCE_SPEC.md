@@ -7836,10 +7836,12 @@ golden would accept a binding that still inlines.
 
 **Non-vacuity.** The set MUST include a rule firing inside a template body
 (`rewrite_in_template_body`), two variants of one template
-(`template_instance_variants`), a nonterminating rewrite detected through a
-body (`rewrite_depth_through_bodies`), a rewrite-target op left in a body and
-refused by the build gate (`unlowered_in_template_body`), and the pinned
-opacity cases (`opacity_rule_replacement`).
+(`template_instance_variants`), a single rewritten body registered as
+`<name>.variant1` because an entry no reference reaches still references the
+template (`rewrite_shared_by_unreached_entry`), a nonterminating rewrite
+detected through a body (`rewrite_depth_through_bodies`), a rewrite-target op
+left in a body and refused by the build gate (`unlowered_in_template_body`),
+and the pinned opacity cases (`opacity_rule_replacement`).
 
 **The elementwise lift (esm-spec §9.6.11).** The `tests/conformance/flatten_wire/`
 goldens are serialized after `Expand` and MUST NOT change: they are the oracle
