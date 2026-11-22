@@ -144,15 +144,6 @@
       "note": "For any JSON object x, metadata.x_esd = x survives emit(load d) unchanged and no verdict depends on its contents."
     },
     {
-      "id": "spec.4.2.rewrite-target-eliminated-before-eval",
-      "section": "4.2",
-      "quote": "A rewrite-target op has **no** evaluator; it MUST be eliminated by a rewrite rule (§9.6) before evaluation.",
-      "class": "semantic",
-      "phase": 4,
-      "area": "rewrite",
-      "note": "Evaluation/compilation of a document in which any open-tier op survives the rewrite fixpoint is rejected with unlowered_operator; loading is not."
-    },
-    {
       "id": "spec.4.2.rhs-d-unresolvable-refused",
       "section": "4.2",
       "quote": "**A `D` the resolution cannot answer MUST be refused (normative).** Resolution answers nothing for an operand outside the table above — an operator with no rule there (`^`, an elementary function, a reduction, a nested `D`), or a name that carries neither equation and is not time-invariant — and it answers nothing for a **cyclic** chain, which it MUST detect and stop rather than expand without end (`D(x)/dt ~ k · D(x, t)`; an observed whose definition reaches its own derivative). In each case the node remains as authored and is a rewrite-target: an implementation MUST NOT invent a value for it",
@@ -190,22 +181,22 @@
       "note": "The meaning of args[1..] of a spatial D is fixed only by the matching rule: lowering depends on them solely through pattern binding."
     },
     {
-      "id": "spec.4.2.sugar-ops-dimension-unknown",
+      "id": "spec.4.2.partial-integral-definition-units",
       "section": "4.2",
-      "quote": "a checker MUST report their dimension as `unknown` and skip the enclosing check (§4.8.4), never inventing a coordinate-divided dimension",
+      "quote": "Every definition of either MUST agree at each call it resolves",
       "class": "semantic",
-      "phase": 2,
+      "phase": 4,
       "area": "units",
-      "note": "grad/div/laplacian/integral and every other open-tier op have undeterminable dimension, so the enclosing check is skipped."
+      "note": "A definition of partial or integral whose unit expression, or determinable body unit, differs from the fixed [f]/[wrt] or [f]·[var] at a call it resolves is definition_unit_mismatch (an error; a warning when the body's unit is undeterminable)."
     },
     {
       "id": "spec.4.2.sugar-ops-not-privileged",
       "section": "4.2",
-      "quote": "A binding MUST NOT single these names out",
+      "quote": "format, and a binding MUST NOT single any of them out",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
-      "note": "Matching, lowering and checking treat grad/div/laplacian/curl/integral exactly as any other open-tier op name (renaming invariance)."
+      "note": "Matching, lowering and checking treat grad/div/laplacian/curl and every other defined-operator name alike (renaming invariance); the format gives them no meaning."
     },
     {
       "id": "spec.4.2.minmax-arity",
@@ -529,7 +520,7 @@
     {
       "id": "spec.4.7.symbolic-size-independent-of-machinery",
       "section": "4.7",
-      "quote": "It MUST NOT depend on whether the leaf happens to declare `metaparameters`, or to import a template library",
+      "quote": "It MUST NOT depend on whether the leaf happens to declare `metaparameters`, or to import an operator library",
       "class": "semantic",
       "phase": 5,
       "area": "flatten",
@@ -593,7 +584,7 @@
     {
       "id": "spec.4.7.rename-target-dotted-identifier",
       "section": "4.7",
-      "quote": "Targets MUST be dotted identifiers (§9.7.7 grammar), else `template_import_rename_invalid`",
+      "quote": "Targets MUST be dotted identifiers (§9.7.7 grammar), else `operator_import_rename_invalid`",
       "class": "semantic",
       "phase": 5,
       "area": "flatten",
@@ -602,7 +593,7 @@
     {
       "id": "spec.4.7.rename-targets-distinct",
       "section": "4.7",
-      "quote": "post-rename names MUST be distinct within the edge, else `template_import_rename_collision`",
+      "quote": "post-rename names MUST be distinct within the edge, else `operator_import_rename_collision`",
       "class": "semantic",
       "phase": 5,
       "area": "flatten",
@@ -648,16 +639,16 @@
     {
       "id": "spec.4.7.ref-target-kinds-distinct",
       "section": "4.7",
-      "quote": "A subsystem `ref` MUST NOT target a template-library file (`subsystem_ref_is_template_library`), and a template import MUST NOT target a subsystem/component file (`template_import_not_library`).",
+      "quote": "A subsystem `ref` MUST NOT target an operator-library file (`subsystem_ref_is_operator_library`), and a definition import MUST NOT target a subsystem/component file (`operator_import_not_library`).",
       "class": "semantic",
       "phase": 5,
       "area": "flatten",
-      "note": "A subsystem ref to a template library is subsystem_ref_is_template_library; a template import of a component file is template_import_not_library."
+      "note": "A subsystem ref to an operator library is subsystem_ref_is_operator_library; a definition import of a component file is operator_import_not_library."
     },
     {
       "id": "spec.4.7.injected-import-target-kinds",
       "section": "4.7",
-      "quote": "The injected `ref` MUST resolve to a template-library file (`template_import_not_library` otherwise); the subsystem `ref` itself still MUST resolve to a component file.",
+      "quote": "The injected `ref` MUST resolve to an operator-library file (`operator_import_not_library` otherwise); the subsystem `ref` itself still MUST resolve to a component file.",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",

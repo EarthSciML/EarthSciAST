@@ -3,7 +3,7 @@ import Esm.Expr.Core
 /-!
 # Expanding a match-less expression template (esm-spec §9.6.1–9.6.3)
 
-`expand t bindings` is the expansion an `apply_expression_template` node
+`expand t bindings` is the expansion an `apply_operator` node
 denotes (§9.6.2, §9.6.4 rule 2): after the §9.6.3 constraint 3 check (the
 bindings cover the template's `params` exactly), every parameter occurrence in
 the body is replaced by its bound AST — §9.6.3 constraint 5, pure syntactic
@@ -24,7 +24,7 @@ substitution, no evaluation:
 Params shadow coincident literals and index symbols (§9.6.1), which
 position-blind substitution gives for free. `ranges` keys are object keys, not
 string values, so they are not substitution sites; nor are a nested
-`apply_expression_template` reference's `name` and binding keys, while its
+`apply_operator` reference's `name` and binding keys, while its
 binding values are expressions and are substituted.
 
 A template body may reference other match-less templates in scope (§9.7.3); a
@@ -40,7 +40,7 @@ namespace Esm.Expr
 
 open Esm.Closed (Scalar)
 
-/-- A match-less `expression_templates` entry (§9.6.1). -/
+/-- A match-less `operators` entry (a definition) (§9.6.1). -/
 structure Template where
   params : List String
   body : Ast
@@ -98,7 +98,7 @@ inductive ExpandError where
   /-- §9.7.3: a reference chain deeper than the bound. -/
   | tooDeep
 
-/-- The expansion of `apply_expression_template` on `t` with `bindings`. -/
+/-- The expansion of `apply_operator` on `t` with `bindings`. -/
 def expand (t : Template) (σ : Bindings) : Except ExpandError Ast :=
   match t.params.find? (fun p => !(σ.any (·.1 == p))) with
   | some p => .error (.missingBinding p)
@@ -114,7 +114,7 @@ def Binds.toList : Binds → Bindings
 
 mutual
 
-/-- Apply `f` at every `apply_expression_template` node, bottom-up (a
+/-- Apply `f` at every `apply_operator` node, bottom-up (a
 reference's bindings first), rebuilding the rest of the tree. -/
 def walkRefs (f : String → Binds → Except ExpandError Ast) : Ast → Except ExpandError Ast
   | .num m e => .ok (.num m e)
@@ -165,7 +165,7 @@ inductive ApplyError where
   | expand (e : ExpandError)
   | eval (e : EvalError)
 
-/-- The value of an `apply_expression_template` node: expand, then evaluate
+/-- The value of an `apply_operator` node: expand, then evaluate
 the expansion (§9.6.4 rule 2: a reference denotes its expansion). -/
 def evalApply {α : Type} [Scalar α] [Lits α] [Elem α] (t : Template) (σ : Bindings) (env : Env α) :
     Except ApplyError (Val α) :=

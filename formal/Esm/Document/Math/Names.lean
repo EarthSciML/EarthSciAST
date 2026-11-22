@@ -221,7 +221,7 @@ theorem pNameLoop_stop (sf : Sf) (f : Nat) (acc : List Char) (rest : List Tok)
   | .kw .acos :: _ | .kw .atan :: _ | .kw .sinh :: _ | .kw .cosh :: _ | .kw .tanh :: _
   | .kw .min :: _ | .kw .max :: _ | .kw .labs :: _ | .kw .rabs :: _ | .kw .lfloor :: _
   | .kw .rfloor :: _ | .kw .lceil :: _ | .kw .rceil :: _ | .kw .abs :: _ | .kw .floor :: _
-  | .kw .ceil :: _ | .kw .pdiff :: _ | .kw .dif :: _ | .kw .dotacc :: _ | .kw .bcases :: _
+  | .kw .ceil :: _ | .kw .pdiff :: _ | .kw .nabla :: _ | .kw .dif :: _ | .kw .dotacc :: _ | .kw .bcases :: _
   | .kw .ecases :: _ | .kw .cases :: _ | .kw .esmnode :: _ | .kw .bmat :: _ | .kw .emat :: _
   | .kw .vec :: _ | .kw .mat :: _ | .kw .sum :: _ | .kw .prod :: _ | .kw .inn :: _
   | .kw .substack :: _ | .kw .limits :: _ | .kw .lbkg :: _ | .kw .rbkg :: _ | .kw .lr :: _

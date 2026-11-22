@@ -489,7 +489,7 @@ def check_tokens(args):
 NOTATION = FORMAL / "Esm" / "Document" / "Notation.lean"
 # Operators the notation table covers that no §4.2 `Op` table lists:
 # `apply_expression_template` is defined in §9.6.4.
-NOTATION_EXTRA_OPS = {"apply_expression_template"}
+NOTATION_EXTRA_OPS = {"apply_operator"}
 
 
 def spec_core_ops(report):

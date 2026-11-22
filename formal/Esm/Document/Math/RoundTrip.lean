@@ -49,7 +49,7 @@ def startA (t : Tok) : Bool := atomStart t && !(t matches .kw .lp) && !(t matche
 
 /-- What a printed expression starts with, as far as the variant readings care. -/
 def HeadOK (c : Ctx) : List Tok → Prop
-  | t :: r => t ≠ .kw .dif ∧ t ≠ .kw .pdiff ∧ t ≠ .rm "d" ∧ (∀ w, t ≠ .word w) ∧
+  | t :: r => t ≠ .kw .dif ∧ (t = .kw .pdiff → ∃ r', r = .kw .us :: r') ∧ t ≠ .rm "d" ∧ (∀ w, t ≠ .word w) ∧
       (t = .letter 'd' → c.S.names.contains "d" = true ∨ (∃ r', r = .kw .us :: r') ∨
         (∃ r', r = .kw .sdot :: r')) ∧ (startA t = true ∨ t = .kw .minus)
   | [] => False
@@ -155,7 +155,13 @@ theorem pPrim_grp (c : Ctx) (e : Json) (toks : List Tok) (hh : HeadOK c toks)
     simp only [List.cons_append, List.nil_append, reduceCtorEq, ↓reduceIte]
     split
     · rename_i heq; simp at heq; exact absurd heq.1 hd1
-    · rename_i heq; simp at heq; exact absurd heq.1 hd2
+    · simp only [List.cons_append] at hp'
+      rw [hp']; simp [isRp]
+    · rename_i r1 hno _ heq
+      simp only [List.cons.injEq] at heq
+      obtain ⟨r', hr'⟩ := hd2 heq.1
+      subst hr'
+      exact absurd (by rw [← heq.2]; simp) (hno (r' ++ Tok.kw .rp :: rest))
     · rename_i heq
       simp only [List.cons_append] at hi hp'
       rw [hi, hp']; simp [isRp]

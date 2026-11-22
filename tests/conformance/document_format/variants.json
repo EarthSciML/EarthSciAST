@@ -13,6 +13,33 @@
       "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n"
     },
     {
+      "id": "operatorname_d_trailing",
+      "kind": "variant",
+      "description": "The earlier trailing-operand form \\operatorname{D}_{x}(u, a, b) reads as partial.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$u$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{D}_{x}(u, a, b)\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["u", "a", "b"], "op": "partial", "wrt": "x"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "u": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$u$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\partial_{x}(u, a, b)\n$$\n"
+    },
+    {
+      "id": "op_d_trailing_typst",
+      "kind": "variant",
+      "description": "The earlier trailing-operand form op(\"D\")_(x)(u, a, b) reads as partial.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($u$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"D\")_(x)(u, a, b) $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["u", "a", "b"], "op": "partial", "wrt": "x"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "u": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($u$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = partial_(x)(u, a, b) $\n"
+    },
+    {
+      "id": "grad_call_form",
+      "kind": "variant",
+      "description": "grad in the call form reads as the same node as \\nabla x.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{grad}(x)\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "grad"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\nabla x\n$$\n"
+    },
+    {
       "id": "dot_latex",
       "kind": "variant",
       "description": "\\dot{N} reads as the time derivative.",
@@ -297,7 +324,7 @@
       "description": "Named template arguments where the parameters are known.",
       "surface": "markdown",
       "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(A_{\\mathrm{pre}} = a, \\mathit{Ea} = T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
-      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_operator"}}], "operators": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n"
     },
     {
@@ -306,7 +333,7 @@
       "description": "Named template arguments in any order read sorted.",
       "surface": "markdown",
       "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(\\mathit{Ea} = T, A_{\\mathrm{pre}} = a)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
-      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_operator"}}], "operators": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n"
     },
     {
@@ -315,7 +342,7 @@
       "description": "Named template arguments in any order read sorted.",
       "surface": "typst",
       "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(italic(\"Ea\") = T, A_(upright(\"pre\")) = a) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n",
-      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_operator"}}], "operators": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
     },
     {
@@ -324,7 +351,7 @@
       "description": "A template header whose multi-letter parameter names are written italic(\"…\"): the header reads each name as a balanced expression up to the next , or ).",
       "surface": "typst",
       "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(italic(\"A_pre\"), italic(\"Ea\")) := italic(\"A_pre\") exp(-italic(\"Ea\")) $\n",
-      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_operator"}}], "operators": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
     },
     {
