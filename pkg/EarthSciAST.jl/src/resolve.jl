@@ -810,24 +810,35 @@ esm 2.4.0 dropped the `"pde"` system kind. A model declaring
 `"system_kind": "pde"` is not refused: the field is kept as written, counts as
 absent for classification ([`declared_system_kind`](@ref)), and the document
 gets ONE `@warn` with the code `deprecated_system_kind` naming every such model
-by JSON pointer (`/models/<name>/system_kind`). Returns those pointers.
+by JSON pointer, subsystems included at any depth
+(`/models/<name>/system_kind`, `/models/<name>/subsystems/<sub>/system_kind`),
+in document order with each model before its subsystems. Returns those
+pointers.
 """
 function _warn_deprecated_system_kind(doc)::Vector{String}
     sites = String[]
     _is_object(doc) || return sites
-    models = _raw_get(doc, "models", nothing)
-    _is_object(models) || return sites
-    for (name, model) in pairs(models)
-        _is_object(model) || continue
-        _raw_get(model, "system_kind", nothing) == "pde" &&
-            push!(sites, _pointer("", "models", string(name), "system_kind"))
-    end
+    _pde_system_kind_sites!(sites, _raw_get(doc, "models", nothing), _pointer("", "models"))
     isempty(sites) && return sites
     @warn string(
         "deprecated_system_kind: the system_kind value \"pde\" is deprecated ",
         "(esm 2.4.0) and ignored; the model is treated as its derived kind. ",
         "Declared at: ", join(sites, ", "), "."
     )
+    return sites
+end
+
+function _pde_system_kind_sites!(sites::Vector{String}, models, at::String)
+    _is_object(models) || return sites
+    for (name, model) in pairs(models)
+        _is_object(model) || continue
+        here = _pointer(at, string(name))
+        _raw_get(model, "system_kind", nothing) == "pde" &&
+            push!(sites, _pointer(here, "system_kind"))
+        _pde_system_kind_sites!(
+            sites, _raw_get(model, "subsystems", nothing), _pointer(here, "subsystems")
+        )
+    end
     return sites
 end
 

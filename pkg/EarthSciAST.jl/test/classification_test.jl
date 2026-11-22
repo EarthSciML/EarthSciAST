@@ -195,6 +195,29 @@ const _CLS = ClassificationConformanceAdapter
         )
     end
 
+    @testset "a declared \"pde\" on a subsystem is warned at its nested pointer" begin
+        # A JSON string keeps document order: each model is named before its
+        # subsystems, as the Python, TypeScript and Go loaders do.
+        leaf(kind) = """{"system_kind": "$kind",
+            "variables": {"u": {"type": "unknown", "units": "1", "default": 1.0}},
+            "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                           "rhs": {"op": "-", "args": ["u"]}}]"""
+        src = """{"esm": "$(EarthSciAST.SCHEMA_VERSION)", "metadata": {"name": "m"},
+          "models": {
+            "A": $(leaf("pde")), "subsystems": {
+              "S": $(leaf("ode")), "subsystems": {"T": $(leaf("pde"))}}},
+              "R": $(leaf("pde"))}}},
+            "B": $(leaf("ode"))}}}"""
+        @test_logs (
+            :warn,
+            "deprecated_system_kind: the system_kind value \"pde\" is deprecated " *
+                "(esm 2.4.0) and ignored; the model is treated as its derived kind. " *
+                "Declared at: /models/A/system_kind, " *
+                "/models/A/subsystems/S/subsystems/T/system_kind, " *
+                "/models/A/subsystems/R/system_kind.",
+        ) EarthSciAST.load_string(src)
+    end
+
     # API_SPEC.md §8 item 11: three distinct questions, not one. `system_kind`
     # DERIVES, `declared_system_kind` READS the field, `effective_system_kind`
     # composes them. The Julia-only `declared_system_kind_mismatch` is gone;
