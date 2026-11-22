@@ -1727,7 +1727,8 @@ function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<stri
         ...deepClone(rules),
       }
     }
-    const rn = hoistMountedTemplates(work, name)
+    const owners = new Map<string, Set<string>>()
+    const rn = hoistMountedTemplates(work, name, owners)
     const block = work.operators
     if (!isPlainObject(block) || Object.keys(block).length === 0) {
       delete comp.operators
@@ -1742,7 +1743,7 @@ function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<stri
       index_sets: root.index_sets,
       [section]: { [name]: work },
     }
-    const lowered = lowerExpressionTemplates(single)
+    const lowered = lowerExpressionTemplates(single, { owners: new Map([[key, owners]]) })
     // The registry the component now carries, when mounted definitions joined
     // it (or it is a top-level mount, whose block the load never captured).
     if (rn !== undefined || rulesRestored || !isPlainObject(snapshot)) {

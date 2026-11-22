@@ -169,20 +169,6 @@ export const OPS: Record<string, OpInfo> = {
       return Math.log(args[0])
     },
   },
-  // `ln` is the natural logarithm under its alternate spelling — a DISTINCT
-  // registered name, not an alias (the registry has no alias mechanism). It is
-  // carried in the schema's `broadcast.fn` scalar subset and is already
-  // dimension-analysed by `units.ts`, so registering it here is what lets one
-  // name be both checked and evaluated instead of half-known.
-  ln: {
-    arity: { min: 1, max: 1 },
-    scalar: true,
-    cost: 15,
-    evaluate: (args) => {
-      if (args[0] <= 0) throw new Error('ln argument must be positive')
-      return Math.log(args[0])
-    },
-  },
   log10: {
     arity: { min: 1, max: 1 },
     scalar: true,
@@ -351,7 +337,6 @@ export const OPS: Record<string, OpInfo> = {
     cost: 2,
     evaluate: (args) => (args[0] !== args[1] ? 1 : 0),
   },
-  '=': { arity: { min: 2, max: 2 } },
   // A CONNECTIVE needs two things to connect. The §4.2 conditionals table reads
   // "| `and`, `or`, `not` | `[a, b]` or `[a]` |" — one Args cell shared by three
   // ops, where `[a]` is `not`'s unary form and `[a, b]` is `and`/`or`'s binary

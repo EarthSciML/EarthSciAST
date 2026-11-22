@@ -11,12 +11,13 @@
  * byte. Mirrors `pkg/EarthSciAST.jl/test/mount_template_registry_test.jl`.
  */
 import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { emitEsmString } from './lower-expression-templates.js'
+import { emitEsmString, lowerExpressionTemplates } from './lower-expression-templates.js'
 import { emitDocument } from './template-imports.js'
 import { fixturesDir } from './test-helpers.js'
-import { loadPath } from './parse.js'
+import { loadPath, loadString } from './parse.js'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
 import { flatten } from './flatten.js'
 import { toJson } from './serialize.js'
@@ -154,5 +155,82 @@ describe('mounted template registries (esm-spec §9.6.4 rule 1)', () => {
     expect(flatRegistry('flatten_closes_join_names', 'fixture.esm')).toBe(
       golden('flatten_closes_join_names', 'flattened_registry.esm'),
     )
+  })
+
+  describe("a mounted leaf's definitions resolve calls only within the leaf (esm-spec §9.6.3 constraint 4)", () => {
+    const leaf = {
+      esm: '2.4.0',
+      metadata: { name: 'leaf' },
+      models: {
+        Leaf: {
+          operators: { scale: { params: ['x'], body: { op: '*', args: [3, 'x'] } } },
+          variables: { c: { type: 'unknown', units: '1', default: 1.0 } },
+          equations: [
+            { lhs: { op: 'D', args: ['c'], wrt: 't' }, rhs: { op: 'scale', args: ['c'] } },
+          ],
+        },
+      },
+    }
+    const host = (args: string[], sub: unknown) => ({
+      esm: '2.4.0',
+      metadata: { name: 'host' },
+      models: {
+        Host: {
+          variables: { y: { type: 'unknown', units: '1', default: 1.0 } },
+          equations: [{ lhs: { op: 'D', args: ['y'], wrt: 't' }, rhs: { op: 'scale', args } }],
+          subsystems: { Sub: sub },
+        },
+      },
+    })
+    const loadMounted = (args: string[]) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'esm-mount-scope-'))
+      try {
+        fs.writeFileSync(path.join(dir, 'leaf.esm'), JSON.stringify(leaf))
+        fs.writeFileSync(
+          path.join(dir, 'host.esm'),
+          JSON.stringify(host(args, { ref: './leaf.esm' })),
+        )
+        const file = loadPath(path.join(dir, 'host.esm'))
+        resolveSubsystemRefsSync(file, dir)
+        return (file.models as Record<string, Comp>).Host!
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+
+    it("the host's call stays a placeholder; the leaf's call resolves", () => {
+      const h = loadMounted(['y'])
+      expect(rhsOf(h, 'y')).toEqual({ op: 'scale', args: ['y'] })
+      expect(rhsOf(h.subsystems!.Sub!, 'c')).toEqual({ op: '*', args: [3, 'c'] })
+    })
+
+    it("a host call of another arity is not checked against the leaf's definition", () => {
+      expect(rhsOf(loadMounted(['y', 'y']), 'y')).toEqual({ op: 'scale', args: ['y', 'y'] })
+    })
+
+    it("an authored subsystem's calls resolve to its own block; the host's do not", () => {
+      const out = lowerExpressionTemplates(host(['y', 'y'], leaf.models.Leaf)) as {
+        models: Record<string, Comp>
+      }
+      const h = out.models.Host!
+      expect(rhsOf(h, 'y')).toEqual({ op: 'scale', args: ['y', 'y'] })
+      expect(rhsOf(h.subsystems!.Sub!, 'c')).toEqual({
+        op: 'apply_operator',
+        args: [],
+        name: 'scale',
+        bindings: { x: 'c' },
+      })
+    })
+
+    it('a document whose only block sits on a nested authored subsystem is lowered', () => {
+      const doc = host(['y'], {
+        variables: {},
+        equations: [],
+        subsystems: { Deep: leaf.models.Leaf },
+      })
+      const h = (loadString(JSON.stringify(doc)).models as Record<string, Comp>).Host!
+      expect(rhsOf(h, 'y')).toEqual({ op: 'scale', args: ['y'] })
+      expect(rhsOf(h.subsystems!.Sub!.subsystems!.Deep!, 'c')).toEqual({ op: '*', args: [3, 'c'] })
+    })
   })
 })
