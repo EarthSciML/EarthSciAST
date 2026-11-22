@@ -7,7 +7,8 @@ package esm
 //   - the field `expression_templates` is read as `operators` and
 //     `expression_template_imports` as `operator_imports` (warning
 //     `deprecated_field`), wherever a field of that name appears — never among
-//     the keys of a name-keyed map, whose keys are author-chosen names;
+//     the keys of a name-keyed map or of an `operators` block, whose keys are
+//     author-chosen names;
 //   - the op `apply_expression_template` is read as `apply_operator`, and the
 //     spatial derivative — a `D` whose `wrt` is present and is not the literal
 //     "t", and the spellings `δ` and `∂` — as `partial`, every other field kept
@@ -87,7 +88,8 @@ type oldSpellingWalker struct {
 // rewriteOldSpellings applies the esm-2.4.0 old-spelling reading to one
 // document's JSON text. It returns the rewritten text, the `deprecated_field`
 // sites and the `deprecated_op` sites (each "<pointer> (<old>)", in document
-// order), or an error when an object spells a field both ways. Text that does
+// order), or an error when an object spells a field both ways (a key repeated
+// verbatim is not that; it decodes like any duplicate key). Text that does
 // not decode is returned unchanged; schema validation reports it.
 func rewriteOldSpellings(jsonStr string) (string, []string, []string, error) {
 	if !mayHoldOldSpellings(jsonStr) {
@@ -209,7 +211,10 @@ func (w *oldSpellingWalker) object(pointer string, namemap bool, entry int, defB
 		opStart, opEnd   = -1, -1
 		wrt              string
 		wrtStr, wrtFound bool
-		seen             = map[string]bool{}
+		// seen maps each field to the key that spelled it, so that only an
+		// old/new pair is refused; a key repeated verbatim is decoded like any
+		// duplicate key (the last occurrence wins).
+		seen = map[string]string{}
 	)
 	for w.dec.More() {
 		keyTok, err := w.dec.Token()
@@ -218,7 +223,9 @@ func (w *oldSpellingWalker) object(pointer string, namemap bool, entry int, defB
 		}
 		key, _ := keyTok.(string)
 		field := key
-		if !namemap {
+		// The keys of a name map and of an `operators` block are author-chosen
+		// names, never field spellings.
+		if !namemap && !defBlock {
 			if nk, old := oldFieldSpellings[key]; old {
 				ks, ke := w.span(key)
 				if ks >= 0 {
@@ -227,14 +234,14 @@ func (w *oldSpellingWalker) object(pointer string, namemap bool, entry int, defB
 				}
 				field = nk
 			}
-			if seen[field] {
+			if prev, dup := seen[field]; dup && prev != key {
 				w.err = newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
 					fmt.Sprintf("%s: an object carries both `%s` and its esm-2.4.0 spelling `%s`; "+
 						"write only `%s` (esm-spec §9.6.12)", pointerOrRoot(pointer),
 						oldNameOf(field), field, field))
 				return w.err
 			}
-			seen[field] = true
+			seen[field] = key
 		}
 		child := pointer + "/" + escapeJSONPointerSegment(field)
 		if defBlock {
