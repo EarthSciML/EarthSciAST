@@ -213,6 +213,33 @@ describe('one operator type (esm 2.4.0, esm-spec §9.6.12)', () => {
     expect(r.dimensions).toBeNull()
   })
 
+  it('ln is not a core operator: an unresolved call is refused, a definition resolves it', () => {
+    const err = errorOf(() => evaluateExpression({ op: 'ln', args: [2] } as any, new Map()))
+    expect(err).toBeInstanceOf(UnloweredOperatorError)
+    expect(err?.code).toBe('unlowered_operator')
+    const doc = {
+      esm: '2.4.0',
+      metadata: { name: 'ln_defined' },
+      models: {
+        m: {
+          variables: {
+            u: { type: 'state', units: '1', default: 1 },
+            y: { type: 'parameter', units: '1', default: 2 },
+          },
+          equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: { op: 'ln', args: ['y'] } }],
+          operators: { ln: { params: ['x'], body: { op: 'log', args: ['x'] } } },
+        },
+      },
+    }
+    const out = lowerExpressionTemplates(doc) as any
+    expect(out.models.m.equations[0].rhs).toEqual({
+      op: 'apply_operator',
+      args: [],
+      name: 'ln',
+      bindings: { x: 'y' },
+    })
+  })
+
   it('old codes are aliases of the new ones (esm-spec §9.6.6)', () => {
     expect(canonicalErrorCode('template_import_cycle')).toBe('operator_import_cycle')
     expect(canonicalErrorCode('apply_expression_template_unknown_template')).toBe(
