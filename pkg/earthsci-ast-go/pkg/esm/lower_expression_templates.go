@@ -1413,7 +1413,10 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 		defines := definitionDefines(name, decl)
 		match, ok := decl["match"]
 		hasMatch := ok && match != nil
-		if !hasMatch {
+		refOnly := isReferenceOnly(decl)
+		if !hasMatch && refOnly {
+			// reached only through an explicit reference (esm-spec §9.6.1)
+		} else if !hasMatch {
 			addArity(defines, len(plist))
 		} else if rop, ok := matchRootOp(decl); ok && !isCoreOp(rop) {
 			margs, _ := match.(map[string]any)["args"].([]any)
@@ -1423,7 +1426,7 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 		if err != nil {
 			return nil, err
 		}
-		if !hasMatch && !isCoreOp(defines) && defines != applyExpressionTemplateOp {
+		if !hasMatch && !refOnly && !isCoreOp(defines) && defines != applyExpressionTemplateOp {
 			args := make([]any, len(plist))
 			for i, p := range plist {
 				args[i] = p

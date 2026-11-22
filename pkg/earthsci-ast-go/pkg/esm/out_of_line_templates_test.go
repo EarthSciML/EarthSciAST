@@ -762,20 +762,13 @@ func TestOOL_EmitIdempotentByteWise(t *testing.T) {
 		{"placeholder_call", "fixture.esm"},
 		{"partial_wrt_param_instance", "fixture.esm"},
 		{"old_names", "fixture.esm"},
-	}
-	// OPEN design question (reported with the #759 port): a referenced `match`
-	// rule is materialized WITHOUT its `match` and `where` but WITH its
-	// inferred `defines` (here `div`), so on reload it is a match-less
-	// definition of `div` — callable at every `div` call, including the one its
-	// `where` excluded. Same shape as QUESTIONS.md Q11.
-	knownOpen := map[string]string{
-		"constrained_match_scope": "a materialized where-constrained rule becomes an unconstrained callable definition of its match root op on reload (open #759 design question, cf. Q11)",
+		// #759 round 2: materialized rules are reference-only (esm-spec §9.6.1).
+		{"reference_only_round_trip", "fixture.esm"},
+		{"independent_variable_wrt", "fixture.esm"},
+		{"vector_calculus_import", "fixture.esm"},
 	}
 	for _, c := range cases {
 		t.Run(c.dir+"/"+c.fixture, func(t *testing.T) {
-			if why, ok := knownOpen[c.dir]; ok {
-				t.Skip(why)
-			}
 			s1 := oolEmit(t, c.dir, c.fixture)
 			s2, err := EmitReferencePreserving(s1, oolConf(c.dir), nil)
 			if err != nil {

@@ -41,13 +41,45 @@ func ootStderr(t *testing.T, f func()) string {
 }
 
 func TestOneOperatorType_EmittedGoldens(t *testing.T) {
-	for _, dir := range []string{"operator_call_by_name", "placeholder_call", "partial_wrt_param_instance", "old_names"} {
+	for _, dir := range []string{"operator_call_by_name", "placeholder_call", "partial_wrt_param_instance", "old_names",
+		"reference_only_round_trip", "independent_variable_wrt", "vector_calculus_import"} {
 		t.Run(dir, func(t *testing.T) {
 			got := oolEmit(t, dir, "fixture.esm")
 			if want := mustRead(t, dir, "emitted.esm"); got != want {
 				t.Errorf("emit != emitted.esm (byte for byte)\n--- got ---\n%s\n--- want ---\n%s", got, want)
 			}
 		})
+	}
+}
+
+// reference_only_round_trip (esm-spec §9.6.1, #759 round 2): the emitted
+// golden re-emits to itself byte for byte — its materialized rules carry
+// `reference_only`, so reloading makes them no callable definitions.
+func TestOneOperatorType_ReferenceOnlyRoundTrip(t *testing.T) {
+	golden := mustRead(t, "reference_only_round_trip", "emitted.esm")
+	again, err := EmitReferencePreserving(golden, oolConf("reference_only_round_trip"), nil)
+	if err != nil {
+		t.Fatalf("re-emit: %v", err)
+	}
+	if again != golden {
+		t.Errorf("emit(load(emitted.esm)) != emitted.esm\n--- got ---\n%s", again)
+	}
+}
+
+// A `D` whose `wrt` is the document's renamed independent variable is the
+// time derivative, read with `wrt: "t"` and no warning (esm-spec §4.2).
+func TestOneOperatorType_IndependentVariableWrt(t *testing.T) {
+	doc := map[string]any{
+		"domain": map[string]any{"independent_variable": "tau"},
+		"x":      map[string]any{"op": "D", "args": []any{"u"}, "wrt": "tau"},
+		"y":      map[string]any{"op": "D", "args": []any{"u"}, "wrt": "z"},
+	}
+	got := CanonicalizeDocument(doc).(map[string]any)
+	if w := got["x"].(map[string]any); w["op"] != "D" || w["wrt"] != "t" {
+		t.Errorf("wrt naming the independent variable: %v; want D wrt t", w)
+	}
+	if w := got["y"].(map[string]any); w["op"] != "partial" {
+		t.Errorf("wrt naming another axis: %v; want partial", w)
 	}
 }
 

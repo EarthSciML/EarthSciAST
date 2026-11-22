@@ -659,15 +659,19 @@ func repointRefs(x any, refs map[uintptr]instRef, final map[string]string) any {
 }
 
 // matchStripped is a declaration without its `match`, `where` and `priority`:
-// how a referenced rule is materialized (esm-spec §9.6.4 rule 3).
+// how a referenced rule (or a variant) is materialized (esm-spec §9.6.4 rule
+// 3), marked `reference_only` (esm-spec §9.6.1) so that reloading an emitted
+// document makes it no callable definition of its operator: emit → load →
+// emit is exact. Mirrors the Julia `_match_stripped`.
 func matchStripped(decl map[string]any) map[string]any {
-	out := make(map[string]any, len(decl))
+	out := make(map[string]any, len(decl)+1)
 	for k, v := range decl {
 		if k == "match" || k == "where" || k == "priority" {
 			continue
 		}
 		out[k] = v
 	}
+	out["reference_only"] = true
 	return out
 }
 
