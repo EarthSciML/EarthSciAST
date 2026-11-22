@@ -143,8 +143,10 @@ end
 function _tpl_feeds_structural(tt::_TplTable, body::ASTExpr)
     fed = Set{String}()
     visit(x) = begin
-        (_tpl_is_call(x) && x.name isa AbstractString && x.bindings !== nothing &&
-            tt.reg !== nothing && haskey(tt.reg, x.name)) || return nothing
+        (
+            _tpl_is_call(x) && x.name isa AbstractString && x.bindings !== nothing &&
+                tt.reg !== nothing && haskey(tt.reg, x.name)
+        ) || return nothing
         for q in _tpl_def(tt, x.name).structural
             v = get(x.bindings, q, nothing)
             v isa VarExpr && push!(fed, v.name)

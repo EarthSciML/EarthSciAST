@@ -199,15 +199,15 @@ const _CLS = ClassificationConformanceAdapter
         # A JSON string keeps document order: each model is named before its
         # subsystems, as the Python, TypeScript and Go loaders do.
         leaf(kind) = """{"system_kind": "$kind",
-            "variables": {"u": {"type": "unknown", "units": "1", "default": 1.0}},
-            "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                           "rhs": {"op": "-", "args": ["u"]}}]"""
+        "variables": {"u": {"type": "unknown", "units": "1", "default": 1.0}},
+        "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                       "rhs": {"op": "-", "args": ["u"]}}]"""
         src = """{"esm": "$(EarthSciAST.SCHEMA_VERSION)", "metadata": {"name": "m"},
-          "models": {
-            "A": $(leaf("pde")), "subsystems": {
-              "S": $(leaf("ode")), "subsystems": {"T": $(leaf("pde"))}}},
-              "R": $(leaf("pde"))}}},
-            "B": $(leaf("ode"))}}}"""
+        "models": {
+          "A": $(leaf("pde")), "subsystems": {
+            "S": $(leaf("ode")), "subsystems": {"T": $(leaf("pde"))}}},
+            "R": $(leaf("pde"))}}},
+          "B": $(leaf("ode"))}}}"""
         @test_logs (
             :warn,
             "deprecated_system_kind: the system_kind value \"pde\" is deprecated " *

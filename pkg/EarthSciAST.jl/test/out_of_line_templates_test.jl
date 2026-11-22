@@ -120,8 +120,10 @@ end
                 ("template_instance_variants", "fixture.esm", "emitted.esm", "expanded.esm"),
                 ("rewrite_shared_by_unreached_entry", "fixture.esm", "emitted.esm", "expanded.esm"),
                 ("opacity_rule_replacement", "fixture.esm", "emitted.esm", "expanded.esm"),
-                ("rewrite_depth_through_bodies", "chain_depth_64.esm",
-                    "emitted_chain_depth_64.esm", "expanded_chain_depth_64.esm"),
+                (
+                    "rewrite_depth_through_bodies", "chain_depth_64.esm",
+                    "emitted_chain_depth_64.esm", "expanded_chain_depth_64.esm",
+                ),
             ]
             @test _emit(dir, fix) == read(conf(dir, emitted), String)
             # Emit then load is a fixed point: the emitted form reloads and
@@ -391,9 +393,9 @@ end
         x = EarthSciAST.expand_flattened_refs(flat)
         eqs = Any[
             OrderedDict{String, Any}(
-                    "lhs" => EarthSciAST.serialize_expression(eq.lhs),
-                    "rhs" => EarthSciAST.serialize_expression(eq.rhs)
-                ) for eq in x.equations
+                "lhs" => EarthSciAST.serialize_expression(eq.lhs),
+                "rhs" => EarthSciAST.serialize_expression(eq.rhs)
+            ) for eq in x.equations
         ]
         @test emit_esm_string(OrderedDict{String, Any}("equations" => eqs)) ==
             read(conf(d, "flattened_expanded.esm"), String)

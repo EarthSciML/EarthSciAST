@@ -344,9 +344,9 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     )
     // Rule 3 lowers an `enum` op spelled by a parameter per template instance,
     // at load (esm-spec §9.6.4 rule 3); the golden carries it lowered.
-    expect(canonEqs(expandRaw(conf('import_library_enum', 'fixture_importer_redeclares.esm')))).toEqual(
-      canonEqs(golden(conf('import_library_enum', 'expanded_importer_redeclares.esm'))),
-    )
+    expect(
+      canonEqs(expandRaw(conf('import_library_enum', 'fixture_importer_redeclares.esm'))),
+    ).toEqual(canonEqs(golden(conf('import_library_enum', 'expanded_importer_redeclares.esm'))))
     // The importer's same-name enum (g_per_hp_hr = 7) does not reach the library
     // body, which keeps the library's 1; the importer's own enum ops, including
     // one bound into the template's parameter, resolve against the importer's.

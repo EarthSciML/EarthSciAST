@@ -175,7 +175,7 @@ name its body reads, and no derivative parameter already given to another
 parameter of it.
 """
 function _dt_param_name(tpl::_DtTemplate, p::String)
-    get!(tpl.dtnames, p) do
+    return get!(tpl.dtnames, p) do
         taken = union(tpl.reads, values(tpl.dtnames))
         n = p * "_dt"
         while n in taken
