@@ -338,7 +338,7 @@ theorem nabArg9_read {c : Ctx} {a : Json} (ha : M c a) (n : NabK) (rest : List T
     pPost c g (nabArg9 c.sf n ((pr c a).at c.sf 9) ++ rest) = some (a, rest) := by
   unfold nabArg9 at hg ⊢
   by_cases hn : n = .curl ∧ startsNum ((pr c a).at c.sf 9) = true
-  · rw [if_pos hn] at hg ⊢
+  · rw [ite_eq_left hn] at hg ⊢
     have hlvl : 9 ≤ (pr c a).lvl := by
       by_contra hc
       have h2 := hn.2
@@ -349,7 +349,7 @@ theorem nabArg9_read {c : Ctx} {a : Json} (ha : M c a) (n : NabK) (rest : List T
     have := grp_child ha 9 (by omega) (by omega) rest hr g (by
       simp only [length_grp] at hg; unfold need at hg ⊢; omega)
     rwa [pLvl9] at this
-  · rw [if_neg hn] at hg ⊢
+  · rw [ite_eq_right hn] at hg ⊢
     have := PL_at ha 9 (by omega) (by omega) rest hr g hg
     rwa [pLvl9] at this
 
@@ -405,7 +405,7 @@ theorem M_nab (c : Ctx) (o : String) (n : NabK) (a : Json) (ho : kindOf o = .nab
     rw [pNot.eq_3]
     unfold nabArg at hf ⊢
     by_cases hA : startsNabla (pr c a).toks = true ∧ 6 ≤ (pr c a).lvl
-    · rw [if_pos hA] at hf ⊢
+    · rw [ite_eq_left hA] at hf ⊢
       obtain ⟨tr, htr⟩ : ∃ tr, (pr c a).toks = .kw .nabla :: tr := by
         have h1 := hA.1
         cases ht : (pr c a).toks with
@@ -425,7 +425,7 @@ theorem M_nab (c : Ctx) (o : String) (n : NabK) (a : Json) (ho : kindOf o = .nab
       rw [htr]
       simp only [List.cons_append]
       rw [pNabArg.eq_2, ← List.cons_append, ← htr, h6]
-    · rw [if_neg hA] at hf ⊢
+    · rw [ite_eq_right hA] at hf ⊢
       have hh := nabArg9_head ha n hA rest
       rw [nabTail_head c.sf n _ (fun t r he => ⟨(hh t r he).1, (hh t r he).2.1, (hh t r he).2.2.1⟩)]
       simp only

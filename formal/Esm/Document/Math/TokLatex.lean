@@ -601,7 +601,7 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       have hN : AllOK (nabHead .latex n ++ nabArg .latex n (pr c a)) := by
         unfold nabArg
         by_cases hN6 : startsNabla (pr c a).toks = true ∧ 6 ≤ (pr c a).lvl
-        · rw [if_pos hN6]
+        · rw [ite_eq_left hN6]
           obtain ⟨tr, htr⟩ : ∃ tr, (pr c a).toks = .kw .nabla :: tr := by
             have h1 := hN6.1
             cases ht : (pr c a).toks with
@@ -617,16 +617,16 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
           | grad => simp only [nabHead]; aok
           | div => simp only [nabHead]; aok
           | lap => simp only [nabHead]; aok
-        · rw [if_neg hN6]
+        · rw [ite_eq_right hN6]
           cases n with
           | curl =>
             simp only [nabHead, nabArg9, true_and]
             by_cases hs : startsNum ((pr c a).at .latex 9) = true
-            · rw [if_pos hs]
+            · rw [ite_eq_left hs]
               have hG := allOK_grp (sf := .latex) rfl hA
               simp only [grp, ↓reduceIte] at hG ⊢
               exact allOK_cons' (show kwOK .nabla = true from rfl) (allOK_times_tok hG rfl)
-            · rw [if_neg hs]
+            · rw [ite_eq_right hs]
               have hh := headOK_at (M_of_isE c a ha) 9
               rw [hc] at hh
               obtain ⟨u, r, he⟩ : ∃ u r, (pr c a).at .latex 9 = u :: r := by

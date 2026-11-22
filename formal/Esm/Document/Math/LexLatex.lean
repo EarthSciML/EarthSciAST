@@ -1642,7 +1642,7 @@ theorem sciExp_times_tok (S : List Char) (hS : S = [] ∨ S = [' ']) (u : Tok)
     rcases hS with rfl | rfl
     · exact noTen_tok u hu hn Y
     · rw [List.singleton_append, skipSp_space]; exact noTen_tok u hu hn Y
-  simp only [dropP, Option.some.injEq]
+  simp only []
   split
   · rfl
   · rw [h10]
@@ -1686,8 +1686,8 @@ theorem TN_sep (k : Kw) (hk : k = .amp ∨ k = .nl) (b : List Tok) (hb : TN b) :
 theorem TN_app_sep (k : Kw) (hk : k = .amp ∨ k = .nl) : ∀ (a b : List Tok), TN a → TN b →
     TN (a ++ .kw k :: b)
   | [], b, _, hb => TN_sep k hk b hb
-  | [t], b, _, hb => ⟨(fun _ => rfl), TN_sep k hk b hb⟩
-  | t :: u :: a, b, ha, hb => ⟨ha.1, TN_app_sep k hk (u :: a) b ha.2 hb⟩
+  | [_], b, _, hb => ⟨(fun _ => rfl), TN_sep k hk b hb⟩
+  | _ :: u :: a, b, ha, hb => ⟨ha.1, TN_app_sep k hk (u :: a) b ha.2 hb⟩
 
 theorem merges_space (t : Tok) : merges t ' ' = false := by
   unfold merges

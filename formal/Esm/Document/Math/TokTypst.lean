@@ -771,7 +771,7 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
       refine mk_ok ?_ hselfN.1 hselfN.2
       unfold nabArg
       by_cases hN6 : startsNabla (pr c a).toks = true ∧ 6 ≤ (pr c a).lvl
-      · rw [if_pos hN6]
+      · rw [ite_eq_left hN6]
         obtain ⟨hB, hBn, hBne⟩ := CH a (sizeOf_node_lt (by simp)) ha 6
         rw [at_eq, iteT hN6.2] at hB hBn hBne
         obtain ⟨tr, htr⟩ : ∃ tr, (pr c a).toks = .kw .nabla :: tr := by
@@ -798,7 +798,7 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
           simp only [nabHead, List.cons_append, List.nil_append]
           rw [htr] at hB ⊢
           exact good_cons rfl (good_times_tok hB rfl (by simp)) (nice_cons _ (by simp) rfl)
-      · rw [if_neg hN6]
+      · rw [ite_eq_right hN6]
         cases n with
         | grad =>
           simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
@@ -813,11 +813,11 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
         | curl =>
           simp only [nabHead, nabArg9, true_and, List.cons_append, List.nil_append]
           by_cases hs : startsNum ((pr c a).at .typst 9) = true
-          · rw [if_pos hs]
+          · rw [ite_eq_left hs]
             have hG := good_grp hA hAn
             simp only [grp, reduceCtorEq, ↓reduceIte] at hG ⊢
             exact good_cons rfl (good_times_tok hG rfl (by simp)) (nice_cons _ (by simp) rfl)
-          · rw [if_neg hs]
+          · rw [ite_eq_right hs]
             obtain ⟨u, r, he⟩ := List.exists_cons_of_ne_nil hAne
             rw [he] at hA hs ⊢
             have hu : startsNum [u] = false := by cases u <;> simp_all [startsNum]
