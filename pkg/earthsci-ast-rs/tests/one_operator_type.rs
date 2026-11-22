@@ -265,3 +265,80 @@ fn old_codes_are_aliases_of_the_new_ones() {
         );
     }
 }
+
+/// esm-spec §9.6.12: an object spelling both `expression_templates` and
+/// `operators` is `operator_invalid_definition`, whether the library is
+/// loaded itself or imported.
+#[test]
+fn a_library_with_both_spellings_is_refused_alike_at_the_root_and_imported() {
+    let mut lib = read_json(&oot("old_names").join("lib_new.esm"));
+    lib["expression_templates"] = lib["operators"].clone();
+    let host = serde_json::json!({
+        "esm": "2.4.0",
+        "metadata": {"name": "importer"},
+        "models": {"m": {
+            "operator_imports": [{"ref": "lib.esm"}],
+            "variables": {"u": {"type": "unknown", "units": "1", "default": 1.0}},
+            "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "u"}]
+        }}
+    });
+    let d = tempfile::tempdir().expect("tempdir");
+    std::fs::write(d.path().join("lib.esm"), lib.to_string()).expect("write lib");
+    std::fs::write(d.path().join("host.esm"), host.to_string()).expect("write host");
+    for f in ["lib.esm", "host.esm"] {
+        let err = earthsci_ast::load_path(d.path().join(f)).expect_err("refused");
+        assert_eq!(
+            err.code(),
+            Some("operator_invalid_definition"),
+            "{f}: {err}"
+        );
+    }
+}
+
+/// esm-spec §4.2, §9.6.12: a `partial` call has the fixed unit
+/// `[f]/[wrt]` whichever rule lowers it. A fired `match` rule whose body
+/// disagrees is `definition_unit_mismatch`, and the equation is typed by the
+/// fixed unit, so it is consistent.
+#[test]
+fn a_fired_partial_rule_is_checked_against_the_fixed_unit() {
+    let doc = serde_json::json!({
+        "esm": "2.4.0",
+        "metadata": {"name": "partial_rule_fixed_unit"},
+        "models": {"m": {
+            "variables": {
+                "u": {"type": "parameter", "units": "kg", "default": 1.0},
+                "x": {"type": "parameter", "units": "m", "default": 1.0},
+                "k": {"type": "parameter", "units": "1", "default": 0.5},
+                "y": {"type": "unknown", "units": "kg/m"}
+            },
+            "equations": [{
+                "lhs": "y",
+                "rhs": {"op": "partial", "args": ["u"], "wrt": "x"}
+            }],
+            "operators": {
+                "scaled": {
+                    "params": ["f", "d"],
+                    "match": {"op": "partial", "args": ["f"], "wrt": "d"},
+                    "body": {"op": "*", "args": ["f", "k"]}
+                }
+            }
+        }}
+    });
+    let file = earthsci_ast::load_string(&doc.to_string()).expect("loads");
+    let r = earthsci_ast::validate(&file);
+    let codes: Vec<&str> = r
+        .structural_errors
+        .iter()
+        .map(|e| e.code.as_str())
+        .collect();
+    assert!(
+        codes.contains(&"definition_unit_mismatch"),
+        "{:?}",
+        r.structural_errors
+    );
+    assert!(
+        !codes.contains(&"unit_inconsistency"),
+        "{:?}",
+        r.structural_errors
+    );
+}

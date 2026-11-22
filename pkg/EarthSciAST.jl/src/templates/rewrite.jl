@@ -705,11 +705,33 @@ struct _Lowering
     # Operand counts the definitions of each defined operator take
     # (esm-spec §9.6.12 "Arity").
     arities::Dict{String, Set{Int}}
+    # Registry entries only subsystems own (merged from a mounted or an
+    # authored subsystem's block, `_hoist_mounted_templates!`), with their
+    # owner paths below the component. Such an entry resolves a call, and
+    # counts for an arity, only at a site within one of its owners (esm-spec
+    # §9.6.3 constraint 4); every other entry is the component's own.
+    owners::Dict{String, Vector{String}}
+    # Operand counts of the subsystem-owned definitions: op => (count, owners).
+    sub_arities::Dict{String, Vector{Tuple{Int, Vector{String}}}}
+    # The subsystem path of the site being rewritten; "" is the component's own.
+    site::Base.RefValue{String}
     shape_env::Dict{String, Vector{String}}
     enums::Any
     scope::String
     depth::IdDict{Any, Int}
 end
+
+# Is the subsystem path `site` at or below the owner path `owner`?
+_path_within(site::String, owner::String) = site == owner || startswith(site, owner * ".")
+
+# Is the registry entry `name` a definition at the site `L` is rewriting?
+function _visible_at_site(L::_Lowering, name::String)
+    o = get(L.owners, name, nothing)
+    return o === nothing || any(p -> _path_within(L.site[], p), o)
+end
+
+# The site whose definitions a registry entry's body is read with.
+_owner_site(L::_Lowering, name::String) = (o = get(L.owners, name, nothing); o === nothing ? "" : first(o))
 
 """
     _rule_reference(rule, captured) -> node
@@ -798,12 +820,12 @@ operand count, is `operator_arity_mismatch` at load. A name with no definition
 in scope is a placeholder, whatever its arity.
 """
 function _check_call_arity(node, L::_Lowering, scope::AbstractString)
-    isempty(L.arities) && return nothing
+    (isempty(L.arities) && isempty(L.sub_arities)) && return nothing
     _visit_json(node) do _, n
         _is_object(n) || return true
         op = _raw_get(n, "op")
         op isa AbstractString || return true
-        counts = get(L.arities, String(op), nothing)
+        counts = _site_arities(L, String(op))
         counts === nothing && return true
         _is_core_op(op) && return true
         args = _raw_get(n, "args")
@@ -819,6 +841,20 @@ function _check_call_arity(node, L::_Lowering, scope::AbstractString)
         )
     end
     return nothing
+end
+
+# The operand counts the definitions of `op` visible at `L`'s site take, or
+# `nothing` when none is.
+function _site_arities(L::_Lowering, op::String)
+    own = get(L.arities, op, nothing)
+    subs = get(L.sub_arities, op, nothing)
+    subs === nothing && return own
+    counts = own === nothing ? Set{Int}() : copy(own)
+    site = L.site[]
+    for (k, owners) in subs
+        any(p -> _path_within(site, p), owners) && push!(counts, k)
+    end
+    return isempty(counts) ? nothing : counts
 end
 
 # The registry entries a node's references reach, transitively through bodies.
@@ -886,16 +922,24 @@ function _explain_unresolved_call(call, registry, shape_env = _EMPTY_SHAPE_ENV):
     return "definitions of '$op' in scope: " * join(lines, "; ") * note
 end
 
+# A shape list as a message writes it: `[edges, cells]`.
+_shape_text(shp) = "[" * join((string(s) for s in shp), ", ") * "]"
+
+# Why a `where` block excluded a definition whose pattern matched: its first
+# constraint that fails, naming the operand's declared shape (esm-spec §9.6.6).
 function _where_reason(whr, b::Dict{String, Any}, shape_env)::String
     whr === nothing && return "holds (the definition was not selected)"
     for (p, c) in pairs(whr)
         want = _raw_get(c, "shape")
+        want_v = want isa AbstractVector ? String[string(s) for s in want] : nothing
         got = get(b, string(p), nothing)
         shp = got isa AbstractString ? get(shape_env, String(got), nothing) : nothing
-        return "$(p).shape = $(want) fails: the operand bound to $p " *
-            (got isa AbstractString ? "('$got') has declared shape $(shp === nothing ? "none" : shp)" : "is not a bare variable")
+        shp !== nothing && shp == want_v && continue
+        want_s = want isa AbstractVector ? _shape_text(want) : string(want)
+        return "$(p).shape = $(want_s) fails: the operand bound to $p " *
+            (got isa AbstractString ? "('$got') has declared shape $(shp === nothing ? "none" : _shape_text(shp))" : "is not a bare variable")
     end
-    return "fails"
+    return "holds (the definition was not selected)"
 end
 
 """
@@ -920,6 +964,7 @@ function _select_definition(L::_Lowering, n, op::String, bv::Union{Nothing, _Bod
     calls = isempty(op) ? nothing : get(L.call_rules, op, nothing)
     if calls !== nothing && _only_op_args(n)
         for rule in calls
+            _visible_at_site(L, rule.name) || continue
             best !== nothing && _selection_key(best) < _selection_key(rule) && break
             b = Dict{String, Any}()
             if _match_pattern(rule.pattern, n, rule.params, b, bv) &&
@@ -994,6 +1039,8 @@ function _has_template_machinery(raw_data)
     for (_, _, comp) in _components(raw_data)
         tpl = _raw_get(comp, "operators")
         _is_object(tpl) && !isempty(tpl) && return true
+        # A subsystem's own block (authored, or brought by a mount).
+        isempty(_collect_mounted_blocks!(Tuple{String, Any}[], comp, "")) || return true
     end
     return _has_apply_op(raw_data)
 end
@@ -1160,8 +1207,58 @@ end
 # Public API
 # ---------------------------------------------------------------------------
 
+# The expression sites of the component `comp` with the subsystem path each
+# sits at ("" for the component's own fields): `(holder, key, path)`, in
+# document order, the registry and the subsystem maps themselves excluded.
+function _component_sites(comp)
+    out = Tuple{Any, Any, String}[]
+    _push_sites!(out, comp, "")
+    return out
+end
+
+function _push_sites!(out, node, path::String)
+    for k in collect(keys(node))
+        sk = string(k)
+        sk == "operators" && continue
+        if sk == "subsystems" && _is_object(node[k])
+            subs = node[k]
+            for (sn, sub) in pairs(subs)
+                sp = isempty(path) ? string(sn) : "$path.$(sn)"
+                if _is_object(sub)
+                    _push_sites!(out, sub, sp)
+                else
+                    push!(out, (subs, sn, path))
+                end
+            end
+        else
+            push!(out, (node, k, path))
+        end
+    end
+    return out
+end
+
+_site_label(path::String, k) = isempty(path) ? string(k) : "subsystems.$path.$(k)"
+
+# esm-spec §9.6.1 / §9.6.4 rule 5: an entry only subsystems own is written on
+# the component as `reference_only`, so the written document's registry makes
+# it no callable definition there and emit → load is a fixed point.
+function _mark_subsystem_owned!(comp, L::_Lowering)
+    isempty(L.owners) && return comp
+    block = _raw_get(comp, "operators")
+    _is_object(block) || return comp
+    for n in keys(L.owners)
+        d = _raw_get(block, n)
+        (_is_object(d) && !_is_reference_only(d)) || continue
+        nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(d))
+        nd["reference_only"] = true
+        block[n] = nd
+        haskey(L.named, n) && (L.named[n] = nd)
+    end
+    return comp
+end
+
 """
-    _hoist_mounted_templates!(comp, cname)
+    _hoist_mounted_templates!(comp, cname) -> Dict{String,Vector{String}}
 
 Merge into the component `comp`'s `expression_templates` block the template
 definitions that models mounted as its subsystems (esm-spec §4.7) brought
@@ -1181,12 +1278,17 @@ at its call site (esm-spec §9.6.4 rule 1). So a leaf mounted twice brings two
 identical blocks, which keep one definition. The mounted subtree below the
 mount point keeps naming its own entries; only `comp`'s other sites follow
 `comp`'s renames.
+
+Returns the merged entries only subsystems own, each with its owner paths.
+Definitions are component-local (esm-spec §9.6.3 constraint 4): such an entry
+resolves a call, and counts for an arity (§9.6.12), only at a site within one
+of its owners, never at `comp`'s own sites.
 """
 function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
     mounts = Tuple{String, Any}[]          # (subsystem path, subsystem)
     _collect_mounted_blocks!(mounts, comp, "")
-    isempty(mounts) && return comp
-    newblock, rn = _merge_mounted_blocks(_raw_get(comp, "operators"), cname, mounts)
+    isempty(mounts) && return Dict{String, Vector{String}}()
+    newblock, rn, owners = _merge_mounted_blocks(_raw_get(comp, "operators"), cname, mounts)
     # `comp`'s own sites, outside the mount points.
     if rn !== nothing
         for k in collect(keys(comp))
@@ -1199,11 +1301,11 @@ function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
         delete!(sub, "operators")
     end
     comp["operators"] = newblock
-    return comp
+    return owners
 end
 
 """
-    _merge_mounted_blocks(own, cname, mounts) -> (block, own_rename)
+    _merge_mounted_blocks(own, cname, mounts) -> (block, own_rename, owners)
 
 The merge `_hoist_mounted_templates!` describes, shared with the typed mount
 path (`resolve_subsystem_refs!`): the component `cname`'s registry `own` (raw,
@@ -1212,6 +1314,8 @@ model still carrying its `expression_templates`) merged by flatten's rule.
 Each mounted model's own references are renamed here, in place; the caller
 applies `own_rename` (old name => new name, or `nothing`) to the component's
 other sites. `own`'s `match` rules are kept, ahead of the merged entries.
+`owners` maps each merged entry no entry of `own` became to the paths of the
+mounted models that brought it.
 """
 # `decl` carrying its `defines` (inferred under `name` when absent).
 function _with_defines(name::String, decl)
@@ -1246,6 +1350,23 @@ function _merge_mounted_blocks(own, cname::String, mounts)
         end
     end
     rn = get(rename, cname, nothing)
+    own_names = Set{String}()
+    if _is_object(own)
+        for (n, _) in pairs(own)
+            push!(own_names, rn === nothing ? string(n) : get(rn, string(n), string(n)))
+        end
+    end
+    owners = Dict{String, Vector{String}}()
+    for (path, sub) in mounts
+        rm = get(rename, path, nothing)
+        for (n, d) in pairs(_raw_get(sub, "operators"))
+            _raw_get(d, "match") === nothing || continue
+            nn = rm === nothing ? string(n) : get(rm, string(n), string(n))
+            nn in own_names && continue
+            ps = get!(owners, nn, String[])
+            path in ps || push!(ps, path)
+        end
+    end
     newblock = OrderedDict{String, Any}()
     if _is_object(own)
         for (n, d) in pairs(own)
@@ -1254,7 +1375,7 @@ function _merge_mounted_blocks(own, cname::String, mounts)
         end
     end
     merge!(newblock, merged)
-    return newblock, rn
+    return newblock, rn, owners
 end
 
 # The subsystems below `node` that carry a mounted block, with their paths;
@@ -1360,7 +1481,7 @@ function lower_expression_templates(raw_data)
         comp = compraw::OrderedDict{String, Any}
         # A model mounted as a subsystem keeps its references and brings its
         # template definitions; they join this component's registry here.
-        _hoist_mounted_templates!(comp, cname)
+        owners = _hoist_mounted_templates!(comp, cname)
         # Static shape environment for `where` constraint evaluation
         # (esm-spec §9.6.1): declared variable shapes only.
         shape_env = _component_shape_env(comp)
@@ -1373,6 +1494,7 @@ function lower_expression_templates(raw_data)
         match_rules = _RewriteRule[]
         call_rules = Dict{String, Vector{_RewriteRule}}()
         arities = Dict{String, Set{Int}}()
+        sub_arities = Dict{String, Vector{Tuple{Int, Vector{String}}}}()
         if _is_object(tplraw)
             # `root` is order-preserving (`_to_ordered`), so this map's key
             # order IS the authored declaration order — the `match`-rule
@@ -1407,6 +1529,8 @@ function lower_expression_templates(raw_data)
                 refonly = _is_reference_only(decl)
                 if m === nothing && refonly
                     # reached only through an explicit reference (§9.6.1)
+                elseif m === nothing && haskey(owners, tname)
+                    push!(get!(sub_arities, defines, Tuple{Int, Vector{String}}[]), (length(td.params), owners[tname]))
                 elseif m === nothing
                     push!(get!(arities, defines, Set{Int}()), length(td.params))
                 elseif rop !== nothing && !_is_core_op(rop)
@@ -1455,17 +1579,19 @@ function lower_expression_templates(raw_data)
         end
         cscope = "$compkind.$cname"
         L = _Lowering(
-            named, match_rules, call_rules, arities, shape_env, enums, cscope,
+            named, match_rules, call_rules, arities, owners, sub_arities, Ref(""),
+            shape_env, enums, cscope,
             IdDict{Any, Int}()
         )
         # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
         # non-template field (esm-spec §9.6.3): each firing writes a reference
         # to its rule (constraint 7); references are leaves for matching and
         # the walk descends into their bindings (§9.6.4 rule 4).
-        for k in collect(keys(comp))
-            k == "operators" && continue
-            comp[k], _ = _rewrite_to_fixpoint(comp[k], L, "$cscope.$k")
+        for (holder, k, path) in _component_sites(comp)
+            L.site[] = path
+            holder[k], _ = _rewrite_to_fixpoint(holder[k], L, "$cscope.$(_site_label(path, k))")
         end
+        L.site[] = ""
         push!(lowerings, (comp, L, Any[]))
         haskey(by_name, cname) || (by_name[cname] = length(lowerings))
     end
@@ -1500,21 +1626,25 @@ function lower_expression_templates(raw_data)
         end
         # esm-spec §9.6.12 "Arity": surviving calls in the component, in the
         # transforms it receives, and in the bodies its references reach.
-        if !isempty(L.arities)
+        if !isempty(L.arities) || !isempty(L.sub_arities)
             reached = Set{String}()
-            for k in collect(keys(comp))
-                k == "operators" && continue
-                _check_call_arity(comp[k], L, "$(L.scope).$k")
-                _reached_definitions!(reached, comp[k], L.named)
+            for (holder, k, path) in _component_sites(comp)
+                L.site[] = path
+                _check_call_arity(holder[k], L, "$(L.scope).$(_site_label(path, k))")
+                _reached_definitions!(reached, holder[k], L.named)
             end
+            L.site[] = ""
             for entry in transforms
                 _check_call_arity(entry["transform"], L, "$(L.scope) coupling transform")
                 _reached_definitions!(reached, entry["transform"], L.named)
             end
             for r in sort!(collect(reached))
+                L.site[] = _owner_site(L, r)
                 _check_call_arity(_raw_get(L.named[r], "body"), L, "$(L.scope).operators.$r")
             end
+            L.site[] = ""
         end
+        _mark_subsystem_owned!(comp, L)
     end
 
     # Validation discharge (esm-spec §9.6.9): the makearray-region check on the

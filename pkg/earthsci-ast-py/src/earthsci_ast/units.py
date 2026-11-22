@@ -2588,7 +2588,12 @@ class UnitValidator:
         name = call.get("name")
         declared = None if uexpr is None else self._eval_unit_expr(uexpr, call)
         fixed_u = None if fixed is None else self._eval_unit_expr(fixed, call)
-        call_u = declared if uexpr is not None else body_u
+        # The call's unit: its unit expression, else the fixed one of
+        # partial / integral, else its body's.
+        if uexpr is not None:
+            call_u = declared
+        else:
+            call_u = fixed_u if fixed_u is not None else body_u
         for what, want in (
             ("its unit expression", declared),
             (f"the fixed unit expression of '{call.get('defines')}'", fixed_u),

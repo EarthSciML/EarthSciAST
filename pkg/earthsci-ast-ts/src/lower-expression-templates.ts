@@ -914,6 +914,8 @@ interface Lowering {
   callRules: Map<string, MatchRule[]>
   /** Operand counts the definitions of each defined operator take (esm-spec §9.6.12 "Arity"). */
   arities: Map<string, Set<number>>
+  /** The component-wide call scope {@link callScopeAt} narrows per subsystem. */
+  calls: CallScope
   shapeEnv: ShapeEnv
   enums: unknown
   scope: string
@@ -1702,8 +1704,89 @@ interface RewriteContext {
   callRules: Map<string, MatchRule[]>
   /** Operand counts the definitions of each defined operator take (§9.6.12). */
   arities: Map<string, Set<number>>
+  /** Operand counts of the `match` rules alone, by the defined operator at their root. */
+  matchArities: Map<string, Set<number>>
+  /** Each match-less definition: its name, the operator it defines, its operand count. */
+  matchlessArities: [string, string, number][]
   /** The enclosing component's static shape environment for `where` (esm-spec §9.6.1). */
   shapeEnv: ShapeEnv
+}
+
+/**
+ * The definitions a component's calls may resolve to, by where the call
+ * stands. Definitions are component-local (esm-spec §9.6.3 constraint 4): an
+ * entry a subsystem's block contributed (a mounted leaf's, or an authored
+ * subsystem's own) is a definition of its operator only at a call inside that
+ * subsystem's subtree; the component's own entries are definitions everywhere
+ * in it.
+ */
+interface CallScope {
+  callRules: Map<string, MatchRule[]>
+  matchArities: Map<string, Set<number>>
+  matchlessArities: [string, string, number][]
+  /** Registry entry => the subsystem paths (below the component) that own it; absent = the component's own. */
+  owners: ReadonlyMap<string, ReadonlySet<string>>
+}
+
+/** Is the entry `name` a definition at a call standing in the subsystem `path` (`''` = the component itself)? */
+function ownedOnPath(scope: CallScope, name: string, path: string): boolean {
+  const owners = scope.owners.get(name)
+  if (owners === undefined) return true
+  for (const o of owners) if (path === o || path.startsWith(`${o}.`)) return true
+  return false
+}
+
+/** The `callRules` and `arities` a call standing in the subsystem `path` sees. */
+function callScopeAt(
+  scope: CallScope,
+  path: string,
+): { callRules: Map<string, MatchRule[]>; arities: Map<string, Set<number>> } {
+  const callRules = new Map<string, MatchRule[]>()
+  for (const [op, list] of scope.callRules) {
+    const kept = list.filter((r) => ownedOnPath(scope, r.name, path))
+    if (kept.length > 0) callRules.set(op, kept)
+  }
+  const arities = new Map<string, Set<number>>()
+  for (const [op, ks] of scope.matchArities) arities.set(op, new Set(ks))
+  for (const [name, op, k] of scope.matchlessArities) {
+    if (!ownedOnPath(scope, name, path)) continue
+    let ks = arities.get(op)
+    if (ks === undefined) arities.set(op, (ks = new Set()))
+    ks.add(k)
+  }
+  return { callRules, arities }
+}
+
+/**
+ * Apply `fn` to each non-registry field of `comp` with the {@link Lowering}
+ * for where it stands: `comp`'s own fields with `L`, each subsystem's fields
+ * (at any depth) with `L` narrowed to that subsystem's call scope. `fn`
+ * returns the field's new value.
+ */
+function mapScopedFields(
+  comp: Record<string, unknown>,
+  L: Lowering,
+  scope: string,
+  fn: (node: Json, L: Lowering, scope: string) => Json,
+): void {
+  const walk = (node: Record<string, unknown>, path: string, nodeScope: string): void => {
+    const here = path === '' ? L : { ...L, ...callScopeAt(L.calls, path) }
+    for (const k of Object.keys(node)) {
+      if (k === 'operators' && node === comp) continue
+      const subs = node[k]
+      if (k === 'subsystems' && isObject(subs)) {
+        for (const [name, sub] of Object.entries(subs)) {
+          const subPath = path === '' ? name : `${path}.${name}`
+          const subScope = `${nodeScope}.subsystems.${name}`
+          if (isObject(sub)) walk(sub, subPath, subScope)
+          else subs[name] = fn(sub as Json, { ...L, ...callScopeAt(L.calls, subPath) }, subScope)
+        }
+        continue
+      }
+      node[k] = fn(node[k] as Json, here, `${nodeScope}.${k}`)
+    }
+  }
+  walk(comp, '', scope)
 }
 
 /**
@@ -1731,9 +1814,11 @@ function buildRewriteContext(
   const matchRules: MatchRule[] = []
   const callRules = new Map<string, MatchRule[]>()
   const arities = new Map<string, Set<number>>()
-  const addArity = (op: string, k: number): void => {
-    let s = arities.get(op)
-    if (s === undefined) arities.set(op, (s = new Set()))
+  const matchArities = new Map<string, Set<number>>()
+  const matchlessArities: [string, string, number][] = []
+  const addArity = (into: Map<string, Set<number>>, op: string, k: number): void => {
+    let s = into.get(op)
+    if (s === undefined) into.set(op, (s = new Set()))
     s.add(k)
   }
   // Object key order in JS preserves declaration order, so the
@@ -1754,10 +1839,12 @@ function buildRewriteContext(
     if (decl.match === undefined && refOnly) {
       // reached only through an explicit reference (esm-spec §9.6.1)
     } else if (decl.match === undefined) {
-      addArity(defines, decl.params.length)
+      addArity(arities, defines, decl.params.length)
+      matchlessArities.push([tname, defines, decl.params.length])
     } else if (rop !== undefined && !isCoreOp(rop)) {
       const margs = isObject(decl.match) ? decl.match.args : undefined
-      addArity(rop, Array.isArray(margs) ? margs.length : 0)
+      addArity(arities, rop, Array.isArray(margs) ? margs.length : 0)
+      addArity(matchArities, rop, Array.isArray(margs) ? margs.length : 0)
     }
     if (decl.match === undefined && !refOnly && !isCoreOp(defines) && defines !== APPLY_OP) {
       let list = callRules.get(defines)
@@ -1798,7 +1885,7 @@ function buildRewriteContext(
   // FIRST eligible definition.
   matchRules.sort(compareSelection)
   for (const list of callRules.values()) list.sort(compareSelection)
-  return { templates, matchRules, callRules, arities, shapeEnv }
+  return { templates, matchRules, callRules, arities, matchArities, matchlessArities, shapeEnv }
 }
 
 /** True if any model / reaction_system declares an operators block. */
@@ -1922,6 +2009,17 @@ function validateMakearrayRegionsInRegistries(
   }
 }
 
+/** Options of {@link lowerExpressionTemplates}. */
+export interface LowerOptions {
+  /**
+   * Per component (`"models.<name>"` / `"reaction_systems.<name>"`), the
+   * owners of the registry entries its subsystems contributed before this call
+   * (a caller that ran {@link hoistMountedTemplates} itself): entry => the
+   * subsystem paths below the component that own it.
+   */
+  owners?: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>
+}
+
 /**
  * Load the file under Option B (reference preservation, esm-spec §9.6.4): fire
  * auto-applied `match` rules to a fixpoint per component (outermost-first,
@@ -1940,7 +2038,10 @@ function validateMakearrayRegionsInRegistries(
  *
  * Pre-condition: the input has been schema-validated.
  */
-export function lowerExpressionTemplates<T extends object>(input: T): T {
+export function lowerExpressionTemplates<T extends object>(
+  input: T,
+  options: LowerOptions = {},
+): T {
   // Old spellings (esm-spec §9.6.12) when the caller skipped the wire boundary.
   const file = wireOldSpellings(input)
   rejectExpressionTemplatesPreV04(file)
@@ -1992,27 +2093,34 @@ export function lowerExpressionTemplates<T extends object>(input: T): T {
     // A model mounted as a subsystem keeps its references and brings its
     // template definitions (as does an authored subsystem with its own block);
     // they join this component's registry here (esm-spec §9.6.4 rule 1).
-    hoistMountedTemplates(comp, compName)
+    const cscope = `${compKind}.${compName}`
+    const owners = new Map<string, Set<string>>()
+    for (const [n, ps] of options.owners?.get(cscope) ?? []) owners.set(n, new Set(ps))
+    hoistMountedTemplates(comp, compName, owners)
     const tplRaw = comp.operators
     const shapeEnv = componentShapeEnv(comp)
-    const cscope = `${compKind}.${compName}`
     let templates: Templates = {}
     let matchRules: MatchRule[] = []
-    let callRules = new Map<string, MatchRule[]>()
-    let arities = new Map<string, Set<number>>()
+    const calls: CallScope = {
+      callRules: new Map(),
+      matchArities: new Map(),
+      matchlessArities: [],
+      owners,
+    }
     if (isObject(tplRaw)) {
       const ctx = buildRewriteContext(tplRaw, isetNames, shapeEnv, cscope)
       templates = ctx.templates
       matchRules = ctx.matchRules
-      callRules = ctx.callRules
-      arities = ctx.arities
+      calls.callRules = ctx.callRules
+      calls.matchArities = ctx.matchArities
+      calls.matchlessArities = ctx.matchlessArities
       contextsByKind[compKind].set(compName, ctx)
     }
     const L: Lowering = {
       named: templates,
       matchRules,
-      callRules,
-      arities,
+      ...callScopeAt(calls, ''),
+      calls,
       shapeEnv,
       enums,
       scope: cscope,
@@ -2023,10 +2131,9 @@ export function lowerExpressionTemplates<T extends object>(input: T): T {
     // its rule (constraint 7); references are leaves for matching and the walk
     // descends into their bindings (§9.6.4 rule 4). The registry block is
     // RETAINED (Option B, §9.6.4 rule 1).
-    for (const k of Object.keys(comp)) {
-      if (k === 'operators') continue
-      comp[k] = rewriteToFixpoint(comp[k], L, `${cscope}.${k}`).node
-    }
+    // A call resolves to the definitions of the component and of the
+    // subsystems on the path to it, never to another subsystem's.
+    mapScopedFields(comp, L, cscope, (node, Lp, scope) => rewriteToFixpoint(node, Lp, scope).node)
     lowerings.push({ comp, L, transforms: [] })
     // Only a component that declares templates receives transforms: one
     // without leaves the transform unrewritten (Expand rejects a dangling ref).
@@ -2069,18 +2176,20 @@ export function lowerExpressionTemplates<T extends object>(input: T): T {
     for (const { entry, scope } of transforms) checkSurvivingRefs(entry.transform, L.named, scope)
     // esm-spec §9.6.12 "Arity": surviving calls in the component, in the
     // transforms it receives, and in the bodies its references reach.
-    if (L.arities.size > 0) {
+    if (L.calls.matchArities.size > 0 || L.calls.matchlessArities.length > 0) {
       const reached = new Set<string>()
-      for (const k of Object.keys(comp)) {
-        if (k === 'operators') continue
-        checkCallArity(comp[k], L, `${L.scope}.${k}`)
-        reachedDefinitions(reached, comp[k], L.named)
-      }
+      mapScopedFields(comp, L, L.scope, (node, Lp, scope) => {
+        checkCallArity(node, Lp, scope)
+        reachedDefinitions(reached, node, L.named)
+        return node
+      })
       for (const { entry } of transforms) {
         checkCallArity(entry.transform, L, `${L.scope} coupling transform`)
         reachedDefinitions(reached, entry.transform, L.named)
       }
       for (const r of [...reached].sort(compareUtf8)) {
+        // A subsystem's definition's body was checked where it was lowered.
+        if (L.calls.owners.has(r)) continue
         checkCallArity(L.named[r]!.body, L, `${L.scope}.operators.${r}`)
       }
     }
@@ -2134,7 +2243,7 @@ export function expandDocument<T extends object>(loaded: T): T {
     if (!isObject(comps)) continue
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
-      compNamed.set(`${compKind} ${cname}`, namedRegistry(comp))
+      compNamed.set(`${compKind}\u0000${cname}`, namedRegistry(comp))
     }
   }
 
@@ -2143,7 +2252,7 @@ export function expandDocument<T extends object>(loaded: T): T {
     if (!isObject(comps)) continue
     for (const [cname, comp] of Object.entries(comps)) {
       if (!isObject(comp)) continue
-      const named = compNamed.get(`${compKind} ${cname}`)!
+      const named = compNamed.get(`${compKind}\u0000${cname}`)!
       const scope = `${compKind}.${cname}`
       for (const k of Object.keys(comp)) {
         if (k === 'operators' || k === 'operator_imports') continue
@@ -2163,7 +2272,8 @@ export function expandDocument<T extends object>(loaded: T): T {
       if (typeof to !== 'string') continue
       const receiver = to.split('.')[0] ?? ''
       const named =
-        compNamed.get(`models ${receiver}`) ?? compNamed.get(`reaction_systems ${receiver}`)
+        compNamed.get(`models\u0000${receiver}`) ??
+        compNamed.get(`reaction_systems\u0000${receiver}`)
       if (!named) continue
       entry.transform = expandAllNode(entry.transform, named, `coupling[${i}].transform`)
     }
@@ -2678,11 +2788,17 @@ export function mergeFlatRegistry(
  * Returns `comp`'s own rename map (old name => merged name), `null` when it
  * renamed nothing, or `undefined` when no subsystem carries a block.
  *
+ * `owners`, when given, receives each merged entry `comp`'s own block did not
+ * contribute, with the subsystem paths whose blocks did. Definitions are
+ * component-local (esm-spec §9.6.3 constraint 4): such an entry resolves a
+ * call, and counts for arity, only inside its owners' subtrees.
+ *
  * Mirrors the Julia reference `_hoist_mounted_templates!`.
  */
 export function hoistMountedTemplates(
   comp: Record<string, unknown>,
   cname: string,
+  owners?: Map<string, Set<string>>,
 ): Record<string, string> | null | undefined {
   const mounts: [string, Record<string, unknown>][] = []
   collectMountedBlocks(mounts, comp, '')
@@ -2726,6 +2842,18 @@ export function hoistMountedTemplates(
   }
   for (const [, sub] of mounts) delete sub.operators
   comp.operators = block
+  if (owners !== undefined) {
+    const own = new Set(Object.keys(blocks[0]!.block).map((n) => rn?.[n] ?? n))
+    for (const { path, block: b } of blocks.slice(1)) {
+      for (const n of Object.keys(b)) {
+        const m = rename.get(path)?.[n] ?? n
+        if (own.has(m)) continue
+        let ps = owners.get(m)
+        if (ps === undefined) owners.set(m, (ps = new Set()))
+        ps.add(path)
+      }
+    }
+  }
   return rn ?? null
 }
 

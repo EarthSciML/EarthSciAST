@@ -160,7 +160,14 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
     expect(found[0].details.got).toBe(argc)
   })
 
-  it.each(['+', '*', '-', 'neg', 'log', 'ln', 'sqrt', 'exp', 'not', 'abs'])(
+  it('rejects fn ln: the natural logarithm is log, and ln is not an operator (esm-spec §4.8.3)', () => {
+    const result = validate(scalarModel({ op: 'broadcast', fn: 'ln', args: ['x'] } as Expression))
+    const found = result.structural_errors.filter((e) => e.code === 'invalid_broadcast_fn')
+    expect(found).toHaveLength(1)
+    expect(found[0].message).toContain("'broadcast' fn 'ln' does not name a scalar operator")
+  })
+
+  it.each(['+', '*', '-', 'neg', 'log', 'sqrt', 'exp', 'not', 'abs'])(
     'accepts the UNARY application broadcast(fn: %s, [x])',
     (fn) => {
       // `broadcast(fn:'+', [x])` is `x` and `broadcast(fn:'-', [x])` is `-x`,

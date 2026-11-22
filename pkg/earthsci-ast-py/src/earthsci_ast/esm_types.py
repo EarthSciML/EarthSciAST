@@ -1315,6 +1315,10 @@ class EsmFile:
     # is consumed by a parameter whose `update` names it, never by a coupling
     # edge or a subsystem mount.
     data_sources: dict[str, DataSource] = field(default_factory=dict)
+    # The pre-0.3.0 runtime-operator registry. No document carries it (a
+    # top-level `operators` block is the definition payload, held in
+    # ``expression_templates``), so a load leaves it empty and the serializer
+    # never writes it.
     operators: list[Operator] = field(default_factory=list)
     registered_functions: dict[str, RegisteredFunction] = field(default_factory=dict)
     coupling: list[CouplingEntry] = field(default_factory=list)

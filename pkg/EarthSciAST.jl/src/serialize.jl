@@ -491,8 +491,13 @@ function serialize_esm_file(file::EsmFile)::Dict{String, Any}
             haskey(result, compkind) || continue
             comp = result[compkind]
             (comp isa AbstractDict && haskey(comp, cname)) || continue
-            comp[cname]["operators"] = block
+            comp[cname]["operators"] = _without_private_keys(block)
         end
+    end
+    # esm-spec §9.6.5, §9.6.12: a document written with an `operators` block
+    # (a library's top-level one included) declares at least 2.4.0.
+    if haskey(result, "operators") || file.component_templates !== nothing
+        result["esm"] = _esm_stamp_floor(result["esm"])
     end
 
     return result

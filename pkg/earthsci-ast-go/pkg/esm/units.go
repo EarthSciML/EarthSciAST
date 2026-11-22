@@ -2489,7 +2489,7 @@ func validateModelUnits(modelName string, model *Model, basePath string, scoped 
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
 		// An equation whose references reach a unit-bearing definition is
 		// typed from its reference-preserving form (esm-spec §9.6.12 "Units").
-		if le, ok := scoped.lowered(eqPath); ok {
+		if le, ok := scoped.lowered(basePath+"/equations", eq.LHS, eq.RHS); ok {
 			var fs []defUnitFinding
 			ut := unitTyper{defs: le.registry, defFindings: &fs}
 			leq := Equation{LHS: le.LHS, RHS: le.RHS}
@@ -2503,10 +2503,30 @@ func validateModelUnits(modelName string, model *Model, basePath string, scoped 
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
 	}
+	// An initialization equation reaching a unit-bearing definition: the
+	// definition-unit check (esm-spec §9.6.12).
+	for i, eq := range model.InitializationEquations {
+		le, ok := scoped.lowered(basePath+"/initialization_equations", eq.LHS, eq.RHS)
+		if !ok {
+			continue
+		}
+		var fs []defUnitFinding
+		ut := unitTyper{defs: le.registry, defFindings: &fs}
+		_, _ = ut.propagate(le.LHS, env)
+		_, _ = ut.propagate(le.RHS, env)
+		definitionUnitFindings(fs, fmt.Sprintf("%s/initialization_equations/%d", basePath, i), result)
+	}
 	validateObservedVariableUnitsScoped(model, env, basePath, scoped, result)
 	checkConversionFactorConsistency(modelName, model, result)
 	checkPhysicalConstantUnits(modelName, model, result)
 	checkDefaultUnits(modelName, model, result)
+	// Inline subsystems at any depth are checked as components of their own
+	// (esm-spec §4.8.4), at their own pointers.
+	for _, k := range sortedKeys(model.Subsystems) {
+		if sub, ok := decodeSubsystemAs[Model](model.Subsystems[k]); ok {
+			validateModelUnits(k, &sub, basePath+"/subsystems/"+escapeJSONPointerSegment(k), scoped, result)
+		}
+	}
 }
 
 // validateObservedVariableUnits dimension-checks each OBSERVED unknown's
@@ -2542,11 +2562,11 @@ func validateObservedVariableUnitsScoped(model *Model, env map[string]Unit, base
 
 		ut := unitTyper{}
 		var fs []defUnitFinding
-		for i, eq := range model.Equations {
+		for _, eq := range model.Equations {
 			if lhs, ok := eq.LHS.(string); !ok || lhs != name {
 				continue
 			}
-			if le, ok := scoped.lowered(fmt.Sprintf("%s/equations/%d", basePath, i)); ok {
+			if le, ok := scoped.lowered(basePath+"/equations", eq.LHS, eq.RHS); ok {
 				def = le.RHS
 				ut = unitTyper{defs: le.registry, defFindings: &fs}
 			}
@@ -2997,10 +3017,22 @@ func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string
 
 	timeUnit := Unit{Dim: Dimension{dimTime: ratInt(1)}, Scale: 1.0}
 
+	// Inline subsystems at any depth are checked at their own pointers.
+	for _, k := range sortedKeys(system.Subsystems) {
+		if sub, ok := decodeSubsystemAs[ReactionSystem](system.Subsystems[k]); ok {
+			validateReactionRateUnits(k, &sub, basePath+"/subsystems/"+escapeJSONPointerSegment(k), scoped, result)
+		}
+	}
+
 	for i, rx := range system.Reactions {
 		rxPath := fmt.Sprintf("%s/reactions/%d", basePath, i)
 
+		// A rate reaching a unit-bearing definition has the unit its
+		// reference-preserving form gives (esm-spec §9.6.12 "Units").
 		rateUnit, err := PropagateDimension(rx.Rate, env)
+		if le, ok := scoped.lowered(basePath+"/reactions", nil, rx.Rate); ok {
+			rateUnit, err = unitTyper{defs: le.registry}.propagate(le.RHS, env)
+		}
 		if err != nil || rateUnit == nil {
 			continue
 		}
@@ -3211,14 +3243,35 @@ func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath stri
 		})
 	}
 	for i, rx := range system.Reactions {
-		if w := (unitTyper{}).rateFinding(rx.Rate, env, fmt.Sprintf("%s/reactions/%d/rate", basePath, i)); w != nil {
+		rate, ut := rx.Rate, unitTyper{}
+		var fs []defUnitFinding
+		if le, ok := scoped.lowered(basePath+"/reactions", nil, rx.Rate); ok {
+			rate, ut = le.RHS, unitTyper{defs: le.registry, defFindings: &fs}
+		}
+		if w := ut.rateFinding(rate, env, fmt.Sprintf("%s/reactions/%d/rate", basePath, i)); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
+		definitionUnitFindings(fs, fmt.Sprintf("%s/reactions/%d", basePath, i), result)
 	}
 	for i, eq := range system.ConstraintEquations {
 		eqPath := fmt.Sprintf("%s/constraint_equations/%d", basePath, i)
+		if le, ok := scoped.lowered(basePath+"/constraint_equations", eq.LHS, eq.RHS); ok {
+			var fs []defUnitFinding
+			ut := unitTyper{defs: le.registry, defFindings: &fs}
+			leq := Equation{LHS: le.LHS, RHS: le.RHS}
+			if w := ut.equationFinding(&leq, env, eqPath); w != nil {
+				result.UnitWarnings = append(result.UnitWarnings, *w)
+			}
+			definitionUnitFindings(fs, eqPath, result)
+			continue
+		}
 		if w := ValidateEquationDimensions(&eq, env, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
+		}
+	}
+	for _, k := range sortedKeys(system.Subsystems) {
+		if sub, ok := decodeSubsystemAs[ReactionSystem](system.Subsystems[k]); ok {
+			validateReactionSystemUnits(k, &sub, basePath+"/subsystems/"+escapeJSONPointerSegment(k), scoped, result)
 		}
 	}
 }
@@ -3318,19 +3371,21 @@ type scopedUnitIndex struct {
 	// topLevel maps each top-level-rooted scoped name to its parsed unit; a
 	// target with no units, or with units that do not parse, is absent.
 	topLevel map[string]Unit
-	// loweredEqs: the reference-preserving form of each model equation whose
-	// references reach a unit-bearing definition, by JSON pointer (esm-spec
+	// loweredEqs: the reference-preserving form of each unit check site whose
+	// references reach a unit-bearing definition, by unitSiteKey (esm-spec
 	// §9.6.12 "Units"; loweredUnitEquation).
 	loweredEqs map[string]loweredUnitEquation
 }
 
-// lowered returns the reference-preserving form of the equation at path, if
-// the load captured one.
-func (s *scopedUnitIndex) lowered(path string) (loweredUnitEquation, bool) {
+// lowered returns the reference-preserving form the load captured for the
+// site (lhs, rhs) of the array at container, if that site still holds what the
+// load produced; an edited, moved-in or new site has none and is typed as it
+// stands.
+func (s *scopedUnitIndex) lowered(container string, lhs, rhs Expression) (loweredUnitEquation, bool) {
 	if s == nil || s.loweredEqs == nil {
 		return loweredUnitEquation{}, false
 	}
-	le, ok := s.loweredEqs[path]
+	le, ok := s.loweredEqs[unitSiteKey(container, lhs, rhs)]
 	return le, ok
 }
 

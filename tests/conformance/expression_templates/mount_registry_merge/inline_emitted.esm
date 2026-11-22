@@ -97,7 +97,8 @@
           "defines": "rate",
           "params": [
             "x"
-          ]
+          ],
+          "reference_only": true
         },
         "Sub.scale": {
           "body": {
@@ -110,7 +111,8 @@
           "defines": "scale",
           "params": [
             "x"
-          ]
+          ],
+          "reference_only": true
         }
       },
       "subsystems": {

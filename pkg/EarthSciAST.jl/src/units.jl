@@ -2183,8 +2183,12 @@ end
 
 # The fixed unit expression of `partial` / `integral` (esm-spec §4.2) a
 # definition of either must agree with, read off its `match` pattern: the
-# pattern's operand over (or times) its axis field.
+# pattern's operand over (or times) its axis field. A rule a firing
+# materialized has lost its `match` and carries the expression it gave instead
+# (`_match_stripped`).
 function _fixed_unit_expr(decl)
+    kept = _raw_get(decl, _FIXED_UNITS_KEY)
+    kept === nothing || return kept
     m = _raw_get(decl, "match")
     (m !== nothing && _is_object(m)) || return nothing
     op = _raw_get(m, "op")
@@ -2252,7 +2256,8 @@ function _definition_call_unit!(findings, call::OpExpr, fr, args, body_u, var_un
                 "'$(_raw_get(decl, "defines"))' gives '$(_ustr(fixed_u))' (esm-spec §4.2)"
         )
     end
-    return call_u === nothing ? (fixed === nothing ? body_u : something(fixed_u, body_u)) : call_u
+    call_u === nothing || return call_u
+    return fixed_u === nothing ? body_u : fixed_u
 end
 
 # The engine proper. Returns the expression's dimension, or `nothing` when it

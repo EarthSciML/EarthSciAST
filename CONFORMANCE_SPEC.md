@@ -6095,11 +6095,15 @@ rewrite-only ports with no simulator and no inline-test runner, and are
 
 ### 5.42 The Derivative Axis Is the Literal `t`, in Every Layer (normative)
 
-esm-spec §4.2 fixes the derivative axis to the **literal** name `t`: a `D` whose
-`wrt` is `"t"`, or absent, is the structural time derivative, and a `D` whose
-`wrt` names anything else — **including the name a document gives
-`domain.independent_variable`** — is a spatial rewrite target. The axis is never
-resolved against `domain.independent_variable`.
+esm-spec §4.2 ("The derivative axis") fixes the derivative axis to the
+**literal** name `t`: a `D` whose `wrt` is `"t"`, or absent, is the structural
+time derivative. *(Draft 2.4.0.)* So is a `D` whose `wrt` names the document's
+own `domain.independent_variable` (when that is declared and is not `"t"`): a
+loader reads it at the wire boundary as the same node with `wrt: "t"`, so every
+later layer still reads the literal rule, and an emitted document writes
+`wrt: "t"`. A `D` whose `wrt` names anything else is read as `partial`, the
+spatial derivative, a rewrite target. The axis `"t"` is never resolved against
+`domain.independent_variable`.
 
 The rule is stated here because it is the kind a binding applies unevenly. It is
 asked in at least four places — classification (§6.3.1 system-kind derivation and
@@ -6125,8 +6129,9 @@ name. `tests/valid/independent_variable_renamed.esm` renames it to `s` and then
 declares `t` as air temperature. Reading `wrt: "t"` as "the independent variable"
 in that document silently retargets the author's derivative onto `s` and leaves
 ∂x/∂(air temperature) unwritable. A model that genuinely differentiates along a
-renamed independent variable spells that name, which makes the node spatial-tier
-and therefore a rewrite target (§9.6.8) — the format has no third tier.
+renamed independent variable may spell either `wrt: "t"` or that name: the
+loader reads the second as the first, so both are the same time derivative and
+no layer ever sees the renamed spelling.
 
 **Pins.** Rust —
 `pkg/earthsci-ast-rs/src/dae.rs::tests::the_derivative_axis_is_the_literal_t_not_the_independent_variable`;
@@ -6134,10 +6139,14 @@ and therefore a rewrite target (§9.6.8) — the format has no third tier.
 Each drives one document declaring a non-`t` independent variable through both
 that binding's classifier and its differential-algebraic layer and requires the
 two to agree, in all three spellings: `wrt` absent, `wrt: "t"`, and `wrt` naming
-the declared independent variable. Julia, Python and TypeScript have no
-differential-algebraic layer; their classifiers already read the literal `t` and
-are pinned by
-`tests/conformance/classification/fixtures/wrt_default_omitted.esm`.
+the declared independent variable — each of the three being the time
+derivative. Julia, Python and TypeScript have no differential-algebraic layer;
+their classifiers read the literal `t` and are pinned by
+`tests/conformance/classification/fixtures/wrt_default_omitted.esm`. The
+independent-variable spelling is pinned at load by
+`tests/conformance/expression_templates/independent_variable_wrt/`
+(`D(y, wrt: "s")` in a document whose independent variable is `s` emits as
+`wrt: "t"`).
 
 ### 5.43 An Assertion's `time` Is When It Is Evaluated (normative)
 

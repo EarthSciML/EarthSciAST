@@ -621,13 +621,15 @@ function computeDimensions(
 
   if (typeof expr === 'string') {
     const dims = unitBindings.get(expr)
+    // A definition parameter with no determinable unit shadows every outer
+    // meaning of its spelling, the implicit `t` included.
+    if (!dims && options.opaque?.has(expr) === true) return unknown()
     if (!dims && expr === 't') {
       // The implicit independent variable has the time dimension, in seconds
       // (esm-spec §4.9.1). A derivative taken with respect to an undeclared `t`
       // stays undeterminable: the `D` arm reads `unitBindings`, not this.
       return finish({ dims: { s: 1 }, scale: 1, exact: ExactScale.one() })
     }
-    if (!dims && options.opaque?.has(expr) === true) return unknown()
     if (!dims) {
       // Unknown variable ⇒ UNKNOWN dimension, not dimensionless. Assuming
       // dimensionless here would manufacture mismatches against every
@@ -1274,7 +1276,11 @@ function referenceUnit(
   for (const p of params) {
     const b = bindings[p]
     if (b === undefined) bound.set(p, null)
-    else if (typeof b === 'string') bound.set(p, unitBindings.get(b) ?? walk(b as Expression))
+    // A name binding is read, never walked: it may be an axis or index-set name
+    // in a structural position, which is not a variable. A name with no
+    // declared unit (the implicit `t` included, as in the `D` arm) leaves the
+    // parameter undeterminable.
+    else if (typeof b === 'string') bound.set(p, unitBindings.get(b) ?? null)
     else bound.set(p, walk(b as Expression))
   }
   const punit = (p: string): ParsedUnit | null => bound.get(p) ?? null
