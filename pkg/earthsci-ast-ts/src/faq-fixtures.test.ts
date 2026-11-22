@@ -131,7 +131,7 @@ describe('Aggregate / semiring fixtures', () => {
       // the grid library a composing document, a subsystem-ref edge or an inline
       // test injects into this component's scope, so `{ from: "cells" }` is not
       // decidable at standalone load and must not be reported. Mirrors §9.6.1,
-      // where `template_constraint_unknown_index_set` does not run for a library
+      // where `operator_constraint_unknown_index_set` does not run for a library
       // file validated standalone.
       const result = validateText(readFileSync(leafPath, 'utf-8'))
 

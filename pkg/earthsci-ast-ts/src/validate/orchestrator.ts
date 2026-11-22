@@ -444,7 +444,7 @@ function convertSchemaError(error: SchemaError): ValidationError {
  */
 export interface ValidateOptions {
   /**
-   * Base directory that relative `{ref}` targets and `expression_template_imports`
+   * Base directory that relative `{ref}` targets and `operator_imports`
    * resolve against — normally the directory of the file being validated.
    *
    * WITHOUT it, `validate()` does no file I/O: it cannot open a ref target, so it

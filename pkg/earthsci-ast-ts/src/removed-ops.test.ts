@@ -81,16 +81,16 @@ describe('removed_op: ops removed at esm 2.0.0', () => {
 
   it('refuses a removed op inside an expression-template body', () => {
     const doc = docWithRhs(
-      { op: 'apply_expression_template', args: [], name: 'yr', bindings: { a: 'p' } },
+      { op: 'apply_operator', args: [], name: 'yr', bindings: { a: 'p' } },
       {
-        expression_templates: {
+        operators: {
           yr: { params: ['a'], body: { op: 'fn', name: 'datetime.year', args: ['a'] } },
         },
       },
     )
     const err = loadError(doc)
     expect(err.code).toBe('removed_op')
-    expect(err.message).toContain('/models/M/expression_templates/yr/body')
+    expect(err.message).toContain('/models/M/operators/yr/body')
   })
 
   it('reports removed_op through validate()', () => {
@@ -103,9 +103,9 @@ describe('removed_op: ops removed at esm 2.0.0', () => {
   it('keeps the esm:std templates of the same names', () => {
     // `argmin` / `argmax` survive as template NAMES; only the op form went.
     const doc = docWithRhs(
-      { op: 'apply_expression_template', args: [], name: 'argmin', bindings: { f: 'p', n: 3 } },
+      { op: 'apply_operator', args: [], name: 'argmin', bindings: { f: 'p', n: 3 } },
       {
-        expression_template_imports: [{ ref: 'esm:std/relational.esm', only: ['argmin'] }],
+        operator_imports: [{ ref: 'esm:std/relational.esm', only: ['argmin'] }],
       },
     )
     expect(() => loadDocument(doc)).not.toThrow(/removed_op/)

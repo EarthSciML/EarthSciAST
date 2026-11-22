@@ -17,10 +17,12 @@ import {
 } from './numeric-literal.js'
 import { lowerEnums } from './lower-enums.js'
 import {
+  atLeastEmitVersion,
   authoredTemplateNames,
   expandDocument,
   lowerExpressionTemplates,
   materializeComponentBlock,
+  needsEmitVersionFloor,
   receivedTransformRefs,
   rejectExpressionTemplatesPreV04,
 } from './lower-expression-templates.js'
@@ -29,6 +31,7 @@ import {
   checkDataSourceExtents,
   collectMountDeclaredMetaparameters,
   documentDeclaresAnExtent,
+  NAME_KEYED_MAP_KEYS,
   rejectImpureTemplateLibrary,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
@@ -359,7 +362,7 @@ export interface LoadOptions {
   canonical?: boolean
 
   /**
-   * Directory anchoring relative `expression_template_imports` refs
+   * Directory anchoring relative `operator_imports` refs
    * (esm-spec §9.7.2). Defaults to the current working directory. Callers
    * loading from a known file path should pass that file's directory.
    */
@@ -369,7 +372,7 @@ export interface LoadOptions {
    * Loader-API metaparameter bindings for the root document
    * (esm-spec §9.7.6 binding site 4): name → integer. Already-closed edge
    * bindings win; API bindings beat `default`s. Binding a name the
-   * document does not declare raises `template_import_unknown_name`.
+   * document does not declare raises `operator_import_unknown_name`.
    */
   metaparameters?: Record<string, number> | undefined
 
@@ -426,7 +429,7 @@ export interface LoadOptions {
 /**
  * Read and parse an ESM document from a filesystem path.
  *
- * The file's own directory anchors relative `expression_template_imports`
+ * The file's own directory anchors relative `operator_imports`
  * refs and `{ref}` subsystem refs unless `options.basePath` overrides it.
  * Requires synchronous file access (Node); browser hosts should read the
  * bytes themselves and call {@link loadString}.
@@ -512,7 +515,10 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   prepareDocumentOps(data, { warn: options?.warn })
   // In canonical mode the schema view is a separate stripped copy: it gets the
   // same rewrite, silently (the warning above already named every site).
-  if (validationView !== data) rewriteDeprecatedOps(validationView)
+  if (validationView !== data) {
+    rewriteOldSpellings(validationView)
+    rewriteDeprecatedOps(validationView)
+  }
 
   // Step 1a: esm-spec §8.2.1 — resolve every `data_sources[*].source` location
   // against this document's own directory, before schema validation and before
@@ -572,16 +578,16 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // Step 3a: Resolve esm-spec §9.7 machinery first — template-library
   // imports (depth-first post-order, per-edge metaparameter instantiation),
   // index_sets merge, metaparameter close+fold — then expand
-  // `apply_expression_template` ops / fire `match` rules to the §9.6.3
+  // `apply_operator` ops / fire `match` rules to the §9.6.3
   // fixpoint. After both passes the tree carries no
-  // apply_expression_template nodes, no `expression_templates` blocks, no
+  // apply_operator nodes, no `operators` blocks, no
   // imports, and no metaparameters — downstream consumers see only normal
   // Expression ASTs (Option A round-trip).
   const basePath = dataSourceBase
   // esm-spec §9.7.10 forms A/B: fold any scope-directed injection — a
   // subsystem-ref edge's `injectedImports` (form A) or a coupling entry's
   // injection map (form B) — into the target components' own
-  // `expression_template_imports` BEFORE resolution, so the ordinary import
+  // `operator_imports` BEFORE resolution, so the ordinary import
   // resolver + §9.6.3 fixpoint lower the target under the chosen
   // discretization. `null` when no injection applies (the fast path).
   const injectedRoot = applyScopeInjections(data, options?.injectedImports ?? [])
@@ -660,7 +666,7 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // Each component's `match` rules as declared, before the fixpoint fires them.
   const componentRules = captureComponentRules(data)
   const loweredTemplates = lowerExpressionTemplates(data as object)
-  // Capture the per-component `expression_templates` registries while the
+  // Capture the per-component `operators` registries while the
   // Option-B image still holds them: `expandDocument` below strips every block,
   // and esm-libraries-spec §4.7.5 step 4 requires `flatten` to carry the MERGED
   // registry as a first-class field of the flattened representation. Keyed
@@ -669,6 +675,13 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   const authoredNames = authoredTemplateNames(machineryInput)
   const componentTemplates = captureComponentTemplates(loweredTemplates, authoredNames)
   const authoredTemplateRhs = captureTemplateApplicationRhs(loweredTemplates)
+  // esm-spec §9.6.4 rule 8, §9.6.5: a document whose components keep an
+  // `operators` block or a reference is stamped at least 2.4.0, as emit
+  // stamps it.
+  if (needsEmitVersionFloor(loweredTemplates as Record<string, unknown>, authoredNames)) {
+    const lt = loweredTemplates as Record<string, unknown>
+    lt.esm = atLeastEmitVersion(lt.esm)
+  }
   const typedData = expandDocument(loweredTemplates) as EsmFile
 
   // Step 4: Lower `enum` ops to `const` integer nodes against the
@@ -687,7 +700,7 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // `loadString(toJson(loadString(f)))` deep-equals `loadString(f)`. An
   // enumerable sidecar breaks that identity for every template-bearing fixture:
   // `toJson` cannot emit it (the schema has no such key), so the reloaded file
-  // has no per-component `expression_templates` left to recapture. Hiding it
+  // has no per-component `operators` left to recapture. Hiding it
   // from enumeration keeps `JSON.stringify`, `Object.keys`, and structural
   // equality seeing exactly the document — while `file.componentTemplates` still
   // reads normally for `flatten`.
@@ -812,7 +825,7 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
 }
 
 /**
- * The per-component `expression_templates` blocks of an Option-B loaded
+ * The per-component `operators` blocks of an Option-B loaded
  * document, keyed `"<section>.<component>"` (`models.A`,
  * `reaction_systems.rs1`).
  *
@@ -826,7 +839,7 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
  */
 /**
  * The right-hand side of every model equation, inline subsystems included,
- * that holds an `apply_expression_template` node, keyed by its equation
+ * that holds an `apply_operator` node, keyed by its equation
  * pointer. Taken on the reference-preserving form, before `expandDocument`.
  */
 function captureTemplateApplicationRhs(data: unknown): Record<string, unknown> {
@@ -836,7 +849,7 @@ function captureTemplateApplicationRhs(data: unknown): Record<string, unknown> {
   const holdsApplication = (v: unknown): boolean => {
     if (Array.isArray(v)) return v.some(holdsApplication)
     if (!isObject(v)) return false
-    if (v.op === 'apply_expression_template') return true
+    if (v.op === 'apply_operator') return true
     return Object.values(v).some(holdsApplication)
   }
   const visit = (model: Record<string, unknown>, path: string): void => {
@@ -891,7 +904,7 @@ function captureComponentTemplates(
       // The rules still carrying `match` (nothing referenced them) follow: a
       // rewrite pass re-run after `{ref}` resolution still needs them, and
       // flatten's registry merge skips them.
-      const own = (comp as Record<string, unknown>).expression_templates
+      const own = (comp as Record<string, unknown>).operators
       if (own !== null && typeof own === 'object' && !Array.isArray(own)) {
         for (const [n, d] of Object.entries(own as Record<string, unknown>)) {
           if (n in block) continue
@@ -920,7 +933,7 @@ function captureComponentRules(data: unknown): Record<string, Record<string, unk
     if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
     for (const [cname, comp] of Object.entries(comps as Record<string, unknown>)) {
       if (comp === null || typeof comp !== 'object' || Array.isArray(comp)) continue
-      const own = (comp as Record<string, unknown>).expression_templates
+      const own = (comp as Record<string, unknown>).operators
       if (own === null || typeof own !== 'object' || Array.isArray(own)) continue
       const rules: Record<string, unknown> = {}
       for (const [n, d] of Object.entries(own as Record<string, unknown>)) {
@@ -936,8 +949,6 @@ function captureComponentRules(data: unknown): Record<string, Record<string, unk
  * Reject the v0.2.x extension points that v0.3.0 closed (esm-spec §9 /
  * docs/rfcs/closed-function-registry.md):
  *
- *   - top-level `operators` block — replaced by AST equations + named
- *     `discretizations` schemes.
  *   - top-level `registered_functions` block — replaced by AST equations
  *     and expression templates.
  *   - any expression-tree `call` op — likewise.
@@ -952,14 +963,8 @@ function rejectRemovedV02Blocks(view: unknown): void {
   const errors: SchemaError[] = []
   const root = view as Record<string, unknown>
 
-  if ('operators' in root) {
-    errors.push({
-      path: '/operators',
-      keyword: 'removed_in_v0_3',
-      message:
-        "top-level 'operators' block was removed in ESM v0.3.0; migrate to AST equations + 'discretizations' (closed-function-registry RFC §6).",
-    })
-  }
+  // A top-level `operators` block is no longer refused: at esm 2.4.0 it is
+  // an operator library's payload (esm-spec §9.6.12, §9.7.1).
   if ('registered_functions' in root) {
     errors.push({
       path: '/registered_functions',
@@ -1158,7 +1163,7 @@ function declaredBelowV11(doc: unknown): boolean {
 function rejectRootLoadGates(validationView: unknown): void {
   // A mounted leaf runs the same list against its own `esm` (esm-spec §4.7).
   rejectVersionGatedConstructs(validationView)
-  // Top-level `expression_templates` beside a component payload is a
+  // Top-level `operators` beside a component payload is a
   // template-library payload no component can see (esm-spec §9.7.1).
   rejectImpureTemplateLibrary(validationView)
   // `solver.external` and `solver.time_span` arrive at esm 1.3.0 (§2.2.4); a
@@ -1183,8 +1188,8 @@ function rejectRootLoadGates(validationView: unknown): void {
  * The `faq` gate lives in {@link prepareDocumentOps}, because it alone reads the
  * AUTHORED version.
  *
- * - `expression_templates` / `apply_expression_template` — esm 0.4.0
- * - `expression_template_imports`, top-level `expression_templates`,
+ * - `operators` / `apply_operator` — esm 0.4.0
+ * - `operator_imports`, top-level `operators`,
  *   `metaparameters` — esm 0.8.0 (esm-spec §9.6.5)
  * - the top-level `solver` block — esm 1.1.0 (esm-spec §2.2.4)
  * - declared `units` on a `const` node — esm 1.2.0 (esm-spec §4.8.5)
@@ -1282,6 +1287,213 @@ export function rewriteDeprecatedOps(doc: unknown): string[] {
   return sites
 }
 
+// ---------------------------------------------------------------------------
+// esm 2.4.0 "one operator type": old spellings read at the wire boundary
+// (esm-spec §9.6.12 "Old names (no refusal)", §4.2 "Reading earlier documents")
+// ---------------------------------------------------------------------------
+
+/** Old field spelling → new (warning `deprecated_field`). */
+const DEPRECATED_FIELDS: readonly (readonly [string, string])[] = [
+  ['expression_templates', 'operators'],
+  ['expression_template_imports', 'operator_imports'],
+]
+/** The old op spelling of the reference node (warning `deprecated_op`). */
+const OLD_APPLY_OP = 'apply_expression_template'
+/** The other spellings of the spatial derivative (warning `deprecated_op`). */
+const PARTIAL_SPELLINGS: ReadonlySet<string> = new Set(['δ', '∂'])
+
+/**
+ * Objects whose keys are author-chosen names, not fields: a field spelling is
+ * never renamed among them (a variable may be called `expression_templates`).
+ */
+function oldSpellingNameMaps(): ReadonlySet<string> {
+  return new Set<string>([
+    ...NAME_KEYED_MAP_KEYS,
+    'models',
+    'reaction_systems',
+    'data_sources',
+    'index_sets',
+    'enums',
+    'metaparameters',
+    'domains',
+    'coupling_roles',
+  ])
+}
+
+/** The sites {@link rewriteOldSpellings} rewrote: fields first, then ops. */
+export interface OldSpellingSites {
+  /** `<pointer-to-new-key> (<old>)`, one per renamed field. */
+  fields: string[]
+  /** `<pointer> (<old op>)`, one per rewritten node. */
+  ops: string[]
+}
+
+/**
+ * Rename `old` to `neu` among the keys of `node` in place, keeping key order.
+ * Both spellings in one object are a load error (`operator_invalid_definition`).
+ */
+function renameFieldInPlace(node: Record<string, unknown>, old: string, neu: string): boolean {
+  if (!Object.prototype.hasOwnProperty.call(node, old)) return false
+  if (Object.prototype.hasOwnProperty.call(node, neu)) {
+    throw new ParseError(
+      `an object carries both \`${old}\` and its esm-2.4.0 spelling \`${neu}\`; write only ` +
+        `\`${neu}\` (esm-spec §9.6.12).`,
+      undefined,
+      ERROR_CODES.OPERATOR_INVALID_DEFINITION,
+    )
+  }
+  const entries = Object.entries(node)
+  for (const [k] of entries) delete node[k]
+  for (const [k, v] of entries) node[k === old ? neu : k] = v
+  return true
+}
+
+/**
+ * esm 2.4.0 (esm-spec §9.6.12, §4.2): read the spellings an earlier document
+ * wrote, IN PLACE, never refusing one:
+ *
+ * - the field `expression_templates` as `operators` and
+ *   `expression_template_imports` as `operator_imports`, wherever a field of
+ *   that name appears (never among the keys of a name-keyed map);
+ * - the op `apply_expression_template` as `apply_operator`, and the spatial
+ *   derivative — a `D` whose `wrt` is present and is not the literal `"t"`, and
+ *   the spellings `δ` and `∂` — as `partial`, every other field kept. A `D`
+ *   whose `wrt` is one of the enclosing definition's `params` is left as
+ *   written: it is decided per definition instance (§9.6.4 rule 3).
+ *
+ * Idempotent: a second pass finds nothing. Returns the sites, as the
+ * `deprecated_field` / `deprecated_op` warnings name them.
+ */
+export function rewriteOldSpellings(doc: unknown): OldSpellingSites {
+  const fields: string[] = []
+  const ops: string[] = []
+  const nameMaps = oldSpellingNameMaps()
+  const seen = new Set<object>()
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+  const walk = (
+    node: unknown,
+    at: string,
+    namemap: boolean,
+    params: ReadonlySet<string> | null,
+  ): void => {
+    if (Array.isArray(node)) {
+      if (seen.has(node)) return
+      seen.add(node)
+      for (let i = 0; i < node.length; i++) walk(node[i], `${at}/${i}`, false, params)
+      return
+    }
+    if (!isObj(node)) return
+    if (seen.has(node)) return
+    seen.add(node)
+    if (!namemap) {
+      for (const [old, neu] of DEPRECATED_FIELDS) {
+        if (renameFieldInPlace(node, old, neu)) fields.push(`${at}/${pointerToken(neu)} (${old})`)
+      }
+      const op = node.op
+      if (typeof op === 'string') {
+        if (op === OLD_APPLY_OP) {
+          node.op = 'apply_operator'
+          ops.push(`${at} (${op})`)
+        } else if (PARTIAL_SPELLINGS.has(op)) {
+          node.op = 'partial'
+          ops.push(`${at} (${op})`)
+        } else if (op === 'D') {
+          const w = node.wrt
+          if (
+            w !== undefined &&
+            w !== null &&
+            w !== 't' &&
+            !(typeof w === 'string' && params !== null && params.has(w))
+          ) {
+            node.op = 'partial'
+            ops.push(`${at} (D)`)
+          }
+        }
+      }
+    }
+    for (const k of Object.keys(node)) {
+      const v = node[k]
+      if (v === null || typeof v !== 'object') continue
+      if (!namemap && k === 'operators' && isObj(v)) {
+        // A definition block: each entry's own params decide a `D` whose `wrt`
+        // names one of them.
+        if (seen.has(v)) continue
+        seen.add(v)
+        for (const [dn, dv] of Object.entries(v)) {
+          if (dv === null || typeof dv !== 'object') continue
+          const p = isObj(dv) ? dv.params : undefined
+          const P = Array.isArray(p)
+            ? new Set(p.filter((x): x is string => typeof x === 'string'))
+            : null
+          walk(dv, `${at}/operators/${pointerToken(dn)}`, false, P)
+        }
+        continue
+      }
+      walk(v, `${at}/${pointerToken(k)}`, !namemap && nameMaps.has(k), params)
+    }
+  }
+  walk(doc, '', false, null)
+  return { fields, ops }
+}
+
+/** The load-time `deprecated_field` warning naming the renamed fields `sites`. */
+export function deprecatedFieldWarning(sites: readonly string[]): string {
+  return (
+    `${ERROR_CODES.DEPRECATED_FIELD}: the fields \`expression_templates\` and ` +
+    '`expression_template_imports` are read as `operators` and `operator_imports` ' +
+    `(esm 2.4.0, esm-spec §9.6.12). Read at: ${sites.join(', ')}.`
+  )
+}
+
+/** The load-time `deprecated_op` warning naming the old reference / derivative spellings `sites`. */
+export function deprecatedOperatorSpellingWarning(sites: readonly string[]): string {
+  return (
+    `${ERROR_CODES.DEPRECATED_OP}: \`apply_expression_template\` is read as \`apply_operator\`, ` +
+    'and a spatial `D` (and `δ`, `∂`) as `partial` (esm 2.4.0, esm-spec §4.2, §9.6.12). ' +
+    `Rewritten at: ${sites.join(', ')}.`
+  )
+}
+
+/**
+ * Whether `x` spells anything an earlier document wrote (esm-spec §9.6.12,
+ * §4.2): an old field name, the old reference op, `δ` / `∂`, or a `D` whose
+ * `wrt` is present and is not `"t"`. A cheap pre-check for entry points a
+ * caller may reach without the load's wire boundary.
+ */
+export function hasOldSpellings(x: unknown): boolean {
+  const seen = new Set<object>()
+  const go = (n: unknown): boolean => {
+    if (n === null || typeof n !== 'object') return false
+    if (seen.has(n)) return false
+    seen.add(n)
+    if (Array.isArray(n)) return n.some(go)
+    const o = n as Record<string, unknown>
+    if ('expression_templates' in o || 'expression_template_imports' in o) return true
+    const op = o.op
+    if (typeof op === 'string') {
+      if (op === OLD_APPLY_OP || PARTIAL_SPELLINGS.has(op)) return true
+      if (op === 'D' && o.wrt !== undefined && o.wrt !== null && o.wrt !== 't') return true
+    }
+    return Object.values(o).some(go)
+  }
+  return go(x)
+}
+
+/**
+ * `raw` itself when it spells nothing an earlier document wrote, else a copy
+ * read through {@link rewriteOldSpellings} (silently). For entry points a
+ * caller may reach without the load's wire boundary
+ * (`lowerExpressionTemplates`, `resolveTemplateMachinery`).
+ */
+export function wireOldSpellings<T>(raw: T): T {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return raw
+  if (!hasOldSpellings(raw)) return raw
+  const doc = deepClone(raw)
+  rewriteOldSpellings(doc)
+  return doc
+}
+
 /** The load-time `deprecated_op` warning naming the rewritten nodes `sites`. */
 export function deprecatedOpWarning(sites: readonly string[]): string {
   return (
@@ -1363,6 +1575,11 @@ export interface PrepareDocumentOpsOptions {
 export function prepareDocumentOps(doc: unknown, options?: PrepareDocumentOpsOptions): void {
   const removed = findRemovedConstruct(doc)
   if (removed !== null) throw new ParseError(removed.message, undefined, ERROR_CODES.REMOVED_OP)
+  const old = rewriteOldSpellings(doc)
+  if (options?.warn !== false) {
+    if (old.fields.length > 0) console.warn(deprecatedFieldWarning(old.fields))
+    if (old.ops.length > 0) console.warn(deprecatedOperatorSpellingWarning(old.ops))
+  }
   const deprecated = rewriteDeprecatedOps(doc)
   if (deprecated.length > 0 && options?.warn !== false) {
     console.warn(deprecatedOpWarning(deprecated))

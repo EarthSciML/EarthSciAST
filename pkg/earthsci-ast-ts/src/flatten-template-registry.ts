@@ -28,7 +28,7 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-const APPLY_OP = 'apply_expression_template'
+const APPLY_OP = 'apply_operator'
 
 /** The prefix of the template-call sentinel names, which are never free reads. */
 const SENTINEL_PREFIX = '\0'

@@ -55,7 +55,7 @@ const EMISSIBLE_FIELDS = ['op', 'args', 'wrt', 'dim', 'fn', 'name', 'value', 'un
  * still canonicalizes, emitting the pinned fields only (matches Julia's
  * `_CANONICAL_IGNORED_FIELDS`). Both are display/rendering conveniences with no
  * wire slot of their own (`arg` — an arg-witness index; `bindings` — the
- * apply_expression_template parameter map).
+ * apply_operator parameter map).
  */
 const CANONICAL_IGNORED_FIELDS = ['arg', 'bindings'] as const
 
@@ -552,8 +552,8 @@ const DOCUMENT_MAP_KEYS: ReadonlySet<string> = new Set([
   'coupling_roles',
   'data_sources',
   'enums',
-  'expression_template_imports',
-  'expression_templates',
+  'operator_imports',
+  'operators',
   'guesses',
   'index_set_rename',
   'index_sets',

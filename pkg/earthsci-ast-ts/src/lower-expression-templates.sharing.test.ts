@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest'
 import { loadDocument } from './parse.js'
 
 function applyNode(name: string) {
-  return { op: 'apply_expression_template', args: [], name, bindings: {} }
+  return { op: 'apply_operator', args: [], name, bindings: {} }
 }
 
 const LEAF_BODY = {
@@ -37,7 +37,7 @@ function buildDoublingChainDoc(depth: number): Record<string, unknown> {
       chem: {
         species: { A: { default: 1.0 }, B: { default: 0.5 } },
         parameters: { T: { default: 298.15 } },
-        expression_templates: templates,
+        operators: templates,
         reactions: [
           {
             id: 'R1',

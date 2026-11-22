@@ -98,7 +98,10 @@ describe('printMath reproduces the math of a display', () => {
       const esm = c.esm!
       const model = Object.values((esm.models ?? {}) as Obj)[0] as Obj | undefined
       const template =
-        model?.expression_templates !== undefined || esm.expression_templates !== undefined
+        model?.operators !== undefined ||
+        esm.operators !== undefined ||
+        model?.expression_templates !== undefined ||
+        esm.expression_templates !== undefined
       it.skipIf(template)(c.id, () => {
         expect(Object.keys((esm.models ?? {}) as Obj)).toHaveLength(1)
         const eqs = model!.equations as unknown[]

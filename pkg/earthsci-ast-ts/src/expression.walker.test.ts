@@ -92,7 +92,7 @@ describe('mapChildren — field preservation', () => {
 
   it('visits template-apply bindings map and preserves name', () => {
     const node: ExprNode = {
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 'saturation',
       bindings: { T: { op: '+', args: ['T', 1] }, p: 'pressure' },
@@ -115,9 +115,9 @@ describe('mapChildren — field preservation', () => {
     expect((out as unknown as Record<string, unknown>).regions).toEqual([[[1, 5]]])
   })
 
-  it('visits apply_expression_template bindings and preserves name', () => {
+  it('visits apply_operator bindings and preserves name', () => {
     const node: ExprNode = {
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 'arrhenius',
       bindings: { Ea: 100, T: { op: '+', args: ['T', 273] } },
@@ -172,7 +172,7 @@ describe('mapChildren — transformation and callback contract', () => {
 
   it('reports map children with the entry key in sorted order', () => {
     const node: ExprNode = {
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 't',
       bindings: { z: 'zc', a: 'ac', m: 'mc' },
@@ -328,13 +328,13 @@ describe('deepEqualExpr', () => {
 
   it('compares map-valued children (template-apply bindings)', () => {
     const a: ExprNode = {
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 't',
       bindings: { T: { op: '+', args: ['T', 1] }, p: 'pressure' },
     } as unknown as ExprNode
     const same: ExprNode = {
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 't',
       bindings: { p: 'pressure', T: { op: '+', args: ['T', 1] } },
@@ -342,7 +342,7 @@ describe('deepEqualExpr', () => {
     expect(deepEqualExpr(a, same)).toBe(true)
 
     const diff: ExprNode = {
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 't',
       bindings: { T: { op: '+', args: ['T', 2] }, p: 'pressure' },

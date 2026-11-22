@@ -1,11 +1,11 @@
 /**
- * Unit tests for expression_templates / apply_expression_template
+ * Unit tests for operators / apply_operator
  * (esm-spec §9.6, docs/rfcs/ast-expression-templates.md, esm-giy).
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { loadString, loadDocument } from './parse.js'
+import { loadString, loadDocument, rewriteOldSpellings } from './parse.js'
 import {
   lowerExpressionTemplates,
   expandDocument,
@@ -37,7 +37,7 @@ const ARRHENIUS_FIXTURE = {
         T: { default: 298.15 },
         num_density: { default: 2.5e19 },
       },
-      expression_templates: {
+      operators: {
         arrhenius: {
           params: ['A_pre', 'Ea'],
           body: {
@@ -59,7 +59,7 @@ const ARRHENIUS_FIXTURE = {
           substrates: [{ species: 'A', stoichiometry: 1 }],
           products: [{ species: 'B', stoichiometry: 1 }],
           rate: {
-            op: 'apply_expression_template',
+            op: 'apply_operator',
             args: [],
             name: 'arrhenius',
             bindings: { A_pre: 1.8e-12, Ea: 1500 },
@@ -70,7 +70,7 @@ const ARRHENIUS_FIXTURE = {
           substrates: [{ species: 'B', stoichiometry: 1 }],
           products: [{ species: 'C', stoichiometry: 1 }],
           rate: {
-            op: 'apply_expression_template',
+            op: 'apply_operator',
             args: [],
             name: 'arrhenius',
             bindings: { A_pre: 3.4e-13, Ea: 800 },
@@ -108,11 +108,11 @@ function inlineArrhenius(A: number, Ea: number) {
   }
 }
 
-describe('expression_templates / apply_expression_template (esm-giy)', () => {
-  it('expands apply_expression_template at loadString time and strips the templates block', () => {
+describe('operators / apply_operator (esm-giy)', () => {
+  it('expands apply_operator at loadString time and strips the templates block', () => {
     const file = loadString(JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE)))
     const sys = file.reaction_systems!.chem as unknown as Record<string, unknown>
-    expect('expression_templates' in sys).toBe(false)
+    expect('operators' in sys).toBe(false)
     // Both reactions should have a rate AST identical to the inline form.
     const reactions = sys.reactions as Array<{ rate: unknown }>
     expect(reactions[0].rate).toEqual(inlineArrhenius(1.8e-12, 1500))
@@ -148,7 +148,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     expect((file.reaction_systems!.chem as ReactionSystem).reactions[0].rate).toBe('k')
   })
 
-  it('rejects apply_expression_template when esm < 0.4.0', () => {
+  it('rejects apply_operator when esm < 0.4.0', () => {
     // The §9.6.5 gate itself, exercised DIRECTLY. From esm 1.0.0 no 0.x document
     // reaches it through `loadString()` any more — the parser rejects an unsupported
     // major version first ("Unsupported major version 0") — so driving this
@@ -169,7 +169,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
   it('rejects unknown template name', () => {
     const fixture = JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE))
     fixture.reaction_systems.chem.reactions[0].rate.name = 'unknown_form'
-    expect(() => loadString(fixture)).toThrow(/unknown_template/)
+    expect(() => loadString(fixture)).toThrow(/operator_unknown_definition/)
   })
 
   it('rejects bindings with extra params', () => {
@@ -184,11 +184,11 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     expect(() => loadString(fixture)).toThrow(/bindings_mismatch/)
   })
 
-  it('rejects nested apply_expression_template inside a template body', () => {
+  it('rejects nested apply_operator inside a template body', () => {
     const fixture = JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE))
     // Inject a recursive body
-    fixture.reaction_systems.chem.expression_templates.arrhenius.body = {
-      op: 'apply_expression_template',
+    fixture.reaction_systems.chem.operators.arrhenius.body = {
+      op: 'apply_operator',
       args: [],
       name: 'arrhenius',
       bindings: { A_pre: 1, Ea: 1 },
@@ -247,7 +247,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
       throw new Error('expected error')
     } catch (e) {
       expect(e).toBeInstanceOf(EsmMachineryError)
-      expect((e as EsmMachineryError).code).toBe('apply_expression_template_unknown_template')
+      expect((e as EsmMachineryError).code).toBe('operator_unknown_definition')
     }
   })
 })
@@ -262,7 +262,7 @@ function gradModel(templates: Record<string, unknown>, rhs: unknown) {
     metadata: { name: 'rewrite_rules', authors: ['t'] },
     models: {
       M: {
-        expression_templates: templates,
+        operators: templates,
         equations: [{ lhs: 'q', rhs }],
       },
     },
@@ -283,11 +283,11 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     )
     const lowered = lowerExpressionTemplates(file) as any
     // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at loadString.
-    expect('expression_templates' in lowered.models.M).toBe(true)
+    expect('operators' in lowered.models.M).toBe(true)
     // The firing wrote a reference to the rule (esm-spec §9.6.3 constraint 7);
     // an unbound param is bound to its own name.
     expect(lowered.models.M.equations[0].rhs).toEqual({
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 'central_grad_x',
       bindings: { f: 'c', dx: 'dx' },
@@ -433,7 +433,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       metadata: { name: 'partial_match', authors: ['t'] },
       models: {
         M: {
-          expression_templates: {
+          operators: {
             grad_x: {
               params: ['f'],
               match: { op: 'grad', args: ['f'], dim: 'x' },
@@ -462,7 +462,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
         chem: {
           species: { A: { default: 1.0 }, B: { default: 0.0 } },
           parameters: { T: { default: 298.15 }, num_density: { default: 2.5e19 } },
-          expression_templates: {
+          operators: {
             max_to_sum: {
               params: ['a', 'b'],
               match: { op: 'max', args: ['a', 'b'] },
@@ -485,16 +485,16 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       op: '+',
       args: ['T', 'num_density'],
     })
-    expect(
-      'expression_templates' in (file.reaction_systems!.chem as unknown as Record<string, unknown>),
-    ).toBe(false)
+    expect('operators' in (file.reaction_systems!.chem as unknown as Record<string, unknown>)).toBe(
+      false,
+    )
   })
 })
 
 // ---------------------------------------------------------------------------
 // 0.8.0 outermost-first + priority + bounded-fixpoint engine, and the
 // `unlowered_operator` evaluation gate. Mirrors the Julia reference testset
-// ("expression_templates rewrite engine — 0.8.0 outermost-first + fixpoint")
+// ("operators rewrite engine — 0.8.0 outermost-first + fixpoint")
 // and drives the cross-binding conformance fixtures under
 // tests/conformance/expression_templates/
 // (docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md §8).
@@ -577,7 +577,8 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     // to evaluation, mirroring the Julia `_compile` gate (stage: "evaluate").
     const file = loadString(fixtureText('unlowered_operator')) as any
     const rhs = file.models.m.equations[0].rhs
-    expect(rhs).toEqual({ op: 'D', args: ['u'], wrt: 'x' })
+    // The spatial `D` is read as `partial` at the wire boundary (esm 2.4.0).
+    expect(rhs).toEqual({ op: 'partial', args: ['u'], wrt: 'x' })
     // Reaching evaluation yields the uniform `unlowered_operator` diagnostic.
     let err: unknown
     try {
@@ -623,7 +624,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
             { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0.0 },
             { lhs: 'y', rhs: { op: 'custom_scheme', args: ['u'], attrs: { gamma: 1.4 } } },
           ],
-          expression_templates: {
+          operators: {
             lower_custom: {
               params: ['f', 'g'],
               match: { op: 'custom_scheme', args: ['f'], attrs: { gamma: 'g' } },
@@ -635,7 +636,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     }
     const lowered = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
     // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at loadString.
-    expect('expression_templates' in lowered.models.m).toBe(true)
+    expect('operators' in lowered.models.m).toBe(true)
     // The firing wrote a reference to the rule (esm-spec §9.6.3 constraint 7).
     const out = expandDocument(lowered) as any
     expect(definingRhs(out.models.m, 'y')).toEqual({ op: '*', args: [1.4, 'u'] })
@@ -656,7 +657,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
       Sink: {
         variables: { offset: { type: 'parameter', default: 0.5 } },
         equations: [],
-        expression_templates: {
+        operators: {
           double_plus: {
             params: ['x', 'off'],
             body: { op: '+', args: [{ op: '*', args: [2.0, 'x'] }, 'off'] },
@@ -670,7 +671,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
         from: 'Src.F',
         to: 'Sink.offset',
         transform: {
-          op: 'apply_expression_template',
+          op: 'apply_operator',
           name: 'double_plus',
           args: [],
           bindings: { x: 'Src.F', off: 'Sink.offset' },
@@ -684,17 +685,17 @@ describe('coupling variable_map expression transforms (receiving-component rewri
     args: [{ op: '*', args: [2.0, 'Src.F'] }, 'Sink.offset'],
   }
 
-  it('expands apply_expression_template in a coupling transform at loadString time', () => {
+  it('expands apply_operator in a coupling transform at loadString time', () => {
     const file = loadDocument(couplingFixture()) as any
     expect(file.coupling[0].transform).toEqual(expandedTransform)
-    expect('expression_templates' in file.models.Sink).toBe(false)
+    expect('operators' in file.models.Sink).toBe(false)
   })
 
   it('expands the transform in the receiving component scope (lowering pass)', () => {
     // Option B: the target-free reference survives the lowering pass; Expand
     // (the Expand-at-build loadString strategy, §9.6.4 rule 2) inlines it.
     const lowered = lowerExpressionTemplates(couplingFixture()) as any
-    expect(lowered.coupling[0].transform.op).toBe('apply_expression_template')
+    expect(lowered.coupling[0].transform.op).toBe('apply_operator')
     const out = expandDocument(lowered) as any
     expect(out.coupling[0].transform).toEqual(expandedTransform)
     // Everything else on the entry is untouched.
@@ -710,7 +711,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
         Sink: {
           variables: { p: { type: 'parameter', default: 0.0 } },
           equations: [],
-          expression_templates: {
+          operators: {
             dbl: {
               params: ['x'],
               match: { op: 'dbl', args: ['x'] },
@@ -745,7 +746,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
           species: { A: { default: 1.0 } },
           parameters: { k: { default: 0.0 } },
           reactions: [],
-          expression_templates: {
+          operators: {
             triple: {
               params: ['x'],
               body: { op: '*', args: [3.0, 'x'] },
@@ -759,7 +760,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
           from: 'Src.F',
           to: 'Chem.k',
           transform: {
-            op: 'apply_expression_template',
+            op: 'apply_operator',
             name: 'triple',
             args: [],
             bindings: { x: 'Src.F' },
@@ -778,12 +779,12 @@ describe('coupling variable_map expression transforms (receiving-component rewri
     // the apply op survives the lowering pass (Option B, §9.6.4 rule 1) and the
     // dangling reference is rejected when Expand resolves it against the (empty)
     // receiver registry.
-    src.models.Src.expression_templates = src.models.Sink.expression_templates
-    delete src.models.Sink.expression_templates
+    src.models.Src.operators = src.models.Sink.operators
+    delete src.models.Sink.operators
     const lowered = lowerExpressionTemplates(src) as any
-    expect(lowered.coupling[0].transform.op).toBe('apply_expression_template')
+    expect(lowered.coupling[0].transform.op).toBe('apply_operator')
     expect(() => expandDocument(lowered)).toThrow(EsmMachineryError)
-    expect(() => expandDocument(lowered)).toThrow(/apply_expression_template_unknown_template/)
+    expect(() => expandDocument(lowered)).toThrow(/operator_unknown_definition/)
     expect(() => expandDocument(lowered)).toThrow(/coupling\[0\]\.transform/)
   })
 
@@ -834,14 +835,14 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
           {
             lhs: 'area',
             rhs: {
-              op: 'apply_expression_template',
+              op: 'apply_operator',
               args: [],
               name,
               bindings,
             },
           },
         ],
-        expression_templates: templates,
+        operators: templates,
       },
     },
   })
@@ -879,7 +880,7 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
             op: '*',
             args: [
               {
-                op: 'apply_expression_template',
+                op: 'apply_operator',
                 args: [],
                 name: 'inner',
                 bindings: { m: 'K', x: 'p', y: 'q' },
@@ -1006,7 +1007,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     }
     expect(caught).toBeInstanceOf(EsmMachineryError)
     expect((caught as EsmMachineryError).code).toBe(err.code)
-    expect((caught as EsmMachineryError).code).toBe('template_constraint_unknown_index_set')
+    expect((caught as EsmMachineryError).code).toBe('operator_constraint_unknown_index_set')
   })
 
   // --- non-fixture unit pins (match-pattern-scoping-constraints RFC §10.6) ---
@@ -1031,7 +1032,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
             { lhs: { op: 'D', args: ['F_cell'], wrt: 't' }, rhs: 0.0 },
             { lhs: 'd', rhs: { op: 'div', args: ['F_cell'] } },
           ],
-          expression_templates: {
+          operators: {
             hi_edges_only: {
               params: ['F'],
               priority: 100,
@@ -1071,7 +1072,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
             { lhs: { op: 'D', args: ['F'], wrt: 't' }, rhs: 0.0 },
             { lhs: 'd', rhs: { op: 'div', args: [{ op: '*', args: [2, 'F'] }] } },
           ],
-          expression_templates: {
+          operators: {
             fv: {
               params: ['F'],
               match: { op: 'div', args: ['F'] },
@@ -1090,7 +1091,9 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     })
   })
 
-  it('`where` without `match` is a malformed declaration', () => {
+  it('`where` on a definition without `match` scopes a call (esm 2.4.0)', () => {
+    // esm-spec §9.6.3 constraint 2 / §9.6.8: a `where` selects among the
+    // definitions of a called defined operator; it is no longer refused.
     const src = {
       esm: '2.0.0',
       metadata: { name: 'where_without_match', authors: ['t'] },
@@ -1099,19 +1102,14 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
         m: {
           variables: {},
           equations: [],
-          expression_templates: {
+          operators: {
             bad: { params: ['F'], where: { F: { shape: ['edges'] } }, body: 'F' },
           },
         },
       },
     }
-    let caught: unknown
-    try {
-      lowerExpressionTemplates(JSON.parse(JSON.stringify(src)))
-    } catch (e) {
-      caught = e
-    }
-    expect((caught as EsmMachineryError).code).toBe('apply_expression_template_invalid_declaration')
+    const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
+    expect(Object.keys(out.models.m.operators)).toContain('bad')
   })
 })
 
@@ -1171,7 +1169,7 @@ describe('rulePriority — non-finite priority does not poison rule selection', 
       models: {
         m: {
           variables: { x: { type: 'unknown', units: '1' } },
-          expression_templates: {
+          operators: {
             ruleNaN: {
               params: ['a'],
               match: { op: 'foo', args: ['a'] },
@@ -1229,6 +1227,9 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
     const file = path.join(REPO_ROOT, rel)
     const dir = path.dirname(file)
     const onDisk = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>
+    // The file may spell the esm-2.3 names; they are read as the 2.4.0 ones at
+    // the wire boundary (esm-spec §9.6.12), so compare against that reading.
+    rewriteOldSpellings(onDisk)
     const emitted = JSON.parse(
       toJson(loadString(fs.readFileSync(file, 'utf-8'), { basePath: dir })),
     ) as Record<string, unknown>
@@ -1236,7 +1237,7 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
     // The two DECLARATION blocks survive VERBATIM — not folded, not stripped.
     // Dropping them emitted `{esm, metadata, index_sets}`: a document with NONE of
     // the five top-level payload keys, which the schema's top-level `anyOf` rejects.
-    expect(emitted.expression_templates).toEqual(onDisk.expression_templates)
+    expect(emitted.operators).toEqual(onDisk.operators)
     expect(emitted.metaparameters).toEqual(onDisk.metaparameters)
 
     // ...and the emitted form is itself a legal, loadable document — the property
@@ -1254,8 +1255,8 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
   })
 
   it('still rejects a genuinely unexpanded apply at a CALL SITE', () => {
-    // Skipping `expression_templates` blocks in the stray-apply scan must not
-    // blind it to a real unexpanded call: an `apply_expression_template` naming a
+    // Skipping `operators` blocks in the stray-apply scan must not
+    // blind it to a real unexpanded call: an `apply_operator` naming a
     // template that does not exist, in an EQUATION (a call site, not a body).
     //
     // The call node is spelled WELL-FORMED (`name` + `bindings`) on purpose, so
@@ -1269,12 +1270,12 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
         models: {
           M: {
             variables: { u: { type: 'unknown', units: '1' } },
-            expression_templates: { known: { params: ['x'], body: { op: '*', args: ['x', 2] } } },
+            operators: { known: { params: ['x'], body: { op: '*', args: ['x', 2] } } },
             equations: [
               {
                 lhs: { op: 'D', args: ['u'], wrt: 't' },
                 rhs: {
-                  op: 'apply_expression_template',
+                  op: 'apply_operator',
                   args: [],
                   name: 'does_not_exist',
                   bindings: {},
@@ -1285,6 +1286,6 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
         },
       })
     expect(stray).toThrow(EsmMachineryError)
-    expect(stray).toThrow(/apply_expression_template_unknown_template/)
+    expect(stray).toThrow(/operator_unknown_definition/)
   })
 })

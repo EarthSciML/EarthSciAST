@@ -49,8 +49,8 @@ describe('lib/relational.esm argmin/argmax templates', () => {
   ).scenarios
 
   it('declares argmin(f, n) and argmax(f, n)', () => {
-    expect(library.expression_templates.argmin.params).toEqual(['f', 'n'])
-    expect(library.expression_templates.argmax.params).toEqual(['f', 'n'])
+    expect(library.operators.argmin.params).toEqual(['f', 'n'])
+    expect(library.operators.argmax.params).toEqual(['f', 'n'])
   })
 
   it('expands every scenario to the substituted body', () => {
@@ -78,11 +78,11 @@ describe('lib/relational.esm argmin/argmax templates', () => {
       metadata: { name: 'relational_templates' },
       models: {
         Probe: {
-          expression_template_imports: [{ ref: libraryPath }],
+          operator_imports: [{ ref: libraryPath }],
           variables,
           equations: calls.map((bindings, i) => ({
             lhs: { op: 'D', args: [`out_${i}`], wrt: 't' },
-            rhs: { op: 'apply_expression_template', args: [], name: scenarios[i]!.op, bindings },
+            rhs: { op: 'apply_operator', args: [], name: scenarios[i]!.op, bindings },
           })),
         },
       },
@@ -90,7 +90,7 @@ describe('lib/relational.esm argmin/argmax templates', () => {
     const equations = (loadString(JSON.stringify(doc)).models!.Probe as Model).equations
     expect(equations).toHaveLength(calls.length)
     equations.forEach((eq, i) => {
-      const body = library.expression_templates[scenarios[i]!.op].body
+      const body = library.operators[scenarios[i]!.op].body
       const got = JSON.parse(JSON.stringify(eq.rhs))
       const want = JSON.parse(JSON.stringify(substitute(body, calls[i]!)))
       expect(got, scenarios[i]!.name).toEqual(want)
@@ -102,7 +102,7 @@ describe('lib/relational.esm argmin/argmax templates', () => {
       const file = loadPath(join(tierDir, 'fixtures', name))
       for (const m of Object.values(file.models ?? {})) {
         for (const eq of (m as Model).equations) {
-          expect(JSON.stringify(eq.rhs)).not.toContain('apply_expression_template')
+          expect(JSON.stringify(eq.rhs)).not.toContain('apply_operator')
         }
       }
     })
@@ -137,11 +137,11 @@ describe('lib/relational.esm argmin/argmax templates', () => {
       index_sets: { cells: { kind: 'interval', size: 3 } },
       models: {
         Probe: {
-          expression_template_imports: [{ ref: libraryPath }],
+          operator_imports: [{ ref: libraryPath }],
           variables,
           equations: calls.map(([name, bindings], i) => ({
             lhs: { op: 'D', args: [`out_${i}`], wrt: 't' },
-            rhs: { op: 'apply_expression_template', args: [], name, bindings },
+            rhs: { op: 'apply_operator', args: [], name, bindings },
           })),
         },
       },
@@ -149,9 +149,7 @@ describe('lib/relational.esm argmin/argmax templates', () => {
     const equations = (loadString(JSON.stringify(doc)).models!.Probe as Model).equations
     equations.forEach((eq, i) => {
       const [name, bindings] = calls[i]!
-      const want = JSON.parse(
-        JSON.stringify(substitute(library.expression_templates[name].body, bindings)),
-      )
+      const want = JSON.parse(JSON.stringify(substitute(library.operators[name].body, bindings)))
       expect(JSON.parse(JSON.stringify(eq.rhs)), name).toEqual(want)
     })
   })
@@ -163,7 +161,7 @@ describe('lib/relational.esm argmin/argmax templates', () => {
       const file = loadPath(path)
       for (const m of Object.values(file.models ?? {})) {
         for (const eq of (m as Model).equations) {
-          expect(JSON.stringify(eq.rhs), e.id).not.toContain('apply_expression_template')
+          expect(JSON.stringify(eq.rhs), e.id).not.toContain('apply_operator')
         }
       }
     }

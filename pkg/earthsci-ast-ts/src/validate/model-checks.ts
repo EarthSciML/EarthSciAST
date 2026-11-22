@@ -1103,7 +1103,7 @@ export function validateAggregateJoinSides(
  * registry exists only in that per-run build and resolving `{ from: NAME }`
  * against the empty local registry would reject every conforming leaf. The
  * check is therefore deferred, mirroring §9.6.1, where
- * `template_constraint_unknown_index_set` does not run for a library file
+ * `operator_constraint_unknown_index_set` does not run for a library file
  * validated standalone; a name still unresolved once injection has run is
  * rejected by the evaluating bindings' resolvers (issue #185).
  */
@@ -1150,12 +1150,12 @@ function isValueInventionFaq(agg: ExpressionNode): boolean {
 }
 
 /**
- * Whether `expr` holds a surviving `apply_expression_template` reference
+ * Whether `expr` holds a surviving `apply_operator` reference
  * (esm-spec §9.6.4), whose body a static walk of this document cannot see.
  */
 function containsTemplateReference(expr: unknown): boolean {
   if (!isExprNode(expr)) return false
-  if (expr.op === 'apply_expression_template') return true
+  if (expr.op === 'apply_operator') return true
   let found = false
   forEachChild(expr, (child) => {
     if (!found && containsTemplateReference(child)) found = true

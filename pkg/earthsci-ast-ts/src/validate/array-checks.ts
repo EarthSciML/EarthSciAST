@@ -302,7 +302,7 @@ export function validateFaqBareArrayOperands(
   const walk = (node: Expr, bound: ReadonlySet<string>, path: string): void => {
     // A template application is opaque: an array bound to one of its arguments
     // is not a bare read here (its expansion is checked at build).
-    if (!isExprNode(node) || node.op === 'apply_expression_template') return
+    if (!isExprNode(node) || node.op === 'apply_operator') return
     let inner = bound
     if (node.op === 'faq') {
       const faq = node as ExpressionNode & {

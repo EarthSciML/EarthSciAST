@@ -58,7 +58,7 @@ describe('unevaluable_operator versus unlowered_operator', () => {
   // Closed-core ops with no scalar rule: never the open-tier rewrite-rule advice.
   for (const op of [
     'distinct',
-    'apply_expression_template',
+    'apply_operator',
     'ic',
     'faq',
     'makearray',

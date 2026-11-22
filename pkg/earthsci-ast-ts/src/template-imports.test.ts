@@ -1,6 +1,6 @@
 /**
  * Tests for esm-spec §9.7 — template-library files,
- * `expression_template_imports`, and loadString-time `metaparameters`
+ * `operator_imports`, and loadString-time `metaparameters`
  * (docs/content/rfcs/template-library-imports.md; esm-libraries-spec §2.1c).
  *
  * Drives the shared conformance fixtures under
@@ -160,7 +160,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // A where-constrained div rule imported twice under prefix has its
     // where.F.shape rewritten x -> meshA.x / meshB.x in lockstep with the index
     // set, so each instance registers and fires only on its own field. Without
-    // the rewrite this raised template_constraint_unknown_index_set.
+    // the rewrite this raised operator_constraint_unknown_index_set.
     const d = expandRaw(conf('import_where_rename_two_instances', 'fixture.esm')) as any
     expect(canonEqs(d)).toEqual(
       canonEqs(golden(conf('import_where_rename_two_instances', 'expanded.esm'))),
@@ -335,7 +335,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // as spelled and is rejected at rule registration (esm-spec §9.6.6).
     expect(
       errCode(() => loadPath(conf('import_where_rename_unknown_index_set', 'fixture.esm'))),
-    ).toBe('template_constraint_unknown_index_set')
+    ).toBe('operator_constraint_unknown_index_set')
   })
 
   it("import_library_enum: a library's enum ops resolve against the library's own block (§9.3)", () => {
@@ -432,7 +432,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
   it('valid suite: library file + minimal consumer', () => {
     // A model-less template-library document loads (esm-spec §9.7.1).
     //
-    // This test used to ASSERT THE BUG: that `expression_templates` and
+    // This test used to ASSERT THE BUG: that `operators` and
     // `metaparameters` came back `undefined`, i.e. that loadString had deleted the
     // library's entire payload. esm-spec §9.6.4 rule 5 says the opposite —
     // Option A expands CALL SITES, it does not delete DECLARATIONS — because a
@@ -442,7 +442,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     const lib = loadPath(path.join(validDir, 'template_import_lib.esm')) as any
     expect(lib.models).toBeUndefined()
     expect(lib.index_sets.cells.size).toBe(8) // size "N" folded by default
-    expect(lib.expression_templates).toBeDefined()
+    expect(lib.operators).toBeDefined()
     expect(lib.metaparameters).toBeDefined()
     // Loader-API binding overrides the default on the library itself.
     const lib12 = loadPath(path.join(validDir, 'template_import_lib.esm'), { N: 12 }) as any
@@ -487,16 +487,16 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(definingRhs(fapi.models.Problem, 'npts')).toBe(6) // API > default
     expect(definingRhs(fapi.models.Problem, 'ramp').ranges.i).toEqual([1, 3])
     // Binding a name the document does not declare is an error.
-    expect(errCode(() => loadPath(problem, { Q: 1 }))).toBe('template_import_unknown_name')
+    expect(errCode(() => loadPath(problem, { Q: 1 }))).toBe('operator_import_unknown_name')
   })
 
   it('round-trip emits the expanded, folded form (§9.7.6)', () => {
     const f = loadPath(conf('import_smoke', 'fixture.esm'))
     const text = toJson(f)
-    expect(text).not.toContain('expression_template_imports')
+    expect(text).not.toContain('operator_imports')
     expect(text).not.toContain('metaparameters')
-    expect(text).not.toContain('expression_templates')
-    expect(text).not.toContain('apply_expression_template')
+    expect(text).not.toContain('operators')
+    expect(text).not.toContain('apply_operator')
     const reloaded = loadString(text) as any
     expect(reloaded.index_sets.lon.size).toBe(288)
     expect(reloaded.models.Advection.equations[0].rhs.args[1].op).toBe('makearray')
@@ -520,7 +520,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       const want = entry.resolver_error_code!
       const got = await errCodeAsync(async () => {
         const file = loadPath(path.join(invalidDir, fname))
-        // Subsystem-ref diagnostics (subsystem_ref_is_template_library,
+        // Subsystem-ref diagnostics (subsystem_ref_is_operator_library,
         // §9.7.6 site-3 binding errors) surface during ref resolution.
         await resolveSubsystemRefs(file, invalidDir)
         return file
@@ -529,23 +529,23 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       seenCodes.add(want)
     }
     // The fixture set exercises the §9.6.6 §9.7 code table, less two codes no
-    // fixture can reach: template_import_unresolved (exercised below — a
-    // missing file cannot be committed) and template_import_version_too_old,
+    // fixture can reach: operator_import_unresolved (exercised below — a
+    // missing file cannot be committed) and operator_import_version_too_old,
     // which esm 1.0.0 makes unreachable THROUGH loadString(). That gate rejects a
     // document declaring below 0.8.0, but a 1.x library rejects every 0.x
     // document on its major version at parse, before the resolver runs, and
     // every document it accepts declares >= 1.0.0 > 0.8.0. The gate helper
     // itself is still live and is unit-tested directly further down.
     for (const code of [
-      'template_import_not_library',
-      'template_library_illegal_payload',
-      'subsystem_ref_is_template_library',
-      'template_import_cycle',
-      'template_import_name_conflict',
-      'template_import_unknown_name',
-      'template_import_index_set_conflict',
-      'apply_expression_template_recursive_body',
-      'template_body_expansion_too_deep',
+      'operator_import_not_library',
+      'operator_library_illegal_payload',
+      'subsystem_ref_is_operator_library',
+      'operator_import_cycle',
+      'operator_import_name_conflict',
+      'operator_import_unknown_name',
+      'operator_import_index_set_conflict',
+      'operator_recursive_body',
+      'operator_body_expansion_too_deep',
       'metaparameter_unbound',
       'metaparameter_type_error',
       'metaparameter_name_conflict',
@@ -589,24 +589,24 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
 
   // `errCode` is shared from module scope (defined once, above).
 
-  it('template_import_unresolved: missing / unparsable ref', () => {
+  it('operator_import_unresolved: missing / unparsable ref', () => {
     expect(
       errCode(() =>
         loadStr(
           modelJson(`
-          "expression_template_imports": [{"ref": "./nope.esm"}],`),
+          "operator_imports": [{"ref": "./nope.esm"}],`),
         ),
       ),
-    ).toBe('template_import_unresolved')
+    ).toBe('operator_import_unresolved')
     fs.writeFileSync(path.join(tmpDir, 'junk.esm'), '{not json')
     expect(
       errCode(() =>
         loadStr(
           modelJson(`
-          "expression_template_imports": [{"ref": "./junk.esm"}],`),
+          "operator_imports": [{"ref": "./junk.esm"}],`),
         ),
       ),
-    ).toBe('template_import_unresolved')
+    ).toBe('operator_import_unresolved')
   })
 
   it('`only` filters visibility, not the target internal wiring', () => {
@@ -615,7 +615,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
       JSON.stringify({
         esm: '1.0.0',
         metadata: { name: 'lib' },
-        expression_templates: {
+        operators: {
           t_inner: { params: [], body: 7 },
           t_keep: {
             params: [],
@@ -623,7 +623,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
               op: '*',
               args: [
                 2,
-                { op: 'apply_expression_template', args: [], name: 't_inner', bindings: {} },
+                { op: 'apply_operator', args: [], name: 't_inner', bindings: {} },
               ],
             },
           },
@@ -638,14 +638,14 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     // dangle; bodies are NOT inlined — Expand reproduces 2 * 7.
     const raw = JSON.parse(
       modelJson(`
-        "expression_template_imports": [{"ref": "./lib_only.esm", "only": ["t_keep"]}],`),
+        "operator_imports": [{"ref": "./lib_only.esm", "only": ["t_keep"]}],`),
     )
     const resolved = resolveTemplateMachinery(raw, tmpDir, { validateSchema }) as any
-    const tpl = resolved.models.M.expression_templates
+    const tpl = resolved.models.M.operators
     expect(new Set(Object.keys(tpl))).toEqual(new Set(['t_keep', 't_inner']))
     expect(tpl.t_keep.body).toEqual({
       op: '*',
-      args: [2, { op: 'apply_expression_template', args: [], name: 't_inner', bindings: {} }],
+      args: [2, { op: 'apply_operator', args: [], name: 't_inner', bindings: {} }],
     })
     expect(tpl.t_inner.body).toEqual(7)
     // Referencing a filtered-out name from an expression position fails.
@@ -653,12 +653,12 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
       errCode(() =>
         loadStr(
           modelJson(`
-          "expression_template_imports": [{"ref": "./lib_only.esm", "only": ["t_keep"]}],
-          "expression_templates": {"local_uses_drop": {"params": [],
-            "body": {"op": "apply_expression_template", "args": [], "name": "t_drop", "bindings": {}}}},`),
+          "operator_imports": [{"ref": "./lib_only.esm", "only": ["t_keep"]}],
+          "operators": {"local_uses_drop": {"params": [],
+            "body": {"op": "apply_operator", "args": [], "name": "t_drop", "bindings": {}}}},`),
         ),
       ),
-    ).toBe('apply_expression_template_unknown_template')
+    ).toBe('operator_unknown_definition')
   })
 
   it('diamond with conflicting edge bindings is rejected (§9.7.6)', () => {
@@ -669,23 +669,23 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
         metadata: { name: 'grid' },
         metaparameters: { NC: { type: 'integer' } },
         index_sets: { cells: { kind: 'interval', size: 'NC' } },
-        expression_templates: { nc: { params: [], body: 'NC' } },
+        operators: { nc: { params: [], body: 'NC' } },
       }),
     )
     expect(
       errCode(() =>
         loadStr(
           modelJson(`
-          "expression_template_imports": [
+          "operator_imports": [
             {"ref": "./grid.esm", "bindings": {"NC": 4}},
             {"ref": "./grid.esm", "bindings": {"NC": 8}}],`),
         ),
       ),
-    ).toMatch(/^template_import_(name|index_set)_conflict$/)
+    ).toMatch(/^operator_import_(name|index_set)_conflict$/)
     // Equal instantiation on both edges dedups cleanly.
     const f = loadStr(
       modelJson(`
-        "expression_template_imports": [
+        "operator_imports": [
           {"ref": "./grid.esm", "bindings": {"NC": 4}},
           {"ref": "./grid.esm", "bindings": {"NC": 4}}],`),
     ) as any
@@ -699,24 +699,24 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
         esm: '1.0.0',
         metadata: { name: 'lib' },
         metaparameters: { N: { type: 'integer', default: 8 } },
-        expression_templates: { n: { params: [], body: 'N' } },
+        operators: { n: { params: [], body: 'N' } },
       }),
     )
     expect(
       errCode(() =>
         loadStr(
           modelJson(`
-          "expression_template_imports": [{"ref": "./lib_n.esm", "bindings": {"Q": 1}}],`),
+          "operator_imports": [{"ref": "./lib_n.esm", "bindings": {"Q": 1}}],`),
         ),
       ),
-    ).toBe('template_import_unknown_name')
+    ).toBe('operator_import_unknown_name')
     // A non-integer binding is rejected at the resolver level
     // (metaparameter_type_error); note the schema also rejects it earlier
     // in the full loadString() pipeline (TemplateImport.bindings is
     // integer-typed).
     const raw = JSON.parse(
       modelJson(`
-        "expression_template_imports": [{"ref": "./lib_n.esm", "bindings": {"N": 2.5}}],`),
+        "operator_imports": [{"ref": "./lib_n.esm", "bindings": {"N": 2.5}}],`),
     )
     expect(errCode(() => resolveTemplateMachinery(raw, tmpDir, {}))).toBe(
       'metaparameter_type_error',
@@ -843,7 +843,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
           : {
               params: [],
               body: {
-                op: 'apply_expression_template',
+                op: 'apply_operator',
                 args: [],
                 name: `c_${String(i + 1).padStart(2, '0')}`,
                 bindings: {},
@@ -855,7 +855,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
       metadata: { name: 'chain' },
       models: {
         M: {
-          expression_templates: tpl,
+          operators: tpl,
           variables: { x: { type: 'unknown', default: 0.5 } },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '-', args: ['x'] } }],
         },
@@ -871,19 +871,19 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
       metadata: { name: 'chain3' },
       models: {
         M: {
-          expression_templates: {
+          operators: {
             c1: {
               params: [],
               body: {
                 op: '+',
-                args: [1, { op: 'apply_expression_template', args: [], name: 'c2', bindings: {} }],
+                args: [1, { op: 'apply_operator', args: [], name: 'c2', bindings: {} }],
               },
             },
             c2: {
               params: [],
               body: {
                 op: '+',
-                args: [2, { op: 'apply_expression_template', args: [], name: 'c3', bindings: {} }],
+                args: [2, { op: 'apply_operator', args: [], name: 'c3', bindings: {} }],
               },
             },
             c3: { params: [], body: 3 },
@@ -898,7 +898,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
             // now `y`'s defining equation RHS.
             {
               lhs: 'y',
-              rhs: { op: 'apply_expression_template', args: [], name: 'c1', bindings: {} },
+              rhs: { op: 'apply_operator', args: [], name: 'c1', bindings: {} },
             },
           ],
         },
@@ -907,7 +907,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     const out = lowerExpressionTemplates(doc) as any
     // Option B: the target-free reference survives loadString (leaf); Expand inlines.
     expect(definingRhs(out.models.M, 'y')).toEqual({
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 'c1',
       bindings: {},
@@ -918,65 +918,65 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     })
 
     // Exactly MAX_TEMPLATE_EXPANSION_DEPTH templates chain: accepted;
-    // one more: template_body_expansion_too_deep (the shared generated
+    // one more: operator_body_expansion_too_deep (the shared generated
     // fixture pins the reject side; this pins the boundary).
     expect(() => lowerExpressionTemplates(chainDoc(MAX_TEMPLATE_EXPANSION_DEPTH))).not.toThrow()
     expect(
       errCode(() => lowerExpressionTemplates(chainDoc(MAX_TEMPLATE_EXPANSION_DEPTH + 1))),
-    ).toBe('template_body_expansion_too_deep')
+    ).toBe('operator_body_expansion_too_deep')
 
     // A body may not reference a `match` rule by name.
     const matchRef = JSON.parse(
       modelJson(`
-        "expression_templates": {
+        "operators": {
           "rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},
                    "body": {"op": "*", "args": [2, "f"]}},
-          "uses_rule": {"params": [], "body": {"op": "apply_expression_template",
+          "uses_rule": {"params": [], "body": {"op": "apply_operator",
                         "args": [], "name": "rule", "bindings": {"f": 1}}}
         },`),
     )
     expect(errCode(() => lowerExpressionTemplates(matchRef))).toBe(
-      'apply_expression_template_unknown_template',
+      'operator_unknown_definition',
     )
 
     // A `match` pattern may not contain apply nodes.
     const matchWithApply = JSON.parse(
       modelJson(`
-        "expression_templates": {
+        "operators": {
           "frag": {"params": [], "body": 1},
           "rule": {"params": ["f"],
-                   "match": {"op": "lowerme", "args": [{"op": "apply_expression_template",
+                   "match": {"op": "lowerme", "args": [{"op": "apply_operator",
                              "args": [], "name": "frag", "bindings": {}}]},
                    "body": {"op": "*", "args": [2, "f"]}}
         },`),
     )
     expect(errCode(() => lowerExpressionTemplates(matchWithApply))).toBe(
-      'apply_expression_template_invalid_declaration',
+      'operator_invalid_definition',
     )
   })
 
   it('version gate helper flags every §9.7 construct', () => {
     for (const snippet of [
       '"metaparameters": {"N": {"type": "integer"}},',
-      '"expression_templates": {"t": {"params": [], "body": 1}},',
+      '"operators": {"t": {"params": [], "body": 1}},',
     ]) {
       const doc = JSON.parse(`
       {"esm": "0.7.0", "metadata": {"name": "old"},${snippet}
        "models": {"M": {"variables": {"x": {"type": "unknown", "default": 0.5}},
                         "equations": []}}}`)
       expect(errCode(() => rejectTemplateImportsPreV08(doc))).toBe(
-        'template_import_version_too_old',
+        'operator_import_version_too_old',
       )
     }
     // 0.8.0 files pass the gate.
     const ok = JSON.parse(`
     {"esm": "0.8.0", "metadata": {"name": "new"},
      "metaparameters": {"N": {"type": "integer", "default": 1}},
-     "expression_templates": {"t": {"params": [], "body": 1}}}`)
+     "operators": {"t": {"params": [], "body": 1}}}`)
     expect(() => rejectTemplateImportsPreV08(ok)).not.toThrow()
   })
 
-  // A top-level `expression_templates` block makes the document a
+  // A top-level `operators` block makes the document a
   // template-library file, which declares none of these keys (esm-spec §9.7.1).
   // Rules are component-local (§9.6.3 constraint 4), so beside a component the
   // block would be visible to nothing; loading refuses it instead.
@@ -991,8 +991,8 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     ['domain', '"domain": {"temporal": {}}'],
   ])('root document: top-level templates beside %s are rejected', (_key, snippet) => {
     const head =
-      '{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, '
-    expect(errCode(() => loadString(head + snippet + '}'))).toBe('template_library_illegal_payload')
+      '{"esm": "1.0.0", "metadata": {"name": "impure"}, "operators": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, '
+    expect(errCode(() => loadString(head + snippet + '}'))).toBe('operator_library_illegal_payload')
   })
 
   // Regression: the §9.7.10 injected-imports append (shared by template-imports
@@ -1008,16 +1008,16 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     // Mutating the caller's source entry after the append must NOT leak into
     // the component (a by-reference push would let it).
     entry.bindings.N = 99
-    const appended = comp.expression_template_imports as any[]
+    const appended = comp.operator_imports as any[]
     expect(appended[0].bindings.N).toBe(4)
 
     // Merge order (esm-spec §9.7.10): the component's own imports first, then
     // the injected list appended after.
     const comp2: Record<string, unknown> = {
-      expression_template_imports: [{ ref: './own.esm' }],
+      operator_imports: [{ ref: './own.esm' }],
     }
     appendComponentImports(comp2, [{ ref: './inj.esm' }])
-    expect((comp2.expression_template_imports as any[]).map((e) => e.ref)).toEqual([
+    expect((comp2.operator_imports as any[]).map((e) => e.ref)).toEqual([
       './own.esm',
       './inj.esm',
     ])

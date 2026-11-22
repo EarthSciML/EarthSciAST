@@ -84,7 +84,7 @@ const CORE_OPS_WITHOUT_REGISTRY_ROW: ReadonlySet<string> = new Set([
   'true',
   'false',
   'enum',
-  'apply_expression_template',
+  'apply_operator',
   'ic',
   'faq',
   'makearray',
