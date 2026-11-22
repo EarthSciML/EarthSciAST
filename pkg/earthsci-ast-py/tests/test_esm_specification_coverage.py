@@ -1506,12 +1506,13 @@ class TestSection09Operators:
     """Section 9: Operators - runtime-specific with needed_vars"""
 
     def test_complete_operator_examples(self):
-        """Test that the operators top-level block (removed in v0.3.0) is rejected by the schema."""
+        """The pre-0.3.0 runtime-operator entry (``operator_id`` /
+        ``needed_vars``) is rejected by the schema: since esm 2.4.0 a top-level
+        ``operators`` block is an operator library's definitions (esm-spec
+        §9.6.12), each of which needs ``params`` and ``body``."""
         schema = _get_schema()
 
-        # operators was removed in v0.3.0; it should now be rejected as an
-        # additional property.
-        with pytest.raises(ValidationError, match="Additional properties are not allowed"):
+        with pytest.raises(ValidationError):
             jsonschema.validate(
                 {
                     "esm": "1.0.0",
@@ -1528,11 +1529,11 @@ class TestSection09Operators:
             )
 
     def test_operator_required_fields(self):
-        """Test that the removed operators block is rejected regardless of its contents."""
+        """A top-level ``operators`` entry that is not a definition (no
+        ``params`` / ``body``) is rejected (esm-spec §9.6.1)."""
         schema = _get_schema()
 
-        # Any use of the operators block (removed in v0.3.0) must be rejected.
-        with pytest.raises(ValidationError, match="Additional properties are not allowed"):
+        with pytest.raises(ValidationError):
             jsonschema.validate(
                 {
                     "esm": "1.0.0",

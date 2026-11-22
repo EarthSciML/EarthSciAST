@@ -75,7 +75,7 @@ def unvectorizable_map(tmp_path_factory) -> Path:
     """
     doc = json.loads(_BUILD_ONCE_SPATIAL.read_text())
     field = doc["models"]["Field"]
-    field.pop("expression_template_imports", None)
+    field.pop("operator_imports", None)
     (area,) = [eq for eq in field["equations"] if eq["lhs"] == "area"]
     ring = {"op": "index", "args": ["poly", "c"]}
     area["rhs"]["expr"] = {"op": "index", "args": [ring, 2, 1]}

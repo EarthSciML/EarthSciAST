@@ -1,0 +1,292 @@
+"""esm 2.4.0 "one operator type" (esm-spec §4.2, §4.8.3, §9.6.1-9.6.3, §9.6.6,
+§9.6.12; CONFORMANCE_SPEC §5.61).
+
+Calls of defined operators resolve to definitions and become references, old
+spellings are read at the wire boundary, core names are reserved, arity is
+checked at load, and unit expressions type a call. The fixtures live under
+``tests/conformance/expression_templates/``; the emitted goldens are byte for
+byte what the Julia reference writes. Mirrors
+``pkg/EarthSciAST.jl/test/one_operator_type_test.jl``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import warnings
+
+import pytest
+from conftest import CONFORMANCE_DIR
+
+from earthsci_ast import load_path, validate
+from earthsci_ast.error_handling import ERROR_CODE_ALIASES, ERROR_CODES, canonical_error_code
+from earthsci_ast.lower_expression_templates import (
+    Expand,
+    emit_document,
+    emit_esm_string,
+    explain_unresolved_call,
+    lower_expression_templates,
+)
+from earthsci_ast.parse import EsmDeprecationWarning, rewrite_old_spellings
+from earthsci_ast.problem import esm_problem
+from earthsci_ast.template_imports import resolve_template_machinery
+
+CONF = CONFORMANCE_DIR / "expression_templates"
+
+
+def _p(*parts: str) -> str:
+    return str(CONF.joinpath(*parts))
+
+
+def _emit(path: str) -> str:
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    return emit_esm_string(emit_document(raw, os.path.dirname(path)))
+
+
+def _lowered(path: str):
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    resolved = resolve_template_machinery(raw, os.path.dirname(path))
+    return lower_expression_templates(raw if resolved is None else resolved)
+
+
+def _core(d: dict) -> dict:
+    return {k: d[k] for k in ("models", "reaction_systems", "coupling", "index_sets") if k in d}
+
+
+def _code(fn) -> str | None:
+    try:
+        fn()
+    except Exception as e:  # noqa: BLE001 — the code is what is asserted
+        return getattr(e, "code", type(e).__name__)
+    return None
+
+
+def _codes_warned(fn) -> list[str]:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fn()
+    return [
+        str(w.message).split(":", 1)[0]
+        for w in caught
+        if issubclass(w.category, EsmDeprecationWarning)
+    ]
+
+
+EMITTED = [
+    ("operator_call_by_name", "fixture.esm", "emitted.esm"),
+    ("placeholder_call", "fixture.esm", "emitted.esm"),
+    ("partial_wrt_param_instance", "fixture.esm", "emitted.esm"),
+    ("old_names", "fixture.esm", "emitted.esm"),
+]
+
+
+@pytest.mark.parametrize("case,fixture,golden", EMITTED, ids=[c[0] for c in EMITTED])
+def test_emitted_golden_byte_for_byte_and_a_fixed_point(case, fixture, golden, tmp_path):
+    out = _emit(_p(case, fixture))
+    with open(_p(case, golden), encoding="utf-8") as f:
+        assert out == f.read()
+    again = tmp_path / "e.esm"
+    again.write_text(out, encoding="utf-8")
+    assert _emit(str(again)) == out
+
+
+def test_old_spellings_emit_exactly_as_the_new_ones():
+    def strip_meta(text: str) -> dict:
+        d = json.loads(text)
+        d.pop("metadata", None)
+        return d
+
+    assert strip_meta(_emit(_p("old_names", "fixture.esm"))) == strip_meta(
+        _emit(_p("old_names", "new_names.esm"))
+    )
+
+
+@pytest.mark.parametrize("case", ["operator_call_by_name", "partial_wrt_param_instance"])
+def test_expanded_golden_structurally(case):
+    got = _core(Expand(_lowered(_p(case, "fixture.esm"))))
+    with open(_p(case, "expanded.esm"), encoding="utf-8") as f:
+        want = _core(json.load(f))
+    assert got == want
+
+
+def test_calls_resolve_to_references_by_operator_name():
+    """§9.6.3 constraint 2 / §9.6.12: a call of a defined operator becomes a
+    reference to the definition selected for it; a placeholder stays a call."""
+    loaded = _lowered(_p("operator_call_by_name", "fixture.esm"))
+    text = json.dumps(loaded["models"])
+    assert '"apply_operator"' in text
+    for decl in loaded["models"][next(iter(loaded["models"]))]["operators"].values():
+        assert isinstance(decl.get("defines"), str)
+
+
+@pytest.mark.parametrize(
+    "case,fixture,error",
+    [
+        ("operator_arity_mismatch", "fixture.esm", "error.json"),
+        ("operator_defines_core_op", "fixture.esm", "error.json"),
+        ("operator_defines_core_op", "explicit_defines.esm", "error_explicit_defines.json"),
+    ],
+)
+def test_load_errors_by_code(case, fixture, error):
+    with open(_p(case, error), encoding="utf-8") as f:
+        want = json.load(f)["code"]
+    assert _code(lambda: load_path(_p(case, fixture))) == want
+
+
+def test_defines_core_op_names_the_definition_and_the_core_op():
+    try:
+        load_path(_p("operator_defines_core_op", "fixture.esm"))
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+    assert "operators.exp" in msg and "'exp'" in msg
+
+
+def test_a_compound_rule_rooted_at_a_core_op_is_exempt():
+    load_path(_p("operator_defines_core_op", "compound_rule_exempt.esm"))
+
+
+def test_old_spellings_warn_and_new_spellings_do_not():
+    old = _codes_warned(lambda: load_path(_p("old_names", "fixture.esm")))
+    assert "deprecated_field" in old
+    assert "deprecated_op" in old
+    with open(_p("old_names", "warnings.json"), encoding="utf-8") as f:
+        assert set(json.load(f)["warnings"]) <= set(old)
+    assert _codes_warned(lambda: load_path(_p("old_names", "new_names.esm"))) == []
+
+
+def test_old_spellings_are_read_once():
+    with open(_p("old_names", "fixture.esm"), encoding="utf-8") as f:
+        doc = json.load(f)
+    fsites, osites = rewrite_old_spellings(doc)
+    assert fsites and osites
+    assert rewrite_old_spellings(doc) == ([], [])
+    assert "operators" in doc["models"]["m"]
+    assert doc["models"]["m"]["operators"]["diff_x"]["match"]["op"] == "partial"
+
+
+def test_both_spellings_in_one_object_is_refused():
+    doc = {"models": {"m": {"operators": {}, "expression_templates": {}}}}
+    assert _code(lambda: rewrite_old_spellings(doc)) == "operator_invalid_definition"
+
+
+def test_a_D_whose_wrt_is_a_definition_param_is_decided_per_instance():
+    """§4.2 "Reading earlier documents": left as `D` at the wire boundary, read
+    as `partial` in each instance that binds the parameter to an axis."""
+    doc = {
+        "models": {
+            "m": {
+                "operators": {
+                    "d": {
+                        "params": ["f", "ax"],
+                        "body": {"op": "D", "args": ["f"], "wrt": "ax"},
+                    }
+                },
+                "equations": [{"lhs": "y", "rhs": {"op": "D", "args": ["u"], "wrt": "x"}}],
+            }
+        }
+    }
+    rewrite_old_spellings(doc)
+    m = doc["models"]["m"]
+    assert m["operators"]["d"]["body"]["op"] == "D"
+    assert m["equations"][0]["rhs"]["op"] == "partial"
+
+
+def test_a_placeholder_loads_and_is_refused_only_if_evaluated():
+    f = load_path(_p("placeholder_call", "fixture.esm"))
+    with pytest.raises(Exception) as exc:
+        esm_problem(f, (0.0, 1.0))
+    assert getattr(exc.value, "code", None) == "unlowered_operator"
+    assert "placeholder" in str(exc.value)
+
+
+def test_unresolved_call_explanation_lists_definitions_and_reasons():
+    registry = {
+        "one": {"params": ["a"], "body": "a", "defines": "g"},
+        "two": {
+            "params": ["a"],
+            "where": {"a": {"shape": ["x"]}},
+            "body": "a",
+            "defines": "g",
+        },
+    }
+    two_args = explain_unresolved_call({"op": "g", "args": ["u", "v"]}, registry)
+    assert two_args.startswith("definitions of 'g' in scope: 'one': takes 1 operand(s)")
+    assert "'two': takes 1 operand(s), the call carries 2" in two_args
+    fields = explain_unresolved_call({"op": "g", "args": ["u"], "wrt": "x"}, registry)
+    assert "has no match, so it binds operands only, and the call carries wrt" in fields
+    where = explain_unresolved_call({"op": "g", "args": ["u"]}, {"two": registry["two"]})
+    assert 'its where constraint a.shape = ["x"] fails' in where
+    assert explain_unresolved_call({"op": "h", "args": []}, registry) == (
+        "no definition of 'h' is in scope (a placeholder)"
+    )
+
+
+def test_unit_expressions_type_a_call():
+    with open(_p("definition_units", "expected.json"), encoding="utf-8") as f:
+        expected = json.load(f)
+    for name in ("fixture.esm", "body_mismatch.esm", "call_unit_from_expression.esm"):
+        r = validate(load_path(_p("definition_units", name)))
+        errors = sorted({e.code for e in r.structural_errors})
+        warned = sorted({w.code for w in r.unit_warnings if w.code == "definition_unit_mismatch"})
+        assert errors == sorted(expected[name]["errors"]), name
+        assert warned == sorted(expected[name]["warnings"]), name
+
+
+def test_new_codes_are_registered():
+    for code in (
+        "operator_arity_mismatch",
+        "operator_defines_core_op",
+        "definition_unit_mismatch",
+        "deprecated_field",
+    ):
+        assert code in set(ERROR_CODES.values())
+
+
+def test_old_codes_are_aliases_of_the_new_ones():
+    assert canonical_error_code("template_import_cycle") == "operator_import_cycle"
+    assert (
+        canonical_error_code("apply_expression_template_unknown_template")
+        == "operator_unknown_definition"
+    )
+    assert canonical_error_code("operator_import_cycle") == "operator_import_cycle"
+    registered = set(ERROR_CODES.values())
+    for old in ERROR_CODE_ALIASES:
+        assert old not in registered, f"{old} is reported; only the new code may be"
+
+
+@pytest.mark.parametrize(
+    "rhs,declared,valid",
+    [
+        ({"op": "partial", "args": ["u"], "wrt": "x"}, "K/m", True),
+        ({"op": "partial", "args": ["u", "w"], "wrt": "x"}, "K/m", True),
+        ({"op": "partial", "args": ["u"], "wrt": "x"}, "K", False),
+        ({"op": "integral", "args": ["u"], "var": "x", "lower": 0, "upper": 1}, "K*m", True),
+        ({"op": "integral", "args": ["u"], "var": "x", "lower": 0, "upper": 1}, "K", False),
+    ],
+)
+def test_partial_and_integral_have_fixed_unit_expressions(rhs, declared, valid):
+    """esm-spec §4.2 / §4.8.3: `partial(f; wrt: x)` has [f]/[x] and
+    `integral(f; var: x)` has [f]·[x], resolved or not; trailing operands of
+    `partial` never enter its unit."""
+    from earthsci_ast import load_document
+
+    doc = {
+        "esm": "2.4.0",
+        "metadata": {"name": "fixed_units"},
+        "models": {
+            "m": {
+                "variables": {
+                    "u": {"type": "parameter", "units": "K", "default": 1.0},
+                    "w": {"type": "parameter", "units": "s", "default": 1.0},
+                    "x": {"type": "parameter", "units": "m", "default": 1.0},
+                    "y": {"type": "unknown", "units": declared},
+                },
+                "equations": [{"lhs": "y", "rhs": rhs}],
+            }
+        },
+    }
+    r = validate(load_document(doc))
+    codes = {e.code for e in r.structural_errors}
+    assert ("unit_inconsistency" not in codes) == valid, codes

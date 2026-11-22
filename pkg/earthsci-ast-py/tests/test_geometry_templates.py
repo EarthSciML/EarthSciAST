@@ -57,7 +57,7 @@ def _doc(rhs: list[dict], imports: bool) -> dict:
     ]
     model: dict = {"variables": variables, "equations": equations}
     if imports:
-        model["expression_template_imports"] = [{"ref": str(GEOMETRY_LIBRARY)}]
+        model["operator_imports"] = [{"ref": str(GEOMETRY_LIBRARY)}]
     return {
         "esm": "1.1.0",
         "metadata": {"name": "geometry_template_probe"},
@@ -66,7 +66,7 @@ def _doc(rhs: list[dict], imports: bool) -> dict:
 
 
 def _apply(name: str, bindings: dict) -> dict:
-    return {"op": "apply_expression_template", "args": [], "name": name, "bindings": bindings}
+    return {"op": "apply_operator", "args": [], "name": name, "bindings": bindings}
 
 
 def _load_rhs(rhs: list[dict], imports: bool) -> list:

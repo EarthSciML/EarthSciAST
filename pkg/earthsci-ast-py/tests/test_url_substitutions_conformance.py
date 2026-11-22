@@ -210,7 +210,7 @@ def test_an_unreadable_nested_ref_is_a_read_error_not_an_unknown_name(
 ) -> None:
     """The forwarding walk runs before the leaf's own mounts load, so it must
     report a nested ref it cannot read rather than refuse the edge binding as
-    `template_import_unknown_name` (which the unread document might declare)."""
+    `operator_import_unknown_name` (which the unread document might declare)."""
     path, docs = _remote_assembly(tmp_path, "missing.esm")
     _serve(monkeypatch, docs)
     from earthsci_ast.parse import SubsystemRefError

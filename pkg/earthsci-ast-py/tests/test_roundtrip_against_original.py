@@ -38,6 +38,7 @@ import pytest
 from conftest import VALID_DIR
 
 import earthsci_ast as ea
+from earthsci_ast.parse import rewrite_old_spellings
 
 # ---------------------------------------------------------------------------
 # Fixtures whose load applies a transform the spec REQUIRES or explicitly
@@ -279,8 +280,15 @@ def _dropped_keys(original: Any, reemitted: Any, path: str = "") -> Iterator[tup
 @pytest.mark.parametrize("fixture", _corpus(), ids=_rel)
 def test_save_load_reproduces_the_original(fixture: Path) -> None:
     """``save(load(F))`` equals ``F`` — unless F is a NAMED transforming fixture,
-    in which case it must still differ (a stale exclusion is a failure too)."""
+    in which case it must still differ (a stale exclusion is a failure too).
+
+    F is compared as a load reads it: the esm-2.3 spellings a fixture may write
+    (``expression_templates``, ``apply_expression_template``, a spatial ``D``)
+    are read as the esm-2.4.0 ones (esm-spec §9.6.12, §4.2), which save
+    writes. That renaming is the whole of the transform; anything else that
+    differs is still a drop."""
     original = json.loads(fixture.read_text(encoding="utf-8"))
+    rewrite_old_spellings(original)
     reemitted = _reemit(fixture)
     reason = TRANSFORMING_FIXTURES.get(_rel(fixture))
 
@@ -508,7 +516,7 @@ def test_an_attrs_key_binds_a_match_rule_param_to_the_matched_literal() -> None:
                     },
                     {"lhs": {"op": "D", "args": ["phi"], "wrt": "t"}, "rhs": "H"},
                 ],
-                "expression_templates": {
+                "operators": {
                     "lower_godunov": {
                         "params": ["f", "g"],
                         "match": {
@@ -526,7 +534,7 @@ def test_an_attrs_key_binds_a_match_rule_param_to_the_matched_literal() -> None:
     rhs = next(eq["rhs"] for eq in model["equations"] if eq["lhs"] == "H")
     assert rhs == {"op": "*", "args": [1.4, "phi"]}
     # §9.6.4 rule 5: the match-only registry is dropped once its rules fire.
-    assert "expression_templates" not in model
+    assert "operators" not in model
 
 
 def test_a_node_carrying_an_annotation_has_no_canonical_form() -> None:

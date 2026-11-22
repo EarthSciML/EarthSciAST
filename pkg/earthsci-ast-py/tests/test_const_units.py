@@ -65,7 +65,7 @@ def test_unresolvable_const_units_in_a_called_template_body_are_reported():
         "metadata": {"name": "ConstUnits", "description": "probe"},
         "models": {
             "M": {
-                "expression_templates": {
+                "operators": {
                     "to_ms": {
                         "params": ["x"],
                         "body": {
@@ -85,7 +85,7 @@ def test_unresolvable_const_units_in_a_called_template_body_are_reported():
                     {
                         "lhs": "speed_ms",
                         "rhs": {
-                            "op": "apply_expression_template",
+                            "op": "apply_operator",
                             "args": [],
                             "name": "to_ms",
                             "bindings": {"x": "speed_mph"},

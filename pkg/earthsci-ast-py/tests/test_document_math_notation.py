@@ -143,7 +143,7 @@ def test_call_form_still_reads_what_the_printer_writes(pr, pa):
 
 
 def test_bare_template_name_out_of_scope_reads_and_prints_bare():
-    e = j({"op": "apply_expression_template", "args": [], "name": "grad", "bindings": {}})
+    e = j({"op": "apply_operator", "args": [], "name": "grad", "bindings": {}})
     assert print_latex(S, e) == r"\operatorname{grad}"
     assert parse_latex(S, r"\operatorname{grad}") == e
     assert parse_latex(S, r"\operatorname{grad} x") is not None
@@ -153,7 +153,7 @@ def test_bare_template_name_out_of_scope_reads_and_prints_bare():
 
 def test_bare_template_name_refused_when_in_scope_with_no_parameters():
     s0 = Sym(NAMES, (("grad", ()),))
-    e = j({"op": "apply_expression_template", "args": [], "name": "grad", "bindings": {}})
+    e = j({"op": "apply_operator", "args": [], "name": "grad", "bindings": {}})
     assert print_latex(s0, e) == r"\operatorname{grad}()"
     assert parse_latex(s0, r"\operatorname{grad}()") == e
     assert parse_latex(s0, r"\operatorname{grad}") is None

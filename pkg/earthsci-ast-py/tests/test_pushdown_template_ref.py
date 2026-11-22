@@ -40,7 +40,7 @@ def _op(o, *args):
 
 
 def _apply(name, bindings):
-    return {"op": "apply_expression_template", "args": [], "name": name, "bindings": dict(bindings)}
+    return {"op": "apply_operator", "args": [], "name": name, "bindings": dict(bindings)}
 
 
 def _agg(output_idx, ranges, expr, reduce=None, args=()):
@@ -180,7 +180,7 @@ def test_bare_factor_name_bindings_are_repointed():
         _op("<=", _ix("ymin", "c"), _ix("pty", "r")),
         _op("<", _ix("pty", "r"), _ix("ymax", "c")),
     )
-    m["expression_templates"] = {
+    m["operators"] = {
         "bin_into_cell": {
             "params": ["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "wgt"],
             "body": _op("*", _op("ifelse", tpl_contain, 1.0, 0.0), _ix("wgt", "r")),
@@ -209,7 +209,7 @@ def test_bare_factor_name_bindings_are_repointed():
             args=_EARGS,
         ),
     )
-    tpl_before = copy.deepcopy(m["expression_templates"])
+    tpl_before = copy.deepcopy(m["operators"])
 
     r = desugar_pushdown(d, model_name="Binned")
     assert r is not d
@@ -233,7 +233,7 @@ def test_bare_factor_name_bindings_are_repointed():
     assert rs == ls
     assert lf == {"op": "*", "args": _contain()["args"]}
     assert rf == {
-        "op": "apply_expression_template",
+        "op": "apply_operator",
         "name": "bin_into_cell__pd_filter",
         "args": [],
         "bindings": {
@@ -245,7 +245,7 @@ def test_bare_factor_name_bindings_are_repointed():
             "pty": "py",
         },
     }
-    tpls = r["models"]["Binned"]["expression_templates"]
+    tpls = r["models"]["Binned"]["operators"]
     assert tpls["bin_into_cell__pd_filter"] == {
         "params": ["xmin", "ymin", "xmax", "ymax", "ptx", "pty"],
         "body": {"op": "*", "args": tpl_contain["args"]},
@@ -269,7 +269,7 @@ def test_subscripted_bindings_are_repointed():
     its params as plain operands."""
     d = base_doc()
     m = d["models"]["Binned"]
-    m["expression_templates"] = {
+    m["operators"] = {
         "bin2": {
             "params": ["lo_x", "lo_y", "hi_x", "hi_y", "x", "y", "wgt"],
             "body": _op(
@@ -313,7 +313,7 @@ def test_subscripted_bindings_are_repointed():
             args=_EARGS,
         ),
     )
-    tpl_before = copy.deepcopy(m["expression_templates"])
+    tpl_before = copy.deepcopy(m["operators"])
 
     r = desugar_pushdown(d, model_name="Binned")
     assert r is not d
@@ -327,7 +327,7 @@ def test_subscripted_bindings_are_repointed():
     assert b["x"]["args"][0] == "px"  # records untouched
     # The authored template is untouched; the producer filter is the derived
     # template of its containment, read with the full-grid subscripted bindings.
-    tpls = r["models"]["Binned"]["expression_templates"]
+    tpls = r["models"]["Binned"]["operators"]
     assert {k: v for k, v in tpls.items() if k != "bin2__pd_filter"} == tpl_before
     assert tpls["bin2__pd_filter"]["params"] == ["lo_x", "lo_y", "hi_x", "hi_y", "x", "y"]
     prod = _structural(r)[0]["rhs"]
@@ -343,7 +343,7 @@ def test_free_rect_in_template_body_is_rejected():
     positions — wrong numbers, silently. Hence an error, not a warning."""
     d = base_doc()
     m = d["models"]["Binned"]
-    m["expression_templates"] = {
+    m["operators"] = {
         "bin3": {
             "params": ["wgt"],
             "body": _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("wgt", "r")),
@@ -357,7 +357,7 @@ def test_free_rect_in_template_body_is_rejected():
     )
     with pytest.raises(ExpressionTemplateError) as ei:
         desugar_pushdown(d, model_name="Binned")
-    assert ei.value.code == "template_body_references_pushdown_rewritten_variable"
+    assert ei.value.code == "operator_body_references_pushdown_rewritten_variable"
     assert "src_W" in str(ei.value)
     assert "E_PM25" in str(ei.value)
     assert "Bind the value through the template's params" in str(ei.value)

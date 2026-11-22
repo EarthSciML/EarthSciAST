@@ -81,7 +81,7 @@ def test_form_a_injected_ref_resolves_against_the_mounting_directory(fname):
 def test_form_a_leaf_loads_standalone_with_d_intact():
     # The leaf loads standalone with its D intact (agnostic; unlowered).
     leaf = load_path(_conf("inject_subsystem_ref", "leaf.esm"))
-    assert leaf.models["Advection"].equations[0].rhs.args[1].op == "D"
+    assert leaf.models["Advection"].equations[0].rhs.args[1].op == "partial"
 
 
 def test_form_a_no_inject_negative_twin_loads_clean():
@@ -91,7 +91,7 @@ def test_form_a_no_inject_negative_twin_loads_clean():
     ni = load_path(_conf("inject_subsystem_ref", "no_inject.esm"))
     runoff = ni.models["Assembly"].subsystems["Runoff"]
     assert isinstance(runoff, Model)
-    assert runoff.equations[0].rhs.args[1].op == "D"
+    assert runoff.equations[0].rhs.args[1].op == "partial"
 
 
 # ---------------------------------------------------------------------------
@@ -108,21 +108,21 @@ def test_form_b_coupling_entry_injection():
     assert f.models["Emit"].equations[0].lhs.op == "D"
     # The injection map is consumed — form B does not survive parse → emit.
     ser = _serialize_esm_file(f)
-    assert "expression_template_imports" not in ser["coupling"][0]
+    assert "operator_imports" not in ser["coupling"][0]
     assert ser == _read_json(_conf("inject_coupling_entry", "expanded.esm"))
 
 
 def test_form_b_diagnostics():
     assert (
         _err_code(lambda: load_path(_conf("inject_coupling_entry", "neg_target_unknown.esm")))
-        == "template_inject_target_unknown"
+        == "operator_inject_target_unknown"
     )
     # From 1.0.0 a data source is not a component, so a key naming a
     # `data_sources` entry is reported by the general not-a-component code —
-    # the separate `template_inject_target_is_loader` diagnostic is retired.
+    # the separate `operator_inject_target_is_loader` diagnostic is retired.
     assert (
         _err_code(lambda: load_path(_conf("inject_coupling_entry", "neg_target_is_loader.esm")))
-        == "template_inject_target_not_component"
+        == "operator_inject_target_not_component"
     )
 
 
@@ -136,7 +136,7 @@ def test_form_c_round_trip_keeps_component_and_test_imports():
     adv = f.models["Advection"]
     # The enclosing component round-trips with its D INTACT (form C does not
     # lower it at load) and each test keeps its import field (survives emit).
-    assert adv.equations[0].rhs.args[1].op == "D"
+    assert adv.equations[0].rhs.args[1].op == "partial"
     assert len(adv.tests) == 2
     assert all(t.expression_template_imports for t in adv.tests)
     assert _serialize_esm_file(f) == _read_json(_conf("inject_test_block", "roundtrip.esm"))
@@ -167,7 +167,7 @@ def test_form_c_ephemeral_builds_lower_independently():
     assert e1.index_sets["lon"]["size"] == 288
     assert e2.index_sets["lon"]["size"] == 144
     # The persisted file is untouched by the ephemeral builds.
-    assert f.models["Advection"].equations[0].rhs.args[1].op == "D"
+    assert f.models["Advection"].equations[0].rhs.args[1].op == "partial"
 
 
 def test_form_a_injected_import_ref_expands_env_var(tmp_path, monkeypatch):
@@ -189,11 +189,11 @@ def test_form_a_injected_import_ref_expands_env_var(tmp_path, monkeypatch):
 
     # Unset: the token stays literal, so the injected import fails to resolve.
     monkeypatch.delenv(var, raising=False)
-    assert _err_code(lambda: load_path(str(doc))) == "template_import_unresolved"
+    assert _err_code(lambda: load_path(str(doc))) == "operator_import_unresolved"
 
     # Negative control: the injected import is load-bearing.
     monkeypatch.setenv(var, str(tmp_path))
-    assert _err_code(lambda: load_path(str(doc))) == "template_import_unresolved"
+    assert _err_code(lambda: load_path(str(doc))) == "operator_import_unresolved"
 
     monkeypatch.setenv(var, conf)
     f = load_path(str(doc))
@@ -226,7 +226,7 @@ def test_form_a_injected_std_ref_resolves_at_load(tmp_path):
                     {
                         "lhs": "h",
                         "rhs": {
-                            "op": "apply_expression_template",
+                            "op": "apply_operator",
                             "args": [],
                             "name": "hour",
                             "bindings": {"t": "t"},
@@ -247,9 +247,7 @@ def test_form_a_injected_std_ref_resolves_at_load(tmp_path):
                 "subsystems": {
                     "Clock": {
                         "ref": "./leaves/leaf.esm",
-                        "expression_template_imports": [
-                            {"ref": "esm:std/calendar.esm", "only": ["hour"]}
-                        ],
+                        "operator_imports": [{"ref": "esm:std/calendar.esm", "only": ["hour"]}],
                     }
                 },
             }
@@ -259,4 +257,4 @@ def test_form_a_injected_std_ref_resolves_at_load(tmp_path):
     f = load_path(str(tmp_path / "root.esm"))
     clock = f.models["Assembly"].subsystems["Clock"]
     assert isinstance(clock, Model)
-    assert clock.equations[0].rhs.op != "apply_expression_template"
+    assert clock.equations[0].rhs.op != "apply_operator"
