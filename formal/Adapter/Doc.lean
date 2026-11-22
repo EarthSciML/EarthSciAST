@@ -150,12 +150,42 @@ binding's `canonicalize_document` uses. -/
 def mapKeys : List String :=
   ["bind", "bindings", "coordinates", "coords", "coupling_roles", "data_sources", "enums",
    "expression_template_imports", "expression_templates", "guesses", "index_set_rename",
-   "index_sets", "initial_conditions", "map", "metaparameters", "models", "parameter_overrides",
+   "index_sets", "initial_conditions", "map", "metaparameters", "models", "operator_imports",
+   "operators", "parameter_overrides",
    "parameters", "pinned_coords", "ranges", "reaction_systems", "rebind", "rename", "species",
    "subsystems", "translate", "url_substitutions", "variables", "where"]
 
 /-- Free-form objects (schema `additionalProperties: true`), never descended. -/
 def freeKeys : List String := ["attrs", "config", "metadata", "reader_options", "x_esd"]
+
+/-- Old field names read as the new ones (esm-spec §9.6.12, "Old names"): emit writes only
+the new names. -/
+def renameKey : String → String
+  | "expression_templates" => "operators"
+  | "expression_template_imports" => "operator_imports"
+  | k => k
+
+/-- The blocks whose entries are operator definitions (esm-spec §9.6.1), old name included. -/
+def defsKeys : List String := ["operators", "expression_templates"]
+
+/-- The string parameter names of a definition entry. -/
+def paramsOf (kvs : List (String × Json)) : List String :=
+  match Math.look "params" kvs with
+  | some (.arr ps) => ps.filterMap fun p => match p with | .str s => some s | _ => none
+  | _ => []
+
+/-- The op an earlier document's spelling is read as (esm-spec §4.2 "Reading earlier
+documents", §9.6.12): `apply_expression_template` is `apply_operator`; a `D` whose `wrt` is
+present and not `"t"` is `partial` (unless the `wrt` is a parameter of the enclosing
+definition, which is decided per instance and kept as written); `δ` and `∂` are `partial`. -/
+def renameOp (ps : List String) (o : String) (kvs : List (String × Json)) : String :=
+  if o = "apply_expression_template" then "apply_operator"
+  else if o = "δ" ∨ o = "∂" then "partial"
+  else if o = "D" then
+    match Math.look "wrt" kvs with
+    | some (.str w) => if w ≠ "t" ∧ !(ps.contains w) then "partial" else o
+    | _ => o
+  else o
 
 /-- The deprecated operators and what they are rewritten to, with their arity. -/
 def deprecatedTo : String → Option (String × Nat)
@@ -163,19 +193,48 @@ def deprecatedTo : String → Option (String × Nat)
   | "pow" => some ("^", 2)
   | _ => none
 
+/-- How `spellRules` reads an object: an ordinary object, a name-keyed map, a block of
+operator definitions (a map whose entries are definitions), or one definition (whose
+`units` is a unit expression, not a units string, esm-spec §9.6.1). -/
+inductive Walk where
+  | plain | map | defs | defn
+
 /-- The spelling rules of the canonical form: units strings respelled, a dimensionless
-`const` dropping its units, `neg` and `pow` rewritten (and a `broadcast` of `neg`).
-`isMap`: the value is a name-keyed map. Unproved adapter code, pinned by the golden files (`Esm.Document.Notation`). -/
-partial def spellRules (isMap : Bool) : Json → Json
-  | .arr xs => .arr (xs.map (spellRules false))
+`const` dropping its units, `neg` and `pow` rewritten (and a `broadcast` of `neg`), and the
+old names of esm-spec §9.6.12 and §4.2 read as the new ones (`renameKey`, `renameOp`).
+`ps`: the parameters of the enclosing definition. Unproved adapter code, pinned by the
+golden files (`Esm.Document.Notation`). -/
+partial def spellWalk (w : Walk) (ps : List String) : Json → Json
+  | .arr xs => .arr (xs.map (spellWalk .plain ps))
   | .obj kvs =>
-    if isMap then .obj (kvs.map fun (k, v) => (k, spellRules false v))
-    else
-      let kvs' := kvs.map fun (k, v) =>
+    match w with
+    | .map => .obj (kvs.map fun (k, v) => (k, spellWalk .plain ps v))
+    | .defs => .obj (kvs.map fun (k, v) =>
+        (k, match v with
+          | .obj ekvs => spellWalk .defn (paramsOf ekvs) v
+          | _ => spellWalk .plain ps v))
+    | _ =>
+      let kvs' := Source.sortKeys (kvs.map fun (k, v) =>
+        let k := renameKey k
         match k, v with
-        | "units", .str u => (k, .str (Esm.Units.canon u))
+        | "units", .str u =>
+          match w with
+          | .defn => (k, v)
+          | _ => (k, .str (Esm.Units.canon u))
+        | "units", _ =>
+          match w with
+          | .defn => (k, spellWalk .plain ps v)
+          | _ => (k, v)
         | "default_units", .str u => (k, .str (Esm.Units.canon u))
-        | _, _ => if freeKeys.contains k then (k, v) else (k, spellRules (mapKeys.contains k) v)
+        | _, _ =>
+          if freeKeys.contains k then (k, v)
+          else if defsKeys.contains k then (k, spellWalk .defs ps v)
+          else (k, spellWalk (if mapKeys.contains k then .map else .plain) ps v))
+      let kvs' := match Math.look "op" kvs' with
+        | some (.str o) =>
+          let o' := renameOp ps o kvs'
+          if o' = o then kvs' else kvs'.map fun (k, v) => if k = "op" then (k, .str o') else (k, v)
+        | _ => kvs'
       match Math.look "op" kvs', Math.look "args" kvs' with
       | some (.str "const"), _ =>
         -- A const in the dimensionless unit drops it: one with a number value becomes
@@ -201,6 +260,9 @@ partial def spellRules (isMap : Bool) : Json → Json
           | _, _ => .obj kvs'
       | _, _ => .obj kvs'
   | j => j
+
+/-- The spelling rules from the root (`isMap`: the value is a name-keyed map). -/
+def spellRules (isMap : Bool) (j : Json) : Json := spellWalk (if isMap then .map else .plain) [] j
 
 /-- A number token with an exponent, respelled so `Lean.Json.parse` still sees a decimal.
 `Lean.Json.parse` folds a positive exponent into the mantissa, so `1.999999999999999e16`

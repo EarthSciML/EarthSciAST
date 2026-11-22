@@ -58,6 +58,13 @@ include("testutils.jl")
 
     # Spec-mandated load-time rewrites. Key: path relative to the repo root.
     TRANSFORMED_AT_LOAD = Dict{String, String}(
+        # esm 2.4.0 (esm-spec §9.6.12 "Old names (no refusal)"): the old
+        # spellings are read as `operators` / `apply_operator`; save writes only
+        # the new names (with each definition's `defines`) and stamps 2.4.0.
+        "tests/valid/expression_templates_arrhenius.esm" =>
+            "esm-spec §9.6.12: `expression_templates` / `apply_expression_template` are read as `operators` / `apply_operator`",
+        "tests/valid/units_const_declared.esm" =>
+            "esm-spec §9.6.12: `expression_templates` / `apply_expression_template` are read as `operators` / `apply_operator`",
         # esm-spec §8.2.1: a scheme-less `source.url_template` is a filesystem
         # path, and a relative one resolves at load against the directory of the
         # file that declared it — the same base and the same timing rule §4.7

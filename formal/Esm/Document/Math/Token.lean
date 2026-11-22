@@ -33,6 +33,8 @@ inductive Kw where
   | frac | sqrt | exp | ln | log | sin | cos | tan | asin | acos | atan | sinh | cosh | tanh
   | min | max | labs | rabs | lfloor | rfloor | lceil | rceil | abs | floor | ceil
   | pdiff | dif | dotacc | bcases | ecases | cases | esmnode
+  -- the nabla of the grad, div, laplacian and curl forms: LaTeX `\nabla`, Typst `nabla`
+  | nabla
   -- constant arrays: LaTeX `\begin{bmatrix}` `\end{bmatrix}`, Typst `vec` `mat`
   | bmat | emat | vec | mat
   -- faq reductions: `\sum` `\prod` `\in` `\substack` `\limits` `\left[` `\right]`, Typst `lr`

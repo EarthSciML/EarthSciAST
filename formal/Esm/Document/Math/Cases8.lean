@@ -9,7 +9,7 @@ namespace Esm.Document.Math
 open Esm.Document
 
 theorem headOK_fields {c : Ctx} {ts : List Tok} (h : HeadOK c ts) :
-    ∃ t r, ts = t :: r ∧ t ≠ .kw .dif ∧ t ≠ .kw .pdiff ∧ t ≠ .rm "d" := by
+    ∃ t r, ts = t :: r ∧ t ≠ .kw .dif ∧ (t = .kw .pdiff → ∃ r', r = .kw .us :: r') ∧ t ≠ .rm "d" := by
   match ts, h with
   | t :: r, ⟨h1, h2, h3, _, _, _⟩ => exact ⟨t, r, rfl, h1, h2, h3⟩
 
@@ -26,13 +26,21 @@ theorem pFracL_quot (c : Ctx) (a b : Json) (ha : M c a) (hb : M c b) (rest : Lis
   obtain ⟨t, r, he, h1d, h2d, h3d⟩ := headOK_fields (headOK_at ha 1)
   rw [he] at h1 hi ⊢
   simp only [List.cons_append] at h1 hi ⊢
-  rw [pFracL.eq_6 _ _ _ (by intro r' e; simp at e; exact h3d e.1) (by intro r' e; simp at e; exact h3d e.1)
-    (by intro r' e; simp at e; exact h2d e.1) (by intro r' e; simp at e; exact h2d e.1)]
-  rw [hi]
-  simp only
-  rw [h1]
-  simp only
-  rw [h2]
+  by_cases hp : t = .kw .pdiff
+  · subst hp
+    obtain ⟨r', rfl⟩ := h2d rfl
+    simp only [List.cons_append] at h1 ⊢
+    rw [pFracL.eq_5, h1]
+    simp only
+    rw [h2]
+  · rw [pFracL.eq_7 _ _ _ (by intro r' e; simp at e; exact h3d e.1) (by intro r' e; simp at e; exact h3d e.1)
+      (by intro r' e; simp at e; exact hp e.1) (by intro r' e; simp at e; exact hp e.1)
+      (by intro r' e; simp at e; exact hp e.1)]
+    rw [hi]
+    simp only
+    rw [h1]
+    simp only
+    rw [h2]
 
 theorem M_div (c : Ctx) (o : String) (a b : Json) (ho : kindOf o = .div) (ha : M c a) (hb : M c b)
     (hpr : pr c (node o [a, b]) = match c.sf with

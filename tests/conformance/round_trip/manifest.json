@@ -262,7 +262,7 @@
       ] },
 
     { "id": "valid/expression_templates_arrhenius", "path": "valid/expression_templates_arrhenius.esm", "tags": ["expression_templates", "divergent", "transforming"], "load_transforms": [{ "transform": "old_spellings", "spec": "esm-spec 9.6.12", "detail": "`expression_templates` and `apply_expression_template` are read as `operators` and `apply_operator` (esm 2.4.0, 'Old names (no refusal)'); save writes only the new names, records each definition's `defines`, and stamps esm 2.4.0. All five bindings." }] },
-    { "id": "valid/template_import_lib", "path": "valid/template_import_lib.esm", "tags": ["expression_templates", "template-library", "divergent"] },
-    { "id": "valid/template_import_rename_lib", "path": "valid/template_import_rename_lib.esm", "tags": ["expression_templates", "template-library", "divergent"] }
+    { "id": "valid/template_import_lib", "path": "valid/template_import_lib.esm", "tags": ["expression_templates", "template-library", "divergent", "transforming"], "load_transforms": [{ "transform": "old_spellings", "spec": "esm-spec 9.6.12", "detail": "The top-level `expression_templates` (and `apply_expression_template` in bodies) are read as `operators` / `apply_operator` (esm 2.4.0, 'Old names (no refusal)'); save writes only the new names. All five bindings." }] },
+    { "id": "valid/template_import_rename_lib", "path": "valid/template_import_rename_lib.esm", "tags": ["expression_templates", "template-library", "divergent", "transforming"], "load_transforms": [{ "transform": "old_spellings", "spec": "esm-spec 9.6.12", "detail": "The top-level `expression_templates` (and `apply_expression_template` in bodies) are read as `operators` / `apply_operator` (esm 2.4.0, 'Old names (no refusal)'); save writes only the new names. All five bindings." }] }
   ]
 }

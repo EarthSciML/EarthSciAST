@@ -123,7 +123,8 @@ theorem M_neg (c : Ctx) (o : String) (a : Json) (ho : kindOf o = .minus) (ha : M
 theorem headOK_append {c : Ctx} {A : List Tok} (h : HeadOK c A) (X : List Tok) : HeadOK c (A ++ X) := by
   match A, h with
   | t :: r, ⟨h1, h2, h3, h4, h5, h6⟩ =>
-    refine ⟨h1, h2, h3, h4, fun hd => ?_, h6⟩
+    refine ⟨h1, fun e => ?_, h3, h4, fun hd => ?_, h6⟩
+    · obtain ⟨r', rfl⟩ := h2 e; exact ⟨r' ++ X, rfl⟩
     rcases h5 hd with h | ⟨r', rfl⟩ | ⟨r', rfl⟩
     · exact Or.inl h
     · exact Or.inr (Or.inl ⟨r' ++ X, rfl⟩)

@@ -23,6 +23,9 @@ theorem sizeOf_tNode_lt {n : String} {bs : List (String × Json)} {kv : String �
 theorem sizeOf_dNode_lt (a : Json) (w : String) : sizeOf a < sizeOf (dNode a w) :=
   sizeOf_obj_lt (as := [a]) (by simp [look]) a (by simp)
 
+theorem sizeOf_pNode_lt (a : Json) (w : String) : sizeOf a < sizeOf (pNode a w) :=
+  sizeOf_obj_lt (as := [a]) (by simp [look]) a (by simp)
+
 theorem sizeOf_dCallNode_lt {w : String} {xs : List Json} {x : Json} (h : x ∈ xs) :
     sizeOf x < sizeOf (dCallNode w xs) :=
   sizeOf_obj_lt (as := xs) (by simp [look]) x h
@@ -69,10 +72,11 @@ theorem M_all (c : Ctx) : ∀ n e, sizeOf e < n → isE e = true → M c e
       exact M_lor c o xs ho hl (fun x hm => IH x (sizeOf_node_lt hm) (hx x hm)) hpr
     | mm o k xs ho hl hx hpr =>
       exact M_mm c o k xs ho hl (fun x hm => IH x (sizeOf_node_lt hm) (hx x hm)) hpr
+    | nab o n a ho ha hpr => exact M_nab c o n a ho (IH a (sizeOf_node_lt (by simp)) ha) hpr
     | call o xs ho hx hpr =>
       exact M_call c o xs ho (fun x hm => IH x (sizeOf_node_lt hm) (hx x hm)) hpr
     | dTime a ha hpr => exact M_dTime c a (IH a (sizeOf_dNode_lt a _) ha) hpr
-    | dSpace w a hw hwn ha hpr => exact M_dSpace c w a hwn (IH a (sizeOf_dNode_lt a _) ha) hpr
+    | dSpace w a hw hwn ha hpr => exact M_dSpace c w a hw hwn (IH a (sizeOf_pNode_lt a _) ha) hpr
     | dCall w xs hw hwn hl hx hpr =>
       exact M_dCall c w xs hwn (fun x hm => IH x (sizeOf_dCallNode_lt hm) (hx x hm)) hpr
     | qty u k hk hu hpr => exact M_qty c u k hu hpr
