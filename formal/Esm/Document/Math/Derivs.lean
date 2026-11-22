@@ -29,12 +29,12 @@ theorem M_of_toks (c : Ctx) (e : Json) (L : Nat) (toks : List Tok)
 
 theorem hOK_kw (c : Ctx) (k : Kw) (r : List Tok) (hk : startA (.kw k) = true)
     (h1 : k ≠ .dif) (h2 : k ≠ .pdiff) : HeadOK c (.kw k :: r) :=
-  ⟨fun e => h1 (by cases e; rfl), fun e => h2 (by cases e; rfl), by simp, by simp, by simp, Or.inl hk⟩
+  ⟨fun e => h1 (by cases e; rfl), fun e => absurd (by cases e; rfl) h2, by simp, by simp, by simp, Or.inl hk⟩
 
 theorem hOK_tok (c : Ctx) (t : Tok) (r : List Tok) (hk : startA t = true)
     (h1 : t ≠ .kw .dif) (h2 : t ≠ .kw .pdiff) (h3 : ∀ s, t ≠ .rm s) (h4 : ∀ w, t ≠ .word w)
     (h5 : ∀ ch, t ≠ .letter ch) : HeadOK c (t :: r) :=
-  ⟨h1, h2, h3 _, h4, fun e => absurd e (h5 _), Or.inl hk⟩
+  ⟨h1, fun e => absurd e h2, h3 _, h4, fun e => absurd e (h5 _), Or.inl hk⟩
 
 theorem nameStop_kw (sf : Sf) (k : Kw) (hk : k ≠ .sdot) (hk2 : k ≠ .us) (r : List Tok) :
     NameStop sf (.kw k :: r) := by
@@ -60,6 +60,20 @@ theorem headA {c : Ctx} {a : Json} (ha : M c a) (L : Nat) :
   obtain ⟨t, r, he, h1, h2, -, -, -, -⟩ := headOK_closer (headOK_at ha L)
   exact ⟨t, r, he, h2, by rintro rfl; simp [isRp] at h1, h1⟩
 
+/-- A printed expression never starts with `_`. -/
+theorem headA_us {c : Ctx} {a : Json} (ha : M c a) (L : Nat) :
+    ∀ t r, (pr c a).at c.sf L = t :: r → t ≠ .kw .us := by
+  intro t r he
+  have h := headOK_at ha L
+  rw [he] at h
+  rintro rfl
+  rcases h.2.2.2.2.2 with h | h <;> simp [startA, atomStart] at h
+
+theorem derivNode_t (x : Json) : derivNode x "t" = dNode x "t" := by simp [derivNode]
+
+theorem derivNode_ne {w : String} (hw : w ≠ "t") (x : Json) : derivNode x w = pNode x w := by
+  simp [derivNode, hw]
+
 theorem pPrim_frac (c : Ctx) (f : Nat) (r : List Tok) :
     pPrim c (f + 1) (.kw .frac :: .kw .lb :: r) = pFracL c f r := by
   rw [pPrim.eq_def]
@@ -68,9 +82,21 @@ theorem pPrim_dif {c : Ctx} (h : c.sf = .typst) (f : Nat) (r : List Tok) :
     pPrim c (f + 1) (.kw .lpg :: .kw .dif :: r) = pDT c f .dif r := by
   rw [pPrim.eq_def]; simp only; rw [h]
 
-theorem pPrim_pdiff {c : Ctx} (h : c.sf = .typst) (f : Nat) (r : List Tok) :
+theorem pPrim_pdiff {c : Ctx} (h : c.sf = .typst) (f : Nat) (r : List Tok)
+    (hr : ∀ r', r ≠ .kw .us :: r') :
     pPrim c (f + 1) (.kw .lpg :: .kw .pdiff :: r) = pDT c f .pdiff r := by
   rw [pPrim.eq_def]; simp only; rw [h]
+  cases r with
+  | nil => rfl
+  | cons t r' =>
+    have ht : t ≠ .kw .us := fun e => hr r' (by rw [e])
+    cases t with
+    | kw k => cases k <;> first | rfl | exact absurd rfl ht
+    | _ => rfl
+
+theorem pPrim_pdcall (c : Ctx) (f : Nat) (r : List Tok) :
+    pPrim c (f + 1) (.kw .pdiff :: .kw .us :: r) = pDCall c f r := by
+  rw [pPrim.eq_def]
 
 theorem pPrim_opn (c : Ctx) (f : Nat) (n : String) (r : List Tok) :
     pPrim c (f + 1) (.opn n :: r) = pOpn c f n r := by
@@ -127,7 +153,7 @@ theorem M_dTime (c : Ctx) (a : Json) (ha : M c a) (hpr : pr c (dNode a "t") = dT
       have hp := pOr_at ha _ (fol1_rpg c.sf rest) g (by unfold need at hf ⊢; simp at hf; omega)
       simp only [List.append_assoc, List.cons_append, List.nil_append]
       rw [pPrim_frac, pFracL.eq_2, pDApply.eq_2, hp]
-      simp [isRp]
+      simp [isRp, derivNode]
   · by_cases hin : inlineD (pr c a) = true
     · have hpr' : pr c (dNode a "t") = mkOut c.sf 7 ([.kw .lpg, .kw .dif] ++ (pr c a).at c.sf 1 ++
           [.kw .rp, .kw .slash, .kw .lpg, .kw .dif, .letter 't', .kw .rp]) := by
@@ -143,7 +169,7 @@ theorem M_dTime (c : Ctx) (a : Json) (ha : M c a) (hpr : pr c (dNode a "t") = dT
       rw [hp]
       simp only [↓reduceIte]
       rw [pName_t c.sf _ (nameStop_kw c.sf .rp (by decide) (by decide) rest)]
-      simp
+      simp [derivNode]
     · have hpr' : pr c (dNode a "t") = mkOut c.sf 6 ([.kw .lpg, .kw .dif, .kw .rp, .kw .slash, .kw .lpg, .kw .dif,
           .letter 't', .kw .rp] ++ grp c.sf ((pr c a).at c.sf 1)) := by
         rw [hpr]; simp only [dTime, hsf, hin, Bool.false_eq_true, ↓reduceIte]
@@ -159,20 +185,21 @@ theorem M_dTime (c : Ctx) (a : Json) (ha : M c a) (hpr : pr c (dNode a "t") = dT
       rw [pName_t c.sf _ (nameStop_kw c.sf .rp (by decide) (by decide) _)]
       simp only [bne_self_eq_false, Bool.and_false, Bool.false_eq_true, ↓reduceIte]
       rw [pDApply.eq_2, hp]
-      simp [isRp]
+      simp [isRp, derivNode]
 
-/-! ## The spatial derivative -/
+/-! ## The spatial derivative `partial` -/
 
-theorem M_dSpace (c : Ctx) (w : String) (a : Json) (hwn : nameOK w = true) (ha : M c a)
-    (hpr : pr c (dNode a w) = dSpace c.sf (nameToks c w) (pr c a)) : M c (dNode a w) := by
+theorem M_dSpace (c : Ctx) (w : String) (a : Json) (hw : w ≠ "t") (hwn : nameOK w = true) (ha : M c a)
+    (hpr : pr c (pNode a w) = dSpace c.sf (nameToks c w) (pr c a)) : M c (pNode a w) := by
   obtain ⟨t, tr, hA, hrb, hrp, hrp'⟩ := headA ha 1
-  have hacc : addAcc (dNode a w) = [dNode a w] := rfl
+  have hus := headA_us ha 1 t tr hA
+  have hacc : addAcc (pNode a w) = [pNode a w] := rfl
   have hW := pName_nameToks c w hwn
   have hlw : 1 ≤ (nameToks c w).length := by
     obtain ⟨t, tr, he, -⟩ := nameToks_head c w; rw [he]; simp
   obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
   · by_cases hin : inlineD (pr c a) = true
-    · have hpr' : pr c (dNode a w) = mkOut c.sf 10 ([.kw .frac, .kw .lb, .kw .pdiff] ++ (pr c a).at c.sf 1 ++
+    · have hpr' : pr c (pNode a w) = mkOut c.sf 10 ([.kw .frac, .kw .lb, .kw .pdiff] ++ (pr c a).at c.sf 1 ++
           [.kw .rb, .kw .lb, .kw .pdiff] ++ nameToks c w ++ [.kw .rb]) := by
         rw [hpr]; simp only [dSpace, hsf, hin, ↓reduceIte]
       refine M_of_toks c _ 10 _ hpr' (by omega) (by omega) (by omega) hacc
@@ -182,11 +209,13 @@ theorem M_dSpace (c : Ctx) (w : String) (a : Json) (hwn : nameOK w = true) (ha :
       have hp := pOr_at ha _ (fol1_rb c.sf (.kw .lb :: .kw .pdiff :: (nameToks c w ++ .kw .rb :: rest))) g
         (by unfold need at hf ⊢; simp at hf; omega)
       simp only [List.append_assoc, List.cons_append, List.nil_append] at hp ⊢
-      rw [pPrim_frac, pFracL.eq_5 _ _ _ (by intro r1 e; rw [hA] at e; simp at e; exact hrb e.1)]
+      rw [pPrim_frac, pFracL.eq_6 _ _ _ (by intro r1 e; rw [hA] at e; simp at e; exact hrb e.1)
+        (by intro r1 e; rw [hA] at e; simp at e; exact hus e.1)]
       rw [hp]
       simp only
       rw [hW _ (nameStop_kw c.sf .rb (by decide) (by decide) rest)]
-    · have hpr' : pr c (dNode a w) = mkOut c.sf 6 ([.kw .frac, .kw .lb, .kw .pdiff, .kw .rb, .kw .lb, .kw .pdiff] ++
+      simp [derivNode_ne hw]
+    · have hpr' : pr c (pNode a w) = mkOut c.sf 6 ([.kw .frac, .kw .lb, .kw .pdiff, .kw .rb, .kw .lb, .kw .pdiff] ++
           nameToks c w ++ [.kw .rb] ++ grp c.sf ((pr c a).at c.sf 1)) := by
         rw [hpr]; simp only [dSpace, hsf, hin, Bool.false_eq_true, ↓reduceIte]
       refine M_of_toks c _ 6 _ hpr' (by omega) (by omega) (by omega) hacc
@@ -200,9 +229,9 @@ theorem M_dSpace (c : Ctx) (w : String) (a : Json) (hwn : nameOK w = true) (ha :
       rw [hW _ (nameStop_kw c.sf .rb (by decide) (by decide) _)]
       simp only
       rw [pDApply.eq_2, hp]
-      simp [isRp]
+      simp [isRp, derivNode_ne hw]
   · by_cases hin : inlineD (pr c a) = true
-    · have hpr' : pr c (dNode a w) = mkOut c.sf 7 ([.kw .lpg, .kw .pdiff] ++ (pr c a).at c.sf 1 ++
+    · have hpr' : pr c (pNode a w) = mkOut c.sf 7 ([.kw .lpg, .kw .pdiff] ++ (pr c a).at c.sf 1 ++
           [.kw .rp, .kw .slash, .kw .lpg, .kw .pdiff] ++ nameToks c w ++ [.kw .rp]) := by
         rw [hpr]; simp only [dSpace, hsf, hin, ↓reduceIte]
       refine M_of_toks c _ 7 _ hpr' (by omega) (by omega) (by omega) hacc
@@ -212,12 +241,13 @@ theorem M_dSpace (c : Ctx) (w : String) (a : Json) (hwn : nameOK w = true) (ha :
       have hp := pOr_at ha _ (fol1_rp c.sf (.kw .slash :: .kw .lpg :: .kw .pdiff :: (nameToks c w ++ .kw .rp :: rest))) g
         (by unfold need at hf ⊢; simp at hf; omega)
       simp only [List.append_assoc, List.cons_append, List.nil_append] at hp ⊢
-      rw [pPrim_pdiff hsf, pDT.eq_3 _ _ _ _ (by intro k r1 e; rw [hA] at e; simp at e; exact hrp e.1)]
+      rw [pPrim_pdiff hsf _ _ (by intro r1 e; rw [hA] at e; simp at e; exact hus e.1),
+        pDT.eq_3 _ _ _ _ (by intro k r1 e; rw [hA] at e; simp at e; exact hrp e.1)]
       rw [hp]
       simp only [↓reduceIte]
       rw [hW _ (nameStop_kw c.sf .rp (by decide) (by decide) rest)]
-      simp
-    · have hpr' : pr c (dNode a w) = mkOut c.sf 6 ([.kw .lpg, .kw .pdiff, .kw .rp, .kw .slash, .kw .lpg, .kw .pdiff] ++
+      simp [derivNode_ne hw]
+    · have hpr' : pr c (pNode a w) = mkOut c.sf 6 ([.kw .lpg, .kw .pdiff, .kw .rp, .kw .slash, .kw .lpg, .kw .pdiff] ++
           nameToks c w ++ [.kw .rp] ++ grp c.sf ((pr c a).at c.sf 1)) := by
         rw [hpr]; simp only [dSpace, hsf, hin, Bool.false_eq_true, ↓reduceIte]
       refine M_of_toks c _ 6 _ hpr' (by omega) (by omega) (by omega) hacc
@@ -227,15 +257,15 @@ theorem M_dSpace (c : Ctx) (w : String) (a : Json) (hwn : nameOK w = true) (ha :
       rw [grp_typst hsf] at hf ⊢
       have hp := pOr_at ha _ (fol1_rp c.sf rest) g (by unfold need at hf ⊢; simp at hf; omega)
       simp only [List.append_assoc, List.cons_append, List.nil_append]
-      rw [pPrim_pdiff hsf, pDT.eq_2]
+      rw [pPrim_pdiff hsf _ _ (by intro r1 e; simp at e), pDT.eq_2]
       simp only [↓reduceIte]
       rw [hW _ (nameStop_kw c.sf .rp (by decide) (by decide) _)]
       simp only [show decide (Kw.pdiff = Kw.dif) = false from rfl, Bool.false_and, Bool.false_eq_true,
         ↓reduceIte]
       rw [pDApply.eq_2, hp]
-      simp [isRp]
+      simp [isRp, derivNode_ne hw]
 
-/-! ## The spatial derivative with trailing operands -/
+/-! ## `partial` with trailing operands: `\\partial_{x}(u, a, b)` -/
 
 theorem M_dCall (c : Ctx) (w : String) (xs : List Json) (hwn : nameOK w = true)
     (hx : ∀ x ∈ xs, M c x)
@@ -245,23 +275,22 @@ theorem M_dCall (c : Ctx) (w : String) (xs : List Json) (hwn : nameOK w = true)
   have hacc : addAcc (dCallNode w xs) = [dCallNode w xs] := by unfold addAcc dCallNode; simp
   refine M_of_toks c _ 10 _ hpr (by omega) (by omega) (by omega) hacc ?_ ?_
   · unfold dCall
-    split <;> (simp only [List.cons_append]
-               exact hOK_tok c _ _ (by simp [startA, atomStart]) (by simp) (by simp) (by simp) (by simp)
-                 (by simp))
+    split <;> (simp only [List.cons_append, HeadOK]
+               refine ⟨?_, fun _ => ⟨_, rfl⟩, ?_, ?_, ?_, Or.inl (by decide)⟩ <;> simp)
   · intro rest hr f hf
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 3 := ⟨f - 3, by
       unfold need at hf; unfold dCall at hf; split at hf <;> simp at hf <;> omega⟩
     have hca := pCallArgs_list c (.kw .rp) (fun r => fol_kw _ _ _ r (by simp [conts, atomStart]))
-      (Or.inl rfl) xs hx rest g (by
+      (Or.inl rfl) xs hx rest (g + 1) (by
         unfold need at hf ⊢; unfold dCall at hf; split at hf <;> simp [callToks] at hf <;> omega)
     obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
     · have hd : ∀ W args, dCall c.sf W args =
-          [.opn "D", .kw .us, .kw .lb] ++ W ++ [.kw .rb] ++ callToks c.sf [] args := by
+          [.kw .pdiff, .kw .us, .kw .lb] ++ W ++ [.kw .rb] ++ callToks c.sf [] args := by
         intro W args; simp only [dCall, hsf]
       rw [hd]
       simp only [callToks, lpC, List.nil_append, List.cons_append, List.append_assoc]
       generalize sepBy [.kw .comma] (xs.map fun x => (pr c x).at c.sf 4) = X at hca ⊢
-      rw [pPrim_opn, pOpn_D]
+      rw [pPrim_pdcall]
       have hname : pName .latex (nameToks c w ++ .kw .rb :: .kw .lp :: (X ++ .kw .rp :: rest)) =
           some (w, .kw .rb :: .kw .lp :: (X ++ .kw .rp :: rest)) := by
         rw [← hsf]; exact pName_nameToks c w hwn _ (nameStop_kw _ .rb (by decide) (by decide) _)
@@ -269,18 +298,100 @@ theorem M_dCall (c : Ctx) (w : String) (xs : List Json) (hwn : nameOK w = true)
       simp only [isLp, ↓reduceIte]
       rw [hca]; simp [allPos_map]
     · have hd : ∀ W args, dCall c.sf W args =
-          [.opn "D", .kw .us, .kw .lpg] ++ W ++ [.kw .rp] ++ callToks c.sf [] args := by
+          [.kw .pdiff, .kw .us, .kw .lpg] ++ W ++ [.kw .rp] ++ callToks c.sf [] args := by
         intro W args; simp only [dCall, hsf]
       rw [hd]
       simp only [callToks, lpC, List.nil_append, List.cons_append, List.append_assoc]
       generalize sepBy [.kw .comma] (xs.map fun x => (pr c x).at c.sf 4) = X at hca ⊢
-      rw [pPrim_opn, pOpn_D]
+      rw [pPrim_pdcall]
       have hname : pName .typst (nameToks c w ++ .kw .rp :: .kw .lp :: (X ++ .kw .rp :: rest)) =
           some (w, .kw .rp :: .kw .lp :: (X ++ .kw .rp :: rest)) := by
         rw [← hsf]; exact pName_nameToks c w hwn _ (nameStop_kw _ .rp (by decide) (by decide) _)
       rw [pDCall.eq_def]; simp only; rw [hsf]; simp only; rw [hname]
       simp only [isLp, ↓reduceIte]
       rw [hca]; simp [allPos_map]
+
+/-! ## The `\nabla` forms -/
+
+theorem nabTail_head (sf : Sf) (n : NabK) (X : List Tok)
+    (hX : ∀ t r, X = t :: r → t ≠ .kw .cdot ∧ t ≠ .kw .times ∧ t ≠ .kw .caret) :
+    nabTail sf ((nabHead sf n).tail ++ X) = (nabName n, X) := by
+  cases n with
+  | div => rfl
+  | curl => rfl
+  | lap => cases sf <;> rfl
+  | grad =>
+    simp only [nabHead, List.tail_cons, List.nil_append, nabName]
+    cases X with
+    | nil => cases sf <;> rfl
+    | cons t r =>
+      obtain ⟨h1, h2, h3⟩ := hX t r rfl
+      cases sf <;> cases t <;> (try rfl) <;> (rename_i k; cases k <;>
+        first | rfl | exact absurd rfl h1 | exact absurd rfl h2 | exact absurd rfl h3)
+
+theorem nabHead_cons (sf : Sf) (n : NabK) : nabHead sf n = .kw .nabla :: (nabHead sf n).tail := by
+  cases n <;> (try cases sf) <;> rfl
+
+/-- The operand of a `\nabla` form reads back at level 9. -/
+theorem nabArg_read {c : Ctx} {a : Json} (ha : M c a) (n : NabK) (rest : List Tok) (hr : Fol c.sf 9 rest)
+    (g : Nat) (hg : need 9 (nabArg c.sf n ((pr c a).at c.sf 9)).length ≤ g) :
+    pPost c g (nabArg c.sf n ((pr c a).at c.sf 9) ++ rest) = some (a, rest) := by
+  unfold nabArg at hg ⊢
+  by_cases hn : n = .curl ∧ startsNum ((pr c a).at c.sf 9) = true
+  · rw [if_pos hn] at hg ⊢
+    have hlvl : 9 ≤ (pr c a).lvl := by
+      by_contra hc
+      have h2 := hn.2
+      rw [at_eq, iteF hc] at h2
+      simp [grp, startsNum] at h2
+    have heq : (pr c a).at c.sf 9 = (pr c a).toks := by rw [at_eq, iteT hlvl]
+    rw [heq] at hg ⊢
+    have := grp_child ha 9 (by omega) (by omega) rest hr g (by
+      simp only [length_grp] at hg; unfold need at hg ⊢; omega)
+    rwa [pLvl9] at this
+  · rw [if_neg hn] at hg ⊢
+    have := PL_at ha 9 (by omega) (by omega) rest hr g hg
+    rwa [pLvl9] at this
+
+theorem nabArg_head {c : Ctx} {a : Json} (ha : M c a) (n : NabK) (rest : List Tok) :
+    ∀ t r, nabArg c.sf n ((pr c a).at c.sf 9) ++ rest = t :: r →
+      t ≠ .kw .cdot ∧ t ≠ .kw .times ∧ t ≠ .kw .caret := by
+  intro t r he
+  have hh : HeadOK c (nabArg c.sf n ((pr c a).at c.sf 9) ++ rest) := by
+    apply headOK_append
+    unfold nabArg
+    split
+    · simp only [grp, List.cons_append, HeadOK]
+      exact ⟨by simp, by simp, by simp, by simp, by simp, Or.inl (by simp [startA, atomStart])⟩
+    · exact headOK_at ha 9
+  rw [he] at hh
+  have h6 := hh.2.2.2.2.2
+  refine ⟨?_, ?_, ?_⟩ <;> (rintro rfl; rcases h6 with h | h <;> simp [startA, atomStart] at h)
+
+theorem M_nab (c : Ctx) (o : String) (n : NabK) (a : Json) (ho : kindOf o = .nab n) (ha : M c a)
+    (hpr : pr c (node o [a]) = mkOut c.sf 6 (nabHead c.sf n ++ nabArg c.sf n ((pr c a).at c.sf 9))) :
+    M c (node o [a]) := by
+  have hon : o = nabName n := by
+    rcases kindOf_nab ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> rfl
+  subst hon
+  apply M_of
+  · intro rest hr f hf
+    simp only [hpr, mkOut] at hr hf ⊢
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by unfold need at hf; omega⟩
+    have hlen : (nabHead c.sf n).length ≤ 5 := by cases n <;> (try cases c.sf) <;> simp [nabHead]
+    have hp := nabArg_read ha n rest (hr.mono (by omega)) g (by
+      simp only [List.length_append] at hf; unfold need at hf ⊢; omega)
+    rw [pLvl6, nabHead_cons]
+    simp only [List.append_assoc, List.cons_append]
+    rw [pNot.eq_3, nabTail_head c.sf n _ (nabArg_head ha n rest)]
+    simp only
+    rw [hp]
+  · rw [hpr, nabHead_cons]; exact headOK_kw c _ _ ⟨.nabla, rfl, rfl, by decide, by decide⟩
+  · rw [hpr]; simp [mkOut]
+  · rw [hpr]; simp [mkOut]
+  · rw [hpr]; simp [mkOut]
+  · exact addAcc_node (by cases n <;> decide)
+  · rw [hpr]; rfl
 
 /-! ## Quantities -/
 

@@ -167,7 +167,7 @@ theorem variant_italic_d (c : Ctx) (hc : c.sf = .latex) (n : String) (hd : c.S.n
   have hdt : "dt".toList = ['d', 't'] := rfl
   have hw' : "d" ++ n ∉ c.S.names := by simpa using hw
   have ht' : "dt" ∉ c.S.names := by simpa using ht
-  simp [hc, dName, hw', ht', hdn, hdt]
+  simp [hc, dName, hw', ht', hdn, hdt, derivNode]
 
 /-- `\frac{d N}{d t}` with an italic `d` and `N` in its printed spelling reads as the time
 derivative of `N`, when no variable `d` is declared. -/
@@ -182,7 +182,7 @@ theorem variant_italic_d_sep (c : Ctx) (hc : c.sf = .latex) (n : String) (hn : n
   rw [dName.eq_2, pName_nameToks c n hn _ (nameStop_kw c.sf .rb (by decide) (by decide) _)]
   simp only [↓reduceIte]
   rw [dName.eq_2, pName_t c.sf _ (nameStop_kw c.sf .rb (by decide) (by decide) _)]
-  simp
+  simp [derivNode]
 
 /-- Typst `(d N)/(d t)` with an italic `d` reads as the time derivative of `N`, when no
 variable `d` is declared. -/
@@ -197,7 +197,7 @@ theorem variant_italic_d_typst (c : Ctx) (hc : c.sf = .typst) (n : String) (hn :
   rw [dName.eq_2, pName_nameToks c n hn _ (nameStop_kw c.sf .rp (by decide) (by decide) _)]
   simp only [↓reduceIte]
   rw [dName.eq_2, pName_t c.sf _ (nameStop_kw c.sf .rp (by decide) (by decide) _)]
-  simp
+  simp [derivNode]
 
 /-- `\frac{\partial N}{\partial t}` reads as the time derivative of `N`, the same node as
 the canonical `\frac{\mathrm{d} N}{\mathrm{d} t}`. -/
@@ -206,10 +206,13 @@ theorem variant_partial_t (c : Ctx) (a : Json) (ha : M c a) (rest : List Tok) (f
     pPrim c (f + 2) (.kw .frac :: .kw .lb :: .kw .pdiff :: ((pr c a).at c.sf 1 ++
       .kw .rb :: .kw .lb :: .kw .pdiff :: .letter 't' :: .kw .rb :: rest)) = some (dNode a "t", rest) := by
   obtain ⟨t, tr, hA, hrb, -, -⟩ := headA ha 1
+  have hus := headA_us ha 1 t tr hA
   have hp := pOr_at ha _ (fol1_rb c.sf (.kw .lb :: .kw .pdiff :: .letter 't' :: .kw .rb :: rest)) f hf
-  rw [pPrim_frac, pFracL.eq_5 _ _ _ (by intro r1 e; rw [hA] at e; simp at e; exact hrb e.1), hp]
+  rw [pPrim_frac, pFracL.eq_6 _ _ _ (by intro r1 e; rw [hA] at e; simp at e; exact hrb e.1)
+    (by intro r1 e; rw [hA] at e; simp at e; exact hus e.1), hp]
   simp only
   rw [pName_t c.sf _ (nameStop_kw c.sf .rb (by decide) (by decide) rest)]
+  simp [derivNode]
 
 /-- Typst `(partial N)/(partial t)` reads as the time derivative of `N`, the same node as
 the canonical `(dif N)/(dif t)`. -/
@@ -219,11 +222,13 @@ theorem variant_partial_t_typst (c : Ctx) (hc : c.sf = .typst) (a : Json) (ha : 
       .kw .rp :: .kw .slash :: .kw .lpg :: .kw .pdiff :: .letter 't' :: .kw .rp :: rest)) =
       some (dNode a "t", rest) := by
   obtain ⟨t, tr, hA, -, hrp, -⟩ := headA ha 1
+  have hus := headA_us ha 1 t tr hA
   have hp := pOr_at ha _ (fol1_rp c.sf (.kw .slash :: .kw .lpg :: .kw .pdiff :: .letter 't' :: .kw .rp :: rest)) f hf
-  rw [pPrim_pdiff hc, pDT.eq_3 _ _ _ _ (by intro k r1 e; rw [hA] at e; simp at e; exact hrp e.1), hp]
+  rw [pPrim_pdiff hc _ _ (by intro r1 e; rw [hA] at e; simp at e; exact hus e.1),
+    pDT.eq_3 _ _ _ _ (by intro k r1 e; rw [hA] at e; simp at e; exact hrp e.1), hp]
   simp only [↓reduceIte]
   rw [pName_t c.sf _ (nameStop_kw c.sf .rp (by decide) (by decide) rest)]
-  simp
+  simp [derivNode]
 
 /-- `\mathit{name}` / `italic("name")` reads as the name, for any name (the explicit name
 shape), before anything that does not continue a name. -/

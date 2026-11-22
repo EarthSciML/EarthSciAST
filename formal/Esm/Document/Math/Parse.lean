@@ -63,7 +63,7 @@ def atomStart : Tok → Bool
     | .lpg | .lp | .lbk | .lnot | .frac | .sqrt | .exp | .ln | .log | .sin | .cos | .tan
     | .asin | .acos | .atan | .sinh | .cosh | .tanh | .min | .max | .labs | .lfloor | .lceil
     | .abs | .floor | .ceil | .dotacc | .bcases | .cases | .esmnode | .bmat | .vec | .mat
-    | .sum | .prod | .limits | .lbkg | .lr => true
+    | .sum | .prod | .limits | .lbkg | .lr | .nabla | .pdiff => true
     | _ => false
   | _ => false
 
@@ -218,12 +218,20 @@ def unitsOfRaw (raw : String) : Option (List Esm.Units.Factor) :=
 def qty (n : JNum) (l : List Esm.Units.Factor) : Json :=
   .obj [("args", .arr []), ("op", .str "const"), ("units", .str (Esm.Units.spell l)), ("value", .num n)]
 
-/-- A derivative node. -/
+/-- A time-derivative node (`dNode x "t"`). -/
 def dNode (x : Json) (w : String) : Json := .obj [("args", .arr [x]), ("op", .str "D"), ("wrt", .str w)]
 
-/-- A template application node. -/
+/-- A `partial` node: the spatial derivative (spec §4.2). -/
+def pNode (x : Json) (w : String) : Json := .obj [("args", .arr [x]), ("op", .str "partial"), ("wrt", .str w)]
+
+/-- The derivative a fraction of differentials reads as: the time derivative `D` along `t`,
+`partial` along any other axis (spec §4.2: `partial`'s `wrt` is never `t`, and a `D` with
+a spatial `wrt` reads as `partial`). -/
+def derivNode (x : Json) (w : String) : Json := if w = "t" then dNode x "t" else pNode x w
+
+/-- A reference node (`apply_operator`, spec §9.6.2). -/
 def tNode (n : String) (bs : List (String × Json)) : Json :=
-  .obj [("args", .arr []), ("bindings", .obj bs), ("name", .str n), ("op", .str "apply_expression_template")]
+  .obj [("args", .arr []), ("bindings", .obj bs), ("name", .str n), ("op", .str "apply_operator")]
 
 /-- A constant node: the value, and the units when there are some. -/
 def constNode (v : Json) : Option String → Json
@@ -278,9 +286,19 @@ def keyOf (c : Ctx) (ts : List Tok) : Option (String × List Tok) :=
   | .typst, .ups [(k, "")] :: .kw .eq :: r => some (k, r)
   | _, _ => none
 
-/-- A spatial derivative with trailing operands. -/
+/-- `partial` with trailing operands. -/
 def dCallNode (w : String) (xs : List Json) : Json :=
-  .obj [("args", .arr xs), ("op", .str "D"), ("wrt", .str w)]
+  .obj [("args", .arr xs), ("op", .str "partial"), ("wrt", .str w)]
+
+/-- After `\nabla`: which form it is (`\cdot` div, `\times` curl, `^{2}` laplacian,
+nothing grad), and the tokens of its operand. -/
+def nabTail (sf : Sf) (r : List Tok) : String × List Tok :=
+  match sf, r with
+  | _, .kw .cdot :: r' => ("div", r')
+  | _, .kw .times :: r' => ("curl", r')
+  | .latex, .kw .caret :: .kw .lb :: .num (.int 2) :: .kw .rb :: r' => ("laplacian", r')
+  | .typst, .kw .caret :: .num (.int 2) :: r' => ("laplacian", r')
+  | _, r' => ("grad", r')
 
 /-- The input starts with Euler's number raised to a power: an upright `e`, or an
 italic `e` when no variable `e` is declared. -/
@@ -333,11 +351,11 @@ def pItalicD (c : Ctx) (r : List Tok) : Option (Json × List Tok) :=
     match c.sf with
     | .latex =>
       match dName c .rb r with
-      | some (n, .kw .lb :: r1) => (dName c .rb r1).map fun p => (dNode (.str n) p.1, p.2)
+      | some (n, .kw .lb :: r1) => (dName c .rb r1).map fun p => (derivNode (.str n) p.1, p.2)
       | _ => none
     | .typst =>
       match dName c .rp r with
-      | some (n, .kw .slash :: .kw .lpg :: r1) => (dName c .rp r1).map fun p => (dNode (.str n) p.1, p.2)
+      | some (n, .kw .slash :: .kw .lpg :: r1) => (dName c .rp r1).map fun p => (derivNode (.str n) p.1, p.2)
       | _ => none
 
 /-- The token is the keyword `k`. -/
@@ -554,12 +572,16 @@ def mulLoop (c : Ctx) : Nat → List Json → List Tok → Option (Json × List 
     else some (close "*" acc, t :: r)
   | _ + 1, acc, [] => some (close "*" acc, [])
 
-/-- Level 6: `not`. -/
+/-- Level 6: `not`, and the `\nabla` forms, whose operand is read at level 9. -/
 def pNot (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
   | 0, _ => none
   | f + 1, .kw .lnot :: r =>
     match pNot c f r with
     | some (x, r') => some (node "not" [x], r')
+    | none => none
+  | f + 1, .kw .nabla :: r =>
+    match pPost c f (nabTail c.sf r).2 with
+    | some (x, r') => some (node (nabTail c.sf r).1 [x], r')
     | none => none
   | f + 1, ts => pFrac c f ts
 
@@ -753,7 +775,8 @@ def pOpn (c : Ctx) : Nat → String → List Tok → Option (Json × List Tok)
     else none
   | _ + 1, n, [] => if bareOK c.S n then some (tNode n [], []) else none
 
-/-- `\operatorname{D}_{x}(u, a, b)` after the `_`. -/
+/-- `\partial_{x}(u, a, b)`, and the earlier `\operatorname{D}_{x}(u, a, b)` (read, never
+printed), after the `_`: `partial` with trailing operands. -/
 def pDCall (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
   | 0, _ => none
   | f + 1, r =>
@@ -819,6 +842,10 @@ def pPrim (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
     | .kw .lpg :: r | .kw .lp :: r =>
       match c.sf, r with
       | .typst, .kw .dif :: r1 => pDT c f .dif r1
+      | .typst, .kw .pdiff :: .kw .us :: _ =>
+        match pOr c f r with
+        | some (x, t :: r') => if isRp t then some (x, r') else none
+        | _ => none
       | .typst, .kw .pdiff :: r1 => pDT c f .pdiff r1
       | .typst, .letter 'd' :: _ =>
         match pItalicD c r with
@@ -836,6 +863,7 @@ def pPrim (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
       | some (x, .kw .rbk :: r') => some (x, r')
       | _ => none
     | .kw .frac :: .kw .lb :: r => pFracL c f r
+    | .kw .pdiff :: .kw .us :: r => pDCall c f r
     | .kw .sqrt :: r =>
       match c.sf, r with
       | .latex, .kw .lb :: r1 =>
@@ -1081,11 +1109,18 @@ def pFracL (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
     match pName c.sf r with
     | some (w, .kw .rb :: r') => pDApply c f w r'
     | _ => none
+  | f + 1, .kw .pdiff :: .kw .us :: r =>
+    match pOr c f (.kw .pdiff :: .kw .us :: r) with
+    | some (x, .kw .rb :: .kw .lb :: r1) =>
+      match pOr c f r1 with
+      | some (y, .kw .rb :: r2) => some (node "/" [x, y], r2)
+      | _ => none
+    | _ => none
   | f + 1, .kw .pdiff :: r =>
     match pOr c f r with
     | some (x, .kw .rb :: .kw .lb :: .kw .pdiff :: r1) =>
       match pName c.sf r1 with
-      | some (w, .kw .rb :: r') => some (dNode x w, r')
+      | some (w, .kw .rb :: r') => some (derivNode x w, r')
       | _ => none
     | _ => none
   | f + 1, r =>
@@ -1114,7 +1149,7 @@ def pDT (c : Ctx) : Nat → Kw → List Tok → Option (Json × List Tok)
     | some (x, .kw .rp :: .kw .slash :: .kw .lpg :: .kw k' :: r1) =>
       if k' = k then
         match pName c.sf r1 with
-        | some (w, .kw .rp :: r') => if k = .dif && w != "t" then none else some (dNode x w, r')
+        | some (w, .kw .rp :: r') => if k = .dif && w != "t" then none else some (derivNode x w, r')
         | _ => none
       else none
     | _ => none
@@ -1124,7 +1159,7 @@ def pDApply (c : Ctx) : Nat → String → List Tok → Option (Json × List Tok
   | 0, _, _ => none
   | f + 1, w, .kw .lpg :: r =>
     match pOr c f r with
-    | some (x, t :: r') => if isRp t then some (dNode x w, r') else none
+    | some (x, t :: r') => if isRp t then some (derivNode x w, r') else none
     | _ => none
   | _ + 1, _, _ => none
 

@@ -11,13 +11,14 @@ namespace Esm.Document.Math.Latex
 
 open Esm.Document Esm.Document.Math
 
-/-- Every `\times` is followed by a bracket, within the list: the printer writes `\times`
-only between the bound pairs of a region. -/
+/-- Every `\times` is followed, within the list, by a token that is not a number: the printer
+writes `\times` between the bound pairs of a region (before a bracket) and after the
+`\nabla` of a curl (before an operand that does not start with a number). -/
 def TL : List Tok → Prop
   | [] => True
-  | t :: r => (t = .kw .times → ∃ r', r = .kw .lbk :: r') ∧ TL r
+  | t :: r => (t = .kw .times → ∃ u r', r = u :: r' ∧ startsNum [u] = false) ∧ TL r
 
-/-- What the printer writes: LaTeX tokens, and `\times` before a bracket. -/
+/-- What the printer writes: LaTeX tokens, and `\times` before a token that is not a number. -/
 def AllOK (ts : List Tok) : Prop := (∀ t ∈ ts, tokOK t ∨ t = .kw .times) ∧ TL ts
 
 theorem allOK_nil : AllOK [] := ⟨fun _ h => (by cases h), trivial⟩
@@ -26,17 +27,17 @@ theorem TL_append : ∀ {a b : List Tok}, TL a → TL b → TL (a ++ b)
   | [], _, _, hb => hb
   | t :: a, b, ha, hb => by
     refine ⟨fun e => ?_, TL_append ha.2 hb⟩
-    obtain ⟨r', rfl⟩ := ha.1 e
-    exact ⟨r' ++ b, rfl⟩
+    obtain ⟨u, r', rfl, hu⟩ := ha.1 e
+    exact ⟨u, r' ++ b, rfl, hu⟩
 
 theorem TL_TN : ∀ (ts : List Tok), TL ts → TN ts
   | [], _ => trivial
   | [_], _ => trivial
   | t :: u :: r, h => by
     refine ⟨fun e => ?_, TL_TN (u :: r) h.2⟩
-    obtain ⟨r', hr⟩ := h.1 e
+    obtain ⟨u', r', hr, hu⟩ := h.1 e
     simp only [List.cons.injEq] at hr
-    exact Or.inl hr.1
+    rw [hr.1]; exact hu
 
 theorem tok_ne_times {t : Tok} (h : tokOK t) : t ≠ .kw .times := by
   rintro rfl; have h' : kwOK .times = true := h; exact absurd h' (by decide)
@@ -60,7 +61,16 @@ theorem allOK_times {r : List Tok} (hr : AllOK (.kw .lbk :: r)) : AllOK (.kw .ti
     simp only [List.mem_cons] at hu
     rcases hu with rfl | hu
     · exact Or.inr rfl
-    · exact hr.1 u (by simp only [List.mem_cons]; exact hu), ⟨fun _ => ⟨r, rfl⟩, hr.2⟩⟩
+    · exact hr.1 u (by simp only [List.mem_cons]; exact hu), ⟨fun _ => ⟨_, r, rfl, rfl⟩, hr.2⟩⟩
+
+/-- `\times` before a list that does not start with a number. -/
+theorem allOK_times_tok {u : Tok} {r : List Tok} (hr : AllOK (u :: r)) (hu : startsNum [u] = false) :
+    AllOK (.kw .times :: u :: r) :=
+  ⟨fun v hv => by
+    simp only [List.mem_cons] at hv
+    rcases hv with rfl | hv
+    · exact Or.inr rfl
+    · exact hr.1 v (by simp only [List.mem_cons]; exact hv), ⟨fun _ => ⟨u, r, rfl, hu⟩, hr.2⟩⟩
 
 theorem allOK_sepBy (sep : List Tok) (hs : AllOK sep) :
     ∀ (xs : List (List Tok)), (∀ x ∈ xs, AllOK x) → AllOK (sepBy sep xs)
@@ -584,6 +594,34 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       have hS := allOK_callToks [.kw k] (allOK_cons2 ⟨hk, allOK_nil⟩) _
         (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_node_lt hm) (hx x hm)) 1))
       rw [hpr]; simp only [mkOut]; constructor <;> aok
+    | nab o n a ho ha hpr =>
+      simp only [hc] at hpr
+      have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 9
+      have hN : AllOK (nabHead .latex n ++ nabArg .latex n ((pr c a).at .latex 9)) := by
+        cases n with
+        | curl =>
+          simp only [nabHead, nabArg, true_and]
+          by_cases hs : startsNum ((pr c a).at .latex 9) = true
+          · rw [if_pos hs]
+            have hG := allOK_grp (sf := .latex) rfl hA
+            simp only [grp, ↓reduceIte] at hG ⊢
+            exact allOK_cons' (show kwOK .nabla = true from rfl) (allOK_times_tok hG rfl)
+          · rw [if_neg hs]
+            have hh := headOK_at (M_of_isE c a ha) 9
+            rw [hc] at hh
+            obtain ⟨u, r, he⟩ : ∃ u r, (pr c a).at .latex 9 = u :: r := by
+              cases h : (pr c a).at .latex 9 with
+              | nil => rw [h] at hh; exact absurd hh (by simp [HeadOK])
+              | cons u r => exact ⟨u, r, rfl⟩
+            rw [he] at hA hs ⊢
+            have hu : startsNum [u] = false := by cases u <;> simp_all [startsNum]
+            exact allOK_cons' (show kwOK .nabla = true from rfl) (allOK_times_tok hA hu)
+        | grad => simp only [nabHead, nabArg, reduceCtorEq, false_and, ↓reduceIte]; aok
+        | div => simp only [nabHead, nabArg, reduceCtorEq, false_and, ↓reduceIte]; aok
+        | lap => simp only [nabHead, nabArg, reduceCtorEq, false_and, ↓reduceIte]; aok
+      rw [hpr]; simp only [mkOut]
+      refine ⟨hN, allOK_app hN ?_⟩
+      aok
     | call o xs ho hx hpr =>
       simp only [hc] at hpr
       have hS := allOK_callToks [.opn o] (allOK_cons2 ⟨trivial, allOK_nil⟩) _
@@ -597,7 +635,7 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       split <;> (simp only [mkOut]; constructor <;> aok)
     | dSpace w a hw hwn ha hpr =>
       simp only [hc] at hpr
-      have hA := POK_toks (IH a (sizeOf_dNode_lt a _) ha) 1
+      have hA := POK_toks (IH a (sizeOf_pNode_lt a _) ha) 1
       have hG := allOK_grp (sf := .latex) rfl hA
       have hN := allOK_nameToks c hc w
       rw [hpr]; simp only [dSpace]
