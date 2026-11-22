@@ -863,11 +863,11 @@ fn derive_system_kind(
     SystemKind::Ode
 }
 
-/// The `system_kind` a model DECLARES, for comparison with the derived kind.
+/// The model's explicit `system_kind` field, or `None` when absent. Compare
+/// it with [`system_kind`] to detect `system_kind_mismatch` (esm-spec §6.3.1).
 /// A declared `"pde"` (deprecated at esm 2.4.0, warned
 /// `deprecated_system_kind` at load) counts as absent: `None`.
-#[cfg(test)]
-pub(crate) fn declared_system_kind(model: &Model) -> Option<&str> {
+pub fn declared_system_kind(model: &Model) -> Option<&str> {
     model
         .system_kind
         .as_deref()

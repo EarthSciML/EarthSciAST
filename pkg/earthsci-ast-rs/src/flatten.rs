@@ -1683,7 +1683,7 @@ pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::
         let closed = closed
             .into_iter()
             // match rules are not referenceable, so not merged
-            .filter(|(_, decl)| !decl.get("match").is_some_and(|m| !m.is_null()))
+            .filter(|(_, decl)| decl.get("match").is_none_or(|m| m.is_null()))
             .collect();
         blocks.push((cname.to_string(), closed));
     }
@@ -1737,11 +1737,9 @@ pub(crate) fn close_template_bodies(
     }
     fn free_leaves(e: &Expr, bound: &HashSet<String>, out: &mut BTreeSet<String>) {
         match e {
-            Expr::Variable(n) => {
-                // `\0`-prefixed names are internal sentinels, never reads.
-                if !bound.contains(n) && !n.starts_with('\0') {
-                    out.insert(n.clone());
-                }
+            // `\0`-prefixed names are internal sentinels, never reads.
+            Expr::Variable(n) if !bound.contains(n) && !n.starts_with('\0') => {
+                out.insert(n.clone());
             }
             Expr::Operator(node) => {
                 let binders = node.binders(Binders::SCOPE);

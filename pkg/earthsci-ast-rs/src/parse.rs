@@ -1906,26 +1906,14 @@ pub(crate) fn prepare_document_ops_scanned(
     Ok(facts)
 }
 
-/// The `deprecated_system_kind` load warning for one document: every model
-/// that declares `"system_kind": "pde"`, by JSON pointer, or `None` when no
-/// model does. The value is ignored for classification (the model takes its
-/// derived kind) and is kept as written.
+/// The `deprecated_system_kind` load warning for one document: every model,
+/// at any `subsystems` depth, that declares `"system_kind": "pde"`, by JSON
+/// pointer in document order, or `None` when no model does. The value is
+/// ignored for classification (the model takes its derived kind) and is kept
+/// as written.
 pub(crate) fn deprecated_system_kind_warning(value: &serde_json::Value) -> Option<String> {
-    let sites: Vec<String> = value
-        .get("models")
-        .and_then(|m| m.as_object())
-        .into_iter()
-        .flatten()
-        .filter(|(_, model)| {
-            model.get("system_kind").and_then(|k| k.as_str()) == Some(DEPRECATED_SYSTEM_KIND)
-        })
-        .map(|(name, _)| {
-            format!(
-                "/models/{}/system_kind",
-                name.replace('~', "~0").replace('/', "~1")
-            )
-        })
-        .collect();
+    let mut sites = Vec::new();
+    pde_system_kind_sites(value.get("models"), "/models", &mut sites);
     (!sites.is_empty()).then(|| {
         format!(
             "deprecated_system_kind: the `system_kind` value \"pde\" is deprecated (esm \
@@ -1934,6 +1922,28 @@ pub(crate) fn deprecated_system_kind_warning(value: &serde_json::Value) -> Optio
             sites.join(", ")
         )
     })
+}
+
+/// Append the pointer of every `system_kind: "pde"` in a `models` (or
+/// `subsystems`) map at `at`, each model before its own subsystems.
+fn pde_system_kind_sites(models: Option<&serde_json::Value>, at: &str, sites: &mut Vec<String>) {
+    let Some(models) = models.and_then(|m| m.as_object()) else {
+        return;
+    };
+    for (name, model) in models {
+        if !model.is_object() {
+            continue;
+        }
+        let here = format!("{at}/{}", name.replace('~', "~0").replace('/', "~1"));
+        if model.get("system_kind").and_then(|k| k.as_str()) == Some(DEPRECATED_SYSTEM_KIND) {
+            sites.push(format!("{here}/system_kind"));
+        }
+        pde_system_kind_sites(
+            model.get("subsystems"),
+            &format!("{here}/subsystems"),
+            sites,
+        );
+    }
 }
 
 /// The `system_kind` value esm 2.4.0 deprecated: there is no `pde` kind any
@@ -2308,6 +2318,28 @@ mod tests {
             crate::classification::system_kind_mismatch(model),
             None,
             "a declared pde never mismatches"
+        );
+    }
+
+    /// The warning reaches a `"pde"` declared on a subsystem at any depth,
+    /// each model before its own subsystems, in document order.
+    #[test]
+    fn a_declared_pde_system_kind_on_a_subsystem_warns() {
+        use serde_json::json;
+        let doc = json!({"esm": "2.4.0", "models": {
+            "A": {"subsystems": {
+                "S": {"system_kind": "pde", "subsystems": {"T/u": {"system_kind": "pde"}}},
+                "R": {"system_kind": "ode"}
+            }},
+            "B": {"system_kind": "pde"}
+        }});
+        let w = deprecated_system_kind_warning(&doc).expect("a warning");
+        assert!(
+            w.ends_with(
+                "Declared at: /models/A/subsystems/S/system_kind, \
+                 /models/A/subsystems/S/subsystems/T~1u/system_kind, /models/B/system_kind."
+            ),
+            "{w}"
         );
     }
 

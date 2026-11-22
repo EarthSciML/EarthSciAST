@@ -157,10 +157,8 @@ const OPERAND_LIST_FIELDS: [&str; 2] = ["args", "values"];
 /// Mirrors `_structural_walk!`.
 fn structural_walk(out: &mut HashSet<String>, x: &SNode, p: &HashSet<String>, operand: bool) {
     match x {
-        SNode::Str(s) => {
-            if !operand && p.contains(s) {
-                out.insert(s.clone());
-            }
+        SNode::Str(s) if !operand && p.contains(s) => {
+            out.insert(s.clone());
         }
         SNode::Arr(items) => {
             for v in items {
@@ -180,9 +178,9 @@ fn structural_walk(out: &mut HashSet<String>, x: &SNode, p: &HashSet<String>, op
                     for (_, bv) in b {
                         structural_walk(out, bv, p, true);
                     }
-                } else if OPERAND_LIST_FIELDS.contains(&k) && op != "enum" {
-                    structural_walk(out, v, p, true);
-                } else if OPERAND_FIELDS.contains(&k) {
+                } else if (OPERAND_LIST_FIELDS.contains(&k) && op != "enum")
+                    || OPERAND_FIELDS.contains(&k)
+                {
                     structural_walk(out, v, p, true);
                 } else {
                     structural_walk(out, v, p, false);
