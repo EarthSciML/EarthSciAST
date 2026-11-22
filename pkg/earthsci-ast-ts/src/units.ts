@@ -35,7 +35,6 @@ import { forEachComponent, forEachEquation, isReferenceStub } from './traverse.j
 import { observedDefinitions } from './classification.js'
 import { ERROR_CODES } from './errors.js'
 import { pointerToken } from './json-pointer.js'
-import { substituteBindings } from './operator-definitions.js'
 
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
@@ -422,6 +421,12 @@ export interface DimensionOptions {
    * undeterminable.
    */
   registry?: Record<string, unknown> | undefined
+  /**
+   * Names that are bound but have no determinable unit (a definition
+   * parameter whose binding is undeterminable, inside its body): their unit is
+   * unknown, silently — not an unknown variable.
+   */
+  opaque?: ReadonlySet<string> | undefined
 }
 
 /**
@@ -622,6 +627,7 @@ function computeDimensions(
       // stays undeterminable: the `D` arm reads `unitBindings`, not this.
       return finish({ dims: { s: 1 }, scale: 1, exact: ExactScale.one() })
     }
+    if (!dims && options.opaque?.has(expr) === true) return unknown()
     if (!dims) {
       // Unknown variable ⇒ UNKNOWN dimension, not dimensionless. Assuming
       // dimensionless here would manufacture mismatches against every
@@ -1232,6 +1238,12 @@ function fixedUnitExpr(decl: Record<string, unknown>): unknown {
  * `definition_unit_mismatch` — an error when the body's unit is determinable,
  * a warning when it is not. A reference no registry resolves is
  * undeterminable; its bindings are still walked for findings.
+ *
+ * The body is typed where it stands, never expanded: in the environment of
+ * the call, with each parameter bound to the unit of what the call binds to it
+ * (an operand's unit; for a structural parameter bound to a name, that name's
+ * declared unit). A parameter whose binding has no determinable unit is
+ * undeterminable in the body, silently.
  */
 function referenceUnit(
   node: ExpressionNode,
@@ -1257,19 +1269,36 @@ function referenceUnit(
   }
   const d = decl as Record<string, unknown>
   const params = Array.isArray(d.params) ? d.params.map((p) => String(p)) : []
-  // The body's unit for this call: the body with each parameter bound.
-  const body = substituteBindings(d.body, bindings)
-  const bodyU = walk(body as Expression)
+  // Each parameter's unit at this call: the unit of what the call binds to it.
+  const bound = new Map<string, ParsedUnit | null>()
+  for (const p of params) {
+    const b = bindings[p]
+    if (b === undefined) bound.set(p, null)
+    else if (typeof b === 'string') bound.set(p, unitBindings.get(b) ?? walk(b as Expression))
+    else bound.set(p, walk(b as Expression))
+  }
+  const punit = (p: string): ParsedUnit | null => bound.get(p) ?? null
+  // The body's unit for this call, in the call's environment with the
+  // parameters bound (they shadow any outer name of the same spelling).
+  const bodyEnv = new Map(unitBindings)
+  const opaque = new Set<string>(options.opaque ?? [])
+  for (const p of params) {
+    const u = bound.get(p) ?? null
+    if (u === null) {
+      bodyEnv.delete(p)
+      opaque.add(p)
+    } else {
+      bodyEnv.set(p, u)
+      opaque.delete(p)
+    }
+  }
+  const bodyResult = checkDimensions(d.body as Expression, bodyEnv, { ...options, opaque })
+  diagnostics.push(...bodyResult.diagnostics)
+  const bodyU = bodyResult.dimensions
   const uexpr = d.units
   const fixed = fixedUnitExpr(d)
   if (uexpr === undefined && fixed === undefined) return bodyU
   const pset = new Set(params)
-  const punit = (p: string): ParsedUnit | null => {
-    const b = bindings[p]
-    if (b === undefined) return null
-    if (typeof b === 'string') return unitBindings.get(b) ?? null
-    return checkDimensions(b as Expression, unitBindings, options).dimensions
-  }
   const declared = uexpr === undefined ? null : evalUnitExpr(uexpr, pset, punit, unitBindings)
   const fixedU = fixed === undefined ? null : evalUnitExpr(fixed, pset, punit, unitBindings)
   const defines = String(d.defines ?? name)
