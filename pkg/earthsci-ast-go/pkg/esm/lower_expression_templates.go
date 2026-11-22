@@ -1701,6 +1701,7 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 		if err := checkComponentArity(cl.comp, cl.L, cl.transforms); err != nil {
 			return err
 		}
+		markSubsystemOwned(cl.comp, cl.L)
 	}
 	// esm-spec §9.6.4 rule 1 (Option B): surviving `apply_operator`
 	// references are the NEW NORMAL. Only unknown-name / bindings-mismatch

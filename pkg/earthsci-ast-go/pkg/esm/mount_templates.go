@@ -373,6 +373,36 @@ func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[st
 // (`Sub`, `Sub.Inner`). An entry absent from it is the component's own.
 type definitionOwners map[string]map[string]bool
 
+// markSubsystemOwned writes every merged entry of comp's block that only
+// subsystems own (no "" owner) with `reference_only: true`: such an entry is
+// no definition in scope at comp's own sites (esm-spec §9.6.3 constraint 4),
+// and once written it must stay that way through emit → load (a fixed point).
+// Mirrors the Julia `_mark_subsystem_owned!`.
+func markSubsystemOwned(comp map[string]any, L *lowering) {
+	if len(L.owners) == 0 {
+		return
+	}
+	block, ok := comp["operators"].(map[string]any)
+	if !ok {
+		return
+	}
+	for _, n := range sortedKeys(L.owners) {
+		if L.owners[n][""] {
+			continue
+		}
+		d, ok := block[n].(map[string]any)
+		if !ok || isReferenceOnly(d) {
+			continue
+		}
+		nd := cloneMapAny(d)
+		nd["reference_only"] = true
+		block[n] = nd
+		if _, has := L.named[n]; has {
+			L.named[n] = nd
+		}
+	}
+}
+
 // hiddenAt is the set of entries no owner on the path to a call site at
 // subsystem path `path` ("" for the component's own fields) contributed: the
 // entries that are not definitions in scope there.
@@ -706,7 +736,7 @@ func (esm *ESMFile) mergeTypedMountedTemplates(kind, name string, subsystems map
 		}
 		ownOrder = blk.keys
 	}
-	block, _, _ := mergeMountedBlocks(own, ownOrder, name, mounts, esm.keyOrders)
+	block, _, byOwner := mergeMountedBlocks(own, ownOrder, name, mounts, esm.keyOrders)
 	named := make(map[string]any, block.len())
 	for _, n := range block.keys {
 		named[n] = block.get(n)
@@ -719,6 +749,18 @@ func (esm *ESMFile) mergeTypedMountedTemplates(kind, name string, subsystems map
 				return err
 			}
 			m.sub[k] = res
+		}
+	}
+	// An entry only subsystems own is reference-only on the component's block
+	// (markSubsystemOwned), as the load writes it.
+	for _, n := range block.keys {
+		if ps, ok := byOwner[n]; !ok || ps[name] {
+			continue
+		}
+		if d, ok := block.get(n).(map[string]any); ok && !isReferenceOnly(d) {
+			nd := cloneMapAny(d)
+			nd["reference_only"] = true
+			block.set(n, nd)
 		}
 	}
 	if esm.componentTemplates == nil {
