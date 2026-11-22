@@ -63,6 +63,7 @@ const ATOM_KWS = (
     KLpg, KLp, KLbk, KLnot, KFrac, KSqrt, KExp, KLn, KLog, KSin, KCos, KTan, KAsin, KAcos,
     KAtan, KSinh, KCosh, KTanh, KMin, KMax, KLabs, KLfloor, KLceil, KAbs, KFloor, KCeil,
     KDotacc, KBcases, KCases, KEsmnode, KBmat, KVec, KMat, KSum, KProd, KLimits, KLbkg, KLr,
+    KNabla, KPdiff,
 )
 
 """`Math.atomStart`: tokens that can start an operand of a product."""
@@ -318,10 +319,18 @@ qty(n::JNum, l) = JObj(
     )
 )
 
-"""`Math.dNode`: a derivative node."""
+"""`Math.dNode`: a time-derivative node (`d_node(x, "t")`)."""
 d_node(x, w::AbstractString) = JObj(Kvs(["args" => JArr(Any[x]), "op" => "D", "wrt" => String(w)]))
 
-"""`Math.tNode`: a template application node."""
+"""`Math.pNode`: a `partial` node, the spatial derivative (spec §4.2)."""
+p_node(x, w::AbstractString) =
+    JObj(Kvs(["args" => JArr(Any[x]), "op" => "partial", "wrt" => String(w)]))
+
+"""`Math.derivNode`: the derivative a fraction of differentials reads as: the time
+derivative `D` along `t`, `partial` along any other axis."""
+deriv_node(x, w::AbstractString) = w == "t" ? d_node(x, "t") : p_node(x, w)
+
+"""`Math.tNode`: a reference node (`apply_operator`, spec §9.6.2)."""
 t_node(n::AbstractString, bs::Kvs) = JObj(
     Kvs(
         [
@@ -430,9 +439,23 @@ function key_of(c::Ctx, ts::Toks)
     return nothing
 end
 
-"""`Math.dCallNode`: a spatial derivative with trailing operands."""
+"""`Math.dCallNode`: `partial` with trailing operands."""
 d_call_node(w::AbstractString, xs::Vector{Any}) =
-    JObj(Kvs(["args" => JArr(xs), "op" => "D", "wrt" => String(w)]))
+    JObj(Kvs(["args" => JArr(xs), "op" => "partial", "wrt" => String(w)]))
+
+"""`Math.nabTail`: after `\\nabla`: which form it is (`\\cdot` div, `\\times` curl,
+`^{2}` laplacian, nothing grad), and the tokens of its operand."""
+function nab_tail(sf::Sf, r::Toks)
+    kat(r, 1, KCdot) && return "div", tdrop(r)
+    kat(r, 1, KTimes) && return "curl", tdrop(r)
+    two = TNum(JInt(2))
+    if sf == SF_LATEX && kat(r, 1, KCaret) && kat(r, 2, KLb) && tk(r, 3) == two && kat(r, 4, KRb)
+        return "laplacian", tdrop(r, 4)
+    elseif sf == SF_TYPST && kat(r, 1, KCaret) && tk(r, 2) == two
+        return "laplacian", tdrop(r, 2)
+    end
+    return "grad", r
+end
 
 declared(c::Ctx, n::AbstractString) = n in c.s.names
 
@@ -493,13 +516,13 @@ function p_italic_d(c::Ctx, r::Toks)
         (x !== nothing && kat(x[2], 1, KLb)) || return nothing
         y = d_name(c, KRb, tdrop(x[2]))
         y === nothing && return nothing
-        return d_node(x[1], y[1]), y[2]
+        return deriv_node(x[1], y[1]), y[2]
     end
     x = d_name(c, KRp, r)
     (x !== nothing && kat(x[2], 1, KSlash) && kat(x[2], 2, KLpg)) || return nothing
     y = d_name(c, KRp, tdrop(x[2], 2))
     y === nothing && return nothing
-    return d_node(x[1], y[1]), y[2]
+    return deriv_node(x[1], y[1]), y[2]
 end
 
 """`Math.Row`: a row of a reduction's subscript (`:rng`, with `k` and `v`), or
@@ -800,7 +823,8 @@ function mul_loop(c::Ctx, f::Int, acc::Vector{Any}, ts::Toks)
     return nothing
 end
 
-"""`Math.pNot`: level 6, `not`."""
+"""`Math.pNot`: level 6, `not`, and the `\\nabla` forms, whose operand is read at
+level 9."""
 function p_not(c::Ctx, f::Int, ts::Toks)
     f == 0 && return nothing
     return nested(_p_not, c, f - 1, ts)
@@ -813,7 +837,22 @@ function _p_not(c::Ctx, f::Int, ts::Toks)
         x === nothing && return nothing
         return node("not", Any[x[1]]), x[2]
     end
+    if kat(ts, 1, KNabla)
+        o, r = nab_tail(c.sf, tdrop(ts))
+        x = p_nab_arg(c, f, r)
+        x === nothing && return nothing
+        return node(o, Any[x[1]]), x[2]
+    end
     return p_frac(c, f, ts)
+end
+
+"""`Math.pNabArg`: the operand of a `\\nabla` form: another `\\nabla` form, or a
+postfix-level operand."""
+function p_nab_arg(c::Ctx, f::Int, ts::Toks)
+    f == 0 && return nothing
+    f -= 1
+    kat(ts, 1, KNabla) && return p_not(c, f, ts)
+    return p_post(c, f, ts)
 end
 
 """`Math.pFrac`: level 7, the Typst fraction, grouping to the left."""
@@ -1122,7 +1161,9 @@ function bare_template(c::Ctx, n::String, ts::Toks)
     return t_node(n, Kvs()), ts
 end
 
-"""`Math.pDCall`: `\\operatorname{D}_{x}(u, a, b)` after the `_`."""
+"""`Math.pDCall`: `\\partial_{x}(u, a, b)`, and the earlier
+`\\operatorname{D}_{x}(u, a, b)` (read, never printed), after the `_`: `partial` with
+trailing operands."""
 function p_d_call(c::Ctx, f::Int, ts::Toks)
     f == 0 && return nothing
     f -= 1
@@ -1225,6 +1266,8 @@ function p_prim(c::Ctx, f::Int, ts::Toks)
     elseif k1 == KLpg || k1 == KLp
         if c.sf == SF_TYPST && iskw(t2, KDif)
             return p_dt(c, f, KDif, tdrop(r))
+        elseif c.sf == SF_TYPST && iskw(t2, KPdiff) && kat(ts, 3, KUs)
+            return paren_close(c, f, r)
         elseif c.sf == SF_TYPST && iskw(t2, KPdiff)
             return p_dt(c, f, KPdiff, tdrop(r))
         elseif c.sf == SF_TYPST && t2 == TLetter('d')
@@ -1239,6 +1282,8 @@ function p_prim(c::Ctx, f::Int, ts::Toks)
         return x[1], tdrop(x[2])
     elseif k1 == KFrac && iskw(t2, KLb)
         return p_frac_l(c, f, tdrop(ts, 2))
+    elseif k1 == KPdiff && iskw(t2, KUs)
+        return p_d_call(c, f, tdrop(ts, 2))
     elseif k1 == KSqrt
         if c.sf == SF_LATEX && iskw(t2, KLb)
             return closed(c, f, tdrop(r), KRb, "sqrt")
@@ -1556,6 +1601,14 @@ function p_frac_l(c::Ctx, f::Int, ts::Toks)
         y = p_name(c.sf, tdrop(ts, 4))
         (y !== nothing && kat(y[2], 1, KRb)) || return nothing
         return p_d_apply(c, f, y[1], tdrop(y[2]))
+    elseif iskw(t1, KPdiff) && kat(ts, 2, KUs)
+        # `\frac{\partial_{x}(…)}{…}`: a quotient whose numerator is `partial` with
+        # trailing operands.
+        x = p_or(c, f, ts)
+        (x !== nothing && kat(x[2], 1, KRb) && kat(x[2], 2, KLb)) || return nothing
+        y = p_or(c, f, tdrop(x[2], 2))
+        (y !== nothing && kat(y[2], 1, KRb)) || return nothing
+        return node("/", Any[x[1], y[1]]), tdrop(y[2])
     elseif iskw(t1, KPdiff)
         x = p_or(c, f, tdrop(ts))
         x === nothing && return nothing
@@ -1563,7 +1616,7 @@ function p_frac_l(c::Ctx, f::Int, ts::Toks)
         (kat(r, 1, KRb) && kat(r, 2, KLb) && kat(r, 3, KPdiff)) || return nothing
         y = p_name(c.sf, tdrop(r, 3))
         (y !== nothing && kat(y[2], 1, KRb)) || return nothing
-        return d_node(x[1], y[1]), tdrop(y[2])
+        return deriv_node(x[1], y[1]), tdrop(y[2])
     end
     p = p_italic_d(c, ts)
     p !== nothing && return p
@@ -1595,7 +1648,7 @@ function p_dt(c::Ctx, f::Int, k::Kw, ts::Toks)
     y = p_name(c.sf, tdrop(r, 4))
     (y !== nothing && kat(y[2], 1, KRp)) || return nothing
     (k == KDif && y[1] != "t") && return nothing
-    return d_node(x[1], y[1]), tdrop(y[2])
+    return deriv_node(x[1], y[1]), tdrop(y[2])
 end
 
 """`Math.pDApply`: a derivative operator applied to a parenthesized operand."""
@@ -1605,7 +1658,7 @@ function p_d_apply(c::Ctx, f::Int, w::AbstractString, ts::Toks)
     kat(ts, 1, KLpg) || return nothing
     x = p_or(c, f, tdrop(ts))
     (x !== nothing && is_rp(tk(x[2]))) || return nothing
-    return d_node(x[1], w), tdrop(x[2])
+    return deriv_node(x[1], w), tdrop(x[2])
 end
 
 """`Math.pCases`: `cases` rows; a chain re-nests to the right."""

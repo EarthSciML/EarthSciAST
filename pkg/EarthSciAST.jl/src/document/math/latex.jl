@@ -151,6 +151,7 @@ const KW_CHARS = Dict{Kw, String}(
     KCosh => "\\cosh", KTanh => "\\tanh", KMin => "\\min", KMax => "\\max",
     KLabs => "\\left|", KRabs => "\\right|", KLfloor => "\\lfloor", KRfloor => "\\rfloor",
     KLceil => "\\lceil", KRceil => "\\rceil", KPdiff => "\\partial", KDotacc => "\\dot",
+    KNabla => "\\nabla",
     KBcases => "\\begin{cases}", KEcases => "\\end{cases}", KBmat => "\\begin{bmatrix}",
     KEmat => "\\end{bmatrix}", KSum => "\\sum", KProd => "\\prod", KInn => "\\in",
     KSubstack => "\\substack", KLimitsL => "\\limits", KLbkg => "\\left[",
