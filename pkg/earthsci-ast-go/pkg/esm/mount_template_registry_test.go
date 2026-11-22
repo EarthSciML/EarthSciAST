@@ -321,3 +321,30 @@ func TestMountedLeafDefinitionsAreLeafLocal(t *testing.T) {
 		t.Errorf("code = %q; want %q (%v)", got, codeOperatorArityMismatch, err)
 	}
 }
+
+// An authored subsystem's own definitions resolve the calls in that subsystem
+// (and below it), together with the mounting component's, but never a call in
+// the mounting component itself.
+func TestInlineSubsystemDefinitionsResolveOnItsPath(t *testing.T) {
+	f, err := LoadString(`{"esm": "2.4.0", "metadata": {"name": "host"}, "models": {"H": {
+  "variables": {"x": {"type": "parameter", "default": 1.0}, "y": {"type": "unknown"}},
+  "equations": [{"lhs": "y", "rhs": {"op": "twice", "args": ["x"]}}],
+  "operators": {"halve": {"params": ["q"], "body": {"op": "/", "args": ["q", 2]}}},
+  "subsystems": {"S": {
+    "variables": {"a": {"type": "parameter", "default": 1.0}, "b": {"type": "unknown"}, "c": {"type": "unknown"}},
+    "equations": [{"lhs": "b", "rhs": {"op": "twice", "args": ["a"]}},
+                  {"lhs": "c", "rhs": {"op": "halve", "args": ["a"]}}],
+    "operators": {"twice": {"params": ["q"], "body": {"op": "*", "args": [2, "q"]}}}}}}}}`)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if n, ok := asExprNode(f.Models["H"].Equations[0].RHS); !ok || n.Op != "twice" {
+		t.Errorf("host rhs = %#v; want the placeholder twice call", f.Models["H"].Equations[0].RHS)
+	}
+	sub, _ := subsystemAsMap(f.Models["H"].Subsystems["S"])
+	eqs, _ := sub["equations"].([]any)
+	got := emitCanonicalString(eqs)
+	if strings.Contains(got, `"twice"`) || strings.Contains(got, `"halve"`) {
+		t.Errorf("subsystem equations = %s; want both calls resolved", got)
+	}
+}

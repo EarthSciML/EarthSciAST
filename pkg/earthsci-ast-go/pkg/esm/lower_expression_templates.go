@@ -887,14 +887,19 @@ type lowering struct {
 	// arities: the operand counts the definitions of each defined operator
 	// take (esm-spec §9.6.12 "Arity").
 	arities map[string]map[int]bool
-	// mountedOnly: the registry entries only mounted subsystems contributed
-	// (hoistMountedTemplates), reached by the mounted subtree's references and
-	// never by a call in this component.
-	mountedOnly map[string]bool
-	shapeEnv    map[string][]string
-	enums       map[string]map[string]int
-	scope       string
-	depth       map[uintptr]depthRec
+	// hidden: the registry entries that are no definition in scope where this
+	// context resolves calls (definitionOwners.hiddenAt): reached by
+	// references, never by a call here, and counted for no arity.
+	hidden map[string]bool
+	// owners records which subsystem blocks contributed each merged entry
+	// (nil when nothing is mounted); at builds the context a call site at a
+	// subsystem path resolves with (definitionScope).
+	owners   definitionOwners
+	at       func(path string) (*lowering, error)
+	shapeEnv map[string][]string
+	enums    map[string]map[string]int
+	scope    string
+	depth    map[uintptr]depthRec
 }
 
 func (L *lowering) depthOf(n map[string]any) (int, bool) {
@@ -1385,9 +1390,9 @@ func RejectExpressionTemplatesPreV04(view map[string]any) error {
 // which each rule's `where` shape constraints are resolved at registration
 // (esm-spec §9.6.1; `operator_constraint_unknown_index_set`). scope is the
 // diagnostic prefix (e.g. "models.M").
-func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[string]struct{}, scope string, mountedOnly map[string]bool) (*lowering, error) {
+func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[string]struct{}, scope string, hidden map[string]bool) (*lowering, error) {
 	L := &lowering{named: map[string]any{}, callRules: map[string][]matchRule{}, arities: map[string]map[int]bool{},
-		mountedOnly: mountedOnly}
+		hidden: hidden}
 	if tplMap == nil {
 		return L, nil
 	}
@@ -1418,8 +1423,8 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 		defines := definitionDefines(name, decl)
 		match, ok := decl["match"]
 		hasMatch := ok && match != nil
-		if !hasMatch && mountedOnly[name] {
-			// A mounted component's definition: reached by its subtree's
+		if !hasMatch && hidden[name] {
+			// Another subsystem's definition: reached by its subtree's
 			// references, never by a call here (component-local scope).
 		} else if !hasMatch {
 			addArity(defines, len(plist))
@@ -1431,7 +1436,7 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 		if err != nil {
 			return nil, err
 		}
-		if !hasMatch && !mountedOnly[name] && !isCoreOp(defines) && defines != applyExpressionTemplateOp {
+		if !hasMatch && !hidden[name] && !isCoreOp(defines) && defines != applyExpressionTemplateOp {
 			args := make([]any, len(plist))
 			for i, p := range plist {
 				args[i] = p
@@ -1562,7 +1567,7 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			// authored subsystem with its own block) keeps its references and
 			// brings its template definitions; they join this component's
 			// registry here, before its fixpoint (hoistMountedTemplates).
-			mountedOnly := hoistMountedTemplates(compObj, cname, "/"+kind+"/"+cname, orders)
+			owners := hoistMountedTemplates(compObj, cname, "/"+kind+"/"+cname, orders)
 			// Static shape environment for `where` constraint evaluation
 			// (esm-spec §9.6.1): declared variable shapes only.
 			shapeEnv := componentShapeEnv(compObj)
@@ -1583,11 +1588,29 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			if orders != nil {
 				order = orders["/"+kind+"/"+cname+"/operators"]
 			}
-			L, err := buildRewriteContext(tplMap, order, isetNames, cscope, mountedOnly)
+			L, err := buildRewriteContext(tplMap, order, isetNames, cscope, owners.hiddenAt(""))
 			if err != nil {
 				return err
 			}
 			L.shapeEnv, L.enums, L.scope, L.depth = shapeEnv, enums, cscope, map[uintptr]depthRec{}
+			if owners != nil {
+				L.owners = owners
+				byPath := map[string]*lowering{"": L}
+				L.at = func(path string) (*lowering, error) {
+					if Lp, ok := byPath[path]; ok {
+						return Lp, nil
+					}
+					Lp, err := buildRewriteContext(tplMap, order, isetNames, cscope, owners.hiddenAt(path))
+					if err != nil {
+						return nil, err
+					}
+					// One depth record per component: rule 3 reads it to tell
+					// the references a firing wrote.
+					Lp.shapeEnv, Lp.enums, Lp.scope, Lp.depth = shapeEnv, enums, cscope, L.depth
+					byPath[path] = Lp
+					return Lp, nil
+				}
+			}
 			named, rules := L.named, L.rules
 			// Outermost-first, priority-ordered, bounded-fixpoint rewrite per
 			// non-template field (esm-spec §9.6.3): each firing writes a
@@ -1599,6 +1622,12 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 					continue
 				}
 				scope := fmt.Sprintf("%s.%s.%s", kind, cname, k)
+				if k == "subsystems" && L.owners != nil {
+					if err := rewriteSubsystemsScoped(compObj[k], "", L, scope); err != nil {
+						return err
+					}
+					continue
+				}
 				rewritten, _, err := rewriteToFixpoint(compObj[k], L, scope, nil)
 				if err != nil {
 					return err
@@ -1667,6 +1696,52 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 		return err
 	}
 	return validateMakearrayRegionsInRegistries(registries)
+}
+
+// rewriteSubsystemsScoped rewrites each subsystem below a component whose
+// registry holds subsystem blocks (L.owners) with the context of its own path:
+// a call there resolves to, and an arity counts, only the definitions the
+// component or a subsystem on the path to it owns (esm-spec §9.6.3
+// constraint 4, §9.6.12).
+func rewriteSubsystemsScoped(subsRaw any, prefix string, L *lowering, scope string) error {
+	subs, ok := subsRaw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, k := range sortedKeys(subs) {
+		path := k
+		if prefix != "" {
+			path = prefix + "." + k
+		}
+		sub, ok := subs[k].(map[string]any)
+		if !ok {
+			rewritten, _, err := rewriteToFixpoint(subs[k], L, scope+"."+k, nil)
+			if err != nil {
+				return err
+			}
+			subs[k] = rewritten
+			continue
+		}
+		Lp, err := L.at(path)
+		if err != nil {
+			return err
+		}
+		for _, f := range sortedKeys(sub) {
+			fscope := scope + "." + k + "." + f
+			if f == "subsystems" {
+				if err := rewriteSubsystemsScoped(sub[f], path, L, fscope); err != nil {
+					return err
+				}
+				continue
+			}
+			rewritten, _, err := rewriteToFixpoint(sub[f], Lp, fscope, nil)
+			if err != nil {
+				return err
+			}
+			sub[f] = rewritten
+		}
+	}
+	return nil
 }
 
 func stripExpressionTemplates(view map[string]any) {

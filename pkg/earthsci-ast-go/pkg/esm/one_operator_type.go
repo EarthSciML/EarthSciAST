@@ -236,7 +236,7 @@ func reachedDefinitions(out map[string]bool, node any, named map[string]any) {
 // registry entry those reach (sorted by name), as the Julia reference does
 // after rule 3 and the surviving-reference checks.
 func checkComponentArity(comp map[string]any, L *lowering, transforms []map[string]any) error {
-	if len(L.arities) == 0 {
+	if len(L.arities) == 0 && L.owners == nil {
 		return nil
 	}
 	reached := map[string]bool{}
@@ -244,7 +244,11 @@ func checkComponentArity(comp map[string]any, L *lowering, transforms []map[stri
 		if k == "operators" {
 			continue
 		}
-		if err := checkCallArity(comp[k], L.arities, L.scope+"."+k); err != nil {
+		if k == "subsystems" && L.owners != nil {
+			if err := checkSubsystemArityScoped(comp[k], "", L, L.scope+"."+k); err != nil {
+				return err
+			}
+		} else if err := checkCallArity(comp[k], L.arities, L.scope+"."+k); err != nil {
 			return err
 		}
 		reachedDefinitions(reached, comp[k], L.named)
@@ -261,12 +265,70 @@ func checkComponentArity(comp map[string]any, L *lowering, transforms []map[stri
 	}
 	sort.Strings(names)
 	for _, r := range names {
-		if L.mountedOnly[r] {
-			continue // a mounted definition's body was checked in its own component
-		}
 		d, _ := L.named[r].(map[string]any)
-		if err := checkCallArity(d["body"], L.arities, L.scope+".operators."+r); err != nil {
+		// A body's calls are judged in the scope of the block that owns it.
+		Lr, err := L.ownerContext(r)
+		if err != nil {
 			return err
+		}
+		if err := checkCallArity(d["body"], Lr.arities, L.scope+".operators."+r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ownerContext is the context a call in the body of registry entry r resolves
+// with: the component's own when it owns r (or nothing is mounted), else that of
+// the first (sorted) subsystem block that contributed r.
+func (L *lowering) ownerContext(r string) (*lowering, error) {
+	ps, ok := L.owners[r]
+	if !ok || ps[""] {
+		return L, nil
+	}
+	paths := make([]string, 0, len(ps))
+	for p := range ps {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return L.at(paths[0])
+}
+
+// checkSubsystemArityScoped is checkCallArity over the subsystems below a
+// component whose registry holds subsystem blocks, each with the arities in
+// scope at its own path (rewriteSubsystemsScoped).
+func checkSubsystemArityScoped(subsRaw any, prefix string, L *lowering, scope string) error {
+	subs, ok := subsRaw.(map[string]any)
+	if !ok {
+		return checkCallArity(subsRaw, L.arities, scope)
+	}
+	for _, k := range sortedKeys(subs) {
+		path := k
+		if prefix != "" {
+			path = prefix + "." + k
+		}
+		sub, ok := subs[k].(map[string]any)
+		if !ok {
+			if err := checkCallArity(subs[k], L.arities, scope+"."+k); err != nil {
+				return err
+			}
+			continue
+		}
+		Lp, err := L.at(path)
+		if err != nil {
+			return err
+		}
+		for _, f := range sortedKeys(sub) {
+			fscope := scope + "." + k + "." + f
+			if f == "subsystems" {
+				if err := checkSubsystemArityScoped(sub[f], path, L, fscope); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := checkCallArity(sub[f], Lp.arities, fscope); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
