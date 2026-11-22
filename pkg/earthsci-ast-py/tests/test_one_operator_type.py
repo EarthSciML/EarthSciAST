@@ -409,13 +409,13 @@ def test_a_mounted_leafs_definitions_resolve_only_the_leafs_calls(tmp_path):
 def test_an_inline_subsystems_calls_resolve_to_its_own_definitions():
     """An authored subsystem's definitions resolve the calls in its own subtree
     (esm-spec §9.6.3 constraint 4), and only there: the host's call of the same
-    operator stays a placeholder."""
+    operator stays a placeholder. The host has no definitions: a block on a
+    subsystem alone, at any depth, is enough for the document to be lowered."""
     raw = {
         "esm": "2.4.0",
         "metadata": {"name": "inline_scope"},
         "models": {
             "Host": {
-                "operators": {"half": {"params": ["x"], "body": {"op": "/", "args": ["x", 2]}}},
                 "variables": {"y": {"type": "unknown", "units": "1", "default": 1.0}},
                 "equations": [
                     {
@@ -448,3 +448,54 @@ def test_an_inline_subsystems_calls_resolve_to_its_own_definitions():
         "name": "scale",
         "bindings": {"x": "c"},
     }
+
+
+def test_a_block_on_a_nested_inline_subsystem_is_lowered():
+    """The only ``operators`` block sits two subsystems down: the document is
+    still lowered, and that subsystem's call resolves to its definition."""
+    inner = {
+        "operators": {"scale": {"params": ["x"], "body": {"op": "*", "args": [3, "x"]}}},
+        "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0}},
+        "equations": [
+            {
+                "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                "rhs": {"op": "scale", "args": ["c"]},
+            }
+        ],
+    }
+    raw = {
+        "esm": "2.4.0",
+        "metadata": {"name": "nested_inline_scope"},
+        "models": {
+            "Host": {
+                "variables": {"y": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["y"]},
+                    }
+                ],
+                "subsystems": {
+                    "Mid": {
+                        "variables": {"m": {"type": "unknown", "units": "1", "default": 1.0}},
+                        "equations": [
+                            {
+                                "lhs": {"op": "D", "args": ["m"], "wrt": "t"},
+                                "rhs": {"op": "-", "args": ["m"]},
+                            }
+                        ],
+                        "subsystems": {"Inner": inner},
+                    }
+                },
+            }
+        },
+    }
+    host = lower_expression_templates(raw)["models"]["Host"]
+    rhs = host["subsystems"]["Mid"]["subsystems"]["Inner"]["equations"][0]["rhs"]
+    assert rhs == {"op": "apply_operator", "args": [], "name": "scale", "bindings": {"x": "c"}}
+    # And through the typed load, the call expands to the definition's body.
+    from earthsci_ast import load_string
+
+    f = load_string(json.dumps(raw))
+    leaf = f.models["Host"].subsystems["Mid"].subsystems["Inner"].equations[0].rhs
+    assert leaf.op == "*" and leaf.args == [3, "c"]

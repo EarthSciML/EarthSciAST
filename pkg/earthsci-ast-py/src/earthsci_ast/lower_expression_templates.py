@@ -1395,20 +1395,28 @@ def reject_expression_templates_pre_v04(view: Any) -> None:
 
 
 def _has_template_machinery(file: dict) -> bool:
-    """True if the document carries anything the §9.6.3 engine must process: any
-    component with a NON-EMPTY ``expression_templates`` block (so match-less
-    named fragments and `where`-carrying rules are still validated / composed at
-    load, even absent an explicit invocation) or any ``apply_expression_template``
-    op anywhere. Mirrors the Julia reference ``_has_template_machinery`` so the
-    accept/validate decision is identical across bindings."""
+    """True if the document carries anything the §9.6.3 engine must process: a
+    NON-EMPTY ``operators`` block on any component or on any of its subsystems,
+    at any depth (so match-less named fragments and `where`-carrying rules are
+    still validated / composed at load, even absent an explicit invocation, and
+    an inline subsystem's calls resolve to its own definitions), or any
+    ``apply_operator`` op anywhere. Mirrors the Julia reference
+    ``_has_template_machinery`` so the accept/validate decision is identical
+    across bindings."""
+
+    def _has_block(comp: Any) -> bool:
+        if not _is_object(comp):
+            return False
+        tplraw = comp.get("operators")
+        if _is_object(tplraw) and len(tplraw) > 0:
+            return True
+        subs = comp.get("subsystems")
+        return _is_object(subs) and any(_has_block(sub) for sub in subs.values())
+
     for compkind in ("models", "reaction_systems"):
         comps = file.get(compkind)
-        if not _is_object(comps):
-            continue
-        for comp in comps.values():
-            tplraw = _is_object(comp) and comp.get("operators")
-            if _is_object(tplraw) and len(tplraw) > 0:
-                return True
+        if _is_object(comps) and any(_has_block(comp) for comp in comps.values()):
+            return True
     return bool(_find_apply_paths(file))
 
 
