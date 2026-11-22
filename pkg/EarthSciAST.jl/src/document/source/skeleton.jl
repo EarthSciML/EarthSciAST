@@ -76,7 +76,7 @@ struct Rxn
     attrs::Kvs
 end
 
-"""`Source.Tm`: an entry of `expression_templates`: a template
+"""`Source.Tm`: an entry of `operators`: a template
 (`lhs === nothing`) or a rewrite rule (`lhs` the match)."""
 struct Tm
     name::String
@@ -121,8 +121,8 @@ head(::Mx) = nothing
 
 """`Source.mathFields`."""
 const MATH_FIELDS = (
-    "analyses", "constraint_equations", "equations", "operators",
-    "initialization_equations", "reactions",
+    "analyses", "constraint_equations", "equations", "initialization_equations",
+    "operators", "reactions",
 )
 
 """`k ∈ mathFields`."""
@@ -375,7 +375,7 @@ function str_list(xs)
     return out
 end
 
-"""`Source.tmOf`: the template or rule an entry of `expression_templates` is,
+"""`Source.tmOf`: the template or rule an entry of `operators` is,
 checked by printing it back."""
 function tm_of(n::AbstractString, v)
     v isa JObj || return nothing
@@ -402,7 +402,7 @@ item_json(m::MxPlot) = plot_json(m.a)
 item_json(m::MxTm) = tm_json(m.t)
 
 """`Source.fieldJson`: an object keyed by the entries' names for
-`expression_templates`, a list otherwise."""
+`operators`, a list otherwise."""
 field_json(f::AbstractString, ms) = f == "operators" ?
     JObj(Kvs([key(m) => item_json(m) for m in ms])) : JArr(Any[item_json(m) for m in ms])
 
