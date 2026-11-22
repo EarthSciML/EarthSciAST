@@ -39,7 +39,7 @@ fn read(case: &str, name: &str) -> String {
 fn block_text(reg: impl IntoIterator<Item = (String, Value)>) -> String {
     let block: Map<String, Value> = reg.into_iter().collect();
     let mut doc = Map::new();
-    doc.insert("expression_templates".to_string(), Value::Object(block));
+    doc.insert("operators".to_string(), Value::Object(block));
     emit_esm_string(&Value::Object(doc))
 }
 
@@ -73,6 +73,10 @@ fn expanded_value(case: &str, name: &str) -> Value {
     resolve_subsystem_refs_raw(&mut raw, &dir(case)).expect("resolve mounts");
     lower_expression_templates(&mut raw).expect("lower");
     expand(&mut raw).expect("expand");
+    // The goldens are the expansion of the LOADED document, which carries
+    // the §9.6.4 rule-8 version floor (esm 2.4.0) a load stamps on a document
+    // with template machinery.
+    raw["esm"] = Value::from("2.4.0");
     raw
 }
 

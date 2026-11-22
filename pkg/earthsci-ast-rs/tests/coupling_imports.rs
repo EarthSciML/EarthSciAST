@@ -367,7 +367,7 @@ fn template_import_targeting_a_coupling_library_is_rejected() {
           },
           "models": {
             "M": {
-              "expression_template_imports": [
+              "operator_imports": [
                 {
                   "ref": "clib.esm"
                 }
@@ -404,7 +404,7 @@ fn template_import_targeting_a_coupling_library_is_rejected() {
         .expect_err("template import of a coupling library must fail");
     assert!(
         e.to_string()
-            .contains("[template_import_is_coupling_library]"),
+            .contains("[operator_import_is_coupling_library]"),
         "got: {e}"
     );
 }

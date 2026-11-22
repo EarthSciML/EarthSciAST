@@ -54,7 +54,7 @@ fn lib_grid() -> Value {
         "metadata": {"name": "lib_grid"},
         "metaparameters": {"GX": {"type": "integer", "default": 2}},
         "index_sets": {"cells": {"kind": "interval", "size": "GX"}},
-        "expression_templates": {
+        "operators": {
             "one": {"params": [], "body": {"op": "const", "value": 1, "args": []}}
         }
     })
@@ -70,7 +70,7 @@ fn model_importing(binding: Value) -> Value {
         },
         "models": {
             "M": {
-                "expression_template_imports": [
+                "operator_imports": [
                     {"ref": "./lib_grid.esm", "bindings": {"GX": binding}}
                 ],
                 "variables": {"a": {"type": "parameter", "shape": ["cells"], "default": 0.0}},
@@ -230,7 +230,7 @@ fn mount_edge_unknown_parent_name_is_loud() {
     let e = load_path_with_options(d.join("parent_bad.esm"), &meta(&[("NX", 18)]))
         .expect_err("unknown parent name in a mount-edge binding must fail loudly");
     assert!(
-        e.to_string().contains("[template_import_unknown_name]"),
+        e.to_string().contains("[operator_import_unknown_name]"),
         "got: {e}"
     );
 }

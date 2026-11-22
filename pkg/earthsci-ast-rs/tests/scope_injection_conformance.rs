@@ -110,8 +110,8 @@ fn form_a_subsystem_ref_injection() {
     // namespace is open, so this is not a load error).
     let leaf = loaded_as_value(&conf(&["inject_subsystem_ref", "leaf.esm"]));
     assert_eq!(
-        leaf["models"]["Advection"]["equations"][0]["rhs"]["args"][1]["op"], "D",
-        "the standalone agnostic leaf keeps its spatial D"
+        leaf["models"]["Advection"]["equations"][0]["rhs"]["args"][1]["op"], "partial",
+        "the standalone agnostic leaf keeps its spatial derivative (read as `partial`)"
     );
 
     // Negative twin: mounting WITHOUT injection loads cleanly (the D survives —
@@ -154,9 +154,7 @@ fn form_b_coupling_entry_injection() {
     // the emitted document matches the golden.
     let ser = loaded_as_value(&fixture);
     assert!(
-        ser["coupling"][0]
-            .get("expression_template_imports")
-            .is_none(),
+        ser["coupling"][0].get("operator_imports").is_none(),
         "the coupling-entry injection map must not survive parse → emit"
     );
     assert_json_eq(
@@ -171,7 +169,7 @@ fn form_b_target_unknown_diagnostic() {
     let e = load_path(conf(&["inject_coupling_entry", "neg_target_unknown.esm"]))
         .expect_err("unknown injection target must be rejected at load");
     assert!(
-        e.to_string().contains("[template_inject_target_unknown]"),
+        e.to_string().contains("[operator_inject_target_unknown]"),
         "got: {e}"
     );
 }
@@ -181,7 +179,7 @@ fn form_b_target_is_loader_diagnostic() {
     let e = load_path(conf(&["inject_coupling_entry", "neg_target_is_loader.esm"]))
         .expect_err("data-loader injection target must be rejected at load");
     assert!(
-        e.to_string().contains("[template_inject_target_is_loader]"),
+        e.to_string().contains("[operator_inject_target_is_loader]"),
         "got: {e}"
     );
 }
@@ -201,8 +199,9 @@ fn form_c_test_block_injection() {
     // lower it at load) and each test keeps its import field (survives emit).
     let adv_rhs = serde_json::to_value(&adv.equations[0].rhs).unwrap();
     assert_eq!(
-        adv_rhs["args"][1]["op"], "D",
-        "form C must NOT lower the enclosing component at load"
+        adv_rhs["args"][1]["op"], "partial",
+        "form C must NOT lower the enclosing component at load (its spatial D \
+         is read as `partial`, esm-spec §4.2)"
     );
     let tests = adv.tests.as_ref().expect("tests");
     assert_eq!(tests.len(), 2);
@@ -263,5 +262,5 @@ fn form_c_test_block_injection() {
     // The persisted file is untouched by the ephemeral builds.
     let adv_rhs_after =
         serde_json::to_value(&f.models.as_ref().unwrap()["Advection"].equations[0].rhs).unwrap();
-    assert_eq!(adv_rhs_after["args"][1]["op"], "D");
+    assert_eq!(adv_rhs_after["args"][1]["op"], "partial");
 }

@@ -482,6 +482,15 @@ pub enum UnitSeverity {
     Error,
     /// Undeterminable dimension — non-blocking warning.
     Analysis,
+    /// A definition's body unit disagrees with its unit expression, or the
+    /// expression with the fixed unit expression of `partial` / `integral`
+    /// (esm-spec §9.6.12 "Units") — blocks validation, as
+    /// `definition_unit_mismatch`.
+    DefinitionMismatch,
+    /// A definition's body unit is undeterminable, so it cannot be checked
+    /// against its unit expression — a non-blocking `definition_unit_mismatch`
+    /// warning (esm-spec §9.6.12).
+    DefinitionUndetermined,
 }
 
 /// The cross-binding `code` values a dimensional finding can carry, as surfaced
@@ -537,7 +546,22 @@ impl UnitFinding {
 
     /// True when this finding is a provable inconsistency.
     pub fn is_error(&self) -> bool {
-        self.severity == UnitSeverity::Error
+        matches!(
+            self.severity,
+            UnitSeverity::Error | UnitSeverity::DefinitionMismatch
+        )
+    }
+
+    /// The structural error code a blocking finding is reported under:
+    /// `definition_unit_mismatch` for a definition's unit check (esm-spec
+    /// §9.6.12), `unit_inconsistency` for every other.
+    pub fn error_code(&self) -> crate::validate::StructuralErrorCode {
+        match self.severity {
+            UnitSeverity::DefinitionMismatch => {
+                crate::validate::StructuralErrorCode::DefinitionUnitMismatch
+            }
+            _ => crate::validate::StructuralErrorCode::UnitInconsistency,
+        }
     }
 
     /// The cross-binding finding code implied by this finding's severity, taken
@@ -551,6 +575,9 @@ impl UnitFinding {
         match self.severity {
             UnitSeverity::Error => UNIT_FINDING_DIMENSIONAL_MISMATCH,
             UnitSeverity::Analysis => UNIT_FINDING_ANALYSIS,
+            UnitSeverity::DefinitionMismatch | UnitSeverity::DefinitionUndetermined => {
+                crate::diagnostic::codes::DEFINITION_UNIT_MISMATCH
+            }
         }
     }
 }
@@ -846,7 +873,156 @@ fn propagate_dim(expr: &Expr, env: &dyn UnitEnv, findings: &mut Vec<UnitFinding>
                 Dim::Unknown
             }
         }
-        Expr::Operator(op) => propagate_operator_dim(op, env, findings),
+        Expr::Operator(op) => {
+            let body = propagate_operator_dim(op, env, findings);
+            match op.definition_units.as_deref() {
+                Some(def) => definition_call_dim(def, body, env, findings),
+                None => body,
+            }
+        }
+    }
+}
+
+/// A call's unit (esm-spec §4.8.3, §9.6.12 "Units"): the unit expression of
+/// the definition the reference named, evaluated from the units of what the
+/// call binds, without evaluating the body; else the body's unit `body`. A
+/// disagreement between them, or with the fixed unit expression of `partial`
+/// / `integral`, is `definition_unit_mismatch` — an error when the body's unit
+/// is determinable, a warning when it is not. Mirrors the Julia reference
+/// `_definition_call_unit!`.
+fn definition_call_dim(
+    def: &crate::types::DefinitionUnits,
+    body: Dim,
+    env: &dyn UnitEnv,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    if def.units.is_none() && def.fixed.is_none() {
+        return body;
+    }
+    // What a parameter stands for at this call: the unit of what the call
+    // binds to it (an operand's unit; for a parameter in a structural
+    // position bound to an axis name, that coordinate's). Its own findings
+    // were reported where the operand sits in the expansion.
+    let param_unit = |p: &str| -> Option<Unit> {
+        let b = def.bindings.get(p)?;
+        propagate_dim(b, env, &mut Vec::new()).known().cloned()
+    };
+    let declared = def
+        .units
+        .as_ref()
+        .and_then(|u| eval_unit_expression(u, def, &param_unit, env));
+    let fixed = def
+        .fixed
+        .as_ref()
+        .and_then(|u| eval_unit_expression(u, def, &param_unit, env));
+    let name = &def.name;
+    let defines = def.defines.as_deref().unwrap_or(name);
+    let fixed_what = format!("the fixed unit expression of '{defines}'");
+    for (what, want) in [
+        ("its unit expression", declared.as_ref()),
+        (fixed_what.as_str(), fixed.as_ref()),
+    ] {
+        let Some(want) = want else {
+            continue;
+        };
+        match body.known() {
+            None => findings.push(UnitFinding {
+                severity: UnitSeverity::DefinitionUndetermined,
+                message: format!(
+                    "definition_unit_mismatch (warning): the body of definition '{name}' has an \
+                     undeterminable unit, so it cannot be checked against {what} ('{}') \
+                     (esm-spec §9.6.12)",
+                    describe_scaled(want)
+                ),
+            }),
+            Some(b) if !b.same_unit(want) => findings.push(UnitFinding {
+                severity: UnitSeverity::DefinitionMismatch,
+                message: format!(
+                    "definition_unit_mismatch: the body of definition '{name}' has unit '{}', \
+                     but {what} gives '{}' (esm-spec §9.6.12)",
+                    describe_scaled(b),
+                    describe_scaled(want)
+                ),
+            }),
+            Some(_) => {}
+        }
+    }
+    // A unit expression must itself agree with the fixed one of
+    // `partial` / `integral`.
+    if let (Some(d), Some(f)) = (declared.as_ref(), fixed.as_ref())
+        && !d.same_unit(f)
+    {
+        findings.push(UnitFinding {
+            severity: UnitSeverity::DefinitionMismatch,
+            message: format!(
+                "definition_unit_mismatch: the unit expression of definition '{name}' gives \
+                 '{}', but the fixed unit expression of '{defines}' gives '{}' (esm-spec §4.2)",
+                describe_scaled(d),
+                describe_scaled(f)
+            ),
+        });
+    }
+    if def.units.is_some() {
+        return declared.map_or(Dim::Unknown, Dim::Known);
+    }
+    match fixed {
+        Some(f) => Dim::Known(f),
+        None => body,
+    }
+}
+
+/// Evaluate a unit expression (esm-spec §9.6.1 `units`): a parameter is the
+/// unit of what the call binds to it, another name its declared unit, a number
+/// dimensionless, a `const` its declared unit (else dimensionless), and `*`,
+/// binary `/`, and `^` with a constant exponent combine them. `None` when
+/// undeterminable.
+fn eval_unit_expression(
+    x: &Expr,
+    def: &crate::types::DefinitionUnits,
+    param_unit: &dyn Fn(&str) -> Option<Unit>,
+    env: &dyn UnitEnv,
+) -> Option<Unit> {
+    match x {
+        Expr::Variable(s) => {
+            if def.bindings.contains_key(s) {
+                param_unit(s)
+            } else {
+                env.unit_of(s).cloned()
+            }
+        }
+        Expr::Number(_) | Expr::Integer(_) => Some(Unit::dimensionless()),
+        Expr::Operator(op) => match op.op.as_str() {
+            "const" => match op.units.as_deref() {
+                Some(u) => parse_unit(u).ok(),
+                None => Some(Unit::dimensionless()),
+            },
+            "*" => {
+                let mut acc: Option<Unit> = None;
+                for a in &op.args {
+                    let u = eval_unit_expression(a, def, param_unit, env)?;
+                    acc = Some(match acc {
+                        None => u,
+                        Some(p) => p.multiply(&u),
+                    });
+                }
+                acc
+            }
+            "/" if op.args.len() == 2 => {
+                let a = eval_unit_expression(&op.args[0], def, param_unit, env)?;
+                let b = eval_unit_expression(&op.args[1], def, param_unit, env)?;
+                Some(a.divide(&b))
+            }
+            "^" if op.args.len() == 2 => {
+                let b = eval_unit_expression(&op.args[0], def, param_unit, env)?;
+                let e = match &op.args[1] {
+                    Expr::Integer(i) => Rational::int(i32::try_from(*i).ok()?),
+                    Expr::Number(f) => Rational::from_f64(*f)?,
+                    _ => return None,
+                };
+                Some(b.power_rational(e))
+            }
+            _ => None,
+        },
     }
 }
 
@@ -1033,6 +1209,52 @@ fn propagate_open_tier_dim(
         "ln" => propagate_transcendental_dim(op, env, findings),
         "power" => propagate_power_dim(op, env, findings),
         "round" => propagate_first_operand_dim(op, env, findings),
+        // esm 2.4.0 (esm-spec §4.2): the fixed unit expressions of the
+        // defined operators `partial` ([f]/[wrt]) and `integral` ([f]·[var]),
+        // which hold resolved or not.
+        "partial" => propagate_partial_dim(op, env, findings),
+        "integral" => propagate_integral_dim(op, env, findings),
+        _ => Dim::Unknown,
+    }
+}
+
+/// `partial(f, b…; wrt: x)` has the unit `[f]/[x]` (esm-spec §4.2); trailing
+/// operands never enter it but are walked for their own findings. A coordinate
+/// with no declared unit makes the result undeterminable. Mirrors the Julia
+/// reference `_partial_rule`.
+fn propagate_partial_dim(
+    op: &ExpressionNode,
+    env: &dyn UnitEnv,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    let Some((first, rest)) = op.args.split_first() else {
+        return Dim::Unknown;
+    };
+    let f = propagate_dim(first, env, findings);
+    for a in rest {
+        propagate_dim(a, env, findings);
+    }
+    let w = op.wrt.as_deref().and_then(|w| env.unit_of(w));
+    match (f.known(), w) {
+        (Some(f), Some(w)) => Dim::Known(f.divide(w)),
+        _ => Dim::Unknown,
+    }
+}
+
+/// `integral(f; var: v, …)` has the unit `[f]·[v]` (esm-spec §4.2). Mirrors
+/// the Julia reference `_integral_rule`.
+fn propagate_integral_dim(
+    op: &ExpressionNode,
+    env: &dyn UnitEnv,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    let Some(first) = op.args.first() else {
+        return Dim::Unknown;
+    };
+    let f = propagate_dim(first, env, findings);
+    let v = op.int_var.as_deref().and_then(|v| env.unit_of(v));
+    match (f.known(), v) {
+        (Some(f), Some(v)) => Dim::Known(f.multiply(v)),
         _ => Dim::Unknown,
     }
 }
@@ -4376,7 +4598,7 @@ mod tests {
                 ..Default::default()
             },
             ExpressionNode {
-                op: "apply_expression_template".into(),
+                op: "apply_operator".into(),
                 bindings: Some([("x".to_string(), sin())].into_iter().collect()),
                 ..Default::default()
             },

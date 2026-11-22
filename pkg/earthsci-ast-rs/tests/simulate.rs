@@ -980,7 +980,7 @@ fn test_error_grad_in_simulator_rejected() {
         .expect("the build must be refused");
     let msg = err.to_string();
     assert!(
-        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "grad"),
+        matches!(err, CompileError::UnloweredOperatorError { ref op, .. } if op == "grad"),
         "expected UnloweredOperatorError(grad), got: {msg}"
     );
     assert!(
@@ -996,7 +996,7 @@ fn test_error_div_in_simulator_rejected() {
         .err()
         .expect("the build must be refused");
     assert!(
-        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "div"),
+        matches!(err, CompileError::UnloweredOperatorError { ref op, .. } if op == "div"),
         "expected UnloweredOperatorError(div), got: {err}"
     );
 }
@@ -1010,7 +1010,7 @@ fn test_error_laplacian_in_simulator_rejected() {
     assert!(
         matches!(
             err,
-            CompileError::UnloweredOperatorError { ref op } if op == "laplacian"
+            CompileError::UnloweredOperatorError { ref op, .. } if op == "laplacian"
         ),
         "expected UnloweredOperatorError(laplacian), got: {err}"
     );
@@ -1034,7 +1034,7 @@ fn test_error_spatial_d_in_simulator_rejected() {
         .expect("the build must be refused");
     let msg = err.to_string();
     assert!(
-        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "D"),
+        matches!(err, CompileError::UnloweredOperatorError { ref op, .. } if op == "D"),
         "expected UnloweredOperatorError(D), got: {msg}"
     );
     assert!(
@@ -1097,7 +1097,7 @@ fn test_error_grad_in_array_simulator_rejected() {
         Err(e) => e,
     };
     assert!(
-        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "grad"),
+        matches!(err, CompileError::UnloweredOperatorError { ref op, .. } if op == "grad"),
         "expected UnloweredOperatorError(grad) from array path, got: {err}"
     );
 }

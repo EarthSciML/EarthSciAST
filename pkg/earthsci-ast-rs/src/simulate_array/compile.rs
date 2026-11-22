@@ -137,7 +137,10 @@ pub(super) fn expr_has_array_op(expr: &Expr) -> bool {
 /// or names no scalar operator.
 pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
     crate::op_registry::check_expr(expr).map_err(|e| match e {
-        OpError::Unlowered { op } => CompileError::UnloweredOperatorError { op },
+        OpError::Unlowered { op } => CompileError::UnloweredOperatorError {
+            op,
+            why: String::new(),
+        },
         OpError::Arity { op, got, expected } => {
             CompileError::InvalidOperatorArity { op, got, expected }
         }
@@ -585,6 +588,7 @@ impl ArrayCompiled {
         if crate::flatten::first_unresolved_rhs_time_derivative(flat).is_some() {
             return Err(CompileError::UnloweredOperatorError {
                 op: "D".to_string(),
+                why: String::new(),
             });
         }
         if flat.independent_variables != ["t"] {
@@ -593,8 +597,8 @@ impl ArrayCompiled {
             // `unlowered_operator` code esm-spec §4.2 / §9.6.8 specifies for
             // an op reaching evaluation unlowered; the dimensionality error
             // is the fallback for a spatial axis with no such op behind it.
-            if let Some(op) = crate::flatten::first_unlowered_operator(flat) {
-                return Err(CompileError::UnloweredOperatorError { op });
+            if let Some((op, why)) = crate::flatten::first_unlowered_call(flat) {
+                return Err(CompileError::UnloweredOperatorError { op, why });
             }
             return Err(CompileError::UnsupportedDimensionalityError {
                 independent_variables: flat.independent_variables.clone(),

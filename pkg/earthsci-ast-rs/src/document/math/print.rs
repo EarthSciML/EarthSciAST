@@ -2113,7 +2113,7 @@ pub fn pr(c: Ctx, e: &Json) -> Out {
                 && let (Some(Json::Obj(bs)), Some(Json::Str(n)), true) = (
                     field(1, "bindings"),
                     field(2, "name"),
-                    str_at(3, "op", "apply_expression_template"),
+                    str_at(3, "op", "apply_operator"),
                 )
             {
                 return pr_template(c, n, bs, &esc);

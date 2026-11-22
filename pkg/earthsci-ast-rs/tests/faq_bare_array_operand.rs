@@ -49,7 +49,7 @@ fn doc(filter: Value, a_shape: Option<Value>, templates: Option<Value>) -> Value
         ]
     });
     if let Some(t) = templates {
-        model["expression_templates"] = t;
+        model["operators"] = t;
     }
     json!({
         "esm": "2.0.0",
@@ -113,7 +113,7 @@ fn bare_shaped_filter_is_refused_at_build() {
 fn bare_shaped_filter_through_a_template_is_refused_at_build() {
     let templates = json!({"gate": {"params": ["x"], "body": gate(json!("x"))}});
     let filter = json!({
-        "op": "apply_expression_template", "args": [], "name": "gate",
+        "op": "apply_operator", "args": [], "name": "gate",
         "bindings": {"x": "a_val"}
     });
     let d = doc(filter, Some(json!(["a_rows"])), Some(templates));
@@ -204,7 +204,7 @@ fn cross_model_and_subsystem_bare_reads_are_refused_at_build() {
     let templates = json!({"gate": {"params": ["x"], "body": gate(json!("x"))}});
     let via = |x: &str| {
         json!({
-            "op": "apply_expression_template", "args": [], "name": "gate",
+            "op": "apply_operator", "args": [], "name": "gate",
             "bindings": {"x": x}
         })
     };
@@ -236,7 +236,7 @@ fn cross_model_and_subsystem_bare_reads_are_refused_at_build() {
     d["models"] = json!({"Host": {
         "variables": {"z": {"type": "unknown", "units": "1"}},
         "equations": [{"lhs": "z", "rhs": 1.0}],
-        "expression_templates": templates,
+        "operators": templates,
         "subsystems": {"M": inner["models"]["M"].clone()}
     }});
     let file = load_string(&d.to_string()).expect("loads");
@@ -274,10 +274,10 @@ fn derivative_state_delivered_bare_by_a_template_is_refused_at_build() {
     let model = &mut d["models"]["Probe"];
     model["equations"].as_array_mut().unwrap().truncate(1);
     model["variables"].as_object_mut().unwrap().remove("z");
-    model["expression_templates"] =
+    model["operators"] =
         json!({"twice": {"params": ["x"], "body": {"op": "*", "args": [2.0, "x"]}}});
     model["equations"][0]["rhs"]["expr"]["args"][1] = json!({
-        "op": "apply_expression_template", "args": [], "name": "twice",
+        "op": "apply_operator", "args": [], "name": "twice",
         "bindings": {"x": "y"}
     });
     let file = load_string(&d.to_string()).expect("loads");

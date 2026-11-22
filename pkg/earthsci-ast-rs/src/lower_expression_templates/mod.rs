@@ -31,7 +31,7 @@
 use serde_json::{Map, Value};
 use std::rc::Rc;
 
-const APPLY_OP: &str = "apply_expression_template";
+const APPLY_OP: &str = "apply_operator";
 
 /// The `op` of a template reference node.
 pub(crate) const APPLY_OP_NAME: &str = APPLY_OP;
@@ -73,7 +73,7 @@ mod tests {
         let inv = json!({"op": "makearray", "regions": [[[3, 0]]], "values": [0]});
         let docs = [
             json!({"esm": "2.0.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": inv.clone()}]}}}),
-            json!({"esm": "2.0.0", "models": {"M": {"expression_templates": {}, "x": {"expression_templates": [inv.clone()]}}}}),
+            json!({"esm": "2.0.0", "models": {"M": {"operators": {}, "x": {"operators": [inv.clone()]}}}}),
             json!({"esm": "2.0.0", "models": {"M": {"equations": [{"lhs": "x", "rhs": {"op": "+", "args": [1, 2]}}]}}}),
         ];
         for doc in docs {
@@ -97,7 +97,7 @@ mod tests {
             "chem": {
               "species": {"A": {"default": 1.0}, "B": {"default": 0.5}},
               "parameters": {"T": {"default": 298.15}, "num_density": {"default": 2.5e19}},
-              "expression_templates": {
+              "operators": {
                 "arrhenius": {
                   "params": ["A_pre", "Ea"],
                   "body": {
@@ -116,7 +116,7 @@ mod tests {
                 {"id": "R1",
                  "substrates": [{"species": "A", "stoichiometry": 1}],
                  "products": [{"species": "B", "stoichiometry": 1}],
-                 "rate": {"op": "apply_expression_template", "args": [],
+                 "rate": {"op": "apply_operator", "args": [],
                           "name": "arrhenius",
                           "bindings": {"A_pre": 1.8e-12, "Ea": 1500}}}
               ]
@@ -134,7 +134,7 @@ mod tests {
         lower_expression_templates(&mut v).expect("expansion");
         expand(&mut v).expect("expand");
         let chem = &v["reaction_systems"]["chem"];
-        assert!(chem.get("expression_templates").is_none());
+        assert!(chem.get("operators").is_none());
         let rate = &chem["reactions"][0]["rate"];
         assert_eq!(rate["op"], json!("*"));
         // First arg: the scalar 1.8e-12.
@@ -146,7 +146,7 @@ mod tests {
         let mut v = arrhenius_fixture();
         v["reaction_systems"]["chem"]["reactions"][0]["rate"]["name"] = json!("missing");
         let e = lower_expression_templates(&mut v).expect_err("should fail");
-        assert_eq!(e.code, "apply_expression_template_unknown_template");
+        assert_eq!(e.code, "operator_unknown_definition");
     }
 
     #[test]
@@ -157,7 +157,7 @@ mod tests {
             .unwrap()
             .remove("Ea");
         let e = lower_expression_templates(&mut v).expect_err("should fail");
-        assert_eq!(e.code, "apply_expression_template_bindings_mismatch");
+        assert_eq!(e.code, "operator_bindings_mismatch");
     }
 
     #[test]
@@ -165,20 +165,20 @@ mod tests {
         let mut v = arrhenius_fixture();
         v["reaction_systems"]["chem"]["reactions"][0]["rate"]["bindings"]["bogus"] = json!(99);
         let e = lower_expression_templates(&mut v).expect_err("should fail");
-        assert_eq!(e.code, "apply_expression_template_bindings_mismatch");
+        assert_eq!(e.code, "operator_bindings_mismatch");
     }
 
     #[test]
     fn rejects_recursive_body() {
         let mut v = arrhenius_fixture();
-        v["reaction_systems"]["chem"]["expression_templates"]["arrhenius"]["body"] = json!({
-            "op": "apply_expression_template",
+        v["reaction_systems"]["chem"]["operators"]["arrhenius"]["body"] = json!({
+            "op": "apply_operator",
             "args": [],
             "name": "arrhenius",
             "bindings": {"A_pre": 1, "Ea": 1}
         });
         let e = lower_expression_templates(&mut v).expect_err("should fail");
-        assert_eq!(e.code, "apply_expression_template_recursive_body");
+        assert_eq!(e.code, "operator_recursive_body");
     }
 
     /// A chain of match-less templates T0..T12 where each T_i's body
@@ -221,7 +221,7 @@ mod tests {
             "reaction_systems": {"chem": {
                 "species": {"A": {"default": 1.0}, "B": {"default": 0.5}},
                 "parameters": {"T": {"default": 298.15}},
-                "expression_templates": Value::Object(templates),
+                "operators": Value::Object(templates),
                 "reactions": [{
                     "id": "R1",
                     "substrates": [{"species": "A", "stoichiometry": 1}],
@@ -233,7 +233,7 @@ mod tests {
         lower_expression_templates(&mut v).expect("expansion");
         expand(&mut v).expect("expand");
         let chem = &v["reaction_systems"]["chem"];
-        assert!(chem.get("expression_templates").is_none());
+        assert!(chem.get("operators").is_none());
         let rate = &chem["reactions"][0]["rate"];
         assert_eq!(rate["op"], json!("+"));
         // Leftmost leaf: the T0 Arrhenius-style body, fully closed.
@@ -261,7 +261,7 @@ mod tests {
         let mut v = arrhenius_fixture();
         v["esm"] = json!("0.3.5");
         let e = lower_expression_templates(&mut v).expect_err("should fail");
-        assert_eq!(e.code, "apply_expression_template_version_too_old");
+        assert_eq!(e.code, "operator_version_too_old");
     }
 
     #[test]
@@ -368,7 +368,7 @@ mod tests {
           "models": {
             "Diff": {
               "variables": {"u": {"type": "unknown"}},
-              "expression_templates": {
+              "operators": {
                 "central_grad_x": {
                   "params": ["f"],
                   "match": {"op": "grad", "args": ["f"], "dim": "x"},
@@ -391,7 +391,7 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         let model = &v["models"]["Diff"];
-        assert!(model.get("expression_templates").is_none());
+        assert!(model.get("operators").is_none());
         let rhs = &model["equations"][0]["rhs"];
         // grad(u, dim=x) lowered to the finite-difference body, f -> "u".
         assert_eq!(rhs["op"], json!("-"));
@@ -412,7 +412,7 @@ mod tests {
           "models": {
             "M": {
               "variables": {"u": {"type": "unknown"}},
-              "expression_templates": {
+              "operators": {
                 "grad_to_deriv": {
                   "params": ["f", "d"],
                   "match": {"op": "grad", "args": ["f"], "dim": "d"},
@@ -447,7 +447,7 @@ mod tests {
           "models": {
             "M": {
               "variables": {"u": {"type": "unknown"}},
-              "expression_templates": {
+              "operators": {
                 "loop_rule": {
                   "params": ["f"],
                   "match": {"op": "grad", "args": ["f"], "dim": "x"},
@@ -476,7 +476,7 @@ mod tests {
           "models": {
             "M": {
               "variables": {"u": {"type": "unknown"}},
-              "expression_templates": {
+              "operators": {
                 "z_rule": {
                   "params": ["f"],
                   "match": {"op": "grad", "args": ["f"], "dim": "x"},
@@ -513,7 +513,7 @@ mod tests {
           "models": {
             "M": {
               "variables": {"u": {"type": "unknown"}},
-              "expression_templates": {
+              "operators": {
                 "low": {
                   "params": ["f"],
                   "match": {"op": "grad", "args": ["f"], "dim": "x"},
@@ -553,7 +553,7 @@ mod tests {
           "models": {
             "M": {
               "variables": {"u": {"type": "unknown"}},
-              "expression_templates": {
+              "operators": {
                 "sugar": {
                   "params": ["f"],
                   "match": {"op": "sugar", "args": ["f"]},
@@ -595,9 +595,9 @@ mod tests {
               "area": {"type": "unknown"}
             },
             "equations": [
-                {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [],
+                {"lhs": "area", "rhs": {"op": "apply_operator", "args": [],
                   "name": name, "bindings": bindings}}],
-            "expression_templates": templates
+            "operators": templates
           }}
         })
     }
@@ -636,7 +636,7 @@ mod tests {
               "outer": {
                 "params": ["K", "p", "q"],
                 "body": {"op": "*", "args": [
-                  {"op": "apply_expression_template", "args": [], "name": "inner",
+                  {"op": "apply_operator", "args": [], "name": "inner",
                    "bindings": {"m": "K", "x": "p", "y": "q"}},
                   2.0]}}
             }),

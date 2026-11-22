@@ -246,7 +246,7 @@ fn lower_mounted_enum_ops(source: &Value, node: &mut Value) -> Result<(), EnumLo
         }
         Value::Object(obj) => {
             for (key, child) in obj.iter_mut() {
-                if key == "expression_templates"
+                if key == "operators"
                     && let Value::Object(templates) = child
                 {
                     for decl in templates.values_mut() {

@@ -162,7 +162,7 @@ fn template_regrid(n: usize, dx: f64) -> Value {
         }
     }
     m["variables"]["dx"]["default"] = json!(dx);
-    m["expression_templates"] = library("geometry.esm");
+    m["operators"] = library("geometry.esm");
     doc
 }
 
@@ -370,7 +370,7 @@ fn scalar_branch_doc(rhs: Value) -> Value {
              "rhs": op("-", vec![op("*", vec![json!(1.0e-3), json!("r")]), json!("u")])}
         ]
     });
-    model["expression_templates"] = library("geometry.esm");
+    model["operators"] = library("geometry.esm");
     document(
         "scalar_branch_block",
         json!({"sc": {"kind": "interval", "size": 1}, "tc": {"kind": "interval", "size": 2},
@@ -686,6 +686,6 @@ fn scalar_lookup_blocks_match_the_oracle() {
     eqs.push(json!({"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
         "rhs": op("-", vec![op("*", vec![json!(0.01), op("+", sum)]), json!("u")])}));
     let mut model = json!({"variables": vars, "equations": eqs});
-    model["expression_templates"] = library("interp.esm");
+    model["operators"] = library("interp.esm");
     oracle_ab(document("scalar_lookup_blocks", json!({}), model));
 }

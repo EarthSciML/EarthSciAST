@@ -60,7 +60,16 @@ pub struct EsmFile {
     /// `parse → emit` VERBATIM and a template-library file round-trips to
     /// itself. Held as raw JSON precisely so that "verbatim" is achievable: a
     /// typed re-serialization could not promise byte-identity.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// On the wire this is `operators` (esm 2.4.0, esm-spec §9.6.12); the
+    /// esm-2.3 spelling `expression_templates` is read as it at the wire
+    /// boundary.
+    #[serde(
+        default,
+        rename = "operators",
+        alias = "expression_templates",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub expression_templates: Option<serde_json::Value>,
 
     /// Top-level metaparameter block (esm-spec §9.7.1) — likewise a DECLARATION
@@ -82,10 +91,6 @@ pub struct EsmFile {
     /// one through a parameter `update` naming it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_sources: Option<IndexMap<String, DataSource>>,
-
-    /// Registered runtime operators (by reference)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operators: Option<IndexMap<String, Operator>>,
 
     /// File-local enum declarations (esm-spec §9.3): each entry maps a
     /// symbolic name to an integer — ANY integer, negative, zero or positive,
@@ -185,7 +190,6 @@ impl Default for EsmFile {
             models: None,
             reaction_systems: None,
             data_sources: None,
-            operators: None,
             enums: None,
             coupling: None,
             coupling_roles: None,

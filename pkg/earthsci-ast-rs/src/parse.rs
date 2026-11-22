@@ -131,7 +131,7 @@ pub struct LoadOptions {
     /// Loader-API metaparameter bindings for the ROOT document (esm-spec
     /// §9.7.6 binding site 4): name → integer. Already-closed edge bindings
     /// win; API bindings beat `default`s. Binding a name the document does
-    /// not declare raises `template_import_unknown_name`.
+    /// not declare raises `operator_import_unknown_name`.
     pub metaparameters: std::collections::BTreeMap<String, i64>,
 }
 
@@ -608,9 +608,9 @@ fn pass_schema(doc: &mut Doc<'_>) -> Result<(), PassError> {
     if doc.facts.mounts_marked {
         let mut authored = doc.value.clone();
         crate::lower_expression_templates::strip_template_origins(&mut authored);
-        validate_schema(&authored)?;
+        validate_schema_as_read(&authored)?;
     } else {
-        validate_schema(&doc.value)?;
+        validate_schema_as_read(&doc.value)?;
     }
     Ok(())
 }
@@ -711,10 +711,17 @@ fn pass_lower_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// document with no template machinery has nothing to expand; `expand` would
 /// walk it only to find that out.
 fn pass_expand_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
-    doc.facts.component_templates = crate::lower_expression_templates::capture_component_templates(
-        &doc.value,
-        &doc.facts.authored_templates,
-    );
+    let (component_templates, stamp) =
+        crate::lower_expression_templates::capture_component_templates_stamped(
+            &doc.value,
+            &doc.facts.authored_templates,
+        );
+    doc.facts.component_templates = component_templates;
+    // The §9.6.4 rule-8 stamp, as emit applies it: the typed document
+    // carries the version its materialized registry needs (esm 2.4.0).
+    if stamp && let Some(root) = doc.value.as_object_mut() {
+        crate::lower_expression_templates::stamp_rule8_floor(root);
+    }
     if doc.facts.has_templates {
         let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
         crate::lower_expression_templates::expand(&mut doc.value).map_err(PassError::Schema)?;
@@ -791,6 +798,23 @@ pub fn load_path_with_options<P: AsRef<std::path::Path>>(
 /// * `Ok(())` - JSON passes schema validation
 /// * `Err(EsmError::SchemaValidation)` - Schema validation errors
 pub fn validate_schema(json_value: &Value) -> Result<(), EsmError> {
+    // The old spellings (esm-spec §9.6.12) are read before the schema, as the
+    // loader reads them (`δ`, `∂` and the old field names are not schema
+    // names).
+    let read;
+    let json_value = match crate::old_spellings::read_silently(json_value) {
+        Some(v) => {
+            read = v;
+            &read
+        }
+        None => json_value,
+    };
+    validate_schema_as_read(json_value)
+}
+
+/// [`validate_schema`] of a document already read through its old spellings
+/// (the load's own schema pass, after the wire boundary).
+fn validate_schema_as_read(json_value: &Value) -> Result<(), EsmError> {
     let schema = get_schema();
     // A valid document is the common case, and answering only whether it is
     // valid skips assembling an error for every failed `oneOf` / `anyOf`
@@ -880,6 +904,16 @@ const SCHEMA_DESCENT_CAP: usize = 16;
 /// errors are emitted with absolute instance paths. Extra errors are harmless
 /// (the comparator is a required-subset), so all branches are explored.
 pub fn collect_schema_errors(json_value: &Value) -> Vec<crate::validate::SchemaError> {
+    // The old spellings (esm-spec §9.6.12) are read first, as the loader
+    // reads them.
+    let read;
+    let json_value = match crate::old_spellings::read_silently(json_value) {
+        Some(v) => {
+            read = v;
+            &read
+        }
+        None => json_value,
+    };
     let root = get_schema_value();
     let defs = root.get("$defs");
     let mut out = Vec::new();
@@ -1285,10 +1319,10 @@ fn park_const_data(doc: &mut Value) -> Vec<ParkedConst> {
     };
     let has_templates =
         |t: Option<&Value>| t.and_then(Value::as_object).is_some_and(|t| !t.is_empty());
-    if has_match(root.get("expression_templates")) {
+    if has_match(root.get("operators")) {
         return out;
     }
-    let mut any = has_templates(root.get("expression_templates"));
+    let mut any = has_templates(root.get("operators"));
     for kind in ["models", "reaction_systems"] {
         for (_, comp) in root
             .get(kind)
@@ -1296,10 +1330,10 @@ fn park_const_data(doc: &mut Value) -> Vec<ParkedConst> {
             .into_iter()
             .flatten()
         {
-            if has_match(comp.get("expression_templates")) {
+            if has_match(comp.get("operators")) {
                 return out;
             }
-            any |= has_templates(comp.get("expression_templates"));
+            any |= has_templates(comp.get("operators"));
         }
     }
     if !any {
@@ -1866,14 +1900,30 @@ pub(crate) fn prepare_document_ops_scanned(
             findings: Vec::new(),
         });
     }
-    // 3. Deprecated spellings (esm-spec §4.2 "Deprecated ops"): the walk
+    // 3. esm 2.4.0 old spellings (esm-spec §9.6.12 "Old names (no refusal)",
+    //    §4.2 "Reading earlier documents"): `expression_templates` /
+    //    `expression_template_imports` are read as `operators` /
+    //    `operator_imports`, `apply_expression_template` as `apply_operator`,
+    //    and a spatial `D` (and `δ`, `∂`) as `partial`, with one
+    //    `deprecated_field` and one `deprecated_op` warning per document.
+    let old = crate::old_spellings::rewrite_old_spellings(value).map_err(|d| {
+        EsmError::SchemaDiagnostic {
+            code: d.code,
+            message: d.message,
+            findings: Vec::new(),
+        }
+    })?;
+    for warning in old.warnings() {
+        eprintln!("warning: {warning}");
+    }
+    // 4. Deprecated spellings (esm-spec §4.2 "Deprecated ops"): the walk
     //    already rewrote them; the document loads with ONE warning naming
     //    every rewritten node. Every document a load touches passes here, so
     //    each warns for its own nodes.
     if let Some(warning) = deprecated_op_warning(&scan.deprecated) {
         eprintln!("warning: {warning}");
     }
-    // 4. A model declaring `"system_kind": "pde"` (deprecated at esm 2.4.0):
+    // 5. A model declaring `"system_kind": "pde"` (deprecated at esm 2.4.0):
     //    ONE warning per document naming every such model; the field is kept.
     if let Some(warning) = deprecated_system_kind_warning(value) {
         eprintln!("warning: {warning}");

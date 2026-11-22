@@ -52,7 +52,7 @@ pub(crate) fn authored_template_names(
             continue;
         };
         for (cname, comp) in comps {
-            let Some(tpl) = comp.get("expression_templates").and_then(|v| v.as_object()) else {
+            let Some(tpl) = comp.get("operators").and_then(|v| v.as_object()) else {
                 continue;
             };
             let mut names = Vec::new();
@@ -119,12 +119,12 @@ pub(crate) fn materialize_component_block(
     authored_here: &[String],
     received: &[String],
 ) -> (Map<String, Value>, bool, bool) {
-    let block = comp.get("expression_templates").and_then(|v| v.as_object());
+    let block = comp.get("operators").and_then(|v| v.as_object());
     let named = block.map(build_named).unwrap_or_default();
     // Surviving-reference names across every non-template field.
     let mut refnames: std::collections::BTreeSet<String> = received.iter().cloned().collect();
     for (k, v) in comp.iter() {
-        if k == "expression_templates" || k == "expression_template_imports" {
+        if k == "operators" || k == "operator_imports" {
             continue;
         }
         let mut names = Vec::new();
@@ -178,16 +178,16 @@ pub fn emit_document(
     raw_source: &Value,
     base_path: &std::path::Path,
 ) -> Result<Value, ExpressionTemplateError> {
-    let authored = authored_template_names(raw_source);
+    // The old spellings (esm-spec §9.6.12) are read first, so the authored
+    // names are read off the `operators` block whatever it was called.
+    let mut read = raw_source.clone();
+    crate::old_spellings::wire_old_spellings(&mut read)?;
+    let authored = authored_template_names(&read);
     let options = crate::parse::LoadOptions {
         base_path: Some(base_path.to_path_buf()),
         ..Default::default()
     };
-    let mut source = crate::parse::Doc::new(
-        raw_source.clone(),
-        crate::parse::DocRole::EmitSource,
-        &options,
-    );
+    let mut source = crate::parse::Doc::new(read, crate::parse::DocRole::EmitSource, &options);
     source.run_passes().map_err(|e| match e {
         crate::parse::PassError::Schema(d) | crate::parse::PassError::Structural(d) => d,
         crate::parse::PassError::Esm(crate::EsmError::SchemaDiagnostic {
@@ -220,18 +220,16 @@ pub fn emit_document(
             bump |= refs || carried;
 
             if emit_block.is_empty() {
-                comp.remove("expression_templates");
+                comp.remove("operators");
             } else {
-                comp.insert(
-                    "expression_templates".to_string(),
-                    Value::Object(emit_block),
-                );
+                comp.insert("operators".to_string(), Value::Object(emit_block));
+                bump = true;
             }
-            comp.remove("expression_template_imports");
+            comp.remove("operator_imports");
         }
     }
 
-    root.remove("expression_template_imports");
+    root.remove("operator_imports");
     if bump {
         // The §9.6.4 rule-8 emit stamp is a FLOOR, not an assignment: an emitted
         // document carrying a surviving reference or a materialized entry "MUST
@@ -252,16 +250,32 @@ pub fn emit_document(
         // rejects every 0.x document at load, so anything reaching emit already
         // declares >= 1.0.0. It is written out anyway so the rule is stated
         // where it is applied rather than resting on that coincidence.
-        const RULE8_FLOOR: (u32, u32, u32) = (0, 9, 0);
-        let declared = root
-            .get("esm")
-            .and_then(|v| v.as_str())
-            .and_then(crate::diagnostic::parse_semver);
-        if declared.is_none_or(|d| d < RULE8_FLOOR) {
-            root.insert("esm".to_string(), Value::String("0.9.0".to_string()));
-        }
+        //
+        // esm 2.4.0: an emitted document writes the names `operators` and
+        // `apply_operator` (esm-spec §9.6.5, §9.6.12), so it declares 2.4.0 or
+        // later; this floor subsumes the 0.9.0 floor of the Option-B
+        // machinery, and a document carrying an `operators` block is stamped
+        // too.
+        stamp_rule8_floor(root);
     }
     Ok(loaded)
+}
+
+/// The §9.6.4 rule-8 version stamp, a FLOOR: a document carrying a surviving
+/// reference or an `operators` block declares `esm: 2.4.0` or later (esm 2.4.0
+/// writes the names `operators` and `apply_operator`, esm-spec §9.6.5,
+/// §9.6.12; this subsumes the 0.9.0 floor of the Option-B machinery). A
+/// document already at or above it keeps its own version. Mirrors the Julia
+/// reference `_esm_stamp_floor`.
+pub(crate) fn stamp_rule8_floor(root: &mut Map<String, Value>) {
+    const RULE8_FLOOR: (u32, u32, u32) = (2, 4, 0);
+    let declared = root
+        .get("esm")
+        .and_then(|v| v.as_str())
+        .and_then(crate::diagnostic::parse_semver);
+    if declared.is_none_or(|d| d < RULE8_FLOOR) {
+        root.insert("esm".to_string(), Value::String("2.4.0".to_string()));
+    }
 }
 
 // --- Canonical byte writer (2-space indent, keys sorted except the ordered
@@ -303,7 +317,7 @@ fn emit_write(out: &mut String, value: &Value, indent: usize, preserve: bool) {
                 out.push_str(&serde_json::to_string(k).expect("string key"));
                 out.push_str(": ");
                 let child = map.get(k.as_str()).expect("key present");
-                emit_write(out, child, indent + 1, k.as_str() == "expression_templates");
+                emit_write(out, child, indent + 1, k.as_str() == "operators");
                 if i + 1 < keys.len() {
                     out.push(',');
                 }
@@ -387,7 +401,7 @@ pub(crate) fn rename_apply_refs(
 /// that REFERENCES the leaf is byte-identical and would dedup under its bare
 /// name. That single deduped body then carries a reference the registry no
 /// longer holds, and expansion fails with
-/// `apply_expression_template_unknown_template` naming a template no component
+/// `operator_unknown_definition` naming a template no component
 /// ever mentioned. Renaming the wrapper per owner lets each copy's nested
 /// reference be rewritten to its own owner's leaf.
 ///
@@ -572,7 +586,7 @@ pub fn flatten_template_registries(loaded: &Value) -> (Value, Map<String, Value>
                 continue;
             };
             for (cname, comp) in cs {
-                let Some(tpl) = comp.get("expression_templates").and_then(|v| v.as_object()) else {
+                let Some(tpl) = comp.get("operators").and_then(|v| v.as_object()) else {
                     continue;
                 };
                 let named: Map<String, Value> = tpl
@@ -599,12 +613,12 @@ pub fn flatten_template_registries(loaded: &Value) -> (Value, Map<String, Value>
                 };
                 if let Some(rn) = rename.get(cname) {
                     for (k, v) in comp.iter_mut() {
-                        if k != "expression_templates" {
+                        if k != "operators" {
                             rename_apply_refs(v, rn);
                         }
                     }
                 }
-                comp.remove("expression_templates");
+                comp.remove("operators");
             }
         }
     }

@@ -195,7 +195,7 @@ fn import_rename_two_instances_matches_golden() {
 /// twice under prefix has its `where.F.shape` rewritten x -> meshA.x / meshB.x
 /// in lockstep with the index set, so each instance registers and fires only on
 /// its own field. Without the rewrite this raised
-/// template_constraint_unknown_index_set (§9.7.7 regression guard).
+/// operator_constraint_unknown_index_set (§9.7.7 regression guard).
 #[test]
 fn import_where_rename_two_instances_matches_golden() {
     let d = expand_raw(&conf(&["import_where_rename_two_instances", "fixture.esm"]));
@@ -406,7 +406,7 @@ fn import_where_rename_unknown_index_set_rejected() {
     .expect_err("bad where set must fail to load");
     let msg = e.to_string();
     assert!(
-        msg.contains("[template_constraint_unknown_index_set]"),
+        msg.contains("[operator_constraint_unknown_index_set]"),
         "got: {msg}"
     );
 }
@@ -741,7 +741,7 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
 }
 
 /// Loader-API bindings (§9.7.6 site 4) beat defaults (site 5); binding an
-/// undeclared name is `template_import_unknown_name`.
+/// undeclared name is `operator_import_unknown_name`.
 #[test]
 fn loader_api_bindings_and_defaults() {
     let problem = conf(&["metaparameter_resolutions", "problem.esm"]);
@@ -765,7 +765,7 @@ fn loader_api_bindings_and_defaults() {
     bogus.insert("Q".to_string(), 1i64);
     let e = load_path_with_options(&problem, &bogus).expect_err("unknown API binding");
     assert!(
-        e.to_string().contains("[template_import_unknown_name]"),
+        e.to_string().contains("[operator_import_unknown_name]"),
         "got: {e}"
     );
 }
@@ -822,8 +822,8 @@ fn valid_suite_library_and_minimal_consumer() {
 fn consumer_round_trip_emits_expanded_folded_form() {
     let f = load_path(conf(&["import_smoke", "fixture.esm"])).expect("load");
     let text = earthsci_ast::to_json(&f).expect("save");
-    assert!(!text.contains("expression_template_imports"));
-    assert!(!text.contains("apply_expression_template"));
+    assert!(!text.contains("operator_imports"));
+    assert!(!text.contains("apply_operator"));
     let reloaded = earthsci_ast::load_string(&text).expect("reload");
     assert_eq!(
         reloaded.index_sets.as_ref().expect("index_sets")["lon"].size,
@@ -852,16 +852,22 @@ fn consumer_round_trip_emits_expanded_folded_form() {
 fn template_library_round_trips_to_itself() {
     for lib in ["template_import_lib.esm", "template_import_rename_lib.esm"] {
         let path = common::repo_root().join("tests/valid").join(lib);
-        let original: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("read"))
-                .expect("parse source");
+        // Read through the esm 2.4.0 wire spellings (esm-spec §9.6.12): the
+        // library is written with the old field and reference names.
+        let original: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&path)
+                .expect("read")
+                .replace("\"expression_templates\"", "\"operators\"")
+                .replace("\"apply_expression_template\"", "\"apply_operator\""),
+        )
+        .expect("parse source");
 
         let loaded = load_path(&path).unwrap_or_else(|e| panic!("{lib} must load: {e:?}"));
         let emitted: serde_json::Value =
             serde_json::from_str(&earthsci_ast::to_json(&loaded).expect("save"))
                 .expect("parse emit");
 
-        for key in ["expression_templates", "metaparameters"] {
+        for key in ["operators", "metaparameters"] {
             assert!(
                 original.get(key).is_some(),
                 "{lib} is only a meaningful pin if it authors `{key}`"
@@ -876,16 +882,10 @@ fn template_library_round_trips_to_itself() {
         // The emitted document must still carry a top-level payload key — this is
         // the schema `anyOf` that the deletion violated.
         assert!(
-            [
-                "models",
-                "reaction_systems",
-                "data_sources",
-                "operators",
-                "expression_templates"
-            ]
-            .iter()
-            .any(|k| emitted.get(*k).is_some()),
-            "{lib}: emitted form carries none of the five top-level payload keys"
+            ["models", "reaction_systems", "data_sources", "operators",]
+                .iter()
+                .any(|k| emitted.get(*k).is_some()),
+            "{lib}: emitted form carries none of the top-level payload keys"
         );
 
         // And it must re-load: legal on disk MUST mean legal after a round-trip.
@@ -935,22 +935,22 @@ fn invalid_fixtures_fail_with_exact_codes() {
         seen_codes.insert(want.to_string());
     }
     // The fixture set exercises the §9.6.6 / §9.7 code table reachable through
-    // FIXTURES. Two codes are not: `template_import_unresolved` (a missing file
-    // is not representable as a fixture) and `template_import_version_too_old`
+    // FIXTURES. Two codes are not: `operator_import_unresolved` (a missing file
+    // is not representable as a fixture) and `operator_import_version_too_old`
     // (esm 1.0.0 rejects a pre-0.8.0 document at the major-version gate long
     // before the §9.7 constructs are looked at, so no loadable fixture can
     // reach it — its own fixture was retired for that reason). Both are pinned
     // by the unit tests below, directly against the gate functions.
     for code in [
-        "template_import_not_library",
-        "template_library_illegal_payload",
-        "subsystem_ref_is_template_library",
-        "template_import_cycle",
-        "template_import_name_conflict",
-        "template_import_unknown_name",
-        "template_import_index_set_conflict",
-        "apply_expression_template_recursive_body",
-        "template_body_expansion_too_deep",
+        "operator_import_not_library",
+        "operator_library_illegal_payload",
+        "subsystem_ref_is_operator_library",
+        "operator_import_cycle",
+        "operator_import_name_conflict",
+        "operator_import_unknown_name",
+        "operator_import_index_set_conflict",
+        "operator_recursive_body",
+        "operator_body_expansion_too_deep",
         "metaparameter_unbound",
         "metaparameter_type_error",
         "metaparameter_name_conflict",
@@ -999,22 +999,22 @@ fn unresolved_missing_and_unparsable_refs() {
         dir.path(),
         &model_json(
             r#"
-      "expression_template_imports": [{"ref": "./nope.esm"}],"#,
+      "operator_imports": [{"ref": "./nope.esm"}],"#,
             "",
         ),
     );
-    assert!(msg.contains("[template_import_unresolved]"), "got: {msg}");
+    assert!(msg.contains("[operator_import_unresolved]"), "got: {msg}");
 
     std::fs::write(dir.path().join("junk.esm"), "{not json").unwrap();
     let msg = load_err_code(
         dir.path(),
         &model_json(
             r#"
-      "expression_template_imports": [{"ref": "./junk.esm"}],"#,
+      "operator_imports": [{"ref": "./junk.esm"}],"#,
             "",
         ),
     );
-    assert!(msg.contains("[template_import_unresolved]"), "got: {msg}");
+    assert!(msg.contains("[operator_import_unresolved]"), "got: {msg}");
 }
 
 #[test]
@@ -1025,10 +1025,10 @@ fn only_filters_visibility_not_internal_wiring() {
         serde_json::to_string(&json!({
             "esm": "2.0.0",
             "metadata": {"name": "lib"},
-            "expression_templates": {
+            "operators": {
                 "t_inner": {"params": [], "body": 7},
                 "t_keep": {"params": [], "body": {"op": "*", "args": [2,
-                    {"op": "apply_expression_template", "args": [], "name": "t_inner", "bindings": {}}]}},
+                    {"op": "apply_operator", "args": [], "name": "t_inner", "bindings": {}}]}},
                 "t_drop": {"params": [], "body": 9}
             }
         }))
@@ -1043,20 +1043,20 @@ fn only_filters_visibility_not_internal_wiring() {
     // and `t_keep`'s body keeps its uninlined reference to it.
     let raw: Value = serde_json::from_str(&model_json(
         r#"
-      "expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],"#,
+      "operator_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],"#,
         "",
     ))
     .unwrap();
     let resolved = resolve_template_machinery(&raw, dir.path(), &BTreeMap::new())
         .expect("resolve")
         .expect("machinery present");
-    let tpl = &resolved["models"]["M"]["expression_templates"];
+    let tpl = &resolved["models"]["M"]["operators"];
     let names: Vec<&String> = tpl.as_object().unwrap().keys().collect();
     assert_eq!(names, vec!["t_inner", "t_keep"]);
     assert_eq!(
         tpl["t_keep"]["body"],
         json!({"op": "*", "args": [2,
-            {"op": "apply_expression_template", "args": [], "name": "t_inner", "bindings": {}}]})
+            {"op": "apply_operator", "args": [], "name": "t_inner", "bindings": {}}]})
     );
 
     // Referencing a filtered-out name from an expression position fails.
@@ -1064,16 +1064,13 @@ fn only_filters_visibility_not_internal_wiring() {
         dir.path(),
         &model_json(
             r#"
-      "expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],
-      "expression_templates": {"local_uses_drop": {"params": [],
-        "body": {"op": "apply_expression_template", "args": [], "name": "t_drop", "bindings": {}}}},"#,
+      "operator_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],
+      "operators": {"local_uses_drop": {"params": [],
+        "body": {"op": "apply_operator", "args": [], "name": "t_drop", "bindings": {}}}},"#,
             "",
         ),
     );
-    assert!(
-        msg.contains("[apply_expression_template_unknown_template]"),
-        "got: {msg}"
-    );
+    assert!(msg.contains("[operator_unknown_definition]"), "got: {msg}");
 }
 
 #[test]
@@ -1086,7 +1083,7 @@ fn diamond_with_conflicting_edge_bindings_is_rejected() {
             "metadata": {"name": "grid"},
             "metaparameters": {"NC": {"type": "integer"}},
             "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
-            "expression_templates": {"nc": {"params": [], "body": "NC"}}
+            "operators": {"nc": {"params": [], "body": "NC"}}
         }))
         .unwrap(),
     )
@@ -1096,15 +1093,15 @@ fn diamond_with_conflicting_edge_bindings_is_rejected() {
         dir.path(),
         &model_json(
             r#"
-      "expression_template_imports": [
+      "operator_imports": [
         {"ref": "./grid.esm", "bindings": {"NC": 4}},
         {"ref": "./grid.esm", "bindings": {"NC": 8}}],"#,
             "",
         ),
     );
     assert!(
-        msg.contains("[template_import_name_conflict]")
-            || msg.contains("[template_import_index_set_conflict]"),
+        msg.contains("[operator_import_name_conflict]")
+            || msg.contains("[operator_import_index_set_conflict]"),
         "got: {msg}"
     );
 
@@ -1113,7 +1110,7 @@ fn diamond_with_conflicting_edge_bindings_is_rejected() {
         dir.path(),
         &model_json(
             r#"
-      "expression_template_imports": [
+      "operator_imports": [
         {"ref": "./grid.esm", "bindings": {"NC": 4}},
         {"ref": "./grid.esm", "bindings": {"NC": 4}}],"#,
             "",
@@ -1135,7 +1132,7 @@ fn edge_bindings_unknown_names_and_non_integer_values() {
             "esm": "2.0.0",
             "metadata": {"name": "lib"},
             "metaparameters": {"N": {"type": "integer", "default": 8}},
-            "expression_templates": {"n": {"params": [], "body": "N"}}
+            "operators": {"n": {"params": [], "body": "N"}}
         }))
         .unwrap(),
     )
@@ -1145,18 +1142,18 @@ fn edge_bindings_unknown_names_and_non_integer_values() {
         dir.path(),
         &model_json(
             r#"
-      "expression_template_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],"#,
+      "operator_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],"#,
             "",
         ),
     );
-    assert!(msg.contains("[template_import_unknown_name]"), "got: {msg}");
+    assert!(msg.contains("[operator_import_unknown_name]"), "got: {msg}");
 
     // A non-integer binding is rejected at the resolver level
     // (metaparameter_type_error); the schema also rejects it in the full
     // load_string() pipeline (TemplateImport.bindings is integer-typed).
     let raw: Value = serde_json::from_str(&model_json(
         r#"
-      "expression_template_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],"#,
+      "operator_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],"#,
         "",
     ))
     .unwrap();
@@ -1406,7 +1403,7 @@ fn chain_doc(n: usize) -> Value {
             json!({"params": [], "body": 1})
         } else {
             json!({"params": [], "body": {
-                "op": "apply_expression_template", "args": [],
+                "op": "apply_operator", "args": [],
                 "name": format!("c_{:02}", i + 1), "bindings": {}}})
         };
         tpl.insert(name, decl);
@@ -1415,7 +1412,7 @@ fn chain_doc(n: usize) -> Value {
         "esm": "2.0.0",
         "metadata": {"name": "chain"},
         "models": {"M": {
-            "expression_templates": Value::Object(tpl),
+            "operators": Value::Object(tpl),
             "variables": {"x": {"type": "unknown", "default": 0.5}},
             "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                            "rhs": {"op": "-", "args": ["x"]}}]
@@ -1430,17 +1427,17 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
         "esm": "2.0.0",
         "metadata": {"name": "chain3"},
         "models": {"M": {
-            "expression_templates": {
+            "operators": {
                 "c1": {"params": [], "body": {"op": "+", "args": [1,
-                    {"op": "apply_expression_template", "args": [], "name": "c2", "bindings": {}}]}},
+                    {"op": "apply_operator", "args": [], "name": "c2", "bindings": {}}]}},
                 "c2": {"params": [], "body": {"op": "+", "args": [2,
-                    {"op": "apply_expression_template", "args": [], "name": "c3", "bindings": {}}]}},
+                    {"op": "apply_operator", "args": [], "name": "c3", "bindings": {}}]}},
                 "c3": {"params": [], "body": 3}
             },
             "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
                           "y": {"type": "unknown", "units": "1"}},
             "equations": [
-                {"lhs": "y", "rhs": {"op": "apply_expression_template",
+                {"lhs": "y", "rhs": {"op": "apply_operator",
                                                "args": [], "name": "c1", "bindings": {}}},{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                            "rhs": {"op": "-", "args": ["x"]}}]
         }}
@@ -1456,36 +1453,36 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
     );
 
     // Exactly MAX_TEMPLATE_EXPANSION_DEPTH templates chain: accepted; one
-    // more: template_body_expansion_too_deep (the shared generated fixture
+    // more: operator_body_expansion_too_deep (the shared generated fixture
     // pins the reject side; this pins the boundary).
     let mut ok = chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH);
     lower_expression_templates(&mut ok).expect("64-template chain accepted");
     let mut too_deep = chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH + 1);
     let e = lower_expression_templates(&mut too_deep).expect_err("65-template chain rejected");
-    assert_eq!(e.code, "template_body_expansion_too_deep");
+    assert_eq!(e.code, "operator_body_expansion_too_deep");
 
     // A body may not reference a `match` rule by name.
     let mut match_ref: Value = serde_json::from_str(&model_json(
         r#"
-      "expression_templates": {
+      "operators": {
         "rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},
                  "body": {"op": "*", "args": [2, "f"]}},
-        "uses_rule": {"params": [], "body": {"op": "apply_expression_template",
+        "uses_rule": {"params": [], "body": {"op": "apply_operator",
                       "args": [], "name": "rule", "bindings": {"f": 1}}}
       },"#,
         "",
     ))
     .unwrap();
     let e = lower_expression_templates(&mut match_ref).expect_err("match rule not invocable");
-    assert_eq!(e.code, "apply_expression_template_unknown_template");
+    assert_eq!(e.code, "operator_unknown_definition");
 
     // A `match` pattern may not contain apply nodes.
     let mut match_with_apply: Value = serde_json::from_str(&model_json(
         r#"
-      "expression_templates": {
+      "operators": {
         "frag": {"params": [], "body": 1},
         "rule": {"params": ["f"],
-                 "match": {"op": "lowerme", "args": [{"op": "apply_expression_template",
+                 "match": {"op": "lowerme", "args": [{"op": "apply_operator",
                            "args": [], "name": "frag", "bindings": {}}]},
                  "body": {"op": "*", "args": [2, "f"]}}
       },"#,
@@ -1493,20 +1490,20 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
     ))
     .unwrap();
     let e = lower_expression_templates(&mut match_with_apply).expect_err("apply in match pattern");
-    assert_eq!(e.code, "apply_expression_template_invalid_declaration");
+    assert_eq!(e.code, "operator_invalid_definition");
 }
 
 #[test]
 fn version_gate_flags_every_9_7_construct() {
     for snippet in [
         r#""metaparameters": {"N": {"type": "integer"}},"#,
-        r#""expression_templates": {"t": {"params": [], "body": 1}},"#,
+        r#""operators": {"t": {"params": [], "body": 1}},"#,
     ] {
         // A genuinely pre-0.8.0 version string: this drives the GATE FUNCTION
         // directly, which is the only way left to reach it. A document this old
         // never survives `load_string()` under esm 1.0.0 — the major-version gate
         // refuses it first — which is why the fixture for
-        // `template_import_version_too_old` was retired as unreachable.
+        // `operator_import_version_too_old` was retired as unreachable.
         let doc: Value = serde_json::from_str(&format!(
             r#"{{"esm": "0.7.0", "metadata": {{"name": "old"}},{snippet}
              "models": {{"M": {{"variables": {{"x": {{"type": "unknown", "default": 0.5}}}},
@@ -1514,13 +1511,13 @@ fn version_gate_flags_every_9_7_construct() {
         ))
         .unwrap();
         let e = reject_template_imports_pre_v08(&doc).expect_err("pre-0.8.0 gate");
-        assert_eq!(e.code, "template_import_version_too_old");
+        assert_eq!(e.code, "operator_import_version_too_old");
     }
     // 0.8.0 files pass the gate.
     let ok: Value = serde_json::from_str(
         r#"{"esm": "2.0.0", "metadata": {"name": "new"},
             "metaparameters": {"N": {"type": "integer", "default": 1}},
-            "expression_templates": {"t": {"params": [], "body": 1}}}"#,
+            "operators": {"t": {"params": [], "body": 1}}}"#,
     )
     .unwrap();
     reject_template_imports_pre_v08(&ok).expect("0.8.0 passes");
@@ -1532,7 +1529,7 @@ fn version_gate_flags_every_9_7_construct() {
 /// block would be visible to nothing; loading refuses it instead.
 #[test]
 fn root_templates_beside_component_payload_rejected() {
-    let head = r#"{"esm": "2.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, "#;
+    let head = r#"{"esm": "2.0.0", "metadata": {"name": "impure"}, "operators": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, "#;
     for (key, snippet) in [
         (
             "models",
@@ -1550,8 +1547,8 @@ fn root_templates_beside_component_payload_rejected() {
             .expect_err(&format!("{key}: must fail to load"));
         let msg = e.to_string();
         assert!(
-            msg.contains("[template_library_illegal_payload]"),
-            "{key}: expected code [template_library_illegal_payload], got: {msg}"
+            msg.contains("[operator_library_illegal_payload]"),
+            "{key}: expected code [operator_library_illegal_payload], got: {msg}"
         );
     }
 }

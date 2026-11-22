@@ -19,10 +19,7 @@ pub(super) fn validate_makearray_regions_in_registries<'a>(
             if matches!(&*body, SNode::Null) {
                 continue;
             }
-            validate_makearray_regions(
-                &to_value(&body),
-                &format!("expression_templates.{tname}/body"),
-            )?;
+            validate_makearray_regions(&to_value(&body), &format!("operators.{tname}/body"))?;
         }
     }
     Ok(())

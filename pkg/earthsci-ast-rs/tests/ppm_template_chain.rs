@@ -49,7 +49,7 @@ fn assert_lowered(expr: &Expr, count: &mut usize) {
     };
     *count += 1;
     assert_ne!(
-        node.op, "apply_expression_template",
+        node.op, "apply_operator",
         "load must leave no surviving template reference in the built IR"
     );
     assert!(

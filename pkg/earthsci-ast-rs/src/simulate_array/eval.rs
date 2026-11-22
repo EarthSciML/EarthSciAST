@@ -5361,7 +5361,7 @@ mod evaluability_gate_tests {
         let err = eval_it(&node("expp", vec![Expr::Number(1.0)]))
             .expect_err("a typo'd operator must not evaluate");
         assert!(
-            matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "expp"),
+            matches!(err, CompileError::UnloweredOperatorError { ref op, .. } if op == "expp"),
             "{err:?}"
         );
     }
@@ -5378,7 +5378,7 @@ mod evaluability_gate_tests {
         });
         let err = eval_it(&spatial_d).expect_err("an unlowered spatial operator must not evaluate");
         assert!(
-            matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "D"),
+            matches!(err, CompileError::UnloweredOperatorError { ref op, .. } if op == "D"),
             "{err:?}"
         );
     }
@@ -5467,7 +5467,7 @@ mod evaluability_gate_tests {
             "distinct",
             "ic",
             "enum",
-            "apply_expression_template",
+            "apply_operator",
             "true",
         ] {
             if !crate::op_registry::is_core_op(op) {
@@ -5555,7 +5555,7 @@ mod evaluability_gate_tests {
             "const",
             "true",
             "enum",
-            "apply_expression_template",
+            "apply_operator",
             "faq",
             "makearray",
             "index",
@@ -5577,10 +5577,7 @@ mod evaluability_gate_tests {
             .filter(|op| !is_evaluable_op(op))
             .collect();
         gap.sort_unstable();
-        assert_eq!(
-            gap,
-            vec!["apply_expression_template", "distinct", "enum", "ic"]
-        );
+        assert_eq!(gap, vec!["apply_operator", "distinct", "enum", "ic"]);
     }
 
     /// Small helper: `Result::unwrap_err` with the op name in the panic message.

@@ -121,7 +121,7 @@ impl Probe {
             "esm": "2.0.0",
             "metadata": {"name": "template_scenarios", "authors": ["test"]},
             "models": {"M": {
-                "expression_template_imports": [{"ref": library, "only": [name]}],
+                "operator_imports": [{"ref": library, "only": [name]}],
                 "variables": variables,
                 "equations": equations
             }}
@@ -231,10 +231,8 @@ fn interp_scenarios_through_the_stdlib_templates() {
         for (k, sc) in scenarios.iter().enumerate() {
             let inputs = sc["inputs"].as_array().expect("inputs");
             let (bindings, q) = interp_call(&name, inputs, k);
-            rhs.push(
-                json!({"op": "apply_expression_template", "args": [], "name": name,
-                            "bindings": bindings}),
-            );
+            rhs.push(json!({"op": "apply_operator", "args": [], "name": name,
+                            "bindings": bindings}));
             queries.extend(q);
         }
         let names: Vec<String> = queries.iter().map(|(q, _)| q.clone()).collect();
@@ -380,7 +378,7 @@ fn datetime_scenarios_through_the_stdlib_templates() {
             };
             cases.push((format!("domain_edge_{t:?}"), t, want, EXACT));
         }
-        let call = json!({"op": "apply_expression_template", "args": [], "name": field,
+        let call = json!({"op": "apply_operator", "args": [], "name": field,
                           "bindings": {"t": "tq"}});
         let mut probe = Probe::new(
             "esm:std/calendar.esm",

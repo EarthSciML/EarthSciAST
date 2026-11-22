@@ -11,58 +11,6 @@ use crate::structural::{MissingScopedComponent, resolve_scoped_ref};
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo};
 use std::collections::{HashMap, HashSet};
 
-/// Union of every system's declared variable/species/parameter names, plus a
-/// sorted copy for embedding in diagnostics — error `details` must be
-/// deterministic, so the HashSet is never serialized directly.
-fn collect_available_vars(
-    system_refs: &HashMap<String, SystemInfo>,
-) -> (HashSet<String>, Vec<String>) {
-    let mut available_vars = HashSet::new();
-    for system_info in system_refs.values() {
-        available_vars.extend(system_info.variables.iter().cloned());
-        available_vars.extend(system_info.species.iter().cloned());
-        available_vars.extend(system_info.parameters.iter().cloned());
-    }
-    let mut sorted: Vec<String> = available_vars.iter().cloned().collect();
-    sorted.sort();
-    (available_vars, sorted)
-}
-
-/// Flag every name in `vars` (an operator's `needed_vars` or `modifies` list)
-/// that no system declares.
-fn check_operator_vars(
-    operator: &str,
-    vars: &[String],
-    field: &str,
-    available: &HashSet<String>,
-    available_sorted: &[String],
-    coupling_path: &str,
-    errors: &mut Vec<StructuralError>,
-) {
-    let verb = if field == "needed_vars" {
-        "requires"
-    } else {
-        "modifies"
-    };
-    for var in vars {
-        if !available.contains(var) {
-            errors.push(StructuralError {
-                path: format!("{coupling_path}.{field}"),
-                code: StructuralErrorCode::OperatorVariableMissing,
-                message: format!(
-                    "Operator '{operator}' {verb} variable '{var}' which is not available"
-                ),
-                details: serde_json::json!({
-                    "operator": operator,
-                    "variable": var,
-                    "field": field,
-                    "available_variables": available_sorted,
-                }),
-            });
-        }
-    }
-}
-
 pub(crate) fn validate_coupling(
     coupling: &[crate::CouplingEntry],
     system_refs: &HashMap<String, SystemInfo>,
@@ -166,58 +114,22 @@ pub(crate) fn validate_coupling(
                 }
             }
             crate::CouplingEntry::OperatorApply { operator, .. } => {
-                if let Some(ref operators) = esm_file.operators {
-                    if !operators.contains_key(operator) {
-                        errors.push(StructuralError {
-                            path: coupling_path.clone(),
-                            code: StructuralErrorCode::UndefinedOperator,
-                            message: format!("Operator '{operator}' referenced in operator_apply coupling is not declared"),
-                            details: serde_json::json!({
-                                "operator": operator,
-                                "coupling_type": "operator_apply",
-                                "expected_in": "operators"
-                            }),
-                        });
-                    } else if let Some(op) = operators.get(operator) {
-                        // Validate operator variables against the union of
-                        // every system's declared names.
-                        let (available_vars, available_sorted) =
-                            collect_available_vars(system_refs);
-                        check_operator_vars(
-                            operator,
-                            &op.needed_vars,
-                            "needed_vars",
-                            &available_vars,
-                            &available_sorted,
-                            &coupling_path,
-                            errors,
-                        );
-                        if let Some(ref modifies) = op.modifies {
-                            check_operator_vars(
-                                operator,
-                                modifies,
-                                "modifies",
-                                &available_vars,
-                                &available_sorted,
-                                &coupling_path,
-                                errors,
-                            );
-                        }
-                    }
-                } else {
-                    errors.push(StructuralError {
-                        path: coupling_path,
-                        code: StructuralErrorCode::UndefinedOperator,
-                        message: format!(
-                            "Operator '{operator}' referenced but no operators are declared"
-                        ),
-                        details: serde_json::json!({
-                            "operator": operator,
-                            "coupling_type": "operator_apply",
-                            "expected_in": "operators"
-                        }),
-                    });
-                }
+                // The format declares no runtime operators: a document's
+                // `operators` block holds definitions of defined operators
+                // (esm 2.4.0, esm-spec §9.6.12), which an `operator_apply`
+                // coupling cannot name, so the operator is never declared.
+                errors.push(StructuralError {
+                    path: coupling_path,
+                    code: StructuralErrorCode::UndefinedOperator,
+                    message: format!(
+                        "Operator '{operator}' referenced but no operators are declared"
+                    ),
+                    details: serde_json::json!({
+                        "operator": operator,
+                        "coupling_type": "operator_apply",
+                        "expected_in": "operators"
+                    }),
+                });
             }
             crate::CouplingEntry::Couple {
                 systems, connector, ..

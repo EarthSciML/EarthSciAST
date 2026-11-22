@@ -176,7 +176,7 @@ fn nested_doc() -> Value {
         "metadata": {"name": "DegreeArgumentsNested"},
         "index_sets": {"cells": {"kind": "interval", "size": 3}},
         "models": {"Deg": {
-            "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": ["linear"]}],
+            "operator_imports": [{"ref": "esm:std/interp.esm", "only": ["linear"]}],
             "variables": {
                 "latitude": {"type": "parameter", "units": "deg", "default": 30.0},
                 "ma": {"type": "unknown", "units": "1", "shape": ["cells"]},
@@ -188,7 +188,7 @@ fn nested_doc() -> Value {
                          "regions": [[[1, 1]], [[2, 3]]],
                          "values": [sin30, cos30]}},
                 {"lhs": "tl",
-                 "rhs": {"op": "apply_expression_template", "args": [], "name": "linear",
+                 "rhs": {"op": "apply_operator", "args": [], "name": "linear",
                          "bindings": {"table": {"op": "const", "args": [], "value": [0.0, 10.0]},
                                       "axis": {"op": "const", "args": [], "value": [0.0, 1.0]},
                                       "x": sin30, "n": 2}}}

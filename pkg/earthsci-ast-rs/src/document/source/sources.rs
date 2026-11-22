@@ -64,7 +64,7 @@ fn entry_pointers(base: &str, math: &[MC]) -> Vec<String> {
     let mut seen: Vec<(&str, usize)> = Vec::new();
     math.iter()
         .map(|m| match m {
-            Mx::Tm(t) => format!("{base}/expression_templates/{}", token(&t.name)),
+            Mx::Tm(t) => format!("{base}/operators/{}", token(&t.name)),
             _ => {
                 let f = m.field();
                 let i = match seen.iter_mut().find(|(g, _)| *g == f) {

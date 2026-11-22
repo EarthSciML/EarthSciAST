@@ -126,6 +126,7 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
         bindings: _,
         // Load provenance, never on the wire (Julia lists it ignored too).
         template_origin: _,
+        definition_units: _,
         // NON-EMISSIBLE — no wire slot; a set value fails canonical emission
         // closed. Checked below in struct-declaration order.
         int_var,
@@ -863,8 +864,8 @@ const DOCUMENT_MAP_KEYS: &[&str] = &[
     "coupling_roles",
     "data_sources",
     "enums",
-    "expression_template_imports",
-    "expression_templates",
+    "operator_imports",
+    "operators",
     "guesses",
     "index_set_rename",
     "index_sets",
@@ -1411,7 +1412,7 @@ mod tests {
         let mut bindings = std::collections::HashMap::new();
         bindings.insert("t".to_string(), Expr::Variable("z".into()));
         let tolerated = Expr::operator(ExpressionNode {
-            op: "apply_expression_template".into(),
+            op: "apply_operator".into(),
             args: vec![Expr::Variable("x".into())],
             bindings: Some(bindings),
             ..ExpressionNode::default()

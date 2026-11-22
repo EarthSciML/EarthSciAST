@@ -2,7 +2,7 @@
 //! passes (expression templates / template imports, enum lowering).
 //!
 //! The `code` field is a STABLE cross-binding diagnostic identifier (e.g.
-//! `template_import_unknown_name`, `unknown_enum`) that the conformance
+//! `operator_import_unknown_name`, `unknown_enum`) that the conformance
 //! fixtures match on — bindings must agree on codes, while `message` prose is
 //! binding-local. The per-pass public names (`ExpressionTemplateError`,
 //! `EnumLoweringError`) are aliases of this one type so each pass keeps its
@@ -60,7 +60,7 @@ macro_rules! diagnostic_code_registry {
         ///
         /// Constant names are the SCREAMING_SNAKE_CASE form of the value (mirroring the
         /// TypeScript keys and the Python enum), so a reference reads as
-        /// `codes::TEMPLATE_IMPORT_UNKNOWN_NAME`.
+        /// `codes::OPERATOR_IMPORT_UNKNOWN_NAME`.
         ///
         /// Scope: every diagnostic code string this binding emits, whichever error
         /// type carries it — [`DiagnosticError`], `StructuralError`
@@ -144,30 +144,46 @@ diagnostic_code_registry! {
 
     /// An `apply_expression_template` whose supplied bindings do not match the
     /// template's declared parameter list (missing, extra, or duplicated).
-    APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH = "apply_expression_template_bindings_mismatch";
+    OPERATOR_BINDINGS_MISMATCH = "operator_bindings_mismatch";
     /// A malformed `expression_templates` declaration — the single most-emitted
     /// code in this pass, covering every shape violation of the template
     /// declaration itself.
-    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION = "apply_expression_template_invalid_declaration";
+    OPERATOR_INVALID_DEFINITION = "operator_invalid_definition";
     /// A template body that (directly or transitively) applies itself.
-    APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY = "apply_expression_template_recursive_body";
+    OPERATOR_RECURSIVE_BODY = "operator_recursive_body";
     /// An `apply_expression_template` naming a template the document does not
     /// declare (and no import supplies).
-    APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE = "apply_expression_template_unknown_template";
+    OPERATOR_UNKNOWN_DEFINITION = "operator_unknown_definition";
     /// A template declaring a `min_spec_version` newer than this binding
     /// implements.
-    APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD = "apply_expression_template_version_too_old";
+    OPERATOR_VERSION_TOO_OLD = "operator_version_too_old";
     /// A rewrite rule whose repeated application does not reach a fixed point.
     REWRITE_RULE_NONTERMINATING = "rewrite_rule_nonterminating";
+    /// esm 2.4.0 (esm-spec §9.6.12 "Arity"): a call of a defined operator
+    /// carries an operand count none of its definitions in scope takes.
+    OPERATOR_ARITY_MISMATCH = "operator_arity_mismatch";
+    /// esm 2.4.0 (esm-spec §9.6.12 "Core names are reserved"): a definition
+    /// whose `defines`, written or inferred, is a core operator's name.
+    OPERATOR_DEFINES_CORE_OP = "operator_defines_core_op";
+    /// esm 2.4.0 (esm-spec §9.6.12 "Units"): a definition's body unit
+    /// disagrees with its unit expression (or the fixed unit expression of
+    /// `partial` / `integral`). An error when the body's unit is determinable,
+    /// a unit WARNING when it is not.
+    DEFINITION_UNIT_MISMATCH = "definition_unit_mismatch" => DefinitionUnitMismatch;
+    /// A WARNING, not an error: a document spells a field by its esm-2.3 name
+    /// (`expression_templates`, `expression_template_imports`), read as its
+    /// esm-2.4.0 name (`operators`, `operator_imports`) at the wire boundary
+    /// (esm-spec §9.6.12 "Old names (no refusal)"). One warning per document.
+    DEPRECATED_FIELD = "deprecated_field";
     /// A rewrite-target op (§4.2) reached evaluation or compilation without
     /// being lowered (esm-spec §9.6.6); refused through `OpError::Unlowered`.
     UNLOWERED_OPERATOR = "unlowered_operator";
     /// Template body expansion exceeded the depth budget (a runaway, but not
     /// provably self-recursive, expansion).
-    TEMPLATE_BODY_EXPANSION_TOO_DEEP = "template_body_expansion_too_deep";
+    OPERATOR_BODY_EXPANSION_TOO_DEEP = "operator_body_expansion_too_deep";
     /// A template `constraints` entry naming an index set absent from the
     /// document's `index_sets` registry.
-    TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "template_constraint_unknown_index_set";
+    OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET = "operator_constraint_unknown_index_set";
 
     // ---- expression templates: the surviving registry at flatten ----
 
@@ -176,8 +192,15 @@ diagnostic_code_registry! {
     /// rewrote out of the flattened equations. Flatten now closes every carried
     /// body (esm-spec §10.7), so a body reads no component name and nothing
     /// raises this (CONFORMANCE_SPEC §5.35).
-    TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE =
-        "template_body_references_coupling_rewritten_variable";
+    OPERATOR_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE =
+        "operator_body_references_coupling_rewritten_variable";
+    /// Projection-pushdown desugar post-condition (`pushdown_rewrite.rs`): a
+    /// rect factor the rewrite must re-point onto the generated per-support
+    /// cell gathers is named FREE in a definition body instead of bound at the
+    /// call site (esm-spec §9.6.4 Option B / CONFORMANCE_SPEC §5.5.7). This
+    /// binding raises it inside a build refusal's message.
+    OPERATOR_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE =
+        "operator_body_references_pushdown_rewritten_variable";
 
     // ---- templates: makearray structural folds (also emitted from
     //      `lower_expression_templates.rs` during template lowering) ----
@@ -195,29 +218,29 @@ diagnostic_code_registry! {
     /// A metaparameter referenced by a template body with no binding in scope.
     METAPARAMETER_UNBOUND = "metaparameter_unbound";
     /// A cycle in the template-library import graph.
-    TEMPLATE_IMPORT_CYCLE = "template_import_cycle";
+    OPERATOR_IMPORT_CYCLE = "operator_import_cycle";
     /// A `template_imports` entry resolving to a COUPLING library, which
     /// exports roles rather than templates.
-    TEMPLATE_IMPORT_IS_COUPLING_LIBRARY = "template_import_is_coupling_library";
+    OPERATOR_IMPORT_IS_COUPLING_LIBRARY = "operator_import_is_coupling_library";
     /// A `template_imports` entry resolving to a document that is not a library
     /// at all.
-    TEMPLATE_IMPORT_NOT_LIBRARY = "template_import_not_library";
+    OPERATOR_IMPORT_NOT_LIBRARY = "operator_import_not_library";
     /// A `rebind` naming a metaparameter the imported library does not declare.
-    TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME = "template_import_rebind_unknown_name";
+    OPERATOR_IMPORT_REBIND_UNKNOWN_NAME = "operator_import_rebind_unknown_name";
     /// A `rename` whose target name is already taken in the importing scope.
-    TEMPLATE_IMPORT_RENAME_COLLISION = "template_import_rename_collision";
+    OPERATOR_IMPORT_RENAME_COLLISION = "operator_import_rename_collision";
     /// A `rename` whose target is not a syntactically valid name.
-    TEMPLATE_IMPORT_RENAME_INVALID = "template_import_rename_invalid";
+    OPERATOR_IMPORT_RENAME_INVALID = "operator_import_rename_invalid";
     /// A `rename` naming a source the imported library does not export.
-    TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME = "template_import_rename_unknown_name";
+    OPERATOR_IMPORT_RENAME_UNKNOWN_NAME = "operator_import_rename_unknown_name";
     /// An explicit import `names` entry the library does not export.
-    TEMPLATE_IMPORT_UNKNOWN_NAME = "template_import_unknown_name";
+    OPERATOR_IMPORT_UNKNOWN_NAME = "operator_import_unknown_name";
     /// A `template_imports` `ref` that does not resolve (missing file, remote
     /// URL, unreadable or unparseable document).
-    TEMPLATE_IMPORT_UNRESOLVED = "template_import_unresolved";
+    OPERATOR_IMPORT_UNRESOLVED = "operator_import_unresolved";
     /// An imported library declaring a `min_spec_version` newer than this
     /// binding implements.
-    TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old";
+    OPERATOR_IMPORT_VERSION_TOO_OLD = "operator_import_version_too_old";
     /// A top-level `solver` block in a document declaring `esm` < 1.1.0
     /// (esm-spec §2.2.4, §2.2.5).
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old";
@@ -255,14 +278,14 @@ diagnostic_code_registry! {
     /// (esm-spec §6.3.2).
     VARIABLE_BOUNDS_VERSION_TOO_OLD = "variable_bounds_version_too_old";
     /// An `inject` whose target names a data LOADER rather than a component.
-    TEMPLATE_INJECT_TARGET_IS_LOADER = "template_inject_target_is_loader";
+    OPERATOR_INJECT_TARGET_IS_LOADER = "operator_inject_target_is_loader";
     /// An `inject` whose target resolves to something that is not a component.
-    TEMPLATE_INJECT_TARGET_NOT_COMPONENT = "template_inject_target_not_component";
+    OPERATOR_INJECT_TARGET_NOT_COMPONENT = "operator_inject_target_not_component";
     /// An `inject` whose target names nothing in the importing document.
-    TEMPLATE_INJECT_TARGET_UNKNOWN = "template_inject_target_unknown";
+    OPERATOR_INJECT_TARGET_UNKNOWN = "operator_inject_target_unknown";
     /// A document carrying top-level `expression_templates` beside a component
     /// payload, which a template-library file never declares (esm-spec §9.7.1).
-    TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "template_library_illegal_payload";
+    OPERATOR_LIBRARY_ILLEGAL_PAYLOAD = "operator_library_illegal_payload";
 
     // ---- coupling libraries: §9.7 coupling-library imports
     //      (`coupling_imports.rs`) ----
@@ -361,7 +384,7 @@ diagnostic_code_registry! {
     /// A mount edge's `index_set_rename` names an index set the RESOLVED
     /// mounted document does not declare (§4.7 "Mount-edge index-set
     /// renaming") — the mount-edge mirror of
-    /// [`TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME`].
+    /// [`OPERATOR_IMPORT_RENAME_UNKNOWN_NAME`].
     SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_name";
     /// `index_set_rename` on a mount form that does not implement it (§4.7
     /// "Mount-edge index-set renaming", "Where it applies"). The field is a
@@ -387,14 +410,14 @@ diagnostic_code_registry! {
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library";
     /// A `subsystem` ref pointing at a TEMPLATE library, which exports
     /// templates rather than a mountable system.
-    SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY = "subsystem_ref_is_template_library";
+    SUBSYSTEM_REF_IS_OPERATOR_LIBRARY = "subsystem_ref_is_operator_library";
 
     // ---- template-library import MERGE collisions (`template_imports.rs`) ----
 
     /// Two imported template libraries export the same template name.
-    TEMPLATE_IMPORT_NAME_CONFLICT = "template_import_name_conflict";
+    OPERATOR_IMPORT_NAME_CONFLICT = "operator_import_name_conflict";
     /// Two imported template libraries export the same index-set name.
-    TEMPLATE_IMPORT_INDEX_SET_CONFLICT = "template_import_index_set_conflict";
+    OPERATOR_IMPORT_INDEX_SET_CONFLICT = "operator_import_index_set_conflict";
 
     // ---- structural validation: the `error_type` of a `StructuralError`
     // (`validate.rs`), pinned by `tests/invalid/expected_errors.json`. ----
@@ -646,6 +669,124 @@ pub fn error_code_names() -> Vec<&'static str> {
     values
 }
 
+/// The diagnostic codes esm 2.4.0 renamed (esm-spec §9.6.6, "Renamed
+/// codes"): `(old spelling, new code)`. This binding reports only the new
+/// codes; a harness or tool that matches an old spelling reads it as the new
+/// one through [`canonical_error_code`]. Mirrors Julia's `ERROR_CODE_ALIASES`.
+pub const ERROR_CODE_ALIASES: &[(&str, &str)] = &[
+    (
+        "apply_expression_template_unknown_template",
+        codes::OPERATOR_UNKNOWN_DEFINITION,
+    ),
+    (
+        "apply_expression_template_bindings_mismatch",
+        codes::OPERATOR_BINDINGS_MISMATCH,
+    ),
+    (
+        "apply_expression_template_recursive_body",
+        codes::OPERATOR_RECURSIVE_BODY,
+    ),
+    (
+        "apply_expression_template_invalid_declaration",
+        codes::OPERATOR_INVALID_DEFINITION,
+    ),
+    (
+        "apply_expression_template_version_too_old",
+        codes::OPERATOR_VERSION_TOO_OLD,
+    ),
+    (
+        "template_constraint_unknown_index_set",
+        codes::OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET,
+    ),
+    (
+        "template_body_expansion_too_deep",
+        codes::OPERATOR_BODY_EXPANSION_TOO_DEEP,
+    ),
+    (
+        "template_library_illegal_payload",
+        codes::OPERATOR_LIBRARY_ILLEGAL_PAYLOAD,
+    ),
+    (
+        "subsystem_ref_is_template_library",
+        codes::SUBSYSTEM_REF_IS_OPERATOR_LIBRARY,
+    ),
+    (
+        "template_inject_target_unknown",
+        codes::OPERATOR_INJECT_TARGET_UNKNOWN,
+    ),
+    (
+        "template_inject_target_not_component",
+        codes::OPERATOR_INJECT_TARGET_NOT_COMPONENT,
+    ),
+    (
+        "template_inject_target_is_loader",
+        codes::OPERATOR_INJECT_TARGET_IS_LOADER,
+    ),
+    (
+        "template_body_references_coupling_rewritten_variable",
+        codes::OPERATOR_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
+    ),
+    (
+        "template_body_references_pushdown_rewritten_variable",
+        codes::OPERATOR_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
+    ),
+    (
+        "template_import_unknown_name",
+        codes::OPERATOR_IMPORT_UNKNOWN_NAME,
+    ),
+    (
+        "template_import_not_library",
+        codes::OPERATOR_IMPORT_NOT_LIBRARY,
+    ),
+    (
+        "template_import_index_set_conflict",
+        codes::OPERATOR_IMPORT_INDEX_SET_CONFLICT,
+    ),
+    (
+        "template_import_unresolved",
+        codes::OPERATOR_IMPORT_UNRESOLVED,
+    ),
+    (
+        "template_import_rename_unknown_name",
+        codes::OPERATOR_IMPORT_RENAME_UNKNOWN_NAME,
+    ),
+    (
+        "template_import_rename_invalid",
+        codes::OPERATOR_IMPORT_RENAME_INVALID,
+    ),
+    (
+        "template_import_rename_collision",
+        codes::OPERATOR_IMPORT_RENAME_COLLISION,
+    ),
+    (
+        "template_import_name_conflict",
+        codes::OPERATOR_IMPORT_NAME_CONFLICT,
+    ),
+    (
+        "template_import_version_too_old",
+        codes::OPERATOR_IMPORT_VERSION_TOO_OLD,
+    ),
+    (
+        "template_import_rebind_unknown_name",
+        codes::OPERATOR_IMPORT_REBIND_UNKNOWN_NAME,
+    ),
+    ("template_import_cycle", codes::OPERATOR_IMPORT_CYCLE),
+    (
+        "template_import_is_coupling_library",
+        codes::OPERATOR_IMPORT_IS_COUPLING_LIBRARY,
+    ),
+];
+
+/// The current spelling of a diagnostic code: `code` itself, or the new code
+/// an old esm-2.3 spelling is an alias of ([`ERROR_CODE_ALIASES`], esm-spec
+/// §9.6.6).
+pub fn canonical_error_code(code: &str) -> &str {
+    ERROR_CODE_ALIASES
+        .iter()
+        .find(|(old, _)| *old == code)
+        .map_or(code, |(_, new)| new)
+}
+
 /// Parse a `major.minor.patch` version string into its numeric components.
 /// Returns `None` for anything that is not exactly three dot-separated
 /// non-negative integers. Shared by the load-time spec-version gates, the
@@ -702,11 +843,6 @@ mod error_code_tests {
             "ambiguous_output_name",
             "ambiguous_subsystem_ref",
             "analysis",
-            "apply_expression_template_bindings_mismatch",
-            "apply_expression_template_invalid_declaration",
-            "apply_expression_template_recursive_body",
-            "apply_expression_template_unknown_template",
-            "apply_expression_template_version_too_old",
             "array_default_without_shape",
             "array_shape_mismatch",
             "assertion_rank_mismatch",
@@ -729,6 +865,8 @@ mod error_code_tests {
             "data_source_unbound",
             "data_source_undefined",
             "data_source_url_unresolved",
+            "definition_unit_mismatch",
+            "deprecated_field",
             "deprecated_op",
             "deprecated_system_kind",
             "derived_index_set_unmaterialized",
@@ -760,7 +898,34 @@ mod error_code_tests {
             "mount_form_unsupported",
             "null_reaction",
             "observed_cycle",
+            "operator_arity_mismatch",
+            "operator_bindings_mismatch",
+            "operator_body_expansion_too_deep",
+            "operator_body_references_coupling_rewritten_variable",
+            "operator_body_references_pushdown_rewritten_variable",
+            "operator_constraint_unknown_index_set",
+            "operator_defines_core_op",
+            "operator_import_cycle",
+            "operator_import_index_set_conflict",
+            "operator_import_is_coupling_library",
+            "operator_import_name_conflict",
+            "operator_import_not_library",
+            "operator_import_rebind_unknown_name",
+            "operator_import_rename_collision",
+            "operator_import_rename_invalid",
+            "operator_import_rename_unknown_name",
+            "operator_import_unknown_name",
+            "operator_import_unresolved",
+            "operator_import_version_too_old",
+            "operator_inject_target_is_loader",
+            "operator_inject_target_not_component",
+            "operator_inject_target_unknown",
+            "operator_invalid_definition",
+            "operator_library_illegal_payload",
+            "operator_recursive_body",
+            "operator_unknown_definition",
             "operator_variable_missing",
+            "operator_version_too_old",
             "parse_error",
             "ragged_values_not_gathered",
             "range_box_invalid",
@@ -789,26 +954,7 @@ mod error_code_tests {
             "subsystem_index_set_rename_unknown_name",
             "subsystem_index_set_rename_unsupported_mount_form",
             "subsystem_ref_is_coupling_library",
-            "subsystem_ref_is_template_library",
-            "template_body_expansion_too_deep",
-            "template_body_references_coupling_rewritten_variable",
-            "template_constraint_unknown_index_set",
-            "template_import_cycle",
-            "template_import_index_set_conflict",
-            "template_import_is_coupling_library",
-            "template_import_name_conflict",
-            "template_import_not_library",
-            "template_import_rebind_unknown_name",
-            "template_import_rename_collision",
-            "template_import_rename_invalid",
-            "template_import_rename_unknown_name",
-            "template_import_unknown_name",
-            "template_import_unresolved",
-            "template_import_version_too_old",
-            "template_inject_target_is_loader",
-            "template_inject_target_not_component",
-            "template_inject_target_unknown",
-            "template_library_illegal_payload",
+            "subsystem_ref_is_operator_library",
             "time_origin_invalid",
             "timestamp_malformed",
             "timestamp_no_calendar_day",
@@ -874,9 +1020,14 @@ mod error_code_tests {
             codes.len()
         );
         let registered = error_code_names();
+        // The renamed-codes table lists each esm-2.3 spelling beside its new
+        // code: an old spelling is registered as an alias of it.
         let missing: Vec<&String> = codes
             .iter()
-            .filter(|c| !registered.contains(&c.as_str()))
+            .filter(|c| {
+                !registered.contains(&c.as_str())
+                    && !super::ERROR_CODE_ALIASES.iter().any(|(old, _)| old == c)
+            })
             .collect();
         assert!(
             missing.is_empty(),

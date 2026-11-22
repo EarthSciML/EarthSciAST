@@ -31,7 +31,7 @@ const LIBRARY_FORBIDDEN_KEYS: [&str; 7] = [
     "domain",
     "index_sets",
     "metaparameters",
-    "expression_templates",
+    "operators",
 ];
 
 /// Coupling-entry types a library edge MAY carry (esm-spec §10.9).
@@ -134,7 +134,7 @@ fn rewrite_expr(expr: &mut Value, f: &dyn Fn(&str) -> String) {
             }
             // `apply_expression_template` bindings VALUES are free-variable
             // targets (esm-spec §10.10.2) — Expressions in their own right.
-            if node.get("op").and_then(|o| o.as_str()) == Some("apply_expression_template")
+            if node.get("op").and_then(|o| o.as_str()) == Some("apply_operator")
                 && let Some(Value::Object(b)) = node.get_mut("bindings")
             {
                 for (_, bv) in b.iter_mut() {
@@ -424,12 +424,12 @@ fn expand_one(
                 ),
             ));
         }
-        if ty == Some("callback") || edge.get("expression_template_imports").is_some() {
+        if ty == Some("callback") || edge.get("operator_imports").is_some() {
             return Err(err(
                 codes::COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
                 format!(
                     "coupling-library '{ref_str}' edge of type '{}' is not role-substitutable (no \
-                     callback entries or edge-level expression_template_imports, esm-spec §10.9)",
+                     callback entries or edge-level operator_imports, esm-spec §10.9)",
                     ty.unwrap_or("<none>")
                 ),
             ));

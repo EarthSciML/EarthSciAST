@@ -751,6 +751,39 @@ pub struct ExpressionNode {
     /// ([`crate::lower_expression_templates::TEMPLATE_ORIGIN_KEY`]).
     #[serde(default, rename = "__esm_template_origin", skip_serializing)]
     pub template_origin: Option<String>,
+
+    /// Load provenance, never on the wire: on the root of the expansion of a
+    /// reference to a definition that carries a unit expression (`units`), or
+    /// a definition of `partial` / `integral` (whose `match` gives the fixed
+    /// unit expression), what the dimensional checker needs to type the call
+    /// by that expression without evaluating the body (esm-spec §4.8.3,
+    /// §9.6.12 "Units"). Set beside [`Self::template_origin`] when the load
+    /// expands a component's references, from a private key the schema refuses
+    /// in an authored document
+    /// ([`crate::lower_expression_templates::DEFINITION_UNITS_KEY`]).
+    #[serde(default, rename = "__esm_definition_units", skip_serializing)]
+    pub definition_units: Option<Box<DefinitionUnits>>,
+}
+
+/// What the dimensional checker reads off the definition a reference named
+/// (esm-spec §9.6.12 "Units"): see [`ExpressionNode::definition_units`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DefinitionUnits {
+    /// The registry name of the definition.
+    pub name: String,
+    /// The defined operator it defines.
+    #[serde(default)]
+    pub defines: Option<String>,
+    /// What the reference bound to each of the definition's `params`.
+    #[serde(default)]
+    pub bindings: HashMap<String, Expr>,
+    /// The definition's unit expression, over its params.
+    #[serde(default)]
+    pub units: Option<Expr>,
+    /// The fixed unit expression of `partial` (`[f]/[wrt]`) or `integral`
+    /// (`[f]·[var]`), read off the definition's `match`, over its params.
+    #[serde(default)]
+    pub fixed: Option<Expr>,
 }
 
 // ───────────────────────────────────────────────────────────────────────────

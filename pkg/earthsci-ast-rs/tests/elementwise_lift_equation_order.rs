@@ -131,14 +131,14 @@ fn column_document() -> serde_json::Value {
                 },
                 "equations": [
                     {"lhs": {"op": "D", "args": ["A"], "wrt": "t"},
-                     "rhs": {"op": "apply_expression_template", "args": [],
+                     "rhs": {"op": "apply_operator", "args": [],
                              "name": "src_term", "bindings": {"s": "src"}}},
                     {"lhs": {"op": "D", "args": ["B"], "wrt": "t"}, "rhs": 0.0},
                     {"lhs": {"op": "ic", "args": ["A"]}, "rhs": "A0"},
                     {"lhs": {"op": "ic", "args": ["B"]}, "rhs": "B0"},
                     {"lhs": "dA", "rhs": {"op": "D", "args": ["A"], "wrt": "t"}}
                 ],
-                "expression_templates": {
+                "operators": {
                     "src_term": {"params": ["s"], "body": {"op": "*", "args": [1.0, "s"]}}
                 },
                 "tests": [{

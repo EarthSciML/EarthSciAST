@@ -1733,7 +1733,7 @@ fn test_ragged_member_gather_is_valid() {
 /// A `faq` range naming a set the document does not declare is therefore
 /// NOT decidable at standalone load and must NOT be reported as
 /// `undefined_index_set` — mirroring esm-spec §9.6.1, where
-/// `template_constraint_unknown_index_set` does not run for a library file
+/// `operator_constraint_unknown_index_set` does not run for a library file
 /// validated standalone (issue #185).
 #[test]
 fn test_f6_undefined_index_set_deferred_for_agnostic_leaf() {

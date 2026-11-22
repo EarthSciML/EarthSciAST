@@ -449,7 +449,7 @@ pub fn t_node(n: &str, bs: Vec<(String, Json)>) -> Json {
         ("args".into(), Json::Arr(vec![])),
         ("bindings".into(), Json::Obj(bs)),
         ("name".into(), Json::str(n)),
-        ("op".into(), Json::str("apply_expression_template")),
+        ("op".into(), Json::str("apply_operator")),
     ])
 }
 

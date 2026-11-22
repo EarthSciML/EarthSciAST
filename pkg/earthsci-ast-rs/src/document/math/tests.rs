@@ -275,8 +275,8 @@ fn component(doc: &serde_json::Value) -> (Sym, Json) {
     names.extend(keys_of(c.get("species")));
     names.extend(keys_of(c.get("parameters")));
     names.extend(keys_of(doc.get("index_sets")));
-    let mut templates = templates_of(doc.get("expression_templates"));
-    templates.extend(templates_of(c.get("expression_templates")));
+    let mut templates = templates_of(doc.get("operators"));
+    templates.extend(templates_of(c.get("operators")));
     let eq = &c["equations"][0];
     let e = Json::Obj(vec![
         (

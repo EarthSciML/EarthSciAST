@@ -35,7 +35,7 @@
   },
   "models": {
     "AdvectionPPM": {
-      "expression_templates": {
+      "operators": {
         "x_coord": {
           "params": [],
           "description": "Cell-center coordinates x_i = x0 + (i - 1/2) dx, shaped over the x index set. x0 and dx are free names supplied by the consuming model (see metadata.description for the contract).",
@@ -214,7 +214,7 @@
                         ]
                       },
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_slope",
                         "bindings": {
@@ -275,7 +275,7 @@
                     "op": "-",
                     "args": [
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_slope_mono",
                         "bindings": {
@@ -285,7 +285,7 @@
                         }
                       },
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_slope_mono",
                         "bindings": {
@@ -441,12 +441,12 @@
           ],
           "description": "F_{i+1/2}=CW84 limited right edge of the upwind cell u0",
           "body": {
-            "op": "apply_expression_template",
+            "op": "apply_operator",
             "args": [],
             "name": "ppm_limit_right",
             "bindings": {
               "ql": {
-                "op": "apply_expression_template",
+                "op": "apply_operator",
                 "args": [],
                 "name": "ppm_face_value_mono",
                 "bindings": {
@@ -457,7 +457,7 @@
                 }
               },
               "qr": {
-                "op": "apply_expression_template",
+                "op": "apply_operator",
                 "args": [],
                 "name": "ppm_face_value_mono",
                 "bindings": {
@@ -503,7 +503,7 @@
                   "op": "-",
                   "args": [
                     {
-                      "op": "apply_expression_template",
+                      "op": "apply_operator",
                       "args": [],
                       "name": "ppm_flux",
                       "bindings": {
@@ -569,7 +569,7 @@
                       }
                     },
                     {
-                      "op": "apply_expression_template",
+                      "op": "apply_operator",
                       "args": [],
                       "name": "ppm_flux",
                       "bindings": {
@@ -721,7 +721,7 @@
             ],
             "values": [
               {
-                "op": "apply_expression_template",
+                "op": "apply_operator",
                 "args": [],
                 "name": "ppm_D_interior",
                 "bindings": {
@@ -735,7 +735,7 @@
                     "op": "-",
                     "args": [
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {
@@ -783,7 +783,7 @@
                         }
                       },
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {
@@ -848,7 +848,7 @@
                     "op": "-",
                     "args": [
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {
@@ -890,7 +890,7 @@
                         }
                       },
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {
@@ -949,7 +949,7 @@
                     "op": "-",
                     "args": [
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {
@@ -991,7 +991,7 @@
                         }
                       },
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {
@@ -1044,7 +1044,7 @@
                     "op": "-",
                     "args": [
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {
@@ -1104,7 +1104,7 @@
                         }
                       },
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {
@@ -1181,7 +1181,7 @@
                     "op": "-",
                     "args": [
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {
@@ -1235,7 +1235,7 @@
                         }
                       },
                       {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "ppm_flux",
                         "bindings": {

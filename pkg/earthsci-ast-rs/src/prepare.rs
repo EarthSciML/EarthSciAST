@@ -1072,18 +1072,18 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
     let Some(obj) = raw.as_object() else {
         return false;
     };
-    if obj.contains_key("expression_template_imports") {
+    // Either spelling: the old one is read as the new at load (esm-spec
+    // §9.6.12).
+    let edge = |o: &serde_json::Map<String, JsonValue>| {
+        o.contains_key("operator_imports") || o.contains_key("expression_template_imports")
+    };
+    if edge(obj) {
         return true;
     }
     ["models", "reaction_systems"].iter().any(|kind| {
         obj.get(*kind)
             .and_then(JsonValue::as_object)
-            .is_some_and(|comps| {
-                comps.values().any(|c| {
-                    c.as_object()
-                        .is_some_and(|c| c.contains_key("expression_template_imports"))
-                })
-            })
+            .is_some_and(|comps| comps.values().any(|c| c.as_object().is_some_and(edge)))
     })
 }
 

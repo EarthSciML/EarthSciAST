@@ -837,10 +837,10 @@ fn resolve_loaded_leaf(
     // which is imported via a `coupling_import` coupling entry (§10.9).
     if crate::template_imports::is_template_library_doc(comp) {
         return Err(err(
-            codes::SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+            codes::SUBSYSTEM_REF_IS_OPERATOR_LIBRARY,
             format!(
                 "{} ref '{ref_str}' targets a template-library file ({}); \
-                 libraries are imported via expression_template_imports \
+                 libraries are imported via operator_imports \
                  (esm-spec 9.7.1)",
                 nouns.library,
                 canonical.display()
@@ -866,7 +866,7 @@ fn resolve_loaded_leaf(
     // inherits the loader's grid instead of falling to its own defaults (a
     // discovered `extent`, §8.9.4, sizes the leaf from the data). Names the
     // leaf does not declare are never forwarded, so they cannot raise
-    // `template_import_unknown_name` against it. Mirrors the Python
+    // `operator_import_unknown_name` against it. Mirrors the Python
     // `_load_ref_data` backfill.
     //
     // The backfill reads `api_meta`, NOT `parent_meta`. `parent_meta`
@@ -937,7 +937,7 @@ fn resolve_loaded_leaf(
     // absolutize against the MOUNTING document's directory, not the leaf's, at
     // both mount forms.
     let injected: Vec<Value> = edge
-        .get("expression_template_imports")
+        .get("operator_imports")
         .and_then(|v| v.as_array())
         .map(|a| {
             let mut a = a.clone();
@@ -1352,7 +1352,7 @@ fn walk_subsystems(
 /// import edge — its binding values cannot be carried symbolically: each folds
 /// IMMEDIATELY against `parent_meta`, the mounting document's already-closed
 /// metaparameter environment (the parent closes before its refs resolve).
-/// A free name absent from `parent_meta` is `template_import_unknown_name`;
+/// A free name absent from `parent_meta` is `operator_import_unknown_name`;
 /// a bad op / empty args / float is `metaparameter_type_error`.
 fn read_edge_bindings(
     obj: &serde_json::Map<String, Value>,
@@ -1423,7 +1423,7 @@ struct EdgeClose {
 ///
 /// (the latter winning). A binding naming something neither the leaf nor its
 /// mount tree declares is left in `bindings`, for the leaf's close to refuse
-/// as `template_import_unknown_name`.
+/// as `operator_import_unknown_name`.
 ///
 /// Edge `bindings` EXPRESSIONS fold against `parent_meta`, the mounting
 /// document's closed environment; `parent_meta` never backfills the leaf (it

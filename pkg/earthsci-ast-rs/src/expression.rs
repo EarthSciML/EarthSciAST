@@ -393,7 +393,7 @@ mod tests {
             gap,
             vec![
                 "D",
-                "apply_expression_template",
+                "apply_operator",
                 "broadcast",
                 "concat",
                 "const",

@@ -73,6 +73,7 @@ pub(crate) fn normalize(
             if crate::flatten::first_unresolved_rhs_time_derivative(flat).is_some() {
                 return Err(CompileError::UnloweredOperatorError {
                     op: "D".to_string(),
+                    why: String::new(),
                 });
             }
             let mut model = model_from_flattened(flat);

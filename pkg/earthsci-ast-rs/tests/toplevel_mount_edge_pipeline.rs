@@ -357,7 +357,7 @@ fn an_assemblers_own_default_never_overrides_a_leafs_own() {
 /// outright, or reversing the precedence, left the suite green.
 ///
 /// Note the host must DECLARE a name for the loader API to bind it — binding an
-/// undeclared one is `template_import_unknown_name` at the root, before any
+/// undeclared one is `operator_import_unknown_name` at the root, before any
 /// mount is reached. So `api_meta` is always a subset of what the host declares,
 /// and what FALSIFICATION 5 forbids forwarding is precisely the remainder: the
 /// host's own DEFAULTS, for names the caller did not bind.
@@ -403,7 +403,7 @@ fn the_loader_api_backfills_a_leaf_and_an_edge_binding_outranks_it() {
     );
 
     // A name the LEAF does not declare is never forwarded, so it cannot raise
-    // `template_import_unknown_name` against the leaf.
+    // `operator_import_unknown_name` against the leaf.
     let other = write(
         &dir,
         "other.esm",
