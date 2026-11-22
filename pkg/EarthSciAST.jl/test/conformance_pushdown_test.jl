@@ -45,14 +45,16 @@ _deep_eq(a, b) = isequal(a, b)
 
         @testset "$(id)" begin
             @test isfile(input_path)
-            input = JSON.parsefile(input_path)
-            pristine = JSON.parsefile(input_path)
+            # Read through the esm 2.4.0 wire spellings (esm-spec §9.6.12), as a
+            # load does before this pass runs.
+            input = EA._wire_old_spellings(JSON.parsefile(input_path))
+            pristine = EA._wire_old_spellings(JSON.parsefile(input_path))
 
             rewritten = mn === nothing ? EA.desugar_pushdown(input) :
                 EA.desugar_pushdown(input; model_name = String(mn))
             if fires
                 @test isfile(golden_path)
-                golden = JSON.parsefile(golden_path)
+                golden = EA._wire_old_spellings(JSON.parsefile(golden_path))
                 @test rewritten !== input                 # the pattern fired
                 @test _deep_eq(rewritten, golden)         # matches the golden
                 @test EA.desugar_pushdown(rewritten) === rewritten   # idempotent
