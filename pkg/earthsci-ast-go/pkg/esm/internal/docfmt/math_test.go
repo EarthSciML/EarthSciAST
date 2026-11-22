@@ -503,7 +503,12 @@ func component(t *testing.T, doc map[string]any) (*Sym, Json) {
 	names = append(names, keysOf(c["species"])...)
 	names = append(names, keysOf(c["parameters"])...)
 	names = append(names, keysOf(doc["index_sets"])...)
-	templates := append(templatesOf(doc["expression_templates"]), templatesOf(c["expression_templates"])...)
+	// The definition blocks, `operators` (or the old `expression_templates`).
+	var templates []TemplateParams
+	for _, k := range []string{"operators", "expression_templates"} {
+		templates = append(templates, templatesOf(doc[k])...)
+		templates = append(templates, templatesOf(c[k])...)
+	}
 	eq := c["equations"].([]any)[0].(map[string]any)
 	e := Obj{{"args", []Json{FromGo(eq["lhs"]), FromGo(eq["rhs"])}}, {"op", "=="}}
 	return &Sym{Names: names, Templates: templates}, e

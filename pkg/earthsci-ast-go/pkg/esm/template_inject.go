@@ -13,7 +13,7 @@ import (
 // entry (form B), or a §6.6/§6.7 test/analysis (form C) — may register imports
 // into a TARGET component's own scope without editing the leaf. Forms A/B are
 // applied at the raw-view level BEFORE resolveTemplateMachinery: each widens
-// the target component's `expression_template_imports` in the §9.7.10 merge
+// the target component's `operator_imports` in the §9.7.10 merge
 // order (the target's own imports first, then the injected list), so the
 // ordinary import resolver + §9.6.3 fixpoint lower the target's rewrite-targets
 // with no engine change. Form A is threaded through subsystem-ref resolution
@@ -25,20 +25,20 @@ import (
 // ===================================================================
 
 // appendComponentImports appends raw §9.7.2 import entries to a component's own
-// `expression_template_imports` (esm-spec §9.7.10 merge order: the target's own
+// `operator_imports` (esm-spec §9.7.10 merge order: the target's own
 // imports first, then the injected list). `comp` is a mutable raw view.
 func appendComponentImports(comp map[string]any, imports []any) {
 	var base []any
-	if existing, ok := comp["expression_template_imports"].([]any); ok {
+	if existing, ok := comp["operator_imports"].([]any); ok {
 		base = append(base, existing...)
 	}
 	base = append(base, imports...)
-	comp["expression_template_imports"] = base
+	comp["operator_imports"] = base
 }
 
 // applySubsystemRefInjection performs esm-spec §9.7.10 form A: append the
 // subsystem-ref edge's injected §9.7.2 import entries to the single top-level
-// component's own `expression_template_imports`, so the referenced document is
+// component's own `operator_imports`, so the referenced document is
 // lowered under the assembler-chosen discretization. `view` is the referenced
 // file's mutable raw view; a §4.7 subsystem file holds exactly one top-level
 // model or reaction system, which is the implicit target. A data-loader-only
@@ -120,24 +120,24 @@ func collectScopedOwners(out map[string]bool, x any) {
 }
 
 // applyCouplingInjections performs esm-spec §9.7.10 form B / §10.8: for each
-// `coupling` entry carrying an `expression_template_imports` map
+// `coupling` entry carrying an `operator_imports` map
 // `{ <target>: [imports...] }`, resolve each target key to a top-level system
-// and append its imports to that system's own `expression_template_imports`
+// and append its imports to that system's own `operator_imports`
 // (merge order §9.7.10). The map is consumed here (deleted from the entry) so
 // form B does not survive parse → emit.
 //
 // Diagnostics (esm-spec §9.6.6): a key naming no system the entry references is
-// `template_inject_target_unknown`; a key resolving to neither a model nor a
-// reaction system is `template_inject_target_not_component`. Only top-level
+// `operator_inject_target_unknown`; a key resolving to neither a model nor a
+// reaction system is `operator_inject_target_not_component`. Only top-level
 // system targets are resolved by this binding — a nested `Parent.Child` key is
-// out of scope and reported as `template_inject_target_not_component`. Mirrors
+// out of scope and reported as `operator_inject_target_not_component`. Mirrors
 // the Julia reference `_apply_coupling_injections!`.
 //
-// `template_inject_target_is_loader` is RETIRED with esm 1.0.0: a data source is
+// `operator_inject_target_is_loader` is RETIRED with esm 1.0.0: a data source is
 // not a component and cannot be a coupling endpoint, so no coupling entry can
 // reference one and the key could never be reached through `referenced` above.
 // A name that happens to match a `data_sources` key now falls to
-// `template_inject_target_not_component`, which is what it is.
+// `operator_inject_target_not_component`, which is what it is.
 func applyCouplingInjections(view map[string]any) error {
 	coupling, ok := view["coupling"].([]any)
 	if !ok {
@@ -161,14 +161,14 @@ func applyCouplingInjections(view map[string]any) error {
 		if !ok {
 			continue
 		}
-		injRaw, has := entry["expression_template_imports"]
+		injRaw, has := entry["operator_imports"]
 		if !has || injRaw == nil {
 			continue
 		}
 		inj, ok := injRaw.(map[string]any)
 		if !ok {
 			return newETErr(CodeTemplateInjectTargetNotComponent,
-				"coupling entry `expression_template_imports` must be a map from a target system name to a list of imports (esm-spec §9.7.10 / §10.8)")
+				"coupling entry `operator_imports` must be a map from a target system name to a list of imports (esm-spec §9.7.10 / §10.8)")
 		}
 		referenced := couplingReferencedSystems(entry)
 		for _, tname := range sortedKeys(inj) {
@@ -183,7 +183,7 @@ func applyCouplingInjections(view map[string]any) error {
 					refList = strings.Join(names, ", ")
 				}
 				return newETErr(CodeTemplateInjectTargetUnknown,
-					fmt.Sprintf("coupling entry `expression_template_imports` key '%s' names no system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry references: %s.", tname, refList))
+					fmt.Sprintf("coupling entry `operator_imports` key '%s' names no system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry references: %s.", tname, refList))
 			}
 			var comp map[string]any
 			if c, ok := topComp(models, tname); ok {
@@ -192,16 +192,16 @@ func applyCouplingInjections(view map[string]any) error {
 				comp = c
 			} else {
 				return newETErr(CodeTemplateInjectTargetNotComponent,
-					fmt.Sprintf("coupling entry `expression_template_imports` key '%s' resolves to neither a top-level model nor a reaction system (esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope.", tname))
+					fmt.Sprintf("coupling entry `operator_imports` key '%s' resolves to neither a top-level model nor a reaction system (esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope.", tname))
 			}
 			importsList, ok := inj[tname].([]any)
 			if !ok {
 				return newETErr(CodeTemplateImportNotLibrary,
-					fmt.Sprintf("coupling entry `expression_template_imports` value for '%s' must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8).", tname))
+					fmt.Sprintf("coupling entry `operator_imports` value for '%s' must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8).", tname))
 			}
 			appendComponentImports(comp, importsList)
 		}
-		delete(entry, "expression_template_imports")
+		delete(entry, "operator_imports")
 	}
 	return nil
 }

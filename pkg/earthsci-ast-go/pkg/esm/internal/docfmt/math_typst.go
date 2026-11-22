@@ -37,7 +37,7 @@ var typKwTable = map[Kw]string{
 	KwSqrt: "sqrt", KwExp: "exp", KwLn: "ln", KwLog: "log", KwSin: "sin", KwCos: "cos",
 	KwTan: "tan", KwAsin: "arcsin", KwAcos: "arccos", KwAtan: "arctan", KwSinh: "sinh",
 	KwCosh: "cosh", KwTanh: "tanh", KwMin: "min", KwMax: "max", KwAbs: "abs",
-	KwFloor: "floor", KwCeil: "ceil", KwPdiff: "partial", KwDif: "dif", KwCases: "cases",
+	KwFloor: "floor", KwCeil: "ceil", KwPdiff: "partial", KwNabla: "nabla", KwDif: "dif", KwCases: "cases",
 	KwEsmnode: "esm.node", KwVec: "vec", KwMat: "mat", KwSum: "sum", KwProd: "product",
 	KwInn: "in", KwLimits: "limits", KwLr: "lr", KwNl: "\\",
 	KwLset: "{", KwRset: "}",
@@ -239,7 +239,7 @@ var typIdentKw = map[string]Kw{
 	"sqrt": KwSqrt, "exp": KwExp, "ln": KwLn, "log": KwLog, "sin": KwSin, "cos": KwCos,
 	"tan": KwTan, "arcsin": KwAsin, "arccos": KwAcos, "arctan": KwAtan, "sinh": KwSinh,
 	"cosh": KwCosh, "tanh": KwTanh, "min": KwMin, "max": KwMax, "abs": KwAbs,
-	"floor": KwFloor, "ceil": KwCeil, "partial": KwPdiff, "dif": KwDif, "cases": KwCases,
+	"floor": KwFloor, "ceil": KwCeil, "partial": KwPdiff, "nabla": KwNabla, "dif": KwDif, "cases": KwCases,
 	"vec": KwVec, "mat": KwMat, "sum": KwSum, "product": KwProd, "in": KwInn,
 	"limits": KwLimits, "lr": KwLr,
 }

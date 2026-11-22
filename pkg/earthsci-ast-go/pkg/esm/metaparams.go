@@ -100,7 +100,7 @@ func collectMetaparamDecls(raw map[string]any, origin string, order []string) (*
 // NAMES, a structural namespace — never expression positions.
 var protectedKeys = []string{
 	"metadata", "params", "type", "units", "kind", "description", "name",
-	"expression_template_imports", "metaparameters", "only", "where",
+	"operator_imports", "metaparameters", "only", "where",
 }
 
 // axisKeys: the scalar value NAMES an index set / axis, so the rename walk maps
@@ -118,7 +118,9 @@ var axisKeys = []string{"wrt", "dim", "var"}
 // operator itself: with `max` bound to 3, {"op":"max", …} became {"op":3, …} and
 // the document died in LoadString with a raw "cannot unmarshal number into
 // ExprNode.op" instead of a diagnostic (audit G12).
-var nodeHeaderKeys = []string{"op", "id", "expect_cadence"}
+// `defines` (esm 2.4.0, esm-spec §9.6.1) names the defined operator a
+// definition defines: a name, never a value.
+var nodeHeaderKeys = []string{"op", "id", "expect_cadence", "defines"}
 
 // registryKeys: closed-registry ids / literal enums PARAMETERIZING the node's
 // op. Like nodeHeaderKeys these are names rather than values, so they are opaque
@@ -163,9 +165,11 @@ var opaqueKeys = []string{
 // substituted. A key in both sets (`where`, `rename`, …) is skipped whole.
 var nameKeyedMapKeys = keySet([]string{
 	"variables", "species", "parameters", "guesses", "subsystems",
-	"expression_templates", "ranges", "bindings", "config", "coords",
+	"operators", "ranges", "bindings", "config", "coords",
 	"initial_conditions", "parameter_overrides", "pinned_coords", "map",
 	"rename", "rebind", "index_set_rename", "url_substitutions", "where",
+	// The old spelling of `operators` (read as it at the wire boundary).
+	"expression_templates",
 })
 
 // boundKeys: `integral` bound fields (esm-spec §4.2). Unlike `var` these are
@@ -259,7 +263,7 @@ func substituteMetaparamsField(k string, c any, values map[string]any) any {
 }
 
 // substituteMetaparamsDecl applies metaparameter substitution over one
-// `expression_templates` entry: the template's own `params` shadow like-named
+// `operators` entry: the template's own `params` shadow like-named
 // metaparameters inside its `body` and `match` (a param is the inner binder;
 // substitution must not capture it).
 func substituteMetaparamsDecl(decl any, values map[string]any) any {
@@ -558,7 +562,7 @@ func coerceMetaExprInts(x any) any {
 // CLOSED environment env (name → int) — the importing document's metaparameter
 // scope (esm-spec §9.7.6 binding value flow). Substitutes the env names, then
 // folds with the exact-integer tryFold arithmetic (`/` must divide exactly;
-// 64-bit overflow is an error). Raises `template_import_unknown_name` if the
+// 64-bit overflow is an error). Raises `operator_import_unknown_name` if the
 // expression references a name absent from env — the mount-edge typo failure,
 // keeping error locality at the edge that authored the expression. Mirrors the
 // Python reference `eval_meta_expr`.

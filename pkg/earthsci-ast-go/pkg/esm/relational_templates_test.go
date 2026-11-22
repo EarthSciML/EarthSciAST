@@ -28,7 +28,7 @@ func TestRelationalScenariosThroughLibraryTemplates(t *testing.T) {
 		Templates map[string]struct {
 			Params []string `json:"params"`
 			Body   any      `json:"body"`
-		} `json:"expression_templates"`
+		} `json:"operators"`
 	}
 	if err := json.Unmarshal(libRaw, &library); err != nil {
 		t.Fatalf("parse %s: %v", libraryPath, err)
@@ -87,7 +87,7 @@ func TestRelationalScenariosThroughLibraryTemplates(t *testing.T) {
 		equations = append(equations, map[string]any{
 			"lhs": map[string]any{"op": "D", "args": []any{out}, "wrt": "t"},
 			"rhs": map[string]any{
-				"op": "apply_expression_template", "args": []any{},
+				"op": "apply_operator", "args": []any{},
 				"name": sc.Op, "bindings": calls[i],
 			},
 		})
@@ -96,9 +96,9 @@ func TestRelationalScenariosThroughLibraryTemplates(t *testing.T) {
 		"esm":      "1.1.0",
 		"metadata": map[string]any{"name": "relational_templates"},
 		"models": map[string]any{"Probe": map[string]any{
-			"expression_template_imports": []any{map[string]any{"ref": libraryPath}},
-			"variables":                   variables,
-			"equations":                   equations,
+			"operator_imports": []any{map[string]any{"ref": libraryPath}},
+			"variables":        variables,
+			"equations":        equations,
 		}},
 	}
 	docJSON, err := json.Marshal(doc)
@@ -146,7 +146,7 @@ func TestRelationalTemplateTierDocumentsExpand(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if strings.Contains(s, "apply_expression_template") {
+				if strings.Contains(s, "apply_operator") {
 					t.Errorf("%s %s equation %d: a template reference survived load", name, mname, i)
 				}
 			}
@@ -167,7 +167,7 @@ func TestRelationalKeyAndWhereTemplatesExpand(t *testing.T) {
 	var library struct {
 		Templates map[string]struct {
 			Body any `json:"body"`
-		} `json:"expression_templates"`
+		} `json:"operators"`
 	}
 	if err := json.Unmarshal(libRaw, &library); err != nil {
 		t.Fatal(err)
@@ -196,7 +196,7 @@ func TestRelationalKeyAndWhereTemplatesExpand(t *testing.T) {
 		variables[out] = map[string]any{"type": "unknown", "default": 0.0, "units": "1"}
 		equations = append(equations, map[string]any{
 			"lhs": map[string]any{"op": "D", "args": []any{out}, "wrt": "t"},
-			"rhs": map[string]any{"op": "apply_expression_template", "args": []any{}, "name": c.name, "bindings": c.bindings},
+			"rhs": map[string]any{"op": "apply_operator", "args": []any{}, "name": c.name, "bindings": c.bindings},
 		})
 	}
 	doc := map[string]any{
@@ -204,9 +204,9 @@ func TestRelationalKeyAndWhereTemplatesExpand(t *testing.T) {
 		"metadata":   map[string]any{"name": "relational_key_templates"},
 		"index_sets": map[string]any{"cells": map[string]any{"kind": "interval", "size": 3}},
 		"models": map[string]any{"Probe": map[string]any{
-			"expression_template_imports": []any{map[string]any{"ref": libraryPath}},
-			"variables":                   variables,
-			"equations":                   equations,
+			"operator_imports": []any{map[string]any{"ref": libraryPath}},
+			"variables":        variables,
+			"equations":        equations,
 		}},
 	}
 	docJSON, err := json.Marshal(doc)
@@ -271,7 +271,7 @@ func TestRelationalRewritesLoad(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if strings.Contains(s, "apply_expression_template") {
+				if strings.Contains(s, "apply_operator") {
 					t.Errorf("%s %s equation %d: a template reference survived load", e.ID, mname, i)
 				}
 			}

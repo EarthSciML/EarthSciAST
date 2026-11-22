@@ -144,9 +144,9 @@ func decodeJSONNumbers(t *testing.T, label string, text []byte) any {
 // the transform. This list is an admission of designed behaviour, not of
 // unfixed drops — do not add a fixture here to silence a real one.
 var transformingFixtures = map[string]string{
-	// Eager `apply_expression_template` expansion (esm-spec §9.6, Option A):
+	// Eager `apply_operator` expansion (esm-spec §9.6, Option A):
 	// call sites are expanded at load and the component's own
-	// `expression_templates` / `expression_template_imports` blocks are
+	// `operators` / `operator_imports` blocks are
 	// consumed, so the emitted equations are the expanded ones.
 	"advection_reaction_loaded_ic_bc.esm":       "eager expression-template expansion",
 	"derivative_trailing_boundary_operands.esm": "eager expression-template expansion",

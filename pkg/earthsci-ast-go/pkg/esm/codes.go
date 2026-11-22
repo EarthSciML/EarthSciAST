@@ -7,8 +7,8 @@ package esm
 //
 // It holds the stable §9.6.6 / §10.11 diagnostic codes the audit flagged as
 // repeated across the package (metaparameter_type_error appears 21×,
-// template_import_unresolved 10×, template_import_unknown_name 10×,
-// template_import_name_conflict 10×, coupling_library_illegal_payload 6×) AND
+// operator_import_unresolved 10×, operator_import_unknown_name 10×,
+// operator_import_name_conflict 10×, coupling_library_illegal_payload 6×) AND
 // the structural-validation codes — including the `Error*` block that used to
 // be declared in validate.go, moved here verbatim (same names, same values, so
 // no wire-visible change) so that a reader looking for "what codes can this
@@ -35,53 +35,53 @@ package esm
 // (raised via newETErr from template_imports.go and subsystem_ref.go). ---
 const (
 	CodeMetaparamTypeError         = "metaparameter_type_error"
-	CodeTemplateImportUnresolved   = "template_import_unresolved"
-	CodeTemplateImportUnknownName  = "template_import_unknown_name"
-	CodeTemplateImportNameConflict = "template_import_name_conflict"
-	CodeTemplateImportCycle        = "template_import_cycle"
+	CodeTemplateImportUnresolved   = "operator_import_unresolved"
+	CodeTemplateImportUnknownName  = "operator_import_unknown_name"
+	CodeTemplateImportNameConflict = "operator_import_name_conflict"
+	CodeTemplateImportCycle        = "operator_import_cycle"
 
 	// CodeTemplateImportVersionTooOld: a file declaring esm < 0.8.0 carries
-	// `expression_template_imports`, top-level `expression_templates`, or
+	// `operator_imports`, top-level `operators`, or
 	// `metaparameters` (esm-spec §9.6.5).
-	CodeTemplateImportVersionTooOld = "template_import_version_too_old"
+	CodeTemplateImportVersionTooOld = "operator_import_version_too_old"
 	// CodeTemplateImportIndexSetConflict: a merged `index_sets` name collides
 	// with a non-deep-equal definition (esm-spec §9.7.5). This binding does not
 	// raise it yet; the constant exists because the §9.6.6 table is
 	// cross-language uniform.
-	CodeTemplateImportIndexSetConflict = "template_import_index_set_conflict"
+	CodeTemplateImportIndexSetConflict = "operator_import_index_set_conflict"
 
 	// CodeTemplateImportNotLibrary: an `import` resolves to a file that is not a
 	// template library (it declares components, or declares no
-	// `expression_templates` / `coupling_roles` block at all).
-	CodeTemplateImportNotLibrary = "template_import_not_library"
+	// `operators` / `coupling_roles` block at all).
+	CodeTemplateImportNotLibrary = "operator_import_not_library"
 	// CodeTemplateImportIsCouplingLibrary: a template `import` resolves to a
 	// COUPLING library (§10.9). The two library kinds are imported through
 	// different blocks and are not interchangeable.
-	CodeTemplateImportIsCouplingLibrary = "template_import_is_coupling_library"
+	CodeTemplateImportIsCouplingLibrary = "operator_import_is_coupling_library"
 	// CodeTemplateLibraryIllegalPayload: a document carries top-level
-	// `expression_templates` beside `models` / `reaction_systems` /
+	// `operators` beside `models` / `reaction_systems` /
 	// `data_sources` / `coupling` / `domain`, which a template-library file
 	// never declares (esm-spec §9.7.1).
-	CodeTemplateLibraryIllegalPayload = "template_library_illegal_payload"
+	CodeTemplateLibraryIllegalPayload = "operator_library_illegal_payload"
 	// CodeTemplateImportRenameInvalid: an import's `rename` / `rebind` entry is
 	// malformed — not an object, or an entry whose key or value is not a
 	// non-empty string.
-	CodeTemplateImportRenameInvalid = "template_import_rename_invalid"
+	CodeTemplateImportRenameInvalid = "operator_import_rename_invalid"
 	// CodeTemplateImportRenameUnknownName: a `rename` key names nothing the
 	// imported library exports.
-	CodeTemplateImportRenameUnknownName = "template_import_rename_unknown_name"
+	CodeTemplateImportRenameUnknownName = "operator_import_rename_unknown_name"
 	// CodeTemplateImportRenameCollision: a `rename` target collides with a name
 	// already in scope (another import's export, or a local declaration).
-	CodeTemplateImportRenameCollision = "template_import_rename_collision"
+	CodeTemplateImportRenameCollision = "operator_import_rename_collision"
 	// CodeTemplateImportRebindUnknownName: a `rebind` key names no metaparameter
 	// the imported library declares.
-	CodeTemplateImportRebindUnknownName = "template_import_rebind_unknown_name"
+	CodeTemplateImportRebindUnknownName = "operator_import_rebind_unknown_name"
 	// CodeTemplateInjectTargetUnknown: an injection `target` names a component
 	// the document does not declare.
-	CodeTemplateInjectTargetUnknown = "template_inject_target_unknown"
+	CodeTemplateInjectTargetUnknown = "operator_inject_target_unknown"
 	// CodeTemplateInjectTargetNotComponent: an injection `target` resolves to
 	// something that is not an injectable component.
-	CodeTemplateInjectTargetNotComponent = "template_inject_target_not_component"
+	CodeTemplateInjectTargetNotComponent = "operator_inject_target_not_component"
 
 	// CodeMetaparamUnbound: a metaparameter reachable in an expanded template
 	// body has no binding — neither from the `metaparameters` block nor from an
@@ -97,34 +97,34 @@ const (
 // out_of_line_templates.go and template_compose.go). ---
 const (
 	// CodeApplyExpressionTemplateInvalidDeclaration: an
-	// `apply_expression_template` node is structurally malformed — a missing or
+	// `apply_operator` node is structurally malformed — a missing or
 	// non-string `template`, a `bindings` payload that is not an object, or a
 	// binding entry whose key is not a non-empty string.
-	CodeApplyExpressionTemplateInvalidDeclaration = "apply_expression_template_invalid_declaration"
+	CodeApplyExpressionTemplateInvalidDeclaration = "operator_invalid_definition"
 	// CodeApplyExpressionTemplateUnknownTemplate: an
-	// `apply_expression_template` names a template neither declared locally nor
+	// `apply_operator` names a template neither declared locally nor
 	// exported by any import in scope.
-	CodeApplyExpressionTemplateUnknownTemplate = "apply_expression_template_unknown_template"
+	CodeApplyExpressionTemplateUnknownTemplate = "operator_unknown_definition"
 	// CodeApplyExpressionTemplateBindingsMismatch: the supplied `bindings` do
 	// not match the template's declared parameters — a missing parameter, or a
 	// binding naming a parameter the template does not declare.
-	CodeApplyExpressionTemplateBindingsMismatch = "apply_expression_template_bindings_mismatch"
+	CodeApplyExpressionTemplateBindingsMismatch = "operator_bindings_mismatch"
 	// CodeApplyExpressionTemplateRecursiveBody: a template's body applies the
 	// template itself, directly or through a cycle of applications.
-	CodeApplyExpressionTemplateRecursiveBody = "apply_expression_template_recursive_body"
+	CodeApplyExpressionTemplateRecursiveBody = "operator_recursive_body"
 	// CodeTemplateBodyExpansionTooDeep: nested template application exceeded the
 	// expansion depth budget — the non-cyclic guard against unbounded growth.
-	CodeTemplateBodyExpansionTooDeep = "template_body_expansion_too_deep"
+	CodeTemplateBodyExpansionTooDeep = "operator_body_expansion_too_deep"
 	// CodeTemplateConstraintUnknownIndexSet: a template's `constraints` entry
 	// names an index set absent from the document `index_sets` registry.
-	CodeTemplateConstraintUnknownIndexSet = "template_constraint_unknown_index_set"
+	CodeTemplateConstraintUnknownIndexSet = "operator_constraint_unknown_index_set"
 	// CodeTemplateBodyReferencesCouplingRewrittenVariable: formerly the
 	// flatten-time refusal of a surviving registry body that named a variable
 	// a coupling rule rewrote. Flatten now closes every carried body (esm-spec
 	// §10.7): a name a body read is a parameter each reference binds, where
 	// the rewrite reaches it, so flatten no longer raises it. The constant
 	// stays because the code vocabulary is uniform across bindings.
-	CodeTemplateBodyReferencesCouplingRewrittenVariable = "template_body_references_coupling_rewritten_variable"
+	CodeTemplateBodyReferencesCouplingRewrittenVariable = "operator_body_references_coupling_rewritten_variable"
 	// CodeAmbiguousOutputName: an output name that matches no variable exactly
 	// and whose last dotted segment is shared by more than one variable
 	// (CONFORMANCE_SPEC §5.17.4). This binding has no output derivation; the
@@ -134,8 +134,32 @@ const (
 	// start, so the region denotes no cells (esm-spec §4.3.5).
 	CodeMakearrayRegionInverted = "makearray_region_inverted"
 	// CodeApplyExpressionTemplateVersionTooOld: a file declaring esm < 0.4.0
-	// carries `expression_templates` or `apply_expression_template`.
-	CodeApplyExpressionTemplateVersionTooOld = "apply_expression_template_version_too_old"
+	// carries `operators` or `apply_operator`.
+	CodeApplyExpressionTemplateVersionTooOld = "operator_version_too_old"
+	// codeOperatorArityMismatch: a call of a defined operator survives the
+	// rewrite while definitions of it are in scope and none takes the call's
+	// operand count (esm-spec §9.6.12 "Arity"). Load error.
+	codeOperatorArityMismatch = "operator_arity_mismatch"
+	// codeOperatorDefinesCoreOp: a definition whose `defines`, written or
+	// inferred, is the name of a core operator (esm-spec §9.6.12 "Core names
+	// are reserved"). Load error.
+	codeOperatorDefinesCoreOp = "operator_defines_core_op"
+	// codeDefinitionUnitMismatch: a definition's body unit disagrees with its
+	// unit expression or with the fixed unit expression of `partial` /
+	// `integral` (esm-spec §9.6.12 "Units"). A validation error, or a warning
+	// when the body's unit is undeterminable.
+	codeDefinitionUnitMismatch = "definition_unit_mismatch"
+	// codeDeprecatedField: the load-time WARNING for a document spelling the
+	// fields `expression_templates` / `expression_template_imports`, read as
+	// `operators` / `operator_imports` (esm-spec §9.6.12 "Old names").
+	codeDeprecatedField = "deprecated_field"
+	// codeOperatorInjectTargetIsLoader: registered for the uniform code
+	// vocabulary; this binding folds the case into
+	// CodeTemplateInjectTargetNotComponent.
+	codeOperatorInjectTargetIsLoader = "operator_inject_target_is_loader"
+	// codeOperatorBodyReferencesPushdownRewrittenVariable: registered for the
+	// uniform code vocabulary; this binding has no projection-pushdown desugar.
+	codeOperatorBodyReferencesPushdownRewrittenVariable = "operator_body_references_pushdown_rewritten_variable"
 	// CodeRewriteRuleNonterminating: the rewrite fixpoint did not converge
 	// within MAX_REWRITE_PASSES passes (esm-spec §9.6.3).
 	CodeRewriteRuleNonterminating = "rewrite_rule_nonterminating"
@@ -293,7 +317,7 @@ const (
 	CodeAmbiguousSubsystemRef = "ambiguous_subsystem_ref"
 	// CodeSubsystemRefIsTemplateLibrary: a subsystem `ref` resolves to a
 	// TEMPLATE library (§9.7) rather than to a document declaring a system.
-	CodeSubsystemRefIsTemplateLibrary = "subsystem_ref_is_template_library"
+	CodeSubsystemRefIsTemplateLibrary = "subsystem_ref_is_operator_library"
 	// CodeSubsystemRefIsCouplingLibrary: a subsystem `ref` resolves to a
 	// COUPLING library (§10.9) rather than to a document declaring a system.
 	CodeSubsystemRefIsCouplingLibrary = "subsystem_ref_is_coupling_library"
@@ -303,7 +327,7 @@ const (
 	// CodeSubsystemIndexSetRenameUnknownName: a mount edge's
 	// `index_set_rename` names an index set the RESOLVED mounted document does
 	// not declare (esm-spec §4.7 "Mount-edge index-set renaming") — the
-	// mount-edge mirror of `template_import_rename_unknown_name`.
+	// mount-edge mirror of `operator_import_rename_unknown_name`.
 	CodeSubsystemIndexSetRenameUnknownName = "subsystem_index_set_rename_unknown_name"
 	// CodeSubsystemIndexSetRenameUnsupportedMountForm: `index_set_rename` on a
 	// mount form that does not implement it (esm-spec §4.7 "Mount-edge
@@ -699,3 +723,46 @@ var (
 	_ DiagnosticError = (*OperatorComposeAmbiguousBareNameError)(nil)
 	_ DiagnosticError = (*OperatorComposeRequireMatchError)(nil)
 )
+
+// errorCodeAliases maps each diagnostic code esm 2.4.0 renamed to its new
+// spelling (esm-spec §9.6.6, "Renamed codes"). This binding reports only the
+// new codes; a harness or tool that matches an old spelling reads it through
+// canonicalErrorCode.
+var errorCodeAliases = map[string]string{
+	"apply_expression_template_unknown_template":           CodeApplyExpressionTemplateUnknownTemplate,
+	"apply_expression_template_bindings_mismatch":          CodeApplyExpressionTemplateBindingsMismatch,
+	"apply_expression_template_recursive_body":             CodeApplyExpressionTemplateRecursiveBody,
+	"apply_expression_template_invalid_declaration":        CodeApplyExpressionTemplateInvalidDeclaration,
+	"apply_expression_template_version_too_old":            CodeApplyExpressionTemplateVersionTooOld,
+	"template_constraint_unknown_index_set":                CodeTemplateConstraintUnknownIndexSet,
+	"template_body_expansion_too_deep":                     CodeTemplateBodyExpansionTooDeep,
+	"template_library_illegal_payload":                     CodeTemplateLibraryIllegalPayload,
+	"subsystem_ref_is_template_library":                    CodeSubsystemRefIsTemplateLibrary,
+	"template_inject_target_unknown":                       CodeTemplateInjectTargetUnknown,
+	"template_inject_target_not_component":                 CodeTemplateInjectTargetNotComponent,
+	"template_inject_target_is_loader":                     codeOperatorInjectTargetIsLoader,
+	"template_body_references_coupling_rewritten_variable": CodeTemplateBodyReferencesCouplingRewrittenVariable,
+	"template_body_references_pushdown_rewritten_variable": codeOperatorBodyReferencesPushdownRewrittenVariable,
+	"template_import_unknown_name":                         CodeTemplateImportUnknownName,
+	"template_import_not_library":                          CodeTemplateImportNotLibrary,
+	"template_import_index_set_conflict":                   CodeTemplateImportIndexSetConflict,
+	"template_import_unresolved":                           CodeTemplateImportUnresolved,
+	"template_import_rename_unknown_name":                  CodeTemplateImportRenameUnknownName,
+	"template_import_rename_invalid":                       CodeTemplateImportRenameInvalid,
+	"template_import_rename_collision":                     CodeTemplateImportRenameCollision,
+	"template_import_name_conflict":                        CodeTemplateImportNameConflict,
+	"template_import_version_too_old":                      CodeTemplateImportVersionTooOld,
+	"template_import_rebind_unknown_name":                  CodeTemplateImportRebindUnknownName,
+	"template_import_cycle":                                CodeTemplateImportCycle,
+	"template_import_is_coupling_library":                  CodeTemplateImportIsCouplingLibrary,
+}
+
+// canonicalErrorCode returns the current spelling of a diagnostic code: code
+// itself, or the new code an old (esm < 2.4.0) spelling is an alias of
+// (esm-spec §9.6.6).
+func canonicalErrorCode(code string) string {
+	if n, ok := errorCodeAliases[code]; ok {
+		return n
+	}
+	return code
+}

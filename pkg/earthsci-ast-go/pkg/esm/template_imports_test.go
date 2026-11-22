@@ -1,7 +1,7 @@
 package esm
 
 // Tests for esm-spec §9.7 — template-library files,
-// `expression_template_imports`, and load-time `metaparameters`
+// `operator_imports`, and load-time `metaparameters`
 // (docs/content/rfcs/template-library-imports.md; esm-libraries-spec §2.1c).
 //
 // Drives the shared conformance fixtures under
@@ -426,7 +426,7 @@ func TestMatchScoping_ConformanceGoldens(t *testing.T) {
 // a `where`-constrained div rule imported twice under prefix has its
 // where.F.shape rewritten x -> meshA.x / meshB.x in lockstep with the index set,
 // so each instance registers and fires only on its own field. Without the
-// rewrite this raised template_constraint_unknown_index_set.
+// rewrite this raised operator_constraint_unknown_index_set.
 func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
 	doc := tiExpandRaw(t, tiConfDir(t, "import_where_rename_two_instances", "fixture.esm"))
 	var v map[string]any
@@ -747,8 +747,8 @@ func TestTemplateImports_LibraryEnumUndeclared(t *testing.T) {
 // rejected at rule registration — the fix does not paper over genuine typos.
 func TestTemplateImports_WhereRenameUnknownIndexSet(t *testing.T) {
 	_, err := LoadPath(tiConfDir(t, "import_where_rename_unknown_index_set", "fixture.esm"))
-	if code := tiErrCode(t, err); code != "template_constraint_unknown_index_set" {
-		t.Errorf("code = %s; want template_constraint_unknown_index_set", code)
+	if code := tiErrCode(t, err); code != "operator_constraint_unknown_index_set" {
+		t.Errorf("code = %s; want operator_constraint_unknown_index_set", code)
 	}
 }
 
@@ -757,8 +757,8 @@ func TestTemplateImports_WhereRenameUnknownIndexSet(t *testing.T) {
 // document's registry is rejected at load.
 func TestMatchScoping_ConstraintUnknownIndexSet(t *testing.T) {
 	_, err := LoadPath(tiConfDir(t, "constraint_unknown_index_set", "fixture.esm"))
-	if code := tiErrCode(t, err); code != "template_constraint_unknown_index_set" {
-		t.Errorf("code = %s; want template_constraint_unknown_index_set", code)
+	if code := tiErrCode(t, err); code != "operator_constraint_unknown_index_set" {
+		t.Errorf("code = %s; want operator_constraint_unknown_index_set", code)
 	}
 }
 
@@ -1004,16 +1004,16 @@ func TestTemplateImports_LoaderAPIBindingsAndDefaults(t *testing.T) {
 	}
 	// Binding a name the document does not declare is an error.
 	_, err = LoadPath(problem, WithMetaparameters(map[string]int64{"Q": 1}))
-	if code := tiErrCode(t, err); code != "template_import_unknown_name" {
-		t.Errorf("unknown API binding code = %s; want template_import_unknown_name", code)
+	if code := tiErrCode(t, err); code != "operator_import_unknown_name" {
+		t.Errorf("unknown API binding code = %s; want operator_import_unknown_name", code)
 	}
 }
 
 // A CONSUMER file round-trips to its expanded, folded form (esm-spec §9.7.6):
-// `expression_template_imports` IS an import edge and is consumed, along with
-// the `apply_expression_template` call sites it lowers.
+// `operator_imports` IS an import edge and is consumed, along with
+// the `apply_operator` call sites it lowers.
 //
-// import_smoke/fixture.esm declares NO top-level `expression_templates` registry
+// import_smoke/fixture.esm declares NO top-level `operators` registry
 // and NO top-level `metaparameters` block, so there is no DECLARATION here to
 // preserve — contrast TestTemplateImports_LibraryRoundTripsToItself. NLON / NLAT
 // are declared by the IMPORTED grid and closed at the edge (`bindings`), so they
@@ -1028,8 +1028,8 @@ func TestTemplateImports_RoundTripEmitsExpandedFoldedForm(t *testing.T) {
 		t.Fatalf("ToJSON: %v", err)
 	}
 	text := string(out)
-	for _, construct := range []string{"expression_template_imports", "metaparameters",
-		"expression_templates", "apply_expression_template"} {
+	for _, construct := range []string{"operator_imports", "metaparameters",
+		"operators", "apply_operator"} {
 		if strings.Contains(text, construct) {
 			t.Errorf("round-trip output still contains %s", construct)
 		}
@@ -1039,8 +1039,8 @@ func TestTemplateImports_RoundTripEmitsExpandedFoldedForm(t *testing.T) {
 // A TEMPLATE-LIBRARY file MUST round-trip to ITSELF (esm-spec §9.6.4 rule 5,
 // §9.7.6 "Ordering within load").
 //
-// The top-level `expression_templates` registry and `metaparameters` block are
-// DECLARATIONS — peers of `index_sets`, not `apply_expression_template` call
+// The top-level `operators` registry and `metaparameters` block are
+// DECLARATIONS — peers of `index_sets`, not `apply_operator` call
 // sites. Option A expands call sites; it does NOT delete declarations. Both
 // survive `parse → emit` VERBATIM.
 //
@@ -1062,8 +1062,14 @@ func TestTemplateImports_LibraryRoundTripsToItself(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read: %v", err)
 			}
+			// The library may spell its block `expression_templates`, which a
+			// load reads as `operators` (esm-spec §9.6.12): compare against that.
+			newSpelling, _, _, err := rewriteOldSpellings(string(src))
+			if err != nil {
+				t.Fatalf("read old spellings: %v", err)
+			}
 			var onDisk map[string]any
-			if err := json.Unmarshal(src, &onDisk); err != nil {
+			if err := json.Unmarshal([]byte(newSpelling), &onDisk); err != nil {
 				t.Fatalf("parse source: %v", err)
 			}
 
@@ -1092,7 +1098,7 @@ func TestTemplateImports_LibraryRoundTripsToItself(t *testing.T) {
 				t.Fatalf("parse typed emit: %v", err)
 			}
 
-			for _, key := range []string{"expression_templates", "metaparameters"} {
+			for _, key := range []string{"operators", "metaparameters"} {
 				if onDisk[key] == nil {
 					t.Fatalf("%s is only a meaningful pin if it authors `%s`", lib, key)
 				}
@@ -1111,7 +1117,7 @@ func TestTemplateImports_LibraryRoundTripsToItself(t *testing.T) {
 			// this is the schema `anyOf` that the deletion violated.
 			payload := false
 			for _, k := range []string{"models", "reaction_systems", "data_sources",
-				"operators", "expression_templates"} {
+				"operators", "operators"} {
 				if emitted[k] != nil {
 					payload = true
 				}
@@ -1221,21 +1227,21 @@ func TestTemplateImports_InvalidFixtures(t *testing.T) {
 	}
 
 	// The fixture set exercises the §9.6.6 §9.7 code table, less two codes no
-	// fixture can reach: template_import_unresolved (exercised by the unit
+	// fixture can reach: operator_import_unresolved (exercised by the unit
 	// tests below — a missing file is not representable as a fixture) and
-	// template_import_version_too_old, which esm 1.0.0 makes unreachable
+	// operator_import_version_too_old, which esm 1.0.0 makes unreachable
 	// through the load path. That gate rejects a document declaring below
 	// 0.8.0, but a 1.x library rejects every 0.x document on its MAJOR version
 	// at parse, before the resolver runs, and every document it accepts
 	// declares >= 1.0.0 > 0.8.0 — so the gate is permanently satisfied. The
 	// gate function itself is still live and unit-tested directly.
 	for _, code := range []string{
-		"template_import_not_library", "template_library_illegal_payload",
-		"subsystem_ref_is_template_library", "template_import_cycle",
-		"template_import_name_conflict", "template_import_unknown_name",
-		"template_import_index_set_conflict",
-		"apply_expression_template_recursive_body",
-		"template_body_expansion_too_deep", "metaparameter_unbound",
+		"operator_import_not_library", "operator_library_illegal_payload",
+		"subsystem_ref_is_operator_library", "operator_import_cycle",
+		"operator_import_name_conflict", "operator_import_unknown_name",
+		"operator_import_index_set_conflict",
+		"operator_recursive_body",
+		"operator_body_expansion_too_deep", "metaparameter_unbound",
 		"metaparameter_type_error", "metaparameter_name_conflict",
 	} {
 		if !seenCodes[code] {
@@ -1266,17 +1272,17 @@ func TestTemplateImports_UnresolvedMissingAndUnparsableRef(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "m.esm")
 	writeFileString(t, p, tiModelJSON(
-		`"expression_template_imports": [{"ref": "./nope.esm"}],`, ""))
+		`"operator_imports": [{"ref": "./nope.esm"}],`, ""))
 	_, err := LoadPath(p)
-	if code := tiErrCode(t, err); code != "template_import_unresolved" {
-		t.Errorf("missing ref code = %s; want template_import_unresolved", code)
+	if code := tiErrCode(t, err); code != "operator_import_unresolved" {
+		t.Errorf("missing ref code = %s; want operator_import_unresolved", code)
 	}
 	writeFileString(t, filepath.Join(dir, "junk.esm"), "{not json")
 	writeFileString(t, p, tiModelJSON(
-		`"expression_template_imports": [{"ref": "./junk.esm"}],`, ""))
+		`"operator_imports": [{"ref": "./junk.esm"}],`, ""))
 	_, err = LoadPath(p)
-	if code := tiErrCode(t, err); code != "template_import_unresolved" {
-		t.Errorf("junk ref code = %s; want template_import_unresolved", code)
+	if code := tiErrCode(t, err); code != "operator_import_unresolved" {
+		t.Errorf("junk ref code = %s; want operator_import_unresolved", code)
 	}
 }
 
@@ -1292,10 +1298,10 @@ func TestTemplateImports_OnlyFiltersVisibilityNotInternalWiring(t *testing.T) {
 	writeFileString(t, filepath.Join(dir, "lib.esm"), `{
       "esm": "0.8.0",
       "metadata": {"name": "lib"},
-      "expression_templates": {
+      "operators": {
         "t_inner": {"params": [], "body": 7},
         "t_keep": {"params": [], "body": {"op": "*", "args": [2,
-          {"op": "apply_expression_template", "args": [], "name": "t_inner", "bindings": {}}]}},
+          {"op": "apply_operator", "args": [], "name": "t_inner", "bindings": {}}]}},
         "t_drop": {"params": [], "body": 9}
       }
     }`)
@@ -1304,13 +1310,13 @@ func TestTemplateImports_OnlyFiltersVisibilityNotInternalWiring(t *testing.T) {
 	// importing `only: [t_keep]` carries the internal-wiring reference-closure
 	// (t_inner) along and the reference SURVIVES; `Expand` yields 2 * 7.
 	src := tiModelJSON(
-		`"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],`, "")
+		`"operator_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],`, "")
 	view := decodeFixture(t, src)
 	orders := extractTemplateOrders(src)
 	if _, err := resolveTemplateMachinery(view, orders, dir, nil, resolveOpts{}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	tpl := view["models"].(map[string]any)["M"].(map[string]any)["expression_templates"].(map[string]any)
+	tpl := view["models"].(map[string]any)["M"].(map[string]any)["operators"].(map[string]any)
 	// t_keep kept explicitly; t_inner carried by the reference closure;
 	// t_drop (unreferenced, filtered) is gone.
 	if len(tpl) != 2 || tpl["t_keep"] == nil || tpl["t_inner"] == nil {
@@ -1318,7 +1324,7 @@ func TestTemplateImports_OnlyFiltersVisibilityNotInternalWiring(t *testing.T) {
 	}
 	body := tpl["t_keep"].(map[string]any)["body"]
 	// The reference to t_inner SURVIVES (Option B; not inlined to `7`).
-	const wantBody = `{"args":[2,{"args":[],"bindings":{},"name":"t_inner","op":"apply_expression_template"}],"op":"*"}`
+	const wantBody = `{"args":[2,{"args":[],"bindings":{},"name":"t_inner","op":"apply_operator"}],"op":"*"}`
 	if got := mustJSON(t, body); got != wantBody {
 		t.Errorf("composed body = %s; want %s", got, wantBody)
 	}
@@ -1328,12 +1334,12 @@ func TestTemplateImports_OnlyFiltersVisibilityNotInternalWiring(t *testing.T) {
 	// Referencing a filtered-out name from an expression position fails.
 	p2 := filepath.Join(dir, "m2.esm")
 	writeFileString(t, p2, tiModelJSON(
-		`"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],
-         "expression_templates": {"local_uses_drop": {"params": [],
-           "body": {"op": "apply_expression_template", "args": [], "name": "t_drop", "bindings": {}}}},`, ""))
+		`"operator_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],
+         "operators": {"local_uses_drop": {"params": [],
+           "body": {"op": "apply_operator", "args": [], "name": "t_drop", "bindings": {}}}},`, ""))
 	_, err := LoadPath(p2)
-	if code := tiErrCode(t, err); code != "apply_expression_template_unknown_template" {
-		t.Errorf("filtered-out reference code = %s; want apply_expression_template_unknown_template", code)
+	if code := tiErrCode(t, err); code != "operator_unknown_definition" {
+		t.Errorf("filtered-out reference code = %s; want operator_unknown_definition", code)
 	}
 }
 
@@ -1343,21 +1349,21 @@ func TestTemplateImports_DiamondWithConflictingEdgeBindings(t *testing.T) {
       "esm": "0.8.0", "metadata": {"name": "grid"},
       "metaparameters": {"NC": {"type": "integer"}},
       "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
-      "expression_templates": {"nc": {"params": [], "body": "NC"}}
+      "operators": {"nc": {"params": [], "body": "NC"}}
     }`)
 	p := filepath.Join(dir, "m.esm")
 	writeFileString(t, p, tiModelJSON(
-		`"expression_template_imports": [
+		`"operator_imports": [
            {"ref": "./grid.esm", "bindings": {"NC": 4}},
            {"ref": "./grid.esm", "bindings": {"NC": 8}}],`, ""))
 	_, err := LoadPath(p)
 	code := tiErrCode(t, err)
-	if code != "template_import_name_conflict" && code != "template_import_index_set_conflict" {
+	if code != "operator_import_name_conflict" && code != "operator_import_index_set_conflict" {
 		t.Errorf("conflicting diamond code = %s; want a §9.7.4/§9.7.5 conflict", code)
 	}
 	// Equal instantiation on both edges dedups cleanly.
 	writeFileString(t, p, tiModelJSON(
-		`"expression_template_imports": [
+		`"operator_imports": [
            {"ref": "./grid.esm", "bindings": {"NC": 4}},
            {"ref": "./grid.esm", "bindings": {"NC": 4}}],`, ""))
 	f, err := LoadPath(p)
@@ -1374,20 +1380,20 @@ func TestTemplateImports_EdgeBindingUnknownNameAndNonInteger(t *testing.T) {
 	writeFileString(t, filepath.Join(dir, "lib.esm"), `{
       "esm": "0.8.0", "metadata": {"name": "lib"},
       "metaparameters": {"N": {"type": "integer", "default": 8}},
-      "expression_templates": {"n": {"params": [], "body": "N"}}
+      "operators": {"n": {"params": [], "body": "N"}}
     }`)
 	p := filepath.Join(dir, "m.esm")
 	writeFileString(t, p, tiModelJSON(
-		`"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],`, ""))
+		`"operator_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],`, ""))
 	_, err := LoadPath(p)
-	if code := tiErrCode(t, err); code != "template_import_unknown_name" {
-		t.Errorf("unknown edge binding code = %s; want template_import_unknown_name", code)
+	if code := tiErrCode(t, err); code != "operator_import_unknown_name" {
+		t.Errorf("unknown edge binding code = %s; want operator_import_unknown_name", code)
 	}
 	// A non-integer binding: the resolver-level backstop reports
 	// metaparameter_type_error (via the raw resolver; the schema also rejects
 	// it in the full load path).
 	src := tiModelJSON(
-		`"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],`, "")
+		`"operator_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],`, "")
 	view := decodeFixture(t, src)
 	_, rerr := resolveTemplateMachinery(view, extractTemplateOrders(src), dir, nil, resolveOpts{})
 	if code := tiErrCode(t, rerr); code != "metaparameter_type_error" {
@@ -1485,7 +1491,7 @@ func TestTemplateImports_ExpressionPositionSubstitutionNeverFolds(t *testing.T) 
 
 func tiChainDoc(n int) string {
 	var sb strings.Builder
-	sb.WriteString(`{"esm": "0.8.0", "metadata": {"name": "chain"}, "models": {"M": {"expression_templates": {`)
+	sb.WriteString(`{"esm": "0.8.0", "metadata": {"name": "chain"}, "models": {"M": {"operators": {`)
 	for i := 1; i <= n; i++ {
 		if i > 1 {
 			sb.WriteString(",")
@@ -1493,7 +1499,7 @@ func tiChainDoc(n int) string {
 		if i == n {
 			fmt.Fprintf(&sb, `"c_%02d": {"params": [], "body": 1}`, i)
 		} else {
-			fmt.Fprintf(&sb, `"c_%02d": {"params": [], "body": {"op": "apply_expression_template", "args": [], "name": "c_%02d", "bindings": {}}}`, i, i+1)
+			fmt.Fprintf(&sb, `"c_%02d": {"params": [], "body": {"op": "apply_operator", "args": [], "name": "c_%02d", "bindings": {}}}`, i, i+1)
 		}
 	}
 	sb.WriteString(`},
@@ -1508,18 +1514,18 @@ func TestTemplateImports_BodyCompositionDepthBoundIsExact(t *testing.T) {
 	src := `{
       "esm": "0.8.0", "metadata": {"name": "chain3"},
       "models": {"M": {
-        "expression_templates": {
+        "operators": {
           "c1": {"params": [], "body": {"op": "+", "args": [1,
-            {"op": "apply_expression_template", "args": [], "name": "c2", "bindings": {}}]}},
+            {"op": "apply_operator", "args": [], "name": "c2", "bindings": {}}]}},
           "c2": {"params": [], "body": {"op": "+", "args": [2,
-            {"op": "apply_expression_template", "args": [], "name": "c3", "bindings": {}}]}},
+            {"op": "apply_operator", "args": [], "name": "c3", "bindings": {}}]}},
           "c3": {"params": [], "body": 3}
         },
         "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
                       "y": {"type": "unknown", "units": "1"}},
         "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                        "rhs": {"op": "-", "args": ["x"]}},
-                      {"lhs": "y", "rhs": {"op": "apply_expression_template",
+                      {"lhs": "y", "rhs": {"op": "apply_operator",
                                            "args": [], "name": "c1", "bindings": {}}}]}}}`
 	v := decodeFixture(t, src)
 	if err := LowerExpressionTemplates(v); err != nil {
@@ -1530,7 +1536,7 @@ func TestTemplateImports_BodyCompositionDepthBoundIsExact(t *testing.T) {
 	}
 
 	// Exactly MaxTemplateExpansionDepth templates chain: accepted; one more:
-	// template_body_expansion_too_deep. The depth counts TEMPLATES on the
+	// operator_body_expansion_too_deep. The depth counts TEMPLATES on the
 	// longest chain — a 65-template chain is rejected, 64 accepted (the
 	// shared generated fixture pins the reject side; this pins the boundary).
 	okDoc := decodeFixture(t, tiChainDoc(MaxTemplateExpansionDepth))
@@ -1539,72 +1545,72 @@ func TestTemplateImports_BodyCompositionDepthBoundIsExact(t *testing.T) {
 	}
 	badDoc := decodeFixture(t, tiChainDoc(MaxTemplateExpansionDepth+1))
 	err := LowerExpressionTemplates(badDoc)
-	if code := tiErrCode(t, err); code != "template_body_expansion_too_deep" {
-		t.Errorf("%d-template chain code = %s; want template_body_expansion_too_deep",
+	if code := tiErrCode(t, err); code != "operator_body_expansion_too_deep" {
+		t.Errorf("%d-template chain code = %s; want operator_body_expansion_too_deep",
 			MaxTemplateExpansionDepth+1, code)
 	}
 }
 
 func TestTemplateImports_BodyMayNotReferenceMatchRule(t *testing.T) {
-	src := tiModelJSON(`"expression_templates": {
+	src := tiModelJSON(`"operators": {
       "rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},
                "body": {"op": "*", "args": [2, "f"]}},
-      "uses_rule": {"params": [], "body": {"op": "apply_expression_template",
+      "uses_rule": {"params": [], "body": {"op": "apply_operator",
                     "args": [], "name": "rule", "bindings": {"f": 1}}}
     },`, "")
 	v := decodeFixture(t, src)
 	err := LowerExpressionTemplates(v)
-	if code := tiErrCode(t, err); code != "apply_expression_template_unknown_template" {
-		t.Errorf("match-rule body reference code = %s; want apply_expression_template_unknown_template", code)
+	if code := tiErrCode(t, err); code != "operator_unknown_definition" {
+		t.Errorf("match-rule body reference code = %s; want operator_unknown_definition", code)
 	}
 }
 
 func TestTemplateImports_MatchPatternMayNotContainApplyNode(t *testing.T) {
 	// esm-spec §9.7.3: match patterns MUST NOT reference templates — the
-	// match-with-apply rejection is apply_expression_template_invalid_declaration.
-	src := tiModelJSON(`"expression_templates": {
+	// match-with-apply rejection is operator_invalid_definition.
+	src := tiModelJSON(`"operators": {
       "frag": {"params": [], "body": 1},
       "rule": {"params": ["f"],
-               "match": {"op": "lowerme", "args": [{"op": "apply_expression_template",
+               "match": {"op": "lowerme", "args": [{"op": "apply_operator",
                          "args": [], "name": "frag", "bindings": {}}]},
                "body": {"op": "*", "args": [2, "f"]}}
     },`, "")
 	v := decodeFixture(t, src)
 	err := LowerExpressionTemplates(v)
-	if code := tiErrCode(t, err); code != "apply_expression_template_invalid_declaration" {
-		t.Errorf("match-with-apply code = %s; want apply_expression_template_invalid_declaration", code)
+	if code := tiErrCode(t, err); code != "operator_invalid_definition" {
+		t.Errorf("match-with-apply code = %s; want operator_invalid_definition", code)
 	}
 }
 
 func TestTemplateImports_VersionGateFlagsEveryConstruct(t *testing.T) {
 	for _, snippet := range []string{
 		`"metaparameters": {"N": {"type": "integer"}},`,
-		`"expression_templates": {"t": {"params": [], "body": 1}},`,
+		`"operators": {"t": {"params": [], "body": 1}},`,
 	} {
 		src := fmt.Sprintf(`{"esm": "0.7.0", "metadata": {"name": "old"},%s
           "models": {"M": {"variables": {"x": {"type": "unknown", "default": 0.5}},
                            "equations": []}}}`, snippet)
 		v := decodeFixture(t, src)
 		err := RejectTemplateImportsPreV08(v)
-		if code := tiErrCode(t, err); code != "template_import_version_too_old" {
-			t.Errorf("gate code for %s = %s; want template_import_version_too_old", snippet, code)
+		if code := tiErrCode(t, err); code != "operator_import_version_too_old" {
+			t.Errorf("gate code for %s = %s; want operator_import_version_too_old", snippet, code)
 		}
 	}
 	// 0.8.0 files pass the gate.
 	ok := decodeFixture(t, `{"esm": "0.8.0", "metadata": {"name": "new"},
       "metaparameters": {"N": {"type": "integer", "default": 1}},
-      "expression_templates": {"t": {"params": [], "body": 1}}}`)
+      "operators": {"t": {"params": [], "body": 1}}}`)
 	if err := RejectTemplateImportsPreV08(ok); err != nil {
 		t.Errorf("0.8.0 file must pass the gate, got: %v", err)
 	}
 }
 
-// A top-level `expression_templates` block makes the document a
+// A top-level `operators` block makes the document a
 // template-library file, which declares none of these keys (esm-spec §9.7.1).
 // Rules are component-local (§9.6.3 constraint 4), so beside a component the
 // block would be visible to nothing; loading refuses it instead.
 func TestTemplateImports_RootTemplatesBesideComponentPayloadRejected(t *testing.T) {
-	head := `{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, `
+	head := `{"esm": "1.0.0", "metadata": {"name": "impure"}, "operators": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, `
 	for _, tc := range []struct{ key, snippet string }{
 		{"models", `"models": {"M": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []}}`},
 		{"reaction_systems", `"reaction_systems": {"R": {"species": {}, "reactions": []}}`},
@@ -1613,8 +1619,8 @@ func TestTemplateImports_RootTemplatesBesideComponentPayloadRejected(t *testing.
 		{"domain", `"domain": {"temporal": {}}`},
 	} {
 		_, err := LoadString(head + tc.snippet + "}")
-		if code := tiErrCode(t, err); code != "template_library_illegal_payload" {
-			t.Errorf("%s: code = %s; want template_library_illegal_payload", tc.key, code)
+		if code := tiErrCode(t, err); code != "operator_library_illegal_payload" {
+			t.Errorf("%s: code = %s; want operator_library_illegal_payload", tc.key, code)
 		}
 	}
 }
@@ -1633,11 +1639,11 @@ func TestTemplateImports_CrossFileChainsAccumulateDepth(t *testing.T) {
 	if err := json.Unmarshal([]byte(chain), &chainView); err != nil {
 		t.Fatalf("decode chain doc: %v", err)
 	}
-	tpl := chainView["models"].(map[string]any)["M"].(map[string]any)["expression_templates"]
+	tpl := chainView["models"].(map[string]any)["M"].(map[string]any)["operators"]
 	libDoc := map[string]any{
-		"esm":                  "0.8.0",
-		"metadata":             map[string]any{"name": "chainlib"},
-		"expression_templates": tpl,
+		"esm":       "0.8.0",
+		"metadata":  map[string]any{"name": "chainlib"},
+		"operators": tpl,
 	}
 	libBytes, err := json.Marshal(libDoc)
 	if err != nil {
@@ -1646,12 +1652,12 @@ func TestTemplateImports_CrossFileChainsAccumulateDepth(t *testing.T) {
 	writeFileString(t, filepath.Join(dir, "chainlib.esm"), string(libBytes))
 	p := filepath.Join(dir, "m.esm")
 	writeFileString(t, p, tiModelJSON(
-		`"expression_template_imports": [{"ref": "./chainlib.esm"}],
-         "expression_templates": {"uses_head": {"params": [],
-           "body": {"op": "apply_expression_template", "args": [], "name": "c_01", "bindings": {}}}},`, ""))
+		`"operator_imports": [{"ref": "./chainlib.esm"}],
+         "operators": {"uses_head": {"params": [],
+           "body": {"op": "apply_operator", "args": [], "name": "c_01", "bindings": {}}}},`, ""))
 	_, err = LoadPath(p)
-	if code := tiErrCode(t, err); code != "template_body_expansion_too_deep" {
-		t.Errorf("65-deep cross-file chain code = %s; want template_body_expansion_too_deep", code)
+	if code := tiErrCode(t, err); code != "operator_body_expansion_too_deep" {
+		t.Errorf("65-deep cross-file chain code = %s; want operator_body_expansion_too_deep", code)
 	}
 }
 
@@ -1665,14 +1671,14 @@ func TestTemplateImports_EffectiveOrderBeatsSortedNameFallback(t *testing.T) {
 	dir := t.TempDir()
 	writeFileString(t, filepath.Join(dir, "lib_first.esm"), `{
       "esm": "0.8.0", "metadata": {"name": "lib_first"},
-      "expression_templates": {
+      "operators": {
         "z_rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},
                    "body": {"op": "*", "args": [2, "f"]}}
       }
     }`)
 	writeFileString(t, filepath.Join(dir, "lib_second.esm"), `{
       "esm": "0.8.0", "metadata": {"name": "lib_second"},
-      "expression_templates": {
+      "operators": {
         "a_rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},
                    "body": {"op": "*", "args": [3, "f"]}}
       }
@@ -1681,7 +1687,7 @@ func TestTemplateImports_EffectiveOrderBeatsSortedNameFallback(t *testing.T) {
 	writeFileString(t, p, `{
       "esm": "0.8.0", "metadata": {"name": "order"},
       "models": {"M": {
-        "expression_template_imports": [
+        "operator_imports": [
           {"ref": "./lib_first.esm"}, {"ref": "./lib_second.esm"}],
         "variables": {"x": {"type": "unknown", "units": "1", "default": 1.5},
                       "y": {"type": "unknown", "units": "1",
@@ -1712,10 +1718,10 @@ func TestTemplateImports_ZeroParameterTemplatesAreLegal(t *testing.T) {
 	src := `{
       "esm": "0.8.0", "metadata": {"name": "zp"},
       "models": {"M": {
-        "expression_templates": {"two": {"params": [], "body": 2}},
+        "operators": {"two": {"params": [], "body": 2}},
         "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
                       "y": {"type": "unknown", "units": "1",
-                            "expression": {"op": "apply_expression_template",
+                            "expression": {"op": "apply_operator",
                                            "args": [], "name": "two", "bindings": {}}}},
         "equations": []}}}`
 	v := decodeFixture(t, src)

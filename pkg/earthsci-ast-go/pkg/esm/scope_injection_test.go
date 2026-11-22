@@ -3,7 +3,7 @@ package esm
 // Tests for esm-spec §9.7.10 — scope-directed template injection
 // (docs/content/rfcs/scoped-template-injection.md): the assembler- or
 // test-chosen discretization for a discretization-agnostic PDE leaf, via
-// `expression_template_imports` on a §4.7 subsystem-ref edge (form A), a §10
+// `operator_imports` on a §4.7 subsystem-ref edge (form A), a §10
 // coupling entry (form B), or a §6.6/§6.7 test/analysis (form C). Drives the
 // shared conformance fixtures under tests/conformance/expression_templates/,
 // mirroring the Julia reference testset
@@ -141,8 +141,8 @@ func TestScopeInjection_FormA_SubsystemRef(t *testing.T) {
 		t.Fatalf("load leaf: %v", err)
 	}
 	leafArgs := siNodeArgs(leaf.Models["Advection"].Equations[0].RHS)
-	if len(leafArgs) != 2 || siNodeOp(leafArgs[1]) != "D" {
-		t.Errorf("standalone leaf lon-derivative op = %q; want D", siNodeOp(leafArgs[1]))
+	if len(leafArgs) != 2 || siNodeOp(leafArgs[1]) != opPartial {
+		t.Errorf("standalone leaf lon-derivative op = %q; want partial (a spatial D reads as partial)", siNodeOp(leafArgs[1]))
 	}
 
 	// Negative twin: mounting WITHOUT injection loads cleanly (the D survives —
@@ -158,8 +158,8 @@ func TestScopeInjection_FormA_SubsystemRef(t *testing.T) {
 			ni.Models["Assembly"].Subsystems["Runoff"])
 	}
 	niArgs := siNodeArgs(siRawFirstEqRHS(t, niRunoff))
-	if len(niArgs) != 2 || siNodeOp(niArgs[1]) != "D" {
-		t.Errorf("no_inject mounted lon-derivative op = %q; want D (unlowered)", siNodeOp(niArgs[1]))
+	if len(niArgs) != 2 || siNodeOp(niArgs[1]) != opPartial {
+		t.Errorf("no_inject mounted lon-derivative op = %q; want partial (unlowered)", siNodeOp(niArgs[1]))
 	}
 }
 
@@ -235,27 +235,30 @@ func TestScopeInjection_FormB_CouplingEntry(t *testing.T) {
 	// The injection map is consumed — form B does not survive parse → emit.
 	coupling := doc["coupling"].([]any)
 	if entry, ok := coupling[0].(map[string]any); ok {
-		if _, has := entry["expression_template_imports"]; has {
-			t.Errorf("coupling entry retained expression_template_imports after load")
+		if _, has := entry["operator_imports"]; has {
+			t.Errorf("coupling entry retained operator_imports after load")
 		}
 	}
 
-	// Full expanded golden (raw pipeline preserves metadata verbatim).
-	want := tiGolden(t, filepath.Join(dir, "expanded.esm"))
-	if got != want {
-		t.Errorf("expanded form diverges from golden:\n got=%s\nwant=%s", got, want)
+	// Full expanded golden: Expand(load(f)), which the typed load produces —
+	// stamped at the esm-2.4.0 floor of a document that held definitions
+	// (esm-spec §9.6.12), unlike the raw pipeline's output.
+	typed, err := LoadPath(filepath.Join(dir, "fixture.esm"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
 	}
+	siCompareSansMetadata(t, typed, filepath.Join(dir, "expanded.esm"))
 
 	// Diagnostics (esm-spec §9.6.6).
-	if _, err := LoadPath(filepath.Join(dir, "neg_target_unknown.esm")); tiErrCode(t, err) != "template_inject_target_unknown" {
-		t.Errorf("neg_target_unknown code = %s; want template_inject_target_unknown", tiErrCode(t, err))
+	if _, err := LoadPath(filepath.Join(dir, "neg_target_unknown.esm")); tiErrCode(t, err) != "operator_inject_target_unknown" {
+		t.Errorf("neg_target_unknown code = %s; want operator_inject_target_unknown", tiErrCode(t, err))
 	}
-	// `template_inject_target_is_loader` is RETIRED with esm 1.0.0: a data source
+	// `operator_inject_target_is_loader` is RETIRED with esm 1.0.0: a data source
 	// is not a component and cannot be a coupling endpoint, so a key naming one
-	// falls to `template_inject_target_not_component` — which is what it is. The
+	// falls to `operator_inject_target_not_component` — which is what it is. The
 	// fixture's own description pins that expectation.
-	if _, err := LoadPath(filepath.Join(dir, "neg_target_is_loader.esm")); tiErrCode(t, err) != "template_inject_target_not_component" {
-		t.Errorf("neg_target_is_loader code = %s; want template_inject_target_not_component", tiErrCode(t, err))
+	if _, err := LoadPath(filepath.Join(dir, "neg_target_is_loader.esm")); tiErrCode(t, err) != "operator_inject_target_not_component" {
+		t.Errorf("neg_target_is_loader code = %s; want operator_inject_target_not_component", tiErrCode(t, err))
 	}
 }
 
@@ -275,15 +278,15 @@ func TestScopeInjection_FormC_TestBlock(t *testing.T) {
 	// The enclosing component round-trips with its D INTACT (form C does not
 	// lower it at load) and each test keeps its import field (survives emit).
 	advArgs := siNodeArgs(adv.Equations[0].RHS)
-	if len(advArgs) != 2 || siNodeOp(advArgs[1]) != "D" {
-		t.Errorf("enclosing component lon-derivative op = %q; want D (intact)", siNodeOp(advArgs[1]))
+	if len(advArgs) != 2 || siNodeOp(advArgs[1]) != opPartial {
+		t.Errorf("enclosing component lon-derivative op = %q; want partial (intact)", siNodeOp(advArgs[1]))
 	}
 	if len(adv.Tests) != 2 {
 		t.Fatalf("got %d tests; want 2", len(adv.Tests))
 	}
 	for i, tst := range adv.Tests {
 		if len(tst.ExpressionTemplateImports) == 0 {
-			t.Errorf("test[%d] (%s) lost its expression_template_imports", i, tst.ID)
+			t.Errorf("test[%d] (%s) lost its operator_imports", i, tst.ID)
 		}
 	}
 

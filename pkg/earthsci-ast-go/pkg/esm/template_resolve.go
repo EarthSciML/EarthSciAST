@@ -97,7 +97,7 @@ func mergeScope(dst, src *templateScope, origin string) error {
 	return nil
 }
 
-// resolveImportsInto resolves each `expression_template_imports` entry of a
+// resolveImportsInto resolves each `operator_imports` entry of a
 // document/component (depth-first post-order, esm-spec §9.7.2) and merges the
 // resulting exported scope into `scope`. `imports` is the raw entries value (a
 // nil / non-list value is a no-op). Relative refs resolve against baseDir; the
@@ -121,7 +121,7 @@ func resolveImportsInto(scope *templateScope, imports any, baseDir string, stack
 	return nil
 }
 
-// mergeOwnTemplates validates a raw `expression_templates` block and merges its
+// mergeOwnTemplates validates a raw `operators` block and merges its
 // entries — in declaration order, honouring `order` — into scope.templates
 // (esm-spec §9.7.4). A nil block is a no-op. Shared "validate + merge own
 // templates" step of processLibrary and resolveTemplateMachinery.
@@ -231,7 +231,7 @@ func canonicalRefPath(ref, baseDir string) string {
 // loadImportBytes loads a template-library `ref` (URL or path relative to
 // baseDir) via the shared loadRefBytes loader, returning the raw bytes and the
 // directory anchoring the target's own relative refs. A load failure (bad URL,
-// missing/unreadable file) is wrapped in the `template_import_unresolved`
+// missing/unreadable file) is wrapped in the `operator_import_unresolved`
 // diagnostic; a relative ref inside a remote library has no resolvable base and
 // fails as unresolved when encountered.
 func loadImportBytes(ref, baseDir, origin string) ([]byte, string, error) {
@@ -257,7 +257,7 @@ func decodeJSONView(data []byte) (map[string]any, error) {
 	return view, nil
 }
 
-// resolveImportEntry resolves ONE `expression_template_imports` entry
+// resolveImportEntry resolves ONE `operator_imports` entry
 // (esm-spec §9.7.2): load the target (path-scoped cycle detection over
 // canonical refs, as §4.7), verify library purity, resolve the target
 // recursively in its own scope, instantiate at this edge's `bindings`, apply
@@ -271,12 +271,12 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 	entryObj, ok := entry.(map[string]any)
 	if !ok {
 		return nil, newETErr(CodeTemplateImportUnresolved,
-			fmt.Sprintf("%s: expression_template_imports entries must be objects with a `ref` field", origin))
+			fmt.Sprintf("%s: operator_imports entries must be objects with a `ref` field", origin))
 	}
 	ref, ok := entryObj["ref"].(string)
 	if !ok || ref == "" {
 		return nil, newETErr(CodeTemplateImportUnresolved,
-			fmt.Sprintf("%s: expression_template_imports entry requires a non-empty string `ref`", origin))
+			fmt.Sprintf("%s: operator_imports entry requires a non-empty string `ref`", origin))
 	}
 	canonical := canonicalImportRef(ref, baseDir)
 	for i, s := range stack {
@@ -319,7 +319,7 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 	}
 	if !isTemplateLibraryDoc(view) {
 		return nil, newETErr(CodeTemplateImportNotLibrary,
-			fmt.Sprintf("%s: import target '%s' lacks top-level `expression_templates` — not a template-library file (esm-spec §9.7.1)", origin, ref))
+			fmt.Sprintf("%s: import target '%s' lacks top-level `operators` — not a template-library file (esm-spec §9.7.1)", origin, ref))
 	}
 	for _, k := range libraryForbiddenKeys {
 		if _, has := view[k]; has {
@@ -445,15 +445,15 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 func processLibrary(view map[string]any, fileOrders map[string][]string,
 	dir string, stack []string, origin string) (*templateScope, error) {
 	scope := newTemplateScope()
-	if err := resolveImportsInto(scope, view["expression_template_imports"], dir, stack, origin); err != nil {
+	if err := resolveImportsInto(scope, view["operator_imports"], dir, stack, origin); err != nil {
 		return nil, err
 	}
 
-	tpl, _ := view["expression_templates"].(map[string]any)
+	tpl, _ := view["operators"].(map[string]any)
 	if err := lowerLibraryTemplateEnums(view, tpl, origin); err != nil {
 		return nil, err
 	}
-	if err := mergeOwnTemplates(scope, tpl, fileOrders["/expression_templates"], origin); err != nil {
+	if err := mergeOwnTemplates(scope, tpl, fileOrders["/operators"], origin); err != nil {
 		return nil, err
 	}
 
@@ -913,20 +913,20 @@ func substituteEnumArgs(body any, lits map[string]string) any {
 // ---------------------------------------------------------------------------
 
 // hasImportMachinery reports whether view carries any esm-spec §9.7 construct
-// that resolveTemplateMachinery must process: a top-level `expression_templates`
-// / `metaparameters` / `expression_template_imports` block, or a per-component
-// `expression_template_imports`. A document with none takes the legacy fast path.
+// that resolveTemplateMachinery must process: a top-level `operators`
+// / `metaparameters` / `operator_imports` block, or a per-component
+// `operator_imports`. A document with none takes the legacy fast path.
 func hasImportMachinery(view map[string]any) bool {
 	if view == nil {
 		return false
 	}
-	if _, has := view["expression_templates"]; has {
+	if _, has := view["operators"]; has {
 		return true
 	}
 	if _, has := view["metaparameters"]; has {
 		return true
 	}
-	if _, has := view["expression_template_imports"]; has {
+	if _, has := view["operator_imports"]; has {
 		return true
 	}
 	for _, kind := range templateComponentKinds {
@@ -936,7 +936,7 @@ func hasImportMachinery(view map[string]any) bool {
 		}
 		for _, compRaw := range comps {
 			if compObj, ok := compRaw.(map[string]any); ok {
-				if _, has := compObj["expression_template_imports"]; has {
+				if _, has := compObj["operator_imports"]; has {
 					return true
 				}
 			}
@@ -973,9 +973,9 @@ type resolveOpts struct {
 // it, so the subsequent lowerExpressionTemplatesOrdered pass breaks
 // declaration-order ties by the §9.7.4 effective sequence.
 //
-// After resolution no `expression_template_imports` key remains — that IS an
+// After resolution no `operator_imports` key remains — that IS an
 // import edge, consumed by the fixpoint (esm-spec §9.7.6). But the top-level
-// `expression_templates` registry and `metaparameters` block are DECLARATIONS,
+// `operators` registry and `metaparameters` block are DECLARATIONS,
 // peers of `index_sets`, and they are restored VERBATIM from a pre-resolution
 // snapshot: Option A expands CALL SITES; it does not delete DECLARATIONS
 // (§9.6.4 rule 5). Returns false when the document carries no §9.7 machinery
@@ -1012,7 +1012,7 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	// these same sub-objects, and composeTemplateBodies / the folding phases
 	// would otherwise rewrite the "snapshot" in place and emit a library's
 	// EXPANDED form rather than the library itself.
-	origTemplates, hasTemplates := view["expression_templates"]
+	origTemplates, hasTemplates := view["operators"]
 	if hasTemplates {
 		origTemplates = deepCopyJSON(origTemplates)
 	}
@@ -1033,7 +1033,7 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	}
 
 	// --- top-level templates + imports (root template-library file, §9.7.4) ---
-	_, isLibrary := view["expression_templates"]
+	_, isLibrary := view["operators"]
 	topTemplates := newOrderedMap()
 	if isLibrary {
 		topTemplates, err = resolveRootLibraryImports(view, orders, baseDir, stack, docIsets, docMeta)
@@ -1067,7 +1067,7 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	// size stays symbolic instead of being `metaparameter_unbound` here. Without
 	// it, whether a mounted leaf accepts an assembler-scoped axis turned on
 	// hasImportMachinery — a whole-document boolean — so adding an
-	// `expression_template_imports` entry for a library the leaf never calls
+	// `operator_imports` entry for a library the leaf never calls
 	// changed whether the leaf's shape resolved.
 	if err := foldClosedDocument(view, topTemplates, docIsets, !opts.mountedLeaf); err != nil {
 		return false, err
@@ -1083,9 +1083,9 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	// esm-spec §9.6.4 rule 5: OPTION A EXPANDS CALL SITES; IT DOES NOT DELETE
 	// DECLARATIONS.
 	//
-	// `expression_template_imports` IS an import edge — a directive consumed by
+	// `operator_imports` IS an import edge — a directive consumed by
 	// the fixpoint — and correctly does not survive `parse → emit`. But a
-	// top-level `expression_templates` registry and a top-level `metaparameters`
+	// top-level `operators` registry and a top-level `metaparameters`
 	// block (§9.7.1) are DECLARATIONS, peers of `index_sets`. Both survive
 	// `parse → emit` VERBATIM, and a template-library file MUST round-trip to
 	// ITSELF (§9.7.6 "Ordering within load").
@@ -1101,9 +1101,9 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	// its bodies composed and its metaparameters substituted, and emitting that
 	// would round-trip a library to a DIFFERENT (expanded) library. Verbatim
 	// means verbatim.
-	delete(view, "expression_template_imports")
+	delete(view, "operator_imports")
 	if hasTemplates {
-		view["expression_templates"] = origTemplates
+		view["operators"] = origTemplates
 	}
 	if hasMetaparams {
 		view["metaparameters"] = origMetaparams
@@ -1115,7 +1115,7 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 }
 
 // resolveRootLibraryImports resolves the ROOT document's own template-library
-// imports and top-level `expression_templates` (esm-spec §9.7.4, root-library
+// imports and top-level `operators` (esm-spec §9.7.4, root-library
 // case): imports merge depth-first post-order, then the declared templates, into
 // a fresh scope; the scope's index sets and re-exported metaparameters flow into
 // the document registries docIsets / docMeta. Returns the effective top-level
@@ -1123,11 +1123,11 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 func resolveRootLibraryImports(view map[string]any, orders map[string][]string,
 	baseDir string, stack []string, docIsets, docMeta *orderedMap) (*orderedMap, error) {
 	topscope := newTemplateScope()
-	if err := resolveImportsInto(topscope, view["expression_template_imports"], baseDir, stack, "document"); err != nil {
+	if err := resolveImportsInto(topscope, view["operator_imports"], baseDir, stack, "document"); err != nil {
 		return nil, err
 	}
-	tpl, _ := view["expression_templates"].(map[string]any)
-	if err := mergeOwnTemplates(topscope, tpl, orders["/expression_templates"], "document"); err != nil {
+	tpl, _ := view["operators"].(map[string]any)
+	if err := mergeOwnTemplates(topscope, tpl, orders["/operators"], "document"); err != nil {
 		return nil, err
 	}
 	if err := mergeScopeExports(docIsets, docMeta, topscope, "document"); err != nil {
@@ -1137,13 +1137,13 @@ func resolveRootLibraryImports(view map[string]any, orders map[string][]string,
 }
 
 // resolveComponentImports resolves each model / reaction-system component's own
-// `expression_template_imports` (esm-spec §9.7.2) IN PLACE: imports merge
+// `operator_imports` (esm-spec §9.7.2) IN PLACE: imports merge
 // depth-first post-order, then the component's own templates, into a fresh
 // scope; the scope's index sets and metaparameters flow into docIsets / docMeta.
 // The effective sequence (imports depth-first post-order, then local
-// declarations) becomes the component's `expression_templates` block — its
+// declarations) becomes the component's `operators` block — its
 // published key order IS the §9.6.3 declaration order, written back into
-// `orders` — and the consumed `expression_template_imports` key is stripped.
+// `orders` — and the consumed `operator_imports` key is stripped.
 func resolveComponentImports(view map[string]any, orders map[string][]string,
 	baseDir string, stack []string, docIsets, docMeta *orderedMap) error {
 	for _, kind := range templateComponentKinds {
@@ -1156,7 +1156,7 @@ func resolveComponentImports(view map[string]any, orders map[string][]string,
 			if !ok {
 				continue
 			}
-			importsRaw, present := comp["expression_template_imports"]
+			importsRaw, present := comp["operator_imports"]
 			if !present || importsRaw == nil {
 				continue
 			}
@@ -1165,17 +1165,17 @@ func resolveComponentImports(view map[string]any, orders map[string][]string,
 			if err := resolveImportsInto(cscope, importsRaw, baseDir, stack, corigin); err != nil {
 				return err
 			}
-			tplPath := "/" + kind + "/" + cname + "/expression_templates"
-			tpl, _ := comp["expression_templates"].(map[string]any)
+			tplPath := "/" + kind + "/" + cname + "/operators"
+			tpl, _ := comp["operators"].(map[string]any)
 			if err := mergeOwnTemplates(cscope, tpl, orders[tplPath], corigin); err != nil {
 				return err
 			}
 			if err := mergeScopeExports(docIsets, docMeta, cscope, corigin); err != nil {
 				return err
 			}
-			comp["expression_templates"] = cscope.templates.m
+			comp["operators"] = cscope.templates.m
 			orders[tplPath] = cscope.templates.keys
-			delete(comp, "expression_template_imports")
+			delete(comp, "operator_imports")
 		}
 	}
 	return nil
@@ -1184,7 +1184,7 @@ func resolveComponentImports(view map[string]any, orders map[string][]string,
 // closeDocumentMetaparams closes the document's metaparameters to concrete int64
 // values (esm-spec §9.7.6 sites 4-5): a loader-API binding wins, else the
 // declared `default`. A loader-API name the document does not declare is
-// `template_import_unknown_name`; a metaparameter still open after bindings and
+// `operator_import_unknown_name`; a metaparameter still open after bindings and
 // defaults is `metaparameter_unbound`.
 //
 // `mountDeclared` is the set of metaparameter names declared by the documents
@@ -1194,7 +1194,7 @@ func resolveComponentImports(view map[string]any, orders map[string][]string,
 // for the names the leaf declares. Such a name is accepted and CONSUMED here —
 // it closes nothing in this scope, so it is absent from the returned map. A name
 // in NEITHER set is still a typo and still raises
-// `template_import_unknown_name`: bindings never invent metaparameters.
+// `operator_import_unknown_name`: bindings never invent metaparameters.
 func closeDocumentMetaparams(docMeta *orderedMap, metaparameters map[string]int64,
 	mountDeclared map[string]bool) (map[string]int64, error) {
 	apiNames := make([]string, 0, len(metaparameters))
@@ -1327,7 +1327,7 @@ func substituteClosedMetaparams(view map[string]any, topTemplates, docIsets *ord
 				continue
 			}
 			for _, k := range sortedKeys(comp) {
-				if k == "expression_templates" {
+				if k == "operators" {
 					if tpl, ok := comp[k].(map[string]any); ok {
 						for tn, td := range tpl {
 							tpl[tn] = substituteMetaparamsDecl(td, substVals)
@@ -1375,7 +1375,7 @@ func foldClosedDocument(view map[string]any, topTemplates, docIsets *orderedMap,
 		}
 	}
 	for _, tn := range topTemplates.keys {
-		if err := foldStructuralSites(topTemplates.get(tn), "document.expression_templates."+tn); err != nil {
+		if err := foldStructuralSites(topTemplates.get(tn), "document.operators."+tn); err != nil {
 			return err
 		}
 	}

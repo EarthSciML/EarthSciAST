@@ -10,7 +10,7 @@ package esm
 // template_instances.go.
 //
 // The load-time rewrite (lower_expression_templates.go) PRESERVES surviving
-// `apply_expression_template` references and per-component `expression_templates`
+// `apply_operator` references and per-component `operators`
 // registries. The typed / numeric build path is Expand-at-build (RFC §7.7):
 // LowerExpressionTemplates / ResolveAndLower call Expand once so downstream code
 // sees the Option-A image. The reference-preserving form travels only into emit
@@ -38,7 +38,7 @@ import (
 // unregistered user op, which carries NO privileged semantics — is NOT in
 // evaluableCoreOps and so reaches T through that generic fallback, not this
 // hand-list.
-// `apply_expression_template` itself is excluded — nested references are handled
+// `apply_operator` itself is excluded — nested references are handled
 // through the §9.7.3 reference DAG, not by op membership. Mirrors the Julia
 // `_REWRITE_TARGET_OPS`.
 var rewriteTargetOps = map[string]struct{}{
@@ -218,7 +218,7 @@ func mapPtrEqual(a, b map[string]any) bool {
 // Full expansion — Expand (esm-spec §9.6.4 rule 2)
 // ---------------------------------------------------------------------------
 
-// expandAll fully expands EVERY `apply_expression_template` node in node by pure
+// expandAll fully expands EVERY `apply_operator` node in node by pure
 // substitution to a fixpoint (innermost-first: bindings are expanded before the
 // body is instantiated, and the instantiated body is re-expanded). Deterministic
 // and sharing-preserving. Mirrors the Julia `_expand_all`.
@@ -309,10 +309,10 @@ func expandAllShared(node any, named map[string]any, scope string, memo expandMe
 	return node, false, nil
 }
 
-// expandDocument fully expands every surviving `apply_expression_template`
+// expandDocument fully expands every surviving `apply_operator`
 // reference in a loaded (Option B) document, producing the Option-A image:
 // every reference replaced by its expansion (§9.6.4 rule 2) and every
-// per-component `expression_templates` block stripped. Mutates `view` in place.
+// per-component `operators` block stripped. Mutates `view` in place.
 // Mirrors the Julia `expand_document`.
 func expandDocument(view map[string]any) map[string]any {
 	if view == nil {
@@ -328,7 +328,7 @@ func expandDocument(view map[string]any) map[string]any {
 				continue
 			}
 			named := map[string]any{}
-			if tpl, ok := comp["expression_templates"].(map[string]any); ok {
+			if tpl, ok := comp["operators"].(map[string]any); ok {
 				for n, d := range tpl {
 					named[n] = d
 				}
@@ -346,7 +346,7 @@ func expandDocument(view map[string]any) map[string]any {
 			named := compNamed[[2]string{kind, cname}]
 			scope := kind + "." + cname
 			for _, k := range sortedKeys(comp) {
-				if k == "expression_templates" || k == "expression_template_imports" {
+				if k == "operators" || k == "operator_imports" {
 					continue
 				}
 				res, err := expandAll(comp[k], named, scope+"."+k)
@@ -354,7 +354,7 @@ func expandDocument(view map[string]any) map[string]any {
 					comp[k] = res
 				}
 			}
-			delete(comp, "expression_templates")
+			delete(comp, "operators")
 		}
 	}
 	if coupling, ok := view["coupling"].([]any); ok {
@@ -390,7 +390,7 @@ func expandDocument(view map[string]any) map[string]any {
 	return view
 }
 
-// Expand fully expands every surviving `apply_expression_template` reference in
+// Expand fully expands every surviving `apply_operator` reference in
 // a loaded document by pure substitution to the acyclic fixpoint (esm-spec
 // §9.6.4 rule 2), producing the Option-A image. Deterministic (the DAG is
 // acyclic and substitution confluent) and NON-DESTRUCTIVE — `view` is deep
@@ -405,7 +405,7 @@ func Expand(view map[string]any) map[string]any {
 // ---------------------------------------------------------------------------
 
 // validateApplyRef is the call-site check for a SURVIVING (non-expanded)
-// `apply_expression_template` reference (esm-spec §9.6.9): the referenced `name`
+// `apply_operator` reference (esm-spec §9.6.9): the referenced `name`
 // must resolve to an in-scope MATCH-LESS template and `bindings` must cover its
 // `params` exactly. Same diagnostics as expandApply, but WITHOUT expanding.
 // Mirrors the Julia `_validate_apply_ref`.
@@ -413,22 +413,22 @@ func validateApplyRef(node map[string]any, templates map[string]any, scope strin
 	name, ok := node["name"].(string)
 	if !ok || name == "" {
 		return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-			fmt.Sprintf("%s: apply_expression_template node missing 'name'", scope))
+			fmt.Sprintf("%s: apply_operator node missing 'name'", scope))
 	}
 	declRaw, ok := templates[name]
 	if !ok {
 		return newETErr(CodeApplyExpressionTemplateUnknownTemplate,
-			fmt.Sprintf("%s: apply_expression_template references undeclared template '%s'", scope, name))
+			fmt.Sprintf("%s: apply_operator references undeclared template '%s'", scope, name))
 	}
 	decl, _ := declRaw.(map[string]any)
 	if m, has := decl["match"]; has && m != nil {
 		return newETErr(CodeApplyExpressionTemplateUnknownTemplate,
-			fmt.Sprintf("%s: apply_expression_template references '%s', a `match` rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)", scope, name))
+			fmt.Sprintf("%s: apply_operator references '%s', a `match` rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)", scope, name))
 	}
 	bindingsRaw, ok := node["bindings"].(map[string]any)
 	if !ok {
 		return newETErr(CodeApplyExpressionTemplateBindingsMismatch,
-			fmt.Sprintf("%s: apply_expression_template '%s' missing 'bindings' object", scope, name))
+			fmt.Sprintf("%s: apply_operator '%s' missing 'bindings' object", scope, name))
 	}
 	declared := map[string]struct{}{}
 	if pr, ok := decl["params"].([]any); ok {
@@ -437,7 +437,7 @@ func validateApplyRef(node map[string]any, templates map[string]any, scope strin
 				declared[ps] = struct{}{}
 				if _, has := bindingsRaw[ps]; !has {
 					return newETErr(CodeApplyExpressionTemplateBindingsMismatch,
-						fmt.Sprintf("%s: apply_expression_template '%s' missing binding for param '%s'", scope, name, ps))
+						fmt.Sprintf("%s: apply_operator '%s' missing binding for param '%s'", scope, name, ps))
 				}
 			}
 		}
@@ -445,14 +445,14 @@ func validateApplyRef(node map[string]any, templates map[string]any, scope strin
 	for k := range bindingsRaw {
 		if _, ok := declared[k]; !ok {
 			return newETErr(CodeApplyExpressionTemplateBindingsMismatch,
-				fmt.Sprintf("%s: apply_expression_template '%s' supplies unknown param '%s'", scope, name, k))
+				fmt.Sprintf("%s: apply_operator '%s' supplies unknown param '%s'", scope, name, k))
 		}
 	}
 	return nil
 }
 
 // checkSurvivingRefs walks node and runs validateApplyRef on every surviving
-// `apply_expression_template` reference it carries (esm-spec §9.6.9 call-site
+// `apply_operator` reference it carries (esm-spec §9.6.9 call-site
 // checks). Descends into references' bindings too. Mirrors `_check_surviving_refs`.
 func checkSurvivingRefs(node any, templates map[string]any, scope string) error {
 	return checkSurvivingRefsSeen(node, templates, scope, map[uintptr]struct{}{})
@@ -511,7 +511,7 @@ func validateMakearrayRegionsInRegistries(registries map[string]map[string]any) 
 			if body == nil {
 				continue
 			}
-			if err := validateMakearrayRegions(body, "expression_templates."+tname+"/body"); err != nil {
+			if err := validateMakearrayRegions(body, "operators."+tname+"/body"); err != nil {
 				return err
 			}
 		}
@@ -573,11 +573,11 @@ func authoredTemplateNames(origView map[string]any, orders map[string][]string) 
 			if !ok {
 				continue
 			}
-			tpl, ok := comp["expression_templates"].(map[string]any)
+			tpl, ok := comp["operators"].(map[string]any)
 			if !ok {
 				continue
 			}
-			order := orders["/"+kind+"/"+cname+"/expression_templates"]
+			order := orders["/"+kind+"/"+cname+"/operators"]
 			var names []string
 			for _, n := range orderedKeysOf(tpl, order) {
 				if _, ok := tpl[n].(map[string]any); !ok {
@@ -610,7 +610,7 @@ func receivedTransformRefs(view map[string]any) map[[2]string][]string {
 }
 
 // materializeComponentBlock computes one Option-B loaded component's emitted
-// `expression_templates` block (esm-spec §9.6.4 rule 5): the entries authored
+// `operators` block (esm-spec §9.6.4 rule 5): the entries authored
 // in-file (`authoredHere`, authored order) first — a `match` rule only once a
 // firing referenced it and rule 3 materialized it without `match` — then the
 // transitive closure of the component's surviving references not authored
@@ -622,7 +622,7 @@ func receivedTransformRefs(view map[string]any) map[[2]string][]string {
 // which count as its own.
 func materializeComponentBlock(comp map[string]any, authoredHere, received []string) (*orderedMap, bool, bool) {
 	named := map[string]any{}
-	if tpl, ok := comp["expression_templates"].(map[string]any); ok {
+	if tpl, ok := comp["operators"].(map[string]any); ok {
 		for n, d := range tpl {
 			named[n] = d
 		}
@@ -632,7 +632,7 @@ func materializeComponentBlock(comp map[string]any, authoredHere, received []str
 		refnames[r] = true
 	}
 	for _, k := range sortedKeys(comp) {
-		if k == "expression_templates" || k == "expression_template_imports" {
+		if k == "operators" || k == "operator_imports" {
 			continue
 		}
 		var refs []string
@@ -670,13 +670,19 @@ func materializeComponentBlock(comp map[string]any, authoredHere, received []str
 // emitDocument produces the reference-preserving, self-contained emitted
 // document (esm-spec §9.6.4 rule 5, RFC §7.5) from a source document. Loads the
 // source under Option B, then for every component builds its emitted
-// `expression_templates` block — authored match-less entries first in authored
+// `operators` block — authored match-less entries first in authored
 // order, then the materialized transitive closure of its surviving references
 // (match-less), lexicographically sorted — drops consumed
-// `expression_template_imports`, and raises the `esm` version FLOOR to 0.9.0 when any
-// surviving reference or materialized entry remains (§9.6.4 rule 8). Mirrors the
+// `operator_imports`, and raises the `esm` version FLOOR to 2.4.0 when any
+// `operators` block or surviving reference remains (§9.6.4 rule 8, esm 2.4.0). Mirrors the
 // Julia `emit_document`.
 func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (map[string]any, error) {
+	// The old spellings are read first (esm-spec §9.6.12), so the authored
+	// names below are read off the `operators` blocks however they were spelled.
+	jsonStr, err := readOldSpellings(jsonStr)
+	if err != nil {
+		return nil, err
+	}
 	origView, err := decodeJSONView([]byte(jsonStr))
 	if err != nil {
 		return nil, fmt.Errorf("emit: decode source: %w", err)
@@ -709,24 +715,51 @@ func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (ma
 			}
 
 			if emitBlock.len() == 0 {
-				delete(comp, "expression_templates")
+				delete(comp, "operators")
 			} else {
-				comp["expression_templates"] = emitBlock
+				comp["operators"] = emitBlock
+				bump = true
 			}
-			delete(comp, "expression_template_imports")
+			delete(comp, "operator_imports")
 		}
 	}
 
-	delete(view, "expression_template_imports")
-	if bump && esmVersionBelow(view, 0, 9) {
-		// esm-spec §9.6.4 rule 6: an emitted document carrying surviving
-		// references or a materialized registry declares `esm: 0.9.0` OR LATER.
-		// The stamp is a FLOOR, not an assignment — writing it unconditionally
-		// DOWNGRADED a 1.0.0 document to 0.9.0 on emit, which changed the meaning
-		// of every construct in it and diverged from the committed goldens.
-		view["esm"] = "0.9.0"
+	delete(view, "operator_imports")
+	if bump && esmVersionBelow3(view, templateMachineryMinESM) {
+		// esm 2.4.0: an emitted document writes the names `operators` and
+		// `apply_operator` (esm-spec §9.6.5, §9.6.12), so one carrying an
+		// `operators` block or a surviving reference declares `esm: 2.4.0` OR
+		// LATER; this floor subsumes the 0.9.0 floor of §9.6.4 rule 8. The stamp
+		// is a FLOOR, not an assignment: a later document keeps its version.
+		view["esm"] = templateMachineryMinESM
 	}
 	return view, nil
+}
+
+// templateMachineryMinESM is the version floor of an emitted document that
+// carries an `operators` block or a surviving reference (esm 2.4.0).
+const templateMachineryMinESM = "2.4.0"
+
+// esmVersionBelow3 reports whether view's declared `esm` is below the
+// major.minor.patch version v.
+func esmVersionBelow3(view map[string]any, v string) bool {
+	esmRaw, ok := view["esm"].(string)
+	if !ok {
+		return false
+	}
+	a := semverRe.FindStringSubmatch(esmRaw)
+	b := semverRe.FindStringSubmatch(v)
+	if a == nil || b == nil {
+		return false
+	}
+	for i := 1; i <= 3; i++ {
+		x, _ := strconv.Atoi(a[i])
+		y, _ := strconv.Atoi(b[i])
+		if x != y {
+			return x < y
+		}
+	}
+	return false
 }
 
 // loadOptionB resolves the §9.7 machinery and runs the Option-B lowering,
@@ -782,13 +815,13 @@ func EmitReferencePreserving(jsonStr, basePath string, metaparameters map[string
 
 // ---------------------------------------------------------------------------
 // Canonical byte writer (2-space indent, keys sorted EXCEPT the ordered
-// expression_templates block) — the cross-binding byte-identity surface.
+// operators block) — the cross-binding byte-identity surface.
 // Mirrors the Julia `_emit_write` / `emit_esm_string`.
 // ---------------------------------------------------------------------------
 
 // emitCanonicalString is the canonical byte serialization of an emitted document
 // (esm-spec §9.6.4 rule 5): 2-space indent, object keys sorted lexicographically
-// EXCEPT the entries of an `expression_templates` block (an *orderedMap), which
+// EXCEPT the entries of an `operators` block (an *orderedMap), which
 // preserve their authored-first / materialized-sorted order.
 func emitCanonicalString(doc any) string {
 	var b strings.Builder
@@ -802,7 +835,7 @@ func emitWriteValue(b *strings.Builder, x any, indent int) {
 	pad1 := strings.Repeat("  ", indent+1)
 	switch v := x.(type) {
 	case *orderedMap:
-		// The expression_templates block: entry order preserved.
+		// The operators block: entry order preserved.
 		if len(v.keys) == 0 {
 			b.WriteString("{}")
 			return
@@ -933,7 +966,7 @@ func emitJSONString(s string) string {
 // esm-libraries-spec §4.7.5)
 // ---------------------------------------------------------------------------
 
-// renameApplyRefs rewrites the `name` of every `apply_expression_template`
+// renameApplyRefs rewrites the `name` of every `apply_operator`
 // reference in node according to rename (old → new), in lockstep with a registry
 // rename. Sharing-preserving. Mirrors the Julia `_rename_apply_refs`.
 func renameApplyRefs(node any, rename map[string]string) any {
@@ -1019,7 +1052,7 @@ func sameRef(a, b any) bool {
 // rebind or a metaparameter) and renames to `A.leaf` / `B.leaf`, while the
 // intermediate wrapper that REFERENCES the leaf is byte-identical and would
 // dedup under its bare name. That single deduped body then carries a reference the registry no longer
-// holds, and expansion fails with `apply_expression_template_unknown_template`
+// holds, and expansion fails with `operator_unknown_definition`
 // naming a template no component ever mentioned. Renaming the wrapper per owner
 // lets each copy's nested reference be rewritten to its own owner's leaf.
 //
@@ -1066,7 +1099,7 @@ func registryCollisionNames(byname *orderedMap) map[string]bool {
 	return collide
 }
 
-// flattenTemplateRegistries merges every component's `expression_templates`
+// flattenTemplateRegistries merges every component's `operators`
 // registry of an Option-B loaded document into a single document-scoped merged
 // registry (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4) by
 // mergeFlatRegistry: deep-equal same-name entries are kept once under the bare
@@ -1085,6 +1118,8 @@ func registryCollisionNames(byname *orderedMap) map[string]bool {
 // place. Mirrors the Julia `flatten_template_registries` over the typed load's
 // `component_templates`.
 func flattenTemplateRegistries(view map[string]any, source string) (map[string]any, *orderedMap) {
+	// The authored names are read off the source in its esm-2.4.0 spelling.
+	source = newSpellingText(source)
 	orders := extractTemplateOrders(source)
 	var authored map[string][]string
 	if origView, err := decodeJSONView([]byte(source)); err == nil {
@@ -1108,7 +1143,7 @@ func flattenTemplateRegistries(view map[string]any, source string) (map[string]a
 				continue
 			}
 			comps = append(comps, compEntry{path: cname, comp: comp})
-			if _, ok := comp["expression_templates"].(map[string]any); !ok {
+			if _, ok := comp["operators"].(map[string]any); !ok {
 				continue
 			}
 			mat, _, _ := materializeComponentBlock(
@@ -1125,13 +1160,13 @@ func flattenTemplateRegistries(view map[string]any, source string) (map[string]a
 	for _, ce := range comps {
 		if rn := rename[ce.path]; rn != nil {
 			for _, k := range sortedKeys(ce.comp) {
-				if k == "expression_templates" {
+				if k == "operators" {
 					continue
 				}
 				ce.comp[k] = renameApplyRefs(ce.comp[k], rn)
 			}
 		}
-		delete(ce.comp, "expression_templates")
+		delete(ce.comp, "operators")
 	}
 	return view, merged
 }

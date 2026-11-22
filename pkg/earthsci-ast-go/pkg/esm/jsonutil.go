@@ -10,7 +10,7 @@ import (
 // (assertNoNestedApply, validateMakearrayRegions, findApplyPaths) each
 // re-implement by hand today. Consolidating them here removes near-identical
 // traversals that had already drifted in their
-// path formatting and their expression_templates-skip behavior.
+// path formatting and their operators-skip behavior.
 
 // walkJSONTree recursively walks a decoded-JSON tree (map[string]interface{} /
 // []interface{} / scalar leaves) rooted at tree, invoking visit for EVERY
@@ -32,7 +32,7 @@ import (
 //
 // This base form visits the whole tree, matching assertNoNestedApply and
 // findApplyPaths. To replicate the validateMakearrayRegions convention of NOT
-// descending into `expression_templates` blocks (pre-substitution template
+// descending into `operators` blocks (pre-substitution template
 // bodies may legally carry parameter names in scalar slots), use
 // walkJSONTreeSkipping with a skip set — the skip is a parameter, so the base
 // form stays skip-free.
@@ -45,7 +45,7 @@ func walkJSONTree(tree any, path string, visit func(path string, obj map[string]
 // skipKeys, that child subtree is skipped (the node itself is still visited).
 // Passing skipKeys == nil is equivalent to walkJSONTree.
 //
-// Pass e.g. map[string]struct{}{"expression_templates": {}} to reproduce the
+// Pass e.g. map[string]struct{}{"operators": {}} to reproduce the
 // validateMakearrayRegions convention.
 func walkJSONTreeSkipping(tree any, path string, skipKeys map[string]struct{}, visit func(path string, obj map[string]any) error) error {
 	switch t := tree.(type) {

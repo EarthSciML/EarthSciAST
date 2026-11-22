@@ -1,6 +1,6 @@
 package esm
 
-// Unit tests for expression_templates / apply_expression_template
+// Unit tests for operators / apply_operator
 // (esm-spec §9.6, docs/rfcs/ast-expression-templates.md, esm-giy).
 
 import (
@@ -21,7 +21,7 @@ const arrheniusFixture = `{
     "chem": {
       "species": {"A": {"default": 1.0}, "B": {"default": 0.5}},
       "parameters": {"T": {"default": 298.15}, "num_density": {"default": 2.5e19}},
-      "expression_templates": {
+      "operators": {
         "arrhenius": {
           "params": ["A_pre", "Ea"],
           "body": {
@@ -40,7 +40,7 @@ const arrheniusFixture = `{
         {"id": "R1",
          "substrates": [{"species": "A", "stoichiometry": 1}],
          "products": [{"species": "B", "stoichiometry": 1}],
-         "rate": {"op": "apply_expression_template", "args": [],
+         "rate": {"op": "apply_operator", "args": [],
                   "name": "arrhenius",
                   "bindings": {"A_pre": 1.8e-12, "Ea": 1500}}}
       ]
@@ -65,8 +65,8 @@ func TestLowerExpressionTemplates_StripsBlock(t *testing.T) {
 		t.Fatalf("expansion failed: %v", err)
 	}
 	chem := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)
-	if _, ok := chem["expression_templates"]; ok {
-		t.Errorf("expression_templates block was not stripped")
+	if _, ok := chem["operators"]; ok {
+		t.Errorf("operators block was not stripped")
 	}
 	rate := chem["reactions"].([]any)[0].(map[string]any)["rate"].(map[string]any)
 	if rate["op"] != "*" {
@@ -83,8 +83,8 @@ func TestLowerExpressionTemplates_RejectsUnknownTemplate(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ExpressionTemplateError, got %T (%v)", err, err)
 	}
-	if etErr.Code != "apply_expression_template_unknown_template" {
-		t.Errorf("code = %s; want apply_expression_template_unknown_template", etErr.Code)
+	if etErr.Code != "operator_unknown_definition" {
+		t.Errorf("code = %s; want operator_unknown_definition", etErr.Code)
 	}
 }
 
@@ -97,8 +97,8 @@ func TestLowerExpressionTemplates_RejectsMissingBinding(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ExpressionTemplateError, got %T", err)
 	}
-	if etErr.Code != "apply_expression_template_bindings_mismatch" {
-		t.Errorf("code = %s; want apply_expression_template_bindings_mismatch", etErr.Code)
+	if etErr.Code != "operator_bindings_mismatch" {
+		t.Errorf("code = %s; want operator_bindings_mismatch", etErr.Code)
 	}
 }
 
@@ -111,16 +111,16 @@ func TestLowerExpressionTemplates_RejectsExtraBinding(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ExpressionTemplateError, got %T", err)
 	}
-	if etErr.Code != "apply_expression_template_bindings_mismatch" {
-		t.Errorf("code = %s; want apply_expression_template_bindings_mismatch", etErr.Code)
+	if etErr.Code != "operator_bindings_mismatch" {
+		t.Errorf("code = %s; want operator_bindings_mismatch", etErr.Code)
 	}
 }
 
 func TestLowerExpressionTemplates_RejectsRecursiveBody(t *testing.T) {
 	v := decodeFixture(t, arrheniusFixture)
-	tplArrh := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["expression_templates"].(map[string]any)["arrhenius"].(map[string]any)
+	tplArrh := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["operators"].(map[string]any)["arrhenius"].(map[string]any)
 	tplArrh["body"] = map[string]any{
-		"op":       "apply_expression_template",
+		"op":       "apply_operator",
 		"args":     []any{},
 		"name":     "arrhenius",
 		"bindings": map[string]any{"A_pre": json.Number("1"), "Ea": json.Number("1")},
@@ -130,8 +130,8 @@ func TestLowerExpressionTemplates_RejectsRecursiveBody(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ExpressionTemplateError, got %T", err)
 	}
-	if etErr.Code != "apply_expression_template_recursive_body" {
-		t.Errorf("code = %s; want apply_expression_template_recursive_body", etErr.Code)
+	if etErr.Code != "operator_recursive_body" {
+		t.Errorf("code = %s; want operator_recursive_body", etErr.Code)
 	}
 }
 
@@ -143,8 +143,8 @@ func TestLowerExpressionTemplates_RejectsPreV04(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ExpressionTemplateError, got %T", err)
 	}
-	if etErr.Code != "apply_expression_template_version_too_old" {
-		t.Errorf("code = %s; want apply_expression_template_version_too_old", etErr.Code)
+	if etErr.Code != "operator_version_too_old" {
+		t.Errorf("code = %s; want operator_version_too_old", etErr.Code)
 	}
 }
 
@@ -287,16 +287,16 @@ func TestLoadString_ExpandsTemplatesEndToEnd(t *testing.T) {
 		t.Fatalf("no reactions parsed")
 	}
 	// Re-marshal the parsed file back to JSON and assert no
-	// apply_expression_template appears anywhere.
+	// apply_operator appears anywhere.
 	out, err := json.Marshal(esmFile)
 	if err != nil {
 		t.Fatalf("re-marshal: %v", err)
 	}
-	if strings.Contains(string(out), "apply_expression_template") {
-		t.Errorf("expanded ESMFile still contains apply_expression_template:\n%s", out)
+	if strings.Contains(string(out), "apply_operator") {
+		t.Errorf("expanded ESMFile still contains apply_operator:\n%s", out)
 	}
-	if strings.Contains(string(out), "expression_templates") {
-		t.Errorf("expanded ESMFile still contains expression_templates block:\n%s", out)
+	if strings.Contains(string(out), "operators") {
+		t.Errorf("expanded ESMFile still contains operators block:\n%s", out)
 	}
 }
 
@@ -314,12 +314,12 @@ func scalarFieldParamDoc(templates, bindings, name string) string {
           "pa": {"type": "parameter"},
           "pb": {"type": "parameter"},
           "area": {"type": "unknown",
-            "expression": {"op": "apply_expression_template", "args": [],
+            "expression": {"op": "apply_operator", "args": [],
               "name": "` + name + `",
               "bindings": ` + bindings + `}}
         },
         "equations": [],
-        "expression_templates": ` + templates + `
+        "operators": ` + templates + `
       }}
     }`
 }
@@ -367,7 +367,7 @@ func TestScalarFieldSubstitution_ThreadsThroughBodyComposition(t *testing.T) {
           "outer": {
            "params": ["K", "p", "q"],
            "body": {"op": "*", "args": [
-             {"op": "apply_expression_template", "args": [], "name": "inner",
+             {"op": "apply_operator", "args": [], "name": "inner",
               "bindings": {"m": "K", "x": "p", "y": "q"}},
              2.0]}}}`,
 		`{"K": "max", "p": "pa", "q": "pb"}`,

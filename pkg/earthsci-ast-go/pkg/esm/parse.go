@@ -80,12 +80,12 @@ func withAuthoredMountDeclared(md map[string]bool) LoadOption {
 // WithMetaparameters binds the ROOT document's open metaparameters at the
 // loader API (esm-spec §9.7.6 binding site 4): already-closed edge bindings
 // win, API bindings beat `default`s. Binding a name the document does not
-// declare fails with `template_import_unknown_name`.
+// declare fails with `operator_import_unknown_name`.
 func WithMetaparameters(m map[string]int64) LoadOption {
 	return func(o *loadOptions) { o.metaparameters = m }
 }
 
-// WithBasePath anchors relative `expression_template_imports` refs (esm-spec
+// WithBasePath anchors relative `operator_imports` refs (esm-spec
 // §9.7.2) for LoadString / LoadDocument input. LoadPath derives it from the
 // file's directory automatically; an explicit WithBasePath overrides that.
 func WithBasePath(dir string) LoadOption {
@@ -160,7 +160,7 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 		// processing". Splice the root's own mounts in HERE, ahead of
 		// LoadString's §9.7 machinery, so the §9.6.3 fixpoint lowers through the
 		// mounted content — without this a rule the root's own component
-		// declares in its own `expression_template_imports` never reaches a
+		// declares in its own `operator_imports` never reaches a
 		// rewrite-target inside a component that component mounts (issue #311).
 		//
 		// Only the CONTENT moves. The `index_sets` those mounts contribute are
@@ -277,7 +277,7 @@ func fileVersionGates(view map[string]any) error {
 }
 
 // mountedContentVersionGates is the part of fileVersionGates a MOUNTED leaf is
-// held to, against the leaf's own `esm`: apply_expression_template (0.4.0),
+// held to, against the leaf's own `esm`: apply_operator (0.4.0),
 // the §9.7 template constructs (0.8.0), the top-level `solver` block (1.1.0),
 // unit-bearing expression nodes (1.2.0) and variable bounds (2.1.0). The `solver.external` and
 // `solver.time_span` gates are the root's alone: those fields do not cross
@@ -382,7 +382,7 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	// the specific diagnostic instead of a generic schema error. The version
 	// gates already ran in prepareRoot.
 	if view != nil {
-		// Top-level `expression_templates` beside a component payload is a
+		// Top-level `operators` beside a component payload is a
 		// template-library payload no component can see (esm-spec §9.7.1).
 		if err := rejectImpureTemplateLibrary(view); err != nil {
 			return nil, err
@@ -414,15 +414,15 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 
 	// Resolve esm-spec §9.7 machinery — template-library imports (depth-first
 	// post-order, per-edge metaparameter instantiation), index_sets merge,
-	// metaparameter close+fold — then expand `apply_expression_template` ops
+	// metaparameter close+fold — then expand `apply_operator` ops
 	// / fire `match` rules to the §9.6.3 fixpoint (esm-spec §9.6 /
 	// docs/rfcs/ast-expression-templates.md). After both passes the JSON has
-	// no apply_expression_template nodes, no expression_templates blocks, no
+	// no apply_operator nodes, no operators blocks, no
 	// imports, and no metaparameters — the typed struct sees only normal
 	// Expression ASTs (Option A round-trip).
 	//
 	// EXCEPT for the two DECLARATION blocks. §9.6.4 rule 5: Option A expands CALL
-	// SITES; it does not delete DECLARATIONS. The top-level `expression_templates`
+	// SITES; it does not delete DECLARATIONS. The top-level `operators`
 	// registry and `metaparameters` block are peers of `index_sets`, and they
 	// survive parse → emit VERBATIM — a template-library file must round-trip to
 	// itself. The resolver restores them onto its own output from an equivalent
@@ -447,13 +447,13 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	// component. `ESMFile.Models` and `ESMFile.ReactionSystems` are maps of the
 	// component type, so the decode below turns such an entry into an EMPTY
 	// component and the edge — its `ref`, its `bindings`, its
-	// `index_set_rename`, its §9.7.10 form-A `expression_template_imports` — is
+	// `index_set_rename`, its §9.7.10 form-A `operator_imports` — is
 	// gone. Snapshot the edges off the text so the ref resolver can run the
 	// §4.7 edge pipeline on them.
 	//
 	// Taken from the AUTHORED text, BEFORE the machinery pass below. That pass
 	// walks each top-level entry as a COMPONENT and ends each one with
-	// `delete(comp, "expression_template_imports")` — it cannot tell a mount
+	// `delete(comp, "operator_imports")` — it cannot tell a mount
 	// edge from a component — so a snapshot taken after it carried the edge's
 	// `ref` but had silently lost the edge's injection, and a §9.7.10 form-A
 	// injection at this mount form lowered nothing at all, even with the
@@ -468,7 +468,7 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 
 	authoredTemplateRHS := authoredTemplateApplications(view)
 
-	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters,
+	expanded, componentTemplates, loweredUnits, err := resolveAndLowerJSONCapturingUnits(jsonStr, o.basePath, o.metaparameters,
 		authoredMountDeclared, o.authoredKeyOrders)
 	if err != nil {
 		return nil, err
@@ -532,7 +532,15 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	// ReactionSystem.speciesOrder.
 	attachSpeciesOrders(&esmFile)
 	esmFile.componentTemplates = componentTemplates
+	// esm 2.4.0: a loaded document holding a definition block (a surviving
+	// reference's closure) is stamped at least 2.4.0, the version that names
+	// `operators` / `apply_operator` — the floor emit applies (esm-spec §9.6.5,
+	// §9.6.12; templateMachineryMinESM).
+	if len(componentTemplates) > 0 && esmVersionBelow3(map[string]any{"esm": esmFile.ESM}, templateMachineryMinESM) {
+		esmFile.ESM = templateMachineryMinESM
+	}
 	esmFile.authoredTemplateRHS = authoredTemplateRHS
+	esmFile.loweredUnitEqs = loweredUnits
 
 	// v0.3.0 closes the function registry (closed-function-registry RFC).
 	// Reject any v0.2.x file that still carries the removed top-level
@@ -731,8 +739,9 @@ func normalizeReactionSystemLiterals(rs *ReactionSystem) {
 }
 
 // rejectDeprecatedV02Blocks fails LoadString with a structural error when
-// the input still declares the v0.2.x `operators` or `registered_functions`
-// top-level blocks removed by the closed-function-registry RFC. The schema
+// the input still declares the v0.2.x `registered_functions` top-level block
+// removed by the closed-function-registry RFC. (A top-level `operators` block
+// is the esm-2.4.0 operator-library payload, esm-spec §9.7.1, not refused.) The schema
 // already rejects these for v0.3.0 inputs; this is a redundant boundary
 // check that survives bypassed schema validation.
 func rejectDeprecatedV02Blocks(jsonStr string) error {
@@ -740,10 +749,6 @@ func rejectDeprecatedV02Blocks(jsonStr string) error {
 	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
 		// Non-object root would have failed schema validation upstream.
 		return nil
-	}
-	if _, ok := top["operators"]; ok {
-		return fmt.Errorf("deprecated_v02_block: top-level `operators` was removed in v0.3.0 " +
-			"(closed-function-registry RFC §6); migrate to discretization schemes or AST equations")
 	}
 	if _, ok := top["registered_functions"]; ok {
 		return fmt.Errorf("deprecated_v02_block: top-level `registered_functions` was removed in v0.3.0 " +
@@ -1011,7 +1016,7 @@ func escapeJSONPointerSegment(s string) string {
 	return s
 }
 
-// authoredDeclarationBlocks extracts the top-level `expression_templates` and
+// authoredDeclarationBlocks extracts the top-level `operators` and
 // `metaparameters` blocks from a document AS AUTHORED, verbatim.
 //
 // They are declarations, not call sites (esm-spec §9.6.4 rule 5), so they survive
@@ -1024,7 +1029,7 @@ func authoredDeclarationBlocks(jsonStr string) (templates, metaparams json.RawMe
 	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
 		return nil, nil
 	}
-	return top["expression_templates"], top["metaparameters"]
+	return top["operators"], top["metaparameters"]
 }
 
 // scanOps reads the JSON TEXT for `"op": "<name>"` pairs and reports the first
@@ -1130,11 +1135,15 @@ func declaredEsmBelow(jsonStr string, wantMajor, wantMinor int) (declared string
 //     before schema validation, which would otherwise report the removed fields
 //     first.
 //  2. The `faq` version gate: `faq` arrives at esm 1.1.0 (esm-spec §2.2.4).
-//  3. The deprecated ops `neg` and `pow` (and a `broadcast` `fn` of `neg`)
+//  3. The esm-2.4.0 old spellings (`expression_templates`,
+//     `expression_template_imports`, `apply_expression_template`, a spatial
+//     `D`, `δ`, `∂`) are read as the new names (readOldSpellings, esm-spec
+//     §9.6.12), with `deprecated_field` / `deprecated_op` warnings.
+//  4. The deprecated ops `neg` and `pow` (and a `broadcast` `fn` of `neg`)
 //     are rewritten to unary `-` and `^` (rewriteDeprecatedOps, esm-spec §4.2
 //     "Deprecated ops"), with one `deprecated_op` warning for the document.
 //
-// It returns the text, rewritten only by step 3.
+// It returns the text, rewritten only by steps 3 and 4.
 func prepareDocumentOps(jsonStr string) (string, error) {
 	removed, hasFaq := scanOps(jsonStr)
 	if err := checkRemovedConstructs(jsonStr, removed); err != nil {
@@ -1144,6 +1153,12 @@ func prepareDocumentOps(jsonStr string) (string, error) {
 		return "", fmt.Errorf(
 			"faq_version_too_old: the `faq` op arrives at esm 1.1.0; file declares %s. "+
 				"Raise the declared version. See docs/content/rfcs/faq-node-rename.md", declared)
+	}
+	// esm 2.4.0: the old field and op spellings, read as the new names
+	// (esm-spec §9.6.12), before the `neg` / `pow` rewrite.
+	jsonStr, err := readOldSpellings(jsonStr)
+	if err != nil {
+		return "", err
 	}
 	rewritten, sites := rewriteDeprecatedOps(jsonStr)
 	warnDeprecatedOps(sites)

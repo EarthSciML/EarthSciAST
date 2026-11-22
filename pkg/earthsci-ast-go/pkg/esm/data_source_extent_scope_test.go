@@ -98,7 +98,7 @@ func TestExtentScope_MountedLeafMetaparameterNeedNotBeRestated(t *testing.T) {
 
 // TestExtentScope_LoaderBindingNoDocumentDeclaresIsRefused: widening the check
 // must not delete it. A name neither the root nor anything it mounts declares is
-// still `template_import_unknown_name` — §9.7.6: bindings never invent
+// still `operator_import_unknown_name` — §9.7.6: bindings never invent
 // metaparameters, a typo fails loudly.
 func TestExtentScope_LoaderBindingNoDocumentDeclaresIsRefused(t *testing.T) {
 	_, err := extentScopeLoad(t, "extent_root_subsystem.esm", map[string]int64{"N_RECS": 3})
@@ -225,7 +225,7 @@ func TestExtentScope_DeclaredExtentStillLoadsWithNoLoaderBindings(t *testing.T) 
 //
 // Here the assembler declares `N_REC` and the leaf it mounts declares nothing.
 // Forwarding the whole loader-API map into the leaf's close would raise
-// `template_import_unknown_name` against a leaf that never asked for the name —
+// `operator_import_unknown_name` against a leaf that never asked for the name —
 // and, worse, would let an assembler's unrelated metaparameter silently resize a
 // leaf axis the edge never bound (esm-spec §4.7).
 // TestExtentScope_UnrelatedAssemblerMetaparameterIsWithheldFromTheLeaf is the

@@ -11,7 +11,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // collectApplyNames accumulates the `name` of every
-// `apply_expression_template` node reachable in x into out. Used by
+// `apply_operator` node reachable in x into out. Used by
 // composeTemplateBodies to build the template-body reference graph (esm-spec
 // §9.7.3).
 func collectApplyNames(out *[]string, x any) {
@@ -34,12 +34,12 @@ func collectApplyNames(out *[]string, x any) {
 
 // composeTemplateBodies performs registration-time body CHECKING (esm-spec
 // §9.7.3, Option B / esm 0.9.0): template bodies MAY reference other in-scope
-// MATCH-LESS templates via `apply_expression_template` nodes. Builds the
+// MATCH-LESS templates via `apply_operator` nodes. Builds the
 // body-reference graph, rejects cycles
-// (`apply_expression_template_recursive_body`), references to undeclared or
-// `match`-bearing templates (`apply_expression_template_unknown_template`), and
+// (`operator_recursive_body`), references to undeclared or
+// `match`-bearing templates (`operator_unknown_definition`), and
 // chains deeper than MaxTemplateExpansionDepth templates
-// (`template_body_expansion_too_deep`).
+// (`operator_body_expansion_too_deep`).
 //
 // From esm 0.9.0 (RFC out-of-line-expression-templates §7.1 step 4) bodies are
 // **NOT inlined** — the references are preserved uninlined and denote their
@@ -77,12 +77,12 @@ func composeTemplateBodies(templates map[string]any, scope string) error {
 			tdeclRaw, ok := templates[r]
 			if !ok {
 				return newETErr(CodeApplyExpressionTemplateUnknownTemplate,
-					fmt.Sprintf("%s.expression_templates.%s: body references undeclared template '%s' (esm-spec §9.7.3)", scope, name, r))
+					fmt.Sprintf("%s.operators.%s: body references undeclared template '%s' (esm-spec §9.7.3)", scope, name, r))
 			}
 			if tdecl, ok := tdeclRaw.(map[string]any); ok {
 				if m, has := tdecl["match"]; has && m != nil {
 					return newETErr(CodeApplyExpressionTemplateUnknownTemplate,
-						fmt.Sprintf("%s.expression_templates.%s: body references '%s', a `match` rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)", scope, name, r))
+						fmt.Sprintf("%s.operators.%s: body references '%s', a `match` rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)", scope, name, r))
 				}
 			}
 		}
@@ -107,7 +107,7 @@ func composeTemplateBodies(templates map[string]any, scope string) error {
 			}
 			cyc := append(append([]string{}, chain[idx:]...), name)
 			return 0, newETErr(CodeApplyExpressionTemplateRecursiveBody,
-				fmt.Sprintf("%s.expression_templates: template-body reference cycle %s (esm-spec §9.7.3)", scope, strings.Join(cyc, " -> ")))
+				fmt.Sprintf("%s.operators: template-body reference cycle %s (esm-spec §9.7.3)", scope, strings.Join(cyc, " -> ")))
 		case 2:
 			return depth[name], nil
 		}
@@ -128,7 +128,7 @@ func composeTemplateBodies(templates map[string]any, scope string) error {
 		depth[name] = d
 		if d > MaxTemplateExpansionDepth {
 			return 0, newETErr(CodeTemplateBodyExpansionTooDeep,
-				fmt.Sprintf("%s.expression_templates.%s: body-reference chain of %d templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH=%d (esm-spec §9.7.3)", scope, name, d, MaxTemplateExpansionDepth))
+				fmt.Sprintf("%s.operators.%s: body-reference chain of %d templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH=%d (esm-spec §9.7.3)", scope, name, d, MaxTemplateExpansionDepth))
 		}
 		order = append(order, name)
 		return d, nil
@@ -141,7 +141,7 @@ func composeTemplateBodies(templates map[string]any, scope string) error {
 
 	// esm 0.9.0 (Option B): DO NOT inline. The DAG has been checked (acyclic,
 	// depth-bounded, references resolve to match-less templates); the bodies are
-	// left with their `apply_expression_template` references intact; only
+	// left with their `apply_operator` references intact; only
 	// Expand (§9.6.4 rule 2) substitutes them.
 	_ = order
 	return nil

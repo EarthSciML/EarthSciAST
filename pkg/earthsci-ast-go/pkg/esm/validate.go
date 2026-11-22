@@ -216,7 +216,7 @@ func ValidateText(jsonStr string, opts ...LoadOption) *ValidationResult {
 // at all.
 //
 // It is answered from the TYPED document. That was not always possible: Go
-// once dropped `expression_templates` and `coupling_roles` at parse, so the
+// once dropped `operators` and `coupling_roles` at parse, so the
 // only surviving evidence was the raw JSON, and the check had to be handed the
 // text. ESMFile has carried both fields since template libraries were made to
 // round-trip, so the text is no longer needed. A file that declares a library
@@ -1159,7 +1159,7 @@ func (s *structuralScan) creditCoordinateNames(allVars map[string]bool) {
 // equationBoundSymbols returns every binder-introduced symbol an equation
 // scopes, collected across BOTH sides (aggregate `output_idx` / `ranges` keys,
 // `index` element positions, integral integration
-// variables, apply_expression_template parameter names). Mirrors TS
+// variables, apply_operator parameter names). Mirrors TS
 // `collectIndexSymbols` applied to lhs ∪ rhs.
 func equationBoundSymbols(eq Equation) map[string]bool {
 	bound := map[string]bool{}
@@ -1207,7 +1207,7 @@ func unionScope(base map[string]bool, extra map[string]bool) map[string]bool {
 // how the sidecars went unchecked: descending only `args` silently accepted an
 // undefined variable hidden in an aggregate body (`expr`), an aggregate
 // `filter`/`key`, integral `lower`/`upper` bounds, a `makearray` `values` list,
-// an `apply_expression_template` `bindings` map, a
+// an `apply_operator` `bindings` map, a
 // `ranges` loop bound, or a makearray `regions` bound. Routing through the
 // keystone makes that class of omission structurally impossible: a NEW
 // expression-bearing field on ExprNode is either a reference child or a declared
@@ -1282,7 +1282,7 @@ func (s *structuralScan) validateExprNodeChildren(node ExprNode, allVars map[str
 //   - Ranges keys   — aggregate contraction loop variables
 //   - Var           — the integral integration variable
 //   - Args[1:]      — `index(array, i, j, …)` element positions (bare names)
-//   - Bindings keys — apply_expression_template formal parameter names
+//   - Bindings keys — apply_operator formal parameter names
 func boundIndexSymbols(node ExprNode) []string {
 	var syms []string
 	for _, idx := range node.OutputIdx {
