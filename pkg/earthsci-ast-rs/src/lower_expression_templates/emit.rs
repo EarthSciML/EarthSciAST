@@ -153,6 +153,11 @@ pub(crate) fn materialize_component_block(
             carried = true;
         }
     }
+    let mut emit_block = Value::Object(emit_block);
+    strip_fixed_units(&mut emit_block);
+    let Value::Object(emit_block) = emit_block else {
+        unreachable!("an object stays an object")
+    };
     (emit_block, !refnames.is_empty(), carried)
 }
 

@@ -265,3 +265,51 @@ fn a_library_with_both_spellings_is_refused_alike_at_the_root_and_imported() {
         );
     }
 }
+
+/// esm-spec §4.2, §9.6.12: a `partial` call has the fixed unit
+/// `[f]/[wrt]` whichever rule lowers it. A fired `match` rule whose body
+/// disagrees is `definition_unit_mismatch`, and the equation is typed by the
+/// fixed unit, so it is consistent.
+#[test]
+fn a_fired_partial_rule_is_checked_against_the_fixed_unit() {
+    let doc = serde_json::json!({
+        "esm": "2.4.0",
+        "metadata": {"name": "partial_rule_fixed_unit"},
+        "models": {"m": {
+            "variables": {
+                "u": {"type": "parameter", "units": "kg", "default": 1.0},
+                "x": {"type": "parameter", "units": "m", "default": 1.0},
+                "k": {"type": "parameter", "units": "1", "default": 0.5},
+                "y": {"type": "unknown", "units": "kg/m"}
+            },
+            "equations": [{
+                "lhs": "y",
+                "rhs": {"op": "partial", "args": ["u"], "wrt": "x"}
+            }],
+            "operators": {
+                "scaled": {
+                    "params": ["f", "d"],
+                    "match": {"op": "partial", "args": ["f"], "wrt": "d"},
+                    "body": {"op": "*", "args": ["f", "k"]}
+                }
+            }
+        }}
+    });
+    let file = earthsci_ast::load_string(&doc.to_string()).expect("loads");
+    let r = earthsci_ast::validate(&file);
+    let codes: Vec<&str> = r
+        .structural_errors
+        .iter()
+        .map(|e| e.code.as_str())
+        .collect();
+    assert!(
+        codes.contains(&"definition_unit_mismatch"),
+        "{:?}",
+        r.structural_errors
+    );
+    assert!(
+        !codes.contains(&"unit_inconsistency"),
+        "{:?}",
+        r.structural_errors
+    );
+}

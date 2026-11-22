@@ -1581,6 +1581,15 @@ fn scan_without_templates(
 ///
 /// Pre-condition: the input has been schema-validated.
 pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTemplateError> {
+    lower_expression_templates_found(value)?;
+    strip_fixed_units(value);
+    Ok(())
+}
+
+/// [`lower_expression_templates`] for a mounted leaf: its registries keep the
+/// fixed unit expressions of its materialized `partial` / `integral` rules
+/// ([`FIXED_UNITS_KEY`]) for the mounting document's expansion.
+pub(crate) fn lower_mounted_leaf(value: &mut Value) -> Result<(), ExpressionTemplateError> {
     lower_expression_templates_found(value).map(|_| ())
 }
 

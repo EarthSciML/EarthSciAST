@@ -135,7 +135,8 @@ impl Drop for MarkTemplateOrigins {
     }
 }
 
-/// How many template-origin marks this thread has placed so far.
+/// How many template-origin marks (and [`FIXED_UNITS_KEY`] fields) this
+/// thread has placed so far.
 pub(crate) fn template_origins_placed() -> u64 {
     MARKS_PLACED.with(std::cell::Cell::get)
 }
@@ -193,25 +194,7 @@ pub(super) fn definition_units_mark(
         return None;
     };
     let units = obj_get(fields, "units").cloned();
-    let fixed = obj_get(fields, "match").and_then(|m| {
-        let SNode::Obj(m) = &**m else {
-            return None;
-        };
-        let (axis, op) = match obj_op(m)? {
-            "partial" => ("wrt", "/"),
-            "integral" => ("var", "*"),
-            _ => return None,
-        };
-        let SNode::Arr(args) = &**obj_get(m, "args")? else {
-            return None;
-        };
-        let first = args.first()?.clone();
-        let ax = obj_get(m, axis)?.clone();
-        Some(Rc::new(SNode::Obj(vec![
-            ("op".to_string(), Rc::new(SNode::Str(op.to_string()))),
-            ("args".to_string(), Rc::new(SNode::Arr(vec![first, ax]))),
-        ])))
-    });
+    let fixed = kept_fixed_units(fields).or_else(|| match_fixed_units(fields));
     if units.is_none() && fixed.is_none() {
         return None;
     }
@@ -231,6 +214,85 @@ pub(super) fn definition_units_mark(
     Some(Rc::new(SNode::Obj(rec)))
 }
 
+/// The private JSON key on which a materialized `partial` / `integral` rule
+/// (a `match` rule a firing referenced, kept without its `match`) keeps the
+/// fixed unit expression its `match` gave (esm-spec §4.2, §9.6.12 "Units"),
+/// so the references the firing wrote are still held to it. Its value is
+/// `[<`template_origin_nonce`>, <expression>]`, so a key an author wrote is
+/// never taken for one; no writer emits it ([`strip_fixed_units`]).
+pub(crate) const FIXED_UNITS_KEY: &str = "__esm_fixed_units";
+
+/// The fixed unit expression of `partial` / `integral` a definition's `match`
+/// gives (esm-spec §4.2): the pattern's operand over (`partial`) or times
+/// (`integral`) its axis field. `None` for any other definition.
+pub(super) fn match_fixed_units(fields: &[(String, Sv)]) -> Option<Sv> {
+    let SNode::Obj(m) = &**obj_get(fields, "match")? else {
+        return None;
+    };
+    let (axis, op) = match obj_op(m)? {
+        "partial" => ("wrt", "/"),
+        "integral" => ("var", "*"),
+        _ => return None,
+    };
+    let SNode::Arr(args) = &**obj_get(m, "args")? else {
+        return None;
+    };
+    let first = args.first()?.clone();
+    let ax = obj_get(m, axis)?.clone();
+    Some(Rc::new(SNode::Obj(vec![
+        ("op".to_string(), Rc::new(SNode::Str(op.to_string()))),
+        ("args".to_string(), Rc::new(SNode::Arr(vec![first, ax]))),
+    ])))
+}
+
+/// The [`FIXED_UNITS_KEY`] field recording `fixed` on a materialized rule.
+/// Counts as a mark ([`template_origins_placed`]): a mounted leaf's registry
+/// carries it into the document the schema check reads.
+pub(super) fn fixed_units_field(fixed: Sv) -> (String, Sv) {
+    MARKS_PLACED.with(|c| c.set(c.get() + 1));
+    let nonce = Rc::new(SNode::Str(template_origin_nonce().to_string()));
+    (
+        FIXED_UNITS_KEY.to_string(),
+        Rc::new(SNode::Arr(vec![nonce, fixed])),
+    )
+}
+
+/// The fixed unit expression a materialized rule kept ([`FIXED_UNITS_KEY`]).
+fn kept_fixed_units(fields: &[(String, Sv)]) -> Option<Sv> {
+    let SNode::Arr(v) = &**obj_get(fields, FIXED_UNITS_KEY)? else {
+        return None;
+    };
+    match v.as_slice() {
+        [n, fixed] if matches!(&**n, SNode::Str(s) if s == template_origin_nonce()) => {
+            Some(fixed.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Whether `v` is a [`FIXED_UNITS_KEY`] value this process wrote.
+fn is_kept_fixed_units(v: &Value) -> bool {
+    v.as_array()
+        .and_then(|a| a.first())
+        .and_then(Value::as_str)
+        .is_some_and(|s| s == template_origin_nonce())
+}
+
+/// `value` with every [`FIXED_UNITS_KEY`] field this process wrote removed:
+/// a registry, or a whole document, as a writer emits it.
+pub(crate) fn strip_fixed_units(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.get(FIXED_UNITS_KEY).is_some_and(is_kept_fixed_units) {
+                map.shift_remove(FIXED_UNITS_KEY);
+            }
+            map.values_mut().for_each(strip_fixed_units);
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_fixed_units),
+        _ => {}
+    }
+}
+
 /// `value` with every template-origin mark this process placed removed: the
 /// document as authored and expanded, for the schema check, which a mark (a
 /// private key) would fail. A key an author wrote stays, and fails it.
@@ -244,6 +306,9 @@ pub(crate) fn strip_template_origins(value: &mut Value) {
             {
                 map.remove(TEMPLATE_ORIGIN_KEY);
                 map.remove(DEFINITION_UNITS_KEY);
+            }
+            if map.get(FIXED_UNITS_KEY).is_some_and(is_kept_fixed_units) {
+                map.shift_remove(FIXED_UNITS_KEY);
             }
             map.values_mut().for_each(strip_template_origins);
         }

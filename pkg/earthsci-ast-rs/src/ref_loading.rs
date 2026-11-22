@@ -982,7 +982,7 @@ fn resolve_loaded_leaf(
     // (`lower_expression_templates::hoist_mounted_templates`), or as the
     // mounted component's own registry at a top-level mount. Mirrors the Julia
     // reference `_mounted_registries!`.
-    crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
+    crate::lower_expression_templates::lower_mounted_leaf(&mut resolved)?;
     crate::lower_expression_templates::mounted_registries(&mut resolved);
     *comp = resolved;
 

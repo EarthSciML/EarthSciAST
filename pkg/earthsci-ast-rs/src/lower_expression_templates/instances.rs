@@ -832,14 +832,23 @@ fn rule3_exposed(
     visible
 }
 
-/// A decl's fields without `match`, `where` and `priority`.
+/// A decl's fields without `match`, `where` and `priority`. A rule for
+/// `partial` / `integral` keeps the fixed unit expression its `match` gave
+/// ([`FIXED_UNITS_KEY`]), so the unit checker still holds the references a
+/// firing wrote to it (esm-spec §4.2, §9.6.12 "Units").
 fn match_stripped(decl: &Sv) -> Vec<(String, Sv)> {
     match &**decl {
-        SNode::Obj(fields) => fields
-            .iter()
-            .filter(|(k, _)| !matches!(k.as_str(), "match" | "where" | "priority"))
-            .cloned()
-            .collect(),
+        SNode::Obj(fields) => {
+            let mut out: Vec<(String, Sv)> = fields
+                .iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "match" | "where" | "priority"))
+                .cloned()
+                .collect();
+            if let Some(fixed) = match_fixed_units(fields) {
+                out.push(fixed_units_field(fixed));
+            }
+            out
+        }
         _ => Vec::new(),
     }
 }
