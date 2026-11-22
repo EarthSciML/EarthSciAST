@@ -113,7 +113,7 @@ fn a_document_loaded_from_a_string_imports_the_bundle() {
     expand(&mut doc).expect("expand");
     let eqs = doc["models"]["M"]["equations"].to_string();
     assert!(
-        !eqs.contains("apply_expression_template") && eqs.contains("faq"),
+        !eqs.contains("apply_operator") && eqs.contains("faq"),
         "{eqs}"
     );
 }

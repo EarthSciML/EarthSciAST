@@ -615,6 +615,6 @@ mod tests {
         assert!(at("/models/M/equations/0").contains("aligned"));
         assert_eq!(at("/models/M/equations/0"), at("/models/M/equations/1"));
         assert!(at("/models/M/equations/2").contains("3 k"));
-        assert!(at("/models/M/expression_templates/loss").contains("coloneqq"));
+        assert!(at("/models/M/operators/loss").contains("coloneqq"));
     }
 }

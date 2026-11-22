@@ -383,7 +383,7 @@ fn instance(
     if st.done.contains_key(&key) {
         return Ok(key);
     }
-    let tscope = format!("{}.expression_templates.{name}", l.scope);
+    let tscope = format!("{}.operators.{name}", l.scope);
     if st.active.contains(&key) {
         return Err(nonterminating(
             &tscope,
@@ -405,6 +405,7 @@ fn instance(
         l.enums.as_ref(),
         &mut PtrMemo::default(),
     )?;
+    let body = instance_partial(&body, &view, &mut PtrMemo::default());
     let (rewritten, passes) = rewrite_to_fixpoint(&body, l, &tscope, Some(&view))?;
     let mut refs = PtrMemo::default();
     let mut ref_keys = Vec::new();
@@ -440,6 +441,67 @@ fn instance(
     );
     st.order.push(key.clone());
     Ok(key)
+}
+
+/// esm-spec §4.2 "Reading earlier documents": a `D` whose `wrt` is one of the
+/// definition's `params` is decided per instance — where the instance binds
+/// that parameter to an axis name other than `"t"`, the `D` reads as `partial`
+/// in this instance (the wire boundary left it as written). Bound to `"t"`, it
+/// stays the time derivative. Mirrors the Julia reference `_instance_partial`.
+fn instance_partial(node: &Sv, view: &BodyView, memo: &mut PtrMemo<Sv>) -> Sv {
+    match &**node {
+        SNode::Obj(fields) => {
+            if let Some(hit) = memo.get(node) {
+                return hit.clone();
+            }
+            let spatial = obj_op(fields) == Some("D")
+                && match obj_get(fields, "wrt").map(|w| &**w) {
+                    Some(SNode::Str(w)) if view.params.contains(w) => {
+                        matches!(view.lit.get(w).map(|x| &**x), Some(SNode::Str(lit)) if lit != "t")
+                    }
+                    _ => false,
+                };
+            let mut changed = spatial;
+            let mut out = Vec::with_capacity(fields.len());
+            for (k, v) in fields {
+                let nv = if spatial && k == "op" {
+                    Rc::new(SNode::Str("partial".to_string()))
+                } else {
+                    let nv = instance_partial(v, view, memo);
+                    changed |= !Rc::ptr_eq(&nv, v);
+                    nv
+                };
+                out.push((k.clone(), nv));
+            }
+            let res = if changed {
+                Rc::new(SNode::Obj(out))
+            } else {
+                node.clone()
+            };
+            memo.insert(node, res.clone());
+            res
+        }
+        SNode::Arr(items) => {
+            if let Some(hit) = memo.get(node) {
+                return hit.clone();
+            }
+            let mut changed = false;
+            let mut out = Vec::with_capacity(items.len());
+            for v in items {
+                let nv = instance_partial(v, view, memo);
+                changed |= !Rc::ptr_eq(&nv, v);
+                out.push(nv);
+            }
+            let res = if changed {
+                Rc::new(SNode::Arr(out))
+            } else {
+                node.clone()
+            };
+            memo.insert(node, res.clone());
+            res
+        }
+        _ => node.clone(),
+    }
 }
 
 /// The `enum` lowering of esm-spec §9.3 applied inside a template body for one

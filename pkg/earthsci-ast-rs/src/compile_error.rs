@@ -111,7 +111,7 @@ pub enum CompileError {
     /// Discretized PDEs fold their spatial axis into array dimensions, leaving
     /// `independent_variables == ["t"]`, and simulate fine.
     #[error(
-        "Unsupported dimensionality {independent_variables:?}: the simulator integrates systems whose only independent variable is time (independent_variables == [\"t\"]). A remaining spatial independent variable means a spatial operator was not discretized — apply the discretization template (an `expression_templates` `match` rewrite) that lowers it to a `faq` stencil, then simulate. Discretized PDEs run natively in this backend."
+        "Unsupported dimensionality {independent_variables:?}: the simulator integrates systems whose only independent variable is time (independent_variables == [\"t\"]). A remaining spatial independent variable means a spatial operator was not discretized — apply the discretization template (an `operators` `match` rewrite) that lowers it to a `faq` stencil, then simulate. Discretized PDEs run natively in this backend."
     )]
     UnsupportedDimensionalityError {
         /// The actual independent variables found.
@@ -150,13 +150,17 @@ pub enum CompileError {
     /// pipeline. This format ships no discretization rules — they live in
     /// EarthSciDiscretizations.
     #[error(
-        "unlowered_operator: rewrite-target operator '{op}' reached evaluation without being \
-         lowered to a stencil by a rewrite rule (esm-spec §4.2 / §9.6.8). Discretization rules \
-         live in EarthSciDiscretizations, not this format."
+        "unlowered_operator: rewrite-target operator '{op}'{why} reached evaluation without \
+         being lowered to a stencil by a rewrite rule (esm-spec §4.2 / §9.6.8). Discretization \
+         rules live in EarthSciDiscretizations, not this format."
     )]
     UnloweredOperatorError {
         /// The offending operator name (e.g. `"D"` or a user op's name).
         op: String,
+        /// For an unresolved call of a defined operator, each definition of it
+        /// in scope and why it was not eligible at this call, or that none is
+        /// (a placeholder), as ` (…)` (esm-spec §9.6.6); empty otherwise.
+        why: String,
     },
 
     /// An evaluable-core operator (esm-spec §4.2) applied to the wrong number
@@ -768,6 +772,7 @@ pub fn first_implicit_equation(
         let structural = matches!(
             &eq.lhs,
             Expr::Operator(n) if n.op == "ic"
+                || n.op == "partial"
                 || (n.op == "D" && n.wrt.as_deref().is_some_and(|w| w != "t"))
         );
         !structural && matches!(lhs_form_ref(&eq.lhs), LhsFormRef::Expression)

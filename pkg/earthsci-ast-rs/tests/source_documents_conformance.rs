@@ -57,7 +57,11 @@ fn source_documents_manifest_cases() {
                 }
             }
             "error" => {
-                let code = case["code"].as_str().unwrap();
+                // A code the manifest spells by its esm-2.3 name is read as the
+                // new code (esm-spec §9.6.6, "Renamed codes").
+                let code = earthsci_ast::extension::diagnostic::canonical_error_code(
+                    case["code"].as_str().unwrap(),
+                );
                 let message = match load_path(&fixture) {
                     Err(e) => {
                         // A coded refusal carries the case's code itself, and

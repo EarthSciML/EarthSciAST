@@ -20,7 +20,7 @@
 //! more checks are pinned only in the Python binding, which is the only one that
 //! builds the variants inline: that the SAME pair still collides without the
 //! field, and that two rename keys onto one target is
-//! `template_import_rename_collision`.
+//! `operator_import_rename_collision`.
 
 #![cfg(not(target_arch = "wasm32"))]
 

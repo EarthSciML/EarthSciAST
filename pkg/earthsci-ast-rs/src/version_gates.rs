@@ -142,9 +142,9 @@ pub(crate) static VERSIONED: [VersionGate; 8] = [
         },
     },
     VersionGate {
-        construct: "`expression_templates` / `apply_expression_template`",
+        construct: "`operators` / `apply_operator`",
         min: (0, 4),
-        code: codes::APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
+        code: codes::OPERATOR_VERSION_TOO_OLD,
         kinds: ROOT_LEAF_LIBRARY,
         group: Group::Templates,
         floor: false,
@@ -152,16 +152,16 @@ pub(crate) static VERSIONED: [VersionGate; 8] = [
         from_facts: None,
         message: |esm, paths| {
             format!(
-                "expression_templates / apply_expression_template require esm >= 0.4.0; \
+                "operators / apply_operator require esm >= 0.4.0; \
                  file declares {esm}. Offending paths: {paths}"
             )
         },
     },
     VersionGate {
-        construct: "`expression_template_imports` / top-level `expression_templates` / \
+        construct: "`operator_imports` / top-level `operators` / \
                     `metaparameters`",
         min: (0, 8),
-        code: codes::TEMPLATE_IMPORT_VERSION_TOO_OLD,
+        code: codes::OPERATOR_IMPORT_VERSION_TOO_OLD,
         kinds: ROOT_LEAF_LIBRARY,
         group: Group::Templates,
         floor: false,
@@ -169,7 +169,7 @@ pub(crate) static VERSIONED: [VersionGate; 8] = [
         from_facts: None,
         message: |esm, paths| {
             format!(
-                "expression_template_imports / top-level expression_templates / metaparameters \
+                "operator_imports / top-level operators / metaparameters \
                  require esm >= 0.8.0; file declares {esm}. Offending paths: {paths}"
             )
         },
@@ -407,11 +407,11 @@ mod tests {
         assert_eq!(VERSIONED[FAQ].code, codes::FAQ_VERSION_TOO_OLD);
         assert_eq!(
             VERSIONED[EXPRESSION_TEMPLATES].code,
-            codes::APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD
+            codes::OPERATOR_VERSION_TOO_OLD
         );
         assert_eq!(
             VERSIONED[TEMPLATE_IMPORTS].code,
-            codes::TEMPLATE_IMPORT_VERSION_TOO_OLD
+            codes::OPERATOR_IMPORT_VERSION_TOO_OLD
         );
         assert_eq!(VERSIONED[SOLVER].code, codes::SOLVER_VERSION_TOO_OLD);
         assert_eq!(
@@ -455,7 +455,7 @@ mod tests {
             json!({
                 "esm": esm,
                 "metadata": { "name": "lib" },
-                "expression_templates": { "one_pa": {
+                "operators": { "one_pa": {
                     "params": [],
                     "body": { "op": "const", "args": [], "value": 1.0, "units": "Pa" }
                 } }
@@ -466,7 +466,7 @@ mod tests {
                 "esm": "1.2.0",
                 "metadata": { "name": "root" },
                 "models": { "M": {
-                    "expression_template_imports": [{ "ref": lib }],
+                    "operator_imports": [{ "ref": lib }],
                     "variables": {},
                     "equations": []
                 } }

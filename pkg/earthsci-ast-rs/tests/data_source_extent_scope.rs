@@ -80,7 +80,7 @@ fn a_mounted_leafs_metaparameter_need_not_be_restated_by_the_root() {
 }
 
 /// Widening the check must not delete it. A name neither the root nor anything
-/// it mounts declares is still `template_import_unknown_name` — §9.7.6:
+/// it mounts declares is still `operator_import_unknown_name` — §9.7.6:
 /// bindings never invent metaparameters, a typo fails loudly.
 #[test]
 fn a_loader_api_binding_no_document_declares_is_still_refused() {
@@ -88,7 +88,7 @@ fn a_loader_api_binding_no_document_declares_is_still_refused() {
         .expect_err("a name nobody declares is a typo, not a binding");
     let text = e.to_string();
     assert!(
-        text.contains("template_import_unknown_name"),
+        text.contains("operator_import_unknown_name"),
         "the stable §9.7.6 code, not a coercion panic: {text}"
     );
     assert!(
@@ -175,7 +175,7 @@ fn an_extent_naming_an_undeclared_metaparameter_is_refused_at_load() {
         .expect_err("an extent nobody declares must not validate clean");
     let text = e.to_string();
     assert!(
-        text.contains("template_import_unknown_name"),
+        text.contains("operator_import_unknown_name"),
         "reuse the §9.7.6 code an unknown name at a binding site already has: {text}"
     );
     assert!(
@@ -200,7 +200,7 @@ fn a_declared_extent_still_loads_with_no_loader_bindings() {
 ///
 /// Here the assembler declares `N_REC` and the leaf it mounts declares nothing.
 /// Forwarding the whole loader-API map into the leaf's close would raise
-/// `template_import_unknown_name` against a leaf that never asked for the name
+/// `operator_import_unknown_name` against a leaf that never asked for the name
 /// — and, worse, would let an assembler's unrelated metaparameter silently
 /// resize a leaf axis the edge never bound (esm-spec §4.7).
 #[test]
@@ -369,7 +369,7 @@ fn the_purest_typo_is_caught_and_stays_caught() {
     let err = load_path(fixture("extent_typo_no_mount.esm"))
         .expect_err("a single-file `extent` typo must be refused at load");
     let text = err.to_string();
-    assert!(text.contains("template_import_unknown_name"), "{text}");
+    assert!(text.contains("operator_import_unknown_name"), "{text}");
     assert!(text.contains("N_RECS"), "must name the misspelling: {text}");
 }
 

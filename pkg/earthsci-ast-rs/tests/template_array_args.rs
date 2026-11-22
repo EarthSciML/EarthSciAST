@@ -75,7 +75,7 @@ fn the_flattened_coupled_case_written_out_and_read_back_matches_the_template_for
     let flat = earthsci_ast::flatten(&file).expect("flatten");
     let text = crate::flatten_wire_conformance::flattened_document(&flat).to_string();
     assert!(
-        !text.contains("apply_expression_template"),
+        !text.contains("apply_operator"),
         "the flattened system holds expansions"
     );
     let read_back = load_string(&text).expect("load the written-out flattened system");
@@ -103,14 +103,14 @@ fn arrays_over_unrelated_index_sets_span_their_union() {
     let doc = r#"{"esm": "2.0.0", "metadata": {"name": "taa_mismatch"},
       "index_sets": {"a": {"kind": "interval", "size": 2}, "b": {"kind": "interval", "size": 3}},
       "models": {"M": {
-        "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": ["bilinear"]}],
+        "operator_imports": [{"ref": "esm:std/interp.esm", "only": ["bilinear"]}],
         "variables": {
           "px": {"type": "parameter", "shape": ["a"], "default": [0.5, 1.5]},
           "py": {"type": "parameter", "shape": ["b"], "default": [10.0, 15.0, 20.0]},
           "B": {"type": "unknown"},
           "s": {"type": "unknown", "default": 0.0}},
         "equations": [
-          {"lhs": "B", "rhs": {"op": "apply_expression_template", "args": [], "name": "bilinear",
+          {"lhs": "B", "rhs": {"op": "apply_operator", "args": [], "name": "bilinear",
             "bindings": {"table": {"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0]]},
                          "axis_x": {"op": "const", "args": [], "value": [0.0, 2.0]},
                          "axis_y": {"op": "const", "args": [], "value": [10.0, 20.0]},
@@ -153,12 +153,12 @@ fn problem(doc: &str, compiler: Compiler) -> Result<earthsci_ast::EsmProblem, St
 fn an_anonymous_array_argument_is_refused() {
     let doc = model_doc(
         r#"{"y": {"type": "unknown"}, "s": {"type": "unknown", "default": 0.0}}"#,
-        r#"[{"lhs": "y", "rhs": {"op": "apply_expression_template", "args": [], "name": "linear",
+        r#"[{"lhs": "y", "rhs": {"op": "apply_operator", "args": [], "name": "linear",
               "bindings": {"table": {"op": "const", "args": [], "value": [1.0, 2.0, 4.0]},
                            "axis": {"op": "const", "args": [], "value": [0.0, 1.0, 2.0]},
                            "x": {"op": "const", "args": [], "value": [0.5, 1.5]}, "n": 3}}},
             {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 1.0}]"#,
-        r#", "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": ["linear"]}]"#,
+        r#", "operator_imports": [{"ref": "esm:std/interp.esm", "only": ["linear"]}]"#,
     );
     for compiler in [Compiler::Interpreter, Compiler::Native] {
         let err = problem(&doc, compiler).expect_err("refused");

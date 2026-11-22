@@ -3188,8 +3188,7 @@ impl BareWalk<'_> {
     /// Whether the walk does not enter `node`: a template application, which
     /// is opaque to it (see [`faq_bare_array_operand_errors`]).
     fn is_opaque(&self, node: &crate::types::ExpressionNode) -> bool {
-        node.op == "apply_expression_template"
-            || (self.opaque_applications && node.template_origin.is_some())
+        node.op == "apply_operator" || (self.opaque_applications && node.template_origin.is_some())
     }
 }
 
@@ -3684,7 +3683,7 @@ fn contains_template_reference(expr: &crate::Expr) -> bool {
     let crate::Expr::Operator(node) = expr else {
         return false;
     };
-    if node.op == "apply_expression_template" {
+    if node.op == "apply_operator" {
         return true;
     }
     let mut found = false;
@@ -3727,7 +3726,7 @@ fn check_aggregate_node(
     // the effective registry exists only in that per-run build and resolving
     // `{from: NAME}` against the empty local registry would reject every
     // conforming leaf. The check is deferred there, mirroring §9.6.1's
-    // standalone exemption for `template_constraint_unknown_index_set`; a name
+    // standalone exemption for `operator_constraint_unknown_index_set`; a name
     // still unresolved once injection has run is rejected by the evaluating
     // bindings' resolvers (issue #185).
     let registry_declared = index_sets.is_some_and(|m| !m.is_empty());
@@ -3910,11 +3909,20 @@ fn record_unit_findings(
     errors: &mut Vec<StructuralError>,
     warnings: &mut Vec<UnitWarning>,
 ) {
+    // A definition's undeterminable-body warning (esm-spec §9.6.12) is
+    // reported once per definition and kind at a site, however many calls of
+    // it the site holds.
+    let mut seen_definition_warnings = std::collections::HashSet::new();
     for finding in findings {
+        if finding.severity == crate::units::UnitSeverity::DefinitionUndetermined
+            && !seen_definition_warnings.insert(finding.message.clone())
+        {
+            continue;
+        }
         if finding.is_error() {
             errors.push(StructuralError {
                 path: path.to_string(),
-                code: StructuralErrorCode::UnitInconsistency,
+                code: finding.error_code(),
                 message: finding.message.clone(),
                 details: serde_json::json!({
                     "subject": subject,

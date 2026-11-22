@@ -237,16 +237,16 @@ mod tests {
     // -- loader-level rules over a substitute bundle -------------------------
 
     const TWICE_LIB: &str = r#"{"esm": "2.0.0", "metadata": {"name": "b"},
-        "expression_templates": {"twice": {"params": ["x"],
+        "operators": {"twice": {"params": ["x"],
             "body": {"op": "*", "args": [2, "x"]}}}}"#;
 
     fn importing_lib(name: &str, import: &str) -> String {
         format!(
             r#"{{"esm": "2.0.0", "metadata": {{"name": "{name}"}},
-            "expression_template_imports": [{{"ref": "{import}"}}],
-            "expression_templates": {{"quad": {{"params": ["x"], "body":
-                {{"op": "apply_expression_template", "args": [], "name": "twice",
-                  "bindings": {{"x": {{"op": "apply_expression_template", "args": [],
+            "operator_imports": [{{"ref": "{import}"}}],
+            "operators": {{"quad": {{"params": ["x"], "body":
+                {{"op": "apply_operator", "args": [], "name": "twice",
+                  "bindings": {{"x": {{"op": "apply_operator", "args": [],
                       "name": "twice", "bindings": {{"x": "x"}}}}}}}}}}}}}}"#
         )
     }
@@ -255,10 +255,10 @@ mod tests {
         format!(
             r#"{{"esm": "2.0.0", "metadata": {{"name": "consumer"}},
             "models": {{"M": {{
-                "expression_template_imports": [{{"ref": "{import}"}}],
+                "operator_imports": [{{"ref": "{import}"}}],
                 "variables": {{"x": {{"type": "parameter", "units": "1", "default": 1.0}},
                               "y": {{"type": "unknown", "units": "1"}}}},
-                "equations": [{{"lhs": "y", "rhs": {{"op": "apply_expression_template",
+                "equations": [{{"lhs": "y", "rhs": {{"op": "apply_operator",
                     "args": [], "name": "{template}", "bindings": {{"x": "x"}}}}}}]}}}}}}"#
         )
     }
@@ -309,33 +309,33 @@ mod tests {
             let file = load_elsewhere(&consumer(&format!("esm:std/{lib}.esm"), "quad"))
                 .unwrap_or_else(|e| panic!("{lib}: {e}"));
             let json = expanded_equations(&file);
-            assert!(!json.contains("apply_expression_template"), "{lib}: {json}");
+            assert!(!json.contains("apply_operator"), "{lib}: {json}");
         }
         let e = load_elsewhere(&consumer("esm:std/up.esm", "quad")).unwrap_err();
-        assert!(e.contains("template_import_unresolved"), "{e}");
+        assert!(e.contains("operator_import_unresolved"), "{e}");
     }
 
     #[test]
     fn a_bundled_file_has_one_identity_for_cycle_detection() {
         let c1 = r#"{"esm": "2.0.0", "metadata": {"name": "c1"},
-            "expression_template_imports": [{"ref": "esm:std/c2.esm"}],
-            "expression_templates": {"one": {"params": [], "body": 1}}}"#;
+            "operator_imports": [{"ref": "esm:std/c2.esm"}],
+            "operators": {"one": {"params": [], "body": 1}}}"#;
         let c2 = r#"{"esm": "2.0.0", "metadata": {"name": "c2"},
-            "expression_template_imports": [{"ref": "c1.esm"}],
-            "expression_templates": {"two": {"params": [], "body": 2}}}"#;
+            "operator_imports": [{"ref": "c1.esm"}],
+            "operators": {"two": {"params": [], "body": 2}}}"#;
         let _bundle = with_test_bundle(&[("c1.esm", c1), ("c2.esm", c2)]);
         let e = load_elsewhere(&consumer("esm:std/c1.esm", "one")).unwrap_err();
-        assert!(e.contains("template_import_cycle"), "{e}");
+        assert!(e.contains("operator_import_cycle"), "{e}");
     }
 
     #[test]
     fn a_bundled_subsystem_resolves_its_own_imports_in_the_bundle() {
         let sub = r#"{"esm": "2.0.0", "metadata": {"name": "sub"},
             "models": {"Sub": {
-                "expression_template_imports": [{"ref": "b.esm"}],
+                "operator_imports": [{"ref": "b.esm"}],
                 "variables": {"u": {"type": "parameter", "units": "1", "default": 3.0},
                               "w": {"type": "unknown", "units": "1"}},
-                "equations": [{"lhs": "w", "rhs": {"op": "apply_expression_template",
+                "equations": [{"lhs": "w", "rhs": {"op": "apply_operator",
                     "args": [], "name": "twice", "bindings": {"x": "u"}}}]}}}"#;
         let _bundle = with_test_bundle(&[("b.esm", TWICE_LIB), ("sub.esm", sub)]);
         for mount in [
@@ -347,7 +347,7 @@ mod tests {
             let text = format!(r#"{{"esm": "2.0.0", "metadata": {{"name": "mount"}}, {mount}}}"#);
             let file = load_elsewhere(&text).unwrap_or_else(|e| panic!("{mount}: {e}"));
             let json = expanded_equations(&file);
-            assert!(!json.contains("apply_expression_template"), "{json}");
+            assert!(!json.contains("apply_operator"), "{json}");
             assert!(json.contains("\"u\""), "{json}");
         }
     }

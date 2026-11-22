@@ -707,9 +707,9 @@ mod tests {
                 "u": {"type": "parameter", "shape": ["c"], "default": [1.0, 2.0, 3.0]},
                 "y": {"type": "unknown", "shape": []},
                 "s": {"type": "unknown", "default": 0.0}}),
-            serde_json::json!({"op": "apply_expression_template", "args": [], "name": "twice",
+            serde_json::json!({"op": "apply_operator", "args": [], "name": "twice",
                 "bindings": {"x": "u"}}),
-            serde_json::json!({"expression_templates": {"twice": {"params": ["x"],
+            serde_json::json!({"operators": {"twice": {"params": ["x"],
                 "body": {"op": "*", "args": [2, "x"]}}}}),
         );
         let (lifted, before, after) = lift_doc(&doc, "M.y");
@@ -737,13 +737,13 @@ mod tests {
                     "s": {"type": "unknown", "default": 0.0}},
                 "equations": [
                     {"lhs": "y", "rhs": {"op": "+", "args": [
-                        {"op": "apply_expression_template", "args": [], "name": "twice",
+                        {"op": "apply_operator", "args": [], "name": "twice",
                          "bindings": {"x": "u"}},
                         "k"]}},
                     {"lhs": "k", "rhs": {"op": "*", "args": [2, "u"]}},
                     {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 0.0}
                 ],
-                "expression_templates": {"twice": {"params": ["x"],
+                "operators": {"twice": {"params": ["x"],
                     "body": {"op": "*", "args": [2, "x"]}}}
             }}
         });
@@ -799,14 +799,14 @@ mod tests {
             "models": {"M": {
                 "variables": variables,
                 "equations": eqs,
-                "expression_templates": {"twice": {"params": ["x"],
+                "operators": {"twice": {"params": ["x"],
                     "body": {"op": "*", "args": [2, "x"]}}}
             }}
         })
     }
 
     fn twice(x: &str) -> serde_json::Value {
-        serde_json::json!({"op": "apply_expression_template", "args": [],
+        serde_json::json!({"op": "apply_operator", "args": [],
             "name": "twice", "bindings": {"x": x}})
     }
 

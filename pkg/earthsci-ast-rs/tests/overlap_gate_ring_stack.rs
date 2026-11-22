@@ -93,7 +93,7 @@ fn doc(sx: usize, sy: usize, tx: usize, ty: usize) -> Value {
             "coord": {"kind": "interval", "size": 2}
         },
         "models": {"Regrid": {
-            "expression_template_imports": [
+            "operator_imports": [
                 {"ref": "esm:std/geometry.esm", "only": ["overlap_area_planar"]}
             ],
             "variables": {
@@ -113,7 +113,7 @@ fn doc(sx: usize, sy: usize, tx: usize, ty: usize) -> Value {
                 {"lhs": "A_ij", "rhs": {
                     "op": "faq", "args": [], "semiring": "sum_product",
                     "output_idx": ["i", "j"], "ranges": ranges, "join": gate,
-                    "expr": {"op": "apply_expression_template", "args": [],
+                    "expr": {"op": "apply_operator", "args": [],
                              "name": "overlap_area_planar",
                              "bindings": {"ring_a": "src_poly", "cell_a": "i", "nv_a": 4,
                                           "ring_b": "tgt_poly", "cell_b": "j", "nv_b": 4}}
@@ -338,7 +338,7 @@ fn a_ring_stack_defined_in_another_component_is_baked() {
     doc["models"] = json!({
         "Grid": {"variables": grid_vars, "equations": [eqs[0].clone(), eqs[1].clone()]},
         "Regrid": {
-            "expression_template_imports": single["expression_template_imports"].clone(),
+            "operator_imports": single["operator_imports"].clone(),
             "variables": regrid_vars,
             "equations": [qualify(&eqs[2]), qualify(&eqs[3])]
         }

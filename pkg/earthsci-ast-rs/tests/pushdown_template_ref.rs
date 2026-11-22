@@ -173,7 +173,7 @@ fn bare_factor_name_bindings_are_repointed() {
     assert!(matches!(lr, Cow::Owned(_)));
 
     let mut d = base_doc();
-    d["models"]["Binned"]["expression_templates"] = json!({"bin_into_cell": {
+    d["models"]["Binned"]["operators"] = json!({"bin_into_cell": {
         "params": ["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "wgt"],
         "body": {"op": "*", "args": [
             {"op": "ifelse", "args": [{"op": "and", "args": [
@@ -184,13 +184,13 @@ fn bare_factor_name_bindings_are_repointed() {
             ix("wgt", "r")]}}});
     set_e(
         &mut d,
-        json!({"op": "apply_expression_template", "args": [],
+        json!({"op": "apply_operator", "args": [],
                          "name": "bin_into_cell",
                          "bindings": {"xmin": "src_W", "ymin": "src_S",
                                       "xmax": "src_E", "ymax": "src_N",
                                       "ptx": "px", "pty": "py", "wgt": "emis_annual"}}),
     );
-    let tpl_before = d["models"]["Binned"]["expression_templates"].clone();
+    let tpl_before = d["models"]["Binned"]["operators"].clone();
 
     let r = desugar_pushdown(&d, Some("Binned")).unwrap();
     assert!(
@@ -228,13 +228,11 @@ fn bare_factor_name_bindings_are_repointed() {
     assert_eq!(lf["op"], json!("*"));
     assert_eq!(
         rf,
-        json!({"op": "apply_expression_template", "name": "bin_into_cell__pd_filter",
+        json!({"op": "apply_operator", "name": "bin_into_cell__pd_filter",
                "args": [], "bindings": {"xmin": "src_W", "ymin": "src_S", "xmax": "src_E",
                                         "ymax": "src_N", "ptx": "px", "pty": "py"}})
     );
-    let tpls = r["models"]["Binned"]["expression_templates"]
-        .as_object()
-        .unwrap();
+    let tpls = r["models"]["Binned"]["operators"].as_object().unwrap();
     assert_eq!(
         tpls["bin_into_cell__pd_filter"]["params"],
         json!(["xmin", "ymin", "xmax", "ymax", "ptx", "pty"])
@@ -272,7 +270,7 @@ fn bare_factor_name_bindings_are_repointed() {
 #[test]
 fn subscripted_bindings_are_repointed() {
     let mut d = base_doc();
-    d["models"]["Binned"]["expression_templates"] = json!({"bin2": {
+    d["models"]["Binned"]["operators"] = json!({"bin2": {
         "params": ["lo_x", "lo_y", "hi_x", "hi_y", "x", "y", "wgt"],
         "body": {"op": "*", "args": [
             {"op": "ifelse", "args": [{"op": "and", "args": [
@@ -283,13 +281,13 @@ fn subscripted_bindings_are_repointed() {
             "wgt"]}}});
     set_e(
         &mut d,
-        json!({"op": "apply_expression_template", "args": [], "name": "bin2",
+        json!({"op": "apply_operator", "args": [], "name": "bin2",
                          "bindings": {"lo_x": ix("src_W", "c"), "lo_y": ix("src_S", "c"),
                                       "hi_x": ix("src_E", "c"), "hi_y": ix("src_N", "c"),
                                       "x": ix("px", "r"), "y": ix("py", "r"),
                                       "wgt": ix("emis_annual", "r")}}),
     );
-    let tpl_before = d["models"]["Binned"]["expression_templates"].clone();
+    let tpl_before = d["models"]["Binned"]["operators"].clone();
 
     let r = desugar_pushdown(&d, Some("Binned")).unwrap();
     assert!(matches!(r, Cow::Owned(_)));
@@ -303,7 +301,7 @@ fn subscripted_bindings_are_repointed() {
     assert_eq!(b["x"]["args"][0], json!("px")); // records untouched
     // The authored template is untouched; the producer filter is the derived
     // template of its containment, read with the full-grid subscripted bindings.
-    let mut authored = r["models"]["Binned"]["expression_templates"]
+    let mut authored = r["models"]["Binned"]["operators"]
         .as_object()
         .unwrap()
         .clone();
@@ -331,19 +329,19 @@ fn subscripted_bindings_are_repointed() {
 #[test]
 fn free_rect_in_template_body_is_rejected() {
     let mut d = base_doc();
-    d["models"]["Binned"]["expression_templates"] = json!({"bin3": {
+    d["models"]["Binned"]["operators"] = json!({"bin3": {
         "params": ["wgt"],
         "body": {"op": "*", "args": [
             {"op": "ifelse", "args": [contain(), 1.0, 0.0]}, ix("wgt", "r")]}}});
     set_e(
         &mut d,
-        json!({"op": "apply_expression_template", "args": [], "name": "bin3",
+        json!({"op": "apply_operator", "args": [], "name": "bin3",
                          "bindings": {"wgt": "emis_annual"}}),
     );
     let err = desugar_pushdown(&d, Some("Binned")).expect_err("must be rejected");
     let msg = err.0;
     assert!(
-        msg.contains("template_body_references_pushdown_rewritten_variable"),
+        msg.contains("operator_body_references_pushdown_rewritten_variable"),
         "{msg}"
     );
     assert!(msg.contains("src_W"), "{msg}");
@@ -383,7 +381,7 @@ fn unexpandable_reference_in_the_join_position_is_reported() {
     let mut d = base_doc();
     set_e(
         &mut d,
-        json!({"op": "apply_expression_template", "args": [], "name": "gone",
+        json!({"op": "apply_operator", "args": [], "name": "gone",
                          "bindings": {"wgt": "emis_annual"}}),
     );
     let dg = pushdown_diagnostics(&d, Some("Binned"));

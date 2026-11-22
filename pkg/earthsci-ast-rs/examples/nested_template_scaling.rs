@@ -20,7 +20,7 @@ use serde_json::{Map, Value, json};
 use std::time::Instant;
 
 fn apply(name: &str) -> Value {
-    json!({"op": "apply_expression_template", "args": [], "name": name, "bindings": {}})
+    json!({"op": "apply_operator", "args": [], "name": name, "bindings": {}})
 }
 
 fn doc(depth: usize) -> Value {
@@ -48,7 +48,7 @@ fn doc(depth: usize) -> Value {
             "chem": {
                 "species": {"A": {"default": 1.0}, "B": {"default": 0.5}},
                 "parameters": {"T": {"default": 298.15}},
-                "expression_templates": Value::Object(templates),
+                "operators": Value::Object(templates),
                 "reactions": [{
                     "id": "R1",
                     "substrates": [{"species": "A", "stoichiometry": 1}],

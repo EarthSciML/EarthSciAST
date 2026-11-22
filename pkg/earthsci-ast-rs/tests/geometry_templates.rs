@@ -31,7 +31,7 @@ fn konst(v: Value) -> Value {
 }
 
 fn apply(name: &str, bindings: Value) -> Value {
-    json!({"op": "apply_expression_template", "args": [], "name": name, "bindings": bindings})
+    json!({"op": "apply_operator", "args": [], "name": name, "bindings": bindings})
 }
 
 /// `D(out_k) = rhs[k]` for every k in one document importing `lib/geometry.esm`,
@@ -52,7 +52,7 @@ fn values(rhs: &[Value]) -> Vec<f64> {
         "esm": "2.0.0",
         "metadata": {"name": "geometry_template_probe", "authors": ["test"]},
         "models": {"M": {
-            "expression_template_imports": [{"ref": "lib/geometry.esm"}],
+            "operator_imports": [{"ref": "lib/geometry.esm"}],
             "variables": variables,
             "equations": equations
         }}

@@ -2386,9 +2386,9 @@ fn static_observed_fields(
     // walks every equation, so an unknown no equation defines — which makes
     // the system not state-free below — does not let a rewrite-target operator
     // through unreported.
-    if let Some(op) = crate::flatten::first_unlowered_operator(flat) {
+    if let Some((op, why)) = crate::flatten::first_unlowered_call(flat) {
         return Err(SimulateError::Compile(
-            crate::compile_error::CompileError::UnloweredOperatorError { op },
+            crate::compile_error::CompileError::UnloweredOperatorError { op, why },
         ));
     }
     // A system WITH state is not state-free evaluable: an observed may read
@@ -2547,7 +2547,7 @@ fn compile_backend(
         return Err(SimulateError::Compile(
             crate::compile_error::CompileError::build_err(format!(
                 "nothing to flatten: '{}' declares no `models` and no `reaction_systems`. A \
-                 file carrying only `expression_templates` is a template LIBRARY (esm-spec \
+                 file carrying only `operators` is a template LIBRARY (esm-spec \
                  §9.7); import it from a document that declares components rather than \
                  building it directly",
                 file.metadata.name.as_deref().unwrap_or("")

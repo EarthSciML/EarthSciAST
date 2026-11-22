@@ -51,7 +51,7 @@ fn doc() -> Value {
     let weight = json!({"op": "*", "args": [
         ix("emis_annual", &[json!("r")]),
         {"op": "/", "args": [
-            {"op": "apply_expression_template", "args": [], "name": "overlap_area_planar",
+            {"op": "apply_operator", "args": [], "name": "overlap_area_planar",
              "bindings": {"ring_a": "cell_ring", "cell_a": "c", "nv_a": 5,
                           "ring_b": "rec_ring", "cell_b": "r", "nv_b": 5}},
             ix("cell_area", &[json!("c")])]}]});
@@ -67,7 +67,7 @@ fn doc() -> Value {
         "xy": {"kind": "interval", "size": 2},
     },
     "models": {"Binned": {
-        "expression_template_imports":
+        "operator_imports":
             [{"ref": "esm:std/geometry.esm", "only": ["overlap_area_planar"]}],
         "variables": {
             "src_W": param(&["src_cells"]),

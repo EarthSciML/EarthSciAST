@@ -1992,6 +1992,53 @@ pub fn first_unlowered_operator(flat: &FlattenedSystem) -> Option<String> {
     None
 }
 
+/// [`first_unlowered_operator`] with, for an unresolved call of a defined
+/// operator (any op but `D`), the explanation esm-spec §9.6.6 asks for: each
+/// definition of it in the system's merged registry and why it was not
+/// eligible at this call, or that none is in scope (a placeholder), formatted
+/// as ` (…)`; empty for a `D`.
+pub fn first_unlowered_call(flat: &FlattenedSystem) -> Option<(String, String)> {
+    fn find(expr: &Expr) -> Option<&crate::ExpressionNode> {
+        let Expr::Operator(node) = expr else {
+            return None;
+        };
+        if matches!(
+            crate::op_registry::check_node(node),
+            Err(crate::op_registry::OpError::Unlowered { .. })
+        ) {
+            return Some(node);
+        }
+        let mut hit = None;
+        node.for_each_child(&mut |child| {
+            if hit.is_none() {
+                hit = find(child);
+            }
+        });
+        hit
+    }
+    for eq in &flat.equations {
+        for side in [&eq.lhs, &eq.rhs] {
+            if let Some(node) = find(side) {
+                let why = if node.op == "D" {
+                    String::new()
+                } else {
+                    let call = serde_json::to_value(node).unwrap_or_default();
+                    format!(
+                        " ({})",
+                        crate::lower_expression_templates::explain_unresolved_call(
+                            &call,
+                            &flat.template_registry,
+                            &std::collections::BTreeMap::new(),
+                        )
+                    )
+                };
+                return Some((node.op.clone(), why));
+            }
+        }
+    }
+    None
+}
+
 /// The name a right-hand-side structural `D` differentiates, for the first such
 /// node in `flat` that [`resolve_rhs_time_derivatives_per_contribution`] left standing — or
 /// `None` when every one of them resolved.

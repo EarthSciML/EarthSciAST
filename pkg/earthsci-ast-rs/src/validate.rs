@@ -468,20 +468,6 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
     // `<source>.<something>` resolve as a scoped reference, which is exactly
     // the shape 1.0.0 removes.
 
-    // Add operators
-    if let Some(ref operators) = esm_file.operators {
-        for name in operators.keys() {
-            systems.insert(
-                name.clone(),
-                SystemInfo {
-                    variables: HashSet::new(),
-                    species: HashSet::new(),
-                    parameters: HashSet::new(),
-                },
-            );
-        }
-    }
-
     systems
 }
 

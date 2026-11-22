@@ -158,7 +158,12 @@ pub struct ModelTest {
     /// so unlike a component's own imports it DOES survive `parse → emit`; the
     /// enclosing component round-trips with its rewrite-targets intact. Empty
     /// for a non-PDE / discretization-free test.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "operator_imports",
+        alias = "expression_template_imports",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub expression_template_imports: Vec<serde_json::Value>,
 }
 
@@ -384,6 +389,11 @@ pub struct ModelAnalysis {
     /// esm-spec §9.7.10 / §6.7 per-run template-library imports — authored
     /// per-run configuration that survives `parse → emit`, exactly as on
     /// [`ModelTest::expression_template_imports`].
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "operator_imports",
+        alias = "expression_template_imports",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub expression_template_imports: Vec<serde_json::Value>,
 }

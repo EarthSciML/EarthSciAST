@@ -219,6 +219,8 @@ mod observed_cycle;
 mod observed_field_static;
 #[path = "observed_trajectory.rs"]
 mod observed_trajectory;
+#[path = "one_operator_type.rs"]
+mod one_operator_type;
 #[path = "operator_compose_merge_conformance.rs"]
 mod operator_compose_merge_conformance;
 #[path = "operator_validation.rs"]

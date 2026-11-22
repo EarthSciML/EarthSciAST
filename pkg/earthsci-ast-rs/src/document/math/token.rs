@@ -70,6 +70,9 @@ pub enum Kw {
     Ceil,
     Pdiff,
     Dif,
+    /// `\nabla` / `nabla`: the head of the `grad`, `div`, `laplacian` and `curl`
+    /// forms (esm-spec §1.2).
+    Nabla,
     Dotacc,
     Bcases,
     Ecases,

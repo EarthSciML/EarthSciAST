@@ -197,7 +197,7 @@ fn attrs_on_rewrite_target_op_bind_as_scalar_metavariables() {
                   }
                 }
               ],
-              "expression_templates": {
+              "operators": {
                 "lower_custom": {
                   "params": [
                     "f",
@@ -283,13 +283,13 @@ fn two_div_two_meshes_matches_golden() {
 
 /// constraint_unknown_index_set: a `where.F.shape` naming an index set the
 /// consuming document does not declare is rejected at rule registration with
-/// the stable `template_constraint_unknown_index_set` code (esm-spec §9.6.6).
+/// the stable `operator_constraint_unknown_index_set` code (esm-spec §9.6.6).
 #[test]
 fn constraint_unknown_index_set_rejected() {
     let err =
         lower_fixture("constraint_unknown_index_set").expect_err("must reject at registration");
     assert_eq!(
-        err.code, "template_constraint_unknown_index_set",
+        err.code, "operator_constraint_unknown_index_set",
         "got: {err}"
     );
 }

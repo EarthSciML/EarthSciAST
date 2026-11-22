@@ -1658,13 +1658,13 @@ pub fn ephemeral_injected_file(
                 continue;
             };
             let mut base: Vec<serde_json::Value> = comp
-                .get("expression_template_imports")
+                .get("operator_imports")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
             base.extend(imports.iter().cloned());
             comp.insert(
-                "expression_template_imports".to_string(),
+                "operator_imports".to_string(),
                 serde_json::Value::Array(base),
             );
             injected = true;

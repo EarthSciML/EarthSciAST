@@ -27,7 +27,7 @@
     },
     {
       "required": [
-        "expression_templates"
+        "operators"
       ]
     },
     {
@@ -134,7 +134,7 @@
         "$ref": "#/$defs/ExpressionTemplate"
       }
     },
-    "expression_templates": {
+    "operators": {
       "propertyNames": { "$ref": "#/$defs/Identifier" },
       "type": "object",
       "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operators`, read with the warning `deprecated_field`. Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `operator_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`operator_import_version_too_old`).",
@@ -149,7 +149,7 @@
         "$ref": "#/$defs/TemplateImport"
       }
     },
-    "expression_template_imports": {
+    "operator_imports": {
       "type": "array",
       "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Ordered imports of template-library files at document top level — only valid in a library file layering on other libraries (esm-spec §9.7.2). Models and reaction systems carry their own `expression_template_imports` field.",
       "items": {
@@ -746,7 +746,7 @@
           "if": {
             "properties": {
               "op": {
-                "const": "apply_expression_template"
+                "const": "apply_operator"
               }
             },
             "required": [
@@ -1962,7 +1962,7 @@
             "$ref": "#/$defs/ExpressionTemplate"
           }
         },
-        "expression_templates": {
+        "operators": {
           "propertyNames": { "$ref": "#/$defs/Identifier" },
           "type": "object",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operators`, read with the warning `deprecated_field`. Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this model's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.",
@@ -1977,7 +1977,7 @@
             "$ref": "#/$defs/TemplateImport"
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "array",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).",
           "items": {
@@ -2020,7 +2020,7 @@
             "$ref": "#/$defs/TemplateImport"
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "array",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Template-library imports registered into the REFERENCED component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a mounted PDE component, without editing the leaf file. Same entry shape as §9.7.2; target implicit (this edge mounts one component). Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "items": {
@@ -2380,7 +2380,7 @@
             "$ref": "#/$defs/ExpressionTemplate"
           }
         },
-        "expression_templates": {
+        "operators": {
           "propertyNames": { "$ref": "#/$defs/Identifier" },
           "type": "object",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operators`, read with the warning `deprecated_field`. Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component (typically inside `reactions[*].rate`) reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this reaction system's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.",
@@ -2395,7 +2395,7 @@
             "$ref": "#/$defs/TemplateImport"
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "array",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).",
           "items": {
@@ -2873,7 +2873,7 @@
             "$ref": "#/$defs/TemplateImport"
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "array",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.6) — lets a discretization-agnostic PDE component's inline tests run under a per-test discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameter_overrides / tolerance).",
           "items": {
@@ -3274,7 +3274,7 @@
             "$ref": "#/$defs/TemplateImport"
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "array",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline analyses run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).",
           "items": {
@@ -3810,7 +3810,7 @@
             }
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "object",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
@@ -3882,7 +3882,7 @@
             }
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "object",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
@@ -3961,7 +3961,7 @@
             }
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "object",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
@@ -4027,7 +4027,7 @@
             }
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "object",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
@@ -4118,7 +4118,7 @@
             }
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "object",
           "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {

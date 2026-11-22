@@ -136,7 +136,7 @@ impl<A, R> Mx<A, R> {
             Mx::Eq(r, _) => r.field(),
             Mx::Rxn(_) => "reactions",
             Mx::Plot(_) => "analyses",
-            Mx::Tm(_) => "expression_templates",
+            Mx::Tm(_) => "operators",
         }
     }
 
@@ -162,8 +162,8 @@ pub const MATH_FIELDS: &[&str] = &[
     "analyses",
     "constraint_equations",
     "equations",
-    "expression_templates",
     "initialization_equations",
+    "operators",
     "reactions",
 ];
 
@@ -393,14 +393,14 @@ impl<R> Tm<R> {
 
 /// `Source.rootTs`.
 pub fn root_ts<A, R>(root: &[(String, Json)], rm: &[Mx<A, R>]) -> Vec<(String, Vec<String>)> {
-    let mut out = templates_of(look("expression_templates", root));
+    let mut out = templates_of(look("operators", root));
     out.extend(rm.iter().filter_map(Mx::head));
     out
 }
 
 /// `Source.compTs`.
 pub fn comp_ts<A, R>(c: &Comp<Mx<A, R>>) -> Vec<(String, Vec<String>)> {
-    let mut out = templates_of(look("expression_templates", &c.math_blocks));
+    let mut out = templates_of(look("operators", &c.math_blocks));
     out.extend(c.math.iter().filter_map(Mx::head));
     out
 }
@@ -716,7 +716,7 @@ pub fn item_json(m: &MC) -> Json {
 /// `Source.fieldJson`: an object keyed by the entries' names for
 /// `expression_templates`, a list otherwise.
 pub fn field_json(f: &str, ms: &[&MC]) -> Json {
-    if f == "expression_templates" {
+    if f == "operators" {
         Json::Obj(
             ms.iter()
                 .map(|m| (m.key().to_string(), item_json(m)))
@@ -755,13 +755,13 @@ pub fn tm_item(kv: &(String, Json)) -> Option<MC> {
 pub fn math_of(caps: &dyn Caps, s: &Sym, f: &str, v: &Json) -> Option<Vec<MC>> {
     let ms: Vec<MC> = match v {
         Json::Arr(xs) if !xs.is_empty() => {
-            if f == "expression_templates" {
+            if f == "operators" {
                 return None;
             }
             xs.iter().map(|x| item_of(f, x)).collect::<Option<_>>()?
         }
         Json::Obj(kvs) if !kvs.is_empty() => {
-            if f != "expression_templates" {
+            if f != "operators" {
                 return None;
             }
             kvs.iter().map(tm_item).collect::<Option<_>>()?
@@ -998,7 +998,7 @@ pub fn comp_sym(
         root,
         rt,
         &comp_base(caps, k, name, kvs),
-        templates_of(look("expression_templates", kvs)),
+        templates_of(look("operators", kvs)),
     )
 }
 
@@ -1033,14 +1033,13 @@ pub fn pick_comp(caps: &dyn Caps, n: &str, v: &Json) -> Option<(String, Kvs)> {
 pub fn top_sym_of(kvs: &[(String, Json)]) -> Sym {
     Sym {
         names: keys_of(look("index_sets", kvs)),
-        templates: templates_of(look("expression_templates", kvs)),
+        templates: templates_of(look("operators", kvs)),
     }
 }
 
 /// `Source.topMath`: the top-level templates, when every one prints natively.
 pub fn top_math(caps: &dyn Caps, kvs: &[(String, Json)]) -> Option<Vec<MC>> {
-    look("expression_templates", kvs)
-        .and_then(|v| math_of(caps, &top_sym_of(kvs), "expression_templates", v))
+    look("operators", kvs).and_then(|v| math_of(caps, &top_sym_of(kvs), "operators", v))
 }
 
 /// `Source.rootBlock`.
@@ -1058,7 +1057,7 @@ pub fn root_block(caps: &dyn Caps, tn: bool, kv: &(String, Json)) -> Option<(Str
         split_opt(|n, v| pick_comp(caps, n, v), Some(&kv.1))
             .1
             .map(|r| (kv.0.clone(), r))
-    } else if k == "expression_templates" && tn {
+    } else if k == "operators" && tn {
         None
     } else {
         Some(kv.clone())
@@ -1086,7 +1085,7 @@ pub fn to_doc(caps: &dyn Caps, d: &Json) -> Doc<MC> {
     let m = meta_of(caps, look("metadata", kvs));
     let tm = top_math(caps, kvs);
     let blocks = root_blocks(caps, tm.is_some(), kvs);
-    let rt = templates_of(look("expression_templates", kvs));
+    let rt = templates_of(look("operators", kvs));
     let comps = |k: Kind, f: &str| -> Vec<Comp<MC>> {
         split_opt(|n, v| pick_comp(caps, n, v), look(f, kvs))
             .0
@@ -1217,10 +1216,7 @@ pub fn of_doc(d: &Doc<MC>) -> Option<Json> {
         vec![]
     } else {
         let refs: Vec<&MC> = d.math.iter().collect();
-        vec![(
-            "expression_templates".to_string(),
-            field_json("expression_templates", &refs),
-        )]
+        vec![("operators".to_string(), field_json("operators", &refs))]
     };
     let mut kvs = esm_kv;
     kvs.extend(meta_kv);

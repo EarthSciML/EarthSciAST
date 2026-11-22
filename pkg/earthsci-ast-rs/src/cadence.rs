@@ -323,7 +323,7 @@ pub(crate) fn is_continuous(
         {
             found |= walk(c, leaf)?;
         }
-        if n.op == "apply_expression_template" {
+        if n.op == "apply_operator" {
             for c in n.bindings.iter().flat_map(|b| b.values()) {
                 found |= walk(c, leaf)?;
             }
@@ -375,7 +375,7 @@ fn child_exprs(node: &Map<String, Value>) -> Vec<&Value> {
     }
     // A standard-library template call reads what its call site binds: the
     // bound expressions are its operands.
-    if node.get("op").and_then(Value::as_str) == Some("apply_expression_template")
+    if node.get("op").and_then(Value::as_str) == Some("apply_operator")
         && let Some(Value::Object(bindings)) = node.get("bindings")
     {
         out.extend(bindings.values());
@@ -931,6 +931,16 @@ pub fn model_with_loaders(model: &Value, doc: &Value) -> Value {
 /// inner `models.<name>` object (use [`model_with_loaders`] to attach the
 /// document's `data_sources` first when the model reads loader-seeded variables).
 pub fn partition_model(model: &Value) -> Result<Partition, CadenceError> {
+    // A model as written may spell its references `apply_expression_template`
+    // (esm-spec §9.6.12): it is read as a load reads it.
+    let read;
+    let model = match crate::old_spellings::read_silently(model) {
+        Some(v) => {
+            read = v;
+            &read
+        }
+        None => model,
+    };
     let empty = Vec::new();
     let equations = model
         .get("equations")

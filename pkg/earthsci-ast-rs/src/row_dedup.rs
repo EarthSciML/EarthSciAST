@@ -352,7 +352,7 @@ fn scan(
     match e {
         Expr::Variable(v) => v != sym && v != scope.name,
         Expr::Operator(n) => {
-            if n.op == "apply_expression_template" {
+            if n.op == "apply_operator" {
                 return false;
             }
             if n.op == "index"

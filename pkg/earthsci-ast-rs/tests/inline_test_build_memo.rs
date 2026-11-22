@@ -223,7 +223,7 @@ fn rebuilds_when_expression_template_imports_differ() {
             json!({
                 "esm": "2.0.0",
                 "metadata": {"name": name},
-                "expression_templates": {name: {
+                "operators": {name: {
                     "params": ["f"],
                     "match": {"op": "D", "args": ["f"], "wrt": "z"},
                     "body": {"op": "*", "args": [rate, "f"]},
@@ -255,7 +255,7 @@ fn rebuilds_when_expression_template_imports_differ() {
         json!({
             "id": id,
             "time_span": {"start": 0.0, "end": 1.0},
-            "expression_template_imports": [{"ref": format!("./{lib}.esm")}],
+            "operator_imports": [{"ref": format!("./{lib}.esm")}],
             "assertions": [{"variable": "x", "time": 1.0, "expected": expected,
                             "tolerance": {"rel": 1e-6, "abs": 1e-9}}],
         })
