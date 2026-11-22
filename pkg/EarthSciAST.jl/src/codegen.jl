@@ -194,7 +194,7 @@ function _cg_fixed_walk!(fixed::Set{String}, ct::_CgTemplates, x, params)
 end
 
 _cg_mismatch(msg) =
-    ExpressionTemplateError(ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH, msg)
+    ExpressionTemplateError(ERROR_CODES.OPERATOR_BINDINGS_MISMATCH, msg)
 
 # The reference `call` re-pointed at the instance of its template its
 # not-runtime parameters (`_cg_fixed`) select, those bindings dropped; `call`

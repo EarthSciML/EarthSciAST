@@ -402,7 +402,7 @@ const _CG = EarthSciAST
             e
         end
         @test err isa _CG.ExpressionTemplateError
-        @test err.code == "apply_expression_template_bindings_mismatch"
+        @test err.code == "operator_bindings_mismatch"
         @test occursin("'x'", err.message)
     end
 end
