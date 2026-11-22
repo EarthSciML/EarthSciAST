@@ -225,7 +225,7 @@ theorem mem_comps {caps : Caps} {kvs : List (String × Json)} {c : Comp MC}
     (h : c ∈ (toDoc caps (.obj kvs)).comps) :
     ∃ K f fkvs n ckvs, look f kvs = some (.obj fkvs) ∧ (n, .obj ckvs) ∈ fkvs ∧
       caps.compName n = true ∧ c = compOf caps (rootBlocks caps (topMath caps kvs).isSome kvs)
-        (templatesOf (look "expression_templates" kvs)) K n ckvs := by
+        (templatesOf (look "operators" kvs)) K n ckvs := by
   simp only [toDoc, List.mem_append, List.mem_map] at h
   rcases h with ⟨p, hp, rfl⟩ | ⟨p, hp, rfl⟩
   · obtain ⟨fkvs, hf, n, w, hm, hpk⟩ := mem_splitOpt_fst hp
@@ -246,17 +246,17 @@ theorem look_index_sets (caps : Caps) (tn : Bool) {kvs : List (String × Json)} 
     simp [rootBlock] at h
     exact look_of_at_single h
 
-/-- The document's templates, read from the skeleton, are those of the `expression_templates`
+/-- The document's templates, read from the skeleton, are those of the `operators`
 value. -/
 theorem rootTs_toDoc (caps : Caps) {kvs : List (String × Json)} (hl : keysSorted kvs = true) :
     rootTs (toDoc caps (.obj kvs)).blocks (toDoc caps (.obj kvs)).math =
-      templatesOf (look "expression_templates" kvs) := by
+      templatesOf (look "operators" kvs) := by
   simp only [toDoc, rootTs]
-  have h := rootBlocks_at caps (topMath caps kvs).isSome hl "expression_templates"
+  have h := rootBlocks_at caps (topMath caps kvs).isSome hl "operators"
   cases htm : topMath caps kvs with
   | none =>
     simp only [htm, Option.isSome_none, Option.getD_none, List.filterMap_nil, List.append_nil] at h ⊢
-    cases hk : look "expression_templates" kvs with
+    cases hk : look "operators" kvs with
     | none => rw [hk] at h; rw [look_of_at_nil h]
     | some v =>
       rw [hk] at h
@@ -265,7 +265,7 @@ theorem rootTs_toDoc (caps : Caps) {kvs : List (String × Json)} (hl : keysSorte
   | some ms =>
     simp only [htm, Option.isSome_some, Option.getD_some] at h ⊢
     unfold topMath at htm
-    cases hk : look "expression_templates" kvs with
+    cases hk : look "operators" kvs with
     | none => rw [hk] at htm; cases htm
     | some v =>
       rw [hk] at htm h
@@ -289,7 +289,7 @@ theorem toDoc_ok (caps : Caps) (hesm : caps.frontKey "esm" = true) (d : Json)
   have hl := canonVal_obj_sorted hv
   have hcomp : ∀ c ∈ (toDoc caps (.obj kvs)).comps, caps.compName c.name = true ∧
       ∃ ckvs, canonVal (.obj ckvs) = true ∧
-        c = compOf caps (toDoc caps (.obj kvs)).blocks (templatesOf (look "expression_templates" kvs))
+        c = compOf caps (toDoc caps (.obj kvs)).blocks (templatesOf (look "operators" kvs))
           (c.kind) c.name ckvs := by
     intro c hc
     obtain ⟨K, f, fkvs, n, ckvs, hf, hm, hn, rfl⟩ := mem_comps hc
@@ -297,10 +297,10 @@ theorem toDoc_ok (caps : Caps) (hesm : caps.frontKey "esm" = true) (d : Json)
     rw [compOf_kind, compOf_name]; rfl
   have hrt := rootTs_toDoc caps hl
   have hsym : ∀ c ∈ (toDoc caps (.obj kvs)).comps, ∃ ckvs, canonVal (.obj ckvs) = true ∧
-      c = compOf caps (toDoc caps (.obj kvs)).blocks (templatesOf (look "expression_templates" kvs))
+      c = compOf caps (toDoc caps (.obj kvs)).blocks (templatesOf (look "operators" kvs))
           (c.kind) c.name ckvs ∧
       symFor (toDoc caps (.obj kvs)) c = compSym (toDoc caps (.obj kvs)).blocks
-        (templatesOf (look "expression_templates" kvs)) c.kind caps c.name ckvs := by
+        (templatesOf (look "operators" kvs)) c.kind caps c.name ckvs := by
     intro c hc
     obtain ⟨-, ckvs, hck, he⟩ := hcomp c hc
     refine ⟨ckvs, hck, he, ?_⟩
@@ -446,7 +446,7 @@ theorem toDoc_ok (caps : Caps) (hesm : caps.frontKey "esm" = true) (d : Json)
     | some ms =>
       rw [htm] at hm
       unfold topMath at htm
-      cases hlk : look "expression_templates" kvs with
+      cases hlk : look "operators" kvs with
       | none => rw [hlk] at htm; cases htm
       | some v =>
         rw [hlk] at htm

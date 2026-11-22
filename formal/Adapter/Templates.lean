@@ -1,20 +1,20 @@
 import Lean.Data.Json
 import Esm.Expr.Template
 
-/-! `esm-lean templates <document.esm> [model]`: the `apply_expression_template`
+/-! `esm-lean templates <document.esm> [model]`: the `apply_operator`
 equations of a template-application document (the standard-library template
 tiers under `tests/conformance/*_templates`), evaluated with the model's
 expression evaluator (`Esm.Expr.evalApply`) at `Float`.
 
 Reads only what those documents use: one model (the one named, or the
-document's sole model when none is); its `expression_template_imports`
+document's sole model when none is); its `operator_imports` (old name `expression_template_imports`)
 (each `ref` a library file relative to the document, or `esm:std/<file>.esm`
 for the repository's `lib/`; `only` honoured); its
 `parameter` variables' `default`s (a number, or a nested array of numbers up
 to rank 3) and the variables defined by an equation `x ~ const(...)`, which
 form the environment, together with every interval index set's `size` (so a
 `{"from": set}` range evaluates over the set's positions); each equation
-`lhs ~ apply_expression_template(...)`; and each array equation `lhs ~ faq(...)`
+`lhs ~ apply_operator(...)` (or the old `apply_expression_template`); and each array equation `lhs ~ faq(...)`
 whose output indices each range over a whole interval index set
 (`{"from": set}`, extent from `index_sets`), with no `join` or `filter` — its
 body, or the reduction over its remaining (contracted) ranges, evaluated at
@@ -54,7 +54,7 @@ def floatJson (x : Float) : Json :=
       | .inl s => .str s
   Json.mkObj [("value", v), ("bits", .str (toString x.toBits))]
 
-/-- The file an `expression_template_imports` `ref` names. A standard-library
+/-- The file an `operator_imports` `ref` names. A standard-library
 ref `esm:std/<file>.esm` (esm-spec §4.7) names a file of the repository's
 top-level `lib/`, the library this model is checked against (the adapter runs
 from `formal/.lake/build/bin/`); its `<file>` is one path segment. Any other ref
@@ -91,7 +91,7 @@ partial def astOf (j : Json) : Except String Ast := do
     -- describe the node and do not change its value
     let allowed : List String := ["id", "expect_cadence"] ++
       (if op == "const" then ["op", "args", "value", "units"]
-      else if op == "apply_expression_template" then ["op", "args", "name", "bindings"]
+      else if op == "apply_operator" || op == "apply_expression_template" then ["op", "args", "name", "bindings"]
       else if op == "faq" then ["op", "args", "output_idx", "reduce", "ranges", "expr", "filter"]
       else ["op", "args"])
     for f in fields do
@@ -101,7 +101,7 @@ partial def astOf (j : Json) : Except String Ast := do
       | _ => pure []
     if op == "const" then
       return .const (← constOf (← j.getObjVal? "value"))
-    else if op == "apply_expression_template" then
+    else if op == "apply_operator" || op == "apply_expression_template" then
       let bs ← (← j.getObjVal? "bindings").getObj?
       let binds ← bs.toArray.toList.foldrM (fun (k, v) acc => do
         return Binds.cons k (← astOf v) acc) Binds.nil
@@ -137,9 +137,9 @@ def templateOf (j : Json) : Except String Template := do
   return { params := (← params.toList.mapM (·.getStr?)), body := ← astOf (← j.getObjVal? "body") }
 
 def errorString : ApplyError → String
-  | .expand (.missingBinding p) => s!"apply_expression_template: no binding for {p}"
-  | .expand (.extraBinding b) => s!"apply_expression_template: binding {b} names no parameter"
-  | .expand (.unknownTemplate n) => s!"apply_expression_template: no template {n} in scope"
+  | .expand (.missingBinding p) => s!"apply_operator: no binding for {p}"
+  | .expand (.extraBinding b) => s!"apply_operator: binding {b} names no parameter"
+  | .expand (.unknownTemplate n) => s!"apply_operator: no definition {n} in scope"
   | .expand .tooDeep => "template_body_expansion_too_deep"
   | .eval (.unsupported w) => s!"unsupported: {w}"
   | .eval (.unbound n) => s!"unbound: {n}"
@@ -332,11 +332,15 @@ def main (args : List String) : IO UInt32 := do
       -- every template of an imported library: the scope its bodies' references
       -- resolve in (§9.7.3), whatever `only` admits for direct use
       let mut scope : List (String × Template) := []
-      let imports := (m.getObjValD "expression_template_imports").getArr?.toOption.getD #[]
+      -- `operator_imports`, or its old name `expression_template_imports` (§9.6.12)
+      let imports := ((m.getObjVal? "operator_imports").toOption.getD
+        (m.getObjValD "expression_template_imports")).getArr?.toOption.getD #[]
       for imp in imports do
         let ref ← liftExcept (imp.getObjValAs? String "ref")
         let lib ← liftExcept (Json.parse (← IO.FS.readFile (← libPath dir ref)))
-        let ts ← liftExcept ((← liftExcept (lib.getObjVal? "expression_templates")).getObj?)
+        -- `operators`, or its old name `expression_templates` (§9.6.12)
+        let tsj := (lib.getObjVal? "operators").toOption.getD (lib.getObjValD "expression_templates")
+        let ts ← liftExcept tsj.getObj?
         let only := (imp.getObjValD "only").getArr?.toOption.map (·.toList.filterMap (·.getStr?.toOption))
         for (name, tj) in ts.toArray.toList do
           let t ← liftExcept (templateOf tj)
@@ -376,7 +380,7 @@ def main (args : List String) : IO UInt32 := do
           if (rhs.getObjValAs? String "op").toOption == some "const" then
             if let .ok c := (rhs.getObjVal? "value").bind constOf then
               if let .ok val := constVal (α := Float) c then env := (lhs, val) :: env
-      -- every lhs ~ apply_expression_template(...) equation, and every array
+      -- every lhs ~ apply_operator(...) equation, and every array
       -- equation lhs ~ faq(...) that maps such a template (or any expression
       -- the evaluator covers) over whole index sets; each result is bound for
       -- the equations after it
@@ -434,7 +438,7 @@ def main (args : List String) : IO UInt32 := do
                       env := (mf, .arr1 keys) :: env
           else if indexed && op != some "faq" then
             continue
-          else if op == some "apply_expression_template" then
+          else if op == some "apply_operator" || op == some "apply_expression_template" then
             let name ← liftExcept (rhs.getObjValAs? String "name")
             let some t := tpls.lookup name | throw s!"{lhs}: template {name} is not imported"
             let bs ← liftExcept ((← liftExcept (rhs.getObjVal? "bindings")).getObj?)
