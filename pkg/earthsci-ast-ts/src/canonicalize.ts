@@ -22,6 +22,7 @@ import {
   type NumericLiteral,
 } from './numeric-literal.js'
 import { canonicalUnitSpelling } from './unit-conversion.js'
+import { wireOldSpellings } from './old-spellings.js'
 
 // `CanonicalizeError` is DEFINED in numeric-literal.ts (the lowest module in
 // the canonical-form stack) so its nonfinite specialization
@@ -55,7 +56,7 @@ const EMISSIBLE_FIELDS = ['op', 'args', 'wrt', 'dim', 'fn', 'name', 'value', 'un
  * still canonicalizes, emitting the pinned fields only (matches Julia's
  * `_CANONICAL_IGNORED_FIELDS`). Both are display/rendering conveniences with no
  * wire slot of their own (`arg` — an arg-witness index; `bindings` — the
- * apply_expression_template parameter map).
+ * apply_operator parameter map).
  */
 const CANONICAL_IGNORED_FIELDS = ['arg', 'bindings'] as const
 
@@ -552,8 +553,8 @@ const DOCUMENT_MAP_KEYS: ReadonlySet<string> = new Set([
   'coupling_roles',
   'data_sources',
   'enums',
-  'expression_template_imports',
-  'expression_templates',
+  'operator_imports',
+  'operators',
   'guesses',
   'index_set_rename',
   'index_sets',
@@ -614,9 +615,17 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
  * document (an `EsmFile` is one; plain numbers, or the tagged literals and
  * bigints of `losslessJsonParse`); the input is not mutated and nothing else
  * changes.
+ * The esm-2.3 spellings are read as the esm-2.4.0 ones first: the fields
+ * `expression_templates` / `expression_template_imports` as `operators` /
+ * `operator_imports`, `apply_expression_template` as `apply_operator`, and a
+ * spatial `D` (one whose `wrt` is not `t` and names no parameter of its
+ * definition), `δ` and `∂` as `partial` (esm-spec §9.6.12, §4.2).
  * These are the rules of Lean `Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
  */
-export function canonicalizeDocument<T>(doc: T): T {
+export function canonicalizeDocument<T>(input: T): T {
+  // The spellings an earlier document wrote read as the esm-2.4.0 ones
+  // (esm-spec §9.6.12, §4.2; Lean `Adapter.Doc.spellRules`), on a copy.
+  const doc = wireOldSpellings(input)
   const walk = (value: unknown, isMap: boolean): unknown => {
     if (Array.isArray(value)) return value.map((v) => walk(v, false))
     if (!isPlainObject(value)) return value

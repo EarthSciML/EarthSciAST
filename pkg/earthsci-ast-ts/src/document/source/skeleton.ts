@@ -89,7 +89,7 @@ export interface Rxn<R> {
 }
 
 /**
- * `Source.Tm`: an entry of `expression_templates`: a template (`lhs` undefined)
+ * `Source.Tm`: an entry of `operators`: a template (`lhs` undefined)
  * or a rewrite rule (`lhs` its match).
  */
 export interface Tm<R> {
@@ -122,7 +122,7 @@ export function mxField<A, R>(m: Mx<A, R>): string {
     case 'plot':
       return 'analyses'
     case 'tm':
-      return 'expression_templates'
+      return 'operators'
   }
 }
 
@@ -144,8 +144,8 @@ export const MATH_FIELDS: readonly string[] = [
   'analyses',
   'constraint_equations',
   'equations',
-  'expression_templates',
   'initialization_equations',
+  'operators',
   'reactions',
 ]
 
@@ -213,7 +213,7 @@ export function tmScope<R>(t: Tm<R>, s: Sym): Sym {
 /**
  * `Tm.mscope`: the symbol table a rule's `match` pattern is read under: its
  * body's, with no templates. A pattern never applies a template (spec §9.7.3:
- * `match` patterns MUST NOT contain `apply_expression_template` nodes), so an
+ * `match` patterns MUST NOT contain `apply_operator` nodes), so an
  * operator in it named like a template in scope (a rule is in scope under its
  * own name) reads as that operator, in the call form.
  */
@@ -223,7 +223,7 @@ export function tmMscope<R>(t: Tm<R>, s: Sym): Sym {
 
 /** `Source.rootTs`. */
 export function rootTs<A, R>(root: Kvs, rm: readonly Mx<A, R>[]): THead[] {
-  const out = templatesOf(look('expression_templates', root))
+  const out = templatesOf(look('operators', root))
   for (const m of rm) {
     const h = mxHead(m)
     if (h !== undefined) out.push(h)
@@ -233,7 +233,7 @@ export function rootTs<A, R>(root: Kvs, rm: readonly Mx<A, R>[]): THead[] {
 
 /** `Source.compTs`. */
 export function compTs<A, R>(c: Comp<Mx<A, R>>): THead[] {
-  const out = templatesOf(look('expression_templates', c.mathBlocks))
+  const out = templatesOf(look('operators', c.mathBlocks))
   for (const m of c.math) {
     const h = mxHead(m)
     if (h !== undefined) out.push(h)
@@ -452,7 +452,7 @@ export function strList(xs: readonly Json[]): string[] | undefined {
   return out
 }
 
-/** `Source.tmOf`: the template or rule an entry of `expression_templates` is, checked by printing it back. */
+/** `Source.tmOf`: the template or rule an entry of `operators` is, checked by printing it back. */
 export function tmOf(n: string, v: Json): Tm<Json> | undefined {
   if (v.t !== 'obj') return undefined
   const kvs = v.kvs
@@ -498,9 +498,9 @@ export function itemJson(m: MC): Json {
   }
 }
 
-/** `Source.fieldJson`: an object keyed by the entries' names for `expression_templates`, a list otherwise. */
+/** `Source.fieldJson`: an object keyed by the entries' names for `operators`, a list otherwise. */
 export function fieldJson(f: string, ms: readonly MC[]): Json {
-  if (f === 'expression_templates') return jobj(ms.map((m) => [mxKey(m), itemJson(m)] as const))
+  if (f === 'operators') return jobj(ms.map((m) => [mxKey(m), itemJson(m)] as const))
   return jarr(ms.map(itemJson))
 }
 
@@ -535,14 +535,14 @@ export function tmItem(kv: Kv): MC | undefined {
 export function mathOf(caps: Caps, s: Sym, f: string, v: Json): MC[] | undefined {
   const ms: MC[] = []
   if (v.t === 'arr' && v.xs.length > 0) {
-    if (f === 'expression_templates') return undefined
+    if (f === 'operators') return undefined
     for (const x of v.xs) {
       const m = itemOf(f, x)
       if (m === undefined) return undefined
       ms.push(m)
     }
   } else if (v.t === 'obj' && v.kvs.length > 0) {
-    if (f !== 'expression_templates') return undefined
+    if (f !== 'operators') return undefined
     for (const kv of v.kvs) {
       const m = tmItem(kv)
       if (m === undefined) return undefined
@@ -681,12 +681,7 @@ export function compSym(
   name: string,
   kvs: Kvs,
 ): Sym {
-  return symWith(
-    root,
-    rt,
-    compBase(caps, k, name, kvs),
-    templatesOf(look('expression_templates', kvs)),
-  )
+  return symWith(root, rt, compBase(caps, k, name, kvs), templatesOf(look('operators', kvs)))
 }
 
 /** `Source.compOf`: a component, with its math fields decided. */
@@ -699,7 +694,7 @@ export function compOf(
   kvs: Kvs,
 ): Comp<MC> {
   const c = compBase(caps, k, name, kvs)
-  const s = symWith(root, rt, c, templatesOf(look('expression_templates', kvs)))
+  const s = symWith(root, rt, c, templatesOf(look('operators', kvs)))
   const math: MC[] = []
   const mathBlocks: Kv[] = []
   for (const f of MATH_FIELDS) {
@@ -719,14 +714,14 @@ export function pickComp(caps: Caps, n: string, v: Json): [string, Kvs] | undefi
 export function topSymOf(kvs: Kvs): Sym {
   return {
     names: keysOf(look('index_sets', kvs)),
-    templates: templatesOf(look('expression_templates', kvs)),
+    templates: templatesOf(look('operators', kvs)),
   }
 }
 
 /** `Source.topMath`: the top-level templates, when every one prints natively. */
 export function topMath(caps: Caps, kvs: Kvs): MC[] | undefined {
-  const v = look('expression_templates', kvs)
-  return v === undefined ? undefined : mathOf(caps, topSymOf(kvs), 'expression_templates', v)
+  const v = look('operators', kvs)
+  return v === undefined ? undefined : mathOf(caps, topSymOf(kvs), 'operators', v)
 }
 
 /** `Source.rootBlock`. */
@@ -738,7 +733,7 @@ export function rootBlock(caps: Caps, tn: boolean, kv: Kv): Kv | undefined {
     const r = splitOpt((n, v) => pickComp(caps, n, v), kv[1])[1]
     return r === undefined ? undefined : [k, r]
   }
-  if (k === 'expression_templates' && tn) return undefined
+  if (k === 'operators' && tn) return undefined
   return kv
 }
 
@@ -759,7 +754,7 @@ export function toDoc(caps: Caps, d: Json): Doc<MC> {
   const m = metaOf(caps, look('metadata', kvs))
   const tm = topMath(caps, kvs)
   const blocks = rootBlocks(caps, tm !== undefined, kvs)
-  const rt = templatesOf(look('expression_templates', kvs))
+  const rt = templatesOf(look('operators', kvs))
   const comps = (k: Kind, f: string): Comp<MC>[] =>
     splitOpt((n, v) => pickComp(caps, n, v), look(f, kvs))[0].map(([n, ckvs]) =>
       compOf(caps, blocks, rt, k, n, ckvs),
@@ -875,8 +870,7 @@ export function ofDoc(d: Doc<MC>): Json | undefined {
     rr ?? undefined,
   )
   if (rss === undefined) return undefined
-  const tkv: Kv[] =
-    d.math.length === 0 ? [] : [['expression_templates', fieldJson('expression_templates', d.math)]]
+  const tkv: Kv[] = d.math.length === 0 ? [] : [['operators', fieldJson('operators', d.math)]]
   const doc = jobj(
     sortKvs([
       ...esmKv,

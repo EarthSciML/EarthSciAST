@@ -47,6 +47,8 @@ export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 export interface UnitDiagnostic {
   message: string
   code: UnitWarning['code']
+  /** `'warning'` for a finding that never invalidates (see {@link UnitWarning.severity}). */
+  severity?: 'warning'
 }
 
 /**
@@ -122,6 +124,16 @@ export interface UnitWarning {
     | 'unparseable_unit'
     | 'analysis'
     | 'units_dimensionless_literal_mismatch'
+    | 'definition_unit_mismatch'
+  /**
+   * `definition_unit_mismatch` (esm-spec §9.6.12 "Units") is an ERROR when a
+   * definition's body unit is determinable and disagrees with its unit
+   * expression (or with the fixed unit expression of `partial` /
+   * `integral`), and a WARNING, marked `'warning'` here, when the body's unit
+   * is undeterminable so the two cannot be compared. `validate()` promotes
+   * only the error.
+   */
+  severity?: 'warning'
   location?: string
   equation?: string
   /** For `unparseable_unit`: the declaration at fault. `validate()` promotes the
@@ -400,6 +412,21 @@ export interface DimensionOptions {
    * current rule; only the dimensionless-literal warning pass sets it.
    */
   dimensionlessLiterals?: boolean
+  /**
+   * The operators registry (name → raw definition) the `apply_operator`
+   * references of the checked expression resolve against: the enclosing
+   * component's (esm-spec §9.6.4 rule 1). A reference's unit is its
+   * definition's unit expression when it has one, else its body's unit for the
+   * call's bindings (esm-spec §4.8.3, §9.6.12 "Units"). Absent: a reference is
+   * undeterminable.
+   */
+  registry?: Record<string, unknown> | undefined
+  /**
+   * Names that are bound but have no determinable unit (a definition
+   * parameter whose binding is undeterminable, inside its body): their unit is
+   * unknown, silently — not an unknown variable.
+   */
+  opaque?: ReadonlySet<string> | undefined
 }
 
 /**
@@ -600,6 +627,7 @@ function computeDimensions(
       // stays undeterminable: the `D` arm reads `unitBindings`, not this.
       return finish({ dims: { s: 1 }, scale: 1, exact: ExactScale.one() })
     }
+    if (!dims && options.opaque?.has(expr) === true) return unknown()
     if (!dims) {
       // Unknown variable ⇒ UNKNOWN dimension, not dimensionless. Assuming
       // dimensionless here would manufacture mismatches against every
@@ -676,6 +704,30 @@ function computeDimensions(
     } else if (!isPureNumber(arg)) {
       warn(scaledDimensionlessMessage(op, arg.exact), ERROR_CODES.DIMENSIONAL_MISMATCH)
     }
+  }
+
+  if (op === 'apply_operator') {
+    return finish(referenceUnit(node, unitBindings, options, walk, diagnostics))
+  }
+
+  if (op === 'partial') {
+    // esm 2.4.0 (esm-spec §4.2): the fixed unit expression of the defined
+    // operator `partial` — `[f]/[wrt]`, resolved or not. Trailing operands
+    // never enter it; they are walked for findings only. A coordinate with no
+    // declared unit makes the result undeterminable.
+    if (args.length === 0) return unknown()
+    const f = walk(args[0]!)
+    for (const a of args.slice(1)) walk(a)
+    const w = axisUnit(unitBindings, node.wrt)
+    return f === null || w === null ? unknown() : finish(divideUnits(f, w))
+  }
+
+  if (op === 'integral') {
+    // esm 2.4.0 (esm-spec §4.2): `integral(f; var: v)` has `[f]·[v]`.
+    if (args.length === 0) return unknown()
+    const f = walk(args[0]!)
+    const v = axisUnit(unitBindings, (node as { var?: unknown }).var)
+    return f === null || v === null ? unknown() : finish(multiplyUnits([f, v]))
   }
 
   const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo, options))
@@ -1105,6 +1157,189 @@ function computeDimensions(
   }
 }
 
+/** The declared unit of the coordinate an axis field names, or `null`. */
+function axisUnit(unitBindings: Map<string, ParsedUnit>, axis: unknown): ParsedUnit | null {
+  if (typeof axis !== 'string') return null
+  return unitBindings.get(axis) ?? null
+}
+
+/** The prefix of a `definition_unit_mismatch` finding (esm-spec §9.6.12). */
+const DEFINITION_UNIT_MISMATCH = ERROR_CODES.DEFINITION_UNIT_MISMATCH
+
+/**
+ * Evaluate a definition's unit expression (raw JSON over params, declared
+ * names, unit-bearing `const`, `*`, binary `/`, `^` with a numeric exponent).
+ * `null` when undeterminable.
+ */
+function evalUnitExpr(
+  x: unknown,
+  params: ReadonlySet<string>,
+  punit: (p: string) => ParsedUnit | null,
+  unitBindings: Map<string, ParsedUnit>,
+): ParsedUnit | null {
+  if (typeof x === 'string') {
+    if (params.has(x)) return punit(x)
+    return unitBindings.get(x) ?? null
+  }
+  if (typeof x === 'number' || isNumericLiteral(x)) return dimensionless()
+  if (x === null || typeof x !== 'object' || Array.isArray(x)) return null
+  const n = x as Record<string, unknown>
+  if (n.op === 'const') {
+    return typeof n.units === 'string' ? tryParseUnit(n.units) : dimensionless()
+  }
+  const args = n.args
+  if (!Array.isArray(args)) return null
+  if (n.op === '*' || n.op === '/') {
+    if (args.length === 0) return null
+    const vals = args.map((a) => evalUnitExpr(a, params, punit, unitBindings))
+    if (vals.some((v) => v === null)) return null
+    if (n.op === '*') return multiplyUnits(vals as ParsedUnit[])
+    if (vals.length !== 2) return null
+    return divideUnits(vals[0]!, vals[1]!)
+  }
+  if (n.op === '^' && args.length === 2) {
+    const b = evalUnitExpr(args[0], params, punit, unitBindings)
+    const e = args[1]
+    if (b === null || !(typeof e === 'number' || isNumericLiteral(e))) return null
+    const ev = literalValue(e as Expression)
+    return ev === null ? null : powerUnit(b, ev)
+  }
+  return null
+}
+
+/**
+ * The fixed unit expression of `partial` / `integral` (esm-spec §4.2) a
+ * definition of either must agree with, read off its `match` pattern: the
+ * pattern's operand over (or times) its axis field.
+ */
+function fixedUnitExpr(decl: Record<string, unknown>): unknown {
+  const m = decl.match
+  if (m === null || typeof m !== 'object' || Array.isArray(m)) return undefined
+  const mm = m as Record<string, unknown>
+  const args = mm.args
+  if (!Array.isArray(args) || args.length === 0) return undefined
+  if (mm.op === 'partial') {
+    if (mm.wrt === undefined || mm.wrt === null) return undefined
+    return { op: '/', args: [args[0], mm.wrt] }
+  }
+  if (mm.op === 'integral') {
+    if (mm.var === undefined || mm.var === null) return undefined
+    return { op: '*', args: [args[0], mm.var] }
+  }
+  return undefined
+}
+
+/**
+ * The unit of an `apply_operator` reference (esm-spec §4.8.3, §9.6.12
+ * "Units"): its definition's unit expression when it has one, evaluated from
+ * the bindings' units without evaluating the body, else the body's unit for
+ * this call's bindings. A disagreement between the body's unit and the unit
+ * expression, or with the fixed unit expression of `partial` / `integral`, is
+ * `definition_unit_mismatch` — an error when the body's unit is determinable,
+ * a warning when it is not. A reference no registry resolves is
+ * undeterminable; its bindings are still walked for findings.
+ *
+ * The body is typed where it stands, never expanded: in the environment of
+ * the call, with each parameter bound to the unit of what the call binds to it
+ * (an operand's unit; for a structural parameter bound to a name, that name's
+ * declared unit). A parameter whose binding has no determinable unit is
+ * undeterminable in the body, silently.
+ */
+function referenceUnit(
+  node: ExpressionNode,
+  unitBindings: Map<string, ParsedUnit>,
+  options: DimensionOptions,
+  walk: (part: Expression) => ParsedUnit | null,
+  diagnostics: UnitDiagnostic[],
+): ParsedUnit | null {
+  const n = node as unknown as Record<string, unknown>
+  const name = n.name
+  const bindings =
+    n.bindings !== null && typeof n.bindings === 'object' && !Array.isArray(n.bindings)
+      ? (n.bindings as Record<string, unknown>)
+      : {}
+  const reg = options.registry
+  const decl =
+    typeof name === 'string' && reg !== undefined && Object.prototype.hasOwnProperty.call(reg, name)
+      ? reg[name]
+      : undefined
+  if (decl === null || typeof decl !== 'object' || Array.isArray(decl)) {
+    for (const v of Object.values(bindings)) walk(v as Expression)
+    return null
+  }
+  const d = decl as Record<string, unknown>
+  const params = Array.isArray(d.params) ? d.params.map((p) => String(p)) : []
+  // Each parameter's unit at this call: the unit of what the call binds to it.
+  const bound = new Map<string, ParsedUnit | null>()
+  for (const p of params) {
+    const b = bindings[p]
+    if (b === undefined) bound.set(p, null)
+    else if (typeof b === 'string') bound.set(p, unitBindings.get(b) ?? walk(b as Expression))
+    else bound.set(p, walk(b as Expression))
+  }
+  const punit = (p: string): ParsedUnit | null => bound.get(p) ?? null
+  // The body's unit for this call, in the call's environment with the
+  // parameters bound (they shadow any outer name of the same spelling).
+  const bodyEnv = new Map(unitBindings)
+  const opaque = new Set<string>(options.opaque ?? [])
+  for (const p of params) {
+    const u = bound.get(p) ?? null
+    if (u === null) {
+      bodyEnv.delete(p)
+      opaque.add(p)
+    } else {
+      bodyEnv.set(p, u)
+      opaque.delete(p)
+    }
+  }
+  const bodyResult = checkDimensions(d.body as Expression, bodyEnv, { ...options, opaque })
+  diagnostics.push(...bodyResult.diagnostics)
+  const bodyU = bodyResult.dimensions
+  const uexpr = d.units
+  const fixed = fixedUnitExpr(d)
+  if (uexpr === undefined && fixed === undefined) return bodyU
+  const pset = new Set(params)
+  const declared = uexpr === undefined ? null : evalUnitExpr(uexpr, pset, punit, unitBindings)
+  const fixedU = fixed === undefined ? null : evalUnitExpr(fixed, pset, punit, unitBindings)
+  const defines = String(d.defines ?? name)
+  const checks: [string, ParsedUnit | null][] = [
+    ['its unit expression', declared],
+    [`the fixed unit expression of '${defines}'`, fixedU],
+  ]
+  for (const [what, want] of checks) {
+    if (want === null) continue
+    if (bodyU === null) {
+      diagnostics.push({
+        message:
+          `${DEFINITION_UNIT_MISMATCH}: the body of definition '${String(name)}' has an ` +
+          `undeterminable unit, so it cannot be checked against ${what} ` +
+          `('${formatUnit(want)}') (esm-spec §9.6.12)`,
+        code: DEFINITION_UNIT_MISMATCH,
+        severity: 'warning',
+      })
+    } else if (!sameUnit(bodyU, want)) {
+      diagnostics.push({
+        message:
+          `${DEFINITION_UNIT_MISMATCH}: the body of definition '${String(name)}' has unit ` +
+          `'${formatUnit(bodyU)}', but ${what} gives '${formatUnit(want)}' (esm-spec §9.6.12)`,
+        code: DEFINITION_UNIT_MISMATCH,
+      })
+    }
+  }
+  // A unit expression must itself agree with the fixed one of partial/integral.
+  if (declared !== null && fixedU !== null && !sameUnit(declared, fixedU)) {
+    diagnostics.push({
+      message:
+        `${DEFINITION_UNIT_MISMATCH}: the unit expression of definition '${String(name)}' ` +
+        `gives '${formatUnit(declared)}', but the fixed unit expression of '${defines}' gives ` +
+        `'${formatUnit(fixedU)}' (esm-spec §4.2)`,
+      code: DEFINITION_UNIT_MISMATCH,
+    })
+  }
+  if (uexpr !== undefined) return declared
+  return fixed === undefined ? bodyU : (fixedU ?? bodyU)
+}
+
 /**
  * Register a unit binding under its bare short name (`name`). The bare key is
  * FIRST-WINS — an earlier component's short name is never overwritten by a later
@@ -1172,7 +1407,11 @@ function checkAndReport(
       warnings.push(mismatch)
     }
     for (const d of diagnostics) {
-      warnings.push({ message: d.message, code: d.code, location })
+      warnings.push(
+        d.severity === undefined
+          ? { message: d.message, code: d.code, location }
+          : { message: d.message, code: d.code, severity: d.severity, location },
+      )
     }
   } catch (error) {
     warnings.push({
@@ -1332,6 +1571,18 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
       if (visit.isReference) return
       const { scopedName, component } = visit
       const location = componentPointer(visit.kind, scopedName)
+      // esm 2.4.0 (esm-spec §4.8.3, §9.6.12 "Units"): an `apply_operator`
+      // reference is typed by its definition — its unit expression, else its
+      // body for the call's bindings — so the checks below read a model
+      // equation's REFERENCE-PRESERVING right-hand side (captured before the
+      // load expands references) against the enclosing top-level component's
+      // registry. Never an expansion: the reference is typed where it stands.
+      const registry = componentRegistry(file, visit.kind, scopedName)
+      const options: DimensionOptions = registry === undefined ? {} : { registry }
+      const refRhs = (index: number): Expression | undefined =>
+        visit.kind === 'models'
+          ? (file.authoredTemplateRhs?.[`${location}/equations/${index}`] as Expression | undefined)
+          : undefined
       // A model's equations live under `equations`; a reaction system's under
       // `constraint_equations` (the two component types are disjoint, and
       // `forEachEquation` walks whichever is present).
@@ -1381,8 +1632,10 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
             })
           }
         }
+        const rhs = refRhs(index)
+        const checked = rhs === undefined ? equation : { ...equation, rhs }
         checkAndReport(warnings, eqLocation, 'Error checking equation dimensions', () => {
-          const { diagnostics, mismatch } = checkEquationUnits(equation, bindings)
+          const { diagnostics, mismatch } = checkEquationUnits(checked, bindings, options)
           return {
             diagnostics,
             mismatch:
@@ -1394,7 +1647,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
                     location: eqLocation,
                     // Rendered only when a mismatch is reported: stringifying a
                     // template-expanded equation re-expands its shared DAG.
-                    equation: `${JSON.stringify(equation.lhs)} = ${JSON.stringify(equation.rhs)}`,
+                    equation: `${JSON.stringify(checked.lhs)} = ${JSON.stringify(checked.rhs)}`,
                   },
           }
         })
@@ -1408,7 +1661,19 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         // evaluates to, and the declaration is what a reader must fix.
         // `observedDefinitions` reads `variables` + `equations`; a component
         // with neither yields an empty map, so no shape test is needed.
-        const observedDefs = observedDefinitions(component as Model)
+        const model = component as Model
+        const observedDefs = observedDefinitions(
+          Array.isArray(model.equations) &&
+            model.equations.some((_eq, i) => refRhs(i) !== undefined)
+            ? {
+                ...model,
+                equations: model.equations.map((eq, i) => {
+                  const rhs = refRhs(i)
+                  return rhs === undefined ? eq : { ...eq, rhs }
+                }),
+              }
+            : model,
+        )
         for (const [varName, variable] of Object.entries(component.variables)) {
           const observedExpr = observedDefs.get(varName)
           if (observedExpr !== undefined) {
@@ -1419,7 +1684,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
               varLocation,
               'Error checking observed variable dimensions',
               () => {
-                const exprResult = checkDimensions(expression, bindings)
+                const exprResult = checkDimensions(expression, bindings, options)
                 const diagnostics = [...exprResult.diagnostics]
                 // Declared units are parsed fallibly. An unparseable declaration
                 // leaves the target dimension UNKNOWN, so the mismatch
@@ -1463,7 +1728,40 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
     { recurse: true },
   )
 
-  return dedupeUnparseable(warnings)
+  return dedupeDefinitionUnits(dedupeUnparseable(warnings))
+}
+
+/**
+ * The operators registry a component's references resolve against: the
+ * enclosing TOP-LEVEL component's (a subsystem's references were hoisted into
+ * it, esm-spec §9.6.4 rule 1), from the load's `componentTemplates` sidecar.
+ */
+function componentRegistry(
+  file: EsmFile,
+  kind: string,
+  scopedName: string,
+): Record<string, unknown> | undefined {
+  const top = scopedName.split('.')[0] ?? scopedName
+  const reg = file.componentTemplates?.[`${kind}.${top}`]
+  return reg !== null && typeof reg === 'object' && !Array.isArray(reg)
+    ? (reg as Record<string, unknown>)
+    : undefined
+}
+
+/**
+ * One `definition_unit_mismatch` finding per site and message: a reference
+ * typed by two checks of one site (an observed equation is checked as an
+ * equation and as its variable's definition) reports it once.
+ */
+function dedupeDefinitionUnits(warnings: UnitWarning[]): UnitWarning[] {
+  const seen = new Set<string>()
+  return warnings.filter((w) => {
+    if (w.code !== ERROR_CODES.DEFINITION_UNIT_MISMATCH) return true
+    const key = `${w.severity ?? ''}\u0000${w.message}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 /** Declared unit strings of a component's own members: a model's `variables`,

@@ -347,14 +347,14 @@ describe('substitute', () => {
 
   it('substitutes into template-apply binding expressions', () => {
     const expr = {
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 'k_rate',
       bindings: { temperature: 'T', pressure: { op: '*', args: ['P', 'scale'] } },
     } as unknown as Expr
     const bindings = { T: 300, scale: 2 }
     expect(substitute(expr, bindings)).toEqual({
-      op: 'apply_expression_template',
+      op: 'apply_operator',
       args: [],
       name: 'k_rate',
       bindings: { temperature: 300, pressure: { op: '*', args: ['P', 2] } },

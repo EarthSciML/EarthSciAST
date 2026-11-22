@@ -125,7 +125,7 @@ describe('migration', () => {
 
     it.runIf(IMPLEMENTS_V2)('relabels a 1.x file that calls an esm:std template', () => {
       const source = v1WithRhs({
-        op: 'apply_expression_template',
+        op: 'apply_operator',
         args: [],
         name: 'argmin',
         bindings: { f: 'x', n: 3 },
