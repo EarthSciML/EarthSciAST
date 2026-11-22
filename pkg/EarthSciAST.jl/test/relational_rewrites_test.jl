@@ -244,7 +244,7 @@ const _RR_CASES = [
             rhs isa AbstractDict && get(rhs, "distinct", false) === true &&
                 (rhs["key"]["bindings"]["n_b"] = 2)   # j = 3, 4 fall outside [1, 3)
         end
-        for ref in model["operator_imports"]
+        for ref in get(model, "operator_imports", get(model, "expression_template_imports", Any[]))
             ref["ref"] = _RR_LIB
         end
         case = e.cases[1]
