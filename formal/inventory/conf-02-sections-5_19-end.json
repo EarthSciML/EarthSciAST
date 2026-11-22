@@ -899,8 +899,8 @@
       "note": "The expanded goldens of fixtures with no cross-boundary match stay those of the in-place engine, as evidence the reference form denotes the inlined meaning."
     },
     {
-      "id": "conf.5.61.core-names-fixtures",
-      "section": "5.61",
+      "id": "conf.5.62.core-names-fixtures",
+      "section": "5.62",
       "quote": "Every binding that loads documents MUST assert all three.",
       "class": "out_of_scope",
       "area": "conformance_harness",
