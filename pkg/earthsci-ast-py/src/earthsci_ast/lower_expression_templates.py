@@ -610,7 +610,7 @@ def _rule_priority(decl: dict) -> int:
 
 
 def _build_match_rules(
-    templates: dict, scope: str, iset_names: set
+    templates: dict, scope: str, iset_names: set, mounted_only: frozenset[str] = frozenset()
 ) -> tuple[list, dict[str, list], dict[str, set[int]]]:
     """Register one component's definitions (esm-spec §9.6.3, §9.6.12), in
     DECLARATION order, as:
@@ -629,7 +629,12 @@ def _build_match_rules(
     index-set names resolved against the consuming document's merged registry
     (``iset_names``; ``operator_constraint_unknown_index_set``). Nontermination
     is NOT checked here — the bounded fixpoint (``MAX_REWRITE_PASSES``) is the
-    sole termination guard."""
+    sole termination guard.
+
+    ``mounted_only`` names the entries only mounted subsystems contributed
+    (:func:`_hoist_mounted_templates`). Definitions are component-local
+    (esm-spec §9.6.3 constraint 4): such an entry is reached by the mounted
+    subtree's references, so it is neither a call rule nor an arity here."""
     rules: list = []
     call_rules: dict[str, list] = {}
     arities: dict[str, set[int]] = {}
@@ -637,6 +642,8 @@ def _build_match_rules(
         params = list(decl["params"])
         defines = _definition_defines(name, decl)
         if "match" not in decl:
+            if name in mounted_only:
+                continue
             arities.setdefault(defines, set()).add(len(params))
             if not _is_core_op(defines) and defines != APPLY_OP:
                 call_rules.setdefault(defines, []).append(
@@ -871,6 +878,7 @@ def _template_call_mark(name: str, decl: Any, bindings: Any) -> dict | None:
         "fixed": fixed,
     }
 
+
 _MARK_TEMPLATE_ORIGINS: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_MARK_TEMPLATE_ORIGINS", default=False
 )
@@ -935,14 +943,22 @@ def _expand(
             if should_expand(newnode):
                 body = _expand_apply(newnode, templates, scope)
                 expanded = recurse(body)
-                if mark and isinstance(expanded, dict):
-                    extra = {TEMPLATE_ORIGIN_KEY: newnode["name"]}
+                if mark:
                     call = _template_call_mark(
                         newnode["name"], templates.get(newnode["name"]), newnode.get("bindings")
                     )
-                    if call is not None:
-                        extra[TEMPLATE_CALL_KEY] = call
-                    expanded = {**expanded, **extra}
+                    if not isinstance(expanded, dict) and call is not None:
+                        # A leaf cannot carry the unit record, and without it
+                        # the call is typed by its body instead of its unit
+                        # expression. Hold it in a one-operand `+`, which folds
+                        # to the identity (esm-spec §4.2); the serializer
+                        # writes the leaf back.
+                        expanded = {"op": "+", "args": [expanded]}
+                    if isinstance(expanded, dict):
+                        extra = {TEMPLATE_ORIGIN_KEY: newnode["name"]}
+                        if call is not None:
+                            extra[TEMPLATE_CALL_KEY] = call
+                        expanded = {**expanded, **extra}
                 return expanded
             return newnode
         changed = False
@@ -994,6 +1010,7 @@ class _Lowering:
         "match_rules",
         "call_rules",
         "arities",
+        "mounted_only",
         "shape_env",
         "enums",
         "scope",
@@ -1009,6 +1026,7 @@ class _Lowering:
         scope: str,
         call_rules: dict[str, list] | None = None,
         arities: dict[str, set[int]] | None = None,
+        mounted_only: frozenset[str] = frozenset(),
     ) -> None:
         self.named = named
         self.match_rules = match_rules
@@ -1018,6 +1036,9 @@ class _Lowering:
         # Operand counts the definitions of each defined operator take
         # (esm-spec §9.6.12 "Arity").
         self.arities = arities or {}
+        # Registry entries only mounted subsystems contributed: reached by the
+        # mounted subtree's references, never by a call in this component.
+        self.mounted_only = mounted_only
         self.shape_env = shape_env
         self.enums = enums
         self.scope = scope
@@ -1392,7 +1413,7 @@ def _has_template_machinery(file: dict) -> bool:
 
 
 def _component_registry(
-    comp: dict, scope: str, iset_names: set
+    comp: dict, scope: str, iset_names: set, mounted_only: frozenset[str] = frozenset()
 ) -> tuple[dict, list, dict, dict[str, list], dict[str, set[int]]]:
     """Build one component's rewrite registry from its ``operators`` block: the
     validated + body-CHECKED named-definition dict, the pre-sorted
@@ -1429,7 +1450,9 @@ def _component_registry(
             if decl is not decl0:
                 templates[tname] = decl
                 tplraw[tname] = decl
-        match_rules, call_rules, arities = _build_match_rules(templates, scope, iset_names)
+        match_rules, call_rules, arities = _build_match_rules(
+            templates, scope, iset_names, mounted_only
+        )
     return templates, match_rules, shape_env, call_rules, arities
 
 
@@ -1599,11 +1622,18 @@ def lower_expression_templates(file: dict) -> dict:
             # A subsystem carrying its own block (a mounted leaf's, or an
             # authored one) joins this component's registry here (esm-spec
             # §9.6.4 rule 1), bodies unchanged.
-            _hoist_mounted_templates(comp, str(cname))
+            mounted_only, scopes = _hoist_mounted_templates(comp, str(cname))
             templates, match_rules, shape_env, call_rules, arities = _component_registry(
-                comp, cscope, iset_names
+                comp, cscope, iset_names, mounted_only
             )
-            L = _Lowering(templates, match_rules, shape_env, enums, cscope, call_rules, arities)
+            L = _Lowering(
+                templates, match_rules, shape_env, enums, cscope, call_rules, arities, mounted_only
+            )
+            # A subsystem's subtree first, where its own definitions resolve
+            # calls too (§9.6.3 constraint 4); the component pass below then
+            # finds nothing more to rewrite there.
+            for path, sub, names in scopes:
+                _lower_subsystem_scope(sub, L, mounted_only - names, iset_names, path)
             for k in list(comp.keys()):
                 if k == "operators":
                     continue
@@ -1653,6 +1683,9 @@ def lower_expression_templates(file: dict) -> dict:
                 _check_call_arity(entry["transform"], L, f"{L.scope} coupling transform")
                 _reached_definitions(reached, entry["transform"], L.named)
             for r in sorted(reached):
+                # A mounted definition's body was checked in its own component.
+                if r in L.mounted_only:
+                    continue
                 _check_call_arity(L.named[r].get("body"), L, f"{L.scope}.operators.{r}")
 
     # Validation discharge (esm-spec §9.6.9): makearray-region checks on the
@@ -2181,7 +2214,7 @@ def _rename_outside_mounts(node: dict, rn: dict[str, str]) -> None:
 
 def _merge_mounted_blocks(
     own: Any, cname: str, mounts: list[tuple[str, dict]]
-) -> tuple[dict[str, Any], dict[str, str] | None]:
+) -> tuple[dict[str, Any], dict[str, str] | None, list[frozenset[str]]]:
     """The merge :func:`_hoist_mounted_templates` describes: the component
     ``cname``'s own block ``own`` (match-less entries, owner path ``cname``)
     and each subsystem block of ``mounts`` (``(path, subsystem)``, match-less
@@ -2189,8 +2222,10 @@ def _merge_mounted_blocks(
     unchanged. Each subsystem's own references (its whole subtree) are renamed
     here, in place, by its owner's renames. Returns the new block (``own``'s
     ``match`` rules first, renamed by ``cname``'s renames, then the merged
-    entries) and ``cname``'s renames (or ``None``). Mirrors the Julia
-    ``_merge_mounted_blocks``."""
+    entries), ``cname``'s renames (or ``None``), and, per entry of
+    ``mounts``, the merged names of that subsystem's own entries. Mirrors the
+    Julia ``_merge_mounted_blocks``."""
+
     # Each entry records the defined operator it defines under the key it was
     # declared with, before a collision rename (esm-spec §9.6.12 "Provenance").
     def _defined(block: dict[str, Any]) -> dict[str, Any]:
@@ -2200,6 +2235,10 @@ def _merge_mounted_blocks(
     for path, sub in mounts:
         blocks.append((path, _defined(_matchless(sub.get("operators")))))
     merged, rename = _merge_flat_registry(blocks)
+    owned = [
+        frozenset((rename.get(path) or {}).get(str(n), str(n)) for n in blk)
+        for (path, blk) in blocks[1:]
+    ]
     for path, sub in mounts:
         rm = rename.get(path)
         if not rm:
@@ -2216,10 +2255,29 @@ def _merge_mounted_blocks(
                 continue
             newblock[str(n)] = _rename_apply_refs(d, rn) if rn else d
     newblock.update(merged)
-    return newblock, rn
+    return newblock, rn, owned
 
 
-def _hoist_mounted_templates(comp: dict, cname: str) -> dict:
+def _lower_subsystem_scope(
+    sub: dict, L: _Lowering, mounted_only: frozenset[str], iset_names: set, path: str
+) -> None:
+    """Rewrite the subtree of the subsystem at ``path`` of ``L``'s component to
+    its fixpoint, in place, with the component's definitions and the
+    subsystem's own as call rules (``mounted_only`` names the entries that stay
+    out of scope there), and check its surviving calls' arity against the same
+    definitions (esm-spec §9.6.3 constraint 4, §9.6.12)."""
+    rules, call_rules, arities = _build_match_rules(L.named, L.scope, iset_names, mounted_only)
+    Ls = _Lowering(L.named, rules, L.shape_env, L.enums, L.scope, call_rules, arities, mounted_only)
+    Ls.depth = L.depth
+    scope = f"{L.scope}.subsystems.{path}"
+    for k in list(sub.keys()):
+        sub[k], _ = _rewrite_to_fixpoint(sub[k], Ls, f"{scope}.{k}")
+        _check_call_arity(sub[k], Ls, f"{scope}.{k}")
+
+
+def _hoist_mounted_templates(
+    comp: dict, cname: str
+) -> tuple[frozenset[str], list[tuple[str, dict, frozenset[str]]]]:
     """Merge into the top-level component ``comp``'s ``expression_templates``
     block the definitions its subsystems carry on their own blocks (esm-spec
     §9.6.4 rule 1): a model mounted as a subsystem (esm-spec §4.7) keeps its
@@ -2234,13 +2292,23 @@ def _hoist_mounted_templates(comp: dict, cname: str) -> dict:
     expanding a subsystem's reference is plain substitution, and a leaf mounted
     twice brings one definition. Each subsystem subtree's references follow its
     own owner's renames; ``comp``'s other sites follow ``comp``'s. The subsystem
-    blocks are removed. In place; returns ``comp``. Mirrors the Julia
+    blocks are removed. In place.
+
+    Returns ``(mounted_only, scopes)``: the names of the merged entries only
+    subsystem blocks contributed, and, for each subsystem that contributed
+    any, ``(path, subsystem, names)``. Definitions are component-local
+    (esm-spec §9.6.3 constraint 4): a call resolves to, and an arity counts,
+    only the definitions owned by ``comp`` or by the subsystem whose subtree
+    holds the call, so a subsystem's entries are no definitions of their
+    operators elsewhere in ``comp`` (§9.6.12). Mirrors the Julia
     ``_hoist_mounted_templates!``."""
     mounts: list[tuple[str, dict]] = []
     _collect_mounted_blocks(mounts, comp, "")
     if not mounts:
-        return comp
-    newblock, rn = _merge_mounted_blocks(comp.get("operators"), cname, mounts)
+        return frozenset(), []
+    own = comp.get("operators")
+    newblock, rn, owned = _merge_mounted_blocks(own, cname, mounts)
+    own_names = {(rn or {}).get(str(n), str(n)) for n in own} if _is_object(own) else set()
     if rn:
         for k in list(comp.keys()):
             if k in ("operators", "subsystems"):
@@ -2250,7 +2318,13 @@ def _hoist_mounted_templates(comp: dict, cname: str) -> dict:
     for _path, sub in mounts:
         sub.pop("operators", None)
     comp["operators"] = newblock
-    return comp
+    mounted_only = frozenset(n for n in newblock if n not in own_names)
+    scopes = [
+        (path, sub, names & mounted_only)
+        for (path, sub), names in zip(mounts, owned)
+        if names & mounted_only
+    ]
+    return mounted_only, scopes
 
 
 def mounted_registries(doc: Any) -> Any:
@@ -2272,9 +2346,7 @@ def mounted_registries(doc: Any) -> Any:
             if not _is_object(blk):
                 continue
             keep = _matchless(blk)
-            used = any(
-                bool(_find_apply_paths(v)) for k, v in comp.items() if k != "operators"
-            )
+            used = any(bool(_find_apply_paths(v)) for k, v in comp.items() if k != "operators")
             if not keep or not used:
                 comp.pop("operators", None)
             else:

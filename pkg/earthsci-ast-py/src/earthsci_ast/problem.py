@@ -86,7 +86,7 @@ from .numpy_interpreter import (
     UnevaluableOperatorError,
     UnreachableSpatialOperatorError,
 )
-from .parse import load_document, load_path
+from .parse import load_document, load_path, wire_old_spellings
 from .pushdown_rewrite import (
     _inject_pushdown_aliases,
     _pushdown_coupling_pairs,
@@ -257,7 +257,7 @@ def _has_template_import_edge(raw: Any) -> bool:
     The pushdown prepass reads the RAW document, before the typed load, so an
     edge that is still unresolved hides the imported templates and index sets
     from the recogniser: the binning body reads as an unexpandable
-    ``apply_expression_template`` and the rewrite silently declines, which costs
+    ``apply_operator`` and the rewrite silently declines, which costs
     the whole ungated fetch. Resolving is gated on this predicate rather than run
     unconditionally so a document with no edge reaches ``desugar_pushdown`` in
     exactly the bytes it does today (metaparameters unfolded, goldens unmoved).
@@ -758,8 +758,11 @@ def _esm_problem_under(
                 "typed parse; see pushdown_rewrite.py)"
             )
         base_path = base_path or derived_base
+        # Read the esm-2.3 spellings first (esm-spec §9.6.12): the import-edge
+        # test below and the recogniser look for the esm-2.4.0 field names.
+        raw = wire_old_spellings(raw)
         # §9.7 imports resolve BEFORE the recogniser looks. `desugar_pushdown`
-        # expands `apply_expression_template` references to find the containment
+        # expands `apply_operator` references to find the containment
         # predicate, but it can only expand what is IN SCOPE — and an import edge
         # puts the library's templates and index sets in scope at LOAD, which has
         # not happened yet on this raw-dict path. Skipping this makes a document

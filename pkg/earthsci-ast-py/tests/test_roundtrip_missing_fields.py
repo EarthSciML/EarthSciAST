@@ -121,53 +121,19 @@ def test_roundtrip_preserves_data_sources():
     assert variables["pressure"]["update"]["from"]["file_variable"] == "P"
 
 
-def test_roundtrip_preserves_operators():
-    """Test that operators are preserved through serialization."""
-    metadata = Metadata(
-        title="Operator Test",
-        description="Test operator preservation",
-        authors=[],
-        created=None,
-        modified=None,
-        version="1.0",
-        references=[],
-        keywords=[],
-    )
+def test_runtime_operators_are_never_written():
+    """The top-level ``operators`` key holds operator definitions (esm-spec
+    §9.6.12); the pre-0.3.0 runtime-operator registry has no wire form, so the
+    serializer neither writes it nor lets it replace the definitions."""
+    metadata = Metadata(title="Operator Test", authors=[])
+    operator = Operator(operator_id="test_operator", needed_vars=["x", "y"])
+    definitions = {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}
 
-    # Create operator
-    operator = Operator(
-        operator_id="test_operator",
-        needed_vars=["x", "y"],
-        modifies=["z"],
-        config={"param1": "value1", "param2": 42},
-    )
+    esm_file = EsmFile(version="2.4.0", metadata=metadata, operators=[operator])
+    assert "operators" not in json.loads(to_json(esm_file))
 
-    # Create ESM file
-    esm_file = EsmFile(
-        version="1.0.0",
-        metadata=metadata,
-        models={},
-        reaction_systems={},
-        events=[],
-        data_sources={},
-        operators=[operator],
-        coupling=[],
-    )
-
-    # Serialize to JSON
-    json_str = to_json(esm_file)
-    data = json.loads(json_str)
-
-    # Verify operators field is present
-    assert "operators" in data
-    assert "test_operator" in data["operators"]
-
-    operator_data = data["operators"]["test_operator"]
-    assert operator_data["operator_id"] == "test_operator"
-    assert operator_data["config"]["param1"] == "value1"
-    assert operator_data["config"]["param2"] == 42
-    assert operator_data["needed_vars"] == ["x", "y"]
-    assert operator_data["modifies"] == ["z"]
+    esm_file.expression_templates = definitions
+    assert json.loads(to_json(esm_file))["operators"] == definitions
 
 
 def test_roundtrip_preserves_couplings():
@@ -337,13 +303,11 @@ def test_roundtrip_preserves_all_missing_fields():
 
     # Verify all fields are present
     assert "data_sources" in data
-    assert "operators" in data
     assert "coupling" in data
     assert "continuous_events" in data
 
     # Verify they have the expected content
     assert "loader" in data["data_sources"]
-    assert "operator" in data["operators"]
     assert len(data["coupling"]) == 1
     assert len(data["continuous_events"]) == 1
     # The source's consumer survives with its binding intact.
