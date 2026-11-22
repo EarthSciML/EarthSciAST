@@ -2001,7 +2001,7 @@ and `resolve_references(document) -> {str: ReferenceGraph}`, raising
 `buildReferenceGraph` / `resolveReferences`, Go `BuildReferenceGraph` /
 `ResolveReferences`). `resolve_references` takes a **loaded** document — the
 output of `load_path` / `load_string` / `load_document`, or its JSON view — whose
-`expression_template_imports` and `{ref}` mounts are already resolved, because an
+`operator_imports` and `{ref}` mounts are already resolved, because an
 imported file's `index_sets` reach the registry only at load (esm-spec §9.7.5) and
 a raw file whose `faq` ranges name an imported axis would otherwise report it as
 `E_REF_UNDECLARED_INDEX_SET`.
