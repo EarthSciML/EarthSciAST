@@ -159,7 +159,7 @@ def expr_doc(rhs, names, lhs="y", index_sets=None, templates=None, extra_model=N
         variables[lhs["args"][0]] = {"type": "unknown"}
     model = {"variables": variables, "equations": [{"lhs": lhs, "rhs": rhs}]}
     if templates:
-        model["expression_templates"] = templates
+        model["operators"] = templates
     if extra_model:
         model.update(extra_model)
     top = {}
@@ -192,7 +192,7 @@ def faq(expr, ranges, output_idx=(), **fields):
 
 
 def tmpl(name, **bindings):
-    return {"op": "apply_expression_template", "args": [], "name": name, "bindings": bindings}
+    return {"op": "apply_operator", "args": [], "name": name, "bindings": bindings}
 
 
 NAMES = ("a", "b", "k", "x", "T", "N")
@@ -539,15 +539,110 @@ def operators(g):
     )
     E(
         "d_spatial",
-        "A spatial derivative: partial over partial.",
-        op("D", "x", wrt="z"),
+        "The spatial derivative partial: partial over partial.",
+        op("partial", "x", wrt="z"),
         names=("x", "z"),
     )
     E(
+        "d_spatial_compound",
+        "partial of a compound operand: the operator form.",
+        op("partial", op("*", "a", "x"), wrt="z"),
+        names=("a", "x", "z"),
+    )
+    E(
         "d_spatial_trailing",
-        "A spatial derivative with trailing operands: the call form D_x(u, a, b).",
+        "partial with trailing operands: \\partial_{x}(u, a, b) / partial_(x)(u, a, b).",
+        op("partial", "u", "a", "b", wrt="x"),
+        names=("u", "a", "b", "x"),
+    )
+    E(
+        "d_spatial_written_as_d",
+        "A D whose wrt is not t, as an earlier document writes it, is read as partial "
+        "(esm-spec 4.2, Reading earlier documents) and prints as partial.",
+        op("D", "u", wrt="x"),
+        names=("u", "x"),
+        written=True,
+    )
+    E(
+        "d_spatial_trailing_written_as_d",
+        "A D with trailing operands and a spatial wrt, as an earlier document writes it, "
+        "is read as partial.",
         op("D", "u", "a", "b", wrt="x"),
         names=("u", "a", "b", "x"),
+        written=True,
+    )
+    E(
+        "partial_wrt_t",
+        "partial whose wrt is t (not a well-formed partial) is not the time derivative: "
+        "it prints in the call form.",
+        op("partial", "x", wrt="t"),
+        names=("x",),
+    )
+
+    # The nabla forms of grad, div, laplacian and curl (one operand, no field).
+    E("nabla_grad", "grad(f) prints \\nabla f / nabla f.", op("grad", "x"), names=("x",))
+    E("nabla_div", "div(F) prints \\nabla \\cdot F / nabla dot F.", op("div", "x"), names=("x",))
+    E(
+        "nabla_laplacian",
+        "laplacian(u) prints \\nabla^{2} u / nabla^2 u.",
+        op("laplacian", "x"),
+        names=("x",),
+    )
+    E("nabla_curl", "curl(F) prints \\nabla \\times F / nabla times F.", op("curl", "x"), names=("x",))
+    E(
+        "nabla_div_grad",
+        "div(grad(u)) prints \\nabla \\cdot \\nabla u, a different tree from laplacian(u).",
+        op("div", op("grad", "x")),
+        names=("x",),
+    )
+    E(
+        "nabla_operand_compound",
+        "The operand of a nabla form prints at the level of a power base: a product is "
+        "parenthesized.",
+        op("grad", op("*", "a", "x")),
+        names=("a", "x"),
+    )
+    E(
+        "nabla_in_product",
+        "A nabla form is a factor: grad(x) times a, and a times div(x).",
+        op("+", op("*", op("grad", "x"), "a"), op("*", "a", op("div", "x"))),
+        names=("a", "x"),
+    )
+    E(
+        "nabla_power_base",
+        "A nabla form as the base of a power is parenthesized.",
+        op("^", op("grad", "x"), 2),
+        names=("x",),
+    )
+    E(
+        "nabla_index",
+        "The operand of a nabla form may be an index (a power base).",
+        op("grad", idx("w", "i")),
+        names=("w", "i"),
+    )
+    E(
+        "nabla_call_form",
+        "grad with two operands, or with a field, keeps the call form.",
+        op("+", op("grad", "x", "a"), op("curl", "x", dim="x")),
+        names=("a", "x"),
+    )
+    E(
+        "old_operator_names",
+        "The old names expression_templates and apply_expression_template are read as "
+        "operators and apply_operator (esm-spec 9.6.12); only the new names are written.",
+        {"op": "apply_expression_template", "args": [], "name": "arrhenius",
+         "bindings": {"A_pre": "a", "Ea": "x"}},
+        names=("a", "x", "T"),
+        extra_model={"expression_templates": ARRHENIUS},
+        written=True,
+    )
+    E(
+        "call_collides_with_definition",
+        "A call whose name is also the key of a definition with known params prints in "
+        "the escape form, so that it reads back as the call, not as a reference.",
+        op("+", op("upwind", "x"), tmpl("upwind", f="a")),
+        names=("a", "x"),
+        templates={"upwind": {"params": ["f"], "body": op("*", 2, "f")}},
     )
 
     # cases.
@@ -789,16 +884,20 @@ def operators(g):
         op("*", "k", tmpl("dlon"), idx(tmpl("dlon"), 1)),
     )
 
-    # Open operators.
-    E("open_op", "An open (rewrite-target) operator prints in the call form.", op("grad", "x"))
+    # Defined operators (esm-spec 9.6.12) with no notation of their own.
+    E(
+        "open_op",
+        "A call of a defined operator with no notation of its own prints in the call form.",
+        op("integral", "x", var="x"),
+    )
     E(
         "open_op_no_operands",
-        "An open operator with no operands keeps its parentheses, apart from a bare template.",
+        "A call with no operands keeps its parentheses, apart from a bare reference.",
         op("+", op("noise"), "x"),
     )
     E(
         "open_op_fields",
-        "Node fields of an open operator are named arguments after a semicolon.",
+        "Node fields of a call are named arguments after a semicolon.",
         op("myop", "x", dim="x", order=2),
     )
     E(
@@ -972,6 +1071,29 @@ def variants(g):
         dN,
         md,
         [(r"\frac{\mathrm{d} N}{\mathrm{d} t}", r"\frac{\partial N}{\partial t}")],
+    )
+    dP = expr_doc(op("partial", "u", "a", "b", wrt="x"), ("u", "a", "b", "x"))
+    V(
+        "operatorname_d_trailing",
+        "The earlier trailing-operand form \\operatorname{D}_{x}(u, a, b) reads as partial.",
+        dP,
+        md,
+        [(r"\partial_{x}(u, a, b)", r"\operatorname{D}_{x}(u, a, b)")],
+    )
+    V(
+        "op_d_trailing_typst",
+        'The earlier trailing-operand form op("D")_(x)(u, a, b) reads as partial.',
+        dP,
+        typ,
+        [("partial_(x)(u, a, b)", 'op("D")_(x)(u, a, b)')],
+    )
+    dG = expr_doc(op("grad", "x"), ("x",))
+    V(
+        "grad_call_form",
+        "grad in the call form reads as the same node as \\nabla x.",
+        dG,
+        md,
+        [(r"\nabla x", r"\operatorname{grad}(x)")],
     )
     V(
         "dot_latex",
@@ -1636,7 +1758,7 @@ def documents(g):
         document(
             models={
                 "M": box_model(
-                    expression_templates={
+                    operators={
                         "loss": {"params": ["r", "v"], "body": op("-", op("*", "r", "v"))}
                     }
                 )
@@ -1650,11 +1772,31 @@ def documents(g):
         document(
             models={
                 "M": box_model(
-                    expression_templates={
+                    operators={
                         "loss": {
                             "params": ["r", "v"],
                             "body": op("-", op("*", "r", "v")),
                             "description": "First-order loss.",
+                        }
+                    }
+                )
+            }
+        ),
+    )
+    P(
+        "definition_defines_units",
+        "A definition with defines and a unit expression (esm-spec 9.6.1): both are "
+        "attributes of the template container, defines a string and the unit expression "
+        "its JSON value.",
+        document(
+            models={
+                "M": box_model(
+                    operators={
+                        "ddx_central": {
+                            "params": ["f", "d"],
+                            "body": op("/", op("-", "f", "f"), "d"),
+                            "defines": "partial",
+                            "units": op("/", "f", "d"),
                         }
                     }
                 )
@@ -1668,7 +1810,7 @@ def documents(g):
         document(
             models={
                 "M": box_model(
-                    expression_templates={
+                    operators={
                         "upwind": {
                             "params": ["f"],
                             "match": op("D", "f", wrt="x"),
@@ -1686,7 +1828,7 @@ def documents(g):
         document(
             metaparameters={"N": {"type": "integer", "default": 8, "description": "cell count"}},
             index_sets={"cells": {"kind": "interval", "size": "N"}},
-            expression_templates={
+            operators={
                 "n_cells": {"params": [], "body": "N"},
                 "scale_by_n": {
                     "params": ["f"],
@@ -2037,6 +2179,16 @@ def refusals(g):
             "removed_op",
             [(r"\operatorname{sign}(x)", r"\operatorname{%s}(x)" % name.replace("_", r"\_"))],
         )
+    gr = expr_doc(op("grad", op("^", "x", 2)), ("x",))
+    R(
+        "nabla_power_operand",
+        "A nabla form's operand is read at the level of a power base, so \\nabla x^{2} is "
+        "refused (grad of a power prints \\nabla \\left(x^{2}\\right)).",
+        gr,
+        md,
+        "parse_error",
+        [(r"\nabla\left(x^{2}\right)", r"\nabla x^{2}")],
+    )
     R(
         "removed_fn_typst",
         "A removed operator in the Typst call form.",
