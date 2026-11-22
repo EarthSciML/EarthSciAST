@@ -867,7 +867,7 @@ func applyRule3(comp map[string]any, L *lowering, transforms []map[string]any) e
 		}
 		sort.Strings(distinct)
 		decl, _ := L.named[t].(map[string]any)
-		if len(distinct) == 1 && !(exposed[t] && distinct[0] != canonicalCompact(decl["body"])) {
+		if len(distinct) == 1 && (!exposed[t] || distinct[0] == canonicalCompact(decl["body"])) {
 			for _, k := range keysT {
 				final[k] = t
 			}

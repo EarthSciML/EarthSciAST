@@ -543,7 +543,7 @@ func matchPattern(pattern, node any, params map[string]struct{}, bindings map[st
 	if ns, ok := node.(string); ok && bv.isParam(ns) {
 		ps, pIsStr := pattern.(string)
 		_, pIsMeta := params[ps]
-		if !(pIsStr && pIsMeta) {
+		if !pIsStr || !pIsMeta {
 			lit, has := bv.lit[ns]
 			if !has {
 				return false

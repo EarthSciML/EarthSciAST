@@ -607,8 +607,7 @@ func expandLibraryEnumCalls(library map[string]any, named *orderedMap, own map[s
 	}
 
 	var instance func(name string, syms map[string]string) (instKey, error)
-	var repoint func(body any, callerParams map[string]bool, lits map[string]string) (any, map[uintptr]libRef, error)
-	repoint = func(body any, callerParams map[string]bool, lits map[string]string) (any, map[uintptr]libRef, error) {
+	repoint := func(body any, callerParams map[string]bool, lits map[string]string) (any, map[uintptr]libRef, error) {
 		refs := map[uintptr]libRef{}
 		memo := map[uintptr]any{}
 		var walk func(x any) (any, bool, error)
@@ -767,7 +766,7 @@ func expandLibraryEnumCalls(library map[string]any, named *orderedMap, own map[s
 	rename := func(body any, refs map[uintptr]libRef) any {
 		irefs := make(map[uintptr]instRef, len(refs))
 		for p, r := range refs {
-			irefs[p] = instRef{node: r.node, key: r.key}
+			irefs[p] = instRef(r)
 		}
 		return repointRefs(body, irefs, final)
 	}
