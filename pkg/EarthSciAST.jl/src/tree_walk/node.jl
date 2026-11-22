@@ -289,8 +289,20 @@ function _const_gather_node(
     )
 end
 
-# The `_ConstGatherArray` of a const array `A` (registry name `name`).
+# The `_ConstGatherArray` of a const array `A` (registry name `name`). Inside a
+# build it is the build's one wrapper of `A` under `name`
+# (`_BuildState.const_tables`), so every gather of `A` — each cell's, each call
+# argument's — holds the same payload object. The wrapper is a function of `A`
+# and `name` alone (its values, extents and per-axis boundary policy), and a
+# const array is not written while a build runs, so sharing it changes no read.
 function _const_gather_payload(A::AbstractArray, name::AbstractString)
+    tabs = _build_ctx() === nothing ? nothing : _build_state().const_tables
+    tabs === nothing && return _new_const_gather_payload(A, name)
+    byname = get!(Dict{String, _ConstGatherArray}, tabs, A)::Dict{String, _ConstGatherArray}
+    return get!(() -> _new_const_gather_payload(A, name), byname, String(name))
+end
+
+function _new_const_gather_payload(A::AbstractArray, name::AbstractString)
     sz = size(A)
     # Share the source array's buffer rather than copy it: an unrolled
     # contraction lowers one gather per term, so a copy per call is
