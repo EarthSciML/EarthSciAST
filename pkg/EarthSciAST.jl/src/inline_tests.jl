@@ -605,12 +605,12 @@ function _ephemeral_injected_file(
         haskey(comps, String(mname)) || continue
         comp = comps[String(mname)]
         comp isa AbstractDict || continue
-        existing = get(comp, "expression_template_imports", nothing)
+        existing = get(comp, "operator_imports", nothing)
         base = existing === nothing ? Any[] : Any[e for e in existing]
         for e in imports
             push!(base, _to_native_json(e))
         end
-        comp["expression_template_imports"] = base
+        comp["operator_imports"] = base
         injected = true
         break
     end

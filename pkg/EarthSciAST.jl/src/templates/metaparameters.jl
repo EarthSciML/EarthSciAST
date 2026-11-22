@@ -95,7 +95,7 @@ const _STRUCTURAL_FIELDS = (
     "kind" => :protected,
     "description" => :protected,
     "name" => :protected,
-    "expression_template_imports" => :protected,
+    "operator_imports" => :protected,
     "metaparameters" => :protected,
     "only" => :protected,
     # `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
@@ -204,7 +204,7 @@ const _META_SUBST_SKIP_KEYS = Set{String}(
 const _NAME_KEYED_MAP_KEYS = Set{String}(
     [
         "variables", "species", "parameters", "guesses", "subsystems",
-        "expression_templates", "ranges", "bindings", "config", "coords",
+        "operators", "ranges", "bindings", "config", "coords",
         "initial_conditions", "parameter_overrides", "pinned_coords", "map",
         "rename", "rebind", "index_set_rename", "url_substitutions", "where",
     ]
@@ -701,7 +701,7 @@ function _substitute_closed_metaparams!(
     )
     isempty(values) && return doc_isets
     for (_, _, comp) in _components(root), k in collect(keys(comp))
-        if k == "expression_templates" && _is_object(comp[k])
+        if k == "operators" && _is_object(comp[k])
             tpl = comp[k]
             for (tn, td) in collect(pairs(tpl))
                 tpl[tn] = _substitute_metaparams_decl(td, values)

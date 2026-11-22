@@ -597,19 +597,6 @@ function _coerce_esm_file(data::Any, document_base::Union{Nothing, AbstractStrin
         Dict{String, DataSource}(string(k) => coerce_data_source(v) for (k, v) in pairs(dl))
     end
 
-    # The format has no top-level `operators` block (esm-spec §9 closure;
-    # `docs/content/rfcs/closed-function-registry.md` §6). A document carrying
-    # one is refused.
-    if _raw_get(data, "operators", nothing) !== nothing
-        throw(
-            ParseError(
-                "`operators` block is not valid in v0.3.0+ " *
-                    "(removed by esm-spec §9 closure). Migrate per " *
-                    "`docs/content/rfcs/closed-function-registry.md` §6."
-            )
-        )
-    end
-
     if _raw_get(data, "registered_functions", nothing) !== nothing
         throw(
             ParseError(
@@ -672,7 +659,7 @@ function _coerce_esm_file(data::Any, document_base::Union{Nothing, AbstractStrin
             )
             comps_raw === nothing && continue
             for (k, v) in pairs(comps_raw)
-                tpl = _raw_get(v, "expression_templates", nothing)
+                tpl = _raw_get(v, "operators", nothing)
                 tpl === nothing && continue
                 # Native String-keyed form: the registry is probed with String
                 # names (`haskey(reg, name)`) and read with `_raw_get`, and the
@@ -859,7 +846,7 @@ function _coerce_subsystem_entry(name::String, v)
         # (`_resolve_mount_edge`) threads them into the referenced document's load and the
         # §9.6.3 fixpoint consumes them before the mounted form is set.
         injected = Any[]
-        imports_raw = _raw_get(v, "expression_template_imports", nothing)
+        imports_raw = _raw_get(v, "operator_imports", nothing)
         if imports_raw !== nothing
             injected = Any[_to_native_json(e) for e in imports_raw]
         end

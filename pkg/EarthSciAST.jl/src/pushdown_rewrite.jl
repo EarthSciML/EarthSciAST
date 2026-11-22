@@ -987,10 +987,10 @@ end
 # rather than overwritten.
 function _pd_register_derived!(model::AbstractDict, derived::AbstractDict, reg)
     isempty(derived) && return nothing
-    blk = get(model, "expression_templates", nothing)
+    blk = get(model, "operators", nothing)
     if !(blk isa AbstractDict)
         blk = OrderedDict{String, Any}()
-        model["expression_templates"] = blk
+        model["operators"] = blk
     end
     for (k, v) in derived
         old = get(blk, k, nothing)

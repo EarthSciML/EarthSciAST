@@ -62,12 +62,12 @@ reject_template_imports_pre_v08(raw_data) =
 # gate reports them.
 function _template_import_offences(raw_data)
     offences = String[]
-    _raw_haskey(raw_data, "expression_templates") && push!(offences, "/expression_templates")
+    _raw_haskey(raw_data, "operators") && push!(offences, "/expression_templates")
     _raw_haskey(raw_data, "metaparameters") && push!(offences, "/metaparameters")
-    _raw_haskey(raw_data, "expression_template_imports") &&
+    _raw_haskey(raw_data, "operator_imports") &&
         push!(offences, "/expression_template_imports")
     for (compkind, cname, comp) in _components(raw_data)
-        _raw_haskey(comp, "expression_template_imports") &&
+        _raw_haskey(comp, "operator_imports") &&
             push!(offences, "/$compkind/$cname/expression_template_imports")
     end
     return offences
@@ -81,7 +81,7 @@ True when `raw` has the template-library-file FORM (top-level
 systems / loaders / coupling / domain) is checked separately at import edges.
 """
 _is_template_library_doc(raw) =
-    _is_object(raw) && _raw_haskey(raw, "expression_templates")
+    _is_object(raw) && _raw_haskey(raw, "operators")
 
 """
     _reject_impure_template_library(raw_data)
@@ -715,7 +715,7 @@ phase, and the per-component phase — they differ only in `origin`.
 """
 function _collect_own_templates(raw, origin::String)::OrderedDict{String, Any}
     own = OrderedDict{String, Any}()
-    tpl = _raw_get(raw, "expression_templates")
+    tpl = _raw_get(raw, "operators")
     if tpl !== nothing && _is_object(tpl)
         for (n, d) in pairs(tpl)
             own[string(n)] = _to_ordered(d)
@@ -980,7 +980,7 @@ function _process_library(
         origin::String, src::_DocumentSource
     )::_TemplateScope
     scope = _TemplateScope()
-    imports = _raw_get(raw, "expression_template_imports")
+    imports = _raw_get(raw, "operator_imports")
     if imports !== nothing && _is_array(imports)
         for entry in imports
             sub = _resolve_import_entry(entry, base, stack, origin, src)
@@ -1209,12 +1209,12 @@ end
 function _has_import_machinery(raw)
     _is_object(raw) || return false
     (
-        _raw_haskey(raw, "expression_templates") ||
+        _raw_haskey(raw, "operators") ||
             _raw_haskey(raw, "metaparameters") ||
-            _raw_haskey(raw, "expression_template_imports")
+            _raw_haskey(raw, "operator_imports")
     ) && return true
     for (_, _, comp) in _components(raw)
-        _raw_haskey(comp, "expression_template_imports") && return true
+        _raw_haskey(comp, "operator_imports") && return true
     end
     return false
 end
@@ -1230,7 +1230,7 @@ function _resolve_root_templates!(
         doc_meta::OrderedDict{String, Any}, src::_DocumentSource
     )::OrderedDict{String, Any}
     topscope = _TemplateScope()
-    imports = get(root, "expression_template_imports", nothing)
+    imports = get(root, "operator_imports", nothing)
     if imports !== nothing && _is_array(imports)
         for entry in imports
             sub = _resolve_import_entry(entry, base, stack, "document", src)
@@ -1254,7 +1254,7 @@ function _resolve_component_imports!(
         doc_meta::OrderedDict{String, Any}, src::_DocumentSource
     )
     for (compkind, cname, comp) in _components(root)
-        imports = get(comp, "expression_template_imports", nothing)
+        imports = get(comp, "operator_imports", nothing)
         imports === nothing && continue
         cscope = _TemplateScope()
         corigin = "$compkind.$cname"
@@ -1269,8 +1269,8 @@ function _resolve_component_imports!(
         # The effective sequence (imports depth-first post-order, then
         # local declarations) becomes the component's template block; the
         # OrderedDict key order IS the §9.6.3 declaration order.
-        comp["expression_templates"] = cscope.templates
-        delete!(comp, "expression_template_imports")
+        comp["operators"] = cscope.templates
+        delete!(comp, "operator_imports")
     end
     return
 end
@@ -1370,8 +1370,8 @@ function _resolve_template_machinery(
     # working copies. Restored verbatim in phase 7 (esm-spec §9.6.4 rule 5 — the
     # rationale is there). `deepcopy` because the folding phases rewrite these
     # sub-trees IN PLACE: an aliased "snapshot" would emit the folded form.
-    orig_templates = haskey(root, "expression_templates") ?
-        deepcopy(root["expression_templates"]) : nothing
+    orig_templates = haskey(root, "operators") ?
+        deepcopy(root["operators"]) : nothing
     orig_metaparams = haskey(root, "metaparameters") ?
         deepcopy(root["metaparameters"]) : nothing
 
@@ -1383,7 +1383,7 @@ function _resolve_template_machinery(
         end
     end
 
-    is_library = haskey(root, "expression_templates")
+    is_library = haskey(root, "operators")
     top_templates = is_library ?
         _resolve_root_templates!(
             root, base, stack, doc_isets, doc_meta, src
@@ -1421,11 +1421,11 @@ function _resolve_template_machinery(
     if is_library
         _check_template_body_graph(top_templates, "document")
     end
-    delete!(root, "expression_template_imports")
+    delete!(root, "operator_imports")
     if orig_templates === nothing
-        delete!(root, "expression_templates")
+        delete!(root, "operators")
     else
-        root["expression_templates"] = orig_templates
+        root["operators"] = orig_templates
     end
     if orig_metaparams === nothing
         delete!(root, "metaparameters")
@@ -1463,7 +1463,7 @@ function _has_scope_injection(raw, injected)::Bool
     coupling = _raw_get(raw, "coupling")
     coupling isa AbstractVector || return false
     for entry in coupling
-        _is_object(entry) && _raw_haskey(entry, "expression_template_imports") && return true
+        _is_object(entry) && _raw_haskey(entry, "operator_imports") && return true
     end
     return false
 end
@@ -1472,12 +1472,12 @@ end
 # `expression_template_imports` (esm-spec §9.7.10 merge order: the target's own
 # imports first, then the injected list). `comp` is a mutable native tree.
 function _append_component_imports!(comp::AbstractDict, imports)
-    existing = get(comp, "expression_template_imports", nothing)
+    existing = get(comp, "operator_imports", nothing)
     base = existing === nothing ? Any[] : Any[e for e in existing]
     for e in imports
         push!(base, _to_ordered(e))
     end
-    comp["expression_template_imports"] = base
+    comp["operator_imports"] = base
     return comp
 end
 
@@ -1577,7 +1577,7 @@ function _apply_coupling_injections!(root::AbstractDict)
     _is_top(d, k) = d isa AbstractDict && haskey(d, k)
     for entry in coupling
         entry isa AbstractDict || continue
-        inj = get(entry, "expression_template_imports", nothing)
+        inj = get(entry, "operator_imports", nothing)
         inj === nothing && continue
         inj isa AbstractDict || throw(
             ExpressionTemplateError(
@@ -1628,7 +1628,7 @@ function _apply_coupling_injections!(root::AbstractDict)
             )
             _append_component_imports!(comp, imports)
         end
-        delete!(entry, "expression_template_imports")
+        delete!(entry, "operator_imports")
     end
     return root
 end

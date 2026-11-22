@@ -353,7 +353,7 @@ references, materialize each referenced `match` rule without its `match`,
 function _apply_rule3!(comp, L::_Lowering, transforms)
     st = _Rule3State(L)
     site_refs = IdDict{Any, String}()
-    fields = String[string(k) for k in keys(comp) if string(k) != "expression_templates"]
+    fields = String[string(k) for k in keys(comp) if string(k) != "operators"]
     sites = Any[(comp, k) for k in fields]
     for e in transforms
         push!(sites, (e, "transform"))
@@ -380,7 +380,7 @@ function _apply_rule3!(comp, L::_Lowering, transforms)
         push!(get!(by_template, st.done[k].name, String[]), k)
     end
     final = Dict{String, String}()
-    block = get!(comp, "expression_templates") do
+    block = get!(comp, "operators") do
         OrderedDict{String, Any}()
     end
     taken = Set{String}(keys(L.named))

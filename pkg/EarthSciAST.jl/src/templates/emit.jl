@@ -30,10 +30,10 @@ function expand_document(loaded)
     for (compkind, cname, comp) in _components(root)
         named = comp_named[(compkind, cname)]
         for k in collect(keys(comp))
-            (k == "expression_templates" || k == "expression_template_imports") && continue
+            (k == "operators" || k == "operator_imports") && continue
             comp[k] = _expand_all(comp[k], named, "$compkind.$cname.$k")
         end
-        haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
+        haskey(comp, "operators") && delete!(comp, "operators")
     end
 
     for (i, entry, tr, comp_name) in _variable_map_transforms(root)
@@ -82,7 +82,7 @@ imported/derived templates are materialized instead.
 function _authored_template_names(raw_source)::Dict{String, Vector{String}}
     authored = Dict{String, Vector{String}}()
     for (compkind, cname, comp) in _components(raw_source)
-        tpl = _raw_get(comp, "expression_templates")
+        tpl = _raw_get(comp, "operators")
         (tpl !== nothing && _is_object(tpl)) || continue
         authored["$compkind.$cname"] = String[
             string(n) for (n, d) in pairs(tpl) if _is_object(d)
@@ -121,8 +121,8 @@ function _materialize_components!(root, authored::Dict{String, Vector{String}})
         refnames = Set{String}(pop!(received, cname, String[]))
         for (k, v) in comp
             (
-                string(k) == "expression_templates" ||
-                    string(k) == "expression_template_imports"
+                string(k) == "operators" ||
+                    string(k) == "operator_imports"
             ) && continue
             for r in _collect_apply_names!(String[], v)
                 push!(refnames, r)
@@ -146,15 +146,15 @@ function _materialize_components!(root, authored::Dict{String, Vector{String}})
         end
 
         if isempty(emit_block)
-            haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
+            haskey(comp, "operators") && delete!(comp, "operators")
         else
-            comp["expression_templates"] = emit_block
+            comp["operators"] = emit_block
             blocks[key] = emit_block
         end
-        haskey(comp, "expression_template_imports") &&
-            delete!(comp, "expression_template_imports")
+        haskey(comp, "operator_imports") &&
+            delete!(comp, "operator_imports")
     end
-    haskey(root, "expression_template_imports") && delete!(root, "expression_template_imports")
+    haskey(root, "operator_imports") && delete!(root, "operator_imports")
     return (blocks, bump)
 end
 
@@ -317,7 +317,7 @@ function _emit_write(io::IO, x, indent::Int; preserve::Bool = false)
             print(io, pad1, JSON3.write(string(k)), ": ")
             _emit_write(
                 io, x[k], indent + 1;
-                preserve = (string(k) == "expression_templates")
+                preserve = (string(k) == "operators")
             )
             i < length(ks) && print(io, ",")
             print(io, "\n")

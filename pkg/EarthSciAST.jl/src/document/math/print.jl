@@ -301,7 +301,7 @@ const CORE_OPS = Set{String}(
         "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh",
         "acosh", "atanh", "atan2", "min", "max", "D", "ic", "Pre", "enum", "const", "faq",
         "makearray", "index", "broadcast", "reshape", "transpose", "concat",
-        "apply_expression_template",
+        "apply_operator",
     ]
 )
 
@@ -1393,7 +1393,7 @@ function pr(c::Ctx, e)
     elseif n == 4
         if empty_args()
             bs, nm = field(2, "bindings"), field(3, "name")
-            if bs isa JObj && nm isa String && str_at(4, "op", "apply_expression_template")
+            if bs isa JObj && nm isa String && str_at(4, "op", "apply_operator")
                 return pr_template(c, nm, bs.kvs, kvs)
             end
         end

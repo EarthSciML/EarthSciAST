@@ -21,7 +21,7 @@ stable §10.11 codes.
 # Payload keys a coupling-library file MUST NOT declare (esm-spec §10.9).
 const _COUPLING_LIBRARY_FORBIDDEN_KEYS = (
     "models", "reaction_systems", "data_sources", "domain",
-    "index_sets", "metaparameters", "expression_templates",
+    "index_sets", "metaparameters", "operators",
 )
 
 # Coupling-entry types a library edge MAY carry (esm-spec §10.9).
@@ -76,7 +76,7 @@ function _rewrite_expr!(expr, fn)
         end
         # `apply_expression_template` bindings VALUES are free-variable targets
         # (esm-spec §10.10.2) — Expressions in their own right.
-        if get(expr, "op", nothing) == "apply_expression_template" &&
+        if get(expr, "op", nothing) == "apply_operator" &&
                 haskey(expr, "bindings") && expr["bindings"] isa AbstractDict
             b = expr["bindings"]
             for k in collect(keys(b))
@@ -368,7 +368,7 @@ function _validate_library(lib, ref::AbstractString)
                 )
             )
         end
-        if etype == "callback" || _raw_haskey(edge, "expression_template_imports")
+        if etype == "callback" || _raw_haskey(edge, "operator_imports")
             throw(
                 ExpressionTemplateError(
                     ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,

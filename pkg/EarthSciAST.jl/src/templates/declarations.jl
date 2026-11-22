@@ -212,7 +212,7 @@ end
 # A component's `expression_templates` block as `name => raw declaration`
 # (empty when it declares none).
 function _component_templates(comp)::Dict{String, Any}
-    tpl = _raw_get(comp, "expression_templates")
+    tpl = _raw_get(comp, "operators")
     _is_object(tpl) || return Dict{String, Any}()
     return Dict{String, Any}(string(n) => d for (n, d) in pairs(tpl))
 end

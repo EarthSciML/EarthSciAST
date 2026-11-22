@@ -108,12 +108,12 @@ end
 # at the root or on a model / reaction system)?
 function _has_template_imports(doc)::Bool
     _is_object(doc) || return false
-    _raw_get(doc, "expression_template_imports", nothing) === nothing || return true
+    _raw_get(doc, "operator_imports", nothing) === nothing || return true
     for section in ("models", "reaction_systems")
         comps = _raw_get(doc, section, nothing)
         _is_object(comps) || continue
         for (_, comp) in pairs(comps)
-            _raw_get(comp, "expression_template_imports", nothing) === nothing || return true
+            _raw_get(comp, "operator_imports", nothing) === nothing || return true
         end
     end
     return false
@@ -387,7 +387,7 @@ end
 function _expression_template_offences(doc)
     offences = String[]
     for (compkind, cname, comp) in _components(doc)
-        _raw_haskey(comp, "expression_templates") &&
+        _raw_haskey(comp, "operators") &&
             push!(offences, "/$compkind/$cname/expression_templates")
     end
     _find_apply_paths!(offences, doc, "")
@@ -604,7 +604,7 @@ function _lower_and_coerce(
         mount_declared::Union{Nothing, AbstractSet{String}} = nothing,
         source::_DocumentSource = _DocumentSource()
     )::EsmFile
-    raw_templates = _verbatim_decl(raw_data, "expression_templates")
+    raw_templates = _verbatim_decl(raw_data, "operators")
     raw_metaparams = _verbatim_decl(raw_data, "metaparameters")
     raw_coordinates = _verbatim_decl(raw_data, "coordinates")
 
@@ -629,7 +629,7 @@ function _lower_and_coerce(
         authored = _authored_template_names(machinery_input)
         blocks, bump = _materialize_components!(root, authored)
         for (_, _, comp) in _components(root)
-            delete!(comp, "expression_templates")
+            delete!(comp, "operators")
         end
         isempty(blocks) || (comp_tpls = OrderedDict{String, Any}(k => v for (k, v) in blocks))
         bump && (esm_stamp = _esm_stamp_floor(get(root, "esm", nothing)))
@@ -737,6 +737,7 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
         )
     end
     _reject_removed_2_0_0!(doc)
+    _rewrite_old_spellings!(doc)
     _rewrite_deprecated_ops!(doc)
     # Only on the authored document's own pass: the post-inlining pass
     # (`gate = false`) sees the same models again and must not warn twice.
@@ -807,6 +808,165 @@ function _warn_deprecated_system_kind(doc)::Vector{String}
         "Declared at: ", join(sites, ", "), "."
     )
     return sites
+end
+
+# ---------------------------------------------------------------------------
+# esm 2.4.0 "one operator type": old spellings read at the wire boundary
+# (esm-spec §9.6.12 "Old names (no refusal)", §4.2 "Reading earlier documents")
+# ---------------------------------------------------------------------------
+
+# Old field spelling → new (warning `deprecated_field`).
+const _DEPRECATED_FIELDS = (
+    "expression_templates" => "operators",
+    "expression_template_imports" => "operator_imports",
+)
+# Old op spelling of the reference node (warning `deprecated_op`).
+const _OLD_APPLY_OP = "apply_expression_template"
+# The other spellings of the spatial derivative (warning `deprecated_op`).
+const _PARTIAL_SPELLINGS = ("δ", "∂")
+
+# Objects whose keys are author-chosen names, not fields: a field spelling is
+# never renamed among them (a variable may be called `expression_templates`).
+const _OLD_SPELLING_NAME_MAPS = union(
+    _NAME_KEYED_MAP_KEYS,
+    Set{String}([
+        "models", "reaction_systems", "data_sources", "index_sets", "enums",
+        "metaparameters", "domains", "coupling_roles",
+    ]),
+)
+
+"""
+    _rewrite_old_spellings!(doc) -> Vector{String}
+
+esm 2.4.0 (esm-spec §9.6.12, §4.2): read the spellings an earlier document
+wrote, in place, on every document a load touches, never refusing one:
+
+- the field `expression_templates` as `operators` and
+  `expression_template_imports` as `operator_imports` (warning
+  `deprecated_field`), wherever a field of that name appears (never among the
+  keys of a name-keyed map);
+- the op `apply_expression_template` as `apply_operator`, and the spatial
+  derivative — a `D` whose `wrt` is present and is not the literal `"t"`, and
+  the spellings `δ` and `∂` — as `partial`, every other field kept (warning
+  `deprecated_op`). A `D` whose `wrt` is one of the enclosing definition's
+  `params` is left as written: it is decided per definition instance
+  (§9.6.4 rule 3; `_instance_partial!`).
+
+One warning per code per document, naming each site as `<pointer> (<old>)`.
+Idempotent. Returns the sites (fields first, then ops).
+"""
+function _rewrite_old_spellings!(doc)::Vector{String}
+    fsites = String[]
+    osites = String[]
+    seen = IdDict{Any, Nothing}()
+    _old_spellings_walk!(doc, "", false, nothing, fsites, osites, seen)
+    isempty(fsites) || @warn string(
+        "deprecated_field: the fields `expression_templates` and ",
+        "`expression_template_imports` are read as `operators` and ",
+        "`operator_imports` (esm 2.4.0, esm-spec §9.6.12). Read at: ",
+        join(fsites, ", "), "."
+    )
+    isempty(osites) || @warn string(
+        "deprecated_op: `apply_expression_template` is read as `apply_operator`, ",
+        "and a spatial `D` (and `δ`, `∂`) as `partial` (esm 2.4.0, esm-spec §4.2, ",
+        "§9.6.12). Rewritten at: ", join(osites, ", "), "."
+    )
+    return vcat(fsites, osites)
+end
+
+# Rename `old` to `new` among the keys of `node`, keeping key order.
+function _rename_field_inplace!(node, old::String, new::String)
+    ok = _node_key(node, old)
+    ok === nothing && return false
+    nk = _node_key(node, new)
+    if nk !== nothing
+        # Both spellings in one object: nothing to choose between silently.
+        throw(
+            ParseError(
+                "[E_DEPRECATED_FIELD] an object carries both `$old` and its esm-2.4.0 " *
+                    "spelling `$new`; write only `$new` (esm-spec §9.6.12).";
+                code = ERROR_CODES.OPERATOR_INVALID_DEFINITION
+            )
+        )
+    end
+    entries = collect(pairs(node))
+    empty!(node)
+    for (k, v) in entries
+        if k == ok
+            node[k isa Symbol ? Symbol(new) : new] = v
+        else
+            node[k] = v
+        end
+    end
+    return true
+end
+
+function _old_spellings_walk!(
+        node, at::String, namemap::Bool, params::Union{Nothing, Set{String}},
+        fsites::Vector{String}, osites::Vector{String}, seen
+    )
+    if _is_object(node)
+        haskey(seen, node) && return nothing
+        seen[node] = nothing
+        if !namemap
+            for (old, new) in _DEPRECATED_FIELDS
+                _rename_field_inplace!(node, old, new) &&
+                    push!(fsites, string(_pointer(at, new), " (", old, ")"))
+            end
+            opk = _node_key(node, "op")
+            if opk !== nothing && node[opk] isa AbstractString
+                op = String(node[opk])
+                if op == _OLD_APPLY_OP
+                    node[opk] = APPLY_EXPRESSION_TEMPLATE_OP
+                    push!(osites, string(at, " (", op, ")"))
+                elseif op in _PARTIAL_SPELLINGS
+                    node[opk] = "partial"
+                    push!(osites, string(at, " (", op, ")"))
+                elseif op == "D"
+                    wk = _node_key(node, "wrt")
+                    w = wk === nothing ? nothing : node[wk]
+                    if w !== nothing && w != "t" &&
+                            !(w isa AbstractString && params !== nothing && String(w) in params)
+                        node[opk] = "partial"
+                        push!(osites, string(at, " (D)"))
+                    end
+                end
+            end
+        end
+        for (k, v) in pairs(node)
+            _is_json_leaf(v) && continue
+            ks = string(k)
+            if !namemap && ks == "operators" && _is_object(v)
+                # A definition block: each entry's own params decide a `D`
+                # whose `wrt` names one of them.
+                haskey(seen, v) && continue
+                seen[v] = nothing
+                for (dn, dv) in pairs(v)
+                    _is_json_leaf(dv) && continue
+                    p = _is_object(dv) ? _raw_get(dv, "params") : nothing
+                    P = (p !== nothing && _is_array(p)) ?
+                        Set{String}(String(x) for x in p if x isa AbstractString) : nothing
+                    _old_spellings_walk!(
+                        dv, _pointer(at, ks, string(dn)), false, P, fsites, osites, seen
+                    )
+                end
+                continue
+            end
+            _old_spellings_walk!(
+                v, _pointer(at, ks), !namemap && ks in _OLD_SPELLING_NAME_MAPS,
+                params, fsites, osites, seen
+            )
+        end
+    elseif _is_array(node)
+        _may_hold_object(node) || return nothing
+        haskey(seen, node) && return nothing
+        seen[node] = nothing
+        for (i, v) in enumerate(node)
+            _is_json_leaf(v) && continue
+            _old_spellings_walk!(v, string(at, "/", i - 1), false, params, fsites, osites, seen)
+        end
+    end
+    return nothing
 end
 
 """

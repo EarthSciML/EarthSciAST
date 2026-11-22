@@ -22,7 +22,7 @@
 # the registry the build resolves them against. A rewrite-target op that
 # survives into an evaluation position is refused later (`unlowered_operator`).
 
-const APPLY_EXPRESSION_TEMPLATE_OP = "apply_expression_template"
+const APPLY_EXPRESSION_TEMPLATE_OP = "apply_operator"
 
 # Every expansion of a template reference made in this process (raw or typed),
 # and the `:tpl_expanded` build count: the explicit expansion utilities
@@ -768,7 +768,7 @@ function _has_template_machinery(raw_data)
     raw_data === nothing && return false
     _is_object(raw_data) || return false
     for (_, _, comp) in _components(raw_data)
-        tpl = _raw_get(comp, "expression_templates")
+        tpl = _raw_get(comp, "operators")
         _is_object(tpl) && !isempty(tpl) && return true
     end
     return _has_apply_op(raw_data)
@@ -799,7 +799,7 @@ function _validate_makearray_regions(x, path::String = "")
     _visit_json(x; path = path) do key, n, ptr
         # Template bodies and matches are pre-substitution trees, whose bounds
         # may carry metaparameter names or fold later (esm-spec §9.7.6).
-        key == "expression_templates" && return false
+        key == "operators" && return false
         _is_object(n) || return true
         op = _raw_get(n, "op")
         (op !== nothing && string(op) == "makearray") || return true
@@ -962,19 +962,19 @@ function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
     mounts = Tuple{String, Any}[]          # (subsystem path, subsystem)
     _collect_mounted_blocks!(mounts, comp, "")
     isempty(mounts) && return comp
-    newblock, rn = _merge_mounted_blocks(_raw_get(comp, "expression_templates"), cname, mounts)
+    newblock, rn = _merge_mounted_blocks(_raw_get(comp, "operators"), cname, mounts)
     # `comp`'s own sites, outside the mount points.
     if rn !== nothing
         for k in collect(keys(comp))
-            k in ("expression_templates", "subsystems") && continue
+            k in ("operators", "subsystems") && continue
             comp[k] = _rename_apply_refs(comp[k], rn)
         end
         _rename_outside_mounts!(comp, rn)
     end
     for (_, sub) in mounts
-        delete!(sub, "expression_templates")
+        delete!(sub, "operators")
     end
-    comp["expression_templates"] = newblock
+    comp["operators"] = newblock
     return comp
 end
 
@@ -997,7 +997,7 @@ function _merge_mounted_blocks(own, cname::String, mounts)
     )
     for (path, sub) in mounts
         blocks["models.$path"] = OrderedDict{String, Any}(
-            string(n) => d for (n, d) in pairs(_raw_get(sub, "expression_templates"))
+            string(n) => d for (n, d) in pairs(_raw_get(sub, "operators"))
                 if _raw_get(d, "match") === nothing
         )
     end
@@ -1006,7 +1006,7 @@ function _merge_mounted_blocks(own, cname::String, mounts)
         rm = get(rename, path, nothing)
         rm === nothing && continue
         for k in collect(keys(sub))
-            k == "expression_templates" && continue
+            k == "operators" && continue
             sub[k] = _rename_apply_refs(sub[k], rm)
         end
     end
@@ -1031,7 +1031,7 @@ function _collect_mounted_blocks!(out, node, prefix::String)
     for (k, sub) in pairs(subs)
         _is_object(sub) || continue
         path = isempty(prefix) ? string(k) : "$prefix.$(k)"
-        blk = _raw_get(sub, "expression_templates")
+        blk = _raw_get(sub, "operators")
         if _is_object(blk)
             push!(out, (path, sub))
         else
@@ -1048,7 +1048,7 @@ function _rename_outside_mounts!(node, rn)
     _is_object(subs) || return
     for (_, sub) in pairs(subs)
         _is_object(sub) || continue
-        _is_object(_raw_get(sub, "expression_templates")) && continue
+        _is_object(_raw_get(sub, "operators")) && continue
         for k in collect(keys(sub))
             k == "subsystems" && continue
             sub[k] = _rename_apply_refs(sub[k], rn)
@@ -1127,7 +1127,7 @@ function lower_expression_templates(raw_data)
         # Static shape environment for `where` constraint evaluation
         # (esm-spec §9.6.1): declared variable shapes only.
         shape_env = _component_shape_env(comp)
-        tplraw = get(comp, "expression_templates", nothing)
+        tplraw = get(comp, "operators", nothing)
         # `named`       — every template keyed by name, consulted by
         #                 `apply_expression_template` (order-independent).
         # `match_rules` — the auto-applied `match` rules, in template
@@ -1184,7 +1184,7 @@ function lower_expression_templates(raw_data)
         # to its rule (constraint 7); references are leaves for matching and
         # the walk descends into their bindings (§9.6.4 rule 4).
         for k in collect(keys(comp))
-            k == "expression_templates" && continue
+            k == "operators" && continue
             comp[k], _ = _rewrite_to_fixpoint(comp[k], L, "$cscope.$k")
         end
         push!(lowerings, (comp, L, Any[]))
@@ -1213,7 +1213,7 @@ function lower_expression_templates(raw_data)
         # Call-site checks on surviving references (§9.6.9): unknown name /
         # bindings mismatch, against the registry as rule 3 left it.
         for k in collect(keys(comp))
-            k == "expression_templates" && continue
+            k == "operators" && continue
             _check_surviving_refs(comp[k], L.named, "$(L.scope).$k")
         end
         for entry in transforms

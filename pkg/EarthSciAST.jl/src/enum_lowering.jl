@@ -115,7 +115,7 @@ end
 _lower_mounted_enum_ops(node, enums) =
     _map_json(node) do key, n
     _is_object(n) || return _JSON_DESCEND
-    key == "expression_templates" && return _lower_template_body_enums(n, enums)
+    key == "operators" && return _lower_template_body_enums(n, enums)
     _raw_get(n, "op") == "enum" && return _lower_enum_op(n, enums, Set{String}())
     return _JSON_DESCEND
 end

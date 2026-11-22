@@ -64,7 +64,7 @@ function _collect_mount_declared_metaparameters(
     # The §9.7.2 import edges one scope carries, when asked for.
     function visit_imports!(holder)
         (follow_imports && _is_object(holder)) || return
-        entries = _raw_get(holder, "expression_template_imports")
+        entries = _raw_get(holder, "operator_imports")
         entries isa AbstractVector || return
         for entry in entries
             visit_ref!(entry)
@@ -827,7 +827,7 @@ function _MountEdge(entry::AbstractDict, selector_key::Union{Nothing, String} = 
     sel = selector_key === nothing ? nothing : get(entry, selector_key, nothing)
     return _MountEdge(
         String(entry["ref"]), get(entry, "bindings", nothing),
-        get(entry, "expression_template_imports", nothing),
+        get(entry, "operator_imports", nothing),
         get(entry, "index_set_rename", nothing), get(entry, "url_substitutions", nothing),
         sel === nothing ? nothing : String(sel)
     )
@@ -1070,16 +1070,16 @@ function _mounted_registries!(comp)
     _is_object(comp) || return comp
     comp = comp isa OrderedDict{String, Any} ? comp : _to_ordered(comp)
     for (_, _, c) in _components(comp)
-        blk = _raw_get(c, "expression_templates")
+        blk = _raw_get(c, "operators")
         _is_object(blk) || continue
         keep = OrderedDict{String, Any}(
             string(n) => d for (n, d) in pairs(blk) if _raw_get(d, "match") === nothing
         )
-        used = any(k -> k != "expression_templates" && _has_apply_op(c[k]), collect(keys(c)))
+        used = any(k -> k != "operators" && _has_apply_op(c[k]), collect(keys(c)))
         if isempty(keep) || !used
-            delete!(c, "expression_templates")
+            delete!(c, "operators")
         else
-            c["expression_templates"] = keep
+            c["operators"] = keep
         end
     end
     return comp
@@ -1558,7 +1558,7 @@ function _merge_typed_mounted_templates!(file::EsmFile, name::String, model::Mod
     block, rn = _merge_mounted_blocks(own, name, Tuple{String, Any}[(p, m[3]) for (p, m) in mounted])
     rn === nothing || map_expressions!(e -> _rename_expr_apply_refs(e, rn), model)
     for (_, (parent, sub_name, raw)) in mounted
-        delete!(raw, "expression_templates")
+        delete!(raw, "operators")
         parent.subsystems[sub_name] = coerce_model(raw)
     end
     if ct === nothing
@@ -1577,7 +1577,7 @@ function _resolve_typed_subsystems!(
         path = isempty(prefix) ? String(sub_name) : "$prefix.$(sub_name)"
         if sub isa SubsystemRef
             raw = _mount_subsystem!(host, _MountEdge(sub), String(sub_name), name, base, ctx)
-            if _is_object(_raw_get(raw, "expression_templates"))
+            if _is_object(_raw_get(raw, "operators"))
                 # Kept references: coerced once its definitions have joined
                 # the top-level component's registry (`resolve_subsystem_refs!`).
                 push!(mounted, (path, (model, String(sub_name), raw)))

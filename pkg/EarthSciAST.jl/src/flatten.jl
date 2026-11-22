@@ -1484,7 +1484,7 @@ function flattened_to_esm(
     # `EsmFile.component_templates` and the impl entry expands with site
     # recording). Absent for every reference-free system.
     if !isempty(flat.template_registry)
-        model["expression_templates"] =
+        model["operators"] =
             OrderedDict{String, Any}(String(k) => v for (k, v) in flat.template_registry)
     end
 

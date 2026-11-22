@@ -326,7 +326,7 @@ t_node(n::AbstractString, bs::Kvs) = JObj(
     Kvs(
         [
             "args" => JArr(), "bindings" => JObj(bs), "name" => String(n),
-            "op" => "apply_expression_template",
+            "op" => "apply_operator",
         ]
     )
 )

@@ -73,7 +73,7 @@ function _ew_visit(
     (inside, bound) in visits && return
     push!(visits, (inside, bound))
     op = expr.op
-    if op == "apply_expression_template"
+    if op == "apply_operator"
         # Read through the reference, never expanded: a binding is in a value
         # position where its parameter is (elementwise_refs.jl `_ew_roles`).
         r = _ew_roles(ctx, expr.name)
@@ -186,7 +186,7 @@ function _ew_at_cell_op(
     op = expr.op
     inside = inside || expr.template_origin !== nothing
     rec(a, b = bound, i = inside) = _ew_at_cell(a, shapes, ctx, loops, align, on_foreign, b, i, memo)
-    if op == "apply_expression_template"
+    if op == "apply_operator"
         # The reference stays a reference: its bindings are read at the cell
         # by role, never its expansion (esm-spec §9.6.11).
         return _ew_ref_at_cell(expr, shapes, ctx, v -> rec(v, bound, true), bound)
@@ -285,7 +285,7 @@ end
 # the root of an expansion made at load.
 function _holds_application(e, seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}())
     e isa OpExpr || return false
-    (e.op == "apply_expression_template" || e.template_origin !== nothing) && return true
+    (e.op == "apply_operator" || e.template_origin !== nothing) && return true
     haskey(seen, e) && return false
     seen[e] = nothing
     found = false

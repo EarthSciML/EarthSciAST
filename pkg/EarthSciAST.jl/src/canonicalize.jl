@@ -619,7 +619,7 @@ using OrderedCollections: OrderedDict
 const _DOCUMENT_MAP_KEYS = Set{String}(
     [
         "bind", "bindings", "coordinates", "coords", "coupling_roles", "data_sources",
-        "enums", "expression_template_imports", "expression_templates", "guesses",
+        "enums", "operator_imports", "operators", "guesses",
         "index_set_rename", "index_sets", "initial_conditions", "map", "metaparameters",
         "models", "parameter_overrides", "parameters", "pinned_coords", "ranges",
         "reaction_systems", "rebind", "rename", "species", "subsystems", "translate",
