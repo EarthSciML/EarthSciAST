@@ -127,7 +127,7 @@ def kwChars : Kw → List Char
   | .max => "\\max".toList | .labs => "\\left|".toList | .rabs => "\\right|".toList
   | .lfloor => "\\lfloor".toList | .rfloor => "\\rfloor".toList
   | .lceil => "\\lceil".toList | .rceil => "\\rceil".toList
-  | .pdiff => "\\partial".toList | .dotacc => "\\dot".toList
+  | .pdiff => "\\partial".toList | .dotacc => "\\dot".toList | .nabla => "\\nabla".toList
   | .bcases => "\\begin{cases}".toList | .ecases => "\\end{cases}".toList
   | .bmat => "\\begin{bmatrix}".toList | .emat => "\\end{bmatrix}".toList
   | .sum => "\\sum".toList | .prod => "\\prod".toList | .inn => "\\in".toList
@@ -215,7 +215,7 @@ def ctrlKw : List (String × Kw) :=
     ("sin", .sin), ("cos", .cos), ("tan", .tan), ("arcsin", .asin), ("arccos", .acos),
     ("arctan", .atan), ("sinh", .sinh), ("cosh", .cosh), ("tanh", .tanh), ("min", .min),
     ("max", .max), ("lfloor", .lfloor), ("rfloor", .rfloor), ("lceil", .lceil),
-    ("rceil", .rceil), ("partial", .pdiff), ("dot", .dotacc),
+    ("rceil", .rceil), ("partial", .pdiff), ("nabla", .nabla), ("dot", .dotacc),
     ("sum", .sum), ("prod", .prod), ("in", .inn), ("substack", .substack), ("limits", .limitsL)]
 
 /-- After a control word: its token. -/

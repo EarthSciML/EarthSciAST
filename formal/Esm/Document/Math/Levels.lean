@@ -80,6 +80,15 @@ theorem pPrim_lnot (c : Ctx) (f : Nat) (r : List Tok) : pPrim c f (.kw .lnot :: 
     | nil => simp [pNamePrim, pName, pSeg, formulaOf, eulerHead]
     | cons t r => simp [fnOf]
 
+theorem pPrim_nabla (c : Ctx) (f : Nat) (r : List Tok) : pPrim c f (.kw .nabla :: r) = none := by
+  cases f with
+  | zero => rfl
+  | succ f =>
+    rw [pPrim.eq_def]
+    cases r with
+    | nil => simp [pNamePrim, pName, pSeg, formulaOf, eulerHead]
+    | cons t r => simp [fnOf]
+
 theorem pPost_none {c : Ctx} {ts : List Tok} (h : ∀ f, pPrim c f ts = none) (f : Nat) :
     pPost c f ts = none := by
   cases f with
@@ -102,11 +111,14 @@ theorem pNot_minus (c : Ctx) (f : Nat) (r : List Tok) : pNot c f (.kw .minus :: 
   cases f with
   | zero => rfl
   | succ f =>
-    rw [pNot.eq_3 _ _ _ (by intro r' h; cases h)]
+    rw [pNot.eq_4 _ _ _ (by intro r' h; cases h) (by intro r' h; cases h)]
     exact pFrac_none (fun g => pPrim_minus c g r) f
 
 theorem pFrac_lnot (c : Ctx) (f : Nat) (r : List Tok) : pFrac c f (.kw .lnot :: r) = none :=
   pFrac_none (fun g => pPrim_lnot c g r) f
+
+theorem pFrac_nabla (c : Ctx) (f : Nat) (r : List Tok) : pFrac c f (.kw .nabla :: r) = none :=
+  pFrac_none (fun g => pPrim_nabla c g r) f
 
 /-! ## Lifting a parse to a looser level -/
 
@@ -194,7 +206,9 @@ theorem lift_not {c : Ctx} {f : Nat} {ts r : List Tok} {x : Json} (h : pFrac c f
     pNot c (f + 1) ts = some (x, r) := by
   have hts : ∀ r', ts ≠ .kw .lnot :: r' := by
     intro r' e; subst e; rw [pFrac_lnot] at h; cases h
-  rw [pNot.eq_3 _ _ _ (fun r' e => hts r' e), h]
+  have hts2 : ∀ r', ts ≠ .kw .nabla :: r' := by
+    intro r' e; subst e; rw [pFrac_nabla] at h; cases h
+  rw [pNot.eq_4 _ _ _ (fun r' e => hts r' e) (fun r' e => hts2 r' e), h]
 
 theorem lift_frac {c : Ctx} {f : Nat} {ts r : List Tok} {x : Json} (h : pPow c f ts = some (x, r))
     (hr : Fol c.sf 7 r) (hf : 1 ≤ f) : pFrac c (f + 1) ts = some (x, r) := by

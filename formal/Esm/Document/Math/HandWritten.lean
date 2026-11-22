@@ -88,6 +88,36 @@ example : reads (parseTypst S "3 thin upright(\"m\")") meters = true := by decid
 
 /-! ## The italic-d derivative and declared names -/
 
+/-! ## Operators in the source formats (esm-spec §1.2, draft 2.4.0) -/
+
+/-- A derivative along an axis other than `t` is `partial`, whichever differential writes it. -/
+example : reads (parseLatex S "\\frac{\\partial x}{\\partial a}") (pNode x "a") = true := by decide +kernel
+example : reads (parseTypst S "(partial x)/(partial a)") (pNode x "a") = true := by decide +kernel
+/-- Along `t`, `\\partial` reads as the time derivative `D`. -/
+example : reads (parseLatex S "\\frac{\\partial x}{\\partial t}") (dNode x "t") = true := by decide +kernel
+/-- The trailing-operand form, and the earlier `\\operatorname{D}_{x}` spelling of it. -/
+example : reads (parseLatex S "\\partial_{a}(x, k)") (dCallNode "a" [x, k]) = true := by decide +kernel
+example : reads (parseLatex S "\\operatorname{D}_{a}(x, k)") (dCallNode "a" [x, k]) = true := by decide +kernel
+example : reads (parseTypst S "partial_(a)(x, k)") (dCallNode "a" [x, k]) = true := by decide +kernel
+example : reads (parseTypst S "op(\"D\")_(a)(x, k)") (dCallNode "a" [x, k]) = true := by decide +kernel
+/-- The four `\\nabla` forms, told apart by what follows `\\nabla`. -/
+example : reads (parseLatex S "\\nabla x") (node "grad" [x]) = true := by decide +kernel
+example : reads (parseLatex S "\\nabla \\cdot x") (node "div" [x]) = true := by decide +kernel
+example : reads (parseLatex S "\\nabla^{2} x") (node "laplacian" [x]) = true := by decide +kernel
+example : reads (parseLatex S "\\nabla \\times x") (node "curl" [x]) = true := by decide +kernel
+example : reads (parseTypst S "nabla x") (node "grad" [x]) = true := by decide +kernel
+example : reads (parseTypst S "nabla dot x") (node "div" [x]) = true := by decide +kernel
+example : reads (parseTypst S "nabla^2 x") (node "laplacian" [x]) = true := by decide +kernel
+example : reads (parseTypst S "nabla times x") (node "curl" [x]) = true := by decide +kernel
+/-- Trees, not identities: `\\nabla \\cdot \\nabla x` is `div(grad(x))`. -/
+example : reads (parseLatex S "\\nabla \\cdot \\nabla x") (node "div" [node "grad" [x]]) = true := by
+  decide +kernel
+/-- The operand is read at the level of a power base: `\\nabla x k` is a product with `grad(x)`. -/
+example : reads (parseLatex S "\\nabla x \\cdot k") (node "*" [node "grad" [x], k]) = true := by
+  decide +kernel
+/-- `\\nabla x^{2}` is refused: the operand of a `\\nabla` form is not a power. -/
+example : (parseLatex S "\\nabla x^{2}").isNone = true := by decide +kernel
+
 def Sd : Sym := { names := ["x"] }
 def Sdx : Sym := { names := ["x", "dx", "dt"] }
 def Sdx1 : Sym := { names := ["x", "dx"] }

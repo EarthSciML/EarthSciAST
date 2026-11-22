@@ -145,7 +145,7 @@ inductive Const where
 mutual
 
 /-- The ESM Expression AST (§4.1). A JSON number is `num`, a bare string a
-`var`, an object with an `op` a `const`, a `faq`, an `apply_expression_template`
+`var`, an object with an `op` a `const`, a `faq`, an `apply_operator`
 reference or a generic `node` (its remaining scalar fields, which this slice
 never needs, are not carried). -/
 inductive Ast where
@@ -160,7 +160,7 @@ inductive Ast where
   `args`. -/
   | faqWhere (outputIdx : List String) (reduce : String) (ranges : Ranges) (filter : Ast)
       (expr : Ast) (args : List Ast)
-  /-- `apply_expression_template`: the template `name` with its `bindings`
+  /-- `apply_operator`: the template `name` with its `bindings`
   (§9.6.2). It denotes its expansion (§9.6.4 rule 2); `eval` refuses it, and
   `Esm.Expr.expandRefs` replaces it by that expansion. -/
   | apply (name : String) (bindings : Binds)
@@ -174,7 +174,7 @@ inductive Ranges where
   sets, so a `faq` with one is refused; the name is a substitution site. -/
   | fromSet (sym : String) (set : String) (rest : Ranges)
 
-/-- An `apply_expression_template` node's `bindings` object, in key order. -/
+/-- An `apply_operator` node's `bindings` object, in key order. -/
 inductive Binds where
   | nil
   | cons (param : String) (value : Ast) (rest : Binds)
@@ -550,7 +550,7 @@ def eval : Ast → Env α → Except EvalError (Val α)
       (fun j => eval body ((k, .num (Lits.ofDec j 0)) :: env))
   | .faqWhere _ _ _ _ _ _, _ =>
     .error (.unsupported "filtered faq outside output_idx [], one dense [start, stop] or from range")
-  | .apply n _, _ => .error (.unsupported s!"apply_expression_template {n}: not expanded")
+  | .apply n _, _ => .error (.unsupported s!"apply_operator {n}: not expanded")
   | .faq _ _ _ _ _, _ =>
     .error (.unsupported "faq outside output_idx [], reduce + * min max, one dense [start, stop] or from range")
 

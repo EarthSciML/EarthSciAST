@@ -525,9 +525,9 @@ theorem look_of_at_single {k : String} {v : Json} : ∀ {l : List (String × Jso
       exact look_of_at_single h
 
 /-- The headers of the native template entries are the symbol-table entries of the
-`expression_templates` value. -/
+`operators` value. -/
 theorem templatesOf_mathOf {caps : Caps} {S : Sym} {v : Json} {ms : List MC}
-    (h : mathOf caps S "expression_templates" v = some ms) :
+    (h : mathOf caps S "operators" v = some ms) :
     templatesOf (some v) = ms.filterMap Mx.head := by
   unfold mathOf at h
   split at h
@@ -554,10 +554,10 @@ theorem templatesOf_mathOf {caps : Caps} {S : Sym} {v : Json} {ms : List MC}
   · cases h
 
 theorem filterMap_head_parts (P : String → List MC) (hP : ∀ g, ∀ m ∈ P g, m.field = g) :
-    ∀ L : List String, L.Nodup → "expression_templates" ∈ L →
-      (L.flatMap P).filterMap Mx.head = (P "expression_templates").filterMap Mx.head := by
+    ∀ L : List String, L.Nodup → "operators" ∈ L →
+      (L.flatMap P).filterMap Mx.head = (P "operators").filterMap Mx.head := by
   intro L hL hm
-  have hnone : ∀ g ≠ "expression_templates", (P g).filterMap Mx.head = [] := by
+  have hnone : ∀ g ≠ "operators", (P g).filterMap Mx.head = [] := by
     intro g hg
     rw [List.filterMap_eq_nil_iff]
     intro m hm'
@@ -570,7 +570,7 @@ theorem filterMap_head_parts (P : String → List MC) (hP : ∀ g, ∀ m ∈ P g
   | cons g L ih =>
     rw [List.nodup_cons] at hL
     simp only [List.flatMap_cons, List.filterMap_append]
-    by_cases hg : g = "expression_templates"
+    by_cases hg : g = "operators"
     · subst hg
       have : (L.flatMap P).filterMap Mx.head = [] := by
         rw [List.filterMap_eq_nil_iff]
@@ -579,7 +579,7 @@ theorem filterMap_head_parts (P : String → List MC) (hP : ∀ g, ∀ m ∈ P g
         have := hP g' m hm''
         cases m with
         | tm t =>
-          have e : "expression_templates" = g' := this
+          have e : "operators" = g' := this
           exact absurd (by rw [← e] at hg'; exact hg') hL.1
         | _ => rfl
       rw [this, List.append_nil]
@@ -589,8 +589,8 @@ theorem filterMap_head_parts (P : String → List MC) (hP : ∀ g, ∀ m ∈ P g
 /-- **The finished section's templates are those its entries were decided under.** -/
 theorem compTs_compOf (caps : Caps) (root : List (String × Json)) (rt : List (String × List String))
     (K : Kind) (name : String) (kvs : List (String × Json)) :
-    compTs (compOf caps root rt K name kvs) = templatesOf (look "expression_templates" kvs) := by
-  have hm : "expression_templates" ∈ mathFields := by decide
+    compTs (compOf caps root rt K name kvs) = templatesOf (look "operators" kvs) := by
+  have hm : "operators" ∈ mathFields := by decide
   have h2 := at_filterMap_field (fun g => (mathPart caps (compSym root rt K caps name kvs) kvs g).2)
     (mathPart_key caps _ kvs) mathFields mathFields_nodup _ hm
   have h1 := filterMap_head_parts (fun g => (mathPart caps (compSym root rt K caps name kvs) kvs g).1)
@@ -599,13 +599,13 @@ theorem compTs_compOf (caps : Caps) (root : List (String × Json)) (rt : List (S
   simp only [List.flatMap_map, List.filterMap_map, Function.comp_def] at h1 h2 ⊢
   rw [h1]
   unfold mathPart at h2 ⊢
-  cases hk : look "expression_templates" kvs with
+  cases hk : look "operators" kvs with
   | none =>
     simp only [hk] at h2 ⊢
     simp [look_of_at_nil h2, templatesOf]
   | some v =>
     simp only [hk] at h2 ⊢
-    cases hmo : mathOf caps (compSym root rt K caps name kvs) "expression_templates" v with
+    cases hmo : mathOf caps (compSym root rt K caps name kvs) "operators" v with
     | none =>
       simp only [hmo, Option.toList_some] at h2 ⊢
       simp [look_of_at_single h2, templatesOf]
@@ -852,13 +852,13 @@ theorem ofDoc_toDoc (caps : Caps) (d : Json) (hd : canonDoc d = true) :
   have hpm := compField_pick caps (topMath caps kvs).isSome hl "models" (Or.inl rfl)
   have hpr := compField_pick caps (topMath caps kvs).isSome hl "reaction_systems" (Or.inr rfl)
   have hjm := compField_join caps hv (rootBlocks caps (topMath caps kvs).isSome kvs)
-    (templatesOf (look "expression_templates" kvs)) .model "models"
+    (templatesOf (look "operators" kvs)) .model "models"
   have hjr := compField_join caps hv (rootBlocks caps (topMath caps kvs).isSome kvs)
-    (templatesOf (look "expression_templates" kvs)) .rs "reaction_systems"
+    (templatesOf (look "operators" kvs)) .rs "reaction_systems"
   -- the top-level templates and the top-level blocks together are the blocks with the
   -- templates kept
   have hTB : ∀ k, at_ k (if ((topMath caps kvs).getD []).isEmpty = true then [] else
-      [("expression_templates", fieldJson "expression_templates" ((topMath caps kvs).getD []))]) ++
+      [("operators", fieldJson "operators" ((topMath caps kvs).getD []))]) ++
       at_ k ((rootBlocks caps (topMath caps kvs).isSome kvs).filter
         (fun kv => kv.1 != "models" && kv.1 != "reaction_systems")) =
       at_ k ((rootBlocks caps false kvs).filter
@@ -868,10 +868,10 @@ theorem ofDoc_toDoc (caps : Caps) (d : Json) (hd : canonDoc d = true) :
     cases htm : topMath caps kvs with
     | none => simp
     | some ms =>
-      obtain ⟨v, hv1, hv2⟩ : ∃ v, look "expression_templates" kvs = some v ∧
-          mathOf caps (topSymOf kvs) "expression_templates" v = some ms := by
+      obtain ⟨v, hv1, hv2⟩ : ∃ v, look "operators" kvs = some v ∧
+          mathOf caps (topSymOf kvs) "operators" v = some ms := by
         unfold topMath at htm
-        cases h : look "expression_templates" kvs with
+        cases h : look "operators" kvs with
         | none => rw [h] at htm; cases htm
         | some v => rw [h] at htm; exact ⟨v, rfl, htm⟩
       obtain ⟨rfl, hne, -⟩ := mathOf_some hv2
@@ -880,10 +880,10 @@ theorem ofDoc_toDoc (caps : Caps) (d : Json) (hd : canonDoc d = true) :
         | nil => exact absurd rfl hne
         | cons _ _ => rfl
       simp only [Option.getD_some, hne', Option.isSome_some, Bool.false_eq_true, ite_false]
-      by_cases hk : k = "expression_templates"
+      by_cases hk : k = "operators"
       · subst hk; rw [hv1]; simp [rootBlock, at_single]
       · rw [at_single]
-        simp only [show ("expression_templates" = k) = False from propext ⟨fun h => hk h.symm, False.elim⟩,
+        simp only [show ("operators" = k) = False from propext ⟨fun h => hk h.symm, False.elim⟩,
           ite_false, List.nil_append]
         cases look k kvs with
         | none => rfl

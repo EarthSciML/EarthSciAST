@@ -53,16 +53,18 @@ class MissingFields(unittest.TestCase):
         self.assertEqual(gen.ast(node, 0, "t"), "(Ast.const (Const.leaf (86400) 0))")
 
     def test_reference_is_transcribed(self):
-        node = {"op": "apply_expression_template", "name": "f", "bindings": {"x": "t", "n": 3}}
-        self.assertEqual(
-            gen.ast(node, 0, "t"),
-            '(Ast.apply "f" (Binds.cons "x" (Ast.var "t") '
-            "(Binds.cons \"n\" (Ast.num (3) 0) Binds.nil)))",
-        )
+        # `apply_expression_template` is the old name of `apply_operator` (§9.6.12).
+        for op in ("apply_operator", "apply_expression_template"):
+            node = {"op": op, "name": "f", "bindings": {"x": "t", "n": 3}}
+            self.assertEqual(
+                gen.ast(node, 0, "t"),
+                '(Ast.apply "f" (Binds.cons "x" (Ast.var "t") '
+                "(Binds.cons \"n\" (Ast.num (3) 0) Binds.nil)))",
+            )
 
     def test_reference_other_fields_are_refused(self):
-        node = {"op": "apply_expression_template", "name": "f", "bindings": {}, "eager": True}
-        with self.assertRaisesRegex(gen.Unsupported, "apply_expression_template fields"):
+        node = {"op": "apply_operator", "name": "f", "bindings": {}, "eager": True}
+        with self.assertRaisesRegex(gen.Unsupported, "apply_operator fields"):
             gen.ast(node, 0, "t")
 
     def test_const_other_fields_are_refused(self):
@@ -73,10 +75,10 @@ class MissingFields(unittest.TestCase):
         with self.assertRaisesRegex(gen.Unsupported, "const node has no value"):
             gen.ast({"op": "const"}, 0, "t")
 
-    def _run(self, templates):
+    def _run(self, templates, key="operators"):
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / "lib.esm"
-            src.write_text(json.dumps({"expression_templates": templates}))
+            src.write_text(json.dumps({key: templates}))
             old_targets, old_argv = gen.TARGETS, sys.argv
             gen.TARGETS = [(str(src), str(Path(d) / "Out.lean"), "T")]
             sys.argv = ["gen-lib-templates.py", "--check"]
@@ -92,19 +94,25 @@ class MissingFields(unittest.TestCase):
         for t, field in (({"body": "x"}, "params"), ({"params": ["x"]}, "body")):
             code, err = self._run({"f": t})
             self.assertEqual(code, 1)
-            self.assertIn(f"expression_templates.f: no {field}", err)
+            self.assertIn(f"operators.f: no {field}", err)
 
     def test_faq_without_expr_in_a_template_reports_and_exits_1(self):
         code, err = self._run(
             {"f": {"params": ["n"], "body": {"op": "faq", "ranges": {"i": [1, "n"]}}}}
         )
         self.assertEqual(code, 1)
-        self.assertIn("expression_templates.f.body: faq has no expr", err)
+        self.assertIn("operators.f.body: faq has no expr", err)
 
     def test_negative_zero_in_a_template_reports_and_exits_1(self):
         code, err = self._run({"f": {"params": ["x"], "body": {"op": "+", "args": ["x", -0.0]}}})
         self.assertEqual(code, 1)
-        self.assertIn("expression_templates.f.body.args[1]", err)
+        self.assertIn("operators.f.body.args[1]", err)
+
+    def test_old_block_name_is_read(self):
+        # `expression_templates` is the old name of `operators` (§9.6.12).
+        code, err = self._run({"f": {"params": ["x"]}}, key="expression_templates")
+        self.assertEqual(code, 1)
+        self.assertIn("expression_templates.f: no body", err)
 
 
 if __name__ == "__main__":
