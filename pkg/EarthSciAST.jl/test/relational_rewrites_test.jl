@@ -98,7 +98,7 @@ function _rr_rank_of(x, members)
         "metadata" => Dict{String, Any}("name" => "rank_of_probe", "authors" => Any["t"]),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
-                "expression_template_imports" => Any[Dict{String, Any}("ref" => _RR_LIB)],
+                "operator_imports" => Any[Dict{String, Any}("ref" => _RR_LIB)],
                 "variables" => Dict{String, Any}(
                     "r" => Dict{String, Any}("type" => "unknown", "units" => "1", "default" => 0.0)
                 ),
@@ -106,7 +106,7 @@ function _rr_rank_of(x, members)
                     Dict{String, Any}(
                         "lhs" => Dict{String, Any}("op" => "D", "args" => Any["r"], "wrt" => "t"),
                         "rhs" => Dict{String, Any}(
-                            "op" => "apply_expression_template", "args" => Any[], "name" => "rank_of",
+                            "op" => "apply_operator", "args" => Any[], "name" => "rank_of",
                             "bindings" => Dict{String, Any}(
                                 "x" => x,
                                 "members" => Dict{String, Any}(
@@ -244,7 +244,7 @@ const _RR_CASES = [
             rhs isa AbstractDict && get(rhs, "distinct", false) === true &&
                 (rhs["key"]["bindings"]["n_b"] = 2)   # j = 3, 4 fall outside [1, 3)
         end
-        for ref in model["expression_template_imports"]
+        for ref in model["operator_imports"]
             ref["ref"] = _RR_LIB
         end
         case = e.cases[1]

@@ -1,0 +1,119 @@
+{
+  "esm": "2.4.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "one-operator-type conformance"
+    ],
+    "description": "esm-spec §9.6.12 'Old names (no refusal)', §4.2 'Reading earlier documents': this document spells `expression_templates`, `expression_template_imports`, `apply_expression_template`, a spatial `D` (in an equation and in a rule's match) and `δ`. It loads with the warnings `deprecated_field` and `deprecated_op`, and its emitted form (emitted.esm) is byte-identical to that of new_names.esm, the same document in the esm 2.4 spellings.",
+    "name": "old_names"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "u"
+            },
+            "name": "diff_x",
+            "op": "apply_operator"
+          }
+        },
+        {
+          "lhs": "h",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "a": "w"
+            },
+            "name": "halve",
+            "op": "apply_operator"
+          }
+        },
+        {
+          "lhs": "g",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "u"
+            },
+            "name": "diff_x",
+            "op": "apply_operator"
+          }
+        }
+      ],
+      "operators": {
+        "diff_x": {
+          "body": {
+            "args": [
+              0.5,
+              "f"
+            ],
+            "op": "*"
+          },
+          "defines": "partial",
+          "params": [
+            "f"
+          ]
+        },
+        "halve": {
+          "body": {
+            "args": [
+              "a",
+              2
+            ],
+            "op": "/"
+          },
+          "defines": "halve",
+          "params": [
+            "a"
+          ]
+        }
+      },
+      "variables": {
+        "g": {
+          "description": "Gradient",
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "h": {
+          "description": "Halved",
+          "type": "unknown",
+          "units": "1"
+        },
+        "u": {
+          "default": 1,
+          "description": "Field",
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "w": {
+          "default": 2,
+          "description": "Scalar",
+          "type": "parameter",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

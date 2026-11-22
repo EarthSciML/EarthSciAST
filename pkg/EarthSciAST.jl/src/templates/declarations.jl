@@ -36,7 +36,7 @@ function _assert_no_nested_apply(body, template_name::String, path::String)
     at === nothing || throw(
         ExpressionTemplateError(
             ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-            "expression_templates.$(template_name): `match` contains an 'apply_expression_template' node at $at; match patterns MUST NOT reference templates (esm-spec §9.7.3)"
+            "operators.$(template_name): `match` contains an 'apply_expression_template' node at $at; match patterns MUST NOT reference templates (esm-spec §9.7.3)"
         )
     )
     return
@@ -48,7 +48,7 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
             throw(
                 ExpressionTemplateError(
                     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: entry must be an object with params + body"
+                    "$scope.operators.$name: entry must be an object with params + body"
                 )
             )
         end
@@ -59,7 +59,7 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
             throw(
                 ExpressionTemplateError(
                     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: 'params' must be an array of strings"
+                    "$scope.operators.$name: 'params' must be an array of strings"
                 )
             )
         end
@@ -69,7 +69,7 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
                 throw(
                     ExpressionTemplateError(
                         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        "$scope.expression_templates.$name: param names must be non-empty strings"
+                        "$scope.operators.$name: param names must be non-empty strings"
                     )
                 )
             end
@@ -78,7 +78,7 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
                 throw(
                     ExpressionTemplateError(
                         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        "$scope.expression_templates.$name: param '$ps' is declared twice"
+                        "$scope.operators.$name: param '$ps' is declared twice"
                     )
                 )
             end
@@ -89,7 +89,7 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
             throw(
                 ExpressionTemplateError(
                     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: 'body' is required"
+                    "$scope.operators.$name: 'body' is required"
                 )
             )
         end
@@ -117,19 +117,13 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
         # `index_sets` registry is in scope) — see `_registered_where`.
         whr = _raw_get(decl, "where")
         if whr !== nothing
-            match === nothing && throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: 'where' is only admissible " *
-                        "alongside 'match' — constraints scope an auto-applied rewrite " *
-                        "rule, not a named fragment (esm-spec §9.6.1)"
-                )
-            )
+            # esm 2.4.0 (esm-spec §9.6.3 constraint 2, §9.6.8): a `where` scopes a
+            # match-less definition too, at a call of the defined operator it defines.
             (_is_object(whr) && !isempty(collect(pairs(whr)))) ||
                 throw(
                 ExpressionTemplateError(
                     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: 'where' must be a " *
+                    "$scope.operators.$name: 'where' must be a " *
                         "non-empty object mapping declared params to constraint objects"
                 )
             )
@@ -138,14 +132,14 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
                 ps in seen || throw(
                     ExpressionTemplateError(
                         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        "$scope.expression_templates.$name: 'where' constrains '$ps', " *
+                        "$scope.operators.$name: 'where' constrains '$ps', " *
                             "which is not a declared param (esm-spec §9.6.1)"
                     )
                 )
                 _is_object(cobj) || throw(
                     ExpressionTemplateError(
                         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        "$scope.expression_templates.$name: where.$ps must be a " *
+                        "$scope.operators.$name: where.$ps must be a " *
                             "constraint object (v1 admits exactly the 'shape' kind)"
                     )
                 )
@@ -153,7 +147,7 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
                 ckeys == Set(["shape"]) || throw(
                     ExpressionTemplateError(
                         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        "$scope.expression_templates.$name: where.$ps carries " *
+                        "$scope.operators.$name: where.$ps carries " *
                             "constraint kind(s) $(join(sort(collect(ckeys)), ", ")); the " *
                             "v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)"
                     )
@@ -162,7 +156,7 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
                 (_is_array(shp) && !isempty(shp)) || throw(
                     ExpressionTemplateError(
                         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                        "$scope.expression_templates.$name: where.$ps.shape must be a " *
+                        "$scope.operators.$name: where.$ps.shape must be a " *
                             "non-empty array of index-set names"
                     )
                 )
@@ -171,7 +165,7 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
                         throw(
                         ExpressionTemplateError(
                             ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                            "$scope.expression_templates.$name: where.$ps.shape " *
+                            "$scope.operators.$name: where.$ps.shape " *
                                 "entries must be non-empty strings"
                         )
                     )
@@ -288,14 +282,14 @@ function _check_template_body_graph(templates::AbstractDict{String, Any}, scope:
             tdecl === nothing && throw(
                 ExpressionTemplateError(
                     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-                    "$scope.expression_templates.$name: body references undeclared template '$r' (esm-spec §9.7.3)"
+                    "$scope.operators.$name: body references undeclared template '$r' (esm-spec §9.7.3)"
                 )
             )
             if _raw_get(tdecl, "match") !== nothing
                 throw(
                     ExpressionTemplateError(
                         ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-                        "$scope.expression_templates.$name: body references '$r', a `match` " *
+                        "$scope.operators.$name: body references '$r', a `match` " *
                             "rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)"
                     )
                 )
@@ -332,7 +326,7 @@ function _check_template_body_graph(templates::AbstractDict{String, Any}, scope:
         d > MAX_TEMPLATE_EXPANSION_DEPTH && throw(
             ExpressionTemplateError(
                 ERROR_CODES.TEMPLATE_BODY_EXPANSION_TOO_DEEP,
-                "$scope.expression_templates.$name: body-reference chain of $d templates " *
+                "$scope.operators.$name: body-reference chain of $d templates " *
                     "exceeds MAX_TEMPLATE_EXPANSION_DEPTH=$MAX_TEMPLATE_EXPANSION_DEPTH (esm-spec §9.7.3)"
             )
         )

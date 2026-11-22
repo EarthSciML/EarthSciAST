@@ -13,7 +13,7 @@
               "x": "Src.F"
             },
             "name": "scale_by",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
           {
             "args": [],
@@ -21,7 +21,7 @@
               "a": "Sink.offset"
             },
             "name": "half_rule",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         ],
         "op": "+"
@@ -29,7 +29,7 @@
       "type": "variable_map"
     }
   ],
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "metadata": {
     "authors": [
       "coupling transforms keep references (esm-spec §10.4, §9.6.4 rule 5)"
@@ -51,7 +51,7 @@
           "rhs": "F_in"
         }
       ],
-      "expression_templates": {
+      "operators": {
         "half_rule": {
           "body": {
             "args": [
@@ -60,6 +60,7 @@
             ],
             "op": "*"
           },
+          "defines": "half_rule",
           "params": [
             "a"
           ]
@@ -72,6 +73,7 @@
             ],
             "op": "*"
           },
+          "defines": "scale_by",
           "params": [
             "x",
             "k"
@@ -112,11 +114,11 @@
               "x": 2
             },
             "name": "scale_by",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "scale_by": {
           "body": {
             "args": [
@@ -125,6 +127,7 @@
             ],
             "op": "+"
           },
+          "defines": "scale_by",
           "params": [
             "x",
             "k"

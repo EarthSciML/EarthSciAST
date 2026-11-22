@@ -53,7 +53,7 @@
     },
 
     "subsystem_ref_to_library.esm": { "code": "subsystem_ref_is_coupling_library", "driver": "resolveSubsystemRefs", "site": "cross-kind" },
-    "template_import_to_library.esm": { "code": "template_import_is_coupling_library", "driver": "load", "site": "cross-kind" },
+    "template_import_to_library.esm": { "code": "operator_import_is_coupling_library", "driver": "load", "site": "cross-kind" },
 
     "coupletype_model.esm": { "code": "additionalProperties", "driver": "validateSchema", "site": "schema", "note": "Model carries the removed `coupletype`; Model is additionalProperties:false, so schema validation fails (unknown property)." },
     "coupletype_reaction_system.esm": { "code": "additionalProperties", "driver": "validateSchema", "site": "schema", "note": "ReactionSystem carries the removed `coupletype`; additionalProperties:false schema failure." }

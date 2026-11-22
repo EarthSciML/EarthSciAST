@@ -59,10 +59,10 @@ end
 
     # References survive, carrying the derivative bindings.
     r1 = _ttd_rhs(flat, "M.r1")
-    @test r1.op == "apply_expression_template" && r1.name == "rate"
+    @test r1.op == "apply_operator" && r1.name == "rate"
     @test r1.bindings["p_dt"] isa EarthSciAST.OpExpr   # a's tendency
     r6 = _ttd_rhs(flat, "M.r6")
-    @test r6.op == "apply_expression_template" && r6.name == "sq.ddt"
+    @test r6.op == "apply_operator" && r6.name == "sq.ddt"
     @test Set(keys(r6.bindings)) == Set(["q", "q_dt"])
     r7 = _ttd_rhs(flat, "M.r7")
     @test r7.name == "cube_rate" && haskey(r7.bindings, "g_dt")
@@ -106,7 +106,7 @@ end
         "esm" => "1.3.0", "metadata" => Dict("name" => "dt_fresh"),
         "models" => Dict(
             "M" => Dict(
-                "expression_templates" => Dict(
+                "operators" => Dict(
                     "f" => Dict(
                         "params" => ["p", "p_dt"],
                         "body" => Dict("op" => "*", "args" => ["p_dt", Dict("op" => "D", "args" => ["p"])]),
@@ -121,7 +121,7 @@ end
                     Dict(
                         "lhs" => "y",
                         "rhs" => Dict(
-                            "op" => "apply_expression_template", "args" => [], "name" => "f",
+                            "op" => "apply_operator", "args" => [], "name" => "f",
                             "bindings" => Dict("p" => "a", "p_dt" => 2.0)
                         )
                     ),

@@ -27,7 +27,7 @@ const _CT_LIB = joinpath(TESTUTILS_REPO_ROOT, "lib")
 _ct_op(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
 _ct_ix(a, s...) = _ct_op("index", a, s...)
 _ct_apply(name; b...) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
 )
 _ct_faq(e, out, ranges; kw...) = Dict{String, Any}(
@@ -78,7 +78,7 @@ function _ct_calendar_doc(nh; t0 = 1.6e9)
         push!(eqs, Dict("lhs" => _ct_dlhs("s_$f", ["h"], H), "rhs" => _ct_faq(_ct_op("-", call, _ct_ix("s_$f", "h")), ["h"], H)))
     end
     model = Dict{String, Any}("variables" => vars, "equations" => eqs)
-    model["expression_template_imports"] = Any[_ct_import("calendar.esm", _CT_FIELDS)]
+    model["operator_imports"] = Any[_ct_import("calendar.esm", _CT_FIELDS)]
     return Dict{String, Any}(
         "esm" => "2.0.0", "metadata" => Dict("name" => "calendar"),
         "index_sets" => Dict("hours" => Dict("kind" => "interval", "size" => nh)),
@@ -152,7 +152,7 @@ function _ct_regrid_doc(n, manifold; area = :tpl)
         push!(names, "lonlat_to_unit")
     end
     model = Dict{String, Any}("variables" => v, "equations" => eqs)
-    isempty(names) || (model["expression_template_imports"] = Any[_ct_import("geometry.esm", names)])
+    isempty(names) || (model["operator_imports"] = Any[_ct_import("geometry.esm", names)])
     return Dict{String, Any}(
         "esm" => "2.0.0", "metadata" => Dict("name" => "regrid"),
         "index_sets" => Dict(
@@ -189,7 +189,7 @@ function _ct_nearest_doc(np, ng)
         Dict("lhs" => _ct_dlhs("w", ["i"], P), "rhs" => _ct_faq(_ct_op("-", _ct_ix("gx", _ct_ix("assign", "i")), _ct_ix("w", "i")), ["i"], P; args = Any["gx", "assign"])),
     ]
     model = Dict{String, Any}("variables" => vars, "equations" => eqs)
-    model["expression_template_imports"] = Any[_ct_import("relational.esm", ["argmin"])]
+    model["operator_imports"] = Any[_ct_import("relational.esm", ["argmin"])]
     return Dict{String, Any}(
         "esm" => "2.0.0", "metadata" => Dict("name" => "nearest"),
         "index_sets" => Dict("points" => Dict("kind" => "interval", "size" => np), "generators" => Dict("kind" => "interval", "size" => ng)),
@@ -231,7 +231,7 @@ function _ct_relational_doc()
     ]
     model = Dict{String, Any}(
         "variables" => vars, "equations" => eqs,
-        "expression_template_imports" => Any[_ct_import("relational.esm", ["argmin_where", "argmax_where", "pair_key", "edge_key", "rank_of", "rank_of_set"])]
+        "operator_imports" => Any[_ct_import("relational.esm", ["argmin_where", "argmax_where", "pair_key", "edge_key", "rank_of", "rank_of_set"])]
     )
     return Dict{String, Any}(
         "esm" => "2.0.0", "metadata" => Dict("name" => "relational"),

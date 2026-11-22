@@ -17,7 +17,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
 const _TIF_N = 12
 
 _tif_ref(name, bindings) = Dict(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => bindings
 )
 _tif_at(f, off) = off == 0 ? Dict("op" => "index", "args" => Any[f, "i"]) :
@@ -133,7 +133,7 @@ function _tif_document(tracers)
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => _TIF_N)),
         "models" => Dict(
             "T" => Dict(
-                "expression_templates" => _tif_templates(),
+                "operators" => _tif_templates(),
                 "variables" => vars,
                 "equations" => eqs,
             )

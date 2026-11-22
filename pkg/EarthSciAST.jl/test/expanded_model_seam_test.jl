@@ -13,7 +13,7 @@ using EarthSciAST: coerce_esm_file, evaluate_expr, TreeWalkError
 # Any `apply_expression_template` node left in the tree?
 function _has_apply(e)
     e isa OpExpr || return false
-    e.op == "apply_expression_template" && return true
+    e.op == "apply_operator" && return true
     any(_has_apply, e.args) && return true
     return e.expr_body !== nothing && _has_apply(e.expr_body)
 end
@@ -24,7 +24,7 @@ end
         "metadata" => Dict("name" => "expanded_model_seam"),
         "models" => Dict(
             "T" => Dict(
-                "expression_templates" => Dict(
+                "operators" => Dict(
                     "decay" => Dict(
                         "params" => ["x", "k"],
                         "body" => Dict(
@@ -41,7 +41,7 @@ end
                     Dict(
                         "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
                         "rhs" => Dict(
-                            "op" => "apply_expression_template", "args" => [],
+                            "op" => "apply_operator", "args" => [],
                             "name" => "decay",
                             "bindings" => Dict("x" => "a", "k" => "k")
                         )

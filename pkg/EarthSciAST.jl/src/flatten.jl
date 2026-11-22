@@ -454,7 +454,7 @@ function spatial_dims_in_expr(expr::ASTExpr)::Vector{Symbol}
             d = Symbol(x.dim)
             (d in dims) || push!(dims, d)
         end
-        if x.op == "D" && x.wrt !== nothing && x.wrt != "t"
+        if x.wrt !== nothing && x.wrt != "t"
             d = Symbol(x.wrt)
             (d in dims) || push!(dims, d)
         end

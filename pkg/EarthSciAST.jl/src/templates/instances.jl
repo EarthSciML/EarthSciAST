@@ -238,6 +238,7 @@ function _instance!(
     bv = _BodyView(Set{String}(params), lits, Dict{String, String}(zip(params, entries)))
     body = _raw_get(decl, "body")
     body = _lower_body_enums(body, bv, st.L.enums)
+    body = _instance_partial(body, bv)
     rewritten, passes = _rewrite_to_fixpoint(body, st.L, tscope; bv = bv)
     refs = IdDict{Any, String}()
     height = passes
@@ -258,6 +259,29 @@ function _instance!(
     st.done[key] = res
     push!(st.order, key)
     return res
+end
+
+"""
+    _instance_partial(body, bv) -> body′
+
+esm-spec §4.2 "Reading earlier documents": a `D` whose `wrt` is one of the
+definition's `params` is decided per instance — where the instance binds that
+parameter to an axis name other than `"t"`, the `D` reads as `partial` in this
+instance (the wire boundary left it as written). Bound to `"t"`, it stays the
+time derivative.
+"""
+function _instance_partial(body, bv::_BodyView)
+    return _rewrite_json(body; leaves = false) do rw, n
+        _raw_get(n, "op") == "D" || return _JSON_DESCEND
+        w = _raw_get(n, "wrt")
+        (w isa AbstractString && String(w) in bv.params) || return _JSON_DESCEND
+        lit = get(bv.lit, String(w), _NO_LIT)
+        (lit isa AbstractString && lit != "t") || return _JSON_DESCEND
+        nn = _rewrite_json_children(rw, n)
+        n2 = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(nn))
+        n2["op"] = "partial"
+        return n2
+    end
 end
 
 """

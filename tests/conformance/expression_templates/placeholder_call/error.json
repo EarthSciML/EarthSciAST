@@ -1,0 +1,5 @@
+{
+  "code": "unlowered_operator",
+  "stage": "evaluate",
+  "description": "esm-spec §9.6.12: a placeholder is an error only if evaluated; the message names the defined operator and says no definition of it is in scope."
+}

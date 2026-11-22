@@ -16,7 +16,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 @testset "scope-directed template injection (esm-spec §9.7.10)" begin
     conf(parts...) = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "expression_templates", parts...
+        "operators", parts...
     )
 
     _golden(path) = _normj(JSON3.read(read(path, String)))
@@ -113,7 +113,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test f.models["Emit"].equations[1].lhs.op == "D"
         # The injection map is consumed — form B does not survive parse → emit.
         ser = serialize_esm_file(f)
-        @test !haskey(ser["coupling"][1], "expression_template_imports")
+        @test !haskey(ser["coupling"][1], "operator_imports")
         @test _normj(ser) == _golden(conf("inject_coupling_entry", "expanded.esm"))
 
         # Diagnostics.
@@ -122,7 +122,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 conf("inject_coupling_entry", "neg_target_unknown.esm")
             )
         ) ==
-            "template_inject_target_unknown"
+            "operator_inject_target_unknown"
         # esm 1.0.0 retires `template_inject_target_is_loader`: a data source is
         # not a component, so it cannot be referenced by a coupling entry at all
         # and a key naming one is reported as `template_inject_target_unknown`
@@ -134,8 +134,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             )
         ) in
             (
-            "template_inject_target_not_component",
-            "template_inject_target_unknown",
+            "operator_inject_target_not_component",
+            "operator_inject_target_unknown",
         )
     end
 

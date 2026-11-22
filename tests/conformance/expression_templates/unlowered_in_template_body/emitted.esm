@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "index_sets": {
     "x": {
       "kind": "interval",
@@ -43,19 +43,20 @@
               "f": "u"
             },
             "name": "ddy",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "ddy": {
           "body": {
             "args": [
               "f"
             ],
-            "op": "D",
+            "op": "partial",
             "wrt": "y"
           },
+          "defines": "ddy",
           "params": [
             "f"
           ]

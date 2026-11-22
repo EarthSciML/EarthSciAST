@@ -145,7 +145,7 @@ _graph_rsys() = ReactionSystem(
             "metadata" => Dict{String, Any}("name" => "graph_tpl"),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
-                    "expression_templates" => Dict{String, Any}(
+                    "operators" => Dict{String, Any}(
                         "scale" => Dict{String, Any}(
                             "params" => Any["x"],
                             "body" => Dict{String, Any}("op" => "*", "args" => Any["k", "x"])
@@ -160,7 +160,7 @@ _graph_rsys() = ReactionSystem(
                         Dict{String, Any}(
                             "lhs" => Dict{String, Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
                             "rhs" => Dict{String, Any}(
-                                "op" => "apply_expression_template",
+                                "op" => "apply_operator",
                                 "args" => Any[], "name" => "scale",
                                 "bindings" => Dict{String, Any}("x" => "z")
                             )

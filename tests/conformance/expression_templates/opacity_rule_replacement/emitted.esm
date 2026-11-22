@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "index_sets": {
     "x": {
       "kind": "interval",
@@ -44,7 +44,7 @@
                       "f": "c"
                     },
                     "name": "grad_alias",
-                    "op": "apply_expression_template"
+                    "op": "apply_operator"
                   },
                   2
                 ],
@@ -68,7 +68,7 @@
               }
             },
             "name": "flux_div",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         },
         {
@@ -79,7 +79,7 @@
               "F": "c"
             },
             "name": "flux_div",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         },
         {
@@ -92,7 +92,7 @@
                   "u": "c"
                 },
                 "name": "sq_grad",
-                "op": "apply_expression_template"
+                "op": "apply_operator"
               }
             ],
             "op": "sqrt"
@@ -109,15 +109,15 @@
                   "p": "c"
                 },
                 "name": "exp_lin",
-                "op": "apply_expression_template"
+                "op": "apply_operator"
               }
             },
             "name": "scale2",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "grad_alias": {
           "body": {
             "args": [],
@@ -125,8 +125,9 @@
               "f": "f"
             },
             "name": "central",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "grad",
           "params": [
             "f",
             "d"
@@ -178,6 +179,7 @@
               }
             }
           },
+          "defines": "partial",
           "params": [
             "f"
           ]
@@ -189,8 +191,9 @@
               "f": "F"
             },
             "name": "central",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           },
+          "defines": "flux_div",
           "params": [
             "F"
           ]
@@ -204,12 +207,13 @@
                   "f": "u"
                 },
                 "name": "central",
-                "op": "apply_expression_template"
+                "op": "apply_operator"
               },
               2
             ],
             "op": "^"
           },
+          "defines": "sq_grad",
           "params": [
             "u"
           ]
@@ -222,6 +226,7 @@
             ],
             "op": "+"
           },
+          "defines": "exp_lin",
           "params": [
             "p"
           ]
@@ -234,6 +239,7 @@
             ],
             "op": "*"
           },
+          "defines": "scale2",
           "params": [
             "w"
           ]

@@ -58,14 +58,14 @@ end
         {"esm": "2.0.0", "metadata": {"name": "taa_mismatch"},
          "index_sets": {"a": {"kind": "interval", "size": 2}, "b": {"kind": "interval", "size": 3}},
          "models": {"M": {
-           "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": ["bilinear"]}],
+           "operator_imports": [{"ref": "esm:std/interp.esm", "only": ["bilinear"]}],
            "variables": {
              "px": {"type": "parameter", "shape": ["a"], "default": [0.5, 1.5]},
              "py": {"type": "parameter", "shape": ["b"], "default": [10.0, 15.0, 20.0]},
              "B": {"type": "unknown"},
              "s": {"type": "unknown", "default": 0.0}},
            "equations": [
-             {"lhs": "B", "rhs": {"op": "apply_expression_template", "args": [], "name": "bilinear",
+             {"lhs": "B", "rhs": {"op": "apply_operator", "args": [], "name": "bilinear",
                "bindings": {"table": {"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0]]},
                             "axis_x": {"op": "const", "args": [], "value": [0.0, 2.0]},
                             "axis_y": {"op": "const", "args": [], "value": [10.0, 20.0]},
@@ -84,7 +84,7 @@ end
     @testset "an anonymous array argument is refused" begin
         doc = _taa_doc(
             """{"y": {"type": "unknown"}, "s": {"type": "unknown", "default": 0.0}}""",
-            """[{"lhs": "y", "rhs": {"op": "apply_expression_template", "args": [], "name": "linear",
+            """[{"lhs": "y", "rhs": {"op": "apply_operator", "args": [], "name": "linear",
               "bindings": {"table": {"op": "const", "args": [], "value": [1.0, 2.0, 4.0]},
                            "axis": {"op": "const", "args": [], "value": [0.0, 1.0, 2.0]},
                            "x": {"op": "const", "args": [], "value": [0.5, 1.5]}, "n": 3}}},
@@ -111,7 +111,7 @@ end
             "pb": {"type": "parameter", "shape": ["verts", "coord"],
                   "default": [[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]},
             "area": {"type": "unknown"}, "s": {"type": "unknown", "default": 0.0}}""",
-            """[{"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [], "name": "overlap",
+            """[{"lhs": "area", "rhs": {"op": "apply_operator", "args": [], "name": "overlap",
               "bindings": {"a": "pa", "b": "pb"}}},
             {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "area"}]""";
             templates = """{"overlap": {"params": ["a", "b"], "body": {"op": "faq", "output_idx": [],
@@ -122,7 +122,7 @@ end
         file = EarthSciAST.load_string(doc)
         flat = EarthSciAST.promote_downstream_shapes(EarthSciAST.flatten(file))
         area = only(eq for eq in flat.equations if eq.lhs isa EarthSciAST.VarExpr && eq.lhs.name == "M.area")
-        @test area.rhs isa EarthSciAST.OpExpr && area.rhs.op == "apply_expression_template"
+        @test area.rhs isa EarthSciAST.OpExpr && area.rhs.op == "apply_operator"
         prob = EarthSciAST.esm_problem(file, (0.0, 1.0); compiler = compiler)
         du = fill(NaN, length(prob.u0))
         prob.f!(du, copy(prob.u0), prob.p, 0.0)

@@ -80,7 +80,7 @@ _uo_compile(e::_UO.ASTExpr) =
         # slip it past a gate either.
         tmpl = _UO.expression_from_json(
             Dict{String, Any}(
-                "op" => "apply_expression_template", "args" => Any[], "name" => "tmpl",
+                "op" => "apply_operator", "args" => Any[], "name" => "tmpl",
                 "bindings" => Dict{String, Any}()
             )
         )

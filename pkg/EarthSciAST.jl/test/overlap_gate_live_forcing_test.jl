@@ -33,7 +33,7 @@ const SLIVER = jop(">", _ix("A_ij", "i", "j"), "atol")
 
 # The overlap area of `src_poly[i]` and `tgt_poly[j]` (lib/geometry.esm).
 const OVERLAP = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => "overlap_area_planar",
+    "op" => "apply_operator", "args" => Any[], "name" => "overlap_area_planar",
     "bindings" => Dict{String, Any}(
         "ring_a" => "src_poly", "cell_a" => "i", "nv_a" => 4,
         "ring_b" => "tgt_poly", "cell_b" => "j", "nv_b" => 4
@@ -66,7 +66,7 @@ function document()
         "data_sources" => Dict("Src" => Dict("kind" => "static", "source" => Dict("url_template" => "{unused_placeholder}"))),
         "models" => Dict(
             "M" => Dict(
-                "expression_template_imports" => Any[
+                "operator_imports" => Any[
                     Dict("ref" => "esm:std/geometry.esm", "only" => Any["overlap_area_planar"]),
                 ],
                 "variables" => Dict(

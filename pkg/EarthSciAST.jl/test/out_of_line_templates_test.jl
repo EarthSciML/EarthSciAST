@@ -28,7 +28,7 @@ end
 @testset "out-of-line expression templates (Option B, esm-spec §9.6.4)" begin
     conf(parts...) = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "expression_templates", parts...
+        "operators", parts...
     )
 
     # Load a fixture under Option B (references preserved), returning the raw
@@ -43,7 +43,7 @@ end
         fp = conf(dir, fixture)
         emit_esm_string(emit_document(JSON3.read(read(fp, String)), dirname(fp)))
     end
-    _isapply(x) = x isa AbstractDict && get(x, "op", nothing) == "apply_expression_template"
+    _isapply(x) = x isa AbstractDict && get(x, "op", nothing) == "apply_operator"
 
     # -----------------------------------------------------------------------
     # BRIDGE GATE (esm-spec §9.6.7, RFC §12 gate 1): Expand(load_path(fixture)) is
@@ -135,7 +135,7 @@ end
         m = _load("template_instance_variants")["models"]["m"]
         @test _ool_defrhs(m, "du")["name"] == "ddx.variant1"
         @test _ool_defrhs(m, "dv")["name"] == "ddx.variant2"
-        @test _normj(m["expression_templates"]["ddx.variant1"]["body"])["name"] == "central_1d"
+        @test _normj(m["operators"]["ddx.variant1"]["body"])["name"] == "central_1d"
         # A leaf-bodied rule writes its leaf.
         e = _normj(_ool_defrhs(_load("rule_writes_reference")["models"]["m"], "e"))
         @test e == Dict("op" => "*", "args" => Any[0.25, "b"])
@@ -194,8 +194,8 @@ end
         f = EarthSciAST.load_path(conf(dir, "fixture.esm"))
         tr = f.coupling[1].transform
         @test tr isa OpExpr && tr.op == "+"
-        @test tr.args[1].op == "apply_expression_template" && tr.args[1].name == "scale_by"
-        @test tr.args[2].op == "apply_expression_template" && tr.args[2].name == "half_rule"
+        @test tr.args[1].op == "apply_operator" && tr.args[1].name == "scale_by"
+        @test tr.args[2].op == "apply_operator" && tr.args[2].name == "half_rule"
         @test collect(keys(f.component_templates["models.Sink"])) == ["half_rule", "scale_by"]
         flat = EarthSciAST.flatten(f)
         @test EarthSciAST.TEMPLATE_EXPANSIONS[] == e0
@@ -234,11 +234,13 @@ end
         # leaves it there. Comparing against the library's own version asserts
         # the opposite rule — that emit restamps — which the two lines below
         # pin against.
-        @test doc["esm"] == "1.1.0"
-        @test EarthSciAST._esm_stamp_floor("0.8.0") == "0.9.0"   # below the floor: raised
-        @test EarthSciAST._esm_stamp_floor("1.0.0") == "1.0.0"   # at/above: untouched
-        @test !haskey(adv, "expression_template_imports")     # imports consumed
-        reg = adv["expression_templates"]
+        # esm 2.4.0: an emitted document writes `operators` / `apply_operator`,
+        # so the floor is 2.4.0 (esm-spec §9.6.5).
+        @test doc["esm"] == "2.4.0"
+        @test EarthSciAST._esm_stamp_floor("0.8.0") == "2.4.0"   # below the floor: raised
+        @test EarthSciAST._esm_stamp_floor("2.5.0") == "2.5.0"   # at/above: untouched
+        @test !haskey(adv, "operator_imports")     # imports consumed
+        reg = adv["operators"]
         # The firing wrote a reference to its rule, which materializes
         # match-less (esm-spec §9.6.3 constraint 7, §9.6.4 rule 5).
         @test Set(string.(keys(reg))) ==
@@ -265,7 +267,7 @@ end
         s = _emit("emit_rename_dotted_keys")
         @test s == read(conf("emit_rename_dotted_keys", "emitted.esm"), String)
         doc = JSON3.read(s)
-        reg = doc["models"]["TwoGrids"]["expression_templates"]
+        reg = doc["models"]["TwoGrids"]["operators"]
         @test Set(string.(keys(reg))) ==
             Set(["fine.dx", "coarse.dx", "fine.central_D_x", "coarse.central_D_x"])   # dotted keys
         @test Set(string.(keys(doc["index_sets"]))) == Set(["fine.x", "coarse.x"])
@@ -281,9 +283,9 @@ end
         m = loaded["models"]["m"]
         deager = _normj(_ool_defrhs(m, "d_eager"))
         @test _isapply(deager["args"][1]) && deager["args"][1]["name"] == "deriv_c"
-        body = _normj(m["expression_templates"]["deriv_c"]["body"])
+        body = _normj(m["operators"]["deriv_c"]["body"])
         @test _isapply(body) && body["name"] == "central" && body["bindings"] == Dict("f" => "f")
-        @test !haskey(m["expression_templates"]["central"], "match")
+        @test !haskey(m["operators"]["central"], "match")
         dsurv = _normj(_ool_defrhs(m, "d_survive"))
         @test _isapply(dsurv["args"][1]) && dsurv["args"][1]["name"] == "scale_c"
         @test _emit("rewrite_in_template_body") ==
@@ -318,7 +320,7 @@ end
         # §9.6.3 constraint 7), binding the surviving reference WHOLE.
         @test _isapply(flux) && flux["name"] == "generic"
         @test _isapply(flux["bindings"]["f"]) && flux["bindings"]["f"]["name"] == "flux_prod"
-        @test _normj(d["models"]["m"]["expression_templates"]["generic"]["body"])["args"][1] == 1  # NOT compound 999
+        @test _normj(d["models"]["m"]["operators"]["generic"]["body"])["args"][1] == 1  # NOT compound 999
         @test _emit("opacity_priority_shadowing") ==
             read(conf("opacity_priority_shadowing", "emitted.esm"), String)
     end
@@ -337,8 +339,8 @@ end
         @test _ool_defrhs(root["models"]["A"], "ya")["name"] == "sten"
         @test _ool_defrhs(root["models"]["B"], "yb")["name"] == "sten"
         # per-component blocks surrendered to the merged registry
-        @test !haskey(root["models"]["A"], "expression_templates")
-        @test !haskey(root["models"]["B"], "expression_templates")
+        @test !haskey(root["models"]["A"], "operators")
+        @test !haskey(root["models"]["B"], "operators")
         # The typed FlattenedSystem carries the same merged registry as a
         # first-class field (esm-libraries-spec §4.7.5 step 4).
         flat = EarthSciAST.flatten(EarthSciAST.load_path(conf("flatten_registry_merge", "fixture.esm")))
@@ -360,7 +362,7 @@ end
         flat = EarthSciAST.flatten(EarthSciAST.load_path(p))
         emitted = emit_esm_string(
             OrderedDict{String, Any}(
-                "expression_templates" => OrderedDict{String, Any}(flat.template_registry)
+                "operators" => OrderedDict{String, Any}(flat.template_registry)
             )
         )
         @test emitted == read(conf("flatten_registry_order", "flattened_registry.esm"), String)
@@ -382,7 +384,7 @@ end
         flat = EarthSciAST.flatten(EarthSciAST.load_path(conf(d, "fixture.esm")))
         emitted = emit_esm_string(
             OrderedDict{String, Any}(
-                "expression_templates" => OrderedDict{String, Any}(flat.template_registry)
+                "operators" => OrderedDict{String, Any}(flat.template_registry)
             )
         )
         @test emitted == read(conf(d, "flattened_registry.esm"), String)
@@ -681,7 +683,7 @@ end
             )
         )
         _apply(v) = EarthSciAST.OpExpr(
-            "apply_expression_template",
+            "apply_operator",
             EarthSciAST.ASTExpr[]; name = "scale",
             bindings = Dict{String, EarthSciAST.ASTExpr}("a" => EarthSciAST.VarExpr(v))
         )
@@ -734,7 +736,7 @@ end
                 EarthSciAST.foreach_subexpr(
                     x -> (
                         hit |= x isa EarthSciAST.OpExpr &&
-                        x.op == "apply_expression_template"
+                        x.op == "apply_operator"
                     ), e
                 )
                 hit
@@ -825,7 +827,7 @@ end
     # -----------------------------------------------------------------------
     @testset "expanding an expansion copy leaves the caller's model unchanged" begin
         twice(f) = Dict(
-            "op" => "apply_expression_template", "args" => Any[],
+            "op" => "apply_operator", "args" => Any[],
             "name" => "twice", "bindings" => Dict("f" => f),
         )
         doc = Dict(
@@ -833,7 +835,7 @@ end
             "metadata" => Dict("name" => "expansion_copy"),
             "models" => Dict(
                 "M" => Dict(
-                    "expression_templates" => Dict(
+                    "operators" => Dict(
                         "twice" => Dict(
                             "params" => ["f"],
                             "body" => Dict("op" => "*", "args" => Any[2, "f"]),

@@ -237,10 +237,10 @@ _rps_rs_froms(file) = file.reaction_systems === nothing ? [] : [
         @test !EarthSciAST._index_set_raw_equal(off, on)
         dst = EarthSciAST.OrderedDict{String, Any}("gf_t" => plain)
         EarthSciAST._merge_named!(
-            dst, "gf_t", off, "template_import_index_set_conflict", "index set", "lib"
+            dst, "gf_t", off, "operator_import_index_set_conflict", "index set", "lib"
         )
         @test_throws EarthSciAST.ExpressionTemplateError EarthSciAST._merge_named!(
-            dst, "gf_t", on, "template_import_index_set_conflict", "index set", "lib"
+            dst, "gf_t", on, "operator_import_index_set_conflict", "index set", "lib"
         )
     end
 

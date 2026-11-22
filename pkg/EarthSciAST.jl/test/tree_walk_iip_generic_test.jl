@@ -44,7 +44,7 @@ const ESM = EarthSciAST
 # Locally-prefixed doc builders (every tree-walk test file is `include`d into the same
 # namespace, so shared short names would clobber each other).
 _gi_apply(nm; b...) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => nm,
+    "op" => "apply_operator", "args" => Any[], "name" => nm,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
 )
 _gi_ao(e) = Dict{String, Any}(
@@ -185,7 +185,7 @@ function _gi_interp()
             ),
         ]
     )
-    doc["models"]["M"]["expression_template_imports"] = Any[
+    doc["models"]["M"]["operator_imports"] = Any[
         Dict{String, Any}("ref" => "esm:std/interp.esm", "only" => Any["linear"]),
     ]
     return doc

@@ -19,7 +19,7 @@ _tv_d(p...) = Dict{String, Any}(p...)
 _tv_op(o, a...; kw...) = _tv_d("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
 _tv_ix(a, s...) = _tv_op("index", a, s...)
 _tv_ref(n; b...) = _tv_d(
-    "op" => "apply_expression_template", "args" => Any[], "name" => n,
+    "op" => "apply_operator", "args" => Any[], "name" => n,
     "bindings" => _tv_d((String(k) => v for (k, v) in b)...)
 )
 const _TV_JOIN = Any[_tv_d("overlap" => _tv_d("src_env" => Any["src_poly"], "tgt_env" => Any["tgt_poly"], "eps" => 1e-9))]
@@ -28,7 +28,7 @@ const _TV_JOIN = Any[_tv_d("overlap" => _tv_d("src_env" => Any["src_poly"], "tgt
 # regridding/conservative_overlap.esm), over lib/geometry.esm's planar area.
 function _tv_overlap_templates()
     lib = JSON3.read(read(joinpath(pkgdir(_TV), "data", "lib", "geometry.esm"), String), Dict{String, Any})
-    t = Dict{String, Any}(lib["expression_templates"])
+    t = Dict{String, Any}(lib["operators"])
     IJ = _tv_d("i" => _tv_d("from" => "src_cells"), "j" => _tv_d("from" => "tgt_cells"))
     t["pairs_gated"] = _tv_d("params" => Any["src_ring", "tgt_ring", "area"], "body" => _tv_op(
         "faq", "src_ring", "tgt_ring"; semiring = "sum_product", output_idx = Any["i", "j"], ranges = IJ,
@@ -75,7 +75,7 @@ function _tv_overlap_doc(ntracers)
             "lhs" => _tv_op("faq"; output_idx = Any["j"], ranges = _tv_d("j" => T), expr = _tv_op("D", _tv_ix(v, "j"); wrt = "t")),
             "rhs" => _tv_op("faq", E; output_idx = Any["j"], ranges = _tv_d("j" => T), expr = _tv_op("-", _tv_ix(E, "j"), _tv_ix(v, "j")))))
     end
-    model = _tv_d("variables" => vars, "equations" => eqs, "expression_templates" => _tv_overlap_templates())
+    model = _tv_d("variables" => vars, "equations" => eqs, "operators" => _tv_overlap_templates())
     return _tv_d("esm" => "2.0.0", "metadata" => _tv_d("name" => "tv_overlap"),
         "index_sets" => _tv_d("src_cells" => _tv_d("kind" => "interval", "size" => 4), "tgt_cells" => _tv_d("kind" => "interval", "size" => 3),
             "verts" => _tv_d("kind" => "interval", "size" => 4), "coord" => _tv_d("kind" => "interval", "size" => 2)),
@@ -112,7 +112,7 @@ end
     end
     # The view: the aggregate's header in the caller, the leaves part calls.
     doc = _tv_overlap_doc(1)
-    tt = _TV._TplTable(Dict{String, Any}(doc["models"]["M"]["expression_templates"]))
+    tt = _TV._TplTable(Dict{String, Any}(doc["models"]["M"]["operators"]))
     ap = _TV._tpl_augment(tt, _TV._tpl_structural_refs(tt, _TV.expression_from_json(doc["models"]["M"]["equations"][5]["rhs"])))
     @test _TV._tpl_compiles(tt, ap)
     v = _TV._tpl_agg_view(tt, ap)
@@ -127,7 +127,7 @@ end
 end
 
 @testset "a call body's reduction over an index set named by a parameter" begin
-    D = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "expression_templates", "ranges_from_param")
+    D = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "operators", "ranges_from_param")
     function du(path, comp)
         (prob, c) = _TV.Internal.counting(() -> _TV.esm_problem(path, (0.0, 1.0); compiler = comp))
         u = copy(prob.u0) .+ 0.1 .* (1:length(prob.u0))
@@ -143,7 +143,7 @@ end
 end
 
 @testset "an elementwise operator over whole array-valued references in a body" begin
-    D = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "expression_templates", "flatten_registry_merge_transitive")
+    D = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "operators", "flatten_registry_merge_transitive")
     mktempdir() do dir
         for lib in ("stencil_lib.esm", "rule_lib.esm")
             cp(joinpath(D, lib), joinpath(dir, lib))

@@ -141,7 +141,7 @@ function _scg_sites_doc(S::Int; odd::Bool = false)
             ay = [0.25 * k + 0.02 * i for k in 1:8]
             tb = [[cos(0.3k + 0.11j + i) for j in 1:8] for k in 1:8]
             Dict{String, Any}(
-                "op" => "apply_expression_template", "args" => Any[], "name" => "bilinear",
+                "op" => "apply_operator", "args" => Any[], "name" => "bilinear",
                 "bindings" => Dict{String, Any}(
                     "table" => jconst(tb), "axis_x" => jconst(ax),
                     "axis_y" => jconst(ay), "x" => _scg_jop("+", 2.5, x),
@@ -150,7 +150,7 @@ function _scg_sites_doc(S::Int; odd::Bool = false)
             )
         else
             Dict{String, Any}(
-                "op" => "apply_expression_template", "args" => Any[], "name" => "linear",
+                "op" => "apply_operator", "args" => Any[], "name" => "linear",
                 "bindings" => Dict{String, Any}(
                     "table" => jconst(tab), "axis" => jconst(ax),
                     "x" => _scg_jop("+", 2.0 + 0.37 * (i % 5), x), "n" => 8
@@ -167,7 +167,7 @@ function _scg_sites_doc(S::Int; odd::Bool = false)
     imports = Any[
         Dict("ref" => joinpath(TESTUTILS_REPO_ROOT, "lib", "interp.esm"), "only" => Any["linear", "bilinear"]),
     ]
-    model = Dict{String, Any}("variables" => vars, "equations" => eqs, "expression_template_imports" => imports)
+    model = Dict{String, Any}("variables" => vars, "equations" => eqs, "operator_imports" => imports)
     return Dict{String, Any}(
         "esm" => "2.0.0", "metadata" => Dict("name" => "sites_$S", "description" => "scalar template sites"),
         "models" => Dict("M" => model)

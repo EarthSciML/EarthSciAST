@@ -99,7 +99,7 @@ _stdref_doc(path) =
     @testset "a document loaded from a string reaches the bundle" begin
         text = read(joinpath(root, "import_interp.esm"), String)
         file = load_string(text)
-        @test !occursin("apply_expression_template", _stdref_expanded_json(file))
+        @test !occursin("apply_operator", _stdref_expanded_json(file))
     end
 
     @testset "spelling rules" begin
@@ -134,10 +134,10 @@ _stdref_doc(path) =
         quad(name) = Dict(
             "params" => ["x"],
             "body" => Dict(
-                "op" => "apply_expression_template", "args" => Any[], "name" => "twice",
+                "op" => "apply_operator", "args" => Any[], "name" => "twice",
                 "bindings" => Dict(
                     "x" => Dict(
-                        "op" => "apply_expression_template", "args" => Any[],
+                        "op" => "apply_operator", "args" => Any[],
                         "name" => "twice", "bindings" => Dict("x" => "x")
                     )
                 )
@@ -145,13 +145,13 @@ _stdref_doc(path) =
         )
         lib(name, imports, templates) = Dict(
             "esm" => "2.0.0", "metadata" => Dict("name" => name),
-            "expression_template_imports" => [Dict("ref" => r) for r in imports],
-            "expression_templates" => templates
+            "operator_imports" => [Dict("ref" => r) for r in imports],
+            "operators" => templates
         )
         bundle_files = Dict(
             "b.esm" => Dict(
                 "esm" => "2.0.0", "metadata" => Dict("name" => "b"),
-                "expression_templates" => Dict("twice" => twice)
+                "operators" => Dict("twice" => twice)
             ),
             "a.esm" => lib("a", ["b.esm"], Dict("quad" => quad("a"))),
             "a_dot.esm" => lib("a_dot", ["./b.esm"], Dict("quad" => quad("a_dot"))),
@@ -163,7 +163,7 @@ _stdref_doc(path) =
                 "esm" => "2.0.0", "metadata" => Dict("name" => "sub"),
                 "models" => Dict(
                     "Sub" => Dict(
-                        "expression_template_imports" => [Dict("ref" => "b.esm")],
+                        "operator_imports" => [Dict("ref" => "b.esm")],
                         "variables" => Dict(
                             "u" => Dict("type" => "parameter", "units" => "1", "default" => 3.0),
                             "w" => Dict("type" => "unknown", "units" => "1")
@@ -171,7 +171,7 @@ _stdref_doc(path) =
                         "equations" => [
                             Dict(
                                 "lhs" => "w", "rhs" => Dict(
-                                    "op" => "apply_expression_template", "args" => Any[],
+                                    "op" => "apply_operator", "args" => Any[],
                                     "name" => "twice", "bindings" => Dict("x" => "u")
                                 )
                             ),
@@ -185,7 +185,7 @@ _stdref_doc(path) =
                 "esm" => "2.0.0", "metadata" => Dict("name" => "consumer"),
                 "models" => Dict(
                     "M" => Dict(
-                        "expression_template_imports" => [Dict("ref" => ref)],
+                        "operator_imports" => [Dict("ref" => ref)],
                         "variables" => Dict(
                             "x" => Dict("type" => "parameter", "units" => "1", "default" => 1.0),
                             "y" => Dict("type" => "unknown", "units" => "1")
@@ -193,7 +193,7 @@ _stdref_doc(path) =
                         "equations" => [
                             Dict(
                                 "lhs" => "y", "rhs" => Dict(
-                                    "op" => "apply_expression_template", "args" => Any[],
+                                    "op" => "apply_operator", "args" => Any[],
                                     "name" => tmpl, "bindings" => Dict("x" => "x")
                                 )
                             ),
@@ -217,14 +217,14 @@ _stdref_doc(path) =
             try
                 for lib_name in ("a", "a_dot", "a_std")
                     f = load_string(consumer("esm:std/$(lib_name).esm", "quad"); base_path = elsewhere)
-                    @test !occursin("apply_expression_template", _stdref_expanded_json(f))
+                    @test !occursin("apply_operator", _stdref_expanded_json(f))
                 end
                 @test _stdref_errcode(
                     () -> load_string(consumer("esm:std/up.esm", "quad"); base_path = elsewhere)
-                ) == "template_import_unresolved"
+                ) == "operator_import_unresolved"
                 @test _stdref_errcode(
                     () -> load_string(consumer("esm:std/c1.esm", "one"); base_path = elsewhere)
-                ) == "template_import_cycle"
+                ) == "operator_import_cycle"
                 mount = JSON3.write(
                     Dict(
                         "esm" => "2.0.0", "metadata" => Dict("name" => "mount"),
@@ -239,7 +239,7 @@ _stdref_doc(path) =
                 )
                 f = load_string(mount; base_path = elsewhere)
                 @test haskey(f.models["Top"].subsystems, "S")
-                @test !occursin("apply_expression_template", _stdref_expanded_json(f))
+                @test !occursin("apply_operator", _stdref_expanded_json(f))
             finally
                 EarthSciAST._STDLIB_DIR[] = saved
             end

@@ -150,6 +150,7 @@ function _materialize_components!(root, authored::Dict{String, Vector{String}})
         else
             comp["operators"] = emit_block
             blocks[key] = emit_block
+            bump = true
         end
         haskey(comp, "operator_imports") &&
             delete!(comp, "operator_imports")
@@ -241,7 +242,10 @@ carrying a surviving `apply_expression_template` reference or a materialized
 `expression_templates` block is stamped to AT LEAST this (esm-spec §9.6.4 rule
 8).
 """
-const TEMPLATE_MACHINERY_MIN_ESM = "0.9.0"
+# esm 2.4.0: an emitted document writes the names `operators` and
+# `apply_operator` (esm-spec §9.6.5, §9.6.12), so it declares 2.4.0 or later;
+# this floor subsumes the 0.9.0 floor of the Option-B machinery (§9.6.4 rule 8).
+const TEMPLATE_MACHINERY_MIN_ESM = "2.4.0"
 
 """
     _esm_stamp_floor(declared) -> String

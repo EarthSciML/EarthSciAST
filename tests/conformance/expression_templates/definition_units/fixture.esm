@@ -1,0 +1,70 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "definition_units",
+    "description": "VALID (esm-spec §9.6.12 'Units'): `rate` has the unit expression q / (1 s) and a body q / tau with tau in seconds, which agree; y [m/s] = rate(x [m]) checks.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "Length"
+        },
+        "tau": {
+          "type": "parameter",
+          "units": "s",
+          "default": 2.0,
+          "description": "Time scale"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Rate"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "rate",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ],
+      "operators": {
+        "rate": {
+          "params": [
+            "q"
+          ],
+          "units": {
+            "op": "/",
+            "args": [
+              "q",
+              {
+                "op": "const",
+                "args": [],
+                "value": 1,
+                "units": "s"
+              }
+            ]
+          },
+          "body": {
+            "op": "/",
+            "args": [
+              "q",
+              "tau"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

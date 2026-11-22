@@ -602,6 +602,80 @@ struct _RewriteRule
     priority::Int
     decl_index::Int
     where_clause::Union{Nothing, Dict{String, Vector{String}}}
+    # esm 2.4.0 (esm-spec §9.6.3 constraint 2, §9.6.12): a match-less
+    # definition is eligible at a CALL of the defined operator it defines —
+    # `pattern` is `{op: defines, args: params}` and the node must carry no
+    # field besides `op` and `args` (`exact`).
+    exact::Bool
+end
+
+# The §9.6.3 selection key: highest `priority`, then a definition carrying a
+# `where` before one without (esm 2.4.0), then declaration order.
+_selection_key(r::_RewriteRule) = (-r.priority, r.where_clause === nothing ? 1 : 0, r.decl_index)
+
+"""
+    _is_core_op(op) -> Bool
+
+True iff `op` names a core operator (esm-spec §4.2: the closed, evaluable set
+every binding's evaluator implements). Every other `op` names a defined
+operator (§9.6.12).
+"""
+_is_core_op(op::AbstractString) = _op_spec(String(op)) !== nothing
+
+# The root `op` of a definition's `match`, or `nothing`.
+function _match_root_op(decl)
+    m = _raw_get(decl, "match")
+    (m !== nothing && _is_object(m)) || return nothing
+    op = _raw_get(m, "op")
+    return op isa AbstractString ? String(op) : nothing
+end
+
+"""
+    _definition_defines(name, decl) -> String
+
+The defined operator an `operators` entry is a definition of (esm-spec §9.6.1
+`defines`): its written `defines`; else the root `op` of its `match` when that
+is not a core op; else its key.
+"""
+function _definition_defines(name::AbstractString, decl)::String
+    d = _raw_get(decl, "defines")
+    d isa AbstractString && return String(d)
+    r = _match_root_op(decl)
+    (r !== nothing && !_is_core_op(r)) && return r
+    return String(name)
+end
+
+"""
+    _check_defines_not_core(name, decl, scope)
+
+esm-spec §9.6.12 "Core names are reserved": a definition whose `defines`,
+written or inferred, is a core operator's name is `operator_defines_core_op`.
+A rule whose `match` is rooted at a core op defines no callable name, so its
+`defines` is provenance only and is not checked.
+"""
+function _check_defines_not_core(name::AbstractString, decl, scope::AbstractString)
+    r = _match_root_op(decl)
+    (r !== nothing && _is_core_op(r)) && return nothing
+    d = _definition_defines(name, decl)
+    _is_core_op(d) && throw(
+        ExpressionTemplateError(
+            ERROR_CODES.OPERATOR_DEFINES_CORE_OP,
+            "$scope.operators.$name: defines the core operator '$d'; a definition " *
+                "may not define a core operator's name (esm-spec §9.6.12, " *
+                "\"Core names are reserved\")"
+        )
+    )
+    return nothing
+end
+
+# Whether `n` is a call shape a match-less definition can bind: an `op` and
+# `args`, no other field (esm-spec §9.6.3 constraint 2).
+function _only_op_args(n)::Bool
+    for (k, _) in pairs(n)
+        ks = string(k)
+        (ks == "op" || ks == "args") || return false
+    end
+    return true
 end
 
 """
@@ -621,6 +695,12 @@ against the RECEIVING component (esm-spec §10.4).
 struct _Lowering
     named::Dict{String, Any}
     match_rules::Vector{_RewriteRule}
+    # Match-less definitions by the defined operator they define, each list in
+    # §9.6.3 selection order (esm 2.4.0 calls by operator name).
+    call_rules::Dict{String, Vector{_RewriteRule}}
+    # Operand counts the definitions of each defined operator take
+    # (esm-spec §9.6.12 "Arity").
+    arities::Dict{String, Set{Int}}
     shape_env::Dict{String, Vector{String}}
     enums::Any
     scope::String
@@ -692,20 +772,155 @@ function _rewrite_pass(
             d === nothing || (L.depth[nn] = d)
             return nn
         end
-        for rule in L.match_rules
-            bindings = Dict{String, Any}()
-            if _match_pattern(rule.pattern, n, rule.params, bindings, bv) &&
-                    _where_satisfied(rule.where_clause, bindings, L.shape_env, bv)
-                last[] = rule.name
-                changed[] = true
-                r = _rule_reference(rule, bindings)
-                _is_apply_node(r) && (L.depth[r] = pass)
-                return r
-            end
+        win, wb = _select_definition(L, n, op_str, bv)
+        if win !== nothing
+            last[] = win.name
+            changed[] = true
+            r = _rule_reference(win, wb)
+            _is_apply_node(r) && (L.depth[r] = pass)
+            return r
         end
         return _JSON_DESCEND
     end
     return (out, changed[])
+end
+
+"""
+    _check_call_arity(node, L, scope)
+
+esm-spec §9.6.12 "Arity": a call of a defined operator `N` that survives the
+fixpoint, when definitions of `N` are in scope and none takes the call's
+operand count, is `operator_arity_mismatch` at load. A name with no definition
+in scope is a placeholder, whatever its arity.
+"""
+function _check_call_arity(node, L::_Lowering, scope::AbstractString)
+    isempty(L.arities) && return nothing
+    _visit_json(node) do _, n
+        _is_object(n) || return true
+        op = _raw_get(n, "op")
+        op isa AbstractString || return true
+        counts = get(L.arities, String(op), nothing)
+        counts === nothing && return true
+        _is_core_op(op) && return true
+        args = _raw_get(n, "args")
+        k = (args === nothing || !_is_array(args)) ? 0 : length(args)
+        k in counts && return true
+        throw(
+            ExpressionTemplateError(
+                ERROR_CODES.OPERATOR_ARITY_MISMATCH,
+                "$scope: a call of the defined operator '$op' carries $k operand(s), but " *
+                    "its definitions in scope take $(join(sort!(collect(counts)), ", ")) " *
+                    "(esm-spec §9.6.12)"
+            )
+        )
+    end
+    return nothing
+end
+
+# The registry entries a node's references reach, transitively through bodies.
+function _reached_definitions!(out::Set{String}, node, named::AbstractDict)
+    for r in _collect_apply_names!(String[], node)
+        r in out && continue
+        d = get(named, r, nothing)
+        d === nothing && continue
+        push!(out, r)
+        _reached_definitions!(out, _raw_get(d, "body"), named)
+    end
+    return out
+end
+
+"""
+    _explain_unresolved_call(call, registry, shape_env) -> String
+
+The `unlowered_operator` explanation of esm-spec §9.6.6 for an unresolved call
+`call` (raw JSON) of a defined operator: every definition of it in `registry`
+(name => raw entry) with the reason it was not eligible there — its `match`
+did not match, its `where` failed (naming the constraint), or its arity or
+call shape differed. Empty registry entries for the operator: a placeholder.
+"""
+function _explain_unresolved_call(call, registry, shape_env = _EMPTY_SHAPE_ENV)::String
+    op = _raw_get(call, "op")
+    op isa AbstractString || return ""
+    args = _raw_get(call, "args")
+    k = (args === nothing || !_is_array(args)) ? 0 : length(args)
+    lines = String[]
+    registry === nothing && return "no definition of '$op' is in scope (a placeholder)"
+    for name in sort!(String[string(n) for n in keys(registry)])
+        decl = registry[name]
+        _is_object(decl) || continue
+        td = _TemplateDecl(decl)
+        m = td.match
+        rop = _match_root_op(decl)
+        if m !== nothing
+            rop == op || continue
+            b = Dict{String, Any}()
+            if !_match_pattern(m, call, Set{String}(td.params), b)
+                push!(lines, "'$name': its match does not match the call")
+                continue
+            end
+            whr = _raw_get(decl, "where")
+            push!(lines, "'$name': its where constraint " * _where_reason(whr, b, shape_env))
+        else
+            _definition_defines(name, decl) == op || continue
+            if length(td.params) != k
+                push!(lines, "'$name': takes $(length(td.params)) operand(s), the call carries $k")
+            elseif !_only_op_args(call)
+                extra = sort!([string(x) for (x, _) in pairs(call) if !(string(x) in ("op", "args"))])
+                push!(lines, "'$name': has no match, so it binds operands only, and the call carries $(join(extra, ", "))")
+            else
+                b = Dict{String, Any}(p => a for (p, a) in zip(td.params, args))
+                push!(lines, "'$name': its where constraint " * _where_reason(_raw_get(decl, "where"), b, shape_env))
+            end
+        end
+    end
+    isempty(lines) && return "no definition of '$op' is in scope (a placeholder)"
+    return "definitions of '$op' in scope: " * join(lines, "; ")
+end
+
+function _where_reason(whr, b::Dict{String, Any}, shape_env)::String
+    whr === nothing && return "holds (the definition was not selected)"
+    for (p, c) in pairs(whr)
+        want = _raw_get(c, "shape")
+        got = get(b, string(p), nothing)
+        shp = got isa AbstractString ? get(shape_env, String(got), nothing) : nothing
+        return "$(p).shape = $(want) fails: the operand bound to $p " *
+            (got isa AbstractString ? "('$got') has declared shape $(shp === nothing ? "none" : shp)" : "is not a bare variable")
+    end
+    return "fails"
+end
+
+"""
+    _select_definition(L, n, op, bv) -> (rule, bindings) or (nothing, nothing)
+
+The definition that resolves node `n` (esm-spec §9.6.3 constraint 2, §9.6.12):
+among the `match` rules whose pattern matches and the match-less definitions of
+the defined operator `op` that take `n`'s operands, those whose `where` holds,
+the first in [`_selection_key`](@ref) order.
+"""
+function _select_definition(L::_Lowering, n, op::String, bv::Union{Nothing, _BodyView})
+    best = nothing
+    bestb = nothing
+    for rule in L.match_rules
+        b = Dict{String, Any}()
+        if _match_pattern(rule.pattern, n, rule.params, b, bv) &&
+                _where_satisfied(rule.where_clause, b, L.shape_env, bv)
+            best, bestb = rule, b
+            break
+        end
+    end
+    calls = isempty(op) ? nothing : get(L.call_rules, op, nothing)
+    if calls !== nothing && _only_op_args(n)
+        for rule in calls
+            best !== nothing && _selection_key(best) < _selection_key(rule) && break
+            b = Dict{String, Any}()
+            if _match_pattern(rule.pattern, n, rule.params, b, bv) &&
+                    _where_satisfied(rule.where_clause, b, L.shape_env, bv)
+                best, bestb = rule, b
+                break
+            end
+        end
+    end
+    return (best, bestb)
 end
 
 """
@@ -1083,6 +1298,8 @@ Throws [`ExpressionTemplateError`](@ref) on any of:
 - declaration is malformed (params missing, body missing, etc.)
 """
 function lower_expression_templates(raw_data)
+    # Old spellings (esm-spec §9.6.12) when the caller skipped the wire boundary.
+    raw_data = _wire_old_spellings(raw_data)
     reject_expression_templates_pre_v04(raw_data)
 
     # Fast path: files that neither declare `expression_templates` blocks
@@ -1134,6 +1351,8 @@ function lower_expression_templates(raw_data)
         #                 DECLARATION order (esm-spec §9.6.3).
         named = Dict{String, Any}()
         match_rules = _RewriteRule[]
+        call_rules = Dict{String, Vector{_RewriteRule}}()
+        arities = Dict{String, Set{Int}}()
         if _is_object(tplraw)
             # `root` is order-preserving (`_to_ordered`), so this map's key
             # order IS the authored declaration order — the `match`-rule
@@ -1149,11 +1368,41 @@ function lower_expression_templates(raw_data)
             # inlined — references are preserved (§9.6.4).
             _check_template_body_graph(templates, "$compkind.$cname")
             decl_index = 0
-            for (tname, decl) in templates
+            for (tname, decl0) in templates
                 decl_index += 1
+                # esm 2.4.0 (esm-spec §9.6.12): every definition records the
+                # defined operator it defines; a core operator's name is reserved.
+                _check_defines_not_core(tname, decl0, "$compkind.$cname")
+                decl = decl0
+                if _raw_get(decl0, "defines") === nothing
+                    decl = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl0))
+                    decl["defines"] = _definition_defines(tname, decl0)
+                    tplraw[tname] = decl
+                end
                 named[tname] = decl
                 td = _TemplateDecl(decl)
                 m = td.match
+                defines = _definition_defines(tname, decl)
+                rop = _match_root_op(decl)
+                if m === nothing
+                    push!(get!(arities, defines, Set{Int}()), length(td.params))
+                elseif rop !== nothing && !_is_core_op(rop)
+                    margs = _raw_get(m, "args")
+                    push!(get!(arities, rop, Set{Int}()), margs === nothing ? 0 : length(margs))
+                end
+                if m === nothing && !_is_core_op(defines) && defines != APPLY_EXPRESSION_TEMPLATE_OP
+                    push!(
+                        get!(call_rules, defines, _RewriteRule[]),
+                        _RewriteRule(
+                            tname,
+                            OrderedDict{String, Any}("op" => defines, "args" => Any[td.params...]),
+                            Set{String}(td.params), String[td.params...], td.body,
+                            _rule_priority(decl), decl_index,
+                            _registered_where(decl, iset_names, "$compkind.$cname", tname),
+                            true
+                        )
+                    )
+                end
                 if m !== nothing
                     # `where` registration: normalize constraints and
                     # resolve every referenced index-set name against the
@@ -1167,18 +1416,25 @@ function lower_expression_templates(raw_data)
                         match_rules,
                         _RewriteRule(
                             tname, m, Set{String}(td.params), String[td.params...], td.body,
-                            _rule_priority(decl), decl_index, where_c
+                            _rule_priority(decl), decl_index, where_c, false
                         )
                     )
                 end
             end
             # Deterministic selection order (esm-spec §9.6.3): highest
-            # `priority` first, ties broken by declaration order (earliest
-            # wins). `_rewrite_pass` then takes the FIRST matching rule.
-            sort!(match_rules, by = r -> (-r.priority, r.decl_index))
+            # `priority` first, then a definition with a `where` before one
+            # without (esm 2.4.0), then declaration order (earliest wins).
+            # `_select_definition` takes the FIRST eligible definition.
+            sort!(match_rules, by = _selection_key)
+            for v in values(call_rules)
+                sort!(v, by = _selection_key)
+            end
         end
         cscope = "$compkind.$cname"
-        L = _Lowering(named, match_rules, shape_env, enums, cscope, IdDict{Any, Int}())
+        L = _Lowering(
+            named, match_rules, call_rules, arities, shape_env, enums, cscope,
+            IdDict{Any, Int}()
+        )
         # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
         # non-template field (esm-spec §9.6.3): each firing writes a reference
         # to its rule (constraint 7); references are leaves for matching and
@@ -1218,6 +1474,23 @@ function lower_expression_templates(raw_data)
         end
         for entry in transforms
             _check_surviving_refs(entry["transform"], L.named, "$(L.scope) coupling transform")
+        end
+        # esm-spec §9.6.12 "Arity": surviving calls in the component, in the
+        # transforms it receives, and in the bodies its references reach.
+        if !isempty(L.arities)
+            reached = Set{String}()
+            for k in collect(keys(comp))
+                k == "operators" && continue
+                _check_call_arity(comp[k], L, "$(L.scope).$k")
+                _reached_definitions!(reached, comp[k], L.named)
+            end
+            for entry in transforms
+                _check_call_arity(entry["transform"], L, "$(L.scope) coupling transform")
+                _reached_definitions!(reached, entry["transform"], L.named)
+            end
+            for r in sort!(collect(reached))
+                _check_call_arity(_raw_get(L.named[r], "body"), L, "$(L.scope).operators.$r")
+            end
         end
     end
 

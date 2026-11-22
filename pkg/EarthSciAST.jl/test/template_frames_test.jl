@@ -23,7 +23,7 @@ using EarthSciAST: OpExpr, VarExpr, NumExpr, ASTExpr, expression_from_json, free
 const _FR = EarthSciAST
 
 _fr_ref(name, b) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(b)
 )
 _fr_op(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
@@ -149,7 +149,7 @@ _fr_names(e::ASTExpr) = sort!(collect(free_variables(e)))
             "esm" => "0.9.0", "metadata" => Dict{String, Any}("name" => "frames_graph"),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
-                    "expression_templates" => Dict{String, Any}(
+                    "operators" => Dict{String, Any}(
                         "inner" => Dict{String, Any}("params" => Any["x"], "body" => _fr_op("*", "k", "x")),
                         "outer" => Dict{String, Any}(
                             "params" => Any["y"],
@@ -179,7 +179,7 @@ _fr_names(e::ASTExpr) = sort!(collect(free_variables(e)))
         @test into_y == Set(["M.k", "M.c", "M.z"])
         # The caller's document still carries its references.
         @test file.models["M"].equations[1].rhs isa OpExpr
-        @test file.models["M"].equations[1].rhs.op == "apply_expression_template"
+        @test file.models["M"].equations[1].rhs.op == "apply_operator"
     end
 
     @testset "range selection reads through references" begin
@@ -189,7 +189,7 @@ _fr_names(e::ASTExpr) = sort!(collect(free_variables(e)))
             "esm" => "0.9.0", "metadata" => Dict{String, Any}("name" => "frames_select"),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
-                    "expression_templates" => Dict{String, Any}(
+                    "operators" => Dict{String, Any}(
                         "damp" => Dict{String, Any}("params" => Any["x"], "body" => _fr_op("*", "w", "x")),
                     ),
                     "variables" => Dict{String, Any}(
@@ -206,7 +206,7 @@ _fr_names(e::ASTExpr) = sort!(collect(free_variables(e)))
             ),
         )
         flat = EarthSciAST.flatten(EarthSciAST.load_string(IOBuffer(EarthSciAST.JSON3.write(doc))))
-        @test any(eq -> occursin("apply_expression_template", string(EarthSciAST.serialize_expression(eq.rhs))), flat.equations)
+        @test any(eq -> occursin("apply_operator", string(EarthSciAST.serialize_expression(eq.rhs))), flat.equations)
         # `w` is live only through the reference in `D(y)`'s rule.
         @test haskey(flat.observed_variables, "M.w")
         flat2, W, R = EarthSciAST._select_flat(flat, ["M.y", "M.z"], :all)

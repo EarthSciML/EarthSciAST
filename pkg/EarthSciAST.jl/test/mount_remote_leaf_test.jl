@@ -176,7 +176,7 @@ using EarthSciAST
             )
         )
         root = root_mounting("$host/scaled.esm"; form = :subsystem)
-        root["models"]["Host"]["subsystems"]["S"]["expression_template_imports"] =
+        root["models"]["Host"]["subsystems"]["S"]["operator_imports"] =
             Any[D("ref" => "./template_import_lib.esm")]
         fetched = String[]
         docs = D("$host/scaled.esm" => J(leaf))
@@ -193,7 +193,7 @@ using EarthSciAST
         y_eq = only(filter(eq -> eq.lhs isa EarthSciAST.VarExpr && eq.lhs.name == "y", file.models["Host"].subsystems["S"].equations))
         # The rule fired: its firing writes a reference to the rule (esm-spec
         # §9.6.3 constraint 7), whose expansion holds no `scale_by_n` op.
-        @test y_eq.rhs isa EarthSciAST.OpExpr && y_eq.rhs.op == "apply_expression_template" &&
+        @test y_eq.rhs isa EarthSciAST.OpExpr && y_eq.rhs.op == "apply_operator" &&
             y_eq.rhs.name == "scale_by_n"
         y_exp = only(
             filter(

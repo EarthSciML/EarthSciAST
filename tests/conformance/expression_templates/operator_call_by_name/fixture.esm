@@ -1,0 +1,232 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "operator_call_by_name",
+    "description": "esm 2.4.0 (esm-spec §9.6.3 constraint 2, §9.6.12): calls of defined operators resolve to definitions without a match. div(F) on an edge field picks fv_div_edges (a where before none, at equal priority, though declared after div_default); div(u) on a cell field picks div_default (the where fails); twice(w) picks twice_fast (priority 1 over the key-named twice); thrice(w) picks thrice_a (declaration order); mystery(w) has no definition and stays a placeholder. Every resolved call becomes a reference; nothing is inlined.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "edges": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "F": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "edges"
+          ],
+          "description": "Edge field"
+        },
+        "u": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "shape": [
+            "cells"
+          ],
+          "description": "Cell field"
+        },
+        "w": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Scalar"
+        },
+        "d1": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "edges"
+          ],
+          "description": "div of an edge field"
+        },
+        "d2": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "div of a cell field"
+        },
+        "t1": {
+          "type": "unknown",
+          "units": "1",
+          "description": "twice"
+        },
+        "t2": {
+          "type": "unknown",
+          "units": "1",
+          "description": "thrice"
+        },
+        "p": {
+          "type": "unknown",
+          "units": "1",
+          "description": "placeholder"
+        },
+        "r": {
+          "type": "unknown",
+          "units": "1",
+          "description": "explicit reference"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "d1",
+          "rhs": {
+            "op": "div",
+            "args": [
+              "F"
+            ]
+          }
+        },
+        {
+          "lhs": "d2",
+          "rhs": {
+            "op": "div",
+            "args": [
+              "u"
+            ]
+          }
+        },
+        {
+          "lhs": "t1",
+          "rhs": {
+            "op": "twice",
+            "args": [
+              "w"
+            ]
+          }
+        },
+        {
+          "lhs": "t2",
+          "rhs": {
+            "op": "thrice",
+            "args": [
+              "w"
+            ]
+          }
+        },
+        {
+          "lhs": "p",
+          "rhs": {
+            "op": "mystery",
+            "args": [
+              "w"
+            ]
+          }
+        },
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "apply_operator",
+            "args": [],
+            "name": "twice",
+            "bindings": {
+              "a": "w"
+            }
+          }
+        }
+      ],
+      "operators": {
+        "div_default": {
+          "params": [
+            "X"
+          ],
+          "defines": "div",
+          "body": {
+            "op": "*",
+            "args": [
+              3,
+              "X"
+            ]
+          }
+        },
+        "fv_div_edges": {
+          "params": [
+            "F"
+          ],
+          "defines": "div",
+          "where": {
+            "F": {
+              "shape": [
+                "edges"
+              ]
+            }
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              2,
+              "F"
+            ]
+          }
+        },
+        "twice": {
+          "params": [
+            "a"
+          ],
+          "body": {
+            "op": "+",
+            "args": [
+              "a",
+              "a"
+            ]
+          }
+        },
+        "twice_fast": {
+          "params": [
+            "a"
+          ],
+          "defines": "twice",
+          "priority": 1,
+          "body": {
+            "op": "*",
+            "args": [
+              2,
+              "a"
+            ]
+          }
+        },
+        "thrice_a": {
+          "params": [
+            "a"
+          ],
+          "defines": "thrice",
+          "body": {
+            "op": "*",
+            "args": [
+              3,
+              "a"
+            ]
+          }
+        },
+        "thrice_b": {
+          "params": [
+            "a"
+          ],
+          "defines": "thrice",
+          "body": {
+            "op": "+",
+            "args": [
+              "a",
+              "a",
+              "a"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

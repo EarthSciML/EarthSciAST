@@ -420,7 +420,7 @@ end
             jop("<=", jidx("ymin", "c"), jidx("pty", "r")),
             jop("<", jidx("pty", "r"), jidx("ymax", "c"))
         )
-        tm["expression_templates"] = Dict{String, Any}(
+        tm["operators"] = Dict{String, Any}(
             "bin_emissions" => Dict{String, Any}(
                 "params" => Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "tot", "frac"],
                 "body" => jop(
@@ -435,7 +435,7 @@ end
                 ("E_PM25", "is_PM25"),
             )
             _defrhs(tm, Ename)["expr"] = Dict{String, Any}(
-                "op" => "apply_expression_template", "args" => Any[],
+                "op" => "apply_operator", "args" => Any[],
                 "name" => "bin_emissions",
                 "bindings" => Dict{String, Any}(
                     "xmin" => "src_W", "ymin" => "src_S",
@@ -445,14 +445,14 @@ end
                 )
             )
         end
-        tpl_before = deepcopy(tm["expression_templates"])
+        tpl_before = deepcopy(tm["operators"])
 
         trd = EA.desugar_pushdown(tdoc; model_name = "ISRM")
         @test trd !== tdoc                                     # it fired
         @test trd["metadata"]["x_esd"]["pushdown"]["gated_select"]["gated_by"] == SET
         # the SHARED body is not edited — Option B's single lowering survives;
         # the producer filter is the derived template of its containment
-        ttpl = trd["models"]["ISRM"]["expression_templates"]
+        ttpl = trd["models"]["ISRM"]["operators"]
         @test Dict(k => v for (k, v) in ttpl if k != "bin_emissions__pd_filter") == tpl_before
         @test haskey(ttpl, "bin_emissions__pd_filter")
         # the CALL SITES are: each E now gathers the compact per-support rects

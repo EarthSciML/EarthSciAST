@@ -24,7 +24,7 @@ const _GT_RTOL = Float64(_GT_PAIRS.tolerance.rtol)
 const _GT_ATOL_FACTOR = Float64(_GT_PAIRS.tolerance.atol_factor)
 
 _gt_apply(name, bindings) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name, "bindings" => bindings
+    "op" => "apply_operator", "args" => Any[], "name" => name, "bindings" => bindings
 )
 _gt_plain(x) = x isa JSON3.Array ? Any[_gt_plain(v) for v in x] : (x isa Real ? Float64(x) : x)
 
@@ -123,7 +123,7 @@ function _gt_document(manifold, rows)
         "index_sets" => index_sets,
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
-                "expression_template_imports" => Any[Dict{String, Any}("ref" => "geometry.esm")],
+                "operator_imports" => Any[Dict{String, Any}("ref" => "geometry.esm")],
                 "variables" => vars, "equations" => eqs
             )
         )
@@ -208,7 +208,7 @@ end
             "metadata" => Dict{String, Any}("name" => "lonlat_to_unit_probe", "authors" => Any["t"]),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
-                    "expression_template_imports" => Any[Dict{String, Any}("ref" => "geometry.esm")],
+                    "operator_imports" => Any[Dict{String, Any}("ref" => "geometry.esm")],
                     "variables" => vars, "equations" => eqs
                 )
             )

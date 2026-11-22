@@ -206,7 +206,7 @@ end
                 models = get(esm, "models", Dict())
                 @test length(models) == 1
                 model = first(values(models))
-                if haskey(model, "expression_templates") || haskey(esm, "expression_templates")
+                if haskey(model, "operators") || haskey(esm, "operators")
                     skipped += 1
                     continue
                 end
@@ -431,7 +431,7 @@ end
 
         # A bare `\operatorname{n}` is a template applied with no bindings,
         # except for a template in scope with no parameters (printed `n()`).
-        tpl(n) = Dict("op" => "apply_expression_template", "args" => Any[], "name" => n, "bindings" => Dict())
+        tpl(n) = Dict("op" => "apply_operator", "args" => Any[], "name" => n, "bindings" => Dict())
         T = sym(["x"], [("g0", String[]), ("h1", ["p"])])
         @test pr(:latex, T, tpl("g0")) == "\\operatorname{g0}()"
         @test round_trips(T, tpl("g0"))

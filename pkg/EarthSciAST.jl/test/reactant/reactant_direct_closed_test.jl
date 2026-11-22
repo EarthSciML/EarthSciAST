@@ -41,7 +41,7 @@ _ct_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 _ct_ix(v, i...) = _ct_o("index", v, i...)
 _ct_cst(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 _ct_apply(name; kw...) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in kw)
 )
 _ct_faq(e; out = Any["i"], ranges = Dict{String, Any}("i" => Dict{String, Any}("from" => "p"))) =
@@ -49,7 +49,7 @@ _ct_faq(e; out = Any["i"], ranges = Dict{String, Any}("i" => Dict{String, Any}("
 
 function _ct_lib(file)
     path = joinpath(TESTUTILS_REPO_ROOT, "lib", file)
-    return JSON3.read(read(path, String), Dict{String, Any})["expression_templates"]
+    return JSON3.read(read(path, String), Dict{String, Any})["operators"]
 end
 
 const CT_X = _ct_ix("x", "i")
@@ -82,7 +82,7 @@ function _ct_doc(body, libs; np = 12, ng = 6, extra_vars = Dict{String, Any}(), 
         ),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
-                "variables" => vars, "equations" => eqs, "expression_templates" => tpl
+                "variables" => vars, "equations" => eqs, "operators" => tpl
             )
         )
     )

@@ -952,7 +952,7 @@ end
             _jop(
                 "*", "Edges.k_argmin_1",
                 _jop(
-                    "apply_expression_template"; name = "argmin",
+                    "apply_operator"; name = "argmin",
                     bindings = Dict{String, Any}(
                         "f" => _jop("index", "Edges.w", "k_argmin_1"), "n" => 3
                     )

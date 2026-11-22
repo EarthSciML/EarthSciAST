@@ -598,7 +598,15 @@ function _rename_scope!(scope::_TemplateScope, maps)
 
     newt = OrderedDict{String, Any}()
     for (n, d) in scope.templates
-        newt[maps.tplmap[n]] = _rename_decl(d, varmap, iset_changed, tpl_changed)
+        nd = _rename_decl(d, varmap, iset_changed, tpl_changed)
+        # esm 2.4.0 (esm-spec §9.6.12 "Provenance"): the defined operator a
+        # definition defines is decided in the library's own scope, so renaming
+        # its key on import does not change it.
+        if maps.tplmap[n] != n && _is_object(nd) && _raw_get(nd, "defines") === nothing
+            nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(nd))
+            nd["defines"] = _definition_defines(n, d)
+        end
+        newt[maps.tplmap[n]] = nd
     end
     scope.templates = newt
 
@@ -1329,6 +1337,7 @@ function _resolve_template_machinery(
         mount_declared::Union{Nothing, AbstractSet{String}} = nothing,
         mounted_leaf::Bool = false
     )
+    raw_data = _wire_old_spellings(raw_data)
     mounted = mount_declared === nothing ? Set{String}() : mount_declared
     if !_has_import_machinery(raw_data)
         # A binding naming something a MOUNTED document declares is meaningful

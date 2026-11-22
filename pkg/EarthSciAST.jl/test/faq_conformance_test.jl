@@ -157,7 +157,7 @@ end
     path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq", "template_from_param_undeclared.esm")
     base = JSON3.read(read(path, String), Dict{String, Any})
     call(name, b) = Dict{String, Any}(
-        "op" => "apply_expression_template", "args" => Any[], "name" => name, "bindings" => b
+        "op" => "apply_operator", "args" => Any[], "name" => name, "bindings" => b
     )
     bad = base["models"]["M"]["equations"][1]["rhs"]
     good = call("total", Dict{String, Any}("v" => "a", "S" => "cells"))
@@ -165,7 +165,7 @@ end
 
     doc = deepcopy(base)
     m = doc["models"]["M"]
-    m["expression_templates"]["outer"] = Dict{String, Any}(
+    m["operators"]["outer"] = Dict{String, Any}(
         "params" => ["w", "T"], "body" => call("total", Dict{String, Any}("v" => "w", "S" => "T"))
     )
     m["equations"][1]["rhs"] = call("outer", Dict{String, Any}("w" => "a", "T" => "ghost_cells"))
@@ -179,7 +179,7 @@ end
 
     doc = deepcopy(base)
     m = doc["models"]["M"]
-    inner = Dict{String, Any}(k => deepcopy(v) for (k, v) in m if k != "expression_templates")
+    inner = Dict{String, Any}(k => deepcopy(v) for (k, v) in m if k != "operators")
     m["equations"][1]["rhs"] = good
     m["subsystems"] = Dict{String, Any}("Sub" => inner)
     cases["subsystem"] = (doc, "/models/M/subsystems/Sub/equations/0/rhs")
@@ -203,7 +203,7 @@ end
 # above (which DOES declare a registry) and by the build.
 @testset "valid: agnostic leaf's injected {from} index set is not a load error (#185)" begin
     path = joinpath(
-        _AGG_REPO_ROOT, "tests", "conformance", "expression_templates",
+        _AGG_REPO_ROOT, "tests", "conformance", "operators",
         "inject_agnostic_faq", "fixture.esm"
     )
     @test isfile(path)
@@ -456,14 +456,14 @@ end
         model = deriv["models"]["Probe"]
         resize!(model["equations"], 1)
         delete!(model["variables"], "z")
-        model["expression_templates"] = Dict{String, Any}(
+        model["operators"] = Dict{String, Any}(
             "twice" => Dict{String, Any}(
                 "params" => Any["x"],
                 "body" => Dict{String, Any}("op" => "*", "args" => Any[2.0, "x"])
             )
         )
         model["equations"][1]["rhs"]["expr"]["args"][2] = Dict{String, Any}(
-            "op" => "apply_expression_template", "args" => Any[], "name" => "twice",
+            "op" => "apply_operator", "args" => Any[], "name" => "twice",
             "bindings" => Dict{String, Any}("x" => "y")
         )
         @test isempty(bare(EarthSciAST.validate_text(JSON3.write(deriv))))

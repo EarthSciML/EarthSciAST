@@ -13,7 +13,7 @@ using EarthSciAST: load_path, flatten, expand_flattened_refs
 const _TA_N = 9
 
 _ta_ref(name, bindings) = Dict(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => bindings
 )
 _ta_op(op, args...) = Dict("op" => op, "args" => Any[args...])
@@ -22,7 +22,7 @@ function _ta_templates()
     lib = JSON3.read(
         read(joinpath(pkgdir(EarthSciAST), "data", "lib", "interp.esm"), String), Dict{String, Any}
     )
-    t = Dict{String, Any}("linear" => lib["expression_templates"]["linear"])
+    t = Dict{String, Any}("linear" => lib["operators"]["linear"])
     # A neighbour average of an array parameter around the caller's `i`, the
     # cells past the ends reading 0 (ghost cells).
     t["smooth"] = Dict(
@@ -95,7 +95,7 @@ function _ta_document(tracers)
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => _TA_N)),
         "models" => Dict(
             "M" => Dict(
-                "expression_templates" => _ta_templates(),
+                "operators" => _ta_templates(),
                 "variables" => vars,
                 "equations" => eqs,
             )
@@ -222,7 +222,7 @@ function _ta_elem_document(tracers)
     return Dict(
         "esm" => "2.0.0", "metadata" => Dict("name" => "template_element_calls_1d"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => N), "bc" => Dict("kind" => "interval", "size" => 1)),
-        "models" => Dict("M" => Dict("expression_templates" => tpl, "variables" => vars, "equations" => eqs)),
+        "models" => Dict("M" => Dict("operators" => tpl, "variables" => vars, "equations" => eqs)),
     )
 end
 
@@ -282,7 +282,7 @@ function _ta_inner_elem_document(tracers)
     return Dict(
         "esm" => "2.0.0", "metadata" => Dict("name" => "template_inner_element_calls_1d"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => N)),
-        "models" => Dict("M" => Dict("expression_templates" => tpl, "variables" => vars, "equations" => eqs)),
+        "models" => Dict("M" => Dict("operators" => tpl, "variables" => vars, "equations" => eqs)),
     )
 end
 

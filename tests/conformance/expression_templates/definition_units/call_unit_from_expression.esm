@@ -1,0 +1,75 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "definition_units_call_unit",
+    "description": "INVALID (esm-spec §4.8.3): a call's unit is its definition's unit expression, evaluated from the bindings' units without evaluating the body. `opaque` declares q / (1 s); its body q * 3 multiplies by a bare literal, so the body's unit is undeterminable (a `definition_unit_mismatch` WARNING), yet z [m] = opaque(x) is still a provable mismatch (m/s against m): validate() reports `unit_inconsistency`.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "Length"
+        },
+        "tau": {
+          "type": "parameter",
+          "units": "s",
+          "default": 2.0,
+          "description": "Time scale"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Rate"
+        },
+        "z": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Length-valued"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "z",
+          "rhs": {
+            "op": "opaque",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ],
+      "operators": {
+        "opaque": {
+          "params": [
+            "q"
+          ],
+          "units": {
+            "op": "/",
+            "args": [
+              "q",
+              {
+                "op": "const",
+                "args": [],
+                "value": 1,
+                "units": "s"
+              }
+            ]
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              "q",
+              3
+            ]
+          }
+        }
+      }
+    }
+  }
+}

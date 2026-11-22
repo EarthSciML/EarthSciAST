@@ -384,7 +384,7 @@ _tmp_write(dir, name, body) = (write(joinpath(dir, name), body); joinpath(dir, n
         # nothing of the leaf would close at the mount.
         conf = joinpath(
             TESTUTILS_REPO_ROOT, "tests", "conformance",
-            "expression_templates", "inject_subsystem_ref"
+            "operators", "inject_subsystem_ref"
         )
         dir = mktempdir()
         host = _tmp_write(
@@ -392,7 +392,7 @@ _tmp_write(dir, name, body) = (write(joinpath(dir, name), body); joinpath(dir, n
             {"esm":"2.0.0","metadata":{"name":"toplevel_inject"},
              "models":{"Runoff":{
                "ref":"$(joinpath(conf, "leaf.esm"))",
-               "expression_template_imports":[
+               "operator_imports":[
                  {"ref":"$(joinpath(conf, "central_D_lon_zero_grad_bc.esm"))",
                   "only":["central_D_lon_zero_grad_bc"],
                   "bindings":{"NLON":288,"NLAT":181}}]}}}"""

@@ -204,7 +204,7 @@ import Symbolics
             "metadata" => Dict{String, Any}("name" => "mtk_tpl"),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
-                    "expression_templates" => Dict{String, Any}(
+                    "operators" => Dict{String, Any}(
                         "scale" => Dict{String, Any}(
                             "params" => Any["x"],
                             "body" => Dict{String, Any}("op" => "*", "args" => Any["k", "x"])
@@ -219,7 +219,7 @@ import Symbolics
                         Dict{String, Any}(
                             "lhs" => Dict{String, Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
                             "rhs" => Dict{String, Any}(
-                                "op" => "apply_expression_template",
+                                "op" => "apply_operator",
                                 "args" => Any[], "name" => "scale",
                                 "bindings" => Dict{String, Any}("x" => "z")
                             )
@@ -244,7 +244,7 @@ import Symbolics
         has_ref = false
         for eq in flat.equations
             EarthSciAST.foreach_subexpr(eq.rhs) do x
-                x isa EarthSciAST.OpExpr && x.op == "apply_expression_template" &&
+                x isa EarthSciAST.OpExpr && x.op == "apply_operator" &&
                     (has_ref = true)
                 nothing
             end

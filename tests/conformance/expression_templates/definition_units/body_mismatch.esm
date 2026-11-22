@@ -1,0 +1,70 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "definition_units_body_mismatch",
+    "description": "INVALID (esm-spec §9.6.12): `bad` declares the unit expression q / (1 s) but its body q * tau has unit m*s at the call bad(x): validate() reports `definition_unit_mismatch` (an error, the body's unit being determinable).",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "Length"
+        },
+        "tau": {
+          "type": "parameter",
+          "units": "s",
+          "default": 2.0,
+          "description": "Time scale"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Rate"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "bad",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ],
+      "operators": {
+        "bad": {
+          "params": [
+            "q"
+          ],
+          "units": {
+            "op": "/",
+            "args": [
+              "q",
+              {
+                "op": "const",
+                "args": [],
+                "value": 1,
+                "units": "s"
+              }
+            ]
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              "q",
+              "tau"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

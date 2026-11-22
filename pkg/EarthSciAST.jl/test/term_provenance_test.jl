@@ -289,7 +289,7 @@ end
         _, before = _tp_equation(flat, _D("Chem.O3"))
         _, after = _tp_equation(expand_flattened_refs(flat), _D("Chem.O3"))
         @test [_tp_origins(c) for c in after] == [_tp_origins(c) for c in before]
-        @test !occursin("apply_expression_template", canonical_expr_json(after[1].expr))
+        @test !occursin("apply_operator", canonical_expr_json(after[1].expr))
     end
 
     @testset "a multiplicative couple scales the tendency, not a later bare definition" begin
@@ -338,7 +338,7 @@ end
         expanded = expand_flattened_refs(flat)
         rhs = canonical_expr_json(expanded.equations[i].rhs)
         @test occursin("2.5", rhs)
-        @test !occursin("apply_expression_template", rhs)
+        @test !occursin("apply_operator", rhs)
         cs = equation_contributions(expanded)[i]
         # The stale list collapses to the current body, keeping its authors.
         @test length(cs) == 1

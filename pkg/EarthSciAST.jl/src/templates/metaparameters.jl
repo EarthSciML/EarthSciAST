@@ -123,6 +123,8 @@ const _STRUCTURAL_FIELDS = (
     # `expect_cadence` (`EXPRESSION_NODE_ANNOTATIONS`) are the same kind of
     # node-level annotation.
     "op" => :node,
+    # esm 2.4.0: the defined operator a definition defines (esm-spec §9.6.1).
+    "defines" => :node,
     (k => :node for k in EXPRESSION_NODE_ANNOTATIONS)...,
     "reduce" => :registry,
     "semiring" => :registry,

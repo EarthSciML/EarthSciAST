@@ -314,7 +314,7 @@ _sc(e) = EarthSciAST.serialize_coupling_entry(e)
                         "metadata" => Dict{String, Any}("name" => "asm2"),
                         "models" => Dict{String, Any}(
                             "M" => Dict{String, Any}(
-                                "expression_template_imports" => Any[Dict{String, Any}("ref" => "clib.esm")],
+                                "operator_imports" => Any[Dict{String, Any}("ref" => "clib.esm")],
                                 "variables" => Dict{String, Any}("x" => Dict{String, Any}("type" => "unknown")),
                                 "equations" => Any[],
                             )
@@ -322,7 +322,7 @@ _sc(e) = EarthSciAST.serialize_coupling_entry(e)
                     )
                 )
             )
-            @test errcode(() -> EarthSciAST.load_path(asm2)) == "template_import_is_coupling_library"
+            @test errcode(() -> EarthSciAST.load_path(asm2)) == "operator_import_is_coupling_library"
         end
     end
 

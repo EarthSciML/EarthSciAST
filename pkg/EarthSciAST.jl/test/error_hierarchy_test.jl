@@ -197,7 +197,7 @@ include("testutils.jl")
         for c in (
                 "undefined_variable", "equation_count_mismatch",
                 "unit_inconsistency", "unit_parse_error",
-                "unresolved_subsystem_ref", "template_import_unresolved",
+                "unresolved_subsystem_ref", "operator_import_unresolved",
                 "coupling_library_illegal_payload", "removed_op",
                 "metaparameter_type_error", "unlowered_operator",
             )

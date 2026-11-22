@@ -874,6 +874,41 @@ function _rewrite_old_spellings!(doc)::Vector{String}
     return vcat(fsites, osites)
 end
 
+"""
+    _wire_old_spellings(raw) -> raw′
+
+`raw` itself when it spells nothing an earlier document wrote (§9.6.12, §4.2),
+else an ordered copy read through [`_rewrite_old_spellings!`](@ref). For entry
+points a caller may reach without the load's wire boundary
+(`lower_expression_templates`, `resolve_template_machinery`).
+"""
+function _wire_old_spellings(raw)
+    _is_object(raw) || return raw
+    _has_old_spellings(raw) || return raw
+    doc = _to_ordered(raw)
+    _rewrite_old_spellings!(doc)
+    return doc
+end
+
+function _has_old_spellings(x)::Bool
+    return _visit_json(x) do _, n
+        _is_object(n) || return true
+        for (k, _) in pairs(n)
+            ks = string(k)
+            (ks == "expression_templates" || ks == "expression_template_imports") && return _JSON_STOP
+        end
+        op = _raw_get(n, "op")
+        if op isa AbstractString
+            (op == _OLD_APPLY_OP || op in _PARTIAL_SPELLINGS) && return _JSON_STOP
+            if op == "D"
+                w = _raw_get(n, "wrt")
+                (w !== nothing && w != "t") && return _JSON_STOP
+            end
+        end
+        return true
+    end
+end
+
 # Rename `old` to `new` among the keys of `node`, keeping key order.
 function _rename_field_inplace!(node, old::String, new::String)
     ok = _node_key(node, old)

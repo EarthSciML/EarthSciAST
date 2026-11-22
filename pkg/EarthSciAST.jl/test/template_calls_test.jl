@@ -14,7 +14,7 @@ include("testutils.jl")
 const _TC_N = 10
 
 _tc_ref(name, bindings) = Dict(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => bindings
 )
 _tc_op(op, args...) = Dict("op" => op, "args" => Any[args...])
@@ -145,7 +145,7 @@ function _tc_document(tracers)
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => _TC_N)),
         "models" => Dict(
             "T" => Dict(
-                "expression_templates" => _tc_templates(),
+                "operators" => _tc_templates(),
                 "variables" => vars,
                 "equations" => eqs,
             )

@@ -79,7 +79,7 @@ function _bi_regrid_doc()
         # here is a plain `unknown` DEFINED by a bare-variable-LHS equation.
         "models" => Dict{String, Any}(
             "Regrid" => Dict{String, Any}(
-                "expression_template_imports" => Any[
+                "operator_imports" => Any[
                     Dict{String, Any}("ref" => "esm:std/geometry.esm", "only" => Any["overlap_area_planar"]),
                 ],
                 "variables" => Dict{String, Any}(
@@ -117,7 +117,7 @@ function _bi_regrid_doc()
                         "rhs" => _bi_agg(
                             Any["i", "j"], ranges_ij,
                             Dict{String, Any}(
-                                "op" => "apply_expression_template", "args" => Any[],
+                                "op" => "apply_operator", "args" => Any[],
                                 "name" => "overlap_area_planar",
                                 "bindings" => Dict{String, Any}(
                                     "ring_a" => "src_poly", "cell_a" => "i", "nv_a" => 4,

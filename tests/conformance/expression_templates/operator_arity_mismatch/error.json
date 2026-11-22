@@ -1,0 +1,5 @@
+{
+  "code": "operator_arity_mismatch",
+  "stage": "load",
+  "description": "esm-spec §9.6.12: a call of a defined operator whose definitions in scope all take another number of operands. Bindings assert the load-time error carries this code."
+}

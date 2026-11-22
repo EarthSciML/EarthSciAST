@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.4.0",
   "index_sets": {
     "x": {
       "kind": "interval",
@@ -43,15 +43,15 @@
                   "w": "q"
                 },
                 "name": "flux_prod",
-                "op": "apply_expression_template"
+                "op": "apply_operator"
               }
             },
             "name": "generic",
-            "op": "apply_expression_template"
+            "op": "apply_operator"
           }
         }
       ],
-      "expression_templates": {
+      "operators": {
         "flux_prod": {
           "body": {
             "args": [
@@ -60,6 +60,7 @@
             ],
             "op": "*"
           },
+          "defines": "flux_prod",
           "params": [
             "u",
             "w"
@@ -73,6 +74,7 @@
             ],
             "op": "*"
           },
+          "defines": "partial",
           "params": [
             "f"
           ]

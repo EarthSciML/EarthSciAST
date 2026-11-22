@@ -28,7 +28,7 @@ const _TI = EarthSciAST
 _ti_op(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
 _ti_ix(a, s...) = _ti_op("index", a, s...)
 _ti_apply(name; b...) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => name,
+    "op" => "apply_operator", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
 )
 _ti_count(k, n, cond, arrays; yes = 1, no = 0) = Dict{String, Any}(
@@ -140,7 +140,7 @@ function _ti_doc(shape::Symbol, n::Int)
         end
     end
     model = Dict{String, Any}("variables" => vars, "equations" => eqs)
-    model["expression_templates"] = _ti_templates()
+    model["operators"] = _ti_templates()
     return Dict{String, Any}(
         "esm" => "2.0.0", "metadata" => Dict("name" => "closed_interp_$(shape)"),
         "index_sets" => Dict("lev" => Dict("kind" => "interval", "size" => n)),
@@ -179,9 +179,9 @@ _ti_count_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_sorted, 
         norm(x) = x isa AbstractDict ? Dict{String, Any}(String(k) => norm(v) for (k, v) in x if k != "description") :
             x isa AbstractVector ? Any[norm(v) for v in x] : x
         mine = _ti_templates()
-        @test Set(keys(lib["expression_templates"])) == Set(keys(mine))
+        @test Set(keys(lib["operators"])) == Set(keys(mine))
         for (name, t) in mine
-            @test norm(lib["expression_templates"][name]) == norm(t)
+            @test norm(lib["operators"][name]) == norm(t)
         end
     end
 
@@ -325,7 +325,7 @@ import OrdinaryDiffEqTsit5   # the solver `run_inline_tests` picks
         src = joinpath(TESTUTILS_REPO_ROOT, "tests", "closed_functions", "interp", fname, "template.esm")
         doc = JSON3.read(read(src, String), Dict{String, Any})
         model = first(values(doc["models"]))
-        model["expression_template_imports"] = Any[Dict{String, Any}("ref" => lib)]
+        model["operator_imports"] = Any[Dict{String, Any}("ref" => lib)]
         vars = model["variables"]
         lits = Dict{String, Any}(k => v["default"] for (k, v) in vars if v["type"] == "parameter")
         @test !isempty(lits)
@@ -639,7 +639,7 @@ _ti_ngens(_) = 1
                             "rhs" => ij(_ti_op("-", _ti_ix("r", "i", "j"), _ti_ix("u", "i", "j")))
                         ),
                     ],
-                    "expression_templates" => _ti_templates(),
+                    "operators" => _ti_templates(),
                 )
             )
         )
@@ -671,7 +671,7 @@ _ti_ngens(_) = 1
         doc = Dict{String, Any}(
             "esm" => "2.0.0", "metadata" => Dict("name" => "many_contractions"),
             "index_sets" => Dict("lev" => Dict("kind" => "interval", "size" => nl)),
-            "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs, "expression_templates" => _ti_templates()))
+            "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs, "operators" => _ti_templates()))
         )
         dn, tn, (f!, u0, p) = _ti_eval(_ti_expanded(doc), :native)
         di, _, _ = _ti_eval(_ti_expanded(doc), :interpreter)
@@ -709,7 +709,7 @@ end
         "equations" => Any[
             Dict("lhs" => _ti_op("D", "u"; wrt = "t"), "rhs" => _ti_op("-", _ti_op("*", 1.0e-6, look), "u")),
         ],
-        "expression_templates" => _ti_templates(),
+        "operators" => _ti_templates(),
     )
     doc = Dict{String, Any}("esm" => "2.0.0", "metadata" => Dict("name" => "site"), "models" => Dict("M" => model))
     withenv("ESS_CODEGEN_FN_NODE_CAP" => string(cap)) do

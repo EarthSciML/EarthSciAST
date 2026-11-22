@@ -54,7 +54,7 @@ _env_overlap() = jop(
 # The overlap area of `cell_ring[c]` and `rec_ring[r]` (5 vertex slots each,
 # the last the closing duplicate).
 _overlap() = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => Any[], "name" => "overlap_area_planar",
+    "op" => "apply_operator", "args" => Any[], "name" => "overlap_area_planar",
     "bindings" => Dict{String, Any}(
         "ring_a" => "cell_ring", "cell_a" => "c", "nv_a" => 5,
         "ring_b" => "rec_ring", "cell_b" => "r", "nv_b" => 5
@@ -141,7 +141,7 @@ function _doc()
         "models" => Dict{String, Any}(
             "Binned" =>
                 Dict{String, Any}(
-                "expression_template_imports" => Any[
+                "operator_imports" => Any[
                     Dict{String, Any}("ref" => "esm:std/geometry.esm", "only" => Any["overlap_area_planar"]),
                 ],
                 "variables" => v, "equations" => eqs
@@ -173,7 +173,7 @@ function _bases!(node, out::Set{String})
                 push!(out, String(a[1]))
         end
         # A template call reads an array through a bare-name binding.
-        if get(node, "op", nothing) == "apply_expression_template"
+        if get(node, "op", nothing) == "apply_operator"
             for b in values(get(node, "bindings", Dict{String, Any}()))
                 b isa AbstractString && push!(out, String(b))
             end

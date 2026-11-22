@@ -237,6 +237,7 @@ const ERROR_CODES = (
     # definitions in scope, none taking its operand count; a definition whose
     # body unit disagrees with its unit expression; an old field spelling.
     OPERATOR_ARITY_MISMATCH = "operator_arity_mismatch",
+    OPERATOR_DEFINES_CORE_OP = "operator_defines_core_op",
     DEFINITION_UNIT_MISMATCH = "definition_unit_mismatch",
     DEPRECATED_FIELD = "deprecated_field",
     TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "operator_constraint_unknown_index_set",

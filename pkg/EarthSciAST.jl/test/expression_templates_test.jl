@@ -24,7 +24,7 @@ const ARRHENIUS_FIXTURE_JSON = """
     "chem": {
       "species": {"A": {"default": 1.0}, "B": {"default": 0.5}, "C": {"default": 0.0}},
       "parameters": {"T": {"default": 298.15}, "num_density": {"default": 2.5e19}},
-      "expression_templates": {
+      "operators": {
         "arrhenius": {
           "params": ["A_pre", "Ea"],
           "body": {
@@ -43,13 +43,13 @@ const ARRHENIUS_FIXTURE_JSON = """
         {"id": "R1",
          "substrates": [{"species": "A", "stoichiometry": 1}],
          "products": [{"species": "B", "stoichiometry": 1}],
-         "rate": {"op": "apply_expression_template", "args": [],
+         "rate": {"op": "apply_operator", "args": [],
                   "name": "arrhenius",
                   "bindings": {"A_pre": 1.8e-12, "Ea": 1500}}},
         {"id": "R2",
          "substrates": [{"species": "B", "stoichiometry": 1}],
          "products": [{"species": "C", "stoichiometry": 1}],
-         "rate": {"op": "apply_expression_template", "args": [],
+         "rate": {"op": "apply_operator", "args": [],
                   "name": "arrhenius",
                   "bindings": {"A_pre": 3.4e-13, "Ea": 800}}}
       ]
@@ -134,7 +134,7 @@ end
             err = e
         end
         @test err isa ExpressionTemplateError
-        @test err.code == "apply_expression_template_unknown_template"
+        @test err.code == "operator_unknown_definition"
     end
 
     @testset "rejects bindings missing a param" begin
@@ -151,7 +151,7 @@ end
             err = e
         end
         @test err isa ExpressionTemplateError
-        @test err.code == "apply_expression_template_bindings_mismatch"
+        @test err.code == "operator_bindings_mismatch"
     end
 
     @testset "rejects extra bindings entries" begin
@@ -168,7 +168,7 @@ end
             err = e
         end
         @test err isa ExpressionTemplateError
-        @test err.code == "apply_expression_template_bindings_mismatch"
+        @test err.code == "operator_bindings_mismatch"
     end
 
     @testset "rejects nested apply_expression_template inside template body" begin
@@ -186,10 +186,10 @@ end
             "chem": {
               "species": {"A": {}, "B": {}},
               "parameters": {"T": {"default": 1.0}},
-              "expression_templates": {
+              "operators": {
                 "outer": {
                   "params": ["x"],
-                  "body": {"op": "apply_expression_template", "args": [],
+                  "body": {"op": "apply_operator", "args": [],
                            "name": "outer",
                            "bindings": {"x": "T"}}
                 }
@@ -198,7 +198,7 @@ end
                 "id": "R1",
                 "substrates": [{"species": "A", "stoichiometry": 1}],
                 "products": [{"species": "B", "stoichiometry": 1}],
-                "rate": {"op": "apply_expression_template", "args": [],
+                "rate": {"op": "apply_operator", "args": [],
                          "name": "outer",
                          "bindings": {"x": 1.0}}
               }]
@@ -214,7 +214,7 @@ end
             err = e
         end
         @test err isa ExpressionTemplateError
-        @test err.code == "apply_expression_template_recursive_body"
+        @test err.code == "operator_recursive_body"
     end
 
     @testset "conformance fixture matches the canonical expanded form" begin
@@ -223,11 +223,11 @@ end
         repo_root = TESTUTILS_REPO_ROOT
         fixture_path = joinpath(
             repo_root, "tests", "conformance",
-            "expression_templates", "arrhenius_smoke", "fixture.esm"
+            "operators", "arrhenius_smoke", "fixture.esm"
         )
         expanded_path = joinpath(
             repo_root, "tests", "conformance",
-            "expression_templates", "arrhenius_smoke", "expanded.esm"
+            "operators", "arrhenius_smoke", "expanded.esm"
         )
         raw = JSON3.read(read(fixture_path, String))
         expanded_via_pass = _lowerx(raw)
@@ -246,7 +246,7 @@ end
         repo_root = TESTUTILS_REPO_ROOT
         case = joinpath(
             repo_root, "tests", "conformance",
-            "expression_templates", "coupling_transform_expression"
+            "operators", "coupling_transform_expression"
         )
         raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
         expanded_via_pass = _lowerx(raw)
@@ -261,7 +261,7 @@ end
         entry = f.coupling[1]
         @test entry isa CouplingVariableMap
         @test entry.transform isa OpExpr
-        @test (entry.transform::OpExpr).op == "apply_expression_template"
+        @test (entry.transform::OpExpr).op == "apply_operator"
         @test (entry.transform::OpExpr).name == "double_plus"
         @test haskey(f.component_templates["models.Sink"], "double_plus")
     end
@@ -298,7 +298,7 @@ end
 @testset "expression_templates rewrite engine — 0.8.0 outermost-first + fixpoint" begin
     _conf(fix) = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "expression_templates", fix
+        "operators", fix
     )
 
     function _lower_conf(fix)
@@ -401,7 +401,7 @@ end
             "equations": [
                 {"lhs": "y", "rhs": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
               ],
-            "expression_templates": {
+            "operators": {
               "lower_custom": {
                 "params": ["f", "g"],
                 "match": {"op": "custom_scheme", "args": ["f"], "attrs": {"gamma": "g"}},
@@ -433,7 +433,7 @@ end
         @test _normj(_et_defrhs(m, "H")) ==
             Dict{String, Any}("op" => "*", "args" => Any[1.4, "phi"])
         # §9.6.4 rule 5: a match-only registry is dropped once its rules fire.
-        @test !haskey(_normj(m), "expression_templates")
+        @test !haskey(_normj(m), "operators")
     end
 end
 
@@ -453,9 +453,9 @@ end
               "area": {"type": "unknown"}
             },
             "equations": [
-                {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [], "name": "fold", "bindings": {"K_reduce": "max", "a": "pa", "b": "pb"}}}
+                {"lhs": "area", "rhs": {"op": "apply_operator", "args": [], "name": "fold", "bindings": {"K_reduce": "max", "a": "pa", "b": "pb"}}}
               ],
-            "expression_templates": {
+            "operators": {
               "fold": {
                 "params": ["K_reduce", "a", "b"],
                 "body": {"op": "faq", "reduce": "K_reduce", "output_idx": [],
@@ -484,9 +484,9 @@ end
               "scaled": {"type": "unknown"}
             },
             "equations": [
-                {"lhs": "scaled", "rhs": {"op": "apply_expression_template", "args": [], "name": "outer", "bindings": {"K": "min", "p": "pa", "q": "pb"}}}
+                {"lhs": "scaled", "rhs": {"op": "apply_operator", "args": [], "name": "outer", "bindings": {"K": "min", "p": "pa", "q": "pb"}}}
               ],
-            "expression_templates": {
+            "operators": {
               "inner": {
                 "params": ["m", "x", "y"],
                 "body": {"op": "faq", "reduce": "m", "output_idx": [],
@@ -496,7 +496,7 @@ end
               "outer": {
                 "params": ["K", "p", "q"],
                 "body": {"op": "*", "args": [
-                  {"op": "apply_expression_template", "args": [], "name": "inner",
+                  {"op": "apply_operator", "args": [], "name": "inner",
                    "bindings": {"m": "K", "x": "p", "y": "q"}},
                   2.0]}
               }
@@ -526,9 +526,9 @@ end
               "area": {"type": "unknown"}
             },
             "equations": [
-                {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [], "name": "shadowed", "bindings": {"max": "min", "x": "pa", "y": "pb"}}}
+                {"lhs": "area", "rhs": {"op": "apply_operator", "args": [], "name": "shadowed", "bindings": {"max": "min", "x": "pa", "y": "pb"}}}
               ],
-            "expression_templates": {
+            "operators": {
               "shadowed": {
                 "params": ["max", "x", "y"],
                 "body": {"op": "faq", "reduce": "max", "output_idx": [],
@@ -551,7 +551,7 @@ end
     # pinned Julia-generated expanded.esm.
     case = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "expression_templates", "scalar_field_param"
+        "operators", "scalar_field_param"
     )
     raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
     out = _lowerx(raw)
@@ -566,7 +566,7 @@ end
     # priority/declaration-order selection.
     _conf2(fix) = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "expression_templates", fix
+        "operators", fix
     )
     _nw(x) =
         (x isa AbstractDict || x isa JSON3.Object) ?
@@ -622,7 +622,7 @@ end
             e
         end
         @test err isa ExpressionTemplateError
-        @test err.code == "template_constraint_unknown_index_set"
+        @test err.code == "operator_constraint_unknown_index_set"
         @test occursin("edges", err.message)
     end
 
@@ -645,7 +645,7 @@ end
           "equations": [
               {"lhs": "d", "rhs": {"op": "div", "args": ["F_cell"]}}
             ],
-          "expression_templates": $templates_json
+          "operators": $templates_json
         }
       }
     }
@@ -700,7 +700,9 @@ end
         @test expr["op"] == "div"   # never rewritten; not an error
     end
 
-    @testset "where without match is an invalid declaration" begin
+    @testset "where on a definition without match scopes a call (esm 2.4.0)" begin
+        # esm-spec §9.6.3 constraint 2 / §9.6.8: a `where` selects among the
+        # definitions of a called defined operator; it is no longer refused.
         src = _scoped_doc(
             """
             {
@@ -712,13 +714,8 @@ end
             }
             """
         )
-        err = try
-            lower_expression_templates(JSON3.read(src)); nothing
-        catch e
-            e
-        end
-        @test err isa ExpressionTemplateError
-        @test err.code == "apply_expression_template_invalid_declaration"
+        out = lower_expression_templates(JSON3.read(src))
+        @test haskey(out["models"]["m"]["operators"], "broken")
     end
 
     @testset "where key must be a declared param" begin
@@ -740,7 +737,7 @@ end
             e
         end
         @test err isa ExpressionTemplateError
-        @test err.code == "apply_expression_template_invalid_declaration"
+        @test err.code == "operator_invalid_definition"
     end
 
     @testset "unknown constraint kind rejected (v1 vocabulary is exactly shape)" begin
@@ -762,7 +759,7 @@ end
             e
         end
         @test err isa ExpressionTemplateError
-        @test err.code == "apply_expression_template_invalid_declaration"
+        @test err.code == "operator_invalid_definition"
     end
 
     @testset "shape must match exactly (names AND order)" begin
@@ -801,7 +798,7 @@ end
                 "cells": {"kind": "interval", "size": 4},
                 "edges": {"kind": "interval", "size": 6}
               },
-              "expression_templates": {
+              "operators": {
                 "fv_div_edges": {
                   "params": ["F"],
                   "match": {"op": "div", "args": ["F"]},
@@ -820,7 +817,7 @@ end
               "metadata": {"name": "consumer"},
               "models": {
                 "m": {
-                  "expression_template_imports": [{"ref": "meshlib.esm"}],
+                  "operator_imports": [{"ref": "meshlib.esm"}],
                   "variables": {
                     "F_edge": {"type": "unknown", "units": "1", "default": 1.5, "shape": ["edges"]},
                     "F_cell": {"type": "unknown", "units": "1", "default": 2.5, "shape": ["cells"]},
@@ -873,8 +870,8 @@ end
     registry = Set{String}(EarthSciAST._KNOWN_DIAGNOSTIC_CODES)
     @test isempty(setdiff(raised, registry))
     # The variable-code sites' codes are registered too.
-    @test "template_import_name_conflict" in registry
-    @test "template_import_index_set_conflict" in registry
+    @test "operator_import_name_conflict" in registry
+    @test "operator_import_index_set_conflict" in registry
     # And no ExpressionTemplateError code is spelled as a raw literal any more —
     # the whole point of the central registry.
     literal_sites = 0

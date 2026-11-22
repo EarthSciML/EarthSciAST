@@ -202,11 +202,13 @@ def check(schema: dict, classification: dict) -> tuple[list[str], dict]:
         )
     for p in sorted(set(classes) - set(sites)):
         errors.append(f"classified path {p} is not a string-capable property in the schema")
+    structural_expressions = classification.get("structural_expressions", {})
     for p, (verdict, reason) in classes.items():
         if (
             p in sites
             and sites[p][1] in ("expression", "metaparameter_site")
             and verdict != "substituted"
+            and p not in structural_expressions
         ):
             errors.append(
                 f"{p} holds an Expression / metaparameter expression but is classified {verdict}"

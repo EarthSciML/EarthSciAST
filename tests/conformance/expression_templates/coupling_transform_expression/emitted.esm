@@ -11,12 +11,12 @@
           "x": "Src.F"
         },
         "name": "double_plus",
-        "op": "apply_expression_template"
+        "op": "apply_operator"
       },
       "type": "variable_map"
     }
   ],
-  "esm": "1.0.0",
+  "esm": "2.4.0",
   "metadata": {
     "authors": [
       "esm coupling-transform-widening conformance"
@@ -38,7 +38,7 @@
           "rhs": "F_in"
         }
       ],
-      "expression_templates": {
+      "operators": {
         "double_plus": {
           "body": {
             "args": [
@@ -53,6 +53,7 @@
             ],
             "op": "+"
           },
+          "defines": "double_plus",
           "params": [
             "x",
             "off"

@@ -41,7 +41,7 @@ _twb_bincol(coord, step, sym) = _twb_floor(_twb_div(_twb_ix(coord, sym), step))
 # The planar overlap area of `ra[i]` and `rb[j]` (lib/geometry.esm), 4 vertex
 # slots each.
 _twb_overlap(ra, rb) = Dict{String, Any}(
-    "op" => "apply_expression_template", "args" => [], "name" => "overlap_area_planar",
+    "op" => "apply_operator", "args" => [], "name" => "overlap_area_planar",
     "bindings" => Dict{String, Any}(
         "ring_a" => ra, "cell_a" => "i", "nv_a" => 4, "ring_b" => rb, "cell_b" => "j", "nv_b" => 4
     )
@@ -206,7 +206,7 @@ function _twb_gap1_doc()
         ),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
-                "expression_template_imports" => _TWB_IMPORTS,
+                "operator_imports" => _TWB_IMPORTS,
                 "variables" => vars, "equations" => vcat(
                     obs_defs, Any[
                         Dict{String, Any}("lhs" => Dict{String, Any}("op" => "ic", "args" => ["regrid_state"]), "rhs" => 0.0),
@@ -330,7 +330,7 @@ end
             ),
             "models" => Dict{String, Any}(
                 "M" => Dict{String, Any}(
-                    "expression_template_imports" => _TWB_IMPORTS,
+                    "operator_imports" => _TWB_IMPORTS,
                     "variables" => vars, "equations" => vcat(
                         obs_defs, Any[
                             Dict{String, Any}("lhs" => Dict{String, Any}("op" => "ic", "args" => ["s"]), "rhs" => 0.0),
