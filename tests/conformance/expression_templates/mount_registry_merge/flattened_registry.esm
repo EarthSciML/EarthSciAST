@@ -45,7 +45,8 @@
       "params": [
         "x",
         "k"
-      ]
+      ],
+      "reference_only": true
     },
     "Sub.scale": {
       "body": {
@@ -58,7 +59,8 @@
       "defines": "scale",
       "params": [
         "x"
-      ]
+      ],
+      "reference_only": true
     },
     "twice": {
       "body": {

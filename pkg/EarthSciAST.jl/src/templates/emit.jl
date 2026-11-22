@@ -296,7 +296,12 @@ function emit_document(raw_source, base_path::AbstractString)
     # native tree. The processed path already returns one.
     root = loaded === src ? _to_ordered(loaded)::OrderedDict{String, Any} : loaded
     _blocks, bump = _materialize_components!(root, authored)
-    bump && (root["esm"] = _esm_stamp_floor(get(root, "esm", nothing)))
+    for (_, _, comp) in _components(root)
+        haskey(comp, "operators") && (comp["operators"] = _without_private_keys(comp["operators"]))
+    end
+    # A library's top-level `operators` block is written under the new name too
+    # (esm-spec §9.6.5, §9.6.12).
+    (bump || haskey(root, "operators")) && (root["esm"] = _esm_stamp_floor(get(root, "esm", nothing)))
     return root
 end
 

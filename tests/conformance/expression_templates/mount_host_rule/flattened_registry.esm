@@ -27,7 +27,8 @@
       "params": [
         "x",
         "k"
-      ]
+      ],
+      "reference_only": true
     },
     "twice": {
       "body": {

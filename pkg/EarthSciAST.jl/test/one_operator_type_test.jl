@@ -125,6 +125,150 @@ _oot_code(e) = e === nothing ? nothing : (hasproperty(e, :code) ? String(e.code)
         end
     end
 
+    @testset "a mounted subsystem's definitions stay in its scope (esm-spec §9.6.3 constraint 4)" begin
+        leaf = """{"esm": "2.4.0", "metadata": {"name": "leaf"}, "models": {"Leaf": {
+        "operators": {
+          "scale": {"params": ["x"], "body": {"op": "*", "args": [3, "x"]}},
+          "pair": {"params": ["x"], "body": {"op": "*", "args": ["k", "x"]}}},
+        "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0},
+                      "k": {"type": "parameter", "units": "1", "default": 0.25}},
+        "equations": [{"lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                       "rhs": {"op": "-", "args": [{"op": "scale", "args": ["c"]}]}}]}}}"""
+        host(call) = """{"esm": "2.4.0", "metadata": {"name": "host"}, "models": {"Host": {
+        "variables": {"y": {"type": "unknown", "units": "1", "default": 1.0}},
+        "equations": [{"lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                       "rhs": {"op": "-", "args": [$call]}}],
+        "subsystems": {"Sub": {"ref": "./leaf.esm"}}}}}"""
+        # An authored subsystem's calls still resolve to its own definitions.
+        inline = """{"esm": "2.4.0", "metadata": {"name": "inline"}, "models": {"Host": {
+        "variables": {"y": {"type": "unknown", "units": "1", "default": 1.0}},
+        "equations": [{"lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                       "rhs": {"op": "-", "args": [{"op": "scale", "args": ["y"]}]}}],
+        "subsystems": {"Sub": {
+          "operators": {"scale": {"params": ["x"], "body": {"op": "*", "args": [3, "x"]}}},
+          "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0}},
+          "equations": [{"lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                         "rhs": {"op": "-", "args": [{"op": "scale", "args": ["c"]}]}}]}}}}}"""
+        mktempdir() do d
+            write(joinpath(d, "leaf.esm"), leaf)
+            write(joinpath(d, "capture.esm"), host("""{"op": "scale", "args": ["y"]}"""))
+            write(joinpath(d, "arity.esm"), host("""{"op": "pair", "args": ["y", "y"]}"""))
+            write(joinpath(d, "inline.esm"), inline)
+            for (f, op) in (("capture.esm", "scale"), ("arity.esm", "pair"))
+                p = joinpath(d, f)
+                s = EarthSciAST.serialize_esm_file(load_path(p))
+                host_m = s["models"]["Host"]
+                # The host's call stays a call, as emit leaves it.
+                @test host_m["equations"][1]["rhs"]["args"][1]["op"] == op
+                emitted = emit_document(JSON3.read(read(p, String)), d)
+                @test emitted["models"]["Host"]["equations"][1]["rhs"]["args"][1]["op"] == op
+                # The leaf's definition is written as reached by references only.
+                @test host_m["operators"]["scale"]["reference_only"] === true
+            end
+            p = joinpath(d, "inline.esm")
+            m = EarthSciAST.serialize_esm_file(load_path(p))["models"]["Host"]
+            @test m["equations"][1]["rhs"]["args"][1]["op"] == "scale"
+            @test m["subsystems"]["Sub"]["equations"][1]["rhs"]["args"][1]["op"] == "apply_operator"
+            @test m["operators"]["scale"]["reference_only"] === true
+            once = _oot_emit(p)
+            write(joinpath(d, "e.esm"), once)
+            @test _oot_emit(joinpath(d, "e.esm")) == once
+            # The only `operators` block sits two subsystems down: the document
+            # is still lowered, and that subsystem's call resolves.
+            deep = replace(
+                inline, "\"subsystems\": {\"Sub\": {" =>
+                    "\"subsystems\": {\"Mid\": {\"variables\": {}, \"equations\": [], \"subsystems\": {\"Sub\": {"
+            ) * "}}"
+            deep = replace(deep, "{\"op\": \"scale\", \"args\": [\"y\"]}" => "\"y\"")
+            p = joinpath(d, "deep.esm")
+            write(p, deep)
+            m = EarthSciAST.serialize_esm_file(load_path(p))["models"]["Host"]
+            @test m["subsystems"]["Mid"]["subsystems"]["Sub"]["equations"][1]["rhs"]["args"][1]["op"] ==
+                "apply_operator"
+        end
+    end
+
+    @testset "a fired partial rule is held to partial's fixed unit (esm-spec §4.2, §9.6.12)" begin
+        doc = """{"esm": "2.4.0", "metadata": {"name": "fixed_unit"}, "models": {"m": {
+        "variables": {"u": {"type": "parameter", "units": "kg", "default": 1.0},
+                      "x": {"type": "parameter", "units": "m", "default": 1.0},
+                      "k": {"type": "parameter", "units": "1", "default": 1.0},
+                      "y": {"type": "unknown", "units": "kg/m"}},
+        "equations": [{"lhs": "y", "rhs": {"op": "partial", "args": ["u"], "wrt": "x"}}],
+        "operators": {"dd": {"params": ["f", "d"],
+          "match": {"op": "partial", "args": ["f"], "wrt": "d"},
+          "body": {"op": "*", "args": ["f", "k"]}}}}}}"""
+        f = load_string(doc)
+        codes = String[e.error_type for e in validate(f).structural_errors]
+        @test "definition_unit_mismatch" in codes
+        @test !("unit_inconsistency" in codes)
+        @test !occursin("__esm", EarthSciAST.to_json(f))
+    end
+
+    @testset "unlowered_operator names the operand's declared shape (esm-spec §9.6.6)" begin
+        doc = """{"esm": "2.4.0", "metadata": {"name": "shape_msg"},
+        "index_sets": {"cells": {"kind": "interval", "size": 3}, "edges": {"kind": "interval", "size": 4}},
+        "models": {"m": {
+          "variables": {"F": {"type": "parameter", "units": "1", "default": 1.0, "shape": ["edges"]},
+                        "G": {"type": "parameter", "units": "1", "default": 2.0, "shape": ["cells"]},
+                        "d1": {"type": "unknown", "units": "1", "shape": ["edges"]},
+                        "d2": {"type": "unknown", "units": "1", "shape": ["cells"]}},
+          "equations": [{"lhs": "d1", "rhs": {"op": "div", "args": ["F"]}},
+                        {"lhs": "d2", "rhs": {"op": "div", "args": ["G"]}}],
+          "operators": {"fvd": {"params": ["Q"], "defines": "div",
+            "where": {"Q": {"shape": ["edges"]}}, "body": {"op": "*", "args": [2, "Q"]}}}}}}"""
+        e = _oot_err(() -> esm_problem(load_string(doc), (0.0, 1.0)))
+        @test _oot_code(e) == "unlowered_operator"
+        msg = sprint(showerror, e)
+        @test occursin("Q.shape = [edges] fails", msg)
+        @test occursin("has declared shape [cells]", msg)
+        @test !occursin("Any[", msg)
+    end
+
+    @testset "an operator library is written under 2.4.0 (esm-spec §9.6.5)" begin
+        p = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "template_import_lib.esm")
+        s = with_logger(NullLogger()) do
+            EarthSciAST.serialize_esm_file(load_path(p))
+        end
+        @test haskey(s, "operators") && s["esm"] == "2.4.0"
+        e = with_logger(NullLogger()) do
+            emit_document(JSON3.read(read(p, String)), dirname(p))
+        end
+        @test haskey(e, "operators") && e["esm"] == "2.4.0"
+    end
+
+    @testset "a test's imports join a component's old-spelled imports (esm-spec §9.7.10)" begin
+        mktempdir() do d
+            write(
+                joinpath(d, "lib1.esm"), """{"esm": "1.1.0", "metadata": {"name": "lib1"},
+                "expression_templates": {"rate": {"params": ["x"], "body": {"op": "*", "args": [2, "x"]}}}}"""
+            )
+            write(
+                joinpath(d, "lib2.esm"), """{"esm": "1.1.0", "metadata": {"name": "lib2"},
+                "expression_templates": {"halve": {"params": ["x"],
+                  "match": {"op": "halve", "args": ["x"]}, "body": {"op": "/", "args": ["x", 2]}}}}"""
+            )
+            p = joinpath(d, "model.esm")
+            write(
+                p, """{"esm": "1.1.0", "metadata": {"name": "inject_both"}, "models": {"M": {
+                "expression_template_imports": [{"ref": "./lib1.esm"}],
+                "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [{"lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                  "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [],
+                          "name": "rate", "bindings": {"x": "c"}}]}}],
+                "tests": [{"id": "t1", "time_span": {"start": 0.0, "end": 1.0},
+                  "expression_template_imports": [{"ref": "./lib2.esm"}],
+                  "assertions": [{"variable": "c", "time": 1.0, "expected": 0.1353352832366127}]}]}}}"""
+            )
+            with_logger(NullLogger()) do
+                f = load_path(p)
+                t = f.models["M"].tests[1]
+                e = EarthSciAST._ephemeral_injected_file(f, p, "M", t.expression_template_imports, d)
+                @test haskey(e.models, "M")
+            end
+        end
+    end
+
     @testset "old codes are aliases of the new ones (esm-spec §9.6.6)" begin
         @test EarthSciAST.canonical_error_code("template_import_cycle") == "operator_import_cycle"
         @test EarthSciAST.canonical_error_code("apply_expression_template_unknown_template") ==

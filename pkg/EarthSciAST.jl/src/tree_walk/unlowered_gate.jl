@@ -80,7 +80,10 @@ function _reject_unlowered_operators(
             # scope and why it was not eligible at this call.
             ct = _call_table()
             reg = ct === nothing ? nothing : ct.tt.reg
-            what *= " (" * _explain_unresolved_call(serialize_expression(node), reg) * ")"
+            shapes = Dict{String, Vector{String}}(
+                String(n) => v.shape for (n, v) in model.variables if v.shape !== nothing
+            )
+            what *= " (" * _explain_unresolved_call(serialize_expression(node), reg, shapes) * ")"
         end
         throw(
             TreeWalkError(

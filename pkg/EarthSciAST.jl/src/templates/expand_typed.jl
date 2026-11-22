@@ -109,9 +109,14 @@ _marking_template_origins() = get(task_local_storage(), _MARK_TEMPLATE_ORIGINS_K
 # serialization never emits `template_origin`.
 const _TEMPLATE_ORIGIN_WIRE_KEY = "__esm_template_origin"
 
-# The JSON-pointer path of the first `_TEMPLATE_ORIGIN_WIRE_KEY` in `node`, or
-# `nothing`.
-_template_origin_key_path(node) = _find_json_path(n -> haskey(n, _TEMPLATE_ORIGIN_WIRE_KEY), node)
+# The private keys a load writes into a document and no document carries:
+# expansion marks, and the fixed unit expression a materialized `partial` /
+# `integral` rule keeps (`_match_stripped`).
+const _LOAD_PRIVATE_KEYS = (_TEMPLATE_ORIGIN_WIRE_KEY, _FIXED_UNITS_KEY)
+_has_load_private_key(n) = any(k -> haskey(n, k), _LOAD_PRIVATE_KEYS)
+
+# The JSON-pointer path of the first load-private key in `node`, or `nothing`.
+_template_origin_key_path(node) = _find_json_path(_has_load_private_key, node)
 
 # Refuse an authored document that spells `_TEMPLATE_ORIGIN_WIRE_KEY`: the key
 # is load provenance, and the schema admits no such property, so an authored
@@ -123,7 +128,7 @@ function _reject_authored_template_origins(raw)
     path === nothing && return nothing
     err = SchemaError(
         isempty(path) ? "/" : path,
-        "Additional property '$(_TEMPLATE_ORIGIN_WIRE_KEY)' is not allowed: it is " *
+        "Additional property '$(_TEMPLATE_ORIGIN_WIRE_KEY)' or '$(_FIXED_UNITS_KEY)' is not allowed: it is " *
             "load provenance, which no document carries (esm-spec §9.6.11)",
         "additionalProperties"
     )
@@ -137,8 +142,10 @@ end
 # removes is only the load's own marks.
 _strip_template_origins(node) =
     _rewrite_json(node; leaves = false) do rw, n
-    haskey(n, _TEMPLATE_ORIGIN_WIRE_KEY) || return _JSON_DESCEND
-    return _rewrite_json_children(rw, n; drop = _TEMPLATE_ORIGIN_WIRE_KEY)
+    haskey(n, _TEMPLATE_ORIGIN_WIRE_KEY) &&
+        return _rewrite_json_children(rw, n; drop = _TEMPLATE_ORIGIN_WIRE_KEY)
+    haskey(n, _FIXED_UNITS_KEY) && return _rewrite_json_children(rw, n; drop = _FIXED_UNITS_KEY)
+    return _JSON_DESCEND
 end
 
 # `ex` marked as the root of an expansion of `name`, while marking is on.

@@ -37,7 +37,8 @@
       "defines": "rate",
       "params": [
         "x"
-      ]
+      ],
+      "reference_only": true
     },
     "loss": {
       "body": {
@@ -51,7 +52,8 @@
       "defines": "loss",
       "params": [
         "x"
-      ]
+      ],
+      "reference_only": true
     }
   }
 }
