@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { isObject, deepClone } from './object-utils.js'
 import { intLit, floatLit, isNumericLiteral } from './numeric-literal.js'
+import { wireOldSpellings } from './old-spellings.js'
 
 describe('isObject', () => {
   it('accepts plain JSON objects', () => {
@@ -67,5 +68,29 @@ describe('deepClone', () => {
     expect(out).toEqual(src)
     expect(out).not.toBe(src)
     expect(out[1]).not.toBe(src[1])
+  })
+})
+
+describe('a key named __proto__', () => {
+  // A legal variable name: JSON.parse defines it as an own property, and a
+  // copy must too, not turn it into the copy's prototype.
+  const parsed = () =>
+    JSON.parse(
+      '{"esm": "2.3.0", "models": {"M": {"variables": {"__proto__": {"type": "unknown"},' +
+        ' "k": {"type": "parameter"}}, "expression_templates": {},' +
+        ' "equations": [{"lhs": {"op": "D", "args": ["__proto__"], "wrt": "t"},' +
+        ' "rhs": {"op": "apply_expression_template", "name": "f", "args": []}}]}}}',
+    ) as { models: { M: Record<string, Record<string, unknown>> } }
+
+  it('deepClone keeps it as an own key', () => {
+    const out = deepClone(parsed())
+    expect(Object.keys(out.models.M.variables)).toEqual(['__proto__', 'k'])
+    expect(Object.getPrototypeOf(out.models.M.variables)).toBe(Object.prototype)
+  })
+
+  it('the old-spelling rewrite keeps it as an own key', () => {
+    const out = wireOldSpellings(parsed())
+    expect(Object.keys(out.models.M)).toEqual(['variables', 'operators', 'equations'])
+    expect(Object.keys(out.models.M.variables)).toEqual(['__proto__', 'k'])
   })
 })

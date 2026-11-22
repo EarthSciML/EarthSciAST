@@ -33,8 +33,18 @@ export function deepClone<T>(v: T): T {
   if (Array.isArray(v)) return v.map(deepClone) as unknown as T
   if (typeof v === 'object') {
     const out: Record<string, unknown> = {}
-    for (const k of Object.keys(v as object)) out[k] = deepClone((v as Record<string, unknown>)[k])
+    for (const k of Object.keys(v as object))
+      setOwn(out, k, deepClone((v as Record<string, unknown>)[k]))
     return out as unknown as T
   }
   return v
+}
+
+/**
+ * Set `obj[key] = value` as an own, enumerable property, as `JSON.parse` does.
+ * A plain assignment would turn a key named `__proto__` (a legal name in a
+ * name-keyed map, e.g. a variable) into the object's prototype.
+ */
+export function setOwn(obj: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true })
 }

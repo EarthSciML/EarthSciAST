@@ -8,7 +8,7 @@
 
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { pointerToken } from './json-pointer.js'
-import { deepClone } from './object-utils.js'
+import { deepClone, setOwn } from './object-utils.js'
 
 /**
  * Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
@@ -107,7 +107,7 @@ function renameFieldInPlace(node: Record<string, unknown>, old: string, neu: str
   }
   const entries = Object.entries(node)
   for (const [k] of entries) delete node[k]
-  for (const [k, v] of entries) node[k === old ? neu : k] = v
+  for (const [k, v] of entries) setOwn(node, k === old ? neu : k, v)
   return true
 }
 
