@@ -239,3 +239,104 @@ func TestOneOperatorType_OldSpellingsIdempotent(t *testing.T) {
 		t.Errorf("second pass not silent: err=%v fields=%v ops=%v", err, f2, o2)
 	}
 }
+
+// A key repeated verbatim is not an old/new spelling pair: the old-spelling
+// reading leaves it alone and the load decodes it as any duplicate key (the
+// last occurrence wins), as the Julia reference does.
+func TestOneOperatorType_DuplicateKeyIsNotBothSpellings(t *testing.T) {
+	f, err := LoadString(`{"esm": "2.4.0", "metadata": {"name": "x", "name": "y"}, "models": {"m": {
+		"variables": {"u": {"type": "unknown"}, "x": {"type": "parameter", "default": 1.0}},
+		"equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "x"}]}}}`)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if f.Metadata.Name != "y" {
+		t.Errorf("metadata.name = %q; want the last occurrence, \"y\"", f.Metadata.Name)
+	}
+	// A repeated old spelling is still read as the new one.
+	out, fs, _, err := rewriteOldSpellings(`{"models": {"m": {"expression_templates": {}, "expression_templates": {}}}}`)
+	if err != nil || len(fs) != 2 || strings.Contains(out, "expression_templates") {
+		t.Errorf("repeated old spelling: out=%s fields=%v err=%v", out, fs, err)
+	}
+}
+
+// The keys of an `operators` block are definition names, never field
+// spellings: a definition named `expression_templates` keeps its name, and one
+// block may hold definitions named both `operators` and `expression_templates`.
+func TestOneOperatorType_DefinitionNamesAreNotRenamed(t *testing.T) {
+	src := `{"esm": "2.4.0", "metadata": {"name": "x"}, "models": {"m": {
+		"variables": {"u": {"type": "unknown"}, "x": {"type": "parameter", "default": 1.0}},
+		"equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+			"rhs": {"op": "+", "args": [{"op": "operators", "args": ["x"]}, {"op": "expression_templates", "args": ["x"]}]}}],
+		"operators": {
+			"operators": {"params": ["q"], "body": {"op": "*", "args": [2, "q"]}},
+			"expression_templates": {"params": ["q"], "body": {"op": "*", "args": [3, "q"]}}}}}}`
+	out, fs, _, err := rewriteOldSpellings(src)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if len(fs) != 0 || out != src {
+		t.Errorf("definition names were rewritten: fields=%v\n%s", fs, out)
+	}
+	f, err := LoadString(src)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got, err := Evaluate(f.Models["m"].Equations[0].RHS, map[string]float64{"x": 1})
+	if err != nil || got != 5 {
+		t.Errorf("rhs = %v, %v; want 5 (2x + 3x at x = 1)", got, err)
+	}
+}
+
+// esm-spec §9.6.6: an unresolved call of a defined operator reaching
+// evaluation is `unlowered_operator`, and the message names the call and lists
+// each definition of the operator in scope with why it was not eligible there.
+func TestOneOperatorType_UnloweredOperatorExplains(t *testing.T) {
+	call := ExprNode{Op: "grad", Args: []any{"u"}}
+	_, err := Evaluate(call, map[string]float64{"u": 1})
+	var de DiagnosticError
+	if !errors.As(err, &de) || de.DiagnosticCode() != CodeUnloweredOperator {
+		t.Fatalf("Evaluate = %v; want %s", err, CodeUnloweredOperator)
+	}
+	for _, want := range []string{`{"op":"grad","args":["u"]}`, "no definition of 'grad' is in scope (a placeholder)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message lacks %q:\n%s", want, err)
+		}
+	}
+
+	var registry map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"grad_x": {"match": {"op": "grad", "args": ["f"], "wrt": "x"}, "params": ["f"], "body": "f"},
+		"grad_cells": {"defines": "grad", "params": ["f"], "where": {"f": {"shape": ["cells"]}}, "body": "f"},
+		"grad_two": {"defines": "grad", "params": ["f", "g"], "body": "f"},
+		"div_u": {"params": ["f"], "body": "f"}}`), &registry); err != nil {
+		t.Fatal(err)
+	}
+	scope := &operatorScope{registry: registry, shapeEnv: map[string][]string{"u": {"lev"}}}
+	_, err = evaluateIn(call, map[string]float64{"u": 1}, scope)
+	if !errors.As(err, &de) || de.DiagnosticCode() != CodeUnloweredOperator {
+		t.Fatalf("evaluateIn = %v; want %s", err, CodeUnloweredOperator)
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"definitions of 'grad' in scope: ",
+		`'grad_cells': its where constraint f.shape = ["cells"] fails: the operand bound to f ('u') has declared shape ["lev"]`,
+		"'grad_two': takes 2 operand(s), the call carries 1",
+		"'grad_x': its match does not match the call",
+		"definitions no reference reached were removed by emit and flatten and are not listed",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message lacks %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "div_u") {
+		t.Errorf("message lists a definition of another operator:\n%s", msg)
+	}
+	// A call carrying fields a match-less definition cannot bind.
+	wrt := "x"
+	why := explainUnresolvedCall(map[string]any{"op": "grad", "args": []any{"u"}, "wrt": wrt},
+		map[string]any{"div_grad": map[string]any{"defines": "grad", "params": []any{"f"}, "body": "f"}}, nil)
+	if !strings.Contains(why, "'div_grad': has no match, so it binds operands only, and the call carries wrt") {
+		t.Errorf("explanation = %s", why)
+	}
+}
