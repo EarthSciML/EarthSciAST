@@ -1,0 +1,5 @@
+{
+  "code": "operator_defines_core_op",
+  "stage": "load",
+  "description": "esm-spec §9.6.12: the entry `double` writes `defines: \"exp\"`, a core op's name. Bindings assert the load-time error carries this code."
+}

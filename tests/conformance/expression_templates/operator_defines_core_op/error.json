@@ -1,0 +1,5 @@
+{
+  "code": "operator_defines_core_op",
+  "stage": "load",
+  "description": "esm-spec §9.6.12 'Core names are reserved': the match-less entry `exp` defines (by inference from its key) the core op `exp`. Bindings assert the load-time error carries this code and names the definition and the core op."
+}
