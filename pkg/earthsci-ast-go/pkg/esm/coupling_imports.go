@@ -33,7 +33,7 @@ var couplingLibraryForbiddenKeys = []string{
 	"domain",
 	"index_sets",
 	"metaparameters",
-	"expression_templates",
+	"operators",
 }
 
 // roleBearingTypes are the coupling-entry types a library edge MAY carry
@@ -101,7 +101,7 @@ func rewriteScopedRef(ref string, bind map[string]string) string {
 
 // rewriteExprRaw rewrites/visits every scoped reference inside a raw Expression
 // tree. Numbers and other non-string/non-object leaves pass through unchanged;
-// `apply_expression_template` bindings VALUES are free-variable targets
+// `apply_operator` bindings VALUES are free-variable targets
 // (esm-spec §10.10.2) — Expressions in their own right.
 func rewriteExprRaw(expr any, fn refFn) any {
 	switch e := expr.(type) {
@@ -350,9 +350,9 @@ func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]s
 			return nil, newETErr(CodeCouplingLibraryNestedImport,
 				fmt.Sprintf("coupling-library '%s' contains a nested coupling_import (v1 forbids layering, esm-spec §10.9)", ref))
 		}
-		if _, hasImports := edge["expression_template_imports"]; et == "callback" || hasImports {
+		if _, hasImports := edge["operator_imports"]; et == "callback" || hasImports {
 			return nil, newETErr(CodeCouplingLibraryIllegalPayload,
-				fmt.Sprintf("coupling-library '%s' edge of type '%s' is not role-substitutable (no callback entries or edge-level expression_template_imports, esm-spec §10.9)", ref, et))
+				fmt.Sprintf("coupling-library '%s' edge of type '%s' is not role-substitutable (no callback entries or edge-level operator_imports, esm-spec §10.9)", ref, et))
 		}
 		if !roleBearingTypes[et] {
 			return nil, newETErr(CodeCouplingLibraryIllegalPayload,

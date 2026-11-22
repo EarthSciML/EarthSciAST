@@ -358,7 +358,7 @@ func inlineTopLevelRefs(file *ESMFile, basePath string, visited map[string]bool,
 			// one that gets to say whether they are well-formed.
 			delete(resolvedRaw, "tests")
 			if err := file.landTypedTopLevelTemplates(form.section, name, resolvedRaw,
-				landed[name]["/expression_templates"]); err != nil {
+				landed[name]["/operators"]); err != nil {
 				return withETPath(err, at)
 			}
 			b, err := json.Marshal(resolvedRaw)
@@ -662,7 +662,7 @@ var (
 )
 
 // anchorInjectedImports returns a mount edge's injected
-// `expression_template_imports` entries (esm-spec §9.7.10 form A) with each
+// `operator_imports` entries (esm-spec §9.7.10 form A) with each
 // relative `ref` anchored at mountingBase, the directory of the document that
 // carries the edge. That document wrote the entries, so it is the referencing
 // file whose directory a relative ref resolves against (esm-spec §4.7); the
@@ -711,7 +711,7 @@ func anchorInjectedImports(entries []any, mountingBase string) []any {
 //
 // The referenced document is resolved on its RAW JSON view: the esm-spec §9.7
 // machinery runs first (version gates, template-library rejection —
-// `subsystem_ref_is_template_library` — import resolution, and metaparameter
+// `subsystem_ref_is_operator_library` — import resolution, and metaparameter
 // close, with the edge's optional `bindings` supplying §9.7.6 binding site 3),
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
@@ -752,7 +752,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 			continue
 		}
 
-		// esm-spec §9.7.10 form A: the edge's optional `expression_template_imports`
+		// esm-spec §9.7.10 form A: the edge's optional `operator_imports`
 		// inject a discretization into the REFERENCED component's own scope. Kept
 		// as raw §9.7.2 entries and threaded into the referenced document's load,
 		// where the §9.6.3 fixpoint lowers its rewrite-targets before the mounted
@@ -761,7 +761,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// anchored at its directory before they join the leaf's scope.
 		var injected []any
 		if m, ok := value.(map[string]any); ok {
-			if inj, ok := m["expression_template_imports"].([]any); ok {
+			if inj, ok := m["operator_imports"].([]any); ok {
 				injected = anchorInjectedImports(inj, basePath)
 			}
 		}
@@ -776,7 +776,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// already-closed environment (parentMeta). requireMetaExpr validates the
 		// structure at the edge (bad op / empty args / float → metaparameter_type_error
 		// even with a symbolic arg); evalMetaExpr folds it (a free name absent
-		// from parentMeta → template_import_unknown_name).
+		// from parentMeta → operator_import_unknown_name).
 		bindings := map[string]int64{}
 		for _, bk := range sortedKeys(bindingsRaw) {
 			ctx := fmt.Sprintf("%s.%s: binding '%s'", form.section, key, bk)
@@ -829,7 +829,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// two reference mechanisms are disjoint (esm-spec §9.7.1).
 		if isTemplateLibraryDoc(view) {
 			return newETErr(CodeSubsystemRefIsTemplateLibrary,
-				fmt.Sprintf("%s %q: ref %q targets a template-library file (%s); libraries are imported via expression_template_imports (esm-spec §9.7.1)", form.noun, key, ref, refKey))
+				fmt.Sprintf("%s %q: ref %q targets a template-library file (%s); libraries are imported via operator_imports (esm-spec §9.7.1)", form.noun, key, ref, refKey))
 		}
 
 		// Nor a coupling-library file — those are imported via a coupling_import
@@ -853,7 +853,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		//     statement about this edge; the loader API is a default beneath it.
 		//   - the filter is the names the LEAF DECLARES, read off the leaf's own
 		//     `metaparameters` block. Handing a leaf a name it never declared
-		//     would be `template_import_unknown_name` against a document that
+		//     would be `operator_import_unknown_name` against a document that
 		//     never asked for it, and would let an assembler's unrelated
 		//     metaparameter resize a leaf axis this edge never bound.
 		//
@@ -909,7 +909,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// processing", so the referenced document's OWN nested mounts are
 		// inlined HERE, ahead of the §9.7.10 injection and the §9.6.3 fixpoint
 		// below. §9.7.10 defines the injection as "as if the target had added
-		// those entries to the END of its own `expression_template_imports`",
+		// those entries to the END of its own `operator_imports`",
 		// and a component's own imports lower a rewrite-target inside a
 		// component it mounts — so the fixpoint has to see the mounted content
 		// or the two halves of that sentence disagree. Resolving them after it
@@ -1392,7 +1392,7 @@ func documentHasSubsystemRefs(view map[string]any) bool {
 // has to see the mounted content or a rewrite-target inside a mounted component
 // never lowers — the defect issue #311 reports, whose CONTROL case is a
 // document's own component declaring a rule library in its own
-// `expression_template_imports` and mounting the rewrite-target through a
+// `operator_imports` and mounting the rewrite-target through a
 // `subsystems.<k>` `{ref}`. Inlining had to move ahead of the machinery for
 // that to work at all.
 //

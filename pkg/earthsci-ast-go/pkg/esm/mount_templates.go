@@ -131,7 +131,7 @@ func mergeFlatRegistry(blocks []registryBlock) (*orderedMap, map[string]map[stri
 	return merged, rename
 }
 
-// matchlessBlock is a raw `expression_templates` block's match-less entries, in
+// matchlessBlock is a raw `operators` block's match-less entries, in
 // declaration order `order` (names absent from it follow, sorted).
 func matchlessBlock(tpl map[string]any, order []string) *orderedMap {
 	out := newOrderedMap()
@@ -139,13 +139,16 @@ func matchlessBlock(tpl map[string]any, order []string) *orderedMap {
 		if d, ok := tpl[n].(map[string]any); ok && declHasMatch(d) {
 			continue
 		}
-		out.set(n, tpl[n])
+		// Each entry records the defined operator it defines under the key it
+		// was declared with, before a collision rename (esm-spec §9.6.12
+		// "Provenance").
+		out.set(n, withDefines(n, tpl[n]))
 	}
 	return out
 }
 
 // mountedRegistries keeps, on each component of a lowered mounted leaf, the
-// `expression_templates` block the mounting document merges: its match-less
+// `operators` block the mounting document merges: its match-less
 // entries only (the `match` rules have fired in the leaf), and none on a
 // component no reference reads. Mutates view. Mirrors the Julia
 // `_mounted_registries!`.
@@ -157,7 +160,7 @@ func mountedRegistries(view map[string]any) {
 			if !ok {
 				continue
 			}
-			tpl, ok := comp["expression_templates"].(map[string]any)
+			tpl, ok := comp["operators"].(map[string]any)
 			if !ok {
 				continue
 			}
@@ -170,22 +173,22 @@ func mountedRegistries(view map[string]any) {
 			}
 			used := false
 			for k, v := range comp {
-				if k != "expression_templates" && containsApplyOp(v) {
+				if k != "operators" && containsApplyOp(v) {
 					used = true
 					break
 				}
 			}
 			if len(keep) == 0 || !used {
-				delete(comp, "expression_templates")
+				delete(comp, "operators")
 			} else {
-				comp["expression_templates"] = keep
+				comp["operators"] = keep
 			}
 		}
 	}
 }
 
 // mountedBlock is a subsystem below a top-level component that carries its own
-// `expression_templates` block, with its path below the component and the JSON
+// `operators` block, with its path below the component and the JSON
 // pointer it sits at (for its declaration order).
 type mountedBlock struct {
 	path string
@@ -212,7 +215,7 @@ func collectMountedBlocks(out []mountedBlock, node map[string]any, prefix, ptr s
 			path = prefix + "." + k
 		}
 		subPtr := ptr + "/subsystems/" + k
-		if _, ok := sub["expression_templates"].(map[string]any); ok {
+		if _, ok := sub["operators"].(map[string]any); ok {
 			out = append(out, mountedBlock{path: path, ptr: subPtr, sub: sub})
 		} else {
 			out = collectMountedBlocks(out, sub, path, subPtr, orders)
@@ -234,7 +237,7 @@ func renameOutsideMounts(node map[string]any, rn map[string]string) {
 		if !ok {
 			continue
 		}
-		if _, ok := sub["expression_templates"].(map[string]any); ok {
+		if _, ok := sub["operators"].(map[string]any); ok {
 			continue
 		}
 		for _, f := range sortedKeys(sub) {
@@ -256,8 +259,8 @@ func renameOutsideMounts(node map[string]any, rn map[string]string) {
 func mergeMountedBlocks(own map[string]any, ownOrder []string, cname string, mounts []mountedBlock, orders map[string][]string) (*orderedMap, map[string]string) {
 	blocks := []registryBlock{{path: cname, block: matchlessBlock(own, ownOrder)}}
 	for _, m := range mounts {
-		tpl, _ := m.sub["expression_templates"].(map[string]any)
-		blocks = append(blocks, registryBlock{path: m.path, block: matchlessBlock(tpl, orders[m.ptr+"/expression_templates"])})
+		tpl, _ := m.sub["operators"].(map[string]any)
+		blocks = append(blocks, registryBlock{path: m.path, block: matchlessBlock(tpl, orders[m.ptr+"/operators"])})
 	}
 	merged, rename := mergeFlatRegistry(blocks)
 	for _, m := range mounts {
@@ -266,7 +269,7 @@ func mergeMountedBlocks(own map[string]any, ownOrder []string, cname string, mou
 			continue
 		}
 		for _, k := range sortedKeys(m.sub) {
-			if k == "expression_templates" {
+			if k == "operators" {
 				continue
 			}
 			m.sub[k] = renameApplyRefs(m.sub[k], rm)
@@ -292,7 +295,7 @@ func mergeMountedBlocks(own map[string]any, ownOrder []string, cname string, mou
 }
 
 // hoistMountedTemplates merges into the top-level component comp's
-// `expression_templates` block the blocks its subsystems carry (a mounted
+// `operators` block the blocks its subsystems carry (a mounted
 // leaf's, or an authored subsystem's own), esm-spec §9.6.4 rule 1. Owner
 // paths: comp's own match-less entries under cname, each subsystem block under
 // its subsystem path below comp. Bodies are taken unchanged. Each mounted
@@ -306,12 +309,12 @@ func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[st
 	if len(mounts) == 0 {
 		return
 	}
-	own, _ := comp["expression_templates"].(map[string]any)
-	ownOrder := orders[ptr+"/expression_templates"]
+	own, _ := comp["operators"].(map[string]any)
+	ownOrder := orders[ptr+"/operators"]
 	newblock, rn := mergeMountedBlocks(own, ownOrder, cname, mounts, orders)
 	if rn != nil {
 		for _, k := range sortedKeys(comp) {
-			if k == "expression_templates" || k == "subsystems" {
+			if k == "operators" || k == "subsystems" {
 				continue
 			}
 			comp[k] = renameApplyRefs(comp[k], rn)
@@ -319,15 +322,15 @@ func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[st
 		renameOutsideMounts(comp, rn)
 	}
 	for _, m := range mounts {
-		delete(m.sub, "expression_templates")
+		delete(m.sub, "operators")
 	}
 	block := make(map[string]any, newblock.len())
 	for _, n := range newblock.keys {
 		block[n] = newblock.get(n)
 	}
-	comp["expression_templates"] = block
+	comp["operators"] = block
 	if orders != nil {
-		orders[ptr+"/expression_templates"] = append([]string(nil), newblock.keys...)
+		orders[ptr+"/operators"] = append([]string(nil), newblock.keys...)
 	}
 }
 
@@ -647,7 +650,7 @@ func (esm *ESMFile) mergeTypedMountedTemplates(kind, name string, subsystems map
 		named[n] = block.get(n)
 	}
 	for _, m := range mounts {
-		delete(m.sub, "expression_templates")
+		delete(m.sub, "operators")
 		for _, k := range sortedKeys(m.sub) {
 			res, err := expandAll(m.sub[k], named, key+"."+m.path+"."+k)
 			if err != nil {
@@ -670,11 +673,11 @@ func (esm *ESMFile) mergeTypedMountedTemplates(kind, name string, subsystems map
 // its references are expanded against it, as the load expands a top-level
 // component's (Expand-at-build). `order` is the block's declaration order.
 func (esm *ESMFile) landTypedTopLevelTemplates(section, name string, comp map[string]any, order []string) error {
-	tpl, ok := comp["expression_templates"].(map[string]any)
+	tpl, ok := comp["operators"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	delete(comp, "expression_templates")
+	delete(comp, "operators")
 	key := section + "." + name
 	for _, k := range sortedKeys(comp) {
 		res, err := expandAll(comp[k], tpl, key+"."+k)

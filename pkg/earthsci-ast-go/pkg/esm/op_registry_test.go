@@ -46,7 +46,7 @@ func TestNonPointwiseOpsAreNotScalarOperators(t *testing.T) {
 		"faq", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
 		// Form / lowering.
 		"D", "ic", "Pre", "const", "true", "false", "enum",
-		"apply_expression_template",
+		"apply_operator",
 		// Relational / value-invention.
 		"distinct",
 		// The format has no operator aliases.
@@ -252,7 +252,7 @@ func walkBroadcastNodes(doc any, templateParams map[string]bool, visit func(Expr
 			}
 		}
 		for key, child := range v {
-			if key == "expression_templates" {
+			if key == "operators" || key == "expression_templates" { // the raw corpus spells both
 				if templates, ok := child.(map[string]any); ok {
 					for _, tmpl := range templates {
 						walkBroadcastNodes(tmpl, templateParamSet(tmpl), visit)

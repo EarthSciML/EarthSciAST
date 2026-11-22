@@ -15,7 +15,7 @@ import (
 var documentMapKeys = map[string]bool{
 	"bind": true, "bindings": true, "coordinates": true, "coords": true,
 	"coupling_roles": true, "data_sources": true, "enums": true,
-	"expression_template_imports": true, "expression_templates": true,
+	"operator_imports": true, "operators": true,
 	"guesses": true, "index_set_rename": true, "index_sets": true,
 	"initial_conditions": true, "map": true, "metaparameters": true,
 	"models": true, "parameter_overrides": true, "parameters": true,

@@ -93,8 +93,8 @@ func TestReferencePreserving_ExpandEqualsFused(t *testing.T) {
 
 			// Non-vacuity: the reference-preserving form must actually preserve
 			// something the fused form destroys.
-			refs := rpCount(keptView, "", "apply_expression_template")
-			regs := rpCount(keptView, "expression_templates", "")
+			refs := rpCount(keptView, "", "apply_operator")
+			regs := rpCount(keptView, "operators", "")
 			if refs == 0 {
 				t.Fatalf("no surviving reference — this group cannot distinguish the two forms")
 			}
@@ -102,10 +102,10 @@ func TestReferencePreserving_ExpandEqualsFused(t *testing.T) {
 				t.Errorf("surviving references but no retained registry: an expanded-away registry leaves the references undefinable (§9.6.4 rule 5)")
 			}
 			fusedView := rpDecode(t, fused)
-			if got := rpCount(fusedView, "", "apply_expression_template"); got != 0 {
+			if got := rpCount(fusedView, "", "apply_operator"); got != 0 {
 				t.Errorf("ResolveAndLower left %d unexpanded reference(s); it is the Option-A surface", got)
 			}
-			if got := rpCount(fusedView, "expression_templates", ""); got != 0 {
+			if got := rpCount(fusedView, "operators", ""); got != 0 {
 				t.Errorf("ResolveAndLower left %d registry/registries; Expand strips them", got)
 			}
 
@@ -122,8 +122,8 @@ func TestReferencePreserving_ExpandEqualsFused(t *testing.T) {
 // check respectively.
 func TestReferencePreserving_RejectsInvalidFixtures(t *testing.T) {
 	for _, tc := range []struct{ group, code string }{
-		{"constraint_unknown_index_set", "template_constraint_unknown_index_set"},
-		{"import_where_rename_unknown_index_set", "template_constraint_unknown_index_set"},
+		{"constraint_unknown_index_set", "operator_constraint_unknown_index_set"},
+		{"import_where_rename_unknown_index_set", "operator_constraint_unknown_index_set"},
 		{"nonterminating_rewrite", "rewrite_rule_nonterminating"},
 	} {
 		t.Run(tc.group, func(t *testing.T) {

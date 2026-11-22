@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-// applyNode builds an `apply_expression_template` call-site node.
+// applyNode builds an `apply_operator` call-site node.
 func applyNode(name string) map[string]any {
 	return map[string]any{
 		"op":       applyExpressionTemplateOp,
@@ -62,9 +62,9 @@ func buildNestedTemplateDoc(depth int) map[string]any {
 		"metadata": map[string]any{"name": "nested_template_blowup", "authors": []any{"esm"}},
 		"reaction_systems": map[string]any{
 			"chem": map[string]any{
-				"species":              map[string]any{"A": map[string]any{"default": 1.0}, "B": map[string]any{"default": 0.5}},
-				"parameters":           map[string]any{"T": map[string]any{"default": 298.15}},
-				"expression_templates": templates,
+				"species":    map[string]any{"A": map[string]any{"default": 1.0}, "B": map[string]any{"default": 0.5}},
+				"parameters": map[string]any{"T": map[string]any{"default": 298.15}},
+				"operators":  templates,
 				"reactions": []any{
 					map[string]any{
 						"id":         "R1",

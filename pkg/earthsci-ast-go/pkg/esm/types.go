@@ -20,7 +20,7 @@ type ExprNode struct {
 	Var   *string `json:"var,omitempty"`   // integration variable name (for integral)
 	Lower any     `json:"lower,omitempty"` // lower integration bound (for integral)
 	Upper any     `json:"upper,omitempty"` // upper integration bound (for integral)
-	// Name is the template name of an `apply_expression_template` op.
+	// Name is the template name of an `apply_operator` op.
 	Name *string `json:"name,omitempty"`
 	// Value carries the inline literal payload of a `const` op node
 	// (esm-spec §4.2 / §9.3); `Args` MUST be empty for a const node. Any
@@ -44,7 +44,7 @@ type ExprNode struct {
 	// as their own fields. They are stored as interface{}/raw slices so numeric
 	// literals inside them keep the json.Number shape they had at parse time. ---
 
-	// Bindings is the param→expression map of an `apply_expression_template` op.
+	// Bindings is the param→expression map of an `apply_operator` op.
 	Bindings map[string]any `json:"bindings,omitempty"`
 	// Regions is the list of hyper-rectangular index regions of a `makearray`
 	// op; each region is a list of [lo, hi] bound pairs.
@@ -632,7 +632,7 @@ type Test struct {
 	// config (a peer of ParameterOverrides), so — unlike a component's own
 	// imports — this DOES survive parse → emit. Consumed only by an ephemeral
 	// per-run build, which this binding does not perform (no numeric solver).
-	ExpressionTemplateImports []any       `json:"expression_template_imports,omitempty"`
+	ExpressionTemplateImports []any       `json:"operator_imports,omitempty"`
 	Assertions                []Assertion `json:"assertions"`
 }
 
@@ -703,7 +703,7 @@ type Analysis struct {
 	// §9.7.10 form C / §6.7). Authored per-run config (a peer of Parameters), so
 	// it DOES survive parse → emit; consumed only by an ephemeral per-run build,
 	// which this binding does not perform.
-	ExpressionTemplateImports []any `json:"expression_template_imports,omitempty"`
+	ExpressionTemplateImports []any `json:"operator_imports,omitempty"`
 }
 
 // ========================================
@@ -1001,7 +1001,7 @@ func (e EventCoupling) CouplingType() string { return e.Type }
 // reference). At flatten (esm-spec §10.10.3) the import expands into concrete
 // variable_map / couple / operator_compose / event edges by substituting the
 // bound actual for every role-named top-level segment; the entry itself
-// round-trips intact. Carries no `expression_template_imports` (injection is a
+// round-trips intact. Carries no `operator_imports` (injection is a
 // property of the wiring entries, not of an import indirection).
 type CouplingImport struct {
 	Type        string            `json:"type"` // "coupling_import"
@@ -1325,7 +1325,7 @@ type ESMFile struct {
 	// ExpressionTemplates the top-level rewrite-rule registry — the payload of a
 	// template-library file (§9.7.1).
 	//
-	// Both are DECLARATIONS — peers of `index_sets` — not `apply_expression_template`
+	// Both are DECLARATIONS — peers of `index_sets` — not `apply_operator`
 	// CALL SITES, and esm-spec §9.6.4 rule 5 requires them to survive `parse → emit`
 	// VERBATIM: a template-library file MUST round-trip to itself. They are held as
 	// raw JSON precisely so that "verbatim" is literal — canonicalizeValue preserves
@@ -1339,7 +1339,7 @@ type ESMFile struct {
 	// re-emitted (tests/valid/template_import_lib.esm,
 	// tests/valid/template_import_rename_lib.esm).
 	Metaparameters      json.RawMessage `json:"metaparameters,omitempty"`
-	ExpressionTemplates json.RawMessage `json:"expression_templates,omitempty"`
+	ExpressionTemplates json.RawMessage `json:"operators,omitempty"`
 
 	// keyOrders records the AUTHORED JSON key order of every object in the
 	// document, keyed by a JSON-pointer-like path ("/models",
@@ -1367,7 +1367,7 @@ type ESMFile struct {
 	// working directory at call time. Unexported, so it never reaches the wire:
 	// `external` round-trips verbatim.
 	documentBase string
-	// componentTemplates holds each component's `expression_templates` block
+	// componentTemplates holds each component's `operators` block
 	// as it stood AFTER import resolution and BEFORE Expand-at-build stripped
 	// it, keyed "models.<name>" / "reaction_systems.<name>" -- the same key
 	// shape Python's EsmFile.component_templates and Julia's use. Flatten
@@ -1382,8 +1382,13 @@ type ESMFile struct {
 	// form, where a template application is opaque (esm-spec §4.3.1); the
 	// expansion it became is the build's to check.
 	authoredTemplateRHS map[string]Expression
+	// loweredUnitEqs holds, keyed by equation pointer, the reference-preserving
+	// form of each top-level model equation whose references reach a
+	// definition with a unit expression (esm-spec §9.6.12 "Units"): the load
+	// expands references, so the validator types those equations from here.
+	loweredUnitEqs map[string]loweredUnitEquation
 	// topLevelRefs holds the raw `{ref, bindings, index_set_rename,
-	// expression_template_imports, ...}` edge of every top-level `models.<k>` and
+	// operator_imports, ...}` edge of every top-level `models.<k>` and
 	// `reaction_systems.<k>` MOUNT EDGE, keyed by block (`models` /
 	// `reaction_systems`) and then by mount name (esm-spec §4.7 "Two mount forms,
 	// one mechanism"). The schema gives each entry `oneOf [component,
@@ -1432,20 +1437,20 @@ func (e *ESMFile) ValidateStruct() error {
 	//
 	// This is the invariant for an ASSEMBLY document — one that declares
 	// components. It is NOT universal: the schema's root `anyOf` also admits two
-	// LIBRARY file kinds (`expression_templates` per esm-spec §9.7,
+	// LIBRARY file kinds (`operators` per esm-spec §9.7,
 	// `coupling_roles` per §10.9) that carry no components at all. Both blocks
 	// survive parse (ESMFile.ExpressionTemplates / .CouplingRoles), so a library
 	// is told apart from an empty document by the typed value alone — which is
 	// what the payload test below, and validate.go's isLibraryDocument, do.
 	// The five top-level PAYLOAD keys of the schema's `anyOf`: models,
-	// reaction_systems, data_sources, expression_templates, coupling_roles. A
-	// template-library file's payload is its `expression_templates` registry
+	// reaction_systems, data_sources, operators, coupling_roles. A
+	// template-library file's payload is its `operators` registry
 	// (§9.7.1) — omitting it here rejected every library file at serialization,
 	// which is how the emitter came to drop the registry in the first place.
 	if len(e.Models) == 0 && len(e.ReactionSystems) == 0 && len(e.DataSources) == 0 &&
 		len(e.CouplingRoles) == 0 && len(e.ExpressionTemplates) == 0 {
 		return fmt.Errorf("at least one of 'models', 'reaction_systems', 'data_sources', " +
-			"'expression_templates', or 'coupling_roles' must be present")
+			"'operators', or 'coupling_roles' must be present")
 	}
 
 	return nil

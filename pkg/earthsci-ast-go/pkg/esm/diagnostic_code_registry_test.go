@@ -222,6 +222,14 @@ func TestEveryRaisedDiagnosticCodeIsRegistered(t *testing.T) {
 		registered[value] = true
 	}
 	for _, code := range specDiagnosticCodes(t) {
+		// An esm-2.3 spelling the §9.6.6 "Renamed codes" table lists is an
+		// alias of its new code, which is what this binding registers.
+		if _, old := errorCodeAliases[code]; old {
+			if !registered[canonicalErrorCode(code)] {
+				t.Errorf("esm-spec §9.6.6 renamed code %q -> %q has no registry constant", code, canonicalErrorCode(code))
+			}
+			continue
+		}
 		if !registered[code] {
 			t.Errorf("esm-spec §9.6.6 code %q has no registry constant in this binding", code)
 		}

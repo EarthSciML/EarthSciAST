@@ -21,7 +21,7 @@ func mtrPath(dir, file string) string {
 }
 
 func mtrBlock(reg *orderedMap) string {
-	return emitCanonicalString(map[string]any{"expression_templates": reg})
+	return emitCanonicalString(map[string]any{"operators": reg})
 }
 
 func mtrFlat(t *testing.T, p string) string {
@@ -139,12 +139,12 @@ func TestMountSharedDefinition(t *testing.T) {
 	// OWN names: Sub1's and Sub2's `k`, Inner's `g`, Host's `g`.
 	for _, sub := range []string{"Sub1", "Sub2"} {
 		eqs := mtrModelEquations(t, file, sub)
-		if !strings.Contains(eqs, `"k"`) || strings.Contains(eqs, "apply_expression_template") {
+		if !strings.Contains(eqs, `"k"`) || strings.Contains(eqs, "apply_operator") {
 			t.Errorf("%s equations must read its own k, expanded: %s", sub, eqs)
 		}
 	}
 	inner := mtrModelEquations(t, file, "Inner")
-	if !strings.Contains(inner, `"g"`) || strings.Contains(inner, "apply_expression_template") {
+	if !strings.Contains(inner, `"g"`) || strings.Contains(inner, "apply_operator") {
 		t.Errorf("Inner equations must read its own g, expanded: %s", inner)
 	}
 
@@ -226,7 +226,7 @@ func TestMountRegistryMergeTypedPath(t *testing.T) {
 	if exp := mtrModelEquations(t, loaded, "Sub"); got != exp {
 		t.Errorf("typed-path Sub equations\n got %s\nwant %s", got, exp)
 	}
-	if _, has := file.Models["Host"].Subsystems["Sub"].(map[string]any)["expression_templates"]; has {
+	if _, has := file.Models["Host"].Subsystems["Sub"].(map[string]any)["operators"]; has {
 		t.Error("the mounted Sub still carries its block after the merge")
 	}
 }

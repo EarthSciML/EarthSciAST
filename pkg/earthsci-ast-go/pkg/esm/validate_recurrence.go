@@ -66,7 +66,7 @@ const (
 	// codeRecurrenceUnsupportedForm: the self-read is reachable only through a
 	// construct that cannot be restricted to one cell (a `makearray` region
 	// value, or a `reshape`/`transpose`/`concat`/`broadcast`/
-	// `apply_expression_template` operand), or the equation declares no cell
+	// `apply_operator` operand), or the equation declares no cell
 	// frame to sweep (esm-spec §4.3.1.1 *Rejections*).
 	//
 	// Both codes are UNEXPORTED, unlike the other structural Code* constants in
@@ -963,7 +963,7 @@ func maxInt64(a, b int64) int64 {
 // READ may be perfectly causal, it is the surrounding construct that cannot be
 // sequenced (esm-spec §4.3.1.1 *Rejections*).
 //
-// `apply_expression_template` is deliberately NOT here. Its operands ride the
+// `apply_operator` is deliberately NOT here. Its operands ride the
 // `bindings` field, which this walk does not visit (and must not start visiting
 // unilaterally — five bindings mirror this field set and §5.19.5 requires exact
 // agreement), so listing it was a rule that barely reached what it named. It is

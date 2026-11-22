@@ -1,7 +1,7 @@
 package esm
 
 // Load-time resolution for esm-spec §9.7: template-library files, cross-file
-// `expression_template_imports`, and load-time `metaparameters`
+// `operator_imports`, and load-time `metaparameters`
 // (docs/content/rfcs/template-library-imports.md; esm-libraries-spec §2.1c).
 //
 // Everything here resolves BEFORE the §9.6.3 rewrite fixpoint
@@ -18,10 +18,10 @@ package esm
 //  5. the §9.6.3 fixpoint on fully-concrete trees.
 //
 // Round-trip is Option A, which expands CALL SITES and does NOT delete
-// DECLARATIONS (esm-spec §9.6.4 rule 5). `expression_template_imports` is an
+// DECLARATIONS (esm-spec §9.6.4 rule 5). `operator_imports` is an
 // import directive consumed by the fixpoint and does not survive parse → emit;
-// the `apply_expression_template` call sites it lowers do not survive either.
-// But a top-level `expression_templates` registry and a top-level
+// the `apply_operator` call sites it lowers do not survive either.
+// But a top-level `operators` registry and a top-level
 // `metaparameters` block are DECLARATIONS — peers of `index_sets` — and they
 // survive VERBATIM: a template-library file MUST round-trip to itself.
 //
@@ -44,7 +44,7 @@ package esm
 // MaxTemplateExpansionDepth is the maximum template-body reference-chain depth
 // (counted in TEMPLATES along the longest chain, so a 65-template chain is
 // rejected and a 64-template chain is accepted) before a file is rejected with
-// `template_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
+// `operator_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
 // across all bindings. It equals MaxRewritePasses: a rewrite of depth d writes
 // a body-reference chain d templates deep, so every document the rewriter
 // accepts also reloads once emitted with its references.

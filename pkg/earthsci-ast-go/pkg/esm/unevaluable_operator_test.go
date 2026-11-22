@@ -86,7 +86,7 @@ func TestUnevaluableOperatorConformanceFixture(t *testing.T) {
 // closed-core op must never receive the rewrite-rule advice.
 func TestUnevaluableOperatorClassification(t *testing.T) {
 	closed := []string{
-		"distinct", "enum", "apply_expression_template", "ic",
+		"distinct", "enum", "apply_operator", "ic",
 		"faq", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
 	}
 	for _, op := range closed {
