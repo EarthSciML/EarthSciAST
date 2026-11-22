@@ -653,7 +653,11 @@ written or inferred, is a core operator's name is `operator_defines_core_op`.
 A rule whose `match` is rooted at a core op defines no callable name, so its
 `defines` is provenance only and is not checked.
 """
+_is_reference_only(decl) = _raw_get(decl, "reference_only") === true
+
 function _check_defines_not_core(name::AbstractString, decl, scope::AbstractString)
+    # A `reference_only` definition is reached by no call (esm-spec §9.6.1).
+    _is_reference_only(decl) && return nothing
     r = _match_root_op(decl)
     (r !== nothing && _is_core_op(r)) && return nothing
     d = _definition_defines(name, decl)
@@ -862,7 +866,9 @@ function _explain_unresolved_call(call, registry, shape_env = _EMPTY_SHAPE_ENV):
             push!(lines, "'$name': its where constraint " * _where_reason(whr, b, shape_env))
         else
             _definition_defines(name, decl) == op || continue
-            if length(td.params) != k
+            if _is_reference_only(decl)
+                push!(lines, "'$name': reference-only, reached by explicit references, never by a call")
+            elseif length(td.params) != k
                 push!(lines, "'$name': takes $(length(td.params)) operand(s), the call carries $k")
             elseif !_only_op_args(call)
                 extra = sort!([string(x) for (x, _) in pairs(call) if !(string(x) in ("op", "args"))])
@@ -873,8 +879,11 @@ function _explain_unresolved_call(call, registry, shape_env = _EMPTY_SHAPE_ENV):
             end
         end
     end
-    isempty(lines) && return "no definition of '$op' is in scope (a placeholder)"
-    return "definitions of '$op' in scope: " * join(lines, "; ")
+    # esm-spec §9.6.12: emit and flatten keep only the definitions a reference
+    # reaches, so an unreferenced definition is no longer here to list.
+    note = "; definitions no reference reached were removed by emit and flatten and are not listed"
+    isempty(lines) && return "no definition of '$op' is in scope (a placeholder)" * note
+    return "definitions of '$op' in scope: " * join(lines, "; ") * note
 end
 
 function _where_reason(whr, b::Dict{String, Any}, shape_env)::String
@@ -1395,13 +1404,16 @@ function lower_expression_templates(raw_data)
                 m = td.match
                 defines = _definition_defines(tname, decl)
                 rop = _match_root_op(decl)
-                if m === nothing
+                refonly = _is_reference_only(decl)
+                if m === nothing && refonly
+                    # reached only through an explicit reference (§9.6.1)
+                elseif m === nothing
                     push!(get!(arities, defines, Set{Int}()), length(td.params))
                 elseif rop !== nothing && !_is_core_op(rop)
                     margs = _raw_get(m, "args")
                     push!(get!(arities, rop, Set{Int}()), margs === nothing ? 0 : length(margs))
                 end
-                if m === nothing && !_is_core_op(defines) && defines != APPLY_EXPRESSION_TEMPLATE_OP
+                if m === nothing && !refonly && !_is_core_op(defines) && defines != APPLY_EXPRESSION_TEMPLATE_OP
                     push!(
                         get!(call_rules, defines, _RewriteRule[]),
                         _RewriteRule(

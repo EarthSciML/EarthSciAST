@@ -424,9 +424,17 @@ function _rule3_exposed(st::_Rule3State, by_template, order)
     return visible
 end
 
-_match_stripped(decl) = OrderedDict{String, Any}(
-    string(k) => v for (k, v) in pairs(decl) if !(string(k) in ("match", "where", "priority"))
-)
+# A materialized entry: the rule (or variant) without its `match`, `where` and
+# `priority`, marked `reference_only` (esm-spec §9.6.1, §9.6.4 rule 5) so that
+# reloading the emitted document makes it no callable definition of its
+# operator: emit → load → emit is exact.
+function _match_stripped(decl)
+    nd = OrderedDict{String, Any}(
+        string(k) => v for (k, v) in pairs(decl) if !(string(k) in ("match", "where", "priority"))
+    )
+    nd["reference_only"] = true
+    return nd
+end
 
 """
     _apply_rule3!(comp, L, transforms)

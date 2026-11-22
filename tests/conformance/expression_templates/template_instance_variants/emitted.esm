@@ -136,7 +136,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "central_2d": {
           "body": {
@@ -193,7 +194,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "ddx.variant1": {
           "body": {
@@ -207,7 +209,8 @@
           "defines": "ddx",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "ddx.variant2": {
           "body": {
@@ -221,7 +224,8 @@
           "defines": "ddx",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         }
       },
       "variables": {

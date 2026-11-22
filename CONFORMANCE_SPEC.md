@@ -7912,6 +7912,13 @@ operators, not core ops.
 `compound_rule_exempt.esm` (a rule keyed `exp` whose `match` is rooted at
 `sqrt`) loads. Every binding that loads documents MUST assert all three.
 
+**Emitted rules are reference-only** *(draft 2.4.0, esm-spec §9.6.1 `reference_only`, §9.6.4
+rule 5)*. `tests/conformance/expression_templates/reference_only_round_trip/`: `fixture.esm`
+holds a referenced rule with a `where` and a compound rule keyed `exp` rooted at `sqrt`; its
+`emitted.esm` writes both `reference_only`, and every binding re-emits `emitted.esm` byte for
+byte (emit → load → emit is exact). `constrained_match_scope` is no longer exempt from the
+emit-idempotency property of §9.6.7.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

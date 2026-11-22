@@ -63,7 +63,8 @@
           "defines": "half_rule",
           "params": [
             "a"
-          ]
+          ],
+          "reference_only": true
         },
         "scale_by": {
           "body": {

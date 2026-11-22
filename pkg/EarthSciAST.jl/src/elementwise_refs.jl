@@ -168,6 +168,7 @@ function _ew_cellwise!(ctx, name::String, split::Vector{String})
     for f in ("match", "where", "priority")
         delete!(decl, f)
     end
+    decl["reference_only"] = true   # reached by its references only (esm-spec §9.6.1)
     decl["params"] = Any[params..., (m[x] for x in split)...]
     decl["body"] = serialize_expression(nbody)
     # A placeholder name, a function of the variant alone: a lift of this

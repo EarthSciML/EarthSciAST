@@ -68,7 +68,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "halve": {
           "body": {

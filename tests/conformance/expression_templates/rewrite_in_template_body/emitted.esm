@@ -117,7 +117,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "deriv_c": {
           "body": {

@@ -187,7 +187,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "ddx.variant1": {
           "body": {
@@ -201,7 +202,8 @@
           "defines": "ddx",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "inner.variant1": {
           "body": {
@@ -215,7 +217,8 @@
           "defines": "inner",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "outer.variant1": {
           "body": {
@@ -229,7 +232,8 @@
           "defines": "outer",
           "params": [
             "g"
-          ]
+          ],
+          "reference_only": true
         }
       },
       "variables": {

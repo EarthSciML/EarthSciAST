@@ -884,7 +884,9 @@ function _rewrite_old_spellings!(doc)::Vector{String}
     fsites = String[]
     osites = String[]
     seen = IdDict{Any, Nothing}()
-    _old_spellings_walk!(doc, "", false, nothing, fsites, osites, seen)
+    task_local_storage(:esm_doc_independent_variable, _document_iv_rename(doc)) do
+        _old_spellings_walk!(doc, "", false, nothing, fsites, osites, seen)
+    end
     isempty(fsites) || @warn string(
         "deprecated_field: the fields `expression_templates` and ",
         "`expression_template_imports` are read as `operators` and ",
@@ -932,6 +934,17 @@ function _has_old_spellings(x)::Bool
         end
         return true
     end
+end
+
+# The document's own renamed independent variable (`domain.independent_variable`
+# when declared and not "t"), or `nothing` (esm-spec §4.2 "The derivative axis").
+function _document_iv_rename(doc)
+    _is_object(doc) || return nothing
+    dom = _raw_get(doc, "domain")
+    (dom !== nothing && _is_object(dom)) || return nothing
+    iv = _raw_get(dom, "independent_variable")
+    (iv isa AbstractString && iv != "t") || return nothing
+    return String(iv)
 end
 
 # Rename `old` to `new` among the keys of `node`, keeping key order.
@@ -985,7 +998,14 @@ function _old_spellings_walk!(
                 elseif op == "D"
                     wk = _node_key(node, "wrt")
                     w = wk === nothing ? nothing : node[wk]
-                    if w !== nothing && w != "t" &&
+                    iv = get(task_local_storage(), :esm_doc_independent_variable, nothing)
+                    if w !== nothing && iv !== nothing && w == iv &&
+                            !(params !== nothing && String(w) in params)
+                        # esm-spec §4.2 "The derivative axis": `wrt` naming the
+                        # document's renamed independent variable is the time
+                        # derivative, read with the literal axis (no warning).
+                        node[wk] = "t"
+                    elseif w !== nothing && w != "t" &&
                             !(w isa AbstractString && params !== nothing && String(w) in params)
                         node[opk] = "partial"
                         push!(osites, string(at, " (D)"))

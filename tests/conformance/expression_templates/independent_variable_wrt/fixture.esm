@@ -1,0 +1,83 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "independent_variable_wrt",
+    "description": "esm-spec §4.2 'The derivative axis': the document's independent variable is `s`, so D(y, wrt: \"s\") is the time derivative, read as D(y, wrt: \"t\") with no warning, while D(u, wrt: \"x\") is the spatial derivative `partial`. emitted.esm writes `wrt: \"t\"` and `partial`.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "domain": {
+    "independent_variable": "s"
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.5,
+          "description": "variable"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.1,
+          "description": "variable"
+        },
+        "u": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "description": "variable"
+        },
+        "g": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "description": "variable"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "s"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1,
+              "k",
+              "y"
+            ]
+          }
+        },
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "x"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -120,7 +120,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "coarse.dx": {
           "body": {
@@ -200,7 +201,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "fine.dx": {
           "body": {

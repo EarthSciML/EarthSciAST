@@ -601,6 +601,8 @@ function _dt_place!(st::_DtState, roots::Vector{String})
             vcat(tpl.params, String[_dt_param_name(tpl, p) for p in r.needs])
         nd = OrderedDict{String, Any}(string(x) => v for (x, v) in pairs(tpl.decl))
         nd["params"] = params
+        # a derivative entry is reached by its references only (esm-spec §9.6.1)
+        kind === :ddt && (nd["reference_only"] = true)
         nd["body"] = serialize_expression(_rename_expr_apply_refs(body_of(m), names))
         nd
     end

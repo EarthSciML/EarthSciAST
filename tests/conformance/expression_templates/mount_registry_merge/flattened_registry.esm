@@ -71,7 +71,8 @@
       "defines": "dbl",
       "params": [
         "a"
-      ]
+      ],
+      "reference_only": true
     }
   }
 }

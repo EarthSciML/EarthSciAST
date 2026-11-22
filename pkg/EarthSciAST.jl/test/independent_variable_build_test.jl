@@ -13,7 +13,7 @@ const _IVB_FIXTURE = joinpath(
 
 # The fixture with its equation replaced by `D(y, s) = t·s + y`: `s` is time,
 # `t` the parameter (air temperature, default 288).
-function _ivb_ode_doc(dir)
+function _ivb_ode_doc(dir; wrt = "s")
     d = JSON3.read(read(_IVB_FIXTURE, String), Dict{String, Any})
     col = d["models"]["Column"]
     col["system_kind"] = "ode"
@@ -23,10 +23,9 @@ function _ivb_ode_doc(dir)
     col["variables"]["t"]["units"] = "1"
     col["equations"] = Any[
         Dict(
-            # The time derivative is spelled with `wrt` absent (literally "t",
-            # esm-spec §4.2): a `wrt` naming the renamed independent variable is
-            # a spatial axis, read as `partial` (esm 2.4.0).
-            "lhs" => Dict("op" => "D", "args" => Any["y"]),
+            # esm-spec §4.2 "The derivative axis": a `wrt` naming the document's
+            # renamed independent variable is the time derivative (read as `t`).
+            "lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => wrt),
             "rhs" => Dict(
                 "op" => "+", "args" => Any[
                     Dict(
@@ -51,9 +50,11 @@ end
         @test all(isfinite, du)
     end
 
-    @testset "time is read under the document's name" begin
+    # Both spellings of the time derivative: `wrt` naming the renamed
+    # independent variable, and the literal `t` (esm-spec §4.2).
+    @testset "time is read under the document's name (wrt = $wrt)" for wrt in ("s", "t")
         mktempdir() do dir
-            path = _ivb_ode_doc(dir)
+            path = _ivb_ode_doc(dir; wrt)
             f!, u0, p, _, vm = _IVB.Internal.build(path)
             i = vm["Column.y"]
             du = zeros(length(u0))

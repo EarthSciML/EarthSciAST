@@ -1,0 +1,50 @@
+{
+  "esm": "2.4.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "one-operator-type conformance"
+    ],
+    "description": "esm-spec §9.7.1, §9.8.5: `esm:std/vector_calculus.esm` is a documentation library with an empty `operators` block. Importing it is a no-op: grad(u) stays a placeholder (no definition in scope), and the emitted document (emitted.esm) carries neither the import nor an `operators` block.",
+    "name": "vector_calculus_import"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": "g",
+          "rhs": {
+            "args": [
+              "u"
+            ],
+            "op": "grad"
+          }
+        }
+      ],
+      "variables": {
+        "g": {
+          "description": "variable",
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "u": {
+          "default": 1,
+          "description": "variable",
+          "shape": [
+            "x"
+          ],
+          "type": "parameter",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

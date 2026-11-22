@@ -39,6 +39,9 @@ _oot_code(e) = e === nothing ? nothing : (hasproperty(e, :code) ? String(e.code)
                 ("placeholder_call", "fixture.esm", "emitted.esm"),
                 ("partial_wrt_param_instance", "fixture.esm", "emitted.esm"),
                 ("old_names", "fixture.esm", "emitted.esm"),
+                ("reference_only_round_trip", "fixture.esm", "emitted.esm"),
+                ("independent_variable_wrt", "fixture.esm", "emitted.esm"),
+                ("vector_calculus_import", "fixture.esm", "emitted.esm"),
             ]
             out = _oot_emit(_oot(dir, fix))
             @test out == read(_oot(dir, gold), String)
@@ -98,6 +101,27 @@ _oot_code(e) = e === nothing ? nothing : (hasproperty(e, :code) ? String(e.code)
             @test sort!(unique(String[e.error_type for e in r.structural_errors])) == sort!(String.(collect(want.errors)))
             got_w = sort!(unique(String[w.code for w in r.unit_warnings if w.code == "definition_unit_mismatch"]))
             @test got_w == sort!(String.(collect(want.warnings)))
+        end
+    end
+
+    @testset "emitted rules are reference-only (esm-spec §9.6.1, §9.6.4 rule 5)" begin
+        out = read(_oot("reference_only_round_trip", "emitted.esm"), String)
+        reg = JSON3.read(out).models.m.operators
+        @test reg.fv_div_edges.reference_only === true && reg.exp.reference_only === true
+        @test !haskey(reg.fv_div_edges, :where)
+        # div(G) stayed a call; reloading does not turn it into a reference.
+        @test occursin("\"op\": \"div\"", out)
+        # emit → load → emit is exact (also for constrained_match_scope).
+        for (dir, fix) in (("reference_only_round_trip", "fixture.esm"), ("constrained_match_scope", "fixture.esm"))
+            once = _oot_emit(_oot(dir, fix))
+            mktempdir() do d
+                p = joinpath(d, "e.esm")
+                write(p, once)
+                twice = _oot_emit(p)
+                @test twice == once
+                write(p, twice)
+                @test _oot_emit(p) == once
+            end
         end
     end
 

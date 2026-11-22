@@ -1,0 +1,133 @@
+{
+  "esm": "2.4.0",
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "edges": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "one-operator-type conformance"
+    ],
+    "description": "esm-spec §9.6.1 `reference_only`, §9.6.4 rule 5: the rule `fv_div_edges` (a `where` on edge fields) fires on div(F) but not on div(G), which stays a call; the compound rule `exp`, rooted at the core op `sqrt`, fires on sqrt(x^2). Emit writes both rules match-less and `reference_only`, so on reload neither becomes a callable definition (div(G) stays a call, and `exp` is not refused as a definition of a core operator): emitted.esm re-emits byte for byte.",
+    "name": "reference_only_round_trip"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": "d1",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "Q": "F"
+            },
+            "name": "fv_div_edges",
+            "op": "apply_operator"
+          }
+        },
+        {
+          "lhs": "d2",
+          "rhs": {
+            "args": [
+              "G"
+            ],
+            "op": "div"
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "a": "x"
+            },
+            "name": "exp",
+            "op": "apply_operator"
+          }
+        }
+      ],
+      "operators": {
+        "fv_div_edges": {
+          "body": {
+            "args": [
+              2,
+              "Q"
+            ],
+            "op": "*"
+          },
+          "defines": "div",
+          "params": [
+            "Q"
+          ],
+          "reference_only": true
+        },
+        "exp": {
+          "body": {
+            "args": [
+              "a"
+            ],
+            "op": "abs"
+          },
+          "defines": "exp",
+          "params": [
+            "a"
+          ],
+          "reference_only": true
+        }
+      },
+      "variables": {
+        "F": {
+          "default": 1,
+          "description": "variable",
+          "shape": [
+            "edges"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "G": {
+          "default": 2,
+          "description": "variable",
+          "shape": [
+            "cells"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "d1": {
+          "description": "variable",
+          "shape": [
+            "edges"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "d2": {
+          "description": "variable",
+          "shape": [
+            "cells"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "x": {
+          "default": 0.5,
+          "description": "variable",
+          "type": "parameter",
+          "units": "1"
+        },
+        "y": {
+          "description": "variable",
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

@@ -77,7 +77,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         }
       },
       "variables": {

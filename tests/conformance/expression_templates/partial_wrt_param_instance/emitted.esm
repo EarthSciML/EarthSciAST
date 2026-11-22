@@ -84,7 +84,8 @@
           "defines": "partial",
           "params": [
             "q"
-          ]
+          ],
+          "reference_only": true
         },
         "deriv.variant1": {
           "body": {
@@ -98,7 +99,8 @@
           "params": [
             "f",
             "d"
-          ]
+          ],
+          "reference_only": true
         },
         "deriv.variant2": {
           "body": {
@@ -113,7 +115,8 @@
           "params": [
             "f",
             "d"
-          ]
+          ],
+          "reference_only": true
         }
       },
       "variables": {

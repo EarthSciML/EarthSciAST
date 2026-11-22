@@ -661,7 +661,9 @@ canonicalize_document(doc::AbstractDict) =
 function _respell_old_quietly(doc)
     _has_old_spellings(doc) || return doc
     d = _to_ordered(doc)
-    _old_spellings_walk!(d, "", false, nothing, String[], String[], IdDict{Any, Nothing}())
+    task_local_storage(:esm_doc_independent_variable, _document_iv_rename(d)) do
+        _old_spellings_walk!(d, "", false, nothing, String[], String[], IdDict{Any, Nothing}())
+    end
     return d
 end
 

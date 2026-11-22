@@ -131,7 +131,8 @@
           "params": [
             "f",
             "d"
-          ]
+          ],
+          "reference_only": true
         },
         "central": {
           "body": {
@@ -182,7 +183,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "flux_div": {
           "body": {
@@ -229,7 +231,8 @@
           "defines": "exp_lin",
           "params": [
             "p"
-          ]
+          ],
+          "reference_only": true
         },
         "scale2": {
           "body": {

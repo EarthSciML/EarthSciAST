@@ -269,7 +269,8 @@
           "defines": "partial",
           "params": [
             "f"
-          ]
+          ],
+          "reference_only": true
         },
         "dlon_deg": {
           "body": {
