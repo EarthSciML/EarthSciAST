@@ -653,7 +653,17 @@ kept, and nothing else changes. These are the rules of Lean
 `Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
 """
 canonicalize_document(doc::AbstractDict) =
-    _canonical_document_numbers(_canonicalize_document_value(doc, false))
+    _canonical_document_numbers(_canonicalize_document_value(_respell_old_quietly(doc), false))
+
+# esm 2.4.0 (esm-spec §9.6.12, §4.2): the canonical form spells only the new
+# names, so an earlier document's spellings are read as the wire boundary reads
+# them (`_rewrite_old_spellings!`), on a copy and without the warnings.
+function _respell_old_quietly(doc)
+    _has_old_spellings(doc) || return doc
+    d = _to_ordered(doc)
+    _old_spellings_walk!(d, "", false, nothing, String[], String[], IdDict{Any, Nothing}())
+    return d
+end
 
 # The deprecated ops (esm-spec §4.2): spelling => (replacement, operand count),
 # from the registry (`_DEPRECATED_OPS` and each spelling's fixed arity).
@@ -713,10 +723,15 @@ function _canonicalize_document_value(value, is_map::Bool)
             drop_units = true
         end
         out = OrderedDict{String, Any}()
+        # A definition's `units` is a unit EXPRESSION over its params
+        # (esm-spec §9.6.1), not a unit string.
+        is_definition = !is_map && _raw_haskey(value, "params") && _raw_haskey(value, "body")
         for (k, v) in pairs(value)
             key = String(k)
             (drop_units && key == "units") && continue
             out[key] = if is_map
+                _canonicalize_document_value(v, false)
+            elseif is_definition && key == "units"
                 _canonicalize_document_value(v, false)
             elseif (key == "units" || key == "default_units") && v isa AbstractString
                 _canonical_units(v)
