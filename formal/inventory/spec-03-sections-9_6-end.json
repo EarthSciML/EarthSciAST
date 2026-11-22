@@ -396,7 +396,7 @@
     {
       "id": "spec.9.6.6.unlowered-operator-message",
       "section": "9.6.6",
-      "quote": "The message MUST name the operator and the call, and list each definition of that operator in scope with the reason it was not eligible there",
+      "quote": "The message MUST name the defined operator and the call",
       "class": "out_of_scope",
       "area": "diagnostics",
       "note": "The wording of a diagnostic message (which definitions it lists and why) is not modelled; the code unlowered_operator is."

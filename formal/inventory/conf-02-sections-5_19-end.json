@@ -899,6 +899,14 @@
       "note": "The expanded goldens of fixtures with no cross-boundary match stay those of the in-place engine, as evidence the reference form denotes the inlined meaning."
     },
     {
+      "id": "conf.5.61.core-names-fixtures",
+      "section": "5.61",
+      "quote": "Every binding that loads documents MUST assert all three.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "The operator_defines_core_op fixtures (two refused, one compound rule exempt) are asserted by every loading binding; the reservation itself is not in the Lean model (no definition registry), a follow-up."
+    },
+    {
       "id": "conf.5.60.assert-both-goldens",
       "section": "5.60",
       "quote": "A harness MUST assert both.",
