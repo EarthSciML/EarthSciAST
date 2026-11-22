@@ -290,3 +290,250 @@ def test_partial_and_integral_have_fixed_unit_expressions(rhs, declared, valid):
     r = validate(load_document(doc))
     codes = {e.code for e in r.structural_errors}
     assert ("unit_inconsistency" not in codes) == valid, codes
+
+
+def test_pushdown_resolves_an_old_spelled_import_edge(monkeypatch):
+    """With ``pushdown_rewrite=True`` the raw document is read in the esm-2.4.0
+    spellings before the import-edge test (esm-spec §9.6.12), so a component
+    that wrote ``expression_template_imports`` still has its imports resolved
+    before the recogniser looks."""
+    import earthsci_ast.problem as problem
+
+    class Resolved(Exception):
+        pass
+
+    def _resolve(raw, *_a, **_k):
+        assert raw["models"]["m"]["operator_imports"] == [{"ref": "./lib.esm"}]
+        raise Resolved
+
+    monkeypatch.setattr(problem, "resolve_template_machinery", _resolve)
+    doc = {
+        "esm": "2.3.0",
+        "metadata": {"name": "old_import_edge"},
+        "models": {
+            "m": {
+                "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["x"]},
+                    }
+                ],
+                "expression_template_imports": [{"ref": "./lib.esm"}],
+            }
+        },
+    }
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(Resolved):
+            esm_problem(doc, (0.0, 1.0), pushdown_rewrite=True)
+
+
+def test_a_reference_to_a_leaf_bodied_definition_is_typed_by_its_unit_expression():
+    """A reference whose definition's body is a single leaf still carries the
+    definition's unit record (esm-spec §9.6.12 "Units"): the body ``q`` (unit
+    m) disagrees with the unit expression ``q / (1 s)``, which is
+    ``definition_unit_mismatch``, not a plain inconsistency at the equation."""
+    with open(_p("definition_units", "body_mismatch.esm"), encoding="utf-8") as f:
+        raw = json.load(f)
+    m = raw["models"]["m"]
+    m["operators"]["bad"]["body"] = "q"
+    m["equations"][0]["rhs"] = {
+        "op": "apply_operator",
+        "args": [],
+        "name": "bad",
+        "bindings": {"q": "x"},
+    }
+    from earthsci_ast import load_string
+    from earthsci_ast.serialize import to_json
+
+    loaded = load_string(json.dumps(raw))
+    codes = [e.code for e in validate(loaded).structural_errors]
+    assert codes == ["definition_unit_mismatch"]
+    # The holder that carries the record is not written back.
+    assert json.loads(to_json(loaded))["models"]["m"]["equations"][0]["rhs"] == "x"
+
+
+def _mount_docs(tmp_path, host_rhs):
+    leaf = {
+        "esm": "2.4.0",
+        "metadata": {"name": "leaf"},
+        "models": {
+            "Leaf": {
+                "operators": {
+                    "scale": {"params": ["x"], "body": {"op": "*", "args": [3, "x"]}},
+                },
+                "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                        "rhs": {"op": "scale", "args": ["c"]},
+                    }
+                ],
+            }
+        },
+    }
+    host = {
+        "esm": "2.4.0",
+        "metadata": {"name": "host"},
+        "models": {
+            "Host": {
+                "variables": {"y": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [{"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": host_rhs}],
+                "subsystems": {"Sub": {"ref": "./leaf.esm"}},
+            }
+        },
+    }
+    (tmp_path / "leaf.esm").write_text(json.dumps(leaf))
+    (tmp_path / "host.esm").write_text(json.dumps(host))
+    return str(tmp_path / "host.esm")
+
+
+def test_a_mounted_leafs_definitions_resolve_only_the_leafs_calls(tmp_path):
+    """Definitions are component-local (esm-spec §9.6.3 constraint 4): a leaf's
+    definitions join the host's registry for the leaf's own references, but a
+    host call of the same operator does not resolve to them, and they count for
+    no arity in the host (§9.6.12)."""
+    f = load_path(_mount_docs(tmp_path, {"op": "scale", "args": ["y"]}))
+    host_rhs = f.models["Host"].equations[0].rhs
+    assert host_rhs.op == "scale" and host_rhs.args == ["y"]
+    # The leaf's own call still resolves to its definition: dc/dt = 3c.
+    leaf_rhs = f.models["Host"].subsystems["Sub"].equations[0].rhs
+    assert leaf_rhs.op == "*" and leaf_rhs.args == [3, "c"]
+    # A host call with an operand count the leaf's definition does not take is
+    # a placeholder, not operator_arity_mismatch.
+    g = load_path(_mount_docs(tmp_path, {"op": "scale", "args": ["y", "y"]}))
+    assert g.models["Host"].equations[0].rhs.op == "scale"
+
+
+def test_an_inline_subsystems_calls_resolve_to_its_own_definitions():
+    """An authored subsystem's definitions resolve the calls in its own subtree
+    (esm-spec §9.6.3 constraint 4), and only there: the host's call of the same
+    operator stays a placeholder. The host has no definitions: a block on a
+    subsystem alone, at any depth, is enough for the document to be lowered."""
+    raw = {
+        "esm": "2.4.0",
+        "metadata": {"name": "inline_scope"},
+        "models": {
+            "Host": {
+                "variables": {"y": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                        "rhs": {"op": "scale", "args": ["y"]},
+                    }
+                ],
+                "subsystems": {
+                    "Sub": {
+                        "operators": {
+                            "scale": {"params": ["x"], "body": {"op": "*", "args": [3, "x"]}}
+                        },
+                        "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0}},
+                        "equations": [
+                            {
+                                "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                                "rhs": {"op": "scale", "args": ["c"]},
+                            }
+                        ],
+                    }
+                },
+            }
+        },
+    }
+    host = lower_expression_templates(raw)["models"]["Host"]
+    assert host["equations"][0]["rhs"] == {"op": "scale", "args": ["y"]}
+    assert host["subsystems"]["Sub"]["equations"][0]["rhs"] == {
+        "op": "apply_operator",
+        "args": [],
+        "name": "scale",
+        "bindings": {"x": "c"},
+    }
+
+
+def test_a_block_on_a_nested_inline_subsystem_is_lowered():
+    """The only ``operators`` block sits two subsystems down: the document is
+    still lowered, and that subsystem's call resolves to its definition."""
+    inner = {
+        "operators": {"scale": {"params": ["x"], "body": {"op": "*", "args": [3, "x"]}}},
+        "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0}},
+        "equations": [
+            {
+                "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                "rhs": {"op": "scale", "args": ["c"]},
+            }
+        ],
+    }
+    raw = {
+        "esm": "2.4.0",
+        "metadata": {"name": "nested_inline_scope"},
+        "models": {
+            "Host": {
+                "variables": {"y": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["y"]},
+                    }
+                ],
+                "subsystems": {
+                    "Mid": {
+                        "variables": {"m": {"type": "unknown", "units": "1", "default": 1.0}},
+                        "equations": [
+                            {
+                                "lhs": {"op": "D", "args": ["m"], "wrt": "t"},
+                                "rhs": {"op": "-", "args": ["m"]},
+                            }
+                        ],
+                        "subsystems": {"Inner": inner},
+                    }
+                },
+            }
+        },
+    }
+    host = lower_expression_templates(raw)["models"]["Host"]
+    rhs = host["subsystems"]["Mid"]["subsystems"]["Inner"]["equations"][0]["rhs"]
+    assert rhs == {"op": "apply_operator", "args": [], "name": "scale", "bindings": {"x": "c"}}
+    # And through the typed load, the call expands to the definition's body.
+    from earthsci_ast import load_string
+
+    f = load_string(json.dumps(raw))
+    leaf = f.models["Host"].subsystems["Mid"].subsystems["Inner"].equations[0].rhs
+    assert leaf.op == "*" and leaf.args == [3, "c"]
+
+
+def test_a_fired_partial_rule_is_held_to_partials_fixed_unit():
+    """A ``partial`` rule that fires loses its ``match`` when rule 3
+    materializes it, but the call it wrote is still typed by ``partial``'s
+    fixed unit expression (esm-spec §4.2, §9.6.12 "Units"): ``partial(u, wrt:
+    x)`` has unit kg/m, so the equation checks, and the body ``f*k`` (unit kg)
+    is ``definition_unit_mismatch``. The emitted registry carries no private
+    key."""
+    raw = {
+        "esm": "2.4.0",
+        "metadata": {"name": "partial_fixed_unit"},
+        "models": {
+            "m": {
+                "variables": {
+                    "u": {"type": "parameter", "units": "kg", "default": 1.0},
+                    "x": {"type": "parameter", "units": "m", "default": 1.0},
+                    "k": {"type": "parameter", "units": "1", "default": 2.0},
+                    "y": {"type": "unknown", "units": "kg/m"},
+                },
+                "equations": [{"lhs": "y", "rhs": {"op": "partial", "args": ["u"], "wrt": "x"}}],
+                "operators": {
+                    "d_rule": {
+                        "params": ["f", "d"],
+                        "match": {"op": "partial", "args": ["f"], "wrt": "d"},
+                        "body": {"op": "*", "args": ["f", "k"]},
+                    }
+                },
+            }
+        },
+    }
+    from earthsci_ast import load_string
+
+    r = validate(load_string(json.dumps(raw)))
+    assert [e.code for e in r.structural_errors] == ["definition_unit_mismatch"]
+    assert "fixed unit expression of 'partial'" in r.structural_errors[0].message
+    emitted = emit_esm_string(emit_document(raw, "."))
+    assert "__esm_" not in emitted

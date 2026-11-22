@@ -2301,7 +2301,13 @@ def collect_mount_declared_metaparameters(
     has to reach the same names by walking. It must NOT widen the site-4 check
     itself: a name an import edge BINDS is consumed rather than re-exported, and
     site 4 is right to refuse it."""
-    from .parse import _fetch_ref_content, _ref_directory, _ref_location, expand_ref_env
+    from .parse import (
+        _fetch_ref_content,
+        _ref_directory,
+        _ref_location,
+        expand_ref_env,
+        rewrite_old_spellings,
+    )
 
     if not _is_object(raw):
         return frozenset()
@@ -2329,6 +2335,15 @@ def collect_mount_declared_metaparameters(
                 raise _unreadable_nested_ref(ref_str, exc) from exc
             return
         if not _is_object(child):
+            return
+        # Read the esm-2.3 spellings as the esm-2.4.0 ones, so an import
+        # written as `expression_template_imports` is followed too. The load
+        # of that document warns about them; this walk stays silent.
+        try:
+            rewrite_old_spellings(child)
+        except ExpressionTemplateError:
+            if strict:
+                raise
             return
         decls = child.get("metaparameters")
         if _is_object(decls):

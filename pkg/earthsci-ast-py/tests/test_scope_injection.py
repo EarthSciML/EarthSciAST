@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import warnings
 
 import pytest
 from conftest import CONFORMANCE_DIR
@@ -258,3 +259,34 @@ def test_form_a_injected_std_ref_resolves_at_load(tmp_path):
     clock = f.models["Assembly"].subsystems["Clock"]
     assert isinstance(clock, Model)
     assert clock.equations[0].rhs.op != "apply_operator"
+
+
+def test_form_c_injection_reads_the_component_old_spelling(tmp_path):
+    """A component that wrote ``expression_template_imports`` (esm-spec
+    §9.6.12) and a test that carries imports: the re-read source is read in the
+    esm-2.4.0 spelling before the test's imports join it, so the component
+    holds one import list, not both spellings."""
+    conf = _conf("inject_test_block")
+    for name in os.listdir(conf):
+        shutil.copy(os.path.join(conf, name), tmp_path / name)
+    (tmp_path / "trivial.esm").write_text(
+        json.dumps(
+            {
+                "esm": "2.4.0",
+                "metadata": {"name": "Trivial"},
+                "operators": {"two_c": {"params": [], "body": 2.0}},
+            }
+        )
+    )
+    src = tmp_path / "fixture.esm"
+    doc = _read_json(str(src))
+    doc["models"]["Advection"]["expression_template_imports"] = [{"ref": "./trivial.esm"}]
+    src.write_text(json.dumps(doc))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        f = load_path(str(src))
+        adv = f.models["Advection"]
+        e = _ephemeral_injected_file(
+            f, str(src), "Advection", adv.tests[0].expression_template_imports, str(tmp_path)
+        )
+    assert e.models["Advection"].equations[0].rhs.args[1].op == "makearray"

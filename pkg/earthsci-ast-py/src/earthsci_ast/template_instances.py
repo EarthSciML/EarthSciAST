@@ -38,9 +38,11 @@ from .json_walk import (
 )
 from .lower_expression_templates import (
     _NO_LIT,
+    FIXED_UNITS_KEY,
     MAX_REWRITE_PASSES,
     _BodyView,
     _canonical_compact,
+    _fixed_unit_expr,
     _Lowering,
     _rewrite_to_fixpoint,
     _shape_entry,
@@ -456,7 +458,17 @@ def _rule3_exposed(
 
 
 def _match_stripped(decl: dict) -> dict:
-    return {k: v for k, v in decl.items() if k not in ("match", "where", "priority")}
+    """A materialized entry: the rule (or variant) without its ``match``,
+    ``where`` and ``priority``. A rule for ``partial`` / ``integral`` keeps the
+    fixed unit expression its ``match`` gave under a private key, so the unit
+    checker still holds the firing's references to it (esm-spec §4.2, §9.6.12
+    "Units"); the emitted registry drops that key
+    (:func:`~earthsci_ast.lower_expression_templates.materialize_component_block`)."""
+    nd = {k: v for k, v in decl.items() if k not in ("match", "where", "priority")}
+    fixed = _fixed_unit_expr(decl)
+    if fixed is not None:
+        nd[FIXED_UNITS_KEY] = fixed
+    return nd
 
 
 def apply_rule3(comp: dict, L: _Lowering, transforms: list[dict]) -> dict:

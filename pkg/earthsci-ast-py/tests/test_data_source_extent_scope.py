@@ -24,6 +24,7 @@ implement.
 """
 
 import json
+import warnings
 
 import pytest
 from conftest import FIXTURES_ROOT
@@ -307,3 +308,30 @@ def test_a_leafs_nested_contribution_folds_at_the_edge_bound_value():
         doc = load_path(str(_DIR / name))
         assert doc.index_sets["own"]["size"] == 7, name
         assert doc.index_sets["lev"]["size"] == 7, name
+
+
+def test_an_extent_reexported_through_an_old_spelled_import_chain(tmp_path):
+    """The re-export walk reads each document it reaches in the esm-2.4.0
+    spellings (esm-spec §9.6.12): an intermediate library that imports the
+    declaring one under ``expression_template_imports`` still carries `N_REC`
+    up to the root."""
+    root = json.loads((_DIR / "extent_reexport_root.esm").read_text())
+    ingest = root["models"]["Ingest"]
+    ingest.pop("expression_template_imports", None)
+    ingest["operator_imports"] = [{"ref": "./lib_a.esm"}]
+    (tmp_path / "root.esm").write_text(json.dumps(root))
+    (tmp_path / "lib_b.esm").write_text((_DIR / "extent_reexport_lib.esm").read_text())
+    (tmp_path / "lib_a.esm").write_text(
+        json.dumps(
+            {
+                "esm": "2.4.0",
+                "metadata": {"name": "LibA"},
+                "expression_template_imports": [{"ref": "./lib_b.esm"}],
+                "expression_templates": {"three": {"params": [], "body": 3.0}},
+            }
+        )
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        doc = load_path(str(tmp_path / "root.esm"), metaparameters={"N_REC": 3})
+    assert _records(doc)["size"] == 3

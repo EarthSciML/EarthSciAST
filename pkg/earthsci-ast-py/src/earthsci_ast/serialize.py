@@ -39,7 +39,6 @@ from .esm_types import (
     Metadata,
     Model,
     ModelVariable,
-    Operator,
     OperatorApplyCoupling,
     OperatorComposeCoupling,
     Parameter,
@@ -232,6 +231,10 @@ def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
     if isinstance(expr, (int, float, str)):
         return _canonical_number(expr)
     if isinstance(expr, ExprNode):
+        if expr.template_call is not None and expr.op == "+" and len(expr.args) == 1:
+            # The holder a load wraps a call's leaf expansion in, so the leaf
+            # carries the call's unit record; the document wrote the leaf.
+            return _serialize_expression(expr.args[0])
         result: dict[str, Any] = {}
         for name, wire, kind, required in EXPR_WIRE_SPEC:
             value = getattr(expr, name)
@@ -985,22 +988,6 @@ def _serialize_data_source(source: DataSource) -> dict[str, Any]:
     return result
 
 
-# ``operator_id`` / ``needed_vars`` are schema-required (always emitted).
-_OPERATOR_SPEC = (
-    ("operator_id", "operator_id", _KEEP, None),
-    ("needed_vars", "needed_vars", _KEEP, None),
-    ("modifies", "modifies", _OMIT_NONE, None),
-    ("config", "config", _OMIT_FALSY, None),
-    ("description", "description", _OMIT_FALSY, None),
-    ("reference", "reference", _OMIT_FALSY, _serialize_reference),
-)
-
-
-def _serialize_operator(operator: Operator) -> dict[str, Any]:
-    """Serialize an operator to JSON-compatible format."""
-    return _serialize_by_spec(operator, _OPERATOR_SPEC)
-
-
 def _serialize_registered_function(rf) -> dict[str, Any]:
     """Serialize a RegisteredFunction entry (esm-spec §9.2)."""
     sig: dict[str, Any] = {"arg_count": rf.signature.arg_count}
@@ -1226,13 +1213,6 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     if esm_file.data_sources:
         result["data_sources"] = {
             name: _serialize_data_source(source) for name, source in esm_file.data_sources.items()
-        }
-
-    # Serialize operators
-    if esm_file.operators:
-        result["operators"] = {
-            (operator.name or operator.operator_id): _serialize_operator(operator)
-            for operator in esm_file.operators
         }
 
     # Serialize registered_functions (esm-spec §9.2 — DEPRECATED in v0.3.0)
