@@ -829,13 +829,26 @@ fn rule3_exposed(
 }
 
 /// A decl's fields without `match`, `where` and `priority`.
+/// A materialized entry: the rule (or variant) without its `match`, `where`
+/// and `priority`, marked `reference_only` (esm-spec §9.6.1, §9.6.4 rule 5),
+/// so that reloading the emitted document makes it no callable definition of
+/// its operator: emit → load → emit is exact. Mirrors `_match_stripped`.
 fn match_stripped(decl: &Sv) -> Vec<(String, Sv)> {
     match &**decl {
-        SNode::Obj(fields) => fields
-            .iter()
-            .filter(|(k, _)| !matches!(k.as_str(), "match" | "where" | "priority"))
-            .cloned()
-            .collect(),
+        SNode::Obj(fields) => {
+            let mut out: Vec<(String, Sv)> = fields
+                .iter()
+                .filter(|(k, _)| {
+                    !matches!(
+                        k.as_str(),
+                        "match" | "where" | "priority" | "reference_only"
+                    )
+                })
+                .cloned()
+                .collect();
+            out.push(("reference_only".to_string(), Rc::new(SNode::Bool(true))));
+            out
+        }
         _ => Vec::new(),
     }
 }

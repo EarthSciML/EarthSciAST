@@ -73,6 +73,9 @@ fn emitted_goldens_byte_for_byte_and_emit_of_load_is_a_fixed_point() {
         "placeholder_call",
         "partial_wrt_param_instance",
         "old_names",
+        "reference_only_round_trip",
+        "independent_variable_wrt",
+        "vector_calculus_import",
     ] {
         let out = emit_path(&oot(dir).join("fixture.esm"));
         let want = std::fs::read_to_string(oot(dir).join("emitted.esm")).expect("golden");
@@ -85,6 +88,32 @@ fn emitted_goldens_byte_for_byte_and_emit_of_load_is_a_fixed_point() {
             out,
             "{dir}: emit ∘ load is not a fixed point"
         );
+    }
+}
+
+/// esm-spec §9.6.1, §9.6.4 rule 5: emitted rules are reference-only, so a
+/// reloaded emitted document calls nothing it did not call before, and emit →
+/// load → emit is exact (also for `constrained_match_scope`).
+#[test]
+fn emitted_rules_are_reference_only() {
+    let out = std::fs::read_to_string(oot("reference_only_round_trip").join("emitted.esm"))
+        .expect("golden");
+    let doc: Value = serde_json::from_str(&out).expect("JSON");
+    let reg = &doc["models"]["m"]["operators"];
+    assert_eq!(reg["fv_div_edges"]["reference_only"], true);
+    assert_eq!(reg["exp"]["reference_only"], true);
+    assert!(reg["fv_div_edges"].get("where").is_none());
+    // div(G) stayed a call; reloading does not turn it into a reference.
+    assert!(out.contains("\"op\": \"div\""));
+    for dir in ["reference_only_round_trip", "constrained_match_scope"] {
+        let once = emit_path(&oot(dir).join("fixture.esm"));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let p = tmp.path().join("e.esm");
+        std::fs::write(&p, &once).expect("write");
+        let twice = emit_path(&p);
+        assert_eq!(twice, once, "{dir}: emit ∘ load is not exact");
+        std::fs::write(&p, &twice).expect("write");
+        assert_eq!(emit_path(&p), once, "{dir}: third emit");
     }
 }
 

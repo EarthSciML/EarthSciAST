@@ -150,6 +150,7 @@ fn walk(
     at: &JsonPath<'_>,
     namemap: bool,
     params: Option<&std::collections::HashSet<String>>,
+    iv: Option<&str>,
     out: &mut OldSpellings,
 ) -> Result<(), DiagnosticError> {
     match node {
@@ -177,6 +178,19 @@ fn walk(
                             PARTIAL_SPELLINGS[1]
                         },
                     )),
+                    Some("D")
+                        if iv.is_some_and(|iv| {
+                            map.get("wrt").and_then(Value::as_str) == Some(iv)
+                                && !params.is_some_and(|p| p.contains(iv))
+                        }) =>
+                    {
+                        // esm-spec §4.2 "The derivative axis": a `wrt` naming
+                        // the document's renamed independent variable is the
+                        // time derivative, read with the literal axis (no
+                        // warning, not an old spelling).
+                        map.insert("wrt".to_string(), Value::from("t"));
+                        None
+                    }
                     Some("D") => {
                         let spatial = match map.get("wrt") {
                             None | Some(Value::Null) => false,
@@ -210,12 +224,12 @@ fn walk(
                             continue;
                         }
                         let p = decl_params(dv);
-                        walk(dv, &JsonPath::Key(&child, dn), false, p.as_ref(), out)?;
+                        walk(dv, &JsonPath::Key(&child, dn), false, p.as_ref(), iv, out)?;
                     }
                     continue;
                 }
                 let nm = !namemap && NAME_MAPS.contains(&k.as_str());
-                walk(v, &child, nm, params, out)?;
+                walk(v, &child, nm, params, iv, out)?;
             }
         }
         Value::Array(items) => {
@@ -224,7 +238,7 @@ fn walk(
             }
             for (i, v) in items.iter_mut().enumerate() {
                 if matches!(v, Value::Object(_) | Value::Array(_)) {
-                    walk(v, &JsonPath::Index(at, i), false, params, out)?;
+                    walk(v, &JsonPath::Index(at, i), false, params, iv, out)?;
                 }
             }
         }
@@ -237,7 +251,22 @@ fn walk(
 /// return the sites read (fields, then ops). See the module documentation.
 pub(crate) fn rewrite_old_spellings(doc: &mut Value) -> Result<OldSpellings, DiagnosticError> {
     let mut out = OldSpellings::default();
-    walk(doc, &JsonPath::Root(""), false, None, &mut out)?;
+    // The document's own renamed independent variable (`domain.
+    // independent_variable` when declared and not "t"), esm-spec §4.2.
+    let iv = doc
+        .get("domain")
+        .and_then(|d| d.get("independent_variable"))
+        .and_then(Value::as_str)
+        .filter(|iv| *iv != "t")
+        .map(str::to_string);
+    walk(
+        doc,
+        &JsonPath::Root(""),
+        false,
+        None,
+        iv.as_deref(),
+        &mut out,
+    )?;
     Ok(out)
 }
 
@@ -388,6 +417,25 @@ mod tests {
         assert_eq!(codes("lib_old.esm"), ["deprecated_field"]);
         assert!(codes("new_names.esm").is_empty());
         assert!(codes("lib_new.esm").is_empty());
+    }
+
+    /// esm-spec §4.2 "The derivative axis": a `D` along the document's renamed
+    /// independent variable is the time derivative, read with `wrt: "t"` and
+    /// no warning; along any other axis it is `partial`.
+    #[test]
+    fn a_wrt_naming_the_independent_variable_is_time() {
+        let mut doc = json!({
+            "domain": {"independent_variable": "tau"},
+            "models": {"M": {"equations": [
+                {"lhs": {"op": "D", "args": ["u"], "wrt": "tau"}, "rhs": 0},
+                {"lhs": "v", "rhs": {"op": "D", "args": ["u"], "wrt": "x"}}
+            ]}}
+        });
+        let got = rewrite_old_spellings(&mut doc).unwrap();
+        let eqs = &doc["models"]["M"]["equations"];
+        assert_eq!(eqs[0]["lhs"], json!({"op": "D", "args": ["u"], "wrt": "t"}));
+        assert_eq!(eqs[1]["rhs"]["op"], "partial");
+        assert_eq!(got.ops, ["/models/M/equations/1/rhs (D)"]);
     }
 
     #[test]
