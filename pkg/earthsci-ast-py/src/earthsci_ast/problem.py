@@ -264,12 +264,12 @@ def _has_template_import_edge(raw: Any) -> bool:
     """
     if not isinstance(raw, dict):
         return False
-    if "expression_template_imports" in raw:
+    if "operator_imports" in raw:
         return True
     for compkind in ("models", "reaction_systems"):
         comps = raw.get(compkind)
         if isinstance(comps, dict) and any(
-            isinstance(c, dict) and "expression_template_imports" in c for c in comps.values()
+            isinstance(c, dict) and "operator_imports" in c for c in comps.values()
         ):
             return True
     return False
@@ -815,12 +815,23 @@ def _esm_problem_under(
     # `unlowered_operator` code at the one front door.
     if len(flat.independent_variables) > 1:
         spatial = [v for v in flat.independent_variables if v != "t"]
+        # esm-spec §9.6.6: name the first unresolved call of a defined operator
+        # and its definitions in scope (or that it is a placeholder), as the
+        # walk below would.
+        detail = ""
+        try:
+            _assert_no_unlowered_operator(flat)
+        except UnreachableSpatialOperatorError as e:
+            if e.explanation:
+                detail = f" The first unresolved call is of '{e.op}' ({e.explanation})."
+        except Exception:  # noqa: BLE001 — the dimensionality error is the one raised
+            pass
         raise UnsupportedDimensionalityError(
             f"unlowered_operator: esm_problem builds systems whose only "
             f"independent variable is time (['t']), but the flattened system "
             f"still has spatial independent variables {spatial} — a spatial "
-            f"operator that was not discretized. Apply the discretization "
-            f"template (an `expression_templates` `match` rewrite) that lowers "
+            f"operator that was not discretized.{detail} Apply the discretization "
+            f"template (an `operators` `match` rewrite) that lowers "
             f"it to a `faq` stencil, then build; discretized "
             f"PDEs run natively here."
         )
@@ -2175,12 +2186,13 @@ def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
     document that trips both keeps the diagnostic it has always reported. Both
     carry ``code = "unlowered_operator"``.
     """
+    registry = getattr(flat, "template_registry", None)
     for eq in flat.equations:
-        _walk_for_unlowered(eq.lhs, structural_derivative_ok=True)
-        _walk_for_unlowered(eq.rhs, structural_derivative_ok=False)
+        _walk_for_unlowered(eq.lhs, structural_derivative_ok=True, registry=registry)
+        _walk_for_unlowered(eq.rhs, structural_derivative_ok=False, registry=registry)
         _refuse_array_valued_bool_and_or(eq.rhs)
     for _target, rhs in flat.field_ics:
-        _walk_for_unlowered(rhs, structural_derivative_ok=False)
+        _walk_for_unlowered(rhs, structural_derivative_ok=False, registry=registry)
 
 
 def _refuse_array_valued_bool_and_or(expr: Any) -> None:
@@ -2214,19 +2226,24 @@ def _refuse_array_valued_bool_and_or(expr: Any) -> None:
 #: Inside one they may be a value-invention producer (``value_invention``'s
 #: ``_VI_BODY_OPS``), which the build materializes before anything is evaluated,
 #: so the walk leaves those to that stage.
-_FRONT_DOOR_UNEVALUABLE_OPS: frozenset[str] = frozenset(
-    {"distinct", "enum", "apply_expression_template"}
-)
+_FRONT_DOOR_UNEVALUABLE_OPS: frozenset[str] = frozenset({"distinct", "enum", "apply_operator"})
 
 
 def _walk_for_unlowered(
-    expr: Any, *, structural_derivative_ok: bool, inside_faq: bool = False
+    expr: Any,
+    *,
+    structural_derivative_ok: bool,
+    inside_faq: bool = False,
+    registry: Any = None,
 ) -> None:
     """Raise on the first non-evaluable-core node in ``expr`` (pre-order).
 
     ``structural_derivative_ok`` marks an equation-LHS tree, the one position
     where a time ``D`` is core (§4.2). It propagates to children so a ``D``
-    nested under an LHS ``faq`` is still structural.
+    nested under an LHS ``faq`` is still structural. ``registry`` (the
+    flattened system's merged definition registry) names, for an unresolved
+    call of a defined operator, each definition of it in scope and why it was
+    not eligible (esm-spec §9.6.6).
     """
     if not isinstance(expr, ExprNode):
         return
@@ -2237,7 +2254,12 @@ def _walk_for_unlowered(
         ):
             raise UnreachableSpatialOperatorError(op)
     elif op not in _EVALUABLE_CORE_OPS:
-        raise UnreachableSpatialOperatorError(op)
+        from .lower_expression_templates import explain_unresolved_call
+        from .serialize import _serialize_expression
+
+        raise UnreachableSpatialOperatorError(
+            op, explain_unresolved_call(_serialize_expression(expr), registry)
+        )
     elif op in _FRONT_DOOR_UNEVALUABLE_OPS and not inside_faq and not structural_derivative_ok:
         raise UnevaluableOperatorError(op)
     for child in iter_children(expr):
@@ -2245,6 +2267,7 @@ def _walk_for_unlowered(
             child,
             structural_derivative_ok=structural_derivative_ok,
             inside_faq=inside_faq or op == "faq",
+            registry=registry,
         )
 
 

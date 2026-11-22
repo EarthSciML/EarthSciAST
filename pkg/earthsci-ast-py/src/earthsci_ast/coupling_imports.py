@@ -49,7 +49,7 @@ _LIBRARY_FORBIDDEN_KEYS = (
     "domain",
     "index_sets",
     "metaparameters",
-    "expression_templates",
+    "operators",
 )
 
 # Coupling-entry types a library edge MAY carry (esm-spec §10.9).
@@ -137,7 +137,7 @@ def _rewrite_expr(expr: Any, fn: RefFn) -> Any:
         m = node.get(k)
         if not _is_object(m):
             continue
-        if k == "bindings" and node.get("op") != "apply_expression_template":
+        if k == "bindings" and node.get("op") != "apply_operator":
             continue
         node[k] = {mk: _rewrite_expr(mv, fn) for mk, mv in m.items()}
     return node
@@ -360,7 +360,7 @@ def _expand_one(lib: Any, ref: str, bind: dict[str, str], esm_file: Any) -> list
                 f"coupling-library '{ref}' contains a nested coupling_import "
                 "(v1 forbids layering, esm-spec §10.9)",
             )
-        if etype == "callback" or "expression_template_imports" in edge:
+        if etype == "callback" or "operator_imports" in edge:
             raise ExpressionTemplateError(
                 COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
                 f"coupling-library '{ref}' edge of type '{etype}' is not "

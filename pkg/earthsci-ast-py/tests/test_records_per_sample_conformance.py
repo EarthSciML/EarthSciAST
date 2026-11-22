@@ -352,7 +352,7 @@ def test_template_import_merge_reads_records_false_as_absent():
         dst,
         "gf_t",
         {"kind": "interval", "size": 2, "records": False},
-        "template_import_index_set_conflict",
+        "operator_import_index_set_conflict",
         "index set",
         "lib",
     )
@@ -361,7 +361,7 @@ def test_template_import_merge_reads_records_false_as_absent():
             dst,
             "gf_t",
             {"kind": "interval", "size": 2, "records": True},
-            "template_import_index_set_conflict",
+            "operator_import_index_set_conflict",
             "index set",
             "lib",
         )

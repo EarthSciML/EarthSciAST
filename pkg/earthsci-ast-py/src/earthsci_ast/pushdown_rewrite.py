@@ -43,7 +43,7 @@ import warnings
 from typing import Any
 
 from .classification import observed_definitions
-from .error_handling import TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE
+from .error_handling import OPERATOR_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE
 from .json_walk import APPLY_OP, ExpressionTemplateError
 
 __all__ = [
@@ -356,10 +356,10 @@ def _pd_register_derived(model: dict, derived: dict, templates: dict | None) -> 
     declaration is refused rather than overwritten."""
     if not derived:
         return
-    blk = model.get("expression_templates")
+    blk = model.get("operators")
     if not isinstance(blk, dict):
         blk = {}
-        model["expression_templates"] = blk
+        model["operators"] = blk
     for k, v in derived.items():
         old = blk.get(k)
         if old is None and templates is not None:
@@ -602,9 +602,9 @@ def _pd_templates(model: dict) -> dict | None:
     cannot be resolved leaves only the component's own block, so the call sites
     that needed it stay unexpanded and the pass declines rather than raises.
     """
-    tpl = model.get("expression_templates")
+    tpl = model.get("operators")
     own = tpl if isinstance(tpl, dict) and tpl else None
-    imports = model.get("expression_template_imports")
+    imports = model.get("operator_imports")
     if not isinstance(imports, list) or not imports:
         return own
     from .template_imports import (  # local: avoid a cycle
@@ -774,7 +774,7 @@ def _pd_diagnostic_message(d: dict) -> str:
     if d.get("reason") == "surviving_template_reference":
         tpl = d.get("template")
         why = (
-            "its body carries a surviving `apply_expression_template` reference"
+            "its body carries a surviving `apply_operator` reference"
             + ("" if tpl is None else f" to '{tpl}'")
             + " that could not be expanded for matching"
         )
@@ -1279,7 +1279,7 @@ def _pd_assert_rects_rebound(
         return
     names = "', '".join(sorted(stale))
     raise ExpressionTemplateError(
-        TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
+        OPERATOR_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
         f"projection-pushdown desugar: the binning aggregate '{ename}' still reads "
         f"'{names}' after its reduction axis was re-pointed onto the generated "
         "derived support set. Those references live in an expression-template BODY, "
@@ -1489,7 +1489,13 @@ def desugar_pushdown(esm: dict, model_name: str | None = None) -> dict:
     ``pd_support__pd_support__…`` layer."""
     if not isinstance(esm, dict) or _pushdown_record(esm) is not None:
         return esm
-    an = _pd_analyze(esm, model_name)
+    # A raw document may spell the esm-2.3 names (esm-spec §9.6.12): read them
+    # as a load does, on a copy, so a call is recognised whichever spelling it
+    # has. ``esm`` itself is still returned when nothing fires.
+    from .parse import wire_old_spellings
+
+    src = wire_old_spellings(esm)
+    an = _pd_analyze(src, model_name)
     if an is None:
         return esm
     plan, diags, mname, templates = an
@@ -1501,7 +1507,7 @@ def desugar_pushdown(esm: dict, model_name: str | None = None) -> dict:
         warnings.warn(_pd_diagnostic_message(d), UserWarning, stacklevel=2)
     if plan is None:
         return esm
-    return _pd_apply(esm, mname, plan, templates)
+    return _pd_apply(src, mname, plan, templates)
 
 
 def pushdown_diagnostics(esm: dict, model_name: str | None = None) -> list[dict]:
@@ -1523,7 +1529,9 @@ def pushdown_diagnostics(esm: dict, model_name: str | None = None) -> list[dict]
     a defect."""
     if not isinstance(esm, dict) or _pushdown_record(esm) is not None:
         return []
-    an = _pd_analyze(esm, model_name)
+    from .parse import wire_old_spellings
+
+    an = _pd_analyze(wire_old_spellings(esm), model_name)
     return [] if an is None else an[1]
 
 

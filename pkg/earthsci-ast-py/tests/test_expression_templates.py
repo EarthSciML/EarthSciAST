@@ -37,7 +37,7 @@ ARRHENIUS_FIXTURE: dict = {
                 "T": {"default": 298.15},
                 "num_density": {"default": 2.5e19},
             },
-            "expression_templates": {
+            "operators": {
                 "arrhenius": {
                     "params": ["A_pre", "Ea"],
                     "body": {
@@ -67,7 +67,7 @@ ARRHENIUS_FIXTURE: dict = {
                     "substrates": [{"species": "A", "stoichiometry": 1}],
                     "products": [{"species": "B", "stoichiometry": 1}],
                     "rate": {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "arrhenius",
                         "bindings": {"A_pre": 1.8e-12, "Ea": 1500},
@@ -78,7 +78,7 @@ ARRHENIUS_FIXTURE: dict = {
                     "substrates": [{"species": "B", "stoichiometry": 1}],
                     "products": [{"species": "C", "stoichiometry": 1}],
                     "rate": {
-                        "op": "apply_expression_template",
+                        "op": "apply_operator",
                         "args": [],
                         "name": "arrhenius",
                         "bindings": {"A_pre": 3.4e-13, "Ea": 800},
@@ -109,7 +109,7 @@ def test_expansion_at_load_strips_templates_and_produces_inline_ast():
     # expand_document produces the Option-A image (blocks stripped, inline AST).
     expanded = expand_document(lower_expression_templates(copy.deepcopy(ARRHENIUS_FIXTURE)))
     chem = expanded["reaction_systems"]["chem"]
-    assert "expression_templates" not in chem
+    assert "operators" not in chem
     assert chem["reactions"][0]["rate"] == _inline_arrhenius(1.8e-12, 1500)
     assert chem["reactions"][1]["rate"] == _inline_arrhenius(3.4e-13, 800)
 
@@ -141,7 +141,7 @@ def test_files_without_templates_pass_through_unchanged():
     }
     out = lower_expression_templates(copy.deepcopy(fixture))
     # Same shape as input, no expression_templates block introduced.
-    assert "expression_templates" not in out["reaction_systems"]["chem"]
+    assert "operators" not in out["reaction_systems"]["chem"]
     assert out["reaction_systems"]["chem"]["reactions"][0]["rate"] == "k"
 
 
@@ -156,7 +156,7 @@ def test_rejects_apply_expression_template_pre_v04():
     fixture["esm"] = "0.3.5"
     with pytest.raises(ExpressionTemplateError) as excinfo:
         reject_expression_templates_pre_v04(fixture)
-    assert excinfo.value.code == "apply_expression_template_version_too_old"
+    assert excinfo.value.code == "operator_version_too_old"
 
 
 def test_rejects_unknown_template_name():
@@ -164,7 +164,7 @@ def test_rejects_unknown_template_name():
     fixture["reaction_systems"]["chem"]["reactions"][0]["rate"]["name"] = "missing"
     with pytest.raises(ExpressionTemplateError) as excinfo:
         lower_expression_templates(fixture)
-    assert excinfo.value.code == "apply_expression_template_unknown_template"
+    assert excinfo.value.code == "operator_unknown_definition"
 
 
 def test_rejects_bindings_missing_a_param():
@@ -172,7 +172,7 @@ def test_rejects_bindings_missing_a_param():
     del fixture["reaction_systems"]["chem"]["reactions"][0]["rate"]["bindings"]["Ea"]
     with pytest.raises(ExpressionTemplateError) as excinfo:
         lower_expression_templates(fixture)
-    assert excinfo.value.code == "apply_expression_template_bindings_mismatch"
+    assert excinfo.value.code == "operator_bindings_mismatch"
 
 
 def test_rejects_extra_bindings_param():
@@ -180,20 +180,20 @@ def test_rejects_extra_bindings_param():
     fixture["reaction_systems"]["chem"]["reactions"][0]["rate"]["bindings"]["bogus"] = 99
     with pytest.raises(ExpressionTemplateError) as excinfo:
         lower_expression_templates(fixture)
-    assert excinfo.value.code == "apply_expression_template_bindings_mismatch"
+    assert excinfo.value.code == "operator_bindings_mismatch"
 
 
 def test_rejects_nested_apply_in_template_body():
     fixture = copy.deepcopy(ARRHENIUS_FIXTURE)
-    fixture["reaction_systems"]["chem"]["expression_templates"]["arrhenius"]["body"] = {
-        "op": "apply_expression_template",
+    fixture["reaction_systems"]["chem"]["operators"]["arrhenius"]["body"] = {
+        "op": "apply_operator",
         "args": [],
         "name": "arrhenius",
         "bindings": {"A_pre": 1, "Ea": 1},
     }
     with pytest.raises(ExpressionTemplateError) as excinfo:
         lower_expression_templates(fixture)
-    assert excinfo.value.code == "apply_expression_template_recursive_body"
+    assert excinfo.value.code == "operator_recursive_body"
 
 
 def test_ast_valued_bindings_are_substituted():
@@ -264,7 +264,7 @@ def test_load_end_to_end_produces_inline_rate_in_typed_object():
 
     def assert_no_apply(node):
         if hasattr(node, "op"):
-            assert node.op != "apply_expression_template"
+            assert node.op != "apply_operator"
             for a in getattr(node, "args", []) or []:
                 assert_no_apply(a)
 
@@ -459,7 +459,7 @@ def test_attrs_match_binds_scalar_metavariable():
                         },
                     }
                 ],
-                "expression_templates": {
+                "operators": {
                     "lower_custom": {
                         "params": ["f", "g"],
                         "match": {"op": "custom_scheme", "args": ["f"], "attrs": {"gamma": "g"}},
@@ -500,14 +500,14 @@ def _scalar_field_doc(templates: dict, bindings: dict, name: str = "overlap_area
                     {
                         "lhs": "area",
                         "rhs": {
-                            "op": "apply_expression_template",
+                            "op": "apply_operator",
                             "args": [],
                             "name": name,
                             "bindings": bindings,
                         },
                     }
                 ],
-                "expression_templates": templates,
+                "operators": templates,
             }
         },
     }
@@ -546,7 +546,7 @@ def test_scalar_field_param_threads_through_body_composition():
                     "op": "*",
                     "args": [
                         {
-                            "op": "apply_expression_template",
+                            "op": "apply_operator",
                             "args": [],
                             "name": "inner",
                             "bindings": {"m": "K", "x": "p", "y": "q"},
@@ -637,13 +637,13 @@ def test_where_constraint_scopes_positive_and_negative_case():
 def test_where_unknown_index_set_rejected_at_registration():
     """constraint_unknown_index_set: a `where` shape naming an index set the
     consuming registry does not declare fails at rule registration with
-    template_constraint_unknown_index_set (esm-spec §9.6.1/§9.6.6)."""
+    operator_constraint_unknown_index_set (esm-spec §9.6.1/§9.6.6)."""
     raw = _conf_fixture("constraint_unknown_index_set")
     want = _conf_fixture("constraint_unknown_index_set", "error.json")["code"]
     with pytest.raises(ExpressionTemplateError) as exc:
         resolved = resolve_template_machinery(raw, _conf_dir("constraint_unknown_index_set"))
         lower_expression_templates(resolved if resolved is not None else raw)
-    assert exc.value.code == want == "template_constraint_unknown_index_set"
+    assert exc.value.code == want == "operator_constraint_unknown_index_set"
 
 
 def _where_pin_doc(templates: dict) -> dict:
@@ -660,7 +660,7 @@ def _where_pin_doc(templates: dict) -> dict:
                 },
                 # `d` is an OBSERVED unknown defined by this equation.
                 "equations": [{"lhs": "d", "rhs": {"op": "div", "args": ["Fe"]}}],
-                "expression_templates": templates,
+                "operators": templates,
             }
         },
     }
@@ -729,17 +729,6 @@ def test_where_constraint_compound_argument_fails_conservatively():
 @pytest.mark.parametrize(
     "bad,code",
     [
-        # `where` without `match`
-        (
-            {
-                "t": {
-                    "params": ["X"],
-                    "where": {"X": {"shape": ["edges"]}},
-                    "body": {"op": "*", "args": ["k", "X"]},
-                }
-            },
-            "apply_expression_template_invalid_declaration",
-        ),
         # `where` constrains a non-declared param
         (
             {
@@ -750,7 +739,7 @@ def test_where_constraint_compound_argument_fails_conservatively():
                     "body": {"op": "*", "args": ["k", "X"]},
                 }
             },
-            "apply_expression_template_invalid_declaration",
+            "operator_invalid_definition",
         ),
         # constraint kind other than `shape`
         (
@@ -762,7 +751,7 @@ def test_where_constraint_compound_argument_fails_conservatively():
                     "body": {"op": "*", "args": ["k", "X"]},
                 }
             },
-            "apply_expression_template_invalid_declaration",
+            "operator_invalid_definition",
         ),
         # empty shape list
         (
@@ -774,7 +763,7 @@ def test_where_constraint_compound_argument_fails_conservatively():
                     "body": {"op": "*", "args": ["k", "X"]},
                 }
             },
-            "apply_expression_template_invalid_declaration",
+            "operator_invalid_definition",
         ),
     ],
 )
@@ -784,3 +773,19 @@ def test_where_structural_validation(bad, code):
     with pytest.raises(ExpressionTemplateError) as exc:
         lower_expression_templates(doc)
     assert exc.value.code == code
+
+
+def test_where_without_match_scopes_a_call_of_the_defined_operator():
+    """esm 2.4.0 (esm-spec §9.6.3 constraint 2, §9.6.8): a `where` is admissible
+    on a match-less definition, where it selects among the definitions of the
+    defined operator a call names."""
+    doc = _where_pin_doc(
+        {
+            "t": {
+                "params": ["X"],
+                "where": {"X": {"shape": ["edges"]}},
+                "body": {"op": "*", "args": ["k", "X"]},
+            }
+        }
+    )
+    lower_expression_templates(doc)  # no `operator_invalid_definition`

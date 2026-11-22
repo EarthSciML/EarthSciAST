@@ -30,7 +30,12 @@ from pathlib import Path
 
 from conftest import REPO_ROOT
 
-from earthsci_ast.error_handling import ERROR_CODES, ErrorCode
+from earthsci_ast.error_handling import (
+    ERROR_CODE_ALIASES,
+    ERROR_CODES,
+    ErrorCode,
+    canonical_error_code,
+)
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "earthsci_ast"
 
@@ -226,5 +231,11 @@ def test_every_spec_diagnostic_code_is_registered():
     # nothing would pass the membership check vacuously.
     assert len(codes) >= 30, codes
     registered = set(ERROR_CODES.values()) | {m.value for m in ErrorCode}
-    missing = [c for c in codes if c not in registered]
+    # esm 2.4.0 renamed codes (esm-spec §9.6.6 "Renamed codes"): the table lists
+    # each old spelling beside its new one; an old spelling is registered as an
+    # alias of the new code, which is the one this binding reports.
+    missing = [c for c in codes if canonical_error_code(c) not in registered]
     assert missing == [], missing
+    for old, new in ERROR_CODE_ALIASES.items():
+        if old in codes:
+            assert new in registered, (old, new)

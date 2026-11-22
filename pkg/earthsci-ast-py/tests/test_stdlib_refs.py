@@ -86,12 +86,10 @@ def _lib(name: str, imports: list[str] | None = None) -> dict:
     doc = {
         "esm": "1.1.0",
         "metadata": {"name": name},
-        "expression_templates": {
-            f"{name}_twice": {"params": ["x"], "body": {"op": "*", "args": [2, "x"]}}
-        },
+        "operators": {f"{name}_twice": {"params": ["x"], "body": {"op": "*", "args": [2, "x"]}}},
     }
     if imports:
-        doc["expression_template_imports"] = [{"ref": r} for r in imports]
+        doc["operator_imports"] = [{"ref": r} for r in imports]
     return doc
 
 
@@ -102,7 +100,7 @@ def _consumer(ref: str, template: str) -> str:
             "metadata": {"name": "consumer"},
             "models": {
                 "M": {
-                    "expression_template_imports": [{"ref": ref}],
+                    "operator_imports": [{"ref": ref}],
                     "variables": {
                         "x": {"type": "unknown", "units": "1", "default": 1.0},
                         "y": {"type": "unknown", "units": "1"},
@@ -112,7 +110,7 @@ def _consumer(ref: str, template: str) -> str:
                         {
                             "lhs": "y",
                             "rhs": {
-                                "op": "apply_expression_template",
+                                "op": "apply_operator",
                                 "args": [],
                                 "name": template,
                                 "bindings": {"x": "x"},
@@ -156,7 +154,7 @@ def test_bundled_file_ref_leaving_the_bundle_is_unresolved(bundle, tmp_path):
     bundle("a.esm", _lib("a", ["../x.esm"]))
     with pytest.raises(Exception) as info:
         load_string(_consumer("esm:std/a.esm", "a_twice"), base_path=str(tmp_path))
-    assert _code(info.value) == "template_import_unresolved"
+    assert _code(info.value) == "operator_import_unresolved"
 
 
 def test_cycle_keys_on_the_std_identity(bundle, tmp_path):
@@ -164,7 +162,7 @@ def test_cycle_keys_on_the_std_identity(bundle, tmp_path):
     bundle("b.esm", _lib("b", ["a.esm"]))
     with pytest.raises(Exception) as info:
         load_string(_consumer("esm:std/a.esm", "a_twice"), base_path=str(tmp_path))
-    assert _code(info.value) == "template_import_cycle"
+    assert _code(info.value) == "operator_import_cycle"
 
 
 def test_an_on_disk_copy_is_not_the_bundled_file(bundle, tmp_path):
@@ -172,7 +170,7 @@ def test_an_on_disk_copy_is_not_the_bundled_file(bundle, tmp_path):
     bundle("b.esm", _lib("b"))
     (tmp_path / "b.esm").write_text(json.dumps(_lib("b")))
     doc = json.loads(_consumer("esm:std/b.esm", "b_twice"))
-    doc["models"]["M"]["expression_template_imports"].append({"ref": "./b.esm"})
+    doc["models"]["M"]["operator_imports"].append({"ref": "./b.esm"})
     f = load_string(json.dumps(doc), base_path=str(tmp_path))
     assert _y_rhs(f) == {"op": "*", "args": [2, "x"]}
 

@@ -379,7 +379,7 @@ def _contains_template_reference(expr: Any) -> bool:
     (esm-spec §9.6.4), whose body a static walk of this document cannot see."""
     if not isinstance(expr, dict):
         return False
-    if expr.get("op") == "apply_expression_template":
+    if expr.get("op") == "apply_operator":
         return True
     return any(_contains_template_reference(child) for _, child in iter_child_values(expr))
 
@@ -1592,7 +1592,7 @@ def _model_template_registry(data: dict[str, Any], model: dict[str, Any]) -> dic
     resolved document (§9.7 machinery already folded imports in): the top-level
     ``expression_templates`` block with the model's own block layered over it."""
     registry: dict[str, Any] = {}
-    for block in (data.get("expression_templates"), model.get("expression_templates")):
+    for block in (data.get("operators"), model.get("operators")):
         if isinstance(block, dict):
             registry.update({k: v for k, v in block.items() if isinstance(v, dict)})
     return registry
@@ -1669,7 +1669,7 @@ def _template_param_maps(
             inner_name = node.get("name")
             bindings = node.get("bindings")
             if (
-                node.get("op") == "apply_expression_template"
+                node.get("op") == "apply_operator"
                 and isinstance(inner_name, str)
                 and isinstance(bindings, dict)
             ):
@@ -1714,7 +1714,7 @@ def _iter_template_calls(expr: Any):
         if isinstance(e, list):
             stack.extend(e)
         elif isinstance(e, dict):
-            if e.get("op") == "apply_expression_template":
+            if e.get("op") == "apply_operator":
                 yield e
             stack.extend(e.values())
 
@@ -1731,11 +1731,7 @@ def _strip_literal_bindings(expr: Any, literal_map: dict[str, frozenset[str]]) -
     out = {k: _strip_literal_bindings(v, literal_map) for k, v in expr.items()}
     name = out.get("name")
     bindings = out.get("bindings")
-    if (
-        out.get("op") == "apply_expression_template"
-        and isinstance(name, str)
-        and isinstance(bindings, dict)
-    ):
+    if out.get("op") == "apply_operator" and isinstance(name, str) and isinstance(bindings, dict):
         sf = literal_map.get(name, frozenset())
         if sf:
             out["bindings"] = {
@@ -3410,34 +3406,6 @@ def _json_pointer_from_message(msg: str) -> str:
     return "/" + head.strip("/")
 
 
-def _check_operator_state_coverage(data: dict[str, Any], errors: list[str]) -> None:
-    """
-    When a file declares operators, every state variable in each model must be
-    covered by either an equation (ODE or assignment) or an operator's modifies list.
-    """
-    if not data.get("operators"):
-        return
-    op_modifies = set()
-    for op in data.get("operators", {}).values():
-        op_modifies.update(op.get("modifies", []) or [])
-    for mname, m in data.get("models", {}).items():
-        state_vars = ode_states(m) + algebraic_unknowns(m)
-        eq_lhs_vars = set()
-        for eq in m.get("equations", []):
-            lhs = eq.get("lhs")
-            if isinstance(lhs, dict) and lhs.get("op") == "D":
-                args = lhs.get("args", [])
-                if args and isinstance(args[0], str):
-                    eq_lhs_vars.add(args[0])
-            elif isinstance(lhs, str):
-                eq_lhs_vars.add(lhs)
-        uncovered = [s for s in state_vars if s not in eq_lhs_vars and s not in op_modifies]
-        if uncovered:
-            errors.append(
-                f"models/{mname}: state variables {uncovered} are not covered by any equation or operator's modifies list"
-            )
-
-
 def _check_reaction_systems(data: dict[str, Any], errors: list[str]) -> None:
     """Validate reaction system rate references (raw-dict, load-time).
 
@@ -3751,9 +3719,9 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # from the count. The former raw-dict twin ``_check_equation_balance``
     # counted ``ic`` equations and could disagree with it on the same file; it
     # was removed so the rule has a single owner (finding: duplicated-rule
-    # dedup). Operator-state coverage below is a DISTINCT check with no coded
-    # twin, so it stays here.
-    collect("uncovered_state_variable", lambda sub: _check_operator_state_coverage(data, sub))
+    # dedup). The former operator-state coverage check read the pre-0.3.0
+    # runtime-operator registry; a top-level `operators` block is now an operator
+    # library's definitions (esm-spec §9.6.12), so that check is gone.
     collect("reaction_consistency", lambda sub: _check_reaction_systems(data, sub))
     collect(
         "missing_registered_function",

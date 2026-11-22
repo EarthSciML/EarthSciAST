@@ -220,7 +220,7 @@ def _apply_names(node) -> list[str]:
     """Every ``apply_expression_template`` name reachable from a raw JSON node."""
     out: list[str] = []
     if isinstance(node, dict):
-        if node.get("op") == "apply_expression_template" and isinstance(node.get("name"), str):
+        if node.get("op") == "apply_operator" and isinstance(node.get("name"), str):
             out.append(node["name"])
         for value in node.values():
             out.extend(_apply_names(value))

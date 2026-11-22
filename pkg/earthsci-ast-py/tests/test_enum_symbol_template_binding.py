@@ -47,7 +47,7 @@ def test_string_bound_enum_symbol_through_a_template_import(tmp_path):
             "esm": "1.0.0",
             "metadata": {"name": "lib"},
             "enums": ENUMS,
-            "expression_templates": {
+            "operators": {
                 "activity_code": {
                     "params": ["sym"],
                     "body": {"op": "enum", "args": ["activity_unit", "sym"]},
@@ -63,13 +63,13 @@ def test_string_bound_enum_symbol_through_a_template_import(tmp_path):
             "enums": ENUMS,
             "models": {
                 "Consumer": {
-                    "expression_template_imports": [{"ref": "./lib.esm"}],
+                    "operator_imports": [{"ref": "./lib.esm"}],
                     "variables": {"code": {"type": "unknown", "units": "1"}},
                     "equations": [
                         {
                             "lhs": "code",
                             "rhs": {
-                                "op": "apply_expression_template",
+                                "op": "apply_operator",
                                 "args": [],
                                 "name": "activity_code",
                                 "bindings": {"sym": "g_per_gallon"},
@@ -96,7 +96,7 @@ def test_string_bound_param_also_used_as_a_reference_must_be_declared(tmp_path):
             "enums": ENUMS,
             "models": {
                 "M": {
-                    "expression_templates": {
+                    "operators": {
                         "mixed": {
                             "params": ["sym"],
                             "body": {
@@ -110,7 +110,7 @@ def test_string_bound_param_also_used_as_a_reference_must_be_declared(tmp_path):
                         {
                             "lhs": "y",
                             "rhs": {
-                                "op": "apply_expression_template",
+                                "op": "apply_operator",
                                 "args": [],
                                 "name": "mixed",
                                 "bindings": {"sym": "g_per_gallon"},

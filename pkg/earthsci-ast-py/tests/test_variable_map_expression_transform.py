@@ -234,7 +234,7 @@ def test_flatten_expression_transform_not_referencing_from_var_raises():
 
 def _template_doc() -> dict:
     doc = _doc()
-    doc["models"]["Sink"]["expression_templates"] = {
+    doc["models"]["Sink"]["operators"] = {
         "double_plus": {
             "params": ["x", "off"],
             "body": {
@@ -249,7 +249,7 @@ def _template_doc() -> dict:
             "from": "Src.F",
             "to": "Sink.F_in",
             "transform": {
-                "op": "apply_expression_template",
+                "op": "apply_operator",
                 "name": "double_plus",
                 "args": [],
                 "bindings": {"x": "Src.F", "off": "Sink.offset"},
@@ -265,7 +265,7 @@ def test_coupling_transform_expands_with_receiving_component_templates():
     # produces the Option-A image (transform fully expanded, block stripped).
     out = expand_document(lower_expression_templates(_template_doc()))
     assert out["coupling"][0]["transform"] == TRANSFORM_AST
-    assert "expression_templates" not in out["models"]["Sink"]
+    assert "operators" not in out["models"]["Sink"]
 
 
 def test_coupling_transform_template_expansion_through_load():

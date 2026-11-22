@@ -253,15 +253,20 @@ class UnreachableSpatialOperatorError(NumpyInterpreterError):
     #: unlowered-operator error carries this, regardless of the exception class.
     code = "unlowered_operator"
 
-    def __init__(self, op: str) -> None:
+    def __init__(self, op: str, explanation: str | None = None) -> None:
         self.op = op
+        # esm-spec §9.6.6: for an unresolved call of a defined operator, each
+        # definition of it in scope and why it was not eligible, or that none is
+        # (a placeholder).
+        self.explanation = explanation
+        why = f" ({explanation})" if explanation else ""
         super().__init__(
-            f"unlowered_operator: rewrite-target op '{op}' reached simulation "
+            f"unlowered_operator: rewrite-target op '{op}'{why} reached simulation "
             f"evaluation with no rule to lower it to a stencil. Any op that is "
-            f"not evaluable-core (a spatial/right-hand-side `D`, `integral`, or "
-            f"a custom op) "
-            f"must be rewritten by a discretization rule before evaluation "
-            f"(esm-spec §4.2 / §9.6.8). Pipeline contract violated."
+            f"not a core operator (a spatial/right-hand-side `D`, `partial`, "
+            f"`integral`, or another defined operator) "
+            f"must be resolved to a definition before evaluation "
+            f"(esm-spec §4.2 / §9.6.8 / §9.6.12). Pipeline contract violated."
         )
 
 
@@ -444,7 +449,7 @@ _EVALUABLE_CORE_OPS: frozenset[str] = op_registry.by_tier("core")
 _NO_RULE_OPS: frozenset[str] = frozenset(
     {
         "=",
-        "apply_expression_template",
+        "apply_operator",
         "distinct",
         "enum",
         "ic",

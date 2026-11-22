@@ -69,7 +69,7 @@ def test_shared_fixture_control_still_evaluates() -> None:
     "op, args",
     [
         ("distinct", ["x"]),
-        ("apply_expression_template", []),
+        ("apply_operator", []),
         ("ic", ["x"]),
         ("enum", ["colors", "red"]),
     ],

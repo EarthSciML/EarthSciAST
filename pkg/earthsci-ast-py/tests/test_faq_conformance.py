@@ -30,16 +30,15 @@ import numpy as np
 import pytest
 from conftest import INVALID_DIR, VALID_DIR
 
-from earthsci_ast.parse import load_path
 from earthsci_ast.inline_tests import _check_assertion, run_inline_tests
+from earthsci_ast.parse import load_path, rewrite_old_spellings
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.reference_resolution import (
     E_REF_UNDECLARED_INDEX_SET,
     ReferenceResolutionError,
     build_reference_graph,
 )
-from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.validation import validate_text
-
 
 _FIXTURES_DIR = VALID_DIR / "faq"
 
@@ -306,6 +305,9 @@ def _template_from_param_variants() -> dict[str, tuple[dict, str]]:
     subsystem model, each with the pointer its finding attaches at."""
     path = _INVALID_FIXTURES_DIR / "template_from_param_undeclared.esm"
     base = json.loads(path.read_text())
+    # Read as a load reads it (esm-spec §9.6.12): the variants below are built
+    # on the esm-2.4.0 names.
+    rewrite_old_spellings(base)
     model = base["models"]["M"]
     bad_call = model["equations"][0]["rhs"]
     good_call = copy.deepcopy(bad_call)
@@ -314,17 +316,17 @@ def _template_from_param_variants() -> dict[str, tuple[dict, str]]:
     wrapper = copy.deepcopy(base)
     m = wrapper["models"]["M"]
     # outer(w, T) forwards T to total's `from` parameter S.
-    m["expression_templates"]["outer"] = {
+    m["operators"]["outer"] = {
         "params": ["w", "T"],
         "body": {
-            "op": "apply_expression_template",
+            "op": "apply_operator",
             "args": [],
             "name": "total",
             "bindings": {"v": "w", "S": "T"},
         },
     }
     m["equations"][0]["rhs"] = {
-        "op": "apply_expression_template",
+        "op": "apply_operator",
         "args": [],
         "name": "outer",
         "bindings": {"w": "a", "T": "ghost_cells"},
@@ -337,7 +339,7 @@ def _template_from_param_variants() -> dict[str, tuple[dict, str]]:
 
     sub = copy.deepcopy(base)
     m = sub["models"]["M"]
-    inner = {k: copy.deepcopy(v) for k, v in m.items() if k != "expression_templates"}
+    inner = {k: copy.deepcopy(v) for k, v in m.items() if k != "operators"}
     m["equations"][0]["rhs"] = copy.deepcopy(good_call)
     m["subsystems"] = {"Sub": inner}
 

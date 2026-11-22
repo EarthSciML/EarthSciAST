@@ -25,6 +25,7 @@ from earthsci_ast import load_path, load_string
 from earthsci_ast.flatten import flatten
 from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.numpy_interpreter import evaluate
+from earthsci_ast.parse import rewrite_old_spellings
 from earthsci_ast.problem import esm_problem, observed_field
 from earthsci_ast.simulation_array import _reconstruct_model_json
 from earthsci_ast.value_invention import ValueInventionError, materialize_value_invention
@@ -176,13 +177,13 @@ def _rank_of(x: int, members: list[int]) -> float:
         "metadata": {"name": "rank_of_probe"},
         "models": {
             "M": {
-                "expression_template_imports": [{"ref": str(LIBRARY)}],
+                "operator_imports": [{"ref": str(LIBRARY)}],
                 "variables": {"r": {"type": "unknown", "units": "1", "default": 0.0}},
                 "equations": [
                     {
                         "lhs": {"op": "D", "args": ["r"], "wrt": "t"},
                         "rhs": {
-                            "op": "apply_expression_template",
+                            "op": "apply_operator",
                             "args": [],
                             "name": "rank_of",
                             "bindings": {
@@ -221,12 +222,14 @@ def test_rewrite_loads_and_runs_like_the_golden(entry: dict) -> None:
 def test_out_of_range_key_component_names_the_column() -> None:
     entry = next(e for e in MANIFEST if e["id"] == "bin_skolem_spatial_join")
     doc = json.loads(_rewrite_path(entry).read_text())
+    # Read as a load reads it (esm-spec §9.6.12).
+    rewrite_old_spellings(doc)
     model = doc["models"]["BinSkolemSpatialJoin"]
     for eq in model["equations"]:
         rhs = eq["rhs"]
         if isinstance(rhs, dict) and rhs.get("distinct"):
             rhs["key"]["bindings"]["n_b"] = 2  # j = 3, 4 fall outside [1, 3)
-    for ref in model["expression_template_imports"]:
+    for ref in model["operator_imports"]:
         ref["ref"] = str(LIBRARY)
     case = entry["cases"][0]
     ca = {k: np.asarray(v, dtype=float) for k, v in case["const_arrays"].items()}

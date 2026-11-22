@@ -3909,7 +3909,7 @@
       "equations": [
         {
           "lhs": {"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, "ChemistrySystem.k1", "ChemistrySystem.O3"]}, {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.O3"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "z"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, "ChemistrySystem.k1", "ChemistrySystem.O3"]}, {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.O3"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "partial", "args": ["ChemistrySystem.O3"], "wrt": "z"}]}]}]},
           "source_system": "ChemistrySystem",
           "contributions": [
             {
@@ -3921,7 +3921,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.O3"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.O3"], "wrt": "z"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.O3"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "partial", "args": ["ChemistrySystem.O3"], "wrt": "z"}]}]},
               "origins": [
                 {
                   "component": "DiffusionSystem"
@@ -3932,7 +3932,7 @@
         },
         {
           "lhs": {"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "t"},
-          "rhs": {"op": "+", "args": [{"op": "*", "args": ["ChemistrySystem.k2", "ChemistrySystem.NO2"]}, {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.NO"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "z"}]}]}]},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["ChemistrySystem.k2", "ChemistrySystem.NO2"]}, {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.NO"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "partial", "args": ["ChemistrySystem.NO"], "wrt": "z"}]}]}]},
           "source_system": "ChemistrySystem",
           "contributions": [
             {
@@ -3944,7 +3944,7 @@
               ]
             },
             {
-              "rhs": {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.NO"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "D", "args": ["ChemistrySystem.NO"], "wrt": "z"}]}]},
+              "rhs": {"op": "+", "args": [{"op": "*", "args": ["DiffusionSystem.kh", {"op": "laplacian", "args": ["ChemistrySystem.NO"]}]}, {"op": "*", "args": ["DiffusionSystem.kv", {"op": "partial", "args": ["ChemistrySystem.NO"], "wrt": "z"}]}]},
               "origins": [
                 {
                   "component": "DiffusionSystem"
