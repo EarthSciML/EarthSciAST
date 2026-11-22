@@ -562,6 +562,9 @@ function coerce_esm_file(
     # A typed constructor refuses a bad value with an `ArgumentError`, which is
     # right for a caller building it in Julia; reached from a document, the
     # same refusal is about the document, so it leaves as a `ParseError`.
+    # An in-memory document may spell what an earlier one wrote (esm-spec
+    # §9.6.12): read it as the wire boundary does.
+    data = _wire_old_spellings(data)
     try
         return _coerce_esm_file(data, document_base)
     catch e

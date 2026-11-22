@@ -28,7 +28,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _VI_REPO_ROOT = TESTUTILS_REPO_ROOT
 _vi_fixture(rel) = joinpath(_VI_REPO_ROOT, rel)
-_vi_raw(rel) = JSON3.read(read(_vi_fixture(rel), String))
+_vi_raw(rel) = EarthSciAST._wire_old_spellings(JSON3.read(read(_vi_fixture(rel), String)))   # esm-2.4.0 spellings
 
 # Read a raw document (through the loader when it imports templates) and select
 # one TYPED model, its template references expanded, plus the document-scoped
