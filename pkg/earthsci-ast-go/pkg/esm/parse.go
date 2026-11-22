@@ -545,7 +545,6 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 		esmFile.ESM = templateMachineryMinESM
 	}
 	esmFile.authoredTemplateRHS = authoredTemplateRHS
-	esmFile.loweredUnitEqs = loweredUnits
 
 	// v0.3.0 closes the function registry (closed-function-registry RFC).
 	// Reject any v0.2.x file that still carries the removed top-level
@@ -570,6 +569,8 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	if err := LowerEnumsMut(&esmFile); err != nil {
 		return nil, err
 	}
+	// Keyed by the live sites as loaded, after every load-time rewrite of them.
+	esmFile.loweredUnitEqs = indexLoweredUnitSites(&esmFile, loweredUnits)
 
 	// According to spec Section 2.1a: load() should succeed for valid JSON that
 	// passes schema validation but fails structural validation. Structural issues

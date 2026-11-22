@@ -15,14 +15,14 @@ package esm
 //     when it is undeterminable).
 //
 // Go's typed load expands references after lowering, so the validator types a
-// model equation whose references reach a unit-bearing definition from the
-// reference-preserving form the load captured (loweredUnitEquation). Mirrors
+// site whose references reach a unit-bearing definition from the
+// reference-preserving form the load captured (loweredUnitEquation), as long
+// as the live site still holds what the load produced from it. Mirrors
 // the Julia `_partial_rule`, `_integral_rule`, `_definition_call_unit!`.
 
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 )
 
 // defUnitFinding is one definition-unit finding: an error, or (warning) the
@@ -32,8 +32,9 @@ type defUnitFinding struct {
 	warning bool
 }
 
-// loweredUnitEquation is a model equation in its reference-preserving
-// (lowered) form, with the raw registry entries its references reach.
+// loweredUnitEquation is a unit check site (an equation, or a reaction rate
+// with a nil LHS) in its reference-preserving (lowered) form, with the raw
+// registry entries its references reach.
 type loweredUnitEquation struct {
 	LHS, RHS Expression
 	registry map[string]any
@@ -361,46 +362,158 @@ func definitionUnitBearing(expr any, registry map[string]any) bool {
 	return false
 }
 
+// unitSiteSections are the expression sites a component's units are checked
+// at (esm-spec §4.8.4, §9.6.12): each an array whose members are equations
+// (lhs, rhs) or, for `reactions`, carry a `rate`.
+var unitSiteSections = []string{"equations", "initialization_equations", "constraint_equations", "reactions"}
+
 // captureLoweredUnitEquations records, from the lowered (reference-preserving)
-// view, every top-level model equation whose references reach a unit-bearing
-// definition, keyed by its JSON pointer, with the reached registry entries.
+// view, every unit check site whose references reach a unit-bearing
+// definition — an equation, initialization equation or constraint equation, or
+// a reaction rate, of every top-level model and reaction system and of their
+// inline subsystems at any depth — keyed by its JSON pointer, with the reached
+// registry entries. A subsystem's references read the top-level component's
+// registry, which by then holds the subsystems' blocks.
 func captureLoweredUnitEquations(view map[string]any) map[string]loweredUnitEquation {
-	models, _ := view["models"].(map[string]any)
 	var out map[string]loweredUnitEquation
-	for _, mname := range sortedKeys(models) {
-		comp, ok := models[mname].(map[string]any)
+	var walk func(comp map[string]any, ptr string, reg map[string]any)
+	walk = func(comp map[string]any, ptr string, reg map[string]any) {
+		for _, section := range unitSiteSections {
+			items, _ := comp[section].([]any)
+			for i, raw := range items {
+				site, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				var lhs, rhs any
+				if section == "reactions" {
+					rhs = site["rate"]
+				} else {
+					lhs, rhs = site["lhs"], site["rhs"]
+				}
+				pair := []any{lhs, rhs}
+				if !definitionUnitBearing(pair, reg) {
+					continue
+				}
+				reached := map[string]bool{}
+				reachedDefinitions(reached, pair, reg)
+				sub := make(map[string]any, len(reached))
+				for n := range reached {
+					sub[n] = deepCopyJSON(reg[n])
+				}
+				le := loweredUnitEquation{RHS: rawToExpression(deepCopyJSON(rhs)), registry: sub}
+				if lhs != nil {
+					le.LHS = rawToExpression(deepCopyJSON(lhs))
+				}
+				if out == nil {
+					out = map[string]loweredUnitEquation{}
+				}
+				out[fmt.Sprintf("%s/%s/%d", ptr, section, i)] = le
+			}
+		}
+		subs, _ := comp["subsystems"].(map[string]any)
+		for _, k := range sortedKeys(subs) {
+			if sc, ok := subs[k].(map[string]any); ok {
+				walk(sc, ptr+"/subsystems/"+escapeJSONPointerSegment(k), reg)
+			}
+		}
+	}
+	for _, kind := range []string{"models", "reaction_systems"} {
+		comps, _ := view[kind].(map[string]any)
+		for _, cname := range sortedKeys(comps) {
+			comp, ok := comps[cname].(map[string]any)
+			if !ok {
+				continue
+			}
+			reg, _ := comp["operators"].(map[string]any)
+			if len(reg) == 0 {
+				continue
+			}
+			walk(comp, "/"+kind+"/"+escapeJSONPointerSegment(cname), reg)
+		}
+	}
+	return out
+}
+
+// unitSiteKey is the key of a captured site in ESMFile.loweredUnitEqs: the
+// site's array (`/models/M/equations`) and the content of the live site. A
+// captured form is used only while the live site at that array still holds what
+// the load produced from it, so an edit that moves, removes or replaces a site
+// can never type the live site from another site's (or a stale) form.
+func unitSiteKey(container string, lhs, rhs Expression) string {
+	b, err := json.Marshal([]any{lhs, rhs})
+	if err != nil {
+		return ""
+	}
+	return container + "\x00" + string(b)
+}
+
+// liveUnitSite is one unit check site of a loaded file.
+type liveUnitSite struct {
+	container string
+	index     int
+	lhs, rhs  Expression
+}
+
+// liveUnitSites lists the unit check sites of file in the pointer scheme of
+// captureLoweredUnitEquations. A subsystem is read through decodeSubsystemAs,
+// as the units validator reads it, so its sites key identically at load and at
+// validation.
+func liveUnitSites(file *ESMFile) []liveUnitSite {
+	var out []liveUnitSite
+	add := func(container string, eqs []Equation) {
+		for i, eq := range eqs {
+			out = append(out, liveUnitSite{container, i, eq.LHS, eq.RHS})
+		}
+	}
+	var model func(m *Model, ptr string)
+	var system func(rs *ReactionSystem, ptr string)
+	model = func(m *Model, ptr string) {
+		add(ptr+"/equations", m.Equations)
+		add(ptr+"/initialization_equations", m.InitializationEquations)
+		for _, k := range sortedKeys(m.Subsystems) {
+			if sub, ok := decodeSubsystemAs[Model](m.Subsystems[k]); ok {
+				model(&sub, ptr+"/subsystems/"+escapeJSONPointerSegment(k))
+			}
+		}
+	}
+	system = func(rs *ReactionSystem, ptr string) {
+		for i, rx := range rs.Reactions {
+			out = append(out, liveUnitSite{ptr + "/reactions", i, nil, rx.Rate})
+		}
+		add(ptr+"/constraint_equations", rs.ConstraintEquations)
+		for _, k := range sortedKeys(rs.Subsystems) {
+			if sub, ok := decodeSubsystemAs[ReactionSystem](rs.Subsystems[k]); ok {
+				system(&sub, ptr+"/subsystems/"+escapeJSONPointerSegment(k))
+			}
+		}
+	}
+	for _, name := range sortedKeys(file.Models) {
+		m := file.Models[name]
+		model(&m, "/models/"+escapeJSONPointerSegment(name))
+	}
+	for _, name := range sortedKeys(file.ReactionSystems) {
+		rs := file.ReactionSystems[name]
+		system(&rs, "/reaction_systems/"+escapeJSONPointerSegment(name))
+	}
+	return out
+}
+
+// indexLoweredUnitSites re-keys the captured sites (by pointer) by
+// unitSiteKey of the live site at that pointer in the loaded file; a captured
+// site with no live counterpart is dropped.
+func indexLoweredUnitSites(file *ESMFile, captured map[string]loweredUnitEquation) map[string]loweredUnitEquation {
+	if len(captured) == 0 {
+		return nil
+	}
+	out := map[string]loweredUnitEquation{}
+	for _, s := range liveUnitSites(file) {
+		le, ok := captured[fmt.Sprintf("%s/%d", s.container, s.index)]
 		if !ok {
 			continue
 		}
-		reg, _ := comp["operators"].(map[string]any)
-		if len(reg) == 0 {
-			continue
-		}
-		eqs, _ := comp["equations"].([]any)
-		for i, raw := range eqs {
-			eq, ok := raw.(map[string]any)
-			if !ok || !definitionUnitBearing(eq, reg) {
-				continue
-			}
-			reached := map[string]bool{}
-			reachedDefinitions(reached, eq, reg)
-			names := make([]string, 0, len(reached))
-			for n := range reached {
-				names = append(names, n)
-			}
-			sort.Strings(names)
-			sub := make(map[string]any, len(names))
-			for _, n := range names {
-				sub[n] = deepCopyJSON(reg[n])
-			}
-			if out == nil {
-				out = map[string]loweredUnitEquation{}
-			}
-			out[fmt.Sprintf("/models/%s/equations/%d", mname, i)] = loweredUnitEquation{
-				LHS:      rawToExpression(deepCopyJSON(eq["lhs"])),
-				RHS:      rawToExpression(deepCopyJSON(eq["rhs"])),
-				registry: sub,
-			}
+		if k := unitSiteKey(s.container, s.lhs, s.rhs); k != "" {
+			out[k] = le
 		}
 	}
 	return out

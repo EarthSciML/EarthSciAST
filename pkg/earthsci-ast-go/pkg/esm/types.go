@@ -1382,10 +1382,11 @@ type ESMFile struct {
 	// form, where a template application is opaque (esm-spec §4.3.1); the
 	// expansion it became is the build's to check.
 	authoredTemplateRHS map[string]Expression
-	// loweredUnitEqs holds, keyed by equation pointer, the reference-preserving
-	// form of each top-level model equation whose references reach a
-	// definition with a unit expression (esm-spec §9.6.12 "Units"): the load
-	// expands references, so the validator types those equations from here.
+	// loweredUnitEqs holds the reference-preserving form of each unit check
+	// site whose references reach a definition with a unit expression
+	// (esm-spec §9.6.12 "Units"), keyed by unitSiteKey (the site's array and
+	// the live site's content as loaded): the load expands references, so the
+	// validator types a site from here while it is unchanged.
 	loweredUnitEqs map[string]loweredUnitEquation
 	// topLevelRefs holds the raw `{ref, bindings, index_set_rename,
 	// operator_imports, ...}` edge of every top-level `models.<k>` and
