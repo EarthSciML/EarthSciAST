@@ -17,7 +17,8 @@ import {
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
 import { emitDocument, resolveTemplateMachinery } from './template-imports.js'
-import { loadPath } from './parse.js'
+import { loadPath, rewriteOldSpellings } from './parse.js'
+import { canonicalizeDocument } from './canonicalize.js'
 import { validateText } from './validate.js'
 import { canonicalErrorCode } from './errors.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
@@ -72,6 +73,9 @@ describe('one operator type (esm 2.4.0, esm-spec §9.6.12)', () => {
       ['placeholder_call', 'fixture.esm', 'emitted.esm'],
       ['partial_wrt_param_instance', 'fixture.esm', 'emitted.esm'],
       ['old_names', 'fixture.esm', 'emitted.esm'],
+      ['reference_only_round_trip', 'fixture.esm', 'emitted.esm'],
+      ['independent_variable_wrt', 'fixture.esm', 'emitted.esm'],
+      ['vector_calculus_import', 'fixture.esm', 'emitted.esm'],
     ])('%s / %s', (dir, fix, gold) => {
       const out = emitPath(conf(dir, fix))
       expect(out).toBe(fs.readFileSync(conf(dir, gold), 'utf-8'))
@@ -192,6 +196,70 @@ describe('one operator type (esm 2.4.0, esm-spec §9.6.12)', () => {
       ].sort()
       expect(ws, f).toEqual([...want.warnings].sort())
     }
+  })
+
+  it('emitted rules are reference-only (esm-spec §9.6.1, §9.6.4 rule 5)', () => {
+    const out = fs.readFileSync(conf('reference_only_round_trip', 'emitted.esm'), 'utf-8')
+    const reg = JSON.parse(out).models.m.operators
+    expect(reg.fv_div_edges.reference_only).toBe(true)
+    expect(reg.exp.reference_only).toBe(true)
+    expect('where' in reg.fv_div_edges).toBe(false)
+    // div(G) stayed a call; reloading does not turn it into a reference.
+    expect(out).toContain('"op": "div"')
+    // emit → load → emit is exact (also for constrained_match_scope).
+    for (const dir of ['reference_only_round_trip', 'constrained_match_scope']) {
+      const once = emitPath(conf(dir, 'fixture.esm'))
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oot-'))
+      try {
+        const p = path.join(tmp, 'e.esm')
+        fs.writeFileSync(p, once)
+        const twice = emitPath(p)
+        expect(twice, dir).toBe(once)
+        fs.writeFileSync(p, twice)
+        expect(emitPath(p), dir).toBe(once)
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true })
+      }
+    }
+  })
+
+  it('a reference-only definition is no call rule and the gate says so', () => {
+    const registry = {
+      grad_x: { params: ['f'], defines: 'grad', body: 'f', reference_only: true },
+    }
+    const err = errorOf(() =>
+      evaluateExpression({ op: 'grad', args: ['u'] } as any, new Map([['u', 1]]), { registry }),
+    )
+    expect(err?.message).toContain(
+      "'grad_x': reference-only, reached by explicit references, never by a call",
+    )
+    expect(err?.message).toContain(
+      'definitions no reference reached were removed by emit and flatten and are not listed',
+    )
+  })
+
+  it('a D along the renamed independent variable is the time derivative', () => {
+    const doc = {
+      domain: { independent_variable: 'tau' },
+      models: {
+        m: {
+          equations: [
+            { lhs: { op: 'D', args: ['u'], wrt: 'tau' }, rhs: { op: 'D', args: ['u'], wrt: 'x' } },
+          ],
+        },
+      },
+    }
+    const sites = rewriteOldSpellings(doc)
+    const eq = doc.models.m.equations[0]!
+    expect(eq.lhs).toEqual({ op: 'D', args: ['u'], wrt: 't' })
+    expect(eq.rhs.op).toBe('partial')
+    expect(sites.ops).toEqual(['/models/m/equations/0/rhs (D)'])
+    expect(
+      canonicalizeDocument({
+        ...doc,
+        models: { m: { equations: [{ lhs: 'y', rhs: { op: 'D', args: ['u'], wrt: 'tau' } }] } },
+      }).models.m.equations[0].rhs.wrt,
+    ).toBe('t')
   })
 
   it('old codes are aliases of the new ones (esm-spec §9.6.6)', () => {

@@ -112,6 +112,18 @@ function renameFieldInPlace(node: Record<string, unknown>, old: string, neu: str
 }
 
 /**
+ * The document's own renamed independent variable (`domain.independent_variable`
+ * when declared and not `"t"`), or `null` (esm-spec §4.2 "The derivative axis").
+ */
+export function documentIndependentVariable(doc: unknown): string | null {
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return null
+  const dom = (doc as Record<string, unknown>).domain
+  if (dom === null || typeof dom !== 'object' || Array.isArray(dom)) return null
+  const iv = (dom as Record<string, unknown>).independent_variable
+  return typeof iv === 'string' && iv !== 't' ? iv : null
+}
+
+/**
  * esm 2.4.0 (esm-spec §9.6.12, §4.2): read the spellings an earlier document
  * wrote, IN PLACE, never refusing one:
  *
@@ -123,6 +135,9 @@ function renameFieldInPlace(node: Record<string, unknown>, old: string, neu: str
  *   the spellings `δ` and `∂` — as `partial`, every other field kept. A `D`
  *   whose `wrt` is one of the enclosing definition's `params` is left as
  *   written: it is decided per definition instance (§9.6.4 rule 3).
+ * - a `D` whose `wrt` names the document's own renamed independent variable
+ *   (`domain.independent_variable`, not `"t"`) as the time derivative, `wrt`
+ *   `"t"` (esm-spec §4.2 "The derivative axis"); no warning, not a site.
  *
  * Idempotent: a second pass finds nothing. Returns the sites, as the
  * `deprecated_field` / `deprecated_op` warnings name them.
@@ -131,6 +146,7 @@ export function rewriteOldSpellings(doc: unknown): OldSpellingSites {
   const fields: string[] = []
   const ops: string[] = []
   const nameMaps = oldSpellingNameMaps()
+  const iv = documentIndependentVariable(doc)
   const seen = new Set<object>()
   const isObj = (v: unknown): v is Record<string, unknown> =>
     v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -163,7 +179,12 @@ export function rewriteOldSpellings(doc: unknown): OldSpellingSites {
           ops.push(`${at} (${op})`)
         } else if (op === 'D') {
           const w = node.wrt
-          if (
+          if (iv !== null && w === iv && !(params !== null && params.has(w))) {
+            // esm-spec §4.2 "The derivative axis": a `wrt` naming the
+            // document's renamed independent variable is the time derivative,
+            // read with the literal axis (no warning).
+            node.wrt = 't'
+          } else if (
             w !== undefined &&
             w !== null &&
             w !== 't' &&

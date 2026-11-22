@@ -49,6 +49,11 @@ export function withDefines(name: string, decl: unknown): unknown {
   return { ...decl, defines: definitionDefines(name, decl) }
 }
 
+/** Whether a definition is `reference_only` (esm-spec §9.6.1): reached by explicit references only. */
+export function isReferenceOnly(decl: unknown): boolean {
+  return isObject(decl) && decl.reference_only === true
+}
+
 /**
  * Whether `n` is a call shape a match-less definition can bind: an `op` and
  * `args`, no other field (esm-spec §9.6.3 constraint 2).
@@ -248,8 +253,12 @@ export function explainUnresolvedCall(
   const op = call.op
   const args = Array.isArray(call.args) ? call.args : []
   const k = args.length
+  // esm-spec §9.6.12: emit and flatten keep only the definitions a reference
+  // reaches, so an unreferenced definition is no longer here to list.
+  const note =
+    '; definitions no reference reached were removed by emit and flatten and are not listed'
   const placeholder = `no definition of '${op}' is in scope (a placeholder)`
-  if (registry === null || registry === undefined) return placeholder
+  if (registry === null || registry === undefined) return placeholder + note
   const lines: string[] = []
   for (const name of Object.keys(registry).sort(compareUtf8)) {
     const decl = registry[name]
@@ -266,7 +275,9 @@ export function explainUnresolvedCall(
       lines.push(`'${name}': its where constraint ` + whereReason(decl.where, b, shapeEnv))
     } else {
       if (definitionDefines(name, decl) !== op) continue
-      if (params.length !== k) {
+      if (isReferenceOnly(decl)) {
+        lines.push(`'${name}': reference-only, reached by explicit references, never by a call`)
+      } else if (params.length !== k) {
         lines.push(`'${name}': takes ${params.length} operand(s), the call carries ${k}`)
       } else if (!onlyOpArgs(call)) {
         const extra = Object.keys(call)
@@ -284,8 +295,8 @@ export function explainUnresolvedCall(
       }
     }
   }
-  if (lines.length === 0) return placeholder
-  return `definitions of '${op}' in scope: ` + lines.join('; ')
+  if (lines.length === 0) return placeholder + note
+  return `definitions of '${op}' in scope: ` + lines.join('; ') + note
 }
 
 /** Julia `repr`-style rendering of a string list (`["a", "b"]`). */

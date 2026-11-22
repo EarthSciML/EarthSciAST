@@ -84,6 +84,7 @@ import { isCoreOp } from './op-registry.js'
 import {
   type BodyView,
   deepEqual,
+  isReferenceOnly,
   definitionDefines,
   matchPattern,
   matchRootOp,
@@ -156,6 +157,8 @@ type TemplateDecl = {
   defines?: unknown
   /** The definition's unit expression (esm-spec §9.6.12 "Units"). */
   units?: unknown
+  /** Reached by explicit references only, never by a call (esm-spec §9.6.1). */
+  reference_only?: unknown
 }
 /** Named templates invoked explicitly via `apply_operator` (no `match`). */
 type Templates = Record<string, TemplateDecl>
@@ -207,6 +210,8 @@ function compareSelection(a: MatchRule, b: MatchRule): number {
  * `defines` is provenance only and is not checked.
  */
 function checkDefinesNotCore(name: string, decl: unknown, scope: string): void {
+  // A `reference_only` definition is reached by no call (esm-spec §9.6.1).
+  if (isReferenceOnly(decl)) return
   const r = matchRootOp(decl)
   if (r !== undefined && isCoreOp(r)) return
   const d = definitionDefines(name, decl)
@@ -1476,13 +1481,19 @@ function rule3Exposed(
   return visible
 }
 
-/** `decl` without `match`, `where` and `priority`. */
+/**
+ * A materialized entry: the rule (or variant) without its `match`, `where` and
+ * `priority`, marked `reference_only` (esm-spec §9.6.1, §9.6.4 rule 5) so that
+ * reloading the emitted document makes it no callable definition of its
+ * operator: emit → load → emit is exact.
+ */
 function matchStripped(decl: TemplateDecl): TemplateDecl {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(decl)) {
     if (k === 'match' || k === 'where' || k === 'priority') continue
     out[k] = v
   }
+  out.reference_only = true
   return out as TemplateDecl
 }
 
@@ -1739,13 +1750,16 @@ function buildRewriteContext(
     }
     const defines = definitionDefines(tname, decl)
     const rop = matchRootOp(decl)
-    if (decl.match === undefined) {
+    const refOnly = isReferenceOnly(decl)
+    if (decl.match === undefined && refOnly) {
+      // reached only through an explicit reference (esm-spec §9.6.1)
+    } else if (decl.match === undefined) {
       addArity(defines, decl.params.length)
     } else if (rop !== undefined && !isCoreOp(rop)) {
       const margs = isObject(decl.match) ? decl.match.args : undefined
       addArity(rop, Array.isArray(margs) ? margs.length : 0)
     }
-    if (decl.match === undefined && !isCoreOp(defines) && defines !== APPLY_OP) {
+    if (decl.match === undefined && !refOnly && !isCoreOp(defines) && defines !== APPLY_OP) {
       let list = callRules.get(defines)
       if (list === undefined) callRules.set(defines, (list = []))
       list.push({
