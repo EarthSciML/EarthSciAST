@@ -251,6 +251,10 @@ fn check_defines_not_core(
     decl: &Value,
     scope: &str,
 ) -> Result<(), ExpressionTemplateError> {
+    // A `reference_only` definition is reached by no call (esm-spec §9.6.1).
+    if is_reference_only(decl) {
+        return Ok(());
+    }
     if let Some(obj) = decl.as_object()
         && match_root_op(obj).is_some_and(is_core_operator)
     {
@@ -268,6 +272,12 @@ fn check_defines_not_core(
         ));
     }
     Ok(())
+}
+
+/// Whether an `operators` entry is `reference_only` (esm-spec §9.6.1): reached
+/// by explicit references only, never by a call of the operator it defines.
+pub(crate) fn is_reference_only(decl: &Value) -> bool {
+    decl.get("reference_only") == Some(&Value::Bool(true))
 }
 
 /// Whether a node is a call shape a match-less definition can bind: an `op`
@@ -535,6 +545,9 @@ fn collect_rules(
             .unwrap_or_else(|| Rc::new(SNode::Null));
         let defines = definition_defines(name, decl);
         match obj.get("match") {
+            // Reached only through an explicit reference (§9.6.1): no call
+            // rule, no arity.
+            None if is_reference_only(decl) => {}
             None => {
                 arities
                     .entry(defines.clone())
@@ -697,6 +710,12 @@ pub(crate) fn explain_unresolved_call(
             if definition_defines(name, decl) != op {
                 continue;
             }
+            if is_reference_only(decl) {
+                lines.push(format!(
+                    "'{name}': reference-only, reached by explicit references, never by a call"
+                ));
+                continue;
+            }
             let call_obj = call.as_object();
             let extra: Vec<&str> = call_obj
                 .map(|o| {
@@ -732,10 +751,14 @@ pub(crate) fn explain_unresolved_call(
             }
         }
     }
+    // esm-spec §9.6.12: emit and flatten keep only the definitions a reference
+    // reaches, so an unreferenced definition is no longer here to list.
+    let note = "; definitions no reference reached were removed by emit and flatten and are not \
+                listed";
     if lines.is_empty() {
-        return format!("no definition of '{op}' is in scope (a placeholder)");
+        return format!("no definition of '{op}' is in scope (a placeholder){note}");
     }
-    format!("definitions of '{op}' in scope: {}", lines.join("; "))
+    format!("definitions of '{op}' in scope: {}{note}", lines.join("; "))
 }
 
 /// Why a definition's `where` did not hold at a call (its first constraint).

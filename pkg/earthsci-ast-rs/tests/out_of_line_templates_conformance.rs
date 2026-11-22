@@ -687,13 +687,6 @@ fn flatten_registry_merge_is_the_union_half_only() {
 #[test]
 fn emit_load_byte_wise_fixed_point_all_fixtures() {
     let base = common::repo_fixture("conformance/expression_templates");
-    // A `match` rule that fired is materialized without its `match` and
-    // `where` (§9.6.4 rule 3) but carries `defines` (esm 2.4.0); reloaded, it
-    // is a match-less definition of that operator, callable at a call the
-    // `where` had excluded, so the emitted form of a document that keeps such a
-    // call is not a fixed point. Open design question (reported with the
-    // #759 port, alongside QUESTIONS.md Q11); no emitted golden pins these.
-    let open_question: &[&str] = &["constrained_match_scope/fixture.esm"];
     let mut failed = Vec::new();
     let mut checked = 0usize;
     for entry in std::fs::read_dir(&base).expect("read conformance dir") {
@@ -725,7 +718,7 @@ fn emit_load_byte_wise_fixed_point_all_fixtures() {
                 &oob::emit_document(&raw2, &dir).expect("re-emit emitted document"),
             );
             let key = format!("{dname}/{fname}");
-            if s1 != s2 && !open_question.contains(&key.as_str()) {
+            if s1 != s2 {
                 failed.push(key);
             }
             checked += 1;
