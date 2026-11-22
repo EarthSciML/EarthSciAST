@@ -16,7 +16,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 @testset "scope-directed template injection (esm-spec §9.7.10)" begin
     conf(parts...) = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "operators", parts...
+        "expression_templates", parts...
     )
 
     _golden(path) = _normj(JSON3.read(read(path, String)))
@@ -48,14 +48,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
         # The leaf loads standalone with its D intact (agnostic; unlowered).
         leaf = EarthSciAST.load_path(conf("inject_subsystem_ref", "leaf.esm"))
-        @test leaf.models["Advection"].equations[1].rhs.args[2].op == "D"
+        @test leaf.models["Advection"].equations[1].rhs.args[2].op == "partial"
 
         # Negative twin: mounting WITHOUT injection loads cleanly (the D
         # survives — the op namespace is open); the unlowered_operator gate is
         # an evaluation-time concern, not a load error.
         ni = EarthSciAST.load_path(conf("inject_subsystem_ref", "no_inject.esm"))
         @test ni.models["Assembly"].subsystems["Runoff"] isa EarthSciAST.Model
-        @test ni.models["Assembly"].subsystems["Runoff"].equations[1].rhs.args[2].op == "D"
+        @test ni.models["Assembly"].subsystems["Runoff"].equations[1].rhs.args[2].op == "partial"
     end
 
     @testset "form A — the injected ref resolves against the mounting directory" begin
@@ -144,7 +144,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         adv = f.models["Advection"]
         # The enclosing component round-trips with its D INTACT (form C does not
         # lower it at load) and each test keeps its import field (survives emit).
-        @test adv.equations[1].rhs.args[2].op == "D"
+        @test adv.equations[1].rhs.args[2].op == "partial"
         @test length(adv.tests) == 2
         @test all(!isempty(t.expression_template_imports) for t in adv.tests)
         @test _normj(serialize_esm_file(f)) ==
@@ -169,6 +169,6 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test e1.index_sets["lon"].size == 288
         @test e2.index_sets["lon"].size == 144
         # The persisted file is untouched by the ephemeral builds.
-        @test f.models["Advection"].equations[1].rhs.args[2].op == "D"
+        @test f.models["Advection"].equations[1].rhs.args[2].op == "partial"
     end
 end

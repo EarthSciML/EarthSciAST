@@ -1,5 +1,5 @@
 {
-  "expression_templates": {
+  "operators": {
     "pull": {
       "body": {
         "args": [
@@ -8,6 +8,7 @@
         ],
         "op": "*"
       },
+      "defines": "pull",
       "params": [
         "x"
       ]
@@ -20,6 +21,7 @@
         ],
         "op": "*"
       },
+      "defines": "rate",
       "params": [
         "x"
       ]
@@ -32,6 +34,7 @@
         ],
         "op": "*"
       },
+      "defines": "rate",
       "params": [
         "x"
       ]
@@ -45,6 +48,7 @@
         ],
         "op": "*"
       },
+      "defines": "loss",
       "params": [
         "x"
       ]

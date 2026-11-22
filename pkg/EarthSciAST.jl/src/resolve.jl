@@ -385,12 +385,18 @@ end
 # The pointers of the §9.6 constructs in a document: a component's
 # `expression_templates` block, then every `apply_expression_template` node.
 function _expression_template_offences(doc)
+    # The esm-2.4.0 names and their old spellings alike (esm-spec §9.6.5).
     offences = String[]
     for (compkind, cname, comp) in _components(doc)
-        _raw_haskey(comp, "operators") &&
-            push!(offences, "/$compkind/$cname/expression_templates")
+        for k in ("operators", "expression_templates")
+            _raw_haskey(comp, k) && push!(offences, "/$compkind/$cname/$k")
+        end
     end
     _find_apply_paths!(offences, doc, "")
+    _visit_json(doc; path = "") do _, n, ptr
+        _raw_get(n, "op") == "apply_expression_template" && push!(offences, string(ptr))
+        return true
+    end
     return offences
 end
 
@@ -428,14 +434,14 @@ authored, before anything is mounted into it. The `solver.external` and
 const _VERSION_GATES = (
     # §9.6.5: expression templates and their references (RFC §5.4).
     expression_templates = _VersionGate(
-        (0, 4, 0), ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
-        "expression_templates / apply_expression_template require",
+        (0, 4, 0), ERROR_CODES.OPERATOR_VERSION_TOO_OLD,
+        "operators / apply_operator (or expression_templates / apply_expression_template) require",
         (:root, :mounted_leaf, :template_library), _expression_template_offences; all = true
     ),
     # §9.6.5: the §9.7 constructs.
     template_imports = _VersionGate(
-        (0, 8, 0), ERROR_CODES.TEMPLATE_IMPORT_VERSION_TOO_OLD,
-        "expression_template_imports / top-level expression_templates / metaparameters require",
+        (0, 8, 0), ERROR_CODES.OPERATOR_IMPORT_VERSION_TOO_OLD,
+        "operator_imports / top-level operators / metaparameters (or their old spellings) require",
         (:root, :mounted_leaf, :template_library), d -> _template_import_offences(d); all = true
     ),
     # §2.2.4: the top-level `solver` block.

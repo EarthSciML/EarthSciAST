@@ -384,7 +384,7 @@ _tmp_write(dir, name, body) = (write(joinpath(dir, name), body); joinpath(dir, n
         # nothing of the leaf would close at the mount.
         conf = joinpath(
             TESTUTILS_REPO_ROOT, "tests", "conformance",
-            "operators", "inject_subsystem_ref"
+            "expression_templates", "inject_subsystem_ref"
         )
         dir = mktempdir()
         host = _tmp_write(

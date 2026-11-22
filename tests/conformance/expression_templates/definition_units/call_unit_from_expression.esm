@@ -35,6 +35,15 @@
       },
       "equations": [
         {
+          "lhs": "y",
+          "rhs": {
+            "op": "opaque",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
           "lhs": "z",
           "rhs": {
             "op": "opaque",

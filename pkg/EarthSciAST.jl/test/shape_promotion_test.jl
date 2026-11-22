@@ -241,7 +241,7 @@ end
 @testset "shape from a faq's inline ranges" begin
     repo = joinpath(@__DIR__, "..", "..", "..")
     doc = joinpath(
-        repo, "tests", "conformance", "operators",
+        repo, "tests", "conformance", "expression_templates",
         "metaparameter_resolutions", "expanded_n4.esm"
     )
     for compiler in (:interpreter, :native)

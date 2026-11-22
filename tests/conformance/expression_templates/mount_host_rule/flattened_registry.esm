@@ -1,5 +1,5 @@
 {
-  "expression_templates": {
+  "operators": {
     "cube": {
       "body": {
         "args": [
@@ -9,6 +9,7 @@
         ],
         "op": "*"
       },
+      "defines": "cub",
       "params": [
         "a"
       ]
@@ -21,6 +22,7 @@
         ],
         "op": "*"
       },
+      "defines": "rate",
       "params": [
         "x",
         "k"
@@ -34,6 +36,7 @@
         ],
         "op": "+"
       },
+      "defines": "dbl",
       "params": [
         "a"
       ]

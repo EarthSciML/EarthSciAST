@@ -284,7 +284,7 @@ function check_data_source_extents(
         name in reachable && continue
         throw(
             ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+                ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
                 "data_sources.$key.extent binds metaparameter '$name', which neither " *
                     "this document nor any document it mounts declares " *
                     "(esm-spec §8.9.4, §9.7.6)"
@@ -448,7 +448,7 @@ function apply_mount_index_set_rename(
         final = get(changed, name, name)
         final in finals && throw(
             ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
+                ERROR_CODES.OPERATOR_IMPORT_RENAME_COLLISION,
                 "$(where): `index_set_rename` maps two index sets onto '$(final)'; " *
                     "post-rename names must be distinct within one mount edge " *
                     "(esm-spec §4.7 / §9.7.7)"
@@ -522,7 +522,7 @@ function _reject_library_ref(
     if _is_template_library_doc(raw_doc)
         throw(
             ExpressionTemplateError(
-                ERROR_CODES.SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+                ERROR_CODES.SUBSYSTEM_REF_IS_OPERATOR_LIBRARY,
                 "Subsystem ref '$(ref)' targets a template-library file$(suffix); " *
                     "libraries are imported via expression_template_imports (esm-spec §9.7.1)"
             )

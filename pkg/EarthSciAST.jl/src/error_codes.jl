@@ -227,11 +227,11 @@ const ERROR_CODES = (
 
     # ── Expression templates (esm-spec §9.6) + the §9.6.4 post-expansion
     #    validators (templates/declarations.jl, templates/rewrite.jl). ──────
-    APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE = "operator_unknown_definition",
-    APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH = "operator_bindings_mismatch",
-    APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY = "operator_recursive_body",
-    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION = "operator_invalid_definition",
-    APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD = "operator_version_too_old",
+    OPERATOR_UNKNOWN_DEFINITION = "operator_unknown_definition",
+    OPERATOR_BINDINGS_MISMATCH = "operator_bindings_mismatch",
+    OPERATOR_RECURSIVE_BODY = "operator_recursive_body",
+    OPERATOR_INVALID_DEFINITION = "operator_invalid_definition",
+    OPERATOR_VERSION_TOO_OLD = "operator_version_too_old",
     REWRITE_RULE_NONTERMINATING = "rewrite_rule_nonterminating",
     # esm 2.4.0 one operator type (esm-spec §9.6.12): a call whose operator has
     # definitions in scope, none taking its operand count; a definition whose
@@ -240,18 +240,18 @@ const ERROR_CODES = (
     OPERATOR_DEFINES_CORE_OP = "operator_defines_core_op",
     DEFINITION_UNIT_MISMATCH = "definition_unit_mismatch",
     DEPRECATED_FIELD = "deprecated_field",
-    TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "operator_constraint_unknown_index_set",
+    OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET = "operator_constraint_unknown_index_set",
     MAKEARRAY_REGION_INVERTED = "makearray_region_inverted",
     # Flatten-time shadow-registry guard (flatten.jl): a surviving registry
     # body references a variable a coupling `variable_map` rewrote in the
     # flattened equations (esm-spec §9.6.4 / §10.4).
-    TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE = "operator_body_references_coupling_rewritten_variable",
+    OPERATOR_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE = "operator_body_references_coupling_rewritten_variable",
     # Projection-pushdown desugar post-condition (pushdown_rewrite.jl): a rect
     # factor the rewrite must re-point onto the generated per-support cell
     # gathers is named FREE in a template body instead of bound at the call
     # site, so the call-site-only rewrite cannot reach it (esm-spec §9.6.4
     # Option B / CONFORMANCE_SPEC §5.5.7).
-    TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = "operator_body_references_pushdown_rewritten_variable",
+    OPERATOR_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = "operator_body_references_pushdown_rewritten_variable",
 
     # ── Document-scoped solver hints (esm-spec §2.2; solver.jl). ─────────
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old",
@@ -279,25 +279,25 @@ const ERROR_CODES = (
 
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
     #    templates/imports.jl, templates/metaparameters.jl). ───────────────
-    TEMPLATE_IMPORT_VERSION_TOO_OLD = "operator_import_version_too_old",
-    TEMPLATE_IMPORT_UNRESOLVED = "operator_import_unresolved",
-    TEMPLATE_IMPORT_NOT_LIBRARY = "operator_import_not_library",
-    TEMPLATE_IMPORT_IS_COUPLING_LIBRARY = "operator_import_is_coupling_library",
-    TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD = "operator_library_illegal_payload",
-    TEMPLATE_IMPORT_CYCLE = "operator_import_cycle",
-    TEMPLATE_IMPORT_NAME_CONFLICT = "operator_import_name_conflict",
-    TEMPLATE_IMPORT_UNKNOWN_NAME = "operator_import_unknown_name",
-    TEMPLATE_IMPORT_INDEX_SET_CONFLICT = "operator_import_index_set_conflict",
-    TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME = "operator_import_rename_unknown_name",
-    TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME = "operator_import_rebind_unknown_name",
-    TEMPLATE_IMPORT_RENAME_COLLISION = "operator_import_rename_collision",
-    TEMPLATE_IMPORT_RENAME_INVALID = "operator_import_rename_invalid",
-    TEMPLATE_INJECT_TARGET_UNKNOWN = "operator_inject_target_unknown",
-    TEMPLATE_INJECT_TARGET_NOT_COMPONENT = "operator_inject_target_not_component",
+    OPERATOR_IMPORT_VERSION_TOO_OLD = "operator_import_version_too_old",
+    OPERATOR_IMPORT_UNRESOLVED = "operator_import_unresolved",
+    OPERATOR_IMPORT_NOT_LIBRARY = "operator_import_not_library",
+    OPERATOR_IMPORT_IS_COUPLING_LIBRARY = "operator_import_is_coupling_library",
+    OPERATOR_LIBRARY_ILLEGAL_PAYLOAD = "operator_library_illegal_payload",
+    OPERATOR_IMPORT_CYCLE = "operator_import_cycle",
+    OPERATOR_IMPORT_NAME_CONFLICT = "operator_import_name_conflict",
+    OPERATOR_IMPORT_UNKNOWN_NAME = "operator_import_unknown_name",
+    OPERATOR_IMPORT_INDEX_SET_CONFLICT = "operator_import_index_set_conflict",
+    OPERATOR_IMPORT_RENAME_UNKNOWN_NAME = "operator_import_rename_unknown_name",
+    OPERATOR_IMPORT_REBIND_UNKNOWN_NAME = "operator_import_rebind_unknown_name",
+    OPERATOR_IMPORT_RENAME_COLLISION = "operator_import_rename_collision",
+    OPERATOR_IMPORT_RENAME_INVALID = "operator_import_rename_invalid",
+    OPERATOR_INJECT_TARGET_UNKNOWN = "operator_inject_target_unknown",
+    OPERATOR_INJECT_TARGET_NOT_COMPONENT = "operator_inject_target_not_component",
     # Registered for cross-binding parity: Rust raises it, Julia's inject
-    # validator currently folds the case into TEMPLATE_INJECT_TARGET_NOT_COMPONENT.
-    TEMPLATE_INJECT_TARGET_IS_LOADER = "operator_inject_target_is_loader",
-    TEMPLATE_BODY_EXPANSION_TOO_DEEP = "operator_body_expansion_too_deep",
+    # validator currently folds the case into OPERATOR_INJECT_TARGET_NOT_COMPONENT.
+    OPERATOR_INJECT_TARGET_IS_LOADER = "operator_inject_target_is_loader",
+    OPERATOR_BODY_EXPANSION_TOO_DEEP = "operator_body_expansion_too_deep",
     METAPARAMETER_UNBOUND = "metaparameter_unbound",
     METAPARAMETER_TYPE_ERROR = "metaparameter_type_error",
     METAPARAMETER_NAME_CONFLICT = "metaparameter_name_conflict",
@@ -324,7 +324,7 @@ const ERROR_CODES = (
 
     # ── Subsystem-reference / index-set checks raised as an
     #    `ExpressionTemplateError` from the load pipeline (parse.jl). ───────
-    SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY = "subsystem_ref_is_operator_library",
+    SUBSYSTEM_REF_IS_OPERATOR_LIBRARY = "subsystem_ref_is_operator_library",
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library",
     SUBSYSTEM_INDEX_SET_CONFLICT = "subsystem_index_set_conflict",
     # A mount edge's `index_set_rename` names an index set the RESOLVED mounted

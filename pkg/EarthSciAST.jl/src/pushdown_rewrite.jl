@@ -1094,7 +1094,7 @@ function _pd_assert_rects_rebound(
     names = sort!(collect(stale))
     throw(
         ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
+            ERROR_CODES.OPERATOR_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
             "projection-pushdown desugar: the binning aggregate '$(Ename)' still reads " *
                 "'$(join(names, "', '"))' after its reduction axis was re-pointed onto the " *
                 "generated derived support set. Those references live in an expression-template " *

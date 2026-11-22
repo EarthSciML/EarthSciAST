@@ -127,7 +127,7 @@ end
 end
 
 @testset "a call body's reduction over an index set named by a parameter" begin
-    D = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "operators", "ranges_from_param")
+    D = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "expression_templates", "ranges_from_param")
     function du(path, comp)
         (prob, c) = _TV.Internal.counting(() -> _TV.esm_problem(path, (0.0, 1.0); compiler = comp))
         u = copy(prob.u0) .+ 0.1 .* (1:length(prob.u0))
@@ -143,7 +143,7 @@ end
 end
 
 @testset "an elementwise operator over whole array-valued references in a body" begin
-    D = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "operators", "flatten_registry_merge_transitive")
+    D = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "expression_templates", "flatten_registry_merge_transitive")
     mktempdir() do dir
         for lib in ("stencil_lib.esm", "rule_lib.esm")
             cp(joinpath(D, lib), joinpath(dir, lib))

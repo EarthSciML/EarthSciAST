@@ -157,7 +157,7 @@ function _expand_expr_refs(
         _note_expansion!()
         (name !== nothing && reg !== nothing && haskey(reg, name)) || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+                ERROR_CODES.OPERATOR_UNKNOWN_DEFINITION,
                 "apply_expression_template references template " *
                     "'$(name === nothing ? "?" : name)' with no in-scope registry entry"
             )

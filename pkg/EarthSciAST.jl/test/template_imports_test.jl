@@ -19,7 +19,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     repo_root = TESTUTILS_REPO_ROOT
     conf(parts...) = joinpath(
         repo_root, "tests", "conformance",
-        "operators", parts...
+        "expression_templates", parts...
     )
     invalid_dir = joinpath(repo_root, "tests", "invalid", "template_imports")
 
@@ -605,8 +605,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             @test resolved !== nothing
 
             # The DECLARATIONS survive the resolver, verbatim.
-            @test _normj(resolved["operators"]) ==
-                _normj(authored.expression_templates)
+            # (read through the esm 2.4.0 wire spellings, esm-spec §9.6.12)
+            wired = EarthSciAST._wire_old_spellings(authored)
+            @test _normj(resolved["operators"]) == _normj(wired["operators"])
             @test _normj(resolved["metaparameters"]) == _normj(authored.metaparameters)
             # The import EDGE, by contrast, is consumed.
             @test !haskey(resolved, "operator_imports")
@@ -614,7 +615,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             # ...and so does the emitted document, which must itself be a legal,
             # loadable file — the property that was actually broken.
             doc = EarthSciAST.emit_document(JSON3.read(read(src, String)), dirname(src))
-            @test _normj(doc["operators"]) == _normj(authored.expression_templates)
+            @test _normj(doc["operators"]) == _normj(wired["operators"])
             @test _normj(doc["metaparameters"]) == _normj(authored.metaparameters)
             @test any(
                 k -> haskey(doc, k),

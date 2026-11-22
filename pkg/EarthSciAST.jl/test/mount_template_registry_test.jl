@@ -13,7 +13,7 @@ using JSON3
 using OrderedCollections
 using EarthSciAST
 
-const _MTR_DIR = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "operators")
+const _MTR_DIR = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "expression_templates")
 
 _mtr(dir, f) = joinpath(_MTR_DIR, dir, f)
 _mtr_block(reg) = EarthSciAST.emit_esm_string(

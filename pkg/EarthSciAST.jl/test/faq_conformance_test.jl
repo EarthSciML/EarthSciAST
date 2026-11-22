@@ -203,7 +203,7 @@ end
 # above (which DOES declare a registry) and by the build.
 @testset "valid: agnostic leaf's injected {from} index set is not a load error (#185)" begin
     path = joinpath(
-        _AGG_REPO_ROOT, "tests", "conformance", "operators",
+        _AGG_REPO_ROOT, "tests", "conformance", "expression_templates",
         "inject_agnostic_faq", "fixture.esm"
     )
     @test isfile(path)

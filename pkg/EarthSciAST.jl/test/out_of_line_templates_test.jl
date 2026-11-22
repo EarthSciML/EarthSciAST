@@ -28,7 +28,7 @@ end
 @testset "out-of-line expression templates (Option B, esm-spec §9.6.4)" begin
     conf(parts...) = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "operators", parts...
+        "expression_templates", parts...
     )
 
     # Load a fixture under Option B (references preserved), returning the raw
@@ -300,7 +300,7 @@ end
         loaded = _load("opacity_negative")
         d = loaded
         flux = _normj(_ool_defrhs(d["models"]["m"], "flux"))
-        @test flux["op"] == "D"                    # compound did NOT fire (no marker 999)
+        @test flux["op"] == "partial"                    # compound did NOT fire (no marker 999)
         @test _isapply(flux["args"][1])            # its arg is the surviving reference
         @test flux["args"][1]["name"] == "flux_prod"
         @test _emit("opacity_negative") ==

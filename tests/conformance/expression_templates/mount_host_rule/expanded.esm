@@ -1,5 +1,5 @@
 {
-  "esm": "2.0.0",
+  "esm": "2.4.0",
   "metadata": {
     "description": "esm-spec §9.6.3/§9.6.4: a `match` rule of the mounting component fires on the content of the models it mounts (§4.7), at any depth, as it does on an authored subsystem's. Host's rule `cube` matches the `cub` nodes in the mounted leaf Sub's equations, including one inside the binding of Sub's surviving reference to its own template `rate`; in the leaf Deep that Sub mounts, inside the reference Sub's own rule `twice` wrote there; and in the mounted leaf Bare, which declares no templates at all. Each rewritten node becomes a reference to `cube`. Sub's rule `twice` fired in Sub's file and travels materialized match-less.",
     "name": "mount_host_rule"

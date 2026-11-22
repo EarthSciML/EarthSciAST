@@ -115,7 +115,7 @@ function _resolve_apply_site(
     name_raw = _raw_get(node, "name")
     name_raw === nothing && throw(
         ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+            ERROR_CODES.OPERATOR_INVALID_DEFINITION,
             "$scope: apply_expression_template node missing 'name'"
         )
     )
@@ -123,14 +123,14 @@ function _resolve_apply_site(
     decl = get(templates, name, nothing)
     decl === nothing && throw(
         ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+            ERROR_CODES.OPERATOR_UNKNOWN_DEFINITION,
             "$scope: apply_expression_template references undeclared template '$name'"
         )
     )
     if reject_match_rule && _raw_get(decl, "match") !== nothing
         throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+                ERROR_CODES.OPERATOR_UNKNOWN_DEFINITION,
                 "$scope: apply_expression_template references '$name', a `match` " *
                     "rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)"
             )
@@ -139,7 +139,7 @@ function _resolve_apply_site(
     bindings_raw = _raw_get(node, "bindings")
     (bindings_raw === nothing || !_is_object(bindings_raw)) && throw(
         ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+            ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
             "$scope: apply_expression_template '$name' missing 'bindings' object"
         )
     )
@@ -149,7 +149,7 @@ function _resolve_apply_site(
     for p in decl_params
         p in provided || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "$scope: apply_expression_template '$name' missing binding for param '$p'"
             )
         )
@@ -157,7 +157,7 @@ function _resolve_apply_site(
     for p in provided
         p in declared || throw(
             ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                ERROR_CODES.OPERATOR_BINDINGS_MISMATCH,
                 "$scope: apply_expression_template '$name' supplies unknown param '$p'"
             )
         )
@@ -546,7 +546,7 @@ function _registered_where(
         for s in req
             s in iset_names || throw(
                 ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
+                    ERROR_CODES.OPERATOR_CONSTRAINT_UNKNOWN_INDEX_SET,
                     "$scope.expression_templates.$tname: where.$(string(p)).shape " *
                         "names index set '$s', which the consuming document's " *
                         "index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)"
@@ -1204,15 +1204,26 @@ Each mounted model's own references are renamed here, in place; the caller
 applies `own_rename` (old name => new name, or `nothing`) to the component's
 other sites. `own`'s `match` rules are kept, ahead of the merged entries.
 """
+# `decl` carrying its `defines` (inferred under `name` when absent).
+function _with_defines(name::String, decl)
+    (_is_object(decl) && _raw_get(decl, "defines") === nothing) || return decl
+    nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl))
+    nd["defines"] = _definition_defines(name, decl)
+    return nd
+end
+
 function _merge_mounted_blocks(own, cname::String, mounts)
     blocks = OrderedDict{String, Any}()
+    # Each entry records the defined operator it defines under the key it was
+    # declared with, before a collision rename (esm-spec §9.6.12 "Provenance").
     blocks["models.$cname"] = OrderedDict{String, Any}(
-        string(n) => d for (n, d) in pairs(_is_object(own) ? own : Dict{String, Any}())
+        string(n) => _with_defines(string(n), d)
+            for (n, d) in pairs(_is_object(own) ? own : Dict{String, Any}())
             if _raw_get(d, "match") === nothing
     )
     for (path, sub) in mounts
         blocks["models.$path"] = OrderedDict{String, Any}(
-            string(n) => d for (n, d) in pairs(_raw_get(sub, "operators"))
+            string(n) => _with_defines(string(n), d) for (n, d) in pairs(_raw_get(sub, "operators"))
                 if _raw_get(d, "match") === nothing
         )
     end

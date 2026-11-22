@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.4.0",
   "index_sets": {
     "lat": {
       "kind": "interval",

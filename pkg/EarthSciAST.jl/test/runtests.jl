@@ -292,6 +292,7 @@ const GROUPS = [
         "stdlib_refs_test.jl",
         "scope_injection_test.jl",
         "out_of_line_templates_test.jl",
+        "one_operator_type_test.jl",
         "compile_once_templates_test.jl",
         "template_instance_functions_test.jl",
         "template_frames_test.jl",

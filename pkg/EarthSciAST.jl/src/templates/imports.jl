@@ -61,14 +61,16 @@ reject_template_imports_pre_v08(raw_data) =
 # The pointers of the §9.7 constructs in a document, in the order the version
 # gate reports them.
 function _template_import_offences(raw_data)
+    # The gate applies to the esm-2.4.0 names and their old spellings alike
+    # (esm-spec §9.6.5).
     offences = String[]
-    _raw_haskey(raw_data, "operators") && push!(offences, "/expression_templates")
-    _raw_haskey(raw_data, "metaparameters") && push!(offences, "/metaparameters")
-    _raw_haskey(raw_data, "operator_imports") &&
-        push!(offences, "/expression_template_imports")
+    for k in ("operators", "expression_templates", "metaparameters", "operator_imports", "expression_template_imports")
+        _raw_haskey(raw_data, k) && push!(offences, "/$k")
+    end
     for (compkind, cname, comp) in _components(raw_data)
-        _raw_haskey(comp, "operator_imports") &&
-            push!(offences, "/$compkind/$cname/expression_template_imports")
+        for k in ("operator_imports", "expression_template_imports")
+            _raw_haskey(comp, k) && push!(offences, "/$compkind/$cname/$k")
+        end
     end
     return offences
 end
@@ -100,7 +102,7 @@ function _reject_impure_template_library(raw_data)
     isempty(present) && return
     throw(
         ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
+            ERROR_CODES.OPERATOR_LIBRARY_ILLEGAL_PAYLOAD,
             "top-level `expression_templates` makes this document a template-library file, which MUST NOT declare " *
                 join(("`$k`" for k in present), ", ") *
                 " (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own `expression_templates` block (§9.6.1), or move them to a template-library file and import it with `expression_template_imports` (§9.7.2)"
@@ -155,17 +157,17 @@ function _name_map(raw, field::String, ctx::String)::OrderedDict{String, String}
     out = OrderedDict{String, String}()
     raw === nothing && return out
     _is_object(raw) || _bad_edge(
-        ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+        ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID, ctx,
         "`$field` must be an object mapping names to names (esm-spec §9.7.7)"
     )
     for (k, v) in pairs(raw)
         ks = string(k)
         isempty(ks) && _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+            ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID, ctx,
             "`$field` has an empty key (esm-spec §9.7.7)"
         )
         (v isa AbstractString && _is_valid_dotted_name(string(v))) || _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+            ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID, ctx,
             "`$field`.$ks target $(repr(v)) is not a valid dotted identifier " *
                 _DOTTED_NAME_RULE
         )
@@ -430,12 +432,12 @@ end
 
 function _ImportEdge(entry, origin::String)
     _is_object(entry) || _bad_edge(
-        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED, origin,
+        ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED, origin,
         "expression_template_imports entries must be objects with a `ref` field"
     )
     ref_raw = _raw_get(entry, "ref")
     (ref_raw isa AbstractString && !isempty(string(ref_raw))) || _bad_edge(
-        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED, origin,
+        ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED, origin,
         "expression_template_imports entry requires a non-empty string `ref`"
     )
     ref = string(ref_raw)
@@ -468,7 +470,7 @@ function _edge_name_maps(scope::_TemplateScope, edge::_ImportEdge)
     if prefix_raw !== nothing &&
             !(prefix_raw isa AbstractString && _is_valid_dotted_name(string(prefix_raw)))
         _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+            ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID, ctx,
             "`prefix` $(repr(prefix_raw)) is not a valid dotted identifier $(_DOTTED_NAME_RULE)"
         )
     end
@@ -482,7 +484,7 @@ function _edge_name_maps(scope::_TemplateScope, edge::_ImportEdge)
     union!(exported, keys(scope.metaparams))
     for k in keys(rename)
         k in exported || _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME, ctx,
+            ERROR_CODES.OPERATOR_IMPORT_RENAME_UNKNOWN_NAME, ctx,
             "`rename` names '$k', which the target does not export at this " *
                 "edge (the surviving exports are templates after `only`, index sets, and " *
                 "metaparameters left open by this edge's `bindings`; esm-spec §9.7.7)"
@@ -502,7 +504,7 @@ function _edge_name_maps(scope::_TemplateScope, edge::_ImportEdge)
         seen = Dict{String, String}()
         for (o, n) in m
             haskey(seen, n) && _bad_edge(
-                ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION, ctx,
+                ERROR_CODES.OPERATOR_IMPORT_RENAME_COLLISION, ctx,
                 "$what names '$(seen[n])' and '$o' both map to '$n' after " *
                     "renaming (esm-spec §9.7.7)"
             )
@@ -540,18 +542,18 @@ function _check_rebind(scope::_TemplateScope, maps, ctx::String)
 
     for k in keys(maps.rebind)
         k in maps.exported && _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME, ctx,
+            ERROR_CODES.OPERATOR_IMPORT_REBIND_UNKNOWN_NAME, ctx,
             "`rebind` names '$k', a declared name of the target (template / " *
                 "index set / metaparameter) — `rebind` addresses only free names; use " *
                 "`rename` for declared names (esm-spec §9.7.7)"
         )
         k in bound && _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+            ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID, ctx,
             "`rebind` key '$k' is a bound index symbol (`output_idx` / " *
                 "`ranges`) of an imported template, not a free name (esm-spec §9.7.7)"
         )
         k in free || _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME, ctx,
+            ERROR_CODES.OPERATOR_IMPORT_REBIND_UNKNOWN_NAME, ctx,
             "`rebind` names '$k', which does not occur free in the imported " *
                 "declarations (esm-spec §9.7.7)"
         )
@@ -567,7 +569,7 @@ function _check_rebind(scope::_TemplateScope, maps, ctx::String)
     end
     for t in newnames
         t in taken && _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION, ctx,
+            ERROR_CODES.OPERATOR_IMPORT_RENAME_COLLISION, ctx,
             "renamed/rebound name '$t' collides with a name still in use " *
                 "inside the imported declarations (a remaining free name, a bound index " *
                 "symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)"
@@ -693,19 +695,19 @@ function _merge_scope!(dst::_TemplateScope, src::_TemplateScope, origin::String)
     for (n, d) in src.templates
         _merge_named!(
             dst.templates, n, d,
-            ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, "template", origin
+            ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT, "template", origin
         )
     end
     for (n, d) in src.index_sets
         _merge_named!(
             dst.index_sets, n, d,
-            ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT, "index set", origin
+            ERROR_CODES.OPERATOR_IMPORT_INDEX_SET_CONFLICT, "index set", origin
         )
     end
     for (n, d) in src.metaparams
         _merge_named!(
             dst.metaparams, n, d,
-            ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, "metaparameter", origin
+            ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT, "metaparameter", origin
         )
     end
     return
@@ -738,7 +740,7 @@ end
 # §9.7.4/§9.7.5 dedup/conflict rules.
 function _merge_own_templates!(dst::OrderedDict{String, Any}, raw, origin::String)
     for (n, d) in _collect_own_templates(raw, origin)
-        _merge_named!(dst, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, "template", origin)
+        _merge_named!(dst, n, d, ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT, "template", origin)
     end
     return dst
 end
@@ -753,13 +755,13 @@ function _merge_scope_registries!(
     )
     for (n, d) in scope.index_sets
         _merge_named!(
-            doc_isets, n, d, ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+            doc_isets, n, d, ERROR_CODES.OPERATOR_IMPORT_INDEX_SET_CONFLICT,
             "index set", origin
         )
     end
     for (n, d) in scope.metaparams
         _merge_named!(
-            doc_meta, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+            doc_meta, n, d, ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT,
             "metaparameter", origin
         )
     end
@@ -832,7 +834,7 @@ function _library_unreadable(u::_RefUnreadable, origin::String)
         "$origin: template-library file could not be read: $(t.key) " *
             "(from ref '$(t.authored)'): $(_unreadable_cause(u))"
     end
-    return ExpressionTemplateError(ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED, msg)
+    return ExpressionTemplateError(ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED, msg)
 end
 
 """
@@ -871,7 +873,7 @@ function _load_library(edge::_ImportEdge, base::_RefBase, stack::Vector{String},
     if canonical in stack
         cyc = vcat(stack[findfirst(==(canonical), stack):end], [canonical])
         _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_CYCLE, origin,
+            ERROR_CODES.OPERATOR_IMPORT_CYCLE, origin,
             "import-graph cycle detected: $(join(cyc, " -> ")) (esm-spec §9.7.2)"
         )
     end
@@ -882,24 +884,24 @@ function _load_library(edge::_ImportEdge, base::_RefBase, stack::Vector{String},
     # Library purity (esm-spec §9.7.1): a component file and a coupling-library
     # file are not importable as a template library.
     _is_coupling_library_doc(raw) && _bad_edge(
-        ERROR_CODES.TEMPLATE_IMPORT_IS_COUPLING_LIBRARY, origin,
+        ERROR_CODES.OPERATOR_IMPORT_IS_COUPLING_LIBRARY, origin,
         "import target '$ref' is a coupling-library file " *
             "(has `coupling_roles`), not a template library (esm-spec §10.9)"
     )
     _is_template_library_doc(raw) || _bad_edge(
-        ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY, origin,
+        ERROR_CODES.OPERATOR_IMPORT_NOT_LIBRARY, origin,
         "import target '$ref' lacks top-level `expression_templates` — " *
             "not a template-library file (esm-spec §9.7.1)"
     )
     for k in _LIBRARY_FORBIDDEN_KEYS
         _raw_haskey(raw, k) && _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY, origin,
+            ERROR_CODES.OPERATOR_IMPORT_NOT_LIBRARY, origin,
             "import target '$ref' declares `$k` — not a pure template-library file (esm-spec §9.7.1)"
         )
     end
     schema_errors = validate_schema(raw)
     isempty(schema_errors) || _bad_edge(
-        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED, origin,
+        ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED, origin,
         "import target '$ref' failed schema validation: " *
             "$(schema_errors[1].path): $(schema_errors[1].message)"
     )
@@ -930,7 +932,7 @@ function _bind_edge!(scope::_TemplateScope, edge::_ImportEdge)
     for (k, v) in pairs(edge.bindings)
         name = string(k)
         haskey(scope.metaparams, name) || _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME, origin,
+            ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME, origin,
             "import of '$ref' binds metaparameter '$name', which the " *
                 "target neither declares nor re-exports (esm-spec §9.7.6)"
         )
@@ -961,7 +963,7 @@ function _filter_only!(scope::_TemplateScope, edge::_ImportEdge)
     keep === nothing && return scope
     for n in keep
         haskey(scope.templates, n) || _bad_edge(
-            ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME, edge.origin,
+            ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME, edge.origin,
             "`only` names template '$n', which '$(edge.ref)' does not declare (esm-spec §9.7.2)"
         )
     end
@@ -1002,7 +1004,7 @@ function _process_library(
     end
     for (n, d) in own
         _merge_named!(
-            scope.templates, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+            scope.templates, n, d, ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT,
             "template", origin
         )
     end
@@ -1012,14 +1014,14 @@ function _process_library(
         for (n, d) in pairs(isets)
             _merge_named!(
                 scope.index_sets, string(n), _to_ordered(d),
-                ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT, "index set", origin
+                ERROR_CODES.OPERATOR_IMPORT_INDEX_SET_CONFLICT, "index set", origin
             )
         end
     end
 
     for (n, d) in _collect_metaparam_decls(raw, origin)
         _merge_named!(
-            scope.metaparams, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+            scope.metaparams, n, d, ERROR_CODES.OPERATOR_IMPORT_NAME_CONFLICT,
             "metaparameter", origin
         )
     end
@@ -1354,7 +1356,7 @@ function _resolve_template_machinery(
         )
         isempty(unknown) || throw(
             ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+                ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
                 "loader API binds metaparameter(s) $(join(unknown, ", ")) which neither " *
                     "this document nor any document it mounts declares (esm-spec §9.7.6)"
             )
@@ -1590,7 +1592,7 @@ function _apply_coupling_injections!(root::AbstractDict)
         inj === nothing && continue
         inj isa AbstractDict || throw(
             ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
+                ERROR_CODES.OPERATOR_INJECT_TARGET_NOT_COMPONENT,
                 "coupling entry `expression_template_imports` must be a map from a " *
                     "target system name to a list of imports (esm-spec §9.7.10 / §10.8)"
             )
@@ -1600,7 +1602,7 @@ function _apply_coupling_injections!(root::AbstractDict)
             tname = string(target)
             (tname in referenced) || throw(
                 ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_INJECT_TARGET_UNKNOWN,
+                    ERROR_CODES.OPERATOR_INJECT_TARGET_UNKNOWN,
                     "coupling entry `expression_template_imports` key '$tname' names no " *
                         "system referenced by that entry (esm-spec §9.7.10 / §10.8). " *
                         "The entry references: " *
@@ -1614,7 +1616,7 @@ function _apply_coupling_injections!(root::AbstractDict)
             else
                 throw(
                     ExpressionTemplateError(
-                        ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
+                        ERROR_CODES.OPERATOR_INJECT_TARGET_NOT_COMPONENT,
                         "coupling entry `expression_template_imports` key '$tname' resolves to " *
                             "neither a top-level model nor a reaction system " *
                             "(esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope."
@@ -1623,14 +1625,14 @@ function _apply_coupling_injections!(root::AbstractDict)
             end
             comp isa AbstractDict || throw(
                 ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
+                    ERROR_CODES.OPERATOR_INJECT_TARGET_NOT_COMPONENT,
                     "coupling entry `expression_template_imports` key '$tname' does not name a " *
                         "component object (esm-spec §9.7.10)."
                 )
             )
             imports isa AbstractVector || throw(
                 ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
+                    ERROR_CODES.OPERATOR_IMPORT_NOT_LIBRARY,
                     "coupling entry `expression_template_imports` value for '$tname' must be a " *
                         "list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8)."
                 )

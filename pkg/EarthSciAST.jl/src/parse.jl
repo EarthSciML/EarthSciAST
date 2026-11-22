@@ -867,7 +867,7 @@ function _coerce_subsystem_entry(name::String, v)
                 OrderedDict{String, String}()
             _is_object(rename_raw) || throw(
                 ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+                    ERROR_CODES.OPERATOR_IMPORT_RENAME_INVALID,
                     "subsystems.$(name): `index_set_rename` must be an object mapping " *
                         "index-set names to names (esm-spec §4.7)"
                 )

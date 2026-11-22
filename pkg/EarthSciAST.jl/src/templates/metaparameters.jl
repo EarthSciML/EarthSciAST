@@ -209,6 +209,8 @@ const _NAME_KEYED_MAP_KEYS = Set{String}(
         "operators", "ranges", "bindings", "config", "coords",
         "initial_conditions", "parameter_overrides", "pinned_coords", "map",
         "rename", "rebind", "index_set_rename", "url_substitutions", "where",
+        # The old spelling of `operators` (read as it at the wire boundary).
+        "expression_templates",
     ]
 )
 
@@ -478,7 +480,7 @@ function eval_meta_expr(expr, env::AbstractDict{String, <:Integer}, ctx::String)
         free = sort(unique(String[n for n in _collect_names!(String[], expr) if !haskey(env, n)]))
         throw(
             ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+                ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
                 "$ctx: metaparameter expression references " *
                     "$(isempty(free) ? "a name" : join(free, ", ")) not in the importing " *
                     "document's metaparameter scope (esm-spec §9.7.6)"
@@ -611,7 +613,7 @@ function _close_document_metaparams(
     for k in sort(collect(keys(api)))
         (haskey(doc_meta, k) || k in mount_declared) || throw(
             ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+                ERROR_CODES.OPERATOR_IMPORT_UNKNOWN_NAME,
                 "loader API binds metaparameter '$k', which neither this document " *
                     "nor any document it mounts declares (esm-spec §9.7.6)"
             )

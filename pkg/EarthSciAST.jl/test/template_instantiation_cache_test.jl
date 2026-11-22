@@ -133,7 +133,7 @@ end
     @testset "agrees with the direct route on the template conformance tiers" begin
         root = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance")
         n = 0
-        for tier in ("interp_templates", "datetime_templates", "relational_templates", "geometry_templates", "operators", "template_array_args")
+        for tier in ("interp_templates", "datetime_templates", "relational_templates", "geometry_templates", "expression_templates", "template_array_args")
             for (d, _, fs) in walkdir(joinpath(root, tier)), f in fs
                 endswith(f, ".esm") || continue
                 file = try

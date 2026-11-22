@@ -223,11 +223,11 @@ end
         repo_root = TESTUTILS_REPO_ROOT
         fixture_path = joinpath(
             repo_root, "tests", "conformance",
-            "operators", "arrhenius_smoke", "fixture.esm"
+            "expression_templates", "arrhenius_smoke", "fixture.esm"
         )
         expanded_path = joinpath(
             repo_root, "tests", "conformance",
-            "operators", "arrhenius_smoke", "expanded.esm"
+            "expression_templates", "arrhenius_smoke", "expanded.esm"
         )
         raw = JSON3.read(read(fixture_path, String))
         expanded_via_pass = _lowerx(raw)
@@ -246,7 +246,7 @@ end
         repo_root = TESTUTILS_REPO_ROOT
         case = joinpath(
             repo_root, "tests", "conformance",
-            "operators", "coupling_transform_expression"
+            "expression_templates", "coupling_transform_expression"
         )
         raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
         expanded_via_pass = _lowerx(raw)
@@ -298,7 +298,7 @@ end
 @testset "expression_templates rewrite engine — 0.8.0 outermost-first + fixpoint" begin
     _conf(fix) = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "operators", fix
+        "expression_templates", fix
     )
 
     function _lower_conf(fix)
@@ -551,7 +551,7 @@ end
     # pinned Julia-generated expanded.esm.
     case = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "operators", "scalar_field_param"
+        "expression_templates", "scalar_field_param"
     )
     raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
     out = _lowerx(raw)
@@ -566,7 +566,7 @@ end
     # priority/declaration-order selection.
     _conf2(fix) = joinpath(
         TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "operators", fix
+        "expression_templates", fix
     )
     _nw(x) =
         (x isa AbstractDict || x isa JSON3.Object) ?
@@ -858,7 +858,7 @@ end
         text = read(joinpath(root, file), String)
         # First argument of each raise site: `ERROR_CODES.<FIELD>`. The sites in
         # templates/imports.jl `_merge_named!` pass the code through a variable
-        # (TEMPLATE_IMPORT_NAME_CONFLICT / TEMPLATE_IMPORT_INDEX_SET_CONFLICT —
+        # (OPERATOR_IMPORT_NAME_CONFLICT / OPERATOR_IMPORT_INDEX_SET_CONFLICT —
         # asserted registered below) and are deliberately not matched here.
         for m in eachmatch(r"ExpressionTemplateError\(\s*ERROR_CODES\.([A-Z][A-Z0-9_]*)", text)
             push!(raised, getproperty(EarthSciAST.ERROR_CODES, Symbol(m.captures[1])))

@@ -2197,7 +2197,12 @@ function _fixed_unit_expr(decl)
     return nothing
 end
 
-const _DEFINITION_UNIT_WARNED = Set{String}()
+# The prefix of a `definition_unit_mismatch` WARNING carried through a findings
+# list (esm-spec §9.6.12: the body's unit is undeterminable). Every reader of a
+# findings list sorts these out (`_split_unit_warnings`); they never count as
+# a provable inconsistency.
+const _DEFINITION_UNIT_WARNING = "definition_unit_mismatch (warning)"
+_is_unit_warning(m) = m isa AbstractString && startswith(m, _DEFINITION_UNIT_WARNING)
 
 # A call's unit (esm-spec §9.6.12 "Units"): the definition's unit expression when
 # it has one, else the body's unit `body_u`; a disagreement between them, or
@@ -2219,11 +2224,12 @@ function _definition_call_unit!(findings, call::OpExpr, fr, args, body_u, var_un
     for (what, want) in (("its unit expression", declared), ("the fixed unit expression of '$(_raw_get(decl, "defines"))'", fixed_u))
         want === nothing && continue
         if body_u === nothing
-            key = string(call.name, "\0", what)
-            if !(key in _DEFINITION_UNIT_WARNED)
-                push!(_DEFINITION_UNIT_WARNED, key)
-                @warn "definition_unit_mismatch: the body of definition '$(call.name)' has an undeterminable unit, so it cannot be checked against $what ('$(_ustr(want))') (esm-spec §9.6.12)"
-            end
+            push!(
+                findings,
+                "$(_DEFINITION_UNIT_WARNING): the body of definition '$(call.name)' has an " *
+                    "undeterminable unit, so it cannot be checked against $what " *
+                    "('$(_ustr(want))') (esm-spec §9.6.12)"
+            )
         elseif !_same_unit(body_u, want)
             push!(
                 findings,
@@ -2331,7 +2337,7 @@ function expression_unit_findings(
     )::Vector{String}
     findings = String[]
     _expr_dimensions!(findings, expr, _with_literal_rule(var_units, dimensionless_literals))
-    return findings
+    return filter!(!_is_unit_warning, findings)
 end
 
 """
@@ -2453,7 +2459,7 @@ end
 # anywhere in the site, internal or between the sides.
 function _site_findings(lhs, rhs, var_units)::Vector{String}
     internal, comparison = _site_check(lhs, rhs, var_units)
-    return vcat(internal, comparison)
+    return filter(!_is_unit_warning, vcat(internal, comparison))
 end
 
 # The operand `x` when `lhs` is `D(x)` taken with respect to an independent
@@ -2703,6 +2709,11 @@ end
 function _unit_site!(errors, warnings, c, pointer, p, kind, lhs, rhs, env)
     internal, comparison = _site_check(lhs, rhs, env)
     sub = _unit_site_subpath(p, kind)
+    # esm-spec §9.6.12: an undeterminable definition body is a warning.
+    for m in unique(filter(_is_unit_warning, internal))
+        push!(warnings, UnitFinding(sub, string(pointer, "/", sub, ": ", m), ERROR_CODES.DEFINITION_UNIT_MISMATCH))
+    end
+    filter!(!_is_unit_warning, internal)
     if !(isempty(internal) && isempty(comparison))
         if kind === :equation_rhs && c isa Model && lhs isa VarExpr &&
                 haskey(c.variables, lhs.name)
