@@ -65,6 +65,10 @@ func definitionDefines(name string, decl map[string]any) string {
 // defines no callable name, so its `defines` is provenance only and is not
 // checked.
 func checkDefinesNotCore(name string, decl map[string]any, scope string) error {
+	// A `reference_only` definition is reached by no call (esm-spec §9.6.1).
+	if isReferenceOnly(decl) {
+		return nil
+	}
 	if r, ok := matchRootOp(decl); ok && isCoreOp(r) {
 		return nil
 	}
@@ -75,6 +79,13 @@ func checkDefinesNotCore(name string, decl map[string]any, scope string) error {
 				"core operator's name (esm-spec §9.6.12, \"Core names are reserved\")", scope, name, d))
 	}
 	return nil
+}
+
+// isReferenceOnly reports whether a definition carries `reference_only: true`:
+// it is reached by explicit references only, never by a call (esm-spec §9.6.1).
+func isReferenceOnly(decl map[string]any) bool {
+	b, ok := decl["reference_only"].(bool)
+	return ok && b
 }
 
 // withDefines returns decl carrying its `defines` (inferred under name when

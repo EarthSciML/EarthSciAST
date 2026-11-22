@@ -64,6 +64,7 @@ type oldSpellingEdit struct {
 	replacement string
 	site        string
 	field       bool
+	nosite      bool // a silent reading (the independent variable's `wrt`)
 }
 
 // a `D` whose rewrite waits on the params of its enclosing definition.
@@ -72,6 +73,8 @@ type pendingD struct {
 	entry int    // the enclosing definition's index in oldSpellingWalker.entries, or -1
 	wrt   string // the `wrt` string, "" when it is not a string
 	isStr bool
+	// the byte span of the `wrt` string, for the independent-variable reading
+	wrtStart, wrtEnd int
 }
 
 type oldSpellingWalker struct {
@@ -102,9 +105,18 @@ func rewriteOldSpellings(jsonStr string) (string, []string, []string, error) {
 		}
 		return jsonStr, nil, nil, nil
 	}
+	iv := documentIVRename(jsonStr)
 	for _, p := range w.pending {
 		if p.isStr && p.entry >= 0 && w.entries[p.entry] != nil && w.entries[p.entry][p.wrt] {
 			continue // decided per instance
+		}
+		if iv != "" && p.isStr && p.wrt == iv && p.wrtStart >= 0 {
+			// esm-spec §4.2 "The derivative axis": a `wrt` naming the document's
+			// renamed independent variable is the time derivative, read with the
+			// literal axis, silently.
+			w.edits = append(w.edits, oldSpellingEdit{start: p.wrtStart, end: p.wrtEnd,
+				replacement: DefaultIndepVar, nosite: true})
+			continue
 		}
 		w.edits = append(w.edits, p.edit)
 	}
@@ -119,6 +131,9 @@ func rewriteOldSpellings(jsonStr string) (string, []string, []string, error) {
 		b.WriteString(jsonStr[prev:e.start])
 		b.WriteString(`"` + e.replacement + `"`)
 		prev = e.end
+		if e.nosite {
+			continue
+		}
 		if e.field {
 			fsites = append(fsites, e.site)
 		} else {
@@ -127,6 +142,24 @@ func rewriteOldSpellings(jsonStr string) (string, []string, []string, error) {
 	}
 	b.WriteString(jsonStr[prev:])
 	return b.String(), fsites, osites, nil
+}
+
+// documentIVRename is the document's own renamed independent variable
+// (`domain.independent_variable` when declared and not "t"), or "" (esm-spec
+// §4.2 "The derivative axis").
+func documentIVRename(jsonStr string) string {
+	var probe struct {
+		Domain struct {
+			IV any `json:"independent_variable"`
+		} `json:"domain"`
+	}
+	if json.Unmarshal([]byte(jsonStr), &probe) != nil {
+		return ""
+	}
+	if s, ok := probe.Domain.IV.(string); ok && s != DefaultIndepVar {
+		return s
+	}
+	return ""
 }
 
 // mayHoldOldSpellings is the cheap filter: text with none of the old names
@@ -207,6 +240,7 @@ func (w *oldSpellingWalker) object(pointer string, namemap bool, entry int, defB
 	var (
 		op               string
 		opStart, opEnd   = -1, -1
+		wrtStart, wrtEnd = -1, -1
 		wrt              string
 		wrtStr, wrtFound bool
 		seen             = map[string]bool{}
@@ -283,6 +317,7 @@ func (w *oldSpellingWalker) object(pointer string, namemap bool, entry int, defB
 				// JSON null: no `wrt` (esm-spec §4.2: an absent `wrt` means `t`).
 			case string:
 				wrtFound, wrtStr, wrt = true, true, v
+				wrtStart, wrtEnd = w.span(v)
 			default:
 				wrtFound = true
 			}
@@ -332,7 +367,7 @@ func (w *oldSpellingWalker) object(pointer string, namemap bool, entry int, defB
 		w.pending = append(w.pending, pendingD{
 			edit: oldSpellingEdit{start: opStart, end: opEnd, replacement: opPartial,
 				site: fmt.Sprintf("%s (D)", pointer)},
-			entry: entry, wrt: wrt, isStr: wrtStr,
+			entry: entry, wrt: wrt, isStr: wrtStr, wrtStart: wrtStart, wrtEnd: wrtEnd,
 		})
 	}
 	return nil
