@@ -122,7 +122,7 @@ def kwStart (t : Tok) : Prop := ∃ k, t = .kw k ∧ startA t = true ∧ k ≠ .
 
 theorem headOK_kw (c : Ctx) (t : Tok) (r : List Tok) (h : kwStart t) : HeadOK c (t :: r) := by
   obtain ⟨k, rfl, h1, h2, h3⟩ := h
-  exact ⟨fun e => h2 (by cases e; rfl), fun e => h3 (by cases e; rfl), by simp, by simp, by simp,
+  exact ⟨fun e => h2 (by cases e; rfl), fun e => absurd (by cases e; rfl) h3, by simp, by simp, by simp,
     Or.inl h1⟩
 
 theorem unToks_head (sf : Sf) (o : String) (k : Kw) (hk : (o, k) ∈ unKw) (t : List Tok) :

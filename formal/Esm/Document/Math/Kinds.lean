@@ -59,9 +59,23 @@ theorem kindOf_mm {o : String} {k : Kw} (h : kindOf o = .mm k) :
     (by intro e; cases e)
   simp only [kindTable, List.mem_cons, Prod.mk.injEq, List.mem_nil_iff, or_false] at hm
   rcases hm with ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ |
-    ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨h1, e⟩ | ⟨h1, e⟩ <;> cases e
+    ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨h1, e⟩ | ⟨h1, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ <;> cases e
   · exact Or.inl ⟨h1, rfl⟩
   · exact Or.inr ⟨h1, rfl⟩
+
+theorem kindOf_nab {o : String} {n : NabK} (h : kindOf o = .nab n) :
+    (o = "grad" ∧ n = .grad) ∨ (o = "div" ∧ n = .div) ∨ (o = "laplacian" ∧ n = .lap) ∨
+      (o = "curl" ∧ n = .curl) := by
+  have hm := kindOf_table h (by intro _ e; cases e) (by intro _ e; cases e) (by intro e; cases e)
+    (by intro e; cases e)
+  simp only [kindTable, List.mem_cons, Prod.mk.injEq, List.mem_nil_iff, or_false] at hm
+  rcases hm with ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ |
+    ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨_, e⟩ | ⟨h1, e⟩ | ⟨h1, e⟩ | ⟨h1, e⟩ | ⟨h1, e⟩ <;>
+    cases e
+  · exact Or.inl ⟨h1, rfl⟩
+  · exact Or.inr (Or.inl ⟨h1, rfl⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨h1, rfl⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨h1, rfl⟩))
 
 theorem kindOf_call {o : String} (h : kindOf o = .call) : callOps.contains o = true := by
   unfold kindOf at h
