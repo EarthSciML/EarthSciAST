@@ -1401,11 +1401,11 @@ def _ephemeral_injected_file(
         comp = comps[mname]
         if not isinstance(comp, dict):
             continue
-        existing = comp.get("expression_template_imports")
+        existing = comp.get("operator_imports")
         base = list(existing) if isinstance(existing, list) else []
         for e in imports:
             base.append(copy.deepcopy(e))
-        comp["expression_template_imports"] = base
+        comp["operator_imports"] = base
         injected = True
         break
     if not injected:

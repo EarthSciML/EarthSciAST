@@ -258,7 +258,7 @@ def faq_bare_array_operands(
 
     def walk(node: Any, bound: frozenset[str]) -> None:
         op = _faq_field(node, "op")
-        if op is None or op == "apply_expression_template":
+        if op is None or op == "apply_operator":
             return
         if op == "faq":
             syms = set(_faq_field(node, "output_idx") or [])

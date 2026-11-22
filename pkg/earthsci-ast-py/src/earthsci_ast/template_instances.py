@@ -229,7 +229,7 @@ def _instance(
     r = st.done.get(key)
     if r is not None:
         return r
-    tscope = f"{st.L.scope}.expression_templates.{name}"
+    tscope = f"{st.L.scope}.operators.{name}"
     if key in st.active:
         raise _nonterminating(
             tscope,
@@ -239,6 +239,7 @@ def _instance(
     st.active.append(key)
     bv = _BodyView(set(params), lits, dict(zip(params, entries)))
     body = _lower_body_enums(decl.get("body"), bv, st.L.enums)
+    body = _instance_partial(body, bv)
     rewritten, passes = _rewrite_to_fixpoint(body, st.L, tscope, bv=bv)
     refs: dict[int, tuple[Any, str]] = {}
     height = [passes]
@@ -301,6 +302,30 @@ def _lower_body_enums(body: Any, bv: _BodyView, enums: Any) -> Any:
         n2 = dict(n)
         n2["args"] = resolved
         return lower_enum_op(n2, enums)
+
+    return _rewrite_json(body, on_object=on_object, share=True)
+
+
+def _instance_partial(body: Any, bv: _BodyView) -> Any:
+    """esm-spec §4.2 "Reading earlier documents": a ``D`` whose ``wrt`` is one
+    of the definition's ``params`` is decided per instance — where the instance
+    binds that parameter to an axis name other than ``"t"``, the ``D`` reads as
+    ``partial`` in this instance (the wire boundary left it as written). Bound
+    to ``"t"``, it stays the time derivative."""
+
+    def on_object(n: dict, recurse) -> Any:
+        rebuilt = _rebuild_children(n, recurse)
+        if n.get("op") != "D":
+            return rebuilt
+        w = n.get("wrt")
+        if not (isinstance(w, str) and w in bv.params):
+            return rebuilt
+        lit = bv.lit.get(w, _NO_LIT)
+        if not (isinstance(lit, str) and lit != "t"):
+            return rebuilt
+        n2 = dict(rebuilt)
+        n2["op"] = "partial"
+        return n2
 
     return _rewrite_json(body, on_object=on_object, share=True)
 
@@ -377,7 +402,7 @@ def apply_rule3(comp: dict, L: _Lowering, transforms: list[dict]) -> dict:
     st = _Rule3State(L)
     site_refs: dict[int, tuple[Any, str]] = {}
     sites: list[tuple[dict, str, str]] = [
-        (comp, k, f"{L.scope}.{k}") for k in list(comp.keys()) if k != "expression_templates"
+        (comp, k, f"{L.scope}.{k}") for k in list(comp.keys()) if k != "operators"
     ]
     for e in transforms:
         sites.append((e, "transform", f"{L.scope} coupling transform"))
@@ -406,10 +431,10 @@ def apply_rule3(comp: dict, L: _Lowering, transforms: list[dict]) -> dict:
     for k in st.order:
         by_template.setdefault(st.done[k].name, []).append(k)
     final: dict[str, str] = {}
-    block = comp.get("expression_templates")
+    block = comp.get("operators")
     if not _is_object(block):
         block = {}
-        comp["expression_templates"] = block
+        comp["operators"] = block
     taken = set(L.named.keys())
     for t in _rule3_template_order(st, by_template):
         keys_t = by_template[t]

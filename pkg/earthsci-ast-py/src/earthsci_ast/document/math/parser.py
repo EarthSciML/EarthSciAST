@@ -309,9 +309,7 @@ def d_node(x: Any, w: str) -> Obj:
 
 def t_node(n: str, bs: list) -> Obj:
     """``Math.tNode``: a template application node."""
-    return Obj(
-        [("args", []), ("bindings", Obj(bs)), ("name", n), ("op", "apply_expression_template")]
-    )
+    return Obj([("args", []), ("bindings", Obj(bs)), ("name", n), ("op", "apply_operator")])
 
 
 def const_node(v: Any, u: str | None) -> Obj:

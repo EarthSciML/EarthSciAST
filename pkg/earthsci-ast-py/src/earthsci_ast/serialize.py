@@ -447,7 +447,7 @@ _TEST_SPEC = (
     ("parameter_overrides", "parameter_overrides", _OMIT_FALSY, dict),
     ("time_span", "time_span", _KEEP, _serialize_time_span),
     ("tolerance", "tolerance", _OMIT_NONE, _serialize_tolerance),
-    ("expression_template_imports", "expression_template_imports", _OMIT_FALSY, _json_deepcopy),
+    ("expression_template_imports", "operator_imports", _OMIT_FALSY, _json_deepcopy),
     ("assertions", "assertions", _KEEP, lambda a: [_serialize_assertion(x) for x in a]),
 )
 
@@ -547,7 +547,7 @@ _ANALYSIS_SPEC = (
     ("time_span", "time_span", _KEEP, _serialize_time_span),
     ("parameter_sweep", "parameter_sweep", _OMIT_NONE, _serialize_parameter_sweep),
     ("plots", "plots", _OMIT_FALSY, lambda ps: [_serialize_plot(p) for p in ps]),
-    ("expression_template_imports", "expression_template_imports", _OMIT_FALSY, _json_deepcopy),
+    ("expression_template_imports", "operator_imports", _OMIT_FALSY, _json_deepcopy),
 )
 
 
@@ -1160,7 +1160,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     if getattr(esm_file, "metaparameters", None):
         result["metaparameters"] = esm_file.metaparameters
     if getattr(esm_file, "expression_templates", None):
-        result["expression_templates"] = esm_file.expression_templates
+        result["operators"] = esm_file.expression_templates
     if getattr(esm_file, "coupling_roles", None):
         result["coupling_roles"] = esm_file.coupling_roles
 
@@ -1316,7 +1316,7 @@ def _emit_write(buf: list[str], x: Any, indent: int, preserve: bool = False) -> 
             buf.append(pad1)
             buf.append(json.dumps(str(k), ensure_ascii=False))
             buf.append(": ")
-            _emit_write(buf, x[k], indent + 1, preserve=(str(k) == "expression_templates"))
+            _emit_write(buf, x[k], indent + 1, preserve=(str(k) == "operators"))
             if i < len(keys) - 1:
                 buf.append(",")
             buf.append("\n")

@@ -379,7 +379,7 @@ _EMISSIBLE_FIELDS: tuple[str, ...] = (
 # the emitter never saw one. They fall through to the derived
 # ``_NON_EMISSIBLE_FIELDS`` below, so no edit is needed here; this note records
 # that the omission is a decision, not an oversight.
-_CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("bindings", "template_origin")
+_CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("bindings", "template_origin", "template_call")
 
 # ExprNode fields WITHOUT a pinned slot in the cross-binding canonical JSON node
 # encoding. If any is set, the node cannot be emitted faithfully and
@@ -561,7 +561,7 @@ def _normalize_exponent(s: str) -> str:
 _DOCUMENT_MAP_KEYS = frozenset(
     {
         "bind", "bindings", "coordinates", "coords", "coupling_roles", "data_sources",
-        "enums", "expression_template_imports", "expression_templates", "guesses",
+        "enums", "operator_imports", "operators", "guesses",
         "index_set_rename", "index_sets", "initial_conditions", "map", "metaparameters",
         "models", "parameter_overrides", "parameters", "pinned_coords", "ranges",
         "reaction_systems", "rebind", "rename", "species", "subsystems", "translate",

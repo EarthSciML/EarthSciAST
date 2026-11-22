@@ -303,7 +303,7 @@ CORE_OPS = frozenset(
         "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
         "asinh", "acosh", "atanh", "atan2", "min", "max", "D", "ic", "Pre", "enum", "const",
         "faq", "makearray", "index", "broadcast", "reshape", "transpose", "concat",
-        "apply_expression_template",
+        "apply_operator",
     }
 )  # fmt: skip
 
@@ -1419,7 +1419,7 @@ def pr(c: Ctx, e: Any) -> Out:
             and k2 == "name"
             and type(v2) is str
             and k3 == "op"
-            and v3 == "apply_expression_template"
+            and v3 == "apply_operator"
         ):
             return _pr_template(c, kvs, v2, v1)
     f = faq_form(kvs)
