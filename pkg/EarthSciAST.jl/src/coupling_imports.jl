@@ -244,7 +244,7 @@ function _read_coupling_library(src::_DocumentSource, base::_RefBase, ref::Abstr
     catch e
         e isa _RefUnreadable || rethrow()
         msg = if e.reason === :invalid_json
-            "coupling-library ref '$(t.key)' is not valid JSON: $(e.cause.original_error)"
+            "coupling-library ref '$(t.key)' did not parse: $(_unreadable_cause(e))"
         elseif e.reason === :not_found
             "coupling-library file not found or unreadable: $(t.key) (from ref '$(t.ref)')"
         else

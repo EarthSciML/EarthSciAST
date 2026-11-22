@@ -101,6 +101,9 @@ function _resolve_indices(expr::OpExpr, rc::_ResolveCtx)
     return r
 end
 function _resolve_indices_op(expr::OpExpr, rc::_ResolveCtx)
+    # A template call resolves its arguments in this context; its body is
+    # compiled once, apart (call.jl).
+    _tpl_is_call(expr) && return _resolve_call_bindings(expr, rc)
     if _is_guarded_node_op(expr.op, length(expr.args)) &&
             expr.expr_body === nothing && expr.values === nothing
         return _resolve_guarded_op(expr, rc)
@@ -187,6 +190,11 @@ function _resolve_index_op(expr::OpExpr, rc::_ResolveCtx)
         throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY", "index op requires at least one arg"))
     target = expr.args[1]
     subs = expr.args[2:end]
+    # Inside a template body being compiled, an array argument (call.jl).
+    if target isa VarExpr && startswith((target::VarExpr).name, '\0')
+        g = _arg_gather_resolve((target::VarExpr).name, subs, rc)
+        g === nothing || return g
+    end
     kind = _index_target_kind(target)
     if kind === _IT_FAQ
         # Expanded at build time by substituting the output indices and
@@ -456,4 +464,44 @@ function _resolve_integral(expr::OpExpr, array_var_info, var_map)
         return OpExpr("*", ASTExpr[VarExpr("d$(iv)"), OpExpr("+", cells)])
     end
     return nothing
+end
+
+function _resolve_call_bindings(expr::OpExpr, rc::_ResolveCtx)
+    # Every argument is resolved here, implicit ones included (a name the body
+    # reads from its caller resolves as it would where expansion put it: a
+    # scalar const field folds to its value).
+    expr = _call_with_implicit(expr)
+    b = expr.bindings
+    b === nothing && return expr
+    ct = _call_table()
+    # An array parameter bound to an expression (an array observed the build
+    # substituted into the binding, say) has no array to pass: that reference
+    # is expanded, for this instance only, and the expansion resolved here.
+    ct === nothing || (x = _call_expanded_for_array(ct.tt, expr)) === nothing ||
+        return _resolve_indices(x, rc)
+    # A binding compiled into the instance with its leaves marked: each caller
+    # value resolved here, each array its marker (call.jl `_call_mark_inlined`).
+    ct === nothing || (
+        expr = _call_mark_inlined(
+            x -> x isa OpExpr ? _resolve_indices(x::OpExpr, rc) : x isa VarExpr ? _resolve_indices(x::VarExpr, rc) : x,
+            a -> _arr_arg_marker(a, rc), (ct::_CallTable).tt, expr
+        )
+    )
+    b = expr.bindings
+    arrs = ct === nothing ? nothing : _call_array_slots((ct::_CallTable).tt, expr)
+    nb = b
+    for (k, v) in b
+        _inl_is_marked(v) && continue
+        # An array argument is passed whole (`_arr_arg_marker`); every other
+        # one is a value, resolved here.
+        isarr = arrs !== nothing && ((startswith(k, _TPL_FREE) ? k : _TPL_ARG * k) in arrs)
+        r = isarr ? _arr_arg_marker(v, rc) :
+            v isa OpExpr ? _resolve_indices(v::OpExpr, rc) :
+            v isa VarExpr ? _resolve_indices(v::VarExpr, rc) : v
+        if r !== v
+            nb === b && (nb = copy(b))
+            nb[k] = r
+        end
+    end
+    return nb === b ? expr : reconstruct(expr; bindings = nb)
 end

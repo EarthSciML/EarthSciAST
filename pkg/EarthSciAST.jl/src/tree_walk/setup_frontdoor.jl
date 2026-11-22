@@ -213,7 +213,7 @@ function _overlap_env_factor_names(model)
                 end
             end
         end
-        for a in e.args
+        for a in _operands(e)
             visit(a)
         end
         visit(e.expr_body); visit(e.filter); visit(e.lower); visit(e.upper)

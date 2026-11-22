@@ -236,8 +236,7 @@ class ConstArrayOutOfRangeError(NumpyInterpreterError):
 
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
     """Raised when an unlowered rewrite-target operator reaches the simulator's
-    RHS evaluator — a spatial/right-hand-side ``D``, one of the open-tier sugar
-    ops (``grad``/``div``/``laplacian``/``curl``/``integral``), or any other
+    RHS evaluator — a spatial/right-hand-side ``D``, ``integral``, or any other
     op that is not evaluable-core such as a custom ``godunov_hamiltonian``
     (esm-spec §4.2 / §9.6.8). All are treated identically — none is privileged.
 
@@ -259,8 +258,8 @@ class UnreachableSpatialOperatorError(NumpyInterpreterError):
         super().__init__(
             f"unlowered_operator: rewrite-target op '{op}' reached simulation "
             f"evaluation with no rule to lower it to a stencil. Any op that is "
-            f"not evaluable-core (a spatial/right-hand-side `D`, the open-tier "
-            f"sugar `grad`/`div`/`laplacian`/`curl`/`integral`, or a custom op) "
+            f"not evaluable-core (a spatial/right-hand-side `D`, `integral`, or "
+            f"a custom op) "
             f"must be rewritten by a discretization rule before evaluation "
             f"(esm-spec §4.2 / §9.6.8). Pipeline contract violated."
         )
@@ -429,8 +428,8 @@ _CMP_UFUNCS: dict[str, Callable] = {
 
 #: The evaluable-core op vocabulary (esm-spec §4.2), DERIVED from the single-source
 #: registry rather than a hand-list. Any op reaching the RHS evaluator that is NOT
-#: in this set is an unlowered rewrite-target — the open-tier sugar
-#: grad/div/laplacian/curl/integral, a spatial `D`, OR a custom user op such as
+#: in this set is an unlowered rewrite-target — ``integral``, a spatial `D`, OR
+#: a custom user op such as
 #: `godunov_hamiltonian`, all treated identically — and is surfaced with the
 #: uniform ``unlowered_operator`` diagnostic. No per-op list, so no op is
 #: privileged and none can be forgotten.
@@ -1039,7 +1038,7 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
     # Generic unlowered-rewrite-target gate (esm-spec §4.2 / §9.6.8). Any op that
     # is NOT evaluable-core reaching the RHS evaluator is an unlowered
     # rewrite-target that a discretization rule should have eliminated: the
-    # open-tier sugar (grad/div/laplacian/curl/integral) AND a custom user op
+    # open-tier `integral` AND a custom user op
     # (`godunov_hamiltonian`) are handled by the SAME path — no op is privileged
     # over any other. Surface the uniform `unlowered_operator` diagnostic rather
     # than a bespoke fallback. (A `D` on the RHS is gated explicitly above, since

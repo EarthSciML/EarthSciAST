@@ -25,7 +25,7 @@ func TestWrtDefaultOmittedClassifies(t *testing.T) {
 		{"ScalarWrtExplicit", []string{"z"}, "ode"},
 		{"ShapedWrtOmitted", []string{"x"}, "ode"},
 		{"ShapedWrtExplicit", []string{"x"}, "ode"},
-		{"SpatialControl", nil, "pde"},
+		{"SpatialControl", nil, "nonlinear"},
 	} {
 		m, ok := f.Models[tc.model]
 		require.True(t, ok, "model %s missing from the fixture", tc.model)
@@ -95,7 +95,7 @@ func TestDerivativeAxisIsTheLiteralT(t *testing.T) {
 	// the complement that stops the fix being "every `D` is differential".
 	f := build(strPtr("s"))
 	m := f.Models["M"]
-	assert.Equal(t, "pde", SystemKind(&m))
+	assert.Equal(t, "nonlinear", SystemKind(&m))
 	assert.Empty(t, ODEStates(&m))
 	// The DAE contract applies only to `ode` models, so it skips this one
 	// rather than reporting a residual algebraic equation — the two layers

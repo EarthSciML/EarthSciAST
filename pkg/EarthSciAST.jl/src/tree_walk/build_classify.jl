@@ -45,7 +45,7 @@
 #     per-cell `faq` form the derivative partition consumes (see
 #     `_lift_wholearray_deriv_equations`). Spatial-operator zeroing over a
 #     structurally-0-D field is done EARLIER, in flatten, so a raw
-#     `grad`/`div`/`laplacian` reaching the
+#     spatial `D` reaching the
 #     compiler directly (a hand-built Model, never discretized) still
 #     hard-errors as the pipeline-violation guard requires. No-op for a model
 #     without a whole-array D.
@@ -480,7 +480,7 @@ function _array_obs_structural_refs!(
     e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits, seen)
     e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits, seen)
     e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits, seen)
-    for a in e.args
+    for a in _operands(e)
         _array_obs_structural_refs!(
             a, names, hits, seen;
             runtime_subscripts = runtime_subscripts
@@ -851,7 +851,7 @@ function _decline_unmaterialized_recurrences(
         # and can never be a recurrence, so it keeps whatever diagnosis it
         # had — the self-edge exemption must not weaken cycle handling.
         name in array_shaped_vars || continue
-        recurrence_self_reference_kind(name, observed_exprs[name]) === :indexed || continue
+        recurrence_self_reference_kind(name, observed_exprs[name]; templates = _build_templates()) === :indexed || continue
         throw(
             TreeWalkError(
                 "E_TREEWALK_UNSUPPORTED_RECURRENCE",
@@ -1127,7 +1127,7 @@ function _obs_structural_refs!(
     e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits, seen)
     e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits, seen)
     e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits, seen)
-    for a in e.args
+    for a in _operands(e)
         _obs_structural_refs!(a, names, hits, seen)
     end
     e.expr_body === nothing || _obs_structural_refs!(e.expr_body::ASTExpr, names, hits, seen)
@@ -1187,7 +1187,7 @@ function _count_obs_refs!(
             end
         else
             u = uncond[i]
-            for (j, a) in enumerate(n.args)
+            for (j, a) in enumerate(_operands(n))
                 (a isa VarExpr && a.name in names) || continue
                 tot[a.name] = _sat_add(get(tot, a.name, 0), t)
                 if u > 0 && !_cse_arg_conditional(n.op, j)

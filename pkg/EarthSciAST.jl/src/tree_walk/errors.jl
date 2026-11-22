@@ -18,7 +18,7 @@ evaluate. `code` is one of two families:
   evaluator's own build/eval failures; or
 * the bare `unlowered_operator` code (esm-spec §4.2 / §9.6.8), thrown by
   `_compile_op` when a rewrite-target operator (an RHS-position `D`, or
-  `grad`/`div`/`laplacian`) reaches evaluation without a discretization
+  a user op) reaches evaluation without a discretization
   rule having lowered it. That code is DELIBERATELY not `E_TREEWALK_*`:
   it is the uniform cross-binding wire code every implementation surfaces
   for this pipeline violation, so it must not be renamed to match the
@@ -74,7 +74,7 @@ Fields:
 
 * `code` — always [`E_DIRECT_EMIT_UNSUPPORTED`](@ref).
 * `construct` — WHAT could not be lowered, in the IR's own vocabulary: the node
-  kind (`_NK_SUBCALL`), the access descriptor kind (`_AK_ARR_TBL_BOX`), the
+  kind (`_NK_AREDUCE`), the access descriptor kind (`_AK_ARR_TBL_BOX`), the
   operator (`` `op `atan2`` ``) or the kernel shape ("per-cell fallback
   kernel"). This is the string a test asserts on.
 * `rule` — WHERE it came from: the state equation, materialized-observed fill

@@ -38,7 +38,6 @@ import {
   collectApplyNames,
   composeTemplateBodies,
   deepEqual,
-  expandReferencesWhere,
   indexSetDeclEqual,
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
@@ -46,12 +45,25 @@ import {
   validateTemplates,
 } from './lower-expression-templates.js'
 import { EnumLoweringError, lowerEnumOpsForFile } from './lower-enums.js'
+import {
+  JSON_DESCEND,
+  canonicalCompact,
+  compareUtf8,
+  rewriteJson,
+  rewriteJsonChildren,
+} from './json-rewrite.js'
 import { EXPRESSION_NODE_ANNOTATIONS } from './expression.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
-import { expandRefEnv, isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
+import {
+  decodeDocument,
+  expandRefEnv,
+  isRemoteRef,
+  normalizeRef,
+  readFileSyncNode,
+} from './path-utils.js'
 import { STDLIB_BASE, classifyStdRef, readStdRef } from './stdlib.js'
-import { ERROR_CODES } from './errors.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { prepareDocumentOps } from './parse.js'
 import { rejectConstUnitsPreV12 } from './solver.js'
 
@@ -893,11 +905,14 @@ function loadImportRaw(
   }
   let raw: unknown
   try {
-    raw = JSON.parse(content)
+    // esm-spec §1.2.1: the format is the file's extension (Markdown, Typst, JSON).
+    raw = decodeDocument(content, path)
   } catch (e) {
+    // A source document refused for a removed operator keeps its own code.
+    if (e instanceof EsmDiagnosticError && e.code === ERROR_CODES.REMOVED_OP) throw e
     throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-      `${origin}: template-library ref '${path}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+      `${origin}: template-library ref '${path}' did not parse: ${e instanceof Error ? e.message : String(e)}`,
     )
   }
   // A template library is a document too, and its template BODIES carry
@@ -1764,15 +1779,20 @@ function processLibrary(
 
 /**
  * Resolve the `enum` symbols a template library binds in its OWN calls
- * (esm-spec §9.3). After {@link lowerLibraryTemplateEnums}, the only `enum` ops
- * left in the library's scope are spelled with a template parameter. A call to a
- * template that can still produce one binds that parameter here, in the library,
- * so each of the library's own template bodies has those calls expanded (the
- * eager expansion esm-spec §9.6.4 rule 3 requires at load anyway) and the result
- * lowered against the library's block. An op the expansion leaves spelled with
- * the calling template's own parameter stays open for the importer's binding.
- * Runs after {@link composeTemplateBodies}, so the reference DAG is acyclic;
- * every new body is computed before any is replaced.
+ * (esm-spec §9.3, §9.7.5). After {@link lowerLibraryTemplateEnums}, the only
+ * `enum` ops left in the library's scope are spelled with a template
+ * parameter. A call that binds such a parameter to a symbol is an instance
+ * (esm-spec §9.6.4 rule 3: the instance includes the symbols the call binds):
+ * the called template's body is lowered against the library's block for that
+ * instance, without expanding the call, and the call is re-pointed to the
+ * lowered body, registered as `<name>.variant<k>`. The authored template keeps
+ * its body: the importer may still call it with a symbol of its own, which
+ * resolves at the importer's call site. Instances follow the reference DAG (a
+ * call that forwards a bound symbol into another call lowers that one too). An
+ * op the lowering leaves spelled with the calling template's own parameter
+ * stays open for the importer's binding. Runs after
+ * {@link composeTemplateBodies}, so the reference DAG is acyclic. Mirrors the
+ * Julia reference `_expand_library_enum_calls!`.
  */
 function expandLibraryEnumCalls(
   library: unknown,
@@ -1781,18 +1801,126 @@ function expandLibraryEnumCalls(
   origin: string,
 ): void {
   const bearing = templateOpBearing(named, (op) => op === 'enum')
-  const callsBearing = (node: Record<string, unknown>): boolean =>
-    typeof node.name === 'string' && bearing[node.name] === true
-  const bodies: Record<string, unknown> = {}
+  const paramsOf = (decl: unknown): string[] =>
+    isObject(decl) && Array.isArray(decl.params)
+      ? decl.params.filter((p): p is string => typeof p === 'string')
+      : []
+  // instance key => the lowered body and the instance key of each re-pointed
+  // reference in it; bodies are computed children first.
+  const insts = new Map<string, { body: Json; refs: Map<object, string> }>()
+  const instName = new Map<string, string>()
+  // The symbols a reference `n` binds to the parameters of its template, as
+  // literals or through `lits` (the enclosing instance's symbols).
+  const boundSymbols = (
+    n: JsonObject,
+    callerParams: Set<string>,
+    lits: Map<string, string>,
+  ): [string, Map<string, string>] | null => {
+    const nm = n.name
+    if (typeof nm !== 'string' || bearing[nm] !== true) return null
+    const b = n.bindings
+    if (!isObject(b)) return null
+    const syms = new Map<string, string>()
+    for (const [k, v] of Object.entries(b)) {
+      if (typeof v !== 'string') continue
+      if (callerParams.has(v)) {
+        if (lits.has(v)) syms.set(k, lits.get(v)!)
+      } else {
+        syms.set(k, v)
+      }
+    }
+    if (syms.size === 0) return null
+    return [nm, syms]
+  }
+  const repoint = (
+    body: Json,
+    callerParams: Set<string>,
+    lits: Map<string, string>,
+  ): { body: Json; refs: Map<object, string> } => {
+    const refs = new Map<object, string>()
+    const out = rewriteJson(body, (rw, n) => {
+      if (n.op !== 'apply_expression_template') return JSON_DESCEND
+      let nn = rewriteJsonChildren(rw, n, 'name') as JsonObject
+      const bs = boundSymbols(n, callerParams, lits)
+      if (bs === null) return nn
+      const key = instance(bs[0], bs[1])
+      if (nn === n) nn = { ...n }
+      refs.set(nn, key)
+      return nn
+    })
+    return { body: out, refs }
+  }
+  const instance = (name: string, syms: Map<string, string>): string => {
+    const decl = named[name] as JsonObject
+    const params = paramsOf(decl)
+    const lits = new Map<string, string>()
+    for (const p of params) if (syms.has(p)) lits.set(p, syms.get(p)!)
+    const key = `${name}\x1f${canonicalCompact(Object.fromEntries(lits))}`
+    if (insts.has(key)) return key
+    // The bound symbols, written into the `enum` ops that spell them.
+    const subst = rewriteJson(decl.body, (_rw, n) => {
+      if (n.op !== 'enum') return JSON_DESCEND
+      const args = n.args
+      if (!Array.isArray(args)) return n
+      const na = args.map((a) => (typeof a === 'string' && lits.has(a) ? lits.get(a)! : a))
+      if (na.every((a, i) => a === args[i])) return n
+      return { ...n, args: na }
+    })
+    const openDecl: JsonObject = { params: params.filter((p) => !lits.has(p)), body: subst }
+    const lowered = lowerLibraryTemplateBody(library, name, openDecl, subst, origin)
+    insts.set(key, repoint(lowered, new Set(params), lits))
+    instName.set(key, name)
+    return key
+  }
+  const ownRefs = new Map<string, { body: Json; refs: Map<object, string> }>()
   for (const n of ownNames) {
     const decl = named[n]
     if (!isObject(decl) || !('body' in decl)) continue
     if (!collectApplyNames(decl.body, []).some((r) => bearing[r] === true)) continue
-    const expanded = expandReferencesWhere(decl.body, named, origin, callsBearing)
-    bodies[n] = lowerLibraryTemplateBody(library, n, decl, expanded, origin)
+    ownRefs.set(n, repoint(decl.body, new Set(paramsOf(decl)), new Map()))
   }
-  for (const [n, body] of Object.entries(bodies)) {
-    named[n] = { ...(named[n] as JsonObject), body }
+  if (insts.size === 0) return
+  // Name the instances children first: a template after every template its
+  // instances' bodies reference; each distinct lowered body of a template is
+  // `<name>.variant<k>`, k in the order of the bodies' canonical bytes.
+  const final = new Map<string, string>()
+  const rename = (body: Json, refs: Map<object, string>): Json =>
+    rewriteJson(body, (rw, n) => {
+      if (n.op !== 'apply_expression_template') return JSON_DESCEND
+      const nn = rewriteJsonChildren(rw, n, 'name') as JsonObject
+      const key = refs.get(n)
+      if (key === undefined) return nn
+      return { ...nn, name: final.get(key)! }
+    })
+  const byName = new Map<string, string[]>()
+  for (const key of insts.keys()) {
+    const t = instName.get(key)!
+    if (!byName.has(t)) byName.set(t, [])
+    byName.get(t)!.push(key)
+  }
+  const done = new Set<string>()
+  const nameTemplate = (t: string): void => {
+    if (done.has(t)) return
+    done.add(t)
+    for (const key of byName.get(t)!) {
+      for (const ck of insts.get(key)!.refs.values()) nameTemplate(instName.get(ck)!)
+    }
+    const keysT = byName.get(t)!
+    const bodies = keysT.map((k) => rename(insts.get(k)!.body, insts.get(k)!.refs))
+    const canon = bodies.map((b) => canonicalCompact(b))
+    const distinct = [...new Set(canon)].sort(compareUtf8)
+    const names = new Map<string, string>()
+    distinct.forEach((c, i) => {
+      let vn = `${t}.variant${i + 1}`
+      while (Object.prototype.hasOwnProperty.call(named, vn)) vn += '_'
+      named[vn] = { ...(named[t] as JsonObject), body: bodies[canon.indexOf(c)] }
+      names.set(c, vn)
+    })
+    keysT.forEach((k, i) => final.set(k, names.get(canon[i]!)!))
+  }
+  for (const t of byName.keys()) nameTemplate(t)
+  for (const [n, { body, refs }] of ownRefs) {
+    named[n] = { ...(named[n] as JsonObject), body: rename(body, refs) }
   }
 }
 
@@ -1926,14 +2054,14 @@ export function collectMountDeclaredMetaparameters(
     let childBase: string
     try {
       if (std !== undefined) {
-        child = JSON.parse(readStdRef(ref, std))
+        child = decodeDocument(readStdRef(ref, std), ref)
         childBase = STDLIB_BASE
       } else if (viaLoader) {
         const got = options.readRef!(ref, basePath)
-        child = JSON.parse(got.text)
+        child = decodeDocument(got.text, path)
         childBase = got.base
       } else {
-        child = JSON.parse((options.readFile ?? readFileSyncNode)(path))
+        child = decodeDocument((options.readFile ?? readFileSyncNode)(path), path)
         childBase = dirName(path)
       }
     } catch {

@@ -34,7 +34,7 @@ const _ACCESS_KIND_NAMES = _kind_name_table("_AK_")
 """
     _node_kind_name(k::UInt8) -> String
 
-The constant name (`"_NK_SUBCALL"`) of a `_Node` kind, for messages.
+The constant name (`"_NK_AREDUCE"`) of a `_Node` kind, for messages.
 """
 _node_kind_name(k::UInt8) = get(_NODE_KIND_NAMES, k, "node kind $(Int(k))")
 

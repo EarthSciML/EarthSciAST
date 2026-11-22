@@ -22,7 +22,7 @@ using ..SSkeleton
 using ..SSkeleton: to_doc
 import ..SSkeleton: front_key, desc, comp_name, decl_name, attr, eqn, rxn, plot, tm
 using ..SItems
-using ..SItems: canon_segs, ck_mx, cook_doc, items, parse_items, pr_mx, raw_doc, unitems
+using ..SItems: canon_segs, ck_mx, cook_doc, items, mathify_doc, parse_items, pr_mx, raw_doc, unitems
 using ..SLines: decode_text
 using ..SMarkdown: DASHES, FENCE, attr_ok, item_ok, lex,
     name_latex, render, rxn_ok, tm_lex
@@ -190,7 +190,7 @@ end
 function print_md(d)
     doc = to_doc(CapsMd(), d)
     out = front_md(doc.front)
-    append!(out, render(canon_segs(items(raw_doc(pr_mdx, doc)))))
+    append!(out, render(canon_segs(items(mathify_doc((s, j) -> DMath.print_latex(s, j), DYaml.plain_math_ok, raw_doc(pr_mdx, doc))))))
     return String(out)
 end
 
@@ -216,6 +216,6 @@ function parse_md(s::AbstractString)
 end
 
 """`Md.parseItemsMd`."""
-parse_items_md(front::Kvs, its) = parse_items(ck_mdx, front, its)
+parse_items_md(front::Kvs, its) = parse_items(ck_mdx, (s, raw) -> DMath.parse_latex(s, raw), front, its)
 
 end # module SMarkdownDoc

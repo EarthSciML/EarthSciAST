@@ -36,16 +36,18 @@ Well-foundedness of every causal self-reference in the document
 
 Only TOP-LEVEL models are walked, and only their `equations` — the same surface
 the reference implementation checks, so a document either binding accepts is a
-document both accept. Each model is read through its template-expanded view
+document both accept. Each model is read through its validation view
 (`views`, a validation pass's `_UnitsInputs.models`; built here when absent),
-so a self-read or a group peer inside an `apply_expression_template` call is
-seen as the build sees it.
+and each `apply_expression_template` reference through its frame against the
+model's template table, never expanded, so a self-read or a group peer inside
+a template body is seen as the build sees it.
 """
-function validate_recurrence_semantics(file::EsmFile; views = nothing)::Vector{StructuralError}
+function validate_recurrence_semantics(file::EsmFile; views = nothing, tables = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     file.models === nothing && return errors
     for model_name in sort!(collect(keys(file.models)))
         model = _units_view(file, model_name, file.models[model_name], views)
+        templates = _tpl_component_table(file, "models", model_name, tables)
         # An array-shaped variable is the only thing a causal self-reference can
         # define: a scalar has no axis to fold along. The declared TYPE is
         # deliberately not consulted — the reference implementation keys on the
@@ -58,7 +60,7 @@ function validate_recurrence_semantics(file::EsmFile; views = nothing)::Vector{S
         # esm-spec §4.3.1.2: a recurrence group's members count their peers'
         # `index` reads as causal reads, and their frames are compared once
         # every member has one.
-        groups = recurrence_groups(model)
+        groups = recurrence_groups(model; templates)
         frames = _RecurrenceFrame[]
         for (i, eq) in enumerate(model.equations)
             t = _recurrence_lhs_target(eq.lhs)
@@ -68,7 +70,7 @@ function validate_recurrence_semantics(file::EsmFile; views = nothing)::Vector{S
             frame = _check_recurrence_equation!(
                 errors, file, eq, i,
                 _pointer("", "models", model_name, "equations", i, "rhs"),
-                array_shaped; group = group
+                array_shaped; group = group, templates = templates
             )
             (frame !== nothing && group !== nothing) && push!(frames, frame)
         end
@@ -398,15 +400,50 @@ end
 
 # The same walk over several names at once — a recurrence group's members
 # (esm-spec §4.3.1.2) — recording which one each read names.
+#
+# With the template table `tt`, a template reference is read as its expansion
+# (esm-spec §9.6.4 rule 2) without building it: its instance body is walked
+# once per instance through its frame (`_tpl_recurrence_reads`) and its reads
+# reused at every use; a parameter sentinel in a body is its binding, read
+# where it was bound, and a read found in a body reports its subscripts as the
+# caller spells them (`_tpl_ground`). `fr` is the frame `e` is read in.
 function _collect_recurrence_self_reads!(
         e::ASTExpr, vars::Vector{String}, index_sets::AbstractDict,
         env::Vector{Pair{String, Tuple{Int, Int}}},
         blocked::Bool,
         out::Vector{_RecurrenceSelfRead},
-        bare::Ref{Bool}
+        bare::Ref{Bool};
+        tt = nothing, fr = nothing
     )
+    if tt !== nothing && _tpl_is_call(e)
+        sub = _tpl_frame_or_nothing(tt, e::OpExpr, fr)
+        if sub !== nothing
+            body = _tpl_recurrence_reads(tt, sub, vars, index_sets)
+            body.bare && (bare[] = true)
+            outer = Dict{String, Tuple{Int, Int}}(env)
+            for r in body.reads
+                push!(
+                    out, _RecurrenceSelfRead(
+                        r.args, merge(outer, r.env), blocked || r.unsequenceable, r.target
+                    )
+                )
+            end
+            # An element call's subscripts, as `index(<array>, subscripts…)`.
+            for x in _tpl_out_bindings(e::OpExpr)
+                _collect_recurrence_self_reads!(x, vars, index_sets, env, blocked, out, bare; tt, fr)
+            end
+            return out
+        end
+    end
     if !(e isa OpExpr)
-        e isa VarExpr && e.name in vars && (bare[] = true)
+        if e isa VarExpr
+            if fr !== nothing && _tpl_is_sentinel(e.name)
+                b, bf = _tpl_arg(fr, e.name)
+                return _collect_recurrence_self_reads!(b, vars, index_sets, env, blocked, out, bare; tt, fr = bf)
+            end
+            # A name a body does not read from its caller is the body's own.
+            fr === nothing && e.name in vars && (bare[] = true)
+        end
         return out
     end
     pushed = 0
@@ -418,15 +455,13 @@ function _collect_recurrence_self_reads!(
             pushed += 1
         end
     end
-    is_self_index = e.op == "index" && !isempty(e.args) &&
-        e.args[1] isa VarExpr && (e.args[1]::VarExpr).name in vars
+    head, head_fr = isempty(e.args) ? (nothing, nothing) : _tpl_leaf(e.args[1], fr)
+    is_self_index = e.op == "index" && head isa VarExpr && head_fr === nothing &&
+        (head::VarExpr).name in vars
     if is_self_index
         snapshot = Dict{String, Tuple{Int, Int}}(env)
-        push!(
-            out, _RecurrenceSelfRead(
-                e.args[2:end], snapshot, blocked, (e.args[1]::VarExpr).name
-            )
-        )
+        args = fr === nothing ? e.args[2:end] : ASTExpr[_tpl_ground(tt, a, fr) for a in e.args[2:end]]
+        push!(out, _RecurrenceSelfRead(args, snapshot, blocked, (head::VarExpr).name))
     end
     # A `makearray` REGION VALUE (`values`) is evaluated once for the whole
     # region, so a self-read inside one cannot be sequenced: §4.3.2's region
@@ -434,19 +469,36 @@ function _collect_recurrence_self_reads!(
     blocked_children = blocked || _recurrence_op_blocks_cell_restriction(e.op)
     for (j, a) in enumerate(e.args)
         (is_self_index && j == 1) && continue
-        _collect_recurrence_self_reads!(a, vars, index_sets, env, blocked_children, out, bare)
+        _collect_recurrence_self_reads!(a, vars, index_sets, env, blocked_children, out, bare; tt, fr)
     end
     for side in (e.expr_body, e.filter, e.key, e.lower, e.upper)
         side === nothing && continue
-        _collect_recurrence_self_reads!(side, vars, index_sets, env, blocked_children, out, bare)
+        _collect_recurrence_self_reads!(side, vars, index_sets, env, blocked_children, out, bare; tt, fr)
     end
     if e.values !== nothing
         for v in e.values
-            _collect_recurrence_self_reads!(v, vars, index_sets, env, true, out, bare)
+            _collect_recurrence_self_reads!(v, vars, index_sets, env, true, out, bare; tt, fr)
         end
     end
     resize!(env, length(env) - pushed)
     return out
+end
+
+# The causal reads of `vars` in the body of the template instance `sub`, read
+# once per instance (per name list) through its frame: each read's bounds are
+# the body's own (the caller's are merged in at each use), and `unsequenceable`
+# says whether the body itself puts it under a whole-operand op.
+function _tpl_recurrence_reads(tt, sub, vars::Vector{String}, index_sets::AbstractDict)
+    memo = _tpl_memo(tt, sub, :recurrence_reads, () -> Dict{Vector{String}, Any}())
+    return get!(memo, copy(vars)) do
+        reads = _RecurrenceSelfRead[]
+        bare = Ref(false)
+        _collect_recurrence_self_reads!(
+            sub.body, vars, index_sets, Pair{String, Tuple{Int, Int}}[], false, reads, bare;
+            tt, fr = sub
+        )
+        (; reads, bare = bare[])
+    end
 end
 
 # The variable an equation DEFINES, if its LHS names one: a bare variable, or
@@ -635,9 +687,11 @@ end
 
 # The `faq` that declares an equation's cell frame: the indexed-`faq` LHS, when
 # the LHS is that form and names its indices, else the RHS when it is a `faq`.
-function _recurrence_frame_faq(eq::Equation, lhs_idx)
+# `rhs` is the right-hand side as read (a reference's instance body, see
+# `_recurrence_equation_frame`).
+function _recurrence_frame_faq(eq::Equation, lhs_idx, rhs::ASTExpr = eq.rhs)
     lhs_idx !== nothing && return eq.lhs::OpExpr
-    return (eq.rhs isa OpExpr && (eq.rhs::OpExpr).op == "faq") ? (eq.rhs::OpExpr) : nothing
+    return (rhs isa OpExpr && (rhs::OpExpr).op == "faq") ? (rhs::OpExpr) : nothing
 end
 
 """
@@ -649,25 +703,32 @@ The static analysis of equation `i`, `eq`, which defines `var` (with
 causal reads are the `index` reads of the names `vars` — `var` itself, then
 its §4.3.1.2 group peers. `nothing` when the RHS reads none of them, which is
 every equation of a document that does not use the construct; else the
-definition's frame, or the first problem found.
+definition's frame, or the first problem found. With the template table
+`templates`, a template reference in the RHS is read as its expansion, through
+its frame (`_collect_recurrence_self_reads!`); an RHS that is one reference
+declares the frame its instance body declares.
 """
 function _recurrence_equation_frame(
         eq::Equation, i::Int, var::AbstractString, lhs_idx,
-        vars::Vector{String}, index_sets::AbstractDict
+        vars::Vector{String}, index_sets::AbstractDict; templates = nothing
     )::Union{Nothing, _RecurrenceFrame, _RecurrenceProblem}
     env = Pair{String, Tuple{Int, Int}}[]
     reads = _RecurrenceSelfRead[]
     bare = Ref(false)
-    _collect_recurrence_self_reads!(eq.rhs, vars, index_sets, env, false, reads, bare)
+    _collect_recurrence_self_reads!(eq.rhs, vars, index_sets, env, false, reads, bare; tt = templates)
     isempty(reads) && return nothing
     bare[] && return _RecurrenceProblem(:bare; target = String(var))
     any(r -> r.unsequenceable, reads) && return _RecurrenceProblem(:unsequenceable)
 
     # The cell frame: the indexed-`faq` LHS's own indices, else the RHS
     # aggregate's.
-    rhs_agg = (eq.rhs isa OpExpr && (eq.rhs::OpExpr).op == "faq") ?
-        (eq.rhs::OpExpr) : nothing
-    frame_agg = _recurrence_frame_faq(eq, lhs_idx)
+    rhs = eq.rhs
+    if templates !== nothing && _tpl_is_call(rhs)
+        sub = _tpl_frame_or_nothing(templates, rhs::OpExpr, nothing)
+        sub === nothing || (rhs = sub.body)
+    end
+    rhs_agg = (rhs isa OpExpr && (rhs::OpExpr).op == "faq") ? (rhs::OpExpr) : nothing
+    frame_agg = _recurrence_frame_faq(eq, lhs_idx, rhs)
     raw_idx = frame_agg === nothing ? nothing : frame_agg.output_idx
     raw_idx === nothing && return _RecurrenceProblem(:no_frame; target = String(var))
     idx_names = String[string(s) for s in raw_idx]
@@ -749,7 +810,7 @@ function _check_recurrence_equation!(
         errors::Vector{StructuralError}, file::EsmFile,
         eq::Equation, i::Int, field_path::String,
         array_shaped::Set{String};
-        group::Union{Nothing, Set{String}} = nothing
+        group::Union{Nothing, Set{String}} = nothing, templates = nothing
     )
     target = _recurrence_lhs_target(eq.lhs)
     target === nothing && return nothing
@@ -760,7 +821,7 @@ function _check_recurrence_equation!(
     # member of a §4.3.1.2 recurrence group — every peer.
     vars = String[var]
     group === nothing || append!(vars, sort!([g for g in group if g != var]))
-    r = _recurrence_equation_frame(eq, i, var, lhs_idx, vars, file.index_sets)
+    r = _recurrence_equation_frame(eq, i, var, lhs_idx, vars, file.index_sets; templates)
     if r isa _RecurrenceProblem
         msg, axis = _recurrence_problem_message(r, var)
         _report!(
@@ -805,16 +866,18 @@ end
 # something equivalent.
 
 """
-    recurrence_self_reference_kind(name, body) -> Symbol
+    recurrence_self_reference_kind(name, body; templates = nothing) -> Symbol
 
 How `body` refers to `name`: `:indexed` (at least one `index(name, …)` read, so
 the equation is a recurrence CANDIDATE), `:bare` (named whole and never through
-`index`, so it is not one), or `:none`.
+`index`, so it is not one), or `:none`. With the template table `templates`, a
+template reference is read as its expansion, its body once per instance
+through its frame (`_tpl_step`), each parameter where the body reads it.
 """
-function recurrence_self_reference_kind(name::AbstractString, body::ASTExpr)::Symbol
+function recurrence_self_reference_kind(name::AbstractString, body::ASTExpr; templates = nothing)::Symbol
     indexed = Ref(false)
     bare = Ref(false)
-    _walk_self_reference!(body, name, indexed, bare, Base.IdSet{OpExpr}())
+    _walk_self_reference!(body, name, indexed, bare, Set{Tuple{UInt, UInt}}(), templates, nothing)
     indexed[] && return :indexed
     bare[] && return :bare
     return :none
@@ -822,38 +885,44 @@ end
 
 function _walk_self_reference!(
         e::ASTExpr, name::AbstractString,
-        indexed::Ref{Bool}, bare::Ref{Bool}, seen::Base.IdSet{OpExpr}
+        indexed::Ref{Bool}, bare::Ref{Bool}, seen::Set{Tuple{UInt, UInt}},
+        tt = nothing, fr = nothing
     )
+    _tpl_step((x, xf) -> _walk_self_reference!(x, name, indexed, bare, seen, tt, xf), tt, e, fr) &&
+        return nothing
     if e isa VarExpr
-        e.name == name && (bare[] = true)
+        # A name a template body does not read from its caller is its own.
+        fr === nothing && e.name == name && (bare[] = true)
         return nothing
     end
     e isa OpExpr || return nothing
-    # A shared sub-DAG answers the same both times: walk each node once, or a
-    # structurally shared body costs one walk per path.
-    e in seen && return nothing
-    push!(seen, e)
+    # A shared sub-DAG answers the same both times: walk each node once (per
+    # template frame), or a structurally shared body costs one walk per path.
+    k = (objectid(e), fr === nothing ? UInt(0) : objectid(fr))
+    k in seen && return nothing
+    push!(seen, k)
     # POSITIONAL, not identity-based: hash-consing shares leaf nodes, so the
     # `VarExpr` at `args[1]` may be the very same object as a bare read
     # elsewhere in the tree, and skipping "that object" would skip both.
-    self_head = e.op == "index" && !isempty(e.args) &&
-        e.args[1] isa VarExpr && (e.args[1]::VarExpr).name == name
+    head, head_fr = isempty(e.args) ? (nothing, nothing) : _tpl_leaf(e.args[1], fr)
+    self_head = e.op == "index" && head isa VarExpr && head_fr === nothing &&
+        (head::VarExpr).name == name
     self_head && (indexed[] = true)
     for j in eachindex(e.args)
         (self_head && j == 1) && continue
-        _walk_self_reference!(e.args[j], name, indexed, bare, seen)
+        _walk_self_reference!(e.args[j], name, indexed, bare, seen, tt, fr)
     end
     for side in (e.expr_body, e.filter, e.key, e.lower, e.upper)
-        side === nothing || _walk_self_reference!(side, name, indexed, bare, seen)
+        side === nothing || _walk_self_reference!(side, name, indexed, bare, seen, tt, fr)
     end
     if e.values !== nothing
         for v in e.values
-            _walk_self_reference!(v, name, indexed, bare, seen)
+            _walk_self_reference!(v, name, indexed, bare, seen, tt, fr)
         end
     end
     if e.bindings !== nothing
         for k in sort!(collect(keys(e.bindings)))
-            _walk_self_reference!(e.bindings[k], name, indexed, bare, seen)
+            _walk_self_reference!(e.bindings[k], name, indexed, bare, seen, tt, fr)
         end
     end
     if e.ranges !== nothing
@@ -861,7 +930,7 @@ function _walk_self_reference!(
             v = e.ranges[k]
             v isa AbstractVector || continue
             for x in v
-                x isa ASTExpr && _walk_self_reference!(x, name, indexed, bare, seen)
+                x isa ASTExpr && _walk_self_reference!(x, name, indexed, bare, seen, tt, fr)
             end
         end
     end

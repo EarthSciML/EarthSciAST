@@ -340,24 +340,25 @@ end
         VERSION >= v"1.12" && @test (@allocated prob.f!(du, prob.u0, prob.p, 0.2)) == 0
     end
 
-    # The template-expanded copy validation and the build take of a model
-    # copies only the containers expansion rewrites: an equation it leaves
-    # alone (a polygon table's inline rings) is the original's tree, and the
-    # original keeps its references. One validation pass builds the expanded
-    # view once and its checks read it, with the findings of a check that
-    # expands for itself.
-    @testset "template expansion copies share the inline data" begin
+    # The validation view of a model (its references kept, each carrying the
+    # names its body reads) and the build's expansion copy copy only the
+    # containers their rewrite replaces: an equation it leaves alone (a
+    # polygon table's inline rings) is the original's tree, and the original
+    # is not changed. One validation pass builds the view once and its checks
+    # read it, with the findings of a check that builds it for itself.
+    @testset "validation views and expansion copies share the inline data" begin
         file = _CT.load_path(_ct_write(_ct_regrid_doc(4, "planar")))
         model = file.models["Regrid"]
+        before = _CT.serialize_expression(model.equations[findfirst(eq -> eq.lhs isa _CT.VarExpr && eq.lhs.name == "A_ij", model.equations)].rhs)
         view = _CT._units_view(file, "Regrid", model)
         @test view !== model && view.equations !== model.equations
         names = [eq.lhs isa _CT.VarExpr ? eq.lhs.name : "" for eq in model.equations]
         poly = findfirst(==("src_poly"), names)
         aij = findfirst(==("A_ij"), names)
         @test view.equations[poly].rhs === model.equations[poly].rhs
-        @test view.equations[aij].rhs !== model.equations[aij].rhs
         @test _CT._model_has_surviving_refs(model)
-        @test !_CT._model_has_surviving_refs(view)
+        @test _CT._model_has_surviving_refs(view)
+        @test _CT.serialize_expression(model.equations[aij].rhs) == before
         copy_ = _CT._expansion_copy(model)
         @test copy_.equations !== model.equations && copy_.variables !== model.variables
         @test all(copy_.equations[i].rhs === model.equations[i].rhs for i in eachindex(names))
@@ -403,12 +404,20 @@ end
 
     @testset "keyed and gated relational templates" begin
         tp = _ct_write(_ct_relational_doc())
-        @test _ct_same(_ct_du(tp, :native), _ct_du(tp, :interpreter))
+        n = _ct_du(tp, :native)
+        @test _ct_same(n, _ct_du(tp, :interpreter))
+        @test _ct_same(n, _ct_du(_CT.expand_document(_CT.load_path(tp)), :native))
     end
 
     @testset "argmin" begin
         tp = _ct_write(_ct_nearest_doc(40, 9))
-        @test _ct_same(_ct_du(tp, :native), _ct_du(tp, :interpreter))
+        n, cn = _CT._with_counts(() -> _ct_du(tp, :native))
+        @test _ct_same(n, _ct_du(tp, :interpreter))
+        # `argmin`'s `f` reads the body's own reduction index: the binding is
+        # compiled into the instance (a call, not an expansion), and the bits
+        # are the expanded document's.
+        @test get(cn, :call_targets, 0) == 1
+        @test _ct_same(n, _ct_du(_CT.expand_document(_CT.load_path(tp)), :native))
     end
 
     # The nested sum must not leave a bare array producer in the cell body,

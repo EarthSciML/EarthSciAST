@@ -100,20 +100,18 @@ const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 #   (1) it is a CSE-opaque core form (`_CSE_OPAQUE_OPS` — `const`/`index`/`D`/…,
 #       structural ops `_compile` lowers or rejects specially); or
 #   (2) it is an open-tier rewrite-target op (`_op_in_T`: a named
-#       `grad`/`div`/`laplacian`/`D`/… OR any unregistered custom op).
+#       `D`/`integral`/… OR any unregistered custom op).
 # A rewrite-target op is NOT evaluable — a discretization rule must lower it
 # first — so it must never be hoisted into a guardless generic `_cse_rebuild`
 # node (which would defer the failure to evaluation). The same holds for a core
 # op with no ladder arm (3): hoisting one would skip `_compile_op`'s
 # `unevaluable_operator` gate.
 # Keeping every T op non-hoistable routes it to `_compile`/`_compile_op`, the
-# one path carrying the GENERIC `unlowered_operator` rejection gate. This is why
-# the grad/div/laplacian registry rows need no bespoke `cse=true`: their tier
-# membership already makes them non-hoistable, uniformly with an arbitrary user
-# op. Leaves (state/param/literal/time) are never hoisted — caching a leaf costs
+# one path carrying the GENERIC `unlowered_operator` rejection gate. Leaves (state/param/literal/time) are never hoisted — caching a leaf costs
 # more than the bare read it would replace.
 _cse_hoistable(e::OpExpr) =
-    !(e.op in _CSE_OPAQUE_OPS) && !_op_in_T(e.op) && _has_tree_walk_rule(e.op)
+    _tpl_is_call(e) ||    # a template call is a pure function of its arguments (call.jl)
+    (!(e.op in _CSE_OPAQUE_OPS) && !_op_in_T(e.op) && _has_tree_walk_rule(e.op))
 
 # `_eval_node_op` has an arm for exactly the shaped registry rows
 # (`_SHAPED_OP_SYMS`). `_compile_op` refuses any other op reaching its generic
@@ -307,9 +305,30 @@ function _cse_node_number!(e::OpExpr, M::_CSEKeyMemos)
             a isa VarExpr ? (:var, a.name) : _emit_json(a)
     end
     key = map(f -> _cse_field_key(e, f, ops), _EMISSIBLE_FIELDS)
+    # A template call's arguments are its `bindings`, which the canonical JSON
+    # does not carry: they enter the key here, each numbered like an operand.
+    _tpl_is_call(e) && (key = (key, _cse_bindings_key(e, M)))
     n = get!(M.ids, key, length(M.ids) + 1)
     M.num[e] = n
     return n
+end
+
+# The bindings of a template call in its CSE key: each binding's canonical
+# number, by name. A binding whose canonical form collapses to a literal is
+# keyed by identity (never shared), as `_cse_key` refuses such a collapse.
+function _cse_bindings_key(e::OpExpr, M::_CSEKeyMemos)
+    b = e.bindings
+    b === nothing && return ()
+    out = Any[]
+    for k in sort!(collect(keys(b)))
+        v = b[k]
+        c = v isa OpExpr ? _canonicalize_memo(v, M.canon) : v
+        num = c isa OpExpr ? _cse_node_number!(c, M) :
+            c isa VarExpr ? (:var, c.name) :
+            v isa OpExpr ? (:unique, objectid(v)) : _emit_json(c)
+        push!(out, k => num)
+    end
+    return Tuple(out)
 end
 
 # One emitted field of `e` in its CSE key: the operand numbers for `args`, the
@@ -438,7 +457,7 @@ function _cse_count!(
     end
     return
 end
-_cse_args(n::OpExpr) = n.args
+_cse_args(n::OpExpr) = _operands(n)
 _cse_counted(a) = a isa OpExpr && _cse_hoistable(a)
 _cse_op_conditional(n::OpExpr, j::Int) = _cse_arg_conditional(n.op, j)
 
@@ -473,6 +492,13 @@ end
 # becomes a `_NK_CACHED` ref. Every hoistable op is a plain `_NK_OP` whose
 # operands are all scalar.
 function _cse_rebuild(expr::OpExpr, var_map, param_syms, ctx::_CSEContext)
+    if _tpl_is_call(expr)
+        tg = _call_target(expr)
+        return _call_node(
+            tg, _Node[_compile_cse(a, var_map, param_syms, ctx) for a in _call_args(tg, expr)],
+            _call_arrays(tg, expr)
+        )
+    end
     children = _Node[
         _compile_cse(a, var_map, param_syms, ctx)
             for a in expr.args

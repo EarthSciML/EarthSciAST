@@ -32,6 +32,7 @@ theorem numsOf_spec : ∀ (xs : List Json) (ns : List JNum), numsOf xs = some ns
   | .str _ :: _, _, h => by simp [numsOf] at h
   | .arr _ :: _, _, h => by simp [numsOf] at h
   | .obj _ :: _, _, h => by simp [numsOf] at h
+  | .math _ :: _, _, h => by simp [numsOf] at h
 
 theorem rowsOf_spec : ∀ (xs : List Json) (rs : List (List JNum)), rowsOf xs = some rs →
     xs = rs.map (fun r => .arr (r.map .num)) ∧ ∀ r ∈ rs, ∀ n ∈ r, numOK n = true
@@ -54,6 +55,7 @@ theorem rowsOf_spec : ∀ (xs : List Json) (rs : List (List JNum)), rowsOf xs = 
   | .str _ :: _, _, h => by simp [rowsOf] at h
   | .num _ :: _, _, h => by simp [rowsOf] at h
   | .obj _ :: _, _, h => by simp [rowsOf] at h
+  | .math _ :: _, _, h => by simp [rowsOf] at h
 
 /-- What a printed array shape guarantees. -/
 def AOK : AForm → Prop

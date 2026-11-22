@@ -8,10 +8,12 @@
 
 use super::keys::Kvs;
 use super::skeleton::{
-    Comp, Decl, Doc, Eqn, Kind, MC, MR, Mx, Role, Rxn, Tm, is_math_field, sym_for, top_sym,
+    COMP_EXPR_PATHS, Comp, Decl, Doc, Eqn, Kind, MC, MR, Mx, PathSeg, Role, Rxn, TOP_EXPR_PATHS,
+    Tm, is_math_field, sym_for, top_sym,
 };
-use crate::document::json::Json;
+use crate::document::json::{Json, math_ok};
 use crate::document::math::Sym;
+use crate::document::math::expr::is_e;
 
 /// `Source.RItem`: one construct of a document. An equation is its math text,
 /// uninterpreted; so is a reaction's rate.
@@ -194,6 +196,159 @@ pub fn raw_doc(pr: &dyn Fn(&Sym, &MC) -> MR, d: &Doc<MC>) -> Doc<MR> {
             })
             .collect(),
     }
+}
+
+// ## Expressions inside path blocks
+//
+// `COMP_EXPR_PATHS` and `TOP_EXPR_PATHS` list the expression-valued fields of
+// path blocks. The printer turns a value there into a math leaf (`Json::Math`)
+// when it is a well-formed expression whose math text the container can
+// delimit (`math_ok` and the container's own test: `yaml::plain_math_ok` for
+// Markdown); the reader reads every math leaf back, wherever it is. Both work
+// in place on a skeleton they own, so a value off every path is not copied.
+
+/// Paths, as `Notation.Seg` lists.
+type Paths<'a> = Vec<&'a [PathSeg]>;
+
+/// `Source.stepKey`: the paths below the entry `k` of an object (or below an
+/// array element, `None`, which `Any` and `Elem` match).
+pub fn step_key<'a>(k: Option<&str>, ps: &[&'a [PathSeg]]) -> Paths<'a> {
+    ps.iter()
+        .filter_map(|p| match p.split_first() {
+            Some((PathSeg::Any, q)) => Some(q),
+            Some((PathSeg::Elem, q)) if k.is_none() => Some(q),
+            Some((PathSeg::Key(k1), q)) if Some(*k1) == k => Some(q),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `Source.atPaths`, in place: `leaf` applied to every value of `v` at one of
+/// the paths `ps` (the shortest first: a value at a path is not looked into);
+/// `leaf` returns the value's replacement, or `None` to keep it. Every other
+/// value is left as it is.
+pub fn at_paths(leaf: &dyn Fn(&Json) -> Option<Json>, ps: &[&[PathSeg]], v: &mut Json) {
+    if ps.is_empty() {
+        return; // `atPaths_nil`
+    }
+    if ps.iter().any(|p| p.is_empty()) {
+        if let Some(y) = leaf(v) {
+            *v = y;
+        }
+        return;
+    }
+    match v {
+        Json::Arr(xs) => {
+            let q = step_key(None, ps);
+            if !q.is_empty() {
+                for x in xs {
+                    at_paths(leaf, &q, x);
+                }
+            }
+        }
+        Json::Obj(kvs) => {
+            for (k, x) in kvs.iter_mut() {
+                at_paths(leaf, &step_key(Some(k.as_str()), ps), x);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `Source.mathLeaf`: a value at an expression path: its math text, when it is
+/// a well-formed expression whose text the container can delimit (`math_ok` and
+/// `ok`); otherwise `None`, the value staying as it is.
+pub fn math_leaf(
+    pr_r: &dyn Fn(&Sym, &Json) -> String,
+    ok: &dyn Fn(&str) -> bool,
+    s: &Sym,
+    v: &Json,
+) -> Option<Json> {
+    if !is_e(v) {
+        return None;
+    }
+    let t = pr_r(s, v);
+    (math_ok(&t) && ok(&t)).then_some(Json::Math(t))
+}
+
+/// `Source.mathify`, in place: print a section's path blocks: every expression
+/// at one of the paths `ps` (keyed by the block's key) as math under the
+/// symbol table `s`.
+pub fn mathify(
+    pr_r: &dyn Fn(&Sym, &Json) -> String,
+    ok: &dyn Fn(&str) -> bool,
+    s: &Sym,
+    ps: &[&[PathSeg]],
+    bs: &mut Kvs,
+) {
+    let leaf = |v: &Json| math_leaf(pr_r, ok, s, v);
+    for (k, v) in bs.iter_mut() {
+        at_paths(&leaf, &step_key(Some(k.as_str()), ps), v);
+    }
+}
+
+/// `Source.cookV`, in place: every math leaf of a value read back with `ck`
+/// (`None` when one does not read).
+pub fn cook_v(ck: &dyn Fn(&str) -> Option<Json>, v: &mut Json) -> Option<()> {
+    match v {
+        Json::Math(t) => *v = ck(t)?,
+        Json::Arr(xs) => {
+            for x in xs {
+                cook_v(ck, x)?;
+            }
+        }
+        Json::Obj(kvs) => cook_o(ck, kvs)?,
+        _ => {}
+    }
+    Some(())
+}
+
+/// `Source.cookO`, in place.
+pub fn cook_o(ck: &dyn Fn(&str) -> Option<Json>, kvs: &mut Kvs) -> Option<()> {
+    for (_, v) in kvs.iter_mut() {
+        cook_v(ck, v)?;
+    }
+    Some(())
+}
+
+/// `Source.cookBlocks`, in place: read a section's path blocks: every math
+/// leaf, wherever it is, read back as an expression under the symbol table
+/// `s`.
+pub fn cook_blocks(ck_r: &dyn Fn(&Sym, &str) -> Option<Json>, s: &Sym, bs: &mut Kvs) -> Option<()> {
+    cook_o(&|t| ck_r(s, t), bs)
+}
+
+/// `Source.mathifyDoc`: print the path blocks of a skeleton: each section's
+/// under its symbol table (a component's, or the document's for the top-level
+/// blocks); `ok` is the container's test of math text.
+pub fn mathify_doc(
+    pr_r: &dyn Fn(&Sym, &Json) -> String,
+    ok: &dyn Fn(&str) -> bool,
+    mut d: Doc<MR>,
+) -> Doc<MR> {
+    // The tables are the skeleton's before printing (`symFor_mathifyDoc`).
+    let top = top_sym(&d);
+    let syms: Vec<Sym> = d.comps.iter().map(|c| sym_for(&d, c)).collect();
+    mathify(pr_r, ok, &top, TOP_EXPR_PATHS, &mut d.blocks);
+    for (c, s) in d.comps.iter_mut().zip(&syms) {
+        mathify(pr_r, ok, s, COMP_EXPR_PATHS, &mut c.blocks);
+    }
+    d
+}
+
+/// `Source.cookDocBlocks`: read the path blocks of a skeleton: every math leaf
+/// of a section's blocks under the section's symbol table.
+pub fn cook_doc_blocks(
+    ck_r: &dyn Fn(&Sym, &str) -> Option<Json>,
+    mut d: Doc<MR>,
+) -> Option<Doc<MR>> {
+    let top = top_sym(&d);
+    let syms: Vec<Sym> = d.comps.iter().map(|c| sym_for(&d, c)).collect();
+    cook_blocks(ck_r, &top, &mut d.blocks)?;
+    for (c, s) in d.comps.iter_mut().zip(&syms) {
+        cook_blocks(ck_r, s, &mut c.blocks)?;
+    }
+    Some(d)
 }
 
 /// `Source.cookComp`: read a component's math entries under its symbol table;

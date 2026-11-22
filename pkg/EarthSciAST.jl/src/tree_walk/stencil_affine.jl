@@ -62,7 +62,7 @@ end
 #
 # IDENTITY-MEMOIZED: the compiled template is a DAG (`_stencilize` /
 # `_compile` preserve sharing via their identity memos), and the lowering is a
-# pure function of the node under one call's fixed `lane_repl`/`subcalls`, so
+# pure function of the node under one call's fixed `lane_repl`, so
 # a shared template node lowers to ONE shared access node — the per-path
 # rebuild re-inflated the spine into an exponentially large tree AND pushed a
 # duplicate `acc` descriptor per PATH to each access leaf. With the memo a
@@ -70,39 +70,30 @@ end
 # entry; evaluation reads `acc[idx]` by index, so values are unchanged, and
 # `_build_acc_cse` counts path multiplicities exactly, so CSE slot decisions
 # are unchanged too. On a tree (no shared nodes) the memo never hits —
-# byte-identical output, `acc` table included. The memo is per top-level
-# call; `_lower_subcall` re-enters through this entry so a variant body gets
-# its own memo for its own `lane_repl`.
+# byte-identical output, `acc` table included. The memo is per top-level call.
 function _lower_to_access(
-        tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
-        acc::Vector{_AccDesc},
-        subcalls::Vector{_SubCallSite} = _SubCallSite[]
+        tmpl::_Node, lane_repl::Vector{<:_LaneRepl}, acc::Vector{_AccDesc}
     )::_Node
-    return _lower_to_access(tmpl, lane_repl, acc, subcalls, _NodeIdMap{_Node}())
+    return _lower_to_access(tmpl, lane_repl, acc, _NodeIdMap{_Node}())
 end
 function _lower_to_access(
         tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
-        acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
-        memo::_NodeIdMap{_Node}
+        acc::Vector{_AccDesc}, memo::_NodeIdMap{_Node}
     )::_Node
     cached = get(memo, tmpl, nothing)
     cached === nothing || return cached
-    result = _lower_to_access_node(tmpl, lane_repl, acc, subcalls, memo)
+    result = _lower_to_access_node(tmpl, lane_repl, acc, memo)
     memo[tmpl] = result
     return result
 end
 function _lower_to_access_node(
         tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
-        acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
-        memo::_NodeIdMap{_Node}
+        acc::Vector{_AccDesc}, memo::_NodeIdMap{_Node}
     )::_Node
     k = tmpl.kind
     if k === _NK_STATE
         if tmpl.idx < 0
-            r = -tmpl.idx
-            r >= _SUBCALL_SENT_BASE &&
-                return _lower_subcall(subcalls[r - _SUBCALL_SENT_BASE], lane_repl)
-            rep = lane_repl[r]
+            rep = lane_repl[-tmpl.idx]
             if rep isa _LitRepl
                 return _alit(rep.v)
             else
@@ -123,80 +114,20 @@ function _lower_to_access_node(
     elseif k === _NK_OP
         # `payload` is carried through (`nothing` for every arithmetic op).
         ch = _Node[
-            _lower_to_access(c, lane_repl, acc, subcalls, memo)
+            _lower_to_access(c, lane_repl, acc, memo)
                 for c in tmpl.children
         ]
         return _mknode(kind = _NK_OP, op = tmpl.op, children = ch, payload = tmpl.payload)
+    elseif k === _NK_CALL
+        # A template call: its arguments lower into this spine; the target's
+        # body is a function of them and is not lowered (call.jl).
+        ch = _Node[
+            _lower_to_access(c, lane_repl, acc, memo)
+                for c in tmpl.children
+        ]
+        return _mknode(kind = _NK_CALL, op = tmpl.op, children = ch, payload = tmpl.payload)
     end
     return _decline(:unknown_kind, string(k))
-end
-
-# Lower one sub-kernel call site (compile-once template tier): slice the body's
-# re-based lane lowerings out of the enclosing `lane_repl`, and get-or-build the
-# variant's shared access form for that descriptor content. Two boxes (or two
-# parent kernels) whose body lanes lower identically share ONE `_AccKernel`
-# object — descriptor content, not box identity, is the key, mirroring the
-# enclosing `spine_cache`. The body's own nested sites recurse with LOCAL
-# numbering (the variant's recipes/subcalls are self-contained).
-function _lower_subcall(site::_SubCallSite, lane_repl::Vector{<:_LaneRepl})::_Node
-    variant, base = site
-    seg = _LaneRepl[lane_repl[base + k] for k in eachindex(variant.recipes)]
-    skey = _lane_repl_key(seg)
-    sub = get!(variant.acc_cache, skey) do
-        a = _AccDesc[]
-        raw = _lower_to_access(variant.tmpl, seg, a, variant.subcalls)
-        sp, cse = _build_acc_cse(raw, a)
-        _AccKernel(
-            _no_cells(), sp, a, cse,
-            _collect_subkernels(sp, cse)
-        )
-    end
-    return _mknode(kind = _NK_SUBCALL, payload = sub)
-end
-
-# Distinct sub-kernels reachable from a lowered spine + its CSE recipes
-# (transitively, nested-first) — the runner prologue fills each one's invariant
-# tier once per call. Dedup by payload identity: a shared body appears once. The
-# spine is a DAG, so each node is entered once (`nodes`); a node met again holds
-# only sub-kernels already listed, so the order is that of a walk per path.
-function _collect_subkernels(spine::_Node, cse::_AccCSE)::Vector{_AccKernel}
-    out = _AccKernel[]
-    seen = IdDict{_AccKernel, Nothing}()
-    nodes = _NodeIdMap{Nothing}()
-    _collect_subkernels!(out, seen, nodes, spine)
-    for r in cse.recipes
-        _collect_subkernels!(out, seen, nodes, r)
-    end
-    for r in cse.inv_recipes
-        _collect_subkernels!(out, seen, nodes, r)
-    end
-    return out
-end
-function _collect_subkernels!(
-        out::Vector{_AccKernel}, seen::IdDict{_AccKernel, Nothing},
-        nodes::_NodeIdMap{Nothing}, n::_Node
-    )
-    haskey(nodes, n) && return
-    nodes[n] = nothing
-    if n.kind === _NK_SUBCALL
-        S = n.payload::_AccKernel
-        haskey(seen, S) && return
-        seen[S] = nothing
-        # `S.subs` already holds ITS transitive sub-kernels (built inside-out by
-        # `_lower_subcall`), so splice those first — nested-first order.
-        for T in S.subs
-            if !haskey(seen, T)
-                seen[T] = nothing
-                push!(out, T)
-            end
-        end
-        push!(out, S)
-        return
-    end
-    for c in n.children
-        _collect_subkernels!(out, seen, nodes, c)
-    end
-    return
 end
 
 # ========================================================================
@@ -246,7 +177,7 @@ end
 # A subexpression names no loop index (it is a constant over the loop).
 _names_no_loop(e::ASTExpr, idx_names) =
     e isa VarExpr ? !((e::VarExpr).name in idx_names) :
-    e isa OpExpr ? _allof(a -> _names_no_loop(a, idx_names), (e::OpExpr).args) : true
+    e isa OpExpr ? _allof(a -> _names_no_loop(a, idx_names), _operands(e::OpExpr)) : true
 
 function _affine_form(e::ASTExpr, idx_names::AbstractVector{String}; single::Bool = false)
     D = length(idx_names)
@@ -384,7 +315,7 @@ mutable struct _AffineEq{B, VM, CA, PS, V}
     fast_key::Union{Nothing, Bool, _FastKey}
     # The boxes' lowered spines by branch key and lane lowering, and the
     # flattened constant arrays the lowerings read.
-    spine_cache::Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}
+    spine_cache::Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE}}
     flat_cache::IdDict{Any, Vector{Float64}}
     # Scratch reused across keyed cells: the branch-key text, the state lanes'
     # slots, the backward probe, and the visited set `_branch_key!` clears.
@@ -404,7 +335,7 @@ function _AffineEq(
         Dict{String, Int}(), Dict{String, Vector{Union{Nothing, _LaneEval}}}(),
         Dict{String, Any}(), Dict{String, Vector{Vector{_GuardPath}}}(),
         IdDict{Any, Bool}(), nothing, IdDict{OpExpr, Any}(), nothing,
-        Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}(),
+        Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE}}(),
         IdDict{Any, Vector{Float64}}(), IOBuffer(), Int[], Int[], _SeenSet()
     )
 end
@@ -478,7 +409,7 @@ function _has_indexed_producer(e, seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr,
         fa isa OpExpr && _is_scalar_op(fa.op) && _reaches_indexable_producer(fa) &&
             return true
     end
-    for a in e.args
+    for a in _operands(e)
         _has_indexed_producer(a, seen) && return true
     end
     e.expr_body !== nothing && _has_indexed_producer(e.expr_body, seen) && return true
@@ -1817,7 +1748,7 @@ _is_const_oob(err) = err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY
 
 # Every guard path each lane sentinel of `tmpl` is read under (`ifelse`
 # branches, the short-circuited operands of `and` / `or`). A lane with no
-# recorded path — one inside a template sub-kernel, or past the walk budget —
+# recorded path — one the walk does not reach, or past the walk budget —
 # has unknown guards, which `_lane_guard_at` treats as a run-time guard.
 function _lane_guard_paths(tmpl::_Node, nlanes::Int)
     paths = [_GuardPath[] for _ in 1:nlanes]
@@ -1831,7 +1762,7 @@ function _lane_guard_paths(tmpl::_Node, nlanes::Int)
         push!(seen, key)
         if n.kind === _NK_STATE && n.idx < 0
             r = -n.idx
-            if r < _SUBCALL_SENT_BASE && r <= nlanes
+            if r <= nlanes
                 p = copy(stack)
                 any(
                     q -> length(q) == length(p) &&
@@ -1873,7 +1804,6 @@ function _guard_at_cell(n::_Node, recipes, env, var_map, const_arrays)
     if k === _NK_STATE
         n.idx < 0 || return nothing
         r = -n.idx
-        r >= _SUBCALL_SENT_BASE && return nothing
         rec = recipes[r]
         rec.kind in (LANE_LOOPLIT, LANE_CONST, LANE_EXPRTBL) || return nothing
         v = try
@@ -2162,7 +2092,7 @@ function _process_affine_box!(kernels, eq::_AffineEq, box, cbox)
     thin = Bool[length(box[d]) == 1 for d in 1:D]
     corners = _box_corners(box)
     bkey, branch = _cell_bkey!(eq, rep)
-    tmpl, recipes, subcalls = branch.tmpl, branch.recipes, branch.subcalls
+    tmpl, recipes = branch.tmpl, branch.recipes
 
     # verify the output slot map on this box against var_map (catches a bad omap)
     denv = Dict{String, Int}()
@@ -2206,9 +2136,9 @@ function _process_affine_box!(kernels, eq::_AffineEq, box, cbox)
     end
 
     view === nothing || _range_real_repls!(view, lane_repl, recipes)
-    spine, acc, cse, subs = get!(eq.spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
+    spine, acc, cse = get!(eq.spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
         a = _AccDesc[]
-        raw = _lower_to_access(tmpl, lane_repl, a, subcalls)
+        raw = _lower_to_access(tmpl, lane_repl, a)
         if reduce !== nothing
             raw = _mknode(
                 kind = _NK_AREDUCE, op = reduce.op, literal = reduce.zerobar,
@@ -2220,7 +2150,7 @@ function _process_affine_box!(kernels, eq::_AffineEq, box, cbox)
             )
         end
         cs_spine, cse = _build_acc_cse(raw, a)   # per-cell CSE (shared subtrees → scratch)
-        (cs_spine, a, cse, _collect_subkernels(cs_spine, cse))
+        (cs_spine, a, cse)
     end
     out_ranges = eq.out_ranges
     slab = Bool[
@@ -2235,7 +2165,7 @@ function _process_affine_box!(kernels, eq::_AffineEq, box, cbox)
         UnitRange{Int}[cbox[d] for d in 1:nout],
         base - (view === nothing ? 0 : view.shift), Int[], slab
     )
-    return push!(kernels, _AccKernel(cs, spine, acc, cse, subs))
+    return push!(kernels, _AccKernel(cs, spine, acc, cse))
 end
 
 # Every lane recipe's compiled evaluator (`nothing` where it has none), per
@@ -2390,11 +2320,8 @@ function _try_affine_stencil(
         array_var_info, var_map::AbstractDict{String, Int},
         const_arrays::AbstractDict, pgather::AbstractDict,
         param_sym_set, covered::_Covered;
-        template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
-        # The per-BUILD cross-equation store (variant +
-        # bound-body caches, shared obs-inline memo).
-        # `nothing` is the per-equation caches
-        # (cross-equation variants off / storeless callers).
+        # The per-BUILD observed-inlining store (`_XEqStore`); `nothing`: a
+        # per-call memo.
         xeq::Union{Nothing, _XEqStore} = nothing,
         reduce::Union{Nothing, _AffineReduce} = nothing,
         # A tile's lowering (`_RangeAffineView`, range_hooks.jl):
@@ -2419,32 +2346,14 @@ function _try_affine_stencil(
         push!(ranges, first(r):last(r))
     end
 
-    # Observed inlining, with the substitution memo EXPOSED when the compile-once
-    # tier is active: `_sub_preserving` reconstructs every ancestor of a bound
-    # variable, so a template expansion root that contains an observed reference
-    # comes out as a NEW object — the memo maps old → new, and translating the
-    # site table through it keeps those roots recognized. A root the memo never
-    # visited (identity preserved, or from another equation) maps to itself. A
-    # root that some earlier rewrite already detached from the table simply
-    # compiles fused — slower, never wrong.
+    # Observed inlining. With a store, the substitution memo is shared across
+    # every equation of the build (bindings — `resolved_obs` — are one fixed
+    # Dict per build, `_xeq_obs_memo` pins that). Without a store: a fresh
+    # per-call memo.
     body = rhs_body
-    sites = template_sites
     if !isempty(resolved_obs)
-        # With a store, the substitution memo is shared across every
-        # equation of the build (bindings — `resolved_obs` — are one fixed Dict
-        # per build, `_xeq_obs_memo` pins that), so a root shared by two
-        # equations rewrites to the SAME object and the cross-equation variant
-        # key can hit. Without a store: a fresh per-call memo.
         memo = xeq === nothing ? _SubMemo() : _xeq_obs_memo(xeq, resolved_obs)
         body = _sub_preserving(rhs_body, resolved_obs, memo)
-        if sites !== nothing
-            translated = IdDict{OpExpr, OpExpr}()
-            for (root, ap) in sites
-                nr = get(memo, root, root)
-                nr isa OpExpr && (translated[nr] = ap)
-            end
-            sites = translated
-        end
     end
     inner = lhs_body.args[1]::OpExpr
     lhs_var = (inner.args[1]::VarExpr).name
@@ -2456,14 +2365,9 @@ function _try_affine_stencil(
     all_ranges = reduce === nothing ? ranges : vcat(ranges, reduce.ranges)
     Dall = length(all_names)
 
-    tctx = sites === nothing ? nothing :
-        _TemplateCtx(
-            sites, var_map, param_sym_set;
-            idxkey = _idxset_key(all_names), store = xeq
-        )
     ctx_proto = _StencilCtx(
         Set{String}(all_names), _LaneRecipe[], Dict{String, Int}(),
-        array_var_info, const_arrays, pgather, tctx
+        array_var_info, const_arrays, pgather
     )
     base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
     # The output slot does not move along a contracted dim.

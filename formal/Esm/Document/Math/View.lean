@@ -483,5 +483,6 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
   | .null, h => by simp [isE] at h
   | .bool _, h => by simp [isE] at h
   | .arr _, h => by simp [isE] at h
+  | .math _, h => by simp [isE] at h
 
 end Esm.Document.Math

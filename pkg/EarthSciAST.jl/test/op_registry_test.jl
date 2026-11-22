@@ -109,15 +109,16 @@ const ESM = EarthSciAST
         @test ESM._ops_with(:mtk_known) isa Set{String}
     end
 
-    @testset "grad/div/laplacian are demoted to unprivileged rewrite targets (§4.2)" begin
-        # esm-spec §4.2: the spatial-calculus sugar carries NO dimensional /
-        # spatial / coordinate privilege. The former `known`/`spatial`/
+    @testset "grad/div/laplacian are ordinary open-tier user op names (§4.2)" begin
+        # esm-spec §4.2: `grad`, `div` and `laplacian` carry NO dimensional /
+        # spatial / coordinate privilege and no registry row. The former `known`/`spatial`/
         # `dim_spatial` flags were dropped — dimension is UNDETERMINABLE until
         # lowered (§4.8.3/§4.8.4, units.jl has no rule), and spatial axes are
         # harvested structurally from the `dim`/`wrt` FIELDS (flatten.jl), not
         # from an op-name set. They now carry NO bespoke registry flag at all —
         # NOT EVEN `cse=true`. What routes them to the `unlowered_operator` gate
-        # is their membership in the open rewrite-target tier T (`_op_in_T`):
+        # is their membership in the open rewrite-target tier T (`_op_in_T`,
+        # which holds every op with no registry row):
         # `_cse_hoistable` makes every T op a non-hoistable CSE barrier, so it
         # reaches `_compile_op`'s GENERIC gate, exactly like an arbitrary user
         # op (pinned by tree_walk_test.jl). They are NOT `_CSE_OPAQUE_OPS`.
@@ -125,6 +126,9 @@ const ESM = EarthSciAST
             @test !(op in ESM._ops_with(:mtk_known))   # no MTK "known" privilege
             @test !(op in ESM._CSE_OPAQUE_OPS)         # no bespoke cse flag
             @test ESM._op_in_T(op)                     # in the open rewrite-target tier
+            @test ESM._op_spec(op) === nothing         # no registry row
+            @test !(op in ESM._REWRITE_TARGET_OPS)     # not a named rewrite target
+            @test !(op in ESM._REMOVED_OPS)            # not refused
         end
         # The `spatial` / `dim_spatial` registry flags were removed entirely,
         # and there is no `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` op-name set.

@@ -540,7 +540,7 @@ bindings export the family; all are total and return sorted names.
 | `discrete_parameters(model) -> [str]` | event/schedule-updated parameters |
 | `sampled_parameters(model) -> [str]` | distribution-drawn parameters |
 | `constant_parameters(model) -> [str]` | never updated |
-| `system_kind(model) -> SystemKind` | `ode` / `dae` / `sde` / `pde` / `nonlinear` |
+| `system_kind(model) -> SystemKind` | `ode` / `dae` / `sde` / `nonlinear` (`pde` was dropped at esm 2.4.0; a declared `pde` is ignored with the warning `deprecated_system_kind`) |
 | `observed_definitions(model) -> {str: Expr}` | observed name → defining expression |
 
 Divergences:
@@ -551,7 +551,8 @@ Divergences:
   model and nothing else. Julia, TypeScript, Python and Go export the whole
   family the item rules — `system_kind` (derived), `declared_system_kind` (the
   explicit field, nullable) and `effective_system_kind` (`declared ?? derived`).
-  Rust exports only `system_kind`.
+  Rust exports `system_kind` and `declared_system_kind`, not
+  `effective_system_kind`.
 - **Return type.** TypeScript and Rust return a `SystemKind` enum; Julia,
   Python and Go return a bare string.
 - **`observed_definitions`** has an extra `bare_only: bool = False` parameter in
@@ -919,6 +920,8 @@ docstring repeats:
 | `symbolic_body_did_not_lower` | the body does not resolve or compile with its indices kept symbolic |
 | `unsupported_op` | an operator the tier has no form for |
 | `unknown_kind` | a compiled node kind the tier has no form for |
+| `call_array_args` | a template call that passes arrays, in a context that has no array arguments (setup geometry) |
+| `call_array_forward` | a template call, inside another call's body, passing on an array that is not that body's own array argument |
 | `unknown_array` | a gather of a name that is not a known array |
 | `malformed_index` | an `index` node with no operand |
 | `subscript_rank_mismatch` | a gather whose subscript count is not the array's rank |
@@ -936,7 +939,6 @@ docstring repeats:
 | `unsupported_desc` | an access descriptor the code generator has no form for |
 | `unsupported_bound` | a loop bound the code generator cannot write |
 | `foreign_scratch` | a read of a scratch buffer the generated function does not own |
-| `subcall_order` | a sub-kernel call emitted before its invariants are in scope |
 | `loopvar_out_of_scope` | a loop variable read outside the loop that binds it |
 | `loop_reentered` | a loop entered again inside its own body |
 | `lane_spec_on_scalar_spine` | a lane descriptor on a scalar spine |
@@ -2135,6 +2137,7 @@ reading that as a gap.
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
 | `contribution` | type | `Contribution` | `Contribution` | `Contribution` | `Contribution` | `Contribution` |
 | `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
+| `declared_system_kind` | function | `declared_system_kind` | `declaredSystemKind` | `declared_system_kind` | `declared_system_kind` | `DeclaredSystemKind` |
 | `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` |
 | `deprecated_records_per_sample_sites` | function | `deprecated_records_per_sample_sites` | `deprecatedRecordsPerSampleSites` | `deprecated_records_per_sample_sites` | `deprecated_records_per_sample_sites` | `DeprecatedRecordsPerSampleSites` |
 | `derive_odes` | function | `derive_odes` | `deriveODEs` / `deriveOdes` | `derive_odes` | `derive_odes` | `DeriveODEs` |
@@ -2221,7 +2224,6 @@ reading that as a gap.
 | `data_source_determinism` | type | `DataSourceDeterminism` | – | `DataSourceDeterminism` | `DataSourceDeterminism` | `DataSourceDeterminism` |
 | `data_source_location` | type | `DataSourceLocation` | – | `DataSourceLocation` | `DataSourceLocation` | `DataSourceLocation` |
 | `data_source_temporal` | type | `DataSourceTemporal` | – | `DataSourceTemporal` | `DataSourceTemporal` | `DataSourceTemporal` |
-| `declared_system_kind` | function | `declared_system_kind` | `declaredSystemKind` | `declared_system_kind` | – | `DeclaredSystemKind` |
 | `dimension_promotion_error` | error | `DimensionPromotionError` | `DimensionPromotionError` | `DimensionPromotionError` | – | `DimensionPromotionError` |
 | `discrete_event` | type | `DiscreteEvent` | – | `DiscreteEvent` | `DiscreteEvent` | `DiscreteEvent` |
 | `discrete_event_trigger` | type | `DiscreteEventTrigger` | – | `DiscreteEventTrigger` | `DiscreteEventTrigger` | `DiscreteEventTrigger` |

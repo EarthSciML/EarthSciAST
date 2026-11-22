@@ -35,6 +35,9 @@ function _xeq_probe(build; compiler = :native)
     counters = (
         variants = get(rep.counts, :body_variants, 0),
         compiles = get(rep.counts, :compile_calls, 0),
+        # Template bodies compiled (call targets; an instance whose body is the
+        # same function as another's shares it and is not counted).
+        targets = get(rep.counts, :call_targets, 0),
     )
     dus = Vector{Float64}[]
     for (ti, u) in zip((0.0, 0.7, 3.25), _xeq_probe_states(length(u0)))
@@ -139,8 +142,11 @@ const ONE_EQ_VARIANTS = Ref(0)
         )
         on, _off = _xeq_oracle(build)
         @test length(on[2]) == 343
-        @test on[5].variants == 15
-        ONE_EQ_VARIANTS[] = on[5].variants
+        # The references are calls: no expansion sub-kernel; fifteen
+        # instances, three compiled bodies (one per axis).
+        @test on[5].variants == 0
+        @test on[5].targets == 3
+        ONE_EQ_VARIANTS[] = on[5].targets
     end
 
     @testset "two equations sharing template roots" begin
@@ -155,8 +161,8 @@ const ONE_EQ_VARIANTS = Ref(0)
         # the same template roots compile the SAME body variants as ONE of them
         # does. Per-equation caches would compile each root twice, so this
         # number doubling is exactly the regression to catch.
-        @test on[5].variants == 15
-        @test on[5].variants == ONE_EQ_VARIANTS[]
+        @test on[5].variants == 0
+        @test on[5].targets == ONE_EQ_VARIANTS[]
         # And the interpreter agrees bit-for-bit with the shared build.
         for k in eachindex(on[1])
             @test on[1][k] == off[1][k]

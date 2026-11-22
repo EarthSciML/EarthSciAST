@@ -1,0 +1,253 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "mount_registry_merge_inline",
+    "description": "The inline twin of fixture.esm: the subsystem Sub is authored in place with its own `expression_templates` block (no `match` rule), which joins Host's registry by the same rule a mounted leaf's does (esm-spec §9.6.4 rule 1): `scale` collides and is renamed in both owners, `rate` follows, `half` is kept once, and Sub's bodies keep Sub's own names (`k`), read in Sub's scope at Sub's references."
+  },
+  "models": {
+    "Host": {
+      "expression_templates": {
+        "scale": {
+          "params": [
+            "x"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              2,
+              "x"
+            ]
+          }
+        },
+        "half": {
+          "params": [
+            "x"
+          ],
+          "body": {
+            "op": "/",
+            "args": [
+              "x",
+              2
+            ]
+          }
+        }
+      },
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "default": 2.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "apply_expression_template",
+                "args": [],
+                "name": "scale",
+                "bindings": {
+                  "x": "y"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "apply_expression_template",
+                "args": [],
+                "name": "half",
+                "bindings": {
+                  "x": "z"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Sub": {
+          "expression_templates": {
+            "scale": {
+              "params": [
+                "x"
+              ],
+              "body": {
+                "op": "*",
+                "args": [
+                  3,
+                  "x"
+                ]
+              }
+            },
+            "half": {
+              "params": [
+                "x"
+              ],
+              "body": {
+                "op": "/",
+                "args": [
+                  "x",
+                  2
+                ]
+              }
+            },
+            "rate": {
+              "params": [
+                "x"
+              ],
+              "body": {
+                "op": "*",
+                "args": [
+                  "k",
+                  {
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": "scale",
+                    "bindings": {
+                      "x": "x"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "variables": {
+            "c": {
+              "type": "unknown",
+              "units": "1",
+              "default": 1.0
+            },
+            "d": {
+              "type": "unknown",
+              "units": "1",
+              "default": 0.5
+            },
+            "k": {
+              "type": "parameter",
+              "units": "1",
+              "default": 0.25
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "c"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": "rate",
+                    "bindings": {
+                      "x": "c"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "d"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "+",
+                    "args": [
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "half",
+                        "bindings": {
+                          "x": "d"
+                        }
+                      },
+                      {
+                        "op": "apply_expression_template",
+                        "args": [],
+                        "name": "half",
+                        "bindings": {
+                          "x": "d"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "Inner": {
+          "variables": {
+            "w": {
+              "type": "unknown",
+              "units": "1",
+              "default": 3.0
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "w"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": "scale",
+                    "bindings": {
+                      "x": "w"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

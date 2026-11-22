@@ -16,6 +16,12 @@
 > standard library (`lib/*.esm`), whose tiers are listed in §5.45.4. Sections that
 > existed only for a removed op are kept as "(Removed at 2.0.0)" stubs so that
 > section numbers stay stable.
+>
+> **esm 2.4.0.** `grad`, `div` and `laplacian` are no longer named as
+> rewrite-target sugar: they are ordinary open-tier operator names, checked,
+> matched and lowered like any user op. No binding special-cases them.
+> The `"pde"` system kind is dropped: a declared `"pde"` loads with the
+> warning `deprecated_system_kind` (§7) and is ignored.
 
 **Version 1.0 — Test Fixture Format and Execution Protocol**
 
@@ -1299,19 +1305,29 @@ Emission is separately constrained, and in the opposite direction. The rewrite
 MUST re-point the rect factors by editing the **call site** — the reference's
 `bindings`, and the `faq`'s own `ranges` / `shape` / `args` / `join` — and
 MUST NOT edit the referenced definition `body`. The body is shared across call
-sites (one of them being the generated producer `filter`, which keeps the
-FULL-GRID rect references) and is lowered once at the build boundary, which is
-what Option B exists for. Both binding spellings carry a rect factor and both
-MUST be re-pointed: the bare factor name (`{"xmin": "src_W"}`) and the
-subscripted expression (`{"lo_x": index(src_W, c)}`).
+sites and is lowered once at the build boundary, which is what Option B exists
+for. Both binding spellings carry a rect factor and both MUST be re-pointed: the
+bare factor name (`{"xmin": "src_W"}`) and the subscripted expression
+(`{"lo_x": index(src_W, c)}`).
+
+The generated producer `filter` keeps the FULL-GRID rect references. When the
+containment `ifelse` lies inside the body of a definition `T`, the filter is NOT
+copied out of the body's expansion: the desugar adds the **derived definition**
+`T__pd_filter` to the model's `operators` — `params` the parameters
+of `T` its comparisons read, in `T`'s declared order; `body` those comparisons
+as a `*` (the same form a longhand filter takes) — and the filter is a reference
+to it, each parameter bound exactly as the representative's call site binds it
+before that call site is re-pointed. A containment nested several definitions
+deep gets one derived definition per definition on the way, each body a reference
+to the next. A derived name that would replace a different declaration already
+in the registry is an error.
 
 Consequently a rect factor named **free** in a definition body — reachable from
 neither the call site's `bindings` nor the `faq`'s `args` — cannot be
 re-pointed, and leaving it would index the compact per-support cell gathers with
 full-grid positions. That is a wrong-numbers defect, so it MUST be rejected, with
 diagnostic `operator_body_references_pushdown_rewritten_variable`. The remedy is
-the one §9.6.4's sibling guard `operator_body_references_coupling_rewritten_variable`
-already prescribes: bind the value through the definition's params.
+to bind the value through the definition's params.
 
 **Residual diagnostic.** The desugar MUST NOT decline silently on a document it
 can see is join-shaped. When a `faq` is the rank-1 factor of a `+`-semiring
@@ -2481,7 +2497,7 @@ CONST **loader** field. This section governs a **build-once spatial field** — 
 `const`-derived array **regridded and/or differentiated** once at setup — that is
 then **consumed elementwise by an ODE**. It is the pattern a coupling emits when a
 static field (e.g. loader/const terrain elevation) is regridded onto a model grid
-and differentiated (`grad`/`D`) into a per-cell forcing that flows into the ODE
+and differentiated (spatial `D`) into a per-cell forcing that flows into the ODE
 RHS (`wildlandfire.esm`'s `TerrainRegrid` → `TerrainSlope`). The two simulation
 bindings that support it — **Julia, Python** — must agree, on a
 **numeric-tolerance** basis, on the resulting trajectory. The shared **offline**
@@ -5348,23 +5364,19 @@ Consequently:
   library whose result object supports name-keyed reads carries the map on that
   object (Python `Solution.merged_renames`, Rust
   `SolutionMetadata::merged_variable_renames`).
-- **The registry body is refused, not rewritten.** It is authored source the
-  substitution never sees, so a body still naming a merged-away variable would
-  expand at the build boundary into a name the flattened system no longer
-  declares. Rewriting it is not the alternative: the flattened form's registry
-  would then disagree with the expand-at-load image the same document produces,
-  which esm-spec §9.6.4 rule 2 requires to be observably identical. That is the
-  guard `operator_body_references_coupling_rewritten_variable` already applies
-  to a `variable_map`-substituted name (§9.6.4); the merged-away names join the
-  same set. A definition `param` shadows the outer name (§9.6.1), so a body that
-  BINDS the name is unaffected — which is the first of the two fixes the
-  diagnostic names.
-
-  **All five bindings MUST implement this guard.** A MUST that four of five
-  ignore is not a rule, it is a note about one implementation, and the
-  compliance matrix stops meaning anything. The `template_registry` surface
-  below pins it, so a binding that drops it goes red rather than quietly
-  diverging.
+- **A registry body reads the survivor through its reference.** Flatten closes
+  every carried definition body (esm-spec §10.7): a name the body read free — a
+  component variable, merged away or replaced by a `variable_map` — is a
+  parameter of the body, bound at each reference to the name of the reference's
+  own site. The merge and the substitution rewrite that binding like any other
+  site of the equation, so the flattened system, its registry and the
+  expand-at-load image agree, and there is nothing to refuse. The
+  `registry_body_names_the_merged_away_state` case pins it: its tendency reads
+  `Chem.ozone` through the reference, never `Sink.O3`. (Before bodies were
+  closed, a body was scoped to its component and such a document was refused
+  with `operator_body_references_coupling_rewritten_variable`, formerly
+  `template_body_references_coupling_rewritten_variable`; that refusal is
+  withdrawn.)
 
 **Shape.** Structure-comparing and golden-free, like §5.33. Each flatten case
 pins BOTH halves — the dead name survives nowhere, AND the later entry landed on
@@ -7700,9 +7712,9 @@ operator removed from the format, in the call or the escape form, and
 shapes and the collisions that force the explicit name form, every accepted
 hand-written variant, the document constructs (front matter, descriptions,
 declarations, equations, reactions, containers, definitions, rules, by-reference
-subsystems, path-keyed blocks, quoted flow-collection attributes, the plot
-shorthand beside the analyses block it stands for), prose and label
-independence, and constants with units.
+subsystems, path-keyed blocks and the math of their expression-valued fields,
+quoted flow-collection attributes, the plot shorthand beside the analyses block
+it stands for), prose and label independence, and constants with units.
 
 **Oracle.** Every expected text and value is generated by `esm-lean`
 (`scripts/gen-document-format-fixtures.py`), never written by hand, so the tier
@@ -7804,7 +7816,8 @@ flattening inlines a definition body, and eager expansion is retired.
    `priority`, in the order of esm-spec §9.6.4 rule 5.
 2. `expanded.esm` — `Expand(load(fixture))`, structurally, under this
    revision's semantics (esm-spec §9.6.4 rules 3 and 4). For every fixture in
-   which no match spans a definition boundary, that is the tree the in-place
+   which no match spans a definition boundary or lies inside the bindings of a
+   reference the in-place engine left unexpanded, that is the tree the in-place
    engine produced, so the existing goldens MUST NOT be regenerated: that
    they still hold is the evidence that the reference form denotes what the
    inlined form meant (esm-spec §9.6.4 rule 3, "Equivalence"). A new fixture
@@ -7812,9 +7825,11 @@ flattening inlines a definition body, and eager expansion is retired.
    change. The cases that differ are pinned only in
    `opacity_rule_replacement/`: a compound pattern around another rule's
    replacement; a structured or ground pattern node at a definition parameter;
-   and a compound pattern across a reference to a definition whose body holds a
-   rewrite-target op. Its golden is written by hand under the new semantics,
-   and the in-place engine fails it by design.
+   a compound pattern across a reference to a definition whose body holds a
+   rewrite-target op; and a rule on a core-op node inside the bindings of an
+   authored reference that survives load, which now fires there where the
+   in-place engine left the binding unrewritten. Its golden is written by
+   hand under the new semantics, and the in-place engine fails it by design.
 
 A harness MUST assert both. Asserting only the emitted golden would accept a
 binding whose references denote the wrong body; asserting only the expanded
@@ -7822,10 +7837,12 @@ golden would accept a binding that still inlines.
 
 **Non-vacuity.** The set MUST include a rule firing inside a definition body
 (`rewrite_in_template_body`), two variants of one definition
-(`template_instance_variants`), a nonterminating rewrite detected through a
-body (`rewrite_depth_through_bodies`), a rewrite-target op left in a body and
-refused by the build gate (`unlowered_in_template_body`), and the two pinned
-opacity cases (`opacity_rule_replacement`).
+(`template_instance_variants`), a single rewritten body registered as
+`<name>.variant1` because an entry no reference reaches still references the
+definition (`rewrite_shared_by_unreached_entry`), a nonterminating rewrite
+detected through a body (`rewrite_depth_through_bodies`), a rewrite-target op
+left in a body and refused by the build gate (`unlowered_in_template_body`),
+and the pinned opacity cases (`opacity_rule_replacement`).
 
 **The elementwise lift (esm-spec §9.6.11).** The `tests/conformance/flatten_wire/`
 goldens are serialized after `Expand` and MUST NOT change: they are the oracle
@@ -7834,10 +7851,14 @@ the lift of the expansion did. Each case gains a second golden, the flattened
 equations with references kept and the reached registry entries, byte for byte
 across bindings, and the set gains a case whose application binds an array to a
 mixed parameter, pinning the `<name>.cellwise<k>` variant and its `p_cell`
-parameter. A structural time derivative inside a definition body is pinned by
+parameter (`mixed_parameter_cellwise`). A structural time derivative inside a definition body is pinned by
 a fixture whose flattened golden (after `Expand`) equals the expansion's
-resolution: one `D` with `wrt` absent over a parameter bound to a state, one
-over a parameter bound to an observed (chain rule), one over a nested
+resolution. The rule promises equality in value, not node for node (a zero
+term the expansion drops can stay in the body, esm-spec §9.6.4 rule 3); this
+fixture binds no parameter that sits under a `D` to a time-invariant name, so
+the two agree byte for byte as well: one `D` with `wrt` absent over a
+parameter bound to a state, one over a parameter bound to an observed (chain
+rule), one over a nested
 reference (`<S>.ddt`), one `wrt` parameter bound to `"t"` in one instance and to
 a spatial axis in another, and one that the table cannot answer, refused by
 the build gate as its expansion is.
@@ -7847,7 +7868,35 @@ whether its build compiles a referenced body once or once per call site:
 esm-spec §9.6.4 rule 2 governs that. The observables are the two goldens and
 the diagnostics.
 
-### 5.61 Core Names Are Reserved (normative, draft 2.4.0)
+### 5.61 Source Documents Loaded from Files (normative)
+
+**Decision pinned.** A loader that reads a document from a path or a URL picks
+Markdown for a `.md` name, Typst for a `.typ` name and JSON for every other
+name, by the extension alone, at the root and at every ref site (esm-spec
+§1.2.1). A source document its reader refuses as malformed fails as
+unparseable JSON fails there: `parse_error` at the root, the mechanism's
+unresolved diagnostic at a ref. A source document refused for a removed
+operator keeps `removed_op` everywhere, as a JSON document carrying one does.
+
+**Shape.** `tests/conformance/source_documents/` (contract in its `README.md`)
+holds a Typst and a Markdown root that import an operator library and mount a
+model written in the other source format, a JSON root that imports a `.typ`
+library and mounts a `.md` model, a top-level mount of a `.typ` model and a
+coupling import of a `.typ` coupling library, each with a JSON twin under
+`twins/` where one exists, and the refusals of `json_content.typ` and
+`json_content.md`, two files that hold JSON text: read by their extension they
+are refused, at the root and at each ref site. `removed_op.typ` and
+`removed_op.md` call the removed `fn`; they are refused with `removed_op` at the
+root and at each ref site, and so is the JSON twin `twins/removed_op.esm` when
+a definition import reaches it.
+
+**Adapters.** `pkg/EarthSciAST.jl/test/source_documents_test.jl` (Julia),
+`pkg/earthsci-ast-py/tests/test_source_documents.py` (Python),
+`pkg/earthsci-ast-rs/tests/source_documents_conformance.rs` (Rust),
+`pkg/earthsci-ast-ts/src/source-documents.test.ts` (TypeScript) and
+`pkg/earthsci-ast-go/pkg/esm/source_documents_test.go` (Go).
+
+### 5.62 Core Names Are Reserved (normative, draft 2.4.0)
 
 **Decision pinned.** The closed §4.2 set is the **core operators**; every other
 operator is a **defined operator**, given by definitions (esm-spec §9.6.12). A
@@ -7932,6 +7981,7 @@ ever emitted it, and the code had zero real coverage.
 | `removed_op` | Structural | **Hard error.** A document uses an `op` spelling, or a top-level field, that was REMOVED rather than deprecated: `arrayop` (the pre-0.8.0 spelling of `faq`, removed at esm 0.8.0); and, removed at esm 2.0.0, `aggregate` (the pre-1.1.0 spelling of `faq`, a deprecated alias from 1.1.0, which the codemod renames to `faq`), the ops `fn`, `table_lookup`, `skolem`, `rank`, `argmin`, `argmax`, `intersect_polygon` and `polygon_intersection_area`, and the `function_tables` block. It MUST be rejected BY NAME at the wire boundary, before schema validation, not left to fall through: each removed op is a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op, load it silently, and fail much later (or never) as `unlowered_operator`. The message names the op or field and the offending path, and for a 2.0.0 removal points at the offline codemod (`python -m earthsci_ast.migrate`, module `earthsci_ast.migration`), which rewrites a 1.x document onto the `lib/*.esm` definitions. A binding's `migrate()` refuses such a document with this code rather than rewriting it. Julia's removed `call` op (v0.3.0) is the precedent. Fixtures: `tests/invalid/faq/arrayop_op_removed.esm` and `tests/invalid/removed_ops/removed_op_<name>.esm`, one per 2.0.0 removal, each pinned `parse_error` (§7.1.2); `tests/conformance/removed_spellings/` covers the two removed `faq` spellings in a referenced child. |
 | `faq_version_too_old` | Structural | **Hard error.** A document spells `"op": "faq"` while declaring `esm` below 1.1.0. `faq` arrives at esm 1.1.0, the same version gate the top-level `solver` block follows (esm-spec §2.2.4). The rule is transitive through lowering: a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not. Fixtures: `tests/conformance/removed_spellings/` (case `faq_requires_v11`). |
 | `deprecated_op` | Structural | **WARNING, not an error.** A document spells a deprecated op (esm-spec §4.2 "Deprecated ops"): `neg`, the word spelling of unary `-`, or `pow`, the word spelling of `^` (or `neg` as a `broadcast` `fn`). At the wire boundary, in the same pass as the `removed_op` check and on every document a load touches, the loader REWRITES each well-formed use to its replacement (`neg(x)` → `-(x)`, `pow(x, n)` → `^(x, n)`, `fn: "neg"` → `fn: "-"`), keeping every other field of the node, and reports this once per DOCUMENT, naming every rewritten node as `<pointer> (<spelling>)`: its RFC 6901 JSON pointer (`~` and `/` in a key escaped) followed by `neg`, `pow` or `broadcast fn neg`. A use with the wrong operand count (a `broadcast` of `neg` with other than one operand included) is left as written, so its arity error is unchanged. The reference-preserving emit path (`emit_document`) applies the same wire boundary as a load. No value changes, and neither spelling survives into the loaded or emitted document or the canonical form. The spellings join `removed_op` in a later major version. Fixtures: `tests/conformance/scalar_operator_semantics/fixtures/pow_alias.esm`, the `negated` observed of `scalar_operator_semantics.esm`, and the `fn: "neg"` broadcast of `tests/fixtures/faq/27_broadcast_unary.esm`. |
+| `deprecated_system_kind` | Structural | **WARNING, not an error.** A model declares `"system_kind": "pde"`, a kind esm 2.4.0 dropped (esm-spec §6.3.1). The loader reports this once per DOCUMENT, naming every such model by the JSON pointer of its `system_kind` field, and keeps the field as written (emit writes it back). The declared value is ignored: the declared kind reads as absent, the model is its derived kind (`sde`, `nonlinear` or `ode`), and `system_kind_mismatch` is never reported for it. Fixture: `tests/conformance/classification/fixtures/system_kind_pde.esm` (`DeclaredPde`). |
 | `deprecated_records_per_sample` | Structural | **WARNING, not an error.** A document carries the deprecated `from.records_per_sample` or `temporal.records_per_sample` (esm-spec §8.3, §8.5.1); the number of records a data-fed parameter receives is now said by its record shape, whose first axis is a record axis (`"records": true`) or not. The loader reports this once per DOCUMENT, naming every place the field is written (a model variable's rule, a reaction-system parameter's rule, or a source's `temporal`), and keeps the field as written. The field is no longer obeyed, only checked: a written value other than the count the record shape gives is the hard error `records_per_sample_invalid` — so a pre-record-axis document writing `2` over a plain size-2 first axis, which used to receive the pair, is now refused (a breaking change, made with the esm 2.0.0 break; the fix is `"records": true` on that axis). The fields are REMOVED at esm 3.0.0. Fixtures: `tests/conformance/records_per_sample/`. |
 | `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
 | `units_dimensionless_literal_mismatch` | Units | **WARNING, not an error.** A check site (an equation, initialization equation or constraint equation, or a reaction rate, of any model or reaction system, inline subsystems included) that the current neutral-literal rule passes or skips fails once every bare numeric literal other than zero is read as dimensionless at scale 1 (esm-spec §4.8.6). Emitted once per site on `unit_warnings`, with `path` the site's pointer (`/models/<M>/equations/<i>`, `/models/<M>/subsystems/<Sub>/initialization_equations/<i>`, `/reaction_systems/<S>/reactions/<i>`, …), and never changes `is_valid`. A site the current rule already rejects carries no warning. A future version of EarthSciAST makes the dimensionless-literal rule the rule, and these sites become `unit_dimension_mismatch` errors. Fixtures: `tests/conformance/dimensionless_literal/` (its golden pins the exact warnings of every `tests/valid` file). |

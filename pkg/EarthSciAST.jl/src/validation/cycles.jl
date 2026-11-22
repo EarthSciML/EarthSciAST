@@ -186,15 +186,19 @@ Cross-binding pins: `(observed_cycle, /models/<M>)` only — the prose is
 deliberately NOT pinned (CONFORMANCE_SPEC §5.19.5); what every binding owes is
 that the message NAME the observeds on the cycle.
 """
-function validate_observed_cycles(file::EsmFile; views = nothing)::Vector{StructuralError}
+function validate_observed_cycles(file::EsmFile; views = nothing, tables = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     file.models === nothing && return errors
     for model_name in sort!(collect(keys(file.models)))
-        # The template-expanded view, as `validate_recurrence_semantics` reads
-        # it, so the two agree on which self-reads are recurrence candidates.
+        # The validation view and template table, as
+        # `validate_recurrence_semantics` reads them, so the two agree on which
+        # self-reads are recurrence candidates: each reference carries the names
+        # its body reads, and is read through its frame where the check looks
+        # at how a name is read.
         model = _units_view(file, model_name, file.models[model_name], views)
+        templates = _tpl_component_table(file, "models", model_name, tables)
         _foreach_component(model, _pointer("", "models", model_name)) do m, p, _
-            _check_observed_cycles!(errors, m, p)
+            _check_observed_cycles!(errors, m, p; templates)
         end
     end
     return errors
@@ -203,16 +207,16 @@ end
 # The observed dependency cycle of one component (not its subsystems).
 function _check_observed_cycles!(
         errors::Vector{StructuralError}, model::Model,
-        path::String
+        path::String; templates = nothing
     )
     defs = observed_definitions(model)
     if !isempty(defs)
         observed = Set{String}(keys(defs))
-        candidates = _recurrence_candidate_names(model, defs)
-        groups = recurrence_groups(model)
+        candidates = _recurrence_candidate_names(model, defs; templates)
+        groups = recurrence_groups(model; templates)
         adj = Dict{String, Vector{String}}()
         for (name, rhs) in defs
-            deps = intersect(_observed_dependency_names(rhs), observed)
+            deps = intersect(_observed_dependency_names(rhs; templates), observed)
             # esm-spec §4.3.1.1 / CONFORMANCE_SPEC §5.19.5: a causal self-read is
             # an ORDERING WITHIN one variable, not a dependency between two, so
             # `V → V` is dropped — for a recurrence CANDIDATE, and only for one.
@@ -317,18 +321,51 @@ end
 # reads, and the differentiand itself is in `args` where the walk already sees
 # it. Counting it would let `d(u)/d(x)` fabricate an edge into an observed that
 # happens to share a coordinate's name.
-function _observed_dependency_names(rhs::ASTExpr)::Set{String}
+#
+# With the model's template table `templates`, a template reference reads the
+# bindings its expansion reads (`_tpl_reads_binding`: the names its body reads
+# from the caller, carried by the validation view, and each parameter the body
+# uses as a value), and its binding keys bind none of the caller's names; the
+# body's own binders, which the expansion puts around a parameter's binding,
+# are subtracted like any other (`_tpl_scope_binders`).
+function _observed_dependency_names(rhs::ASTExpr; templates = nothing)::Set{String}
     free = Set{String}()
     bound = Set{String}()
-    foreach_subexpr_once(rhs) do e
+    seen = Base.IdSet{OpExpr}()
+    function walk(e)
         if e isa VarExpr
             push!(free, e.name)
-        elseif e isa OpExpr
-            for sym in _bound_index_symbols(e)
-                push!(bound, sym)
-            end
+            return
         end
+        e isa OpExpr || return
+        e in seen && return
+        push!(seen, e)
+        if templates !== nothing && _tpl_is_call(e)
+            foreach(walk, e.args)
+            b = e.bindings
+            b === nothing && return
+            for k in sort!(collect(keys(b)))
+                _tpl_reads_binding(templates, e, k) || continue
+                # A declared parameter's binding is substituted into the body,
+                # where the body's own binders may capture its names.
+                if !startswith(k, _TPL_FREE) && !startswith(k, _TPL_OUT)
+                    try
+                        union!(bound, _tpl_scope_binders(templates, e.name))
+                    catch err
+                        err isa ExpressionTemplateError || rethrow()
+                    end
+                end
+                walk(b[k])
+            end
+            return
+        end
+        for sym in _bound_index_symbols(e)
+            push!(bound, sym)
+        end
+        foreach_child(walk, e)
+        return
     end
+    walk(rhs)
     setdiff!(free, bound)
     return free
 end

@@ -40,7 +40,7 @@
 #     congruent entries bucketed at BUILD time so a backend emits one whole-lane
 #     program per group rather than one per cell;
 #   * the vectorization PLAN per access kernel (`_OopAccPlan`): the gather slot
-#     vectors, frozen lane constants, ghost masks and sub-kernel tables, plus
+#     vectors, frozen lane constants and ghost masks, plus
 #     the analysis that decides whether a kernel admits
 #     the vectorized form at all and, when it does not, says why;
 #   * the build product itself (`_OopRHS`, `_CompiledIR`, `_make_rhs_oop`).
@@ -367,21 +367,10 @@ struct _OopAccPlan
     ghost::Vector{Vector{Bool}}       # per descriptor: ghost-lane mask for a STATE_TBL_BOX with
     # a 0 slot (empty ⇒ no ghost); true lanes select 0.0 after
     # a gather at a SAFE index (see _build_oop_acc_plan)
-    # Template-body sub-kernels (compile-once tier, `_NK_SUBCALL`): the parent's
-    # FLAT transitive `K.subs` list and, aligned with it, each sub-kernel's own
-    # lane plan built against the PARENT's lane enumeration (a sub is evaluated at
-    # the parent's `(oln, midx)`, so its descriptors index by the parent lanes).
-    # Empty for every reference-free kernel. Nested subs are all present here
-    # (K.subs is transitive), so a `_NK_SUBCALL` in a sub's spine resolves against
-    # this same list. A sub whose spine does not vectorize forces `vectorizable`
-    # false on the whole parent.
-    subs::Vector{_AccKernel}
-    sub_plans::Vector{_OopAccPlan}
 end
 const _OOP_ACC_FALLBACK =
     _OopAccPlan(
-    false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[], Vector{Bool}[],
-    _AccKernel[], _OopAccPlan[]
+    false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[], Vector{Bool}[]
 )
 
 # Lane enumeration mirroring `_run_acc_kernel!` / `_run_box_kernel!` order:
@@ -433,8 +422,7 @@ end
 
 # Can the whole spine (plus CSE recipes) evaluate as lane vectors? A `_NK_CACHED`
 # must resolve to THIS kernel's scratch tiers. A ghost-bearing STATE_TBL_BOX
-# vectorizes as gather-then-select; a template sub-kernel is evaluated as its
-# own whole-array op over the parent lanes. Every descriptor kind is named: a
+# vectorizes as gather-then-select. Every descriptor kind is named: a
 # kind this plan does not know is an error (`_oop_unknown_kind`), never a
 # vectorizable kernel with no data.
 function _oop_acc_vecable(n::_Node, K::_AccKernel)
@@ -442,17 +430,6 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel)
     # An affine reduction's body is evaluated at lanes of (cell, contracted
     # index) that the lane enumeration does not carry.
     k === _NK_AREDUCE && return false
-    if k === _NK_SUBCALL
-        # A template-body sub-kernel vectorizes iff its OWN spine + CSE recipes do
-        # (checked against the SUB's descriptor table — a sub's `_NK_CACHED`
-        # resolves to the sub's scratch, not the parent's). Nested subcalls recurse
-        # the same way. `K.subs` being transitive means every reachable sub is also
-        # planned at the parent, so this check and the plan build agree.
-        S = n.payload::_AccKernel
-        return _oop_acc_vecable(S.spine, S) &&
-            _allof(r -> _oop_acc_vecable(r, S), S.cse.recipes) &&
-            _allof(r -> _oop_acc_vecable(r, S), S.cse.inv_recipes)
-    end
     if k === _NK_ACCESS
         _oop_known_kind(K.acc[n.idx].kind) || _oop_unknown_kind(K.acc[n.idx].kind)
     elseif k === _NK_CACHED
@@ -462,10 +439,7 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel)
 end
 
 # Resolve one descriptor table's per-lane host data against a GIVEN lane
-# enumeration (`out`/`mis`). Split out of `_build_oop_acc_plan` so a
-# template-body sub-kernel — evaluated at the PARENT's lanes — resolves its own
-# descriptors against those same parent lanes (its `_no_cells()` carries no
-# lanes of its own). Returns the four aligned per-descriptor vectors.
+# enumeration (`out`/`mis`). Returns the four aligned per-descriptor vectors.
 function _build_oop_desc_vectors(
         acc::Vector{_AccDesc},
         out::Vector{Int}, mis::Vector{Vector{Int}}
@@ -536,28 +510,7 @@ function _build_oop_acc_plan_inner(K::_AccKernel)
     _oop_plan_vecable(K) || return _OOP_ACC_FALLBACK
     out, mis = _oop_acc_lanes(K.cells)
     gathers, consts, forc, ghost = _build_oop_desc_vectors(K.acc, out, mis)
-    # Template-body sub-kernels (`K.subs`, transitive/nested-first): each is
-    # evaluated at the parent's `(oln, midx)`, so resolve its descriptor tables
-    # against the PARENT's lane enumeration. `_oop_acc_vecable` already accepted
-    # every `_NK_SUBCALL` above (recursing into each sub), so the subs vectorize by
-    # construction; build their aligned lane plans here so the walker can splice
-    # each variant's whole-array result into the parent operand stream.
-    subs = K.subs
-    sub_plans = _OopAccPlan[]
-    if !isempty(subs)
-        sub_plans = Vector{_OopAccPlan}(undef, length(subs))
-        for j in eachindex(subs)
-            S = subs[j]
-            sg, sc, sf, sgh = _build_oop_desc_vectors(S.acc, out, mis)
-            # A sub carries no cells of its own; `out_slots` is unused for a sub
-            # (only the top-level plan scatters), so reuse the parent lane slots.
-            sub_plans[j] = _OopAccPlan(
-                true, out, sg, sc, sf, sgh,
-                _AccKernel[], _OopAccPlan[]
-            )
-        end
-    end
-    return _OopAccPlan(true, out, gathers, consts, forc, ghost, subs, sub_plans)
+    return _OopAccPlan(true, out, gathers, consts, forc, ghost)
 end
 
 # ---- The build's out-of-place product ---------------------------------------

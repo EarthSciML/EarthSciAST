@@ -8,7 +8,7 @@ An ESM document in Typst is markup plus the functions of an `esm` Typst package:
 
 ```
 #import "@preview/esm:0.1.0": *
-#show: esm-document.with(esm: "2.3.0", name: "Decay")
+#show: esm-document.with(esm: "2.4.0", name: "Decay")
 
 #description[First\-order radioactive decay.]
 
@@ -534,7 +534,7 @@ theorem pArg_argT (F : Nat) (a : String × Json) (ha : argOK a = true) (rest : L
   unfold pArg
   rw [hrd]
   simp only [String.ofList_toList, hk, hres, Bool.not_false, Bool.and_self, ite_true]
-  rw [TypstDict.encode, TypstDict.pVal_enc 0 v F rest (jwf_sound v hw) (numStop_of hr) hF]
+  rw [TypstDict.encode, TypstDict.pVal_enc 0 v F rest (Json.WF.wfm (jwf_sound v hw)) (numStop_of hr) hF]
   rfl
 
 /-- The fuel the value reader needs, bounded by the text. -/
@@ -684,7 +684,7 @@ def isBlock : RItem → Bool
 /-- What each construct's content must satisfy for its text to read back. -/
 def itemOK : RItem → Bool
   | .desc _ => true
-  | .block _ v => jwf v
+  | .block _ v => v.wfmb
   | .comp _ _ => true
   | .decl d => if d.kind = .sub then d.attrs.all argOK else declOK d
   | .eqn raw => !raw.toList.contains '$' && (tmLexT raw.toList).isNone
@@ -786,7 +786,7 @@ theorem lex_block (k : String) (v : Json) (hv : itemOK (.block k v) = true) (bol
     rw [parseQuoted_quote]
     simp only
     have hs := TypstDict.size_le 0 v
-    rw [TypstDict.encode, TypstDict.pVal_enc 0 v _ _ (jwf_sound v hv) (by intro c hc; cases hc; decide)
+    rw [TypstDict.encode, TypstDict.pVal_enc 0 v _ _ ((Json.wfmb_iff v).mp hv) (by intro c hc; cases hc; decide)
       (by simp [itemT, TypstDict.encode] at hg; omega)]
     simp [lineEnd_nl]
   · simp [itemT, blockOpen, pre_append]

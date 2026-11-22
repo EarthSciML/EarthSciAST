@@ -11,16 +11,15 @@ from __future__ import annotations
 
 import contextvars
 import copy
-import json
 import math
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Any
 
 from .classification import is_implicit_lhs
 from .compiler import CompilerUnavailableError
 from .error_handling import STRIPPED_PROBLEM_NOT_SOLVABLE
 from .errors import SimulationError
+from .serialize import canonical_json_value
 
 STRIP_CLASSES = ("algebraic", "continuous_events", "discrete_events", "parameter_updates")
 
@@ -93,64 +92,6 @@ def strip_classes(strip: Any) -> list[str]:
         if c not in out:
             out.append(c)
     return sorted(out)
-
-
-# ---------------------------------------------------------------------------
-# Canonical JSON
-# ---------------------------------------------------------------------------
-
-
-def _julia_float(f: float) -> str:
-    """``f`` as Julia prints a Float64 (CONFORMANCE_SPEC §5.5.3.1): positional
-    for a first-digit exponent in ``-4..=5``, else ``d.ddde<exp>``. Not
-    :func:`~earthsci_ast.canonicalize.format_canonical_float`, whose layout
-    (the expression canonicalizer's, RFC §5.4.6) switches at ``1e-6`` and
-    ``1e21`` and so writes ``1.5e-5`` as ``0.000015``."""
-    if not math.isfinite(f):
-        raise ValueError("a non-finite number has no canonical JSON form")
-    if f == 0.0:
-        return "-0.0" if math.copysign(1.0, f) < 0 else "0.0"
-    sign, digits, exponent = Decimal(repr(f)).as_tuple()
-    ds = "".join(str(d) for d in digits).rstrip("0") or "0"
-    e10 = len(digits) + exponent - 1
-    out = "-" if sign else ""
-    if -4 <= e10 <= 5:
-        if e10 < 0:
-            out += "0." + "0" * (-e10 - 1) + ds
-        else:
-            whole = ds[: e10 + 1].ljust(e10 + 1, "0")
-            frac = ds[e10 + 1 :] or "0"
-            out += whole + "." + frac
-    else:
-        out += ds[0] + "." + (ds[1:] or "0") + "e" + str(e10)
-    return out
-
-
-def canonical_json_value(v: Any) -> str:
-    if v is None:
-        return "null"
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, int):
-        return str(v)
-    if isinstance(v, float):
-        if v.is_integer() and abs(v) < 9.2e18:
-            return str(int(v))
-        return _julia_float(v)
-    if isinstance(v, str):
-        return json.dumps(v, ensure_ascii=False)
-    if isinstance(v, dict):
-        return (
-            "{"
-            + ",".join(
-                json.dumps(str(k), ensure_ascii=False) + ":" + canonical_json_value(v[k])
-                for k in sorted(v, key=str)
-            )
-            + "}"
-        )
-    if isinstance(v, (list, tuple)):
-        return "[" + ",".join(canonical_json_value(x) for x in v) + "]"
-    raise TypeError(f"canonical_json: cannot write a {type(v).__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +275,7 @@ def _strippable_implicit(lhs: Any) -> bool:
     while isinstance(body, dict) and body.get("op") == "faq" and body.get("expr") is not None:
         body = body["expr"]
     op = body.get("op") if isinstance(body, dict) else getattr(body, "op", None)
-    return op not in ("ic", "D", "grad", "div", "laplacian")
+    return op not in ("ic", "D")
 
 
 def strip_document(file: Any, classes: list[str]) -> tuple[Any, StrippedConstructs, Any]:

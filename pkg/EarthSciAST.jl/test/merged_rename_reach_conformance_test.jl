@@ -54,7 +54,6 @@ const _MRR_FLATTEN = [c for c in _MRR_CASES if c.surface == "flatten"]
 const _MRR_OVERRIDE = [c for c in _MRR_CASES if c.surface == "override_keys"]
 const _MRR_OUTPUT = [c for c in _MRR_CASES if c.surface == "output_selection"]
 const _MRR_EVENTS = [c for c in _MRR_CASES if c.surface == "events_and_updates"]
-const _MRR_REGISTRY = [c for c in _MRR_CASES if c.surface == "template_registry"]
 const _MRR_INLINE = [c for c in _MRR_CASES if c.surface == "inline_tests"]
 
 _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
@@ -66,9 +65,8 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
         @test !isempty(_MRR_OVERRIDE)
         @test !isempty(_MRR_OUTPUT)
         @test !isempty(_MRR_EVENTS)
-        @test !isempty(_MRR_REGISTRY)
         @test !isempty(_MRR_INLINE)
-        for surface in ("events_and_updates", "template_registry", "inline_tests")
+        for surface in ("events_and_updates", "inline_tests")
             @test "julia" in _MRR_MANIFEST.surfaces[Symbol(surface)].bindings
         end
         @test "julia" in _MRR_MANIFEST.surfaces.flatten.bindings
@@ -285,26 +283,6 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
         end
     end
 
-    for case in _MRR_REGISTRY
-        @testset "$(case.id)" begin
-            # The ONE surface that refuses rather than resolves. A surviving
-            # registry body is authored source that expands at the BUILD
-            # boundary, so it can neither be left alone nor rewritten.
-            err = nothing
-            try
-                _mrr_flatten(case)
-            catch e
-                err = e
-            end
-            @test err isa ExpressionTemplateError
-            if err isa ExpressionTemplateError
-                @test err.code == String(case.raises)
-                for name in case.names_in_message
-                    @test occursin(String(name), err.message)
-                end
-            end
-        end
-    end
 
     for case in _MRR_INLINE
         @testset "$(case.id)" begin

@@ -1,0 +1,15 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "mount_toplevel_json_content",
+    "description": "Mounts ./json_content.typ, a file holding JSON text, as a top-level model: it is read as Typst, which refuses it (unresolved_subsystem_ref).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "Decay": {
+      "ref": "./json_content.typ"
+    }
+  }
+}

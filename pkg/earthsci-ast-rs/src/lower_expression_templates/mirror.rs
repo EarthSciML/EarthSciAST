@@ -9,7 +9,7 @@ use super::*;
 // T0..Tn whose bodies each reference T_{i-1} TWICE therefore expands to 2^n
 // copies of the leaf — a ~4KB file with a depth-19 chain produced a
 // multi-million-node AST and an OOM, while respecting every documented limit
-// (chain depth <= MAX_TEMPLATE_EXPANSION_DEPTH = 32).
+// (chain depth <= MAX_TEMPLATE_EXPANSION_DEPTH = 64).
 //
 // The fix mirrors the Julia reference implementation (its "shared DAGs, not
 // exponential trees" change): the expansion pipeline works on an `Rc`-shared
@@ -394,11 +394,13 @@ pub(crate) fn validate_templates(
 }
 
 /// Maximum template-body reference-chain depth (counted in TEMPLATES along
-/// the longest chain, so a 33-template chain is rejected while a 32-template
+/// the longest chain, so a 65-template chain is rejected while a 64-template
 /// chain is accepted) before a file is rejected with
 /// `template_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
-/// across all bindings.
-pub const MAX_TEMPLATE_EXPANSION_DEPTH: usize = 32;
+/// across all bindings. It equals `MAX_REWRITE_PASSES`: a rewrite of depth `d`
+/// writes a body-reference chain `d` templates deep, so every document the
+/// rewriter accepts also reloads once emitted with its references.
+pub const MAX_TEMPLATE_EXPANSION_DEPTH: usize = 64;
 
 /// Collect the `name`s of every `apply_expression_template` node in a tree.
 pub(crate) fn collect_apply_names(x: &Value, out: &mut Vec<String>) {

@@ -22,11 +22,15 @@
 import type { EsmFile, Model, ReactionSystem, SubsystemRef } from './types.js'
 import {
   EsmMachineryError,
+  collectApplyNames,
   deepEqual,
   expandDocument,
+  hoistMountedTemplates,
   indexSetDeclEqual,
   lowerExpressionTemplates,
+  materializeComponentBlock,
 } from './lower-expression-templates.js'
+import { deepClone } from './object-utils.js'
 import {
   appendComponentImports,
   applyMountIndexSetRename,
@@ -42,6 +46,7 @@ import { isCouplingLibraryDoc } from './coupling-imports.js'
 import { EnumLoweringError, lowerMountedDocumentEnums } from './lower-enums.js'
 import {
   canonicalizePath,
+  decodeDocument,
   expandRefEnv,
   isRemoteRef,
   joinPath,
@@ -213,9 +218,10 @@ export function resolveSubsystemRefsSync(
   const registry: Record<string, unknown> =
     (file.index_sets as Record<string, unknown> | undefined) ?? {}
 
-  // Which ROOT components mount a `subsystems.<k>` `{ ref }`, recorded BEFORE the
-  // walk below inlines them — afterwards the stubs are gone. Only these are
-  // re-lowered at the end (see `relowerThroughInlinedMounts`).
+  // Which ROOT components mount a `subsystems.<k>` `{ ref }`, or are a top-level
+  // `{ ref }` mount themselves, recorded BEFORE the walk below inlines them —
+  // afterwards the stubs are gone. Only these are re-lowered at the end (see
+  // `relowerThroughInlinedMounts`).
   const mountingComponents = componentsWithSubsystemRefs(file)
 
   // esm-spec §4.7 "Working precision crosses a mount": the root's effective
@@ -425,7 +431,8 @@ async function prefetchRefs(
       const refBase = refBaseOf(ref, currentBase)
       let parsed: unknown
       try {
-        parsed = JSON.parse(content)
+        // esm-spec §1.2.1: the format is the target's extension.
+        parsed = decodeDocument(content, key)
       } catch {
         // A malformed target is the sync core's error to report, with its code.
         continue
@@ -634,6 +641,43 @@ function anchorInjectedImport(entry: unknown, mountingBase: string): unknown {
 }
 
 /**
+ * The lowered leaf `doc` with each top-level component's `expression_templates`
+ * block kept for the mounting document (esm-spec §9.6.4 rule 1): its
+ * match-less entries only (the `match` rules have fired in the leaf), and none
+ * on a component no reference reads. Mutates and returns `doc`. Mirrors the
+ * Julia reference `_mounted_registries!`.
+ */
+function mountedRegistries(doc: Record<string, unknown>): Record<string, unknown> {
+  for (const section of ['models', 'reaction_systems'] as const) {
+    const comps = doc[section]
+    if (!isPlainObject(comps)) continue
+    for (const comp of Object.values(comps)) {
+      if (!isPlainObject(comp)) continue
+      const blk = comp.expression_templates
+      if (!isPlainObject(blk)) continue
+      const keep: Record<string, unknown> = {}
+      for (const [n, d] of Object.entries(blk)) if (!carriesMatch(d)) keep[n] = d
+      const used = Object.keys(comp).some(
+        (k) => k !== 'expression_templates' && collectApplyNames(comp[k], []).length > 0,
+      )
+      if (Object.keys(keep).length === 0 || !used) delete comp.expression_templates
+      else comp.expression_templates = keep
+    }
+  }
+  return doc
+}
+
+/** A plain JSON object (not an array, not null). */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+}
+
+/** Is `decl` a `match` rule? */
+function carriesMatch(decl: unknown): boolean {
+  return isPlainObject(decl) && decl.match !== undefined && decl.match !== null
+}
+
+/**
  * Post-parse handling shared by model / reaction-system ref resolution:
  *
  * 1. A §4.7 subsystem ref MUST NOT target a template-library file — the two
@@ -763,13 +807,16 @@ function resolveRefDocument(
     mountDeclared,
     mountedLeaf: true,
   })
-  // esm-spec §9.6.4 (Option B): lower to the reference-preserving form, then
-  // apply the RFC §7.7 Expand-at-build strategy so the resolved subsystem is
-  // the Option-A expanded image (bit-identical downstream behavior). A leaf with
-  // no §9.7 machinery still expands its component-local templates here: its own
-  // calls bind their parameters, so an `enum` op a parameter spells resolves
-  // against the leaf's block below, not the mounting document's (esm-spec §9.3).
-  const expanded = expandDocument(lowerExpressionTemplates(resolved ?? machineryInput)) as EsmFile
+  // esm-spec §9.6.4 rule 1: the leaf is lowered in its own file and keeps its
+  // references — no expansion at the mount edge. Each of its components keeps
+  // its match-less template definitions (its `match` rules have fired here),
+  // which the mounting document merges into its own registry
+  // (`hoistMountedTemplates`, during the mounting component's lowering or in
+  // `relowerThroughInlinedMounts`). An `enum` op in a body or a binding still
+  // resolves against the leaf's own `enums` block below (esm-spec §9.3).
+  const expanded = mountedRegistries(
+    lowerExpressionTemplates(resolved ?? machineryInput) as unknown as Record<string, unknown>,
+  ) as unknown as EsmFile
   // esm-spec §9.3: the referenced document's `enum` ops resolve against ITS
   // OWN `enums` block, here, while that block is still at hand. The mounting
   // document's block is a different one and `enums` do not merge across a
@@ -1228,7 +1275,22 @@ function resolveRefEdge(
       throw error
     }
     const refBasePath = refBaseOf(ref, basePath)
-    const refDoc = JSON.parse(content) as EsmFile
+    let refDoc: EsmFile
+    try {
+      // esm-spec §1.2.1: Markdown, Typst or JSON by the target's extension.
+      refDoc = decodeDocument(content, chainKey) as EsmFile
+    } catch (error) {
+      // A removed operator keeps its own code; any other refused read is a
+      // failure of THIS edge, at the offending mount.
+      if (error instanceof EsmDiagnosticError && error.code === ERROR_CODES.REMOVED_OP) throw error
+      throw new RefLoadError(
+        ref,
+        undefined,
+        ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
+        `${mountFormBlock(mountForm)}.${subName} ref '${ref}' did not parse: ${error instanceof Error ? error.message : String(error)}`,
+        pointer,
+      )
+    }
     // Same wire boundary as the root (docs/content/rfcs/faq-node-rename.md §5.2).
     prepareDocumentOps(refDoc)
     // esm-spec §4.7 "Working precision crosses a mount": read before resolution
@@ -1563,7 +1625,7 @@ function inlineTopLevelRef(
 /**
  * The ROOT components — `"models.<name>"` / `"reaction_systems.<name>"` keys, the
  * `componentTemplates` key shape — that mount a `subsystems.<k>` `{ ref }` at
- * any depth.
+ * any depth, or that are a top-level `{ ref }` mount edge themselves.
  */
 function componentsWithSubsystemRefs(file: EsmFile): Set<string> {
   const out = new Set<string>()
@@ -1582,73 +1644,164 @@ function componentsWithSubsystemRefs(file: EsmFile): Set<string> {
     const comps = (file as unknown as Record<string, unknown>)[section]
     if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
     for (const [name, comp] of Object.entries(comps as Record<string, unknown>)) {
-      if (mounts(comp)) out.add(`${section}.${name}`)
+      const topLevel =
+        section === 'models'
+          ? isTopLevelMountEdge(comp as Model | SubsystemRef)
+          : isTopLevelReactionSystemMountEdge(comp)
+      if (topLevel || mounts(comp)) out.add(`${section}.${name}`)
     }
   }
   return out
 }
 
 /**
- * Re-run the esm-spec §9.6.3 rewrite pass over each ROOT component that just had
- * mounted content spliced into it, using the rules that component resolved at
- * load and that `load*` keeps on the non-enumerable `componentTemplates` sidecar.
+ * Finish each ROOT component that just had mounted content spliced into it:
+ * merge the template definitions its mounted leaves brought into its registry
+ * (esm-spec §9.6.4 rule 1), re-run the esm-spec §9.6.3 rewrite pass over it with
+ * the rules that component resolved at load (kept on the non-enumerable
+ * `componentTemplates` sidecar), and expand it into the typed image.
  *
- * WHY. In this binding `loadPath` / `loadString` do not resolve `{ ref }` mounts
- * — `resolveSubsystemRefs` is a separate entry point, run after the load has
- * already lowered the document — so a rule a component declares in its own
- * `expression_template_imports` never reached a rewrite-target inside a
- * component it mounts. That is issue #311's CONTROL case, and §9.7.10 defines
- * the mount-edge injection by reference to it ("as if the target had added those
- * entries to the end of its own `expression_template_imports`"), so the two must
- * agree. Rust, Go and Julia inline before their fixpoint; this binding lowers a
- * second time instead, which keeps `loadPath`'s contract (it does not resolve
- * refs) and still covers mounts only the async resolver can fetch.
+ * THE REGISTRY. A mounted leaf keeps its references; each of its components
+ * carries its match-less definitions on its own block (`mountedRegistries`).
+ * `hoistMountedTemplates` merges every such block below the component into the
+ * component's registry by the registry merge, bodies unchanged, each mounted
+ * subtree's references following its own owner's renames. The merged block
+ * replaces the component's `componentTemplates` entry, in the order emit
+ * materializes a registry: authored entries first, then the closure of the
+ * references, sorted. A top-level `{ ref }` mount's component brings its block
+ * the same way, as its own registry.
+ *
+ * THE TYPED IMAGE. This binding's typed document is the expanded image
+ * (`load*` runs `expandDocument`), so the spliced content's references are
+ * expanded here, against the merged registry: a reference inside a subsystem
+ * reads that subsystem's names, because the body is substituted into the
+ * subsystem's own expression.
+ *
+ * WHY THE REWRITE PASS. In this binding `loadPath` / `loadString` do not
+ * resolve `{ ref }` mounts — `resolveSubsystemRefs` is a separate entry point,
+ * run after the load has already lowered the document — so a rule a component
+ * declares in its own `expression_template_imports` never reached a
+ * rewrite-target inside a component it mounts. That is issue #311's CONTROL
+ * case, and §9.7.10 defines the mount-edge injection by reference to it ("as if
+ * the target had added those entries to the end of its own
+ * `expression_template_imports`"), so the two must agree.
  *
  * SAFE TO REPEAT. Only components recorded as mounting a `{ ref }` before
  * resolution are touched, and the pass is a fixpoint: content the load already
  * lowered carries no rewrite-target a rule can match again, so it comes back
  * unchanged — pinned by a test that re-lowers an already-lowered root.
- *
- * WHAT IT CANNOT SEE. A match pattern is one expression tree, and splicing a
- * subsystem in adds that subsystem's equations beside the component's own
- * rather than grafting nodes into them — the component refers to mounted
- * content only by scoped NAME (`sd.y`) — so no pattern can span the boundary
- * between the two, and the second pass cannot differ from a first pass that
- * saw both.
  */
 function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<string>): void {
   if (mountingComponents.size === 0) return
-  const templates = (file as { componentTemplates?: Record<string, unknown> }).componentTemplates
-  if (!templates) return
+  const sidecars = file as {
+    componentTemplates?: Record<string, unknown>
+    componentRules?: Record<string, Record<string, unknown>>
+    authoredTemplateNames?: Record<string, string[]>
+  }
   const root = file as unknown as Record<string, unknown>
   for (const key of mountingComponents) {
-    const block = templates[key]
-    if (block === null || typeof block !== 'object' || Array.isArray(block)) continue
-    if (Object.keys(block as Record<string, unknown>).length === 0) continue
     const dot = key.indexOf('.')
     const section = key.slice(0, dot) as 'models' | 'reaction_systems'
     const name = key.slice(dot + 1)
     const comps = root[section] as Record<string, unknown> | undefined
     const comp = comps?.[name]
-    if (!comps || comp === null || typeof comp !== 'object' || Array.isArray(comp)) continue
+    if (!comps || !isPlainObject(comp)) continue
+    const snapshot = sidecars.componentTemplates?.[key]
+    const own = isPlainObject(snapshot)
+      ? snapshot
+      : isPlainObject(comp.expression_templates)
+        ? comp.expression_templates
+        : undefined
+    const work: Record<string, unknown> = { ...comp }
+    if (own !== undefined) work.expression_templates = deepClone(own)
+    else delete work.expression_templates
+    // The component's `match` rules fire on the content it mounts as on its
+    // own (esm-spec §9.6.3), including a rule its own content already
+    // referenced, which the snapshot holds materialized match-less.
+    const rules = sidecars.componentRules?.[key]
+    const rulesRestored = rules !== undefined && Object.keys(rules).length > 0
+    if (rulesRestored) {
+      work.expression_templates = {
+        ...(isPlainObject(work.expression_templates) ? work.expression_templates : {}),
+        ...deepClone(rules),
+      }
+    }
+    const rn = hoistMountedTemplates(work, name)
+    const block = work.expression_templates
+    if (!isPlainObject(block) || Object.keys(block).length === 0) {
+      delete comp.expression_templates
+      continue
+    }
     // A one-component document carrying just what the rewrite pass consults: the
     // version it gates on, the registry `where` constraints resolve against, and
-    // the component with its rules re-attached. Coupling and sibling components
+    // the component with its rules attached. Coupling and sibling components
     // are left out; the pass is per component and must not re-check them here.
     const single: Record<string, unknown> = {
       esm: root.esm,
       index_sets: root.index_sets,
-      [section]: {
-        [name]: { ...(comp as Record<string, unknown>), expression_templates: block },
-      },
+      [section]: { [name]: work },
     }
-    const lowered = expandDocument(lowerExpressionTemplates(single)) as Record<string, unknown>
-    const out = (lowered[section] as Record<string, unknown> | undefined)?.[name]
-    if (out !== null && typeof out === 'object' && !Array.isArray(out)) {
-      delete (out as { expression_templates?: unknown }).expression_templates
+    const lowered = lowerExpressionTemplates(single)
+    // The registry the component now carries, when mounted definitions joined
+    // it (or it is a top-level mount, whose block the load never captured).
+    if (rn !== undefined || rulesRestored || !isPlainObject(snapshot)) {
+      const lcomp = (lowered[section] as Record<string, unknown>)[name] as Record<string, unknown>
+      const roots = isPlainObject(snapshot)
+        ? Object.keys(snapshot)
+            .filter((n) => !carriesMatch(snapshot[n]))
+            .map((n) => rn?.[n] ?? n)
+        : []
+      const authored =
+        sidecars.authoredTemplateNames?.[key] ??
+        (isPlainObject(snapshot) ? Object.keys(snapshot).filter((n) => !(rn && n in rn)) : [])
+      setComponentTemplates(file, key, registrySnapshot(lcomp, authored, roots))
+    }
+    const expanded = expandDocument(lowered) as Record<string, unknown>
+    const out = (expanded[section] as Record<string, unknown> | undefined)?.[name]
+    if (isPlainObject(out)) {
+      delete out.expression_templates
       comps[name] = out
     }
   }
+}
+
+/**
+ * A component's registry as the load captures it (`parse.ts`
+ * `captureComponentTemplates`): emit's materialization
+ * ({@link materializeComponentBlock}, authored entries first, then the closure
+ * of the references and of `roots`, sorted), then the rules that still carry
+ * `match`.
+ */
+function registrySnapshot(
+  comp: Record<string, unknown>,
+  authored: readonly string[],
+  roots: readonly string[],
+): Record<string, unknown> {
+  const { block } = materializeComponentBlock(comp, authored, roots)
+  const own = comp.expression_templates
+  if (isPlainObject(own)) {
+    for (const [n, d] of Object.entries(own)) {
+      if (n in block) continue
+      if (carriesMatch(d)) block[n] = d
+    }
+  }
+  return deepClone(block)
+}
+
+/** Set (or, for an empty block, drop) one entry of the `componentTemplates` sidecar. */
+function setComponentTemplates(file: EsmFile, key: string, block: Record<string, unknown>): void {
+  const holder = file as { componentTemplates?: Record<string, unknown> }
+  if (holder.componentTemplates === undefined) {
+    if (Object.keys(block).length === 0) return
+    Object.defineProperty(file, 'componentTemplates', {
+      value: {},
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
+  if (Object.keys(block).length === 0) delete holder.componentTemplates![key]
+  else holder.componentTemplates![key] = block
 }
 
 /**
@@ -1946,7 +2099,10 @@ export async function ephemeralInjectedFile(
   let raw: Record<string, unknown>
   if (sourcePath !== null) {
     const fs = await import('node:fs/promises')
-    raw = JSON.parse(await fs.readFile(sourcePath, 'utf-8')) as Record<string, unknown>
+    raw = decodeDocument(await fs.readFile(sourcePath, 'utf-8'), sourcePath) as Record<
+      string,
+      unknown
+    >
     // Same wire boundary as the root (docs/content/rfcs/faq-node-rename.md §5.2).
     prepareDocumentOps(raw)
   } else if (file !== null) {

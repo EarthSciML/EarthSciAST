@@ -104,10 +104,10 @@ function _select_flat(
         end
     end
     # ---- the states and observeds the kept rules reach ----
-    # Read through every surviving template reference: a template body names
-    # the variables its expansion reads.
-    sel = FlattenedSystem(flat; equations = eqs, equation_contributions = contribs)
-    xeqs = expand_flattened_refs(sel).equations
+    # Read through every surviving template reference without expanding it
+    # (esm-spec §9.6.4 rule 2): each reference carries, as implicit bindings,
+    # the names its body reads from its caller (`_tpl_augment`).
+    xeqs = _tpl_augmented_equations(eqs, flat.template_registry)
     defs = Dict{String, Vector{ASTExpr}}()
     roots = Set{String}()
     for eq in xeqs

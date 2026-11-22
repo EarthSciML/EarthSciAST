@@ -10,11 +10,11 @@ use super::*;
 /// check is instantiation-independent. Every retained template body (match and
 /// match-less) is validated directly. Mirrors the Julia reference
 /// `_validate_makearray_regions_in_registries`.
-pub(super) fn validate_makearray_regions_in_registries(
-    registries: &std::collections::HashMap<String, CompRegistry>,
+pub(super) fn validate_makearray_regions_in_registries<'a>(
+    registries: impl IntoIterator<Item = &'a Named>,
 ) -> Result<(), ExpressionTemplateError> {
-    for reg in registries.values() {
-        for (tname, decl) in &reg.named {
+    for named in registries {
+        for (tname, decl) in named {
             let body = decl_body(decl);
             if matches!(&*body, SNode::Null) {
                 continue;

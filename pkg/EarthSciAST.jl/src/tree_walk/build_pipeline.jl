@@ -165,7 +165,6 @@ end
 # discrete-cadence def extraction, and the `ic` fold.
 function _build_partition_and_materialize(
         model::Model, cls::_VariableClasses;
-        template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         index_sets::AbstractDict, const_arrays::AbstractDict,
         param_arrays::AbstractDict, parameter_overrides::AbstractDict, vi_vars::Set{String}, vi_extents::AbstractDict,
         vi_maps,
@@ -277,7 +276,6 @@ function _build_partition_and_materialize(
             )
         end
     end
-    _translate_equation_sites!(template_sites, ode_equations, equations)
 
     # ---- Resolve index-set references in ranges (RFC §5.2) ----
     # Rewrite any `ranges[*]` `{from: <name>}` reference against the document's
@@ -300,7 +298,6 @@ function _build_partition_and_materialize(
             equations, index_sets, derived_extents,
             factor_scope
         )
-        _translate_equation_sites!(template_sites, pre, equations)
     end
     init_equations = _resolve_index_set_ranges(
         init_equations,
@@ -614,7 +611,6 @@ function _build_compile_evaluator(
         initial_conditions::AbstractDict, tspan,
         products::Union{Nothing, BuildProducts}, materialize_out::Union{Nothing, DiscreteMaterializer},
         form::_BuildForm,
-        template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         caller_u0 = nothing
     )
     u0 = layout.u0
@@ -668,12 +664,12 @@ function _build_compile_evaluator(
     # What an output-time read (observed_program.jl) compiles against.
     if products !== nothing
         products.observed_ctx = _ObsProgramCtx(
-            model, cls, parts, index_sets, state_scope, n_states, p, template_sites,
+            model, cls, parts, index_sets, state_scope, n_states, p,
             materialize_out === nothing ? Dict{String, Array{Float64}}() :
                 materialize_out.caches,
             merge(Dict{String, ASTExpr}(split.raw), split.materialized),
             _state_base_names(layout.var_map, layout.array_var_info),
-            Dict{String, Any}(), ReentrantLock()
+            Dict{String, Any}(), ReentrantLock(), _build_state().calls
         )
     end
 
@@ -699,8 +695,7 @@ function _build_compile_evaluator(
     ]
 
     levels = _compile_fill_levels(
-        form, split, mat_vars, layout, model, rhs_scope, products;
-        template_sites = template_sites
+        form, split, mat_vars, layout, model, rhs_scope, products
     )
     oop_levels = _oop_fill_levels(form, levels)
     products === nothing || sort!(products.recurrences; by = r -> r.var)
@@ -710,7 +705,6 @@ function _build_compile_evaluator(
     # A state without a `D` equation keeps du = 0.
     state_eqs = _compile_derivative_equations(
         split.derivatives, split.resolved, rhs_scope, n_states;
-        template_sites = template_sites,
         scalar_obs_inline = obs_plan.inline,
         rhs_list_compiled = _rhs_list_compiled(form),
         obs_nst = _obs_split_nst(form, n_states, n_total)
@@ -860,8 +854,7 @@ end
 function _compile_fill_levels(
         form::_BuildForm, split::_ObservedSplit, mat_vars::Set{String},
         layout::_StatePlan, model::Model, scope::_CompileScope,
-        products::Union{Nothing, BuildProducts};
-        template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing
+        products::Union{Nothing, BuildProducts}
     )
     plan = _fill_level_plan(form, split, mat_vars, layout, scope)
     mat_defs = split.materialized
@@ -878,7 +871,6 @@ function _compile_fill_levels(
     return _LevelParts[
         _compile_fill_level(
             lvl, cadence, fill, recurrence, split.resolved, scope, _n_total(layout);
-            template_sites = template_sites,
             rhs_list_compiled = _rhs_list_compiled(form),
             obs_nst = _level_nst(form, n_states)
         )
@@ -1129,7 +1121,8 @@ function _build_evaluator_impl(
     # fill route sweeps it through the one recurrence implementation
     # (tree_walk/recurrence_group.jl). `nothing` — no group — changes nothing.
     stacked = _stack_recurrence_groups(
-        model, get(kwargs, :index_sets, Dict{String, IndexSet}())
+        model, get(kwargs, :index_sets, Dict{String, IndexSet}()),
+        get(kwargs, :_template_reg, nothing)
     )
     if stacked !== nothing
         model = stacked[1]
@@ -1301,25 +1294,20 @@ function _build_evaluator_impl_inner(
     # A parameter recomputed by a symbolic update is an event in all but name.
     symbolic = _first_symbolic_update(model)
     symbolic === nothing || throw(_symbolic_update_refusal(symbolic...))
-    # ---- Compile-once template tier: expand references at the entry, keeping
-    # the SITES (RFC out-of-line-expression-templates §7.7). Every phase and
-    # every fallback path below sees exactly the fused expanded tree Option A
-    # produced — variable discovery, layout, validation, and the per-cell /
-    # symbolic paths are byte-identical to a pre-expanded build. The recorded
-    # expansion roots are consumed ONLY by the affine stencil build, which
-    # compiles each (use site, region class) body once and calls it as a
-    # sub-kernel. Expansion works on a copy (`_expansion_copy`): the caller's
-    # typed model must keep its references (`serialize_esm_file` emits them
-    # verbatim — R1).
-    _template_sites = nothing
+    # ---- Template references: compiled as calls (tree_walk/call.jl) ----
+    # No reference is expanded: each stays a reference and compiles as a call;
+    # an array-valued or aggregate one read whole (or an element of an
+    # aggregate one) is its view (`_tpl_prepare_model!`), and one the build
+    # cannot compile is refused. Preparation works on a copy
+    # (`_expansion_copy`): the caller's typed model keeps its references
+    # (`serialize_esm_file` emits them verbatim — R1).
     if _template_reg !== nothing
         model = _expansion_copy(model)
-        sites = IdDict{OpExpr, OpExpr}()
-        _expand_model_refs!(
-            model, _template_reg; sites = sites,
-            memo = something(_expand_cache, _ExpandCache())
-        )
-        isempty(sites) || (_template_sites = sites)
+        # The build's own registry: structural instances and view parts are
+        # registered in it, never in the caller's (call.jl `_tpl_prepare_model!`).
+        _template_reg = copy(_template_reg)
+        model, _ = _tpl_prepare_model!(model, _template_reg, index_sets, _vi_extents)
+        _expand_cache = nothing
     elseif _model_has_surviving_refs(model)
         # A surviving reference with no registry in reach would compile into an
         # opaque op node and only fail at RHS evaluation time — fail loudly at
@@ -1336,10 +1324,10 @@ function _build_evaluator_impl_inner(
             )
         )
     end
-    # ---- esm-spec §4.3.1 `faq_bare_array_operand`, on the EXPANDED model ----
+    # ---- esm-spec §4.3.1 `faq_bare_array_operand` ----
     # `validate` (and the front door's reference-integrity refusal) cannot see a
-    # bare shaped name a template binding delivers into a `faq` filter; here
-    # every reference is expanded.
+    # bare shaped name a template binding delivers into a `faq` filter; the
+    # check reads a call's value operands (call.jl `_value_operands`).
     _refuse_faq_bare_array_operands(model)
     # ---- §9.6.3 constraint 6: walk every equation for an unlowered op ----
     # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
@@ -1367,22 +1355,10 @@ function _build_evaluator_impl_inner(
     # interning makes textually identical subtrees (which template inlining
     # manufactures as fresh copies) the SAME object, so those memos hit.
     # Returns a NEW Model sharing untouched sub-objects — the caller's model
-    # is never mutated. `_template_sites` is keyed by node identity, so its
-    # entries are re-keyed through the intern map (a merged key is harmless:
-    # the only site consumers are `haskey` boundary checks, see the pre-audit
-    # audits/intern_preaudit_2026-07-19.md). With interning off the pass is
-    # skipped entirely.
+    # is never mutated. With interning off the pass is skipped entirely.
     if !_intern_disabled()
         ictx = _InternCtx()
         model = _intern_model(model, ictx)
-        if _template_sites !== nothing
-            translated = IdDict{OpExpr, OpExpr}()
-            for (root, ap) in _template_sites
-                nr = get(ictx.memo, root, root)
-                translated[nr] = ap
-            end
-            _template_sites = translated
-        end
     end
     # ---- Nested reductions lifted to internal observeds (hoist.jl) ----
     # Only where array observeds are factored: the interpreter inlines them, so
@@ -1447,7 +1423,6 @@ function _build_evaluator_impl_inner(
     # ---- Phase 2: ODE partition + setup materialization + equation rewrites ----
     parts = _build_partition_and_materialize(
         model, cls;
-        template_sites = _template_sites,
         index_sets = index_sets, const_arrays = const_arrays,
         param_arrays = param_arrays, parameter_overrides = parameter_overrides, vi_vars = _vi_vars,
         vi_extents = _vi_extents, vi_maps = _vi_maps,
@@ -1528,7 +1503,7 @@ function _build_evaluator_impl_inner(
         const_array_boundaries = const_array_boundaries, param_arrays = param_arrays,
         initial_conditions = initial_conditions, tspan = tspan, products = products,
         materialize_out = materialize_out, form = build_form,
-        template_sites = _template_sites, caller_u0 = _caller_u0
+        caller_u0 = _caller_u0
     )
 end
 

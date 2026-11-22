@@ -247,6 +247,8 @@ const _DECLINE_REASONS = (
     :symbolic_body_did_not_lower => "the body does not resolve or compile with its indices kept symbolic",
     :unsupported_op => "an operator the tier has no form for",
     :unknown_kind => "a compiled node kind the tier has no form for",
+    :call_array_args => "a template call that passes arrays, in a context that has no array arguments (setup geometry)",
+    :call_array_forward => "a template call, inside another call's body, passing on an array that is not that body's own array argument",
     :unknown_array => "a gather of a name that is not a known array",
     :malformed_index => "an `index` node with no operand",
     :subscript_rank_mismatch => "a gather whose subscript count is not the array's rank",
@@ -266,7 +268,6 @@ const _DECLINE_REASONS = (
     :unsupported_desc => "an access descriptor the code generator has no form for",
     :unsupported_bound => "a loop bound the code generator cannot write",
     :foreign_scratch => "a read of a scratch buffer the generated function does not own",
-    :subcall_order => "a sub-kernel call emitted before its invariants are in scope",
     :loopvar_out_of_scope => "a loop variable read outside the loop that binds it",
     :loop_reentered => "a loop entered again inside its own body",
     :lane_spec_on_scalar_spine => "a lane descriptor on a scalar spine",
@@ -547,14 +548,21 @@ mutable struct _BuildState
     # The scalar parameter values a join gate's computed key column reads while
     # the gates resolve (`_with_join_params`, join_key_columns.jl); empty otherwise.
     join_params::Dict{String, Float64}
+    # The build's template call targets (`_CallTable`, tree_walk/call.jl), or
+    # `nothing` when the build has no template registry. A child state shares
+    # its parent's.
+    calls::Any
+    # While a call target's body compiles: its argument map (`_ArgMap`).
+    argmap::Any
 end
 _BuildState(
     count::Base.RefValue{Int} = Ref(0);
-    scatter_keep::Union{Nothing, IdDict{Any, Nothing}} = nothing
+    scatter_keep::Union{Nothing, IdDict{Any, Nothing}} = nothing,
+    calls = nothing
 ) = _BuildState(
     Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}(),
     Dict{Symbol, Base.RefValue{Int}}(), count, 0, nothing, scatter_keep,
-    Dict{String, Float64}()
+    Dict{String, Float64}(), calls, nothing
 )
 
 """
@@ -674,7 +682,10 @@ function _new_build_ctx(plan::CompilerPlan, record::Union{Nothing, _BuildRecord}
     count = outer === nothing ? Ref(0) : outer.state.loopvar_count
     return _fresh_ctx(
         plan, record,
-        _BuildState(count; scatter_keep = IdDict{Any, Nothing}()), outer
+        _BuildState(
+            count; scatter_keep = IdDict{Any, Nothing}(),
+            calls = outer === nothing ? nothing : outer.state.calls
+        ), outer
     )
 end
 
@@ -686,7 +697,10 @@ function _child_build_ctx()
     outer === nothing && return _fresh_ctx(_DEFAULT_COMPILER_PLAN, nothing, _BuildState(), nothing)
     return _BuildContext(
         outer.plan, outer.record,
-        _BuildState(outer.state.loopvar_count; scatter_keep = outer.state.scatter_keep),
+        _BuildState(
+            outer.state.loopvar_count; scatter_keep = outer.state.scatter_keep,
+            calls = outer.state.calls
+        ),
         outer.tuning, outer.range_spec, outer.ws_capture, outer.counts, outer.merge_recheck
     )
 end
@@ -765,6 +779,14 @@ _counts_sink()::Union{Nothing, Dict{Symbol, Int}} =
 function _count!(k::Symbol, n::Int = 1)
     c = _counts_sink()
     c === nothing || (c[k] = get(c, k, 0) + n)
+    return nothing
+end
+
+# Record `n` under `k` when it is larger than what `k` holds (a maximum, kept
+# in the same sink as the counts).
+function _count_max!(k::Symbol, n::Int)
+    c = _counts_sink()
+    c === nothing || (c[k] = max(get(c, k, 0), n))
     return nothing
 end
 

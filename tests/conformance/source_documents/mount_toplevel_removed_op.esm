@@ -1,0 +1,15 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "mount_toplevel_removed_op",
+    "description": "Mounts ./removed_op.typ as a top-level model: its equation calls fn, an operator removed at esm 2.0.0, so the Typst reader refuses it and the mount keeps the reader's code (removed_op).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "Decay": {
+      "ref": "./removed_op.typ"
+    }
+  }
+}

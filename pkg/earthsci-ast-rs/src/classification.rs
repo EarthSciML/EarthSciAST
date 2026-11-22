@@ -36,17 +36,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The `wrt` value naming the independent (time) variable.
 const TIME: &str = "t";
 
-/// Sugar ops that ARE a spatial derivative regardless of any `wrt`/`dim`
-/// (esm-spec §4.2 calculus ops; the §6.3.1 `pde` test).
-const SPATIAL_SUGAR_OPS: [&str; 3] = ["grad", "div", "laplacian"];
-
 /// The derived system kind (esm-spec §6.3.1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum SystemKind {
     /// Any Brownian parameter.
     Sde,
-    /// Any equation contains a spatial derivative.
-    Pde,
     /// No time-derivative equation at all.
     Nonlinear,
     /// Everything else.
@@ -59,7 +53,6 @@ impl SystemKind {
     pub fn as_str(self) -> &'static str {
         match self {
             SystemKind::Sde => "sde",
-            SystemKind::Pde => "pde",
             SystemKind::Nonlinear => "nonlinear",
             SystemKind::Ode => "ode",
         }
@@ -852,10 +845,10 @@ fn owned_definitions(defs: BTreeMap<&str, &Expr>) -> BTreeMap<String, Expr> {
 
 // === system_kind ==========================================================
 
-/// Derive the system kind, testing the four §6.3.1 conditions IN ORDER and
-/// taking the first that holds. The order is normative: `pde` is tested before
-/// `nonlinear` (a steady-state PDE has no time derivative but is still a PDE),
-/// and `sde` before `pde` (there is no `SPDESystem` constructor to select).
+/// Derive the system kind, testing the three §6.3.1 conditions IN ORDER and
+/// taking the first that holds: `sde`, then `nonlinear`, then `ode`. Spatial
+/// derivatives do not affect the kind (there is no `pde` kind since esm
+/// 2.4.0).
 fn derive_system_kind(
     brownian: &[String],
     equations: &[Equation],
@@ -864,30 +857,32 @@ fn derive_system_kind(
     if !brownian.is_empty() {
         return SystemKind::Sde;
     }
-    if equations
-        .iter()
-        .any(|eq| has_spatial_derivative(&eq.lhs) || has_spatial_derivative(&eq.rhs))
-    {
-        return SystemKind::Pde;
-    }
     if ode_states.is_empty() && !equations.iter().any(|eq| has_time_derivative(&eq.lhs)) {
         return SystemKind::Nonlinear;
     }
     SystemKind::Ode
 }
 
-/// True when the expression contains a SPATIAL derivative anywhere: a `D` whose
-/// `wrt` is present and is not `"t"`, or a `grad` / `div` / `laplacian` sugar
-/// op. The walk descends EVERY expression child, not just `args` (§4.9.5).
-pub fn has_spatial_derivative(expr: &Expr) -> bool {
-    match expr {
-        Expr::Operator(node) => {
-            let here = (node.op == "D" && node.wrt.as_deref().is_some_and(|w| w != TIME))
-                || SPATIAL_SUGAR_OPS.contains(&node.op.as_str());
-            here || node.any_child(&mut has_spatial_derivative)
-        }
-        _ => false,
-    }
+/// The model's explicit `system_kind` field, or `None` when absent. Compare
+/// it with [`system_kind`] to detect `system_kind_mismatch` (esm-spec §6.3.1).
+/// A declared `"pde"` (deprecated at esm 2.4.0, warned
+/// `deprecated_system_kind` at load) counts as absent: `None`.
+pub fn declared_system_kind(model: &Model) -> Option<&str> {
+    model
+        .system_kind
+        .as_deref()
+        .filter(|k| *k != crate::parse::DEPRECATED_SYSTEM_KIND)
+}
+
+/// `Some((declared, derived))` when a model's declared `system_kind`
+/// contradicts the derived one (`system_kind_mismatch`, esm-spec §6.3.1);
+/// `None` when it agrees or declares none. A declared `"pde"` never
+/// mismatches: it counts as absent.
+#[cfg(test)]
+pub(crate) fn system_kind_mismatch(model: &Model) -> Option<(String, SystemKind)> {
+    let declared = declared_system_kind(model)?;
+    let derived = Classification::of(model).system_kind;
+    (declared != derived.as_str()).then(|| (declared.to_string(), derived))
 }
 
 /// True when the expression contains a TIME derivative anywhere.
@@ -1105,17 +1100,21 @@ mod tests {
         assert_eq!(Classification::of(&m).ode_states, ["u"]);
     }
 
-    /// system_kind's four conditions, in the normative order.
+    /// system_kind's three conditions, in the normative order.
     #[test]
     fn system_kind_order() {
-        // A steady-state PDE has no time derivative but is still a PDE.
+        // Spatial derivatives do not affect the kind: a steady-state model
+        // written with them has no time derivative, so it is nonlinear.
         let steady = model(serde_json::json!({
             "variables": { "phi": { "type": "unknown" }, "f": { "type": "parameter" } },
-            "equations": [ { "lhs": { "op": "laplacian", "args": ["phi"] }, "rhs": "f" } ]
+            "equations": [ { "lhs": { "op": "+", "args": [
+                { "op": "D", "args": [{ "op": "D", "args": ["phi"], "wrt": "x" }], "wrt": "x" },
+                { "op": "D", "args": [{ "op": "D", "args": ["phi"], "wrt": "y" }], "wrt": "y" }
+            ] }, "rhs": "f" } ]
         }));
-        assert_eq!(system_kind(&steady), SystemKind::Pde);
+        assert_eq!(system_kind(&steady), SystemKind::Nonlinear);
 
-        // Both signals: sde wins, because there is no SPDESystem to select.
+        // A Brownian parameter with a spatial derivative: sde.
         let both = model(serde_json::json!({
             "variables": {
                 "v": { "type": "unknown" },
@@ -1124,7 +1123,7 @@ mod tests {
                         "update": { "kind": "wiener" } }
             },
             "equations": [ { "lhs": { "op": "D", "args": ["v"], "wrt": "t" },
-                             "rhs": { "op": "*", "args": [{ "op": "grad", "args": ["v"], "dim": "x" }, "xi"] } } ]
+                             "rhs": { "op": "*", "args": [{ "op": "D", "args": ["v"], "wrt": "x" }, "xi"] } } ]
         }));
         assert_eq!(system_kind(&both), SystemKind::Sde);
 

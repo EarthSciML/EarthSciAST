@@ -480,7 +480,7 @@ pub(crate) fn is_strippable_implicit(lhs: &Expr) -> bool {
     }
     !matches!(
         body,
-        Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "D" | "grad" | "div" | "laplacian")
+        Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "D")
     )
 }
 

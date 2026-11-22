@@ -816,7 +816,7 @@ function _library_unreadable(u::_RefUnreadable, origin::String)
     msg = if u.reason === :not_found
         "$origin: template-library file not found: $(t.key) (from ref '$(t.authored)')"
     elseif u.reason === :invalid_json
-        "$origin: template-library ref '$(t.key)' is not valid JSON: $(u.cause.original_error)"
+        "$origin: template-library ref '$(t.key)' did not parse: $(_unreadable_cause(u))"
     elseif _is_remote(t)
         "$origin: failed to download template-library ref '$(t.ref)' " *
             "(resolved to '$(t.key)'): $(_unreadable_cause(u))"
@@ -1026,37 +1026,145 @@ function _process_library(
 end
 
 # Resolve the `enum` symbols a template library binds in its OWN calls
-# (esm-spec §9.3). After `_lower_library_template_enums`, the only `enum` ops
-# left in the library's scope are spelled with a template parameter. A call to a
-# template that can still produce one binds that parameter here, in the library,
-# so each of the library's own template bodies has those calls expanded (the
-# eager expansion esm-spec §9.6.4 rule 3 requires at load anyway) and the result
-# lowered against the library's block. An op the expansion leaves spelled with
-# the calling template's own parameter stays open for the importer's binding.
-# Runs after `_check_template_body_graph`, so the reference DAG is acyclic; every
-# new body is computed before any is replaced.
+# (esm-spec §9.3, §9.7.5). After `_lower_library_template_enums`, the only
+# `enum` ops left in the library's scope are spelled with a template parameter.
+# A call that binds such a parameter to a symbol is an instance (esm-spec §9.6.4
+# rule 3: the instance includes the symbols the call binds): the called
+# template's body is lowered against the library's block for that instance,
+# without expanding the call, and the call is re-pointed to the lowered body,
+# registered as `<name>.variant<k>`. The authored template keeps its body: the
+# importer may still call it with a symbol of its own, which resolves at the
+# importer's call site. Instances follow the reference DAG (a call that forwards
+# a bound symbol into another call lowers that one too). An op the lowering
+# leaves spelled with the calling template's own parameter stays open for the
+# importer's binding. Runs after `_check_template_body_graph`, so the reference
+# DAG is acyclic.
 function _expand_library_enum_calls!(
         named, library, own_names::Vector{String},
         origin::String
     )
     graph = _template_graph(named)
     bearing = _transitive_op_flags(named, op -> op == "enum"; graph = graph)
-    calls_bearing = node -> begin
-        nm = _raw_get(node, "name")
-        nm isa AbstractString && get(bearing, String(nm), false)
+    # (template, bound symbols) => (lowered body, the instance key of each
+    # re-pointed reference in it); bodies are computed children first.
+    insts = OrderedDict{Tuple{String, String}, Tuple{Any, IdDict{Any, Tuple{String, String}}}}()
+    # The symbols a reference `n` binds to the parameters of its template, as
+    # literals or through `lits` (the enclosing instance's symbols).
+    function bound_symbols(n, caller_params, lits)
+        nm = _raw_get(n, "name")
+        (nm isa AbstractString && get(bearing, String(nm), false)) || return nothing
+        b = _raw_get(n, "bindings")
+        _is_object(b) || return nothing
+        syms = Dict{String, String}()
+        for (k, v) in pairs(b)
+            v isa AbstractString || continue
+            if String(v) in caller_params
+                haskey(lits, String(v)) && (syms[string(k)] = lits[String(v)])
+            else
+                syms[string(k)] = String(v)
+            end
+        end
+        isempty(syms) && return nothing
+        return (String(nm), syms)
     end
-    bodies = OrderedDict{String, Any}()
+    function repoint(body, caller_params, lits)
+        refs = IdDict{Any, Tuple{String, String}}()
+        out = _rewrite_json(body; leaves = false) do rw, n
+            _is_apply_node(n) || return _JSON_DESCEND
+            nn = _rewrite_json_children(rw, n; keep = "name")
+            bs = bound_symbols(n, caller_params, lits)
+            bs === nothing && return nn
+            key = instance(bs[1], bs[2])
+            key === nothing && return nn
+            nn = nn === n ? OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(n)) : nn
+            refs[nn] = key
+            return nn
+        end
+        return out, refs
+    end
+    function instance(name::String, syms::Dict{String, String})
+        decl = named[name]
+        params = _TemplateDecl(decl).params
+        lits = Dict{String, String}(p => syms[p] for p in params if haskey(syms, p))
+        key = (name, _canonical_compact(Dict{String, Any}(lits)))
+        haskey(insts, key) && return key
+        body = _raw_get(decl, "body")
+        # The bound symbols, written into the `enum` ops that spell them.
+        subst = _rewrite_json(body; leaves = false) do _, n
+            _raw_get(n, "op") == "enum" || return _JSON_DESCEND
+            args = _raw_get(n, "args")
+            (args !== nothing && _is_array(args)) || return n
+            na = Any[(a isa AbstractString && haskey(lits, String(a))) ? lits[String(a)] : a for a in args]
+            na == collect(args) && return n
+            n2 = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(n))
+            n2["args"] = na
+            return n2
+        end
+        open_decl = OrderedDict{String, Any}(
+            "params" => String[p for p in params if !haskey(lits, p)], "body" => subst
+        )
+        lowered = _lower_library_template_body(library, name, open_decl, subst, origin)
+        lowered, refs = repoint(lowered, Set{String}(params), lits)
+        insts[key] = (lowered, refs)
+        return key
+    end
+    own_refs = OrderedDict{String, Tuple{Any, IdDict{Any, Tuple{String, String}}}}()
     for n in own_names
         decl = get(named, n, nothing)
         (decl !== nothing && _is_object(decl) && _raw_haskey(decl, "body")) || continue
-        body = _raw_get(decl, "body")
         any(r -> get(bearing, r, false), graph.refs[n]) || continue
-        expanded = _expand_refs_walk(body, named, origin, calls_bearing, IdDict{Any, Any}())
-        bodies[n] = _lower_library_template_body(library, n, decl, expanded, origin)
+        own_refs[n] = repoint(_raw_get(decl, "body"), Set{String}(_TemplateDecl(decl).params), Dict{String, String}())
     end
-    for (n, body) in bodies
+    isempty(insts) && return named
+    # Name the instances children first: a template after every template its
+    # instances' bodies reference; each distinct lowered body of a template is
+    # `<name>.variant<k>`, k in the order of the bodies' canonical bytes.
+    final = Dict{Tuple{String, String}, String}()
+    rename(body, refs) = _rewrite_json(body; leaves = false) do rw, n
+        _is_apply_node(n) || return _JSON_DESCEND
+        nn = _rewrite_json_children(rw, n; keep = "name")
+        key = get(refs, n, nothing)
+        key === nothing && return nn
+        out = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(nn))
+        out["name"] = final[key]
+        return out
+    end
+    by_name = OrderedDict{String, Vector{Tuple{String, String}}}()
+    for key in keys(insts)
+        push!(get!(by_name, key[1], Tuple{String, String}[]), key)
+    end
+    done = Set{String}()
+    function name_template(t)
+        t in done && return
+        push!(done, t)
+        for key in by_name[t], (_, ck) in insts[key][2]
+            name_template(ck[1])
+        end
+        bodies = Any[rename(insts[k]...) for k in by_name[t]]
+        canon = String[_canonical_compact(b) for b in bodies]
+        distinct = sort!(unique(canon))
+        names = Dict{String, String}()
+        for (i, c) in enumerate(distinct)
+            vn = "$t.variant$i"
+            while haskey(named, vn)
+                vn *= "_"
+            end
+            nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(named[t]))
+            nd["body"] = bodies[findfirst(==(c), canon)]
+            named[vn] = nd
+            names[c] = vn
+        end
+        for (k, c) in zip(by_name[t], canon)
+            final[k] = names[c]
+        end
+        return
+    end
+    for t in keys(by_name)
+        name_template(t)
+    end
+    for (n, (body, refs)) in own_refs
         decl = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(named[n]))
-        decl["body"] = body
+        decl["body"] = rename(body, refs)
         named[n] = decl
     end
     return named

@@ -9,6 +9,17 @@ pub enum EsmError {
     #[error("JSON parse error: {0}")]
     JsonParse(#[from] serde_json::Error),
 
+    /// A Markdown or Typst source document its reader refused as malformed
+    /// (esm-spec §1.2.1): the source-format counterpart of
+    /// [`EsmError::JsonParse`].
+    #[error("Source document parse error: {message}")]
+    SourceParse {
+        /// Stable cross-binding diagnostic code (`parse_error`).
+        code: &'static str,
+        /// The rendered message.
+        message: String,
+    },
+
     /// Schema validation error
     #[error("Schema validation error: {0}")]
     SchemaValidation(String),
@@ -91,7 +102,8 @@ impl EsmError {
     pub fn code(&self) -> Option<&'static str> {
         match self {
             EsmError::SchemaDiagnostic { code, .. }
-            | EsmError::StructuralDiagnostic { code, .. } => Some(code),
+            | EsmError::StructuralDiagnostic { code, .. }
+            | EsmError::SourceParse { code, .. } => Some(code),
             _ => None,
         }
     }

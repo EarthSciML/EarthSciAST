@@ -8,7 +8,7 @@
 # (`EarthSciAST.load`) and, for every model NODE — a top-level model and each of
 # its subsystems under the dot-path the golden keys by — records the three
 # unknown sets, the four parameter sets, the derived `system_kind`, and the
-# model's declared `system_kind` field (or `nothing`). Every list is sorted
+# model's declared `system_kind` (or `nothing`, also for a deprecated "pde"). Every list is sorted
 # lexicographically so the comparison is order-independent across languages.
 #
 # `test/classification_test.jl` includes this file and asserts the result
@@ -40,7 +40,7 @@ function classify_model(model::Model)
         "sampled_parameters" => sampled_parameters(model),
         "constant_parameters" => constant_parameters(model),
         "system_kind" => system_kind(model),
-        "declared_system_kind" => model.system_kind,
+        "declared_system_kind" => declared_system_kind(model),
     )
 end
 

@@ -702,7 +702,7 @@ render(segs) = render_segs(item_t, segs)
 read back."""
 function item_ok(it::RItem)
     (it isa RDesc || it isa RComp) && return true
-    it isa RBlock && return jwf(it.v)
+    it isa RBlock && return wfmb(it.v)
     it isa RDecl && return it.d.kind == D_SUB ? all(arg_ok, it.d.attrs) : decl_ok(it.d)
     it isa REqn && return !occursin('$', it.s) && tm_lex_t(collect(Char, it.s)) === nothing
     it isa REqx && return it.role != R_EQN && !occursin('$', it.s)

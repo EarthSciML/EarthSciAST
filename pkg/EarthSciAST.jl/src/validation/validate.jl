@@ -19,9 +19,10 @@ validate_structural(file::EsmFile)::Vector{StructuralError} =
 # (`composed`); the document-wide declared names, coordinate names and
 # callback-injected names reference integrity scopes with; every declaration by
 # scoped name (`index`) and the document-wide scoped-reference units read off
-# it (esm-spec §4.8.4); each top-level model's and reaction
-# system's template-expanded view (`_units_view`); and the units checker's
-# result once it has run (`_unit_check!`).
+# it (esm-spec §4.8.4); each top-level model's view (`_units_view`: its
+# references kept, each carrying the names its body reads) and each top-level
+# reaction system; and the units checker's result once it has run
+# (`_unit_check!`).
 struct _ValidationContext
     file::EsmFile
     indep::String
@@ -34,30 +35,38 @@ struct _ValidationContext
     toplevel::Dict{String, Union{String, Nothing}}
     models::Dict{String, Model}
     reaction_systems::Dict{String, ReactionSystem}
+    # `<kind>.<name>` => the top-level component's template table (absent when
+    # it has no surviving reference), one per pass: every check reads the
+    # component's references through it, so a body is prepared and an
+    # instance's frame built once per pass, not once per check.
+    tables::Dict{String, Any}
     checked::Base.RefValue{Any}
 end
 
 const _UnitsInputs = _ValidationContext
 
 function _ValidationContext(file::EsmFile)
+    tables = Dict{String, Any}()
     models = Dict{String, Model}()
     if file.models !== nothing
         for (name, model) in file.models
-            models[name] = _units_view(file, name, model)
+            tt = _tpl_component_table(file, "models", name)
+            tt === nothing || (tables["models.$name"] = tt)
+            models[name] = _units_view(file, name, model; tt)
         end
     end
-    rss = Dict{String, ReactionSystem}()
-    if file.reaction_systems !== nothing
-        for (name, rs) in file.reaction_systems
-            rss[name] = _reaction_system_units_view(file, name, rs)
-        end
+    rss = file.reaction_systems === nothing ? Dict{String, ReactionSystem}() :
+        Dict{String, ReactionSystem}(file.reaction_systems)
+    for name in keys(rss)
+        tt = _tpl_component_table(file, "reaction_systems", name)
+        tt === nothing || (tables["reaction_systems.$name"] = tt)
     end
     index = _scoped_index(file)
     return _ValidationContext(
         file, _indep_var(file), _coupled_system_names(file),
         _operator_composed_systems(file), _document_declared_names(file),
         _coordinate_names(file), _callback_injected_names(file),
-        index, _scoped_units(index), models, rss, Ref{Any}(nothing)
+        index, _scoped_units(index), models, rss, tables, Ref{Any}(nothing)
     )
 end
 
@@ -84,7 +93,7 @@ function _check_balance!(errors, ctx)
 end
 
 _check_references!(errors, ctx) =
-    append!(errors, validate_reference_integrity(ctx.file; views = ctx.models, names = ctx))
+    append!(errors, validate_reference_integrity(ctx.file; views = ctx.models, tables = ctx.tables, names = ctx))
 
 # An inline test's assertion targets, override keys and assertion ranks
 # (esm-spec §6.6.2, §6.6.3, §6.6.5).
@@ -190,7 +199,7 @@ _check_bounds!(errors, ctx) =
 # the broadcast checks (the `fn` contract, element-wise axis alignment,
 # esm-spec §4.3.4), each at the containing expression field.
 _check_faq!(errors, ctx) =
-    append!(errors, validate_aggregate_semantics(ctx.file; views = ctx.models))
+    append!(errors, validate_aggregate_semantics(ctx.file; views = ctx.models, tables = ctx.tables))
 _check_broadcast!(errors, ctx) = append!(errors, validate_broadcast_semantics(ctx.file))
 
 # Recurrence well-foundedness (esm-spec §4.3.1.1) and observed dependency
@@ -198,9 +207,9 @@ _check_broadcast!(errors, ctx) = append!(errors, validate_broadcast_semantics(ct
 # cycle check is gated on recurrence CANDIDACY, never on the recurrence
 # verdict (CONFORMANCE_SPEC §5.19.5).
 _check_recurrences!(errors, ctx) =
-    append!(errors, validate_recurrence_semantics(ctx.file; views = ctx.models))
+    append!(errors, validate_recurrence_semantics(ctx.file; views = ctx.models, tables = ctx.tables))
 _check_observed_dependency_cycles!(errors, ctx) =
-    append!(errors, validate_observed_cycles(ctx.file; views = ctx.models))
+    append!(errors, validate_observed_cycles(ctx.file; views = ctx.models, tables = ctx.tables))
 
 # A `variable_map` identity coupling between differently declared units
 # (esm-spec §4.7.6), at `/coupling/<i>`.

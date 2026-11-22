@@ -1166,7 +1166,7 @@ pub fn item_ok(it: &RItem) -> bool {
     let dd: Vec<char> = DD.chars().collect();
     match it {
         RItem::Desc(s) => no_stop(&fence, &with_nl(s)),
-        RItem::Block(_, v) => crate::document::math::expr::jwf(v),
+        RItem::Block(_, v) => v.wfmb(),
         RItem::Comp(_, n) => !n.contains(']') && !n.contains('\n'),
         RItem::Decl(d) => {
             if d.kind == DKind::Sub {

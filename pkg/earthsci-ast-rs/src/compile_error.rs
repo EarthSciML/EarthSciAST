@@ -138,8 +138,8 @@ pub enum CompileError {
         details: String,
     },
 
-    /// A rewrite-target operator (a spatial / right-hand-side `D`, or the
-    /// optional sugar ops `grad` / `div` / `laplacian` / ...) survived the
+    /// A rewrite-target operator (a spatial / right-hand-side `D`, or a user
+    /// op) survived the
     /// lowering fixpoint into an evaluation position (esm-spec §4.2 / §9.6.8).
     /// Such ops carry NO evaluator: a discretization `match` rewrite rule MUST
     /// lower them to a `faq` / `makearray` stencil before evaluation.
@@ -155,7 +155,7 @@ pub enum CompileError {
          live in EarthSciDiscretizations, not this format."
     )]
     UnloweredOperatorError {
-        /// The offending operator name (e.g. `"grad"` or `"D"`).
+        /// The offending operator name (e.g. `"D"` or a user op's name).
         op: String,
     },
 
@@ -767,7 +767,7 @@ pub fn first_implicit_equation(
     equations.iter().find(|eq| {
         let structural = matches!(
             &eq.lhs,
-            Expr::Operator(n) if matches!(n.op.as_str(), "ic" | "grad" | "div" | "laplacian")
+            Expr::Operator(n) if n.op == "ic"
                 || (n.op == "D" && n.wrt.as_deref().is_some_and(|w| w != "t"))
         );
         !structural && matches!(lhs_form_ref(&eq.lhs), LhsFormRef::Expression)

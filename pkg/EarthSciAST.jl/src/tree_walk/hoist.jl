@@ -89,7 +89,7 @@ function _hoist_free_names!(out::Set{String}, e::ASTExpr, bound::Set{String})
         end
     end
     inner = isempty(binders) ? bound : union(bound, binders)
-    for a in o.args
+    for a in _operands(o)
         _hoist_free_names!(out, a, inner)
     end
     for f in (o.expr_body, o.filter, o.lower, o.upper, o.key)

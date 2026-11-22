@@ -21,12 +21,14 @@ from .items import (
     RSurf,
     ck_mx,
     cook_doc,
+    cook_doc_blocks,
     cook_rows,
     eq_expr,
     eq_sides,
     id_char,
     id_ok,
     items,
+    mathify_doc,
     p_piece,
     p_side,
     pr_mx,
@@ -742,11 +744,16 @@ def _is_block(it: tuple) -> bool:
     return it[0] != "decl" or it[1].kind == SUB
 
 
+def _any_math(_t: str) -> bool:
+    """Typst math content needs no test beyond ``math_ok``."""
+    return True
+
+
 def print_typ(d: Any) -> str:
     """``Typ.printTyp``: print a document as Typst."""
     doc = to_doc(CAPS_T, d)
     out = [HEADER + args_first_t(doc.front) + ")\n"]
-    for it in items(raw_doc(_pr_tx, doc)):
+    for it in items(mathify_doc(print_typst, _any_math, raw_doc(_pr_tx, doc))):
         out.append("\n")
         out.append(item_t(it))
         if not _is_block(it):
@@ -770,6 +777,9 @@ def parse_typ(text: str):
     if its is None:
         return None
     sk = unitems(r[0], its)
+    if sk is None:
+        return None
+    sk = cook_doc_blocks(parse_typst, sk)
     if sk is None:
         return None
     d = cook_doc(_ck_tx, sk)

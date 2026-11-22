@@ -95,7 +95,6 @@ import {
   type SystemKind,
 } from './classification.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
-import { EsmMachineryError } from './lower-expression-templates.js'
 import { mergedTemplateRegistry } from './flatten-template-registry.js'
 import { resolveRhsTimeDerivatives } from './flatten-tendency.js'
 import {
@@ -431,18 +430,6 @@ export interface FlattenMetadata {
    * which is the overwhelming majority.
    */
   mergedVariableRenames: Record<string, string>
-  /**
-   * Every name a COUPLING rule rewrote OUT of the flattened equations: a
-   * `variable_map`'s substituted target, plus every merged-away spelling of
-   * {@link FlattenMetadata.mergedVariableRenames}.
-   *
-   * Only the registry guard reads it. A surviving `expression_templates` body
-   * is authored source that no equation walk reaches, so a body naming one of
-   * these is REFUSED rather than resolved (see `checkRegistryCouplingRewrites`,
-   * CONFORMANCE_SPEC §5.35). Unlike `mergedVariableRenames` this is not a
-   * consumer-facing map: it says a name is GONE, not where it went.
-   */
-  couplingRewrittenNames: Set<string>
 }
 
 /** A deferred `ic` equation (esm-spec §11.4.1): an initial condition, not dynamics. */
@@ -748,8 +735,8 @@ function hasArrayOp(expr: Expression): boolean {
  * differential into `into`.
  *
  * Read STRUCTURALLY from every node's `dim` axis field (esm-spec §4.9.1), NOT
- * from a list of op names: the open-tier sugar ops carry no spatial-detection
- * privilege, and only an undiscretized differential node carries `dim`. A
+ * from a list of op names: an open-tier op (`integral`, a user op) carries no
+ * spatial-detection privilege, and only an undiscretized node carries `dim`. A
  * discretized system has folded its spatial axes into array dimensions and yields
  * the empty set, so it stays a pure ODE.
  */
@@ -759,8 +746,7 @@ function spatialDimsInExpr(expr: Expression, into: Set<string>): void {
     if (typeof dim === 'string' && dim !== '') into.add(dim)
     // `wrt` is the other axis-naming scalar field, and a differential taken with
     // respect to anything but time names a spatial axis exactly as `dim` does --
-    // §4.7.6 step 2 lists it alongside grad/div/laplacian as "`D` with
-    // `wrt !== "t"`". Scanning `dim` alone made `D(u,t) = k * D(u,x)`, the heat
+    // §4.7.6 step 2 names it as "`D` with `wrt !== "t"`". Scanning `dim` alone made `D(u,t) = k * D(u,x)`, the heat
     // equation, come out as a pure ODE.
     const wrt = (node as { wrt?: unknown }).wrt
     if (typeof wrt === 'string' && wrt !== '' && wrt !== 't') into.add(wrt)
@@ -1488,7 +1474,7 @@ function buildTranslateMap(entry: CouplingEntry): Record<string, [string, number
 
 /**
  * Expand `_var` placeholders in B's equations against A's state variables
- * (esm-spec §4.7.1): an equation like `D(_var, t) = -u·grad(_var)` is cloned once
+ * (esm-spec §4.7.1): an equation like `D(_var, t) = -u·D(_var, wrt: x)` is cloned once
  * per state variable of A, with `_var` substituted for the namespaced name.
  */
 function expandOperatorComposePlaceholders(
@@ -2495,10 +2481,6 @@ function applyCouplings(
     composeRenames(mergedRenames, applyOperatorCompose(components, oc, mergedRenames))
   }
   Object.assign(metadata.mergedVariableRenames, mergedRenames)
-  // An `operator_compose` merge DELETES a name the same way a `variable_map`
-  // substitution does, so the merged-away spellings join the set the registry
-  // guard refuses against (issue #230).
-  for (const gone of Object.keys(mergedRenames)) metadata.couplingRewrittenNames.add(gone)
 
   for (const [index, cp] of couples) {
     applyCouple(components, retargetPendingEntry(cp, mergedRenames), index)
@@ -2508,108 +2490,6 @@ function applyCouplings(
   for (const [index, vm] of varMaps) {
     const resolved = retargetPendingEntry(vm, mergedRenames)
     applyVariableMap(components, resolved, index, shapeless)
-    // A NAMED transform substitutes `to` away entirely; an EXPRESSION transform
-    // leaves it standing as the observed the transform defines. Only the first
-    // deletes a name, so only the first joins the set the registry guard
-    // refuses against (Julia's `map_rewritten_names`).
-    const e = resolved as unknown as { to?: string; transform?: unknown }
-    const toVar = e.to ?? ''
-    if (toVar !== '' && (e.transform === undefined || typeof e.transform === 'string')) {
-      metadata.couplingRewrittenNames.add(toVar)
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// The shadow template registry: the ONE site a rewritten name is REFUSED
-// ---------------------------------------------------------------------------
-
-/**
- * Keys of an expression node whose STRING value names something other than a
- * variable, so the raw-body walk must not read them as references.
- */
-const TEMPLATE_BODY_NON_OPERAND_KEYS: ReadonlySet<string> = new Set([
-  'op',
-  'wrt',
-  'dim',
-  'fn',
-  'id',
-  'name',
-  'semiring',
-  'reduce',
-])
-
-/**
- * Every variable name a RAW (unparsed) template body references.
- *
- * The registry holds bodies as JSON rather than as {@link ExpressionNode}, so
- * this walks the JSON: a bare string in an OPERAND position is a variable
- * reference; a structural key (`op`, `wrt`, `fn`, …) names an operator, an axis
- * or a registry id and is skipped. Mirrors Python
- * `flatten._template_body_var_names`.
- */
-function templateBodyVarNames(body: unknown): Set<string> {
-  const out = new Set<string>()
-  const walk = (node: unknown, operand: boolean): void => {
-    if (typeof node === 'string') {
-      if (operand) out.add(node)
-    } else if (Array.isArray(node)) {
-      for (const item of node) walk(item, operand)
-    } else if (node !== null && typeof node === 'object') {
-      for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-        walk(value, !TEMPLATE_BODY_NON_OPERAND_KEYS.has(key))
-      }
-    }
-  }
-  walk(body, false)
-  return out
-}
-
-/**
- * Refuse a SURVIVING registry body that names a coupling-rewritten variable.
- *
- * A `variable_map` substitution and an `operator_compose` renaming match both
- * DELETE a name from the flattened tables and rewrite the equations off it. A
- * surviving `expression_templates` body is a shadow copy of authored source
- * that no equation walk reaches, and it expands at the BUILD boundary rather
- * than at flatten — so a body still naming a deleted variable would expand,
- * later and elsewhere, into a name the flattened system does not declare.
- *
- * This is the ONE site where such a reference is REFUSED rather than resolved
- * (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
- * silently diverge from the expand-at-load image the same document produces
- * with reference-preserving emit disabled. A template `param` SHADOWS the outer
- * name (esm-spec §9.6.1), so a body that BINDS the name through its params is
- * fine — which is exactly the fix the message names.
- *
- * Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites` and Python
- * `flatten._check_registry_coupling_rewrites`.
- */
-function checkRegistryCouplingRewrites(
-  registry: Record<string, unknown>,
-  rewritten: ReadonlySet<string>,
-): void {
-  if (rewritten.size === 0) return
-  for (const tname of Object.keys(registry).sort()) {
-    const decl = registry[tname]
-    if (decl === null || typeof decl !== 'object' || Array.isArray(decl)) continue
-    const body = (decl as Record<string, unknown>).body
-    if (body === undefined || body === null) continue
-    const raw = (decl as Record<string, unknown>).params
-    const params = new Set(
-      (Array.isArray(raw) ? raw : []).filter((p): p is string => typeof p === 'string'),
-    )
-    const hits = [...templateBodyVarNames(body)]
-      .filter((n) => !params.has(n) && rewritten.has(n))
-      .sort()
-    if (hits.length === 0) continue
-    throw new EsmMachineryError(
-      ERROR_CODES.TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
-      `expression template '${tname}' body references '${hits.join("', '")}', which a ` +
-        'coupling rule rewrote in the flattened equations; the registry body would expand ' +
-        "to a stale name at the build boundary. Bind the value through the template's " +
-        'params, or expand the reference before coupling (esm-spec §9.6.4).',
-    )
   }
 }
 
@@ -2999,7 +2879,7 @@ function collectFieldIcs(flat: FlattenedSystem): void {
 // (reactions -> generic `D(sp) = Σ terms`; then `operator_compose` merges each
 // species' reaction ODE with the spatial operator's advection makearray). What
 // operator_compose does NOT do is array-ify the result: the merged
-// `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
+// `D(sp) = <reaction> + <-u·makearray(D(sp, wrt: x))>` still has a SCALAR `sp` while
 // its advection makearray indexes `sp` per grid cell. The same holds for every
 // other route a grid reaches a 0-D system by (a `variable_map` feeding a shaped
 // field into a rate, an operator written elementwise, a partial translate).
@@ -3795,7 +3675,6 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
     operatorApplies: [],
     callbacks: [],
     mergedVariableRenames: {},
-    couplingRewrittenNames: new Set<string>(),
   }
 
   // 2. Resolve coupling entries into the per-component equation sets.
@@ -3828,9 +3707,6 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
   classifyFlattened(flat)
   collectFieldIcs(flat)
   flat.templateRegistry = mergedTemplateRegistry(file)
-  // ...and the ONE place a coupling-rewritten name is REFUSED rather than
-  // resolved. See `checkRegistryCouplingRewrites`.
-  checkRegistryCouplingRewrites(flat.templateRegistry, metadata.couplingRewrittenNames)
 
   // 8. Bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
   //    (esm-spec §4.8.3, issue #409). See `normalizeFlattenedAngleArguments`.

@@ -329,3 +329,92 @@ describe('an ARRAYED definition is observed, in every LHS spelling (§6.3.1)', (
     expect(algebraicUnknowns(model)).toEqual([])
   })
 })
+
+describe('no pde system kind (esm 2.4.0)', () => {
+  /** A one-equation model `D(u, t) = rhs`, as a 2.4.0 document. */
+  const docWith = (rhs: unknown, model: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      esm: '2.4.0',
+      metadata: { name: 'no_pde' },
+      models: {
+        M: {
+          variables: {
+            u: { type: 'unknown', units: '1', default: 0.0 },
+            k: { type: 'parameter', units: '1', default: 1.0 },
+          },
+          equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs }],
+          ...model,
+        },
+      },
+    })
+
+  const captureWarnings = <T>(fn: () => T): { result: T; warnings: string[] } => {
+    const warnings: string[] = []
+    const originalWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.join(' '))
+    }
+    try {
+      return { result: fn(), warnings }
+    } finally {
+      console.warn = originalWarn
+    }
+  }
+
+  // grad, div and laplacian are ordinary operator names: a document using one
+  // loads, and the op does not change the kind.
+  for (const op of ['grad', 'div', 'laplacian']) {
+    it(`a document using \`${op}\` loads and is classified ode`, () => {
+      const file = loadString(docWith({ op: '*', args: ['k', { op, args: ['u'], dim: 'x' }] }))
+      expect(systemKind(file.models!.M as Model)).toBe('ode')
+    })
+  }
+
+  it('a spatial D does not change the kind', () => {
+    const model = {
+      variables: { u: { type: 'unknown', units: '1', default: 0.0 } },
+      equations: [
+        { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: { op: 'D', args: ['u'], wrt: 'x' } },
+      ],
+    } as unknown as Model
+    expect(systemKind(model)).toBe('ode')
+    const steady = {
+      variables: { u: { type: 'unknown', units: '1', default: 0.0 } },
+      equations: [{ lhs: 0, rhs: { op: 'D', args: ['u'], wrt: 'x' } }],
+    } as unknown as Model
+    expect(systemKind(steady)).toBe('nonlinear')
+  })
+
+  it('a declared "pde" loads with one deprecated_system_kind warning and counts as absent', () => {
+    const { result: file, warnings } = captureWarnings(() =>
+      loadString(
+        docWith('k', {
+          system_kind: 'pde',
+          subsystems: {
+            Inner: {
+              system_kind: 'pde',
+              variables: { w: { type: 'unknown', units: '1', default: 0.0 } },
+              equations: [{ lhs: { op: 'D', args: ['w'], wrt: 't' }, rhs: 0 }],
+            },
+          },
+        }),
+      ),
+    )
+    const deprecated = warnings.filter((w) => w.startsWith('deprecated_system_kind'))
+    expect(deprecated).toHaveLength(1)
+    expect(deprecated[0]).toContain(
+      'Declared at: /models/M/system_kind, /models/M/subsystems/Inner/system_kind.',
+    )
+    const model = file.models!.M as Model
+    // Kept as written.
+    expect(model.system_kind).toBe('pde')
+    expect(declaredSystemKind(model)).toBeNull()
+    expect(effectiveSystemKind(model)).toBe('ode')
+    expect(classifyDocument(file.models!)['M'].declaredSystemKind).toBeNull()
+  })
+
+  it('no warning for a declared ode', () => {
+    const { warnings } = captureWarnings(() => loadString(docWith('k', { system_kind: 'ode' })))
+    expect(warnings.some((w) => w.startsWith('deprecated_system_kind'))).toBe(false)
+  })
+})

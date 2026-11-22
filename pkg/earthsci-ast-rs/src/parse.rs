@@ -375,6 +375,9 @@ struct LoadFacts {
     enum_walk_needed: bool,
     /// Whether the document has template machinery.
     has_templates: bool,
+    /// The template names each component authors in-file, read before
+    /// template resolution merges imports (esm-spec §9.6.4 rule 5).
+    authored_templates: std::collections::HashMap<String, Vec<String>>,
     /// Each component's `expression_templates` registry, captured before
     /// expansion removes the blocks.
     component_templates: Option<indexmap::IndexMap<String, Value>>,
@@ -495,9 +498,11 @@ fn pass_data_source_extents(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// `index_sets` do not join the registry until the root has CLOSED — §9.7.6
 /// site 3, "subsystem refs resolve post-close" ([`pass_staged_index_sets`]).
 ///
-/// A mounted leaf is expanded here, so its template expansions are marked here
-/// too (esm-spec §9.6.11; `MarkTemplateOrigins`), and the schema check reads
-/// the document with those marks taken off.
+/// A mounted leaf keeps its references (esm-spec §9.6.4 rule 1); they are
+/// expanded with the root's in [`pass_expand_templates`]. Any expansion mount
+/// resolution does make is marked here (esm-spec §9.6.11;
+/// `MarkTemplateOrigins`), and the schema check reads the document with those
+/// marks taken off.
 ///
 /// A refusal here carries, as its findings, the document's own mount edges
 /// that do not resolve, each at its pointer
@@ -628,6 +633,8 @@ fn pass_scope_injections(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// §9.7.6). An emit source carries no loader-API bindings and mounts nothing
 /// declared.
 fn pass_template_machinery(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    doc.facts.authored_templates =
+        crate::lower_expression_templates::authored_template_names(&doc.value);
     crate::template_imports::resolve_template_machinery_scoped_owned(
         &mut doc.value,
         &doc.base,
@@ -704,8 +711,10 @@ fn pass_lower_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// document with no template machinery has nothing to expand; `expand` would
 /// walk it only to find that out.
 fn pass_expand_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
-    doc.facts.component_templates =
-        crate::lower_expression_templates::capture_component_templates(&doc.value);
+    doc.facts.component_templates = crate::lower_expression_templates::capture_component_templates(
+        &doc.value,
+        &doc.facts.authored_templates,
+    );
     if doc.facts.has_templates {
         let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
         crate::lower_expression_templates::expand(&mut doc.value).map_err(PassError::Schema)?;
@@ -738,6 +747,11 @@ fn pass_reserved_index_symbols(doc: &mut Doc<'_>) -> Result<(), PassError> {
 
 /// Load an ESM file from a filesystem path.
 ///
+/// The file's extension picks its format (esm-spec §1.2.1): `.md` is a
+/// Markdown source document, `.typ` a Typst source document, and every other
+/// name (`.esm` among them) JSON. A refused source document fails with its
+/// reader's code (`parse_error`, or `removed_op`).
+///
 /// Reads the file, resolves any subsystem references relative to the file's
 /// directory, validates against the schema, and deserializes into an
 /// [`EsmFile`].
@@ -753,10 +767,11 @@ pub fn load_path_with_options<P: AsRef<std::path::Path>>(
     metaparameters: &std::collections::BTreeMap<String, i64>,
 ) -> Result<EsmFile, EsmError> {
     let path = path.as_ref();
-    let json_str = std::fs::read_to_string(path).map_err(|e| EsmError::FileRead {
+    let text = std::fs::read_to_string(path).map_err(|e| EsmError::FileRead {
         path: path.display().to_string(),
         source: e,
     })?;
+    let json_value = crate::ref_reader::decode_document(&text, path)?;
 
     let base = path
         .parent()
@@ -766,7 +781,26 @@ pub fn load_path_with_options<P: AsRef<std::path::Path>>(
         base_path: Some(base),
         metaparameters: metaparameters.clone(),
     };
-    load_string_with_options(&json_str, &options)
+    load_value(json_value, &options)
+}
+
+/// A document file's `text` as JSON text, read in the format its `location`
+/// names (esm-spec §1.2.1): JSON text is returned as it is, and a Markdown
+/// (`.md`) or Typst (`.typ`) source document is read and rendered as JSON. For
+/// a caller that has a file's text in hand and goes on to load or validate it
+/// as a string (the `esm` CLI's subcommands); [`load_path`] reads files
+/// directly.
+pub fn document_json_text<'a>(
+    text: &'a str,
+    location: &std::path::Path,
+) -> Result<std::borrow::Cow<'a, str>, EsmError> {
+    if crate::ref_reader::source_format(location).is_none() {
+        return Ok(std::borrow::Cow::Borrowed(text));
+    }
+    let value = crate::ref_reader::decode_document(text, location)?;
+    Ok(std::borrow::Cow::Owned(
+        serde_json::to_string(&value).map_err(EsmError::JsonParse)?,
+    ))
 }
 
 /// Validate a JSON value against the ESM schema
@@ -1125,8 +1159,8 @@ fn compile_branch<'c>(
 /// Both names are IMPLICITLY DECLARED in every model's expression scope
 /// (§4.9.1), and every consumer in this crate resolves them by name BEFORE it
 /// consults the loop bindings: `simulate_array/eval.rs::lookup_variable` and
-/// `lookup_array_ref`, the two `tape/lower.rs` sites, `units.rs`, `simulate/resolve.rs`, and the scoping walkers
-/// `flatten.rs::namespace_expr_scoped` / `scope_template_body`
+/// `lookup_array_ref`, the two `tape/lower.rs` sites, `units.rs`, `simulate/resolve.rs`, and the scoping walker
+/// `flatten.rs::namespace_expr_scoped`
 /// (`if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name)`). A
 /// `ranges` key or `output_idx` entry spelled with one of those names therefore
 /// declares a loop the body can never address: every read of the symbol inside
@@ -1864,8 +1898,57 @@ pub(crate) fn prepare_document_ops_scanned(
     if let Some(warning) = deprecated_op_warning(&scan.deprecated) {
         eprintln!("warning: {warning}");
     }
+    // 4. A model declaring `"system_kind": "pde"` (deprecated at esm 2.4.0):
+    //    ONE warning per document naming every such model; the field is kept.
+    if let Some(warning) = deprecated_system_kind_warning(value) {
+        eprintln!("warning: {warning}");
+    }
     Ok(facts)
 }
+
+/// The `deprecated_system_kind` load warning for one document: every model,
+/// at any `subsystems` depth, that declares `"system_kind": "pde"`, by JSON
+/// pointer in document order, or `None` when no model does. The value is
+/// ignored for classification (the model takes its derived kind) and is kept
+/// as written.
+pub(crate) fn deprecated_system_kind_warning(value: &serde_json::Value) -> Option<String> {
+    let mut sites = Vec::new();
+    pde_system_kind_sites(value.get("models"), "/models", &mut sites);
+    (!sites.is_empty()).then(|| {
+        format!(
+            "deprecated_system_kind: the `system_kind` value \"pde\" is deprecated (esm \
+             2.4.0) and ignored; the model is treated as its derived kind (esm-spec §6.3.1). \
+             Declared at: {}.",
+            sites.join(", ")
+        )
+    })
+}
+
+/// Append the pointer of every `system_kind: "pde"` in a `models` (or
+/// `subsystems`) map at `at`, each model before its own subsystems.
+fn pde_system_kind_sites(models: Option<&serde_json::Value>, at: &str, sites: &mut Vec<String>) {
+    let Some(models) = models.and_then(|m| m.as_object()) else {
+        return;
+    };
+    for (name, model) in models {
+        if !model.is_object() {
+            continue;
+        }
+        let here = format!("{at}/{}", name.replace('~', "~0").replace('/', "~1"));
+        if model.get("system_kind").and_then(|k| k.as_str()) == Some(DEPRECATED_SYSTEM_KIND) {
+            sites.push(format!("{here}/system_kind"));
+        }
+        pde_system_kind_sites(
+            model.get("subsystems"),
+            &format!("{here}/subsystems"),
+            sites,
+        );
+    }
+}
+
+/// The `system_kind` value esm 2.4.0 deprecated: there is no `pde` kind any
+/// more, so a declared `"pde"` counts as absent.
+pub(crate) const DEPRECATED_SYSTEM_KIND: &str = "pde";
 
 /// The expression ops esm 2.0.0 removed (esm-spec, "2.0.0 is a break"):
 /// `aggregate`, the pre-1.1.0 spelling of `faq`, and the external functions,
@@ -2203,6 +2286,61 @@ mod tests {
         assert!(e.contains("file declares 1.0.0"), "{e}");
         let v = run(json!({"esm": "2.0.0", "a": {"op": "faq"}})).unwrap();
         assert_eq!(v, json!({"esm": "2.0.0", "a": {"op": "faq"}}));
+    }
+
+    /// A declared `"system_kind": "pde"` warns once per document, naming every
+    /// such model by pointer, and is kept as written.
+    #[test]
+    fn a_declared_pde_system_kind_warns_once_and_is_kept() {
+        use serde_json::json;
+        let doc = json!({"esm": "2.4.0", "models": {
+            "A": {"system_kind": "pde"}, "B": {"system_kind": "ode"}, "C/x": {"system_kind": "pde"}
+        }});
+        let w = deprecated_system_kind_warning(&doc).expect("a warning");
+        assert!(w.starts_with("deprecated_system_kind: "), "{w}");
+        assert!(
+            w.ends_with("Declared at: /models/A/system_kind, /models/C~1x/system_kind."),
+            "{w}"
+        );
+        assert!(
+            deprecated_system_kind_warning(&json!({"models": {"B": {"system_kind": "ode"}}}))
+                .is_none()
+        );
+
+        let src = r#"{"esm": "2.4.0", "metadata": {"name": "P"},
+            "models": {"M": {"system_kind": "pde", "variables": {"u": {"type": "unknown"}},
+                "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "u"}]}}}"#;
+        let file = load_string(src).expect("a declared pde loads");
+        let model = &file.models.as_ref().unwrap()["M"];
+        assert_eq!(model.system_kind.as_deref(), Some("pde"), "kept as written");
+        assert_eq!(crate::classification::declared_system_kind(model), None);
+        assert_eq!(
+            crate::classification::system_kind_mismatch(model),
+            None,
+            "a declared pde never mismatches"
+        );
+    }
+
+    /// The warning reaches a `"pde"` declared on a subsystem at any depth,
+    /// each model before its own subsystems, in document order.
+    #[test]
+    fn a_declared_pde_system_kind_on_a_subsystem_warns() {
+        use serde_json::json;
+        let doc = json!({"esm": "2.4.0", "models": {
+            "A": {"subsystems": {
+                "S": {"system_kind": "pde", "subsystems": {"T/u": {"system_kind": "pde"}}},
+                "R": {"system_kind": "ode"}
+            }},
+            "B": {"system_kind": "pde"}
+        }});
+        let w = deprecated_system_kind_warning(&doc).expect("a warning");
+        assert!(
+            w.ends_with(
+                "Declared at: /models/A/subsystems/S/system_kind, \
+                 /models/A/subsystems/S/subsystems/T~1u/system_kind, /models/B/system_kind."
+            ),
+            "{w}"
+        );
     }
 
     #[test]

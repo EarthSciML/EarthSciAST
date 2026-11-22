@@ -372,7 +372,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guesses: Option<HashMap<String, serde_json::Value>>,
 
-    /// MTK system-kind discriminator: "ode" (default), "nonlinear", "sde", "pde".
+    /// MTK system-kind discriminator: "ode" (default), "nonlinear", "sde"; a declared "pde" is deprecated
+    /// (esm 2.4.0), warned `deprecated_system_kind` at load and ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_kind: Option<String>,
 }

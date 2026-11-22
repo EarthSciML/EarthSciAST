@@ -1,0 +1,64 @@
+{
+  "expression_templates": {
+    "Zulu.s": {
+      "body": {
+        "args": [
+          "f",
+          1
+        ],
+        "op": "+"
+      },
+      "params": [
+        "f"
+      ]
+    },
+    "Alpha.s": {
+      "body": {
+        "args": [
+          "f",
+          2
+        ],
+        "op": "+"
+      },
+      "params": [
+        "f"
+      ]
+    },
+    "aa": {
+      "body": {
+        "args": [
+          2,
+          "f"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "f"
+      ]
+    },
+    "lib_a": {
+      "body": {
+        "args": [
+          5,
+          "f"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "f"
+      ]
+    },
+    "lib_z": {
+      "body": {
+        "args": [
+          3,
+          "f"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "f"
+      ]
+    }
+  }
+}

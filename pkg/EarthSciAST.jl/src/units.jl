@@ -774,7 +774,14 @@ end
 # The numeric value of a literal AST node, or `nothing` if it is not one. The
 # `^` rule reads its exponent through this rather than through the dimensional
 # engine (which reports every literal as indeterminate).
-function _literal_value(e::ASTExpr)
+#
+# Inside a template body read through its frame (`_TplUnitEnv`), a parameter
+# sentinel is read as its binding wherever a rule reads a literal by VALUE:
+# `fr` is the frame the body is read in (`nothing` outside a body), and
+# `_tpl_leaf` (templates/frames.jl) is the one resolver, so `x^p` with `p`
+# bound to `2` folds exactly as the expansion's `x^2` does.
+function _literal_value(e::ASTExpr, fr = nothing)
+    e, _ = _tpl_leaf(e, fr)
     e isa IntExpr && return e.value
     (e isa NumExpr && e.value isa Number) && return e.value
     return nothing
@@ -795,7 +802,7 @@ function _exponent_rational(v)::Union{Rational{Int}, Nothing}
 end
 
 """
-    _constant_exponent_value(e) -> Union{Rational{Int}, Nothing}
+    _constant_exponent_value(e, fr = nothing) -> Union{Rational{Int}, Nothing}
 
 The exact rational value of a CONSTANT-EXPRESSION exponent (esm-spec §4.8.3
 `^`), or `nothing` when it is symbolic. It folds a numeric literal; a `const`
@@ -807,7 +814,8 @@ nested to any depth. Anything else — a variable, an expression containing one,
 a `const` that is dimensional or scaled (`%`), any other operator, an `Int`
 overflow, a division by zero — is symbolic.
 """
-function _constant_exponent_value(e::ASTExpr)::Union{Rational{Int}, Nothing}
+function _constant_exponent_value(e::ASTExpr, fr = nothing)::Union{Rational{Int}, Nothing}
+    e, fr = _tpl_leaf(e, fr)
     lit = _literal_value(e)
     lit !== nothing && return _exponent_rational(lit)
     e isa OpExpr || return nothing
@@ -829,7 +837,7 @@ function _constant_exponent_value(e::ASTExpr)::Union{Rational{Int}, Nothing}
     isempty(e.args) && return nothing
     vals = Rational{Int}[]
     for a in e.args
-        v = _constant_exponent_value(a)
+        v = _constant_exponent_value(a, fr)
         v === nothing && return nothing
         push!(vals, v)
     end
@@ -1444,7 +1452,7 @@ function _power_rule(expr, var_units, findings)
     # CONSTANT EXPRESSION over literals (`3/2`, `-(1)`, a unitless `const`)
     # folds to the exact rational it denotes and is used exactly as that
     # literal would be (esm-spec §4.8.3); anything else is symbolic.
-    power = _constant_exponent_value(expr.args[2])
+    power = _constant_exponent_value(expr.args[2], _tpl_unit_frame(var_units))
 
     if power === nothing
         # Non-literal exponent: it must still be dimensionless, and THAT is
@@ -1967,11 +1975,128 @@ function _literal_unit(v, var_units)
     return Unitful.NoUnits
 end
 
+# ---------------------------------------------------------------------------
+# TEMPLATE REFERENCES (esm-spec §4.8.5 item 5, §9.6.4 rule 2).
+#
+# A reference has the unit of its expansion, and the engine judges it without
+# expanding: the unit of a reference is the unit of its instance's prepared
+# body (templates/frames.jl `_tpl_frame`), with each parameter sentinel bound
+# to the unit of its binding, computed in the caller's environment. The body is
+# analysed once per distinct instance — the template instance, each binding's
+# unit, the value of each binding that is a constant, and the §4.8.6 literal
+# switch — and the unit and the body's findings are reused at every use.
+#
+# The template table reaches the engine through the environment it already
+# threads: `_TplUnitEnv` wraps a component's environment (`_tpl_units_env`),
+# answers every lookup of a name as the environment it wraps does, and carries
+# the table, the frame a body is read in and each sentinel's binding unit.
+# ---------------------------------------------------------------------------
+
+# A body finding that stands for the findings inside the binding of the
+# parameter sentinel `sentinel`: the expansion has them wherever the body
+# reads the parameter, so a cached body result is replayed with each use's own.
+struct _TplArgFindings
+    sentinel::String
+end
+
+struct _TplUnitEnv{D <: AbstractDict} <: AbstractDict{String, String}
+    inner::D
+    tt::_TplTable
+    # The frame the body is read in; `nothing` at a component's own sites.
+    frame::Union{Nothing, _TplFrame}
+    # Sentinel => (the binding's unit, the findings inside the binding).
+    args::Dict{String, Tuple{Any, Vector{Any}}}
+    # Instance key => (unit, findings) of a body, shared by one component's walk.
+    memo::Dict{Vector{Any}, Tuple{Any, Vector{Any}}}
+end
+Base.get(env::_TplUnitEnv, name, default) = get(env.inner, name, default)
+Base.getindex(env::_TplUnitEnv, name) = env.inner[name]
+Base.haskey(env::_TplUnitEnv, name) = haskey(env.inner, name)
+Base.length(env::_TplUnitEnv) = length(env.inner)
+Base.iterate(env::_TplUnitEnv, state...) = iterate(env.inner, state...)
+_indep_of(env::_TplUnitEnv) = _indep_of(env.inner)
+
+# `env` reading the template references of a component against the table `tt`
+# (`nothing`: a component with no surviving reference, `env` unchanged).
+_tpl_units_env(env::AbstractDict, ::Nothing) = env
+_tpl_units_env(env::AbstractDict, tt::_TplTable) = _TplUnitEnv(
+    env, tt, nothing, Dict{String, Tuple{Any, Vector{Any}}}(),
+    Dict{Vector{Any}, Tuple{Any, Vector{Any}}}()
+)
+
+# The template scope of a unit environment, under the literal-rule switch.
+_tpl_unit_scope(env::_LiteralRuleEnv) = _tpl_unit_scope(env.inner)
+_tpl_unit_scope(env::_TplUnitEnv) = env
+_tpl_unit_scope(::AbstractDict) = nothing
+# The frame a site's expressions are read in, and the template table.
+_tpl_unit_frame(env) = (sc = _tpl_unit_scope(env); sc === nothing ? nothing : sc.frame)
+_tpl_unit_table(env) = (sc = _tpl_unit_scope(env); sc === nothing ? nothing : sc.tt)
+
+# A parameter sentinel inside a body: its binding's unit, with a marker where
+# the binding's own findings belong.
+function _tpl_sentinel_unit!(findings, name::String, var_units)
+    sc = _tpl_unit_scope(var_units)
+    (sc === nothing || !haskey(sc.args, name)) && return nothing
+    u, _ = sc.args[name]
+    push!(findings, _TplArgFindings(name))
+    return u
+end
+
+# Does a literal-sensitive rule read the binding `b` (in `fr`) by value?
+_tpl_unit_literal(b, fr) =
+    _constant_exponent_value(b, fr) !== nothing || _bare_literal_value(b, fr) !== nothing
+
+# The unit of the reference `call`, its findings appended to `findings`.
+function _tpl_call_unit!(findings, call::OpExpr, var_units)
+    sc = _tpl_unit_scope(var_units)
+    # No registry: a reference has no unit the engine can read.
+    sc === nothing && return nothing
+    fr = _tpl_frame_or_nothing(sc.tt, call, sc.frame)
+    # An unresolvable reference is reported by the template checks.
+    fr === nothing && return nothing
+    on = var_units isa _LiteralRuleEnv
+    args = Dict{String, Tuple{Any, Vector{Any}}}()
+    key = Any[objectid(fr.body), on]
+    for k in sort!(collect(keys(fr.args)))
+        # The binding as THIS reference writes it, read in this reference's
+        # frame. The frame is shared by every reference with the same binding
+        # keys (`_tpl_frame`), so `fr.args[k]` may be another caller's
+        # binding, written in that caller's frame (its parameter sentinels are
+        # not this frame's).
+        b = _tpl_call_binding(call, k)
+        f = Any[]
+        u = _expr_dimensions!(f, b, var_units)
+        args[k] = (u, f)
+        push!(key, k, u, _tpl_unit_literal(b, sc.frame) ? _tpl_bkey(sc.tt, b, sc.frame) : nothing)
+    end
+    hit = get(sc.memo, key, nothing)
+    if hit === nothing
+        benv = _TplUnitEnv(_with_literal_rule(var_units, false), sc.tt, fr, args, sc.memo)
+        bf = Any[]
+        u = _expr_dimensions!(bf, fr.body, on ? _LiteralRuleEnv(benv) : benv)
+        hit = (u, bf)
+        sc.memo[key] = hit
+    end
+    u, bf = hit
+    for x in bf
+        if x isa _TplArgFindings
+            append!(findings, args[x.sentinel][2])
+        else
+            push!(findings, x)
+        end
+    end
+    # An element call's subscripts, walked as `index` walks them.
+    for s in _tpl_out_bindings(call)
+        _expr_dimensions!(findings, s, var_units)
+    end
+    return u
+end
+
 # The engine proper. Returns the expression's dimension, or `nothing` when it
 # cannot be determined; every PROVABLE inconsistency encountered anywhere in the
 # subtree is appended to `findings`. See the invariant at the top of this block.
 function _expr_dimensions!(
-        findings::Vector{String}, expr::ASTExpr,
+        findings::AbstractVector, expr::ASTExpr,
         var_units::AbstractDict
     )::Union{Unitful.Units, Nothing}
     if expr isa NumExpr || expr isa IntExpr
@@ -1981,6 +2106,8 @@ function _expr_dimensions!(
         # the esm-spec §4.8.6 switch a nonzero one is dimensionless instead.
         return _literal_unit(expr.value, var_units)
     elseif expr isa VarExpr
+        # A template parameter inside a body read through its frame.
+        _tpl_is_sentinel(expr.name) && return _tpl_sentinel_unit!(findings, expr.name, var_units)
         # Look up variable units; a variable we know nothing about has
         # *unknown* dimensions, not dimensionless ones.
         unit_str = get(var_units, expr.name, nothing)
@@ -1994,6 +2121,8 @@ function _expr_dimensions!(
         end
         return _absolute_unit(parse_units(unit_str))
     elseif expr isa OpExpr
+        # A template reference: the unit of its expansion, read through its frame.
+        _tpl_is_call(expr) && return _tpl_call_unit!(findings, expr, var_units)
         rule = get(_DIMENSION_RULES, expr.op, nothing)
         rule !== nothing && return rule(expr, var_units, findings)
         expr.op in _ARRAY_ELEMENT_OPS &&
@@ -2345,8 +2474,9 @@ function _component_unit_findings!(
     )
     _declaration_unit_findings!(errors, c)
     lhs = Ref{Any}(nothing)
+    tt = _tpl_unit_table(env)
     foreach_expression(c; subsystems = false) do e, p, kind
-        for units in unresolvable_const_units(e)
+        for units in unresolvable_const_units(e, tt)
             push!(
                 errors, UnitFinding(
                     p[2:end], "Unit string '$units' is not a recognised unit", UNIT_PARSE_ERROR
@@ -2440,7 +2570,7 @@ function _unit_site!(errors, warnings, c, pointer, p, kind, lhs, rhs, env)
         return
     end
     kind in _UNIT_LITERAL_SITES || return
-    literals = _nonzero_literals(lhs === nothing ? (rhs,) : (lhs, rhs))
+    literals = _nonzero_literals(lhs === nothing ? (rhs,) : (lhs, rhs), _tpl_unit_table(env))
     # With no nonzero literal the two rules type the site identically.
     isempty(literals) && return
     found = _site_findings(lhs, rhs, _with_literal_rule(env, true))
@@ -2575,13 +2705,15 @@ const UNIT_FINDING_DIMENSIONLESS_LITERAL = ERROR_CODES.UNITS_DIMENSIONLESS_LITER
 
 # The value of a bare numeric literal, a `const` without `units`, or a unary
 # `+`/`-` of one (nested to any depth); `nothing` for anything else.
-function _bare_literal_value(e)
+# `fr` is the template frame `e` is read in, as for `_literal_value`.
+function _bare_literal_value(e, fr = nothing)
     _real(v) = (v isa Real && !(v isa Bool)) ? v : nothing
+    e isa ASTExpr && ((e, fr) = _tpl_leaf(e, fr))
     (e isa IntExpr || e isa NumExpr) && return _real(e.value)
     e isa OpExpr || return nothing
     e.op == "const" && e.units === nothing && return _real(e.value)
     if e.op in ("+", "-") && length(e.args) == 1
-        inner = _bare_literal_value(e.args[1])
+        inner = _bare_literal_value(e.args[1], fr)
         inner === nothing && return nothing
         return e.op == "-" ? -inner : inner
     end
@@ -2589,11 +2721,21 @@ function _bare_literal_value(e)
 end
 
 # The distinct nonzero bare literals in `exprs`, in walk order, as text — what
-# the dimensionless-literal warning names.
-function _nonzero_literals(exprs)::Vector{String}
+# the dimensionless-literal warning names. With the template table `tt`, a
+# reference is read as its expansion is: its instance body through its frame,
+# each parameter where the body reads it (`_tpl_step`); each (node, frame)
+# is visited once, which cannot change a list of distinct literals.
+function _nonzero_literals(exprs, tt = nothing)::Vector{String}
     out = String[]
-    function walk(node)
-        v = _bare_literal_value(node)
+    seen = Set{Tuple{UInt, UInt}}()
+    function walk(node, fr)
+        _tpl_step(walk, tt, node, fr) && return
+        if node isa OpExpr
+            k = (objectid(node), fr === nothing ? UInt(0) : objectid(fr))
+            k in seen && return
+            push!(seen, k)
+        end
+        v = _bare_literal_value(node, fr)
         if v !== nothing
             if !iszero(v)
                 text = string(v)
@@ -2602,13 +2744,13 @@ function _nonzero_literals(exprs)::Vector{String}
             return
         end
         node isa OpExpr || return
-        foreach(walk, node.args)
-        node.expr_body !== nothing && walk(node.expr_body)
-        node.filter !== nothing && walk(node.filter)
-        node.values !== nothing && foreach(walk, node.values)
+        foreach(a -> walk(a, fr), node.args)
+        node.expr_body !== nothing && walk(node.expr_body, fr)
+        node.filter !== nothing && walk(node.filter, fr)
+        node.values !== nothing && foreach(v -> walk(v, fr), node.values)
         return
     end
-    foreach(walk, exprs)
+    foreach(e -> walk(e, nothing), exprs)
     return out
 end
 
@@ -2662,19 +2804,36 @@ _find_units_bearing_node(node, at::String) =
     unresolvable_const_units(expr::ASTExpr) -> Vector{String}
 
 Every declared `const` unit string in `expr` that does not resolve against the
-registry (esm-spec §4.8.5 item 2), in walk order.
+registry (esm-spec §4.8.5 item 2), in walk order. With the template table `tt`
+a reference counts as its expansion does: its instance body's strings, read
+through its frame and listed once per instance (reused at every use), with
+each parameter's binding counted where the body reads it.
 """
-function unresolvable_const_units(expr)
+function unresolvable_const_units(expr, tt = nothing)
     out = String[]
-    _walk_const_units!(out, expr)
+    _walk_const_units!(out, expr, tt, nothing)
     return out
 end
 
-function _walk_const_units!(out, expr)
+function _walk_const_units!(out, expr, tt = nothing, fr = nothing)
+    if expr isa VarExpr && fr !== nothing && _tpl_is_sentinel(expr.name)
+        b, bf = _tpl_arg(fr, expr.name)
+        return _walk_const_units!(out, b, tt, bf)
+    end
     expr isa OpExpr || return out
+    if tt !== nothing && _tpl_is_call(expr)
+        sub = _tpl_frame_or_nothing(tt, expr, fr)
+        if sub !== nothing
+            append!(
+                out, _tpl_memo(tt, sub, :unresolvable_const_units, () -> _walk_const_units!(String[], sub.body, tt, sub))
+            )
+            foreach(s -> _walk_const_units!(out, s, tt, fr), _tpl_out_bindings(expr))
+            return out
+        end
+    end
     if expr.op == "const" && expr.units !== nothing && parse_units(expr.units) === nothing
         push!(out, expr.units)
     end
-    foreach_child(child -> _walk_const_units!(out, child), expr)
+    foreach_child(child -> _walk_const_units!(out, child, tt, fr), expr)
     return out
 end

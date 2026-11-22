@@ -1,0 +1,139 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "mount_host_rule_leaf",
+    "description": "The leaf mount_host_rule/fixture.esm mounts. Its equations hold `cub` nodes, which no rule of the leaf matches (the mounting component's rule `cube` does), and a `dbl` node its own rule `twice` matches. `rate` is a match-less template reading the leaf's parameter `k`; one of its references binds a `cub` node. It mounts deep_leaf.esm, whose `dbl` node its rule `twice` matches and whose `cub` node, inside that, the rule `cube` two mounts up matches."
+  },
+  "models": {
+    "Leaf": {
+      "expression_templates": {
+        "twice": {
+          "params": [
+            "a"
+          ],
+          "match": {
+            "op": "dbl",
+            "args": [
+              "a"
+            ]
+          },
+          "body": {
+            "op": "+",
+            "args": [
+              "a",
+              "a"
+            ]
+          }
+        },
+        "rate": {
+          "params": [
+            "x"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              "k",
+              "x"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "d": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.5
+        },
+        "e": {
+          "type": "unknown",
+          "units": "1",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.25
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "cub",
+                "args": [
+                  "c"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "d"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "dbl",
+                "args": [
+                  "d"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "e"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "apply_expression_template",
+                "args": [],
+                "name": "rate",
+                "bindings": {
+                  "x": {
+                    "op": "cub",
+                    "args": [
+                      "e"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Deep": {
+          "ref": "./deep_leaf.esm"
+        }
+      }
+    }
+  }
+}

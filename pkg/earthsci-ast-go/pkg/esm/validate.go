@@ -763,8 +763,8 @@ func coupledSystemNames(file *ESMFile) map[string]bool {
 // v0.8.0 removed `Domain.spatial`, so a coordinate has NO declaration site in
 // the schema: it is named directly in an expression (`ic(u) ~ 0.5*(1 +
 // tanh((x - 0.3)/0.15))`, tests/valid/initial_conditions/
-// expression_ignition_front_1d.esm) and as the `dim` of a `grad`/`div`/
-// `laplacian` node. It is a coordinate of the domain, not an entry of any
+// expression_ignition_front_1d.esm), as the `wrt` of a spatial `D` and as the
+// `dim` of a node that carries one. It is a coordinate of the domain, not an entry of any
 // `variables` block — reporting it as an undefined variable rejects a valid
 // file.
 var conventionalCoordinateNames = []string{"x", "y", "z", "lon", "lat", "lev"}
@@ -1149,7 +1149,7 @@ func (s *structuralScan) creditIndependentVariable(allVars map[string]bool) {
 // in-scope. Like the independent variable, a coordinate belongs to the DOMAIN,
 // not to any `variables` block — v0.8.0 removed `Domain.spatial`, so it has no
 // declaration site at all — yet an expression may name it directly (the `x` of
-// an expression initial condition, the `dim` of a `grad`). See coordinateNames.
+// an expression initial condition, the `wrt` of a spatial `D`). See coordinateNames.
 func (s *structuralScan) creditCoordinateNames(allVars map[string]bool) {
 	for name := range s.coords {
 		allVars[name] = true
@@ -1555,22 +1555,17 @@ type EquationBalance struct {
 // (§4.9.4) and are never counted here; nor is an in-band `ic`-op equation, which
 // is the same prescription spelled inside `equations` (§11.4).
 //
-// Two carve-outs skip the check entirely:
+// One carve-out skips the check entirely:
 //
 //   - a model with SUBSYSTEMS holds its dynamics in those subsystems, so its own
 //     `equations` list may legitimately be empty while it declares unknowns
-//     (tests/valid/scoped_refs_coupling.esm);
-//   - a PDE model, whose unknown count is a property of a discretization this
-//     binding does not perform.
+//     (tests/valid/scoped_refs_coupling.esm).
 //
 // A coupled model is skipped by the CALLER (validateModel): its unknowns may be
 // driven by equations another system contributes.
 func computeEquationBalance(model *Model) (EquationBalance, bool) {
 	var bal EquationBalance
 	if len(model.Subsystems) > 0 {
-		return bal, true
-	}
-	if EffectiveSystemKind(model) == SystemKindPDE {
 		return bal, true
 	}
 

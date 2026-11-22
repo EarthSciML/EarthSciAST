@@ -937,7 +937,7 @@
     {
       "id": "spec.10.4.library-transform-lowered",
       "section": "10.4",
-      "quote": "a library edge's transform MUST expand to an already-lowered form",
+      "quote": "so the templates it references MUST already be lowered",
       "class": "semantic",
       "phase": 5,
       "area": "coupling",
@@ -964,16 +964,16 @@
     {
       "id": "spec.10.7.scope-before-merge",
       "section": "10.7",
-      "quote": "A binding MUST therefore apply the scoping in the same pass that namespaces the component's equations",
+      "quote": "A binding MUST bind the added parameters at the reference sites in the same pass that namespaces the component's equations",
       "class": "semantic",
       "phase": 5,
       "area": "flatten",
-      "note": "The flattened template registry equals merge(scope(each component's carried registry)), with dedup on post-scoping bodies and DAG-propagated owner-path renames."
+      "note": "Each component's carried registry bodies are closed (free names become added parameters bound at every reference site) in the same pass that namespaces its equations, and the flattened registry is the deep-equal-dedup union of the closed bodies."
     },
     {
       "id": "spec.10.7.merge-surface-composed",
       "section": "10.7",
-      "quote": "A caller that goes on to namespace MUST compose it with the scoping",
+      "quote": "A caller that goes on to namespace MUST compose it with the closing",
       "class": "out_of_scope",
       "area": "api",
       "note": "Obligation on callers of a binding's flatten_template_registries API surface, not on format semantics."
@@ -1017,7 +1017,7 @@
     {
       "id": "spec.10.9.coupling-library-transform-lowered",
       "section": "10.9",
-      "quote": "a library transform MUST expand to an already-lowered form",
+      "quote": "references MUST already be lowered; a transform whose references reach a template that would",
       "class": "semantic",
       "phase": 5,
       "area": "coupling",

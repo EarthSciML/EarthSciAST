@@ -1,0 +1,42 @@
+{
+  "expression_templates": {
+    "cube": {
+      "body": {
+        "args": [
+          "a",
+          "a",
+          "a"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "a"
+      ]
+    },
+    "rate": {
+      "body": {
+        "args": [
+          "k",
+          "x"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "x",
+        "k"
+      ]
+    },
+    "twice": {
+      "body": {
+        "args": [
+          "a",
+          "a"
+        ],
+        "op": "+"
+      },
+      "params": [
+        "a"
+      ]
+    }
+  }
+}

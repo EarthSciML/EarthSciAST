@@ -2,7 +2,6 @@
 //! and report pass or fail.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::PathBuf;
 
 use crate::args::SolverAlg;
@@ -157,7 +156,7 @@ pub(crate) fn relative_to_cwd(path: &std::path::Path) -> String {
 /// Best-effort: an unreadable or unparseable file yields nothing, because the
 /// run itself already reports that failure as a load ERROR row.
 pub(crate) fn mounted_components(path: &std::path::Path) -> Vec<String> {
-    let Ok(text) = fs::read_to_string(path) else {
+    let Ok(text) = crate::input::read_input(path) else {
         return Vec::new();
     };
     let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) else {

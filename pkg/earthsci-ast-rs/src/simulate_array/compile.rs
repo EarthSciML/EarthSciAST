@@ -129,8 +129,8 @@ pub(super) fn expr_has_array_op(expr: &Expr) -> bool {
 ///
 /// # Errors
 ///
-/// [`CompileError::UnloweredOperatorError`] for a rewrite-target op (sugar, a
-/// spatial `D`, a user op, or a misspelling); [`CompileError::InvalidOperatorArity`]
+/// [`CompileError::UnloweredOperatorError`] for a rewrite-target op (a spatial
+/// `D`, `integral`, a user op, or a misspelling); [`CompileError::InvalidOperatorArity`]
 /// for a core op with the wrong argument count;
 /// [`CompileError::MakearrayRegionInvalid`] for a ragged or inverted `makearray`;
 /// [`CompileError::InvalidBroadcastFn`] for a `broadcast` whose `fn` is absent
@@ -1177,8 +1177,7 @@ fn classify_model(
 // ============================================================================
 
 /// (0) Reject, at BUILD, every operator this runtime cannot evaluate — the
-/// open rewrite-target tier (`grad`/`div`/`laplacian`, a spatial `D`, a user op,
-/// a typo), which the canonical pipeline requires ESD discretization to have
+/// open rewrite-target tier (a spatial `D`, `integral`, a user op, a typo), which the canonical pipeline requires ESD discretization to have
 /// rewritten before the simulator sees it (esm-i7b), AND the evaluable-core ops
 /// that have no rule in this evaluator because an earlier stage was supposed to
 /// eliminate them (`distinct`, `ic`, `enum`, `apply_expression_template`).
@@ -1472,7 +1471,7 @@ fn insert_binders(node: &ExpressionNode, kinds: Binders, out: &mut NameSet) {
 /// - the `dim` axis of every node that carries one, regardless of `op`
 ///   (esm-spec §4.9.1 (ii), as revised): a coordinate axis is resolved
 ///   STRUCTURALLY by the presence of a `dim` field, not by a hardcoded
-///   spatial-operator name list (the sugar ops carry no privileged status).
+///   spatial-operator name list (no op name carries a privileged status).
 ///   Defensive: the array path rejects unlowered spatial ops earlier, but a
 ///   coordinate an `ic` RHS shares with a node's `dim` stays creditable;
 /// - the name at the HEAD (first arg) of every `index(name, …)` op — an

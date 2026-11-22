@@ -1,15 +1,16 @@
 # Reference integrity: model, expression, coupling and system references.
 
 """
-    validate_reference_integrity(file::EsmFile; views = nothing, names = nothing) -> Vector{StructuralError}
+    validate_reference_integrity(file::EsmFile; views = nothing, tables = nothing, names = nothing) -> Vector{StructuralError}
 
 Validate that all variable references can be resolved through the hierarchy.
-`views` are the template-expanded top-level models and `names` the
-document-wide name sets (`_document_names`), both from a validation pass's
-context when the caller has one.
+`views` are the top-level models' validation views (`_units_view`: each
+template reference kept, carrying the names its body reads), `tables` their
+template tables and `names` the document-wide name sets (`_document_names`),
+all from a validation pass's context when the caller has one.
 """
 function validate_reference_integrity(
-        file::EsmFile; views = nothing, names = nothing
+        file::EsmFile; views = nothing, tables = nothing, names = nothing
     )::Vector{StructuralError}
     errors = StructuralError[]
     names === nothing && (names = _document_names(file))
@@ -26,7 +27,7 @@ function validate_reference_integrity(
                 errors, validate_model_references(
                     file, model, _pointer("", "models", model_name);
                     model_name = model_name,
-                    is_coupled = (model_name ∈ names.coupled), views = views,
+                    is_coupled = (model_name ∈ names.coupled), views = views, tables = tables,
                     names = names
                 )
             )
@@ -194,7 +195,7 @@ _indep_var(file::EsmFile)::String = _indep_var(file.domain)
 # them. v0.8.0 removed `Domain.spatial`, so a coordinate has no declaration site
 # at all: it is named directly in an expression (the `x` of an expression initial
 # condition, `0.5*(1 + tanh((x - 0.3)/0.15))`) and as the `dim` of a
-# `grad`/`div`/`laplacian`. It belongs to the DOMAIN, not to any `variables`
+# spatial `D` (its `wrt`) or of an open-tier op. It belongs to the DOMAIN, not to any `variables`
 # block, so reporting it `undefined_variable` rejects a valid file.
 const _CONVENTIONAL_COORDINATE_NAMES = ("x", "y", "z", "lon", "lat", "lev")
 
@@ -347,23 +348,29 @@ its model subsystems (an event's affect targets are names, not sites).
 function validate_model_references(
         file::EsmFile, model::Model, path::String;
         model_name::AbstractString = "",
-        is_coupled::Bool = false, views = nothing, names = nothing
+        is_coupled::Bool = false, views = nothing, tables = nothing, names = nothing
     )::Vector{StructuralError}
     errors = StructuralError[]
     names === nothing && (names = _document_names(file))
-    # The view expands every site of the model and of its subsystems. A
-    # subsystem of a coupled model is composed along with its parent, so it is
-    # checked with the parent's scope rule.
+    # The view's references carry the names their bodies read, at every site
+    # of the model and of its subsystems. A subsystem of a coupled model is
+    # composed along with its parent, so it is checked with the parent's scope
+    # rule.
     view = isempty(model_name) ? model : _units_view(file, model_name, model, views)
+    templates = isempty(model_name) ? nothing : _tpl_component_table(file, "models", model_name, tables)
     _foreach_component(view, path) do m, p, _
-        _check_component_references!(errors, file, m, p, is_coupled, names)
+        _check_component_references!(errors, file, m, p, is_coupled, names; templates)
     end
     return errors
 end
 
 # The references at every expression site of one component (not its
-# subsystems), `model` already template-expanded.
-function _check_component_references!(errors, file::EsmFile, model::Model, path, is_coupled::Bool, names)
+# subsystems), `model` a validation view whose references carry the names
+# their bodies read; `templates` the model's template table.
+function _check_component_references!(
+        errors, file::EsmFile, model::Model, path, is_coupled::Bool, names;
+        templates = nothing
+    )
     # Names in scope for this model's equations: its declared variables (state,
     # parameter, observed), the document-scoped `index_sets` registry (a
     # legitimate non-variable identifier namespace an aggregate may name — RFC
@@ -407,17 +414,16 @@ function _check_component_references!(errors, file::EsmFile, model::Model, path,
     # `external_temperature_forcing` exactly this way and nowhere else).
     union!(scope, names.injected)
 
-    # Check every expression site (`_REFERENCE_CHECKED_SITES`) against `scope`,
-    # on the EXPANSION of any surviving `apply_expression_template` reference
-    # (esm-spec §9.6.4 rule 2: a reference denotes its expansion). A template
-    # binding is a value substituted into the body, and only where the body uses
-    # it in an expression position is it a reference; one bound to a scalar
-    # field (`K_manifold => "planar"` filling a `manifold`) or to a range's
-    # `from` is a literal. Expansion keeps every site where it was, so pointers
-    # still name the authored expression.
+    # Check every expression site (`_REFERENCE_CHECKED_SITES`) against `scope`.
+    # A surviving `apply_expression_template` reference denotes its expansion
+    # (esm-spec §9.6.4 rule 2), so what it reads is what its body reads: the
+    # names the body reads from the caller (carried as bindings by the view)
+    # and each binding the body uses in an expression position. One bound to a
+    # scalar field (`K_manifold => "planar"` filling a `manifold`) or to a
+    # range's `from` is a literal, not a read (`_tpl_reads_binding`).
     foreach_expression(model, path; subsystems = false) do e, at, kind
         kind in _REFERENCE_CHECKED_SITES || return nothing
-        append!(errors, validate_expression_references(file, e, at; scope = scope))
+        append!(errors, validate_expression_references(file, e, at; scope = scope, templates = templates))
         return nothing
     end
     return errors
@@ -550,7 +556,7 @@ matching Rust `for_each_child` / Go `validateExprNodeChildren`:
 """
 function validate_expression_references(
         file::EsmFile, expr::ASTExpr, path::String;
-        scope::Union{Set{String}, Nothing} = nothing
+        scope::Union{Set{String}, Nothing} = nothing, templates = nothing
     )::Vector{StructuralError}
     errors = StructuralError[]
     # `path` is the expression-bearing FIELD's pointer (`equations[i]/rhs`, an
@@ -563,7 +569,7 @@ function validate_expression_references(
     # visits every node so nothing goes unchecked).
     _check_expression_references!(
         errors, file, expr, path, path,
-        scope === nothing ? nothing : _RefScope(scope, nothing, String[])
+        scope === nothing ? nothing : _RefScope(scope, nothing, String[]), templates
     )
     return errors
 end
@@ -589,10 +595,47 @@ end
 function _check_expression_references!(
         errors::Vector{StructuralError}, file::EsmFile,
         expr::ASTExpr, path::String, anchor::String,
-        scope::Union{_RefScope, Nothing}
+        scope::Union{_RefScope, Nothing}, templates = nothing
     )
     if isa(expr, VarExpr)
         _check_bare_variable!(errors, expr.name, anchor, scope)
+    elseif templates !== nothing && _tpl_is_call(expr)
+        # A template reference read against its template table: its reads are
+        # the bindings its expansion reads (`_tpl_reads_binding`); a binding
+        # key names the callee's parameter and binds nothing of the caller's,
+        # but a declared parameter's binding is substituted into the body, so
+        # the body's own binders are in scope there (`_tpl_scope_binders`).
+        for a in expr.args
+            _check_expression_references!(errors, file, a, path, anchor, scope, templates)
+        end
+        b = expr.bindings
+        if b !== nothing
+            for k in sort!(collect(keys(b)))
+                _tpl_reads_binding(templates, expr, k) || continue
+                sc = scope
+                if sc !== nothing && !startswith(k, _TPL_FREE) && !startswith(k, _TPL_OUT)
+                    binders = try
+                        _tpl_scope_binders(templates, expr.name)
+                    catch err
+                        err isa ExpressionTemplateError || rethrow()
+                        Set{String}()
+                    end
+                    isempty(binders) || (sc = _RefScope(sc.base, sc, collect(binders)))
+                end
+                # A binding the expansion reads only in a subscript: its names
+                # are index space there (`_bound_index_symbols`).
+                if sc !== nothing
+                    only_idx = try
+                        _tpl_binding_sentinel(k) in _tpl_index_reads(templates, expr.name)
+                    catch err
+                        err isa ExpressionTemplateError || rethrow()
+                        false
+                    end
+                    only_idx && (sc = _RefScope(sc.base, sc, _collect_index_names!(String[], b[k])))
+                end
+                _check_expression_references!(errors, file, b[k], path, anchor, sc, templates)
+            end
+        end
     elseif isa(expr, OpExpr)
         # Extend the in-scope set with any index symbols this node binds, so a
         # bound loop index in a descended child is not flagged as undefined.
@@ -627,7 +670,7 @@ function _check_expression_references!(
         # the same order).
         _foreach_child_field(expr) do child, field, i
             (skip_operator_arg && field === :args && i == 1) && return
-            _check_expression_references!(errors, file, child, path, anchor, child_scope)
+            _check_expression_references!(errors, file, child, path, anchor, child_scope, templates)
         end
     end
     # NumExpr / IntExpr are literals — no references to validate.

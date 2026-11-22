@@ -27,7 +27,6 @@ end
 function _compile_derivative_equations(
         derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope, n_states::Int;
-        template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         # SCALAR-arm substitution map: `resolved_obs` minus the
         # observeds compiled as named prelude slots, so a slot reference stays a
         # bare `VarExpr` for `_compile_cse` to lower onto its slot. `nothing`
@@ -58,11 +57,8 @@ function _compile_derivative_equations(
     # empty unless a contraction clears the length floor.
     array_contractions = _ArrayContraction[]
     covered = _Covered(n_states)
-    # A3: ONE cross-equation store for this build's whole equation loop — the
-    # compile-once variant / bound-body caches and the shared obs-inline memo
-    # move from per-equation to per-build (sound because every compile input
-    # threaded below is the same object for every equation; see the _XEqStore
-    # note in stencil.jl). Off, the caches are per equation.
+    # A3: ONE store for this build's whole equation loop: the shared
+    # obs-inline memo (see the _XEqStore note in stencil.jl).
     xeq = _compiler_plan_now().stencil ? _XEqStore() : nothing
     # Cross-equation direct class emission (acc_merge.jl): pool every per-cell
     # equation's cell entries here and run the scalarizer-level class emitter
@@ -72,7 +68,7 @@ function _compile_derivative_equations(
     pooled_cells = _cross_eq_class_emit_enabled() ? Tuple{Int, _Node}[] : nothing
     var_map = cs.var_map
     faq_scope = _FaqScope(
-        resolved_obs, cs, template_sites, xeq, pooled_cells, rhs_list_compiled, obs_nst,
+        resolved_obs, cs, xeq, pooled_cells, rhs_list_compiled, obs_nst,
         percell_scalar, acc_kernels, scan_folds, array_contractions, covered
     )
 
@@ -756,7 +752,7 @@ _scalar_rule_tier(e) = _has_contract_loop(e) ? :scalar_loop : :scalar
 function _has_contract_loop(e)
     e isa OpExpr || return false
     e.op == "__contract_loop" && return true
-    for a in e.args
+    for a in _operands(e)
         _has_contract_loop(a) && return true
     end
     return e.expr_body !== nothing && _has_contract_loop(e.expr_body)
@@ -922,7 +918,6 @@ _empty_output(a::_FaqEq) = !isempty(a.range_iters) && any(isempty, a.range_iters
 struct _FaqScope{O, S <: _CompileScope}
     resolved_obs::O
     cs::S
-    template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}}
     xeq::Union{Nothing, _XEqStore}
     # `nothing`, or the cross-equation cell-entry pool: per-cell entries are
     # appended here instead of being merged per equation, and
@@ -1262,12 +1257,9 @@ function _offer(::_AffineTier, a::_FaqEq, sc::_FaqScope, st::_FaqRun)
             OpExpr("ifelse", ASTExpr[a.filter, a.rhs_body, NumExpr(a.zerobar)])
         kernels = _affine_once(
             a, sc, loop_body, a.range_iters, scan;
-            template_sites = sc.template_sites, reduce = fold_form
+            reduce = fold_form
         )
         first_try = kernels !== nothing
-        if kernels === nothing && sc.template_sites !== nothing
-            kernels = _affine_once(a, sc, loop_body, a.range_iters, scan; reduce = fold_form)
-        end
         kernels === nothing || _tally_cascade!(:affine_reduce)
     end
     body = kernels !== nothing ? nothing :
@@ -1289,11 +1281,8 @@ function _offer(::_AffineTier, a::_FaqEq, sc::_FaqScope, st::_FaqRun)
     # full output axis.
     term_iters = (scan === nothing || scan[4] === nothing) ? a.range_iters : scan[4]
     if kernels === nothing && body !== nothing
-        kernels = _affine_once(a, sc, body, term_iters, scan; template_sites = sc.template_sites)
+        kernels = _affine_once(a, sc, body, term_iters, scan)
         first_try = kernels !== nothing
-        if kernels === nothing && sc.template_sites !== nothing
-            kernels = _affine_once(a, sc, body, term_iters, scan)
-        end
     end
     kernels === nothing && return nothing
     # The term kernels are in hand: resolve the slots they write, in scan

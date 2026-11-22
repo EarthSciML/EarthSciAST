@@ -29,8 +29,8 @@ near-face centered classes, a wide-stencil interior), and every region body is a
 rank-3 faq. The affine box processor therefore fires, and the per-cell
 branch keys form the genuine cross-product: a fused (expanded) build compiles
 one spine per `(x-class, y-class, z-class)` = **5×5×5 = 125** branch keys, while
-the compile-once tier compiles **5+5+5 = 15** template-body variants plus 125
-tiny parent spines that call them as sub-kernels.
+the compile-once build compiles each template body once per instance and
+calls it from the parent spines.
 
 ## Measure
 
@@ -54,12 +54,13 @@ Reports:
 
 ## Status of the numbers
 
-The compile-once tier (RFC §5/§7.7 "compile references natively") is
-implemented in the Julia affine stencil build: each surviving reference's body
-is compiled once per (use site, region class) and called at runtime as a
-sub-kernel (`_NK_SUBCALL`), with the body's lane recipes re-based into the
-parent's recipe vector so grouping, ghost keys, and box cuts are exactly the
-fused ones. Measured on `transport_3axis_7cubed_fullrank.esm`:
+The Julia build now compiles every surviving reference as a CALL: the
+template body is compiled once per instance and called with argument values
+(`_NK_CALL`, src/tree_walk/call.jl). The table below was measured on
+`transport_3axis_7cubed_fullrank.esm` with the earlier compile-once tier, which
+compiled each body once per (use site, region class) and called it as a
+sub-kernel; that tier has since been removed, and the table is kept as a
+historical record, not re-measured:
 
 | | branch templates | body variants | node-lowerings |
 |---|---|---|---|

@@ -63,6 +63,7 @@ include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFo
 include("tree_walk/build_records.jl")    #      the records a build hands back
 include("tree_walk/hoist.jl")            #      nested reductions lifted to internal observeds
 include("tree_walk/compile.jl")          # §3   expression → `_Node`
+include("tree_walk/call.jl")             #      template references compiled as calls
 include("tree_walk/resolve_ctx.jl")      #      the index-resolution context, `_PGatherArray`
 include("tree_walk/prelude_cache.jl")    #      the scalar prelude cache and its stamps
 include("tree_walk/rhs_seams.jl")        #      value type, parameter read, Float32 guard

@@ -70,6 +70,21 @@ function _compile(expr::IntExpr, var_map, param_syms, memo::_MaybeMemo = nothing
 end
 function _compile(expr::VarExpr, var_map, param_syms, memo::_MaybeMemo = nothing)
     name = expr.name
+    # Inside a template call body every name read from outside is an argument.
+    if startswith(name, '\0')
+        a = _arg_leaf(name)
+        a === nothing || return a
+        # A template sentinel (not a stencil lane, which shares the `\0` spelling).
+        (
+            startswith(name, _TPL_ARG) || startswith(name, _TPL_FREE) || startswith(name, _TPL_OUT) ||
+                startswith(name, _TPL_IN) || startswith(name, _TPL_BASE)
+        ) && throw(
+            TreeWalkError(
+                "E_TREEWALK_UNRESOLVED_TEMPLATE_REF",
+                "a template parameter $(repr(replace(name, '\0' => '·'))) reached compile outside its call body"
+            )
+        )
+    end
     if name == "t"
         return _mknode(kind = _NK_TIME)
     end
@@ -118,6 +133,8 @@ _unevaluable_operator(op, why::AbstractString) = TreeWalkError(
 )
 
 function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
+    # A template reference is a call (call.jl): never expanded.
+    _tpl_is_call(expr) && return _compile_call(expr, var_map, param_syms, memo)
     op_sym = Symbol(expr.op)
     # A run-time loop or gather resolve lowered (`_Lowered`): its args are the
     # node's children (a loop body, ragged bounds, gather subscripts). A loop
@@ -264,7 +281,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
         )
     end
     # An op that is not evaluable core (esm-spec §4.2 / §9.6.6) is an unlowered
-    # rewrite target: `grad`/`div`/`laplacian`, `integral`, or any open-namespace
+    # rewrite target: `integral`, or any open-namespace
     # op with no registry row (`_op_in_T`). A discretization rule must lower it
     # first. A registered core form with no scalar meaning reports
     # `unevaluable_operator` instead, from the arms above or the gate below.

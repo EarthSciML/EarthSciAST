@@ -240,8 +240,8 @@ built from these ops, so they need no evaluator support of their own.
 Array-typed ops outside a position that consumes them (`faq`, `makearray`,
 `reshape`, `transpose`, `concat`) and the value-invention op `distinct` are
 refused while the evaluator is
-built with `unevaluable_operator`; PDE ops (`grad`, `div`, `laplacian`) are
-refused with `unlowered_operator` (esm-spec §9.6.6). Either way they must be
+built with `unevaluable_operator`; a spatial `D` or a user op no rewrite rule
+lowered is refused with `unlowered_operator` (esm-spec §9.6.6). Either way they must be
 discretized, scalarized or materialized **before** the build. The `D` op is only
 permitted in equation LHS (the time-derivative marker).
 
@@ -254,7 +254,7 @@ cross-binding operator codes):
 | Code | Cause |
 |---|---|
 | `unevaluable_operator` | An evaluable-core op the walker has no rule for (an array or value-invention op an earlier stage should have eliminated). Cross-binding code, raised at build (esm-spec §9.6.6). |
-| `unlowered_operator` | A rewrite-target op (`grad`, a spatial or right-hand-side `D`, a user op) that no rewrite rule lowered. Cross-binding code (esm-spec §9.6.6). |
+| `unlowered_operator` | A rewrite-target op (a spatial or right-hand-side `D`, a user op) that no rewrite rule lowered. Cross-binding code (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_OP` | An internal pipeline defect: a `call` op built in code (it is not part of the format), or an `index` that reached compilation unresolved. |
 | `E_TREEWALK_UNSUPPORTED_SHAPE` | Array data that does not fit a variable's declared `shape` (or array data for an unshaped variable), or an array-shaped observed the build cannot own. |
 | `unsupported_construct` | The model declares a continuous event, a discrete event, an implicit equation (an expression LHS such as `s - f(s) ~ 0`), or Wiener noise (a parameter whose `update.kind` is `wiener`). The walker runs none of them, so `:native` and `:interpreter` both refuse; `compiler = :mtk` runs the events and implicit equations, and no compiler integrates an SDE (esm-spec §9.6.6). |

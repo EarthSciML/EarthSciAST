@@ -1,0 +1,45 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "mount_registry_merge_leaf",
+    "description": "The leaf mount_registry_merge/fixture.esm mounts. Its `scale` differs from the mounting component's (a collision), its `half` is deep-equal to the mounting component's (kept once), its `rate` references `scale` and reads the leaf's own parameter `k`, and its `match` rule `twice` fires in the leaf, so the leaf's equation holds a reference to the rule, materialized match-less."
+  },
+  "models": {
+    "Leaf": {
+      "expression_templates": {
+        "scale": {
+          "params": ["x"],
+          "body": {"op": "*", "args": [3, "x"]}
+        },
+        "half": {
+          "params": ["x"],
+          "body": {"op": "/", "args": ["x", 2]}
+        },
+        "rate": {
+          "params": ["x"],
+          "body": {"op": "*", "args": ["k", {"op": "apply_expression_template", "args": [], "name": "scale", "bindings": {"x": "x"}}]}
+        },
+        "twice": {
+          "params": ["a"],
+          "match": {"op": "dbl", "args": ["a"]},
+          "body": {"op": "+", "args": ["a", "a"]}
+        }
+      },
+      "variables": {
+        "c": {"type": "unknown", "units": "1", "default": 1.0},
+        "d": {"type": "unknown", "units": "1", "default": 0.5},
+        "k": {"type": "parameter", "units": "1", "default": 0.25}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [], "name": "rate", "bindings": {"x": "c"}}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["d"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "dbl", "args": [{"op": "apply_expression_template", "args": [], "name": "half", "bindings": {"x": "d"}}]}]}
+        }
+      ]
+    }
+  }
+}

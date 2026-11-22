@@ -135,10 +135,11 @@ _graph_rsys() = ReactionSystem(
         @test g.nodes[1].metadata["species_count"] == 2
     end
 
-    @testset "expression_graph expands surviving template references (§9.6.4)" begin
+    @testset "expression_graph reads through surviving template references (§9.6.4)" begin
         # A target-free `apply_expression_template` reference survives load; its
-        # BODY's free `k` is a real dependency of `y` that `free_variables` can
-        # only see after the boundary expansion (`bindings` alone reach just `z`).
+        # BODY's free `k` is a real dependency of `y`, which the graph reads
+        # through the reference without expanding it (the authored `bindings`
+        # alone reach just `z`).
         doc = Dict{String, Any}(
             "esm" => "0.9.0",
             "metadata" => Dict{String, Any}("name" => "graph_tpl"),
@@ -178,7 +179,7 @@ _graph_rsys() = ReactionSystem(
         pair(e) = Set([e.source.name, e.target.name])
         @test any(e -> pair(e) == Set(["M.k", "M.y"]), g.edges)  # body free var edge
         @test any(e -> pair(e) == Set(["M.z", "M.y"]), g.edges)  # binding edge
-        # Expansion worked on a copy: the caller's file still carries the refs.
+        # The graph worked on a copy: the caller's file still carries the refs.
         @test file.component_templates !== nothing
     end
 end

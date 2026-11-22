@@ -1586,9 +1586,9 @@ fn document_declared_names(esm_file: &EsmFile) -> HashSet<String> {
 ///
 /// 2. **Spatial coordinate names** — §11.4. A checker resolves as a coordinate
 ///    any free symbol that is (i) a key of `index_sets`, (ii) the `dim` field of
-///    ANY node that carries one (resolved STRUCTURALLY, by field — the
-///    spatial-calculus sugar ops carry no privileged status, so this is not
-///    keyed on a `grad`/`div`/`curl`/`laplacian` op-name list), or (iii) a free
+///    ANY node that carries one (resolved STRUCTURALLY, by field — no op name
+///    carries a privileged status, so this is not keyed on an op-name
+///    list), or (iii) a free
 ///    symbol in the RHS of an `ic` equation, which §11.4 *defines* to be a
 ///    coordinate expression.
 ///
@@ -1634,7 +1634,7 @@ fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
     // (2ii) + (2iii): walk every expression in the document once, collecting the
     // `dim` field of every node that carries one (structurally, by field) and
     // the free symbols of each `ic` RHS. Both are document-scoped: a coordinate
-    // named by `{op: grad, dim: "x"}` in one model is the same axis `x` that
+    // named by `{op: integral, dim: "x"}` in one model is the same axis `x` that
     // another model's initial condition may reference.
     if let Some(models) = &esm_file.models {
         for model in models.values() {
@@ -2104,9 +2104,8 @@ fn is_ic_equation(lhs: &crate::Expr) -> bool {
 /// Collect the `dim` axis of every node that carries one, regardless of its
 /// `op` (esm-spec §4.9.1 (ii), as revised).
 ///
-/// The spatial-calculus sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`) are
-/// ordinary open-tier rewrite targets with NO privileged status, so a
-/// coordinate axis is resolved STRUCTURALLY — by the presence of a `dim` field
+/// Open-tier rewrite targets (`integral`, `curl`, `∇`, user ops) have NO
+/// privileged status, so a coordinate axis is resolved STRUCTURALLY — by the presence of a `dim` field
 /// — not by matching a hardcoded operator-name list. Resolving by field also
 /// credits an axis named by an unregistered user discretization op (e.g.
 /// `godunov_hamiltonian`) or by `∇`, which a hand-maintained name list

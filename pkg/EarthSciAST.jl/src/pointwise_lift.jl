@@ -11,7 +11,7 @@ using OrderedCollections: OrderedDict
 # (reactions → generic `D(sp)=Σ terms` equations, then `operator_compose` merges
 # each species' reaction ODE with the spatial operator's advection contribution).
 # What operator_compose does NOT do is array-ify the result: the merged
-# `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
+# `D(sp) = <reaction> + <-u·makearray(D(sp, x))>` still has a SCALAR `sp` while
 # its advection `makearray` indexes `sp` per grid cell. This step performs the
 # `lifting:"pointwise"` promotion — it reuses the same faq lowering a spatial
 # MODEL uses — by wrapping each such merged state ODE in a `faq` over the
@@ -19,47 +19,39 @@ using OrderedCollections: OrderedDict
 # per cell, and giving the species a grid shape. The reaction network then runs
 # pointwise on the grid through the existing faq evaluator.
 
-# Collect every `makearray` OpExpr node reachable from `expr`.
-function _collect_makearrays!(acc::Vector{OpExpr}, expr::ASTExpr)
-    expr isa OpExpr || return acc
-    expr.op == "makearray" && push!(acc, expr)
-    # Walk every immediate sub-expression via the shared traversal instead of a
-    # hand-listed {args, expr_body, values} field walk. `child_exprs` is a strict
-    # superset (it also visits `lower`/`upper`/`filter`/`key`/dense
-    # `ranges` bounds), but a `makearray` — a materialized spatial array — never
-    # lives inside those scalar-valued fields, so both the set of collected nodes
-    # and their depth-first order (`args`, then `expr_body`, then `values`) are
-    # unchanged.
-    for c in child_exprs(expr)
-        _collect_makearrays!(acc, c)
-    end
-    return acc
+# ---- Walking through template references without expanding them ----
+# A reference denotes its expansion (esm-spec §9.6.4 rule 2), and the lift's
+# decisions must be the ones the expanded tree gives, but no analysis expands a
+# reference (rule 2 SHOULD NOT): each walk below enters a template's own body,
+# parsed once per walk, in a FRAME that binds its parameters to the call site's
+# binding expressions, each with the frame it is read in. A parameter leaf of
+# the body reads as its binding, exactly where the expansion would have
+# substituted it. One frame per template instance (template name and the
+# identity of each binding in its frame), and each node is walked once per
+# frame, so a chain of references doubling at every level stays linear.
+struct _RefFrame
+    bind::Dict{String, Tuple{ASTExpr, Any}}   # parameter => (binding, its frame)
+    body::ASTExpr                            # the body this instance reads
 end
 
-# First VarExpr leaf name in an index-argument expression (the loop variable of
-# that index position), or `nothing` for a constant position.
-function _index_arg_loop(expr::ASTExpr)::Union{String, Nothing}
-    if expr isa VarExpr
-        return expr.name
-    elseif expr isa OpExpr
-        for a in expr.args
-            v = _index_arg_loop(a)
-            v === nothing || return v
-        end
-    end
-    return nothing
+struct _RefWalk
+    reg::Any
+    bodies::Dict{String, Any}           # template name => typed body, or `nothing`
+    # template name => its parameters that occur somewhere other than as a
+    # variable leaf (an `output_idx` entry, a `ranges` index set, `wrt`, …)
+    structural::Dict{String, Vector{String}}
+    frames::Dict{Any, _RefFrame}
 end
+_RefWalk(reg) = _RefWalk(reg, Dict{String, Any}(), Dict{String, Vector{String}}(), Dict{Any, _RefFrame}())
 
-# The expansion of the template reference `e` against `reg`, for analysis only:
-# the equation tree keeps the reference. Each reference is expanded once
-# (`peek`, `memo`); `nothing` with no registry, or when the expansion fails for
-# a reason other than resources (an unknown template, bad bindings), which the
-# build reports with its own diagnostic.
-function _peek_expansion(peek::IdDict{OpExpr, Any}, e::OpExpr, reg, memo::_ExpandCache)
-    reg === nothing && return nothing
-    return get!(peek, e) do
+# The typed body of template `name`, parsed once per walk; `nothing` with no
+# registry entry or a body that does not parse (the build reports both).
+function _ref_body(w::_RefWalk, name)
+    name isa AbstractString || return nothing
+    return get!(w.bodies, String(name)) do
+        (w.reg === nothing || !haskey(w.reg, name)) && return nothing
         try
-            _expand_expr_refs(e, reg, nothing, memo)
+            expression_from_json(_raw_get(w.reg[name], "body"))
         catch err
             _is_resource_error(err) && rethrow()
             nothing
@@ -67,47 +59,217 @@ function _peek_expansion(peek::IdDict{OpExpr, Any}, e::OpExpr, reg, memo::_Expan
     end
 end
 
+# How often the string `p` occurs in the raw body (every place expansion's
+# `_substitute` replaces it: never a reference's `name`), and how often as a
+# variable leaf of the typed body.
+function _raw_count(n, p::String)
+    n isa AbstractString && return String(n) == p ? 1 : 0
+    if _is_object(n)
+        c = 0
+        apply = _is_apply_node(n)
+        for (k, v) in pairs(n)
+            (apply && string(k) == "name") && continue
+            c += _raw_count(v, p)
+        end
+        return c
+    end
+    n isa AbstractVector && return sum(x -> _raw_count(x, p), n; init = 0)
+    return 0
+end
+function _leaf_count(e::ASTExpr, p::String)
+    e isa VarExpr && return e.name == p ? 1 : 0
+    e isa OpExpr || return 0
+    return sum(c -> _leaf_count(c, p), child_exprs(e); init = 0)
+end
+
+# The parameters of `name` that expansion substitutes somewhere other than a
+# variable leaf: the walk can read those only on the instance's own body.
+function _ref_structural(w::_RefWalk, name::String, body::ASTExpr)
+    return get!(w.structural, name) do
+        raw = _raw_get(w.reg[name], "body")
+        String[p for p in _TemplateDecl(w.reg[name]).params if _raw_count(raw, p) != _leaf_count(body, p)]
+    end
+end
+
+# The body a reference `e` (read in `frame`) denotes and the frame its
+# parameters read in, or `nothing` for a template the registry does not have.
+# A reference whose bindings do not cover the template's parameters exactly is
+# refused, as expansion refuses it. A parameter expansion would substitute in
+# a structural position (an `output_idx` entry, a `ranges` index set, `wrt`)
+# is substituted into the instance's body, once per instance, so the walk reads
+# exactly what the expanded tree has there; every other parameter is read
+# through the frame.
+function _ref_enter(w::_RefWalk, e::OpExpr, frame)
+    body = _ref_body(w, e.name)
+    body === nothing && return nothing
+    name = String(e.name)
+    params = _TemplateDecl(w.reg[name]).params
+    given = e.bindings === nothing ? Set{String}() : Set{String}(String(k) for k in keys(e.bindings))
+    for p in params
+        p in given || throw(
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                "apply_expression_template '$name' missing binding for param '$p'"
+            )
+        )
+    end
+    for p in given
+        p in params || throw(
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                "apply_expression_template '$name' supplies unknown param '$p'"
+            )
+        )
+    end
+    binds = e.bindings === nothing ? Pair{String, ASTExpr}[] :
+        sort!([String(k) => v for (k, v) in e.bindings]; by = first)
+    key = (name, objectid(frame), Tuple((k, objectid(v)) for (k, v) in binds))
+    f = get(w.frames, key, nothing)
+    if f === nothing
+        bind = Dict{String, Tuple{ASTExpr, Any}}(k => (v, frame) for (k, v) in binds)
+        structural = _ref_structural(w, name, body)
+        ibody = body
+        if !isempty(structural)
+            sub = Dict{String, Any}()
+            for p in structural
+                x, _ = _ref_leaf(bind[p][1], frame)
+                sub[p] = serialize_expression(x)
+            end
+            ibody = expression_from_json(_substitute(_raw_get(w.reg[name], "body"), sub))
+            for p in structural
+                delete!(bind, p)
+            end
+        end
+        f = _RefFrame(bind, ibody)
+        w.frames[key] = f
+    end
+    return (f.body, f)
+end
+
+# A leaf of the tree read in `frame`: a parameter reads as its binding (in the
+# binding's own frame); any other name is itself.
+function _ref_leaf(v::VarExpr, frame)
+    while frame isa _RefFrame
+        got = get(frame.bind, v.name, nothing)
+        got === nothing && return (v, frame)
+        x, frame = got
+        x isa VarExpr || return (x, frame)
+        v = x
+    end
+    return (v, frame)
+end
+
+# Collect every `makearray` node reachable from `expr`, with the frame it is
+# read in, walking through template references (an operator written as a
+# reference keeps its `makearray` in the template body). The walk visits every
+# immediate sub-expression (`child_exprs`), so the order is the expanded
+# tree's depth-first order (`args`, then `expr_body`, then `values`).
+function _collect_makearrays!(
+        acc::Vector{Tuple{OpExpr, Any}}, expr::ASTExpr, w::_RefWalk, frame = nothing,
+        seen::Set{Tuple{UInt, UInt}} = Set{Tuple{UInt, UInt}}()
+    )
+    if expr isa VarExpr
+        x, f = _ref_leaf(expr, frame)
+        x === expr || _collect_makearrays!(acc, x, w, f, seen)
+        return acc
+    end
+    expr isa OpExpr || return acc
+    key = (objectid(expr), objectid(frame))
+    key in seen && return acc
+    push!(seen, key)
+    if expr.op == APPLY_EXPRESSION_TEMPLATE_OP
+        got = _ref_enter(w, expr, frame)
+        got === nothing || _collect_makearrays!(acc, got[1], w, got[2], seen)
+        return acc
+    end
+    expr.op == "makearray" && push!(acc, (expr, frame))
+    for c in child_exprs(expr)
+        _collect_makearrays!(acc, c, w, frame, seen)
+    end
+    return acc
+end
+
+# True when the reference `e` denotes a `makearray` (its body, through any
+# references the body is, is one).
+function _ref_is_makearray(w::_RefWalk, e::OpExpr)
+    x, frame = e, nothing
+    for _ in 1:(MAX_TEMPLATE_EXPANSION_DEPTH + 1)
+        if x isa VarExpr
+            y, f = _ref_leaf(x, frame)
+            y === x && return false
+            x, frame = y, f
+        elseif x isa OpExpr && x.op == APPLY_EXPRESSION_TEMPLATE_OP
+            got = _ref_enter(w, x, frame)
+            got === nothing && return false
+            x, frame = got
+        else
+            return x isa OpExpr && x.op == "makearray"
+        end
+    end
+    return false
+end
+
+# First VarExpr leaf name in an index-argument expression (the loop variable of
+# that index position), or `nothing` for a constant position. Read in `frame`,
+# through template references.
+function _index_arg_loop(expr::ASTExpr, w::Union{Nothing, _RefWalk} = nothing, frame = nothing)::Union{String, Nothing}
+    if expr isa VarExpr
+        x, f = _ref_leaf(expr, frame)
+        x isa VarExpr && return x.name
+        return _index_arg_loop(x, w, f)
+    elseif expr isa OpExpr
+        if w !== nothing && expr.op == APPLY_EXPRESSION_TEMPLATE_OP
+            got = _ref_enter(w, expr, frame)
+            return got === nothing ? nothing : _index_arg_loop(got[1], w, got[2])
+        end
+        for a in expr.args
+            v = _index_arg_loop(a, w, frame)
+            v === nothing || return v
+        end
+    end
+    return nothing
+end
+
 # Determine the ordered spatial loop variables of a lowered spatial operator by
-# reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` whose
-# every position carries a loop variable (the interior stencil). Returns the loop
-# names in index-position (dim) order, or `nothing` if none is found.
-#
-# `reg` (the merged flat template registry, esm-spec §9.6.4 Option B) makes the
-# search see THROUGH surviving `apply_expression_template` region values: the
-# interior gather lives inside the referenced template body, so the walk peeks
-# at the body's expansion — ANALYSIS ONLY, the equation tree is never rewritten,
-# and the compile-once build still receives the reference-preserving form.
+# reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` (read
+# in `frame`) whose every position carries a loop variable (the interior
+# stencil). Returns the loop names in index-position (dim) order, or `nothing`
+# if none is found. The search walks through template references in their own
+# frames (`_RefWalk`), where the interior gather of a referenced stencil lives.
 function _detect_lift_loops(
-        ma::OpExpr, lifted::Set{String}, rank::Int,
-        reg = nothing
+        ma::OpExpr, frame, lifted::Set{String}, rank::Int, w::_RefWalk
     )
     result = Ref{Union{Vector{String}, Nothing}}(nothing)
-    peek = IdDict{OpExpr, Any}()
-    # Expansions share their subtrees, so each reference is expanded through
-    # one memo and each node is walked once: a second visit finds nothing the
-    # first did not.
-    memo = _ExpandCache()
-    seen = IdDict{OpExpr, Nothing}()
-    function walk(e)
+    seen = Set{Tuple{UInt, UInt}}()
+    function walk(e, fr)
         result[] === nothing || return
+        if e isa VarExpr
+            x, f = _ref_leaf(e, fr)
+            x === e || walk(x, f)
+            return
+        end
         e isa OpExpr || return
-        haskey(seen, e) && return
-        seen[e] = nothing
+        key = (objectid(e), objectid(fr))
+        key in seen && return
+        push!(seen, key)
         if e.op == APPLY_EXPRESSION_TEMPLATE_OP
-            body = _peek_expansion(peek, e, reg, memo)
-            body === nothing || walk(body)
+            got = _ref_enter(w, e, fr)
+            got === nothing || walk(got[1], got[2])
             return
         end
         if e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr &&
-                ((e.args[1]::VarExpr).name in lifted) && length(e.args) - 1 == rank
-            loops = String[]
-            ok = true
-            for k in 2:length(e.args)
-                lv = _index_arg_loop(e.args[k])
-                lv === nothing && (ok = false; break)
-                push!(loops, lv)
+                length(e.args) - 1 == rank
+            arr, _ = _ref_leaf(e.args[1]::VarExpr, fr)
+            if arr isa VarExpr && (arr::VarExpr).name in lifted
+                loops = String[]
+                ok = true
+                for k in 2:length(e.args)
+                    lv = _index_arg_loop(e.args[k], w, fr)
+                    lv === nothing && (ok = false; break)
+                    push!(loops, lv)
+                end
+                ok && (result[] = loops; return)
             end
-            ok && (result[] = loops; return)
         end
         # NOTE: this walk deliberately covers only {args, expr_body, values} —
         # NOT the full `child_exprs` field set (which also visits
@@ -118,16 +280,16 @@ function _detect_lift_loops(
         # CHANGE which loop names are detected, so the restricted subset is
         # behavior-pinned.
         for a in e.args
-            walk(a)
+            walk(a, fr)
         end
-        e.expr_body === nothing || walk(e.expr_body)
+        e.expr_body === nothing || walk(e.expr_body, fr)
         return if e.values !== nothing
             for v in e.values
-                walk(v)
+                walk(v, fr)
             end
         end
     end
-    walk(ma)
+    walk(ma, frame)
     return result[]
 end
 
@@ -179,7 +341,8 @@ const _LIFT_WHOLE_ARRAY_OPS = Tuple(sort!(collect(_ops_with(:shape_remap))))
 # bare inside the lifted `faq`.
 function _lift_rhs_to_cell(
         expr::ASTExpr, arrayvars::Set{String}, loops::Vector{String},
-        align::_AxisAlign, species::String, ctx::Union{Nothing, _ElementwiseContext} = nothing
+        align::_AxisAlign, species::String, ctx::Union{Nothing, _ElementwiseContext} = nothing,
+        walk::Union{Nothing, _RefWalk} = nothing
     )::ASTExpr
     foreign(v, shape, axes, s) = throw(
         DimensionPromotionError(
@@ -195,7 +358,11 @@ function _lift_rhs_to_cell(
         return _lift_gather_shaped(v, shape, loops, align.axes, species, elementwise)
     end
     function node(e::OpExpr)
-        if ctx !== nothing && e.op == APPLY_EXPRESSION_TEMPLATE_OP
+        if walk !== nothing && e.op == APPLY_EXPRESSION_TEMPLATE_OP && _ref_is_makearray(walk, e)
+            # An operator written as a reference: it denotes its `makearray`,
+            # read per cell like one, and stays a reference.
+            return _index_wrap(e, loops)
+        elseif ctx !== nothing && e.op == APPLY_EXPRESSION_TEMPLATE_OP
             return _ew_at_cell(e, align.var_shapes, ctx, loops, align, foreign)
         elseif e.op == "makearray"
             return _index_wrap(reconstruct(e; output_idx = Any[loops...]), loops)
@@ -364,24 +531,28 @@ function _apply_pointwise_lift!(
     # The operator route: a scalar state whose merged equation carries an
     # operator makearray. Its grid and loops are read off the makearray.
     operator_route = _pointwise_lifted_species(
-        equations, states; exclude_components = no_operator_route
+        equations, states; exclude_components = no_operator_route,
+        reg = template_registry
     )
+    walk = _RefWalk(template_registry)
     plans = Dict{String, _LiftPlan}()
     for (target, n) in tendencies
         (target in operator_route && !haskey(plans, target)) || continue
-        mas = _collect_makearrays!(OpExpr[], equations[n].rhs)
-        (isempty(mas) || mas[1].regions === nothing || isempty(mas[1].regions)) && continue
-        rank = length(mas[1].regions[1])
-        loops = _pointwise_lift_loops(mas, operator_route, rank, target, template_registry)
+        mas = _collect_makearrays!(Tuple{OpExpr, Any}[], equations[n].rhs, walk)
+        isempty(mas) && continue
+        ma1 = mas[1][1]
+        (ma1.regions === nothing || isempty(ma1.regions)) && continue
+        rank = length(ma1.regions[1])
+        loops = _pointwise_lift_loops(mas, operator_route, rank, target, walk)
         gaxes, ranges = _pointwise_lift_axes(
-            mas[1], loops, size_to_names,
+            ma1, loops, size_to_names,
             target, rank;
             mas = mas, var_shapes = var_shapes,
             index_sets = declared,
-            reg = template_registry,
+            walk = walk,
             registry = index_sets
         )
-        plans[target] = _LiftPlan(gaxes, _makearray_extents(mas[1]), loops, ranges)
+        plans[target] = _LiftPlan(gaxes, _makearray_extents(ma1), loops, ranges)
     end
 
     function axis_size(axis::String, state::String)::Int
@@ -521,7 +692,7 @@ function _apply_pointwise_lift!(
         end
         pool[n] = _pointwise_lift_equation(
             pool[n], arrayvars, target, loops,
-            _AxisAlign(plan.axes, read_shapes), ranges, ctx
+            _AxisAlign(plan.axes, read_shapes), ranges, ctx, walk
         )
     end
     return (shapes = read_shapes, stale = promoted)
@@ -548,15 +719,16 @@ end
 function _pointwise_lifted_species(
         equations::Vector{Equation},
         states::OrderedDict{String, ModelVariable};
-        exclude_components = ()
+        exclude_components = (), reg = nothing
     )::Set{String}
     lifted = Set{String}()
+    w = _RefWalk(reg)
     for eq in equations
         species = differential_lhs_variable(eq.lhs)
         species === nothing && continue
         (haskey(states, species) && _lift_is_scalar(states[species])) || continue
         _component_root(species) in exclude_components && continue
-        isempty(_collect_makearrays!(OpExpr[], eq.rhs)) && continue
+        isempty(_collect_makearrays!(Tuple{OpExpr, Any}[], eq.rhs, w)) && continue
         push!(lifted, species)
     end
     return lifted
@@ -596,12 +768,11 @@ end
 # or throw `DimensionPromotionError` when no makearray carries a full-rank
 # interior-stencil gather.
 function _pointwise_lift_loops(
-        mas::Vector{OpExpr}, lifted::Set{String},
-        rank::Int, species::String,
-        reg = nothing
+        mas::Vector{Tuple{OpExpr, Any}}, lifted::Set{String},
+        rank::Int, species::String, w::_RefWalk
     )::Vector{String}
-    for ma in mas
-        loops = _detect_lift_loops(ma, lifted, rank, reg)
+    for (ma, frame) in mas
+        loops = _detect_lift_loops(ma, frame, lifted, rank, w)
         loops === nothing || return loops
     end
     throw(
@@ -643,15 +814,16 @@ end
 # any extent-agreeing name IS that index set, so it decides only the dimensions
 # the size match leaves ambiguous.
 #
-# Walks THROUGH surviving `apply_expression_template` references (analysis only,
-# exactly as `_detect_lift_loops` does): with a monotone rule stack the interior
-# gathers live inside the referenced template bodies, not the equation tree.
+# Walks through surviving `apply_expression_template` references in their own
+# frames, never expanding them (`_RefWalk`, as `_detect_lift_loops` does): with a
+# monotone rule stack the interior gathers live inside the referenced template
+# bodies, not the equation tree.
 function _lift_axis_names(
-        mas::Vector{OpExpr}, loops::Vector{String},
+        mas::Vector{Tuple{OpExpr, Any}}, loops::Vector{String},
         extents::Vector{Int},
         var_shapes::Dict{String, Vector{String}},
         index_sets::OrderedDict{String, IndexSet},
-        reg
+        w::_RefWalk
     )::Vector{Union{String, Nothing}}
     rank = length(loops)
     evidence = [Set{String}() for _ in 1:rank]
@@ -661,25 +833,28 @@ function _lift_axis_names(
         # ambiguous; drop it rather than guess.
         haskey(dim_of, l) ? (dim_of[l] = 0) : (dim_of[l] = d)
     end
-    peek = IdDict{OpExpr, Any}()
-    seen = IdDict{OpExpr, Bool}()
-    # One memo for every reference, so a template referenced at several depths
-    # is expanded once (and its expansion's shared subtrees walked once).
-    memo = _ExpandCache()
-    function walk(e)
+    seen = Set{Tuple{UInt, UInt}}()
+    function walk(e, fr)
+        if e isa VarExpr
+            x, f = _ref_leaf(e, fr)
+            x === e || walk(x, f)
+            return
+        end
         e isa OpExpr || return
-        get!(seen, e, false) && return
-        seen[e] = true
+        key = (objectid(e), objectid(fr))
+        key in seen && return
+        push!(seen, key)
         if e.op == APPLY_EXPRESSION_TEMPLATE_OP
-            body = _peek_expansion(peek, e, reg, memo)
-            body === nothing || walk(body)
+            got = _ref_enter(w, e, fr)
+            got === nothing || walk(got[1], got[2])
             return
         end
         if e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr
-            sh = get(var_shapes, (e.args[1]::VarExpr).name, nothing)
+            arr, _ = _ref_leaf(e.args[1]::VarExpr, fr)
+            sh = arr isa VarExpr ? get(var_shapes, (arr::VarExpr).name, nothing) : nothing
             if sh !== nothing && length(sh) == length(e.args) - 1
                 for p in eachindex(sh)
-                    lv = _index_arg_loop(e.args[p + 1])
+                    lv = _index_arg_loop(e.args[p + 1], w, fr)
                     lv === nothing && continue
                     d = get(dim_of, lv, 0)
                     d == 0 && continue
@@ -690,12 +865,12 @@ function _lift_axis_names(
             end
         end
         for c in child_exprs(e)
-            walk(c)
+            walk(c, fr)
         end
         return
     end
-    for ma in mas
-        walk(ma)
+    for (ma, frame) in mas
+        walk(ma, frame)
     end
     return Union{String, Nothing}[
         length(evidence[d]) == 1 ? first(evidence[d]) :
@@ -712,13 +887,13 @@ function _pointwise_lift_axes(
         ma::OpExpr, loops::Vector{String},
         size_to_names::Dict{Int, Vector{String}},
         species::String, rank::Int;
-        mas::Vector{OpExpr},
+        mas::Vector{Tuple{OpExpr, Any}},
         var_shapes::Dict{String, Vector{String}},
-        index_sets, reg,
+        index_sets, walk::_RefWalk,
         registry::AbstractDict{String, IndexSet}
     )
     extents = _makearray_extents(ma)
-    named = _lift_axis_names(mas, loops, extents, var_shapes, index_sets, reg)
+    named = _lift_axis_names(mas, loops, extents, var_shapes, index_sets, walk)
     gaxes = String[]
     ranges = Dict{String, Any}()
     for d in 1:rank
@@ -769,12 +944,12 @@ end
 # body is what the contributions sum to.
 function _pointwise_lift_equation(
         fe::_FlatEq, arrayvars::Set{String}, species::String, loops::Vector{String},
-        align::_AxisAlign, ranges::Dict{String, Any}, ctx = nothing
+        align::_AxisAlign, ranges::Dict{String, Any}, ctx = nothing, walk = nothing
     )
     idx_species = _index_wrap(VarExpr(species), loops)
     new_lhs = _cell_faq(OpExpr("D", ASTExpr[idx_species], wrt = "t"), loops, ranges)
     lifted = Contribution[
-        Contribution(_lift_rhs_to_cell(c.expr, arrayvars, loops, align, species, ctx), c.origins)
+        Contribution(_lift_rhs_to_cell(c.expr, arrayvars, loops, align, species, ctx, walk), c.origins)
             for c in fe.contribs
     ]
     new_rhs = _cell_faq(_fold_contributions(lifted), loops, ranges)

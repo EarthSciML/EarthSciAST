@@ -139,7 +139,7 @@ function _ic_body_is_closed_form(e)::Bool
         e.lower !== nothing || e.upper !== nothing || e.filter !== nothing ||
             e.key !== nothing || e.ranges !== nothing
     ) && return false
-    for a in e.args
+    for a in _operands(e)
         _ic_body_is_closed_form(a) || return false
     end
     e.expr_body !== nothing && (_ic_body_is_closed_form(e.expr_body::ASTExpr) || return false)

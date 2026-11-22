@@ -424,13 +424,9 @@ end
 # Spatial-axis detection (structural, esm-spec §4.2 / §4.9.1(ii) / §11.2)
 # ========================================
 
-# The spatial-calculus sugar `grad`/`div`/`laplacian` carry NO privilege: they
-# are ordinary open-tier rewrite-target ops (op_registry.jl leaves them
-# unregistered). Spatial axes are harvested STRUCTURALLY from the `dim`/`wrt`
-# scalar FIELDS of any node — never from a hand-maintained op-name list — so
-# there is no `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` set anymore, and a user
-# rewrite-target op carrying a `dim` contributes its axis exactly as `grad`
-# does. (A fully shape-derived rederivation over `index_sets`, §11.2, is the
+# Spatial axes are harvested STRUCTURALLY from the `dim`/`wrt` scalar FIELDS
+# of any node — never from a hand-maintained op-name list — so a user
+# rewrite-target op carrying a `dim` contributes its axis. (A fully shape-derived rederivation over `index_sets`, §11.2, is the
 # other admissible structural signal; the by-field `dim`/`wrt` harvest is the
 # smaller one and is what §4.9.1(ii) pins for coordinate-name resolution.)
 
@@ -439,7 +435,7 @@ end
 
 Collect every spatial-axis name referenced in `expr`, resolved STRUCTURALLY by
 field (esm-spec §4.9.1(ii)): the value of a `dim` field on ANY Expression node
-(a user rewrite-target op's `dim` names an axis exactly as `grad`'s does), plus
+(a user rewrite-target op's `dim` names an axis), plus
 a spatial `wrt` (a `wrt` naming an axis other than the independent variable) on
 a `D` node. No op name is privileged.
 
@@ -497,20 +493,22 @@ function _rhs_derivative_target(e::ASTExpr)::Union{String, Nothing}
 end
 
 """
-    _resolve_rhs_time_derivatives!(pool, time_invariant, lifted_shapes)
+    _resolve_rhs_time_derivatives!(pool, time_invariant, lifted_shapes;
+                                   registry = nothing, map_other_sites = nothing)
 
-Step 3c of [`flatten`]: rewrite every right-hand-side STRUCTURAL time derivative
-into the tendency this system already defines for it (esm-spec §4.2).
+Step 3a of [`flatten`]: rewrite every right-hand-side STRUCTURAL time derivative
+into the tendency this system already defines for it (esm-spec §4.2;
+esm-libraries-spec §4.7.5 step 3a).
 
 `D` on an equation's LEFT-hand side is structural: it makes the equation
 differential, and system assembly consumes it. On a RIGHT-hand side,
 `D(x, t)` over a STATE is `x`'s own tendency, and `D(y, t)` over an OBSERVED is
 the total derivative of `y`'s defining right-hand side, by the same rule one
-level down: the one recursive walk [`_deriv`](@ref). It runs here, after
+level down: the one recursive walk [`_dt_deriv`](@ref). It runs here, after
 coupling and reaction lowering, so no evaluator meets a right-hand-side `D` and
 a sibling model's `D(Chem.O3, t)` resolves to the mechanism's tendency (§7.4).
 
-What `_deriv` covers, and nothing else: a STATE (its tendency, with any `D`
+What the table covers, and nothing else: a STATE (its tendency, with any `D`
 inside that tendency resolved in turn, so a chained
 `D(lai)/dt ~ sla · D(biomass)/dt` terminates in states; a pointwise-lifted
 state's tendency is its lifted `faq`, and one cell `index(x, ℓ…)` of it is that
@@ -524,6 +522,15 @@ with `unlowered_operator`: §4.2 forbids inventing a value there, in particular
 `0`. A SPATIAL `D` is untouched (§9.6.8 owns it) and left-hand sides are never
 rewritten.
 
+A structural `D` inside the body of a template a reference names, or applied
+to a reference, is resolved in the body without expanding anything (esm-spec
+§9.6.4 rule 3, "Time derivatives"; flatten_template_dt.jl): a parameter's
+derivative becomes a `p_dt` parameter each reference binds, a reference's
+derivative a reference to `<name>.ddt`, and the flattened `registry` is
+rewritten in place. `map_other_sites(f)` rewrites the expression sites outside
+the equation pool, which this step does not resolve, so their references keep
+pointing at the unresolved bodies.
+
 The tendency and definition tables are built straight from the equations' LHS
 FORMS, never from a classification set: §6.3.1 derives an unknown's role from the
 equations.
@@ -533,10 +540,11 @@ contribution, which keeps its origins; `x`'s own contributions are not spliced
 in (esm-libraries-spec §4.7.5).
 
 Mirrors the Rust `flatten::resolve_rhs_time_derivatives` and the Python
-`_resolve_rhs_time_derivatives` exactly.
+`_resolve_rhs_time_derivatives`.
 """
 function _resolve_rhs_time_derivatives!(
-        pool::Vector{_FlatEq}, time_invariant::Set{String}, lifted_shapes::AbstractDict
+        pool::Vector{_FlatEq}, time_invariant::Set{String}, lifted_shapes::AbstractDict;
+        registry::Union{Nothing, AbstractDict} = nothing, map_other_sites = nothing
     )
     tendency = Dict{String, ASTExpr}()
     definition = Dict{String, ASTExpr}()
@@ -556,28 +564,33 @@ function _resolve_rhs_time_derivatives!(
         end
     end
     (isempty(tendency) && isempty(definition)) && return pool
-    for (i, fe) in enumerate(pool)
-        eq = fe.eq
-        _has_time_derivative(eq.rhs) || continue
-        # The quantity this equation DEFINES is not available to substitute into
-        # its own right-hand side; seeding `active` with it is what makes
-        # `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather
-        # than expand forever.
+    # The quantity an equation DEFINES is not available to substitute into its
+    # own right-hand side; seeding `active` with it is what makes
+    # `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather
+    # than expand forever.
+    function own_of(eq)
         own = _rhs_derivative_target(eq.lhs)
         own === nothing && (own = _lifted_target(eq, lifted_shapes))
-        if own === nothing && eq.lhs isa VarExpr
-            own = (eq.lhs::VarExpr).name
-        end
-        active = own === nothing ? String[] : String[own]
-        resolve(e) = _substitute_time_derivatives(
-            e, tendency, definition,
-            time_invariant, active
-        )
-        resolved = _rewrite_flat_eq(resolve, fe, _is_lifted(eq, lifted_shapes))
-        resolved === fe ||
-            (pool[i] = _FlatEq(Equation(eq.lhs, resolved.eq.rhs), resolved.contribs, fe.owner))
+        (own === nothing && eq.lhs isa VarExpr) && (own = (eq.lhs::VarExpr).name)
+        return own
     end
-    return pool
+    reg = registry === nothing ? OrderedDict{String, Any}() : registry
+    st = _DtState(tendency, definition, time_invariant, lifted_shapes, reg)
+    if isempty(reg)
+        # No template: only the pool's own `D`s.
+        for (i, fe) in enumerate(pool)
+            eq = fe.eq
+            _has_time_derivative(eq.rhs) || continue
+            own = own_of(eq)
+            active = own === nothing ? String[] : String[own]
+            resolve(e) = _dt_rewrite(st, e, nothing, _DtAcc(), active)
+            resolved = _rewrite_flat_eq(resolve, fe, _is_lifted(eq, lifted_shapes))
+            resolved === fe ||
+                (pool[i] = _FlatEq(Equation(eq.lhs, resolved.eq.rhs), resolved.contribs, fe.owner))
+        end
+        return pool
+    end
+    return _resolve_template_time_derivatives!(pool, st, own_of, lifted_shapes, map_other_sites)
 end
 
 """
@@ -608,129 +621,6 @@ function _has_time_derivative(e::ASTExpr)::Bool
     found = false
     foreach_child(x -> (found |= _has_time_derivative(x)), e)
     return found
-end
-
-"""
-    _substitute_time_derivatives(e, tendency, definition, time_invariant, active)
-
-Rewrite every structural `D` inside `e`, leaving the ones [`_deriv`](@ref)
-cannot answer exactly as authored for the gate to report. `map_children` is
-identity-preserving, so an expression carrying no `D` is returned unchanged
-rather than rebuilt.
-"""
-function _substitute_time_derivatives(
-        e::ASTExpr, tendency::Dict{String, ASTExpr},
-        definition::Dict{String, ASTExpr},
-        time_invariant::Set{String},
-        active::Vector{String}
-    )::ASTExpr
-    e isa OpExpr || return e
-    if _is_structural_time_derivative(e)
-        out = _deriv(e.args[1], tendency, definition, time_invariant, active)
-        return out === nothing ? e : out
-    end
-    return map_children(
-        x -> _substitute_time_derivatives(x, tendency, definition, time_invariant, active), e
-    )
-end
-
-"""
-    _deriv(e, tendency, definition, time_invariant, active) -> Union{ASTExpr,Nothing}
-
-d/dt of `e`, or `nothing` when this format does not define it.
-"""
-function _deriv(
-        e::ASTExpr, tendency::Dict{String, ASTExpr},
-        definition::Dict{String, ASTExpr}, time_invariant::Set{String},
-        active::Vector{String}
-    )::Union{ASTExpr, Nothing}
-    if e isa VarExpr
-        name = (e::VarExpr).name
-        # A cycle: stop here and let the gate name it.
-        name in active && return nothing
-        if haskey(tendency, name)
-            push!(active, name)
-            try
-                return _substitute_time_derivatives(
-                    tendency[name], tendency, definition,
-                    time_invariant, active
-                )
-            finally
-                pop!(active)
-            end
-        elseif haskey(definition, name)
-            # CHAIN RULE: an observed's total time derivative is its defining
-            # right-hand side differentiated by this same rule, one level down.
-            push!(active, name)
-            try
-                return _deriv(definition[name], tendency, definition, time_invariant, active)
-            finally
-                pop!(active)
-            end
-        elseif name in time_invariant
-            return _zero_expr()
-        end
-        # A name in none of the three. Answering `0` for a name this pass does
-        # not recognise is exactly the invention §4.2 forbids.
-        return nothing
-    end
-    (e isa NumExpr || e isa IntExpr) && return _zero_expr()
-    e isa OpExpr || return nothing
-
-    d(a) = _deriv(a, tendency, definition, time_invariant, active)
-    op = (e::OpExpr).op
-    args = (e::OpExpr).args
-    if op == "index" && !isempty(args) && args[1] isa VarExpr &&
-            _is_lifted_tendency(get(tendency, (args[1]::VarExpr).name, nothing))
-        # One cell of a lifted state: that cell of its lifted tendency.
-        whole = d(args[1])
-        whole === nothing && return nothing
-        return OpExpr("index", ASTExpr[whole, args[2:end]...])
-    end
-    if op == "+"
-        terms = ASTExpr[]
-        for a in args
-            da = d(a)
-            da === nothing && return nothing
-            push!(terms, da)
-        end
-        return _sum_expr(terms)
-    elseif op == "-" && length(args) == 1
-        da = d(args[1]); da === nothing && return nothing
-        return _negate_expr(da)
-    elseif op == "-" && length(args) == 2
-        da = d(args[1]); da === nothing && return nothing
-        db = d(args[2]); db === nothing && return nothing
-        return _difference_expr(da, db)
-    elseif op == "neg" && length(args) == 1
-        da = d(args[1]); da === nothing && return nothing
-        return _negate_expr(da)
-    elseif op == "*"
-        # Product rule over an n-ary `*`: one term per factor, that factor
-        # differentiated and the others left alone.
-        terms = ASTExpr[]
-        for (i, a) in enumerate(args)
-            da = d(a)
-            da === nothing && return nothing
-            _is_zero_expr(da) && continue
-            factors = ASTExpr[da]
-            for (j, b) in enumerate(args)
-                i == j || push!(factors, b)
-            end
-            push!(terms, _product_expr(factors))
-        end
-        return _sum_expr(terms)
-    elseif op == "/" && length(args) == 2
-        u, v = args[1], args[2]
-        du = d(u); du === nothing && return nothing
-        dv = d(v); dv === nothing && return nothing
-        # `v` constant in t: (u/v)' = u'/v, which keeps the common `D(x, t)/c`
-        # shape small.
-        _is_zero_expr(dv) && return _quotient_expr(du, v)
-        num = _difference_expr(_product_expr(ASTExpr[du, v]), _product_expr(ASTExpr[u, dv]))
-        return _quotient_expr(num, _product_expr(ASTExpr[v, v]))
-    end
-    return nothing
 end
 
 # ---------------------------------------------------------------------------
@@ -978,7 +868,6 @@ function system_kind(flat::FlattenedSystem)::String
         flat.state_variables, flat.parameters,
         flat.observed_variables, flat.equations
     )
-    has_spatial_derivative(view) && return "pde"
     has_time_derivative(view) || return "nonlinear"
     return "ode"
 end
@@ -1045,12 +934,13 @@ a system is over-determined.
 INVARIANT (esm-spec §9.6.4 Option B): `flatten` ALWAYS carries surviving
 `apply_expression_template` references — MODEL-equation references ride into
 the `FlattenedSystem` (namespacing scopes their `bindings`), resolvable against
-the merged `template_registry` it also carries. Reaction-system RATE references
-never survive: they are expanded eagerly at collect (`_collect_reaction_system!`),
-before namespacing. Consumers that need the Option-A expanded image call
-[`expand_flattened_refs`](@ref) at their own boundary (RFC
-out-of-line-expression-templates §7.7); the tree-walk build expands at its entry
-with site recording (the compile-once tier).
+the merged `template_registry` it also carries. Reaction-system RATE and event
+references survive too: their templates' free names are explicit parameters in
+the merged registry, bound at each reference in the system's scope
+(`_collect_reaction_system!`). Consumers that need the Option-A expanded image
+call [`expand_flattened_refs`](@ref) at their own boundary (RFC
+out-of-line-expression-templates §7.7); the tree-walk build compiles each
+reference as a call.
 """
 function flatten(
         file::EsmFile; base_path::AbstractString = ".",
@@ -1066,7 +956,9 @@ function flatten(
     # so a reaction network's mass-action tendency (§7.4) is available to a
     # sibling model's scoped `D(Chem.O3, t)`.
     _resolve_rhs_time_derivatives!(
-        st.equations, Set{String}(keys(st.params)), st.lifted_shapes
+        st.equations, Set{String}(keys(st.params)), st.lifted_shapes;
+        registry = st.template_registry,
+        map_other_sites = f -> _map_flat_sites!(f, st)
     )
     return _finish_flatten(st, pointwise)
 end
@@ -1192,12 +1084,27 @@ end
 # against the collected tables, before any coupling consumes a spelling; record
 # the data-fed parameters.
 function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
-    # The merged template registry (esm-spec §9.6.4 rule 7, §10.7), its bodies
-    # component-scoped first (`_scope_component_templates`). Computed before
-    # collection because its collision rename must reach each component's
-    # reference sites while they are still attributable to their owner.
-    template_registry, template_rename =
-        _merge_flat_registry(_scope_component_templates(file))
+    # The merged template registry (esm-spec §9.6.4 rule 7, §10.7;
+    # esm-libraries-spec §4.7.5 step 4). A body's free names are read in the
+    # scope of each reference's site (a subsystem's reference reads the
+    # subsystem's names, and one definition can serve several subsystems), so
+    # every body first gets its free names as explicit parameters
+    # (`_tpl_explicit_free`), which every reference then binds in its own
+    # site's scope as it is namespaced. Computed before collection because the
+    # collision rename must reach each component's reference sites while they
+    # are still attributable to their owner.
+    ct0 = file.component_templates
+    scoped = ct0 === nothing ? nothing : OrderedDict{String, Any}(String(k) => v for (k, v) in ct0)
+    tpl_added = Dict{String, Dict{String, Vector{String}}}()
+    if scoped !== nothing
+        for (compkey, block) in collect(scoped)
+            parts = split(String(compkey), "."; limit = 2)
+            length(parts) == 2 || continue
+            scoped[compkey], tpl_added[String(parts[2])] = _tpl_explicit_free(block)
+        end
+    end
+    template_registry, template_rename = _merge_flat_registry(scoped)
+    file = _own_transform_refs(file, template_rename, tpl_added)
     st = FlattenState(file, template_registry)
     ct = file.component_templates
     if file.models !== nothing
@@ -1205,6 +1112,7 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
             push!(st.components, name)
             _collect_model!(
                 st, model, name;
+                tpl_added = get(tpl_added, name, nothing),
                 tpl_rename = get(template_rename, name, nothing),
                 tpl_captures = template_captures(
                     ct === nothing ? nothing : get(ct, "models.$(name)", nothing)
@@ -1217,14 +1125,73 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
             push!(st.components, name)
             _collect_reaction_system!(
                 st, rsys, name;
-                templates = ct === nothing ? nothing :
-                    get(ct, "reaction_systems.$(name)", nothing)
+                tpl_added = get(tpl_added, name, nothing),
+                tpl_rename = get(template_rename, name, nothing),
+                tpl_captures = template_captures(
+                    ct === nothing ? nothing : get(ct, "reaction_systems.$(name)", nothing)
+                )
             )
         end
     end
     _check_variable_map_endpoints(file, st.states, st.params, st.observeds)
     st.loader_fields = _loader_fields(file, st.params, records)
     return st
+end
+
+# The `apply_expression_template` references of a `variable_map` expression
+# transform are owned by the RECEIVING component (the first segment of `to`,
+# esm-spec §10.4), whose registry they resolve against: they follow that
+# component's slice of the registry collision rename (§9.6.4 rule 7, §10.7) and
+# bind its templates' explicit free names (`_tpl_explicit_free`) to the
+# component's scoped names, as its own references do. The transform's other references are fully scoped already
+# (§10.4), so nothing else is namespaced. Library edges (§10.10) arrive here
+# role-substituted and are treated the same way.
+function _own_transform_refs(file::EsmFile, template_rename, tpl_added)
+    (isempty(template_rename) && isempty(tpl_added)) && return file
+    changed = false
+    coupling = CouplingEntry[]
+    for entry in file.coupling
+        if entry isa CouplingVariableMap && entry.transform isa ASTExpr
+            owner = String(first(split(entry.to, "."; limit = 2)))
+            tr = entry.transform::ASTExpr
+            added = get(tpl_added, owner, nothing)
+            if added !== nothing && !isempty(added)
+                tr = _tpl_bind_explicit(tr, added)
+                tr = _scope_added_bindings(tr, added, owner)
+            end
+            rn = get(template_rename, owner, nothing)
+            rn === nothing || (tr = _rename_expr_apply_refs(tr, rn))
+            if tr !== entry.transform
+                changed = true
+                entry = CouplingVariableMap(
+                    entry.from, entry.to, tr;
+                    factor = entry.factor, description = entry.description,
+                    lifting = entry.lifting
+                )
+            end
+        end
+        push!(coupling, entry)
+    end
+    return changed ? reconstruct(file; coupling = coupling) : file
+end
+
+# The bindings `_tpl_bind_explicit` added (a free name bound to itself) are
+# names of the receiving component `owner`: scope them `owner.name`.
+function _scope_added_bindings(e::ASTExpr, added, owner::String)
+    e isa OpExpr || return e
+    out = map_children(c -> _scope_added_bindings(c, added, owner), e)::OpExpr
+    if _tpl_is_call(out) && out.name isa AbstractString && out.bindings !== nothing
+        names = get(added, String(out.name), nothing)
+        if names !== nothing
+            b = copy(out.bindings)
+            for n in names
+                v = get(b, n, nothing)
+                v isa VarExpr && v.name == n && (b[n] = VarExpr("$owner.$n"))
+            end
+            out = reconstruct(out; bindings = b)
+        end
+    end
+    return out
 end
 
 # Step 3: apply the coupling entries, by kind in the order §4.7 fixes
@@ -1280,9 +1247,10 @@ function _apply_coupling!(st::FlattenState)
         )
     end
 
-    # Names a `variable_map` substitution replaced in the equations (an
-    # expression `transform` keeps its `to` references, so it is exempt).
-    rewritten = Set{String}()
+    # A template-registry body reads no component name (`_tpl_explicit_free`
+    # made its free names parameters its references bind), so a replaced or
+    # merged-away name it read is in a reference's bindings, where the rewrites
+    # below reach it like any other site.
     shapeless = _data_fed_without_shape(file)
     for (k, entry) in enumerate(file.coupling)
         entry isa CouplingVariableMap || continue
@@ -1292,18 +1260,10 @@ function _apply_coupling!(st::FlattenState)
             observeds = st.observeds, index = k - 1, shapeless = shapeless
         )
         resolved.transform isa ASTExpr && continue
-        push!(rewritten, resolved.to)
         # Every other site naming the replaced parameter follows the
         # replacement the equations took (esm-libraries-spec §4.7.5).
         _map_flat_sites!(_variable_map_rewrite(resolved), st)
     end
-    # A surviving template-registry body is authored source no rewrite above
-    # reaches: one that still names a replaced or merged-away variable would
-    # expand at the build boundary into a name the system no longer declares.
-    # Refused, not rewritten, so the result cannot diverge from the
-    # expand-at-load image.
-    union!(rewritten, keys(st.merged_renames))
-    _check_registry_coupling_rewrites(st.template_registry, rewritten)
     return st
 end
 
@@ -1350,6 +1310,11 @@ function _finish_flatten(st::FlattenState, pointwise)
         seed = pointwise === nothing ? nothing : pointwise.shapes,
         stale = pointwise === nothing ? () : pointwise.stale
     )
+    # Every lift is done: the cellwise variants they made take their final
+    # names (esm-spec §9.6.11), at every site that references them.
+    renames = _name_cellwise_variants!(st.template_registry)
+    isempty(renames) ||
+        _map_flat_sites!(e -> _rename_expr_apply_refs(e, renames), st; equations = true)
     return FlattenedSystem(;
         independent_variables = ivs,
         state_variables = st.states, parameters = st.params,
@@ -1444,122 +1409,6 @@ end
 # ========================================
 # FlattenedSystem → runnable single-model ESM document
 # ========================================
-
-# esm-spec §9.6.4 rule 7 / §10.7: registry bodies are COMPONENT-SCOPED source —
-# their free variable references resolve in the owning component's namespace,
-# exactly as the expand-at-load image does (load-time expansion splices the body
-# into the component's equations BEFORE flatten renames them). The flattened
-# registry must therefore carry bodies whose free variables are renamed with the
-# SAME (prefix, local-name) map `_collect_model!` applies to the component's
-# equations — otherwise a body spliced at the BUILD boundary (the
-# reference-preserving fast path, or `expand_flattened_refs`) references bare
-# names the flat var_map does not contain. Template formal params are EXCLUDED
-# from the rename set: they are the template's own scope, substituted at
-# expansion, never component variables. Nested reference BINDINGS inside a body
-# are scoped by `namespace_expr`'s apply arm; body-local aggregate loop names
-# are not component variables, so the map never touches them. The caller's
-# `EsmFile` registry is untouched (emit still produces the authored bodies) —
-# this scopes a COPY for the flat registry only. Reaction-system blocks pass
-# through unscoped BY POLICY (the flatten invariant): references survive
-# flatten only in MODEL equations; reaction-RATE references are always expanded
-# eagerly at collect (`_collect_reaction_system!`, before namespacing), so a
-# reaction-system registry entry is never resolved against post-flatten — it
-# rides along solely so the reconstituted document round-trips.
-function _scope_component_templates(file::EsmFile)
-    ct = file.component_templates
-    ct === nothing && return nothing
-    # OrderedDict, iterated in the order the parser recorded the components:
-    # `_merge_flat_registry` consumes this map positionally now that §4.7.5
-    # step 4 makes the merged registry document-ordered.
-    out = OrderedDict{String, Any}()
-    for (compkey, block) in ct
-        parts = split(String(compkey), "."; limit = 2)
-        model = length(parts) == 2 && parts[1] == "models" && file.models !== nothing ?
-            get(file.models, String(parts[2]), nothing) : nothing
-        if !(model isa Model) || !_is_object(block)
-            out[String(compkey)] = block
-            continue
-        end
-        cname = String(parts[2])
-        local_names = Set{String}(keys(model.variables))
-        for (sub_name, _) in model.subsystems
-            push!(local_names, sub_name)
-        end
-        newblock = OrderedDict{String, Any}()
-        for (tname, decl) in pairs(block)
-            body_raw = _raw_get(decl, "body")
-            if body_raw === nothing
-                newblock[string(tname)] = decl
-                continue
-            end
-            pnames = Set{String}()
-            params_raw = _raw_get(decl, "params")
-            if params_raw isa AbstractVector
-                for p in params_raw
-                    p isa AbstractString && push!(pnames, String(p))
-                end
-            end
-            scoped = namespace_expr(
-                expression_from_json(body_raw), cname,
-                setdiff(local_names, pnames)
-            )
-            nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl))
-            nd["body"] = serialize_expression(scoped)
-            newblock[string(tname)] = nd
-        end
-        out[String(compkey)] = newblock
-    end
-    return out
-end
-
-"""
-    _check_registry_coupling_rewrites(registry, rewritten)
-
-Shadow-registry validation (flatten-time, cheap): `_substitute_variable_map!`
-rewrites a coupling `variable_map`'s `to` name in every VISIBLE equation AST,
-but a surviving template-registry body is authored source the substitution
-never touches. If such a body still references a rewritten name, its expansion
-at the build boundary would surface a STALE reference (for `param_to_var` /
-`conversion_factor`, a deleted parameter → `E_TREEWALK_UNBOUND_VARIABLE` deep
-in the build; for the scaling transforms, a silent semantic divergence from the
-Expand-at-load image). Throw a clear error naming the template and the variable
-instead. Free names are collected with the generated walkers
-(`foreach_subexpr` descends `bindings` and `ranges`); the template's own formal
-`params` are its private scope and excluded.
-"""
-function _check_registry_coupling_rewrites(registry, rewritten::Set{String})
-    (isempty(registry) || isempty(rewritten)) && return nothing
-    for tname in sort!(collect(keys(registry)))
-        decl = registry[tname]
-        _is_object(decl) || continue
-        body_raw = _raw_get(decl, "body")
-        body_raw === nothing && continue
-        pnames = Set{String}()
-        params_raw = _raw_get(decl, "params")
-        if params_raw isa AbstractVector
-            for p in params_raw
-                p isa AbstractString && push!(pnames, String(p))
-            end
-        end
-        names = Set{String}()
-        foreach_subexpr(expression_from_json(body_raw)) do x
-            x isa VarExpr && push!(names, x.name)
-            nothing
-        end
-        hits = sort!(collect(intersect(setdiff(names, pnames), rewritten)))
-        isempty(hits) || throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
-                "expression template '$(String(tname))' body references " *
-                    "'$(join(hits, "', '"))', which a coupling rule rewrote in " *
-                    "the flattened equations; the registry body would expand to a stale " *
-                    "name at the build boundary. Bind the value through the template's " *
-                    "params, or expand the reference before coupling (esm-spec §9.6.4)."
-            )
-        )
-    end
-    return nothing
-end
 
 """
     flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}
@@ -1685,6 +1534,11 @@ structurally identical apply sites expand once and share the result. Pass `nothi
 per-site re-expansion. Sharing is safe here for the same reason it is in
 `_expand_model_refs!` — the expanded set becomes a DAG, which is what interning
 would produce one pass later anyway.
+
+Not for build or analysis paths: esm-spec §9.6.4 rule 2 says builders,
+evaluators and analyses SHOULD NOT expand references (they analyse and compile
+each template once). This is an explicit expansion utility for tools and
+interchange.
 """
 function expand_flattened_refs(
         flat::FlattenedSystem;
@@ -1710,6 +1564,25 @@ function expand_flattened_refs(
         field_ics = Pair{String, ASTExpr}[name => expand(e) for (name, e) in flat.field_ics],
         continuous_events = _map_event_exprs(expand, flat.continuous_events),
         discrete_events = _map_event_exprs(expand, flat.discrete_events)
+    )
+end
+
+# `flat` with every template reference renamed through `renames` (old => new),
+# in each expression site `expand_flattened_refs` rewrites, its initialization
+# equations, and its field initial conditions.
+function _rename_flat_refs(flat::FlattenedSystem, renames::AbstractDict{String, String})
+    isempty(renames) && return flat
+    f = e -> _rename_expr_apply_refs(e, renames)
+    neweqs, newcontribs = _rewrite_flat_equations(f, flat)
+    return FlattenedSystem(
+        flat; equations = neweqs, equation_contributions = newcontribs,
+        state_variables = _map_variable_sites(f, flat.state_variables),
+        parameters = _map_variable_sites(f, flat.parameters),
+        observed_variables = _map_variable_sites(f, flat.observed_variables),
+        field_ics = Pair{String, ASTExpr}[name => f(e) for (name, e) in flat.field_ics],
+        continuous_events = _map_event_exprs(f, flat.continuous_events),
+        discrete_events = _map_event_exprs(f, flat.discrete_events),
+        initialization_equations = _map_equation_sides(f, flat.initialization_equations)
     )
 end
 

@@ -198,6 +198,68 @@ class Doc:
         self.comps = comps
 
 
+# ## Expressions inside path blocks
+
+
+class _Any:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "ANY"
+
+
+#: A path segment matching every element of an array and every value of an
+#: object (``Notation.Seg.any``).
+ANY: Any = _Any()
+
+
+class _Elem:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "ELEM"
+
+
+#: A path segment matching every element of an array only, the array form of a
+#: field that is one object or an array of them (``Notation.Seg.elem``).
+ELEM: Any = _Elem()
+
+#: ``Notation.compExprPaths``: the expression-valued fields of a component's path
+#: blocks, as paths from the block's key (esm-schema.json; an update is one rule
+#: or an array of them). A value there that is a well-formed expression prints as
+#: math (``Source.mathify``).
+COMP_EXPR_PATHS: tuple = (
+    ("continuous_events", ANY, "affect_neg", ANY, "rhs"),
+    ("continuous_events", ANY, "affects", ANY, "rhs"),
+    ("continuous_events", ANY, "conditions", ANY),
+    ("discrete_events", ANY, "affects", ANY, "rhs"),
+    ("discrete_events", ANY, "trigger", "expression"),
+    ("guesses", ANY),
+    ("parameters", ANY, "update", "expression"),
+    ("parameters", ANY, "update", "from", "unit_conversion"),
+    ("parameters", ANY, "update", "when"),
+    ("parameters", ANY, "update", ELEM, "expression"),
+    ("parameters", ANY, "update", ELEM, "from", "unit_conversion"),
+    ("parameters", ANY, "update", ELEM, "when"),
+    ("tests", ANY, "assertions", ANY, "reference"),
+    ("variables", ANY, "update", "expression"),
+    ("variables", ANY, "update", "from", "unit_conversion"),
+    ("variables", ANY, "update", "when"),
+    ("variables", ANY, "update", ELEM, "expression"),
+    ("variables", ANY, "update", ELEM, "from", "unit_conversion"),
+    ("variables", ANY, "update", ELEM, "when"),
+)
+
+#: ``Notation.topExprPaths``: the same for the document's top-level path blocks.
+TOP_EXPR_PATHS: tuple = (
+    ("coupling", ANY, "affect_neg", ANY, "rhs"),
+    ("coupling", ANY, "affects", ANY, "rhs"),
+    ("coupling", ANY, "conditions", ANY),
+    ("coupling", ANY, "connector", "equations", ANY, "expression"),
+    ("coupling", ANY, "trigger", "expression"),
+)
+
+
 # ## The symbol table of a component
 
 

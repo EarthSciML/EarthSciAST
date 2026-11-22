@@ -169,15 +169,13 @@ diagnostic_code_registry! {
     /// document's `index_sets` registry.
     TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "template_constraint_unknown_index_set";
 
-    // ---- expression templates: the SURVIVING registry, checked at flatten
-    //      (`flatten.rs::check_registry_coupling_rewrites`) ----
+    // ---- expression templates: the surviving registry at flatten ----
 
-    /// A surviving `expression_templates` registry body names a variable a
-    /// coupling rule rewrote out of the flattened equations (a `variable_map`
-    /// substitution, or an `operator_compose` renaming match). The body is
-    /// authored source no equation walk reaches and it expands at the BUILD
-    /// boundary, so this is the ONE site where such a reference is REFUSED
-    /// rather than resolved (esm-spec §9.6.4, CONFORMANCE_SPEC §5.35).
+    /// Withdrawn refusal, kept as a stable code: a surviving
+    /// `expression_templates` registry body naming a variable a coupling rule
+    /// rewrote out of the flattened equations. Flatten now closes every carried
+    /// body (esm-spec §10.7), so a body reads no component name and nothing
+    /// raises this (CONFORMANCE_SPEC §5.35).
     TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE =
         "template_body_references_coupling_rewritten_variable";
 
@@ -321,6 +319,12 @@ diagnostic_code_registry! {
     /// wire boundary rewrites each to its replacement and reports this once
     /// per document, naming every rewritten node.
     DEPRECATED_OP = "deprecated_op";
+    /// A WARNING, not an error: a model declares `"system_kind": "pde"`,
+    /// deprecated at esm 2.4.0 (esm-spec §6.3.1). The value is ignored — the
+    /// model is treated as its derived kind and never reports
+    /// `system_kind_mismatch` for it — and the field is kept as written. One
+    /// warning per document, naming every such model by JSON pointer.
+    DEPRECATED_SYSTEM_KIND = "deprecated_system_kind";
     /// A Markdown or Typst source text is not an ESM document: an unknown
     /// word, an ambiguous juxtaposition, an unbalanced delimiter, an unclosed
     /// display, container or directive, and every other malformed input the
@@ -726,6 +730,7 @@ mod error_code_tests {
             "data_source_undefined",
             "data_source_url_unresolved",
             "deprecated_op",
+            "deprecated_system_kind",
             "derived_index_set_unmaterialized",
             "dimensional_mismatch",
             "domain_unit_mismatch",

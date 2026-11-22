@@ -182,6 +182,21 @@ function _mtk_unlowered_op(e::EsmExpr)
     return found[]
 end
 
+# The first equation of `flat` using an operator `_esm_to_symbolic` has no arm
+# for, with that operator, or `nothing`. An `ic` left-hand side is routed out of
+# the lowering (`_split_ic_equations`), so only its operand is scanned there.
+function _mtk_first_unlowered_op(flat::FlattenedSystem)
+    for eq in flat.equations
+        lhs = eq.lhs
+        lhs_sides = lhs isa OpExpr && lhs.op == "ic" ? lhs.args : (lhs,)
+        for side in (lhs_sides..., eq.rhs)
+            op = _mtk_unlowered_op(side)
+            op === nothing || return (eq, op)
+        end
+    end
+    return nothing
+end
+
 # Document-level constructs the ODE lowering cannot express. Each one is found
 # by looking for it, never by catching a failure: a refusal that is really a
 # swallowed bug would make this compiler look like it covers less than it does
@@ -304,9 +319,10 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     # AN OPERATOR THE LOWERING HAS NO ARM FOR, named with its equation rather
     # than raised from inside `ModelingToolkit.System`. Last, so every refusal
     # above that names a more specific rule keeps precedence.
-    for eq in flat.equations, side in (eq.lhs, eq.rhs)
-        op = _mtk_unlowered_op(side)
-        op === nothing || _mtk_refuse(
+    unlowered = _mtk_first_unlowered_op(flat)
+    if unlowered !== nothing
+        eq, op = unlowered
+        _mtk_refuse(
             _mtk_equation_label(eq),
             "it uses the operator `$(op)`, which this compiler has no lowering " *
                 "for. $_MTK_TRY_INSTEAD"

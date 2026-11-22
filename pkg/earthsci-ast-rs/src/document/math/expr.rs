@@ -228,6 +228,7 @@ pub fn jwf(j: &Json) -> bool {
         Json::Num(n) => num_ok(n),
         Json::Arr(xs) => xs.iter().all(jwf),
         Json::Obj(kvs) => keys_distinct(kvs) && kvs.iter().all(|(_, v)| jwf(v)),
+        Json::Math(_) => false,
         _ => true,
     }
 }

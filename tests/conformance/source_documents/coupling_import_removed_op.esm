@@ -1,0 +1,42 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "coupling_import_removed_op",
+    "description": "Imports ./removed_op.md as a coupling library: it calls fn, an operator removed at esm 2.0.0, so the Markdown reader refuses it and the coupling import keeps the reader's code (removed_op).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "A": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "coupling_import",
+      "ref": "./removed_op.md",
+      "bind": {
+        "R": "A"
+      }
+    }
+  ]
+}

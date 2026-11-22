@@ -91,7 +91,7 @@ end
 # and `pushdown_diagnostics` (which only reports). Returns `nothing` when no
 # model is selected; otherwise the plan (`nothing` ⇒ the pattern did not match),
 # the residual diagnostics, the model name, and the component template registry
-# the emission side needs to expand references with.
+# the emission side reads template bodies from (never to expand a reference).
 function _pd_analyze(esm::AbstractDict, model_name)
     file = _coerce_or_load(esm)
     m = _select_model_or_nothing(file, model_name)
@@ -99,7 +99,8 @@ function _pd_analyze(esm::AbstractDict, model_name)
     mname = _pd_model_name(file, model_name)
     mname === nothing && return nothing
     reg = _pd_registry(file, mname)
-    plan, diags = _pd_detect(m, _pd_detection_defs(m, reg), file.index_sets)
+    defs = observed_definitions(m)
+    plan, diags = _pd_detect(m, defs, file.index_sets; tt = _pd_template_table(reg, defs))
     return (plan = plan, diagnostics = diags, mname = mname, registry = reg)
 end
 
@@ -125,26 +126,28 @@ _pd_model_name(file, model_name) = model_name !== nothing ? String(model_name) :
         String(first(keys(file.models))) : nothing
     )
 
-# ---- detection-time template-reference expansion (esm-spec §9.6.4 rule 2) --
+# ---- detection through template references (esm-spec §9.6.4 rule 2) -------
 #
-# Under Option B (§9.6.4) `load` PRESERVES `apply_expression_template`
-# references: they ride to the build boundary where `_build_evaluator_impl`
-# expands them with site recording (see simulate.jl).
-# `esm_problem` therefore hands `desugar_pushdown` a document whose binning body may
-# be a surviving reference rather than the containment `ifelse` the recogniser
-# looks for.
+# `load` PRESERVES `apply_expression_template` references, so `esm_problem`
+# hands `desugar_pushdown` a document whose binning body may be a surviving
+# reference rather than the containment `ifelse` the recogniser looks for.
 #
-# §9.6.4 rule 4 ("patterns do not see through surviving references") governs the
-# §9.6.3 REWRITE-RULE ENGINE. `desugar_pushdown` is a different consumer, and
-# rule 2 governs it: a reference DENOTES its expansion, every consumer MAY
-# expand, and observable behavior must be as if evaluated on `Expand(tree)`.
-# Whether the pushdown fires MUST NOT depend on whether the author factored the
-# binning body through a template — so detection runs on the EXPANDED view.
+# §9.6.4 rule 4 ("patterns do not see through surviving references") governs
+# the §9.6.3 REWRITE-RULE ENGINE. `desugar_pushdown` is a different consumer,
+# and rule 2 governs it: a reference DENOTES its expansion. Whether the pushdown
+# fires MUST NOT depend on whether the author factored the binning body through
+# a template — so the pattern is matched THROUGH references, without expanding
+# them: at a reference the matcher reads the template's own body in the
+# reference's frame (templates/frames.jl `_tpl_frame`), and at a parameter (or
+# implicit parameter) of that body it reads the call site's binding, in the
+# caller's frame. A name the matcher accepts — an array or a loop symbol of the
+# aggregate — must read as a name of the model's own tree (frame `nothing`): a
+# name bound inside a body is the body's own and never one of them.
 #
-# Emission does NOT: `_pd_apply` edits the call site's `bindings` (and the
-# aggregate's own `ranges`/`args`/`shape`/`join`), never the shared template
-# body, so the body stays shared and singly-lowered and Option B survives the
-# rewrite. `_pd_assert_rects_rebound` is the post-condition that proves it.
+# Emission does not read bodies either: `_pd_apply` edits the call site's
+# `bindings` (and the aggregate's own `ranges`/`args`/`shape`/`join`), never the
+# shared template body, so the body stays shared and singly-lowered.
+# `_pd_assert_rects_rebound` is the post-condition that proves it.
 
 # The component template registry for `mname`, or `nothing` when the document
 # carries no surviving references (`coerce_esm_file` fills `component_templates`
@@ -165,64 +168,69 @@ function _pd_has_apply(e)::Bool
     return false
 end
 
-# The `name` of the first surviving reference in `e` (pre-order), for the
-# residual diagnostic; `nothing` when `e` carries none.
-function _pd_first_apply_name(e)
-    e isa OpExpr || return nothing
-    e.op == APPLY_EXPRESSION_TEMPLATE_OP && return e.name
-    for c in child_exprs(e)
-        r = _pd_first_apply_name(c)
+# The template table detection reads references through: `nothing` when there
+# is no registry or no definition carries a reference (every read below is then
+# the plain tree read).
+_pd_template_table(reg, defs::AbstractDict) =
+    (reg === nothing || !any(_pd_has_apply, values(defs))) ? nothing : _TplTable(reg)
+
+"""
+    _pd_open(tt, e, fr) -> (e, fr)
+
+`e` read in frame `fr` (`nothing`: the model's own tree), through the template
+references: a parameter sentinel of a body is read as the call site's binding
+in the caller's frame, and a reference as its template's body in the
+reference's frame (`_tpl_frame`, one per instance). A reference that cannot be
+read (an unresolvable template, a bindings mismatch — `desugar_pushdown` is
+callable on a raw document that never went through `load`'s §9.6.9 call-site
+checks) is returned as it is: the pass's contract is to leave a document it
+cannot recognise unchanged, and `_pd_binning_refusal` reports the reference if
+the definition is join-shaped. With `tt === nothing` a reference is never
+entered.
+"""
+function _pd_open(tt, e::ASTExpr, fr)
+    while true
+        if fr !== nothing && e isa VarExpr && _tpl_is_sentinel(e.name)
+            e, fr = _tpl_arg(fr, e.name)
+        elseif tt !== nothing && _tpl_is_call(e)
+            sub = try
+                _tpl_frame(tt, e, fr)
+            catch err
+                err isa ExpressionTemplateError || rethrow()
+                return (e, fr)
+            end
+            e, fr = sub.body, sub
+        else
+            return (e, fr)
+        end
+    end
+    return
+end
+
+# The name `e` reads as a name of the model's own tree, or `nothing`.
+function _pd_name(tt, e::ASTExpr, fr)
+    x, xf = _pd_open(tt, e, fr)
+    return (x isa VarExpr && xf === nothing) ? x.name : nothing
+end
+
+# The `name` of the first reference in `e` (pre-order, read through the
+# references) that cannot be read, for the residual diagnostic; `nothing` when
+# there is none.
+function _pd_first_apply_name(tt, e::ASTExpr, fr)
+    x, xf = _pd_open(tt, e, fr)
+    x isa OpExpr || return nothing
+    _tpl_is_call(x) && return x.name
+    for c in child_exprs(x)
+        r = _pd_first_apply_name(tt, c, xf)
         r === nothing || return r
     end
     return nothing
 end
 
-"""
-    _pd_detection_defs(model, reg) -> Dict{String,ASTExpr}
-
-[`observed_definitions`](@ref) with every surviving `apply_expression_template`
-reference EXPANDED against `reg` — the `Expand(tree)` view the pattern matcher
-must see (§9.6.4 rule 2). An observed unknown's body is its
-defining EQUATION's right-hand side, so this — not the variable table — is what
-the detector matches against; `_pd_detect` still reads `model.variables` for the
-shapes and types beside it. Returns the definition map UNCHANGED (no copy) when
-there is no registry or no reference to expand.
-
-Expansion is DETECTION-ONLY: the returned bodies are never emitted. A reference
-that fails to expand (an unresolvable template — `desugar_pushdown` is callable
-on a raw document that never went through `load`'s §9.6.9 call-site checks) is
-left in place rather than raised: the pass's contract is to leave a document it
-cannot recognise unchanged, and the surviving reference is then reported by
-`_pd_binning_refusal` if the definition is join-shaped.
-"""
-function _pd_detection_defs(model::Model, reg)
-    defs = observed_definitions(model)
-    reg === nothing && return defs
-    any(_pd_has_apply, values(defs)) || return defs
-    out = Dict{String, ASTExpr}(defs)
-    # Shared expansion memo: two sites with the same (template, bindings) reuse
-    # one expansion. Rule 2 requires exactly that they be structurally identical
-    # with bit-equal constants, and this walk is read-only, so the sharing is
-    # unobservable — the same guarantee `_expand_model_refs!` relies on.
-    memo = _ExpandCache()
-    for (name, ex) in defs
-        _pd_has_apply(ex) || continue
-        lowered = try
-            _expand_expr_refs(ex, reg, nothing, memo)
-        catch err
-            err isa ExpressionTemplateError || rethrow()
-            continue
-        end
-        lowered === ex || (out[name] = lowered)
-    end
-    return out
-end
-
 # ---- typed-IR leaf helpers -------------------------------------------------
-_pd_varname(e) = e isa VarExpr ? e.name : nothing
 
 """
-    _pd_cell_factors!(e, c_sym, vars, C, out, bad)
+    _pd_cell_factors!(e, c_sym, vars, C, out, bad, tt = nothing)
 
 Walk a binning body and record into `out` EVERY array it reads at a position on
 the cell axis — not only the envelope factors of the containment predicate —
@@ -259,68 +267,78 @@ not disturb.
 """
 function _pd_cell_factors!(
         e, c_sym::AbstractString, vars::AbstractDict,
-        C::AbstractString, out::AbstractDict, bad::AbstractDict
+        C::AbstractString, out::AbstractDict, bad::AbstractDict, tt = nothing
     )
-    e isa OpExpr || return nothing
-    if e.op == "index" && length(e.args) >= 2
-        F = _pd_varname(e.args[1])
-        if F !== nothing
-            v = get(vars, F, nothing)
-            shp = v === nothing ? nothing : v.shape
-            if shp !== nothing && !isempty(shp) && String(shp[1]) == C
-                sub = e.args[2]
-                if _pd_varname(sub) == c_sym
-                    haskey(out, F) || (out[F] = String[String(x) for x in shp])
-                elseif _pd_mentions_sym(sub, c_sym)
-                    haskey(bad, F) || (bad[F] = _pd_subscript_sketch(sub))
-                end
-            end
+    e isa ASTExpr || return nothing
+    # One visit per node of the tree and per node of each template instance it
+    # reaches (each instance body once, `_tpl_foreach_node`); a body's reads
+    # are read through its frame.
+    visit = function (node, fr)
+        (node isa OpExpr && node.op == "index" && length(node.args) >= 2) || return
+        F = _pd_name(tt, node.args[1], fr)
+        F === nothing && return
+        v = get(vars, F, nothing)
+        shp = v === nothing ? nothing : v.shape
+        (shp !== nothing && !isempty(shp) && String(shp[1]) == C) || return
+        sub = node.args[2]
+        if _pd_name(tt, sub, fr) == c_sym
+            haskey(out, F) || (out[F] = String[String(x) for x in shp])
+        elseif _pd_mentions_sym(tt, sub, fr, c_sym)
+            haskey(bad, F) || (bad[F] = _pd_subscript_sketch(tt, sub, fr))
         end
+        return
     end
-    for c in child_exprs(e)
-        _pd_cell_factors!(c, c_sym, vars, C, out, bad)
+    if tt === nothing
+        foreach_subexpr(x -> visit(x, nothing), e)
+    else
+        _tpl_foreach_node(visit, tt, e)
     end
     return nothing
 end
 
-# Does `e` reference the loop symbol `sym` anywhere?
-function _pd_mentions_sym(e, sym::AbstractString)::Bool
-    _pd_varname(e) == sym && return true
-    e isa OpExpr || return false
-    for c in child_exprs(e)
-        _pd_mentions_sym(c, sym) && return true
+# Does `e` (read in frame `fr`) reference the loop symbol `sym` anywhere?
+function _pd_mentions_sym(tt, e::ASTExpr, fr, sym::AbstractString)::Bool
+    x, xf = _pd_open(tt, e, fr)
+    x isa VarExpr && return xf === nothing && x.name == sym
+    x isa OpExpr || return false
+    for c in child_exprs(x)
+        _pd_mentions_sym(tt, c, xf, sym) && return true
     end
     return false
 end
 
 # A one-line rendering of a subscript expression, for the refusal message.
-function _pd_subscript_sketch(e)
-    n = _pd_varname(e); n === nothing || return String(n)
+function _pd_subscript_sketch(tt, e::ASTExpr, fr)
+    e, fr = _pd_open(tt, e, fr)
+    e isa VarExpr && return String(e.name)
     e isa NumExpr && return string(e.value)
     e isa IntExpr && return string(e.value)
     e isa OpExpr || return "?"
     if e.op == "index"
-        return _pd_subscript_sketch(e.args[1]) * "[" *
-            join((_pd_subscript_sketch(a) for a in e.args[2:end]), ", ") * "]"
+        return _pd_subscript_sketch(tt, e.args[1], fr) * "[" *
+            join((_pd_subscript_sketch(tt, a, fr) for a in e.args[2:end]), ", ") * "]"
     end
-    return String(e.op) * "(" * join((_pd_subscript_sketch(a) for a in e.args), ", ") * ")"
+    return String(e.op) * "(" * join((_pd_subscript_sketch(tt, a, fr) for a in e.args), ", ") * ")"
 end
 
-# index(F, sym) with EXACTLY one index → (F, sym); else nothing.
-function _pd_index_split(e)
+# index(F, sym) with EXACTLY one index → (F, sym); else nothing. Read in frame
+# `fr` through the references (`_pd_open`).
+function _pd_index_split(tt, e::ASTExpr, fr)
+    e, fr = _pd_open(tt, e, fr)
     (e isa OpExpr && e.op == "index" && length(e.args) == 2) || return nothing
-    f = _pd_varname(e.args[1]); s = _pd_varname(e.args[2])
+    f = _pd_name(tt, e.args[1], fr); s = _pd_name(tt, e.args[2], fr)
     (f === nothing || s === nothing) && return nothing
     return (f, s)
 end
 
-# index(F, sym…) with ≥1 index → (F, [syms…]); else nothing.
-function _pd_index_syms(e)
+# index(F, sym…) with ≥1 index → (F, [syms…]); else nothing. Read as above.
+function _pd_index_syms(tt, e::ASTExpr, fr)
+    e, fr = _pd_open(tt, e, fr)
     (e isa OpExpr && e.op == "index" && length(e.args) >= 2) || return nothing
-    f = _pd_varname(e.args[1]); f === nothing && return nothing
+    f = _pd_name(tt, e.args[1], fr); f === nothing && return nothing
     syms = String[]
     for a in @view e.args[2:end]
-        s = _pd_varname(a); s === nothing && return nothing
+        s = _pd_name(tt, a, fr); s === nothing && return nothing
         push!(syms, s)
     end
     return (f, syms)
@@ -335,13 +353,20 @@ end
 # `c_sym` is the contracted index and `out_syms` the ordered output indices. This
 # is a PURE STRUCTURAL check on index symbols; it neither inspects factor values
 # nor the semiring (callers apply the additive `(+,0)` semiring guard themselves).
+#
+# `tt`/`fr` read the body through template references (`_pd_open`); the
+# three-argument form reads the plain tree.
+_pd_matvec_factors(body, c_sym::AbstractString, out_syms::AbstractVector{<:AbstractString}) =
+    _pd_matvec_factors(nothing, body, nothing, c_sym, out_syms)
 function _pd_matvec_factors(
-        body, c_sym::AbstractString,
+        tt, body, fr, c_sym::AbstractString,
         out_syms::AbstractVector{<:AbstractString}
     )
+    body isa ASTExpr || return nothing
+    body, fr = _pd_open(tt, body, fr)
     (body isa OpExpr && body.op == "*" && length(body.args) == 2) || return nothing
     isempty(out_syms) && return nothing
-    parts = Any[_pd_index_syms(a) for a in body.args]
+    parts = Any[_pd_index_syms(tt, a, fr) for a in body.args]
     any(p -> p === nothing, parts) && return nothing
     A_syms = String[String(c_sym)]
     append!(A_syms, (String(s) for s in out_syms))
@@ -373,15 +398,18 @@ end
 
 _pd_flip(op) = op == "<" ? ">" : op == "<=" ? ">=" : op == ">" ? "<" : "<="
 
-# Find the condition of the first `ifelse(cond, then, else)` in a typed subtree.
-function _pd_find_ifelse_cond(e)
+# Find the condition of the first `ifelse(cond, then, else)` in a typed subtree
+# read in frame `fr` through the template references (`_pd_open`): the
+# condition and the frame it is read in, or `nothing`.
+function _pd_find_ifelse_cond(tt, e::ASTExpr, fr)
+    e, fr = _pd_open(tt, e, fr)
     e isa OpExpr || return nothing
-    (e.op == "ifelse" && length(e.args) == 3) && return e.args[1]
+    (e.op == "ifelse" && length(e.args) == 3) && return (e.args[1], fr)
     for a in e.args
-        r = _pd_find_ifelse_cond(a)
+        r = _pd_find_ifelse_cond(tt, a, fr)
         r === nothing || return r
     end
-    e.expr_body === nothing || (r = _pd_find_ifelse_cond(e.expr_body); r === nothing || return r)
+    e.expr_body === nothing || (r = _pd_find_ifelse_cond(tt, e.expr_body, fr); r === nothing || return r)
     return nothing
 end
 
@@ -419,14 +447,19 @@ end
 # test is invariant under. Appearance order is used because it is deterministic.
 #
 # Returns `nothing` (⇒ no match) on any other shape.
-function _pd_parse_containment(pred, c_sym::AbstractString, r_sym::AbstractString)
+#
+# `pred` is read in frame `fr` through the template references (`_pd_open`).
+function _pd_parse_containment(tt, pred, fr, c_sym::AbstractString, r_sym::AbstractString)
+    pred isa ASTExpr || return nothing
+    pred, fr = _pd_open(tt, pred, fr)
     pred isa OpExpr || return nothing
     comps = pred.op in ("and", "*") ? pred.args : ASTExpr[pred]
     bounds = Dict{String, Dict{Symbol, String}}()
     rec_order = String[]
-    for cmp in comps
+    for cmp0 in comps
+        cmp, cf = _pd_open(tt, cmp0, fr)
         (cmp isa OpExpr && cmp.op in ("<", "<=", ">", ">=") && length(cmp.args) == 2) || return nothing
-        s1 = _pd_index_split(cmp.args[1]); s2 = _pd_index_split(cmp.args[2])
+        s1 = _pd_index_split(tt, cmp.args[1], cf); s2 = _pd_index_split(tt, cmp.args[2], cf)
         (s1 === nothing || s2 === nothing) && return nothing
         f1, sym1 = s1; f2, sym2 = s2
         local Fc, Fp, cell_on_left
@@ -533,15 +566,16 @@ end
 function _pd_detect_binning(
         ev::ModelVariable, agg::Union{ASTExpr, Nothing},
         out_set::AbstractString;
-        out_is_cell::Union{Bool, Nothing} = nothing
+        out_is_cell::Union{Bool, Nothing} = nothing, tt = nothing
     )
     js = _pd_binning_shape(ev, agg, out_set)
     js === nothing && return nothing
     out_sym, in_sym, in_set = js.out_sym, js.in_sym, js.in_set
     body = (agg::OpExpr).expr_body
-    body isa OpExpr || return nothing
-    pred = _pd_find_ifelse_cond(body)
-    pred === nothing && return nothing
+    body isa ASTExpr || return nothing
+    found = _pd_find_ifelse_cond(tt, body, nothing)
+    found === nothing && return nothing
+    pred, pfr = found
     # For a POINT-IN-RECT predicate exactly one of the two assignments parses —
     # `_pd_parse_containment` demands the record side yield two coordinates each
     # with a min AND a max cell bound, which the rect side cannot do. An
@@ -552,7 +586,7 @@ function _pd_detect_binning(
     # `C`/`R` are fixed. Left `nothing` (the point case, and the forward arm's
     # unhinted call) the out-as-cell reading is preferred.
     if out_is_cell !== false
-        env = _pd_parse_containment(pred, out_sym, in_sym)
+        env = _pd_parse_containment(tt, pred, pfr, out_sym, in_sym)
         env === nothing || return (
             c_sym = out_sym, r_sym = in_sym,
             C = String(out_set), R = in_set, out_is_cell = true,
@@ -560,7 +594,7 @@ function _pd_detect_binning(
         )
     end
     out_is_cell === true && return nothing
-    env = _pd_parse_containment(pred, in_sym, out_sym)
+    env = _pd_parse_containment(tt, pred, pfr, in_sym, out_sym)
     env === nothing && return nothing
     return (
         c_sym = in_sym, r_sym = out_sym, C = in_set, R = String(out_set),
@@ -607,7 +641,7 @@ const _PD_UNGATED_CONSEQUENCE =
 Why [`_pd_detect_binning`](@ref) refused `ev`, for a caller that has ALREADY
 established `ev` sits in the join position (it is the rank-1 factor of a
 `+`-semiring mat-vec against a provider-backed `[out_set, …]` array). `agg` is
-`ev`'s DEFINING EQUATION RHS from the detection view, exactly as
+`ev`'s DEFINING EQUATION RHS, read through its references with `tt`, exactly as
 `_pd_detect_binning` received it; `nothing` (a variable that is not an observed
 unknown, so has no definition) is never join-shaped.
 
@@ -616,21 +650,21 @@ Otherwise `(reason, template)`:
 
   * `("surviving_template_reference", name)` — the body carries no containment
     `ifelse` because it is (or hides) a surviving `apply_expression_template`
-    reference that could not be expanded for matching;
+    reference that could not be read for matching;
   * `("predicate_unparsed", nothing)` — a containment `ifelse` was found but it
     did not read as a containment — point-in-rect or envelope
     overlap — in EITHER orientation.
 """
 function _pd_binning_refusal(
         ev::ModelVariable, agg::Union{ASTExpr, Nothing},
-        out_set::AbstractString
+        out_set::AbstractString; tt = nothing
     )
     _pd_binning_shape(ev, agg, out_set) === nothing && return nothing
     body = (agg::OpExpr).expr_body
-    body isa OpExpr || return nothing
-    pred = _pd_find_ifelse_cond(body)
+    body isa ASTExpr || return nothing
+    pred = _pd_find_ifelse_cond(tt, body, nothing)
     if pred === nothing
-        tname = _pd_first_apply_name(body)
+        tname = _pd_first_apply_name(tt, body, nothing)
         tname === nothing && return nothing        # no predicate at all ⇒ dense
         return ("surviving_template_reference", String(tname))
     end
@@ -708,13 +742,13 @@ end
 # document's own const-array rects, unrewritten.
 function _pd_mirror_specs(
         model::Model, obs_defs::AbstractDict,
-        C::AbstractString, R::AbstractString, forward_names
+        C::AbstractString, R::AbstractString, forward_names; tt = nothing
     )
     out = _PdMirror[]
     for (name, defn) in obs_defs
         name in forward_names && continue
         v = model.variables[name]
-        bind = _pd_detect_binning(v, defn, R; out_is_cell = false)
+        bind = _pd_detect_binning(v, defn, R; out_is_cell = false, tt)
         bind === nothing && continue
         (!bind.out_is_cell && bind.C == C && bind.R == R) || continue
         # Never stack a second gate on an aggregate that already declares a join.
@@ -725,15 +759,16 @@ function _pd_mirror_specs(
     return out
 end
 
-# Detect the pushdown pattern across a model's observeds. `obs_defs` is the
-# DETECTION view (`_pd_detection_defs`): the observed definitions with surviving
-# template references expanded, so a binning body factored through a template
-# matches exactly as its expansion would. `model` supplies the declarations
-# beside it — shapes and types, which no expansion touches. Returns
+# Detect the pushdown pattern across a model's observeds. `obs_defs` are the
+# observed definitions (`observed_definitions`), read through their template
+# references with the table `tt` (`_pd_open`; `nothing` when they carry none),
+# so a binning body factored through a template matches exactly as its
+# expansion would. `model` supplies the declarations beside them — shapes and
+# types. Returns
 # `(plan, diagnostics)` — `plan` `nothing` when nothing matches / the semiring
 # guard fails, `diagnostics` the residual "a join I could not read" records
 # (see `_pd_binning_refusal`).
-function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDict)
+function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDict; tt = nothing)
     vars = model.variables
     diags = Dict{String, Any}[]
     conc_specs = Tuple{String, String}[]        # (conc name, reduction symbol)
@@ -751,7 +786,7 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
         js = _pd_join_shape(agg)
         js === nothing && continue
         rcv_sym, s_sym, c_set, r_set = js.out_sym, js.in_sym, js.in_set, js.out_set
-        facs = _pd_matvec_factors((agg::OpExpr).expr_body, s_sym, String[rcv_sym])
+        facs = _pd_matvec_factors(tt, (agg::OpExpr).expr_body, nothing, s_sym, String[rcv_sym])
         facs === nothing && continue
         Aname, Ename = facs
         av = get(vars, Aname, nothing)
@@ -761,14 +796,14 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
         ) || continue
         ev = get(vars, Ename, nothing); ev === nothing && continue
         edef = get(obs_defs, Ename, nothing)
-        bind = _pd_detect_binning(ev, edef, c_set)
+        bind = _pd_detect_binning(ev, edef, c_set; tt)
         if bind === nothing || !bind.out_is_cell                  # FORWARD arm only
             # `ev` is the rank-1 factor of a `+`-mat-vec against a
             # provider-backed `[c_set, r_set]` array: the join position. If it is
             # ALSO binning-shaped but unreadable, say so — silence here means an
             # unpruned fetch that surfaces hours later as a memory failure.
             if bind === nothing
-                why = _pd_binning_refusal(ev, edef, String(c_set))
+                why = _pd_binning_refusal(ev, edef, String(c_set); tt)
                 why === nothing || push!(
                     diags, Dict{String, Any}(
                         "code" => "pushdown_join_unrecognised",
@@ -791,14 +826,14 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
         Aname in A_names || push!(A_names, Aname)
         if !any(b -> b.name == Ename, forward)
             push!(forward, _PdBinning(Ename, bind.c_sym, bind.src_env, bind.tgt_env))
-            # Collected on the DETECTION view, like every other pattern read: a
+            # Read through the references, like every other pattern read: a
             # body factored through a template must yield the same gather set as
             # its longhand twin (esm-spec §9.6.4 rule 2). Emission still edits
             # the authored body / call-site bindings, and
             # `_pd_assert_rects_rebound` proves the substitution landed.
             _pd_cell_factors!(
                 edef, bind.c_sym, vars, String(c_set),
-                cell_factors, cell_bad
+                cell_factors, cell_bad, tt
             )
         end
     end
@@ -819,7 +854,7 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
     # MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
     # cell/record sets. They are collected only once the forward pattern has
     # fixed `C`/`R`: the mirror is a rider on the rewrite, never its trigger.
-    mirrors = _pd_mirror_specs(model, obs_defs, C, R, Set{String}(b.name for b in forward))
+    mirrors = _pd_mirror_specs(model, obs_defs, C, R, Set{String}(b.name for b in forward); tt)
     return (
         _PdPlan(
             C, rcv_set, R, conc_specs, A_names, forward, mirrors,
@@ -872,22 +907,137 @@ function _pd_rewrite_rects!(node, rectmap::AbstractDict)
     return node
 end
 
-# Find the condition of the first dict-form `ifelse` node.
-function _pd_dict_find_ifelse_cond(node)
-    if node isa AbstractDict
-        if get(node, "op", nothing) == "ifelse"
+# The producer filter of the first dict-form `ifelse` node of `Expand(node)`
+# (pre-order), written in `node`'s own scope, or `nothing` when there is none:
+# the comparisons of its condition (an `and`/`*` of them, or the one condition)
+# as a `*`, deep-copied. No reference is expanded; the walk visits nodes in the
+# order the expansion would hold them, so it finds the `ifelse` detection
+# (`_pd_find_ifelse_cond`, reading through the frames) found: a template body
+# is walked in place of the reference (`reg`, the component registry), and a
+# parameter leaf of that body stands for its binding, walked in the
+# reference's scope. An `ifelse` inside the body of a template `T` is not
+# copied out of the body: the comparisons become the body of the DERIVED
+# template `T__pd_filter` (registered in `derived`), written in `T`'s
+# parameters, and the filter in `node`'s scope is a reference to it with the
+# parameters it reads bound as the reference binds them. A containment nested
+# several templates deep gets one derived template per template on the way,
+# each body a reference to the next.
+function _pd_filter_in(node, reg, derived::AbstractDict)
+    r = _pd_filter_scan(node, reg, derived, nothing)
+    return r === nothing ? nothing : r[1]
+end
+
+# A template body's scope in `_pd_filter_scan`: the reference's binding of each
+# parameter and the scope the reference itself sits in (`nothing` at the top).
+struct _PdFilterScope
+    bindings::Dict{String, Any}
+    outer::Union{Nothing, _PdFilterScope}
+end
+
+# `_pd_filter_in`'s walk: `(filter, owner)`, `owner` the scope the filter is
+# written in, or `nothing`.
+function _pd_filter_scan(node, reg, derived::AbstractDict, scope)
+    if node isa AbstractString
+        (scope !== nothing && haskey(scope.bindings, node)) || return nothing
+        return _pd_filter_scan(scope.bindings[node], reg, derived, scope.outer)
+    elseif node isa AbstractDict
+        op = get(node, "op", nothing)
+        if op == "ifelse"
             a = get(node, "args", nothing)
-            a isa AbstractVector && length(a) == 3 && return a[1]
+            if a isa AbstractVector && length(a) == 3
+                c = a[1]
+                comps = (c isa AbstractDict && get(c, "op", nothing) in ("and", "*")) ?
+                    c["args"] : Any[c]
+                f = OrderedDict{String, Any}(
+                    "op" => "*", "args" => Any[_to_ordered(deepcopy(x)) for x in comps]
+                )
+                return (f, scope)
+            end
+        elseif op == APPLY_EXPRESSION_TEMPLATE_OP && reg !== nothing
+            name = get(node, "name", nothing)
+            if name isa AbstractString && haskey(reg, name)
+                decl = _TemplateDecl(reg[name])
+                b = get(node, "bindings", nothing)
+                inner = _PdFilterScope(
+                    Dict{String, Any}(
+                        p => b[p] for p in decl.params if b isa AbstractDict && haskey(b, p)
+                    ),
+                    scope
+                )
+                r = _pd_filter_scan(decl.body, reg, derived, inner)
+                (r !== nothing && r[2] === inner) &&
+                    return (_pd_filter_ref(String(name), decl.params, r[1], node, derived), scope)
+                return r
+            end
         end
-        for (_, v) in node
-            r = _pd_dict_find_ifelse_cond(v)
+        apply = op == APPLY_EXPRESSION_TEMPLATE_OP
+        for (k, v) in node
+            apply && k == "name" && continue
+            r = _pd_filter_scan(v, reg, derived, scope)
             r === nothing || return r
         end
     elseif node isa AbstractVector
         for x in node
-            r = _pd_dict_find_ifelse_cond(x)
+            r = _pd_filter_scan(x, reg, derived, scope)
             r === nothing || return r
         end
+    end
+    return nothing
+end
+
+# The derived template `<name>__pd_filter` with body `f` (written in the
+# parameters of template `name`, declared `params`), registered in `derived`,
+# and the reference to it at `call` (a reference to `name`): the parameters `f`
+# reads, in declared order, each bound to `call`'s binding of it. When `f`
+# reads none of the parameters (only free names, or names the body binds) a
+# template of no parameters is not a valid declaration, so `f` itself, the
+# longhand `*` filter, is returned instead.
+function _pd_filter_ref(name::String, params, f, call::AbstractDict, derived::AbstractDict)
+    used = String[p for p in params if _pd_reads_param(f, p)]
+    isempty(used) && return f
+    dname = name * "__pd_filter"
+    derived[dname] = OrderedDict{String, Any}("params" => Any[used...], "body" => f)
+    b = get(call, "bindings", nothing)
+    bindings = OrderedDict{String, Any}(
+        p => _to_ordered(deepcopy(b[p])) for p in used if b isa AbstractDict && haskey(b, p)
+    )
+    return OrderedDict{String, Any}(
+        "op" => APPLY_EXPRESSION_TEMPLATE_OP, "name" => dname, "args" => Any[],
+        "bindings" => bindings
+    )
+end
+
+# Does the dict-form body `n` read the parameter `p`: a string leaf `p`
+# anywhere but a reference's `name` (where template substitution, `_substitute`,
+# puts a binding)?
+function _pd_reads_param(n, p::AbstractString)::Bool
+    n isa AbstractString && return n == p
+    if n isa AbstractDict
+        apply = get(n, "op", nothing) == APPLY_EXPRESSION_TEMPLATE_OP
+        return any(kv -> !(apply && kv[1] == "name") && _pd_reads_param(kv[2], p), pairs(n))
+    end
+    n isa AbstractVector && return any(x -> _pd_reads_param(x, p), n)
+    return false
+end
+
+# Register the derived filter templates in the model's `expression_templates`
+# block. A name already declared there with a different declaration is refused
+# rather than overwritten.
+function _pd_register_derived!(model::AbstractDict, derived::AbstractDict, reg)
+    isempty(derived) && return nothing
+    blk = get(model, "expression_templates", nothing)
+    if !(blk isa AbstractDict)
+        blk = OrderedDict{String, Any}()
+        model["expression_templates"] = blk
+    end
+    for (k, v) in derived
+        old = get(blk, k, nothing)
+        old === nothing && reg !== nothing && (old = get(reg, k, nothing))
+        (old === nothing || _to_ordered(old) == v) || error(
+            "projection-pushdown desugar: the derived producer-filter template '$(k)' " *
+                "would replace a template of that name the document already declares"
+        )
+        blk[k] = v
     end
     return nothing
 end
@@ -905,6 +1055,17 @@ _pd_overlap_clause(src_env, tgt_env) =
         "eps" => 0.0
     )
 )
+
+# Does a dict-form subtree carry an `apply_expression_template` reference?
+function _pd_dict_has_apply(node)::Bool
+    if node isa AbstractDict
+        get(node, "op", nothing) == APPLY_EXPRESSION_TEMPLATE_OP && return true
+        return any(_pd_dict_has_apply, values(node))
+    elseif node isa AbstractVector
+        return any(_pd_dict_has_apply, node)
+    end
+    return false
+end
 
 # Collect into `out` every factor name `F ∈ keys(rectmap)` that still appears in
 # an `index(F, …)` position of a dict-form subtree — i.e. every occurrence
@@ -932,9 +1093,11 @@ end
 """
     _pd_assert_rects_rebound(expr, Ename, rectmap, reg)
 
-POST-CONDITION of the forward arm's rect re-pointing, discharged on the EXPANDED
-form of the rewritten aggregate `expr` (esm-spec §9.6.4 rule 2: what the
-evaluator sees is `Expand(tree)`).
+POST-CONDITION of the forward arm's rect re-pointing, discharged on what the
+rewritten aggregate `expr` reads (esm-spec §9.6.4 rule 2: a reference denotes
+its expansion): its own `index` reads, and those of every template body it
+reaches, each read through its frame (`_tpl_foreach_node`, the base of each
+read through the call site's bindings) — never an expanded copy.
 
 `E`'s reduction axis now ranges over the COMPACT derived support set, so every
 rect reference in its body must have become the corresponding `pd_cell__*`
@@ -954,9 +1117,17 @@ function _pd_assert_rects_rebound(
         rectmap::AbstractDict, reg
     )
     isempty(rectmap) && return
-    view = reg === nothing ? expr :
-        _expand_all(_to_ordered(deepcopy(expr)), reg, "pushdown_rewrite")
-    stale = _pd_collect_stale_rects!(view, rectmap, Set{String}())
+    stale = _pd_collect_stale_rects!(expr, rectmap, Set{String}())
+    if reg !== nothing && _pd_dict_has_apply(expr)
+        tt = _TplTable(reg)
+        _tpl_foreach_node(tt, expression_from_json(expr)) do node, fr
+            fr === nothing && return       # the tree's own reads: collected above
+            (node isa OpExpr && node.op == "index" && !isempty(node.args)) || return
+            F = _pd_name(tt, node.args[1], fr)
+            (F !== nothing && haskey(rectmap, F)) && push!(stale, F)
+            return
+        end
+    end
     isempty(stale) && return
     names = sort!(collect(stale))
     throw(
@@ -1168,7 +1339,7 @@ function _pd_apply(esm, mname::AbstractString, plan::_PdPlan, reg = nothing)
     end
     defs = _pd_definitions(eqs)
 
-    prod_filter = _pd_producer_filter(eqs, defs, plan, reg)
+    prod_filter = _pd_producer_filter(d["models"][mname], eqs, defs, plan, reg)
     # The member buffer is an `unknown`: the generated producer equation
     # defines it (esm-spec §6.3.1).
     mv[names.member_var] = Dict{String, Any}("type" => "unknown", "shape" => Any[names.support_set])
@@ -1206,23 +1377,17 @@ function _pd_rect_factors(plan::_PdPlan)
 end
 
 # The producer's filter: the comparisons of the representative binning's
-# containment, deep-copied, with their full-grid rect references. A body
-# factored through a template is read off its expansion (§9.6.4 rule 2), a
-# scratch value of which nothing else is emitted.
-function _pd_producer_filter(eqs, defs::Dict{String, Int}, plan::_PdPlan, reg)
+# containment, with their full-grid rect references (`_pd_filter_in`). A
+# containment inside a template body is the derived template
+# `<template>__pd_filter`, registered in `model`'s `expression_templates`, and
+# the filter is a reference to it: the body is never expanded.
+function _pd_producer_filter(model::AbstractDict, eqs, defs::Dict{String, Int}, plan::_PdPlan, reg)
     repexpr = _pd_defining_rhs(eqs, defs, plan.forward[1].name)
-    ifcond = _pd_dict_find_ifelse_cond(get(repexpr, "expr", nothing))
-    if ifcond === nothing && reg !== nothing
-        ifcond = _pd_dict_find_ifelse_cond(
-            _expand_all(
-                _to_ordered(deepcopy(get(repexpr, "expr", nothing))),
-                reg, "pushdown_rewrite"
-            )
-        )
-    end
-    ifcond === nothing && error("pushdown desugar: representative E lost its containment ifelse")
-    comps = get(ifcond, "op", nothing) in ("and", "*") ? ifcond["args"] : Any[ifcond]
-    return Dict{String, Any}("op" => "*", "args" => Any[_to_ordered(c) for c in comps])
+    derived = OrderedDict{String, Any}()
+    f = _pd_filter_in(get(repexpr, "expr", nothing), reg, derived)
+    f === nothing && error("pushdown desugar: representative E lost its containment ifelse")
+    _pd_register_derived!(model, derived, reg)
+    return f
 end
 
 # The per-rect cell-gather observeds `cell_F[c] = index(F, index(member_factor, c))`,

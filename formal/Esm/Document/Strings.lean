@@ -298,7 +298,7 @@ theorem keyHead_ne {c : Char} (h : c = '"' ∨ isIdentStart c = true) (x : Char)
 
 /-- Characters a printed number never starts with. -/
 def nonNumHeads : List Char :=
-  ['(', ')', '"', 'n', 't', 'f', ':', '[', '{', '?', ' ', '\n', '\t', '\r']
+  ['(', ')', '"', 'n', 't', 'f', ':', '[', '{', '?', '$', ' ', '\n', '\t', '\r']
 
 theorem numHead_ne {c : Char} (h : Number.NumHead c) (x : Char)
     (hx : x ∈ nonNumHeads := by decide) : c ≠ x :=

@@ -35,6 +35,9 @@ const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time fro
 const _NK_RECUR_GATHER = UInt8(13)  # a recurrence's causal self-read: a PUBLISHED cell of its own buffer, or a fault (recurrence_sweep.jl)
 const _NK_RAGGED_LOOP = UInt8(14)  # ⊕-reduction over a range whose bounds are evaluated per call (a ragged `offsets` bound), seeded from 0̄
 const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an EVAL-TIME-computed offset (a loop-var subscript)
+const _NK_CALL = UInt8(16)  # call a compiled template instance (call.jl): payload = _CallSite, children = its arguments
+const _NK_ARG = UInt8(17)   # read argument `idx` of the innermost running call of `payload::_CallTarget` (call.jl)
+const _NK_ARG_GATHER = UInt8(18)  # read an ARRAY argument of the running call at the subscripts `children` (payload = _ArgGatherRef, call.jl)
 
 # The ONE compiled IR node — scalar spines and access-kernel spines are both trees
 # of these. `kind` selects which fields are live. The catch-all `payload::Any` slot
@@ -65,7 +68,10 @@ const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an E
 #   * `_NK_CONTRACTION_LOOP` — `_ContractLoop`; `_NK_RAGGED_LOOP` — `_RaggedLoop`;
 #     `_NK_STATE_GATHER` — `_StateGather`; `_NK_RECUR_GATHER` — the recurrence's
 #     gather; `_NK_LOOPVAR` — the loop counter's `Base.RefValue{Int}`.
-#   * the access-kernel kinds (access_kernel.jl): `_NK_SUBCALL` — an `_AccKernel`, `_NK_AREDUCE` — an `_AReduceSpec`.
+#   * the access-kernel kind `_NK_AREDUCE` (access_kernel.jl) — an `_AReduceSpec`.
+#   * `_NK_CALL` — the `_CallSite` (target and array arguments) called;
+#     `_NK_ARG` — the `_CallTarget` whose argument it reads; `_NK_ARG_GATHER` —
+#     an `_ArgGatherRef` (call.jl).
 #   * `_NK_OP` — `nothing`, except the setup-time geometry operators
 #     (`:geo_gather`, `:geo_agg`, `:geo_count`, `:geomemo`, `:cellmemo`), which exist
 #     only in build-time geometry bodies and carry their source or spec.
@@ -277,6 +283,15 @@ function _const_gather_node(
                 "$(length(sz))-D array, got $(length(subscript_nodes))"
         )
     )
+    return _mknode(
+        kind = _NK_CONST_GATHER, payload = _const_gather_payload(A, name),
+        children = subscript_nodes
+    )
+end
+
+# The `_ConstGatherArray` of a const array `A` (registry name `name`).
+function _const_gather_payload(A::AbstractArray, name::AbstractString)
+    sz = size(A)
     # Share the source array's buffer rather than copy it: an unrolled
     # contraction lowers one gather per term, so a copy per call is
     # O(terms · sizeof(A)). Const arrays are read-only at run time, so aliasing
@@ -291,14 +306,7 @@ function _const_gather_node(
         acc *= sz[d]
     end
     boundary = Symbol[_const_dim_boundary(A, d) for d in eachindex(sz)]
-    return _mknode(
-        kind = _NK_CONST_GATHER,
-        payload = _ConstGatherArray(
-            flat, strides, collect(Int, sz),
-            boundary, String(name)
-        ),
-        children = subscript_nodes
-    )
+    return _ConstGatherArray(flat, strides, collect(Int, sz), boundary, String(name))
 end
 
 # The `_NK_LIVE_GATHER` of a `_LiveGatherRef`: the buffer itself (never a copy,

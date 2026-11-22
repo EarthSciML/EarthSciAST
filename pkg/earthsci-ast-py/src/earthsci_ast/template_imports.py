@@ -71,6 +71,7 @@ from .json_walk import (
     _is_object,
     _rewrite_json,
     _walk_json,
+    decode_document,
     expand_ref_env,
     load_ref_raw,
 )
@@ -83,10 +84,13 @@ __all__ = [
 ]
 
 #: Maximum template-body reference-chain depth (counted in TEMPLATES along the
-#: longest chain, so a 33-template chain is rejected and a 32-template chain is
+#: longest chain, so a 65-template chain is rejected and a 64-template chain is
 #: accepted) before a file is rejected with ``template_body_expansion_too_deep``
-#: (esm-spec §9.7.3). Pinned identically across all bindings.
-MAX_TEMPLATE_EXPANSION_DEPTH = 32
+#: (esm-spec §9.7.3). Pinned identically across all bindings. It equals
+#: ``MAX_REWRITE_PASSES``: a rewrite of depth ``d`` writes a body-reference chain
+#: ``d`` templates deep, so every document the rewriter accepts also reloads
+#: once emitted with its references.
+MAX_TEMPLATE_EXPANSION_DEPTH = 64
 
 _COMPONENT_KINDS = ("models", "reaction_systems")
 
@@ -742,10 +746,7 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
 
     From ``esm: 0.9.0`` (RFC out-of-line-expression-templates §7.1 step 4)
     bodies are **NOT inlined** — the references are preserved uninlined and
-    denote their expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3)
-    are computed separately by
-    :func:`earthsci_ast.lower_expression_templates._template_target_bearing`.
-    This runs BEFORE the §9.6.3 fixpoint ever consults a ``match`` rule; it now
+    denote their expansion (§9.6.4 rule 2). This runs BEFORE the §9.6.3 fixpoint ever consults a ``match`` rule; it now
     only validates the DAG."""
     if not templates:
         return
@@ -775,8 +776,7 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
 
     # DFS over the reference graph: cycle detection and chain-depth bound. Under
     # esm 0.9.0 (Option B) bodies are NOT inlined — the references are preserved
-    # and consumed later by ``Expand`` (§9.6.4 rule 2) or the eager pre-pass
-    # (§9.6.4 rule 3) — so no post-order accumulation is needed; this is a pure
+    # and consumed later by ``Expand`` (§9.6.4 rule 2) — so no post-order accumulation is needed; this is a pure
     # validation of the DAG (acyclic, depth-bounded, resolves to match-less).
     state: dict[str, int] = {}  # 1 = on stack, 2 = done
     depth: dict[str, int] = {}  # templates on the longest chain from this node
@@ -1692,35 +1692,169 @@ def _expand_library_enum_calls(
     library: Any, named: dict[str, Any], own_names: list[str], origin: str
 ) -> None:
     """Resolve the ``enum`` symbols a template library binds in its OWN calls
-    (esm-spec §9.3). After :func:`_lower_library_template_enums`, the only
-    ``enum`` ops left in the library's scope are spelled with a template
-    parameter. A call to a template that can still produce one binds that
-    parameter here, in the library, so each of the library's own template bodies
-    has those calls expanded (the eager expansion esm-spec §9.6.4 rule 3 requires
-    at load anyway) and the result lowered against the library's block. An op the
-    expansion leaves spelled with the calling template's own parameter stays open
-    for the importer's binding. Runs after :func:`_compose_template_bodies`, so
-    the reference DAG is acyclic; every new body is computed before any is
-    replaced."""
-    from .lower_expression_templates import _expand, _template_bearing
+    (esm-spec §9.3, §9.7.5). After :func:`_lower_library_template_enums`, the
+    only ``enum`` ops left in the library's scope are spelled with a template
+    parameter. A call that binds such a parameter to a symbol is an instance
+    (esm-spec §9.6.4 rule 3: the instance includes the symbols the call binds):
+    the called template's body is lowered against the library's block for that
+    instance, without expanding the call, and the call is re-pointed to the
+    lowered body, registered as ``<name>.variant<k>``. The authored template
+    keeps its body: the importer may still call it with a symbol of its own,
+    which resolves at the importer's call site. Instances follow the reference
+    DAG (a call that forwards a bound symbol into another call lowers that one
+    too). An op the lowering leaves spelled with the calling template's own
+    parameter stays open for the importer's binding. Runs after
+    :func:`_compose_template_bodies`, so the reference DAG is acyclic."""
+    from .lower_expression_templates import _canonical_compact, _template_bearing
 
     bearing = _template_bearing(named, lambda op: op == "enum")
+    # (template, canonical bound symbols) -> (lowered body, the instance key of
+    # each re-pointed reference in it, by node identity); children first.
+    insts: dict[tuple[str, str], tuple[Any, dict[int, tuple[Any, tuple[str, str]]]]] = {}
 
-    def calls_bearing(node: dict) -> bool:
-        name = node.get("name")
-        return isinstance(name, str) and bearing.get(name, False)
+    def bound_symbols(n: dict, caller_params: set, lits: dict) -> tuple[str, dict] | None:
+        nm = n.get("name")
+        if not (isinstance(nm, str) and bearing.get(nm, False)):
+            return None
+        b = n.get("bindings")
+        if not _is_object(b):
+            return None
+        syms: dict[str, str] = {}
+        for k, v in b.items():
+            if not isinstance(v, str):
+                continue
+            if v in caller_params:
+                if v in lits:
+                    syms[str(k)] = lits[v]
+            else:
+                syms[str(k)] = v
+        if not syms:
+            return None
+        return nm, syms
 
-    bodies: dict[str, Any] = {}
+    def rebuild(n: dict, recurse, keep: str | None = None) -> dict:
+        changed = False
+        out: dict = {}
+        for k, v in n.items():
+            if k == keep:
+                out[k] = v
+                continue
+            rv = recurse(v)
+            if rv is not v:
+                changed = True
+            out[k] = rv
+        return out if changed else n
+
+    def repoint(body: Any, caller_params: set, lits: dict):
+        refs: dict[int, tuple[Any, tuple[str, str]]] = {}
+
+        def on_object(n: dict, recurse) -> Any:
+            if n.get("op") != APPLY_OP:
+                return rebuild(n, recurse)
+            nn = rebuild(n, recurse, keep="name")
+            bs = bound_symbols(n, caller_params, lits)
+            if bs is None:
+                return nn
+            key = instance(bs[0], bs[1])
+            if nn is n:
+                nn = dict(n)
+            refs[id(nn)] = (nn, key)
+            return nn
+
+        return _rewrite_json(body, on_object=on_object, share=True), refs
+
+    def instance(name: str, syms: dict[str, str]) -> tuple[str, str]:
+        decl = named[name]
+        params = [p for p in decl.get("params", []) if isinstance(p, str)]
+        lits = {p: syms[p] for p in params if p in syms}
+        key = (name, _canonical_compact(lits))
+        if key in insts:
+            return key
+        body = decl.get("body")
+
+        # The bound symbols, written into the `enum` ops that spell them.
+        def on_object(n: dict, recurse) -> Any:
+            if n.get("op") != "enum":
+                return rebuild(n, recurse)
+            args = n.get("args")
+            if not _is_array(args):
+                return n
+            na = [lits[a] if (isinstance(a, str) and a in lits) else a for a in args]
+            if na == list(args):
+                return n
+            n2 = dict(n)
+            n2["args"] = na
+            return n2
+
+        subst = _rewrite_json(body, on_object=on_object, share=True)
+        open_decl = {"params": [p for p in params if p not in lits], "body": subst}
+        lowered = _lower_library_template_body(library, name, open_decl, subst, origin)
+        lowered, refs = repoint(lowered, set(params), lits)
+        insts[key] = (lowered, refs)
+        return key
+
+    own_refs: dict[str, tuple[Any, dict]] = {}
     for n in own_names:
         decl = named.get(n)
         if not _is_object(decl) or "body" not in decl:
             continue
         if not any(bearing.get(r, False) for r in _collect_apply_names([], decl["body"])):
             continue
-        expanded = _expand(decl["body"], named, origin, calls_bearing)
-        bodies[n] = _lower_library_template_body(library, n, decl, expanded, origin)
-    for n, body in bodies.items():
-        named[n] = {**named[n], "body": body}
+        params = {p for p in decl.get("params", []) if isinstance(p, str)}
+        own_refs[n] = repoint(decl["body"], params, {})
+    if not insts:
+        return
+
+    # Name the instances children first: a template after every template its
+    # instances' bodies reference; each distinct lowered body of a template is
+    # `<name>.variant<k>`, k in the order of the bodies' canonical bytes.
+    final: dict[tuple[str, str], str] = {}
+
+    def rename(body: Any, refs: dict) -> Any:
+        def on_object(n: dict, recurse) -> Any:
+            if n.get("op") != APPLY_OP:
+                return rebuild(n, recurse)
+            nn = rebuild(n, recurse, keep="name")
+            hit = refs.get(id(n))
+            if hit is None:
+                return nn
+            out = dict(nn)
+            out["name"] = final[hit[1]]
+            return out
+
+        return _rewrite_json(body, on_object=on_object, share=True)
+
+    by_name: dict[str, list[tuple[str, str]]] = {}
+    for key in insts:
+        by_name.setdefault(key[0], []).append(key)
+    done: set[str] = set()
+
+    def name_template(t: str) -> None:
+        if t in done:
+            return
+        done.add(t)
+        for key in by_name[t]:
+            for _node, ck in insts[key][1].values():
+                name_template(ck[0])
+        bodies = [rename(*insts[k]) for k in by_name[t]]
+        canon = [_canonical_compact(b) for b in bodies]
+        distinct = sorted(set(canon))
+        names: dict[str, str] = {}
+        for i, c in enumerate(distinct, start=1):
+            vn = f"{t}.variant{i}"
+            while vn in named:
+                vn += "_"
+            nd = dict(named[t])
+            nd["body"] = bodies[canon.index(c)]
+            named[vn] = nd
+            names[c] = vn
+        for k, c in zip(by_name[t], canon):
+            final[k] = names[c]
+
+    for t in list(by_name):
+        name_template(t)
+    for n, (body, refs) in own_refs.items():
+        named[n] = {**named[n], "body": rename(body, refs)}
 
 
 def _lower_library_template_enums(library: Any, name: str, decl: Any, origin: str) -> None:
@@ -2176,9 +2310,7 @@ def collect_mount_declared_metaparameters(
             if key in seen:
                 return
             seen.add(key)
-            import json as _json
-
-            child = _json.loads(_fetch_ref_content(expanded, str(base_path)))
+            child = decode_document(_fetch_ref_content(expanded, str(base_path)), expanded)
         except Exception as exc:
             if strict:
                 # A nested mount this walk cannot read is an unresolvable ref.

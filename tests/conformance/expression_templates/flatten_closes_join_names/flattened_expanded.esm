@@ -1,0 +1,392 @@
+{
+  "equations": [
+    {
+      "lhs": "Alpha.out",
+      "rhs": {
+        "args": [],
+        "expr": {
+          "args": [
+            {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "Alpha.W",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "Alpha.X",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "Alpha.X",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "Alpha.E",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "Alpha.S",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "Alpha.Y",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "Alpha.Y",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "Alpha.N",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<"
+                    }
+                  ],
+                  "op": "and"
+                },
+                1,
+                0
+              ],
+              "op": "ifelse"
+            },
+            {
+              "args": [
+                "Alpha.cval",
+                "c"
+              ],
+              "op": "index"
+            }
+          ],
+          "op": "*"
+        },
+        "join": [
+          {
+            "overlap": {
+              "eps": 0.0,
+              "src_env": [
+                "Alpha.X",
+                "Alpha.Y"
+              ],
+              "tgt_env": [
+                "Alpha.bW",
+                "Alpha.bS",
+                "Alpha.bE",
+                "Alpha.bN"
+              ]
+            }
+          }
+        ],
+        "op": "faq",
+        "output_idx": [
+          "r"
+        ],
+        "ranges": {
+          "c": {
+            "from": "cells"
+          },
+          "r": {
+            "from": "recs"
+          }
+        },
+        "reduce": "+"
+      }
+    },
+    {
+      "lhs": "Alpha.want",
+      "rhs": {
+        "args": [],
+        "expr": {
+          "args": [
+            "Alpha.run_year",
+            {
+              "args": [
+                "k",
+                1
+              ],
+              "op": "-"
+            }
+          ],
+          "op": "+"
+        },
+        "op": "faq",
+        "output_idx": [
+          "k"
+        ],
+        "ranges": {
+          "k": {
+            "from": "keys"
+          }
+        }
+      }
+    },
+    {
+      "lhs": "Alpha.total",
+      "rhs": {
+        "args": [],
+        "expr": 1,
+        "join": [
+          {
+            "on": [
+              [
+                "Alpha.want",
+                "Alpha.tbl_year"
+              ]
+            ]
+          }
+        ],
+        "op": "faq",
+        "output_idx": [
+          "k"
+        ],
+        "ranges": {
+          "k": {
+            "from": "keys"
+          },
+          "r": {
+            "from": "rows"
+          }
+        },
+        "semiring": "sum_product"
+      }
+    },
+    {
+      "lhs": "Beta.out",
+      "rhs": {
+        "args": [],
+        "expr": {
+          "args": [
+            {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "Beta.W",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "Beta.X",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "Beta.X",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "Beta.E",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "Beta.S",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "Beta.Y",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "Beta.Y",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "Beta.N",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<"
+                    }
+                  ],
+                  "op": "and"
+                },
+                1,
+                0
+              ],
+              "op": "ifelse"
+            },
+            {
+              "args": [
+                "Beta.cval",
+                "c"
+              ],
+              "op": "index"
+            }
+          ],
+          "op": "*"
+        },
+        "join": [
+          {
+            "overlap": {
+              "eps": 0.0,
+              "src_env": [
+                "Beta.X",
+                "Beta.Y"
+              ],
+              "tgt_env": [
+                "Beta.bW",
+                "Beta.bS",
+                "Beta.bE",
+                "Beta.bN"
+              ]
+            }
+          }
+        ],
+        "op": "faq",
+        "output_idx": [
+          "r"
+        ],
+        "ranges": {
+          "c": {
+            "from": "cells"
+          },
+          "r": {
+            "from": "recs"
+          }
+        },
+        "reduce": "+"
+      }
+    },
+    {
+      "lhs": "Beta.want",
+      "rhs": {
+        "args": [],
+        "expr": {
+          "args": [
+            "Beta.run_year",
+            {
+              "args": [
+                "k",
+                1
+              ],
+              "op": "-"
+            }
+          ],
+          "op": "+"
+        },
+        "op": "faq",
+        "output_idx": [
+          "k"
+        ],
+        "ranges": {
+          "k": {
+            "from": "keys"
+          }
+        }
+      }
+    },
+    {
+      "lhs": "Beta.total",
+      "rhs": {
+        "args": [],
+        "expr": 1,
+        "join": [
+          {
+            "on": [
+              [
+                "Beta.want",
+                "Beta.tbl_year"
+              ]
+            ]
+          }
+        ],
+        "op": "faq",
+        "output_idx": [
+          "k"
+        ],
+        "ranges": {
+          "k": {
+            "from": "keys"
+          },
+          "r": {
+            "from": "rows"
+          }
+        },
+        "semiring": "sum_product"
+      }
+    }
+  ]
+}

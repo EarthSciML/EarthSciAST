@@ -234,6 +234,201 @@ fn pd_flip(op: &str) -> &'static str {
     }
 }
 
+/// The producer filter of the first raw `ifelse` of `Expand(node)` (pre-order),
+/// written in `node`'s own scope, or `None` when there is none: the comparisons
+/// of its condition (an `and`/`*` of them, or the one condition) as a `*`,
+/// cloned. No reference is expanded; the walk visits nodes in the order the
+/// expansion would hold them, so it finds the `ifelse` detection found: a
+/// template body is walked in place of the reference, and a parameter leaf of
+/// that body stands for its binding, walked in the reference's scope. An
+/// `ifelse` inside the body of a template `T` is not copied out of the body:
+/// the comparisons become the body of the DERIVED template `T__pd_filter`
+/// (registered in `derived`), written in `T`'s parameters, and the filter in
+/// `node`'s scope is a reference to it with the parameters it reads bound as
+/// the reference binds them. A containment nested several templates deep gets
+/// one derived template per template on the way. Mirrors the Julia
+/// reference's `_pd_filter_in`.
+fn pd_filter_in(
+    node: &Value,
+    templates: Option<&Map<String, Value>>,
+    derived: &mut Map<String, Value>,
+) -> Option<Value> {
+    let mut scopes = Vec::new();
+    pd_filter_scan(node, templates, derived, &mut scopes, None).map(|(f, _)| f)
+}
+
+/// A template body's scope in [`pd_filter_scan`]: the reference's binding of
+/// each parameter and the index of the scope the reference itself sits in
+/// (`None` at the top).
+struct PdFilterScope<'a> {
+    bindings: HashMap<&'a str, &'a Value>,
+    outer: Option<usize>,
+}
+
+/// [`pd_filter_in`]'s walk: `(filter, owner)`, `owner` the index in `scopes`
+/// of the scope the filter is written in (`None`: the top).
+fn pd_filter_scan<'a>(
+    node: &'a Value,
+    templates: Option<&'a Map<String, Value>>,
+    derived: &mut Map<String, Value>,
+    scopes: &mut Vec<PdFilterScope<'a>>,
+    scope: Option<usize>,
+) -> Option<(Value, Option<usize>)> {
+    match node {
+        Value::String(s) => {
+            let sc = scope?;
+            let b = *scopes[sc].bindings.get(s.as_str())?;
+            let outer = scopes[sc].outer;
+            pd_filter_scan(b, templates, derived, scopes, outer)
+        }
+        Value::Object(m) => {
+            let op = m.get("op").and_then(Value::as_str);
+            if op == Some("ifelse") {
+                if let Some(a) = m.get("args").and_then(Value::as_array)
+                    && a.len() == 3
+                {
+                    let c = &a[0];
+                    let comps: Vec<Value> = match c.get("op").and_then(Value::as_str) {
+                        Some("and") | Some("*") => c
+                            .get("args")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default(),
+                        _ => vec![c.clone()],
+                    };
+                    return Some((json!({"op": "*", "args": comps}), scope));
+                }
+            } else if op == Some(APPLY_OP)
+                && let Some(reg) = templates
+                && let Some(name) = m.get("name").and_then(Value::as_str)
+                && let Some(decl) = reg.get(name)
+            {
+                let params: Vec<&str> = decl
+                    .get("params")
+                    .and_then(Value::as_array)
+                    .map(|ps| ps.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                let mut bindings = HashMap::new();
+                if let Some(b) = m.get("bindings").and_then(Value::as_object) {
+                    for p in &params {
+                        if let Some((k, v)) = b.get_key_value(*p) {
+                            bindings.insert(k.as_str(), v);
+                        }
+                    }
+                }
+                let inner = scopes.len();
+                scopes.push(PdFilterScope {
+                    bindings,
+                    outer: scope,
+                });
+                let r = decl
+                    .get("body")
+                    .and_then(|b| pd_filter_scan(b, templates, derived, scopes, Some(inner)));
+                scopes.pop();
+                return match r {
+                    Some((f, owner)) if owner == Some(inner) => {
+                        Some((pd_filter_ref(name, &params, f, m, derived), scope))
+                    }
+                    r => r,
+                };
+            }
+            let apply = op == Some(APPLY_OP);
+            m.iter()
+                .filter(|(k, _)| !(apply && k.as_str() == "name"))
+                .find_map(|(_, v)| pd_filter_scan(v, templates, derived, scopes, scope))
+        }
+        Value::Array(xs) => xs
+            .iter()
+            .find_map(|x| pd_filter_scan(x, templates, derived, scopes, scope)),
+        _ => None,
+    }
+}
+
+/// Register the derived template `<name>__pd_filter` (body `f`, the parameters
+/// of `name` it reads, in declared order) and return the reference to it at
+/// `call`, each parameter bound as `call` binds it. When `f` reads none of the
+/// parameters (only free names, or names the body binds) a template of no
+/// parameters is not a valid declaration, so `f` itself, the longhand `*`
+/// filter, is returned instead.
+fn pd_filter_ref(
+    name: &str,
+    params: &[&str],
+    f: Value,
+    call: &Map<String, Value>,
+    derived: &mut Map<String, Value>,
+) -> Value {
+    let used: Vec<String> = params
+        .iter()
+        .filter(|p| pd_reads_param(&f, p))
+        .map(|p| String::from(*p))
+        .collect();
+    if used.is_empty() {
+        return f;
+    }
+    let dname = format!("{name}__pd_filter");
+    let mut bindings = Map::new();
+    if let Some(b) = call.get("bindings").and_then(Value::as_object) {
+        for p in &used {
+            if let Some(v) = b.get(p) {
+                bindings.insert(p.clone(), v.clone());
+            }
+        }
+    }
+    derived.insert(dname.clone(), json!({"params": used, "body": f}));
+    json!({"op": APPLY_OP, "name": dname, "args": [], "bindings": bindings})
+}
+
+/// Does the raw body `n` read parameter `p`: a string leaf `p` anywhere but a
+/// reference's `name`?
+fn pd_reads_param(n: &Value, p: &str) -> bool {
+    match n {
+        Value::String(s) => s == p,
+        Value::Object(m) => {
+            let apply = m.get("op").and_then(Value::as_str) == Some(APPLY_OP);
+            m.iter()
+                .any(|(k, v)| !(apply && k == "name") && pd_reads_param(v, p))
+        }
+        Value::Array(xs) => xs.iter().any(|x| pd_reads_param(x, p)),
+        _ => false,
+    }
+}
+
+/// Register the derived filter templates in `model`'s `expression_templates`
+/// block; a name already declared with a different declaration is refused
+/// rather than overwritten.
+fn pd_register_derived(
+    model: &mut Value,
+    derived: Map<String, Value>,
+    templates: Option<&Map<String, Value>>,
+) -> Result<(), PushdownRewriteError> {
+    if derived.is_empty() {
+        return Ok(());
+    }
+    let m = model
+        .as_object_mut()
+        .ok_or_else(|| PushdownRewriteError("model is not an object".into()))?;
+    if !m.get("expression_templates").is_some_and(Value::is_object) {
+        m.insert("expression_templates".into(), Value::Object(Map::new()));
+    }
+    let blk = m
+        .get_mut("expression_templates")
+        .and_then(Value::as_object_mut)
+        .expect("expression_templates is an object");
+    for (k, v) in derived {
+        let old = blk.get(&k).or_else(|| templates.and_then(|t| t.get(&k)));
+        if let Some(old) = old
+            && *old != v
+        {
+            return Err(PushdownRewriteError(format!(
+                "projection-pushdown desugar: the derived producer-filter template '{k}' \
+                 would replace a template of that name the document already declares"
+            )));
+        }
+        blk.insert(k, v);
+    }
+    Ok(())
+}
+
 /// Condition of the first `ifelse(cond, then, else)` in a raw subtree.
 /// Object-value iteration is insertion-ordered (`preserve_order`), matching
 /// the Python `dict.values()` walk exactly.
@@ -1595,10 +1790,13 @@ impl<'p> PdEmit<'p> {
     /// Producer filter comparisons, deep-copied from the representative E
     /// BEFORE E is rewritten (they must keep full-grid rect factor refs).
     /// Read off the DEFINING EQUATION: esm 1.0.0 has no variable
-    /// `expression` field.
+    /// `expression` field. A containment inside a template body becomes the
+    /// derived template `<template>__pd_filter`, registered in the model's
+    /// `expression_templates`, and the filter a reference to it: no reference
+    /// is expanded (`pd_filter_in`).
     fn producer_filter(
         &self,
-        model: &Value,
+        model: &mut Value,
         templates: Option<&Map<String, Value>>,
     ) -> Result<Value, PushdownRewriteError> {
         let repexpr = pd_def(model, &self.plan.rep_ename)
@@ -1606,35 +1804,17 @@ impl<'p> PdEmit<'p> {
             .ok_or_else(|| {
                 PushdownRewriteError("representative E lost its defining equation".into())
             })?;
-        // When the call site hides the predicate behind a template reference, read it
-        // off the EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID
-        // rect references, which is exactly what the pre-rewrite expansion yields.
-        // The expansion is a scratch value: nothing of it is emitted except these
-        // comparisons, so the document's template block and call sites are untouched.
-        // A template-free document never builds one, so its emitted filter is
-        // byte-identical to before.
-        let rep_expanded = repexpr
+        let mut derived = Map::new();
+        let filter = repexpr
             .get("expr")
-            .and_then(|e| pd_expand_for_detection(e, templates));
-        let ifcond = repexpr
-            .get("expr")
-            .and_then(pd_find_ifelse_cond)
-            .or_else(|| rep_expanded.as_ref().and_then(pd_find_ifelse_cond))
+            .and_then(|e| pd_filter_in(e, templates, &mut derived))
             .ok_or_else(|| {
                 PushdownRewriteError(
                     "pushdown desugar: representative E lost its containment ifelse".into(),
                 )
             })?;
-        let comps: Vec<Value> = if matches!(op_of(ifcond), Some("and") | Some("*")) {
-            ifcond
-                .get("args")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        } else {
-            vec![ifcond.clone()]
-        };
-        Ok(json!({"op": "*", "args": comps}))
+        pd_register_derived(model, derived, templates)?;
+        Ok(filter)
     }
 
     /// Member state var + member_factor param.
@@ -2382,4 +2562,101 @@ pub fn pushdown_provider_gates(
         );
     }
     Ok(gates)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ix(f: &str, i: &str) -> Value {
+        json!({"op": "index", "args": [f, i]})
+    }
+
+    fn contain() -> Value {
+        json!({"op": "and", "args": [
+            {"op": "<=", "args": [ix("src_W", "c"), ix("px", "r")]},
+            {"op": "<",  "args": [ix("px", "r"), ix("src_E", "c")]}]})
+    }
+
+    fn longhand() -> Value {
+        json!({"op": "*", "args": contain()["args"].clone()})
+    }
+
+    fn templates(t: Value) -> Map<String, Value> {
+        t.as_object().cloned().unwrap()
+    }
+
+    /// The filter comes from the `ifelse` detection found in the expanded
+    /// body: the binding of `p` (the containment) is reached before the body's
+    /// own `ifelse`, so the filter is the containment in the caller's scope.
+    #[test]
+    fn filter_follows_expansion_order() {
+        let reg = templates(json!({"T": {
+            "params": ["p", "q"],
+            "body": {"op": "*", "args": ["p",
+                {"op": "ifelse", "args": [{"op": ">", "args": ["q", 0.0]}, 1.0, 0.0]}]}}}));
+        let call = json!({"op": APPLY_OP, "name": "T", "args": [], "bindings": {
+            "p": {"op": "ifelse", "args": [contain(), ix("emis_annual", "r"), 0.0]},
+            "q": ix("px", "r")}});
+        let mut derived = Map::new();
+        assert_eq!(
+            pd_filter_in(&call, Some(&reg), &mut derived),
+            Some(longhand())
+        );
+        assert!(derived.is_empty());
+    }
+
+    /// A containment in an outer template's binding, reached through an inner
+    /// reference's parameter leaf, is written in the outermost scope.
+    #[test]
+    fn filter_in_binding_of_nested_reference_is_in_caller_scope() {
+        let reg = templates(json!({
+            "Inner": {"params": ["a"], "body": {"op": "*", "args": ["a", 2.0]}},
+            "Outer": {"params": ["b"],
+                "body": {"op": APPLY_OP, "name": "Inner", "args": [], "bindings": {"a": "b"}}}}));
+        let call = json!({"op": APPLY_OP, "name": "Outer", "args": [], "bindings": {
+            "b": {"op": "ifelse", "args": [contain(), 1.0, 0.0]}}});
+        let mut derived = Map::new();
+        assert_eq!(
+            pd_filter_in(&call, Some(&reg), &mut derived),
+            Some(longhand())
+        );
+        assert!(derived.is_empty());
+    }
+
+    /// A containment in a template body that reads none of the template's
+    /// parameters is the longhand `*` filter: a derived template of no
+    /// parameters is not a valid declaration.
+    #[test]
+    fn filter_reading_no_parameter_is_inlined() {
+        let reg = templates(json!({"T": {
+            "params": ["w"],
+            "body": {"op": "*", "args": [
+                {"op": "ifelse", "args": [contain(), 1.0, 0.0]}, "w"]}}}));
+        let call = json!({"op": APPLY_OP, "name": "T", "args": [],
+            "bindings": {"w": ix("emis_annual", "r")}});
+        let mut derived = Map::new();
+        assert_eq!(
+            pd_filter_in(&call, Some(&reg), &mut derived),
+            Some(longhand())
+        );
+        assert!(derived.is_empty());
+    }
+
+    /// A containment reading a parameter is still a derived template.
+    #[test]
+    fn filter_reading_a_parameter_is_a_derived_template() {
+        let reg = templates(json!({"T": {
+            "params": ["lo", "w"],
+            "body": {"op": "*", "args": [
+                {"op": "ifelse", "args": [
+                    {"op": "<=", "args": [ix("lo", "c"), ix("px", "r")]}, 1.0, 0.0]}, "w"]}}}));
+        let call = json!({"op": APPLY_OP, "name": "T", "args": [],
+            "bindings": {"lo": "src_W", "w": ix("emis_annual", "r")}});
+        let mut derived = Map::new();
+        let f = pd_filter_in(&call, Some(&reg), &mut derived).unwrap();
+        assert_eq!(f["name"], "T__pd_filter");
+        assert_eq!(f["bindings"], json!({"lo": "src_W"}));
+        assert_eq!(derived["T__pd_filter"]["params"], json!(["lo"]));
+    }
 }

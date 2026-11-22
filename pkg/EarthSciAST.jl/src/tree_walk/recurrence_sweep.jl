@@ -94,7 +94,7 @@ function _recurrence_names(defs::AbstractDict, array_shaped)
     out = Set{String}()
     for (name, def) in defs
         name in array_shaped || continue
-        recurrence_self_reference_kind(name, def) === :indexed && push!(out, String(name))
+        recurrence_self_reference_kind(name, def; templates = _build_templates()) === :indexed && push!(out, String(name))
     end
     return out
 end

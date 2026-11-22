@@ -173,10 +173,14 @@ function _scg_sites_doc(S::Int; odd::Bool = false)
         "models" => Dict("M" => model)
     )
 end
-function _scg_sites_build(S::Int; odd::Bool = false, compiler = :native)
+# `expanded`: the template references expanded at load, so each site's
+# template body is a large term of the sum (as a reference it is a call).
+function _scg_sites_build(S::Int; odd::Bool = false, compiler = :native, expanded::Bool = false)
     path = joinpath(mktempdir(), "sites.esm")
     write(path, JSON3.write(_scg_sites_doc(S; odd = odd)))
-    prob = ESM.esm_problem(path, (0.0, 1.0); compiler = compiler)
+    prob = expanded ?
+        ESM.esm_problem(ESM.expand_flattened_refs(ESM.flatten(ESM.load_path(path))), (0.0, 1.0); compiler = compiler) :
+        ESM.esm_problem(path, (0.0, 1.0); compiler = compiler)
     return (; f! = prob.f!, u0 = prob.u0, p = prob.p)
 end
 function _scg_sites_agree(bn, bi)
@@ -320,13 +324,17 @@ end
         # one observed that one equation reads: one unit of ~S large terms.
         # Cut at the large slots, the terms of each template are one class
         # whose tables are per-member holes, and the sum runs a level later.
-        tiny = _scg_sites_build(1)
+        # Built from the expanded document: as references the sites are
+        # template calls, small terms; the call build gives the same bits.
+        _scg_sites_build_x(S; kw...) = _scg_sites_build(S; expanded = true, kw...)
+        tiny = _scg_sites_build_x(1)
         @test tiny.f!.state.scalars.dynp isa ESM._ScalarProgram     # small: not cut
         for S in (12, 24)
-            bn = _scg_sites_build(S)
-            bi = _scg_sites_build(S; compiler = :interpreter)
+            bn = _scg_sites_build_x(S)
+            bi = _scg_sites_build_x(S; compiler = :interpreter)
             @test bn.f!.state.scalars.dynp isa ESM._ScalarLevels
             @test _scg_sites_agree(bn, bi)
+            @test _scg_sites_agree(bn, _scg_sites_build(S))
             u = bn.u0 .+ 0.25
             J(b) = ForwardDiff.jacobian((d, uu) -> b.f!(d, uu, b.p, 0.8), zeros(length(u)), u)
             @test _scg_bitsame(J(bn), J(bi))
@@ -351,18 +359,18 @@ end
         # A site reads each of its tables at many subscripts; the reads of one
         # table are one per-member array (two tables per `linear` site, three
         # per `bilinear` one), so the repeated reads in a body still share.
-        b12 = _scg_sites_build(12)
+        b12 = _scg_sites_build_x(12)
         code = join(
             string(ESM.RuntimeGeneratedFunctions.get_expression(g.f))
                 for g in b12.f!.state.scalars.dynp.progs[1].gens
         )
         @test length(unique(m.match for m in eachmatch(r"_cgot\d+", code))) <= 5
-        s12, s24 = sz(b12), sz(_scg_sites_build(24))
+        s12, s24 = sz(b12), sz(_scg_sites_build_x(24))
         @test length(s12) == length(s24) >= 2
         @test s12[1] == s24[1]
         @test sum(sum, s12[2:end]) < sum(s12[1])
         if VERSION >= v"1.12"
-            b = _scg_sites_build(12)
+            b = _scg_sites_build_x(12)
             @test rhs_alloc_bytes(b.f!, zeros(length(b.u0)), b.u0, b.p, 0.8) == 0
         end
     end

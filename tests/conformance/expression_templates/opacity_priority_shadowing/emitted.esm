@@ -34,9 +34,9 @@
         {
           "lhs": "flux",
           "rhs": {
-            "args": [
-              1,
-              {
+            "args": [],
+            "bindings": {
+              "f": {
                 "args": [],
                 "bindings": {
                   "u": "U",
@@ -45,8 +45,9 @@
                 "name": "flux_prod",
                 "op": "apply_expression_template"
               }
-            ],
-            "op": "*"
+            },
+            "name": "generic",
+            "op": "apply_expression_template"
           }
         }
       ],
@@ -62,6 +63,18 @@
           "params": [
             "u",
             "w"
+          ]
+        },
+        "generic": {
+          "body": {
+            "args": [
+              1,
+              "f"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "f"
           ]
         }
       },

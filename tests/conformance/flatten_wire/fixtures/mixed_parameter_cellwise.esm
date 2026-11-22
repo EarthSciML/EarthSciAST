@@ -1,0 +1,138 @@
+{
+ "esm": "1.3.0",
+ "metadata": {
+  "name": "mixed_parameter_cellwise",
+  "authors": [
+   "EarthSciAST test suite"
+  ],
+  "description": "mix(p) reads p in a value position and whole, as the operand of a sum over c: p is a mixed parameter. y1 applies mix to the state u (over [c]) elementwise, so the lift re-points the reference to mix's cellwise variant mix.cellwise1, which binds p to u whole and its fresh parameter p_cell to u read at the cell. outer(a) passes a to mix, so a is mixed too, and outer.cellwise1 references mix.cellwise1 in its body. u is a state so the sum is evaluated at run time."
+ },
+ "index_sets": {
+  "c": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "M": {
+   "expression_templates": {
+    "mix": {
+     "params": [
+      "p"
+     ],
+     "body": {
+      "op": "/",
+      "args": [
+       "p",
+       {
+        "op": "faq",
+        "args": [],
+        "output_idx": [],
+        "ranges": {
+         "k": {
+          "from": "c"
+         }
+        },
+        "reduce": "+",
+        "expr": {
+         "op": "index",
+         "args": [
+          "p",
+          "k"
+         ]
+        }
+       }
+      ]
+     }
+    },
+    "outer": {
+     "params": [
+      "a"
+     ],
+     "body": {
+      "op": "*",
+      "args": [
+       2.0,
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "mix",
+        "bindings": {
+         "p": "a"
+        }
+       }
+      ]
+     }
+    }
+   },
+   "variables": {
+    "u": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ],
+     "default": [
+      1.0,
+      2.0,
+      5.0
+     ]
+    },
+    "y1": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ]
+    },
+    "y2": {
+     "type": "unknown"
+    }
+   },
+   "equations": [
+    {
+     "lhs": "y1",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "mix",
+      "bindings": {
+       "p": "u"
+      }
+     }
+    },
+    {
+     "lhs": "y2",
+     "rhs": {
+      "op": "+",
+      "args": [
+       1.0,
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "outer",
+        "bindings": {
+         "a": "u"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "u"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "*",
+      "args": [
+       -0.5,
+       "u"
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

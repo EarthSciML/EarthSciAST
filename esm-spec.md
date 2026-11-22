@@ -1,6 +1,24 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 2.3.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.4.0**
+
+> **2.4.0: `grad`, `div` and `laplacian` are ordinary names.** The JSON form
+> does not change. The format no longer names `grad`, `div` and `laplacian` as
+> rewrite-target sugar with a defined meaning (§4.2): they are ordinary
+> open-tier operator names, exactly like any user op. A document using one
+> still loads, a rewrite rule may still match one, and one that reaches
+> evaluation unlowered is still rejected with `unlowered_operator`. What
+> changes is that no binding treats them specially any more: no binding
+> lowers `grad` itself (the Julia ModelingToolkit path used to turn it into a
+> `Differential`). A spatial derivative is written with the operator `partial`
+> (§4.2, §9.6.12; see "one operator type" below).
+>
+> 2.4.0 also drops the `"pde"` system kind (§6.3.1): the derived kinds are
+> `"sde"`, `"nonlinear"` and `"ode"`, and a spatial derivative (`partial`,
+> a spatial `D` read as `partial`, or any of the three names) no longer changes a model's kind. A model that
+> declares `system_kind: "pde"` still loads, with the warning
+> `deprecated_system_kind`; the value is ignored. See `MIGRATION.md`,
+> "esm 2.4.0". Every 2.3.0 document is a valid 2.4.0 document.
 
 > **Proposed for 2.4.0 (not additive: the behaviour differences are listed below).** The
 > version line above, and `esm-schema.json`, stay at 2.3.0 until the release that adopts
@@ -9,7 +27,8 @@
 > apply inside definition bodies once per definition instance, replacing eager expansion
 > (§9.6.4 rule 3); mounted leaves keep their references (§9.6.4 rule 1); and the elementwise
 > lift keeps references, reading their bindings at the cell (§9.6.11). For a document in which
-> no match spans a definition boundary, `Expand(load(f))` is the same tree as under 2.3.0. This
+> no match spans a definition boundary and no rule matches inside the bindings of a reference
+> 2.3.0 left unexpanded, `Expand(load(f))` is the same tree as under 2.3.0. This
 > change's breaking differences are:
 >
 > 1. **A pattern no longer matches across a reference to a definition whose body holds a
@@ -21,19 +40,31 @@
 > 3. **Inside a definition body, a pattern sees a parameter only through its kind and declared
 >    shape**; a structured or ground pattern node at a parameter no longer matches what the
 >    call site bound (§9.6.4 rule 4, case b).
-> 4. **The reference-preserving (emitted) form changes**: a lowered node is a reference to
+> 4. **A rule now fires inside the `bindings` of a reference that survives load.** 2.3.0
+>    treated a reference it did not expand eagerly as a leaf and never rewrote its bindings,
+>    so a rule on a node a call site bound there (one built only from core ops, since a
+>    rewrite-target op in a binding made the reference eager) did not fire, though it fired
+>    on the same node anywhere else; now the walk descends into a reference's bindings
+>    (§9.6.3 constraint 2), so the rule fires there as it does in the expansion (§9.6.4
+>    rule 4, case d).
+> 5. **The reference-preserving (emitted) form changes**: a lowered node is a reference to
 >    its rule; a referenced rule is emitted as a match-less entry under its name; rewritten
 >    definition bodies replace authored ones, and the registry gains `<name>.variant<k>` and
 >    `<name>.cellwise<k>` entries. A consumer that reads a loaded or emitted document
 >    expecting inlined stencils (e.g. one that counts zero `apply_operator` nodes)
 >    must expand first.
-> 5. **The flattened system's form changes**: elementwise-lifted equations and mounted leaves
+> 6. **The flattened system's form changes**: elementwise-lifted equations and mounted leaves
 >    keep references; a structural `D` inside a definition body is resolved in the body, adding
 >    `p_dt` parameters and bindings and `<name>.ddt` derivative entries; the merged registry
 >    carries them all; `Expand` of the flattened system is unchanged.
 >
+> `MAX_TEMPLATE_EXPANSION_DEPTH` rises from 32 to 64, equal to `MAX_REWRITE_PASSES`, so that
+> a document's emitted form, whose body-reference chains are as deep as its deepest rewrite,
+> always reloads (§9.7.3). This only accepts more documents.
+>
 > A definition body holding a structural time derivative is still accepted, and resolves to
-> exactly what its expansion did (§9.6.4 rule 3).
+> the same value its expansion did, though not always to the same tree: a zero term the
+> expansion drops can stay in the body (§9.6.4 rule 3).
 >
 > **Also proposed for 2.4.0 (draft): one operator type.** Expression templates are renamed
 > **defined operators**: every entry of an `operators` block is a **definition** of one
@@ -51,8 +82,8 @@
 > are read as aliases with a deprecation warning, and a `D` with a spatial `wrt` (or the
 > spellings `δ` and `∂`) is read as `partial`, also with a warning.
 >
-> Differences 1–3 change which rules fire, and so what a document means, wherever they apply;
-> none applies anywhere in the 2026-11 corpus of real models. These semantics are not
+> Differences 1–4 change which rules fire, and so what a document means, wherever they apply;
+> none of 1–4 applies anywhere in the 2026-11 corpus of real models. These semantics are not
 > version-switched: a loader implementing them applies them to every document it accepts, as
 > the reference-preserving load of 0.9.0 did.
 
@@ -188,13 +219,43 @@ form) as `partial`. A call whose operator name is also the key of a definition w
 (`\esm{…}` / `esm.node(…)`) so that it reads back as the call. `integral` keeps the call form;
 a native `\int` form is not specified here.
 
+#### 1.2.1 Loading a source document from a file (normative)
+
+A loader that reads a document from a path or a URL picks its format by the
+file extension of that path, or of the URL's path, alone: a name ending in
+`.md` is a Markdown source document, a name ending in `.typ` a Typst source
+document, and every other name, `.esm` among them, JSON. The comparison is
+exact and case-sensitive. The format is never guessed from the content, so a
+file named `.typ` that holds JSON text is read as Typst and refused.
+
+The rule holds wherever a document is read from a file: the root of a load from
+a path, and every ref site, which are subsystem mounts at both forms (§4.7),
+definition imports (§9.7.2) and coupling imports (§10.10). A source document read
+this way is the document its reader returns, and everything after the read
+(version gates, schema validation, migration, resolution of its own refs) is
+the same as for the JSON document it spells. Its own relative refs resolve
+against its own directory, whatever their extensions. So a library can be
+converted one file at a time: a `.esm` document can import a `.typ` operator
+library or mount a `.md` model, and the reverse.
+
+A source document its reader refuses as malformed fails where JSON text that
+does not parse fails: `parse_error` at the root, and the mechanism's unresolved
+diagnostic at a ref site (`unresolved_subsystem_ref`,
+`operator_import_unresolved`, `coupling_import_unresolved`). A source document's
+refusal of a removed operator keeps its code, `removed_op`, wherever it
+happens. The standard library
+(`esm:std/<file>.esm`, §4.7) is JSON. Writing a document is unchanged: a
+binding's save writes JSON; printing a source document is `print_markdown` /
+`print_typst`. Current bindings: all five. `tests/conformance/source_documents/`
+pins the rule (CONFORMANCE_SPEC §5.61).
+
 ---
 
 ## 2. Top-Level Structure
 
 ```json
 {
-  "esm": "2.3.0",
+  "esm": "2.4.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
@@ -2019,6 +2080,8 @@ A subsystem may be a child **model** or a child **reaction system**. A `data_sou
 | HTTP/HTTPS URL | `"https://example.com/models/atmosphere.esm"` | Fetched from the network |
 | Standard library | `"esm:std/solar.esm"` | The binding's bundled copy of the standard library (below) |
 
+A referenced file may be a Markdown (`.md`) or Typst (`.typ`) source document as well as JSON; its extension says which (§1.2.1).
+
 A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d/stencils/upwind1_D_interior.esm"`), expanded from the loader's environment **before** the resolution above — the mechanism for referencing a sibling library repository checked out at a deployment-chosen path. Expansion is an **OPTIONAL** capability, on the same footing as URL refs: only the braced `${VAR}` form is expanded (not bare `$VAR`); an **unset** variable is left literal, so the ref fails to resolve with the ordinary unresolved diagnostic (`operator_import_unresolved` / `coupling_import_unresolved` / the subsystem-ref error) rather than misresolving; and a binding without the capability treats `${VAR}` as a literal path segment, i.e. the same clean unresolved failure. The variable name is a C-identifier (`[A-Za-z_][A-Za-z0-9_]*`); a `${...}` whose contents are not one is an ordinary path segment, like a bare `$VAR`. Expansion applies equally to subsystem refs, template-import refs (§9.7.2) and coupling-import refs (§10.10). Current bindings: **Julia**, **Python**, **Rust**, **TypeScript** and **Go** all expand `${VAR}` in all three mechanisms. Because expansion feeds resolution, an expanded relative ref anchors against the referencing file's directory and an expanded absolute/URL ref is used as-is. A `data_sources` entry's `source.url_template` reuses this section's *path* resolution rule but **not** its `${VAR}` capability: §8.2.1 makes relative resolution REQUIRED of every binding and refuses `${VAR}` outright, because an optional capability there would decide where a document's data comes from differently in different bindings.
 
 **Standard-library references (normative).** A ref of the form `esm:std/<file>.esm` names a file of the **standard library**, the top-level `lib/` directory of this specification's repository (`docs/content/standard_library.md`). It resolves, at load, to the copy of that file the binding bundles inside its own published package. Each binding release bundles the `lib/` of the specification revision it implements, so the library a document reaches this way is the one that ships with the format version the binding implements; a library file declares its own `esm` and is held to it like any referenced file (below). Unlike URL refs and `${VAR}` expansion, the form is a **REQUIRED** capability of every binding, at every site that accepts a §4.7 ref: subsystem refs at both mount forms, definition imports (§9.7.2) and coupling imports (§10.10). It needs no network access and does not depend on where the referencing file lives, so a document anywhere on disk, or one loaded from a string with no base, can write `{"ref": "esm:std/interp.esm"}`. The rules:
@@ -3129,7 +3192,7 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 | `continuous_events` | | Continuous events (see Section 5.2) |
 | `initialization_equations` | | Equations that hold only at t=0, solved before time-stepping begins. Typical uses: aerosol equilibrium / plume-rise style models (`system_kind='nonlinear'`) that need extra constraints for initialization, and ODE models whose initial state is determined by solving an auxiliary system. |
 | `guesses` | | Initial-guess seeds for nonlinear solvers during initialization, keyed by variable name. Values are `Expression` graphs (numbers, strings, or nodes). |
-| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — at least one `wiener`-updated parameter), `"pde"` (spatial domain + differential operators). Each binding's MTK integration uses the **kind** to select between `System`, `NonlinearSystem`, `SDESystem`, and `PDESystem` constructors — the kind **derived** from the equations and parameter updates by §6.3.1, not this field. From 1.0.0 the field is a *declaration* of something the document already determines: a binding uses the derivation when the field is absent and reports `system_kind_mismatch` when a present field contradicts it (§6.3.1), so **declaring it never changes how a document runs**. Writing `"nonlinear"` on a model that already has no time-derivative equation is therefore correctly a no-op, and writing it on one that does is an error rather than a request. A `"nonlinear"` model has NO time-derivative equations at all; its equation balance is unknowns-vs-equations and every algebraic LHS counts (§4.9.4). |
+| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — at least one `wiener`-updated parameter). `"pde"` is **deprecated** (esm 2.4.0): a document declaring it still loads, with the warning `deprecated_system_kind`, and the value is ignored (the model is its derived kind, and no `system_kind_mismatch` is reported for it). Each binding's MTK integration uses the **kind** to select between `System`, `NonlinearSystem` and `SDESystem` constructors — the kind **derived** from the equations and parameter updates by §6.3.1, not this field. From 1.0.0 the field is a *declaration* of something the document already determines: a binding uses the derivation when the field is absent and reports `system_kind_mismatch` when a present field contradicts it (§6.3.1), so **declaring it never changes how a document runs**. Writing `"nonlinear"` on a model that already has no time-derivative equation is therefore correctly a no-op, and writing it on one that does is an error rather than a request. A `"nonlinear"` model has NO time-derivative equations at all; its equation balance is unknowns-vs-equations and every algebraic LHS counts (§4.9.4). |
 | `subsystems` | | Named child models (subsystems), keyed by unique identifier. Each subsystem can be defined inline or included by reference (see Section 4.7). Enables hierarchical composition — variables in subsystems are referenced via dot notation (see Section 4.6). |
 | `tolerance` | | Model-level default numerical tolerance used by tests (see Section 6.6). Object with optional `abs` and/or `rel` fields. |
 | `tests` | | Inline validation tests that exercise this model in isolation (see Section 6.6). |
@@ -3325,40 +3388,30 @@ materialized by their own engine and are outside this rule. CONFORMANCE_SPEC.md 
 | `constant_parameters(model)` | neither — plain constants |
 
 **System kind.** `system_kind(model)` derives what the `system_kind` field
-declares, testing four conditions **in this order** and taking the first that
+declares, testing three conditions **in this order** and taking the first that
 holds:
 
 | # | Condition | Result |
 |---|---|---|
 | 1 | any parameter in `brownian_parameters` | `"sde"` |
-| 2 | any equation contains a **spatial derivative** | `"pde"` |
-| 3 | no time-derivative equation at all | `"nonlinear"` |
-| 4 | otherwise | `"ode"` |
+| 2 | no time-derivative equation at all | `"nonlinear"` |
+| 3 | otherwise | `"ode"` |
 
-A **spatial derivative** is a `D` node whose `wrt` is present and is not `"t"`,
-or one of the `grad` / `div` / `laplacian` sugar ops (§4.2). It is detected
-anywhere in an equation's LHS or RHS, and the walk descends every Expression
-child, not just `args` (§4.9.5).
-
-Two points about this rule are load-bearing, because both were previously left
-to each binding to guess:
-
-- **It is stated in terms of the equations, not a domain block.** Earlier drafts
-  said "a spatial domain plus differential operators", but v0.8.0 removed
-  `Domain.spatial`, and since then `domain` has carried only
-  `independent_variable`, `temporal`, `element_type`, and `array_type` — nothing
-  spatial. There is no spatial domain to test, so a binding written to that
-  wording could not implement the `"pde"` branch at all. The differential
-  operators in the equations are the whole signal.
-- **The order puts `"pde"` before `"nonlinear"`.** A steady-state PDE
-  (`laplacian(u) ~ f`, no ∂/∂t) has no time-derivative equation and would
-  otherwise fall through to `"nonlinear"`. It is a PDE, and MTK's `PDESystem`
-  is what it maps to. `"sde"` still wins over `"pde"`: there is no
-  `SPDESystem` constructor to select, so a model that is both is assembled as
-  an SDE.
+Spatial derivatives play no part: a model is spatial through its variables'
+shapes (§11.2), and a `partial` is lowered by a discretization rule before
+anything is assembled (§9.6.8). Until esm 2.4.0 a fourth kind, `"pde"`, was
+derived from a spatial derivative in the equations; it is gone, because its only
+consumer was a `PDESystem` constructor choice that the discretize-then-integrate
+pipeline does not need.
 
 A binding uses the derivation when the field is absent, and reports
-`system_kind_mismatch` when a present field contradicts it.
+`system_kind_mismatch` when a present field contradicts it. **A declared `"pde"`
+is deprecated and ignored (normative):** a loader MUST NOT refuse it; it warns
+once per document with `deprecated_system_kind`, naming every such model by the
+JSON pointer of its `system_kind` field; the declared kind then reads as absent
+(the model is its derived kind) and `system_kind_mismatch` is never reported for
+it. The field is kept as written, so `emit` writes it back unchanged. Fixture:
+`tests/conformance/classification/fixtures/system_kind_pde.esm`.
 
 These functions are the *only* sanctioned way to ask these questions. A site
 that used to branch on `variable.type == "state"` calls `is_ode_state`; one that
@@ -3842,7 +3895,7 @@ Worked example — 1-D heat equation `u_t = α u_xx` on `x ∈ [0, 1]` with `u(x
 
 #### 6.6.6 Running a discretization-agnostic PDE component (test injection)
 
-A reusable PDE leaf is written against the operator sugar (`grad`, `div`, `laplacian`, spatial `D`) and deliberately imports **no** discretization, so it can be composed under different schemes (§9.7.10). Such a component is un-runnable in isolation — its rewrite-targets have no `match` rule to lower them (`unlowered_operator`, §9.6.3 constraint 6) — so its inline tests could not run against any concrete scheme. A `Test` therefore MAY carry an `operator_imports` array (§9.7.2 shape) naming the discretization library to lower the enclosing component under, **for that test's run only**:
+A reusable PDE leaf is written against `partial` (and other operators) and deliberately imports **no** discretization, so it can be composed under different schemes (§9.7.10). Such a component is un-runnable in isolation — its rewrite-targets have no `match` rule to lower them (`unlowered_operator`, §9.6.3 constraint 6) — so its inline tests could not run against any concrete scheme. A `Test` therefore MAY carry an `operator_imports` array (§9.7.2 shape) naming the discretization library to lower the enclosing component under, **for that test's run only**:
 
 ```json
 {
@@ -5250,7 +5303,7 @@ definition of `N` it selects (§9.6.12), so a reference is what survives load.
 4. **Component-local scope.** Definitions declared inside — or imported into (§9.7.2) — one `model` / `reaction_system` are visible only within that component's expression positions.
 5. **Pure syntactic substitution.** Every parameter occurrence in `body` — a bare parameter-name string in a variable-reference position, or the string value of a scalar Expression-node field (§9.6.1) — is replaced by the bound argument's AST in source order. Substitution is position-blind and purely syntactic: a declared parameter name shadows any coincident field literal or index symbol inside `body`, no evaluation occurs, and no field-specific admissibility is checked at substitution time — a value substituted into a scalar-field position MUST be a literal admissible for that field, enforced by the §9.6.9 validation discharge, never by the substitution engine. Expansion MUST NOT depend on argument evaluation. Parameter substitution applies inside the `bindings` values of nested `apply_operator` references exactly as in any other Expression position; the `name` field is never a substitution site; params shadow as above. Substitution is what `Expand` does (§9.6.4 rule 2) and what a reference denotes; the rewrite engine never substitutes a rule's body into the tree (constraint 7).
 6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry `grad`/`div`/`laplacian`/spatial-`D` as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, and a right-hand-side structural `D` that §4.2's total-derivative resolution left standing (an operand outside its closed set, a name it cannot resolve, or a cyclic chain) — is rejected with diagnostic `unlowered_operator` (naming the op and node path). The walk also covers the body of every definition a reachable reference names, as §9.6.4 rule 3 rewrote it, once per definition instance; an op left standing there is rejected the same way, naming the op, the definition, and the first call site in document order that reaches it. Substitution introduces no op that is not in a body or in a call site's `bindings`, so this walk sees every op `Expand(tree)` contains without expanding anything. This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
-7. **A firing rule writes a reference, never its body.** When rule `R` fires at a node, the engine replaces the node with `{"op": "apply_operator", "args": [], "name": N, "bindings": B}`, where `N` is `R`'s registered name in the component (post-rename, §9.7.7) and `B` maps each entry of `R`'s `params` to what the match bound to it: the matched sub-AST for a parameter in an operand position, the matched literal for one in a scalar-field position (§9.6.1). A parameter that occurs nowhere in `R`'s `match` is bound to its own name, so the reference expands to `R`'s body exactly as written there. `Expand` of the reference is `R`'s body with `B` substituted (constraint 5) — the replacement the engine used to write in place — so this constraint changes the reference-preserving form, and with it the emitted document (§9.6.4 rule 5), but not `Expand(load(f))` wherever no match would span a reference boundary (§9.6.4 rule 4): every existing `expanded*.esm` golden of §9.6.7 stands. The written reference is an ordinary reference from then on: later passes rewrite inside its `bindings` (constraint 2), no pattern sees into it (§9.6.4 rule 4), and `R`'s body is rewritten once per instance (§9.6.4 rule 3). A rule whose `body` is a single leaf — a number, a boolean, or a bare string — writes the leaf (for a string that is one of `R`'s `params`, what that parameter bound): there is no body to share, and the reference would be larger than what it stands for.
+7. **A firing rule writes a reference, never its body.** When rule `R` fires at a node, the engine replaces the node with `{"op": "apply_operator", "args": [], "name": N, "bindings": B}`, where `N` is `R`'s registered name in the component (post-rename, §9.7.7) and `B` maps each entry of `R`'s `params` to what the match bound to it: the matched sub-AST for a parameter in an operand position, the matched literal for one in a scalar-field position (§9.6.1). A parameter that occurs nowhere in `R`'s `match` is bound to its own name, so the reference expands to `R`'s body exactly as written there. `Expand` of the reference is `R`'s body with `B` substituted (constraint 5) — the replacement the engine used to write in place — so this constraint changes the reference-preserving form, and with it the emitted document (§9.6.4 rule 5), but not `Expand(load(f))` wherever no match would span a reference boundary and none lies inside the bindings of a reference the in-place engine left unexpanded (§9.6.4 rule 4): every existing `expanded*.esm` golden of §9.6.7 stands. The written reference is an ordinary reference from then on: later passes rewrite inside its `bindings` (constraint 2), no pattern sees into it (§9.6.4 rule 4), and `R`'s body is rewritten once per instance (§9.6.4 rule 3). A rule whose `body` is a single leaf — a number, a boolean, or a bare string — writes the leaf (for a string that is one of `R`'s `params`, what that parameter bound): there is no body to share, and the reference would be larger than what it stands for.
 
 #### 9.6.4 Round-trip — Option B (reference-preserving)
 
@@ -5271,7 +5324,17 @@ special-case older versions to recover Option A matching. Motivation and measure
    This holds at a §4.7 mount edge too: a mounted leaf is lowered in its own file, its
    references survive the mount, and the registries of its components travel with the
    mounted components into the mounting document, materialized as rule 5 states, exactly as
-   a component's own registry does. (A binding that still expands — rule 2 says it SHOULD NOT
+   a component's own registry does. They join the registry of the mounting top-level
+   component by the merge of rule 7, each subsystem path below the component an owner
+   (an authored subsystem that declares its own `operators` block joins the same
+   way). The bodies keep the **mounted model's own names**: a body's free names (the names
+   it reads that are not its `params` or loop symbols it binds) are read in the scope of the
+   subsystem that owns the reference, exactly as an authored body's are at its call site
+   (rule 2: the expansion substitutes the body into that subsystem's expression). So a leaf
+   mounted twice, at `Sub1` and `Sub2`, brings one copy of each of its definitions, not
+   one per mount: its free name `k` denotes `Sub1.k` at a reference inside `Sub1` and
+   `Sub2.k` at one inside `Sub2`. Different definitions under one name still collide and
+   are renamed by rule 7. (A binding that still expands — rule 2 says it SHOULD NOT
    — keeps with each expansion the provenance §9.6.11 "Applications" requires.)
    Definition references survive
    load; downstream code MAY recognise them (that is the point), but MUST give them the
@@ -5320,7 +5383,13 @@ special-case older versions to recover Option A matching. Motivation and measure
      serialization (CONFORMANCE_SPEC §5.5.3) and `_` appended to the name until it names no
      other entry, and each reference is re-pointed to the entry of its instance. A body in
      which nothing fires is left unchanged, and a definition that no reference reaches is not
-     rewritten.
+     rewritten. A definition's body is replaced in place only if no match-less registry entry
+     that keeps its authored body (one no reference reaches, or one whose instances took
+     variants) references the definition, directly or through such entries; otherwise the one
+     rewritten body is registered as `<name>.variant1` and the reached references are
+     re-pointed to it, so that a reference reaching the definition through that entry — in
+     this document, or in one that mounts or flattens it — expands the authored body, which
+     was never rewritten for that reference's instance.
    - *Rewrite depth.* A rewrite made in pass `p` of the fixpoint on a component's
      expression positions has depth `p`. A rewrite made in pass `q` of the fixpoint on an
      instance's body has depth `d + q`, where `d` is the depth of the rewrite that wrote the
@@ -5355,9 +5424,19 @@ special-case older versions to recover Option A matching. Motivation and measure
      `p_dt` bindings. This depends on the definition alone (which parameters sit under a
      structural `D` is read from the body), plus the `wrt` literal where `wrt` is a
      parameter, so it is done once per definition instance. **It equals the expansion's
-     resolution exactly**: §4.2's recursion is structural, so resolving `D(e[p := b])`
+     resolution in value**: §4.2's recursion is structural, so resolving `D(e[p := b])`
      visits the nodes of `e` as resolving `D(e)` in the body does and, at each place `b` was
-     substituted, yields the resolution of `D(b)` — which is what `p_dt` is bound to.
+     substituted, yields the resolution of `D(b)` — which is what `p_dt` is bound to. The
+     two are equal in value, not always node for node. A binding drops a term that is `0`
+     and a factor that is `1` as it combines resolutions, and it keeps doing so here; but in
+     the body a parameter's derivative is the parameter `p_dt`, not the `0` or `1` it is
+     bound to, so a term the expansion drops can stay in the body. Take a body `D(p*q)`
+     referenced with `p` bound to a parameter `k` and `q` to a state `x` whose tendency is
+     `f`. The expansion resolves `D(k*x)` to `0*x + k*f` and drops the zero term, leaving
+     `k*f`. The body resolves to `p_dt*q + p*q_dt`, and the reference binds `p_dt` to `0` and
+     `q_dt` to `f`, so it denotes `0*x + k*f` with the zero term kept. Both evaluate to the
+     same number everywhere, which is what this rule promises; the folding itself is not
+     changed, and a check of the rule compares values, not trees.
      Free names in the body are flatten-scoped names of the system (§10.7), resolved against
      the same equations; cycles are detected over names exactly as at a call site.
 
@@ -5382,10 +5461,11 @@ special-case older versions to recover Option A matching. Motivation and measure
      flatten resolves what is left. Structural `D` is strictly unary (§4.2), so an instance
      whose `wrt` parameter is bound to `"t"` on a `D` with trailing operands is rejected at
      that reference with `operator_arity`.
-   - *Equivalence.* Wherever no match would span a reference boundary (rule 4), `Expand` of
+   - *Equivalence.* Wherever no match would span a reference boundary, and none lies inside
+     the bindings of a reference the in-place engine left unexpanded (rule 4), `Expand` of
      the result equals the tree that substituting each firing rule's body in place, and
-     continuing the fixpoint on the substituted tree, would produce. Where a match would span
-     a boundary, the two differ, and this rule and rule 4 define the result; the
+     continuing the fixpoint on the substituted tree, would produce. Where one would, the two
+     differ, and this rule and rule 4 define the result; the
      `expanded*.esm` goldens of §9.6.7 pin this rule's result in both cases. No existing
      golden contains such a match, so every existing one is unchanged; the
      `opacity_rule_replacement/` fixture pins the cases that differ.
@@ -5405,18 +5485,26 @@ special-case older versions to recover Option A matching. Motivation and measure
 
    **What this changes from in-place rewriting.** An engine that substituted rule bodies in
    place, and expanded references to definitions whose bodies held rewrite-target ops, could
-   match across the boundaries this rule closes. Three cases now differ, deliberately: (a) a
-   compound pattern whose inner node would only exist as part of another rule's replacement
-   (a pattern on `sqrt(D(u,x)^2 + …)` around a node that an alias rule rewrites to `D`);
-   (b) inside a definition body, a pattern that needs more of a parameter's binding than its
-   kind and declared shape — a structured or ground pattern node at a parameter; and (c) a
-   compound pattern that would have matched a node assembled partly from a call site and
-   partly from the body of a reference that eager expansion used to inline. None occurs in
-   the 2026-11 corpus of real models (EarthSciDiscretizations, EarthSciModels, EqESM, EqIce,
-   EqWeFiC, reseact.esm and others) or in an existing conformance golden; the audit is
-   recorded with this revision's design notes, and `opacity_rule_replacement/` (§9.6.7) pins
-   all three. A pattern that needs one SHOULD be written against the replacement itself, or
-   the definition SHOULD take the inner operand as its own parameter.
+   match across the boundaries this rule closes, and never rewrote inside a reference it left
+   unexpanded. Four cases now differ, deliberately: (a) a compound pattern whose inner node
+   would only exist as part of another rule's replacement (a pattern on `sqrt(D(u,x)^2 + …)`
+   around a node that an alias rule rewrites to `D`); (b) inside a definition body, a pattern
+   that needs more of a parameter's binding than its kind and declared shape — a structured or
+   ground pattern node at a parameter; (c) a compound pattern that would have matched a node
+   assembled partly from a call site and partly from the body of a reference that eager
+   expansion used to inline; and (d) a rule on a node inside the `bindings` of a reference
+   that survives load — a reference to a definition whose body holds no rewrite-target op, whose
+   bindings hold none either, so the node is built from core ops alone — which the in-place
+   engine treated as a leaf and never rewrote, though the rule fired on the same node anywhere
+   else. Cases (a)–(c) no longer fire; case (d) now fires, because the walk descends into a
+   reference's bindings (§9.6.3 constraint 2), so `Expand` of the result is the tree the rule
+   produces on the expansion. None of (a)–(d) occurs in the 2026-11 corpus of real models
+   (EarthSciDiscretizations, EarthSciModels, EqESM, EqIce, EqWeFiC, reseact.esm and others) —
+   for (d), no rule there has a pattern built from core ops alone — or in an existing
+   conformance golden; the audit is recorded with this revision's design notes, and
+   `opacity_rule_replacement/` (§9.6.7) pins all four. A pattern
+   that needs one of (a)–(c) SHOULD be written against the replacement itself, or the definition
+   SHOULD take the inner operand as its own parameter.
 
    **Scope of this rule.** Rule 4 governs the §9.6.3 **rewrite-rule engine** and nothing else:
    the `match`-pattern matcher, whose opacity keeps the fixpoint deterministic and
@@ -5440,7 +5528,8 @@ special-case older versions to recover Option A matching. Motivation and measure
    emit verbatim (post-substitution; post-fold on an **instantiating load** — see "Two load
    modes" below). Each component materializes into its own
    `operators` block the transitive closure of definitions its surviving references
-   name — **registered instances**: post-`only`, post-`rename`/`rebind`,
+   name — the references in the coupling `variable_map` transforms it receives count as its
+   own (§10.4) — as **registered instances**: post-`only`, post-`rename`/`rebind`,
    post-metaparameter-fold, checked but uninlined, with bodies as rule 3 rewrote them — with
    authored entries first in authored order, then materialized entries in lexicographic
    (UTF-8 byte) name order; all five
@@ -5566,15 +5655,21 @@ special-case older versions to recover Option A matching. Motivation and measure
 6. **Validators discharge validity per §9.6.9.** A document is valid iff `Expand(document)`
    is valid; bindings MUST discharge this via registration-time, call-site, and memoized
    per-instantiation checks (§9.6.9), not by materializing the full expansion.
-7. **Flatten carries registries** (§10.7; esm-libraries-spec §4.7.5): the component-scoping
-   map applies inside carried definition bodies and surviving references' `bindings`;
-   component registries merge into the flattened document with deep-equal dedup at first
-   occurrence and deterministic `<ComponentPath>.<name>` rename of both entries on a
-   non-deep-equal collision — propagated along the reference DAG to every declaration
-   that reaches one — with references rewritten in lockstep. The component-scoping runs
-   **before** the merge and the dedup compares post-scoping bodies; a binding that expands
-   every reference at load carries no registry into flatten and has nothing to scope
-   (§10.7, "Applicability across bindings").
+7. **Flatten carries registries** (§10.7; esm-libraries-spec §4.7.5). A body's free names
+   are read at each reference's site (rules 1–2), and one definition may serve several
+   scopes, so flatten makes them explicit: every carried body's free names become trailing
+   `params` (sorted by UTF-8 bytes, a nested reference binding its callee's to the same
+   names), and every reference binds each to its own name, which the component-scoping map
+   then scopes with the rest of the site (`k` becomes `Host.Sub1.k` at a reference inside
+   `Host.Sub1`). Component registries merge into the flattened document with deep-equal
+   dedup at first occurrence; on a non-deep-equal collision every distinct definition is
+   renamed `<ComponentPath>.<name>` after the first owner (document order) that carries it —
+   owners whose entries are deep-equal once their nested references are renamed share that
+   one entry — propagated along the reference DAG to every declaration that reaches a
+   colliding name, with references rewritten in lockstep, a coupling transform's references
+   with those of its receiving component (§10.4). A binding that expands every reference at
+   load carries no registry into flatten and has nothing to close (§10.7, "Applicability
+   across bindings").
 8. **Version stamping.** An emitted document that carries any surviving
    `apply_operator` call site or any **materialized** registry entry MUST declare
    `esm: 0.9.0` or later, regardless of the source document's declared version — the bump
@@ -5650,7 +5745,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `operator_import_rebind_unknown_name` | An import edge's `rebind` names a name that does not occur free in the imported declarations — including a key that names a *declared* name, which is a rename, not a rebind (§9.7.7). |
 | `operator_import_rename_collision` | Renaming/rebinding produced a collision: two names of one namespace mapped onto one target, or a renamed/rebound name collides with a name still in use inside the imported declarations (a remaining free name, bound index symbol, definition param, or another target) (§9.7.7). |
 | `operator_import_rename_invalid` | A `prefix` or rename/rebind target is not a valid dotted identifier, a rename/rebind map is malformed, or a `rebind` key addresses a bound index symbol (§9.7.7). |
-| `operator_body_expansion_too_deep` | Body-reference chain exceeds `MAX_TEMPLATE_EXPANSION_DEPTH` (32) (§9.7.3). |
+| `operator_body_expansion_too_deep` | Body-reference chain exceeds `MAX_TEMPLATE_EXPANSION_DEPTH` (64, equal to `MAX_REWRITE_PASSES`) (§9.7.3). |
 | `metaparameter_unbound` | A metaparameter is still open at the root document's close, after edge bindings, API bindings, and defaults (§9.7.6). NOT raised on the §9.6.4-rule-5 *generic load* — an operator-library file (§9.7.1) loaded as the root with no loader-API bindings — where metaparameters stay open by design; nor at an import/subsystem edge that simply leaves a name unbound (it re-exports upward, §9.7.6 site 2). |
 | `metaparameter_type_error` | A metaparameter binding is not an integer; a fold divides inexactly or overflows 64-bit; or a metaparameter expression uses an op outside `+ - * /` (§9.7.6). |
 | `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name, or with a loop symbol (§9.7.6). |
@@ -5701,7 +5796,7 @@ The import-renaming RFC adds (see `docs/content/rfcs/template-import-renaming.md
 - `import_rebind_keyed_factors/` — an MPAS-style ragged keyed-factor rule with its factor contract rebound to the consumer's `meshA_*` arrays (§9.7.7).
 - `import_rename_diamond/` — identical renamed edges dedupe; a differently-renamed edge registers distinctly; the equal-priority tie between two axis-less rule instances is pinned by the §9.7.4 order (§9.7.7).
 - `import_rename_integral_axis/` — one cumulative-`integral` rule library instantiated twice (prefix `col`/`row`, rename `x` → `lev`/`lat`, N = 4/3); transitive rename through the match's `var` and bare-axis-name `upper` bound, so each instance fires only on its own axis (§9.7.7).
-- `import_library_enum/` — a library that declares an enum, names it in its own definition body, and binds a symbol into a parameter-spelled `enum` op in its own call: the importer loads without the enum (`expanded.esm`), and an importer redeclaring the enum with different values does not change the library's constants (its own `enum` op and its own call), while every symbol the importer spells, including one it binds directly or through a forwarded parameter, resolves against the importer's block (`expanded_importer_redeclares.esm`) (§9.3).
+- `import_library_enum/` — a library that declares an enum, names it in its own definition body, and binds a symbol into a parameter-spelled `enum` op in its own call: the importer loads without the enum (`expanded.esm`), and an importer redeclaring the enum with different values does not change the library's constants (its own `enum` op and its own call), while every symbol the importer spells, including one it binds directly or through a forwarded parameter, resolves against the importer's block (`expanded_importer_redeclares.esm`) (§9.3). In that golden a symbol the importer binds into a library definition's parameter-spelled `enum` op (directly or through a forwarded parameter) is already lowered to the importer's constant, because rule 3 lowers it once per definition instance at load (§9.6.4 rule 3); an `enum` op the importer writes whole, in an equation or as a binding, stays an `enum` op, lowered at typed load.
 - `import_library_enum_undeclared/` — invalid: a library body naming an enum the library does not declare → `unknown_enum` at load, reported against the library and the definition, whether or not the importer declares that enum (§9.3).
 
 The match-scoping RFC adds (see `docs/content/rfcs/match-pattern-scoping-constraints.md`):
@@ -5721,11 +5816,12 @@ The rules-as-references revision (§9.6.3 constraint 7, §9.6.4 rule 3) adds the
 
 - `rule_writes_reference/` — one rule fired at three sites with different operands: three references to the rule, one materialized body; a leaf-bodied rule writes its leaf.
 - `template_instance_variants/` — one definition whose body holds a `D`, called with two variables of different declared shapes, and two `where`-scoped rules: two variants `<name>.variant1` / `.variant2`, numbered by canonical serialization, each call site re-pointed.
-- `rewrite_depth_through_bodies/` — invalid: a rule whose body reintroduces its own pattern under the same instance → `rewrite_rule_nonterminating`, naming the rule and the definition; and a chain that converges at depth 64 exactly (accepted) beside one at depth 65 (rejected).
+- `rewrite_shared_by_unreached_entry/` — one definition whose body holds a `D`, reached by a single instance, and referenced by an authored match-less entry that nothing in the component references; and the same through a chain of two reached definitions: each reached definition keeps its authored body and the rewritten body is registered as `<name>.variant1`, each call site re-pointed (§9.6.4 rule 3, "Where the result lives"). Its `expanded.esm` is written under this revision's semantics; no fixture of this revision needs the in-place engine for it, because the expansion is the same either way.
+- `rewrite_depth_through_bodies/` — invalid: a rule whose body reintroduces its own pattern under the same instance → `rewrite_rule_nonterminating`, naming the rule and the definition; and a chain that converges at depth 64 exactly (accepted) beside one at depth 65 (rejected). The accepted chain's `emitted_chain_depth_64.esm` holds a 64-definition body-reference chain; every binding loads it and re-emits it byte for byte (emit then load is a fixed point), which holds because `MAX_TEMPLATE_EXPANSION_DEPTH` equals `MAX_REWRITE_PASSES` (§9.7.3).
 - `unlowered_in_template_body/` — invalid at build: a definition body holding a `D` that no rule matches → `unlowered_operator`, naming the op, the definition and the first call site.
-- `opacity_rule_replacement/` — the cases where this revision and the in-place engine differ, each pinned the way this revision decides it: (a) a compound pattern whose inner node only exists in another rule's replacement does not fire, (b) a structured and a ground pattern node at a definition parameter do not match what the call site bound, and (c) a compound pattern that would have assembled across an eagerly expanded reference to a definition whose body holds a rewrite-target op does not fire. Its `expanded.esm` is written under this revision's semantics, and the in-place engine would fail it; its description records, case by case, what the in-place engine produced instead.
+- `opacity_rule_replacement/` — the cases where this revision and the in-place engine differ, each pinned the way this revision decides it: (a) a compound pattern whose inner node only exists in another rule's replacement does not fire, (b) a structured and a ground pattern node at a definition parameter do not match what the call site bound, (c) a compound pattern that would have assembled across an eagerly expanded reference to a definition whose body holds a rewrite-target op does not fire, and (d) a rule on a core-op node inside the bindings of an authored reference that survives load (a match-less definition whose body, like the binding, holds no rewrite-target op) fires there, writing a reference into the binding, where the in-place engine left the binding unrewritten. Its `expanded.esm` is written under this revision's semantics, and the in-place engine would fail it; its description records, case by case, what the in-place engine produced instead.
 
-Every `emitted.esm` golden of a fixture in which a rule fires changes under this revision (the lowered node becomes a reference and the rule materializes); every existing `expanded*.esm` golden is unchanged, because no existing fixture contains a match that spans a reference boundary (checked: `godunov_beats_inner_deriv`, `fixpoint_nested_deriv`, `eager_target_bearing`, `opacity_negative` and `opacity_priority_shadowing` match within one side of every boundary).
+Every `emitted.esm` golden of a fixture in which a rule fires changes under this revision (the lowered node becomes a reference and the rule materializes); every existing `expanded*.esm` golden is unchanged except `import_library_enum/expanded_importer_redeclares.esm` (see above: an importer-bound `enum` op is now lowered per instance at load), because no existing fixture contains a match that spans a reference boundary or lies inside the bindings of a reference the in-place engine left unexpanded (checked: `godunov_beats_inner_deriv`, `fixpoint_nested_deriv`, `eager_target_bearing`, `opacity_negative` and `opacity_priority_shadowing` match within one side of every boundary).
 - `opacity_negative/` — a compound `match` pattern whose shape only assembles across a surviving-reference boundary: MUST NOT fire (§9.6.4 rule 4's pinned divergence).
 - `opacity_priority_shadowing/` — the silent form of the divergence: a high-priority compound rule whose structural fragment is hidden in a target-free reference, plus a lower-priority generic rule; the golden pins that the compound rule does NOT fire and the generic rule DOES (binding the surviving reference whole).
 - `per_instantiation_validation/` — a definition parameterized on a scalar field, two call sites, one inadmissible: rejected on the expanded-equivalent check (§9.6.9), naming the offending call site.
@@ -6028,7 +6124,7 @@ An **ordered array** appearing (i) inside a `model` or `reaction_system`, or (ii
 
 #### 9.7.3 Registration-time body checking
 
-A definition `body` MAY contain `apply_operator` nodes referencing other definitions that are **in scope** (declared locally or imported) and **match-less**. After the effective sequence (§9.7.4) is fixed and before the §9.6.3 fixpoint runs, the loader builds the body-reference graph, rejects cycles (`operator_recursive_body`), and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 32` (`operator_body_expansion_too_deep`). Bodies are **not** inlined (from `esm: 0.9.0`; pre-0.9.0 loaders inlined here in topological order — substitution is confluent, so the result was order-independent). Because nothing inlines at a library boundary anymore, the depth bound is measured on the **full merged cross-file reference graph**: a chain deeper than 32 across files is rejected even though each file's local chain is shallow (under Option A each library's own composition closed its bodies at its edge, resetting the count — a deliberate, corner-case-only behavioral change of 0.9.0). A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_operator` nodes.
+A definition `body` MAY contain `apply_operator` nodes referencing other definitions that are **in scope** (declared locally or imported) and **match-less**. After the effective sequence (§9.7.4) is fixed and before the §9.6.3 fixpoint runs, the loader builds the body-reference graph, rejects cycles (`operator_recursive_body`), and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 64` templates (`operator_body_expansion_too_deep`). The bound equals `MAX_REWRITE_PASSES` (§9.6.3) on purpose: there is one nesting limit. A rewrite of depth `d` (§9.6.4 rule 3) leaves a body-reference chain `d` templates deep, so every document the rewriter accepts also reloads once emitted with its references; with a smaller body bound, a document could load and then fail to load from its own emitted form. Bodies are **not** inlined (from `esm: 0.9.0`; pre-0.9.0 loaders inlined here in topological order — substitution is confluent, so the result was order-independent). Because nothing inlines at a library boundary anymore, the depth bound is measured on the **full merged cross-file reference graph**: a chain deeper than 64 across files is rejected even though each file's local chain is shallow (under Option A each library's own composition closed its bodies at its edge, resetting the count — a deliberate, corner-case-only behavioral change of 0.9.0). A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_operator` nodes.
 
 #### 9.7.4 Effective declaration order
 
@@ -6380,7 +6476,7 @@ The coupling section defines how models and reaction systems connect to form a `
 }
 ```
 
-Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier drafts expressed as `operator_apply` coupling entries are now expressed via `grad`/`div`/`laplacian` PDE operators in the model equations, lowered by discretization rewrite rules (§9.6.8).
+Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier drafts expressed as `operator_apply` coupling entries are now expressed as `partial` terms (or other operator calls) in the model equations, lowered by discretization rewrite rules (§9.6.8).
 
 ### 10.1 Coupling Types
 
@@ -6468,7 +6564,7 @@ For `variable_map` coupling entries, `transform` specifies how the source variab
 
 Every `variable_map` transform performs a **replacement**: the target is bound to the source, optionally scaled by `factor`. `factor` is a scaling coefficient valid only on the scaling transforms (`additive`, `multiplicative`, `conversion_factor`); a `factor` on `param_to_var` or `identity` — which have nothing to scale — or alongside an Expression transform — which spells its own arithmetic — is rejected at load. The three scaling transforms are equivalent in effect for a `variable_map` and differ only in documented intent. Genuine additive/multiplicative **term composition** (adding a source/sink term, or multiplying a tendency in place) is a `couple`/ConnectorSystem concern (§10.3), not a `variable_map`.
 
-**Expression-transform evaluation contract.** When `transform` is an Expression — always an **operator node** (the degenerate bare-reference and literal Expression spellings are not admissible in this slot: bare replacement is what the named transforms already provide, and the string space is reserved for their names) — the entry binds the target to a **derived value**: flattening (§10.7) removes the `to` parameter and introduces in its place a derived (observed) variable — same name, units, and shape — whose defining expression is the transform, so every reference to the target evaluates the expression's value exactly as an authored observed would. The expression's free variables follow the connector-equation convention (§10.3, §4.6): every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system. The expression MUST reference the entry's `from` variable — it is the data-flow edge the entry declares — and MAY reference any other variable, parameter, or observed in scope of the flattened system (this is what the §8.6 regridding form relies on: the receiving component's build-once overlap weights, normalization row-sums, and sliver tolerance appear alongside the source field). The expression's value must be shaped like the target (its units are the target's declared units; validators MAY check consistency as for `identity`). Definition invocations (`apply_operator`) are legal anywhere in the transform: they resolve at load, before validation and flattening, against the definition registry of the component that owns the `to` target — the receiving component — which is where a regridding library import (§9.7) naturally lives. Eager invocations expand in the §9.6.4-rule-3 pre-pass; the rest survive and denote their expansion (§9.6.4 rule 2), resolved at flatten/evaluation against the carried registry (§9.6.4 rule 7). As with all of §9.6.4, round-trip emits the reference-preserving form. **One carve-out for coupling-library edges (§10.9).** When a `variable_map` edge arrives via a `coupling_import` expansion (§10.10) rather than being authored inline, its `to` owner is a role and is not known until binding, so its transform definitions cannot expand at load. For such an edge, transform-definition expansion is deferred to the flatten-time expansion step (§10.10, `esm-libraries-spec.md` §4.7.5): the invocations expand against the *bound* `to` owner's registry immediately after role substitution. Because this is *after* the §9.6.3 fixpoint, a library edge's transform MUST expand to an already-lowered form (a regridding `faq`/`index` carries no rewrite-target operator); a transform definition that would introduce `grad` / `div` / spatial `D` is rejected with `coupling_library_illegal_payload`.
+**Expression-transform evaluation contract.** When `transform` is an Expression — always an **operator node** (the degenerate bare-reference and literal Expression spellings are not admissible in this slot: bare replacement is what the named transforms already provide, and the string space is reserved for their names) — the entry binds the target to a **derived value**: flattening (§10.7) removes the `to` parameter and introduces in its place a derived (observed) variable — same name, units, and shape — whose defining expression is the transform, so every reference to the target evaluates the expression's value exactly as an authored observed would. The expression's free variables follow the connector-equation convention (§10.3, §4.6): every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system. The expression MUST reference the entry's `from` variable — it is the data-flow edge the entry declares — and MAY reference any other variable, parameter, or observed in scope of the flattened system (this is what the §8.6 regridding form relies on: the receiving component's build-once overlap weights, normalization row-sums, and sliver tolerance appear alongside the source field). The expression's value must be shaped like the target (its units are the target's declared units; validators MAY check consistency as for `identity`). Definition invocations (`apply_operator`) are legal anywhere in the transform: they resolve at load, before validation and flattening, against the definition registry of the component that owns the `to` target — the receiving component — which is where a regridding library import (§9.7) naturally lives. The receiving component's rules rewrite the transform as they rewrite its own expression positions (§9.6.3; a firing writes a reference, constraint 7), and §9.6.4 rule 3 rewrites the bodies the transform's references reach. The references stay references — at load, at emit and at flatten — and denote their expansion (§9.6.4 rule 2); only an explicit expansion utility expands them. They are the receiving component's references: its emitted `operators` block materializes the definitions they name exactly as it does for its own (§9.6.4 rule 5), and flattening scopes and renames them in lockstep with that component's registry entries (§9.6.4 rule 7) — on a registry collision a transform's reference follows the receiving component's `<ComponentPath>.<name>` rename — so the observed that replaces the `to` parameter is defined by an expression carrying the references, like any other equation of the flattened system. **One carve-out for coupling-library edges (§10.9).** When a `variable_map` edge arrives via a `coupling_import` expansion (§10.10) rather than being authored inline, its `to` owner is a role and is not known until binding, so its transform cannot resolve at load. For such an edge, resolution is deferred to the flatten-time expansion step (§10.10, `esm-libraries-spec.md` §4.7.5): immediately after role substitution, the transform's references resolve against the *bound* `to` owner's registry and stay references, owned by that component exactly as an inline edge's are. Because this is *after* the §9.6.3 fixpoint, no rule rewrites a library edge's transform, so the definitions it references MUST already be lowered (a regridding `faq`/`index` carries no rewrite-target operator); a transform whose references reach a definition that would introduce `grad` / `div` / `partial` is rejected with `coupling_library_illegal_payload`.
 
 ### 10.5 Coupling across grids and dimensionality
 
@@ -6476,7 +6572,7 @@ Coupled components may live on different index sets (resolutions), or differ in 
 
 #### Regridding
 
-When a variable is mapped between two components on different index sets — or from a data-fed parameter's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `faq` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `faq` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration. This is the Expression form of `transform` (§10.4): the target parameter becomes a derived variable defined by the expression, whose scoped references reach the source field and the receiving component's build-once weight arrays. The expression is authored inline, or — the usual factoring — invokes overlap-weight definitions imported from a regridding library (§9.7), expanded at load per §9.6.4:
+When a variable is mapped between two components on different index sets — or from a data-fed parameter's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `faq` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `faq` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration. This is the Expression form of `transform` (§10.4): the target parameter becomes a derived variable defined by the expression, whose scoped references reach the source field and the receiving component's build-once weight arrays. The expression is authored inline, or — the usual factoring — invokes overlap-weight definitions imported from a regridding library (§9.7), resolved at load per §9.6.4 against the receiving component and kept as references (§10.4):
 
 ```json
 {
@@ -6561,14 +6657,14 @@ The last dot-separated segment is always the variable name; all preceding segmen
 
 - **Graph construction** — the expression graph (Section 4.8.2 of the library spec) operates on the flattened system to produce cross-system dependency edges.
 - **Coupled system validation** — checking that all coupling references resolve, no variables are orphaned, and equation–unknown balance holds across the full system.
-- **Simulation** — Julia libraries might convert the flattened system to a single MTK `ODESystem` (for 0D/ODE-only systems) or `PDESystem` (for systems with spatial derivatives), using MTK's native namespace separator (`₊`) in place of dots.
+- **Simulation** — Julia libraries might convert the flattened system to a single MTK `ODESystem` (after any spatial derivatives have been discretized), using MTK's native namespace separator (`₊`) in place of dots.
 - **Export and display** — pretty-printing the full coupled system as a single set of equations.
 
-**Definition registries flatten with their components** (from `esm: 0.9.0`, §9.6.4 rule 7). The variable-renaming map flatten applies to a component's equations applies identically to free variable references inside that component's carried definition bodies and inside surviving `apply_operator` references' `bindings` (definition `params` shadow, exactly as in §9.6.1). Component registries merge into the flattened document: deep-equal same-name entries (post-scoping) dedupe at first occurrence — the common case, two components importing one stencil; a non-deep-equal same-name collision renames **both** entries deterministically to `<ComponentPath>.<name>`, rewriting their references in lockstep. **Collisions propagate along the reference DAG:** a declaration whose body references a colliding name is itself treated as colliding, in every component that carries it, and is renamed per owner too — otherwise a byte-identical wrapper over a per-component leaf would dedupe under its bare name and its single surviving body would reference a name the merged registry no longer holds. Equivalently: a name that survives under its bare spelling never reaches a renamed one. The rename is total and deterministic; there is no new diagnostic. The flattened representation carries the merged registry as a first-class field, and downstream consumers (graph construction, simulation backends, emit) resolve surviving references against it.
+**Definition registries flatten with their components** (from `esm: 0.9.0`, §9.6.4 rule 7). A carried definition body's free variable references (names it reads that are neither its `params` nor loop symbols it binds) are read at each reference's site, in the scope of the (sub)system that owns the reference (§9.6.4 rules 1–2), and one definition may serve references in several scopes — a leaf mounted twice, or a component's definition referenced from one of its subsystems. Flatten therefore **closes** every carried body before the merge: its free names become trailing `params`, sorted by UTF-8 bytes, a nested reference in a body binding its callee's added parameters to the same names; and every surviving reference binds each added parameter to its own name, which the variable-renaming map flatten applies to the reference's site then scopes with the rest of the site's expression (definition `params` shadow, exactly as in §9.6.1). A body `k * x` with `params: ["x"]`, referenced from `Host.Sub1` and from `Host.Sub2`, flattens to ONE entry with `params: ["x", "k"]`, bound `k: "Host.Sub1.k"` at the first site and `k: "Host.Sub2.k"` at the second. Component registries then merge into the flattened document: deep-equal same-name entries dedupe at first occurrence — the common case, two components importing one stencil; on a non-deep-equal same-name collision each distinct definition is renamed deterministically to `<ComponentPath>.<name>` after the first owner, in document order, that carries it (owners whose entries are deep-equal once their own nested references are renamed share that one entry), rewriting every owner's references in lockstep. **Collisions propagate along the reference DAG:** a declaration whose body references a colliding name is itself treated as colliding, in every component that carries it, and is renamed as above too — otherwise a byte-identical wrapper over per-component leaves would dedupe under its bare name and its single surviving body would reference a name the merged registry no longer holds. Equivalently: a name that survives under its bare spelling never reaches a renamed one. The rename is total and deterministic; there is no new diagnostic. The flattened representation carries the merged registry as a first-class field, and downstream consumers (graph construction, simulation backends, emit) resolve surviving references against it.
 
-**The component scoping is a precondition of the merge, not a part of it.** The free-variable rename above runs on each component's carried bodies **before** the union is taken, and the deep-equal dedup compares the post-scoping bodies. Merging unscoped bodies is unsound, not merely unpolished: two components that import one library and each supply their own `inv_dx` carry byte-identical registry entries whose free `inv_dx` denotes a *different* variable in each, and the one surviving deduped body is correct for neither. Scoping is also what *creates* most real collisions — it makes any body mentioning a component variable per-component distinct, which is why N identical models suffice to trigger the rename and its DAG propagation. A binding MUST therefore apply the scoping in the same pass that namespaces the component's equations, so bodies and reference sites move in lockstep, and merge afterwards.
+**Closing is a precondition of the merge, not a part of it.** The closing above runs on each component's carried bodies **before** the union is taken, and the deep-equal dedup compares closed bodies. A closed body reads nothing from any scope, so deduplicating it is sound: two components that import one library and each supply their own `inv_dx` carry one entry, whose `inv_dx` parameter each component's references bind to its own variable. Scoping a body to one component instead (prefixing its free names) is unsound wherever a reference sits in a subsystem of that component, and it splits one definition into a copy per scope. A binding MUST bind the added parameters at the reference sites in the same pass that namespaces the component's equations, so bodies and reference sites move in lockstep, and merge afterwards.
 
-**Applicability across bindings.** The obligation binds any binding whose flattened representation carries a surviving registry. A binding that expands every reference at load (§9.6.4 rule 2 — the Expand-at-build pipeline) reaches flatten with no surviving reference and no registry to scope, so the obligation is vacuous for it; it is inherited in full the moment that binding grows a reference-preserving flatten path. A binding MAY additionally expose the union half alone as a function over the **un-namespaced** component view — this is what the cross-binding `flatten_template_registries` conformance surface is. That surface implements the merge only: it dedupes and collision-renames exactly as above, on whatever bodies it is given, and its result is self-consistent with the un-namespaced document it returns. A caller that goes on to namespace MUST compose it with the scoping; conformance therefore pins both halves — the merge in every binding, and the scoping∘merge composition in every binding that carries a registry through flatten.
+**Applicability across bindings.** The obligation binds any binding whose flattened representation carries a surviving registry. A binding that expands every reference at load (§9.6.4 rule 2 — the Expand-at-build pipeline) reaches flatten with no surviving reference and no registry to close, so the obligation is vacuous for it; it is inherited in full the moment that binding grows a reference-preserving flatten path. A binding MAY additionally expose the union half alone as a function over the **un-namespaced** component view — this is what the cross-binding `flatten_template_registries` conformance surface is. That surface implements the merge only: it dedupes and collision-renames exactly as above, on whatever bodies it is given, and its result is self-consistent with the un-namespaced document it returns. A caller that goes on to namespace MUST compose it with the closing; conformance therefore pins both halves — the merge in every binding, and the closing∘merge composition in every binding that carries a registry through flatten.
 
 **Per-term provenance is a property of the flattened system, not of the document.** Flattening sums `operator_compose` and `couple` contributions into one right-hand side per equation. The flattened representation keeps, beside each equation, the ordered list of those contributions, each with its author: the dotted path of the component whose equation contained it, or the index of the coupling entry that wrote it (a `couple` connector's expression, a `variable_map` Expression transform's definition). The right-hand side is the left-fold sum of the list. Authorship survives every rewrite flatten applies (`translate` renames, `variable_map` substitution, the pointwise lift), because those change a term's inputs, not who wrote it. Nothing in a document carries the list and no format version gates it; a consumer that splits a right-hand side into operators reads it to select terms by author. Library Specification §4.7.5, "Per-term provenance", specifies how each flattening step fills it.
 
@@ -6649,10 +6745,11 @@ A coupling-library file **MUST NOT** itself contain a `coupling_import` entry
 **No discretization inside a library edge, and no rewrite-target transform definitions.** A regridding
 `transform` (§10.4) references the *receiving* component's build-once weight arrays and index sets;
 after binding, the `to` target is a real component whose registry is in scope, so the library needs
-no `index_sets` or definitions of its own. Because a library edge's transform definitions expand at
-flatten (§10.4 carve-out, §10.10.3) — after the §9.6.3 fixpoint — a library transform MUST expand
-to an already-lowered form; a transform definition that would introduce a rewrite-target operator
-(`grad` / `div` / spatial `D`) is rejected with `coupling_library_illegal_payload`.
+no `index_sets` or definitions of its own. Because a library edge's transform references resolve at
+flatten (§10.4 carve-out, §10.10.3) — after the §9.6.3 fixpoint — the definitions a library transform
+references MUST already be lowered; a transform whose references reach a definition that would
+introduce a rewrite-target operator (`grad` / `div` / `partial`) is rejected with
+`coupling_library_illegal_payload`.
 
 **Role-scoped reference resolution.** In an ordinary document a coupling edge's top-level segment
 must resolve to a top-level `models` / `reaction_systems` key (§4.6). A library
@@ -6806,8 +6903,9 @@ Two consequences of expanding inside flatten are normative:
   so it runs only for a document whose location the loader recorded (§4.7); a document with no
   location of its own leaves the mis-bind to flatten rather than resolving the `ref` against the
   process working directory.
-- **A library-edge transform's definitions expand at flatten** against the bound `to` owner's
-  registry (§10.4 carve-out), to an already-lowered form.
+- **A library-edge transform's references resolve at flatten** against the bound `to` owner's
+  registry (§10.4 carve-out) and stay references, owned by that component; the definitions they
+  reference are already lowered.
 
 Two independent import edges referencing the same library with *different* `bind` maps expand to two
 independent edge sets. A double-driven `param_to_var` target (two edges, imported or inline, whose
@@ -6834,7 +6932,7 @@ arrive at run time. This holds for a SCALAR parameter exactly as for a shaped on
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`). |
 | `subsystem_ref_is_coupling_library` | A §4.7 subsystem `ref` targets a coupling-library file. |
 | `operator_import_is_coupling_library` | A §9.7.2 definition import targets a coupling-library file. |
-| `coupling_library_illegal_payload` | A coupling-library file declares `models` / `reaction_systems` / `data_sources` / `domain` / `index_sets` / `metaparameters` / `operators`; **or** contains a `callback` entry or a library edge carrying `operator_imports`; **or** carries a library edge whose transform definition would expand to a rewrite-target operator; **or** (if the binding narrows the entry set) an entry type it does not permit. |
+| `coupling_library_illegal_payload` | A coupling-library file declares `models` / `reaction_systems` / `data_sources` / `domain` / `index_sets` / `metaparameters` / `operators`; **or** contains a `callback` entry or a library edge carrying `operator_imports`; **or** carries a library edge whose transform references a definition that would introduce a rewrite-target operator; **or** (if the binding narrows the entry set) an entry type it does not permit. |
 | `coupling_library_nested_import` | A coupling-library file contains a `coupling_import` entry. |
 | `coupling_edge_unknown_role` | A library edge's top-level system segment, at any occurrence site, is not a declared role. |
 | `coupling_role_unused` | A declared role appears at no occurrence site in any library edge. |
@@ -7033,7 +7131,7 @@ Pinned by `tests/conformance/ic_at_start/` (CONFORMANCE_SPEC §5.56).
 
 ### 11.5 Boundary conditions
 
-Boundary conditions are **not** a declarable construct — there is no `boundary_conditions` field and no boundary-condition op. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so the boundary condition lives **inside the discretization rewrite rule** that lowers `grad`/`div`/`laplacian` to a `faq` + `makearray` stencil: the interior region is the stencil, and the boundary-face `makearray` regions encode the BC (Dirichlet → fixed value; Neumann/zero-gradient → one-sided difference; Robin → the solved boundary expression; a seam shared with another variable → an `index` into that variable; periodic → the gather's periodic policy, no override). See §9.6.8. A boundary condition therefore cannot be specified anywhere outside its discretization rule.
+Boundary conditions are **not** a declarable construct — there is no `boundary_conditions` field and no boundary-condition op. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so the boundary condition lives **inside the discretization rewrite rule** that lowers a `partial` (or any other operator call) to a `faq` + `makearray` stencil: the interior region is the stencil, and the boundary-face `makearray` regions encode the BC (Dirichlet → fixed value; Neumann/zero-gradient → one-sided difference; Robin → the solved boundary expression; a seam shared with another variable → an `index` into that variable; periodic → the gather's periodic policy, no override). See §9.6.8. A boundary condition therefore cannot be specified anywhere outside its discretization rule.
 
 **BCs from data.** The boundary-face value may be an `index` into a **data-fed parameter** (one whose `update` draws from a `data_sources` entry) exactly as it may index any other variable — so a Dirichlet or seam boundary value can be supplied from data (`index(O3_boundary, …)` in the boundary region). This is the same index-into-another-variable mechanism; it needs no special construct.
 
@@ -7239,7 +7337,7 @@ and **update handlers** (§5.5), which run control logic at update time. (A sour
 is pure I/O — it does not regrid; transferring its fields onto a model's target
 grid is a model concern, §8.) The `.esm` file declares *what* they provide and
 *what* they need, but delegates *how* to the runtime. Everything else is math in
-the file. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed via `grad`/`div`/`laplacian` PDE operators in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are operator definitions (§9.6), most from the standard library (§9.7.1), whose bodies are trees of §4.2 operators.
+the file. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed as `partial` terms (or other operator calls) in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are operator definitions (§9.6), most from the standard library (§9.7.1), whose bodies are trees of §4.2 operators.
 
 ### Expression AST over string math
 
@@ -7271,7 +7369,7 @@ Many physical parameterizations are algebraic or ODE systems with no intrinsic s
 
 ### Coupled systems flatten to a single equation system
 
-The composition of multiple models and reaction systems resolves to a **single flat equation system** with dot-namespaced variables (`Atmosphere.Chemistry.O3`). This is not merely a convenience — it is the canonical intermediate representation that all downstream operations (simulation, validation, graph construction) consume. Dot-namespacing preserves provenance (you can always trace a variable back to its originating component) while producing a system that maps directly to a single solver object (MTK `ODESystem` or `PDESystem` in Julia, a single ODE integrator call in Python). The separation between modular component definitions (in the `.esm` file) and the unified flat system (produced by flattening) mirrors the distinction between source code and compiled output: the file is for humans and version control, the flattened system is for machines and solvers.
+The composition of multiple models and reaction systems resolves to a **single flat equation system** with dot-namespaced variables (`Atmosphere.Chemistry.O3`). This is not merely a convenience — it is the canonical intermediate representation that all downstream operations (simulation, validation, graph construction) consume. Dot-namespacing preserves provenance (you can always trace a variable back to its originating component) while producing a system that maps directly to a single solver object (an MTK `ODESystem` in Julia, a single ODE integrator call in Python). The separation between modular component definitions (in the `.esm` file) and the unified flat system (produced by flattening) mirrors the distinction between source code and compiled output: the file is for humans and version control, the flattened system is for machines and solvers.
 
 ---
 

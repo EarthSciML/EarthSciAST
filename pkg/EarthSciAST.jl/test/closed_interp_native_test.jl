@@ -208,7 +208,8 @@ _ti_count_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_sorted, 
 
     # One bracket index per lookup: `linear` writes it six times, and every
     # copy sits in its innermost branch, so that branch computes it once and
-    # the count is emitted once per lookup (three lookups).
+    # the count is searched once per lookup (three lookups, which call one
+    # compiled `linear` with their own tables).
     @testset "the bracket index runs once per lookup" begin
         doc = _ti_doc(:cell, n)
         _, tn, _ = _ti_eval(doc, :native; times = (0.0,))
@@ -562,6 +563,14 @@ function _ti_sections(x, out = Any[], seen = Base.IdSet{Any}())
     end
     return out
 end
+# `doc` with its template references expanded: the whole-array contraction
+# tier's own tests below need the counts written out in the observed itself (a
+# reference is a call, whose body that tier does not see).
+function _ti_expanded(doc)
+    path = tempname() * ".esm"
+    write(path, JSON3.write(doc))
+    return _TI.expand_flattened_refs(_TI.flatten(_TI.load_path(path)))
+end
 _ti_widest(g::Tuple) = isempty(g) ? 0 : max(length(g), maximum(_ti_widest, g))
 _ti_widest(_) = 0
 _ti_ngens(g::Tuple) = sum(_ti_ngens, g; init = 0)
@@ -634,10 +643,13 @@ _ti_ngens(_) = 1
                 )
             )
         )
-        dn, tn, _ = _ti_eval(doc, :native)
-        di, _, _ = _ti_eval(doc, :interpreter)
+        dn, tn, _ = _ti_eval(_ti_expanded(doc), :native)
+        di, _, _ = _ti_eval(_ti_expanded(doc), :interpreter)
         @test _ti_same(dn, di)
         @test get(tn, :array_contraction_consumer, 0) >= 1
+        # As template calls: the same bits.
+        dc, _, _ = _ti_eval(doc, :native)
+        @test _ti_same(dc, dn)
     end
 
     @testset "a section of more contractions than inference unrolls" begin
@@ -661,9 +673,11 @@ _ti_ngens(_) = 1
             "index_sets" => Dict("lev" => Dict("kind" => "interval", "size" => nl)),
             "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs, "expression_templates" => _ti_templates()))
         )
-        dn, tn, (f!, u0, p) = _ti_eval(doc, :native)
-        di, _, _ = _ti_eval(doc, :interpreter)
+        dn, tn, (f!, u0, p) = _ti_eval(_ti_expanded(doc), :native)
+        di, _, _ = _ti_eval(_ti_expanded(doc), :interpreter)
         @test _ti_same(dn, di)
+        dc, _, _ = _ti_eval(doc, :native)
+        @test _ti_same(dc, dn)
         @test get(tn, :array_contraction_codegen, 0) >= m
         secs = _ti_sections(f!)
         @test sum(s -> _ti_ngens(s.gens), secs) >= m

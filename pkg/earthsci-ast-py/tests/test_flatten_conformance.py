@@ -188,29 +188,28 @@ def test_the_refusals_are_refused(entry):
     assert type(excinfo.value).__name__ == entry["error"]
 
 
-def test_the_template_registry_is_scoped_before_it_is_unioned():
-    """The step-4 ordering requirement that the union is taken over
-    COMPONENT-SCOPED bodies, pinned on the fixture built for it.
+def test_the_template_registry_is_closed_before_it_is_unioned():
+    """The step-4 ordering requirement that the union is taken over CLOSED
+    bodies (esm-spec §10.7), pinned on the fixture built for it.
 
     ``fixture_twins.esm`` has two byte-identical models importing one library
     whose body carries a free ``inv_dx`` — a model-local parameter, so it
-    denotes a DIFFERENT variable in each. Deduplicating the pre-scoping bodies
-    keeps one entry that is correct for neither model. Scoping first makes them
-    non-deep-equal, which routes them into the collision rename and keeps an
-    entry per owner, each wrapper reaching its own leaf.
+    denotes a DIFFERENT variable in each. Flatten closes every body first:
+    ``inv_dx`` becomes a parameter of ``interior_stencil`` (and, through the
+    nested references, of ``outer_stencil`` and ``d_x_rule``), which each
+    model's references bind to its own variable. The closed bodies are
+    identical, so the twins share one entry per template, correct for both.
     """
     path = FIXTURES_ROOT / (
         "conformance/expression_templates/flatten_registry_merge_transitive/fixture_twins.esm"
     )
     flat = flatten(load_path(str(path)))
-    assert set(flat.template_registry) == {
-        "A.interior_stencil",
-        "A.outer_stencil",
-        "B.interior_stencil",
-        "B.outer_stencil",
-    }, "bare names here mean the union was taken before the bodies were scoped"
-    body = json.dumps(flat.template_registry["A.interior_stencil"]["body"])
-    assert "A.inv_dx" in body and "B.inv_dx" not in body
+    assert set(flat.template_registry) == {"interior_stencil", "outer_stencil", "d_x_rule"}
+    for name, decl in flat.template_registry.items():
+        assert "inv_dx" in decl["params"], f"{name} was not closed over its free inv_dx"
+    # The body itself still reads its (now explicit) parameter, unscoped.
+    body = json.dumps(flat.template_registry["interior_stencil"]["body"])
+    assert '"inv_dx"' in body and "A.inv_dx" not in body and "B.inv_dx" not in body
     # Nothing dangles: every nested reference resolves in the merged registry.
     for name, decl in flat.template_registry.items():
         for ref in _apply_names(decl):

@@ -285,6 +285,9 @@ func defaultLoadCouplingRef(ref, basePath string) (map[string]any, error) {
 	// plain error is re-wrapped in this loader's own diagnostic code.
 	data, _, err := loadRefBytes(ref, basePath)
 	if err != nil {
+		if kept, ok := keptRefusal(err); ok {
+			return nil, kept
+		}
 		return nil, newETErr(CodeCouplingImportUnresolved,
 			fmt.Sprintf("coupling_import ref '%s' failed to load: %v", ref, err))
 	}
@@ -532,6 +535,9 @@ func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]Couplin
 			var etErr *ExpressionTemplateError
 			if errors.As(err, &etErr) {
 				return nil, err
+			}
+			if kept, ok := keptRefusal(err); ok {
+				return nil, kept
 			}
 			return nil, newETErr(CodeCouplingImportUnresolved,
 				fmt.Sprintf("coupling_import ref '%s' failed to load: %v", imp.Ref, err))
