@@ -841,10 +841,21 @@ TEMPLATE_ORIGIN_KEY = "__esm_template_origin"
 TEMPLATE_CALL_KEY = "__esm_template_call"
 
 
+#: The private registry-entry key on which a materialized ``partial`` /
+#: ``integral`` rule keeps the fixed unit expression its stripped ``match``
+#: gave (``template_instances._match_stripped``). The schema refuses it in an
+#: authored document, and the emitted registry drops it.
+FIXED_UNITS_KEY = "__esm_fixed_units"
+
+
 def _fixed_unit_expr(decl: Any) -> Any:
     """The fixed unit expression of ``partial`` / ``integral`` (esm-spec §4.2) a
     definition of either must agree with, read off its ``match`` pattern: the
-    pattern's operand over (or times) its axis field; ``None`` otherwise."""
+    pattern's operand over (or times) its axis field; ``None`` otherwise. A
+    rule a firing materialized has lost its ``match`` and carries the
+    expression under :data:`FIXED_UNITS_KEY` instead."""
+    if _is_object(decl) and decl.get(FIXED_UNITS_KEY) is not None:
+        return decl[FIXED_UNITS_KEY]
     m = decl.get("match") if _is_object(decl) else None
     if not _is_object(m):
         return None
@@ -1895,11 +1906,18 @@ def materialize_component_block(
         # A `match` rule nothing references still carries its `match` (a
         # referenced one was materialized without it, §9.6.4 rule 3).
         if n in named and not (_is_object(named[n]) and named[n].get("match") is not None):
-            block[n] = named[n]
+            block[n] = _without_private_keys(named[n])
     mat_names = sorted(materialized - authored_set)
     for n in mat_names:
-        block[n] = named[n]
+        block[n] = _without_private_keys(named[n])
     return block, bool(refnames), bool(mat_names)
+
+
+def _without_private_keys(decl: Any) -> Any:
+    """A registry entry as a writer emits it: without :data:`FIXED_UNITS_KEY`."""
+    if _is_object(decl) and FIXED_UNITS_KEY in decl:
+        return {k: v for k, v in decl.items() if k != FIXED_UNITS_KEY}
+    return decl
 
 
 #: The esm version an emitted or loaded document carrying an `operators` block

@@ -499,3 +499,41 @@ def test_a_block_on_a_nested_inline_subsystem_is_lowered():
     f = load_string(json.dumps(raw))
     leaf = f.models["Host"].subsystems["Mid"].subsystems["Inner"].equations[0].rhs
     assert leaf.op == "*" and leaf.args == [3, "c"]
+
+
+def test_a_fired_partial_rule_is_held_to_partials_fixed_unit():
+    """A ``partial`` rule that fires loses its ``match`` when rule 3
+    materializes it, but the call it wrote is still typed by ``partial``'s
+    fixed unit expression (esm-spec §4.2, §9.6.12 "Units"): ``partial(u, wrt:
+    x)`` has unit kg/m, so the equation checks, and the body ``f*k`` (unit kg)
+    is ``definition_unit_mismatch``. The emitted registry carries no private
+    key."""
+    raw = {
+        "esm": "2.4.0",
+        "metadata": {"name": "partial_fixed_unit"},
+        "models": {
+            "m": {
+                "variables": {
+                    "u": {"type": "parameter", "units": "kg", "default": 1.0},
+                    "x": {"type": "parameter", "units": "m", "default": 1.0},
+                    "k": {"type": "parameter", "units": "1", "default": 2.0},
+                    "y": {"type": "unknown", "units": "kg/m"},
+                },
+                "equations": [{"lhs": "y", "rhs": {"op": "partial", "args": ["u"], "wrt": "x"}}],
+                "operators": {
+                    "d_rule": {
+                        "params": ["f", "d"],
+                        "match": {"op": "partial", "args": ["f"], "wrt": "d"},
+                        "body": {"op": "*", "args": ["f", "k"]},
+                    }
+                },
+            }
+        },
+    }
+    from earthsci_ast import load_string
+
+    r = validate(load_string(json.dumps(raw)))
+    assert [e.code for e in r.structural_errors] == ["definition_unit_mismatch"]
+    assert "fixed unit expression of 'partial'" in r.structural_errors[0].message
+    emitted = emit_esm_string(emit_document(raw, "."))
+    assert "__esm_" not in emitted
