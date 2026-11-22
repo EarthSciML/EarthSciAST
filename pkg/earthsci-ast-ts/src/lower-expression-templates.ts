@@ -1500,6 +1500,27 @@ function matchStripped(decl: TemplateDecl): TemplateDecl {
 }
 
 /**
+ * esm-spec §9.6.1 / §9.6.4 rule 5: an entry only subsystems own (merged from a
+ * mounted or an authored subsystem's block) is written on the component as
+ * `reference_only`, so the written document's registry makes it no callable
+ * definition there and emit → load is a fixed point. Mirrors the Julia
+ * reference `_mark_subsystem_owned!`.
+ */
+function markSubsystemOwned(comp: Record<string, unknown>, L: Lowering): void {
+  const owners = L.calls.owners
+  if (owners.size === 0) return
+  const block = comp.operators
+  if (!isObject(block)) return
+  for (const n of owners.keys()) {
+    const d = block[n]
+    if (!isObject(d) || isReferenceOnly(d)) continue
+    const nd = { ...d, reference_only: true } as TemplateDecl
+    block[n] = nd
+    if (Object.prototype.hasOwnProperty.call(L.named, n)) L.named[n] = nd
+  }
+}
+
+/**
  * Esm-spec §9.6.4 rule 3 for one component whose expression positions (and the
  * coupling `transforms` it receives, `variable_map` entries) have reached the
  * §9.6.3 fixpoint: rewrite the body of every template instance their
@@ -2193,6 +2214,7 @@ export function lowerExpressionTemplates<T extends object>(
         checkCallArity(L.named[r]!.body, L, `${L.scope}.operators.${r}`)
       }
     }
+    markSubsystemOwned(comp, L)
   }
 
   // Validation discharge (esm-spec §9.6.9): the makearray-region check on the
