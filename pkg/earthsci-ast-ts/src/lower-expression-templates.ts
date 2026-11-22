@@ -485,6 +485,10 @@ function registeredWhere(
  * non-mutating, and the canonical serialized bytes are unchanged (JSON
  * serialization of the DAG re-expands it textually).
  */
+export function substituteBindings(body: Json, bindings: Record<string, Json>): Json {
+  return substitute(body, bindings)
+}
+
 function substitute(body: Json, bindings: Record<string, Json>): Json {
   const memo = new Map<object, Json>()
   const go = (node: Json): Json => {
