@@ -9,7 +9,7 @@
 # copies of the leaf; the §9.6.3 call-site fixpoint, the post-expansion
 # validators, and `_parse_expression` each re-walked/re-built the full tree —
 # a few-KB document within every documented limit (chain depth <=
-# MAX_TEMPLATE_EXPANSION_DEPTH = 32) expanded to millions of AST nodes and
+# MAX_TEMPLATE_EXPANSION_DEPTH, then 32) expanded to millions of AST nodes and
 # gigabytes of live memory.
 #
 # Usage (one depth per process, so ru_maxrss is a clean per-depth peak):
@@ -30,6 +30,7 @@
 #   depth=16  nodes=524,287        unique_dag_nodes=20  load=0.3s  maxrss=129MiB
 #   depth=30  nodes=8,589,934,591  unique_dag_nodes=34  load=0.3s  maxrss=129MiB
 #   depth=32  -> template_body_expansion_too_deep (33-template chain), as spec'd
+#               when the limit was 32 (it is now 64, equal to MAX_REWRITE_PASSES)
 #
 # (~0.3s / 129MiB is the package-import baseline of this environment.)
 

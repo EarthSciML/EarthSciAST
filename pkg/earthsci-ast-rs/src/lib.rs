@@ -246,8 +246,9 @@ pub use document::{
 // Brownian / discrete / sampled / constant.
 pub use classification::{
     Classification, LhsForm, SystemKind, algebraic_unknowns, brownian_parameters,
-    constant_parameters, discrete_parameters, is_ode_state, observed_definition_json,
-    observed_definitions, observed_unknowns, ode_states, sampled_parameters, system_kind,
+    constant_parameters, declared_system_kind, discrete_parameters, is_ode_state,
+    observed_definition_json, observed_definitions, observed_unknowns, ode_states,
+    sampled_parameters, system_kind,
 };
 pub use coupling_imports::{
     CouplingImportOptions, expand_coupling_imports, has_coupling_import, is_coupling_library_doc,
@@ -437,7 +438,7 @@ pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the
 /// `schema_version_matches_bundled_schema` test enforces it, and
 /// `parse::library_version()` (major-compat gating) derives from it.
-pub const SCHEMA_VERSION: &str = "2.3.0";
+pub const SCHEMA_VERSION: &str = "2.4.0";
 
 #[cfg(test)]
 mod version_tests {

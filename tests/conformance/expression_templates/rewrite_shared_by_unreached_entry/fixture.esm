@@ -1,0 +1,235 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "rewrite_shared_by_unreached_entry",
+    "description": "esm-spec §9.6.4 rule 3, a single rewritten body that another registry entry can still reach. The match-less template `ddx` holds a spatial `D` and is called once, with `u` (declared shape [x]), so `central_1d` (scoped by `where f: shape [x]`) fires in its body and every reached instance rewrites to the same body. But the authored match-less entry `wrap` references `ddx` and nothing in the component references `wrap`: it keeps its authored body, is emitted, and joins the registry of any document that mounts or flattens this component, where a reference to it may bind a variable of another shape. So `ddx` is not rewritten in place: it keeps its authored body, the rewritten body is registered as `ddx.variant1`, and the call site is re-pointed to it. The same holds transitively: `outer` references `inner` (whose body holds the `D`), the equation for `dw` references `outer`, and the unreferenced authored entry `hidden` references `outer`; `inner` and `outer` both keep their authored bodies and gain `inner.variant1` and `outer.variant1`, the second referencing the first. A template that only reached references name is still rewritten in place (see `rewrite_in_template_body/`).",
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.4 rule 3)"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "m": {
+      "expression_templates": {
+        "ddx": {
+          "params": [
+            "f"
+          ],
+          "body": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "x"
+          }
+        },
+        "wrap": {
+          "params": [
+            "g"
+          ],
+          "body": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ddx",
+            "bindings": {
+              "f": "g"
+            }
+          }
+        },
+        "inner": {
+          "params": [
+            "f"
+          ],
+          "body": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "x"
+          }
+        },
+        "outer": {
+          "params": [
+            "g"
+          ],
+          "body": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "inner",
+            "bindings": {
+              "f": "g"
+            }
+          }
+        },
+        "hidden": {
+          "params": [
+            "h"
+          ],
+          "body": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "outer",
+            "bindings": {
+              "g": "h"
+            }
+          }
+        },
+        "central_1d": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "x"
+          },
+          "where": {
+            "f": {
+              "shape": [
+                "x"
+              ]
+            }
+          },
+          "body": {
+            "op": "faq",
+            "args": [
+              "f"
+            ],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "f",
+                    {
+                      "op": "+",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "f",
+                    {
+                      "op": "-",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 0.5
+        },
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 1.5
+        },
+        "du": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        },
+        "dw": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "u"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "w"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "w"
+            ]
+          }
+        },
+        {
+          "lhs": "du",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ddx",
+            "bindings": {
+              "f": "u"
+            }
+          }
+        },
+        {
+          "lhs": "dw",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "outer",
+            "bindings": {
+              "g": "w"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

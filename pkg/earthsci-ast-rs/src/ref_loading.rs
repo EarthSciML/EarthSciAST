@@ -974,16 +974,16 @@ fn resolve_loaded_leaf(
         true,
     )?
     .unwrap_or_else(|| std::mem::take(comp));
-    // A mounted component is a self-contained build boundary (mirrors Julia
-    // `_load_ref` → `_lower_and_coerce`): lower under Option B, then `expand`,
-    // so the spliced component carries the fully-expanded Option-A image and
-    // the assembling document's lowering never resolves the leaf's template
-    // names against its own registry. A leaf with no §9.7 machinery still
-    // expands here: its own calls bind their parameters, so an `enum` op a
-    // parameter spells resolves against the leaf's block below (esm-spec
-    // §9.3).
+    // The leaf keeps its references (esm-spec §9.6.4 rule 1): it is lowered
+    // here, in its own file, and each component keeps the match-less template
+    // definitions its references read (its `match` rules have fired), which
+    // the mounting document merges into its own registry by flatten's rule —
+    // at its lowering for a subsystem mount
+    // (`lower_expression_templates::hoist_mounted_templates`), or as the
+    // mounted component's own registry at a top-level mount. Mirrors the Julia
+    // reference `_mounted_registries!`.
     crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
-    crate::lower_expression_templates::expand(&mut resolved)?;
+    crate::lower_expression_templates::mounted_registries(&mut resolved);
     *comp = resolved;
 
     // esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN `enums`
@@ -1118,7 +1118,8 @@ fn inline_toplevel_refs(
         let entry = obj
             .get_mut(form.block)
             .and_then(|v| v.as_object_mut())
-            .and_then(|m| m.remove(&name))
+            .and_then(|m| m.get_mut(&name))
+            .map(std::mem::take)
             .expect("edge entry present");
         let entry_obj = entry.as_object().expect("edge entry is an object");
         let ref_str = entry_obj
@@ -1335,11 +1336,13 @@ fn walk_subsystems(
         return Ok(());
     };
 
-    let names: Vec<String> = subs.keys().cloned().collect();
-    for name in names {
-        let entry = subs.remove(&name).unwrap_or(Value::Null);
-        let resolved = resolve_value(entry, scope, visited, registry.as_deref_mut())?;
-        subs.insert(name, resolved);
+    // Resolved in place, so the subsystems keep their document order (a
+    // `remove` here is a swap-remove, which reorders the map; the registry
+    // merge names a shared definition after its first owner in document order,
+    // esm-spec §9.6.4 rule 1).
+    for entry in subs.values_mut() {
+        let taken = std::mem::take(entry);
+        *entry = resolve_value(taken, scope, visited, registry.as_deref_mut())?;
     }
 
     Ok(())

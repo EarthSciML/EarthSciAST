@@ -24,6 +24,32 @@
 
 const APPLY_EXPRESSION_TEMPLATE_OP = "apply_expression_template"
 
+# Every expansion of a template reference made in this process (raw or typed),
+# and the `:tpl_expanded` build count: the explicit expansion utilities
+# (`Expand`, `expand_flattened_refs`, the `:mtk` target) are the only callers
+# expected to move it; load, flatten, validation and build leave it at 0.
+const TEMPLATE_EXPANSIONS = Threads.Atomic{Int}(0)
+_note_expansion!() = (Threads.atomic_add!(TEMPLATE_EXPANSIONS, 1); _count!(:tpl_expanded); nothing)
+
+"""
+    _BodyView
+
+How the rewrite engine sees a template body it rewrites for one template
+instance (esm-spec §9.6.4 rule 3): `params` — the template's parameters, each a
+leaf; `lit` — the literal the instance binds to each parameter in a structural
+position (a scalar field, a `ranges` bound or `from`, an `enum` argument);
+`entries` — each parameter's instance entry ([`_instance_entry`](@ref)), which
+a `where` `shape` constraint reads.
+"""
+struct _BodyView
+    params::Set{String}
+    lit::Dict{String, Any}
+    entries::Dict{String, String}
+end
+
+struct _NoLit end
+const _NO_LIT = _NoLit()
+
 # ---------------------------------------------------------------------------
 # Substitution
 # ---------------------------------------------------------------------------
@@ -200,7 +226,7 @@ references are handled through the §9.7.3 reference DAG, not by op membership.
 const _REWRITE_TARGET_OPS =
     Set{String}(
     [
-        "D", "grad", "div", "laplacian", "integral", "enum",
+        "D", "integral", "enum",
     ]
 )
 
@@ -247,8 +273,7 @@ _direct_T_op(node) = _direct_op_hit(node, _op_in_T)
 """
     _transitive_op_flags(templates, pred; graph = _template_graph(templates)) -> Dict{String,Bool}
 
-The one transitive flag behind [`_template_target_bearing`](@ref) (§9.6.4
-rule 3) and the enum-bearing check: a template is flagged iff its body
+The one transitive op flag (the library-edge enum check): a template is flagged iff its body
 contains an op satisfying `pred` anywhere (including inside nested references'
 `bindings`), or it references, transitively, a flagged template
 ([`_flagged`](@ref), exact on a graph with cycles). A caller that already
@@ -264,38 +289,10 @@ function _transitive_op_flags(
 end
 
 """
-    _template_target_bearing(templates) -> Dict{String,Bool}
-
-Per-template **target-bearing** flag (esm-spec §9.6.4 rule 3): body contains
-an op in **T** anywhere, or transitively references a target-bearing template.
-[`_transitive_op_flags`](@ref) with the `_op_in_T` predicate.
-"""
-_template_target_bearing(templates::AbstractDict)::Dict{String, Bool} =
-    _transitive_op_flags(templates, _op_in_T)
-
-"""
-    _ref_is_eager(node, target_bearing) -> Bool
-
-Whether an `apply_expression_template` `node` is **eager** (esm-spec §9.6.4
-rule 3): its referenced template is target-bearing, OR any of its `bindings`
-values contains an op in **T**. (After innermost-first eager expansion of the
-bindings, a "nested eager reference" always manifests as a T-op in the
-bindings, so this predicate subsumes that clause — see `_expand_eager`.)
-"""
-function _ref_is_eager(node, target_bearing::AbstractDict{String, Bool})::Bool
-    name_raw = _raw_get(node, "name")
-    name_raw === nothing && return false
-    get(target_bearing, string(name_raw), false) && return true
-    b = _raw_get(node, "bindings")
-    b === nothing && return false
-    return _direct_T_op(b)
-end
-
-"""
     _expand_refs_walk(node, named, scope, expand_pred, memo) -> node
 
 The ONE memoized, sharing-preserving reference-expansion walk behind
-[`_expand_eager`](@ref) and [`_expand_all`](@ref). Innermost-first: an
+[`_expand_all`](@ref) and the library-edge `enum` expansion. Innermost-first: an
 `apply_expression_template` node's `bindings` are rewritten before the node
 itself is considered; a node for which `expand_pred(node)` holds is expanded
 by pure substitution (`_expand_apply`) and its instantiated body re-walked;
@@ -320,6 +317,7 @@ function _expand_refs_walk(
             end
         end
         expand_pred(newnode) || return newnode
+        _note_expansion!()
         res = _rewrite_json_node(rw, _expand_apply(newnode, named, scope))
         # While marking (a mount's leaf, expanded at load), the root of the
         # expansion records that it came from an application (esm-spec
@@ -332,21 +330,6 @@ function _expand_refs_walk(
         return res
     end
 end
-
-"""
-    _expand_eager(node, named, target_bearing, scope) -> node
-
-The eager-expansion pre-pass (esm-spec §9.6.4 rule 3): expand — by pure
-substitution, innermost-first — every EAGER `apply_expression_template` node,
-and only eager nodes ([`_ref_is_eager`](@ref)). Non-eager (surviving)
-references are returned intact. Consumes no `MAX_REWRITE_PASSES` budget (it
-is a separate pre-pass). Sharing is preserved via the identity memo.
-"""
-_expand_eager(
-    node, named::AbstractDict, target_bearing::AbstractDict{String, Bool},
-    scope::String, memo::IdDict{Any, Any} = IdDict{Any, Any}()
-) =
-    _expand_refs_walk(node, named, scope, n -> _ref_is_eager(n, target_bearing), memo)
 
 # ---------------------------------------------------------------------------
 # Full expansion — `Expand` (esm-spec §9.6.4 rule 2)
@@ -419,7 +402,20 @@ match literally; arrays match elementwise (same length); objects match when
 every pattern key is present on `node` and matches (extra `node` keys are
 allowed, so a pattern constrains only the fields it names).
 """
-function _match_pattern(pattern, node, params::Set{String}, bindings::Dict{String, Any})::Bool
+function _match_pattern(
+        pattern, node, params::Set{String}, bindings::Dict{String, Any},
+        bv::Union{Nothing, _BodyView} = nothing
+    )::Bool
+    # Inside a template body (esm-spec §9.6.4 rules 3 and 4) a parameter is a
+    # leaf: a metavariable captures it whole, and any other pattern node sees
+    # it only as the literal its instance binds in a structural position (and
+    # never matches an operand-position parameter).
+    if bv !== nothing && node isa AbstractString && String(node) in bv.params &&
+            !(pattern isa AbstractString && String(pattern) in params)
+        lit = get(bv.lit, String(node), _NO_LIT)
+        lit === _NO_LIT && return false
+        return _match_pattern(pattern, lit, params, bindings)
+    end
     if pattern isa Bool
         return (node isa Bool) && node == pattern
     elseif pattern isa AbstractString
@@ -438,7 +434,7 @@ function _match_pattern(pattern, node, params::Set{String}, bindings::Dict{Strin
         _is_array(node) || return false
         length(pattern) == length(node) || return false
         for (pp, nn) in zip(pattern, node)
-            _match_pattern(pp, nn, params, bindings) || return false
+            _match_pattern(pp, nn, params, bindings, bv) || return false
         end
         return true
     elseif _is_object(pattern)
@@ -447,7 +443,7 @@ function _match_pattern(pattern, node, params::Set{String}, bindings::Dict{Strin
             ks = string(k)
             nv = _raw_get(node, ks)
             (nv === nothing && !_raw_haskey(node, ks)) && return false
-            _match_pattern(pv, nv, params, bindings) || return false
+            _match_pattern(pv, nv, params, bindings, bv) || return false
         end
         return true
     else
@@ -505,12 +501,19 @@ depends only on declarations and is byte-identical across bindings.
 """
 function _where_satisfied(
         where_c, bindings::Dict{String, Any},
-        shape_env::Dict{String, Vector{String}}
+        shape_env::Dict{String, Vector{String}},
+        bv::Union{Nothing, _BodyView} = nothing
     )::Bool
     where_c === nothing && return true
     for (p, req) in where_c
         b = get(bindings, p, nothing)
         b isa AbstractString || return false
+        # A template-body parameter satisfies it iff its instance binds a bare
+        # variable of exactly that declared shape (esm-spec §9.6.4 rule 3).
+        if bv !== nothing && String(b) in bv.params
+            get(bv.entries, String(b), "") == _shape_entry(req) || return false
+            continue
+        end
         shp = get(shape_env, string(b), nothing)
         shp === nothing && return false
         shp == req || return false
@@ -587,12 +590,14 @@ by [`_rewrite_pass`](@ref). `priority` and `decl_index` (1-based declaration
 position) carry the deterministic selection order — highest `priority` first,
 ties broken by earliest declaration. `where_clause` is the normalized static
 constraint map produced by [`_registered_where`](@ref) (`nothing` when the
-rule is unconstrained).
+rule is unconstrained). `param_list` is `params` in declared order: the keys
+of the reference a firing writes (esm-spec §9.6.3 constraint 7).
 """
 struct _RewriteRule
     name::String
     pattern::Any
     params::Set{String}
+    param_list::Vector{String}
     body::Any
     priority::Int
     decl_index::Int
@@ -600,86 +605,102 @@ struct _RewriteRule
 end
 
 """
-    _ComponentRegistry
+    _Lowering
 
-One component's rewrite registry, captured by
-[`lower_expression_templates`](@ref): `named` — every template declaration
-keyed by name, consulted by `apply_expression_template` (order-independent);
-`match_rules` — the auto-applied rules pre-sorted into §9.6.3 selection order;
-`shape_env` — the component's static shape environment
-([`_component_shape_env`](@ref)) for `where` constraint evaluation. This is
-everything needed to rewrite a coupling `variable_map` transform against the
-RECEIVING component (esm-spec §10.4).
+One component's rewrite state (esm-spec §9.6.3, §9.6.4 rule 3): `named` — every
+template declaration keyed by name (the registry references resolve against;
+rule 3 adds its variants here); `match_rules` — the auto-applied rules
+pre-sorted into §9.6.3 selection order; `shape_env` — the component's static
+shape environment ([`_component_shape_env`](@ref)) for `where` constraints;
+`enums` — the document's `enums` block, for the per-instance `enum` lowering
+of rule 3; `depth` — the rewrite depth of each reference a firing wrote (the
+pass that wrote it; a reference the author wrote has depth 0 and no entry).
+This is also everything needed to rewrite a coupling `variable_map` transform
+against the RECEIVING component (esm-spec §10.4).
 """
-struct _ComponentRegistry
+struct _Lowering
     named::Dict{String, Any}
     match_rules::Vector{_RewriteRule}
     shape_env::Dict{String, Vector{String}}
-    target_bearing::Dict{String, Bool}
+    enums::Any
+    scope::String
+    depth::IdDict{Any, Int}
 end
 
 """
-    _rewrite_pass(node, named, sorted_rules, scope, last, shape_env) -> (new_node, changed)
+    _rule_reference(rule, captured) -> node
+
+What a firing of `rule` writes in place of the matched node (esm-spec §9.6.3
+constraint 7): a reference to the rule bound to what the match captured, a
+parameter the match never bound being bound to its own name. A rule whose body
+is a single leaf writes the leaf (for one of its parameters, what that
+parameter bound): there is no body to share.
+"""
+function _rule_reference(rule::_RewriteRule, captured::Dict{String, Any})
+    body = rule.body
+    if !_is_object(body) && !_is_array(body)
+        body isa AbstractString && String(body) in rule.params &&
+            return get(captured, String(body), String(body))
+        return body
+    end
+    b = OrderedDict{String, Any}()
+    for p in rule.param_list
+        b[p] = get(captured, p, p)
+    end
+    return OrderedDict{String, Any}(
+        "op" => APPLY_EXPRESSION_TEMPLATE_OP, "args" => Any[],
+        "name" => rule.name, "bindings" => b
+    )
+end
+
+"""
+    _rewrite_pass(node, L, pass, last, bv) -> (new_node, changed)
 
 One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3), a
-sharing-preserving [`_rewrite_json`](@ref) walk. At each object node the engine first tries to fire
-a rule AT the node before descending:
-
-1. an `apply_expression_template` op is expanded (`_expand_apply`), OR
-2. the first rule in `sorted_rules` (pre-sorted highest-`priority`-first, ties by
-   declaration order) whose `match` pattern structurally matches the node AND
-   whose `where` constraints (if any) are satisfied by the resulting bindings
-   fires. Constraint filtering is part of match ELIGIBILITY (esm-spec §9.6.3
-   constraint 2): a constraint-excluded rule is treated exactly like a
-   non-matching rule at this node, so the scan proceeds to the next candidate
-   in priority / declaration order.
-
-A fired rule's body replaces the node and the walk does NOT descend into that
-freshly-produced body during this pass (it is revisited next pass) — the
-replace-verbatim contract. If nothing fires, the walk descends into the
-node's children. `changed` is `true` iff any rewrite occurred in this
-subtree; `last` (a `Ref{String}`) records the op of the most recent rewrite,
-for the non-convergence diagnostic. `shape_env` is the enclosing component's
-static shape environment (`_component_shape_env`).
+sharing-preserving [`_rewrite_json`](@ref) walk. At each object node the first
+rule in `L.match_rules` (highest `priority` first, ties by declaration order)
+whose `match` pattern matches the node AND whose `where` constraints hold
+fires; constraint filtering is part of match eligibility (§9.6.3 constraint 2).
+A firing writes a reference to the rule ([`_rule_reference`](@ref), constraint
+7), recorded in `L.depth` at depth `pass`, and the walk does not descend into
+it during this pass. At a reference — authored or written — no pattern
+matches (§9.6.4 rule 4), but the walk descends into the values of its
+`bindings`, which are expressions of the call site. `bv` is the template-body
+view when `node` is a template body being rewritten for one instance (§9.6.4
+rule 3), `nothing` at a component's expression positions. `last` records the
+name of the last rule that fired, for the non-convergence diagnostic.
 """
 function _rewrite_pass(
-        node, named::Dict{String, Any},
-        sorted_rules::Vector{_RewriteRule},
-        scope::String, last::Ref{String},
-        shape_env::Dict{String, Vector{String}},
-        target_bearing::Dict{String, Bool}
+        node, L::_Lowering, pass::Int, last::Ref{String},
+        bv::Union{Nothing, _BodyView} = nothing
     )
     changed = Ref(false)
     # One rewrite per unique node: the rewrite of a node is a function of the
-    # node alone (matching is structural; the registries and `shape_env` are
-    # fixed for the pass), so a subtree shared under many parents is rewritten
-    # once and its result shared, keeping the pass linear in unique nodes.
-    out = _rewrite_json(node; leaves = false) do _, n
+    # node alone, so a subtree shared under many parents is rewritten once.
+    out = _rewrite_json(node; leaves = false) do rw, n
         op = _raw_get(n, "op")
         op_str = op === nothing ? "" : string(op)
-        # Outermost-first: fire a rule AT this node before descending.
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            # esm-spec §9.6.4 rule 4 (Option B): a surviving (non-eager)
-            # reference is a LEAF: the engine does not descend into its
-            # `bindings`, no rule fires inside it, and it survives the
-            # fixpoint. The eager pre-pass (`_expand_eager`) has removed the
-            # eager ones; one passed in unexpanded is expanded here.
-            _ref_is_eager(n, target_bearing) || return n
-            last[] = APPLY_EXPRESSION_TEMPLATE_OP
-            changed[] = true
-            return _expand_eager(n, named, target_bearing, scope)
+            b = _raw_get(n, "bindings")
+            (b === nothing || !_is_object(b)) && return n
+            nb = _rewrite_json_children(rw, b)
+            nb === b && return n
+            nn = OrderedDict{String, Any}(
+                string(k) => (string(k) == "bindings" ? nb : v) for (k, v) in pairs(n)
+            )
+            d = get(L.depth, n, nothing)
+            d === nothing || (L.depth[nn] = d)
+            return nn
         end
-        for rule in sorted_rules
+        for rule in L.match_rules
             bindings = Dict{String, Any}()
-            if _match_pattern(rule.pattern, n, rule.params, bindings) &&
-                    _where_satisfied(rule.where_clause, bindings, shape_env)
-                last[] = op_str
+            if _match_pattern(rule.pattern, n, rule.params, bindings, bv) &&
+                    _where_satisfied(rule.where_clause, bindings, L.shape_env, bv)
+                last[] = rule.name
                 changed[] = true
-                # Instantiate by pure substitution (through nested
-                # references' `bindings`; `name` is never a site). An eager
-                # reference the instantiation introduces expands as part of
-                # the same rewrite (§9.6.4 rule 4).
-                return _expand_eager(_substitute(rule.body, bindings), named, target_bearing, scope)
+                r = _rule_reference(rule, bindings)
+                _is_apply_node(r) && (L.depth[r] = pass)
+                return r
             end
         end
         return _JSON_DESCEND
@@ -688,40 +709,30 @@ function _rewrite_pass(
 end
 
 """
-    _rewrite_to_fixpoint(node, named, sorted_rules, scope) -> rewritten node
+    _rewrite_to_fixpoint(node, L, scope; bv = nothing) -> (rewritten node, productive passes)
 
-Drive `_rewrite_pass` to a fixpoint (esm-spec §9.6.3): repeat pre-order passes
-until a pass performs zero rewrites, or reject the file with
-`rewrite_rule_nonterminating` once `MAX_REWRITE_PASSES` productive passes have
-run without converging. This bound — not a static check — is the authoritative
-termination guard, so a self-reintroducing rule fails to converge rather than
-being flagged up front.
+Drive [`_rewrite_pass`](@ref) to a fixpoint (esm-spec §9.6.3): repeat pre-order
+passes until a pass performs zero rewrites. A rewrite made in pass `p` has
+depth `p`; one whose depth would exceed `MAX_REWRITE_PASSES` rejects the file
+with `rewrite_rule_nonterminating` (§9.6.4 rule 3, "Rewrite depth"). This bound
+— not a static check — is the authoritative termination guard, so a
+self-reintroducing rule fails to converge rather than being flagged up front.
 """
 function _rewrite_to_fixpoint(
-        node, named::Dict{String, Any},
-        sorted_rules::Vector{_RewriteRule}, scope::String,
-        shape_env::Dict{String, Vector{String}} = _EMPTY_SHAPE_ENV,
-        target_bearing::Dict{String, Bool} = _template_target_bearing(named)
+        node, L::_Lowering, scope::String;
+        bv::Union{Nothing, _BodyView} = nothing
     )
     last = Ref{String}("")
-    # esm-spec §9.6.4 rule 3 / §7.1 step 5: the eager-expansion pre-pass runs
-    # BEFORE the fixpoint and consumes no `MAX_REWRITE_PASSES` budget. It
-    # removes every eager reference (target-bearing, or T-op in bindings) so the
-    # fixpoint and the later `unlowered_operator` gate walk a tree in which no
-    # rewrite-target op hides inside a surviving reference.
-    current = _expand_eager(node, named, target_bearing, scope)
-    for _pass in 1:MAX_REWRITE_PASSES
-        current, changed = _rewrite_pass(
-            current, named, sorted_rules, scope, last,
-            shape_env, target_bearing
-        )
-        changed || return current   # fixpoint reached
+    current = node
+    for pass in 1:(MAX_REWRITE_PASSES + 1)
+        current, changed = _rewrite_pass(current, L, pass, last, bv)
+        changed || return (current, pass - 1)
     end
     throw(
         ExpressionTemplateError(
             ERROR_CODES.REWRITE_RULE_NONTERMINATING,
             "$scope: expression-template rewriting did not converge within " *
-                "MAX_REWRITE_PASSES=$MAX_REWRITE_PASSES passes (last rewritten op " *
+                "MAX_REWRITE_PASSES=$MAX_REWRITE_PASSES passes (last rule fired " *
                 "'$(last[])'). A `match` rule likely re-introduces its own pattern " *
                 "(esm-spec §9.6.3)."
         )
@@ -836,8 +847,8 @@ instantiation-independent. Every retained template body (match and match-less)
 is validated directly; its region bounds are already concrete integers.
 """
 function _validate_makearray_regions_in_registries(registries)
-    for (_, reg) in registries
-        for (tname, decl) in reg.named
+    for named in registries
+        for (tname, decl) in named
             body = _raw_get(decl, "body")
             body === nothing && continue
             _validate_makearray_regions(
@@ -935,16 +946,17 @@ them) and its match-less definitions, already closed in its own file, on its
 own `expression_templates` block. Each such block joins `comp`'s by the rule
 flatten uses to merge component registries (`_merge_flat_registry`):
 deep-equal entries are kept once, and a name two non-equal entries share is
-renamed in every owner to `<owner path>.<name>`, with that owner's references
-renamed in lockstep. The owner path of `comp`'s own entries is `cname`, of a
-mounted block its subsystem path below `comp` (`Sub` or `Sub.Inner`).
+renamed to `<owner path>.<name>`, one entry per distinct definition (named
+after its first owner), with each owner's references renamed in lockstep. The
+owner path of `comp`'s own entries is `cname`, of a mounted block its
+subsystem path below `comp` (`Sub` or `Sub.Inner`).
 
-A mounted body's free names (the mounted model's own variables and
-subsystems) are first written as `comp` reads them (`T` becomes `Sub.T`), so
-the body still reads the mounted model's names once it sits in `comp`'s
-registry (flatten scopes it further, as every body of `comp`). The mounted
-subtree below the mount point keeps naming its own entries; only `comp`'s
-other sites follow `comp`'s renames.
+A mounted body keeps the mounted model's own names: its free names are read in
+the scope of the subsystem that owns the reference, as an authored body's are
+at its call site (esm-spec §9.6.4 rule 1). So a leaf mounted twice brings two
+identical blocks, which keep one definition. The mounted subtree below the
+mount point keeps naming its own entries; only `comp`'s other sites follow
+`comp`'s renames.
 """
 function _hoist_mounted_templates!(comp::AbstractDict, cname::String)
     mounts = Tuple{String, Any}[]          # (subsystem path, subsystem)
@@ -984,7 +996,10 @@ function _merge_mounted_blocks(own, cname::String, mounts)
             if _raw_get(d, "match") === nothing
     )
     for (path, sub) in mounts
-        blocks["models.$path"] = _mounted_block_as_read_from_parent(sub, path)
+        blocks["models.$path"] = OrderedDict{String, Any}(
+            string(n) => d for (n, d) in pairs(_raw_get(sub, "expression_templates"))
+                if _raw_get(d, "match") === nothing
+        )
     end
     merged, rename = _merge_flat_registry(blocks)
     for (path, sub) in mounts
@@ -1043,43 +1058,6 @@ function _rename_outside_mounts!(node, rn)
     return
 end
 
-# The mounted model `sub`'s match-less definitions with each body's free names
-# of `sub` (its variables and subsystems, not the template's parameters)
-# written as its parent reads them, `path.name`.
-function _mounted_block_as_read_from_parent(sub, path::String)
-    blk = _raw_get(sub, "expression_templates")
-    local_names = Set{String}()
-    for key in ("variables", "species", "parameters", "subsystems")
-        v = _raw_get(sub, key)
-        if _is_object(v)
-            union!(local_names, (string(n) for n in keys(v)))
-        elseif _is_array(v)
-            for x in v
-                n = _raw_get(x, "name")
-                n isa AbstractString && push!(local_names, String(n))
-            end
-        end
-    end
-    captures = template_captures(blk)
-    out = OrderedDict{String, Any}()
-    for (n, d) in pairs(blk)
-        _raw_get(d, "match") === nothing || continue
-        body = _raw_get(d, "body")
-        if body === nothing
-            out[string(n)] = d
-            continue
-        end
-        params = Set{String}(_TemplateDecl(d).params)
-        scoped = namespace_expr(
-            expression_from_json(body), path, setdiff(local_names, params); captures = captures
-        )
-        nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(d))
-        nd["body"] = serialize_expression(scoped)
-        out[string(n)] = nd
-    end
-    return out
-end
-
 """
     lower_expression_templates(raw_data) -> OrderedDict{String,Any}
 
@@ -1133,11 +1111,13 @@ function lower_expression_templates(raw_data)
         end
     end
 
-    # Per-component rewrite registries, captured so coupling `variable_map`
+    # Per-component rewrite state, captured so coupling `variable_map`
     # expression transforms (esm-spec §10.4) can be rewritten against the
-    # RECEIVING component's registry below. Models are registered first; a
+    # RECEIVING component's rules below. Models are registered first; a
     # reaction system never overwrites a same-named model.
-    registries = Dict{String, _ComponentRegistry}()
+    enums = _raw_get(root, "enums")
+    lowerings = Tuple{Any, _Lowering, Vector{Any}}[]
+    by_name = Dict{String, Int}()
 
     for (compkind, cname, compraw) in _components(root)
         comp = compraw::OrderedDict{String, Any}
@@ -1175,8 +1155,6 @@ function lower_expression_templates(raw_data)
                 td = _TemplateDecl(decl)
                 m = td.match
                 if m !== nothing
-                    params = Set{String}(td.params)
-                    body = td.body
                     # `where` registration: normalize constraints and
                     # resolve every referenced index-set name against the
                     # consuming document's registry (esm-spec §9.6.1;
@@ -1188,9 +1166,8 @@ function lower_expression_templates(raw_data)
                     push!(
                         match_rules,
                         _RewriteRule(
-                            tname, m, params, body,
-                            _rule_priority(decl), decl_index,
-                            where_c
+                            tname, m, Set{String}(td.params), String[td.params...], td.body,
+                            _rule_priority(decl), decl_index, where_c
                         )
                     )
                 end
@@ -1200,55 +1177,48 @@ function lower_expression_templates(raw_data)
             # wins). `_rewrite_pass` then takes the FIRST matching rule.
             sort!(match_rules, by = r -> (-r.priority, r.decl_index))
         end
-        # Target-bearing flags (esm-spec §9.6.4 rule 3): drive the eager
-        # pre-pass and the surviving-reference leaf semantics.
-        target_bearing = _template_target_bearing(named)
-        # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
-        # non-template field (esm-spec §9.6.3): fires auto `match` rules and
-        # eagerly expands target-bearing references; NON-eager references
-        # survive (§9.6.4 rule 4).
         cscope = "$compkind.$cname"
+        L = _Lowering(named, match_rules, shape_env, enums, cscope, IdDict{Any, Int}())
+        # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
+        # non-template field (esm-spec §9.6.3): each firing writes a reference
+        # to its rule (constraint 7); references are leaves for matching and
+        # the walk descends into their bindings (§9.6.4 rule 4).
         for k in collect(keys(comp))
             k == "expression_templates" && continue
-            comp[k] = _rewrite_to_fixpoint(
-                comp[k], named, match_rules,
-                "$cscope.$k", shape_env, target_bearing
-            )
-            # Call-site checks on surviving references (§9.6.9): unknown
-            # name / bindings mismatch. A reference to a known template
-            # survives (Option B).
-            _check_surviving_refs(comp[k], named, "$cscope.$k")
+            comp[k], _ = _rewrite_to_fixpoint(comp[k], L, "$cscope.$k")
         end
-        # esm-spec §9.6.4 rule 1 (Option B): DO NOT delete the component's
-        # `expression_templates` block — it is the retained registered
-        # registry that emit materializes (§9.6.4 rule 5) and Expand
-        # consumes (§9.6.4 rule 2).
-        haskey(registries, cname) ||
-            (
-            registries[cname] =
-                _ComponentRegistry(named, match_rules, shape_env, target_bearing)
-        )
+        push!(lowerings, (comp, L, Any[]))
+        haskey(by_name, cname) || (by_name[cname] = length(lowerings))
     end
 
-    # Coupling `variable_map` expression transforms (esm-spec §10.4/§10.5):
-    # template invocations in a transform expand at load against the template
-    # registry of the component that owns the entry's `to` target — the
-    # receiving component, where a regridding library import (§9.7) lives.
-    # The transform is rewritten to fixpoint exactly as a field of that
-    # component would be (named templates + auto `match` rules, §9.6.3).
+    # Coupling `variable_map` expression transforms (esm-spec §10.4/§10.5) are
+    # rewritten against the rules of the component that owns the entry's `to`
+    # target — the receiving component, where a regridding library import
+    # (§9.7) lives — exactly as a field of that component would be.
     for (i, entry, tr, comp_name) in _variable_map_transforms(root)
-        reg = get(registries, comp_name, nothing)
-        reg === nothing && continue
-        entry["transform"] = _rewrite_to_fixpoint(
-            tr, reg.named,
-            reg.match_rules,
-            "coupling[$(i)].transform", reg.shape_env,
-            reg.target_bearing
-        )
-        _check_surviving_refs(
-            entry["transform"], reg.named,
-            "coupling[$(i)].transform"
-        )
+        idx = get(by_name, comp_name, nothing)
+        idx === nothing && continue
+        _, L, transforms = lowerings[idx]
+        entry["transform"], _ = _rewrite_to_fixpoint(tr, L, "coupling[$(i)].transform")
+        push!(transforms, entry)
+    end
+
+    # esm-spec §9.6.4 rule 3: the rules apply inside the bodies of the templates
+    # the references reach, once per template instance, without expanding any
+    # reference. esm-spec §9.6.4 rule 1 (Option B): the component's
+    # `expression_templates` block is RETAINED — the registry emit
+    # materializes (§9.6.4 rule 5) and Expand consumes (§9.6.4 rule 2).
+    for (comp, L, transforms) in lowerings
+        _apply_rule3!(comp, L, transforms)
+        # Call-site checks on surviving references (§9.6.9): unknown name /
+        # bindings mismatch, against the registry as rule 3 left it.
+        for k in collect(keys(comp))
+            k == "expression_templates" && continue
+            _check_surviving_refs(comp[k], L.named, "$(L.scope).$k")
+        end
+        for entry in transforms
+            _check_surviving_refs(entry["transform"], L.named, "$(L.scope) coupling transform")
+        end
     end
 
     # Validation discharge (esm-spec §9.6.9): the makearray-region check on the
@@ -1256,7 +1226,7 @@ function lower_expression_templates(raw_data)
     # it runs on the reference-preserving tree AND the retained folded template
     # bodies directly.
     _validate_makearray_regions(root)
-    _validate_makearray_regions_in_registries(registries)
+    _validate_makearray_regions_in_registries(L.named for (_, L, _) in lowerings)
 
     # Canonical arithmetic-operand literal narrowing (CONFORMANCE_SPEC §5.5.3.1
     # rule 1); see `_narrow_arg_literals!`.

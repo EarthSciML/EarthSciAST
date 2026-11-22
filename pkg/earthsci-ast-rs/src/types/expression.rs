@@ -555,8 +555,8 @@ pub struct ExpressionNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrt: Option<String>,
 
-    /// Dimensional analysis hint; also names the spatial dimension a `grad` /
-    /// `faq` op iterates over.
+    /// Dimensional analysis hint; also names the spatial dimension an open-tier
+    /// op (`integral`, a user op) or a `faq` op iterates over.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dim: Option<String>,
 

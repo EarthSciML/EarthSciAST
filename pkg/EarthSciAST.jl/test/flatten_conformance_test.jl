@@ -157,7 +157,7 @@ reaction-lowering cases" below). The case is compared in full.)
   `_spatial_dims_in_expr` harvests only a node's `dim` field and a spatial `D`
   carries its axis in `wrt`. It is the same axis the oracle's own expected
   equations print as `D(ChemistrySystem.O3)/Dz`, so the omission also makes the
-  case's `system_kind: "pde"` rest on `grad` alone. Julia's answer is the
+  case's system kind rest on `grad` alone. Julia's answer is the
   spec's; pinned locally below.
   (ii) `equations`: `DepositionSystem` writes `surface_flux = deposition_velocity
   * O3` for an `O3` it does not declare and no coupling binds — the same

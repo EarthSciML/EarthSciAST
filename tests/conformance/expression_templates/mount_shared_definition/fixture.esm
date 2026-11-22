@@ -1,0 +1,56 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "mount_shared_definition",
+    "description": "esm-spec §9.6.4 rule 1: one leaf mounted twice (Sub1, Sub2) brings ONE definition of each template, in the leaf's own names; a body's free name `k` is read in the scope of the subsystem that owns the reference, so Sub1's references read Sub1.k and Sub2's read Sub2.k (a coupling gives Sub2.k a different value). The leaf's `rate` collides with Host's own `rate`: Host's is renamed `Host.rate`, and the leaf's single definition `Sub1.rate` (named after its first owner) serves Sub2 too. `loss` does not collide and is kept once under its own name. Host's `pull` reads its free name `g`, which Host and its authored subsystem Inner both declare: Host's reference reads Host.g and Inner's reads Host.Inner.g, as their expansions do. In the flattened registry each body's free names are explicit trailing parameters, bound at every reference to its own site's names (esm-libraries-spec §4.7.5 step 4)."
+  },
+  "models": {
+    "Host": {
+      "expression_templates": {
+        "rate": {
+          "params": ["x"],
+          "body": {"op": "*", "args": [2, "x"]}
+        },
+        "pull": {
+          "params": ["x"],
+          "body": {"op": "*", "args": ["g", "x"]}
+        }
+      },
+      "variables": {
+        "y": {"type": "unknown", "units": "1", "default": 1.0},
+        "z": {"type": "unknown", "units": "1", "default": 2.0},
+        "g": {"type": "parameter", "units": "1", "default": 0.5},
+        "kh": {"type": "parameter", "units": "1", "default": 2.0}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [], "name": "rate", "bindings": {"x": "y"}}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [], "name": "pull", "bindings": {"x": "z"}}]}
+        }
+      ],
+      "subsystems": {
+        "Sub1": {"ref": "./leaf.esm"},
+        "Sub2": {"ref": "./leaf.esm"},
+        "Inner": {
+          "variables": {
+            "w": {"type": "unknown", "units": "1", "default": 3.0},
+            "g": {"type": "parameter", "units": "1", "default": 3.0}
+          },
+          "equations": [
+            {
+              "lhs": {"op": "D", "args": ["w"], "wrt": "t"},
+              "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [], "name": "pull", "bindings": {"x": "w"}}]}
+            }
+          ]
+        }
+      }
+    }
+  },
+  "coupling": [
+    {"type": "variable_map", "from": "Host.kh", "to": "Host.Sub2.k", "transform": "param_to_var"}
+  ]
+}

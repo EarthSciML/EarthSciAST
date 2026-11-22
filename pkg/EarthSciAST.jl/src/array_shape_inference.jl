@@ -96,7 +96,7 @@ function _scan_shape!(
     end
 
     # Generic recursion for other operators (+, -, *, /, ^, elementary
-    # functions, D, grad, etc.). The optional `expr_body` field is scanned
+    # functions, D, user ops, etc.). The optional `expr_body` field is scanned
     # only for array ops above, so we skip it here.
     for a in expr.args
         _scan_shape!(shapes, a, idx_env)

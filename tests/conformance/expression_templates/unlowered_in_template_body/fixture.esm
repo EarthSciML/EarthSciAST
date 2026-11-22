@@ -1,0 +1,142 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "unlowered_in_template_body",
+    "description": "esm-spec §9.6.3 constraint 6, §9.6.4 rule 3: the template `ddy` holds `D(f, wrt y)` and no rule matches a `D` along `y`. The document loads (loading is permissive) and the reference to `ddy` survives with its body unrewritten; the build gate walks the reachable body and rejects it with `unlowered_operator`, naming the op, the template and the first call site.",
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    },
+    "y": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "m": {
+      "expression_templates": {
+        "central": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "x"
+          },
+          "body": {
+            "op": "faq",
+            "args": [
+              "f"
+            ],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "f",
+                    {
+                      "op": "+",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "f",
+                    {
+                      "op": "-",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "ddy": {
+          "params": [
+            "f"
+          ],
+          "body": {
+            "op": "D",
+            "args": [
+              "f"
+            ],
+            "wrt": "y"
+          }
+        }
+      },
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x",
+            "y"
+          ],
+          "default": 0.5
+        },
+        "dy": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x",
+            "y"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "u"
+            ]
+          }
+        },
+        {
+          "lhs": "dy",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ddy",
+            "bindings": {
+              "f": "u"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

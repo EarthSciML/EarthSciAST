@@ -75,7 +75,7 @@ type DAEInfo struct {
 // ApplyDAEContract does not run the RFC §11 discretization pipeline: it is
 // intended to be composed with discretize() when that lands in Go, or called
 // standalone by tools that need DAE factoring on an already discretized model.
-// Models carrying an explicit non-ODE SystemKind ("nonlinear", "sde", "pde")
+// Models carrying an explicit non-ODE SystemKind ("nonlinear", "sde")
 // are skipped — the DAE contract only applies to would-be ODE systems.
 func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 	info := DAEInfo{
@@ -274,13 +274,18 @@ func isDifferentialEquation(eq Equation) bool {
 }
 
 // isDAETargetSystem reports whether the DAE contract applies to model.
-// Systems that are nonlinear, SDE, or PDE are handed off to other solver stacks
+// Systems that are nonlinear or SDE are handed off to other solver stacks
 // and are outside the DAE/ODE classification contract.
 //
 // The kind is the EFFECTIVE one (classify.go): the declared `system_kind` when
 // the model carries one, and the esm-spec §6.3.1 derivation otherwise. Before
 // 1.0.0 an undeclared model was assumed ODE, which quietly ran the factoring
 // over algebraic-only (nonlinear) systems that merely omitted the field.
+//
+// A model with spatial derivatives is an `ode` when it has a time derivative
+// (esm 2.4.0 dropped the "pde" kind), so the contract runs on it: a spatial
+// `D` on an equation LHS is algebraic, and an equation like `D(u, wrt: x) ~ 0`
+// survives factoring as a residual and raises E_NONTRIVIAL_DAE.
 func isDAETargetSystem(_ *ESMFile, model *Model) bool {
 	return EffectiveSystemKind(model) == SystemKindODE
 }

@@ -58,10 +58,27 @@ function _reject_unlowered_operators(
         node === nothing && (node = _first_unlowered_node(eq.rhs, false, seen_rhs))
         node === nothing && continue
         wrt = node.op == "D" && node.wrt !== nothing ? " (wrt=$(node.wrt))" : ""
+        what = "'$(node.op)'$wrt"
+        if _tpl_is_call(node)
+            # Name the op the body holds and the template the reference names
+            # (esm-spec §9.6.3 constraint 6).
+            ct = _call_table()
+            ops = ct === nothing ? String[] : sort!(
+                    collect(
+                        _call_body_ops!(
+                            _tpl_memo(ct.tt, nothing, :body_ops, () -> Dict{String, Set{String}}()),
+                            ct.tt, String(node.name)
+                        )
+                    )
+                )
+            i = findfirst(op -> op == "D" || _is_unlowered_op(op), ops)
+            what = "'$(i === nothing ? node.op : ops[i])' in the body of template " *
+                "'$(node.name)' (or one it references), reached from a reference"
+        end
         throw(
             TreeWalkError(
                 ERROR_CODES.UNLOWERED_OPERATOR,
-                "unlowered rewrite-target operator '$(node.op)'$wrt in the equation for " *
+                "unlowered rewrite-target operator $what in the equation for " *
                     "$(eq.lhs): no rewrite rule lowered it before evaluation (esm-spec §9.6.3 " *
                     "constraint 6 / §9.6.8). The gate walks every equation, including an " *
                     "observed nothing reads."

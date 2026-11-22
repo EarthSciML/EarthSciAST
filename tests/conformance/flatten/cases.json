@@ -911,7 +911,7 @@
       "id": "advanced_coupling",
       "tier": "discrete_parameters",
       "fixture": "coupling/advanced_coupling.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t",
         "x"
@@ -1188,7 +1188,7 @@
       "id": "full_coupled",
       "tier": "coupled",
       "fixture": "valid/full_coupled.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t",
         "lon",
@@ -1516,7 +1516,7 @@
       "id": "complete_coupling_types",
       "tier": "coupled",
       "fixture": "coupling/complete_coupling_types.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t",
         "x",
@@ -1948,7 +1948,7 @@
       "id": "coupled_atmospheric_system",
       "tier": "coupled",
       "fixture": "end_to_end/coupled_atmospheric_system.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t",
         "x",
@@ -2995,7 +2995,7 @@
       "id": "minimal_chemistry",
       "tier": "operator_compose",
       "fixture": "valid/minimal_chemistry.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t",
         "x",
@@ -3237,7 +3237,7 @@
       "id": "metadata_inheritance_coupled",
       "tier": "operator_compose",
       "fixture": "valid/metadata_inheritance_coupled.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t",
         "x",
@@ -3467,7 +3467,7 @@
       "id": "bare_reference_resolution",
       "tier": "operator_compose",
       "fixture": "scoping/bare_reference_resolution.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t"
       ],
@@ -3757,7 +3757,7 @@
       "id": "operator_compose_translate",
       "tier": "operator_compose",
       "fixture": "coupling/operator_compose_resolution_fixtures.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t",
         "z",
@@ -5054,6 +5054,8 @@
         "x"
       ],
       "template_registry": [
+        "A.d_x_rule",
+        "B.d_x_rule",
         "A.interior_stencil",
         "B.interior_stencil",
         "A.outer_stencil",
@@ -5180,10 +5182,9 @@
         "x"
       ],
       "template_registry": [
-        "A.interior_stencil",
-        "B.interior_stencil",
-        "A.outer_stencil",
-        "B.outer_stencil"
+        "d_x_rule",
+        "interior_stencil",
+        "outer_stencil"
       ],
       "field_ics": [],
       "loader_fields": [],
@@ -5193,7 +5194,7 @@
       "id": "chained_operator_compose",
       "tier": "chained_compose",
       "fixture": "coupling/chained_operator_compose.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t"
       ],
@@ -7143,7 +7144,9 @@
         "lon",
         "lat"
       ],
-      "template_registry": [],
+      "template_registry": [
+        "grad_lon_inflow"
+      ],
       "field_ics": [
         {
           "state": "Chemistry.O3",
@@ -9762,7 +9765,7 @@
       "id": "term_provenance_placeholder_expansion",
       "tier": "term_provenance",
       "fixture": "conformance/term_provenance/fixtures/placeholder_expansion.esm",
-      "system_kind": "pde",
+      "system_kind": "ode",
       "independent_variables": [
         "t"
       ],

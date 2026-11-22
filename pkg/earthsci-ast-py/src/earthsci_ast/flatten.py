@@ -21,9 +21,6 @@ from . import compiler as _compiler
 from . import op_registry
 from ._show import canonical_key
 from .classification import inlined_unknowns, observed_unknowns, ode_states
-from .error_handling import (
-    TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
-)
 from .errors import EarthSciAstError
 from .esm_types import (
     ARRAY_OPS,
@@ -56,7 +53,6 @@ from .expr_walk import any_child, iter_children, map_children, walk
 # this module still import ``_expand_range`` from :mod:`.flatten`.
 from .index_alignment import ELEMENTWISE_OPS
 from .index_ranges import expand_range as _expand_range
-from .json_walk import ExpressionTemplateError
 from .reactions import derive_odes
 from .structural_checks import (
     judge_record_shapes,
@@ -258,8 +254,7 @@ class UnsupportedMappingError(FlattenError):
 
     Core-tier libraries (the Python tier) only implement ``broadcast`` and
     ``identity`` mappings; ``slice``, ``project``, and ``regrid`` raise this
-    error, as do spatial operators (``grad``, ``div``, ``laplacian``) when
-    encountered during a Core-tier flatten — see spec §4.7.6.
+    error — see spec §4.7.6.
     """
 
 
@@ -289,7 +284,7 @@ class UnsupportedDimensionalityError(FlattenError):
 
     Raised by esm_problem() when the flattened system still contains a spatial
     independent variable. Such a system carries an *undiscretized* spatial
-    operator (a spatial ``D`` or ``grad``/``div``/``laplacian`` sugar) that no
+    operator (a spatial ``D`` or another open-tier rewrite-target op) that no
     discretization rule reduced to a stencil, so it surfaces the uniform
     cross-binding ``code = "unlowered_operator"`` diagnostic (esm-spec §4.2 /
     §9.6.8).
@@ -571,14 +566,6 @@ class FlattenMetadata:
     # the merge moved out from under it. Empty for a document with no renaming
     # merge, which is the overwhelming majority.
     merged_variable_renames: dict[str, str] = field(default_factory=dict)
-    # Every name a COUPLING rule rewrote out of the flattened equations: a
-    # `variable_map`'s substituted target, and every merged-away spelling above.
-    # Only the registry guard reads it — a surviving template body is authored
-    # source no substitution reaches, so a body naming one of these is REFUSED
-    # rather than resolved (`_check_registry_coupling_rewrites`,
-    # CONFORMANCE_SPEC §5.35). Not a consumer-facing map, unlike
-    # `merged_variable_renames`: it says a name is GONE, not where it went.
-    coupling_rewritten_names: set[str] = field(default_factory=set)
     # Every `variable_map` whose `lifting` esm-spec §10.5 reserves (`mean`,
     # `integral`), as `(from, to, lifting)` in coupling order after
     # `coupling_import` expansion. Flatten leaves such an edge's source
@@ -612,8 +599,9 @@ class FlattenedSystem:
     independent_variables:
         Independent variables of the flattened system. Always contains ``"t"``
         for temporal evolution; spatial independent variables (``"x"``, ``"y"``,
-        ``"z"``) appear only when the equations contain spatial derivative
-        operators (``grad``, ``div``, ``laplacian``).
+        ``"z"``) appear only when the equations contain an unlowered spatial
+        differential (a ``D`` with a spatial ``wrt``, or a node naming an axis in
+        its ``dim`` field).
     state_variables:
         The SOLVED-FOR VECTOR, keyed by dot-namespaced name: the differential
         unknowns, PLUS ``algebraic_variables``, PLUS any arrayed observed that
@@ -728,7 +716,7 @@ class FlattenedSystem:
     def system_kind(self) -> str:
         """The flattened system's derived MTK system kind (esm-spec §6.3.1),
         computed by :func:`classification.system_kind` over the flattened
-        variables and equations — "sde" / "pde" / "nonlinear" / "ode", tested in
+        variables and equations — "sde" / "nonlinear" / "ode", tested in
         that order.
 
         Available on the flattened form precisely because `brownian_parameters`
@@ -983,7 +971,7 @@ def _spatial_dims_in_expr(expr: Expr) -> list[str]:
     differential in ``expr``.
 
     Harvested STRUCTURALLY from every node's ``dim`` axis field (esm-spec §4.9.1),
-    NOT from a list of op names: the open-tier sugar ops grad/div/laplacian/curl
+    NOT from a list of op names: open-tier ops (``integral``, ``curl``, user ops)
     carry no spatial-detection privilege, so the signal is the ordinary
     axis-naming ``dim`` scalar field (which only an undiscretized differential
     node carries — no evaluable-core op uses it). A discretized system has already
@@ -1008,8 +996,7 @@ def _spatial_dims_in_expr(expr: Expr) -> list[str]:
                 out.append(node.dim)
         # `wrt` is the OTHER axis-naming scalar field, and a differential taken
         # with respect to anything but time names a spatial axis exactly as
-        # `dim` does. §4.7.6 step 2 lists it alongside grad/div/laplacian:
-        # "`D` with `wrt != "t"`".
+        # `dim` does. §4.7.6 step 2: "`D` with `wrt != "t"`".
         #
         # This is not a return to op-name matching -- the docstring's argument
         # stands, and `wrt` is a structural field test, not a name test. It was
@@ -2951,7 +2938,6 @@ def _apply_couplings(
         _compose_renames(merged_renames, _apply_operator_compose(components, oc, merged_renames))
 
     metadata.merged_variable_renames.update(merged_renames)
-    metadata.coupling_rewritten_names.update(merged_renames)
 
     for index, cp in couple_entries:
         _apply_couple(components, _retarget_pending_entry(cp, merged_renames), index)
@@ -2960,12 +2946,6 @@ def _apply_couplings(
     for index, vm in var_map_entries:
         resolved = _retarget_pending_entry(vm, merged_renames)
         _apply_variable_map(components, resolved, index, shapeless)
-        # A NAMED transform substitutes `to` away entirely; an EXPRESSION
-        # transform leaves it standing as the observed the transform defines.
-        # Only the first deletes a name, so only the first joins the set the
-        # registry guard refuses against (Julia's `map_rewritten_names`).
-        if not isinstance(resolved.transform, ExprNode):
-            metadata.coupling_rewritten_names.add(resolved.to_var)
 
 
 def _same_expression_key(expr: Expr) -> str:
@@ -3160,7 +3140,7 @@ def _derive_independent_vars(flat: FlattenedSystem) -> None:
     Time is always present; a spatial dimension is added when an UNDISCRETIZED
     spatial differential still names it. That signal is derived STRUCTURALLY from
     the ``dim`` axis field carried by such a node (esm-spec §4.9.1) — never from a
-    hardcoded op-name list — so no sugar op is privileged over a custom
+    hardcoded op-name list — so no open-tier op is privileged over a custom
     rewrite-target op. A discretized (array) system carries no such ``dim`` node
     and correctly stays a pure ODE (``independent_variables == ["t"]``).
     """
@@ -3315,93 +3295,43 @@ def _collect_field_ics(flat: FlattenedSystem) -> None:
     flat.equations = remaining
 
 
-def _scope_template_body(
-    expr: Expr, prefix: str, local_names: set[str], bound: frozenset[str] = frozenset()
-) -> Expr:
-    """Component-scope one carried template body: prefix exactly the references
-    that name one of the OWNING component's locals.
-
-    This is the "post-step-2 scoping" esm-libraries-spec §4.7.5 step 4 calls an
-    ordering requirement rather than a parenthetical. A body's FREE variables are
-    resolved in its owner's scope, so two components importing one library carry
-    byte-identical bodies whose free ``inv_dx`` denotes a DIFFERENT variable in
-    each; deduplicating them pre-scoping keeps one body that is correct for
-    neither. Scoping also makes them non-deep-equal, which is what routes them
-    into the collision rename and keeps an entry per component.
-
-    Unlike :func:`_namespace_expr` (which prefixes every bare reference except an
-    explicit leave-alone set) this is a WHITELIST, matching Julia's
-    ``namespace_expr(body, cname, local_names)``: a body legitimately references
-    its own formal ``params``, loop symbols, and document-scoped index sets, none
-    of which are component locals and none of which may be prefixed. The caller
-    removes the template's ``params`` from ``local_names`` before calling.
-    """
-    if expr is None or _is_number(expr):
-        return expr
-    if isinstance(expr, str):
-        if expr in bound:
-            return expr
-        if "." in expr:
-            head = expr.split(".", 1)[0]
-            return f"{prefix}.{expr}" if head in local_names else expr
-        return f"{prefix}.{expr}" if expr in local_names else expr
-    if isinstance(expr, ExprNode):
-        local_bound = set(bound)
-        for sym in expr.output_idx or ():
-            if isinstance(sym, str):
-                local_bound.add(sym)
-        local_bound.update((expr.ranges or {}).keys())
-        if expr.var is not None:
-            local_bound.add(expr.var)
-        frozen = frozenset(local_bound)
-        out = map_children(expr, lambda c: _scope_template_body(c, prefix, local_names, frozen))
-        if getattr(expr, "join", None):
-            binders = set(expr.output_idx or ()) | set((expr.ranges or {}).keys())
-            out = replace(out, join=_namespace_join(expr.join, binders, prefix, local_names))
-        return out
-    return expr
-
-
 def _merged_template_registry(esm_file: EsmFile) -> dict[str, Any]:
     """The MERGED expression-template registry of the flattened representation
     (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4).
 
-    Union of the per-component registries, in this order:
-
-    1. **Scope, then union.** Each MODEL block's bodies are component-scoped
-       first (:func:`_scope_template_body`), because the dedup below compares
-       post-scoping bodies. Reaction-system blocks pass through unscoped BY
-       POLICY, mirroring the Julia reference: a rate-law reference is expanded
-       eagerly at collect, so a reaction-system entry is never resolved against
-       the post-flatten scope — it rides along so the reconstituted document
-       round-trips.
-    2. **Deep-equal dedup at first occurrence** — two components importing one
-       stencil keep one entry under the bare name.
-    3. **Collision rename** — a same-name entry whose occurrences are not all
-       deep-equal renames to ``<ComponentPath>.<name>`` in EVERY owning
-       component, and the rename propagates along the reference DAG
-       (:func:`~.lower_expression_templates._registry_collision_names`) so no
-       surviving body holds a reference the merged registry cannot resolve.
+    1. **Close, then union.** A body's free names are read at each reference's
+       site, in the scope of the (sub)system that owns the reference (esm-spec
+       §9.6.4 rules 1-2), and one definition may serve several scopes (a leaf
+       mounted twice, a component's template referenced from one of its
+       subsystems). So every component's carried block, models and reaction
+       systems alike, is first CLOSED
+       (:func:`~.lower_expression_templates.tpl_explicit_free`): each body's
+       free names become trailing ``params``, sorted by UTF-8 bytes, and a
+       nested reference binds its callee's added parameters to the same names.
+       The dedup below compares closed bodies.
+    2. **Merge** (:func:`~.lower_expression_templates._merge_flat_registry`):
+       deep-equal same-name entries dedupe at first occurrence; on a collision
+       each distinct definition is renamed ``<ComponentPath>.<name>`` after its
+       first owner, and the collision propagates along the reference DAG.
 
     ``match`` rules are excluded: only match-less templates are referenceable
     (§9.6.2), so only they can be merged.
 
     Components are walked in DOCUMENT order (models in file order, then reaction
-    systems), which is what step 4's ordering rule requires and what makes
-    "first occurrence" mean the first occurrence in the file. The Julia reference
-    sorts the component keys instead; the two agree whenever component names sort
-    in declaration order, and where they disagree the spec's rule governs.
+    systems), which is what step 4's ordering rule requires.
 
     Python's typed path expands every reference at load (esm-spec §9.6.4 rule 2),
-    so no equation reaching here carries an ``apply_expression_template`` node
-    and the rename has no component reference sites left to rewrite — step 4's
-    "Applicability" paragraph says exactly this. The registry is still carried,
-    because the field is normative and a consumer must be able to reconstitute
-    the reference-preserving document from the flattened form.
+    so no equation reaching here carries an ``apply_expression_template`` node:
+    there are no reference sites left to bind the added parameters at or to
+    rename (step 4's "Applicability" paragraph). The registry is still carried,
+    closed, because the field is normative and a consumer must be able to
+    reconstitute the reference-preserving document from the flattened form.
     """
-    from .lower_expression_templates import _registry_collision_names, _rename_apply_refs
-    from .parse import _parse_expression
-    from .serialize import _serialize_expression
+    from .lower_expression_templates import (
+        _matchless,
+        _merge_flat_registry,
+        tpl_explicit_free,
+    )
 
     component_templates = getattr(esm_file, "component_templates", None) or {}
     if not component_templates:
@@ -3415,45 +3345,15 @@ def _merged_template_registry(esm_file: EsmFile) -> dict[str, Any]:
         if key not in ordered_keys:
             ordered_keys.append(key)
 
-    # name -> [(component_path, declaration), ...] in document order.
-    byname: dict[str, list[tuple[str, Any]]] = {}
+    blocks: list[tuple[str, Any]] = []
     for compkey in ordered_keys:
         block = component_templates.get(compkey)
         if not isinstance(block, dict):
             continue
-        section, _, cname = compkey.partition(".")
-        model = esm_file.models.get(cname) if section == "models" else None
-        local_names = set(model.variables) | set(model.subsystems) if model is not None else set()
-        for tname, decl in block.items():
-            if isinstance(decl, dict) and decl.get("match") is not None:
-                continue  # match rules are not referenceable, so not merged
-            scoped = decl
-            body = decl.get("body") if isinstance(decl, dict) else None
-            if model is not None and body is not None:
-                params = {p for p in (decl.get("params") or []) if isinstance(p, str)}
-                scoped = dict(decl)
-                scoped["body"] = _serialize_expression(
-                    _scope_template_body(_parse_expression(body), cname, local_names - params)
-                )
-            byname.setdefault(str(tname), []).append((cname, scoped))
-
-    collide = _registry_collision_names(byname)
-    merged: dict[str, Any] = {}
-    rename: dict[str, dict[str, str]] = {}
-    for name, occurrences in byname.items():
-        if name in collide:
-            for path, decl in occurrences:
-                newname = f"{path}.{name}"
-                merged[newname] = decl
-                rename.setdefault(path, {})[name] = newname
-        else:
-            merged[name] = occurrences[0][1]
-    # A renamed body's own nested references follow its owner's map, so a
-    # per-owner wrapper reaches its owner's leaf and never the other owner's.
-    for _path, per_owner in rename.items():
-        for _old, new in per_owner.items():
-            if new in merged:
-                merged[new] = _rename_apply_refs(merged[new], per_owner)
+        _section, _, cname = compkey.partition(".")
+        closed, _added = tpl_explicit_free(_matchless(block))
+        blocks.append((cname, closed))
+    merged, _rename = _merge_flat_registry(blocks)
     return merged
 
 
@@ -3552,9 +3452,6 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     _collect_field_ics(flat)
     # The merged expression-template registry (esm-spec §9.6.4 rule 7, §10.7).
     flat.template_registry = _merged_template_registry(esm_file)
-    # ...and the ONE place a coupling-rewritten name is REFUSED rather than
-    # resolved. See `_check_registry_coupling_rewrites`.
-    _check_registry_coupling_rewrites(flat.template_registry, metadata.coupling_rewritten_names)
 
     # Step 8: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
     # (esm-spec §4.8.3, issue #409). See `_normalize_angle_arguments`.
@@ -3728,80 +3625,6 @@ def _normalize_angle_arguments(flat: FlattenedSystem) -> None:
             discrete.trigger.value = rewrite(discrete.trigger.value)
         for affect in discrete.affects:
             affect.rhs = rewrite(affect.rhs)
-
-
-# Keys of an expression node whose STRING value names something other than a
-# variable, so a raw-body walk must not read them as references.
-_TEMPLATE_BODY_NON_OPERAND_KEYS = frozenset(
-    {"op", "wrt", "dim", "fn", "id", "name", "semiring", "reduce"}
-)
-
-
-def _template_body_var_names(body: Any) -> set[str]:
-    """Every variable name a RAW (unparsed) template body references.
-
-    The registry holds bodies as JSON rather than as :class:`ExprNode`, so this
-    walks the JSON: a bare string in an OPERAND position is a variable
-    reference. A structural key (`op`, `wrt`, `fn`, ...) names an operator, an
-    axis or a registry id and is skipped.
-    """
-    out: set[str] = set()
-
-    def walk(node: Any, operand: bool) -> None:
-        if isinstance(node, str):
-            if operand:
-                out.add(node)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item, operand)
-        elif isinstance(node, dict):
-            for key, value in node.items():
-                walk(value, key not in _TEMPLATE_BODY_NON_OPERAND_KEYS)
-
-    walk(body, False)
-    return out
-
-
-def _check_registry_coupling_rewrites(registry: dict[str, Any], rewritten: set[str] | None) -> None:
-    """Refuse a SURVIVING registry body that names a coupling-rewritten variable.
-
-    A `variable_map` substitution and an `operator_compose` renaming match both
-    DELETE a name from the flattened tables and rewrite the equations off it. A
-    surviving `expression_templates` body is a shadow copy of authored source
-    that no equation walk reaches, and it expands at the BUILD boundary rather
-    than at flatten -- so a body still naming a deleted variable would expand,
-    later and elsewhere, into a name the flattened system does not declare.
-
-    This is the ONE site where such a reference is REFUSED rather than resolved
-    (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
-    silently diverge from the expand-at-load image the same document produces.
-    A template `param` shadows the outer name (esm-spec §9.6.1), so a body that
-    BINDS the name through its params is fine -- which is exactly the fix the
-    message names.
-
-    Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites`.
-    """
-    if not registry or not rewritten:
-        return
-    for tname in sorted(registry):
-        decl = registry[tname]
-        if not isinstance(decl, dict):
-            continue
-        body = decl.get("body")
-        if body is None:
-            continue
-        params = {p for p in (decl.get("params") or []) if isinstance(p, str)}
-        hits = sorted((_template_body_var_names(body) - params) & set(rewritten))
-        if hits:
-            names = "', '".join(hits)
-            raise ExpressionTemplateError(
-                TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
-                f"expression template '{tname}' body references '{names}', which "
-                f"a coupling rule rewrote in the flattened equations; the registry "
-                f"body would expand to a stale name at the build boundary. Bind "
-                f"the value through the template's params, or expand the "
-                f"reference before coupling (esm-spec §9.6.4).",
-            )
 
 
 def _is_structural_time_derivative(expr: Expr) -> bool:
@@ -4139,7 +3962,7 @@ def _expand_operator_compose_placeholders(
     """Expand ``_var`` placeholders in B's equations against A's state variables.
 
     Spec §4.7.1 placeholder expansion: an equation like ``D(_var, t) =
-    -u·grad(_var, x)`` in system B is cloned once per state variable in system
+    -u·D(_var, wrt: x)`` in system B is cloned once per state variable in system
     A, with ``_var`` substituted for the actual (namespaced) variable name.
     """
     if not entry.systems or len(entry.systems) < 2:
@@ -4181,7 +4004,7 @@ def _expand_operator_compose_placeholders(
 # (reactions -> generic ``D(sp)=Σ terms``; then ``operator_compose`` merges each
 # species' reaction ODE with the spatial operator's advection makearray). What
 # operator_compose does NOT do is array-ify the result: the merged
-# ``D(sp) = <reaction> + <-u·makearray(grad(sp))>`` still has a SCALAR ``sp``
+# ``D(sp) = <reaction> + <-u·makearray(D(sp, wrt: x))>`` still has a SCALAR ``sp``
 # while its advection makearray indexes ``sp`` per grid cell. This pass performs
 # the ``lifting:"pointwise"`` promotion — wrapping each merged state ODE in an
 # ``faq`` over the grid, indexing the bare reaction species per cell and

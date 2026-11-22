@@ -22,6 +22,10 @@
 //! * `output_selection` — a name-keyed READ of the finished run resolves to the
 //!   survivor's row instead of reporting a variable that never existed.
 //!
+//! A template body that reads the merged-away name free is a `flatten` case
+//! too: flatten closes every carried body (esm-spec §10.7), so the name is in
+//! the reference's bindings, where the rewrite reaches it.
+//!
 //! Like `operator_compose_merge` the category carries no golden: what it pins is
 //! REACH, asserted as structure.
 
@@ -82,7 +86,6 @@ fn the_manifest_is_not_empty_and_names_this_binding() {
         "override_keys",
         "output_selection",
         "events_and_updates",
-        "template_registry",
         "inline_tests",
     ] {
         let bindings = m["surfaces"][surface]["bindings"]
@@ -417,43 +420,6 @@ fn the_rename_reaches_events_and_variable_updates() {
                     .trim_matches(|c: char| { !c.is_alphanumeric() && c != '.' && c != '_' })
                     == gone),
                 "{id}: {gone} still appears in an event or an update: {haystack}"
-            );
-        }
-    }
-}
-
-/// The ONE surface that refuses rather than resolves.
-///
-/// A surviving registry body is authored source that expands at the build
-/// boundary, so it can neither be left alone (it would expand into a name the
-/// flattened system does not declare) nor rewritten (the flattened registry
-/// would then disagree with the expand-at-load image). Flatten refuses.
-#[test]
-fn a_registry_body_naming_the_merged_away_state_is_refused() {
-    let m = common::tier_manifest("merged_rename_reach");
-    let cases = cases_for(&m, "template_registry");
-    assert!(
-        !cases.is_empty(),
-        "no template_registry cases in the manifest"
-    );
-    for case in &cases {
-        let id = case["id"].as_str().unwrap_or("?");
-        let path = common::category_dir("merged_rename_reach")
-            .join(case["path"].as_str().expect("`path` is a string"));
-        let file = load_path(&path).unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
-        let err = flatten(&file).expect_err(&format!("{id}: flatten must REFUSE"));
-        let text = err.to_string();
-        let want = case["raises"].as_str().expect("`raises` is a string");
-        assert!(
-            text.contains(want),
-            "{id}: the diagnostic must carry {want}, got {text}"
-        );
-        for name in case["names_in_message"].as_array().expect("array") {
-            let name = name.as_str().expect("a name is a string");
-            assert!(
-                text.contains(name),
-                "{id}: the diagnostic must name {name} — naming the offending \
-                 reference is what turns it into a fix"
             );
         }
     }

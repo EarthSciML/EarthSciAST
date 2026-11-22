@@ -43,8 +43,7 @@ func collectApplyNames(out *[]string, x any) {
 //
 // From esm 0.9.0 (RFC out-of-line-expression-templates §7.1 step 4) bodies are
 // **NOT inlined** — the references are preserved uninlined and denote their
-// expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are computed
-// separately by templateTargetBearing. This runs BEFORE the §9.6.3 fixpoint
+// expansion (§9.6.4 rule 2). This runs BEFORE the §9.6.3 fixpoint
 // ever consults a `match` rule; it now only validates the DAG. Mirrors the
 // Julia reference `_compose_template_bodies!`.
 func composeTemplateBodies(templates map[string]any, scope string) error {
@@ -142,8 +141,8 @@ func composeTemplateBodies(templates map[string]any, scope string) error {
 
 	// esm 0.9.0 (Option B): DO NOT inline. The DAG has been checked (acyclic,
 	// depth-bounded, references resolve to match-less templates); the bodies are
-	// left with their `apply_expression_template` references intact. Expand
-	// (§9.6.4 rule 2) or the eager pre-pass (§9.6.4 rule 3) consume them later.
+	// left with their `apply_expression_template` references intact; only
+	// Expand (§9.6.4 rule 2) substitutes them.
 	_ = order
 	return nil
 }

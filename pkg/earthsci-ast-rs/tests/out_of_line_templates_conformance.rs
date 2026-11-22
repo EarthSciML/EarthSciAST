@@ -176,9 +176,10 @@ fn expand_is_deterministic_and_load_non_destructive() {
     oob::expand(&mut a).unwrap();
     oob::expand(&mut b).unwrap();
     assert_eq!(normj(&a), normj(&b));
-    // The un-expanded load still carries a makearray call site (surviving ref).
+    // The un-expanded load still carries a surviving reference: the rule's
+    // firing wrote a reference to the rule (esm-spec §9.6.3 constraint 7).
     let mk = &loaded["models"]["Advection"]["equations"][0]["rhs"]["args"][1];
-    assert_eq!(mk["op"], "makearray");
+    assert!(is_apply(mk));
 }
 
 // ---------------------------------------------------------------------------
@@ -203,12 +204,22 @@ fn emit_materialized_registry_imports_gone_stencils_materialized() {
     assert!(adv.get("expression_template_imports").is_none()); // imports consumed
     let reg = adv["expression_templates"].as_object().unwrap();
     let keys: std::collections::HashSet<&str> = reg.keys().map(String::as_str).collect();
+    // The firing wrote a reference to its rule, which materializes match-less
+    // (esm-spec §9.6.3 constraint 7, §9.6.4 rule 5).
     assert_eq!(
         keys,
-        ["central_D_lon_interior", "dlon_deg"].into_iter().collect()
-    ); // match-less only; match rule not materialized
-    // Call site intact: the makearray interior region is a surviving reference.
-    let interior = &adv["equations"][0]["rhs"]["args"][1]["values"][0];
+        [
+            "central_D_lon_interior",
+            "central_D_lon_zero_grad_bc",
+            "dlon_deg"
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert!(reg["central_D_lon_zero_grad_bc"].get("match").is_none());
+    let site = &adv["equations"][0]["rhs"]["args"][1];
+    assert!(is_apply(site) && site["name"] == "central_D_lon_zero_grad_bc");
+    let interior = &reg["central_D_lon_zero_grad_bc"]["body"]["values"][0];
     assert!(is_apply(interior) && interior["name"] == "central_D_lon_interior");
 }
 
@@ -227,7 +238,17 @@ fn emit_rename_dotted_keys_on_disk() {
         .as_object()
         .unwrap();
     let keys: std::collections::HashSet<&str> = reg.keys().map(String::as_str).collect();
-    assert_eq!(keys, ["fine.dx", "coarse.dx"].into_iter().collect());
+    assert_eq!(
+        keys,
+        [
+            "fine.dx",
+            "coarse.dx",
+            "fine.central_D_x",
+            "coarse.central_D_x"
+        ]
+        .into_iter()
+        .collect()
+    );
     let isets: std::collections::HashSet<&str> = doc["index_sets"]
         .as_object()
         .unwrap()
@@ -238,25 +259,179 @@ fn emit_rename_dotted_keys_on_disk() {
 }
 
 // ---------------------------------------------------------------------------
-// eager_target_bearing (§9.6.4 rule 3, §9.6.7): positive + negative.
+// rewrite_in_template_body (§9.6.4 rule 3, §9.6.7; formerly
+// eager_target_bearing): both references survive; the `central` rule rewrites
+// `deriv_c`'s body in place to a reference to itself.
 // ---------------------------------------------------------------------------
 #[test]
-fn eager_target_bearing_positive_and_negative() {
-    let loaded = load_b("eager_target_bearing", "fixture.esm").unwrap();
+fn rewrite_in_template_body_rules_rewrite_the_body_both_references_survive() {
+    let loaded = load_b("rewrite_in_template_body", "fixture.esm").unwrap();
     let model = &loaded["models"]["m"];
-    // POSITIVE: deriv_c (D-bearing) reference eagerly expanded, then the D
-    // lowered by the `central` rule -> an aggregate. No surviving reference.
     let deager = normj(obs_def(model, "d_eager"));
-    assert_eq!(deager["op"], "index");
-    assert_eq!(deager["args"][0]["op"], "faq");
-    // NEGATIVE: scale_c (target-free) reference SURVIVES.
+    assert!(is_apply(&deager["args"][0]) && deager["args"][0]["name"] == "deriv_c");
+    let body = normj(&model["expression_templates"]["deriv_c"]["body"]);
+    assert!(is_apply(&body) && body["name"] == "central");
+    assert_eq!(body["bindings"], serde_json::json!({"f": "f"}));
+    assert!(
+        model["expression_templates"]["central"]
+            .get("match")
+            .is_none()
+    );
     let dsurv = normj(obs_def(model, "d_survive"));
     assert!(is_apply(&dsurv["args"][0]) && dsurv["args"][0]["name"] == "scale_c");
-    // Emit golden.
     assert_eq!(
-        emit("eager_target_bearing", "fixture.esm"),
-        std::fs::read_to_string(conf("eager_target_bearing").join("emitted.esm")).unwrap()
+        emit("rewrite_in_template_body", "fixture.esm"),
+        std::fs::read_to_string(conf("rewrite_in_template_body").join("emitted.esm")).unwrap()
     );
+}
+
+/// The parts of a document an expanded golden pins, numbers normalized.
+fn core(d: &Value) -> BTreeMap<String, Value> {
+    ["models", "reaction_systems", "coupling", "index_sets"]
+        .into_iter()
+        .filter_map(|k| d.get(k).map(|v| (k.to_string(), normj(v))))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Rules write references (CONFORMANCE_SPEC §5.60; esm-spec §9.6.3 constraint
+// 7, §9.6.4 rule 3): both goldens — the emitted form byte for byte, and
+// Expand(load) against the expanded oracle — and the two rejected depth cases.
+// ---------------------------------------------------------------------------
+#[test]
+fn rules_write_references_emitted_and_expanded_goldens() {
+    for (dir, fix, emitted, expanded) in [
+        (
+            "rewrite_in_template_body",
+            "fixture.esm",
+            "emitted.esm",
+            "expanded.esm",
+        ),
+        (
+            "rule_writes_reference",
+            "fixture.esm",
+            "emitted.esm",
+            "expanded.esm",
+        ),
+        (
+            "template_instance_variants",
+            "fixture.esm",
+            "emitted.esm",
+            "expanded.esm",
+        ),
+        (
+            "rewrite_shared_by_unreached_entry",
+            "fixture.esm",
+            "emitted.esm",
+            "expanded.esm",
+        ),
+        (
+            "opacity_rule_replacement",
+            "fixture.esm",
+            "emitted.esm",
+            "expanded.esm",
+        ),
+        (
+            "rewrite_depth_through_bodies",
+            "chain_depth_64.esm",
+            "emitted_chain_depth_64.esm",
+            "expanded_chain_depth_64.esm",
+        ),
+        // Coupling transforms keep their references (esm-spec §10.4); the
+        // receiving component's block materializes what they name.
+        (
+            "coupling_transform_expression",
+            "fixture.esm",
+            "emitted.esm",
+            "expanded.esm",
+        ),
+        (
+            "coupling_transform_rule_and_import",
+            "fixture.esm",
+            "emitted.esm",
+            "expanded.esm",
+        ),
+    ] {
+        assert_eq!(
+            emit(dir, fix),
+            std::fs::read_to_string(conf(dir).join(emitted)).unwrap(),
+            "[{dir}/{fix}] emitted golden"
+        );
+        // Emit then load is a fixed point: the emitted form reloads and re-emits
+        // byte for byte. For the depth-64 chain this holds only because the
+        // body-nesting bound equals MAX_REWRITE_PASSES (esm-spec §9.7.3): its
+        // emitted form is a 64-template body-reference chain.
+        assert_eq!(
+            emit(dir, emitted),
+            std::fs::read_to_string(conf(dir).join(emitted)).unwrap(),
+            "[{dir}/{emitted}] emit then load is not a fixed point"
+        );
+        let mut loaded = load_b(dir, fix).unwrap_or_else(|e| panic!("[{dir}/{fix}] load: {e}"));
+        oob::expand(&mut loaded).unwrap_or_else(|e| panic!("[{dir}/{fix}] expand: {e}"));
+        let golden: Value =
+            serde_json::from_str(&std::fs::read_to_string(conf(dir).join(expanded)).unwrap())
+                .unwrap();
+        assert_eq!(
+            core(&loaded),
+            core(&golden),
+            "[{dir}/{fix}] expanded golden"
+        );
+    }
+    // Variants are numbered by canonical bytes and each call site re-pointed.
+    let loaded = load_b("template_instance_variants", "fixture.esm").unwrap();
+    let m = &loaded["models"]["m"];
+    assert_eq!(obs_def(m, "du")["name"], "ddx.variant1");
+    assert_eq!(obs_def(m, "dv")["name"], "ddx.variant2");
+    assert_eq!(
+        m["expression_templates"]["ddx.variant1"]["body"]["name"],
+        "central_1d"
+    );
+    // A leaf-bodied rule writes its leaf.
+    let loaded = load_b("rule_writes_reference", "fixture.esm").unwrap();
+    assert_eq!(
+        normj(obs_def(&loaded["models"]["m"], "e")),
+        serde_json::json!({"op": "*", "args": [0.25, "b"]})
+    );
+    // Nontermination detected through bodies, and the depth bound.
+    for (dir, fix, errf) in [
+        ("rewrite_depth_through_bodies", "fixture.esm", "error.json"),
+        (
+            "rewrite_depth_through_bodies",
+            "chain_depth_65.esm",
+            "error_chain_depth_65.json",
+        ),
+    ] {
+        let want: Value =
+            serde_json::from_str(&std::fs::read_to_string(conf(dir).join(errf)).unwrap()).unwrap();
+        let got = load_b(dir, fix).map(|_| ()).map_err(|e| e.code.to_string());
+        assert_eq!(
+            got,
+            Err(want["code"].as_str().unwrap().to_string()),
+            "[{dir}/{fix}]"
+        );
+    }
+}
+
+/// unlowered_in_template_body (esm-spec §9.6.3 constraint 6, §9.6.4 rule 3):
+/// the document loads with the reference to `ddy` surviving and its body
+/// unrewritten (emitted.esm); building it is refused with `unlowered_operator`.
+#[test]
+fn unlowered_in_template_body_loads_and_is_refused_at_build() {
+    assert_eq!(
+        emit("unlowered_in_template_body", "fixture.esm"),
+        std::fs::read_to_string(conf("unlowered_in_template_body").join("emitted.esm")).unwrap()
+    );
+    let want: Value = serde_json::from_str(
+        &std::fs::read_to_string(conf("unlowered_in_template_body").join("error.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(want["code"], "unlowered_operator");
+    let file = earthsci_ast::load_path(conf("unlowered_in_template_body").join("fixture.esm"))
+        .expect("loading is permissive");
+    let flat = earthsci_ast::flatten(&file).expect("flatten");
+    let e = earthsci_ast::extension::flatten::reject_unlowered_operators(&flat)
+        .expect_err("unlowered D refused");
+    assert!(e.to_string().contains("unlowered_operator"), "{e}");
 }
 
 // ---------------------------------------------------------------------------
@@ -291,10 +466,16 @@ fn opacity_priority_shadowing_generic_fires_compound_silently_does_not() {
         earthsci_ast::observed_definition_json(&loaded["models"]["m"], "flux")
             .expect("flux defining equation"),
     );
-    assert_eq!(flux["op"], "*");
-    assert_eq!(flux["args"][0], 1); // generic marker (NOT compound 999)
-    assert!(is_apply(&flux["args"][1])); // reference bound WHOLE by metavariable f
-    assert_eq!(flux["args"][1]["name"], "flux_prod");
+    // The generic rule fired and wrote a reference to itself (esm-spec §9.6.3
+    // constraint 7), binding the surviving reference WHOLE.
+    assert!(is_apply(&flux) && flux["name"] == "generic");
+    assert!(is_apply(&flux["bindings"]["f"]));
+    assert_eq!(flux["bindings"]["f"]["name"], "flux_prod");
+    // generic marker (NOT compound 999)
+    assert_eq!(
+        normj(&loaded["models"]["m"]["expression_templates"]["generic"]["body"])["args"][0],
+        1
+    );
     assert_eq!(
         emit("opacity_priority_shadowing", "fixture.esm"),
         std::fs::read_to_string(conf("opacity_priority_shadowing").join("emitted.esm")).unwrap()
@@ -381,11 +562,23 @@ fn flatten_registry_merge_transitive_collisions_propagate() {
         [
             "A.interior_stencil",
             "A.outer_stencil",
+            "A.d_x_rule",
             "B.interior_stencil",
-            "B.outer_stencil"
+            "B.outer_stencil",
+            "B.d_x_rule"
         ]
         .into_iter()
         .collect()
+    );
+    // The rule's firing wrote a reference to the rule (esm-spec §9.6.3
+    // constraint 7), whose body references the wrapper: it renames with it.
+    assert_eq!(
+        apply_names(&merged["A.d_x_rule"]["body"]),
+        ["A.outer_stencil"]
+    );
+    assert_eq!(
+        apply_names(&merged["B.d_x_rule"]["body"]),
+        ["B.outer_stencil"]
     );
     // Each owner's wrapper reaches its OWN leaf, never the other model's.
     assert_eq!(
@@ -399,11 +592,11 @@ fn flatten_registry_merge_transitive_collisions_propagate() {
     // Component reference sites follow in lockstep.
     assert_eq!(
         apply_names(&root["models"]["A"]["equations"]),
-        ["A.outer_stencil"]
+        ["A.d_x_rule"]
     );
     assert_eq!(
         apply_names(&root["models"]["B"]["equations"]),
-        ["B.outer_stencil"]
+        ["B.d_x_rule"]
     );
     // Nothing dangles: every surviving reference resolves in the merged registry.
     for decl in merged.values() {
@@ -420,21 +613,22 @@ fn flatten_registry_merge_transitive_collisions_propagate() {
 
 // ---------------------------------------------------------------------------
 // flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7, §10.7):
-// the SCOPING PRECONDITION, pinned. Two byte-identical models import the same
-// rule library; `interior_stencil`'s body references the free name `inv_dx`,
-// which is a model-local parameter and so denotes a DIFFERENT variable in each.
+// the CLOSING PRECONDITION, with both halves pinned side by side. Two
+// byte-identical models import the same rule library; `interior_stencil`'s
+// body references the free name `inv_dx`, which is a model-local parameter and
+// so denotes a DIFFERENT variable in each.
 //
-// `flatten_template_registries` is the UNION half only, over the un-namespaced
-// component view: identical bodies dedupe under their bare names, and the pair
-// it returns is self-consistent with the un-namespaced document. Rust reaches
-// this surface only from conformance — `parse` runs Expand-at-build (§9.6.4
-// rule 2) so the typed IR never carries a surviving reference and
-// `FlattenedSystem` carries no registry, which is why no scoping step exists
-// here and none is required (§10.7, "Applicability across bindings"). The Julia
-// twin of this test also pins the scoping∘merge composition, which its
-// reference-preserving `flatten` does carry; if Rust ever grows that path it
-// inherits the obligation, and this test is what will fail if the merge is fed
-// unscoped bodies from it.
+// - `flatten_template_registries` is the UNION half only, over the
+//   un-namespaced component view: identical bodies dedupe under their bare
+//   names, and the bodies keep their free `inv_dx`.
+// - the executing `flatten` composes the §10.7 CLOSING with that merge:
+//   `inv_dx` becomes a parameter of `interior_stencil` (and, through the
+//   nested references, of `outer_stencil` and `d_x_rule`), which each model's
+//   references bind to its own `A.inv_dx` / `B.inv_dx`. The closed bodies are
+//   identical and are kept once, correct for both models. (This binding
+//   expands every reference at load, so its flattened equations carry no
+//   reference whose bindings could be checked; the Julia twin of this test
+//   checks them.)
 // ---------------------------------------------------------------------------
 #[test]
 fn flatten_registry_merge_is_the_union_half_only() {
@@ -444,20 +638,16 @@ fn flatten_registry_merge_is_the_union_half_only() {
     let keys: std::collections::HashSet<&str> = merged.keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        ["interior_stencil", "outer_stencil"].into_iter().collect()
+        ["interior_stencil", "outer_stencil", "d_x_rule"]
+            .into_iter()
+            .collect()
     );
     assert_eq!(
         apply_names(&merged["outer_stencil"]["body"]),
         ["interior_stencil"]
     );
-    assert_eq!(
-        apply_names(&root["models"]["A"]["equations"]),
-        ["outer_stencil"]
-    );
-    assert_eq!(
-        apply_names(&root["models"]["B"]["equations"]),
-        ["outer_stencil"]
-    );
+    assert_eq!(apply_names(&root["models"]["A"]["equations"]), ["d_x_rule"]);
+    assert_eq!(apply_names(&root["models"]["B"]["equations"]), ["d_x_rule"]);
     // Nothing dangles at this layer.
     for decl in merged.values() {
         for r in apply_names(decl) {
@@ -472,6 +662,28 @@ fn flatten_registry_merge_is_the_union_half_only() {
         !body.contains("A.inv_dx") && !body.contains("B.inv_dx"),
         "{body}"
     );
+
+    // closing ∘ merge: one closed entry per template, `inv_dx` a parameter of
+    // each.
+    let flat = earthsci_ast::flatten(
+        &earthsci_ast::load_path(
+            conf("flatten_registry_merge_transitive").join("fixture_twins.esm"),
+        )
+        .expect("load"),
+    )
+    .expect("flatten");
+    let keys: std::collections::HashSet<&str> =
+        flat.template_registry.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["interior_stencil", "outer_stencil", "d_x_rule"]
+            .into_iter()
+            .collect()
+    );
+    for (name, decl) in &flat.template_registry {
+        let params = decl["params"].as_array().expect("params");
+        assert!(params.iter().any(|p| p == "inv_dx"), "{name}: {decl}");
+    }
 }
 
 // ---------------------------------------------------------------------------

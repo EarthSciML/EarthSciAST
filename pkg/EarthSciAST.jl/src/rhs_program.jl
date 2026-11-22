@@ -315,7 +315,7 @@ end
 # refused at program build, by name.
 const _WsState = Union{
     _CSECache, _ObsExtVec, _AccScratch, _ForcingEpoch, _SecTCache, _ACMask,
-    Base.RefValue, Core.Box, AbstractDict,
+    Base.RefValue, Core.Box, AbstractDict, _CallTarget,
 }
 
 # A memoizing cache: its buffer may also be read through a codegen table.
@@ -338,6 +338,14 @@ function _ws_children!(x::AbstractDict, w)
     return nothing
 end
 _ws_children!(::Union{_ForcingEpoch, _SecTCache}, w) = nothing
+# A template compiled as a call (tree_walk/call.jl): its argument stack and the
+# running call's frame are per-call state; its body and block layouts are
+# walked like any other part of the program.
+function _ws_children!(x::_CallTarget, w)
+    _ws_walk!(x.body, x, w)
+    _ws_walk!(x.blocks, x, w)
+    return nothing
+end
 
 function _ws_fresh(x::_CSECache, c)
     y = _CSECache(
@@ -396,6 +404,19 @@ function _ws_fresh(x::AbstractDict, c)
     end
     return y
 end
+
+function _ws_fresh(x::_CallTarget, c)
+    y = _CallTarget(
+        x.name, x.key, x.slots, x.arrslots, x.arrkinds, x.arrdims, x.body, _ArgStack(), 0,
+        x.nodes, _ArrArg[], x.passed, x.baseidx, x.blocks
+    )
+    c.memo[x] = y
+    y.body = _inst(x.body, c)
+    y.blocks = _inst(x.blocks, c)
+    push!(c.caches, y)
+    return y
+end
+_ws_invalidate!(x::_CallTarget) = (x.fp = 0; x.stack.top = 0; empty!(x.curarrs); nothing)
 
 function _ws_invalidate!(x::_WsCache)
     x.stamp64 = _CSE_INVALID

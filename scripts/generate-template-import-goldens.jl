@@ -22,7 +22,7 @@
 #   tests/conformance/expression_templates/metaparam_structural_field_collision/expanded.esm
 #   tests/conformance/expression_templates/import_library_enum/expanded.esm
 #   tests/conformance/expression_templates/import_library_enum/expanded_importer_redeclares.esm
-#   tests/invalid/template_imports/body_chain_too_deep.esm   (33-template chain, generated)
+#   tests/invalid/template_imports/body_chain_too_deep.esm   (65-template chain, generated)
 #
 # The import fixtures are expanded through the raw §9.7 pipeline
 # (resolve_template_machinery → lower_expression_templates) so the golden is
@@ -129,8 +129,8 @@ for (wrapper, golden) in [
     )
 end
 
-# tests/invalid/template_imports/body_chain_too_deep.esm — a 33-template
-# body-reference chain (one over MAX_TEMPLATE_EXPANSION_DEPTH = 32).
+# tests/invalid/template_imports/body_chain_too_deep.esm — a 65-template
+# body-reference chain (one over MAX_TEMPLATE_EXPANSION_DEPTH = 64).
 let n = EarthSciAST.MAX_TEMPLATE_EXPANSION_DEPTH + 1
     tpl = Dict{String, Any}()
     for i in 1:n

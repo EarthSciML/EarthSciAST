@@ -1,0 +1,56 @@
+{
+  "expression_templates": {
+    "pull": {
+      "body": {
+        "args": [
+          "g",
+          "x"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "x",
+        "g"
+      ]
+    },
+    "Host.rate": {
+      "body": {
+        "args": [
+          2,
+          "x"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "x"
+      ]
+    },
+    "Sub1.rate": {
+      "body": {
+        "args": [
+          "k",
+          "x"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "x",
+        "k"
+      ]
+    },
+    "loss": {
+      "body": {
+        "args": [
+          "k",
+          "x",
+          "x"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "x",
+        "k"
+      ]
+    }
+  }
+}

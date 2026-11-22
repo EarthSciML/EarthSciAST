@@ -103,6 +103,41 @@ import Symbolics
         @test !occursin("PDESystem", err.msg)
     end
 
+    @testset "ModelingToolkit.System refuses an operator it has no lowering for" begin
+        # With no `dim` field there is no spatial independent variable, so the
+        # open-tier `grad` (or any name no rule rewrote) reaches the lowering
+        # and is refused by name with `unlowered_operator`.
+        for op in ("grad", "div", "laplacian", "my_open_op")
+            vars = Dict{String, ModelVariable}(
+                "u" => ModelVariable(UnknownVariable; default = 1.0),
+            )
+            eq = Equation(
+                OpExpr("D", EarthSciAST.ASTExpr[VarExpr("u")], wrt = "t"),
+                OpExpr(
+                    "-", EarthSciAST.ASTExpr[
+                        OpExpr(op, EarthSciAST.ASTExpr[VarExpr("u")]),
+                    ]
+                ),
+            )
+            file = EsmFile(
+                "0.1.0", Metadata("Open");
+                models = Dict("Open" => Model(vars, [eq]))
+            )
+            flat = flatten(file)
+            @test !any(iv -> iv != :t, flat.independent_variables)
+            err = try
+                ModelingToolkit.System(flat; name = :Open)
+                nothing
+            catch e
+                e
+            end
+            @test err isa SimulateError
+            @test err.code == EarthSciAST.ERROR_CODES.UNLOWERED_OPERATOR
+            @test occursin("`$(op)`", err.msg)
+            @test occursin("D(Open.u)", err.msg)
+        end
+    end
+
     @testset "Round-trip: Model → System → Model" begin
         vars = Dict(
             "x" => ModelVariable(UnknownVariable; default = 2.0),

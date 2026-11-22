@@ -345,6 +345,8 @@ function _call_target(ct::_CallTable, call::OpExpr)
     info = _tpl_call_info(ct.tt, name)
     b = call.bindings === nothing ? Dict{String, ASTExpr}() : call.bindings
     S = Dict{String, Any}()
+    # Array expressions compiled into the instance, by array sentinel.
+    ainl = Dict{String, ASTExpr}()
     arrkind = Dict{String, Symbol}()
     arrdims = Dict{String, Vector{Int}}()
     blocks = Dict{String, _StateGather}()
@@ -361,14 +363,27 @@ function _call_target(ct::_CallTable, call::OpExpr)
             # An array every read of which the caller makes (`_call_hoist_plan`)
             # is no argument.
             hp === nothing || !(s in hp.whole) || continue
-            push!(asrc, (s, _call_arg(b, s)))
+            v = _call_arg(b, s)
+            # An array expression is compiled into the instance (below).
+            if _inl_is_amarked(v)
+                ainl[s] = v
+                continue
+            end
+            push!(asrc, (s, v))
         end
         # The arrays read inside bindings compiled into the instance.
         for p in sort!(collect(def.params))
             v = get(b, p, nothing)
             (v === nothing || !_inl_is_marked(v)) && continue
+            _inl_is_amarked(v) && !haskey(ainl, _TPL_ARG * p) && continue
             for (k, m) in enumerate(_inl_arrays(v))
                 push!(asrc, (_TPL_INA * p * "\0" * string(k), m))
+            end
+        end
+        for s in sort!(collect(keys(ainl)))
+            startswith(s, _TPL_FREE) || continue
+            for (k, m) in enumerate(_inl_arrays(ainl[s]))
+                push!(asrc, (_TPL_INA * s * "\0" * string(k), m))
             end
         end
         for (s, v) in asrc
@@ -398,6 +413,10 @@ function _call_target(ct::_CallTable, call::OpExpr)
     for sn in sort!(collect(keys(inl)))
         print(io, '\x05', sn, '=', _inl_key(b[sn[(ncodeunits(_TPL_ARG) + 1):end]]))
     end
+    for sn in sort!(collect(keys(ainl)))
+        v = ainl[sn]::OpExpr
+        print(io, '\x06', sn, '=', join(v.output_idx, ','), ':', _inl_key(v))
+    end
     key = String(take!(io))
     got = get(ct.targets, key, nothing)
     if got !== nothing
@@ -418,6 +437,7 @@ function _call_target(ct::_CallTable, call::OpExpr)
     # Each read the caller makes is the argument `"\0lane\0k"`.
     hp === nothing || (ibody = hp.body)
     isempty(inl) || (ibody = _tpl_subst_scoped(ibody, inl, IdDict{OpExpr, ASTExpr}()))
+    isempty(ainl) || (ibody = _call_subst_arrays(ibody, _call_array_skels(ainl), IdDict{OpExpr, ASTExpr}()))
     arrslots = sort!(collect(keys(arrkind)))
     # Scalar slots: the argument sentinels in the order the body first reads
     # them (so two instances whose bodies have one structure have one slot
@@ -426,13 +446,17 @@ function _call_target(ct::_CallTable, call::OpExpr)
     append!(cand, String[_TPL_FREE * n for n in inst.free])
     append!(cand, String[_TPL_OUT * o for o in outs])
     hp === nothing || append!(cand, String[_TPL_LANE * string(k) for k in eachindex(hp.gathers)])
-    filter!(s -> !haskey(arrkind, s) && !(hp !== nothing && s in hp.whole) && !haskey(inl, s), cand)
+    filter!(s -> !haskey(arrkind, s) && !(hp !== nothing && s in hp.whole) && !haskey(inl, s) && !haskey(ainl, s), cand)
     # A declared parameter the body never reads as a value is no argument
     # (its binding is never made, as in the expansion).
     info === nothing || filter!(s -> !startswith(s, _TPL_ARG) || s in info.scalars, cand)
     for (sn, sk) in inl
         p = sn[(ncodeunits(_TPL_ARG) + 1):end]
         append!(cand, String[_TPL_IN * p * "\0" * string(k) for k in 1:_inl_count(b[p])])
+    end
+    for (sn, v) in ainl
+        p = _call_binding_key(sn)
+        append!(cand, String[_TPL_IN * p * "\0" * string(k) for k in 1:_inl_count(v)])
     end
     slots = _call_first_reads(ibody, Set{String}(cand))
     append!(slots, sort!(setdiff(cand, slots)))
@@ -898,6 +922,78 @@ function _inl_mkey(v::ASTExpr)
     return string("(", v.op, " ", join((_inl_mkey(x) for x in v.args), " "), ")")
 end
 
+# ---- Array expressions compiled into the instance -------------------------------
+# An array parameter bound to an ARRAY EXPRESSION (frames.jl `_tpl_array_expr`:
+# an elementwise `faq` over its output indices) is no array the caller can
+# pass, and no buffer is made for it: it is read LAZILY. The binding is marked
+# as a compound binding is (`_call_mark_inlined`: its leaves caller values,
+# `"\0in\0p\0k"`, its array reads array arguments, `"\0ina\0p\0k"`), and its
+# element skeleton is part of the instance key. In the instance's body each
+# read `index(<array sentinel>, s…)` is the element with each output index
+# read as `s`, so the expression is evaluated at that cell, only where and
+# when the body reads it; the body itself is compiled once per instance, as
+# any. A sentinel the body passes on to a call in it is the whole expression
+# (the skeleton as a `faq`), compiled into the inner call's instance in turn.
+# The marked binding is `__inlb(m)` carrying the expression's `output_idx` and
+# `ranges`.
+
+_inl_is_amarked(v::ASTExpr) = _inl_is_marked(v) && v.output_idx !== nothing
+
+# The binding key of the sentinel `s` (a declared parameter's name, an
+# implicit parameter's sentinel itself).
+_call_binding_key(s::AbstractString) = startswith(s, _TPL_ARG) ? String(s[(ncodeunits(_TPL_ARG) + 1):end]) : String(s)
+
+# Per array sentinel compiled in: its output indices, its element skeleton and
+# the skeleton as a whole `faq`.
+function _call_array_skels(ainl::Dict{String, ASTExpr})
+    out = Dict{String, Tuple{Vector{String}, ASTExpr, ASTExpr}}()
+    for (sn, v) in ainl
+        o = v::OpExpr
+        outs = String[String(x) for x in o.output_idx]
+        el = _inl_mskel(o, _call_binding_key(sn), Ref(0), Ref(0))
+        whole = OpExpr("faq", ASTExpr[]; output_idx = Any[x for x in outs], ranges = o.ranges, expr_body = el)
+        out[sn] = (outs, el, whole)
+    end
+    return out
+end
+
+# `e` with each read of an array sentinel of `m` its element at the read's
+# subscripts, and each other occurrence the whole expression.
+function _call_subst_arrays(e::ASTExpr, m::Dict{String, Tuple{Vector{String}, ASTExpr, ASTExpr}}, memo::IdDict{OpExpr, ASTExpr})
+    if e isa VarExpr
+        got = get(m, e.name, nothing)
+        return got === nothing ? e : got[3]
+    end
+    e isa OpExpr || return e
+    r = get(memo, e, nothing)
+    r === nothing || return r
+    if e.op == "index" && length(e.args) >= 2 && e.args[1] isa VarExpr && haskey(m, (e.args[1]::VarExpr).name)
+        outs, el, _ = m[(e.args[1]::VarExpr).name]
+        subs = ASTExpr[_call_subst_arrays(a, m, memo) for a in @view e.args[2:end]]
+        length(subs) == length(outs) || throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_OP",
+                "an array expression of rank $(length(outs)) is read at $(length(subs)) subscripts"
+            )
+        )
+        r = _tpl_subst_scoped(el, Dict{String, ASTExpr}(outs[d] => subs[d] for d in eachindex(outs)), IdDict{OpExpr, ASTExpr}())
+    else
+        r = map_children(c -> _call_subst_arrays(c, m, memo), e)
+    end
+    memo[e] = r
+    return r
+end
+
+# The marked form of the array expression `v` (`_inl_mark` over its element,
+# its output indices kept as names).
+function _inl_amark(leaf, arr, v::OpExpr, tt::_TplTable)
+    outs = Set{String}(String(x) for x in v.output_idx)
+    return OpExpr(
+        "__inlb", ASTExpr[_inl_mark(leaf, arr, v.expr_body, outs, tt)];
+        output_idx = v.output_idx, ranges = v.ranges
+    )
+end
+
 # The reference `call` with each binding that is compiled into its instance as
 # a marked binding (`_call_inl_mode`) rewritten: every maximal part that reads
 # no name the body binds is the caller value `__inleaf(leaf(part))`; an array
@@ -917,6 +1013,14 @@ function _call_mark_inlined(leaf, arr, tt::_TplTable, call::OpExpr)
         _call_inl_mode(tt, info, def, p, v) === :marked || continue
         nb === nothing && (nb = Dict{String, ASTExpr}(call.bindings))
         nb[p] = OpExpr("__inlb", ASTExpr[_inl_mark(leaf, arr, v, B, tt)])
+    end
+    # An array parameter bound to an array expression.
+    for s in info.arrays
+        k = _call_binding_key(s)
+        v = get(call.bindings, k, nothing)
+        (v === nothing || _inl_is_marked(v) || !_tpl_array_expr(v)) && continue
+        nb === nothing && (nb = Dict{String, ASTExpr}(call.bindings))
+        nb[k] = _inl_amark(leaf, arr, v::OpExpr, tt)
     end
     return nb === nothing ? call : reconstruct(call; bindings = nb)
 end
@@ -1051,7 +1155,8 @@ function _arr_arg_marker(v::ASTExpr, rc)
             TreeWalkError(
                 "E_TREEWALK_UNSUPPORTED_OP",
                 "an array parameter of a template is bound to an expression; the build " *
-                    "passes only named or inline const arrays yet"
+                    "passes named or inline const arrays, and evaluates elementwise array " *
+                    "expressions where the body reads them"
             )
         )
     end
@@ -1507,7 +1612,7 @@ function _tpl_agg_view(
     end
     lm = Dict{String, ASTExpr}()
     for k in 1:n
-        leaf = _tpl_part_call(tt, call, _tpl_part_name(call.name, k))
+        leaf = _tpl_part_forward(tt, _tpl_part_call(tt, call, _tpl_part_name(call.name, k)))
         lanes && _tpl_call_info(tt, leaf.name) !== nothing && (leaf = _tpl_with_lanes(tt, leaf))
         lm[_TPL_LEAF * string(k)] = leaf
     end
@@ -1552,6 +1657,30 @@ function _tpl_part_call(tt::_TplTable, call::OpExpr, pn::String)
         haskey(nb, _TPL_FREE * n) || (nb[_TPL_FREE * n] = VarExpr(n))
     end
     return _tpl_structural_ref(tt, reconstruct(call; name = pn, bindings = nb))
+end
+
+# A FORWARDING part — the part `_tpl_skel_node!` makes for a leaf of a
+# whole-array reference in a body, whose body is that reference's own part
+# call — is read as the part call it forwards to, its bindings read as the
+# outer call binds them (the bindings composed; no body is copied). A rule
+# that forwards to a stencil template (esm-spec §9.6.3 constraint 7) then has
+# the stencil's parts as its view's leaves, called and laned in the caller as
+# the stencil itself is.
+function _tpl_part_forward(tt::_TplTable, leaf::OpExpr)
+    while occursin(_TPL_PART, leaf.name)
+        def = _tpl_def(tt, leaf.name)
+        def.closed === nothing && return leaf
+        body = def.closed.body
+        (_tpl_is_call(body) && !_tpl_is_elem(body::OpExpr) && occursin(_TPL_PART, (body::OpExpr).name)) ||
+            return leaf
+        m = _tpl_sentinel_map(leaf)
+        for n in def.closed.free
+            haskey(m, _TPL_FREE * n) || (m[_TPL_FREE * n] = VarExpr(n))
+        end
+        inner = _tpl_subst_scoped(body, m, IdDict{OpExpr, ASTExpr}())::OpExpr
+        leaf = _tpl_part_call(tt, inner, inner.name)
+    end
+    return leaf
 end
 
 # Every variable leaf name in `e` (sentinels included, binders ignored).

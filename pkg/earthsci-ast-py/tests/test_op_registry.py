@@ -29,6 +29,8 @@ import importlib
 import re
 import warnings
 
+import pytest
+
 # Import the submodules via importlib: the package ``__init__`` re-exports the
 # ``flatten`` FUNCTION under the name ``flatten``, shadowing the submodule in the
 # package namespace, so ``from earthsci_ast import flatten`` would bind the
@@ -401,3 +403,21 @@ def test_removed_ops_are_not_registered():
     # derived from the registry may still carry it.
     for op in reg.REMOVED_OPS:
         assert op not in reg.OPS, op
+
+
+def _removed_op_fixtures():
+    from conftest import INVALID_DIR
+
+    return sorted((INVALID_DIR / "removed_ops").glob("*.esm"))
+
+
+@pytest.mark.parametrize("path", _removed_op_fixtures(), ids=lambda p: p.name)
+def test_removed_op_fixtures_are_refused_at_load(path):
+    # Every tests/invalid/removed_ops/ fixture is refused at load with
+    # `removed_op`, by name at the wire boundary.
+    from earthsci_ast import load_path
+    from earthsci_ast.errors import ParseError
+
+    with pytest.raises(ParseError) as info:
+        load_path(str(path))
+    assert info.value.code == "removed_op", str(info.value)

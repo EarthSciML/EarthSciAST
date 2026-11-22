@@ -268,39 +268,21 @@ end
         @test ESM._expand_expr_refs(site, reg, nothing, cache).template_origin === nothing
     end
 
-    @testset "the elementwise lift's expansions agree with the direct route" begin
-        # `_ew_expansion` is what the lift reads (its cache, or none).
+    @testset "the elementwise lift keeps references (esm-spec §9.6.11)" begin
+        # Flatten reads every application through its template, never
+        # expanding it: the expansion counter does not move, and the lifted
+        # equations still hold their references.
         dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "template_array_args")
         n = 0
         for (d, _, fs) in walkdir(dir), f in fs
             endswith(f, ".esm") || continue
-            file = load_path(joinpath(d, f))
-            reg = ESM.flatten(file).template_registry
-            isempty(reg) && continue
-            cached = ESM._ElementwiseContext(reg)
-            direct = ESM._ElementwiseContext(reg, nothing)
-            # The authored applications: flatten writes every elementwise one
-            # as its lift (esm-spec §9.6.11), so its equations hold none.
-            for m in values(file.models), eq in m.equations
-                apps = ESM.OpExpr[]
-                walk(e) = (
-                    e isa ESM.OpExpr && (
-                        e.op == "apply_expression_template" ? push!(apps, e) :
-                            ESM.map_children(c -> (walk(c); c), e)
-                    ); nothing
-                )
-                walk(eq.rhs)
-                for a in apps
-                    x = ESM._ew_expansion(a, cached)
-                    y = ESM._ew_expansion(a, direct)
-                    @test _tic_json(x) == _tic_json(y)
-                    @test _tic_marks(x) == _tic_marks(y)
-                    @test x.template_origin == a.name
-                    n += 1
-                end
-            end
+            e0 = ESM.TEMPLATE_EXPANSIONS[]
+            flat = ESM.flatten(load_path(joinpath(d, f)))
+            @test ESM.TEMPLATE_EXPANSIONS[] == e0
+            isempty(flat.template_registry) && continue
+            n += count(eq -> occursin("apply_expression_template", ESM.JSON3.write(ESM.serialize_expression(eq.rhs))), flat.equations)
         end
-        @test n > 5
+        @test n > 0
     end
 
     @testset "a bad binding is reported at its own call site" begin

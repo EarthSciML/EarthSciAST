@@ -35,7 +35,6 @@ from conftest import CONFORMANCE_DIR
 from earthsci_ast import flatten, load_path
 from earthsci_ast.flatten import _lhs_dependent_var
 from earthsci_ast.inline_tests import run_inline_tests
-from earthsci_ast.json_walk import ExpressionTemplateError
 from earthsci_ast.problem import esm_problem, solve
 from earthsci_ast.serialize import _serialize_expression
 
@@ -64,7 +63,6 @@ FLATTEN_CASES = [c for c in CASES if c["surface"] == "flatten"]
 OVERRIDE_CASES = [c for c in CASES if c["surface"] == "override_keys"]
 OUTPUT_CASES = [c for c in CASES if c["surface"] == "output_selection"]
 EVENT_CASES = [c for c in CASES if c["surface"] == "events_and_updates"]
-REGISTRY_CASES = [c for c in CASES if c["surface"] == "template_registry"]
 INLINE_CASES = [c for c in CASES if c["surface"] == "inline_tests"]
 
 
@@ -81,12 +79,11 @@ def test_the_manifest_is_not_empty():
     assert OVERRIDE_CASES, "the merged_rename_reach manifest recorded no override cases"
     assert OUTPUT_CASES, "the merged_rename_reach manifest recorded no output cases"
     assert EVENT_CASES, "the merged_rename_reach manifest recorded no event cases"
-    assert REGISTRY_CASES, "the merged_rename_reach manifest recorded no registry cases"
     assert INLINE_CASES, "the merged_rename_reach manifest recorded no inline-test cases"
     assert "python" in MANIFEST["surfaces"]["flatten"]["bindings"]
     assert "python" in MANIFEST["surfaces"]["override_keys"]["bindings"]
     assert "python" in MANIFEST["surfaces"]["output_selection"]["bindings"]
-    for surface in ("events_and_updates", "template_registry", "inline_tests"):
+    for surface in ("events_and_updates", "inline_tests"):
         assert "python" in MANIFEST["surfaces"][surface]["bindings"]
 
 
@@ -243,25 +240,6 @@ def test_the_rename_reaches_events_and_variable_updates(case):
     for gone in case["absent_from_events_and_updates"]:
         assert gone not in haystack.split(), (
             f"{case['id']}: {gone!r} still appears in an event or an update: {haystack}"
-        )
-
-
-@pytest.mark.parametrize("case", REGISTRY_CASES, ids=[c["id"] for c in REGISTRY_CASES])
-def test_a_registry_body_naming_the_merged_away_state_is_refused(case):
-    """The ONE surface that refuses rather than resolves.
-
-    A surviving registry body is authored source that expands at the build
-    boundary, so it can neither be left alone (it would expand into a name the
-    flattened system does not declare) nor rewritten (the flattened registry
-    would then disagree with the expand-at-load image). Flatten refuses.
-    """
-    with pytest.raises(ExpressionTemplateError) as excinfo:
-        _flatten(case)
-    assert excinfo.value.code == case["raises"]
-    for name in case["names_in_message"]:
-        assert name in str(excinfo.value), (
-            f"{case['id']}: the diagnostic must name {name!r} — naming the offending "
-            "reference is what turns it into a fix"
         )
 
 

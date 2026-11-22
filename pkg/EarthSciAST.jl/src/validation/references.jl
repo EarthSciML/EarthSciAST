@@ -195,7 +195,7 @@ _indep_var(file::EsmFile)::String = _indep_var(file.domain)
 # them. v0.8.0 removed `Domain.spatial`, so a coordinate has no declaration site
 # at all: it is named directly in an expression (the `x` of an expression initial
 # condition, `0.5*(1 + tanh((x - 0.3)/0.15))`) and as the `dim` of a
-# `grad`/`div`/`laplacian`. It belongs to the DOMAIN, not to any `variables`
+# spatial `D` (its `wrt`) or of an open-tier op. It belongs to the DOMAIN, not to any `variables`
 # block, so reporting it `undefined_variable` rejects a valid file.
 const _CONVENTIONAL_COORDINATE_NAMES = ("x", "y", "z", "lon", "lat", "lev")
 
@@ -621,6 +621,17 @@ function _check_expression_references!(
                         Set{String}()
                     end
                     isempty(binders) || (sc = _RefScope(sc.base, sc, collect(binders)))
+                end
+                # A binding the expansion reads only in a subscript: its names
+                # are index space there (`_bound_index_symbols`).
+                if sc !== nothing
+                    only_idx = try
+                        _tpl_binding_sentinel(k) in _tpl_index_reads(templates, expr.name)
+                    catch err
+                        err isa ExpressionTemplateError || rethrow()
+                        false
+                    end
+                    only_idx && (sc = _RefScope(sc.base, sc, _collect_index_names!(String[], b[k])))
                 end
                 _check_expression_references!(errors, file, b[k], path, anchor, sc, templates)
             end

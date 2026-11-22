@@ -40,7 +40,7 @@
       "kind": "refusal",
       "description": "The removed operator arrayop in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrayop}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrayop}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -48,7 +48,7 @@
       "kind": "refusal",
       "description": "The removed operator aggregate in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{aggregate}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{aggregate}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -56,7 +56,7 @@
       "kind": "refusal",
       "description": "The removed operator fn in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{fn}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{fn}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -64,7 +64,7 @@
       "kind": "refusal",
       "description": "The removed operator table_lookup in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{table\\_lookup}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{table\\_lookup}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -72,7 +72,7 @@
       "kind": "refusal",
       "description": "The removed operator skolem in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{skolem}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{skolem}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -80,7 +80,7 @@
       "kind": "refusal",
       "description": "The removed operator rank in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{rank}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{rank}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -88,7 +88,7 @@
       "kind": "refusal",
       "description": "The removed operator argmin in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{argmin}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{argmin}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -96,7 +96,7 @@
       "kind": "refusal",
       "description": "The removed operator argmax in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{argmax}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{argmax}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -104,7 +104,7 @@
       "kind": "refusal",
       "description": "The removed operator intersect_polygon in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{intersect\\_polygon}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{intersect\\_polygon}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -112,7 +112,7 @@
       "kind": "refusal",
       "description": "The removed operator polygon_intersection_area in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{polygon\\_intersection\\_area}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{polygon\\_intersection\\_area}(x)\n$$\n",
       "error": "removed_op"
     },
     {
@@ -120,7 +120,7 @@
       "kind": "refusal",
       "description": "A removed operator in the Typst call form.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"fn\")(x) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"fn\")(x) $\n",
       "error": "removed_op"
     },
     {
@@ -128,7 +128,7 @@
       "kind": "refusal",
       "description": "A removed operator in the Typst call form.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"aggregate\")(x) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"aggregate\")(x) $\n",
       "error": "removed_op"
     },
     {
@@ -136,7 +136,7 @@
       "kind": "refusal",
       "description": "A removed operator in the LaTeX escape form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\esm{arrayop}{{\\text{\"id\"}: \\text{\"tagged\"}, \\text{\"shape\"}: [2, 3]}}{a}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\esm{arrayop}{{\\text{\"id\"}: \\text{\"tagged\"}, \\text{\"shape\"}: [2, 3]}}{a}\n$$\n",
       "error": "removed_op"
     },
     {
@@ -144,7 +144,7 @@
       "kind": "refusal",
       "description": "A removed operator in the Typst escape form.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = esm.node(\"rank\", #(\n  id: \"tagged\",\n  shape: (\n    2,\n    3,\n  ),\n), a) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = esm.node(\"rank\", #(\n  id: \"tagged\",\n  shape: (\n    2,\n    3,\n  ),\n), a) $\n",
       "error": "removed_op"
     },
     {
@@ -152,7 +152,7 @@
       "kind": "refusal",
       "description": "A multi-letter word that is no declared name.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k zz\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k zz\n$$\n",
       "error": "parse_error"
     },
     {
@@ -160,7 +160,7 @@
       "kind": "refusal",
       "description": "A multi-letter word that is no declared name.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = k zz $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = k zz $\n",
       "error": "parse_error"
     },
     {
@@ -168,7 +168,7 @@
       "kind": "refusal",
       "description": "With R, T and RT declared, bare RT could be the name or the product: refused (write \\mathit{RT} or R T).",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$R$]{}\n\n:param[$\\mathit{RT}$]{}\n\n:param[$T$]{}\n\n:var[$y$]{}\n\n$$\ny = RT\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$R$]{}\n\n:param[$\\mathit{RT}$]{}\n\n:param[$T$]{}\n\n:var[$y$]{}\n\n$$\ny = RT\n$$\n",
       "error": "parse_error"
     },
     {
@@ -176,7 +176,7 @@
       "kind": "refusal",
       "description": "With R, T and RT declared, bare RT is refused.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($R$)\n\n#param($italic(\"RT\")$)\n\n#param($T$)\n\n#var($y$)\n\n$ y = RT $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($R$)\n\n#param($italic(\"RT\")$)\n\n#param($T$)\n\n#var($y$)\n\n$ y = RT $\n",
       "error": "parse_error"
     },
     {
@@ -184,7 +184,7 @@
       "kind": "refusal",
       "description": "With dx declared and dt not, \\frac{dx}{dt} is no derivative and dt is unknown.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$\\mathit{dx}$]{}\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{dx}{dt}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$\\mathit{dx}$]{}\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{dx}{dt}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -192,7 +192,7 @@
       "kind": "refusal",
       "description": "An unbalanced brace.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{k}{x\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{k}{x\n$$\n",
       "error": "parse_error"
     },
     {
@@ -200,7 +200,7 @@
       "kind": "refusal",
       "description": "An unbalanced parenthesis.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (k x $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (k x $\n",
       "error": "parse_error"
     },
     {
@@ -208,7 +208,7 @@
       "kind": "refusal",
       "description": "An operator with no right operand.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x +\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x +\n$$\n",
       "error": "parse_error"
     },
     {
@@ -216,7 +216,7 @@
       "kind": "refusal",
       "description": "An equation has one top-level =.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k = x\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k = x\n$$\n",
       "error": "parse_error"
     },
     {
@@ -224,7 +224,7 @@
       "kind": "refusal",
       "description": "A display with no top-level = is not an equation.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\nk x\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\nk x\n$$\n",
       "error": "parse_error"
     },
     {
@@ -232,7 +232,7 @@
       "kind": "refusal",
       "description": "D is not an open operator name.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{D}(x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{D}(x)\n$$\n",
       "error": "parse_error"
     },
     {
@@ -240,7 +240,7 @@
       "kind": "refusal",
       "description": "A continuation row starting with its own = is refused.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\begin{aligned}\\frac{\\mathrm{d} A}{\\mathrm{d} t} = k A \\\\\n&= -a\\end{aligned}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\begin{aligned}\\frac{\\mathrm{d} A}{\\mathrm{d} t} = k A \\\\\n&= -a\\end{aligned}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -248,7 +248,7 @@
       "kind": "refusal",
       "description": "A display with no closing $$.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x\n\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x\n\n",
       "error": "parse_error"
     },
     {
@@ -256,7 +256,7 @@
       "kind": "refusal",
       "description": "An initialization container with no closing :::.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n\n:::initialization\n$$\nc = 1\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$c$]{default=0 units=\"kg/m^3\"}\n\n:param[$u$]{default=1 units=\"m/s\"}\n\n$$\n\\frac{\\mathrm{d} c}{\\mathrm{d} t} = -u c\n$$\n\n:::initialization\n$$\nc = 1\n$$\n",
       "error": "parse_error"
     },
     {
@@ -264,7 +264,7 @@
       "kind": "refusal",
       "description": "A reaction table with a rate column is refused, never skipped as prose.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::reaction-system[Chem]\n\n:species[$\\mathrm{NO}$]{default=0}\n\n:species[$\\mathrm{NO_{2}}$]{default=0}\n\n:species[$\\mathrm{O_{3}}$]{default=0}\n\n:param[$j$]{default=0.01}\n\n:param[$k_{\\mathrm{1}}$]{default=1.8e-12 units=\"1/s\"}\n\n| id | reaction | rate |\n| --- | --- | --- |\n| R1 | NO + O3 -> NO2 | $k_{\\mathrm{1}}$ |\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::reaction-system[Chem]\n\n:species[$\\mathrm{NO}$]{default=0}\n\n:species[$\\mathrm{NO_{2}}$]{default=0}\n\n:species[$\\mathrm{O_{3}}$]{default=0}\n\n:param[$j$]{default=0.01}\n\n:param[$k_{\\mathrm{1}}$]{default=1.8e-12 units=\"1/s\"}\n\n| id | reaction | rate |\n| --- | --- | --- |\n| R1 | NO + O3 -> NO2 | $k_{\\mathrm{1}}$ |\n",
       "error": "parse_error"
     },
     {
@@ -272,7 +272,7 @@
       "kind": "refusal",
       "description": "Two named template arguments with one name.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{scale}(f = x, f = 2)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{scale}(f = x, f = 2)\n$$\n",
       "error": "parse_error"
     },
     {
@@ -280,7 +280,7 @@
       "kind": "refusal",
       "description": "A declaration with no closing parenthesis.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$\n\n#param($x$)\n\n#var($y$)\n\n$ y = k x $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$\n\n#param($x$)\n\n#var($y$)\n\n$ y = k x $\n",
       "error": "parse_error"
     },
     {
@@ -288,7 +288,7 @@
       "kind": "refusal",
       "description": "A \\limits operator (args are the arrays the body indexes) takes no superscript set.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum\\limits_{i \\in S}^{\\{f\\}} w_{i}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\sum\\limits_{i \\in S}^{\\{f\\}} w_{i}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -296,7 +296,7 @@
       "kind": "refusal",
       "description": "limits(sum) takes no superscript set.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = limits(sum)_(i in S)^({f}) w_i $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = limits(sum)_(i in S)^({f}) w_i $\n",
       "error": "parse_error"
     },
     {
@@ -304,7 +304,7 @@
       "kind": "refusal",
       "description": "With output indices the set goes on the bracket only: a set on the reduction inside the bracket is refused, the bracket's own set beside it or not.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]^{\\{f\\}}_{i \\in S}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]^{\\{f\\}}_{i \\in S}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -312,7 +312,7 @@
       "kind": "refusal",
       "description": "A set on the reduction inside the bracket, none on the bracket: refused.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]_{i \\in S}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$f$]{}\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum_{j \\in C}^{\\{f\\}} w_{i, j}\\right]_{i \\in S}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -320,7 +320,7 @@
       "kind": "refusal",
       "description": "A set on the reduction inside lr([…]) is refused.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(j in C)^({f}) w_(i, j)])^({f})_(i in S) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(j in C)^({f}) w_(i, j)])^({f})_(i in S) $\n",
       "error": "parse_error"
     },
     {
@@ -328,7 +328,7 @@
       "kind": "refusal",
       "description": "A set on the reduction inside lr([…]), none on the bracket: refused.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(j in C)^({f}) w_(i, j)])_(i in S) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($f$)\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([sum_(j in C)^({f}) w_(i, j)])_(i in S) $\n",
       "error": "parse_error"
     },
     {
@@ -336,7 +336,7 @@
       "kind": "refusal",
       "description": "A \\limits operator inside the bracket: no set on the bracket either.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum\\limits_{j \\in C} w_{i, j}\\right]^{\\{w\\}}_{i \\in S}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n```esm:index_sets\nC:\n  kind: \"interval\"\n  size: 2\nS:\n  kind: \"interval\"\n  size: 3\n```\n\n::model[M]\n\n:param[$w$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\sum\\limits_{j \\in C} w_{i, j}\\right]^{\\{w\\}}_{i \\in S}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -344,7 +344,7 @@
       "kind": "refusal",
       "description": "limits(sum) inside lr([…]): no set on the bracket either.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([limits(sum)_(j in C) w_(i, j)])^({w})_(i in S) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#esm-block(\"index_sets\", (\n  C: (\n    kind: \"interval\",\n    size: 2,\n  ),\n  S: (\n    kind: \"interval\",\n    size: 3,\n  ),\n))\n\n#model(\"M\")\n\n#param($w$)\n\n#var($y$)\n\n$ y = lr([limits(sum)_(j in C) w_(i, j)])^({w})_(i in S) $\n",
       "error": "parse_error"
     },
     {
@@ -352,7 +352,7 @@
       "kind": "refusal",
       "description": "The call form of a core operator carries no annotation field (id, expect_cadence): the printer writes that node in the escape form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{reshape}(a; \\mathrm{id} = \\text{\\\"r\\\"}, \\mathrm{shape} = [2, 3])\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{reshape}(a; \\mathrm{id} = \\text{\\\"r\\\"}, \\mathrm{shape} = [2, 3])\n$$\n",
       "error": "parse_error"
     },
     {
@@ -360,7 +360,7 @@
       "kind": "refusal",
       "description": "The call form of a core operator carries no annotation field.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"reshape\")(a; upright(\"id\") = #\"r\", upright(\"shape\") = #(\n  2,\n  3,\n)) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"reshape\")(a; upright(\"id\") = #\"r\", upright(\"shape\") = #(\n  2,\n  3,\n)) $\n",
       "error": "parse_error"
     },
     {
@@ -368,7 +368,7 @@
       "kind": "refusal",
       "description": "A node with a native spelling is refused in the call form: a constant vector.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{const}(; \\mathrm{value} = [1, 2, 3])\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{const}(; \\mathrm{value} = [1, 2, 3])\n$$\n",
       "error": "parse_error"
     },
     {
@@ -376,7 +376,7 @@
       "kind": "refusal",
       "description": "A field key named twice in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(x; \\mathrm{dim} = x, \\mathrm{dim} = x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(x; \\mathrm{dim} = x, \\mathrm{dim} = x)\n$$\n",
       "error": "parse_error"
     },
     {
@@ -384,7 +384,7 @@
       "kind": "refusal",
       "description": "A field named args in the call form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(x; \\mathrm{args} = x)\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(x; \\mathrm{args} = x)\n$$\n",
       "error": "parse_error"
     },
     {
@@ -392,7 +392,7 @@
       "kind": "refusal",
       "description": "A bare \\operatorname{n} where a template n with no parameters is in scope: the printer writes \\operatorname{n}().",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{unit\\_tile}\n$$\n\n$$\n\\operatorname{unit\\_tile}() \\coloneqq 1\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{unit\\_tile}\n$$\n\n$$\n\\operatorname{unit\\_tile}() \\coloneqq 1\n$$\n",
       "error": "parse_error"
     },
     {
@@ -400,7 +400,7 @@
       "kind": "refusal",
       "description": "A bare op(\"n\") where a template n with no parameters is in scope.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"unit_tile\") $\n\n$ op(\"unit_tile\")() := 1 $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($y$)\n\n$ y = op(\"unit_tile\") $\n\n$ op(\"unit_tile\")() := 1 $\n",
       "error": "parse_error"
     },
     {
@@ -408,7 +408,7 @@
       "kind": "refusal",
       "description": "A bmatrix of more than 10 columns is refused: the printer writes the array form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\\\ 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21\\end{bmatrix}\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\begin{bmatrix}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\\\ 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21\\end{bmatrix}\n$$\n",
       "error": "parse_error"
     },
     {
@@ -416,7 +416,7 @@
       "kind": "refusal",
       "description": "The array form's column count must be every row's length.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{cccccccccccc}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\\\ 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 \\end{array}\\right]\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{cccccccccccc}0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\\\ 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 \\end{array}\\right]\n$$\n",
       "error": "parse_error"
     },
     {
@@ -424,7 +424,7 @@
       "kind": "refusal",
       "description": "The array form is for more than 10 columns; a narrower matrix is a bmatrix.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{cc}1 & 2 \\\\ 3 & 4 \\end{array}\\right]\n$$\n",
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{cc}1 & 2 \\\\ 3 & 4 \\end{array}\\right]\n$$\n",
       "error": "parse_error"
     }
   ]

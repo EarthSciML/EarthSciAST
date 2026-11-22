@@ -540,7 +540,7 @@ bindings export the family; all are total and return sorted names.
 | `discrete_parameters(model) -> [str]` | event/schedule-updated parameters |
 | `sampled_parameters(model) -> [str]` | distribution-drawn parameters |
 | `constant_parameters(model) -> [str]` | never updated |
-| `system_kind(model) -> SystemKind` | `ode` / `dae` / `sde` / `pde` / `nonlinear` |
+| `system_kind(model) -> SystemKind` | `ode` / `dae` / `sde` / `nonlinear` (`pde` was dropped at esm 2.4.0; a declared `pde` is ignored with the warning `deprecated_system_kind`) |
 | `observed_definitions(model) -> {str: Expr}` | observed name → defining expression |
 
 Divergences:
@@ -551,7 +551,8 @@ Divergences:
   model and nothing else. Julia, TypeScript, Python and Go export the whole
   family the item rules — `system_kind` (derived), `declared_system_kind` (the
   explicit field, nullable) and `effective_system_kind` (`declared ?? derived`).
-  Rust exports only `system_kind`.
+  Rust exports `system_kind` and `declared_system_kind`, not
+  `effective_system_kind`.
 - **Return type.** TypeScript and Rust return a `SystemKind` enum; Julia,
   Python and Go return a bare string.
 - **`observed_definitions`** has an extra `bare_only: bool = False` parameter in
@@ -2136,6 +2137,7 @@ reading that as a gap.
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
 | `contribution` | type | `Contribution` | `Contribution` | `Contribution` | `Contribution` | `Contribution` |
 | `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
+| `declared_system_kind` | function | `declared_system_kind` | `declaredSystemKind` | `declared_system_kind` | `declared_system_kind` | `DeclaredSystemKind` |
 | `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` |
 | `deprecated_records_per_sample_sites` | function | `deprecated_records_per_sample_sites` | `deprecatedRecordsPerSampleSites` | `deprecated_records_per_sample_sites` | `deprecated_records_per_sample_sites` | `DeprecatedRecordsPerSampleSites` |
 | `derive_odes` | function | `derive_odes` | `deriveODEs` / `deriveOdes` | `derive_odes` | `derive_odes` | `DeriveODEs` |
@@ -2222,7 +2224,6 @@ reading that as a gap.
 | `data_source_determinism` | type | `DataSourceDeterminism` | – | `DataSourceDeterminism` | `DataSourceDeterminism` | `DataSourceDeterminism` |
 | `data_source_location` | type | `DataSourceLocation` | – | `DataSourceLocation` | `DataSourceLocation` | `DataSourceLocation` |
 | `data_source_temporal` | type | `DataSourceTemporal` | – | `DataSourceTemporal` | `DataSourceTemporal` | `DataSourceTemporal` |
-| `declared_system_kind` | function | `declared_system_kind` | `declaredSystemKind` | `declared_system_kind` | – | `DeclaredSystemKind` |
 | `dimension_promotion_error` | error | `DimensionPromotionError` | `DimensionPromotionError` | `DimensionPromotionError` | – | `DimensionPromotionError` |
 | `discrete_event` | type | `DiscreteEvent` | – | `DiscreteEvent` | `DiscreteEvent` | `DiscreteEvent` |
 | `discrete_event_trigger` | type | `DiscreteEventTrigger` | – | `DiscreteEventTrigger` | `DiscreteEventTrigger` | `DiscreteEventTrigger` |

@@ -1,0 +1,838 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "flatten_closes_join_names",
+    "description": "Template bodies whose `join` clauses name component variables that the body reads nowhere else: an overlap gate's envelope factors (`bW`, `bS`, `bE`, `bN`) and an `on` clause's key columns (`want`, `tbl_year`). Flatten closes every body, so these names become parameters each reference binds in its own component's scope, exactly as the body's variable leaves do.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "recs": {
+      "kind": "interval",
+      "size": 3
+    },
+    "rows": {
+      "kind": "interval",
+      "size": 4
+    },
+    "keys": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "Alpha": {
+      "expression_templates": {
+        "bin": {
+          "params": [
+            "v"
+          ],
+          "body": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "c": {
+                "from": "cells"
+              },
+              "r": {
+                "from": "recs"
+              }
+            },
+            "reduce": "+",
+            "join": [
+              {
+                "overlap": {
+                  "src_env": [
+                    "X",
+                    "Y"
+                  ],
+                  "tgt_env": [
+                    "bW",
+                    "bS",
+                    "bE",
+                    "bN"
+                  ],
+                  "eps": 0.0
+                }
+              }
+            ],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "and",
+                      "args": [
+                        {
+                          "op": "<=",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "W",
+                                "c"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "X",
+                                "r"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "<",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "X",
+                                "r"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "E",
+                                "c"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "<=",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "S",
+                                "c"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "Y",
+                                "r"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "<",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "Y",
+                                "r"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "N",
+                                "c"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    1.0,
+                    0.0
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "c"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "matches": {
+          "params": [],
+          "body": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "keys"
+              },
+              "r": {
+                "from": "rows"
+              }
+            },
+            "semiring": "sum_product",
+            "join": [
+              {
+                "on": [
+                  [
+                    "want",
+                    "tbl_year"
+                  ]
+                ]
+              }
+            ],
+            "expr": 1.0
+          }
+        }
+      },
+      "variables": {
+        "W": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.0,
+            1.0,
+            0.0,
+            1.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "E": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            2.0,
+            1.0,
+            2.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "S": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "N": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            1.0,
+            2.0,
+            2.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "bW": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.0,
+            1.0,
+            0.0,
+            1.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "bE": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            2.0,
+            1.0,
+            2.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "bS": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "bN": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            1.0,
+            2.0,
+            2.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "cval": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            2.0,
+            3.0,
+            4.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "X": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.5,
+            1.5,
+            1.2
+          ],
+          "shape": [
+            "recs"
+          ]
+        },
+        "Y": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.5,
+            1.5,
+            0.2
+          ],
+          "shape": [
+            "recs"
+          ]
+        },
+        "out": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "recs"
+          ]
+        },
+        "want": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "keys"
+          ]
+        },
+        "run_year": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2020.0
+        },
+        "tbl_year": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            2019.0,
+            2020.0,
+            2021.0,
+            2020.0
+          ],
+          "shape": [
+            "rows"
+          ]
+        },
+        "total": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "keys"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "out",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bin",
+            "bindings": {
+              "v": "cval"
+            }
+          }
+        },
+        {
+          "lhs": "want",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "keys"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "run_year",
+                {
+                  "op": "-",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "matches",
+            "bindings": {}
+          }
+        }
+      ]
+    },
+    "Beta": {
+      "expression_templates": {
+        "bin": {
+          "params": [
+            "v"
+          ],
+          "body": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "c": {
+                "from": "cells"
+              },
+              "r": {
+                "from": "recs"
+              }
+            },
+            "reduce": "+",
+            "join": [
+              {
+                "overlap": {
+                  "src_env": [
+                    "X",
+                    "Y"
+                  ],
+                  "tgt_env": [
+                    "bW",
+                    "bS",
+                    "bE",
+                    "bN"
+                  ],
+                  "eps": 0.0
+                }
+              }
+            ],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "and",
+                      "args": [
+                        {
+                          "op": "<=",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "W",
+                                "c"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "X",
+                                "r"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "<",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "X",
+                                "r"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "E",
+                                "c"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "<=",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "S",
+                                "c"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "Y",
+                                "r"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "<",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "Y",
+                                "r"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "N",
+                                "c"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    1.0,
+                    0.0
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "c"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "matches": {
+          "params": [],
+          "body": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "keys"
+              },
+              "r": {
+                "from": "rows"
+              }
+            },
+            "semiring": "sum_product",
+            "join": [
+              {
+                "on": [
+                  [
+                    "want",
+                    "tbl_year"
+                  ]
+                ]
+              }
+            ],
+            "expr": 1.0
+          }
+        }
+      },
+      "variables": {
+        "W": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.0,
+            1.0,
+            0.0,
+            1.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "E": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            2.0,
+            1.0,
+            2.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "S": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "N": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            1.0,
+            2.0,
+            2.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "bW": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.0,
+            1.0,
+            0.0,
+            1.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "bE": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            2.0,
+            1.0,
+            2.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "bS": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "bN": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            1.0,
+            2.0,
+            2.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "cval": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            2.0,
+            3.0,
+            4.0,
+            5.0
+          ],
+          "shape": [
+            "cells"
+          ]
+        },
+        "X": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.5,
+            1.5,
+            1.2
+          ],
+          "shape": [
+            "recs"
+          ]
+        },
+        "Y": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            0.5,
+            1.5,
+            0.2
+          ],
+          "shape": [
+            "recs"
+          ]
+        },
+        "out": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "recs"
+          ]
+        },
+        "want": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "keys"
+          ]
+        },
+        "run_year": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2021.0
+        },
+        "tbl_year": {
+          "type": "parameter",
+          "units": "1",
+          "default": [
+            2019.0,
+            2020.0,
+            2021.0,
+            2020.0
+          ],
+          "shape": [
+            "rows"
+          ]
+        },
+        "total": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "keys"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "out",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bin",
+            "bindings": {
+              "v": "cval"
+            }
+          }
+        },
+        {
+          "lhs": "want",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "keys"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "run_year",
+                {
+                  "op": "-",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "matches",
+            "bindings": {}
+          }
+        }
+      ]
+    }
+  }
+}

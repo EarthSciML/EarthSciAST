@@ -154,6 +154,7 @@ function _expand_expr_refs(
     )
     if e.op == APPLY_EXPRESSION_TEMPLATE_OP
         name = e.name
+        _note_expansion!()
         (name !== nothing && reg !== nothing && haskey(reg, name)) || throw(
             ExpressionTemplateError(
                 ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,

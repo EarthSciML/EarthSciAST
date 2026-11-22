@@ -1,0 +1,53 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {},
+  "metadata": {
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ],
+    "description": "esm-spec §9.6.4 rule 3 (Rewrite depth): a chain of 64 rules, rule r<k> rewriting op `s<k>` into a body holding `s<k+1>`. The call site fires r1 in pass 1 (depth 1); each later rule fires in pass 1 of the body of the rule before it, one level deeper. The deepest rewrite has depth 64 = MAX_REWRITE_PASSES, so the document is accepted; `y` expands to `2*u`.",
+    "name": "rewrite_depth_through_bodies_64"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "u"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "args": [
+              2,
+              "u"
+            ],
+            "op": "*"
+          }
+        }
+      ],
+      "variables": {
+        "u": {
+          "default": 0.5,
+          "type": "unknown",
+          "units": "1"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

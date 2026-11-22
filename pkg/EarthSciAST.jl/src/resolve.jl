@@ -643,12 +643,12 @@ function _lower_and_coerce(
     expanded = loaded
     if loaded !== lowered_src
         # The machinery ran (the no-machinery fast path returns its input by
-        # identity). Coupling `variable_map` transform references expand against
-        # the receiving component's registry before the registries are
-        # materialized for emit and stripped from the coercion tree.
+        # identity). Coupling `variable_map` transform references stay
+        # references (esm-spec §10.4): the receiving component's materialized
+        # registry carries their templates, then the registries are stripped
+        # from the coercion tree.
         root = loaded
         authored = _authored_template_names(machinery_input)
-        _expand_coupling_transform_refs!(root)
         blocks, bump = _materialize_components!(root, authored)
         for (_, _, comp) in _components(root)
             delete!(comp, "expression_templates")
@@ -737,6 +737,8 @@ Settle expression-node `op` spellings for ONE document, in four steps:
 3. The deprecated spellings `neg` and `pow` are rewritten to unary `-` and
    `^`, with one `deprecated_op` warning for the document
    (`_rewrite_deprecated_ops!`, esm-spec §4.2 "Deprecated ops").
+   A model declaring `"system_kind": "pde"` gets one `deprecated_system_kind`
+   warning for the document (`_warn_deprecated_system_kind`, esm 2.4.0).
 4. The `faq` version gate: `faq` arrives at esm 1.1.0 (esm-spec §2.2.4, the
    rule the top-level `solver` block follows). With `gate = false`
    (post-inlining: a 1.0.0 parent whose mounted child uses `faq`), the declared
@@ -758,6 +760,9 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
     end
     _reject_removed_2_0_0!(doc)
     _rewrite_deprecated_ops!(doc)
+    # Only on the authored document's own pass: the post-inlining pass
+    # (`gate = false`) sees the same models again and must not warn twice.
+    gate && _warn_deprecated_system_kind(doc)
     if gate
         _check_version_gate(_VERSION_GATES.faq, doc)
         return nothing
@@ -796,6 +801,45 @@ function _node_key(n, name::String)
     sym = Symbol(name)
     haskey(n, sym) && return sym
     return nothing
+end
+
+"""
+    _warn_deprecated_system_kind(doc) -> Vector{String}
+
+esm 2.4.0 dropped the `"pde"` system kind. A model declaring
+`"system_kind": "pde"` is not refused: the field is kept as written, counts as
+absent for classification ([`declared_system_kind`](@ref)), and the document
+gets ONE `@warn` with the code `deprecated_system_kind` naming every such model
+by JSON pointer, subsystems included at any depth
+(`/models/<name>/system_kind`, `/models/<name>/subsystems/<sub>/system_kind`),
+in document order with each model before its subsystems. Returns those
+pointers.
+"""
+function _warn_deprecated_system_kind(doc)::Vector{String}
+    sites = String[]
+    _is_object(doc) || return sites
+    _pde_system_kind_sites!(sites, _raw_get(doc, "models", nothing), _pointer("", "models"))
+    isempty(sites) && return sites
+    @warn string(
+        "deprecated_system_kind: the system_kind value \"pde\" is deprecated ",
+        "(esm 2.4.0) and ignored; the model is treated as its derived kind. ",
+        "Declared at: ", join(sites, ", "), "."
+    )
+    return sites
+end
+
+function _pde_system_kind_sites!(sites::Vector{String}, models, at::String)
+    _is_object(models) || return sites
+    for (name, model) in pairs(models)
+        _is_object(model) || continue
+        here = _pointer(at, string(name))
+        _raw_get(model, "system_kind", nothing) == "pde" &&
+            push!(sites, _pointer(here, "system_kind"))
+        _pde_system_kind_sites!(
+            sites, _raw_get(model, "subsystems", nothing), _pointer(here, "subsystems")
+        )
+    end
+    return sites
 end
 
 """

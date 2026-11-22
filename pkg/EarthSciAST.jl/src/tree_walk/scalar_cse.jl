@@ -100,17 +100,14 @@ const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 #   (1) it is a CSE-opaque core form (`_CSE_OPAQUE_OPS` — `const`/`index`/`D`/…,
 #       structural ops `_compile` lowers or rejects specially); or
 #   (2) it is an open-tier rewrite-target op (`_op_in_T`: a named
-#       `grad`/`div`/`laplacian`/`D`/… OR any unregistered custom op).
+#       `D`/`integral`/… OR any unregistered custom op).
 # A rewrite-target op is NOT evaluable — a discretization rule must lower it
 # first — so it must never be hoisted into a guardless generic `_cse_rebuild`
 # node (which would defer the failure to evaluation). The same holds for a core
 # op with no ladder arm (3): hoisting one would skip `_compile_op`'s
 # `unevaluable_operator` gate.
 # Keeping every T op non-hoistable routes it to `_compile`/`_compile_op`, the
-# one path carrying the GENERIC `unlowered_operator` rejection gate. This is why
-# the grad/div/laplacian registry rows need no bespoke `cse=true`: their tier
-# membership already makes them non-hoistable, uniformly with an arbitrary user
-# op. Leaves (state/param/literal/time) are never hoisted — caching a leaf costs
+# one path carrying the GENERIC `unlowered_operator` rejection gate. Leaves (state/param/literal/time) are never hoisted — caching a leaf costs
 # more than the bare read it would replace.
 _cse_hoistable(e::OpExpr) =
     _tpl_is_call(e) ||    # a template call is a pure function of its arguments (call.jl)
