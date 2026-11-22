@@ -46,6 +46,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import copy
+import json
 import re
 from collections.abc import Iterator
 from typing import Any
