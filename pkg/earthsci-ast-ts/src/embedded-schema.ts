@@ -49,6 +49,11 @@ export const schema: AnySchemaObject = {
     },
     {
       "required": [
+        "operators"
+      ]
+    },
+    {
+      "required": [
         "coupling_roles"
       ]
     }
@@ -150,19 +155,36 @@ export const schema: AnySchemaObject = {
     "solver": {
       "$ref": "#/$defs/Solver"
     },
+    "operators": {
+      "propertyNames": {
+        "$ref": "#/$defs/Identifier"
+      },
+      "type": "object",
+      "description": "Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `operator_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`operator_import_version_too_old`).",
+      "additionalProperties": {
+        "$ref": "#/$defs/ExpressionTemplate"
+      }
+    },
     "expression_templates": {
       "propertyNames": {
         "$ref": "#/$defs/Identifier"
       },
       "type": "object",
-      "description": "Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `template_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`template_import_version_too_old`).",
+      "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operators`, read with the warning `deprecated_field`. Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `operator_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`operator_import_version_too_old`).",
       "additionalProperties": {
         "$ref": "#/$defs/ExpressionTemplate"
       }
     },
-    "expression_template_imports": {
+    "operator_imports": {
       "type": "array",
       "description": "Ordered imports of template-library files at document top level — only valid in a library file layering on other libraries (esm-spec §9.7.2). Models and reaction systems carry their own `expression_template_imports` field.",
+      "items": {
+        "$ref": "#/$defs/TemplateImport"
+      }
+    },
+    "expression_template_imports": {
+      "type": "array",
+      "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Ordered imports of template-library files at document top level — only valid in a library file layering on other libraries (esm-spec §9.7.2). Models and reaction systems carry their own `expression_template_imports` field.",
       "items": {
         "$ref": "#/$defs/TemplateImport"
       }
@@ -608,7 +630,7 @@ export const schema: AnySchemaObject = {
         },
         "name": {
           "type": "string",
-          "description": "For apply_expression_template: the id of an `expression_templates` entry declared in the same component (esm-spec.md §9.6 / docs/rfcs/ast-expression-templates.md). Bindings MUST reject references to undeclared template names at file-load time with diagnostic 'apply_expression_template_unknown_template'."
+          "description": "For apply_expression_template: the id of an `expression_templates` entry declared in the same component (esm-spec.md §9.6 / docs/rfcs/ast-expression-templates.md). Bindings MUST reject references to undeclared template names at file-load time with diagnostic 'operator_unknown_definition'."
         },
         "value": {
           "description": "For const: the inline literal value carried by this expression node (any JSON number, integer, or nested array thereof; `args` MUST be empty). For the 'bc' op with kind 'constant'/'dirichlet': the boundary value — a number, a parameter/variable-reference string, or an Expression AST node."
@@ -619,7 +641,7 @@ export const schema: AnySchemaObject = {
         },
         "bindings": {
           "type": "object",
-          "description": "For apply_expression_template: a map from each parameter name declared by the referenced template to the Expression bound to that parameter. Every entry of the template's `params` MUST appear as a key; extra keys are rejected at load time with diagnostic 'apply_expression_template_bindings_mismatch'. Values may be numeric literals, variable name references (strings), or arbitrary Expression ASTs (full subtrees). `args` MUST be empty for an apply_expression_template node — the parameter values live here.",
+          "description": "For apply_expression_template: a map from each parameter name declared by the referenced template to the Expression bound to that parameter. Every entry of the template's `params` MUST appear as a key; extra keys are rejected at load time with diagnostic 'operator_bindings_mismatch'. Values may be numeric literals, variable name references (strings), or arbitrary Expression ASTs (full subtrees). `args` MUST be empty for an apply_expression_template node — the parameter values live here.",
           "additionalProperties": {
             "$ref": "#/$defs/Expression"
           }
@@ -760,6 +782,30 @@ export const schema: AnySchemaObject = {
             "properties": {
               "op": {
                 "const": "apply_expression_template"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "name",
+              "bindings"
+            ],
+            "properties": {
+              "args": {
+                "type": "array",
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "apply_operator"
               }
             },
             "required": [
@@ -1952,7 +1998,7 @@ export const schema: AnySchemaObject = {
             "$ref": "#/$defs/Analysis"
           }
         },
-        "expression_templates": {
+        "operators": {
           "propertyNames": {
             "$ref": "#/$defs/Identifier"
           },
@@ -1962,9 +2008,26 @@ export const schema: AnySchemaObject = {
             "$ref": "#/$defs/ExpressionTemplate"
           }
         },
-        "expression_template_imports": {
+        "expression_templates": {
+          "propertyNames": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "type": "object",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operators`, read with the warning `deprecated_field`. Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this model's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.",
+          "additionalProperties": {
+            "$ref": "#/$defs/ExpressionTemplate"
+          }
+        },
+        "operator_imports": {
           "type": "array",
           "description": "Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).",
           "items": {
             "$ref": "#/$defs/TemplateImport"
           }
@@ -1998,9 +2061,16 @@ export const schema: AnySchemaObject = {
           },
           "description": "Bindings closing the referenced document's metaparameters (esm-spec §9.7.6 site 3). Each value is a metaparameter expression over the MOUNTING document's metaparameters (an integer literal, or e.g. `NX*NY`), folded to a concrete integer at the mount."
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "array",
           "description": "Template-library imports registered into the REFERENCED component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a mounted PDE component, without editing the leaf file. Same entry shape as §9.7.2; target implicit (this edge mounts one component). Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Template-library imports registered into the REFERENCED component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a mounted PDE component, without editing the leaf file. Same entry shape as §9.7.2; target implicit (this edge mounts one component). Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "items": {
             "$ref": "#/$defs/TemplateImport"
           }
@@ -2011,7 +2081,7 @@ export const schema: AnySchemaObject = {
             "type": "string",
             "minLength": 1
           },
-          "description": "Mount-edge index-set renaming (esm-spec §4.7 'Mount-edge index-set renaming'; docs/content/rfcs/mount-edge-index-set-renaming.md): a map from an index-set name AS THE RESOLVED MOUNTED DOCUMENT SPELLS IT to the name it takes in the mounting document. `index_sets` is a document-scoped registry, so two mounts that independently use one axis name at different lengths (a 59-layer atmospheric column and a 4-layer soil column both over `lev`) collide with subsystem_index_set_conflict; this field is the §9.7.7 renaming mechanism at a component-mount edge, restricted to index sets because they are the only declaration kind a mount contributes to document scope. Applied as ONE simultaneous substitution AFTER the referenced document resolves completely (its own imports, this edge's `bindings` and injection, its metaparameter close and the §9.6.3 fixpoint) and BEFORE its `index_sets` merge, transitively through every occurrence inside the mounted document — `index_sets` keys and ragged `of` lists, `{\"from\": …}` ranges, the `wrt`/`dim`/`var` axis scalars and bare-axis-name `integral` bounds, `where` `shape` constraints, variable/parameter `shape` lists, `Assertion.coords` keys, and `DataSourceSelectAxis.gated_by`. Keys must name an index set of the resolved mounted document (subsystem_index_set_rename_unknown_name); targets are dotted identifiers (template_import_rename_invalid) and must be distinct (template_import_rename_collision). The map need not be total: an unnamed axis passes through unrenamed, so a deliberately shared axis still merges deep-equal. Load-time only; consumed at the mount; does not survive parse→emit."
+          "description": "Mount-edge index-set renaming (esm-spec §4.7 'Mount-edge index-set renaming'; docs/content/rfcs/mount-edge-index-set-renaming.md): a map from an index-set name AS THE RESOLVED MOUNTED DOCUMENT SPELLS IT to the name it takes in the mounting document. `index_sets` is a document-scoped registry, so two mounts that independently use one axis name at different lengths (a 59-layer atmospheric column and a 4-layer soil column both over `lev`) collide with subsystem_index_set_conflict; this field is the §9.7.7 renaming mechanism at a component-mount edge, restricted to index sets because they are the only declaration kind a mount contributes to document scope. Applied as ONE simultaneous substitution AFTER the referenced document resolves completely (its own imports, this edge's `bindings` and injection, its metaparameter close and the §9.6.3 fixpoint) and BEFORE its `index_sets` merge, transitively through every occurrence inside the mounted document — `index_sets` keys and ragged `of` lists, `{\"from\": …}` ranges, the `wrt`/`dim`/`var` axis scalars and bare-axis-name `integral` bounds, `where` `shape` constraints, variable/parameter `shape` lists, `Assertion.coords` keys, and `DataSourceSelectAxis.gated_by`. Keys must name an index set of the resolved mounted document (subsystem_index_set_rename_unknown_name); targets are dotted identifiers (operator_import_rename_invalid) and must be distinct (operator_import_rename_collision). The map need not be total: an unnamed axis passes through unrenamed, so a deliberately shared axis still merges deep-equal. Load-time only; consumed at the mount; does not survive parse→emit."
         },
         "url_substitutions": {
           "type": "object",
@@ -2356,7 +2426,7 @@ export const schema: AnySchemaObject = {
             "$ref": "#/$defs/Analysis"
           }
         },
-        "expression_templates": {
+        "operators": {
           "propertyNames": {
             "$ref": "#/$defs/Identifier"
           },
@@ -2366,9 +2436,26 @@ export const schema: AnySchemaObject = {
             "$ref": "#/$defs/ExpressionTemplate"
           }
         },
-        "expression_template_imports": {
+        "expression_templates": {
+          "propertyNames": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "type": "object",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operators`, read with the warning `deprecated_field`. Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component (typically inside `reactions[*].rate`) reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this reaction system's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.",
+          "additionalProperties": {
+            "$ref": "#/$defs/ExpressionTemplate"
+          }
+        },
+        "operator_imports": {
           "type": "array",
           "description": "Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).",
           "items": {
             "$ref": "#/$defs/TemplateImport"
           }
@@ -2377,7 +2464,7 @@ export const schema: AnySchemaObject = {
     },
     "ExpressionTemplate": {
       "type": "object",
-      "description": "A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → a `faq`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are checked at registration time as a statically-checked acyclic DAG (cycles rejected with 'apply_expression_template_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=64 rejected with 'template_body_expansion_too_deep'); from esm 0.9.0 they are preserved uninlined and denote their expansion (Option B, esm-spec §9.6.4; pre-0.9.0 loaders inlined them here by pure substitution). `match` patterns MUST NOT contain `apply_expression_template` nodes. An optional `where` block adds static match-scoping constraints on the captured parameters (declared-shape/index-set scoping, filtered before priority selection — see the `where` property and esm-spec §9.6.1).",
+      "description": "A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → a `faq`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are checked at registration time as a statically-checked acyclic DAG (cycles rejected with 'operator_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=64 rejected with 'operator_body_expansion_too_deep'); from esm 0.9.0 they are preserved uninlined and denote their expansion (Option B, esm-spec §9.6.4; pre-0.9.0 loaders inlined them here by pure substitution). `match` patterns MUST NOT contain `apply_expression_template` nodes. An optional `where` block adds static match-scoping constraints on the captured parameters (declared-shape/index-set scoping, filtered before priority selection — see the `where` property and esm-spec §9.6.1).",
       "required": [
         "params",
         "body"
@@ -2417,7 +2504,16 @@ export const schema: AnySchemaObject = {
               }
             }
           },
-          "description": "Optional static match-scoping constraints for an auto-applied (`match`) rule (esm-spec §9.6.1; docs/rfcs/match-pattern-scoping-constraints.md). Keys are declared `params`; each value is a constraint object — the v1 vocabulary is exactly one kind, `shape`: an ordered list of index-set names as spelled in the CONSUMING document's merged index_sets registry (esm-spec §9.7.5, composing with import-edge index-set renaming). After the pattern structurally matches, the rule is eligible only if every constrained parameter bound to a BARE variable reference whose declaration in the enclosing component carries exactly that `shape` (same names, same order); a compound sub-AST, literal, scoped reference, undeclared name, or scalar fails the constraint. Evaluation is fully static — declared shapes at lowering time, never runtime values — and is part of match ELIGIBILITY: it filters BEFORE the §9.6.3 priority/declaration-order selection, so a constraint-excluded rule is simply a non-matching rule at that node. A constraint naming an index set absent from the consuming document's registry is rejected at rule registration with 'template_constraint_unknown_index_set'; a constrained rule that never fires is NOT an error (an un-lowered rewrite-target op is caught by the ordinary 'unlowered_operator' gate). Admissible only alongside `match` (else 'apply_expression_template_invalid_declaration')."
+          "description": "Optional static match-scoping constraints for an auto-applied (`match`) rule (esm-spec §9.6.1; docs/rfcs/match-pattern-scoping-constraints.md). Keys are declared `params`; each value is a constraint object — the v1 vocabulary is exactly one kind, `shape`: an ordered list of index-set names as spelled in the CONSUMING document's merged index_sets registry (esm-spec §9.7.5, composing with import-edge index-set renaming). After the pattern structurally matches, the rule is eligible only if every constrained parameter bound to a BARE variable reference whose declaration in the enclosing component carries exactly that `shape` (same names, same order); a compound sub-AST, literal, scoped reference, undeclared name, or scalar fails the constraint. Evaluation is fully static — declared shapes at lowering time, never runtime values — and is part of match ELIGIBILITY: it filters BEFORE the §9.6.3 priority/declaration-order selection, so a constraint-excluded rule is simply a non-matching rule at that node. A constraint naming an index set absent from the consuming document's registry is rejected at rule registration with 'operator_constraint_unknown_index_set'; a constrained rule that never fires is NOT an error (an un-lowered rewrite-target op is caught by the ordinary 'unlowered_operator' gate). Admissible only alongside `match` (else 'operator_invalid_definition')."
+        },
+        "defines": {
+          "type": "string",
+          "minLength": 1,
+          "description": "DRAFT esm 2.4.0 (esm-spec §9.6.12): the operator this entry is a definition of. Absent: the `op` of the `match` root when that is not a core op, else the entry's key. Several definitions may share it; a call of the operator resolves to one of them. Emit writes it on every materialized definition (provenance). Reserved names: a `defines` (written or inferred) naming a core op (esm-spec §4.2) is rejected at load with 'operator_defines_core_op', except on a rule whose `match` is rooted at a core op, where it is provenance only (esm-spec §9.6.12)."
+        },
+        "units": {
+          "$ref": "#/$defs/Expression",
+          "description": "DRAFT esm 2.4.0 (esm-spec §9.6.1, §9.6.12): the definition's UNIT EXPRESSION, an Expression tree over its `params` (each standing for the unit of what a call binds to it; a parameter bound to an axis name stands for that coordinate's unit), other names (their declared units) and unit-bearing `const` nodes, combined with `*`, `/` and `^`. A call's unit is evaluated from it without evaluating the body."
         },
         "priority": {
           "type": "integer",
@@ -2435,7 +2531,7 @@ export const schema: AnySchemaObject = {
     },
     "TemplateImport": {
       "type": "object",
-      "description": "One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`template_import_cycle`). `only` filters which template names become visible to the importer (`template_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope. `prefix` / `rename` namespace the surviving exported names (templates after `only`, index sets, still-open metaparameters) into the importer's vocabulary, applied transitively through every occurrence inside the imported declarations; `rebind` rewrites free variable names (keyed factors and other free names in template bodies) at the same point (esm-spec §9.7.7). Renaming happens after this edge's `bindings` instantiation and `only` filtering and before the §9.7.4/§9.7.5 merge, so the same file imported under different renames registers as distinct instances while identical edges dedupe. Identifier grammar, unknown-name, and collision checks are resolver-level (`template_import_rename_invalid`, `template_import_rename_unknown_name`, `template_import_rebind_unknown_name`, `template_import_rename_collision`).",
+      "description": "One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`operator_import_cycle`). `only` filters which template names become visible to the importer (`operator_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope. `prefix` / `rename` namespace the surviving exported names (templates after `only`, index sets, still-open metaparameters) into the importer's vocabulary, applied transitively through every occurrence inside the imported declarations; `rebind` rewrites free variable names (keyed factors and other free names in template bodies) at the same point (esm-spec §9.7.7). Renaming happens after this edge's `bindings` instantiation and `only` filtering and before the §9.7.4/§9.7.5 merge, so the same file imported under different renames registers as distinct instances while identical edges dedupe. Identifier grammar, unknown-name, and collision checks are resolver-level (`operator_import_rename_invalid`, `operator_import_rename_unknown_name`, `operator_import_rebind_unknown_name`, `operator_import_rename_collision`).",
       "required": [
         "ref"
       ],
@@ -2474,7 +2570,7 @@ export const schema: AnySchemaObject = {
             "type": "string",
             "minLength": 1
           },
-          "description": "Explicit renames, exported name → importer-visible name; entries override `prefix`. Keys must name a surviving export (`template_import_rename_unknown_name`); targets are dotted identifiers (esm-spec §9.7.7)."
+          "description": "Explicit renames, exported name → importer-visible name; entries override `prefix`. Keys must name a surviving export (`operator_import_rename_unknown_name`); targets are dotted identifiers (esm-spec §9.7.7)."
         },
         "rebind": {
           "type": "object",
@@ -2482,7 +2578,7 @@ export const schema: AnySchemaObject = {
             "type": "string",
             "minLength": 1
           },
-          "description": "Free-name rebinding, free name → replacement variable name (e.g. areaCell → meshA.areaCell): rewrites free variable names occurring in the imported template bodies/matches and ragged index-set offsets/values factors. Keys must occur free in the surviving declarations (`template_import_rebind_unknown_name`) (esm-spec §9.7.7)."
+          "description": "Free-name rebinding, free name → replacement variable name (e.g. areaCell → meshA.areaCell): rewrites free variable names occurring in the imported template bodies/matches and ragged index-set offsets/values factors. Keys must occur free in the surviving declarations (`operator_import_rebind_unknown_name`) (esm-spec §9.7.7)."
         }
       }
     },
@@ -2830,9 +2926,16 @@ export const schema: AnySchemaObject = {
           "$ref": "#/$defs/Tolerance",
           "description": "Test-level default tolerance, merged PER FIELD (esm-spec 6.6.4): it supplies each of abs and rel that an assertion in this test does not declare, and falls through to the model-level default - and then to the implementation default rel = 1e-6 - for each field it does not declare itself. Write rel: 0 to stop that fallthrough."
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "array",
           "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.6) — lets a discretization-agnostic PDE component's inline tests run under a per-test discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameter_overrides / tolerance).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.6) — lets a discretization-agnostic PDE component's inline tests run under a per-test discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameter_overrides / tolerance).",
           "items": {
             "$ref": "#/$defs/TemplateImport"
           }
@@ -3224,9 +3327,16 @@ export const schema: AnySchemaObject = {
             "$ref": "#/$defs/Plot"
           }
         },
-        "expression_template_imports": {
+        "operator_imports": {
           "type": "array",
           "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline analyses run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline analyses run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).",
           "items": {
             "$ref": "#/$defs/TemplateImport"
           }
@@ -3750,9 +3860,19 @@ export const schema: AnySchemaObject = {
           ],
           "description": "Strategy for mapping between 0D and spatial systems."
         },
+        "operator_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -3812,9 +3932,19 @@ export const schema: AnySchemaObject = {
           ],
           "description": "Strategy for mapping between 0D and spatial systems."
         },
+        "operator_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -3881,9 +4011,19 @@ export const schema: AnySchemaObject = {
           ],
           "description": "Strategy for mapping between 0D and spatial systems."
         },
+        "operator_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -3937,9 +4077,19 @@ export const schema: AnySchemaObject = {
           "type": "object",
           "additionalProperties": true
         },
+        "operator_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -4018,9 +4168,19 @@ export const schema: AnySchemaObject = {
         "reinitialize": {
           "type": "boolean"
         },
+        "operator_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "DEPRECATED ALIAS (draft esm 2.4.0) of `operator_imports`, read with the warning `deprecated_field`. Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (operator_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is operator_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
