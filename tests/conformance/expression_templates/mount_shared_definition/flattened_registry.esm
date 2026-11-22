@@ -39,7 +39,8 @@
       "params": [
         "x",
         "k"
-      ]
+      ],
+      "reference_only": true
     },
     "loss": {
       "body": {
@@ -54,7 +55,8 @@
       "params": [
         "x",
         "k"
-      ]
+      ],
+      "reference_only": true
     }
   }
 }

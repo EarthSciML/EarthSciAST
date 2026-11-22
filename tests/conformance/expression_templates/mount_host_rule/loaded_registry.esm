@@ -26,7 +26,8 @@
       "defines": "rate",
       "params": [
         "x"
-      ]
+      ],
+      "reference_only": true
     },
     "twice": {
       "body": {

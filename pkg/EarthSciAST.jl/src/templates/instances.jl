@@ -241,7 +241,11 @@ function _instance!(
     body = _raw_get(decl, "body")
     body = _lower_body_enums(body, bv, st.L.enums)
     body = _instance_partial(body, bv)
+    # The body is read with the definitions of the site that owns it.
+    site = st.L.site[]
+    st.L.site[] = _owner_site(st.L, name)
     rewritten, passes = _rewrite_to_fixpoint(body, st.L, tscope; bv = bv)
+    st.L.site[] = site
     refs = IdDict{Any, String}()
     height = passes
     _visit_json(rewritten) do _, n
@@ -427,13 +431,37 @@ end
 # A materialized entry: the rule (or variant) without its `match`, `where` and
 # `priority`, marked `reference_only` (esm-spec §9.6.1, §9.6.4 rule 5) so that
 # reloading the emitted document makes it no callable definition of its
-# operator: emit → load → emit is exact.
+# operator: emit → load → emit is exact. A rule for `partial` / `integral`
+# keeps the fixed unit expression its `match` gave under a private key, so
+# the unit checker still holds the firing's references to it (esm-spec §4.2,
+# §9.6.12 "Units"); no writer emits that key (`_without_private_keys`).
 function _match_stripped(decl)
     nd = OrderedDict{String, Any}(
         string(k) => v for (k, v) in pairs(decl) if !(string(k) in ("match", "where", "priority"))
     )
     nd["reference_only"] = true
+    fixed = _fixed_unit_expr(decl)
+    fixed === nothing || (nd[_FIXED_UNITS_KEY] = fixed)
     return nd
+end
+
+# The private registry-entry key of `_match_stripped`.
+const _FIXED_UNITS_KEY = "__esm_fixed_units"
+
+# `block` (an `operators` registry) as a writer emits it: each entry without the
+# private keys a load keeps on it. Returns `block` itself when no entry has one.
+function _without_private_keys(block)
+    _is_object(block) || return block
+    any(d -> _is_object(d) && _raw_get(d, _FIXED_UNITS_KEY) !== nothing, values(block)) ||
+        return block
+    out = OrderedDict{String, Any}()
+    for (n, d) in pairs(block)
+        out[string(n)] = (_is_object(d) && _raw_get(d, _FIXED_UNITS_KEY) !== nothing) ?
+            OrderedDict{String, Any}(
+                string(k) => v for (k, v) in pairs(d) if string(k) != _FIXED_UNITS_KEY
+            ) : d
+    end
+    return out
 end
 
 """

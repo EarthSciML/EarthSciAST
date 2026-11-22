@@ -1561,7 +1561,16 @@ function _merge_typed_mounted_templates!(file::EsmFile, name::String, model::Mod
     ct = file.component_templates
     key = "models.$name"
     own = ct === nothing ? nothing : get(ct, key, nothing)
-    block, rn = _merge_mounted_blocks(own, name, Tuple{String, Any}[(p, m[3]) for (p, m) in mounted])
+    block, rn, owners = _merge_mounted_blocks(own, name, Tuple{String, Any}[(p, m[3]) for (p, m) in mounted])
+    # An entry only the mounted models own is no callable definition of the
+    # host (esm-spec §9.6.3 constraint 4, §9.6.1 `reference_only`).
+    for n in keys(owners)
+        d = get(block, n, nothing)
+        (_is_object(d) && !_is_reference_only(d)) || continue
+        nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(d))
+        nd["reference_only"] = true
+        block[n] = nd
+    end
     rn === nothing || map_expressions!(e -> _rename_expr_apply_refs(e, rn), model)
     for (_, (parent, sub_name, raw)) in mounted
         delete!(raw, "operators")

@@ -1100,7 +1100,8 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
         for (compkey, block) in collect(scoped)
             parts = split(String(compkey), "."; limit = 2)
             length(parts) == 2 || continue
-            scoped[compkey], tpl_added[String(parts[2])] = _tpl_explicit_free(block)
+            # The flattened registry is written as is: no load-private key.
+            scoped[compkey], tpl_added[String(parts[2])] = _tpl_explicit_free(_without_private_keys(block))
         end
     end
     template_registry, template_rename = _merge_flat_registry(scoped)
