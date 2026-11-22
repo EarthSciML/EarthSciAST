@@ -21,6 +21,7 @@ import { isNumericLiteral } from './numeric-literal.js'
 import { getOpInfo, checkArity } from './op-registry.js'
 import { forEachChild } from './expression.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
+import { explainUnresolvedCall } from './operator-definitions.js'
 
 /**
  * Compiled expression closure produced by {@link compileExpression}.
@@ -96,13 +97,37 @@ const CORE_OPS_WITHOUT_REGISTRY_ROW: ReadonlySet<string> = new Set([
   'distinct',
 ])
 
+/**
+ * Options of {@link compileExpression} / {@link evaluateExpression}.
+ */
+export interface EvaluateOptions {
+  /**
+   * The operators registry (name → raw definition) in scope of the evaluated
+   * expression. It is read only to explain an `unlowered_operator` refusal:
+   * the message lists each definition of the unresolved defined operator and
+   * why it was not eligible (esm-spec §9.6.6). Absent: no definition is in
+   * scope, so an unresolved call is a placeholder.
+   */
+  registry?: Record<string, unknown> | undefined
+}
+
 /** The diagnostic for an op the scalar evaluator has no rule for. */
-function unevaluableOperator(node: ExpressionNode): Error {
+function unevaluableOperator(node: ExpressionNode, options: EvaluateOptions = {}): Error {
   if (
     node.op === 'D' ||
     (getOpInfo(node.op) === undefined && !CORE_OPS_WITHOUT_REGISTRY_ROW.has(node.op))
   ) {
-    const wrt = node.op === 'D' && typeof node.wrt === 'string' ? ` (wrt=${node.wrt})` : ''
+    if (node.op !== 'D') {
+      // esm-spec §9.6.6: an unresolved call of a defined operator names each
+      // definition of it in scope and why it was not eligible here.
+      const why = explainUnresolvedCall(node, options.registry)
+      return new UnloweredOperatorError(
+        `unlowered call of the defined operator '${node.op}' (${why}) reached evaluation: ` +
+          `it must resolve to a definition at load (esm-spec §4.2 / §9.6.12). This format ` +
+          `ships no discretization rules (they live in EarthSciDiscretizations).`,
+      )
+    }
+    const wrt = typeof node.wrt === 'string' ? ` (wrt=${node.wrt})` : ''
     return new UnloweredOperatorError(
       `unlowered rewrite-target operator '${node.op}'${wrt} reached evaluation: ` +
         `it must be lowered to a stencil by a rewrite rule before evaluation ` +
@@ -124,7 +149,7 @@ function unevaluableOperator(node: ExpressionNode): Error {
  * operator (pre-order) the scalar evaluator cannot evaluate (esm-spec §9.6.6:
  * the check precedes evaluation).
  */
-function assertEvaluable(expr: Expr): void {
+function assertEvaluable(expr: Expr, options: EvaluateOptions = {}): void {
   if (typeof expr !== 'object' || expr === null || isNumericLiteral(expr)) return
   const node = expr as ExpressionNode
   if (typeof node.op !== 'string') return
@@ -135,8 +160,10 @@ function assertEvaluable(expr: Expr): void {
       return
   }
   const info = getOpInfo(node.op)
-  if (node.op === 'D' || info === undefined || !info.evaluate) throw unevaluableOperator(node)
-  forEachChild(node, (child) => assertEvaluable(child))
+  if (node.op === 'D' || info === undefined || !info.evaluate) {
+    throw unevaluableOperator(node, options)
+  }
+  forEachChild(node, (child) => assertEvaluable(child, options))
 }
 
 /**
@@ -168,8 +195,8 @@ export class EvaluatorError extends EsmDiagnosticError {
  * load time) and array-valued `const` nodes (those are consumed by
  * container ops such as `index`, not by scalar evaluation).
  */
-export function compileExpression(expr: Expr): CompiledExpression {
-  assertEvaluable(expr)
+export function compileExpression(expr: Expr, options: EvaluateOptions = {}): CompiledExpression {
+  assertEvaluable(expr, options)
   return (bindings: Map<string, number>) => evalExprNode(expr, bindings)
 }
 
@@ -180,8 +207,12 @@ export function compileExpression(expr: Expr): CompiledExpression {
  * fixed-point observed-variable resolution, unit-conversion
  * folding).
  */
-export function evaluateExpression(expr: Expr, bindings: Map<string, number>): number {
-  assertEvaluable(expr)
+export function evaluateExpression(
+  expr: Expr,
+  bindings: Map<string, number>,
+  options: EvaluateOptions = {},
+): number {
+  assertEvaluable(expr, options)
   return evalExprNode(expr, bindings)
 }
 

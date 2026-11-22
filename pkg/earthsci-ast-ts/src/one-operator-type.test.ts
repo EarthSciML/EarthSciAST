@@ -20,6 +20,7 @@ import { emitDocument, resolveTemplateMachinery } from './template-imports.js'
 import { loadPath } from './parse.js'
 import { validateText } from './validate.js'
 import { canonicalErrorCode } from './errors.js'
+import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 import { fixturesDir } from './test-helpers.js'
 
 const conf = (...parts: string[]) => fixturesDir('conformance', 'expression_templates', ...parts)
@@ -135,6 +136,41 @@ describe('one operator type (esm 2.4.0, esm-spec §9.6.12)', () => {
     loadPath(conf('old_names', 'new_names.esm'))
     const again = warn.mock.calls.map((c: unknown[]) => String(c[0]))
     expect(again.filter((m: string) => /^deprecated_(field|op):/.test(m))).toEqual([])
+  })
+
+  it('a placeholder loads and is refused only if evaluated', () => {
+    const want = JSON.parse(fs.readFileSync(conf('placeholder_call', 'error.json'), 'utf-8')) as {
+      code: string
+    }
+    const f = loadPath(conf('placeholder_call', 'fixture.esm')) as any
+    const eqs = f.models.m.equations as { lhs: unknown; rhs: unknown }[]
+    const rhs = eqs.find((e) => e.lhs === 'T')!.rhs
+    const err = errorOf(() =>
+      evaluateExpression(rhs as any, new Map(), {
+        registry: f.componentTemplates?.['models.m'],
+      }),
+    )
+    expect(err).toBeInstanceOf(UnloweredOperatorError)
+    expect(err?.code).toBe(want.code)
+    expect(err?.message).toContain('placeholder')
+  })
+
+  it('an unresolved call names the definitions in scope and why each was not eligible', () => {
+    const registry = {
+      grad_x: { params: ['f'], defines: 'grad', body: 'f' },
+      grad_pair: { params: ['f', 'g'], defines: 'grad', body: 'f' },
+    }
+    const err = errorOf(() =>
+      evaluateExpression({ op: 'grad', args: ['u'], dim: 'x' } as any, new Map([['u', 1]]), {
+        registry,
+      }),
+    )
+    expect(err?.code).toBe('unlowered_operator')
+    expect(err?.message).toContain("definitions of 'grad' in scope")
+    expect(err?.message).toContain("'grad_pair': takes 2 operand(s), the call carries 1")
+    expect(err?.message).toContain(
+      "'grad_x': has no match, so it binds operands only, and the call carries dim",
+    )
   })
 
   it('unit expressions (esm-spec §9.6.12 "Units")', () => {

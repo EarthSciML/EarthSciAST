@@ -35,7 +35,7 @@ import { forEachComponent, forEachEquation, isReferenceStub } from './traverse.j
 import { observedDefinitions } from './classification.js'
 import { ERROR_CODES } from './errors.js'
 import { pointerToken } from './json-pointer.js'
-import { substituteBindings } from './lower-expression-templates.js'
+import { substituteBindings } from './operator-definitions.js'
 
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
