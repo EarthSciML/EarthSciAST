@@ -313,8 +313,8 @@ func TestApplyDAEContract_ObservedDefinitionSubstituted(t *testing.T) {
 // `independent_variable: "time"` is DIFFERENTIAL — the esm-spec §5.4 reading.
 // §4.2 fixes the derivative axis to the LITERAL `t` and is normative
 // (CONFORMANCE_SPEC §5.42), so such a `D` is a SPATIAL derivative: the model
-// is a `pde`, `x` is not an ODE state, and the DAE contract — which applies
-// only to `ode` models — does not run on it at all. The DAE layer used to
+// has no time derivative and is `nonlinear`, `x` is not an ODE state, and the
+// DAE contract — which applies only to `ode` models — does not run on it at all. The DAE layer used to
 // disagree with this binding's own classifier here (EarthSciAST#407); it no
 // longer can, because both read the axis through derivativeIsTemporal.
 func TestApplyDAEContract_DomainIndepVar(t *testing.T) {
@@ -351,4 +351,61 @@ func TestApplyDAEContract_DomainIndepVar(t *testing.T) {
 	if info.AlgebraicEquationCount != 0 || info.PerModel["M"] != 0 {
 		t.Errorf("a `nonlinear` model is outside the DAE contract, got %+v", info)
 	}
+}
+
+// TestApplyDAEContract_SpatialDerivativeModel pins what the contract does with a
+// model that carries spatial derivatives. Since esm 2.4.0 there is no "pde"
+// kind (esm-spec §6.3.1): a transient model with spatial derivatives is an
+// `ode`, so the contract runs on it like any other.
+//
+// A spatial derivative on a right-hand side is not an equation to classify and
+// leaves the model a pure ODE. A spatial `D` on a LEFT-hand side is not a time
+// derivative, so the equation is algebraic, and since it names no single
+// variable it is a residual that factoring cannot remove: E_NONTRIVIAL_DAE.
+// That is the case for a boundary condition written as an equation, such as the
+// Neumann condition `D(u, wrt: x) ~ 0`. The format has no such construct — a
+// boundary condition lives inside the discretization rule (esm-spec §9.6.8) —
+// and the same document already fails validation with equation_count_mismatch
+// (two equations, one unknown). Rust's apply_dae_contract refuses it the same
+// way.
+func TestApplyDAEContract_SpatialDerivativeModel(t *testing.T) {
+	heat := func() Equation {
+		return dEq("u", "t", opNode("*", "k",
+			ExprNode{Op: "D", Args: []any{ExprNode{Op: "D", Args: []any{"u"}, Wrt: strPtr("x")}}, Wrt: strPtr("x")}))
+	}
+	vars := map[string]ModelVariable{
+		"u": {Type: "unknown", Default: 0.0},
+		"k": {Type: "parameter", Default: 1.0},
+	}
+
+	t.Run("spatial D on a right-hand side only", func(t *testing.T) {
+		file := singleModelFile(Model{Variables: vars, Equations: []Equation{heat()}})
+		m := file.Models["M"]
+		if k := EffectiveSystemKind(&m); k != SystemKindODE {
+			t.Fatalf("EffectiveSystemKind = %q, want %q", k, SystemKindODE)
+		}
+		info, err := ApplyDAEContract(file)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if info.SystemClass != "ode" || info.PerModel["M"] != 0 {
+			t.Errorf("want a pure ODE, got %+v", info)
+		}
+	})
+
+	t.Run("Neumann condition written as an equation", func(t *testing.T) {
+		neumann := Equation{LHS: ExprNode{Op: "D", Args: []any{"u"}, Wrt: strPtr("x")}, RHS: int64(0)}
+		file := singleModelFile(Model{Variables: vars, Equations: []Equation{heat(), neumann}})
+		info, err := ApplyDAEContract(file)
+		re, ok := err.(*RuleEngineError)
+		if !ok || re.Code != "E_NONTRIVIAL_DAE" {
+			t.Fatalf("want E_NONTRIVIAL_DAE, got %T: %v", err, err)
+		}
+		if !strings.Contains(re.Message, "/models/M/equations/1") {
+			t.Errorf("message does not name the boundary equation: %s", re.Message)
+		}
+		if info.PerModel["M"] != 1 {
+			t.Errorf("PerModel[M] = %d, want 1", info.PerModel["M"])
+		}
+	})
 }

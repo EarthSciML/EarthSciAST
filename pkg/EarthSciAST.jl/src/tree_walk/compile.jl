@@ -75,8 +75,10 @@ function _compile(expr::VarExpr, var_map, param_syms, memo::_MaybeMemo = nothing
         a = _arg_leaf(name)
         a === nothing || return a
         # A template sentinel (not a stencil lane, which shares the `\0` spelling).
-        (startswith(name, _TPL_ARG) || startswith(name, _TPL_FREE) || startswith(name, _TPL_OUT) ||
-            startswith(name, _TPL_IN) || startswith(name, _TPL_BASE)) && throw(
+        (
+            startswith(name, _TPL_ARG) || startswith(name, _TPL_FREE) || startswith(name, _TPL_OUT) ||
+                startswith(name, _TPL_IN) || startswith(name, _TPL_BASE)
+        ) && throw(
             TreeWalkError(
                 "E_TREEWALK_UNRESOLVED_TEMPLATE_REF",
                 "a template parameter $(repr(replace(name, '\0' => '·'))) reached compile outside its call body"

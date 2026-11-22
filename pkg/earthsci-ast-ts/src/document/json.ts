@@ -8,9 +8,16 @@
  * integer; every other finite number is its shortest round-trip decimal digits
  * and the decimal exponent of the first digit), and object entries keep their
  * order. {@link fromPlain} and {@link toPlain} convert at the public boundary.
+ *
+ * A `math` value is not JSON: it is the math text of an expression inside a
+ * path block (`Json.math`), the form a container prints and reads there
+ * (`Source.mathify`, `Source.cookBlocks`). It lives only between a container's
+ * text and the skeleton; a document never holds one ({@link jsonWfb} is false
+ * on it).
  */
 
 import { floatLit, intLit, isNumericLiteral } from '../numeric-literal.js'
+import type { Chars, Read } from './number.js'
 
 /**
  * A JSON number in canonical form (`Esm.Document.JNum`).
@@ -35,6 +42,7 @@ export type Json =
   | { readonly t: 'str'; readonly s: string }
   | { readonly t: 'arr'; readonly xs: readonly Json[] }
   | { readonly t: 'obj'; readonly kvs: readonly (readonly [string, Json])[] }
+  | { readonly t: 'math'; readonly s: string }
 
 export type JObj = Extract<Json, { t: 'obj' }>
 export type Kvs = JObj['kvs']
@@ -49,6 +57,28 @@ export const jnum = (n: JNum): Json => ({ t: 'num', n })
 export const jint = (v: bigint | number): Json => ({ t: 'num', n: mkInt(v) })
 export const jarr = (xs: readonly Json[]): Json => ({ t: 'arr', xs })
 export const jobj = (kvs: readonly (readonly [string, Json])[]): Json => ({ t: 'obj', kvs })
+export const jmath = (s: string): Json => ({ t: 'math', s })
+
+/**
+ * `Json.mathOK`: math text a container can delimit with `$`: not empty, no `$`,
+ * no line break, and not ending in a backslash (which would escape the closing
+ * `$`).
+ */
+export function mathOk(s: string): boolean {
+  return s !== '' && !s.includes('$') && !s.includes('\n') && !s.includes('\r') && !s.endsWith('\\')
+}
+
+/**
+ * `Json.pMath`: a math leaf `$…$`, at its `$`: the text up to the next `$`,
+ * which must be {@link mathOk}.
+ */
+export function pMath(cs: Chars, i: number): Read<Json> {
+  let j = i + 1
+  while (j < cs.length && cs[j] !== '$') j++
+  if (j >= cs.length) return undefined
+  const t = cs.slice(i + 1, j).join('')
+  return mathOk(t) ? [jmath(t), j + 1] : undefined
+}
 
 export const mkInt = (v: bigint | number): JNum => ({ k: 'int', v: BigInt(v) })
 
@@ -127,6 +157,8 @@ export function jsonEq(a: Json, b: Json): boolean {
       return b.t === 'num' && jnumEq(a.n, b.n)
     case 'str':
       return b.t === 'str' && a.s === b.s
+    case 'math':
+      return b.t === 'math' && a.s === b.s
     case 'arr':
       return (
         b.t === 'arr' && a.xs.length === b.xs.length && a.xs.every((x, i) => jsonEq(x, b.xs[i]))
@@ -140,7 +172,7 @@ export function jsonEq(a: Json, b: Json): boolean {
   }
 }
 
-/** `Json.wfb`: every number canonical, every object with distinct keys. */
+/** `Json.wfb`: every number canonical, every object with distinct keys, and no math leaf. */
 export function jsonWfb(j: Json): boolean {
   switch (j.t) {
     case 'num':
@@ -149,6 +181,27 @@ export function jsonWfb(j: Json): boolean {
       return j.xs.every(jsonWfb)
     case 'obj':
       return keysDistinct(j.kvs) && j.kvs.every(([, v]) => jsonWfb(v))
+    case 'math':
+      return false
+    default:
+      return true
+  }
+}
+
+/**
+ * `Json.wfmb`: {@link jsonWfb}, except that a math leaf whose text is
+ * {@link mathOk} is allowed (what the codecs print and read).
+ */
+export function jsonWfmb(j: Json): boolean {
+  switch (j.t) {
+    case 'num':
+      return jnumWfb(j.n)
+    case 'arr':
+      return j.xs.every(jsonWfmb)
+    case 'obj':
+      return keysDistinct(j.kvs) && j.kvs.every(([, v]) => jsonWfmb(v))
+    case 'math':
+      return mathOk(j.s)
     default:
       return true
   }
@@ -239,7 +292,9 @@ export function toPlain(j: Json, tagged: boolean): unknown {
       return null
     case 'bool':
       return j.v
+    // `math`: never reached, a document read back holds no math leaf
     case 'str':
+    case 'math':
       return j.s
     case 'num': {
       const f = jnumToFloat(j.n)

@@ -35,7 +35,9 @@
  * Then rule 3 (esm-spec §9.6.4): the rules rewrite the body of every template
  * the references reach, once per template instance (`applyRule3`), with depth
  * counted through bodies. One distinct rewritten body replaces the template's
- * in place; several become `<name>.variant<k>` entries; every reference is
+ * in place (unless a registry entry rule 3 leaves as authored still references
+ * the template, directly or through such entries: then it becomes
+ * `<name>.variant1`); several become `<name>.variant<k>` entries; every reference is
  * re-pointed, and each referenced rule is materialized without `match`,
  * `where` and `priority`. Nothing here expands a reference: references survive
  * and denote their expansion (`Expand`, §9.6.4 rule 2). Any rewrite-target op
@@ -1395,6 +1397,85 @@ function rule3TemplateOrder(st: Rule3State, byTemplate: Map<string, string[]>): 
   return order
 }
 
+/**
+ * The templates whose reached instances rewrite to more than one distinct body.
+ * Naming each single-bodied template in place or as `<name>.variant1` renames
+ * every reference to it alike, so which bodies are distinct does not depend on
+ * that choice: this provisional pass names every single-bodied template in
+ * place. Mirrors the Julia `_rule3_multi`.
+ */
+function rule3Multi(
+  st: Rule3State,
+  byTemplate: Map<string, string[]>,
+  order: string[],
+): Set<string> {
+  const final = new Map<string, string>()
+  const multi = new Set<string>()
+  for (const t of order) {
+    const keysT = byTemplate.get(t)!
+    const canon = keysT.map((k) => {
+      const r = st.done.get(k)!
+      return canonicalCompact(repointRefs(r.body, r.refs, final))
+    })
+    const distinct = [...new Set(canon)].sort(compareUtf8)
+    if (distinct.length === 1) {
+      for (const k of keysT) final.set(k, t)
+      continue
+    }
+    multi.add(t)
+    keysT.forEach((k, i) => final.set(k, `${t}\x1f${distinct.indexOf(canon[i]!) + 1}`))
+  }
+  return multi
+}
+
+/**
+ * The reached match-less templates whose authored body stays reachable from a
+ * registry entry that rule 3 does not rewrite under its own name (esm-spec
+ * §9.6.4 rule 3): a match-less entry no reference reaches, one whose instances
+ * took variants, and, transitively, any reached template such an entry
+ * references. Such a template keeps its authored body; a single rewritten body
+ * is registered as `<name>.variant1` instead. Mirrors the Julia
+ * `_rule3_exposed`.
+ */
+function rule3Exposed(
+  st: Rule3State,
+  byTemplate: Map<string, string[]>,
+  order: string[],
+): Set<string> {
+  const named = st.L.named as Record<string, unknown>
+  const matchless = (n: string): boolean => {
+    const d = Object.prototype.hasOwnProperty.call(named, n) ? named[n] : undefined
+    return isObject(d) && (d as { match?: unknown }).match == null
+  }
+  const memo = new Map<string, string[]>()
+  const refsOf = (n: string): string[] => {
+    let r = memo.get(n)
+    if (r === undefined) {
+      const d = named[n]
+      const body = isObject(d) ? (d as { body?: Json }).body : undefined
+      r = [...new Set(collectApplyNames(body as Json, []))].filter(
+        (x) => byTemplate.has(x) && matchless(x),
+      )
+      memo.set(n, r)
+    }
+    return r
+  }
+  const stack = Object.keys(named).filter((n) => !byTemplate.has(n) && matchless(n))
+  if ([...byTemplate.keys()].some((t) => matchless(t) && refsOf(t).length > 0)) {
+    for (const t of rule3Multi(st, byTemplate, order)) if (matchless(t)) stack.push(t)
+  }
+  const visible = new Set<string>()
+  while (stack.length > 0) {
+    const n = stack.pop()!
+    for (const r of refsOf(n)) {
+      if (visible.has(r)) continue
+      visible.add(r)
+      stack.push(r)
+    }
+  }
+  return visible
+}
+
 /** `decl` without `match`, `where` and `priority`. */
 function matchStripped(decl: TemplateDecl): TemplateDecl {
   const out: Record<string, unknown> = {}
@@ -1454,7 +1535,9 @@ function applyRule3(
   if (!isObject(comp.operators)) comp.operators = L.named
   const block = comp.operators as Record<string, unknown>
   const taken = new Set(Object.keys(L.named))
-  for (const t of rule3TemplateOrder(st, byTemplate)) {
+  const order = rule3TemplateOrder(st, byTemplate)
+  const exposed = rule3Exposed(st, byTemplate, order)
+  for (const t of order) {
     const keysT = byTemplate.get(t)!
     const bodies = keysT.map((k) => {
       const r = st.done.get(k)!
@@ -1463,7 +1546,7 @@ function applyRule3(
     const canon = bodies.map((b) => canonicalCompact(b))
     const distinct = [...new Set(canon)].sort(compareUtf8)
     const decl = L.named[t]!
-    if (distinct.length === 1) {
+    if (distinct.length === 1 && !(exposed.has(t) && distinct[0] !== canonicalCompact(decl.body))) {
       for (const k of keysT) final.set(k, t)
       const isRule = (decl as { match?: Json }).match !== undefined
       const nd = isRule ? matchStripped(decl) : ({ ...decl } as TemplateDecl)

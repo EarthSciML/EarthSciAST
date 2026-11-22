@@ -293,7 +293,9 @@ function jsonToksInto(j: Json, out: Tok[]): void {
     case 'num':
       out.push(tNum(j.n))
       return
+    // `math`: never reached, an expression holds no math leaf
     case 'str':
+    case 'math':
       out.push(tJstr(j.s))
       return
     case 'arr':

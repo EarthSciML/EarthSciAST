@@ -143,8 +143,10 @@ end
 function _tpl_feeds_structural(tt::_TplTable, body::ASTExpr)
     fed = Set{String}()
     visit(x) = begin
-        (_tpl_is_call(x) && x.name isa AbstractString && x.bindings !== nothing &&
-            tt.reg !== nothing && haskey(tt.reg, x.name)) || return nothing
+        (
+            _tpl_is_call(x) && x.name isa AbstractString && x.bindings !== nothing &&
+                tt.reg !== nothing && haskey(tt.reg, x.name)
+        ) || return nothing
         for q in _tpl_def(tt, x.name).structural
             v = get(x.bindings, q, nothing)
             v isa VarExpr && push!(fed, v.name)
@@ -192,6 +194,7 @@ function _tpl_elem_reads(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr
     r = get(memo, e, nothing)
     r === nothing || return r
     r = map_children(c -> _tpl_elem_reads(tt, c, memo), e)
+    r = _tpl_const_table_read(tt, r)
     if r.op == "index" && _tpl_structless(r) && length(r.args) >= 2 &&
             _tpl_is_call(r.args[1]) && !_tpl_is_elem(r.args[1]::OpExpr)
         info = _tpl_call_info(tt, (r.args[1]::OpExpr).name)
@@ -201,6 +204,37 @@ function _tpl_elem_reads(tt::_TplTable, e::ASTExpr, memo::IdDict{OpExpr, ASTExpr
     end
     memo[e] = r
     return r
+end
+
+# The literal `const` array a reference denotes when its template has no
+# parameters and its body is that literal (a lookup table, `duo_tile_map`);
+# `nothing` otherwise. One node per template, so every read of the table
+# shares it (one interned const array).
+function _tpl_const_table(tt::_TplTable, call)
+    (call isa OpExpr && _tpl_is_call(call) && !_tpl_is_elem(call)) || return nothing
+    memo = _tpl_memo(tt, nothing, :const_table, () -> Dict{String, Any}())
+    return get!(memo, call.name) do
+        def = try
+            _tpl_def(tt, call.name)
+        catch err
+            err isa ExpressionTemplateError || rethrow()
+            return nothing
+        end
+        (isempty(def.params) && def.closed !== nothing) || return nothing
+        b = def.closed.body
+        (b isa OpExpr && b.op == "const" && b.value isa AbstractVector && isempty(def.closed.free)) || return nothing
+        b
+    end
+end
+
+# `index(ref, s…)` of a reference that denotes a literal table
+# (`_tpl_const_table`) read as `index(<the literal>, s…)`: a constant, which
+# every phase reads as it reads an inline `const` array.
+function _tpl_const_table_read(tt::_TplTable, r::OpExpr)
+    (r.op == "index" && _tpl_structless(r) && length(r.args) >= 2) || return r
+    c = _tpl_const_table(tt, r.args[1])
+    c === nothing && return r
+    return reconstruct(r; args = ASTExpr[c, r.args[2:end]...])
 end
 
 # `e` with every `broadcast` whose `fn` is admissible lowered to its operator
@@ -268,9 +302,11 @@ end
 function _tpl_whole_faq(a)
     (a isa OpExpr && _is_faq_op(a.op) && a.output_idx !== nothing && !isempty(a.output_idx)) || return nothing
     all(x -> x isa AbstractString, a.output_idx) || return nothing
-    (a.expr_body !== nothing && a.ranges !== nothing && a.filter === nothing && a.join === nothing &&
-        a.join_gates === nothing && a.key === nothing && a.values === nothing && a.lower === nothing &&
-        a.upper === nothing && all(x -> x isa VarExpr, a.args)) || return nothing
+    (
+        a.expr_body !== nothing && a.ranges !== nothing && a.filter === nothing && a.join === nothing &&
+            a.join_gates === nothing && a.key === nothing && a.values === nothing && a.lower === nothing &&
+            a.upper === nothing && all(x -> x isa VarExpr, a.args)
+    ) || return nothing
     outs = String[String(x) for x in a.output_idx]
     (length(a.ranges) == length(outs) && all(o -> haskey(a.ranges, o), outs)) || return nothing
     return outs, a.ranges
@@ -290,8 +326,10 @@ end
 function _tpl_range_same(x, y)
     x isa IndexSetRef && y isa IndexSetRef && return x.from == y.from && x.of == y.of
     x isa AbstractVector && y isa AbstractVector && return length(x) == length(y) &&
-        all(((p, q),) -> (p isa Integer || p isa IntExpr) && (q isa Integer || q isa IntExpr) &&
-        Int(p isa IntExpr ? p.value : p) == Int(q isa IntExpr ? q.value : q), zip(x, y))
+        all(
+        ((p, q),) -> (p isa Integer || p isa IntExpr) && (q isa Integer || q isa IntExpr) &&
+            Int(p isa IntExpr ? p.value : p) == Int(q isa IntExpr ? q.value : q), zip(x, y)
+    )
     return false
 end
 
@@ -407,18 +445,27 @@ function _tpl_structural_ref(tt::_TplTable, call::OpExpr)
         ok || return call
         S[p] = serialize_expression(x)
     end
+    iname = _tpl_register_instance!(tt, call.name, S)
+    nb = Dict{String, ASTExpr}(k => v for (k, v) in b if !haskey(S, k))
+    return reconstruct(call; name = iname, bindings = nb)
+end
+
+# The name of the instance of template `name` with the parameters in `S`
+# (parameter => raw value) substituted, registered in `tt.reg` on first use:
+# the declaration with those values substituted into its body and those
+# parameters dropped.
+function _tpl_register_instance!(tt::_TplTable, name::AbstractString, S::Dict{String, Any})
     skey = join(sort!([k * "=" * _stable_json(v) for (k, v) in S]), ",")
-    iname = string(call.name, _TPL_INST, skey)
+    iname = string(name, _TPL_INST, skey)
     if !haskey(tt.reg, iname)
-        raw = tt.reg[call.name]
+        raw = tt.reg[name]
         decl = _TemplateDecl(raw)
-        sub = Dict{String, Any}(p => v for (p, v) in S)
         nd = OrderedDict{String, Any}()
         for (k, v) in pairs(raw)
             nd[string(k)] = v
         end
         nd["params"] = Any[p for p in decl.params if !haskey(S, p)]
-        body = _substitute(decl.body, sub)
+        body = _substitute(decl.body, S)
         # A nested reference the substitution gave name or number structural
         # bindings (`_tpl_feeds_structural`) reads its own instance, in the
         # declaration too: the view parts are cut from it (`_tpl_skel`).
@@ -427,8 +474,7 @@ function _tpl_structural_ref(tt::_TplTable, call::OpExpr)
         nd["body"] = rb === tb ? body : serialize_expression(rb)
         tt.reg[iname] = nd
     end
-    nb = Dict{String, ASTExpr}(k => v for (k, v) in b if !haskey(S, k))
-    return reconstruct(call; name = iname, bindings = nb)
+    return iname
 end
 
 # `e` with every reference to a structural template re-pointed at its instance
@@ -658,6 +704,20 @@ function _tpl_frame(tt::_TplTable, call::OpExpr, parent::Union{Nothing, _TplFram
     return fr
 end
 
+# The binding of the frame argument `k` (a sentinel) as the reference `call`
+# writes it: `"\0arg\0p"` is the binding of parameter `p`, `"\0free\0n"`
+# the implicit binding (the name `n` itself when the reference carries none),
+# as `_tpl_frame` makes them.
+function _tpl_call_binding(call::OpExpr, k::String)
+    b = call.bindings
+    if startswith(k, _TPL_FREE)
+        v = b === nothing ? nothing : get(b, k, nothing)
+        return v === nothing ? VarExpr(k[(ncodeunits(_TPL_FREE) + 1):end]) : v
+    end
+    startswith(k, _TPL_ARG) || throw(ArgumentError("not a frame argument: $(repr(k))"))
+    return b[k[(ncodeunits(_TPL_ARG) + 1):end]]
+end
+
 # The structural key of `e` read in `fr`: its own structure, with each
 # sentinel replaced by its binding's key in the binding's frame. Two
 # expressions with equal keys denote the same expression.
@@ -868,7 +928,7 @@ function _tpl_scope_binders(tt::_TplTable, name)
             haskey(seen, e) && return
             seen[e] = nothing
             union!(out, _bound_symbols(e))
-            foreach_child(walk, e)
+            return foreach_child(walk, e)
         end
         walk(_tpl_names_body(tt, name))
         out
@@ -906,7 +966,7 @@ function _tpl_body_reads(tt::_TplTable, name)
                 end
                 return
             end
-            foreach_child(c -> walk(c, captured), e)
+            return foreach_child(c -> walk(c, captured), e)
         end
         walk(_tpl_names_body(tt, name), Set{String}())
         out
@@ -1230,9 +1290,11 @@ function _tpl_call_info_uncached(tt::_TplTable, name::String)
     if body isa OpExpr && _is_faq_op(body.op) && body.output_idx !== nothing && !isempty(body.output_idx)
         oi = body.output_idx
         all(x -> x isa AbstractString, oi) || return nothing
-        (body.filter === nothing && body.join_gates === nothing && body.join === nothing &&
-            body.key === nothing && body.expr_body !== nothing && all(a -> a isa VarExpr, body.args) &&
-            body.values === nothing && body.lower === nothing && body.upper === nothing) || return nothing
+        (
+            body.filter === nothing && body.join_gates === nothing && body.join === nothing &&
+                body.key === nothing && body.expr_body !== nothing && all(a -> a isa VarExpr, body.args) &&
+                body.values === nothing && body.lower === nothing && body.upper === nothing
+        ) || return nothing
         outs = String[String(x) for x in oi]
         body.ranges === nothing || all(k -> String(k) in outs, keys(body.ranges)) || return nothing
         append!(info.outs, outs)
@@ -1340,8 +1402,10 @@ function _tpl_call_walk!(tt::_TplTable, e::ASTExpr, cond::Bool, info::_TplCallIn
     if _is_faq_op(e.op)
         # A scalar reduction over constant ranges.
         (e.output_idx === nothing || isempty(e.output_idx)) || return false
-        (e.join_gates === nothing && e.join === nothing && e.key === nothing &&
-            e.values === nothing && e.lower === nothing && e.upper === nothing) || return false
+        (
+            e.join_gates === nothing && e.join === nothing && e.key === nothing &&
+                e.values === nothing && e.lower === nothing && e.upper === nothing
+        ) || return false
         (e.expr_body === nothing || e.ranges === nothing) && return false
         isempty(e.args) || all(a -> a isa VarExpr, e.args) || return false
         for (_, rv) in e.ranges
@@ -1515,7 +1579,7 @@ function _tpl_body_binders(tt::_TplTable, name)
             haskey(seen, e) && return
             seen[e] = nothing
             union!(out, _bound_symbols(e))
-            foreach_child(walk, e)
+            return foreach_child(walk, e)
         end
         b = def.closed.body
         # An array-valued body's output indices are no binders of its element

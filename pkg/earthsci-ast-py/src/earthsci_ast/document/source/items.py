@@ -18,11 +18,25 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ..math import token as K
-from ..math.expr import Sym, is_dig, is_formula, is_letter, name_ok, num_ok
+from ..math.expr import Sym, is_dig, is_e, is_formula, is_letter, name_ok, num_ok
 from ..math.parser import parse_toks
 from ..strings import is_ident_char
-from ..value import Dec, Obj
-from .skeleton import EQN, Comp, Doc, Eqn, Tm, is_math_field, sym_for, top_sym
+from ..value import Dec, Math, Obj, math_ok
+from .keys import FAIL
+from .skeleton import (
+    ANY,
+    ELEM,
+    COMP_EXPR_PATHS,
+    EQN,
+    TOP_EXPR_PATHS,
+    Comp,
+    Doc,
+    Eqn,
+    Tm,
+    is_math_field,
+    sym_for,
+    top_sym,
+)
 
 # ## Constructs
 
@@ -109,6 +123,137 @@ def unitems(front: list, its: list):
     if cur is not None:
         comps.append(cur)
     return Doc(front, desc, blocks, math, comps)
+
+
+def step_key(k: str | None, ps: tuple) -> tuple:
+    """``Source.stepKey``: the paths below the entry ``k`` of an object (``None``:
+    below an element of an array, which ``ANY`` and ``ELEM`` match)."""
+    out = []
+    for p in ps:
+        if not p:
+            continue
+        seg, rest = p[0], p[1:]
+        if seg is ANY or (seg is ELEM if k is None else seg == k):
+            out.append(rest)
+    return tuple(out)
+
+
+def at_paths(leaf: Callable, ps: tuple, v: Any) -> Any:
+    """``Source.atPaths``: ``leaf`` applied to every value of ``v`` at one of the
+    paths ``ps`` (a value at a path is not looked into); every other value as it
+    is."""
+    if not ps:
+        return v  # `atPaths_nil`
+    if () in ps:
+        return leaf(v)
+    t = type(v)
+    if t is list:
+        q = step_key(None, ps)
+        return [at_paths(leaf, q, x) for x in v]
+    if t is Obj:
+        return Obj((k, at_paths(leaf, step_key(k, ps), x)) for k, x in v)
+    return v
+
+
+def math_leaf(pr_r: Callable, ok: Callable, s: Sym, v: Any) -> Any:
+    """``Source.mathLeaf``: a well-formed expression whose math text the container
+    can delimit (:func:`math_ok` and ``ok``), as that math leaf; any other value as
+    it is."""
+    if is_e(v):
+        t = pr_r(s, v)
+        if math_ok(t) and ok(t):
+            return Math(t)
+    return v
+
+
+def mathify(pr_r: Callable, ok: Callable, s: Sym, ps: tuple, blocks: list) -> list:
+    """``Source.mathify``: a section's path blocks, every expression at one of the
+    paths ``ps`` (keyed by the block's key) as math under ``s``."""
+    return [
+        (k, at_paths(lambda v: math_leaf(pr_r, ok, s, v), step_key(k, ps), v)) for k, v in blocks
+    ]
+
+
+def _cook_val(ck_r: Callable, s: Sym, v: Any) -> Any:
+    """``Source.cookV``; a value with no math leaf is returned as it is, not
+    copied."""
+    t = type(v)
+    if t is Math:
+        r = ck_r(s, v.text)
+        return FAIL if r is None else r
+    if t is list:
+        out = None
+        for i, x in enumerate(v):
+            y = _cook_val(ck_r, s, x)
+            if y is FAIL:
+                return FAIL
+            if out is None:
+                if y is x:
+                    continue
+                out = v[:i]
+            out.append(y)
+        return v if out is None else out
+    if t is Obj:
+        out = None
+        for i, (k, x) in enumerate(v):
+            y = _cook_val(ck_r, s, x)
+            if y is FAIL:
+                return FAIL
+            if out is None:
+                if y is x:
+                    continue
+                out = list(v[:i])
+            out.append((k, y))
+        return v if out is None else Obj(out)
+    return v
+
+
+def cook_blocks(ck_r: Callable, s: Sym, blocks: list):
+    """``Source.cookBlocks``: every math leaf of a section's path blocks, wherever
+    it is, read back as an expression under ``s``. ``None`` when one does not
+    read; ``blocks`` itself when none holds a math leaf."""
+    out = None
+    for i, (k, v) in enumerate(blocks):
+        y = _cook_val(ck_r, s, v)
+        if y is FAIL:
+            return None
+        if out is None:
+            if y is v:
+                continue
+            out = list(blocks[:i])
+        out.append((k, y))
+    return blocks if out is None else out
+
+
+def mathify_doc(pr_r: Callable, ok: Callable, d: Doc) -> Doc:
+    """``Source.mathifyDoc``: the path blocks of a skeleton printed, each section's
+    under its symbol table; ``ok`` is the container's test of math text."""
+    comps = []
+    for c in d.comps:
+        rc = c.with_math(c.math)
+        rc.blocks = mathify(pr_r, ok, sym_for(d, c), COMP_EXPR_PATHS, c.blocks)
+        comps.append(rc)
+    blocks = mathify(pr_r, ok, top_sym(d), TOP_EXPR_PATHS, d.blocks)
+    return Doc(d.front, d.desc, blocks, d.math, comps)
+
+
+def cook_doc_blocks(ck_r: Callable, d: Doc):
+    """``Source.cookDocBlocks``: every math leaf of a skeleton's path blocks read
+    back under its section's symbol table. ``None`` when one does not read; a
+    section with no math leaf is kept as it is."""
+    blocks = cook_blocks(ck_r, top_sym(d), d.blocks)
+    if blocks is None:
+        return None
+    comps = []
+    for c in d.comps:
+        cb = cook_blocks(ck_r, sym_for(d, c), c.blocks)
+        if cb is None:
+            return None
+        if cb is not c.blocks:
+            c = c.with_math(c.math)
+            c.blocks = cb
+        comps.append(c)
+    return Doc(d.front, d.desc, blocks, d.math, comps)
 
 
 def raw_doc(pr: Callable, d: Doc) -> Doc:

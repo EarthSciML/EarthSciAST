@@ -30,6 +30,7 @@ def beq : Json → Json → Bool
   | .bool a, .bool b => a == b
   | .num a, .num b => decide (a = b)
   | .str a, .str b => a == b
+  | .math a, .math b => a == b
   | .arr a, .arr b => beqList a b
   | .obj a, .obj b => beqObj a b
   | _, _ => false
@@ -51,6 +52,7 @@ theorem beq_iff : ∀ a b : Json, beq a b = true ↔ a = b
   | .bool x, b => by cases b <;> simp [beq]
   | .num x, b => by cases b <;> simp [beq]
   | .str x, b => by cases b <;> simp [beq]
+  | .math x, b => by cases b <;> simp [beq]
   | .arr x, b => by cases b <;> simp [beq, beqList_iff]
   | .obj x, b => by cases b <;> simp [beq, beqObj_iff]
 
@@ -303,6 +305,7 @@ theorem joinField_splitField {β : Type} (pick : String → Json → Option β)
   | .bool _ => rfl
   | .num _ => rfl
   | .str _ => rfl
+  | .math _ => rfl
   | .arr _ => rfl
 
 /-- The same, for a field that may be absent. -/

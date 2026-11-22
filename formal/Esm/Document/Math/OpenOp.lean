@@ -20,6 +20,7 @@ theorem jsonVal_head (sf : Sf) (v : Json) (hv : jwf v = true) (hn : ∀ n, v ≠
     | bool b => cases b <;> exact ⟨_, _, rfl, fun _ _ => rfl, by simp⟩
     | num n => exact absurd rfl (hn n)
     | str s => exact ⟨_, _, rfl, fun _ _ => rfl, by simp⟩
+    | math _ => simp [jwf] at hv
     | arr xs => exact ⟨.kw .lbk, jsonItems xs ++ [.kw .rbk], by simp [jsonVal, jsonToks], fun _ _ => rfl, by simp⟩
     | obj kvs => exact ⟨.kw .lb, jsonEntries kvs ++ [.kw .rb], by simp [jsonVal, jsonToks], fun _ _ => rfl, by simp⟩
 
@@ -115,7 +116,7 @@ theorem pVal_val (c : Ctx) (b : Bool) (v : Json) (hv : jwf v = true) (hM : b = t
       obtain ⟨t, r, ht, hl, hty⟩ := jsonVal_head c.sf v hv hn
       obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
       · have hj : jsonVal c.sf v = jsonToks v := by simp [jsonVal, hsf]
-        have hpj := pJson_toks v f X (by rw [hj] at hf; unfold need at hf; omega)
+        have hpj := pJson_toks v f X (jwf_sound v hv) (by rw [hj] at hf; unfold need at hf; omega)
         rw [hj] at ht ⊢
         rw [ht] at hpj ⊢
         simp only [List.cons_append] at hpj ⊢

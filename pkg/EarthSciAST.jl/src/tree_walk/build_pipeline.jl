@@ -854,7 +854,7 @@ end
 function _compile_fill_levels(
         form::_BuildForm, split::_ObservedSplit, mat_vars::Set{String},
         layout::_StatePlan, model::Model, scope::_CompileScope,
-        products::Union{Nothing, BuildProducts};
+        products::Union{Nothing, BuildProducts}
     )
     plan = _fill_level_plan(form, split, mat_vars, layout, scope)
     mat_defs = split.materialized

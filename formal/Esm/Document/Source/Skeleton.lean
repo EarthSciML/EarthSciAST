@@ -517,7 +517,8 @@ theorem strList_some : ∀ {ps : List Json} {xs : List String}, strList ps = som
     simp only [strList, Option.map_eq_some_iff] at h
     obtain ⟨ys, hy, rfl⟩ := h
     simp [strList_some hy]
-  | .null :: _, _, h | .bool _ :: _, _, h | .num _ :: _, _, h | .arr _ :: _, _, h | .obj _ :: _, _, h => by
+  | .null :: _, _, h | .bool _ :: _, _, h | .num _ :: _, _, h | .arr _ :: _, _, h | .obj _ :: _, _, h
+  | .math _ :: _, _, h => by
     simp [strList] at h
 
 theorem strsOf_strs (xs : List String) : strsOf (some (.arr (xs.map .str))) = xs := by

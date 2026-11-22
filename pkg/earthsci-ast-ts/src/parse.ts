@@ -47,7 +47,7 @@ import {
 } from './solver.js'
 import { rejectVariableBoundsPreV21 } from './variable-bounds.js'
 import { schema } from './embedded-schema.js'
-import { readFileSyncNode, dirnameOf } from './path-utils.js'
+import { readFileSyncNode, dirnameOf, decodeDocument, documentFormatOf } from './path-utils.js'
 import { deepClone } from './object-utils.js'
 import { pointerToken } from './json-pointer.js'
 import {
@@ -442,16 +442,31 @@ export interface LoadOptions {
  * Requires synchronous file access (Node); browser hosts should read the
  * bytes themselves and call {@link loadString}.
  *
- * @param path - Filesystem path to the `.esm` document
+ * @param path - Filesystem path to the document: `.esm` JSON, or a Markdown
+ *   (`.md`) or Typst (`.typ`) source document, by its extension (esm-spec §1.2.1)
  * @param options - Optional load-time settings (see {@link LoadOptions})
  * @returns Typed EsmFile object
- * @throws {ParseError} When JSON parsing fails or version is incompatible
+ * @throws {ParseError} When JSON (or source-document) parsing fails or version is incompatible
  * @throws {SchemaValidationError} When schema validation fails
  */
 export function loadPath(path: string, options?: LoadOptions): EsmFile {
   const text = (options?.readFile ?? readFileSyncNode)(path)
   const basePath = options?.basePath ?? dirnameOf(path)
-  return loadInput(text, { ...options, basePath })
+  // esm-spec §1.2.1: a `.md` / `.typ` file is a source document, read by its
+  // reader and then given to the same pipeline as the JSON value; any other
+  // name is JSON text, decoded by `loadInput` itself (lossless in canonical mode).
+  if (documentFormatOf(path) === undefined) return loadInput(text, { ...options, basePath })
+  let doc: unknown
+  try {
+    doc = decodeDocument(text, path, { canonical: options?.canonical === true })
+  } catch (error) {
+    if (error instanceof EsmDiagnosticError && error.code === ERROR_CODES.REMOVED_OP) throw error
+    throw new ParseError(
+      `${path} is not a valid source document: ${error instanceof Error ? error.message : String(error)}`,
+      error instanceof Error ? error : undefined,
+    )
+  }
+  return loadInput(bigintsToFloatLits(doc) as object, { ...options, basePath })
 }
 
 /**

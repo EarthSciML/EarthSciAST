@@ -41,14 +41,16 @@ for (dir, fixture, golden) in [
         ("opacity_rule_replacement", "fixture.esm", "emitted.esm"),
         ("rewrite_depth_through_bodies", "chain_depth_64.esm", "emitted_chain_depth_64.esm"),
         ("unlowered_in_template_body", "fixture.esm", "emitted.esm"),
+        ("rewrite_shared_by_unreached_entry", "fixture.esm", "emitted.esm"),
     ]
     _write_emit(dir, fixture, golden)
 end
 
 # The `expanded.esm` goldens that only this revision's semantics can produce
 # (CONFORMANCE_SPEC §5.60): `opacity_rule_replacement/` pins the cases where it
-# differs from the in-place engine, and the depth-64 chain is one the in-place
-# engine rejected (it allowed 63 productive passes). Every other `expanded*.esm`
+# differs from the in-place engine, the depth-64 chain is one the in-place
+# engine rejected (it allowed 63 productive passes), and
+# `rewrite_shared_by_unreached_entry/` was added after that engine was gone. Every other `expanded*.esm`
 # golden was written by the in-place engine and is never regenerated.
 function _write_expanded(dir::String, fixture::String, golden::String)
     fp = joinpath(CONF, dir, fixture)
@@ -65,6 +67,7 @@ end
 for (dir, fixture, golden) in [
         ("opacity_rule_replacement", "fixture.esm", "expanded.esm"),
         ("rewrite_depth_through_bodies", "chain_depth_64.esm", "expanded_chain_depth_64.esm"),
+        ("rewrite_shared_by_unreached_entry", "fixture.esm", "expanded.esm"),
     ]
     _write_expanded(dir, fixture, golden)
 end

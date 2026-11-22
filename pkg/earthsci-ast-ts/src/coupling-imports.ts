@@ -18,9 +18,9 @@
 import type { EsmFile, CouplingEntry, CouplingImport, Expression } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
-import { expandRefEnv, isRemoteRef, joinPath } from './path-utils.js'
+import { decodeDocument, expandRefEnv, isRemoteRef, joinPath } from './path-utils.js'
 import { classifyStdRef, readStdRef } from './stdlib.js'
-import { ERROR_CODES } from './errors.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import { prepareDocumentOps } from './parse.js'
 
@@ -323,16 +323,26 @@ export function collectRoleSegments(edge: unknown): Set<string> {
 // here — so the shared form is adopted.
 // ---------------------------------------------------------------------------
 
-function parseStdCouplingLibrary(ref: string, content: string): unknown {
+/**
+ * Read a coupling library's text in the format `location`'s extension names
+ * (esm-spec §1.2.1: Markdown, Typst or JSON) and apply the document wire
+ * boundary. A refused read is `coupling_import_unresolved`, except a removed
+ * operator, which keeps its own code.
+ */
+function parseCouplingLibrary(location: string, content: string): unknown {
   let raw: unknown
   try {
-    raw = JSON.parse(content)
+    raw = decodeDocument(content, location)
   } catch (e) {
+    if (e instanceof EsmDiagnosticError && e.code === ERROR_CODES.REMOVED_OP) throw e
     throw new EsmMachineryError(
       ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-      `coupling-library ref '${ref}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+      `coupling-library ref '${location}' did not parse: ${e instanceof Error ? e.message : String(e)}`,
     )
   }
+  // A coupling library is a document too — same wire boundary as the root
+  // (docs/content/rfcs/faq-node-rename.md §5.2). OUTSIDE the try above, so a
+  // `removed_op` / `faq_version_too_old` is not rebranded as a parse error.
   prepareDocumentOps(raw)
   return raw
 }
@@ -365,20 +375,7 @@ function defaultLoadRef(ref: string, basePath: string): unknown {
       `coupling-library file not found or unreadable: ${path} (from ref '${ref}'): ${e instanceof Error ? e.message : String(e)}`,
     )
   }
-  let raw: unknown
-  try {
-    raw = JSON.parse(content)
-  } catch (e) {
-    throw new EsmMachineryError(
-      ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-      `coupling-library ref '${path}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
-    )
-  }
-  // A coupling library is a document too — same wire boundary as the root
-  // (docs/content/rfcs/faq-node-rename.md §5.2). OUTSIDE the try above, so a
-  // `removed_op` / `faq_version_too_old` is not rebranded as a JSON error.
-  prepareDocumentOps(raw)
-  return raw
+  return parseCouplingLibrary(path, content)
 }
 
 // ---------------------------------------------------------------------------
@@ -582,11 +579,11 @@ export function expandCouplingImports(
       // `loadRef` hook the caller supplied.
       const std = classifyStdRef(ref, basePath)
       lib =
-        std !== undefined
-          ? parseStdCouplingLibrary(ref, readStdRef(ref, std))
-          : loadRef(ref, basePath)
+        std !== undefined ? parseCouplingLibrary(ref, readStdRef(ref, std)) : loadRef(ref, basePath)
     } catch (e) {
       if (e instanceof EsmMachineryError) throw e
+      // A removed operator keeps its own code (esm-spec §1.2.1, §4.2).
+      if (e instanceof EsmDiagnosticError && e.code === ERROR_CODES.REMOVED_OP) throw e
       throw new EsmMachineryError(
         ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
         `coupling_import ref '${ref}' failed to load: ${e instanceof Error ? e.message : String(e)}`,

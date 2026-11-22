@@ -1,0 +1,38 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "import_json_removed_op",
+    "description": "Imports ./twins/removed_op.esm, the JSON twin of removed_op.typ, as a template library: the wire-boundary check refuses its removed operator fn, and the import keeps that code (removed_op), as it does for the source documents.",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "M": {
+      "expression_template_imports": [
+        {
+          "ref": "./twins/removed_op.esm"
+        }
+      ],
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}

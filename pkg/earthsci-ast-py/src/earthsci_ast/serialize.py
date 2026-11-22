@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,63 @@ def _canonical_number(value: Any) -> Any:
     if math.isfinite(value) and value.is_integer() and _INT64_MIN <= value <= _INT64_MAX:
         return int(value)
     return value
+
+
+def _julia_float(f: float) -> str:
+    """``f`` as Julia prints a Float64 (CONFORMANCE_SPEC §5.5.3.1): positional
+    for a first-digit exponent in ``-4..=5``, else ``d.ddde<exp>``. Not
+    :func:`~earthsci_ast.canonicalize.format_canonical_float`, whose layout
+    (the expression canonicalizer's, RFC §5.4.6) switches at ``1e-6`` and
+    ``1e21`` and so writes ``1.5e-5`` as ``0.000015``."""
+    if not math.isfinite(f):
+        raise ValueError("a non-finite number has no canonical JSON form")
+    if f == 0.0:
+        return "-0.0" if math.copysign(1.0, f) < 0 else "0.0"
+    sign, digits, exponent = Decimal(repr(f)).as_tuple()
+    ds = "".join(str(d) for d in digits).rstrip("0") or "0"
+    e10 = len(digits) + exponent - 1
+    out = "-" if sign else ""
+    if -4 <= e10 <= 5:
+        if e10 < 0:
+            out += "0." + "0" * (-e10 - 1) + ds
+        else:
+            whole = ds[: e10 + 1].ljust(e10 + 1, "0")
+            frac = ds[e10 + 1 :] or "0"
+            out += whole + "." + frac
+    else:
+        out += ds[0] + "." + (ds[1:] or "0") + "e" + str(e10)
+    return out
+
+
+def canonical_json_value(v: Any) -> str:
+    """The canonical byte form of a raw JSON value (CONFORMANCE_SPEC §5.5.3):
+    compact (``,`` and ``:`` separators), object keys sorted at every level
+    (code-point order, which is UTF-8 byte order), integral Int64-representable
+    floats written as integers and every other float in the §5.5.3.1 layout
+    (:func:`_julia_float`)."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        n = _canonical_number(v)
+        return str(n) if isinstance(n, int) else _julia_float(n)
+    if isinstance(v, str):
+        return json.dumps(v, ensure_ascii=False)
+    if isinstance(v, dict):
+        return (
+            "{"
+            + ",".join(
+                json.dumps(str(k), ensure_ascii=False) + ":" + canonical_json_value(v[k])
+                for k in sorted(v, key=str)
+            )
+            + "}"
+        )
+    if isinstance(v, (list, tuple)):
+        return "[" + ",".join(canonical_json_value(x) for x in v) + "]"
+    raise TypeError(f"canonical_json: cannot write a {type(v).__name__}")
 
 
 def _canonical_nested(value: Any) -> Any:

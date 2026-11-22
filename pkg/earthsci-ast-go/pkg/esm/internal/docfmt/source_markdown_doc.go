@@ -258,7 +258,8 @@ func mdDocCanonSegs(its []RItem) []Seg {
 func mdDocPrintMd(lim *Lim, d Json) string {
 	doc := skToDoc(lim, capsMd{}, d)
 	out := mdDocFrontMd(doc.Front)
-	raw := itemsRawDoc(mdDocPrMdx, &doc)
+	r0 := itemsRawDoc(mdDocPrMdx, &doc)
+	raw := itemsMathifyDoc(mathPrintLatex, yamlPlainMathOK, &r0)
 	out = append(out, mdRender(mdDocCanonSegs(itemsItems(&raw)))...)
 	return string(out)
 }
@@ -300,7 +301,11 @@ func mdDocParseItemsMd(lim *Lim, front Obj, its []RItem) (Json, bool) {
 	if !ok {
 		return nil, false
 	}
-	d, ok := itemsCookDoc(lim, mdDocCkMdx, &r)
+	r1, ok := itemsCookDocBlocks(lim, mathParseLatex, &r)
+	if !ok {
+		return nil, false
+	}
+	d, ok := itemsCookDoc(lim, mdDocCkMdx, &r1)
 	if !ok {
 		return nil, false
 	}

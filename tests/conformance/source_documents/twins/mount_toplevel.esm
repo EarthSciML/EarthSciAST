@@ -1,0 +1,11 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "mount_toplevel",
+    "description": "Mounts the decay model as a top-level model.",
+    "authors": ["EarthSciML"]
+  },
+  "models": {
+    "Decay": {"ref": "./leaf.esm"}
+  }
+}

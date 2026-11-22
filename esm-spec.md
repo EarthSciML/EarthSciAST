@@ -219,6 +219,36 @@ form) as `partial`. A call whose operator name is also the key of a definition w
 (`\esm{…}` / `esm.node(…)`) so that it reads back as the call. `integral` keeps the call form;
 a native `\int` form is not specified here.
 
+#### 1.2.1 Loading a source document from a file (normative)
+
+A loader that reads a document from a path or a URL picks its format by the
+file extension of that path, or of the URL's path, alone: a name ending in
+`.md` is a Markdown source document, a name ending in `.typ` a Typst source
+document, and every other name, `.esm` among them, JSON. The comparison is
+exact and case-sensitive. The format is never guessed from the content, so a
+file named `.typ` that holds JSON text is read as Typst and refused.
+
+The rule holds wherever a document is read from a file: the root of a load from
+a path, and every ref site, which are subsystem mounts at both forms (§4.7),
+definition imports (§9.7.2) and coupling imports (§10.10). A source document read
+this way is the document its reader returns, and everything after the read
+(version gates, schema validation, migration, resolution of its own refs) is
+the same as for the JSON document it spells. Its own relative refs resolve
+against its own directory, whatever their extensions. So a library can be
+converted one file at a time: a `.esm` document can import a `.typ` operator
+library or mount a `.md` model, and the reverse.
+
+A source document its reader refuses as malformed fails where JSON text that
+does not parse fails: `parse_error` at the root, and the mechanism's unresolved
+diagnostic at a ref site (`unresolved_subsystem_ref`,
+`operator_import_unresolved`, `coupling_import_unresolved`). A source document's
+refusal of a removed operator keeps its code, `removed_op`, wherever it
+happens. The standard library
+(`esm:std/<file>.esm`, §4.7) is JSON. Writing a document is unchanged: a
+binding's save writes JSON; printing a source document is `print_markdown` /
+`print_typst`. Current bindings: all five. `tests/conformance/source_documents/`
+pins the rule (CONFORMANCE_SPEC §5.61).
+
 ---
 
 ## 2. Top-Level Structure
@@ -2049,6 +2079,8 @@ A subsystem may be a child **model** or a child **reaction system**. A `data_sou
 | Absolute path | `"/models/atmosphere.esm"` | Used as-is |
 | HTTP/HTTPS URL | `"https://example.com/models/atmosphere.esm"` | Fetched from the network |
 | Standard library | `"esm:std/solar.esm"` | The binding's bundled copy of the standard library (below) |
+
+A referenced file may be a Markdown (`.md`) or Typst (`.typ`) source document as well as JSON; its extension says which (§1.2.1).
 
 A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d/stencils/upwind1_D_interior.esm"`), expanded from the loader's environment **before** the resolution above — the mechanism for referencing a sibling library repository checked out at a deployment-chosen path. Expansion is an **OPTIONAL** capability, on the same footing as URL refs: only the braced `${VAR}` form is expanded (not bare `$VAR`); an **unset** variable is left literal, so the ref fails to resolve with the ordinary unresolved diagnostic (`operator_import_unresolved` / `coupling_import_unresolved` / the subsystem-ref error) rather than misresolving; and a binding without the capability treats `${VAR}` as a literal path segment, i.e. the same clean unresolved failure. The variable name is a C-identifier (`[A-Za-z_][A-Za-z0-9_]*`); a `${...}` whose contents are not one is an ordinary path segment, like a bare `$VAR`. Expansion applies equally to subsystem refs, template-import refs (§9.7.2) and coupling-import refs (§10.10). Current bindings: **Julia**, **Python**, **Rust**, **TypeScript** and **Go** all expand `${VAR}` in all three mechanisms. Because expansion feeds resolution, an expanded relative ref anchors against the referencing file's directory and an expanded absolute/URL ref is used as-is. A `data_sources` entry's `source.url_template` reuses this section's *path* resolution rule but **not** its `${VAR}` capability: §8.2.1 makes relative resolution REQUIRED of every binding and refuses `${VAR}` outright, because an optional capability there would decide where a document's data comes from differently in different bindings.
 
@@ -5351,7 +5383,13 @@ special-case older versions to recover Option A matching. Motivation and measure
      serialization (CONFORMANCE_SPEC §5.5.3) and `_` appended to the name until it names no
      other entry, and each reference is re-pointed to the entry of its instance. A body in
      which nothing fires is left unchanged, and a definition that no reference reaches is not
-     rewritten.
+     rewritten. A definition's body is replaced in place only if no match-less registry entry
+     that keeps its authored body (one no reference reaches, or one whose instances took
+     variants) references the definition, directly or through such entries; otherwise the one
+     rewritten body is registered as `<name>.variant1` and the reached references are
+     re-pointed to it, so that a reference reaching the definition through that entry — in
+     this document, or in one that mounts or flattens it — expands the authored body, which
+     was never rewritten for that reference's instance.
    - *Rewrite depth.* A rewrite made in pass `p` of the fixpoint on a component's
      expression positions has depth `p`. A rewrite made in pass `q` of the fixpoint on an
      instance's body has depth `d + q`, where `d` is the depth of the rewrite that wrote the
@@ -5778,6 +5816,7 @@ The rules-as-references revision (§9.6.3 constraint 7, §9.6.4 rule 3) adds the
 
 - `rule_writes_reference/` — one rule fired at three sites with different operands: three references to the rule, one materialized body; a leaf-bodied rule writes its leaf.
 - `template_instance_variants/` — one definition whose body holds a `D`, called with two variables of different declared shapes, and two `where`-scoped rules: two variants `<name>.variant1` / `.variant2`, numbered by canonical serialization, each call site re-pointed.
+- `rewrite_shared_by_unreached_entry/` — one definition whose body holds a `D`, reached by a single instance, and referenced by an authored match-less entry that nothing in the component references; and the same through a chain of two reached definitions: each reached definition keeps its authored body and the rewritten body is registered as `<name>.variant1`, each call site re-pointed (§9.6.4 rule 3, "Where the result lives"). Its `expanded.esm` is written under this revision's semantics; no fixture of this revision needs the in-place engine for it, because the expansion is the same either way.
 - `rewrite_depth_through_bodies/` — invalid: a rule whose body reintroduces its own pattern under the same instance → `rewrite_rule_nonterminating`, naming the rule and the definition; and a chain that converges at depth 64 exactly (accepted) beside one at depth 65 (rejected). The accepted chain's `emitted_chain_depth_64.esm` holds a 64-definition body-reference chain; every binding loads it and re-emits it byte for byte (emit then load is a fixed point), which holds because `MAX_TEMPLATE_EXPANSION_DEPTH` equals `MAX_REWRITE_PASSES` (§9.7.3).
 - `unlowered_in_template_body/` — invalid at build: a definition body holding a `D` that no rule matches → `unlowered_operator`, naming the op, the definition and the first call site.
 - `opacity_rule_replacement/` — the cases where this revision and the in-place engine differ, each pinned the way this revision decides it: (a) a compound pattern whose inner node only exists in another rule's replacement does not fire, (b) a structured and a ground pattern node at a definition parameter do not match what the call site bound, (c) a compound pattern that would have assembled across an eagerly expanded reference to a definition whose body holds a rewrite-target op does not fire, and (d) a rule on a core-op node inside the bindings of an authored reference that survives load (a match-less definition whose body, like the binding, holds no rewrite-target op) fires there, writing a reference into the binding, where the in-place engine left the binding unrewritten. Its `expanded.esm` is written under this revision's semantics, and the in-place engine would fail it; its description records, case by case, what the in-place engine produced instead.

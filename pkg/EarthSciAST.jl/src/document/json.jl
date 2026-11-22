@@ -12,7 +12,10 @@ decimal exponent of the first digit), and object entries keep their order.
 
 A value is one of `JNULL`, a `Bool`, a [`JNum`](@ref), a `String`, a
 [`JArr`](@ref) or a [`JObj`](@ref). Arrays and objects are wrapped so that an
-empty array and an empty object never compare equal.
+empty array and an empty object never compare equal. A [`JMath`](@ref) is the
+math text of an expression inside a path block (`Json.math`): it lives only
+between a container's text and the skeleton, and a document never holds one
+([`wfb`](@ref) is false on it).
 
 The readers mirror the Lean ones, which consume a list of characters and
 return what they read and the rest of the list. Here the input is a
@@ -23,9 +26,9 @@ module DJson
 
 using OrderedCollections: OrderedDict
 
-export JNull, JNULL, JNum, JInt, JDec, JArr, JObj, Kvs, Json, Chars,
+export JNull, JNULL, JNum, JInt, JDec, JArr, JObj, JMath, Kvs, Json, Chars,
     EOFC, at, drop, starts, strip_prefix, chars, str_of, fieldeq, in_int64, look,
-    sort_keys, keys_distinct, wfb
+    sort_keys, keys_distinct, wfb, wfmb, math_ok, p_math
 
 # ## Character slices
 
@@ -113,8 +116,34 @@ JObj() = JObj(Kvs())
 Base.:(==)(a::JObj, b::JObj) = a.kvs == b.kvs
 Base.hash(a::JObj, h::UInt) = hash(a.kvs, hash(:JObj, h))
 
-"""A document value: `JNull`, `Bool`, `JNum`, `String`, `JArr` or `JObj`."""
+"""`Json.math`: an expression's math text, as a path block holds it (`\$…\$` in
+both containers). Never well formed: a document never holds one."""
+struct JMath
+    s::String
+end
+Base.:(==)(a::JMath, b::JMath) = a.s == b.s
+Base.hash(a::JMath, h::UInt) = hash(a.s, hash(:JMath, h))
+
+"""A document value: `JNull`, `Bool`, `JNum`, `String`, `JArr` or `JObj` (and,
+inside a container's path block, `JMath`)."""
 const Json = Any
+
+"""`Json.mathOK`: math text a container can delimit with `\$`: not empty, no
+`\$`, no line break, and not ending in a backslash (which would escape the
+closing `\$`)."""
+math_ok(s::AbstractString) =
+    !isempty(s) && !occursin('$', s) && !occursin('\n', s) && !occursin('\r', s) &&
+    last(s) != '\\'
+
+"""`Json.pMath`: a math leaf after its `\$`: the text up to the next `\$`, which
+must be [`math_ok`](@ref). `(JMath, rest)` or `nothing`."""
+function p_math(r::Chars)
+    j = findfirst(==('$'), r)
+    j === nothing && return nothing
+    t = str_of(@view r[1:(j - 1)])
+    math_ok(t) || return nothing
+    return JMath(t), drop(r, j)
+end
 
 # ## Numbers
 
@@ -170,10 +199,20 @@ function wfb(n::JDec)
     return z === nothing || !in_int64(z)
 end
 
-"""`Json.wfb`: every number canonical, every object with distinct keys."""
+"""`Json.wfb`: every number canonical, every object with distinct keys, and no
+math leaf."""
 wfb(x::JArr) = all(wfb, x.xs)
 wfb(x::JObj) = keys_distinct(x.kvs) && all(kv -> wfb(kv.second), x.kvs)
+wfb(::JMath) = false
 wfb(::Any) = true
+
+"""`Json.wfmb`: [`wfb`](@ref), except that a math leaf whose text is
+[`math_ok`](@ref) is allowed (what the codecs print and read)."""
+wfmb(n::JNum) = wfb(n)
+wfmb(x::JArr) = all(wfmb, x.xs)
+wfmb(x::JObj) = keys_distinct(x.kvs) && all(kv -> wfmb(kv.second), x.kvs)
+wfmb(x::JMath) = math_ok(x.s)
+wfmb(::Any) = true
 
 """The keys of an entry list are pairwise distinct."""
 function keys_distinct(kvs)

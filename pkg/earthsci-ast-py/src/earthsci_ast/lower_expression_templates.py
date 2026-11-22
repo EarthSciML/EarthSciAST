@@ -46,7 +46,6 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import copy
-import json
 import re
 from collections.abc import Iterator
 from typing import Any
@@ -84,7 +83,7 @@ from .json_walk import (  # noqa: F401 — re-exported for the historical import
 # re-exported here so ``lower_expression_templates.emit_esm_string`` (used by the
 # package ``__init__`` and tests, alongside :func:`emit_document`) keeps working.
 from .serialize import (
-    _emit_scalar,
+    canonical_json_value,
     emit_esm_string,  # noqa: F401 — re-exported historical path
 )
 from .template_imports import _collect_apply_names, _compose_template_bodies
@@ -286,35 +285,10 @@ _NO_LIT = _NoLit()
 
 
 def _canonical_compact(x: Any) -> str:
-    """The canonical byte form of a raw JSON value (CONFORMANCE_SPEC §5.5.3):
-    compact (``,`` and ``:`` separators), object keys sorted by UTF-8 bytes at
-    every level, integral Int64-representable floats written as integers
-    (§5.5.3.1 rule 1), other numbers as the emit writer writes them. Orders the
-    variants of esm-spec §9.6.4 rule 3."""
-    buf: list[str] = []
-
-    def w(v: Any) -> None:
-        if _is_object(v):
-            buf.append("{")
-            for i, k in enumerate(sorted(str(k) for k in v.keys())):
-                if i:
-                    buf.append(",")
-                buf.append(json.dumps(k, ensure_ascii=False))
-                buf.append(":")
-                w(v[k])
-            buf.append("}")
-        elif _is_array(v):
-            buf.append("[")
-            for i, c in enumerate(v):
-                if i:
-                    buf.append(",")
-                w(c)
-            buf.append("]")
-        else:
-            buf.append(_emit_scalar(v))
-
-    w(x)
-    return "".join(buf)
+    """The canonical byte form of a raw JSON value (CONFORMANCE_SPEC §5.5.3,
+    numbers per §5.5.3.1). Orders the variants of esm-spec §9.6.4 rule 3, so
+    every binding must produce the same bytes."""
+    return canonical_json_value(x)
 
 
 def _shape_entry(shape: Any) -> str:
@@ -2463,9 +2437,7 @@ def tpl_explicit_free(block: Any) -> tuple[Any, dict[str, list[str]]]:
         bound = _tpl_bind_explicit(body, added)
         raw_params = decl.get("params")
         params = [p for p in raw_params if isinstance(p, str)] if _is_array(raw_params) else []
-        free = sorted(
-            _tpl_free_leaves(bound) - set(params), key=lambda s: s.encode("utf-8")
-        )
+        free = sorted(_tpl_free_leaves(bound) - set(params), key=lambda s: s.encode("utf-8"))
         if bound is body and not free:
             newdecl[name] = decl
             return

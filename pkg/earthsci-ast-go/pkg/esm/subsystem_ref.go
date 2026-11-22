@@ -1189,6 +1189,9 @@ func loadSubsystemRefBytes(ref, basePath, key string, visited map[string]bool, f
 
 	data, refBasePath, err = loadRefBytes(ref, basePath)
 	if err != nil {
+		if kept, ok := keptRefusal(err); ok {
+			return nil, refKey, "", kept
+		}
 		// A ref that names no readable file is the §4.7 `ref_not_found`
 		// diagnostic (tests/invalid/subsystem_ref_not_found.esm), not an
 		// anonymous I/O failure — the code is what the shared corpus pins and

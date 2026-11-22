@@ -512,6 +512,74 @@ function _index_pushdown_arrayish(
     return false
 end
 
+# The names a template reference in `equations` binds by name (a binding that
+# is a bare variable), at any depth.
+function _names_bound_to_references(equations::Vector{Equation})
+    out = Set{String}()
+    seen = IdDict{OpExpr, Nothing}()
+    function walk(e)
+        e isa OpExpr || return
+        haskey(seen, e) && return
+        seen[e] = nothing
+        if _tpl_is_call(e) && e.bindings !== nothing
+            for (_, v) in e.bindings
+                v isa VarExpr && push!(out, v.name)
+            end
+        end
+        foreach_child(walk, e)
+        return
+    end
+    for eq in equations
+        walk(eq.lhs)
+        walk(eq.rhs)
+    end
+    return out
+end
+
+# The elementwise array definition `rhs` (operators over variables and
+# numbers) of an observed of declared shape `shape`, as the producer it
+# denotes: `faq` over `shape` (one output index per axis) whose term reads
+# each shaped variable at the output indices. A scalar `rhs` (no shaped
+# operand: a number, a scalar variable) is that `faq` with no operands, its
+# value replicated over `shape` (esm-spec §4.3.4). `nothing` when a shaped
+# operand's shape is not `shape` (a broadcast the lift does not write) or a
+# node is not an elementwise operator.
+function _lift_elementwise_array_def(rhs::ASTExpr, shape, model::Model)
+    sh = String[String(x) for x in shape]
+    idx = String["__esm_lift_$k" for k in eachindex(sh)]
+    reads = String[]
+    ok = Ref(true)
+    function lift(x)
+        ok[] || return x
+        if x isa VarExpr
+            v = get(model.variables, x.name, nothing)
+            v === nothing && return x
+            _is_array_shape(v.shape) || return x
+            if String[String(a) for a in v.shape] != sh
+                ok[] = false
+                return x
+            end
+            x.name in reads || push!(reads, x.name)
+            return OpExpr("index", ASTExpr[x, (VarExpr(i) for i in idx)...])
+        end
+        (x isa NumExpr || x isa IntExpr) && return x
+        if x isa OpExpr && x.op in _WS4_FOLDABLE_ELEMENTWISE_OPS && _tpl_structless(x) &&
+                isempty(_bound_symbols(x)) && !_tpl_is_call(x)
+            return reconstruct(x; args = ASTExpr[lift(a) for a in x.args])
+        end
+        ok[] = false
+        return x
+    end
+    body = lift(rhs)
+    ok[] || return nothing
+    return OpExpr(
+        "faq", ASTExpr[VarExpr(n) for n in reads];
+        output_idx = Any[idx...],
+        ranges = Dict{String, Any}(idx[k] => IndexSetRef(sh[k]) for k in eachindex(sh)),
+        expr_body = body
+    )
+end
+
 # ---- Elementwise array-observed fold (WS4: readable PDE-leaf decomposition) ----
 # Fold every ARRAY-shaped observed whose (already-discretization-lowered) defining
 # equation RHS is an ELEMENTWISE expression — top-level op in
@@ -563,53 +631,101 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
         var = get(model.variables, rhs.name, nothing)
         return var !== nothing && !_is_array_shape(var.shape)
     end
-    targets = Dict{String, ASTExpr}()
-    # Selection runs to a FIXED POINT, because an observed that merely ALIASES
-    # another target (`chain = lit`, `lit = 1.5`) has to fold with it: the
-    # substitution below rewrites every surviving reader, so folding only the
-    # referent would leave the alias behind as a shaped observed carrying the
-    # referent's body — exactly the form this fold exists to remove, and the one
-    # the evaluator rejects as `E_TREEWALK_UNSUPPORTED_SHAPE`. An alias of a
-    # NON-target (`a = col`, a const-array producer) is untouched and stays with
-    # the bare-alias handler.
-    while true
-        grew = false
-        for (name, rhs) in defs
-            (haskey(targets, name) || !is_array_obs(name)) && continue
-            if (rhs isa OpExpr && rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS) ||
-                    is_scalar_rhs(rhs) ||
-                    (rhs isa VarExpr && haskey(targets, rhs.name))
-                targets[name] = rhs
-                grew = true
+    # An array observed a template reference binds BY NAME (an argument the
+    # call passes whole, `K` in `flux(u = u, K = K)`, or a name its body reads
+    # from the caller, which the build's references carry as a binding,
+    # `_tpl_augment`) is not folded: its substituted body would reach the call
+    # as an expression, which the build passes as no array (it compiles a
+    # reference as a call, never expanding it). Such a name is kept out of the
+    # fold targets, and a definition that would have folded (an elementwise
+    # one, a scalar, an alias of a target) is lifted to the producer it
+    # denotes, `faq` over its declared shape (`_lift_elementwise_array_def`),
+    # so it is a producer-defined array observed (materialized, read by name).
+    # The lift reads each target it names through that target's resolved
+    # body, so it reads no name the fold removes. A definition the lift cannot
+    # write folds as before.
+    function select_targets(kept)
+        targets = Dict{String, ASTExpr}()
+        # Selection runs to a FIXED POINT, because an observed that merely
+        # ALIASES another target (`chain = lit`, `lit = 1.5`) has to fold with
+        # it: the substitution below rewrites every surviving reader, so
+        # folding only the referent would leave the alias behind as a shaped
+        # observed carrying the referent's body — exactly the form this fold
+        # exists to remove, and the one the evaluator rejects as
+        # `E_TREEWALK_UNSUPPORTED_SHAPE`. An alias of a NON-target (`a = col`,
+        # a const-array producer) is untouched and stays with the bare-alias
+        # handler.
+        while true
+            grew = false
+            for (name, rhs) in defs
+                (haskey(targets, name) || name in kept || !is_array_obs(name)) && continue
+                if would_fold(rhs, targets)
+                    targets[name] = rhs
+                    grew = true
+                end
             end
+            grew || break
         end
-        grew || break
+        return targets
     end
-    isempty(targets) && return (equations, Set{String}())
-
-    # Dependency order among the targets (the chain is feed-forward; a cycle is a
-    # genuine authoring error). Only target→target edges are ordered; references
-    # to producer observeds / params / state are leaves left in place.
-    deps = Dict(
-        name => intersect(free_variables(rhs), keys(targets))
-            for (name, rhs) in targets
-    )
-    order = _dependency_order(
-        collect(keys(targets)), name -> deps[name];
-        on_cycle = _ -> throw(
-            TreeWalkError(
-                "E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
-                "cyclic elementwise array-observed dependency among $(collect(keys(targets)))"
+    would_fold(rhs, targets) = (rhs isa OpExpr && rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS) ||
+        is_scalar_rhs(rhs) || (rhs isa VarExpr && haskey(targets, rhs.name))
+    # Dependency order among the targets (the chain is feed-forward; a cycle is
+    # a genuine authoring error), and each target's fully-resolved body. Only
+    # target→target edges are ordered; references to producer observeds /
+    # params / state are leaves left in place. `_substitute_shared`, not plain
+    # `substitute`: a raw target body can be a DAG (template lowering shares
+    # subtrees by reference), and the per-path rebuild would materialize it as
+    # an exponentially large tree.
+    function resolve_targets(targets)
+        deps = Dict(
+            name => intersect(free_variables(rhs), keys(targets))
+                for (name, rhs) in targets
+        )
+        order = _dependency_order(
+            collect(keys(targets)), name -> deps[name];
+            on_cycle = _ -> throw(
+                TreeWalkError(
+                    "E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
+                    "cyclic elementwise array-observed dependency among $(collect(keys(targets)))"
+                )
             )
         )
-    )
-    # `_substitute_shared`, not plain `substitute`: a raw target body can be a
-    # DAG (template lowering shares subtrees by reference), and the per-path
-    # rebuild would materialize it as an exponentially large tree.
-    resolved = Dict{String, ASTExpr}()
-    for name in order
-        resolved[name] = _substitute_shared(targets[name], resolved)
+        resolved = Dict{String, ASTExpr}()
+        for name in order
+            resolved[name] = _substitute_shared(targets[name], resolved)
+        end
+        return resolved
     end
+    bound = _names_bound_to_references(equations)
+    kept = Set{String}(n for n in bound if is_array_obs(n) && haskey(defs, n))
+    local targets, resolved
+    lifted = Dict{String, ASTExpr}()
+    while true
+        targets = select_targets(kept)
+        resolved = resolve_targets(targets)
+        empty!(lifted)
+        unlifted = String[]
+        for name in kept
+            rhs = defs[name]
+            would_fold(rhs, targets) || continue
+            f = _lift_elementwise_array_def(
+                _substitute_shared(rhs, resolved), model.variables[name].shape, model
+            )
+            f === nothing ? push!(unlifted, name) : (lifted[name] = f)
+        end
+        isempty(unlifted) && break
+        setdiff!(kept, unlifted)
+    end
+    if !isempty(lifted)
+        equations = copy(equations)
+        for (k, eq) in enumerate(equations)
+            lhs = eq.lhs
+            (lhs isa VarExpr && haskey(lifted, lhs.name)) || continue
+            equations[k] = Equation(lhs, lifted[lhs.name]; _comment = eq._comment)
+        end
+    end
+    isempty(targets) && return (equations, Set{String}())
 
     # Drop each folded definition and substitute its fully-resolved RHS into
     # every remaining reader (sharing-preserving, as above).

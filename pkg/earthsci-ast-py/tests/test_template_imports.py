@@ -147,7 +147,11 @@ def _err_code(fn) -> str | None:
         ("import_library_enum", "fixture.esm", "expanded.esm"),
         # Rule 3 lowers an `enum` op spelled by a parameter per template
         # instance, at load (esm-spec §9.6.4 rule 3); the golden carries it.
-        ("import_library_enum", "fixture_importer_redeclares.esm", "expanded_importer_redeclares.esm"),
+        (
+            "import_library_enum",
+            "fixture_importer_redeclares.esm",
+            "expanded_importer_redeclares.esm",
+        ),
     ],
 )
 def test_import_conformance_matches_golden(group, fixture, golden):

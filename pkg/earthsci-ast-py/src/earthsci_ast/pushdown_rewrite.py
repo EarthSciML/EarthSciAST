@@ -286,17 +286,33 @@ def _pd_find_ifelse_cond(e: Any) -> Any:
 
 
 def _pd_filter_in(node: Any, templates: dict | None, derived: dict) -> Any:
-    """The producer filter of the first raw ``ifelse`` in ``node`` (pre-order),
-    written in ``node``'s own scope, or ``None`` when there is none: the
-    comparisons of its condition (an ``and``/``*`` of them, or the one
-    condition) as a ``*``, deep-copied. An ``ifelse`` inside the body of a
-    template ``T`` that a reference names is not copied out of the body: the
-    comparisons become the body of the DERIVED template ``T__pd_filter``
-    (registered in ``derived``), written in ``T``'s parameters, and the filter
-    in ``node``'s scope is a reference to it with the parameters it reads bound
-    as the reference binds them. A containment nested several templates deep
-    gets one derived template per template on the way. No reference is
-    expanded. Mirrors the Julia reference's ``_pd_filter_in``."""
+    """The producer filter of the first raw ``ifelse`` of ``Expand(node)``
+    (pre-order), written in ``node``'s own scope, or ``None`` when there is
+    none: the comparisons of its condition (an ``and``/``*`` of them, or the
+    one condition) as a ``*``, deep-copied. No reference is expanded; the walk
+    visits nodes in the order the expansion would hold them, so it finds the
+    same ``ifelse`` detection found: a template body is walked in place of the
+    reference, and a parameter leaf of that body stands for its binding, walked
+    in the reference's scope. An ``ifelse`` inside the body of a template ``T``
+    is not copied out of the body: the comparisons become the body of the
+    DERIVED template ``T__pd_filter`` (registered in ``derived``), written in
+    ``T``'s parameters, and the filter in ``node``'s scope is a reference to it
+    with the parameters it reads bound as the reference binds them. A
+    containment nested several templates deep gets one derived template per
+    template on the way. Mirrors the Julia reference's ``_pd_filter_in``."""
+    r = _pd_filter_scan(node, templates, derived, None)
+    return None if r is None else r[0]
+
+
+def _pd_filter_scan(node: Any, templates: dict | None, derived: dict, scope: Any) -> Any:
+    """:func:`_pd_filter_in`'s walk. ``scope`` is ``None`` at the top, or
+    ``(bindings, outer)`` inside a template body: the reference's binding of
+    each parameter and the scope the reference itself sits in. Returns
+    ``(filter, owner)``, ``owner`` being the scope the filter is written in."""
+    if isinstance(node, str):
+        if scope is not None and node in scope[0]:
+            return _pd_filter_scan(scope[0][node], templates, derived, scope[1])
+        return None
     if isinstance(node, dict):
         op = node.get("op")
         if op == "ifelse":
@@ -304,32 +320,44 @@ def _pd_filter_in(node: Any, templates: dict | None, derived: dict) -> Any:
             if isinstance(a, list) and len(a) == 3:
                 c = a[0]
                 comps = c["args"] if isinstance(c, dict) and c.get("op") in ("and", "*") else [c]
-                return {"op": "*", "args": [copy.deepcopy(x) for x in comps]}
+                return ({"op": "*", "args": [copy.deepcopy(x) for x in comps]}, scope)
         elif op == APPLY_OP and templates is not None:
             name = node.get("name")
             if isinstance(name, str) and name in templates:
                 decl = templates[name]
-                f = _pd_filter_in(decl.get("body"), templates, derived)
-                if f is not None:
-                    params = [p for p in decl.get("params") or [] if isinstance(p, str)]
-                    return _pd_filter_ref(name, params, f, node, derived)
-        for v in node.values():
-            r = _pd_filter_in(v, templates, derived)
+                params = [p for p in decl.get("params") or [] if isinstance(p, str)]
+                b = node.get("bindings")
+                b = b if isinstance(b, dict) else {}
+                inner = ({p: b[p] for p in params if p in b}, scope)
+                r = _pd_filter_scan(decl.get("body"), templates, derived, inner)
+                if r is not None and r[1] is inner:
+                    return (_pd_filter_ref(name, params, r[0], node, derived), scope)
+                return r
+        apply = op == APPLY_OP
+        for k, v in node.items():
+            if apply and k == "name":
+                continue
+            r = _pd_filter_scan(v, templates, derived, scope)
             if r is not None:
                 return r
     elif isinstance(node, list):
         for x in node:
-            r = _pd_filter_in(x, templates, derived)
+            r = _pd_filter_scan(x, templates, derived, scope)
             if r is not None:
                 return r
     return None
 
 
-def _pd_filter_ref(name: str, params: list, f: Any, call: dict, derived: dict) -> dict:
+def _pd_filter_ref(name: str, params: list, f: Any, call: dict, derived: dict) -> Any:
     """Register the derived template ``<name>__pd_filter`` (body ``f``, the
     parameters of ``name`` it reads, in declared order) and return the
-    reference to it at ``call``, each parameter bound as ``call`` binds it."""
+    reference to it at ``call``, each parameter bound as ``call`` binds it.
+    When ``f`` reads none of the parameters (only free names, or names the
+    body binds) a template of no parameters is not a valid declaration, so
+    ``f`` itself, the longhand ``*`` filter, is returned instead."""
     used = [p for p in params if _pd_reads_param(f, p)]
+    if not used:
+        return f
     dname = name + "__pd_filter"
     derived[dname] = {"params": list(used), "body": f}
     b = call.get("bindings")

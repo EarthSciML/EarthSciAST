@@ -86,6 +86,20 @@ struct _DEKernelFrame <: _DEFrame
     cell::Vector{_DEVal}
 end
 
+# A call target is host data: the emitter inlines its body at emission, and it
+# holds nothing to trace. Its body's argument nodes refer back to it, a cycle
+# the tracer's modes that do not consult `seen` would follow without end, so
+# tracing stops at it, as it does at a `Module`.
+function Reactant.make_tracer(
+        seen, @nospecialize(prev::_E._CallTarget), @nospecialize(path), mode; kwargs...
+    )
+    if mode == Reactant.TracedToTypes
+        push!(path, prev)
+        return nothing
+    end
+    return prev
+end
+
 _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal =
     _de_walk(ctx, _DEScalarFrame(cache), nd)
 
@@ -150,6 +164,10 @@ function _de_walk(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
         end
         c = _DEVal[_de_walk(ctx, fr, ch) for ch in nd.children]
         return _de_op(ctx, nd, c)
+    elseif k === _E._NK_CALL
+        # A template call: its body with the call's arguments in place,
+        # walked in this frame (`_de_inline_call`).
+        return _de_walk(ctx, fr, _de_inline_call(ctx, nd))
     end
     return _de_leaf(ctx, fr, nd)
 end
@@ -161,21 +179,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEScalarFrame, nd::_E._Node)::_DEVal
     if k === _E._NK_STATE
         return _de_read(ctx, ctx.ue, nd.idx, :state)
     elseif k === _E._NK_CONTRACTION_LOOP
-        cnt = _de_count_loop(ctx, nd)
-        cnt === nothing ||
-            return _de_emit_count(ctx, cnt, _de_walk(ctx, fr, cnt.query))
-        # Emission-time unroll of the static range, in the interpreter's
-        # ascending order. A loop whose BODY is host data never gets here — it
-        # folded above — and a long one lands in `stablehlo.reduce` rather than a
-        # chain of `range` binary ops (see `_de_fold_terms`).
-        spec = nd.payload::_E._ContractLoop
-        body = nd.children[1]
-        terms = _DEVal[]
-        for kk in spec.lo:spec.step:spec.hi
-            spec.ref[] = kk
-            push!(terms, _de_walk(ctx, fr, body))
-        end
-        return _de_fold_terms(ctx, nd.op, nd.literal, terms)
+        return _de_contraction_loop(ctx, fr, nd)
     elseif k === _E._NK_LOOPVAR
         return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
     elseif k === _E._NK_CONST_GATHER
@@ -212,6 +216,96 @@ end
 
 _de_kindname(k::UInt8) = _E._node_kind_name(k)
 
+function _de_contraction_loop(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
+    cnt = _de_count_loop(ctx, nd)
+    cnt === nothing ||
+        return _de_emit_count(ctx, cnt, _de_walk(ctx, fr, cnt.query))
+    # Emission-time unroll of the static range, in the interpreter's
+    # ascending order. A loop whose BODY is host data never gets here — it
+    # folded above — and a long one lands in `stablehlo.reduce` rather than a
+    # chain of `range` binary ops (see `_de_fold_terms`).
+    spec = nd.payload::_E._ContractLoop
+    body = nd.children[1]
+    terms = _DEVal[]
+    for kk in spec.lo:spec.step:spec.hi
+        spec.ref[] = kk
+        push!(terms, _de_walk(ctx, fr, body))
+    end
+    return _de_fold_terms(ctx, nd.op, nd.literal, terms)
+end
+
+# ---- template calls ------------------------------------------------------------
+
+# The body of the call `nd` (`_NK_CALL`, call.jl) with the call's arguments in
+# place: each argument read (`_NK_ARG`) is the caller's argument node, and each
+# read of an array argument (`_NK_ARG_GATHER`) is the gather of the array the
+# call passes, a const array, a live
+# forcing buffer or a state array. A call in the body passing on an array
+# argument of this one passes the array itself. The interpreter evaluates the
+# body as a pure function of the arguments, so the inlined body denotes the
+# same values; a body is a DAG and stays one.
+function _de_inline_call(ctx::_DECtx, nd::_E._Node)::_E._Node
+    site = nd.payload::_E._CallSite
+    tg = site.target
+    memo = _E._NodeMap{_E._Node}()
+    function arr(j::Int)
+        tg.baseidx[j] == 0 || _de_refuse(
+            ctx, "a template call passing a block array",
+            "a block array's base is a run-time argument; its read has no direct lowering yet."
+        )
+        return site.arrays[tg.passed[j]]
+    end
+    function sub(x::_E._Node)::_E._Node
+        got = get(memo, x, nothing)
+        got === nothing || return got
+        k = x.kind
+        r = if k === _E._NK_ARG
+            x.payload === tg || _de_refuse(
+                ctx, "an argument read of another call in a template call's body",
+                "a body reads only its own arguments."
+            )
+            nd.children[x.idx]
+        elseif k === _E._NK_ARG_GATHER
+            ref = x.payload::_E._ArgGatherRef
+            ref.target === tg || _de_refuse(
+                ctx, "an array argument read of another call in a template call's body",
+                "a body reads only its own arguments."
+            )
+            a = arr(ref.j)
+            ch = _E._Node[sub(c) for c in x.children]
+            if a.kind === :const
+                _E._mknode(kind = _E._NK_CONST_GATHER, payload = a.data::_E._ConstGatherArray, children = ch)
+            elseif a.kind === :live
+                _E._mknode(kind = _E._NK_LIVE_GATHER, payload = a.data::_E._ConstGatherArray, children = ch)
+            elseif a.kind === :state
+                _E._mknode(kind = _E._NK_STATE_GATHER, payload = a.data::_E._StateGather, children = ch)
+            else
+                _de_refuse(
+                    ctx, "a template call passing a $(a.kind) array",
+                    "no arm of the direct walk reads it."
+                )
+            end
+        elseif k === _E._NK_CALL
+            s2 = x.payload::_E._CallSite
+            arrays = _E._ArrArg[
+                (a.data isa _E._FwdArr && (a.data::_E._FwdArr).target === tg) ?
+                    arr((a.data::_E._FwdArr).j) : a for a in s2.arrays
+            ]
+            _E._mknode(
+                kind = k, op = x.op, payload = _E._CallSite(s2.target, arrays),
+                children = _E._Node[sub(c) for c in x.children]
+            )
+        elseif isempty(x.children)
+            x
+        else
+            _E._Node(x.kind, x.op, x.literal, x.idx, x.sym, x.payload, _E._Node[sub(c) for c in x.children])
+        end
+        memo[x] = r
+        return r
+    end
+    return sub(tg.body)
+end
+
 # ---- access kernels ----------------------------------------------------------
 
 # ---- an access kernel's own leaves -------------------------------------------
@@ -244,6 +338,15 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
             # CONST_BOX / LOOP_IDX: frozen lane data, one interned array constant.
             return _de_arrconst(ctx, plan.consts[nd.idx])
         end
+    elseif k === _E._NK_CONTRACTION_LOOP
+        # From a template call's body inlined here (`_de_inline_call`).
+        return _de_contraction_loop(ctx, fr, nd)
+    elseif k === _E._NK_CONST_GATHER
+        # A const array a template call passes, read in its inlined body; a
+        # host-static read has folded above.
+        return _de_cgather(ctx, nd, ch -> _de_walk(ctx, fr, ch), _ -> nothing)
+    elseif k === _E._NK_LOOPVAR
+        return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
     end
     return _de_refuse(
         ctx, "the access-kernel node kind $(_de_kindname(k))",

@@ -32,6 +32,7 @@ from .error_handling import (
     COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
     COUPLING_LIBRARY_NESTED_IMPORT,
     COUPLING_ROLE_UNUSED,
+    REMOVED_OP,
 )
 from .json_walk import (
     DICT_LIST_CHILD_FIELDS,
@@ -462,6 +463,9 @@ def expand_coupling_imports(
         except ExpressionTemplateError:
             raise
         except Exception as e:  # noqa: BLE001 — reported with the stable code
+            # A removed operator keeps its own code (esm-spec §1.2.1).
+            if getattr(e, "code", None) == REMOVED_OP:
+                raise
             raise ExpressionTemplateError(
                 COUPLING_IMPORT_UNRESOLVED,
                 f"coupling_import ref '{ref}' failed to load: {e}",

@@ -22,10 +22,10 @@ _tif_ref(name, bindings) = Dict(
 )
 _tif_at(f, off) = off == 0 ? Dict("op" => "index", "args" => Any[f, "i"]) :
     Dict(
-    "op" => "index", "args" => Any[
-        f, Dict("op" => (off > 0 ? "+" : "-"), "args" => Any["i", abs(off)]),
-    ]
-)
+        "op" => "index", "args" => Any[
+            f, Dict("op" => (off > 0 ? "+" : "-"), "args" => Any["i", abs(off)]),
+        ]
+    )
 _tif_pin(f, at) = Dict("op" => "index", "args" => Any[f, at])
 
 # Templates: `upwind(w, lo, hi, curv)` picks a face value by the sign of `w`,

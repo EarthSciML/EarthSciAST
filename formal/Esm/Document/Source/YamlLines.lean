@@ -66,11 +66,19 @@ theorem print_noNL (n : JNum) : '\n' ∉ Number.print n := by
       · simp only [List.mem_append, List.mem_cons, not_or]
         exact ⟨digits_noNL _, by decide, digits_noNL _⟩
 
-theorem inline_noNL (v : Json) : '\n' ∉ Yaml.inline v := by
+/-- Math text a container can delimit has no newline. -/
+theorem mathOK_noNL {s : String} (h : Json.mathOK s = true) : '\n' ∉ s.toList := by
+  intro hm
+  have hc : s.toList.contains '\n' = true := by simpa using hm
+  rw [Json.mathOK, hc] at h
+  simp at h
+
+theorem inline_noNL (v : Json) (hv : v.WFm) : '\n' ∉ Yaml.inline v := by
   match v with
   | .null | .bool true | .bool false | .arr _ | .obj _ => simp [Yaml.inline]
   | .num n => exact print_noNL n
   | .str s => simp [Yaml.inline, quote, escape, escChar_noNL]
+  | .math s => simpa [Yaml.inline] using mathOK_noNL (s := s) hv
 
 /-! ## Line heads -/
 
@@ -182,25 +190,26 @@ theorem keyPart_good (m : Nat) (k : String) : HeadsP Good (keyPart m k) := by
   · exact printKey_good k
 
 mutual
-theorem valBody_good (m : Nat) : ∀ v : Json, HeadsP Good (valBody m v)
-  | .arr (w :: ws) => HeadsP.cons good_nl (items_good (m + 1) (w :: ws))
-  | .obj (e :: es) => HeadsP.cons good_nl (entries_good (m + 2) (e :: es))
-  | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] =>
-    HeadsP.scalarLine good_space good_nl (inline_noNL _)
+theorem valBody_good (m : Nat) : ∀ v : Json, v.WFm → HeadsP Good (valBody m v)
+  | .arr (w :: ws), h => HeadsP.cons good_nl (items_good (m + 1) (w :: ws) h)
+  | .obj (e :: es), h => HeadsP.cons good_nl (entries_good (m + 2) (e :: es) h.2)
+  | .null, h | .bool _, h | .num _, h | .str _, h | .math _, h | .arr [], h | .obj [], h =>
+    HeadsP.scalarLine good_space good_nl (inline_noNL _ h)
 
-theorem itemBody_good (m : Nat) : ∀ v : Json, HeadsP Good (itemBody m v)
-  | .arr (w :: ws) => HeadsP.cons good_nl (items_good (m + 1) (w :: ws))
-  | .obj ((k, w) :: es) => by
+theorem itemBody_good (m : Nat) : ∀ v : Json, v.WFm → HeadsP Good (itemBody m v)
+  | .arr (w :: ws), h => HeadsP.cons good_nl (items_good (m + 1) (w :: ws) h)
+  | .obj ((k, w) :: es), h => by
     simp only [itemBody, List.append_assoc]
     exact HeadsP.cons good_space ((keyPart_good (m + 2) k).append
-      (HeadsP.cons (x := ':') (by decide) ((valBody_good (m + 2) w).append (entries_good (m + 2) es))))
-  | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] =>
-    HeadsP.scalarLine good_space good_nl (inline_noNL _)
+      (HeadsP.cons (x := ':') (by decide) ((valBody_good (m + 2) w h.2.1).append
+        (entries_good (m + 2) es h.2.2))))
+  | .null, h | .bool _, h | .num _, h | .str _, h | .math _, h | .arr [], h | .obj [], h =>
+    HeadsP.scalarLine good_space good_nl (inline_noNL _ h)
 
 /-- At a positive indentation every item line starts with a space. -/
-theorem items_good (m : Nat) : ∀ l : List Json, HeadsP Good (encItems (m + 1) l)
-  | [] => HeadsP.nil _
-  | v :: vs => by
+theorem items_good (m : Nat) : ∀ l : List Json, Json.WFmList l → HeadsP Good (encItems (m + 1) l)
+  | [], _ => HeadsP.nil _
+  | v :: vs, hl => by
     have h : encItems (m + 1) (v :: vs) =
         ' ' :: (spaces m ++ '-' :: (itemBody (m + 1) v ++ encItems (m + 1) vs)) := by
       simp [encItems, spaces, List.replicate_succ]
@@ -208,39 +217,42 @@ theorem items_good (m : Nat) : ∀ l : List Json, HeadsP Good (encItems (m + 1) 
     refine HeadsP.cons_mid good_space (by decide) fun c hc => ?_
     rw [heads_false_spaces] at hc
     simp only [heads] at hc
-    exact (itemBody_good (m + 1) v).append (items_good m vs) _ c hc
+    exact (itemBody_good (m + 1) v hl.1).append (items_good m vs hl.2) _ c hc
 
-theorem entries_good (m : Nat) : ∀ l : List (String × Json), HeadsP Good (encEntries m l)
-  | [] => HeadsP.nil _
-  | (k, v) :: es => by
+theorem entries_good (m : Nat) : ∀ l : List (String × Json), Json.WFmObj l →
+    HeadsP Good (encEntries m l)
+  | [], _ => HeadsP.nil _
+  | (k, v) :: es, hl => by
     simp only [encEntries, List.append_assoc]
     exact (spaces_good m).append ((keyPart_good m k).append
-      (HeadsP.cons (by decide) ((valBody_good m v).append (entries_good m es))))
+      (HeadsP.cons (by decide) ((valBody_good m v hl.1).append (entries_good m es hl.2))))
 end
 
 /-- At indentation 0 an item line starts with `-`, never a backtick. -/
-theorem items_tick : ∀ l : List Json, HeadsP (· ≠ '`') (encItems 0 l)
-  | [] => HeadsP.nil _
-  | v :: vs => by
+theorem items_tick : ∀ l : List Json, Json.WFmList l → HeadsP (· ≠ '`') (encItems 0 l)
+  | [], _ => HeadsP.nil _
+  | v :: vs, hl => by
     simp only [encItems, spaces, List.replicate_zero, List.nil_append]
-    exact HeadsP.cons (by decide) (((itemBody_good 0 v).mono fun _ h => h.1).append (items_tick vs))
+    exact HeadsP.cons (by decide) (((itemBody_good 0 v hl.1).mono fun _ h => h.1).append
+      (items_tick vs hl.2))
 
 /-- A scalar or empty container starts with a character that is neither a backtick nor
 a newline. (A number needs `WF`: an out-of-range digit could print as a backtick.) -/
-theorem inline_head (v : Json) (hv : v.WF) (hi : isInl v = true) :
+theorem inline_head (v : Json) (hv : v.WFm) (hi : isInl v = true) :
     ∃ c t, Yaml.inline v = c :: t ∧ c ≠ '`' ∧ c ≠ '\n' := by
   match v with
   | .null | .bool true | .bool false | .arr [] | .obj [] => exact ⟨_, _, rfl, by decide, by decide⟩
   | .str s => exact ⟨_, _, rfl, by decide, by decide⟩
+  | .math s => exact ⟨_, _, rfl, by decide, by decide⟩
   | .num n =>
     obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
     exact ⟨c, t, h, Number.NumHead.of_fin (P := fun c => c ≠ '`' ∧ c ≠ '\n')
       (by decide) (by decide +kernel) hc⟩
 
-theorem scalar_tick (v : Json) (hv : v.WF) (hi : isInl v = true) :
+theorem scalar_tick (v : Json) (hv : v.WFm) (hi : isInl v = true) :
     HeadsP (· ≠ '`') (Yaml.inline v ++ ['\n']) := by
   obtain ⟨c, t, h, hc, hcn⟩ := inline_head v hv hi
-  have ht : '\n' ∉ t := fun hm => inline_noNL v (by rw [h]; exact List.mem_cons_of_mem c hm)
+  have ht : '\n' ∉ t := fun hm => inline_noNL v hv (by rw [h]; exact List.mem_cons_of_mem c hm)
   rw [h, List.cons_append]
   exact HeadsP.line (p := (· ≠ '`')) hc hcn (by decide) ht
 
@@ -256,14 +268,14 @@ mutual
 theorem valBody_end (m : Nat) : ∀ (v : Json) (b : Bool), endBol b (valBody m v) = true
   | .arr (w :: ws), b => by rw [valBody, endBol_cons]; exact items_end _ _
   | .obj (e :: es), b => by rw [valBody, endBol_cons]; exact entries_end _ _
-  | .null, b | .bool _, b | .num _, b | .str _, b | .arr [], b | .obj [], b => by
+  | .null, b | .bool _, b | .num _, b | .str _, b | .math _, b | .arr [], b | .obj [], b => by
     rw [valBody_inl m _ rfl, endBol_newline]
 
 theorem itemBody_end (m : Nat) : ∀ (v : Json) (b : Bool), endBol b (itemBody m v) = true
   | .arr (w :: ws), b => by rw [itemBody, endBol_cons]; exact items_end _ _
   | .obj ((k, w) :: es), b => by
     simp only [itemBody, endBol_append, endBol_cons, valBody_end, entries_end]
-  | .null, b | .bool _, b | .num _, b | .str _, b | .arr [], b | .obj [], b => by
+  | .null, b | .bool _, b | .num _, b | .str _, b | .math _, b | .arr [], b | .obj [], b => by
     rw [itemBody_inl m _ rfl, endBol_newline]
 
 theorem items_end (m : Nat) : ∀ l : List Json, endBol true (encItems m l) = true
@@ -279,14 +291,14 @@ end
 
 /-! ## The YAML spelling -/
 
-/-- No line of the YAML spelling of a well-formed value starts with a backtick, so a
-YAML block never closes a Markdown code fence. -/
-theorem yaml_heads_tick (v : Json) (hv : v.WF) : '`' ∉ heads true (Yaml.encode v) := by
+/-- No line of the YAML spelling of a well-formed value (math leaves allowed) starts with
+a backtick, so a YAML block never closes a Markdown code fence. -/
+theorem yaml_heads_tick (v : Json) (hv : v.WFm) : '`' ∉ heads true (Yaml.encode v) := by
   have h : HeadsP (· ≠ '`') (Yaml.encode v) := by
     match v with
-    | .arr (w :: ws) => exact items_tick (w :: ws)
-    | .obj (e :: es) => exact (entries_good 0 (e :: es)).mono fun _ h => h.1
-    | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] => exact scalar_tick _ hv rfl
+    | .arr (w :: ws) => exact items_tick (w :: ws) hv
+    | .obj (e :: es) => exact (entries_good 0 (e :: es) hv.2).mono fun _ h => h.1
+    | .null | .bool _ | .num _ | .str _ | .math _ | .arr [] | .obj [] => exact scalar_tick _ hv rfl
   exact fun hm => h true '`' hm rfl
 
 /-- No line of the YAML spelling of a well-formed object starts with `-`, so front
@@ -295,7 +307,7 @@ theorem yaml_heads_dash (kvs : List (String × Json)) (hv : (Json.obj kvs).WF) :
     '-' ∉ heads true (Yaml.encode (.obj kvs)) := by
   match kvs with
   | [] => decide
-  | e :: es => exact fun hm => (entries_good 0 (e :: es) true '-' hm).2 rfl
+  | e :: es => exact fun hm => (entries_good 0 (e :: es) (Json.WF.wfm hv).2 true '-' hm).2 rfl
 
 /-- The YAML spelling ends with a newline. -/
 theorem yaml_ends (v : Json) : endBol false (Yaml.encode v) = true := by
@@ -305,6 +317,6 @@ theorem yaml_ends (v : Json) : endBol false (Yaml.encode v) = true := by
   | .obj (e :: es) =>
     rw [Yaml.encode, endBol_ne_nil (by obtain ⟨k, w⟩ := e; simp [encEntries]) false true,
       entries_end]
-  | .null | .bool _ | .num _ | .str _ | .arr [] | .obj [] => exact endBol_newline _ _
+  | .null | .bool _ | .num _ | .str _ | .math _ | .arr [] | .obj [] => exact endBol_newline _ _
 
 end Esm.Document.Source

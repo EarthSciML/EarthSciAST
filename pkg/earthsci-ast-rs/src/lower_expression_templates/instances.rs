@@ -10,9 +10,10 @@
 //! any other expression). Each instance's body is rewritten once; inside it a
 //! parameter is a leaf ([`BodyView`]). When every reachable instance of a
 //! template rewrites to the same body, that body replaces the template's in
-//! place; otherwise each distinct body becomes `<name>.variant<k>`, numbered by
-//! canonical bytes, and every reference is re-pointed to the entry of its
-//! instance. Mirrors the Julia reference `templates/instances.jl`.
+//! place — unless a registry entry rule 3 leaves as authored still references
+//! the template, directly or through such entries; otherwise each distinct body
+//! becomes `<name>.variant<k>`, numbered by canonical bytes, and every
+//! reference is re-pointed to the entry of its instance. Mirrors the Julia reference `templates/instances.jl`.
 
 use super::*;
 use std::collections::{HashMap, HashSet};
@@ -156,10 +157,8 @@ const OPERAND_LIST_FIELDS: [&str; 2] = ["args", "values"];
 /// Mirrors `_structural_walk!`.
 fn structural_walk(out: &mut HashSet<String>, x: &SNode, p: &HashSet<String>, operand: bool) {
     match x {
-        SNode::Str(s) => {
-            if !operand && p.contains(s) {
-                out.insert(s.clone());
-            }
+        SNode::Str(s) if !operand && p.contains(s) => {
+            out.insert(s.clone());
         }
         SNode::Arr(items) => {
             for v in items {
@@ -179,9 +178,9 @@ fn structural_walk(out: &mut HashSet<String>, x: &SNode, p: &HashSet<String>, op
                     for (_, bv) in b {
                         structural_walk(out, bv, p, true);
                     }
-                } else if OPERAND_LIST_FIELDS.contains(&k) && op != "enum" {
-                    structural_walk(out, v, p, true);
-                } else if OPERAND_FIELDS.contains(&k) {
+                } else if (OPERAND_LIST_FIELDS.contains(&k) && op != "enum")
+                    || OPERAND_FIELDS.contains(&k)
+                {
                     structural_walk(out, v, p, true);
                 } else {
                     structural_walk(out, v, p, false);
@@ -666,6 +665,107 @@ fn rule3_template_order(
     Ok(order)
 }
 
+/// The templates whose reached instances rewrite to more than one distinct
+/// body. Naming each single-bodied template in place or as `<name>.variant1`
+/// renames every reference to it alike, so which bodies are distinct does not
+/// depend on that choice: this provisional pass names every single-bodied
+/// template in place. Mirrors `_rule3_multi`.
+fn rule3_multi(
+    st: &Rule3State,
+    by_template: &indexmap::IndexMap<String, Vec<String>>,
+    order: &[String],
+) -> HashSet<String> {
+    let mut final_: HashMap<String, String> = HashMap::new();
+    let mut multi = HashSet::new();
+    for t in order {
+        let keys_t = &by_template[t];
+        let canon: Vec<String> = keys_t
+            .iter()
+            .map(|k| {
+                let r = &st.done[k];
+                canonical_compact(&repoint_refs(
+                    &r.body,
+                    &r.refs,
+                    &final_,
+                    &mut PtrMemo::default(),
+                ))
+            })
+            .collect();
+        let mut distinct = canon.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        if distinct.len() == 1 {
+            for k in keys_t {
+                final_.insert(k.clone(), t.clone());
+            }
+            continue;
+        }
+        multi.insert(t.clone());
+        for (k, c) in keys_t.iter().zip(&canon) {
+            let i = distinct.binary_search(c).expect("distinct of canon");
+            final_.insert(k.clone(), format!("{t}\u{1f}{}", i + 1));
+        }
+    }
+    multi
+}
+
+/// The reached match-less templates whose authored body stays reachable from
+/// a registry entry that rule 3 does not rewrite under its own name (esm-spec
+/// §9.6.4 rule 3): a match-less entry no reference reaches, one whose
+/// instances took variants, and, transitively, any reached template such an
+/// entry references. Such a template keeps its authored body; a single
+/// rewritten body is registered as `<name>.variant1` instead. Mirrors
+/// `_rule3_exposed`.
+fn rule3_exposed(
+    st: &Rule3State,
+    l: &Lowering,
+    by_template: &indexmap::IndexMap<String, Vec<String>>,
+    order: &[String],
+) -> HashSet<String> {
+    let named = &l.named;
+    let matchless = |n: &str| named.get(n).is_some_and(|d| !decl_has_match(d));
+    let mut memo: HashMap<String, Vec<String>> = HashMap::new();
+    let mut refs_of = |n: &str| -> Vec<String> {
+        if let Some(r) = memo.get(n) {
+            return r.clone();
+        }
+        let mut names = Vec::new();
+        collect_apply_names_sv(&decl_body(&named[n]), &mut names, &mut PtrSet::default());
+        let mut r: Vec<String> = names
+            .into_iter()
+            .filter(|x| by_template.contains_key(x) && matchless(x))
+            .collect();
+        r.sort_unstable();
+        r.dedup();
+        memo.insert(n.to_string(), r.clone());
+        r
+    };
+    let mut stack: Vec<String> = named
+        .keys()
+        .filter(|n| !by_template.contains_key(*n) && matchless(n))
+        .cloned()
+        .collect();
+    let need_multi = by_template
+        .keys()
+        .any(|t| matchless(t) && !refs_of(t).is_empty());
+    if need_multi {
+        stack.extend(
+            rule3_multi(st, by_template, order)
+                .into_iter()
+                .filter(|t| matchless(t)),
+        );
+    }
+    let mut visible = HashSet::new();
+    while let Some(n) = stack.pop() {
+        for r in refs_of(&n) {
+            if visible.insert(r.clone()) {
+                stack.push(r);
+            }
+        }
+    }
+    visible
+}
+
 /// A decl's fields without `match`, `where` and `priority`.
 fn match_stripped(decl: &Sv) -> Vec<(String, Sv)> {
     match &**decl {
@@ -736,7 +836,9 @@ pub(super) fn apply_rule3(
     let mut final_: HashMap<String, String> = HashMap::new();
     let mut updates: Vec<(String, Sv)> = Vec::new();
     let mut taken: HashSet<String> = l.named.keys().cloned().collect();
-    for t in rule3_template_order(&st, &by_template, &l.scope)? {
+    let order = rule3_template_order(&st, &by_template, &l.scope)?;
+    let exposed = rule3_exposed(&st, l, &by_template, &order);
+    for t in order {
         let keys_t = &by_template[&t];
         let bodies: Vec<Sv> = keys_t
             .iter()
@@ -750,7 +852,9 @@ pub(super) fn apply_rule3(
         distinct.sort_unstable();
         distinct.dedup();
         let decl = l.named[&t].clone();
-        if distinct.len() == 1 {
+        if distinct.len() == 1
+            && !(exposed.contains(&t) && distinct[0] != canonical_compact(&decl_body(&decl)))
+        {
             for k in keys_t {
                 final_.insert(k.clone(), t.clone());
             }

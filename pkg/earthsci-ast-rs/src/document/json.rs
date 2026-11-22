@@ -86,6 +86,11 @@ impl JNum {
 }
 
 /// A JSON value (`Esm.Document.Json`). Object entries keep their order.
+///
+/// `Math(s)` is not JSON: it is the math text of an expression inside a path
+/// block, the form a container prints and reads there (`Source.mathify`,
+/// `Source.cookBlocks`). It lives only between a container's text and the
+/// skeleton; a document never holds one ([`Json::wfb`] is false on it).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Json {
     Null,
@@ -94,15 +99,55 @@ pub enum Json {
     Str(String),
     Arr(Vec<Json>),
     Obj(Vec<(String, Json)>),
+    Math(String),
+}
+
+/// `Json.mathOK`: math text a container can delimit with `$`: not empty, no
+/// `$`, no line break, and not ending in a backslash (which would escape the
+/// closing `$`).
+pub fn math_ok(s: &str) -> bool {
+    !s.is_empty()
+        && !s.contains('$')
+        && !s.contains('\n')
+        && !s.contains('\r')
+        && !s.ends_with('\\')
+}
+
+/// `Json.pMath`: a math leaf after its `$`: the text up to the next `$`, which
+/// must be [`math_ok`].
+pub fn p_math(r: &[char]) -> Option<(Json, &[char])> {
+    let j = r.iter().position(|&c| c == '$')?;
+    let t: String = r[..j].iter().collect();
+    if math_ok(&t) {
+        Some((Json::Math(t), &r[j + 1..]))
+    } else {
+        None
+    }
 }
 
 impl Json {
-    /// `Json.wfb`: every number canonical, every object with distinct keys.
+    /// `Json.wfb`: every number canonical, every object with distinct keys, and
+    /// no math leaf. (The readers check [`Json::wfmb`]; the final canonical
+    /// check is `Math.jwf`.)
+    #[allow(dead_code)]
     pub fn wfb(&self) -> bool {
         match self {
             Json::Num(n) => n.wfb(),
             Json::Arr(xs) => xs.iter().all(Json::wfb),
             Json::Obj(kvs) => keys_distinct(kvs) && kvs.iter().all(|(_, v)| v.wfb()),
+            Json::Math(_) => false,
+            _ => true,
+        }
+    }
+
+    /// `Json.wfmb`: [`Json::wfb`], with math leaves of [`math_ok`] text allowed
+    /// (what the codecs print and read).
+    pub fn wfmb(&self) -> bool {
+        match self {
+            Json::Num(n) => n.wfb(),
+            Json::Arr(xs) => xs.iter().all(Json::wfmb),
+            Json::Obj(kvs) => keys_distinct(kvs) && kvs.iter().all(|(_, v)| v.wfmb()),
+            Json::Math(s) => math_ok(s),
             _ => true,
         }
     }
@@ -231,6 +276,8 @@ pub fn to_serde(j: &Json) -> Result<serde_json::Value, JNum> {
         Json::Bool(b) => serde_json::Value::Bool(*b),
         Json::Num(n) => serde_json::Value::Number(jnum_to_serde(n).ok_or_else(|| n.clone())?),
         Json::Str(s) => serde_json::Value::String(s.clone()),
+        // Never reached: a document read back holds no math leaf (`Json.WF`).
+        Json::Math(s) => serde_json::Value::String(s.clone()),
         Json::Arr(xs) => {
             serde_json::Value::Array(xs.iter().map(to_serde).collect::<Result<_, _>>()?)
         }
@@ -275,7 +322,9 @@ fn render_into(j: &Json, out: &mut String) {
         Json::Bool(true) => out.push_str("true"),
         Json::Bool(false) => out.push_str("false"),
         Json::Num(n) => out.extend(super::number::print(n)),
-        Json::Str(s) => out.extend(super::strings::quote(false, s)),
+        // Never reached: a document read back holds no math leaf
+        // (`Adapter.Doc.render`).
+        Json::Str(s) | Json::Math(s) => out.extend(super::strings::quote(false, s)),
         Json::Arr(xs) => {
             out.push('[');
             for (i, x) in xs.iter().enumerate() {

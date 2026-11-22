@@ -105,7 +105,7 @@ func mtrModelEquations(t *testing.T, file *ESMFile, path ...string) string {
 		}
 		return strings.Join(parts, "\n")
 	}
-	var node any = host.Subsystems[path[0]]
+	node := any(host.Subsystems[path[0]])
 	for _, p := range path[1:] {
 		node = node.(map[string]any)["subsystems"].(map[string]any)[p]
 	}

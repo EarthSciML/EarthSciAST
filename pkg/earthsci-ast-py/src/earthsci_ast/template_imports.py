@@ -71,6 +71,7 @@ from .json_walk import (
     _is_object,
     _rewrite_json,
     _walk_json,
+    decode_document,
     expand_ref_env,
     load_ref_raw,
 )
@@ -2319,9 +2320,7 @@ def collect_mount_declared_metaparameters(
             if key in seen:
                 return
             seen.add(key)
-            import json as _json
-
-            child = _json.loads(_fetch_ref_content(expanded, str(base_path)))
+            child = decode_document(_fetch_ref_content(expanded, str(base_path)), expanded)
         except Exception as exc:
             if strict:
                 # A nested mount this walk cannot read is an unresolvable ref.

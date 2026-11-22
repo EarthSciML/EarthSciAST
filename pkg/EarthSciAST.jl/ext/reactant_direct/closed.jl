@@ -370,6 +370,16 @@ function _de_acck_keyval(nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan)
         v1 = vals[1]
         all(v -> isequal(v, v1), vals) || return nothing
         return v1
+    elseif k === _E._NK_CONST_GATHER
+        # A const array a template call passes, read in its inlined body
+        # (emit.jl `_de_inline_call`) at literal or loop-counter subscripts.
+        all(ch -> ch.kind === _E._NK_LITERAL || ch.kind === _E._NK_LOOPVAR, nd.children) ||
+            return nothing
+        cg = nd.payload::_E._ConstGatherArray
+        off = _E._const_gather_offset(
+            cg, length(nd.children), d -> _de_index_int(nd.children[d])
+        )
+        return Float64(cg.flat[off])
     elseif k === _E._NK_OP && nd.op !== Symbol("")
         c = Any[]
         for ch in nd.children

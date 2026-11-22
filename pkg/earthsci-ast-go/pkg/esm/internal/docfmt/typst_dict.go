@@ -10,7 +10,9 @@ package docfmt
 //   - strings with Typst escapes (`\u{XXXX}`);
 //   - arrays `(a, b)`, `()` empty; dictionaries `(key: v, "quoted key": v)`,
 //     `(:)` empty. A key is bare when it is an identifier and not a Typst
-//     keyword.
+//     keyword;
+//   - a math leaf `$…$`, Typst math content: its text up to the next `$`
+//     (`Json.mathOK`). Only a path block holds one (`Source.mathify`).
 //
 // The canonical layout is one element per line, each indented two spaces
 // deeper than the opening line and followed by `,`. The reader skips
@@ -57,6 +59,10 @@ func tdictEnc(m int, v Json, out []rune) []rune {
 		return append(out, tdictPrintNum(x)...)
 	case string:
 		return append(out, strQuote(true, x)...)
+	case Math:
+		out = append(out, '$')
+		out = append(out, []rune(x.Text)...)
+		return append(out, '$')
 	case []Json:
 		if len(x) == 0 {
 			return append(out, '(', ')')
@@ -179,6 +185,8 @@ func tdictPVal(lim *Lim, input []rune) (Json, []rune, bool) {
 			return nil, nil, false
 		}
 		return s, r, true
+	case '$':
+		return jsonPMath(input[1:])
 	case 'n':
 		if r, ok := cutPrefix(input, "none"); ok {
 			return nil, r, true
@@ -289,10 +297,10 @@ func tdictPEntries(lim *Lim, input []rune) (Obj, []rune, bool) {
 }
 
 // tdictDecode is `TypstDict.decode`: whitespace, the value, whitespace, end of
-// input. The value must be well formed.
+// input. The value must be well formed, math leaves allowed (`Json.WFm`).
 func tdictDecode(lim *Lim, s []rune) (Json, bool) {
 	v, r, ok := tdictPVal(lim, tdictSkipWs(s))
-	if !ok || len(tdictSkipWs(r)) != 0 || !JsonWfb(v) {
+	if !ok || len(tdictSkipWs(r)) != 0 || !jsonWfmb(v) {
 		return nil, false
 	}
 	return v, true

@@ -97,17 +97,8 @@ func opInT(op string) bool {
 	return !known
 }
 
-// directTOp reports whether node contains, ANYWHERE within it (descending
-// through every field, including the `bindings` of nested apply nodes), an
-// object whose `op` is in T (opInT). Does NOT follow references to other
-// templates — that transitive step is templateOpBearing. Mirrors the Julia
-// `_direct_T_op`.
-func directTOp(node any) bool {
-	return directOp(node, opInT)
-}
-
 // directOp reports whether node contains, anywhere within it, an object whose
-// `op` satisfies pred. directTOp is directOp with the tier-T predicate.
+// `op` satisfies pred.
 func directOp(node any, pred func(string) bool) bool {
 	return directOpSeen(node, pred, map[uintptr]struct{}{})
 }
@@ -206,12 +197,6 @@ type expandMemoEntry struct {
 	in      map[string]any
 	out     any
 	changed bool
-}
-
-// mapPtrEqual reports whether two map[string]any share the same underlying
-// pointer (identity), used to detect whether a rebuild happened.
-func mapPtrEqual(a, b map[string]any) bool {
-	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
 }
 
 // ---------------------------------------------------------------------------

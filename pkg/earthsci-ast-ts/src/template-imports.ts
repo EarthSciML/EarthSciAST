@@ -56,9 +56,15 @@ import {
 import { EXPRESSION_NODE_ANNOTATIONS } from './expression.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
-import { expandRefEnv, isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
+import {
+  decodeDocument,
+  expandRefEnv,
+  isRemoteRef,
+  normalizeRef,
+  readFileSyncNode,
+} from './path-utils.js'
 import { STDLIB_BASE, classifyStdRef, readStdRef } from './stdlib.js'
-import { ERROR_CODES } from './errors.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { prepareDocumentOps } from './parse.js'
 import { NAME_KEYED_MAP_KEYS, wireOldSpellings } from './old-spellings.js'
 import { rejectConstUnitsPreV12 } from './solver.js'
@@ -889,11 +895,14 @@ function loadImportRaw(
   }
   let raw: unknown
   try {
-    raw = JSON.parse(content)
+    // esm-spec §1.2.1: the format is the file's extension (Markdown, Typst, JSON).
+    raw = decodeDocument(content, path)
   } catch (e) {
+    // A source document refused for a removed operator keeps its own code.
+    if (e instanceof EsmDiagnosticError && e.code === ERROR_CODES.REMOVED_OP) throw e
     throw new EsmMachineryError(
       ERROR_CODES.OPERATOR_IMPORT_UNRESOLVED,
-      `${origin}: template-library ref '${path}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+      `${origin}: template-library ref '${path}' did not parse: ${e instanceof Error ? e.message : String(e)}`,
     )
   }
   // A template library is a document too, and its template BODIES carry
@@ -2038,14 +2047,14 @@ export function collectMountDeclaredMetaparameters(
     let childBase: string
     try {
       if (std !== undefined) {
-        child = JSON.parse(readStdRef(ref, std))
+        child = decodeDocument(readStdRef(ref, std), ref)
         childBase = STDLIB_BASE
       } else if (viaLoader) {
         const got = options.readRef!(ref, basePath)
-        child = JSON.parse(got.text)
+        child = decodeDocument(got.text, path)
         childBase = got.base
       } else {
-        child = JSON.parse((options.readFile ?? readFileSyncNode)(path))
+        child = decodeDocument((options.readFile ?? readFileSyncNode)(path), path)
         childBase = dirName(path)
       }
     } catch {

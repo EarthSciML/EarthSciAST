@@ -21,18 +21,6 @@ cd pkg/earthsci-ast-go && go test ./...                          # Go
 ./install.sh --check     # Verify system requirements
 ```
 
-## Architecture Overview
-
-EarthSciAST is a language-agnostic JSON format for earth science model components, defined by `esm-schema.json` and documented in `esm-spec.md`. Language implementations live under `pkg/`:
-
-- **EarthSciAST.jl** — Julia reference implementation (MTK/Catalyst integration)
-- **earthsci-ast-ts** (`@earthsciml/ast`) — TypeScript types and utilities
-- **earthsci-ast-py** (`earthsci-ast`) — Python scientific integration
-- **earthsci-ast-rs** (`earthsci-ast`) — Rust high-performance implementation
-- **earthsci-ast-go** — Go lightweight implementation
-
-Shared test fixtures in `tests/` (valid, invalid, conformance) ensure cross-language consistency.
-
 ## Conventions & Patterns
 
 - Follow conventional commits: `type(scope): description` (e.g. `feat(julia): add expression support`)
@@ -46,3 +34,5 @@ Whe you receive a report from a subagent that includes abbreviations, shorthand,
 When developing locally, only run test suites directly related to the code you are changing; leave the full test suite to be run by CI.
 
 Automatically generated .esm files for testing or benchmarks should not be checked into git; instead they should be generated at run-time.
+
+This is a large project, subject to bit-rot. As you are working, be on the lookout for opportunities to improve the elegance and maintainability of the code. When you find small opportunities, just implement them as part of your normal work. If you find larger opportunities, flag them to the user. Before implementing a new feature, check whether a similar feature already exists, and prefer generalizing existing capabilities to implementing new capabilities that are similar.

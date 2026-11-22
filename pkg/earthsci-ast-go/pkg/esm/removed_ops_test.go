@@ -197,7 +197,7 @@ func TestRemovedOpsFixturesAreRefusedAtLoad(t *testing.T) {
 			}
 			// removed_op_table_lookup.esm also carries the `function_tables`
 			// block its lookup reads, which is reported first.
-			if re.Name != name && !(name == "table_lookup" && re.Name == removedFunctionTables) {
+			if re.Name != name && (name != "table_lookup" || re.Name != removedFunctionTables) {
 				t.Errorf("removed_op refusal names %q, want %q", re.Name, name)
 			}
 		})

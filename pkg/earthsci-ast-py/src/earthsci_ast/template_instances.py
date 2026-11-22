@@ -12,9 +12,10 @@ what is bound (a bare variable with its declared shape, a literal, any other
 expression). Each instance's body is rewritten once; inside it a parameter is a
 leaf (:class:`~earthsci_ast.lower_expression_templates._BodyView`). When every
 reachable instance of a template rewrites to the same body, that body replaces
-the template's in place; otherwise each distinct body becomes
-``<name>.variant<k>``, numbered by canonical bytes, and every reference is
-re-pointed to the entry of its instance.
+the template's in place — unless a registry entry rule 3 leaves as authored
+still references the template, directly or through such entries; otherwise
+each distinct body becomes ``<name>.variant<k>``, numbered by canonical bytes,
+and every reference is re-pointed to the entry of its instance.
 
 Mirrors ``pkg/EarthSciAST.jl/src/templates/instances.jl``; the cross-binding
 choices the spec leaves open (instance keys, variant numbering, placement) are
@@ -45,6 +46,7 @@ from .lower_expression_templates import (
     _shape_entry,
     _validate_apply_ref,
 )
+from .template_imports import _collect_apply_names
 
 # Fields whose value is an Expression (an operand position): a parameter
 # string there is an operand; anywhere else it is structural.
@@ -387,6 +389,72 @@ def _rule3_template_order(st: _Rule3State, by_template: dict[str, list[str]]) ->
     return order
 
 
+def _rule3_multi(st: _Rule3State, by_template: dict[str, list[str]], order: list[str]) -> set[str]:
+    """The templates whose reached instances rewrite to more than one distinct
+    body. Naming each single-bodied template in place or as ``<name>.variant1``
+    renames every reference to it alike, so which bodies are distinct does not
+    depend on that choice: this provisional pass names every single-bodied
+    template in place."""
+    final: dict[str, str] = {}
+    multi: set[str] = set()
+    for t in order:
+        keys_t = by_template[t]
+        canon = [
+            _canonical_compact(_repoint_refs(st.done[k].body, st.done[k].refs, final))
+            for k in keys_t
+        ]
+        distinct = sorted(set(canon))
+        if len(distinct) == 1:
+            for k in keys_t:
+                final[k] = t
+        else:
+            multi.add(t)
+            for k, c in zip(keys_t, canon):
+                final[k] = f"{t}\x1f{distinct.index(c)}"
+    return multi
+
+
+def _rule3_exposed(
+    st: _Rule3State, by_template: dict[str, list[str]], order: list[str]
+) -> set[str]:
+    """The reached match-less templates whose authored body stays reachable from
+    a registry entry that rule 3 does not rewrite under its own name (esm-spec
+    §9.6.4 rule 3): a match-less entry no reference reaches, one whose instances
+    took variants, and, transitively, any reached template such an entry
+    references. Such a template keeps its authored body; a single rewritten
+    body is registered as ``<name>.variant1`` instead."""
+    named = st.L.named
+
+    def matchless(n: str) -> bool:
+        d = named.get(n)
+        return _is_object(d) and d.get("match") is None
+
+    refs_memo: dict[str, set[str]] = {}
+
+    def refs_of(n: str) -> set[str]:
+        r = refs_memo.get(n)
+        if r is None:
+            r = {
+                x
+                for x in _collect_apply_names([], named[n].get("body"))
+                if x in by_template and matchless(x)
+            }
+            refs_memo[n] = r
+        return r
+
+    stack = [n for n in named if n not in by_template and matchless(n)]
+    if any(matchless(t) and refs_of(t) for t in by_template):
+        stack.extend(t for t in _rule3_multi(st, by_template, order) if matchless(t))
+    visible: set[str] = set()
+    while stack:
+        n = stack.pop()
+        for r in refs_of(n):
+            if r not in visible:
+                visible.add(r)
+                stack.append(r)
+    return visible
+
+
 def _match_stripped(decl: dict) -> dict:
     return {k: v for k, v in decl.items() if k not in ("match", "where", "priority")}
 
@@ -436,13 +504,17 @@ def apply_rule3(comp: dict, L: _Lowering, transforms: list[dict]) -> dict:
         block = {}
         comp["operators"] = block
     taken = set(L.named.keys())
-    for t in _rule3_template_order(st, by_template):
+    order = _rule3_template_order(st, by_template)
+    exposed = _rule3_exposed(st, by_template, order)
+    for t in order:
         keys_t = by_template[t]
         bodies = [_repoint_refs(st.done[k].body, st.done[k].refs, final) for k in keys_t]
         canon = [_canonical_compact(b) for b in bodies]
         distinct = sorted(set(canon))
         decl = L.named[t]
-        if len(distinct) == 1:
+        if len(distinct) == 1 and not (
+            t in exposed and distinct[0] != _canonical_compact(decl.get("body"))
+        ):
             for k in keys_t:
                 final[k] = t
             is_rule = decl.get("match") is not None

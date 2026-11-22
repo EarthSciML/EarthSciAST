@@ -76,7 +76,12 @@ theorem wfb_iff (n : JNum) : n.wfb = true ↔ n.WF := by
 end JNum
 
 /-- A JSON value. Strings and keys are arbitrary Lean strings (any Unicode scalar
-values); object entries keep their order. -/
+values); object entries keep their order.
+
+`math s` is not JSON: it is the math text of an expression inside a path block, the
+form a container prints and reads there (`Source.mathify`, `Source.cookBlocks`). It
+lives only between a container's text and the skeleton; a document never holds one
+(`WF` is false on it). -/
 inductive Json where
   | null
   | bool (b : Bool)
@@ -84,16 +89,51 @@ inductive Json where
   | str (s : String)
   | arr (xs : List Json)
   | obj (kvs : List (String × Json))
+  | math (s : String)
   deriving Repr
 
 namespace Json
 
+/-- Math text a container can delimit with `$`: not empty, no `$`, no line break, and
+not ending in a backslash (which would escape the closing `$`). -/
+def mathOK (s : String) : Bool :=
+  !s.toList.isEmpty && !s.toList.contains '$' && !s.toList.contains '\n' &&
+    !s.toList.contains '\r' && s.toList.getLast? != some '\\'
+
+/-- The text of a math leaf after its `$`, up to the next `$`. -/
+def mathBody : List Char → Option (List Char × List Char)
+  | [] => none
+  | c :: r => if c = '$' then some ([], r) else (mathBody r).map fun p => (c :: p.1, p.2)
+
+/-- A math leaf after its `$`: the text up to the next `$`, which must be `mathOK`. -/
+def pMath (r : List Char) : Option (Json × List Char) :=
+  match mathBody r with
+  | some (b, r') => if mathOK (String.ofList b) then some (.math (String.ofList b), r') else none
+  | none => none
+
+theorem mathBody_append : ∀ (l r : List Char), l.contains '$' = false →
+    mathBody (l ++ '$' :: r) = some (l, r)
+  | [], r, _ => by simp [mathBody]
+  | c :: l, r, h => by
+    simp only [List.contains_cons, Bool.or_eq_false_iff, beq_eq_false_iff_ne, ne_eq] at h
+    have hc : c ≠ '$' := fun e => h.1 e.symm
+    simp only [List.cons_append, mathBody, hc, ite_false, mathBody_append l r h.2,
+      Option.map_some]
+
+theorem pMath_math (s : String) (r : List Char) (h : mathOK s = true) :
+    pMath (s.toList ++ '$' :: r) = some (.math s, r) := by
+  have hd : s.toList.contains '$' = false := by
+    simp only [mathOK, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1.1.2
+  simp [pMath, mathBody_append _ _ hd, String.ofList_toList, h]
+
 mutual
-/-- Well formed: every number is canonical and every object has distinct keys. -/
+/-- Well formed: every number is canonical, every object has distinct keys, and there is
+no math leaf. -/
 def WF : Json → Prop
   | .num n => n.WF
   | .arr xs => WFList xs
   | .obj kvs => (kvs.map Prod.fst).Nodup ∧ WFObj kvs
+  | .math _ => False
   | _ => True
 
 /-- Every element is well formed. -/
@@ -113,6 +153,7 @@ def wfb : Json → Bool
   | .num n => n.wfb
   | .arr xs => wfbList xs
   | .obj kvs => decide (kvs.map Prod.fst).Nodup && wfbObj kvs
+  | .math _ => false
   | _ => true
 
 def wfbList : List Json → Bool
@@ -129,6 +170,7 @@ theorem wfb_iff : ∀ v : Json, v.wfb = true ↔ v.WF
   | .null => by simp [wfb, WF]
   | .bool _ => by simp [wfb, WF]
   | .str _ => by simp [wfb, WF]
+  | .math _ => by simp [wfb, WF]
   | .num n => by simp only [wfb, WF]; exact n.wfb_iff
   | .arr xs => by simp only [wfb, WF]; exact wfbList_iff xs
   | .obj kvs => by
@@ -146,6 +188,89 @@ theorem wfbObj_iff : ∀ l : List (String × Json), wfbObj l = true ↔ WFObj l
   | (_, v) :: es => by
     simp only [wfbObj, WFObj, Bool.and_eq_true]
     rw [wfb_iff v, wfbObj_iff es]
+end
+
+mutual
+/-- Well formed with math leaves: `WF`, except that a math leaf whose text is `mathOK`
+is allowed. What the codecs print and read: a path block's value as a container holds
+it. -/
+def WFm : Json → Prop
+  | .num n => n.WF
+  | .arr xs => WFmList xs
+  | .obj kvs => (kvs.map Prod.fst).Nodup ∧ WFmObj kvs
+  | .math s => mathOK s = true
+  | _ => True
+
+def WFmList : List Json → Prop
+  | [] => True
+  | v :: vs => WFm v ∧ WFmList vs
+
+def WFmObj : List (String × Json) → Prop
+  | [] => True
+  | (_, v) :: es => WFm v ∧ WFmObj es
+end
+
+mutual
+/-- `WFm`, as a check. -/
+def wfmb : Json → Bool
+  | .num n => n.wfb
+  | .arr xs => wfmbList xs
+  | .obj kvs => decide (kvs.map Prod.fst).Nodup && wfmbObj kvs
+  | .math s => mathOK s
+  | _ => true
+
+def wfmbList : List Json → Bool
+  | [] => true
+  | v :: vs => wfmb v && wfmbList vs
+
+def wfmbObj : List (String × Json) → Bool
+  | [] => true
+  | (_, v) :: es => wfmb v && wfmbObj es
+end
+
+mutual
+theorem wfmb_iff : ∀ v : Json, v.wfmb = true ↔ v.WFm
+  | .null => by simp [wfmb, WFm]
+  | .bool _ => by simp [wfmb, WFm]
+  | .str _ => by simp [wfmb, WFm]
+  | .math _ => by simp [wfmb, WFm]
+  | .num n => by simp only [wfmb, WFm]; exact n.wfb_iff
+  | .arr xs => by simp only [wfmb, WFm]; exact wfmbList_iff xs
+  | .obj kvs => by
+    simp only [wfmb, WFm, Bool.and_eq_true, decide_eq_true_eq]
+    rw [wfmbObj_iff kvs]
+
+theorem wfmbList_iff : ∀ l : List Json, wfmbList l = true ↔ WFmList l
+  | [] => by simp [wfmbList, WFmList]
+  | v :: vs => by
+    simp only [wfmbList, WFmList, Bool.and_eq_true]
+    rw [wfmb_iff v, wfmbList_iff vs]
+
+theorem wfmbObj_iff : ∀ l : List (String × Json), wfmbObj l = true ↔ WFmObj l
+  | [] => by simp [wfmbObj, WFmObj]
+  | (_, v) :: es => by
+    simp only [wfmbObj, WFmObj, Bool.and_eq_true]
+    rw [wfmb_iff v, wfmbObj_iff es]
+end
+
+mutual
+/-- A well-formed value is well formed with math leaves (it has none). -/
+theorem WF.wfm : ∀ {v : Json}, v.WF → v.WFm
+  | .null, _ => trivial
+  | .bool _, _ => trivial
+  | .str _, _ => trivial
+  | .num _, h => h
+  | .math _, h => h.elim
+  | .arr xs, h => WFList.wfm (xs := xs) h
+  | .obj _, h => ⟨h.1, WFObj.wfm h.2⟩
+
+theorem WFList.wfm : ∀ {xs : List Json}, WFList xs → WFmList xs
+  | [], _ => trivial
+  | _ :: _, h => ⟨WF.wfm h.1, WFList.wfm h.2⟩
+
+theorem WFObj.wfm : ∀ {es : List (String × Json)}, WFObj es → WFmObj es
+  | [], _ => trivial
+  | (_, _) :: _, h => ⟨WF.wfm h.1, WFObj.wfm h.2⟩
 end
 
 mutual

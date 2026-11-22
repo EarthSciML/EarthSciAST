@@ -1,0 +1,29 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "coupling_root",
+    "description": "Imports a coupling library written in Typst: the state x of Growth sets the decay rate k of Decay.",
+    "authors": ["EarthSciML"]
+  },
+  "models": {
+    "Growth": {
+      "variables": {
+        "x": {"type": "unknown", "units": "1/s", "default": 0.1}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+          "rhs": {"op": "*", "args": [{"op": "const", "args": [], "value": 0.0, "units": "1/s"}, "x"]}
+        }
+      ]
+    },
+    "Decay": {"ref": "./leaf.typ"}
+  },
+  "coupling": [
+    {
+      "type": "coupling_import",
+      "ref": "./coupling_library.typ",
+      "bind": {"Driver": "Growth", "Decayer": "Decay"}
+    }
+  ]
+}

@@ -130,7 +130,8 @@ func typDocCanonSegs(its []RItem) []Seg {
 func typDocPrintTyp(lim *Lim, d Json) string {
 	doc := skToDoc(lim, capsT{}, d)
 	out := typDocHeaderT(doc.Front)
-	raw := itemsRawDoc(typDocPrTx, &doc)
+	r0 := itemsRawDoc(typDocPrTx, &doc)
+	raw := itemsMathifyDoc(mathPrintTypst, func(string) bool { return true }, &r0)
 	out = append(out, stypRender(typDocCanonSegs(itemsItems(&raw)))...)
 	return string(out)
 }
@@ -170,7 +171,11 @@ func typDocParseItemsT(lim *Lim, front Obj, its []RItem) (Json, bool) {
 	if !ok {
 		return nil, false
 	}
-	d, ok := itemsCookDoc(lim, typDocCkTx, &r)
+	r1, ok := itemsCookDocBlocks(lim, mathParseTypst, &r)
+	if !ok {
+		return nil, false
+	}
+	d, ok := itemsCookDoc(lim, typDocCkTx, &r1)
 	if !ok {
 		return nil, false
 	}

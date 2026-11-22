@@ -164,6 +164,59 @@ end
 map_math(c::Comp, f, ::Type{Q}) where {Q <: Phase} =
     Comp{Q}(c.kind, c.name, c.desc, c.decls, Any[f(c, m) for m in c.math], c.math_blocks, c.blocks)
 
+# ## Expressions inside path blocks
+
+"""`Notation.Seg.any`: a path segment matching every element of an array and
+every value of an object. A `String` segment is `Notation.Seg.key`: the entry
+of that key of an object."""
+struct SegAny end
+const ANY = SegAny()
+
+"""`Notation.Seg.elem`: a path segment matching every element of an array only
+(the array form of a field that is one object or an array of them)."""
+struct SegElem end
+const ELEM = SegElem()
+
+"""`Notation.compExprPaths`: the expression-valued fields of a component's path
+blocks, as paths from the block's key (esm-schema.json: `Assertion.reference`,
+`ContinuousEvent.conditions`, `AffectEquation.rhs`,
+`DiscreteEventTrigger.expression`, `Model.guesses`, `ParameterUpdate.expression`
+and `.when`, `DataSourceBinding.unit_conversion` under `ParameterUpdate.from`;
+an update is one rule or an array of them). A value there that is a
+well-formed expression prints as math (`Source.mathify`)."""
+const COMP_EXPR_PATHS = Vector{Any}[
+    Any["continuous_events", ANY, "affect_neg", ANY, "rhs"],
+    Any["continuous_events", ANY, "affects", ANY, "rhs"],
+    Any["continuous_events", ANY, "conditions", ANY],
+    Any["discrete_events", ANY, "affects", ANY, "rhs"],
+    Any["discrete_events", ANY, "trigger", "expression"],
+    Any["guesses", ANY],
+    Any["parameters", ANY, "update", "expression"],
+    Any["parameters", ANY, "update", "from", "unit_conversion"],
+    Any["parameters", ANY, "update", "when"],
+    Any["parameters", ANY, "update", ELEM, "expression"],
+    Any["parameters", ANY, "update", ELEM, "from", "unit_conversion"],
+    Any["parameters", ANY, "update", ELEM, "when"],
+    Any["tests", ANY, "assertions", ANY, "reference"],
+    Any["variables", ANY, "update", "expression"],
+    Any["variables", ANY, "update", "from", "unit_conversion"],
+    Any["variables", ANY, "update", "when"],
+    Any["variables", ANY, "update", ELEM, "expression"],
+    Any["variables", ANY, "update", ELEM, "from", "unit_conversion"],
+    Any["variables", ANY, "update", ELEM, "when"],
+]
+
+"""`Notation.topExprPaths`: the expression-valued fields of the document's
+top-level path blocks (the coupling entries' events and connector
+equations)."""
+const TOP_EXPR_PATHS = Vector{Any}[
+    Any["coupling", ANY, "affect_neg", ANY, "rhs"],
+    Any["coupling", ANY, "affects", ANY, "rhs"],
+    Any["coupling", ANY, "conditions", ANY],
+    Any["coupling", ANY, "connector", "equations", ANY, "expression"],
+    Any["coupling", ANY, "trigger", "expression"],
+]
+
 # ## The symbol table of a component
 
 """`Source.keysOf`."""

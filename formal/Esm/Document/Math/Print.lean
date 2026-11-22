@@ -197,6 +197,7 @@ def jsonToks : Json → List Tok
   | .bool false => [.word "false"]
   | .num n => [.num n]
   | .str s => [.jstr s]
+  | .math s => [.jstr s]
   | .arr xs => .kw .lbk :: jsonItems xs ++ [.kw .rbk]
   | .obj kvs => .kw .lb :: jsonEntries kvs ++ [.kw .rb]
 
@@ -702,6 +703,7 @@ def jbeq : Json → Json → Bool
   | .bool a, .bool b => a == b
   | .num a, .num b => decide (a = b)
   | .str a, .str b => a == b
+  | .math a, .math b => a == b
   | .arr a, .arr b => jbeqL a b
   | .obj a, .obj b => jbeqO a b
   | _, _ => false
@@ -968,6 +970,7 @@ theorem jbeq_sound : ∀ a b : Json, jbeq a b = true → a = b
   | .bool a, .bool b, h => by simp [jbeq] at h; rw [h]
   | .num a, .num b, h => by simp [jbeq] at h; rw [h]
   | .str a, .str b, h => by simp [jbeq] at h; rw [h]
+  | .math a, .math b, h => by simp [jbeq] at h; rw [h]
   | .arr a, .arr b, h => by simp only [jbeq] at h; rw [jbeqL_sound a b h]
   | .obj a, .obj b, h => by simp only [jbeq] at h; rw [jbeqO_sound a b h]
   | .null, .bool _, h | .null, .num _, h | .null, .str _, h | .null, .arr _, h | .null, .obj _, h
@@ -975,7 +978,10 @@ theorem jbeq_sound : ∀ a b : Json, jbeq a b = true → a = b
   | .num _, .null, h | .num _, .bool _, h | .num _, .str _, h | .num _, .arr _, h | .num _, .obj _, h
   | .str _, .null, h | .str _, .bool _, h | .str _, .num _, h | .str _, .arr _, h | .str _, .obj _, h
   | .arr _, .null, h | .arr _, .bool _, h | .arr _, .num _, h | .arr _, .str _, h | .arr _, .obj _, h
-  | .obj _, .null, h | .obj _, .bool _, h | .obj _, .num _, h | .obj _, .str _, h | .obj _, .arr _, h => by
+  | .obj _, .null, h | .obj _, .bool _, h | .obj _, .num _, h | .obj _, .str _, h | .obj _, .arr _, h
+  | .math _, .null, h | .math _, .bool _, h | .math _, .num _, h | .math _, .str _, h
+  | .math _, .arr _, h | .math _, .obj _, h | .null, .math _, h | .bool _, .math _, h
+  | .num _, .math _, h | .str _, .math _, h | .arr _, .math _, h | .obj _, .math _, h => by
     simp [jbeq] at h
 
 theorem jbeqL_sound : ∀ a b : List Json, jbeqL a b = true → a = b
@@ -1001,6 +1007,7 @@ theorem jbeq_refl : ∀ a : Json, jbeq a a = true
   | .bool b => by simp [jbeq]
   | .num n => by simp [jbeq]
   | .str s => by simp [jbeq]
+  | .math s => by simp [jbeq]
   | .arr xs => by simp only [jbeq]; exact jbeqL_refl xs
   | .obj kvs => by simp only [jbeq]; exact jbeqO_refl kvs
 

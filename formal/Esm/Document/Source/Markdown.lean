@@ -727,8 +727,9 @@ theorem pInline_gen (v : Json) (hi : Yaml.isInl v = true) (hv : v.WF) (rest : Li
     have hp := Number.parse_print n rest hv hr
     simp only [Yaml.inline, h, List.cons_append] at hp ⊢
     simp only [Yaml.pInline, numHead_ne hc 'n', numHead_ne hc 't', numHead_ne hc 'f',
-      numHead_ne hc '[', numHead_ne hc '{', numHead_ne hc '"', ite_false, hp]
+      numHead_ne hc '[', numHead_ne hc '{', numHead_ne hc '"', numHead_ne hc '$', ite_false, hp]
     rfl
+  | .math _ => exact hv.elim
 
 /-- What may follow an attribute value: `,`, `]`, `}`, a space or `|`. -/
 def FStop (rest : List Char) : Prop :=
@@ -751,6 +752,7 @@ theorem inline_head' (v : Json) (hv : v.WF) :
   | .str s => exact ⟨'"', escape false s.toList ++ ['"'], by simp [Yaml.inline, quote], by decide⟩
   | .arr _ => exact ⟨_, _, rfl, by decide⟩
   | .obj _ => exact ⟨_, _, rfl, by decide⟩
+  | .math _ => exact hv.elim
   | .num n =>
     obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
     refine ⟨c, t, h, ?_⟩
@@ -772,6 +774,7 @@ theorem flow_head (v : Json) (hv : v.WF) :
   | .bool b => exact inline_head' (.bool b) hv
   | .num n => exact inline_head' (.num n) hv
   | .str s => exact inline_head' (.str s) hv
+  | .math _ => exact hv.elim
 
 theorem pFlow_scalar (v : Json) (hi : Yaml.isInl v = true) (hv : v.WF) (rest : List Char)
     (hr : FStop rest) (f : Nat) : pFlow (f + 1) (Yaml.inline v ++ rest) = some (v, rest) := by
@@ -798,6 +801,7 @@ theorem pFlow_scalar (v : Json) (hi : Yaml.isInl v = true) (hv : v.WF) (rest : L
     simp only [Yaml.inline, hct, List.cons_append] at h ⊢
     simp only [pFlow, hc1.1, hc1.2, ite_false]
     exact h
+  | .math _ => exact hv.elim
 
 mutual
 theorem pFlow_flow : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF → FStop rest → v.size < f →
@@ -1282,7 +1286,7 @@ def isBlock : RItem → Bool
 /-- What each construct's content must satisfy for its text to read back. -/
 def itemOK : RItem → Bool
   | .desc s => noStop fence (s.toList ++ ['\n'])
-  | .block _ v => jwf v
+  | .block _ v => v.wfmb
   | .comp _ n => !n.toList.contains ']' && !n.toList.contains '\n'
   | .decl d => if d.kind = .sub then subOK d else declOK d
   | .eqn raw => noStop dd (raw.toList ++ ['\n']) && (tmLex raw.toList).isNone
@@ -1411,7 +1415,7 @@ theorem lex_block (k : String) (v : Json) (hv : itemOK (.block k v) = true) (bol
     (hbol : bol = true) (t : List Char) (g : Nat)
     (hg : (itemMd (.block k v)).length + t.length < g + 1) :
     lex (g + 1) bol (itemMd (.block k v) ++ t) = (lex g true t).map (.block k v :: ·) := by
-  have hw : v.WF := jwf_sound v hv
+  have hw : v.WFm := (Json.wfmb_iff v).mp hv
   apply lex_block_step g bol _ t _ (by simp [itemMd, fenceEsm]) _ hbol
   · simp only [itemMd, List.append_assoc, List.cons_append]
     rw [blockAt_fence, fenceAt, splitLine_line _ _ (keyMd_noNl k)]
@@ -2007,6 +2011,7 @@ theorem inline_head (v : Json) (hv : v.WF) : ∃ c t, Yaml.inline v = c :: t ∧
   | .str s => exact ⟨'"', escape false s.toList ++ ['"'], by simp [Yaml.inline, quote], by decide⟩
   | .arr _ => exact ⟨_, _, rfl, by decide⟩
   | .obj _ => exact ⟨_, _, rfl, by decide⟩
+  | .math _ => exact hv.elim
   | .num n =>
     obtain ⟨c, t, h, hc⟩ := Number.print_head n hv
     refine ⟨c, t, h, ?_⟩

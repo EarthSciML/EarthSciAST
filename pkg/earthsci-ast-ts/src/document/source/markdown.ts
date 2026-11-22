@@ -8,7 +8,7 @@
  * span is skipped whole.
  */
 
-import { jarr, jobj, jstr, type Json } from '../json.js'
+import { jarr, jobj, jsonWfmb, jstr, type Json } from '../json.js'
 import { nested } from '../limits.js'
 import { escT, jwf, nameOk, parseLatex, printLatex, rawB, unescT, type Sym } from '../math/index.js'
 import { chars, type Chars, type Read } from '../number.js'
@@ -756,7 +756,7 @@ export function itemOk(it: RItem): boolean {
     case 'desc':
       return noStop(FENCE, `${it.s}\n`)
     case 'block':
-      return jwf(it.v)
+      return jsonWfmb(it.v)
     case 'comp':
       return !it.name.includes(']') && !it.name.includes('\n')
     case 'decl':

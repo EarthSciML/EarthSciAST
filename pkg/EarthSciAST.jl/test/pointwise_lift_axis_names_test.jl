@@ -110,8 +110,10 @@ const _W = ESM._RefWalk(nothing)
         # its dimension's extent, so the filter rejects all of them rather than
         # naming a face axis.
         only_faces = _mk_operator(ext, ["Mx" => loops])
-        named = ESM._lift_axis_names(_mas(only_faces), loops, ext, var_shapes,
-            index_sets, _W)
+        named = ESM._lift_axis_names(
+            _mas(only_faces), loops, ext, var_shapes,
+            index_sets, _W
+        )
         @test named[1] === nothing            # lon_nodes is 7, the extent is 6
         @test named[2] == "lat"               # Mx's OTHER positions are cell-centred
         @test named[3] == "lev"
@@ -158,8 +160,10 @@ const _W = ESM._RefWalk(nothing)
         # alternative is a silent wrong axis.)
         diag_loops = ["i", "i", "k"]
         ma3 = _mk_operator(ext, ["dp" => diag_loops])
-        named = ESM._lift_axis_names(_mas(ma3), diag_loops, ext, var_shapes,
-            index_sets, _W)
+        named = ESM._lift_axis_names(
+            _mas(ma3), diag_loops, ext, var_shapes,
+            index_sets, _W
+        )
         @test named[1] === nothing
         @test named[2] === nothing
         @test named[3] == "lev"
