@@ -18,7 +18,7 @@
 
 use earthsci_ast::Classification;
 use earthsci_ast::HasSubsystems;
-use earthsci_ast::{EsmFile, Model, SystemKind, flatten};
+use earthsci_ast::{EsmFile, Model, SystemKind, declared_system_kind, flatten};
 use serde_json::Value;
 
 use crate::common;
@@ -193,7 +193,7 @@ fn run_classification_category(category: &str) {
                 "[{id}] {key}.system_kind"
             );
             // A declared `"pde"` (deprecated at esm 2.4.0) counts as absent.
-            let declared = declared_kind(model);
+            let declared = declared_system_kind(model);
             assert_eq!(
                 want["declared_system_kind"],
                 declared.map_or(Value::Null, |k| Value::String(k.to_string())),
@@ -237,12 +237,5 @@ fn system_kind_order_is_first_match_wins() {
     // mismatch.
     assert_eq!(kind("DeclaredPde"), SystemKind::Ode);
     assert_eq!(nodes["DeclaredPde"].system_kind.as_deref(), Some("pde"));
-    assert_eq!(declared_kind(&nodes["DeclaredPde"]), None);
-}
-
-/// The declared `system_kind` the comparison uses: a declared `"pde"`
-/// (deprecated at esm 2.4.0, warned `deprecated_system_kind` at load) counts as
-/// absent and never mismatches.
-fn declared_kind(model: &Model) -> Option<&str> {
-    model.system_kind.as_deref().filter(|k| *k != "pde")
+    assert_eq!(declared_system_kind(&nodes["DeclaredPde"]), None);
 }

@@ -100,7 +100,7 @@
       "julia": 358,
       "typescript": 239,
       "python": 270,
-      "rust": 393,
+      "rust": 394,
       "go": 457
     },
     "by_tier": {
@@ -2586,6 +2586,7 @@
         "go": "DeclaredSystemKind",
         "julia": "declared_system_kind",
         "python": "declared_system_kind",
+        "rust": "declared_system_kind",
         "typescript": "declaredSystemKind"
       }
     },
