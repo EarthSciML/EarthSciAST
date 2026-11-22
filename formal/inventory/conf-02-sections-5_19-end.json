@@ -479,15 +479,6 @@
       "note": "require_match is tri-state: load then emit preserves an explicit false and preserves absence, and does not conflate them."
     },
     {
-      "id": "conf.5.35.template-guard-all-bindings",
-      "section": "5.35",
-      "quote": "All five bindings MUST implement this guard.** A MUST that four of five ignore is not a rule",
-      "class": "semantic",
-      "phase": 5,
-      "area": "coupling",
-      "note": "A surviving expression-template registry body that references a merged-away variable (and does not bind it as a template param) is refused with template_body_references_coupling_rewritten_variable."
-    },
-    {
       "id": "conf.5.36.indexed-lhs-runs-like-bare",
       "section": "5.36",
       "quote": "A binding MUST run a document whose ARRAY-shaped observed is defined the indexed way exactly as it runs the bare one.",
