@@ -848,7 +848,7 @@ function _explain_unresolved_call(call, registry, shape_env = _EMPTY_SHAPE_ENV):
     args = _raw_get(call, "args")
     k = (args === nothing || !_is_array(args)) ? 0 : length(args)
     lines = String[]
-    registry === nothing && return "no definition of '$op' is in scope (a placeholder)"
+    registry === nothing && return "no definition of '$op' is in scope (a placeholder); definitions no reference reached were removed by emit and flatten and are not listed"
     for name in sort!(String[string(n) for n in keys(registry)])
         decl = registry[name]
         _is_object(decl) || continue
