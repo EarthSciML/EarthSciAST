@@ -12,6 +12,7 @@ import json
 import os
 import re
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -1929,8 +1930,19 @@ def _load_ref_data(
 # and travels on the typed component until the mounting document consumes it.
 
 #: The attribute a typed mounted component carries its reference-preserving
-#: form under, until the mounting document splices it in.
+#: form under, until the mounting document splices it in. A leaf with no
+#: template machinery whose own mounts carry none either carries a
+#: :class:`_DeferredForm` instead: its form matters only to a mounting document
+#: that has template machinery (a `match` rule there fires on its content).
 _MOUNTED_FORM_ATTR = "_esa_mounted_template_form"
+
+
+@dataclass
+class _DeferredForm:
+    """A mounted form not computed yet; :func:`_take_mounted_form` computes it
+    when a mounting document splices it in."""
+
+    compute: Callable[[], dict[str, Any] | None]
 
 
 @dataclass
@@ -1952,7 +1964,8 @@ def _is_ref_entry(v: Any) -> bool:
 
 def _take_mounted_form(component: Any) -> dict[str, Any] | None:
     state = getattr(component, "__dict__", None)
-    return state.pop(_MOUNTED_FORM_ATTR, None) if isinstance(state, dict) else None
+    form = state.pop(_MOUNTED_FORM_ATTR, None) if isinstance(state, dict) else None
+    return form.compute() if isinstance(form, _DeferredForm) else form
 
 
 def _splice_subsystem_forms(raw: dict[str, Any], typed: Any) -> bool:
@@ -2015,7 +2028,10 @@ def _attach_mounted_template_form(templates: _LeafTemplates, parsed: Any, compon
     (`mounted_registries`); then the edge's remaining steps. A leaf with no
     template machinery keeps its content as its form too: a `match` rule of a
     component that mounts it fires on that content (esm-spec §9.6.3), so the
-    mounting document's fixpoint must see it.
+    mounting document's fixpoint must see it. When neither the leaf nor any of
+    its mounts has template machinery, that form is deferred
+    (:class:`_DeferredForm`) and computed only if a mounting document splices
+    it in.
 
     The leaf's own `match` rules fire on its mounts' content in the same
     fixpoint, so when the leaf's component declares one, its mounted subsystems'
@@ -2039,22 +2055,30 @@ def _attach_mounted_template_form(templates: _LeafTemplates, parsed: Any, compon
             break
     if section is None:
         return
-    doc = copy.deepcopy(templates.pre)
-    if _splice_mounted_forms(doc, parsed):
-        lowered = lower_expression_templates(doc)
-        pre_comp = (templates.pre.get(section) or {}).get(key)
-        if _declares_match_rule(pre_comp):
-            with marking_template_origins():
-                expanded = templates.finish(expand_document(lowered))
-            _graft_mounted_rewrites(pre_comp, (expanded.get(section) or {}).get(key), component)
-    elif _has_template_machinery(templates.pre):
-        lowered = copy.deepcopy(templates.lowered)
+
+    def compute() -> dict[str, Any] | None:
+        doc = copy.deepcopy(templates.pre)
+        if _splice_mounted_forms(doc, parsed):
+            lowered = lower_expression_templates(doc)
+            pre_comp = (templates.pre.get(section) or {}).get(key)
+            if _declares_match_rule(pre_comp):
+                with marking_template_origins():
+                    expanded = templates.finish(expand_document(lowered))
+                _graft_mounted_rewrites(pre_comp, (expanded.get(section) or {}).get(key), component)
+        elif _has_template_machinery(templates.pre):
+            lowered = copy.deepcopy(templates.lowered)
+        else:
+            lowered = doc
+        lowered = templates.finish(mounted_registries(lowered))
+        form = (lowered.get(section) or {}).get(key)
+        return form if isinstance(form, dict) else None
+
+    if _has_template_machinery(templates.pre) or _any_mounted_form(parsed, computed_only=True):
+        form = compute()
+        if form is not None:
+            setattr(component, _MOUNTED_FORM_ATTR, form)
     else:
-        lowered = doc
-    lowered = templates.finish(mounted_registries(lowered))
-    form = (lowered.get(section) or {}).get(key)
-    if isinstance(form, dict):
-        setattr(component, _MOUNTED_FORM_ATTR, form)
+        setattr(component, _MOUNTED_FORM_ATTR, _DeferredForm(compute))
 
 
 def _declares_match_rule(comp: Any) -> bool:
@@ -2165,19 +2189,37 @@ def _graft_rule_rewrites_into_mounts(pre: dict[str, Any], lowered: Any, esm_file
                 _graft_mounted_rewrites(comp, (expanded.get(section) or {}).get(name), t)
 
 
-def _any_mounted_form(esm_file: Any) -> bool:
-    def has(c: Any) -> bool:
+def _iter_mounted_states(esm_file: Any) -> Iterator[dict[str, Any]]:
+    """The attribute dicts of every component of ``esm_file``, subsystems at
+    any depth, that carry a mounted form (computed or deferred)."""
+
+    def walk(c: Any) -> Iterator[dict[str, Any]]:
         state = getattr(c, "__dict__", None)
         if isinstance(state, dict) and _MOUNTED_FORM_ATTR in state:
-            return True
+            yield state
         subs = getattr(c, "subsystems", None)
-        return isinstance(subs, dict) and any(has(v) for v in subs.values())
+        if isinstance(subs, dict):
+            for v in subs.values():
+                yield from walk(v)
 
+    for sec in ("models", "reaction_systems"):
+        for c in (getattr(esm_file, sec, None) or {}).values():
+            yield from walk(c)
+
+
+def _any_mounted_form(esm_file: Any, *, computed_only: bool = False) -> bool:
+    """Whether a component of ``esm_file`` carries a mounted form; with
+    ``computed_only``, one that is not a :class:`_DeferredForm`."""
     return any(
-        has(c)
-        for sec in ("models", "reaction_systems")
-        for c in (getattr(esm_file, sec, None) or {}).values()
+        not (computed_only and isinstance(state[_MOUNTED_FORM_ATTR], _DeferredForm))
+        for state in _iter_mounted_states(esm_file)
     )
+
+
+def _drop_mounted_forms(esm_file: Any) -> None:
+    """Discard every mounted form ``esm_file`` still carries."""
+    for state in list(_iter_mounted_states(esm_file)):
+        state.pop(_MOUNTED_FORM_ATTR, None)
 
 
 def _forward_edge_bindings(
@@ -3461,6 +3503,7 @@ def _load_data(
     from ._data_source_urls import resolve_data_source_urls
     from .lower_expression_templates import (
         _authored_template_names,
+        _has_template_machinery,
         expand_document,
         lower_expression_templates,
         marking_template_origins,
@@ -3720,8 +3763,10 @@ def _load_data(
     # document's own fixpoint, so the registries are taken again from the
     # document with each mount spliced in as its reference-preserving form
     # (`_attach_mounted_template_form`) and lowered once, which hoists every
-    # subsystem block into its top-level component in one merge.
-    if _any_mounted_form(esm_file):
+    # subsystem block into its top-level component in one merge. Only deferred
+    # forms (no template machinery anywhere below) and no machinery here means
+    # nothing to merge and no rule to fire.
+    if _has_template_machinery(_pre_lower) or _any_mounted_form(esm_file, computed_only=True):
         _shadow = copy.deepcopy(_pre_lower)
         if _splice_mounted_forms(_shadow, esm_file):
             _lowered_shadow = lower_expression_templates(_shadow)
@@ -3732,6 +3777,7 @@ def _load_data(
             # mounts (esm-spec §9.6.3), which the typed mounts above took from
             # each leaf's own Expand image.
             _graft_rule_rewrites_into_mounts(_pre_lower, _lowered_shadow, esm_file)
+    _drop_mounted_forms(esm_file)
     # The mounts have merged; the merge bookkeeping does not outlive the load.
     esm_file.data_sources = dict(esm_file.data_sources)
     # esm-spec §4.9.7 over the RESOLVED tree. The structural pass above ran on
