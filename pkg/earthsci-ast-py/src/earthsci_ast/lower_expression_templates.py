@@ -1449,6 +1449,28 @@ def _has_template_machinery(file: dict) -> bool:
     return bool(_find_apply_paths(file))
 
 
+def _mark_subsystem_owned(comp: dict, L: _Lowering) -> dict:
+    """esm-spec §9.6.1 / §9.6.4 rule 5: an entry only subsystems own (hoisted
+    from a mounted or authored subsystem's block) is written on the component as
+    ``reference_only``, so the written document's registry makes it no callable
+    definition there and emit → load is a fixed point. In place."""
+    if not L.mounted_only:
+        return comp
+    block = comp.get("operators")
+    if not _is_object(block):
+        return comp
+    for n in L.mounted_only:
+        d = block.get(n)
+        if not _is_object(d) or _is_reference_only(d):
+            continue
+        nd = dict(d)
+        nd["reference_only"] = True
+        block[n] = nd
+        if n in L.named:
+            L.named[n] = nd
+    return comp
+
+
 def _component_registry(
     comp: dict, scope: str, iset_names: set, mounted_only: frozenset[str] = frozenset()
 ) -> tuple[dict, list, dict, dict[str, list], dict[str, set[int]]]:
@@ -1724,6 +1746,7 @@ def lower_expression_templates(file: dict) -> dict:
                 if r in L.mounted_only:
                     continue
                 _check_call_arity(L.named[r].get("body"), L, f"{L.scope}.operators.{r}")
+        _mark_subsystem_owned(comp, L)
 
     # Validation discharge (esm-spec §9.6.9): makearray-region checks on the
     # reference-preserving form. Region bounds cannot carry template params, so
