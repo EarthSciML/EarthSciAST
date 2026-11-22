@@ -35,11 +35,13 @@
 > A definition body holding a structural time derivative is still accepted, and resolves to
 > exactly what its expansion did (§9.6.4 rule 3).
 >
-> **Also proposed for 2.4.0 (draft): one operator type.** Expression definitions are renamed
-> **operators**, and every entry of an `operators` block is an operator **definition**:
-> `params`, a `body`, optional `match`, `where` and `priority`, an optional unit expression
-> (`units`), and the name of the operator it defines (`defines`). Several definitions may
-> share an operator name, in one file and across imported files. A call `{"op": N, …}`
+> **Also proposed for 2.4.0 (draft): one operator type.** Expression templates are renamed
+> **defined operators**: every entry of an `operators` block is a **definition** of one
+> defined operator, with `params`, a `body`, optional `match`, `where` and `priority`, an
+> optional unit expression (`units`), and the name of the defined operator it defines
+> (`defines`). The closed §4.2 set is the **core operators** (core ops); a definition may not
+> define a core op's name (`operator_defines_core_op`). Several definitions may share a
+> defined operator's name, in one file and across imported files. A call `{"op": N, …}`
 > collects the definitions of `N` in scope, picks one with the existing rules (`match` and
 > `where`, then `priority`, then declaration order) and becomes a reference to it; a name with
 > no definition in scope is a legal placeholder, an error only if evaluated
@@ -71,12 +73,12 @@
 > document.
 
 > **2.0.0 is a break.** Every external function leaves the expression AST, so
-> the format's core is the §4.2 operators alone. Removed: the `fn` op and the
+> the format's core is the §4.2 core operators alone. Removed: the `fn` op and the
 > closed function registry (every `datetime.*` and `interp.*` name); the
 > `function_tables` block and the `table_lookup` op; the `skolem` and `rank`
 > value-invention ops and the `argmin` / `argmax` ops; and the geometry leaves
 > `intersect_polygon` and `polygon_intersection_area`, with their `manifold`
-> field. Each is now an operator definition in the standard library, imported
+> field. Each is now a defined operator in the standard library, imported
 > from `esm:std/<file>.esm` (§4.7, §9.7): `lib/calendar.esm` and
 > `lib/interp.esm` for the closed functions and the tables, `lib/relational.esm`
 > for keys, ranks and arg-witnesses, `lib/geometry.esm` for overlap areas
@@ -114,11 +116,11 @@ The ESM (`.esm`) format is a JSON-based serialization format for EarthSciML mode
 
 ESM is **language-agnostic**. Every model must be fully self-describing: all equations, variables, parameters, species, and reactions are specified in the format itself. A conforming parser in any language can reconstruct the complete mathematical system from the `.esm` file alone, without access to any particular software package.
 
-Two things are excepted from full specification, both inherently runtime-specific: **data sources** (file I/O, format adapters, large external grids), which are described well enough to locate and decode but not reimplemented in-file; and **update handlers** (§5.5), referenced by `handler_id`. There is no registry of callable functions: every expression is a tree of the §4.2 operators, and anything larger — calendar fields, interpolation, polygon overlap — is an operator definition (§9.6) from the standard library (`lib/*.esm`, imported as `esm:std/<file>.esm`), whose body is itself such a tree.
+Two things are excepted from full specification, both inherently runtime-specific: **data sources** (file I/O, format adapters, large external grids), which are described well enough to locate and decode but not reimplemented in-file; and **update handlers** (§5.5), referenced by `handler_id`. There is no registry of callable functions: every expression is a tree of the §4.2 core operators, and anything larger — calendar fields, interpolation, polygon overlap — is a defined operator (§9.6) from the standard library (`lib/*.esm`, imported as `esm:std/<file>.esm`), whose body is itself such a tree.
 
 ### 1.1 Authoring Policy: AST first, factoring second
 
-The evaluable core of §4.2 is **closed**: there is no per-file declaration of new functions, no `handler_id` lookup inside an expression, and no out-of-band runtime registry. Adding an operator requires a spec rev. A primitive that is not a core op — calendar decomposition, table interpolation, polygon overlap — is written as a finite tree of core ops and shipped as a standard-library definition (§9.7.1, `lib/*.esm`). A binding recovers the speed of a hand-written kernel by recognising the definition's expanded shape in its compiler, never by giving the definition a second, built-in meaning.
+The evaluable core of §4.2 is **closed**: there is no per-file declaration of new functions, no `handler_id` lookup inside an expression, and no out-of-band runtime registry. Adding a core operator requires a spec rev. A primitive that is not a core op — calendar decomposition, table interpolation, polygon overlap — is written as a finite tree of core ops and shipped as a standard-library definition (§9.7.1, `lib/*.esm`). A binding recovers the speed of a hand-written kernel by recognising the definition's expanded shape in its compiler, never by giving the definition a second, built-in meaning.
 
 The full authoring stance, normatively:
 
@@ -764,17 +766,24 @@ normative text surface for expressions.
 
 ### 4.2 Operators
 
-Every `op` string belongs to one of **two tiers**:
+Every `op` string belongs to one of **two tiers**. *Terminology:* the closed set listed here
+is the **core operators** (core ops); every other operator is a **defined operator**, given by
+the definitions in scope (§9.6.12). The definition block keeps the name `operators`.
 
-- **Evaluable core (closed).** The operators listed in this section — arithmetic,
+- **Evaluable core (closed).** The core operators listed in this section — arithmetic,
   comparisons/booleans, elementary functions, `ifelse`, the calculus form-ops `D`/`ic`, and
   the array/query ops (§4.3) — are implemented directly by every binding's evaluator. This
   set is closed: adding one is a spec change, and each binding pins it as its evaluator's op
   registry.
-- **Operators (open).** Any other `op` identifier names an **operator** (§9.6.12): the
-  spatial derivative `partial`, `integral`, `grad`, or a name such as `godunov_hamiltonian`.
-  A call of an operator is resolved at load to a reference to one of the operator's
-  **definitions** in scope (§9.6); a name with no definition in scope is a **placeholder**.
+- **Defined operators (open).** Any other `op` identifier names a **defined operator**
+  (§9.6.12): the spatial derivative `partial`, `integral`, `grad`, or a name such as
+  `godunov_hamiltonian`. `partial` and `integral` are defined operators, not core ops: their
+  call shapes and unit expressions are fixed below, and those hold with no definition in scope,
+  but this format gives them no evaluator and ships no definition of them. A call of a defined
+  operator is resolved at load to a reference to one of its **definitions** in scope (§9.6); a
+  name with no definition in scope is a **placeholder**. A core op's name is never a defined
+  operator: a definition that would define one is a load error (`operator_defines_core_op`,
+  §9.6.12).
   A call has **no** evaluator of its own; one that reaches evaluation unresolved — a
   placeholder, or a call no definition was eligible for — is rejected. The rest of this
   specification also calls an unresolved call a *rewrite-target*. Loading is permissive — a file MAY load with
@@ -874,7 +883,7 @@ Example: `{"op": "D", "args": ["O3"], "wrt": "t"}` represents ∂O₃/∂t.
 
 **The spatial derivative is the operator `partial` (draft 2.4.0, normative).**
 `{"op": "partial", "args": [f, b₁, …], "wrt": "x"}` is ∂f/∂x along the coordinate `wrt`,
-which is any axis name, never the literal `"t"`. It is an ordinary operator (§9.6.12), with no
+which is any axis name, never the literal `"t"`. It is a defined operator, not a core op (§9.6.12), with no
 evaluator and no definition in this format: a discretization library supplies its definitions
 (§9.6.8), and with none in scope it is a placeholder. Its call shape is fixed here: `args[0]`
 is the differentiated operand; `args[1..]` are any number of trailing operands (boundary data
@@ -1018,7 +1027,7 @@ A `D` in a **`match` pattern** is subject to exactly the same rule: a pattern
 pattern with a spatial (or parameter-valued) `wrt` may carry trailing wildcards.
 
 `partial`, `integral`, `grad`, `div`, `laplacian`, `curl` and every other non-core name are
-**ordinary operator names** (§9.6.12): none is built in, none has a defined meaning in this
+**ordinary defined-operator names** (§9.6.12): none is built in, none has a defined meaning in this
 format, and a binding MUST NOT single any of them out. Each is resolved by the definitions in
 scope, matched and checked by the same machinery. A call's unit is its definition's unit
 expression (§4.8.3); a placeholder's unit is UNDETERMINABLE, so a checker reports it as
@@ -2296,9 +2305,9 @@ A binding's canonicalizer MUST write every `units` string of the canonical form 
 | **Inverse circular trig** — `asin` `acos` `atan` | The argument MUST be **dimensionless at scale 1**. The result is an **angle** (`rad`). |
 | `atan2` (2-ary) | The two operands MUST be **COMMENSURATE with each other** — same dimension and same scale, but ANY dimension, not necessarily dimensionless. The result is an **angle** (`rad`). `atan2` is the ONE inverse-trig op that does not take a dimensionless argument: it takes a *ratio not yet formed*, so `atan2(dy_m, dx_m)` is the ordinary spelling of a bearing and MUST be admitted. A checker that gives `atan2` the `asin`/`acos`/`atan` dimensionless-argument rule rejects it. `atan2(dy_m, dx_s)` remains an ERROR — the operands are not commensurate. |
 | **Strict transcendentals** | The argument MUST be **dimensionless at scale 1** — a PURE NUMBER — and the result is dimensionless. The set is EXACTLY: `log` `log10` `exp` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` — nine ops, and no others. (`ln` is not an operator: the natural logarithm is `log`, §4.2, and an `ln` node is a rewrite-target like any other unknown op.) It is a CLOSED list, not a category to be extended by intuition: `sqrt`, `abs`, `min`, `max` are not members and have their own rules above. |
-| a reference (`apply_operator`), and so a resolved operator call | *(Draft 2.4.0.)* The referenced definition's **unit expression** (§9.6.12), evaluated by this table with each parameter standing for the unit of what the reference binds to it (a parameter bound to an axis name stands for that coordinate's unit); trailing operands that no parameter of the expression names do not enter it. A definition without a unit expression has the unit of its body, inferred by this table per instance without evaluating anything. |
+| a reference (`apply_operator`), and so a resolved call of a defined operator | *(Draft 2.4.0.)* The referenced definition's **unit expression** (§9.6.12), evaluated by this table with each parameter standing for the unit of what the reference binds to it (a parameter bound to an axis name stands for that coordinate's unit); trailing operands that no parameter of the expression names do not enter it. A definition without a unit expression has the unit of its body, inferred by this table per instance without evaluating anything. |
 | a call of `partial` or `integral`, resolved or not | *(Draft 2.4.0.)* The fixed unit expression of §4.2 ("The unit expressions of `partial` and `integral`"): `args[0]` over the `wrt` coordinate, `args[0]` times the `var` coordinate. A definition that resolves the call must agree with it (§9.6.12). |
-| any other unresolved operator call (a placeholder) | UNDETERMINABLE (§4.8.4). |
+| any other unresolved call of a defined operator (a placeholder) | UNDETERMINABLE (§4.8.4). |
 | any other op | No dimensional rule ⇒ the result is UNDETERMINABLE (§4.8.4). It is **not** dimensionless. |
 
 **Angles are the ONE exception to the dimensionless-argument rule, and they must be.** `rad` is one of the eight axes (§4.8.1), so an angle is NOT dimensionless — which means a rule that demanded a dimensionless argument for *every* transcendental would make `cos(θ)` illegal, and `cos(θ)` is the single most common operation in earth science. It would reject the shipped standard library (`lib/solar.esm`: `cos_zenith = sin φ · sin δ + cos φ · cos δ · cos ω`) and `tests/valid/lib_solar_subsystem_inclusion.esm` (`cos(Solar.solar_zenith_angle)`) along with it. The circular functions map an angle to a pure ratio and their inverses map a ratio back to an angle; the hyperbolic and logarithmic/exponential functions do not, and keep the strict rule. This is the only place where tracking `rad` as an axis costs anything, and it is what tracking it buys: a latitude in `deg` stays distinguishable from a bare number.
@@ -5161,10 +5170,10 @@ An `operators` entry is a **rewrite rule**: a set of metavariable `params`, an E
 | Case | `match` | Applied by |
 |---|---|---|
 | **Variable substitution** | a bare metavariable | binding a name → AST |
-| **Operator call** | *absent* | a call `{op: N, args}` of the operator `N` the definition defines (§9.6.12), or an explicit `apply_operator` reference to the definition |
+| **Operator call** | *absent* | a call `{op: N, args}` of the defined operator `N` the definition defines (§9.6.12), or an explicit `apply_operator` reference to the definition |
 | **Pattern definition** (e.g. a stencil for `partial`, a Hamilton–Jacobi norm) | a pattern like `{op:"partial", args:["f"], wrt:"d"}` or a compound one | auto-applied wherever the pattern matches |
 
-The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary operator definition** that lowers a call (a `partial` on a right-hand side, a `div`, any operator, §4.2) into a `faq` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
+The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary definition** that lowers a call (a `partial` on a right-hand side, a `div`, any defined operator, §4.2) into a `faq` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
 
 **No step of this mechanism inlines a body.** A firing rule replaces the matched node with a *reference* to the rule, bound to what the match captured (§9.6.3 constraint 7); rules apply inside definition bodies once per definition instance, not by expanding references into the tree (§9.6.4 rule 3). A reference denotes its expansion (§9.6.4 rule 2), so what a document means is unchanged by this; what changes is that one discretization rule applied at many sites is one body, shared, in the loaded and the emitted document.
 
@@ -5195,7 +5204,7 @@ Required fields:
 
 Optional fields:
 
-- `defines` *(draft 2.4.0)*: the name of the operator this entry is a definition of (§9.6.12). Absent, it is the `op` of the `match` pattern's root when that is not a core op (§4.2), and otherwise the entry's key. A definition with a compound `match` rooted at a core op (`sqrt`, `+`) defines no callable name; its `defines`, if written, is provenance only.
+- `defines` *(draft 2.4.0)*: the name of the defined operator this entry is a definition of (§9.6.12). Absent, it is the `op` of the `match` pattern's root when that is not a core op (§4.2), and otherwise the entry's key. A definition with a compound `match` rooted at a core op (`sqrt`, `+`) defines no callable name; its `defines`, if written, is provenance only. Any other definition whose `defines`, written or inferred, is a core op's name (an entry keyed `exp` with no `match`, or one writing `"defines": "exp"`) is rejected at load with `operator_defines_core_op` (§9.6.12, "Core names are reserved").
 - `units` *(draft 2.4.0)*: the definition's **unit expression**, an Expression tree over the entry's `params` built from `*`, `/` and `^` (with a constant exponent), names and unit-bearing `const` nodes (§4.8.5): `{"op": "/", "args": ["f", "d"]}` for a derivative whose axis parameter is `d`, `{"op": "*", "args": ["f", "v"]}` for an integral, `{"op": "/", "args": ["F", {"op": "const", "args": [], "value": 1, "units": "m"}]}`. A parameter stands for the unit of what a call binds to it: an operand's unit, or, for a parameter bound to an axis name in a scalar field (`wrt`, `var`, `dim`), that coordinate's unit. Any other name stands for its own declared unit, as in any expression (§4.8.4): a rule that matches the literal axis `wrt: "lon"` writes `{"op": "/", "args": ["f", "lon"]}`. It is evaluated without evaluating the body (§4.8.3, §9.6.12).
 - `match`: a pattern Expression that makes the entry an **auto-applied rewrite rule**. Parameter names appearing as bare strings in `match` are wildcards: a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field (e.g. `dim`, `side`) binds to the matched literal. A **non-parameter** string in an operand/`args` position is a **literal**: it matches only that exact bare variable reference (numbers and booleans likewise match literally; arrays match elementwise at equal length; an object pattern constrains exactly the fields it names, extra node fields are permitted). A ground `args` entry is the sanctioned **per-variable selector** — `{"op": "D", "args": ["u"], "wrt": "x"}` with `u` not in `params` fires only on the derivative of `u`, so mixed schemes on one axis (upwind for `u`, central for `v`) are two rules with ground patterns, ranked by explicit `priority` (§9.6.8). The rule fires wherever `match` structurally matches a node and its `where` constraints (below), if any, are satisfied — in a component's expression positions and inside the bodies of the definitions they reference (§9.6.4 rule 3) — and replaces the node with a reference to itself (§9.6.3 constraint 7). When `match` is absent the entry is applied only by explicit `apply_operator` invocation (§9.6.2).
 
@@ -5229,8 +5238,8 @@ Required fields:
 
 *(Draft 2.4.0.)* `apply_operator` is the former `apply_expression_template`, which a loader still
 reads, rewriting it to `apply_operator` with the warning `deprecated_op`. `name` names a
-**definition** (a registry key), never an operator name. An operator **call** `{"op": N,
-"args": [...], …}` names an operator; the §9.6.3 fixpoint replaces it with a reference to the
+**definition** (a registry key), never an operator name. A **call** `{"op": N,
+"args": [...], …}` names a defined operator; the §9.6.3 fixpoint replaces it with a reference to the
 definition of `N` it selects (§9.6.12), so a reference is what survives load.
 
 #### 9.6.3 Constraints (normative)
@@ -5599,10 +5608,11 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3), counted as rewrite depth through definition bodies, or a definition instance's rewriting needs the same instance again (§9.6.4 rule 3). |
 | `derived_index_set_unmaterialized` | An expression ranges over a `kind: "derived"` index set whose producer could not be materialized at build — a `distinct` producer whose key column is not a constant factor (§4.2), or a producer no stage evaluated. Raised when the model is built for evaluation, naming the index set and its `from_faq` producer. The evaluator MUST NOT contract the range as empty: an empty range folds to the semiring's additive identity, and a `0` indistinguishable from a real count is exactly the silent wrong answer this code exists to prevent. |
 | `value_invention_key_out_of_range` | A `distinct` producer's `key`, or a column a value-invention `join.on` clause reads, evaluates to NaN at build. The key definitions of `lib/relational.esm` (`pair_key`, `edge_key`) return NaN for a component that is outside its declared range, non-integral or NaN, so that a key can never collide silently with another; this code is how that reaches the author. Raised when value invention runs, naming the column (the producer whose `key` it is, or the join column) and the loop indices at which it was NaN. Takes precedence over `derived_index_set_unmaterialized`: the producer ran, and the column, not the data, is wrong. Fixture: `tests/conformance/value_invention_materialize/fixtures/key_out_of_range.esm`. |
-| `operator_arity_mismatch` | *(Draft 2.4.0.)* At load: a call of an operator whose definitions in scope all take another number of operands (§9.6.12). |
+| `operator_arity_mismatch` | *(Draft 2.4.0.)* At load: a call of a defined operator whose definitions in scope all take another number of operands (§9.6.12). |
+| `operator_defines_core_op` | *(Draft 2.4.0.)* At load: a definition whose `defines`, written or inferred, is the name of a core op (§4.2) — an entry keyed `exp` with no `match`, or one writing `"defines": "exp"`. A rule whose `match` is rooted at a core op is exempt: its `defines` is provenance only (§9.6.1, §9.6.12 "Core names are reserved"). |
 | `deprecated_field` | *(Draft 2.4.0, warning.)* A document spells `expression_templates` or `expression_template_imports`; the loader reads it as `operators` or `operator_imports`. Neither old spelling survives into the loaded or emitted document. |
 | `definition_unit_mismatch` | *(Draft 2.4.0.)* At a call, a definition's body has a determinable unit that disagrees with its unit expression: an **error**. When the body's unit is undeterminable the same finding is a **warning** (§9.6.12). |
-| `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. *(Draft 2.4.0: an operator call no definition resolved, or a placeholder. The message MUST name the operator and the call, and list each definition of that operator in scope with the reason it was not eligible there — its `match` did not match, its `where` failed (naming the constraint and the operand's declared shape), or its arity differed.)* Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
+| `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. *(Draft 2.4.0: a call of a defined operator no definition resolved, or a placeholder. The message MUST name the defined operator and the call, and list each definition of it in scope with the reason it was not eligible there — its `match` did not match, its `where` failed (naming the constraint and the operand's declared shape), or its arity differed.)* Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
 | `unevaluable_operator` | An op that IS in the evaluable-core set (§4.2) reached an evaluator that has no evaluation rule for it. The complement of `unlowered_operator`, and the two are distinguished by which side of §4.2 the op falls on: `unlowered_operator` means the op is OUTSIDE evaluable-core and no rewrite rule eliminated it (the document is under-lowered), whereas `unevaluable_operator` means the op is INSIDE evaluable-core but *this* evaluator cannot produce a value for it — because an earlier pipeline stage (value invention, or a lowering pass) should have eliminated it, or because the document was built for a different runtime (a binding may legitimately offer more than one evaluator, e.g. a scalar ODE interpreter alongside a whole-array one, with different rule sets). The check MUST precede evaluation: the evaluator walks the whole expression (or, where it has a build step, every expression it builds) and refuses up front, so no part of an expression carrying such an op is evaluated — an op in the untaken branch of an `ifelse` is refused too. Raising only when evaluation happens to reach the node does not satisfy this. The diagnostic MUST name the offending op, and the evaluator MUST NOT evaluate the op to a sentinel value (NaN, zero, or any other number): a sentinel is indistinguishable from a legitimate numerical result and would propagate into the solution. Binding-local spellings of this condition (`E_TREEWALK_UNSUPPORTED_OP`, `unsupported_operator`, an uncoded interpreter error) are superseded by this code; the shared fixture is `tests/conformance/unevaluable_operator/`. |
 | `unsupported_construct` | A model construct reached an evaluator that cannot run it: a **continuous event** (`continuous_events`), a **discrete event** (`discrete_events`), an **implicit equation** — one whose LHS is an expression rather than an unknown (bare or indexed), a time derivative of one, or `ic` of one, and so constrains its operands without defining any of them — or **Wiener noise**, a parameter whose `update.kind` is `wiener`, which makes the document an SDE (§6.3.1) that an ODE evaluator would otherwise run with the noise read as a constant. Fires at BUILD, before evaluation, and MUST name the construct and the evaluator. It is reported rather than skipped: an evaluator that runs the model without the event, or without solving the residual, reports an answer the document does not describe. An evaluator that does run the construct (e.g. a ModelingToolkit export) never raises it. A caller that runs the construct itself asks for it to be removed and handed back instead, per construct class, with `esm_problem`'s `strip` (API_SPEC.md §5.8, "Strip and expose"); a construct the caller did not name is still refused with this code, and Wiener noise is never strippable. |
 | `callback_unregistered` | An equation reads a variable that a `callback` coupling entry injects (`coupling[i].config.callback_variables[j].name`, a declaration site per §4.9), and no callback supplying it is registered at construction. The value is the host's to supply, and no binding has a seam to register one before the build. So a build that went ahead would read a placeholder (zero, NaN, or an unset forcing slot) the document does not describe. It fires at BUILD, before evaluation, and names the variable, the reading system and the `callback_id`. Loading and validation are unaffected: the variable IS declared. |
@@ -5720,6 +5730,7 @@ Every `emitted.esm` golden of a fixture in which a rule fires changes under this
 - `opacity_priority_shadowing/` — the silent form of the divergence: a high-priority compound rule whose structural fragment is hidden in a target-free reference, plus a lower-priority generic rule; the golden pins that the compound rule does NOT fire and the generic rule DOES (binding the surviving reference whole).
 - `per_instantiation_validation/` — a definition parameterized on a scalar field, two call sites, one inadmissible: rejected on the expanded-equivalent check (§9.6.9), naming the offending call site.
 - `flatten_registry_merge/` — two components referencing one stencil (dedup) and a forced non-equal collision (deterministic owner-path rename).
+- `operator_defines_core_op/` *(draft 2.4.0)* — invalid at load: an entry keyed `exp` with no `match` (`defines` inferred as the key), and, as a second document, an entry writing `"defines": "exp"` → `operator_defines_core_op`, naming the definition and the core op; a third document, valid, holds a compound rule whose `match` is rooted at `sqrt` and whose key is `exp`, which is exempt (§9.6.12 "Core names are reserved").
 - Property over **all** fixtures, all five bindings: `emit ∘ load` idempotent byte-wise.
 
 #### 9.6.8 Discretizing spatial derivatives (definitions of `partial`)
@@ -5887,23 +5898,45 @@ Whether an argument is array-valued is decided on the **flattened** system (§10
 
 > **Draft (proposed for 2.4.0).** This subsection replaces three earlier notions — the open
 > rewrite-target tier with its user ops, the rewrite-target sugar, and expression templates —
-> with one: the **operator**, given by its **definitions**. Terminology: earlier revisions
+> with one: the **defined operator**, given by its **definitions**. Terminology: earlier revisions
 > called a definition an *expression template*, its block `expression_templates` and its
 > reference `apply_expression_template`; this text says *definition*, `operators` and
 > `apply_operator` throughout. A *rule* is a definition with a `match`; a *rewrite-target* is
-> an unresolved operator call.
+> an unresolved call of a defined operator.
 
-**Operators and definitions.** Every `op` string that is not core (§4.2) and not removed names
-an **operator**. Every entry of an `operators` block (§9.6.1) — in a component, or in an
-operator-library file the component imports (§9.7) — is a **definition** of exactly one
-operator, the one its `defines` field names (§9.6.1; inferred when absent, so every entry an
+**Terminology: core operators and defined operators.** The two kinds of `op` are named apart.
+A **core operator** (core op) is one of the closed set §4.2 lists — arithmetic, comparisons,
+elementary functions, `ifelse`, `D`, `ic`, the array and query ops — which every binding's
+evaluator implements and which only a spec revision changes. A **defined operator** is every
+other operator: it has no evaluator and means what its definitions in scope say. `partial` and
+`integral` are defined operators whose call shapes and unit expressions §4.2 fixes. The block
+that holds definitions keeps the name `operators`; its entries define defined operators, never
+core ones. Where this specification says "operator" without qualification in the context of
+definitions, calls and placeholders, it means a defined operator.
+
+**Defined operators and definitions.** Every `op` string that is not a core op (§4.2) and not
+removed names a **defined operator**. Every entry of an `operators` block (§9.6.1) — in a
+component, or in an operator-library file the component imports (§9.7) — is a **definition**
+of exactly one defined operator, the one its `defines` field names (§9.6.1; inferred when absent, so every entry an
 earlier document wrote keeps its meaning). A definition carries `params` and a `body`, and
 optionally `match`, `where`, `priority` and a unit expression `units`. **Several definitions may
-share an operator name**, in one file (under distinct keys) and across the files a component
-imports; there is no separate declaration of an operator and no distinction between a "defined"
-and an "abstract" one.
+share a defined operator's name**, in one file (under distinct keys) and across the files a
+component imports; there is no separate declaration of a defined operator and no distinction
+between one with definitions and an "abstract" one.
 
-**Calls.** A call `{"op": N, "args": [...], …}` of an operator is resolved by the §9.6.3
+**Core names are reserved.** A definition whose `defines` — written, or inferred as §9.6.1
+states — is the name of a core op is rejected at load with `operator_defines_core_op`, naming
+the definition and the core op: an entry keyed `exp` with no `match`, and an entry writing
+`"defines": "exp"`, are both refused, wherever they are declared (a component, or an
+operator-library file the component imports). A core op's meaning is fixed by §4.2 and cannot be
+overridden, and a call of a core op is never resolved to a definition. The one exception is
+unchanged: a rule whose `match` is rooted at a core op (a compound pattern such as
+`sqrt(… + …)`) defines no callable name, and its `defines`, written or inferred, is provenance
+only, so it is not checked. Because of this rule, a later revision of this specification that
+adds a core op turns every existing definition of that name into a loud load error, never into a
+silent change of meaning.
+
+**Calls.** A call `{"op": N, "args": [...], …}` of a defined operator is resolved by the §9.6.3
 fixpoint: at the call the engine collects the definitions eligible there (§9.6.3 constraint 2 —
 a `match` that matches the call, or no `match` and the call's operands bound to `params` in
 order), keeps those whose `where` holds, and selects one by `priority`, then a `where` before
@@ -5914,10 +5947,10 @@ rule 3), and an evaluator meets nothing else.
 
 **Overriding** is one more definition: one whose `where` is narrower (it is preferred at equal
 `priority` to an unscoped one) or whose `priority` is higher. A model overrides a library's
-definition of an operator for its own grid by adding a definition, never by editing the
+definition of a defined operator for its own grid by adding a definition, never by editing the
 library.
 
-**Compound patterns.** A definition whose `match` is built from several operators — a
+**Compound patterns.** A definition whose `match` is built from several operators, core or defined, — a
 Hamilton–Jacobi norm `sqrt(partial(u, wrt: x)^2 + partial(u, wrt: y)^2)`, a sum of two
 derivatives — fires on that whole shape, as before; outermost-first selection gives it the
 shape before the inner calls are resolved. Such a definition defines no callable name (§9.6.1
@@ -5935,7 +5968,7 @@ imported definitions, not those a test or an assembly injects (§9.7.10).
 and round-trips unchanged — the discretization-agnostic component of §6.6.6, the test input
 `input_T()` that an injected library defines per test (§9.7.10). Its unit is UNDETERMINABLE
 (§4.8.3). It is an error only if evaluated: `unlowered_operator` (§9.6.3 constraint 6), whose
-message lists every definition of the operator in scope and why it was not eligible.
+message lists every definition of the defined operator in scope and why it was not eligible.
 
 **Units.** A call's unit is the unit expression of the definition it resolves to, evaluated
 from the units of what the call binds, without evaluating the body (§4.8.3, §9.6.1 `units`).
@@ -5953,17 +5986,17 @@ expressions with their call shapes, so their calls have a unit even unresolved, 
 definition of them is checked against it. Any other call with no definition in scope has an
 UNDETERMINABLE unit.
 
-**The spatial derivative and the standard names.** `partial` (§4.2) and `integral` are operator
-names whose call shapes and unit expressions this specification fixes — `partial`'s axis field
+**The spatial derivative and the standard names.** `partial` (§4.2) and `integral` are
+defined operators, not core ops: names whose call shapes and unit expressions this specification fixes — `partial`'s axis field
 `wrt`, its trailing operands and `[f]/[wrt]`; `integral`'s `var`, `lower`, `upper` and
 `[f]·[var]` — and for which it ships no definition (nor any entry without a body: the fixed facts
 are part of §4.2, not of an `operators` block).
 `grad`, `div`, `laplacian` and `curl` are names whose meaning a library documents (§9.8.5); this
 format fixes nothing about them. All six are placeholders until a definition is in scope.
 
-**Provenance.** A definition records the operator it defines (`defines`); emit writes it on
-every materialized definition, so a consumer of a loaded, emitted or flattened document can say
-which operator each reference resolved (a term is "`partial` along `lev`"), however the
+**Provenance.** A definition records the defined operator it defines (`defines`); emit writes it
+on every materialized definition, so a consumer of a loaded, emitted or flattened document can
+say which defined operator each reference resolved (a term is "`partial` along `lev`"), however the
 definition's key was renamed on import.
 
 **Old names (no refusal).** A loader reads `expression_templates` as `operators` and
