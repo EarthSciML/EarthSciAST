@@ -213,6 +213,20 @@ def test_template_instance_variants_repoint_call_sites():
     assert m["expression_templates"]["ddx.variant1"]["body"]["name"] == "central_1d"
 
 
+def test_canonical_compact_numbers_follow_5_5_3_1():
+    """Variant numbering sorts these bytes, so non-integral floats take the
+    CONFORMANCE_SPEC §5.5.3.1 layout every other binding writes."""
+    from earthsci_ast.lower_expression_templates import _canonical_compact
+
+    v = {"b": [1.0e-12, 2.0, 0.25, 1.0e16, 7], "a": -3.5e-6}
+    assert _canonical_compact(v) == '{"a":-3.5e-6,"b":[1.0e-12,2,0.25,10000000000000000,7]}'
+    # Bodies differing only by 1e-5 and 1.5 sort as the other bindings sort them.
+    assert _canonical_compact(1.0e-5) == "1.0e-5"
+    assert sorted([_canonical_compact(1.5), _canonical_compact(1.0e-5)]) == ["1.0e-5", "1.5"]
+    assert _canonical_compact(1.0e17) == "100000000000000000"
+    assert _canonical_compact(2.0**63) == "9.223372036854776e18"
+
+
 def test_leaf_bodied_rule_writes_its_leaf():
     e = _defining(_load("rule_writes_reference"), "m", "e")
     assert e == {"op": "*", "args": [0.25, "b"]}

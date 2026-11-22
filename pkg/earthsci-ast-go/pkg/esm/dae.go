@@ -281,6 +281,11 @@ func isDifferentialEquation(eq Equation) bool {
 // the model carries one, and the esm-spec §6.3.1 derivation otherwise. Before
 // 1.0.0 an undeclared model was assumed ODE, which quietly ran the factoring
 // over algebraic-only (nonlinear) systems that merely omitted the field.
+//
+// A model with spatial derivatives is an `ode` when it has a time derivative
+// (esm 2.4.0 dropped the "pde" kind), so the contract runs on it: a spatial
+// `D` on an equation LHS is algebraic, and an equation like `D(u, wrt: x) ~ 0`
+// survives factoring as a residual and raises E_NONTRIVIAL_DAE.
 func isDAETargetSystem(_ *ESMFile, model *Model) bool {
 	return EffectiveSystemKind(model) == SystemKindODE
 }
