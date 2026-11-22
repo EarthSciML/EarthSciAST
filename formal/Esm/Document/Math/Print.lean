@@ -605,11 +605,22 @@ def nabHead (sf : Sf) : NabK → List Tok
     | .typst => [.kw .nabla, .kw .caret, .num (.int 2)]
   | .curl => [.kw .nabla, .kw .times]
 
-/-- The operand of a `\nabla` form: printed at the level of a power base (`t`). After
-`\times` an operand that starts with a number is parenthesized too, so that no
-`\times 10^{…}` follows a token (the lexers read a number's scientific tail there). -/
-def nabArg (sf : Sf) (n : NabK) (t : List Tok) : List Tok :=
+/-- An operand printed at the level of a power base, `t`; after the `\times` of a curl, one
+that starts with a number in parentheses. -/
+def nabArg9 (sf : Sf) (n : NabK) (t : List Tok) : List Tok :=
   if n = .curl ∧ startsNum t = true then grp sf t else t
+
+/-- The printed form starts with `\nabla`. -/
+def startsNabla : List Tok → Bool
+  | .kw .nabla :: _ => true
+  | _ => false
+
+/-- The operand of a `\nabla` form: another `\nabla` form as it is (`\nabla \cdot \nabla u`
+is `div(grad(u))`), anything else at the level of a power base. After `\times` an operand
+that starts with a number is parenthesized too, so that no `\times 10^{…}` follows a token
+(the lexers read a number's scientific tail there). -/
+def nabArg (sf : Sf) (n : NabK) (o : Out) : List Tok :=
+  if startsNabla o.toks = true ∧ 6 ≤ o.lvl then o.toks else nabArg9 sf n (o.at sf 9)
 
 /-- The quantity `3\,\mathrm{m/s}` / `3 thin upright("m") thin upright("s")^(-1)`: the
 number, then the unit as one token. -/
@@ -1320,7 +1331,7 @@ def pr (c : Ctx) (e : Json) : Out :=
         if 2 ≤ xs.length then
           mkOut sf 10 (callToks sf [.kw k] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 1))
         else opn ()
-      | .nab n, [a] => mkOut sf 6 (nabHead sf n ++ nabArg sf n ((pr c a).at sf 9))
+      | .nab n, [a] => mkOut sf 6 (nabHead sf n ++ nabArg sf n (pr c a))
       | .call, xs => mkOut sf 10 (callToks sf [.opn o] (xs.attach.map fun ⟨x, _⟩ => (pr c x).at sf 4))
       | _, _ => opn ()
     | [("args", .arr as), ("op", .str "D"), ("wrt", .str w)] =>

@@ -597,28 +597,48 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
     | nab o n a ho ha hpr =>
       simp only [hc] at hpr
       have hA := POK_toks (IH a (sizeOf_node_lt (by simp)) ha) 9
-      have hN : AllOK (nabHead .latex n ++ nabArg .latex n ((pr c a).at .latex 9)) := by
-        cases n with
-        | curl =>
-          simp only [nabHead, nabArg, true_and]
-          by_cases hs : startsNum ((pr c a).at .latex 9) = true
-          · rw [if_pos hs]
-            have hG := allOK_grp (sf := .latex) rfl hA
-            simp only [grp, ↓reduceIte] at hG ⊢
-            exact allOK_cons' (show kwOK .nabla = true from rfl) (allOK_times_tok hG rfl)
-          · rw [if_neg hs]
-            have hh := headOK_at (M_of_isE c a ha) 9
-            rw [hc] at hh
-            obtain ⟨u, r, he⟩ : ∃ u r, (pr c a).at .latex 9 = u :: r := by
-              cases h : (pr c a).at .latex 9 with
-              | nil => rw [h] at hh; exact absurd hh (by simp [HeadOK])
-              | cons u r => exact ⟨u, r, rfl⟩
-            rw [he] at hA hs ⊢
-            have hu : startsNum [u] = false := by cases u <;> simp_all [startsNum]
-            exact allOK_cons' (show kwOK .nabla = true from rfl) (allOK_times_tok hA hu)
-        | grad => simp only [nabHead, nabArg, reduceCtorEq, false_and, ↓reduceIte]; aok
-        | div => simp only [nabHead, nabArg, reduceCtorEq, false_and, ↓reduceIte]; aok
-        | lap => simp only [nabHead, nabArg, reduceCtorEq, false_and, ↓reduceIte]; aok
+      have hT := (IH a (sizeOf_node_lt (by simp)) ha).1
+      have hN : AllOK (nabHead .latex n ++ nabArg .latex n (pr c a)) := by
+        unfold nabArg
+        by_cases hN6 : startsNabla (pr c a).toks = true ∧ 6 ≤ (pr c a).lvl
+        · rw [if_pos hN6]
+          obtain ⟨tr, htr⟩ : ∃ tr, (pr c a).toks = .kw .nabla :: tr := by
+            have h1 := hN6.1
+            cases ht : (pr c a).toks with
+            | nil => rw [ht] at h1; simp [startsNabla] at h1
+            | cons u us =>
+              rw [ht] at h1
+              cases u with
+              | kw k => cases k <;> simp [startsNabla] at h1 ⊢
+              | _ => simp [startsNabla] at h1
+          rw [htr] at hT ⊢
+          cases n with
+          | curl => exact allOK_cons' (show kwOK .nabla = true from rfl) (allOK_times_tok hT rfl)
+          | grad => simp only [nabHead]; aok
+          | div => simp only [nabHead]; aok
+          | lap => simp only [nabHead]; aok
+        · rw [if_neg hN6]
+          cases n with
+          | curl =>
+            simp only [nabHead, nabArg9, true_and]
+            by_cases hs : startsNum ((pr c a).at .latex 9) = true
+            · rw [if_pos hs]
+              have hG := allOK_grp (sf := .latex) rfl hA
+              simp only [grp, ↓reduceIte] at hG ⊢
+              exact allOK_cons' (show kwOK .nabla = true from rfl) (allOK_times_tok hG rfl)
+            · rw [if_neg hs]
+              have hh := headOK_at (M_of_isE c a ha) 9
+              rw [hc] at hh
+              obtain ⟨u, r, he⟩ : ∃ u r, (pr c a).at .latex 9 = u :: r := by
+                cases h : (pr c a).at .latex 9 with
+                | nil => rw [h] at hh; exact absurd hh (by simp [HeadOK])
+                | cons u r => exact ⟨u, r, rfl⟩
+              rw [he] at hA hs ⊢
+              have hu : startsNum [u] = false := by cases u <;> simp_all [startsNum]
+              exact allOK_cons' (show kwOK .nabla = true from rfl) (allOK_times_tok hA hu)
+          | grad => simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte]; aok
+          | div => simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte]; aok
+          | lap => simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte]; aok
       rw [hpr]; simp only [mkOut]
       refine ⟨hN, allOK_app hN ?_⟩
       aok

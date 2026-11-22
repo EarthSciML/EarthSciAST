@@ -580,10 +580,16 @@ def pNot (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
     | some (x, r') => some (node "not" [x], r')
     | none => none
   | f + 1, .kw .nabla :: r =>
-    match pPost c f (nabTail c.sf r).2 with
+    match pNabArg c f (nabTail c.sf r).2 with
     | some (x, r') => some (node (nabTail c.sf r).1 [x], r')
     | none => none
   | f + 1, ts => pFrac c f ts
+
+/-- The operand of a `\nabla` form: another `\nabla` form, or a postfix-level operand. -/
+def pNabArg (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
+  | 0, _ => none
+  | f + 1, .kw .nabla :: r => pNot c f (.kw .nabla :: r)
+  | f + 1, r => pPost c f r
 
 /-- Level 7: the Typst fraction, grouping to the left. -/
 def pFrac (c : Ctx) : Nat → List Tok → Option (Json × List Tok)

@@ -769,30 +769,60 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
       obtain ⟨hA, hAn, hAne⟩ := CH a (sizeOf_node_lt (by simp)) ha 9
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       refine mk_ok ?_ hselfN.1 hselfN.2
-      cases n with
-      | grad =>
-        simp only [nabHead, nabArg, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
-        exact good_cons rfl hA hAn
-      | div =>
-        simp only [nabHead, nabArg, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
-        exact good_cons rfl (good_cons rfl hA hAn) (nice_cons _ (by simp) rfl)
-      | lap =>
-        simp only [nabHead, nabArg, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
-        exact good_cons rfl (good_cons rfl (good_cons tokOK_num2 hA hAn) (nice_cons _ (by simp) rfl))
-          (nice_cons _ (by simp) rfl)
-      | curl =>
-        simp only [nabHead, nabArg, true_and, List.cons_append, List.nil_append]
-        by_cases hs : startsNum ((pr c a).at .typst 9) = true
-        · rw [if_pos hs]
-          have hG := good_grp hA hAn
-          simp only [grp, reduceCtorEq, ↓reduceIte] at hG ⊢
-          exact good_cons rfl (good_times_tok hG rfl (by simp)) (nice_cons _ (by simp) rfl)
-        · rw [if_neg hs]
-          obtain ⟨u, r, he⟩ := List.exists_cons_of_ne_nil hAne
-          rw [he] at hA hs ⊢
-          have hu : startsNum [u] = false := by cases u <;> simp_all [startsNum]
-          have hlp : u ≠ .kw .lp := ((hAn u (by rw [he]; rfl)).1)
-          exact good_cons rfl (good_times_tok hA hu hlp) (nice_cons _ (by simp) rfl)
+      unfold nabArg
+      by_cases hN6 : startsNabla (pr c a).toks = true ∧ 6 ≤ (pr c a).lvl
+      · rw [if_pos hN6]
+        obtain ⟨hB, hBn, hBne⟩ := CH a (sizeOf_node_lt (by simp)) ha 6
+        rw [at_eq, iteT hN6.2] at hB hBn hBne
+        obtain ⟨tr, htr⟩ : ∃ tr, (pr c a).toks = .kw .nabla :: tr := by
+          have h1 := hN6.1
+          cases ht : (pr c a).toks with
+          | nil => rw [ht] at h1; simp [startsNabla] at h1
+          | cons u us =>
+            rw [ht] at h1
+            cases u with
+            | kw k => cases k <;> simp [startsNabla] at h1 ⊢
+            | _ => simp [startsNabla] at h1
+        cases n with
+        | grad =>
+          simp only [nabHead, List.cons_append, List.nil_append]
+          exact good_cons rfl hB hBn
+        | div =>
+          simp only [nabHead, List.cons_append, List.nil_append]
+          exact good_cons rfl (good_cons rfl hB hBn) (nice_cons _ (by simp) rfl)
+        | lap =>
+          simp only [nabHead, List.cons_append, List.nil_append]
+          exact good_cons rfl (good_cons rfl (good_cons tokOK_num2 hB hBn) (nice_cons _ (by simp) rfl))
+            (nice_cons _ (by simp) rfl)
+        | curl =>
+          simp only [nabHead, List.cons_append, List.nil_append]
+          rw [htr] at hB ⊢
+          exact good_cons rfl (good_times_tok hB rfl (by simp)) (nice_cons _ (by simp) rfl)
+      · rw [if_neg hN6]
+        cases n with
+        | grad =>
+          simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
+          exact good_cons rfl hA hAn
+        | div =>
+          simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
+          exact good_cons rfl (good_cons rfl hA hAn) (nice_cons _ (by simp) rfl)
+        | lap =>
+          simp only [nabHead, nabArg9, reduceCtorEq, false_and, ↓reduceIte, List.cons_append, List.nil_append]
+          exact good_cons rfl (good_cons rfl (good_cons tokOK_num2 hA hAn) (nice_cons _ (by simp) rfl))
+            (nice_cons _ (by simp) rfl)
+        | curl =>
+          simp only [nabHead, nabArg9, true_and, List.cons_append, List.nil_append]
+          by_cases hs : startsNum ((pr c a).at .typst 9) = true
+          · rw [if_pos hs]
+            have hG := good_grp hA hAn
+            simp only [grp, reduceCtorEq, ↓reduceIte] at hG ⊢
+            exact good_cons rfl (good_times_tok hG rfl (by simp)) (nice_cons _ (by simp) rfl)
+          · rw [if_neg hs]
+            obtain ⟨u, r, he⟩ := List.exists_cons_of_ne_nil hAne
+            rw [he] at hA hs ⊢
+            have hu : startsNum [u] = false := by cases u <;> simp_all [startsNum]
+            have hlp : u ≠ .kw .lp := ((hAn u (by rw [he]; rfl)).1)
+            exact good_cons rfl (good_times_tok hA hu hlp) (nice_cons _ (by simp) rfl)
     | tru o ho hpr =>
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
       exact mk_ok (good_single (tokOK_txt _ (by decide))) hselfN.1 hselfN.2

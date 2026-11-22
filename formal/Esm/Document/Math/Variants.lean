@@ -230,6 +230,17 @@ theorem variant_partial_t_typst (c : Ctx) (hc : c.sf = .typst) (a : Json) (ha : 
   rw [pName_t c.sf _ (nameStop_kw c.sf .rp (by decide) (by decide) rest)]
   simp [derivNode]
 
+/-- The earlier trailing-operand form `\operatorname{D}_{x}(u, a, b)` / `op("D")_(x)(u, a, b)`
+reads exactly as `\partial_{x}(u, a, b)` / `partial_(x)(u, a, b)`: as `partial` with trailing
+operands (spec §1.2). -/
+theorem variant_operatorname_d (c : Ctx) (f : Nat) (r : List Tok) :
+    pPrim c (f + 2) (.opn "D" :: .kw .us :: r) = pPrim c (f + 1) (.kw .pdiff :: .kw .us :: r) := by
+  rw [pPrim_opn, pOpn_D, pPrim_pdcall]
+
+/-- A fraction of differentials along an axis other than `t` reads as `partial`, never `D`. -/
+theorem variant_partial_axis (x : Json) (w : String) (hw : w ≠ "t") : derivNode x w = pNode x w :=
+  derivNode_ne hw x
+
 /-- `\mathit{name}` / `italic("name")` reads as the name, for any name (the explicit name
 shape), before anything that does not continue a name. -/
 theorem variant_italic_name (c : Ctx) (s : String) (rest : List Tok) (hr : Fol c.sf 10 rest) (f : Nat) :

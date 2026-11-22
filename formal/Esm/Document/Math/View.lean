@@ -96,7 +96,7 @@ inductive V (c : Ctx) : Json → Prop where
       (hpr : pr c (node o xs) = mkOut c.sf 10 (callToks c.sf [.kw k] (xs.map fun x => (pr c x).at c.sf 1))) :
       V c (node o xs)
   | nab (o : String) (n : NabK) (a : Json) (ho : kindOf o = .nab n) (ha : isE a = true)
-      (hpr : pr c (node o [a]) = mkOut c.sf 6 (nabHead c.sf n ++ nabArg c.sf n ((pr c a).at c.sf 9))) :
+      (hpr : pr c (node o [a]) = mkOut c.sf 6 (nabHead c.sf n ++ nabArg c.sf n (pr c a))) :
       V c (node o [a])
   | call (o : String) (xs : List Json) (ho : kindOf o = .call) (hx : ∀ x ∈ xs, isE x = true)
       (hpr : pr c (node o xs) = mkOut c.sf 10 (callToks c.sf [.opn o] (xs.map fun x => (pr c x).at c.sf 4))) :

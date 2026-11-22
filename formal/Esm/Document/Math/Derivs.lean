@@ -332,11 +332,11 @@ theorem nabTail_head (sf : Sf) (n : NabK) (X : List Tok)
 theorem nabHead_cons (sf : Sf) (n : NabK) : nabHead sf n = .kw .nabla :: (nabHead sf n).tail := by
   cases n <;> (try cases sf) <;> rfl
 
-/-- The operand of a `\nabla` form reads back at level 9. -/
-theorem nabArg_read {c : Ctx} {a : Json} (ha : M c a) (n : NabK) (rest : List Tok) (hr : Fol c.sf 9 rest)
-    (g : Nat) (hg : need 9 (nabArg c.sf n ((pr c a).at c.sf 9)).length ≤ g) :
-    pPost c g (nabArg c.sf n ((pr c a).at c.sf 9) ++ rest) = some (a, rest) := by
-  unfold nabArg at hg ⊢
+/-- An operand of a `\nabla` form that is not itself one reads back at level 9. -/
+theorem nabArg9_read {c : Ctx} {a : Json} (ha : M c a) (n : NabK) (rest : List Tok) (hr : Fol c.sf 9 rest)
+    (g : Nat) (hg : need 9 (nabArg9 c.sf n ((pr c a).at c.sf 9)).length ≤ g) :
+    pPost c g (nabArg9 c.sf n ((pr c a).at c.sf 9) ++ rest) = some (a, rest) := by
+  unfold nabArg9 at hg ⊢
   by_cases hn : n = .curl ∧ startsNum ((pr c a).at c.sf 9) = true
   · rw [if_pos hn] at hg ⊢
     have hlvl : 9 ≤ (pr c a).lvl := by
@@ -353,23 +353,43 @@ theorem nabArg_read {c : Ctx} {a : Json} (ha : M c a) (n : NabK) (rest : List To
     have := PL_at ha 9 (by omega) (by omega) rest hr g hg
     rwa [pLvl9] at this
 
-theorem nabArg_head {c : Ctx} {a : Json} (ha : M c a) (n : NabK) (rest : List Tok) :
-    ∀ t r, nabArg c.sf n ((pr c a).at c.sf 9) ++ rest = t :: r →
-      t ≠ .kw .cdot ∧ t ≠ .kw .times ∧ t ≠ .kw .caret := by
+theorem nabArg9_head {c : Ctx} {a : Json} (ha : M c a) (n : NabK)
+    (hno : ¬(startsNabla (pr c a).toks = true ∧ 6 ≤ (pr c a).lvl)) (rest : List Tok) :
+    ∀ t r, nabArg9 c.sf n ((pr c a).at c.sf 9) ++ rest = t :: r →
+      t ≠ .kw .cdot ∧ t ≠ .kw .times ∧ t ≠ .kw .caret ∧ t ≠ .kw .nabla := by
   intro t r he
-  have hh : HeadOK c (nabArg c.sf n ((pr c a).at c.sf 9) ++ rest) := by
+  have hh : HeadOK c (nabArg9 c.sf n ((pr c a).at c.sf 9) ++ rest) := by
     apply headOK_append
-    unfold nabArg
+    unfold nabArg9
     split
     · simp only [grp, List.cons_append, HeadOK]
       exact ⟨by simp, by simp, by simp, by simp, by simp, Or.inl (by simp [startA, atomStart])⟩
     · exact headOK_at ha 9
+  have hnab : t ≠ .kw .nabla := by
+    rintro rfl
+    unfold nabArg9 at he
+    by_cases hlv : 9 ≤ (pr c a).lvl
+    · have heq : (pr c a).at c.sf 9 = (pr c a).toks := by rw [at_eq, iteT hlv]
+      rw [heq] at he
+      split at he
+      · simp [grp] at he
+      · cases ht : (pr c a).toks with
+        | nil => have h0 := M_head ha; rw [ht] at h0; simp [HeadOK] at h0
+        | cons u us =>
+          rw [ht] at he
+          simp only [List.cons_append, List.cons.injEq] at he
+          apply hno
+          rw [ht, he.1]
+          exact ⟨rfl, by omega⟩
+    · have heq : (pr c a).at c.sf 9 = grp c.sf (pr c a).toks := by rw [at_eq, iteF hlv]
+      rw [heq] at he
+      split at he <;> simp [grp] at he
   rw [he] at hh
   have h6 := hh.2.2.2.2.2
-  refine ⟨?_, ?_, ?_⟩ <;> (rintro rfl; rcases h6 with h | h <;> simp [startA, atomStart] at h)
+  refine ⟨?_, ?_, ?_, hnab⟩ <;> (rintro rfl; rcases h6 with h | h <;> simp [startA, atomStart] at h)
 
 theorem M_nab (c : Ctx) (o : String) (n : NabK) (a : Json) (ho : kindOf o = .nab n) (ha : M c a)
-    (hpr : pr c (node o [a]) = mkOut c.sf 6 (nabHead c.sf n ++ nabArg c.sf n ((pr c a).at c.sf 9))) :
+    (hpr : pr c (node o [a]) = mkOut c.sf 6 (nabHead c.sf n ++ nabArg c.sf n (pr c a))) :
     M c (node o [a]) := by
   have hon : o = nabName n := by
     rcases kindOf_nab ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> rfl
@@ -377,15 +397,41 @@ theorem M_nab (c : Ctx) (o : String) (n : NabK) (a : Json) (ho : kindOf o = .nab
   apply M_of
   · intro rest hr f hf
     simp only [hpr, mkOut] at hr hf ⊢
-    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by unfold need at hf; omega⟩
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 2 := ⟨f - 2, by unfold need at hf; omega⟩
     have hlen : (nabHead c.sf n).length ≤ 5 := by cases n <;> (try cases c.sf) <;> simp [nabHead]
-    have hp := nabArg_read ha n rest (hr.mono (by omega)) g (by
-      simp only [List.length_append] at hf; unfold need at hf ⊢; omega)
+    have hlen1 : 1 ≤ (nabHead c.sf n).length := by cases n <;> (try cases c.sf) <;> simp [nabHead]
     rw [pLvl6, nabHead_cons]
     simp only [List.append_assoc, List.cons_append]
-    rw [pNot.eq_3, nabTail_head c.sf n _ (nabArg_head ha n rest)]
-    simp only
-    rw [hp]
+    rw [pNot.eq_3]
+    unfold nabArg at hf ⊢
+    by_cases hA : startsNabla (pr c a).toks = true ∧ 6 ≤ (pr c a).lvl
+    · rw [if_pos hA] at hf ⊢
+      obtain ⟨tr, htr⟩ : ∃ tr, (pr c a).toks = .kw .nabla :: tr := by
+        have h1 := hA.1
+        cases ht : (pr c a).toks with
+        | nil => rw [ht] at h1; simp [startsNabla] at h1
+        | cons u us =>
+          rw [ht] at h1
+          cases u with
+          | kw k => cases k <;> simp [startsNabla] at h1 ⊢
+          | _ => simp [startsNabla] at h1
+      have h6 := PL_at ha 6 (by omega) (by omega) rest hr g (by
+        rw [at_eq, iteT hA.2]; simp only [List.length_append] at hf; unfold need at hf ⊢; omega)
+      rw [pLvl6, at_eq, iteT hA.2] at h6
+      rw [nabTail_head c.sf n _ (by
+        intro t r he; rw [htr] at he; simp only [List.cons_append, List.cons.injEq] at he
+        obtain ⟨rfl, -⟩ := he; refine ⟨?_, ?_, ?_⟩ <;> simp)]
+      simp only
+      rw [htr]
+      simp only [List.cons_append]
+      rw [pNabArg.eq_2, ← List.cons_append, ← htr, h6]
+    · rw [if_neg hA] at hf ⊢
+      have hh := nabArg9_head ha n hA rest
+      rw [nabTail_head c.sf n _ (fun t r he => ⟨(hh t r he).1, (hh t r he).2.1, (hh t r he).2.2.1⟩)]
+      simp only
+      rw [pNabArg.eq_3 _ _ _ (fun r he => (hh _ r he).2.2.2 rfl)]
+      rw [nabArg9_read ha n rest (hr.mono (by omega)) g (by
+        simp only [List.length_append] at hf; unfold need at hf ⊢; omega)]
   · rw [hpr, nabHead_cons]; exact headOK_kw c _ _ ⟨.nabla, rfl, rfl, by decide, by decide⟩
   · rw [hpr]; simp [mkOut]
   · rw [hpr]; simp [mkOut]
