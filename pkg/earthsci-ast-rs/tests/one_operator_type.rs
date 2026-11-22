@@ -236,3 +236,32 @@ fn old_codes_are_aliases_of_the_new_ones() {
         );
     }
 }
+
+/// esm-spec §9.6.12: an object spelling both `expression_templates` and
+/// `operators` is `operator_invalid_definition`, whether the library is
+/// loaded itself or imported.
+#[test]
+fn a_library_with_both_spellings_is_refused_alike_at_the_root_and_imported() {
+    let mut lib = read_json(&oot("old_names").join("lib_new.esm"));
+    lib["expression_templates"] = lib["operators"].clone();
+    let host = serde_json::json!({
+        "esm": "2.4.0",
+        "metadata": {"name": "importer"},
+        "models": {"m": {
+            "operator_imports": [{"ref": "lib.esm"}],
+            "variables": {"u": {"type": "unknown", "units": "1", "default": 1.0}},
+            "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "u"}]
+        }}
+    });
+    let d = tempfile::tempdir().expect("tempdir");
+    std::fs::write(d.path().join("lib.esm"), lib.to_string()).expect("write lib");
+    std::fs::write(d.path().join("host.esm"), host.to_string()).expect("write host");
+    for f in ["lib.esm", "host.esm"] {
+        let err = earthsci_ast::load_path(d.path().join(f)).expect_err("refused");
+        assert_eq!(
+            err.code(),
+            Some("operator_invalid_definition"),
+            "{f}: {err}"
+        );
+    }
+}
