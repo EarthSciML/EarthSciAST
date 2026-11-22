@@ -191,7 +191,17 @@ using EarthSciAST
         )
         @test fetched == ["$host/scaled.esm"]
         y_eq = only(filter(eq -> eq.lhs isa EarthSciAST.VarExpr && eq.lhs.name == "y", file.models["Host"].subsystems["S"].equations))
-        @test !occursin("scale_by_n", sprint(show, y_eq.rhs))
+        # The rule fired: its firing writes a reference to the rule (esm-spec
+        # §9.6.3 constraint 7), whose expansion holds no `scale_by_n` op.
+        @test y_eq.rhs isa EarthSciAST.OpExpr && y_eq.rhs.op == "apply_expression_template" &&
+            y_eq.rhs.name == "scale_by_n"
+        y_exp = only(
+            filter(
+                eq -> eq.lhs isa EarthSciAST.VarExpr && eq.lhs.name == "y",
+                EarthSciAST.expanded_file(file).models["Host"].subsystems["S"].equations
+            )
+        )
+        @test !occursin("scale_by_n", sprint(show, y_exp.rhs))
     end
 
     @testset "an interrupt while fetching is not rebranded" begin

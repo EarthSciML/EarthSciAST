@@ -102,29 +102,35 @@ def lower_enum_ops_for_file(
             return node
         if node.get("op") == "enum":
             args = node.get("args")
-            if (
-                not isinstance(args, list)
-                or len(args) != 2
-                or not all(isinstance(a, str) for a in args)
-                or any(a in open_names for a in args)
-            ):
+            if isinstance(args, list) and any(isinstance(a, str) and a in open_names for a in args):
                 return node
-            enum_name, symbol = args
-            mapping = enums.get(enum_name)
-            if not isinstance(mapping, dict):
-                raise EnumLoweringError(
-                    UNKNOWN_ENUM,
-                    f"enum `{enum_name}` is not declared in the file's `enums` block",
-                )
-            if symbol not in mapping:
-                raise EnumLoweringError(
-                    UNKNOWN_ENUM_SYMBOL,
-                    f"symbol `{symbol}` is not declared under enum `{enum_name}`",
-                )
-            return {"op": "const", "args": [], "value": mapping[symbol]}
+            return lower_enum_op(node, enums)
         return {k: walk(v) for k, v in node.items()}
 
     return walk(target)
+
+
+def lower_enum_op(node: dict[str, Any], enums: Any) -> Any:
+    """One raw ``enum`` op lowered to its ``const`` against the ``enums`` block
+    ``enums`` (esm-spec §9.3), or ``node`` itself when its arguments are not two
+    strings. Raises :class:`EnumLoweringError` (``unknown_enum`` /
+    ``unknown_enum_symbol``)."""
+    args = node.get("args")
+    if not isinstance(args, list) or len(args) != 2 or not all(isinstance(a, str) for a in args):
+        return node
+    enum_name, symbol = args
+    mapping = enums.get(enum_name) if isinstance(enums, dict) else None
+    if not isinstance(mapping, dict):
+        raise EnumLoweringError(
+            UNKNOWN_ENUM,
+            f"enum `{enum_name}` is not declared in the file's `enums` block",
+        )
+    if symbol not in mapping:
+        raise EnumLoweringError(
+            UNKNOWN_ENUM_SYMBOL,
+            f"symbol `{symbol}` is not declared under enum `{enum_name}`",
+        )
+    return {"op": "const", "args": [], "value": mapping[symbol]}
 
 
 def lower_mounted_document_enums(document: dict[str, Any]) -> dict[str, Any]:

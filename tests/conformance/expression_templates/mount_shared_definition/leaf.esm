@@ -1,0 +1,36 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "mount_shared_definition_leaf",
+    "description": "The leaf mount_shared_definition/fixture.esm mounts twice. Both of its templates read the leaf's own parameter `k`, a free name of the body: `rate` (whose name the mounting component also declares, with a different body) and `loss` (no collision)."
+  },
+  "models": {
+    "Leaf": {
+      "expression_templates": {
+        "rate": {
+          "params": ["x"],
+          "body": {"op": "*", "args": ["k", "x"]}
+        },
+        "loss": {
+          "params": ["x"],
+          "body": {"op": "*", "args": ["k", "x", "x"]}
+        }
+      },
+      "variables": {
+        "c": {"type": "unknown", "units": "1", "default": 1.0},
+        "d": {"type": "unknown", "units": "1", "default": 0.5},
+        "k": {"type": "parameter", "units": "1", "default": 0.25}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [], "name": "rate", "bindings": {"x": "c"}}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["d"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "apply_expression_template", "args": [], "name": "loss", "bindings": {"x": "d"}}]}
+        }
+      ]
+    }
+  }
+}

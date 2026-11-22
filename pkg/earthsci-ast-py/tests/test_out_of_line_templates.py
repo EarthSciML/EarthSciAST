@@ -2,7 +2,8 @@
 reference-preserving expression templates): esm-spec §9.6.4 (rules 1-8),
 §9.6.7 (new fixtures), §9.6.9 (validation discharge), §10.7 (flatten registry
 merge). Mirrors pkg/EarthSciAST.jl/test/out_of_line_templates_test.jl and drives
-tests/conformance/expression_templates/{emit_*, eager_*, opacity_*,
+tests/conformance/expression_templates/{emit_*, rewrite_*, rule_writes_reference,
+template_instance_variants, unlowered_in_template_body, opacity_*,
 per_instantiation_validation, flatten_registry_merge}.
 """
 
@@ -127,9 +128,126 @@ def test_bridge_expand_equals_expanded_oracle(dir_, fix, gold):
 def test_expand_is_deterministic_and_load_is_nondestructive():
     loaded = _load("import_smoke")
     assert expand_document(loaded) == expand_document(loaded)
-    # non-destructive: the loaded view still carries surviving references.
+    # non-destructive: the loaded view still carries surviving references —
+    # the rule's firing wrote a reference (esm-spec §9.6.3 constraint 7).
     mk = loaded["models"]["Advection"]["equations"][0]["rhs"]["args"][1]
-    assert mk["op"] == "makearray"
+    assert _isapply(mk)
+    expanded = expand_document(loaded)
+    assert expanded["models"]["Advection"]["equations"][0]["rhs"]["args"][1]["op"] == "makearray"
+
+
+# ---------------------------------------------------------------------------
+# Rules write references (CONFORMANCE_SPEC §5.60; esm-spec §9.6.3 constraint 7,
+# §9.6.4 rule 3): both goldens — the emitted form byte for byte, and
+# Expand(load) against the expanded oracle.
+# ---------------------------------------------------------------------------
+_RULES_WRITE_REFERENCES_CASES = [
+    ("rewrite_in_template_body", "fixture.esm", "emitted.esm", "expanded.esm"),
+    ("rule_writes_reference", "fixture.esm", "emitted.esm", "expanded.esm"),
+    ("template_instance_variants", "fixture.esm", "emitted.esm", "expanded.esm"),
+    ("opacity_rule_replacement", "fixture.esm", "emitted.esm", "expanded.esm"),
+    (
+        "rewrite_depth_through_bodies",
+        "chain_depth_64.esm",
+        "emitted_chain_depth_64.esm",
+        "expanded_chain_depth_64.esm",
+    ),
+]
+
+
+@pytest.mark.parametrize("dir_,fix,emitted,expanded", _RULES_WRITE_REFERENCES_CASES)
+def test_rules_write_references_goldens(dir_, fix, emitted, expanded):
+    assert _emit(dir_, fix) == open(_conf(dir_, emitted), encoding="utf-8").read()
+    # Emit then load is a fixed point: the emitted form reloads and re-emits
+    # byte for byte. For the depth-64 chain this holds only because the
+    # body-nesting bound equals MAX_REWRITE_PASSES (esm-spec §9.7.3): its
+    # emitted form is a 64-template body-reference chain.
+    assert _emit(dir_, emitted) == open(_conf(dir_, emitted), encoding="utf-8").read()
+    got = _core(expand_document(_load(dir_, fix)))
+    want = _core(json.loads(open(_conf(dir_, expanded), encoding="utf-8").read()))
+    assert got == want
+
+
+# ---------------------------------------------------------------------------
+# Coupling transforms keep their references (esm-spec §10.4): they resolve
+# against the RECEIVING component, whose emitted block materializes the
+# templates they name (§9.6.4 rule 5) — the emitted golden byte for byte, and
+# Expand(load) against the expanded oracle.
+# ---------------------------------------------------------------------------
+_COUPLING_TRANSFORM_CASES = [
+    "coupling_transform_expression",
+    "coupling_transform_rule_and_import",
+]
+
+
+@pytest.mark.parametrize("dir_", _COUPLING_TRANSFORM_CASES)
+def test_coupling_transform_goldens(dir_):
+    assert _emit(dir_) == open(_conf(dir_, "emitted.esm"), encoding="utf-8").read()
+    got = _core(expand_document(_load(dir_)))
+    want = _core(json.loads(open(_conf(dir_, "expanded.esm"), encoding="utf-8").read()))
+    assert got == want
+
+
+def test_coupling_transform_keeps_references_and_receiver_registry():
+    """The transform keeps both references (the imported template's and the one
+    the receiving component's rule wrote), and the receiving component's typed
+    registry — built as emit's block — holds the rule and the imported
+    template."""
+    from earthsci_ast import load_path
+
+    loaded = _load("coupling_transform_rule_and_import")
+    tr = loaded["coupling"][0]["transform"]
+    assert _isapply(tr["args"][0]) and tr["args"][0]["name"] == "scale_by"
+    assert _isapply(tr["args"][1]) and tr["args"][1]["name"] == "half_rule"
+    f = load_path(_conf("coupling_transform_rule_and_import", "fixture.esm"))
+    assert list(f.component_templates["models.Sink"]) == ["half_rule", "scale_by"]
+    assert list(f.component_templates["models.Src"]) == ["scale_by"]
+
+
+def test_template_instance_variants_repoint_call_sites():
+    """Variants are numbered by canonical bytes and each call site re-pointed."""
+    m = _load("template_instance_variants")["models"]["m"]
+    assert _defining({"models": {"m": m}}, "m", "du")["name"] == "ddx.variant1"
+    assert _defining({"models": {"m": m}}, "m", "dv")["name"] == "ddx.variant2"
+    assert m["expression_templates"]["ddx.variant1"]["body"]["name"] == "central_1d"
+
+
+def test_leaf_bodied_rule_writes_its_leaf():
+    e = _defining(_load("rule_writes_reference"), "m", "e")
+    assert e == {"op": "*", "args": [0.25, "b"]}
+
+
+@pytest.mark.parametrize(
+    "dir_,fix,err",
+    [
+        ("rewrite_depth_through_bodies", "fixture.esm", "error.json"),
+        ("rewrite_depth_through_bodies", "chain_depth_65.esm", "error_chain_depth_65.json"),
+    ],
+)
+def test_rewrite_depth_through_bodies_errors(dir_, fix, err):
+    """Nontermination detected through template bodies, and the depth bound
+    (64 accepted, 65 rejected)."""
+    from earthsci_ast.lower_expression_templates import ExpressionTemplateError
+
+    want = json.loads(open(_conf(dir_, err), encoding="utf-8").read())["code"]
+    with pytest.raises(ExpressionTemplateError) as ei:
+        _load(dir_, fix)
+    assert ei.value.code == want
+
+
+def test_unlowered_in_template_body_refused_at_build():
+    """A rewrite-target op left in a reachable template body is refused by the
+    build gate (``unlowered_operator``), as its expansion is."""
+    from earthsci_ast import load_path
+    from earthsci_ast.problem import esm_problem
+
+    want = json.loads(
+        open(_conf("unlowered_in_template_body", "error.json"), encoding="utf-8").read()
+    )["code"]
+    f = load_path(_conf("unlowered_in_template_body", "fixture.esm"))  # loads clean
+    with pytest.raises(Exception) as ei:
+        esm_problem(f, (0.0, 1.0))
+    assert getattr(ei.value, "code", None) == want
 
 
 # ---------------------------------------------------------------------------
@@ -149,10 +267,17 @@ def test_emit_materialized_registry():
     assert doc["esm"] == "1.1.0"
     assert "expression_template_imports" not in adv  # imports consumed
     reg = adv["expression_templates"]
-    assert set(reg.keys()) == {"central_D_lon_interior", "dlon_deg"}  # match-less only
-    assert "central_D_lon_zero_grad_bc" not in reg  # match rule not materialized
-    # Call site intact: the makearray interior region is a surviving ref.
-    interior = adv["equations"][0]["rhs"]["args"][1]["values"][0]
+    # The firing wrote a reference to its rule, which materializes match-less
+    # (esm-spec §9.6.3 constraint 7, §9.6.4 rule 5).
+    assert set(reg.keys()) == {
+        "central_D_lon_interior",
+        "central_D_lon_zero_grad_bc",
+        "dlon_deg",
+    }
+    assert "match" not in reg["central_D_lon_zero_grad_bc"]
+    site = adv["equations"][0]["rhs"]["args"][1]
+    assert _isapply(site) and site["name"] == "central_D_lon_zero_grad_bc"
+    interior = reg["central_D_lon_zero_grad_bc"]["body"]["values"][0]
     assert _isapply(interior) and interior["name"] == "central_D_lon_interior"
     # idempotency (§9.6.4 rule 5 / RFC gate 2)
     s2 = emit_esm_string(emit_document(json.loads(s), _conf("emit_materialized_registry")))
@@ -167,27 +292,33 @@ def test_emit_rename_dotted_keys():
     assert s == open(_conf("emit_rename_dotted_keys", "emitted.esm"), encoding="utf-8").read()
     doc = json.loads(s)
     reg = doc["models"]["TwoGrids"]["expression_templates"]
-    assert set(reg.keys()) == {"fine.dx", "coarse.dx"}  # dotted keys
+    assert set(reg.keys()) == {
+        "fine.dx",
+        "coarse.dx",
+        "fine.central_D_x",
+        "coarse.central_D_x",
+    }  # dotted keys
     assert set(doc["index_sets"].keys()) == {"fine.x", "coarse.x"}
 
 
 # ---------------------------------------------------------------------------
-# eager_target_bearing (§9.6.4 rule 3, §9.6.7): positive + negative.
+# rewrite_in_template_body (§9.6.4 rule 3, §9.6.7; formerly
+# eager_target_bearing): both references survive; the `central` rule rewrites
+# `deriv_c`'s body in place to a reference to itself.
 # ---------------------------------------------------------------------------
-def test_eager_target_bearing():
-    loaded = _load("eager_target_bearing")
-    # POSITIVE: deriv_c (D-bearing) reference eagerly expanded, then the D
-    # lowered by the `central` rule → an aggregate. No surviving ref.
+def test_rewrite_in_template_body():
+    loaded = _load("rewrite_in_template_body")
+    m = loaded["models"]["m"]
     deager = _defining(loaded, "m", "d_eager")
-    assert deager["op"] == "index"
-    assert deager["args"][0]["op"] == "faq"
-    # NEGATIVE: scale_c (target-free) reference SURVIVES.
+    assert _isapply(deager["args"][0]) and deager["args"][0]["name"] == "deriv_c"
+    body = m["expression_templates"]["deriv_c"]["body"]
+    assert _isapply(body) and body["name"] == "central" and body["bindings"] == {"f": "f"}
+    assert "match" not in m["expression_templates"]["central"]
     dsurv = _defining(loaded, "m", "d_survive")
     assert _isapply(dsurv["args"][0]) and dsurv["args"][0]["name"] == "scale_c"
-    # Emit golden.
     assert (
-        _emit("eager_target_bearing")
-        == open(_conf("eager_target_bearing", "emitted.esm"), encoding="utf-8").read()
+        _emit("rewrite_in_template_body")
+        == open(_conf("rewrite_in_template_body", "emitted.esm"), encoding="utf-8").read()
     )
 
 
@@ -215,10 +346,12 @@ def test_opacity_negative():
 def test_opacity_priority_shadowing():
     loaded = _load("opacity_priority_shadowing")
     flux = _defining(loaded, "m", "flux")
-    assert flux["op"] == "*"
-    assert flux["args"][0] == 1  # generic marker (NOT compound 999)
-    assert _isapply(flux["args"][1])  # reference bound WHOLE by metavariable f
-    assert flux["args"][1]["name"] == "flux_prod"
+    # The generic rule fired and wrote a reference to itself (esm-spec §9.6.3
+    # constraint 7), binding the surviving reference WHOLE.
+    assert _isapply(flux) and flux["name"] == "generic"
+    assert _isapply(flux["bindings"]["f"]) and flux["bindings"]["f"]["name"] == "flux_prod"
+    generic = loaded["models"]["m"]["expression_templates"]["generic"]
+    assert generic["body"]["args"][0] == 1  # generic marker (NOT compound 999)
     assert (
         _emit("opacity_priority_shadowing")
         == open(_conf("opacity_priority_shadowing", "emitted.esm"), encoding="utf-8").read()
@@ -260,15 +393,21 @@ def test_flatten_registry_merge_transitive_collisions_propagate():
     assert set(merged.keys()) == {
         "A.interior_stencil",
         "A.outer_stencil",
+        "A.d_x_rule",
         "B.interior_stencil",
         "B.outer_stencil",
+        "B.d_x_rule",
     }
+    # The rule's firing wrote a reference to the rule (esm-spec §9.6.3
+    # constraint 7), whose body references the wrapper: it renames with it.
+    assert _collect_apply_names([], merged["A.d_x_rule"]["body"]) == ["A.outer_stencil"]
+    assert _collect_apply_names([], merged["B.d_x_rule"]["body"]) == ["B.outer_stencil"]
     # Each owner's wrapper reaches its OWN leaf, never the other model's.
     assert _collect_apply_names([], merged["A.outer_stencil"]["body"]) == ["A.interior_stencil"]
     assert _collect_apply_names([], merged["B.outer_stencil"]["body"]) == ["B.interior_stencil"]
     # Component reference sites follow in lockstep.
-    assert _collect_apply_names([], root["models"]["A"]["equations"]) == ["A.outer_stencil"]
-    assert _collect_apply_names([], root["models"]["B"]["equations"]) == ["B.outer_stencil"]
+    assert _collect_apply_names([], root["models"]["A"]["equations"]) == ["A.d_x_rule"]
+    assert _collect_apply_names([], root["models"]["B"]["equations"]) == ["B.d_x_rule"]
     # Nothing dangles: every surviving reference resolves in the merged registry.
     for decl in merged.values():
         for ref in _collect_apply_names([], decl):
@@ -301,10 +440,10 @@ def test_flatten_registry_merge_is_the_union_half_only():
     loaded = _load("flatten_registry_merge_transitive", "fixture_twins.esm")
     root, merged = flatten_template_registries(loaded)
     # Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
-    assert set(merged.keys()) == {"interior_stencil", "outer_stencil"}
+    assert set(merged.keys()) == {"interior_stencil", "outer_stencil", "d_x_rule"}
     assert _collect_apply_names([], merged["outer_stencil"]["body"]) == ["interior_stencil"]
-    assert _collect_apply_names([], root["models"]["A"]["equations"]) == ["outer_stencil"]
-    assert _collect_apply_names([], root["models"]["B"]["equations"]) == ["outer_stencil"]
+    assert _collect_apply_names([], root["models"]["A"]["equations"]) == ["d_x_rule"]
+    assert _collect_apply_names([], root["models"]["B"]["equations"]) == ["d_x_rule"]
     # Nothing dangles at this layer.
     for decl in merged.values():
         for ref in _collect_apply_names([], decl):
@@ -324,9 +463,15 @@ def test_flatten_registry_merge_is_the_union_half_only():
     [
         "emit_materialized_registry",
         "emit_rename_dotted_keys",
-        "eager_target_bearing",
+        "rewrite_in_template_body",
         "opacity_negative",
         "opacity_priority_shadowing",
+        "rule_writes_reference",
+        "template_instance_variants",
+        "opacity_rule_replacement",
+        "unlowered_in_template_body",
+        "coupling_transform_expression",
+        "coupling_transform_rule_and_import",
     ],
 )
 def test_emit_load_byte_wise_fixed_point(dir_):

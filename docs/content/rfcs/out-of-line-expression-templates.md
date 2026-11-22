@@ -439,7 +439,7 @@ Conformance never requires compile-once. An evaluator MAY:
 > A template `body` MAY contain `apply_expression_template` nodes referencing other templates
 > that are in scope and match-less. After the effective sequence (§9.7.4) is fixed, the loader
 > builds the body-reference graph, rejects cycles (`apply_expression_template_recursive_body`)
-> and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 32`
+> and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 64`
 > (`template_body_expansion_too_deep`), and computes target-bearing flags (§9.6.4 rule 3).
 > Bodies are **not** inlined. `match` patterns MUST NOT contain `apply_expression_template`
 > nodes.

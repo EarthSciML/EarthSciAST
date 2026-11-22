@@ -432,28 +432,6 @@ type FlattenMetadata struct {
 	// merge moved out from under it. Nil for a document with no renaming merge,
 	// which is the overwhelming majority.
 	MergedVariableRenames map[string]string
-	// CouplingRewrittenNames is every name a COUPLING rule rewrote out of the
-	// flattened equations: a `variable_map`'s substituted target, and every
-	// merged-away spelling above.
-	//
-	// Only the registry guard reads it — a surviving expression-template body is
-	// authored source no substitution reaches, so a body naming one of these is
-	// REFUSED rather than resolved (checkRegistryCouplingRewrites,
-	// CONFORMANCE_SPEC §5.35). Not a consumer-facing map, unlike
-	// MergedVariableRenames: it says a name is GONE, not where it went.
-	CouplingRewrittenNames map[string]bool
-}
-
-// noteCouplingRewritten records one name a coupling rule rewrote out of the
-// equations, materializing the set on first use.
-func (m *FlattenMetadata) noteCouplingRewritten(name string) {
-	if name == "" {
-		return
-	}
-	if m.CouplingRewrittenNames == nil {
-		m.CouplingRewrittenNames = map[string]bool{}
-	}
-	m.CouplingRewrittenNames[name] = true
 }
 
 // FlattenedSystem is a coupled system flattened into a single system — the
@@ -2954,12 +2932,9 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 	if err := collectFieldICs(flat); err != nil {
 		return nil, err
 	}
+	// A carried body reads no component name once closed (esm-spec §10.7), so
+	// a name a coupling rule rewrote is never left in it.
 	flat.TemplateRegistry = mergedTemplateRegistry(file)
-	// ...and the ONE place a coupling-rewritten name is REFUSED rather than
-	// resolved. See checkRegistryCouplingRewrites.
-	if err := checkRegistryCouplingRewrites(flat.TemplateRegistry, flat.Metadata.CouplingRewrittenNames); err != nil {
-		return nil, err
-	}
 	// Bring a scaled ANGLE argument of sin/cos/tan to radians (esm-spec §4.8.3,
 	// issue #409). See normalizeAngleArguments.
 	normalizeFlattenedAngleArguments(flat)
@@ -3195,13 +3170,6 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 	if len(mergedRenames) > 0 {
 		metadata.MergedVariableRenames = mergedRenames
 	}
-	// A merge DELETES a name the same way a `variable_map` substitution does, and
-	// a surviving template-registry body is the same SHADOW copy of authored
-	// source no equation walk reaches — so the merged-away names join the set the
-	// registry guard refuses against (issue #230, CONFORMANCE_SPEC §5.35).
-	for gone := range mergedRenames {
-		metadata.noteCouplingRewritten(gone)
-	}
 	for _, cp := range couples {
 		if err := applyCouple(components, order, retargetPendingCouple(cp.entry, mergedRenames), cp.index); err != nil {
 			return err
@@ -3212,12 +3180,6 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		resolved := retargetPendingVariableMap(vm.entry, mergedRenames)
 		if err := applyVariableMap(components, order, resolved, vm.index, shapeless); err != nil {
 			return err
-		}
-		// A NAMED transform substitutes `to` away entirely; an EXPRESSION
-		// transform leaves it standing as the observed the transform defines.
-		// Only the first deletes a name, so only the first joins the guard's set.
-		if !resolved.TransformIsExpression() {
-			metadata.noteCouplingRewritten(resolved.To)
 		}
 	}
 	return nil

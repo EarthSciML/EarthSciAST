@@ -1659,11 +1659,13 @@ def _load_ref_data(
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
 
-    Returns ``(ref_data, new_base, leaf_env, forward)`` where ``ref_data`` is
-    the resolved, lowered raw dict (ready for ``_parse_esm_data``), ``new_base``
-    the directory anchoring the referenced file's own nested refs, ``leaf_env``
-    the leaf's closed metaparameter environment, and ``forward`` the forwarded
-    edge bindings its OWN mount edges receive (see below). A ref that
+    Returns ``(ref_data, new_base, leaf_env, forward, templates)`` where
+    ``ref_data`` is the resolved, lowered raw dict (ready for
+    ``_parse_esm_data``), ``new_base`` the directory anchoring the referenced
+    file's own nested refs, ``leaf_env`` the leaf's closed metaparameter
+    environment, ``forward`` the forwarded edge bindings its OWN mount edges
+    receive (see below), and ``templates`` the leaf's reference-preserving
+    form (:class:`_LeafTemplates`, see :func:`_mounted_template_form`). A ref that
     targets a template-library file is rejected with the stable
     ``subsystem_ref_is_template_library`` diagnostic (esm-spec §9.7.1): the
     two reference mechanisms are disjoint.
@@ -1862,43 +1864,320 @@ def _load_ref_data(
     )
     if resolved is not None:
         ref_data = resolved
-    # Option B (esm-spec §9.6.4): lower preserves references; the mounted
-    # subsystem feeds the typed IR via `_parse_esm_data`, so Expand-at-build here
-    # (RFC §7.7) yields the fully-expanded Option-A image — numerics identical.
-    ref_data = lower_expression_templates(ref_data)
+
+    def finish(doc: dict[str, Any]) -> dict[str, Any]:
+        # esm-spec §9.3: the referenced document's `enum` ops resolve against
+        # ITS OWN `enums` block, here, while that block is still at hand. The
+        # mounting document's block is a different one and `enums` do not merge
+        # across a mount, so an importer declaring an enum of the same name
+        # cannot change what the leaf computes. The leaf's own nested mounts
+        # resolve after this returns, each lowered at its own edge.
+        from .enums import EnumLoweringError, lower_mounted_document_enums
+
+        try:
+            doc = lower_mounted_document_enums(doc)
+        except EnumLoweringError as e:
+            raise ExpressionTemplateError(
+                e.code,
+                f"{kind} ref '{ref_str}': {e.message} — an `enum` op in a mounted file "
+                "resolves against that file's own `enums` block (esm-spec §9.3)",
+            ) from e
+
+        # esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
+        # referenced document has now resolved in its OWN scope — its imports,
+        # this edge's `bindings` and injection, its metaparameter close and
+        # fold, the §9.6.3 fixpoint — so its `index_sets` are the
+        # post-resolution vocabulary the edge's `index_set_rename` speaks.
+        # Before its own nested mounts resolve: each nested edge renames what
+        # IT contributes, at its own edge. Absent or empty => identity, so an
+        # edge that does not use the field resolves exactly as before.
+        from .template_imports import apply_mount_index_set_rename
+
+        apply_mount_index_set_rename(doc, index_set_rename, rename_where)
+        return doc
+
+    # Option B (esm-spec §9.6.4): the §9.6.3 fixpoint lowers the leaf in its
+    # own file and its references survive. The leaf keeps them, and each of its
+    # components keeps its match-less definitions, which join the mounting
+    # component's registry (esm-spec §9.6.4 rule 1): `templates` carries that
+    # reference-preserving form to the mount (`_mounted_template_form`). The
+    # mounted component also feeds this binding's typed IR via
+    # `_parse_esm_data`, which is the Expand image (RFC §7.7) as at the root:
+    # `expand_document` substitutes each body into the leaf's own expressions,
+    # so a body's free names read the leaf's own names, as they do in the
+    # mounting document (plain substitution).
+    lowered = lower_expression_templates(ref_data)
+    templates = _LeafTemplates(ref_data, lowered, finish)
     with marking_template_origins():
-        ref_data = expand_document(ref_data)
+        ref_data = expand_document(lowered)
+    ref_data = finish(ref_data)
 
-    # esm-spec §9.3: the referenced document's `enum` ops resolve against ITS
-    # OWN `enums` block, here, while that block is still at hand. The mounting
-    # document's block is a different one and `enums` do not merge across a
-    # mount, so an importer declaring an enum of the same name cannot change
-    # what the leaf computes. The leaf's own nested mounts resolve after this
-    # returns, each lowered at its own edge.
-    from .enums import EnumLoweringError, lower_mounted_document_enums
+    return ref_data, new_base, leaf_env, forward, templates
 
-    try:
-        ref_data = lower_mounted_document_enums(ref_data)
-    except EnumLoweringError as e:
-        raise ExpressionTemplateError(
-            e.code,
-            f"{kind} ref '{ref_str}': {e.message} — an `enum` op in a mounted file "
-            "resolves against that file's own `enums` block (esm-spec §9.3)",
-        ) from e
 
-    # esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
-    # referenced document has now resolved in its OWN scope — its imports, this
-    # edge's `bindings` and injection, its metaparameter close and fold, the
-    # §9.6.3 fixpoint — so its `index_sets` are the post-resolution vocabulary
-    # the edge's `index_set_rename` speaks. Before its own nested mounts
-    # resolve: each nested edge renames what IT contributes, at its own edge.
-    # Absent or empty => identity, so an edge that does not use the field
-    # resolves exactly as before.
-    from .template_imports import apply_mount_index_set_rename
+# ---------------------------------------------------------------------------
+# A mounted leaf's reference-preserving form (esm-spec §9.6.4 rule 1)
+# ---------------------------------------------------------------------------
+#
+# This binding's typed IR is the Expand image (RFC §7.7), so a mounted leaf's
+# typed component carries no reference. Its registry still joins the mounting
+# top-level component's (`EsmFile.component_templates`, which flatten merges):
+# the leaf keeps its references and each component its match-less definitions,
+# and the mounting document lowers them in with its own (`lower_expression_
+# templates` hoists every subsystem block into its top-level component). That
+# reference-preserving form is computed here, bottom up along the mount tree,
+# and travels on the typed component until the mounting document consumes it.
 
-    apply_mount_index_set_rename(ref_data, index_set_rename, rename_where)
+#: The attribute a typed mounted component carries its reference-preserving
+#: form under, until the mounting document splices it in.
+_MOUNTED_FORM_ATTR = "_esa_mounted_template_form"
 
-    return ref_data, new_base, leaf_env, forward
+
+@dataclass
+class _LeafTemplates:
+    """What a mount edge keeps of the leaf for its reference-preserving form:
+    the leaf document as it stood just before the §9.6.3 fixpoint (``pre``),
+    that document lowered on its own (``lowered``), and the edge's remaining
+    steps (``finish``: the leaf's own ``enum`` lowering and the edge's
+    ``index_set_rename``)."""
+
+    pre: dict[str, Any]
+    lowered: dict[str, Any]
+    finish: Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def _is_ref_entry(v: Any) -> bool:
+    return isinstance(v, dict) and "ref" in v
+
+
+def _take_mounted_form(component: Any) -> dict[str, Any] | None:
+    state = getattr(component, "__dict__", None)
+    return state.pop(_MOUNTED_FORM_ATTR, None) if isinstance(state, dict) else None
+
+
+def _splice_subsystem_forms(raw: dict[str, Any], typed: Any) -> bool:
+    subs = raw.get("subsystems")
+    tsubs = getattr(typed, "subsystems", None)
+    if not isinstance(subs, dict) or not isinstance(tsubs, dict):
+        return False
+    spliced = False
+    for k, v in list(subs.items()):
+        t = tsubs.get(k)
+        if t is None:
+            continue
+        if _is_ref_entry(v):
+            form = _take_mounted_form(t)
+            if form is not None:
+                subs[k] = form
+                spliced = True
+        elif isinstance(v, dict):
+            spliced = _splice_subsystem_forms(v, t) or spliced
+    return spliced
+
+
+def _splice_mounted_forms(doc: dict[str, Any], typed_file: Any) -> bool:
+    """Replace, in the raw document ``doc``, each ``{ref}`` mount (top-level or
+    subsystem, at any depth) whose resolved typed component in ``typed_file``
+    carries a reference-preserving form (:func:`_mounted_template_form`) by
+    that form, consuming it. Returns whether anything was spliced."""
+    spliced = False
+    for section in ("models", "reaction_systems"):
+        comps = doc.get(section)
+        typed = getattr(typed_file, section, None)
+        if not isinstance(comps, dict) or not isinstance(typed, dict):
+            continue
+        for name, entry in list(comps.items()):
+            t = typed.get(name)
+            if t is None:
+                continue
+            if _is_ref_entry(entry):
+                form = _take_mounted_form(t)
+                if form is not None:
+                    comps[name] = form
+                    spliced = True
+            elif isinstance(entry, dict):
+                spliced = _splice_subsystem_forms(entry, t) or spliced
+    return spliced
+
+
+def _attach_mounted_template_form(templates: _LeafTemplates, parsed: Any, component: Any) -> None:
+    """Compute the reference-preserving form of the mounted ``component``
+    (resolved from the leaf ``parsed``, its own mounts included) and keep it on
+    the component for the mounting document (:func:`_splice_mounted_forms`).
+
+    The form is the leaf's component as the leaf's own lowering leaves it
+    (esm-spec §9.6.4 rule 1): the leaf's own mounts spliced in as their forms
+    first, so their blocks join the leaf's registry in the same merge as the
+    leaf's authored ones (mirroring the Julia edge, which inlines a leaf's
+    mounts before its fixpoint); then the fixpoint (`lower_expression_
+    templates`, references kept); then each component keeps only its
+    match-less definitions, and none when no reference reads them
+    (`mounted_registries`); then the edge's remaining steps. A leaf with no
+    template machinery keeps its content as its form too: a `match` rule of a
+    component that mounts it fires on that content (esm-spec §9.6.3), so the
+    mounting document's fixpoint must see it.
+
+    The leaf's own `match` rules fire on its mounts' content in the same
+    fixpoint, so when the leaf's component declares one, its mounted subsystems'
+    typed expressions are taken again from that fixpoint
+    (:func:`_graft_mounted_rewrites`)."""
+    from .lower_expression_templates import (
+        _has_template_machinery,
+        expand_document,
+        lower_expression_templates,
+        marking_template_origins,
+        mounted_registries,
+    )
+
+    section = key = None
+    for sec in ("models", "reaction_systems"):
+        for k, v in (getattr(parsed, sec, None) or {}).items():
+            if v is component:
+                section, key = sec, k
+                break
+        if section is not None:
+            break
+    if section is None:
+        return
+    doc = copy.deepcopy(templates.pre)
+    if _splice_mounted_forms(doc, parsed):
+        lowered = lower_expression_templates(doc)
+        pre_comp = (templates.pre.get(section) or {}).get(key)
+        if _declares_match_rule(pre_comp):
+            with marking_template_origins():
+                expanded = templates.finish(expand_document(lowered))
+            _graft_mounted_rewrites(pre_comp, (expanded.get(section) or {}).get(key), component)
+    elif _has_template_machinery(templates.pre):
+        lowered = copy.deepcopy(templates.lowered)
+    else:
+        lowered = doc
+    lowered = templates.finish(mounted_registries(lowered))
+    form = (lowered.get(section) or {}).get(key)
+    if isinstance(form, dict):
+        setattr(component, _MOUNTED_FORM_ATTR, form)
+
+
+def _declares_match_rule(comp: Any) -> bool:
+    """Whether the raw component ``comp`` or an authored subsystem below it
+    declares a ``match`` rule (a mount point's own rules fired in its file)."""
+    if not isinstance(comp, dict) or _is_ref_entry(comp):
+        return False
+    blk = comp.get("expression_templates")
+    if isinstance(blk, dict) and any(isinstance(d, dict) and "match" in d for d in blk.values()):
+        return True
+    subs = comp.get("subsystems")
+    return isinstance(subs, dict) and any(_declares_match_rule(v) for v in subs.values())
+
+
+def _graft_mounted_rewrites(pre: Any, expanded: Any, typed: Any) -> None:
+    """Take the typed expressions of each subsystem mounted below the component
+    ``typed`` from ``expanded``, the Expand image of the mounting document's
+    fixpoint run with the mounts spliced in as their forms.
+
+    This binding resolves a mount on the typed tree, from the leaf's own Expand
+    image, after the mounting document's fixpoint has run without the leaf's
+    content. A ``match`` rule of the mounting component fires on that content
+    as on its own (esm-spec §9.6.3: the fixpoint walks the component's
+    subsystems, mounted or authored), and ``expanded`` is where it fired.
+    ``pre`` is the mounting component before the fixpoint: its ``{ref}``
+    entries mark the mount points; an authored subsystem already holds the
+    rewrites, so the walk only passes through it."""
+    if not isinstance(pre, dict) or not isinstance(expanded, dict):
+        return
+    pre_subs = pre.get("subsystems")
+    raw_subs = expanded.get("subsystems")
+    typed_subs = getattr(typed, "subsystems", None)
+    if not (
+        isinstance(pre_subs, dict) and isinstance(raw_subs, dict) and isinstance(typed_subs, dict)
+    ):
+        return
+    for k, pv in pre_subs.items():
+        raw = raw_subs.get(k)
+        t = typed_subs.get(k)
+        if t is None or isinstance(t, dict) or not isinstance(raw, dict) or _is_ref_entry(raw):
+            continue
+        if _is_ref_entry(pv):
+            _graft_component_expressions(t, raw)
+        else:
+            _graft_mounted_rewrites(pv, raw, t)
+
+
+def _graft_component_expressions(dst: Any, raw: dict[str, Any]) -> None:
+    """Replace every expression site of the typed component ``dst`` (and of its
+    subsystems) by the one the raw component ``raw`` holds."""
+    if isinstance(dst, ReactionSystem):
+        src = _parse_reaction_system(raw)
+        for d, s in zip(dst.reactions, src.reactions):
+            d.rate_constant = s.rate_constant
+        dst.constraint_equations[:] = src.constraint_equations
+        sparams = {p.name: p for p in src.parameters}
+        for p in dst.parameters:
+            sp = sparams.get(p.name)
+            if sp is not None:
+                p.update = sp.update
+    else:
+        src = _parse_model(raw)
+        dst.equations[:] = src.equations
+        dst.initialization_equations[:] = src.initialization_equations
+        dst.guesses = src.guesses
+        for vname, var in dst.variables.items():
+            sv = src.variables.get(vname)
+            if sv is not None:
+                var.update = sv.update
+                var.lb = sv.lb
+                var.ub = sv.ub
+    dst.continuous_events[:] = src.continuous_events
+    dst.discrete_events[:] = src.discrete_events
+    for sname, sub in (src.subsystems or {}).items():
+        t = (dst.subsystems or {}).get(sname)
+        raw_sub = (raw.get("subsystems") or {}).get(sname)
+        if (
+            t is None
+            or isinstance(t, dict)
+            or isinstance(sub, dict)
+            or not isinstance(raw_sub, dict)
+        ):
+            continue
+        _graft_component_expressions(t, raw_sub)
+
+
+def _graft_rule_rewrites_into_mounts(pre: dict[str, Any], lowered: Any, esm_file: Any) -> None:
+    """For each top-level component of the root document ``pre`` (before its
+    fixpoint) that declares a ``match`` rule, take its mounted subsystems' typed
+    expressions from the Expand image of ``lowered`` (the fixpoint run with the
+    mounts spliced in; :func:`_graft_mounted_rewrites`)."""
+    from .lower_expression_templates import expand_document, marking_template_origins
+
+    expanded = None
+    for section in ("models", "reaction_systems"):
+        comps = pre.get(section)
+        typed = getattr(esm_file, section, None)
+        if not isinstance(comps, dict) or not isinstance(typed, dict):
+            continue
+        for name, comp in comps.items():
+            if not _declares_match_rule(comp):
+                continue
+            if expanded is None:
+                with marking_template_origins():
+                    expanded = expand_document(lowered)
+            t = typed.get(name)
+            if t is not None:
+                _graft_mounted_rewrites(comp, (expanded.get(section) or {}).get(name), t)
+
+
+def _any_mounted_form(esm_file: Any) -> bool:
+    def has(c: Any) -> bool:
+        state = getattr(c, "__dict__", None)
+        if isinstance(state, dict) and _MOUNTED_FORM_ATTR in state:
+            return True
+        subs = getattr(c, "subsystems", None)
+        return isinstance(subs, dict) and any(has(v) for v in subs.values())
+
+    return any(
+        has(c)
+        for sec in ("models", "reaction_systems")
+        for c in (getattr(esm_file, sec, None) or {}).values()
+    )
 
 
 def _forward_edge_bindings(
@@ -2246,7 +2525,7 @@ def _resolve_subsystems_generic(
             kind = "reaction_systems" if isinstance(component, ReactionSystem) else "models"
             mount_pointer = f"/{kind}/{component.name}/subsystems/{sub_name}"
             try:
-                ref_data, new_base, leaf_env, forward = _load_ref_data(
+                ref_data, new_base, leaf_env, forward, templates = _load_ref_data(
                     ref_str,
                     base_path,
                     bindings,
@@ -2282,6 +2561,9 @@ def _resolve_subsystems_generic(
                 resolved_subsystems[sub_name] = resolve_ref(
                     parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env, forward
                 )
+                # The leaf's references and definitions, for the mounting
+                # component's registry (esm-spec §9.6.4 rule 1).
+                _attach_mounted_template_form(templates, parsed, resolved_subsystems[sub_name])
                 # esm-spec §4.7 "A mounted document's data sources", at this
                 # form as at the top-level one: after the leaf's own mounts
                 # resolved (inside `resolve_ref`) and merged into it.
@@ -2806,7 +3088,7 @@ def _resolve_toplevel_mount(
 
     bindings = _subsystem_ref_bindings(edge, f"{form.block}.{name}")
     injected = _subsystem_ref_injected_imports(edge)
-    ref_data, new_base, leaf_env, forward = _load_ref_data(
+    ref_data, new_base, leaf_env, forward, templates = _load_ref_data(
         ref_str,
         base_path,
         bindings,
@@ -2909,6 +3191,9 @@ def _resolve_toplevel_mount(
             sources=_mount_target(parsed),
         )
     _carry_mounted_element_type(component, leaf_precision, precision, where)
+    # The leaf's references and definitions, for this document's registry
+    # (esm-spec §9.6.4 rule 1).
+    _attach_mounted_template_form(templates, parsed, component)
     # esm-spec §4.7 "A mounted document's data sources": the leaf's own
     # sources, plus what its own mounts (both forms, resolved above) merged
     # into it, cross this edge into THIS document.
@@ -2958,19 +3243,34 @@ _LOAD_ARGS_DOC = """
 """
 
 
-def _capture_component_templates(data: Any) -> dict[str, Any]:
+def _capture_component_templates(
+    data: Any, authored: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     """The per-component ``expression_templates`` blocks of an Option-B loaded
-    document, keyed ``"<section>.<component>"``.
+    document, keyed ``"<section>.<component>"``, each as emit materializes it
+    (esm-spec §9.6.4 rule 5,
+    :func:`~earthsci_ast.lower_expression_templates.materialize_component_block`):
+    the entries authored in-file (``authored``, from the source before
+    resolution) first, in authored order, then the closure of the component's
+    surviving references, sorted — the registry flatten merges, as the Julia
+    ``_materialize_components!`` gives the typed load path.
 
     Snapshot taken on the tree BETWEEN ``lower_expression_templates`` (which
     preserves the blocks) and ``expand_document`` (which strips them). Deep
     copied so a later in-place pass over ``data`` cannot mutate the snapshot.
-    Components declaring no block are omitted, so the common document yields
+    Components with an empty block are omitted, so the common document yields
     ``{}`` and flatten's registry merge is a no-op.
     """
+    from .lower_expression_templates import (
+        materialize_component_block,
+        received_transform_refs,
+    )
+
+    authored = authored or {}
     out: dict[str, Any] = {}
     if not isinstance(data, dict):
         return out
+    received = received_transform_refs(data)
     for section in ("models", "reaction_systems"):
         comps = data.get(section)
         if not isinstance(comps, dict):
@@ -2978,9 +3278,15 @@ def _capture_component_templates(data: Any) -> dict[str, Any]:
         for cname, comp in comps.items():
             if not isinstance(comp, dict):
                 continue
+            refs = received.pop(cname, None)
             block = comp.get("expression_templates")
-            if isinstance(block, dict) and block:
-                out[f"{section}.{cname}"] = copy.deepcopy(block)
+            if not (isinstance(block, dict) and block):
+                continue
+            mat, _, _ = materialize_component_block(
+                comp, authored.get(f"{section}.{cname}", []), refs
+            )
+            if mat:
+                out[f"{section}.{cname}"] = copy.deepcopy(mat)
     return out
 
 
@@ -3154,6 +3460,7 @@ def _load_data(
 
     from ._data_source_urls import resolve_data_source_urls
     from .lower_expression_templates import (
+        _authored_template_names,
         expand_document,
         lower_expression_templates,
         marking_template_origins,
@@ -3329,6 +3636,10 @@ def _load_data(
     # exempts it, so a single file whose `extent` misspells a metaparameter it
     # declares itself stops being caught. Measured both ways.
     check_data_source_extents(data, base_path, _mount_declared)
+    # The template names authored in-file, before resolution merges imports
+    # into the blocks: the typed registry keeps them in authored position
+    # (esm-spec §9.6.4 rule 5, `_capture_component_templates`).
+    _authored_templates = _authored_template_names(data)
     resolved = resolve_template_machinery(
         data, base_path, metaparameters=metaparameters, mount_declared=_mount_declared
     )
@@ -3338,10 +3649,15 @@ def _load_data(
     # Structural validation (runs on the resolved, folded form — §9.6.4)
     _validate_structural(data, file_path=file_path)
 
-    # Run the §9.6.3 rewrite fixpoint under Option B (esm-spec §9.6.4): explicit
-    # target-bearing references are eagerly expanded and `match` rules fired, but
-    # NON-eager `apply_expression_template` references and the per-component
-    # `expression_templates` registries SURVIVE on the returned tree.
+    # Run the §9.6.3 rewrite fixpoint under Option B (esm-spec §9.6.4): `match`
+    # rules fire and each firing writes a reference to its rule (§9.6.3
+    # constraint 7), rules rewrite the template bodies the references reach
+    # (§9.6.4 rule 3), and the `apply_expression_template` references and the
+    # per-component `expression_templates` registries SURVIVE on the returned
+    # tree.
+    # The document before the fixpoint, kept for the registries the mounted
+    # leaves join (below, after the mounts resolve).
+    _pre_lower = data
     data = lower_expression_templates(data)
     # Capture the per-component registries while the Option-B image still holds
     # them: `expand_document` below strips every `expression_templates` block,
@@ -3349,7 +3665,7 @@ def _load_data(
     # registry as a first-class field of the flattened representation. Keyed
     # `"models.<name>"` / `"reaction_systems.<name>"` (the Julia
     # `component_templates` key shape).
-    _raw_component_templates = _capture_component_templates(data)
+    _raw_component_templates = _capture_component_templates(data, _authored_templates)
     # esm-spec §9.6.4 Option B: the typed IR / build path (simulate, flatten,
     # codegen) is Expand-at-build (RFC out-of-line-expression-templates §7.7) —
     # call `Expand` once here so `_parse_esm_data` sees the fully-expanded
@@ -3398,6 +3714,24 @@ def _load_data(
         loader_metaparameters=metaparameters,
         parent_metaparameters=root_meta_env,
     )
+    # esm-spec §9.6.4 rule 1: a mounted leaf keeps its references and its
+    # definitions join the registry of the top-level component it is mounted
+    # under. This binding resolves mounts on the typed tree, after the
+    # document's own fixpoint, so the registries are taken again from the
+    # document with each mount spliced in as its reference-preserving form
+    # (`_attach_mounted_template_form`) and lowered once, which hoists every
+    # subsystem block into its top-level component in one merge.
+    if _any_mounted_form(esm_file):
+        _shadow = copy.deepcopy(_pre_lower)
+        if _splice_mounted_forms(_shadow, esm_file):
+            _lowered_shadow = lower_expression_templates(_shadow)
+            esm_file.component_templates = _capture_component_templates(
+                _lowered_shadow, _authored_templates
+            )
+            # A component's `match` rules fire on the content of the models it
+            # mounts (esm-spec §9.6.3), which the typed mounts above took from
+            # each leaf's own Expand image.
+            _graft_rule_rewrites_into_mounts(_pre_lower, _lowered_shadow, esm_file)
     # The mounts have merged; the merge bookkeeping does not outlive the load.
     esm_file.data_sources = dict(esm_file.data_sources)
     # esm-spec §4.9.7 over the RESOLVED tree. The structural pass above ran on

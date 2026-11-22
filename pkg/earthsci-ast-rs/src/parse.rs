@@ -375,6 +375,9 @@ struct LoadFacts {
     enum_walk_needed: bool,
     /// Whether the document has template machinery.
     has_templates: bool,
+    /// The template names each component authors in-file, read before
+    /// template resolution merges imports (esm-spec §9.6.4 rule 5).
+    authored_templates: std::collections::HashMap<String, Vec<String>>,
     /// Each component's `expression_templates` registry, captured before
     /// expansion removes the blocks.
     component_templates: Option<indexmap::IndexMap<String, Value>>,
@@ -495,9 +498,11 @@ fn pass_data_source_extents(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// `index_sets` do not join the registry until the root has CLOSED — §9.7.6
 /// site 3, "subsystem refs resolve post-close" ([`pass_staged_index_sets`]).
 ///
-/// A mounted leaf is expanded here, so its template expansions are marked here
-/// too (esm-spec §9.6.11; `MarkTemplateOrigins`), and the schema check reads
-/// the document with those marks taken off.
+/// A mounted leaf keeps its references (esm-spec §9.6.4 rule 1); they are
+/// expanded with the root's in [`pass_expand_templates`]. Any expansion mount
+/// resolution does make is marked here (esm-spec §9.6.11;
+/// `MarkTemplateOrigins`), and the schema check reads the document with those
+/// marks taken off.
 ///
 /// A refusal here carries, as its findings, the document's own mount edges
 /// that do not resolve, each at its pointer
@@ -628,6 +633,8 @@ fn pass_scope_injections(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// §9.7.6). An emit source carries no loader-API bindings and mounts nothing
 /// declared.
 fn pass_template_machinery(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    doc.facts.authored_templates =
+        crate::lower_expression_templates::authored_template_names(&doc.value);
     crate::template_imports::resolve_template_machinery_scoped_owned(
         &mut doc.value,
         &doc.base,
@@ -704,8 +711,10 @@ fn pass_lower_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
 /// document with no template machinery has nothing to expand; `expand` would
 /// walk it only to find that out.
 fn pass_expand_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
-    doc.facts.component_templates =
-        crate::lower_expression_templates::capture_component_templates(&doc.value);
+    doc.facts.component_templates = crate::lower_expression_templates::capture_component_templates(
+        &doc.value,
+        &doc.facts.authored_templates,
+    );
     if doc.facts.has_templates {
         let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
         crate::lower_expression_templates::expand(&mut doc.value).map_err(PassError::Schema)?;
@@ -1150,8 +1159,8 @@ fn compile_branch<'c>(
 /// Both names are IMPLICITLY DECLARED in every model's expression scope
 /// (§4.9.1), and every consumer in this crate resolves them by name BEFORE it
 /// consults the loop bindings: `simulate_array/eval.rs::lookup_variable` and
-/// `lookup_array_ref`, the two `tape/lower.rs` sites, `units.rs`, `simulate/resolve.rs`, and the scoping walkers
-/// `flatten.rs::namespace_expr_scoped` / `scope_template_body`
+/// `lookup_array_ref`, the two `tape/lower.rs` sites, `units.rs`, `simulate/resolve.rs`, and the scoping walker
+/// `flatten.rs::namespace_expr_scoped`
 /// (`if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name)`). A
 /// `ranges` key or `output_idx` entry spelled with one of those names therefore
 /// declares a loop the body can never address: every read of the symbol inside

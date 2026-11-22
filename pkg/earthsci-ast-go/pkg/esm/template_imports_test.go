@@ -1531,7 +1531,7 @@ func TestTemplateImports_BodyCompositionDepthBoundIsExact(t *testing.T) {
 
 	// Exactly MaxTemplateExpansionDepth templates chain: accepted; one more:
 	// template_body_expansion_too_deep. The depth counts TEMPLATES on the
-	// longest chain — a 33-template chain is rejected, 32 accepted (the
+	// longest chain — a 65-template chain is rejected, 64 accepted (the
 	// shared generated fixture pins the reject side; this pins the boundary).
 	okDoc := decodeFixture(t, tiChainDoc(MaxTemplateExpansionDepth))
 	if err := LowerExpressionTemplates(okDoc); err != nil {
@@ -1623,10 +1623,10 @@ func TestTemplateImports_CrossFileChainsAccumulateDepth(t *testing.T) {
 	// esm-spec §9.6.4 Option B (§9.7.3): template bodies are no longer inlined
 	// at the library boundary — the references survive and merge into the
 	// importer's scope, so the depth bound is checked on the FULL merged
-	// reference graph. A 32-deep chain in a library PLUS a consumer template
-	// referencing its head is a 33-deep chain across files, which exceeds
-	// MAX_TEMPLATE_EXPANSION_DEPTH=32 and is rejected (mirroring the Julia
-	// reference: the importer re-composes the merged 33-template graph).
+	// reference graph. A 64-deep chain in a library PLUS a consumer template
+	// referencing its head is a 65-deep chain across files, which exceeds
+	// MAX_TEMPLATE_EXPANSION_DEPTH=64 and is rejected (mirroring the Julia
+	// reference: the importer re-composes the merged 65-template graph).
 	dir := t.TempDir()
 	chain := tiChainDoc(MaxTemplateExpansionDepth)
 	var chainView map[string]any
@@ -1651,7 +1651,7 @@ func TestTemplateImports_CrossFileChainsAccumulateDepth(t *testing.T) {
            "body": {"op": "apply_expression_template", "args": [], "name": "c_01", "bindings": {}}}},`, ""))
 	_, err = LoadPath(p)
 	if code := tiErrCode(t, err); code != "template_body_expansion_too_deep" {
-		t.Errorf("33-deep cross-file chain code = %s; want template_body_expansion_too_deep", code)
+		t.Errorf("65-deep cross-file chain code = %s; want template_body_expansion_too_deep", code)
 	}
 }
 

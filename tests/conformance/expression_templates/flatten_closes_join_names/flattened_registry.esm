@@ -1,0 +1,185 @@
+{
+  "expression_templates": {
+    "bin": {
+      "body": {
+        "args": [],
+        "expr": {
+          "args": [
+            {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "W",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "X",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "X",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "E",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "S",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "Y",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "Y",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "N",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<"
+                    }
+                  ],
+                  "op": "and"
+                },
+                1,
+                0
+              ],
+              "op": "ifelse"
+            },
+            {
+              "args": [
+                "v",
+                "c"
+              ],
+              "op": "index"
+            }
+          ],
+          "op": "*"
+        },
+        "join": [
+          {
+            "overlap": {
+              "eps": 0,
+              "src_env": [
+                "X",
+                "Y"
+              ],
+              "tgt_env": [
+                "bW",
+                "bS",
+                "bE",
+                "bN"
+              ]
+            }
+          }
+        ],
+        "op": "faq",
+        "output_idx": [
+          "r"
+        ],
+        "ranges": {
+          "c": {
+            "from": "cells"
+          },
+          "r": {
+            "from": "recs"
+          }
+        },
+        "reduce": "+"
+      },
+      "params": [
+        "v",
+        "E",
+        "N",
+        "S",
+        "W",
+        "X",
+        "Y",
+        "bE",
+        "bN",
+        "bS",
+        "bW"
+      ]
+    },
+    "matches": {
+      "body": {
+        "args": [],
+        "expr": 1,
+        "join": [
+          {
+            "on": [
+              [
+                "want",
+                "tbl_year"
+              ]
+            ]
+          }
+        ],
+        "op": "faq",
+        "output_idx": [
+          "k"
+        ],
+        "ranges": {
+          "k": {
+            "from": "keys"
+          },
+          "r": {
+            "from": "rows"
+          }
+        },
+        "semiring": "sum_product"
+      },
+      "params": [
+        "tbl_year",
+        "want"
+      ]
+    }
+  }
+}

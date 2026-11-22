@@ -5,8 +5,9 @@ package esm
 // Implements the RFC out-of-line-expression-templates contract (esm-spec §9.6.4
 // rules 1-8, §9.6.9 validation discharge, §9.7.2 `only` closure, §10.7 flatten)
 // for the Go binding. Mirrors the Julia reference
-// EarthSciAST.jl/src/lower_expression_templates.jl (target-bearing flags, eager
-// pre-pass, Expand, reference-preserving emit, flatten registry merge).
+// EarthSciAST.jl/src/templates/ (Expand, reference-preserving emit, flatten
+// registry merge); the rule-3 per-instance body rewriting is
+// template_instances.go.
 //
 // The load-time rewrite (lower_expression_templates.go) PRESERVES surviving
 // `apply_expression_template` references and per-component `expression_templates`
@@ -26,8 +27,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Eager-expansion carve-out: the rewrite-target op tier T (esm-spec §9.6.4
-// rule 3 / RFC §7.2)
+// The rewrite-target op tier T (esm-spec §4.2; RFC §7.2)
 // ---------------------------------------------------------------------------
 
 // rewriteTargetOps hand-lists ONLY the tier-T members that ALSO carry an
@@ -100,7 +100,7 @@ func opInT(op string) bool {
 // directTOp reports whether node contains, ANYWHERE within it (descending
 // through every field, including the `bindings` of nested apply nodes), an
 // object whose `op` is in T (opInT). Does NOT follow references to other
-// templates — that transitive step is templateTargetBearing. Mirrors the Julia
+// templates — that transitive step is templateOpBearing. Mirrors the Julia
 // `_direct_T_op`.
 func directTOp(node any) bool {
 	return directOp(node, opInT)
@@ -138,20 +138,10 @@ func directOpSeen(node any, pred func(string) bool, seen map[uintptr]struct{}) b
 	return false
 }
 
-// templateTargetBearing computes, for every template in `named`, its
-// target-bearing flag (esm-spec §9.6.4 rule 3): a template is target-bearing iff
-// its body contains an op in T anywhere (including inside nested references'
-// bindings), OR it references — transitively through the §9.7.3-checked acyclic
-// DAG — a target-bearing template. Mirrors the Julia `_template_target_bearing`.
-func templateTargetBearing(named map[string]any) map[string]bool {
-	return templateOpBearing(named, opInT)
-}
-
 // templateOpBearing computes, for every template in `named`, whether it can
 // produce an object whose `op` satisfies pred: its body contains one anywhere
 // (including inside nested references' bindings), or it references,
 // transitively through the acyclic body-reference DAG, a template that can.
-// templateTargetBearing is templateOpBearing with the tier-T predicate.
 func templateOpBearing(named map[string]any, pred func(string) bool) map[string]bool {
 	tb := map[string]bool{}
 	inprogress := map[string]bool{}
@@ -196,26 +186,6 @@ func templateOpBearing(named map[string]any, pred func(string) bool) map[string]
 	return tb
 }
 
-// refIsEager reports whether an `apply_expression_template` node is eager
-// (esm-spec §9.6.4 rule 3): its referenced template is target-bearing, OR any of
-// its `bindings` values contains an op in T. After innermost-first eager
-// expansion of the bindings, a "nested eager reference" always manifests as a
-// T-op in the bindings, so this subsumes that clause. Mirrors `_ref_is_eager`.
-func refIsEager(node map[string]any, targetBearing map[string]bool) bool {
-	name, ok := node["name"].(string)
-	if !ok {
-		return false
-	}
-	if targetBearing[name] {
-		return true
-	}
-	b := node["bindings"]
-	if b == nil {
-		return false
-	}
-	return directTOp(b)
-}
-
 // cloneMapAny shallow-copies a map[string]any (values shared by reference).
 func cloneMapAny(m map[string]any) map[string]any {
 	out := make(map[string]any, len(m))
@@ -224,10 +194,6 @@ func cloneMapAny(m map[string]any) map[string]any {
 	}
 	return out
 }
-
-// ---------------------------------------------------------------------------
-// Eager-expansion pre-pass (esm-spec §9.6.4 rule 3)
-// ---------------------------------------------------------------------------
 
 // expandMemo keys object nodes by map pointer identity. The walks expand
 // freshly instantiated template bodies, which become garbage once their result
@@ -240,108 +206,6 @@ type expandMemoEntry struct {
 	in      map[string]any
 	out     any
 	changed bool
-}
-
-// expandEager expands — by pure substitution, innermost-first — every EAGER
-// `apply_expression_template` node, and only eager nodes. Non-eager (surviving)
-// references are returned intact. Consumes no MaxRewritePasses budget (it is a
-// separate pre-pass). Sharing is preserved via a pointer-identity memo. Mirrors
-// the Julia `_expand_eager`.
-func expandEager(node any, named map[string]any, targetBearing map[string]bool, scope string) (any, error) {
-	out, _, err := expandRefsShared(node, named, scope, expandMemo{},
-		func(n map[string]any) bool { return refIsEager(n, targetBearing) })
-	return out, err
-}
-
-// expandRefsShared is the reference-expansion walk behind expandEager: it
-// expands, innermost-first, every `apply_expression_template` node for which
-// expand holds (asked after the node's bindings are expanded) and returns every
-// other reference intact. The Julia counterpart is `_expand_refs_walk`.
-func expandRefsShared(node any, named map[string]any, scope string, memo expandMemo, expand func(map[string]any) bool) (any, bool, error) {
-	switch n := node.(type) {
-	case []any:
-		var out []any
-		for i, c := range n {
-			nc, ch, err := expandRefsShared(c, named, scope, memo, expand)
-			if err != nil {
-				return nil, false, err
-			}
-			if ch && out == nil {
-				out = make([]any, len(n))
-				copy(out, n[:i])
-			}
-			if out != nil {
-				out[i] = nc
-			}
-		}
-		if out == nil {
-			return n, false, nil
-		}
-		return out, true, nil
-	case map[string]any:
-		key := reflect.ValueOf(n).Pointer()
-		if e, hit := memo[key]; hit {
-			return e.out, e.changed, nil
-		}
-		op, _ := n["op"].(string)
-		if op == applyExpressionTemplateOp {
-			// Innermost-first: expand eager references inside the bindings first.
-			newnode := n
-			if b, ok := n["bindings"].(map[string]any); ok {
-				var nb map[string]any
-				for _, bk := range sortedKeys(b) {
-					nbv, ch, err := expandRefsShared(b[bk], named, scope, memo, expand)
-					if err != nil {
-						return nil, false, err
-					}
-					if ch {
-						if nb == nil {
-							nb = cloneMapAny(b)
-						}
-						nb[bk] = nbv
-					}
-				}
-				if nb != nil {
-					newnode = cloneMapAny(n)
-					newnode["bindings"] = nb
-				}
-			}
-			if expand(newnode) {
-				body, err := expandApply(newnode, named, scope)
-				if err != nil {
-					return nil, false, err
-				}
-				res, _, err := expandRefsShared(body, named, scope, memo, expand)
-				if err != nil {
-					return nil, false, err
-				}
-				memo[key] = expandMemoEntry{in: n, out: res, changed: true}
-				return res, true, nil
-			}
-			memo[key] = expandMemoEntry{in: n, out: newnode, changed: newnode != nil && !mapPtrEqual(newnode, n)}
-			return newnode, !mapPtrEqual(newnode, n), nil
-		}
-		var out map[string]any
-		for _, k := range sortedKeys(n) {
-			nv, ch, err := expandRefsShared(n[k], named, scope, memo, expand)
-			if err != nil {
-				return nil, false, err
-			}
-			if ch {
-				if out == nil {
-					out = cloneMapAny(n)
-				}
-				out[k] = nv
-			}
-		}
-		if out == nil {
-			memo[key] = expandMemoEntry{in: n, out: n, changed: false}
-			return n, false, nil
-		}
-		memo[key] = expandMemoEntry{in: n, out: out, changed: true}
-		return out, true, nil
-	}
-	return node, false, nil
 }
 
 // mapPtrEqual reports whether two map[string]any share the same underlying
@@ -691,10 +555,12 @@ func refClosure(refnames map[string]bool, named map[string]any) map[string]bool 
 	return out
 }
 
-// authoredTemplateNames returns the per-component MATCH-LESS template names
-// authored in-file in origView (in source declaration order via `orders`). Emit
-// keeps these verbatim as authored entries (esm-spec §9.6.4 rule 5). Mirrors
-// `_authored_template_names`.
+// authoredTemplateNames returns the per-component template names authored
+// in-file in origView (in source declaration order via `orders`). Emit keeps
+// these in authored position (esm-spec §9.6.4 rule 5): a match-less entry
+// always, a `match` rule only when a firing referenced it (it is then
+// materialized without `match`, `where` and `priority`); imported/derived
+// templates are materialized instead. Mirrors `_authored_template_names`.
 func authoredTemplateNames(origView map[string]any, orders map[string][]string) map[string][]string {
 	authored := map[string][]string{}
 	for _, kind := range templateComponentKinds {
@@ -714,11 +580,7 @@ func authoredTemplateNames(origView map[string]any, orders map[string][]string) 
 			order := orders["/"+kind+"/"+cname+"/expression_templates"]
 			var names []string
 			for _, n := range orderedKeysOf(tpl, order) {
-				d, ok := tpl[n].(map[string]any)
-				if !ok {
-					continue
-				}
-				if m, has := d["match"]; has && m != nil {
+				if _, ok := tpl[n].(map[string]any); !ok {
 					continue
 				}
 				names = append(names, n)
@@ -727,6 +589,82 @@ func authoredTemplateNames(origView map[string]any, orders map[string][]string) 
 		}
 	}
 	return authored
+}
+
+// receivedTransformRefs gives, per component ({kind, name}), the template names
+// referenced by the `variable_map` transforms it RECEIVES — the receiver
+// collectCouplingTransformSites pairs each entry with. The transforms keep
+// their references (esm-spec §10.4); the receiving component owns them, so its
+// emitted block materializes their closure (§9.6.4 rule 5). Mirrors the Julia
+// reference `_received_transform_refs`.
+func receivedTransformRefs(view map[string]any) map[[2]string][]string {
+	out := map[[2]string][]string{}
+	for key, sites := range collectCouplingTransformSites(view) {
+		var refs []string
+		for _, s := range sites {
+			collectApplyNames(&refs, s.entry["transform"])
+		}
+		out[key] = refs
+	}
+	return out
+}
+
+// materializeComponentBlock computes one Option-B loaded component's emitted
+// `expression_templates` block (esm-spec §9.6.4 rule 5): the entries authored
+// in-file (`authoredHere`, authored order) first — a `match` rule only once a
+// firing referenced it and rule 3 materialized it without `match` — then the
+// transitive closure of the component's surviving references not authored
+// here, sorted by UTF-8 bytes. Also reports whether the component carries any
+// surviving reference and whether any non-authored entry was materialized
+// (the §9.6.4 rule 8 version stamp). Shared by emit and the typed load path,
+// as the Julia `_materialize_components!` is. `received` names the references
+// of the coupling transforms the component receives (receivedTransformRefs),
+// which count as its own.
+func materializeComponentBlock(comp map[string]any, authoredHere, received []string) (*orderedMap, bool, bool) {
+	named := map[string]any{}
+	if tpl, ok := comp["expression_templates"].(map[string]any); ok {
+		for n, d := range tpl {
+			named[n] = d
+		}
+	}
+	refnames := map[string]bool{}
+	for _, r := range received {
+		refnames[r] = true
+	}
+	for _, k := range sortedKeys(comp) {
+		if k == "expression_templates" || k == "expression_template_imports" {
+			continue
+		}
+		var refs []string
+		collectApplyNames(&refs, comp[k])
+		for _, r := range refs {
+			refnames[r] = true
+		}
+	}
+	materialized := refClosure(refnames, named)
+	authoredSet := map[string]bool{}
+	for _, n := range authoredHere {
+		authoredSet[n] = true
+	}
+	block := newOrderedMap()
+	for _, n := range authoredHere {
+		// A `match` rule nothing references still carries its `match` (a
+		// referenced one was materialized without it, §9.6.4 rule 3).
+		if d, ok := named[n].(map[string]any); ok && !declHasMatch(d) {
+			block.set(n, d)
+		}
+	}
+	var matNames []string
+	for n := range materialized {
+		if !authoredSet[n] {
+			matNames = append(matNames, n)
+		}
+	}
+	sort.Strings(matNames)
+	for _, n := range matNames {
+		block.set(n, named[n])
+	}
+	return block, len(refnames) > 0, len(matNames) > 0
 }
 
 // emitDocument produces the reference-preserving, self-contained emitted
@@ -752,6 +690,7 @@ func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (ma
 	}
 
 	bump := false
+	received := receivedTransformRefs(view)
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -763,48 +702,9 @@ func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (ma
 				continue
 			}
 			key := kind + "." + cname
-			named := map[string]any{}
-			if tpl, ok := comp["expression_templates"].(map[string]any); ok {
-				for n, d := range tpl {
-					named[n] = d
-				}
-			}
-			refnames := map[string]bool{}
-			for _, k := range sortedKeys(comp) {
-				if k == "expression_templates" || k == "expression_template_imports" {
-					continue
-				}
-				var refs []string
-				collectApplyNames(&refs, comp[k])
-				for _, r := range refs {
-					refnames[r] = true
-				}
-			}
-			if len(refnames) > 0 {
-				bump = true
-			}
-			materialized := refClosure(refnames, named)
-			authoredHere := authored[key]
-			authoredSet := map[string]bool{}
-			for _, n := range authoredHere {
-				authoredSet[n] = true
-			}
-
-			emitBlock := newOrderedMap()
-			for _, n := range authoredHere {
-				if d, ok := named[n]; ok {
-					emitBlock.set(n, d)
-				}
-			}
-			var matNames []string
-			for n := range materialized {
-				if !authoredSet[n] {
-					matNames = append(matNames, n)
-				}
-			}
-			sort.Strings(matNames)
-			for _, n := range matNames {
-				emitBlock.set(n, named[n])
+			emitBlock, hasRefs, hasMaterialized := materializeComponentBlock(
+				comp, authored[key], received[[2]string{kind, cname}])
+			if hasRefs || hasMaterialized {
 				bump = true
 			}
 
@@ -1116,10 +1016,9 @@ func sameRef(a, b any) bool {
 //
 // Without it the common multi-model shape silently breaks. Two components
 // import one rule library; the leaf stencil folds differently per component (a
-// rebind, a metaparameter, or the §10.7 component-scoping of its free
-// variables) and renames to `A.leaf` / `B.leaf`, while the intermediate wrapper
-// that REFERENCES the leaf is byte-identical and would dedup under its bare
-// name. That single deduped body then carries a reference the registry no longer
+// rebind or a metaparameter) and renames to `A.leaf` / `B.leaf`, while the
+// intermediate wrapper that REFERENCES the leaf is byte-identical and would
+// dedup under its bare name. That single deduped body then carries a reference the registry no longer
 // holds, and expansion fails with `apply_expression_template_unknown_template`
 // naming a template no component ever mentioned. Renaming the wrapper per owner
 // lets each copy's nested reference be rewritten to its own owner's leaf.
@@ -1169,101 +1068,70 @@ func registryCollisionNames(byname *orderedMap) map[string]bool {
 
 // flattenTemplateRegistries merges every component's `expression_templates`
 // registry of an Option-B loaded document into a single document-scoped merged
-// registry (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4):
-// deep-equal same-name entries dedupe at first occurrence; a colliding name (see
-// registryCollisionNames — non-deep-equal, or reaching one that is) renames its
-// entry in EVERY owning component to `<ComponentPath>.<name>` with references
-// rewritten in lockstep. Returns the rewritten document and the merged registry
-// (the FlattenedSystem's first-class registry field). Match rules are not merged.
-// Mutates `view` in place. Mirrors the Julia `flatten_template_registries`.
-func flattenTemplateRegistries(view map[string]any) (map[string]any, *orderedMap) {
+// registry (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4) by
+// mergeFlatRegistry: deep-equal same-name entries are kept once under the bare
+// name; a colliding name (registryCollisionNames — non-deep-equal, or reaching
+// one that is) keeps one entry per distinct definition, named
+// `<first owner's path>.<name>`, with each owner's references rewritten in
+// lockstep. Returns the rewritten document and the merged registry (the
+// FlattenedSystem's first-class registry field). Match rules are not merged.
+//
+// Order (esm-libraries-spec §4.7.5 step 4, normative): components in document
+// order (models as `source` declares them, then reaction systems), each
+// component's block as emit materializes it (materializeComponentBlock:
+// authored entries first in authored order, then the materialized ones sorted
+// by UTF-8 bytes). `source` is the document text `view` was loaded from; it
+// carries the declaration order the decoded view has lost. Mutates `view` in
+// place. Mirrors the Julia `flatten_template_registries` over the typed load's
+// `component_templates`.
+func flattenTemplateRegistries(view map[string]any, source string) (map[string]any, *orderedMap) {
+	orders := extractTemplateOrders(source)
+	var authored map[string][]string
+	if origView, err := decodeJSONView([]byte(source)); err == nil {
+		authored = authoredTemplateNames(origView, orders)
+	}
+	received := receivedTransformRefs(view)
 	type compEntry struct {
-		path  string
-		comp  map[string]any
-		named map[string]any
+		path string
+		comp map[string]any
 	}
 	var comps []compEntry
+	var blocks []registryBlock
 	for _, kind := range templateComponentKinds {
 		cs, ok := view[kind].(map[string]any)
 		if !ok {
 			continue
 		}
-		for _, cname := range sortedKeys(cs) {
+		for _, cname := range orderedKeysOf(cs, orders["/"+kind]) {
 			comp, ok := cs[cname].(map[string]any)
 			if !ok {
 				continue
 			}
-			named := map[string]any{}
-			if tpl, ok := comp["expression_templates"].(map[string]any); ok {
-				for n, d := range tpl {
-					if dm, ok := d.(map[string]any); ok {
-						if m, has := dm["match"]; has && m != nil {
-							continue // match rules not merged
-						}
-					}
-					named[n] = d
-				}
+			comps = append(comps, compEntry{path: cname, comp: comp})
+			if _, ok := comp["expression_templates"].(map[string]any); !ok {
+				continue
 			}
-			comps = append(comps, compEntry{path: cname, comp: comp, named: named})
+			mat, _, _ := materializeComponentBlock(
+				comp, authored[kind+"."+cname], received[[2]string{kind, cname}])
+			if mat.len() > 0 {
+				blocks = append(blocks, registryBlock{path: cname, block: mat})
+			}
 		}
 	}
+	merged, rename := mergeFlatRegistry(blocks)
 
-	// Group each template name across components (preserving first-seen order).
-	byname := newOrderedMap()
+	// Rewrite each component's reference sites in lockstep with its renames,
+	// then surrender the per-component blocks to the merged registry.
 	for _, ce := range comps {
-		for _, n := range sortedKeys(ce.named) {
-			var occ []any
-			if ex, ok := byname.get(n).([]any); ok {
-				occ = ex
-			}
-			occ = append(occ, [2]any{ce.path, ce.named[n]})
-			byname.set(n, occ)
-		}
-	}
-
-	merged := newOrderedMap()
-	rename := map[string]map[string]string{} // path => (old => new)
-	names := append([]string(nil), byname.keys...)
-	sort.Strings(names)
-	collide := registryCollisionNames(byname)
-	for _, name := range names {
-		occ, _ := byname.get(name).([]any)
-		if !collide[name] {
-			merged.set(name, occ[0].([2]any)[1]) // deep-equal dedup
-			continue
-		}
-		for _, o := range occ {
-			path := o.([2]any)[0].(string)
-			decl := o.([2]any)[1]
-			newname := path + "." + name
-			merged.set(newname, decl)
-			if rename[path] == nil {
-				rename[path] = map[string]string{}
-			}
-			rename[path][name] = newname
-		}
-	}
-
-	// Rewrite reference sites in lockstep (component expression positions and the
-	// carried bodies of the renamed entries), then surrender the per-component
-	// blocks to the merged registry.
-	for _, ce := range comps {
-		rn := rename[ce.path]
-		if rn != nil {
+		if rn := rename[ce.path]; rn != nil {
 			for _, k := range sortedKeys(ce.comp) {
 				if k == "expression_templates" {
 					continue
 				}
 				ce.comp[k] = renameApplyRefs(ce.comp[k], rn)
 			}
-			for _, newname := range rn {
-				if merged.has(newname) {
-					merged.set(newname, renameApplyRefs(merged.get(newname), rn))
-				}
-			}
 		}
 		delete(ce.comp, "expression_templates")
 	}
-
 	return view, merged
 }

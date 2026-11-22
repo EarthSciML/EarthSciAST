@@ -528,7 +528,10 @@ pub fn arity_of(op: &str) -> Option<Arity> {
     CoreOp::from_name(op).map(|c| c.info().arity)
 }
 
-/// Is `op` an evaluable-core operator (esm-spec §4.2)?
+/// Is `op` an evaluable-core operator (esm-spec §4.2)? Only the registry's
+/// own consistency tests ask since the load-time eager pre-pass (which used it
+/// to recognise rewrite-target ops) was removed.
+#[cfg(test)]
 #[must_use]
 pub fn is_core_op(op: &str) -> bool {
     CoreOp::from_name(op).is_some()

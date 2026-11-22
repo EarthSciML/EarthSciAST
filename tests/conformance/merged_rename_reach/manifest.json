@@ -1,7 +1,7 @@
 {
   "category": "merged_rename_reach",
   "version": "1.0",
-  "description": "Cross-binding conformance for how far an `operator_compose` merged-away rename REACHES (esm-libraries-spec §4.7.1 step 4). A renaming match — a `translate` match, or the bare-name fallback #216 resolves by ownership — folds `B.x` into `A.x`, so `B.x` is DELETED and every equation in the document is rewritten off the dead spelling. That rewrite is document-wide over EQUATION ASTs and nothing else, and three other places address the state BY NAME: a `couple` connector's `from`/`to` and a `variable_map`'s `from`/`to`, which are plain scoped-reference STRINGS on the entry object; the override keys a runner is handed; and a surviving expression-template registry body. §4.7.5 step 3 applies every `operator_compose` BEFORE any `couple` or `variable_map`, so an entry that has not run yet can still name a spelling the merge has already deleted. The decision this category pins is RESOLUTION, not refusal: a reference to a merged-away name resolves to the survivor, so a document that merges `B.x` onto `A.x` stays addressable by either spelling. Refusing instead would be defensible for a name nothing can resolve, but these are renames the author ASKED for — a `translate` map names the surviving spelling on purpose — and a document is built around them. Like `operator_compose_merge` and `override_key_diagnostics` this category carries no golden: what it pins is REACH, asserted as structure (which names survive, which equations reference what) rather than as numbers.",
+  "description": "Cross-binding conformance for how far an `operator_compose` merged-away rename REACHES (esm-libraries-spec §4.7.1 step 4). A renaming match — a `translate` match, or the bare-name fallback #216 resolves by ownership — folds `B.x` into `A.x`, so `B.x` is DELETED and every equation in the document is rewritten off the dead spelling. That rewrite is document-wide over EQUATION ASTs and nothing else, and three other places address the state BY NAME: a `couple` connector's `from`/`to` and a `variable_map`'s `from`/`to`, which are plain scoped-reference STRINGS on the entry object; and the override keys a runner is handed. (A surviving expression-template registry body reads no component name once flatten closes it, esm-spec §10.7: a name its body read is in a reference's bindings, where the equation rewrite reaches it.) §4.7.5 step 3 applies every `operator_compose` BEFORE any `couple` or `variable_map`, so an entry that has not run yet can still name a spelling the merge has already deleted. The decision this category pins is RESOLUTION, not refusal: a reference to a merged-away name resolves to the survivor, so a document that merges `B.x` onto `A.x` stays addressable by either spelling. Refusing instead would be defensible for a name nothing can resolve, but these are renames the author ASKED for — a `translate` map names the surviving spelling on purpose — and a document is built around them. Like `operator_compose_merge` and `override_key_diagnostics` this category carries no golden: what it pins is REACH, asserted as structure (which names survive, which equations reference what) rather than as numbers.",
   "spec": "esm-libraries-spec §4.7.1 step 4; §4.7.5 step 3 ordering",
   "issue": "EarthSciML/EarthSciAST#230",
   "bindings_required": [
@@ -58,17 +58,6 @@
         "typescript",
         "go"
       ]
-    },
-    "template_registry": {
-      "_comment": "The ONE surface that REFUSES rather than resolves. A surviving `expression_templates` body is a shadow copy of authored source that no equation walk reaches and that expands at the BUILD boundary, so a body naming a merged-away state would expand later and elsewhere into a variable the flattened system does not declare. Rewriting it would make the flattened registry disagree with the expand-at-load image the same document produces, which esm-spec 9.6.4 rule 2 requires to be observably identical -- so the document is refused at flatten instead. A template `param` shadows the outer name (9.6.1), so a body that BINDS the name is fine; the fixture deliberately does not.",
-      "bindings": [
-        "julia",
-        "python",
-        "rust",
-        "typescript",
-        "go"
-      ],
-      "diagnostic": "template_body_references_coupling_rewritten_variable"
     },
     "inline_tests": {
       "_comment": "A component's own inline test addresses the quantity by its LOCAL name (esm-spec 6.6), in an assertion and in an `initial_conditions` key. A merge can fold that component's state onto another's, and then neither resolves. The two halves fail differently: the assertion fails LOUDLY (`scalar state 'O3' not found`), while the IC key is dropped in SILENCE and the state runs from the survivor's declared default -- a wrong answer rather than a missing one. Only the three bindings that RUN inline tests are in scope.",
@@ -213,12 +202,23 @@
     {
       "id": "registry_body_names_the_merged_away_state",
       "path": "fixtures/registry_body_names_the_merged_away_state.esm",
-      "surface": "template_registry",
-      "raises": "template_body_references_coupling_rewritten_variable",
-      "names_in_message": [
+      "surface": "flatten",
+      "merged_variable_renames": {
+        "Sink.O3": "Chem.ozone"
+      },
+      "state_variables": [
+        "Chem.ozone"
+      ],
+      "tendency_of": "Chem.ozone",
+      "tendency_references": [
+        "Chem.k",
+        "Sink.kd",
+        "Chem.ozone"
+      ],
+      "no_equation_references": [
         "Sink.O3"
       ],
-      "note": "Flatten must REFUSE. The body references the component's local `O3`, which scopes to `Sink.O3` and which the merge then deletes; `O3` is not one of the template's `params`, so the 9.6.1 shadow does not apply. A binding that resolves here instead of refusing is as wrong as one that does nothing: it would silently rewrite authored source."
+      "note": "A template body reads the merged-away local `O3` free. Flatten closes the body (esm-spec §10.7): `O3` is a parameter Sink's reference binds, so the merge rewrites the binding and the tendency reads `Chem.ozone`. Before bodies were closed, a body was scoped to its component and this was refused with `template_body_references_coupling_rewritten_variable`; a closed body reads no component name, so there is nothing to refuse."
     },
     {
       "id": "inline_test_names_the_merged_away_state",

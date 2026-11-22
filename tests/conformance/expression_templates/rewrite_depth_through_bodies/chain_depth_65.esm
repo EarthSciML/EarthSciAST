@@ -1,0 +1,1160 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "rewrite_depth_through_bodies_65",
+    "description": "esm-spec §9.6.4 rule 3 (Rewrite depth): a chain of 65 rules, rule r<k> rewriting op `s<k>` into a body holding `s<k+1>`. The call site fires r1 in pass 1 (depth 1); each later rule fires in pass 1 of the body of the rule before it, one level deeper. The deepest rewrite has depth 65 > MAX_REWRITE_PASSES, so the document is rejected with `rewrite_rule_nonterminating`.",
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ]
+  },
+  "index_sets": {},
+  "models": {
+    "m": {
+      "expression_templates": {
+        "r1": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s1",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s2",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r2": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s2",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s3",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r3": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s3",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s4",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r4": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s4",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s5",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r5": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s5",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s6",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r6": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s6",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s7",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r7": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s7",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s8",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r8": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s8",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s9",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r9": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s9",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s10",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r10": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s10",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s11",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r11": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s11",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s12",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r12": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s12",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s13",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r13": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s13",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s14",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r14": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s14",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s15",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r15": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s15",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s16",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r16": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s16",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s17",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r17": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s17",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s18",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r18": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s18",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s19",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r19": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s19",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s20",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r20": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s20",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s21",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r21": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s21",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s22",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r22": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s22",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s23",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r23": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s23",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s24",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r24": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s24",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s25",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r25": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s25",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s26",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r26": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s26",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s27",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r27": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s27",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s28",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r28": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s28",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s29",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r29": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s29",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s30",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r30": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s30",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s31",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r31": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s31",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s32",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r32": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s32",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s33",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r33": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s33",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s34",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r34": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s34",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s35",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r35": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s35",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s36",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r36": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s36",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s37",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r37": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s37",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s38",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r38": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s38",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s39",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r39": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s39",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s40",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r40": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s40",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s41",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r41": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s41",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s42",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r42": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s42",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s43",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r43": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s43",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s44",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r44": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s44",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s45",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r45": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s45",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s46",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r46": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s46",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s47",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r47": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s47",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s48",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r48": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s48",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s49",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r49": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s49",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s50",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r50": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s50",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s51",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r51": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s51",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s52",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r52": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s52",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s53",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r53": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s53",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s54",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r54": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s54",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s55",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r55": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s55",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s56",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r56": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s56",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s57",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r57": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s57",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s58",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r58": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s58",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s59",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r59": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s59",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s60",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r60": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s60",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s61",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r61": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s61",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s62",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r62": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s62",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s63",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r63": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s63",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s64",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r64": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s64",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "s65",
+            "args": [
+              "f"
+            ]
+          }
+        },
+        "r65": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "s65",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "*",
+            "args": [
+              2,
+              "f"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.5
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "u"
+            ]
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "s1",
+            "args": [
+              "u"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

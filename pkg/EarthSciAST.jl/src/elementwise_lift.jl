@@ -26,14 +26,6 @@
 # marked expansions.
 
 
-# The expansion of the application `e`, its root marked with the template's
-# name, or `nothing` when `ctx` has no registry to expand it against.
-function _ew_expansion(e::OpExpr, ctx::Union{Nothing, _ElementwiseContext})
-    (ctx === nothing || ctx.registry === nothing || isempty(ctx.registry)) && return nothing
-    return task_local_storage(_MARK_TEMPLATE_ORIGINS_KEY, true) do
-        _expand_expr_refs(e, ctx.registry, nothing, ctx.memo)
-    end
-end
 
 _is_rank0_faq(e::OpExpr) =
     e.op in _ARRAY_PRODUCER_OPS && e.op != "makearray" &&
@@ -82,9 +74,20 @@ function _ew_visit(
     push!(visits, (inside, bound))
     op = expr.op
     if op == "apply_expression_template"
-        ex = _ew_expansion(expr, ctx)
-        ex === nothing ||
-            _ew_visit(ex, shapes, ctx, bound, true, on_read, on_anonymous, seen)
+        # Read through the reference, never expanded: a binding is in a value
+        # position where its parameter is (elementwise_refs.jl `_ew_roles`).
+        r = _ew_roles(ctx, expr.name)
+        r === nothing && return
+        b = expr.bindings === nothing ? Dict{String, ASTExpr}() : expr.bindings
+        for k in sort!(collect(keys(b)))
+            rk = get(r.role, k, :none)
+            (rk == :value || rk == :mixed) &&
+                _ew_visit(b[k], shapes, ctx, bound, true, on_read, on_anonymous, seen)
+        end
+        for n in r.free_value
+            (n in bound || isempty(get(shapes, n, String[]))) && continue
+            on_read(n, true)
+        end
         return
     end
     inside = inside || expr.template_origin !== nothing
@@ -149,8 +152,8 @@ function _application_operands(expr::OpExpr, shapes, ctx)::Vector{ASTExpr}
 end
 
 # `expr` read at the current cell of `loops`: every shaped read `_ew_visit`
-# reports gathered at the loops its index sets name; a template reference is
-# replaced by its expansion, so read.
+# reports gathered at the loops its index sets name; a template reference keeps
+# its reference, its bindings read at the cell by role (`_ew_ref_at_cell`).
 #
 # Memoized by node identity and `(bound, inside)`, as `_ew_visit` is: a subtree
 # an expansion shares is rewritten once, and the rewrite shares it too, rather
@@ -181,13 +184,13 @@ function _ew_at_cell_op(
         loops::Vector{String}, align, on_foreign, bound::Set{String}, inside::Bool, memo
     )::ASTExpr
     op = expr.op
-    if op == "apply_expression_template"
-        ex = _ew_expansion(expr, ctx)
-        ex === nothing && return expr
-        return _ew_at_cell(ex, shapes, ctx, loops, align, on_foreign, bound, true, memo)
-    end
     inside = inside || expr.template_origin !== nothing
     rec(a, b = bound, i = inside) = _ew_at_cell(a, shapes, ctx, loops, align, on_foreign, b, i, memo)
+    if op == "apply_expression_template"
+        # The reference stays a reference: its bindings are read at the cell
+        # by role, never its expansion (esm-spec §9.6.11).
+        return _ew_ref_at_cell(expr, shapes, ctx, v -> rec(v, bound, true), bound)
+    end
     if op == "index"
         inside || return expr
         return reconstruct(
@@ -296,8 +299,9 @@ end
 Flatten's last step (esm-spec §9.6.11, "A flattened system keeps its
 applications' meaning on the wire"): every equation `x = rhs`, and every field
 initial condition `ic(x) = rhs`, that applies a template elementwise becomes
-the per-cell `faq` the build would lift it to, its template references
-expanded. A flattened system written out as a document and read back — the
+the per-cell `faq` the build would lift it to. Its template references stay
+references, each binding read at the cell by its parameter's role
+(elementwise_refs.jl; esm-spec §9.6.11): nothing is expanded. A flattened system written out as a document and read back — the
 EarthSciIntegrator planner's derived documents, after `expand_flattened_refs` —
 then denotes the same system: left as an application whose expansion reads an
 array by bare name inside the template's bracket count, it would be refused as

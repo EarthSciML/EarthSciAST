@@ -134,6 +134,23 @@ fn lower_enum_node(
     Ok(Value::Object(out))
 }
 
+/// Lower one `enum` op `node` (whose `args` are two strings) to its `const`
+/// against `enums`, a document's top-level `enums` value (`None` when the
+/// document declares none), with the load-time diagnostics. Esm-spec §9.6.4
+/// rule 3 lowers an op spelled with a template parameter this way, once per
+/// template instance, where the instance binds the parameter to a symbol.
+pub(crate) fn lower_enum_op_against(
+    enums: Option<&Value>,
+    node: &Map<String, Value>,
+) -> Result<Value, EnumLoweringError> {
+    let mut doc = Map::new();
+    if let Some(e) = enums {
+        doc.insert("enums".to_string(), e.clone());
+    }
+    let parsed = parse_enums_block(&Value::Object(doc))?;
+    lower_enum_node(node, &parsed)
+}
+
 /// Return a copy of `node` with every `enum`-op object replaced by its
 /// lowered `const` node. A replacement's fields are all leaves, so the
 /// visitor's descent into it finds nothing further to lower; on error the

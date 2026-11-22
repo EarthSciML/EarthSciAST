@@ -121,7 +121,8 @@ function _tpl_def(tt::_TplTable, name)
         decl = _TemplateDecl(tt.reg[name])
         raw = decl.body
         typed = expression_from_json(raw)
-        structural = String[p for p in decl.params if _raw_count(raw, p) != _leaf_count(typed, p)]
+        fed = _tpl_feeds_structural(tt, typed)
+        structural = String[p for p in decl.params if _raw_count(raw, p) != _leaf_count(typed, p) || p in fed]
         closed = isempty(structural) ? _tpl_close(tt, String(name), decl, Dict{String, Any}()) : nothing
         d = _TplDef(String(name), decl.params, structural, closed)
         tt.defs[String(name)] = d
@@ -131,14 +132,40 @@ function _tpl_def(tt::_TplTable, name)
     end
 end
 
+# The names `body` passes, as a bare name, to a structural parameter of a
+# template it references: `T(q = p)` with `q` structural in `T`. Such a `p`,
+# when it is a parameter of the body's template, is structural there too —
+# its value lands in `T`'s structural position — so the reference is read
+# through an instance of the body's template, in which `T(q = <name>)` is
+# itself re-pointed at `T`'s instance. (Closing makes a `join` name a body
+# reads a parameter, `_tpl_explicit_free`, and an enclosing template that
+# passes its own parameter on is the common shape.)
+function _tpl_feeds_structural(tt::_TplTable, body::ASTExpr)
+    fed = Set{String}()
+    visit(x) = begin
+        (_tpl_is_call(x) && x.name isa AbstractString && x.bindings !== nothing &&
+            tt.reg !== nothing && haskey(tt.reg, x.name)) || return nothing
+        for q in _tpl_def(tt, x.name).structural
+            v = get(x.bindings, q, nothing)
+            v isa VarExpr && push!(fed, v.name)
+        end
+        return nothing
+    end
+    visit(body)
+    foreach_subexpr(visit, body)
+    return fed
+end
+
 # The prepared body of `name` with the structural parameters substituted by
-# `S` (parameter => raw value).
+# `S` (parameter => raw value). A nested reference whose structural bindings
+# are then names or numbers reads its instance (`_tpl_structural_refs`).
 function _tpl_close(tt::_TplTable, name::String, decl::_TemplateDecl, S::Dict{String, Any})
     sub = Dict{String, Any}()
     for p in decl.params
         sub[p] = haskey(S, p) ? S[p] : _TPL_ARG * p
     end
     typed = expression_from_json(_substitute(decl.body, sub))
+    typed = _tpl_structural_refs(tt, typed)
     # `broadcast(fn = F, …)` is `F(…)` (esm-spec §4.3.4), lowered in a body as
     # the build lowers it in the model's own tree (an invalid `fn` is left for
     # the build to refuse).
@@ -146,6 +173,7 @@ function _tpl_close(tt::_TplTable, name::String, decl::_TemplateDecl, S::Dict{St
     typed = _tpl_augment(tt, typed)
     typed = _tpl_elem_reads(tt, typed)
     typed = _tpl_body_lift(tt, typed, IdDict{OpExpr, ASTExpr}())
+    typed = _tpl_lift_root_ref(tt, typed)
     free = sort!(collect(_tpl_free_leaves(typed)))
     if !isempty(free)
         m = Dict{String, ASTExpr}(n => VarExpr(_TPL_FREE * n) for n in free)
@@ -342,6 +370,37 @@ function _tpl_lift_whole(tt::_TplTable, r::OpExpr)
     )
 end
 
+# A body that is itself a whole array-valued reference — the body of a rule
+# that forwards to a stencil template, which a firing references (esm-spec
+# §9.6.3 constraint 7) — is that reference read at each output index:
+#
+#     interior(f)  ==  faq(output_idx = o, ranges = R, expr = interior(f)[o])
+#
+# The reference stays a reference (its element call); the template is then
+# array-valued and called through its element like any other.
+function _tpl_lift_root_ref(tt::_TplTable, r::ASTExpr)
+    r isa OpExpr || return r
+    w = _tpl_whole_ref(tt, r)
+    w === nothing && return r
+    outs, rg = w
+    used = Set{String}()
+    foreach_subexpr(x -> x isa VarExpr && push!(used, x.name), r)
+    oi = String[]
+    for k in eachindex(outs)
+        n = string("i", k)
+        while n in used || n in oi
+            n *= "′"
+        end
+        push!(oi, n)
+    end
+    subs = ASTExpr[VarExpr(n) for n in oi]
+    ranges = Dict{String, Any}(n => rg[outs[k]] for (k, n) in enumerate(oi))
+    return OpExpr(
+        "faq", ASTExpr[]; output_idx = Any[oi...], ranges = ranges,
+        expr_body = _elem_call(tt, r, subs)
+    )
+end
+
 # Does `a` hold a whole array-valued reference or an array-valued node?
 function _tpl_reads_whole(tt::_TplTable, a)
     a isa OpExpr || return false
@@ -404,7 +463,13 @@ function _tpl_register_instance!(tt::_TplTable, name::AbstractString, S::Dict{St
             nd[string(k)] = v
         end
         nd["params"] = Any[p for p in decl.params if !haskey(S, p)]
-        nd["body"] = _substitute(decl.body, S)
+        body = _substitute(decl.body, S)
+        # A nested reference the substitution gave name or number structural
+        # bindings (`_tpl_feeds_structural`) reads its own instance, in the
+        # declaration too: the view parts are cut from it (`_tpl_skel`).
+        tb = expression_from_json(body)
+        rb = _tpl_structural_refs(tt, tb)
+        nd["body"] = rb === tb ? body : serialize_expression(rb)
         tt.reg[iname] = nd
     end
     return iname
@@ -445,6 +510,44 @@ function _tpl_free_leaves!(out, e::ASTExpr, bound::Set{String}, seen)
         inner = union(bound, b)
         foreach_child(c -> _tpl_free_leaves!(out, c, inner, seen), e)
     end
+    return
+end
+
+# The names `e` reads through a `join` clause and does not bind itself: an
+# `on` clause's key columns and an `overlap` clause's envelope factors. They
+# are plain strings, not variable leaves, yet name variables exactly as a leaf
+# does — the same names component namespacing scopes (`_namespace_join`). A
+# column naming a loop symbol of its node or of an enclosing one is a binder,
+# not a read.
+function _tpl_free_join_names(e::ASTExpr)
+    out = Set{String}()
+    _tpl_free_join_names!(out, e, Set{String}(), IdDict{OpExpr, Nothing}())
+    return out
+end
+function _tpl_free_join_names!(out, e::ASTExpr, bound::Set{String}, seen)
+    e isa OpExpr || return
+    b = _bound_symbols(e)
+    inner = isempty(b) ? bound : union(bound, b)
+    if isempty(inner)
+        # A shared node under no binder reads the same names.
+        haskey(seen, e) && return
+        seen[e] = nothing
+    end
+    if e.join !== nothing
+        add(n) = (s = String(n); (s in inner || _tpl_is_sentinel(s)) || push!(out, s); nothing)
+        for clause in e.join
+            if clause isa _OverlapJoinSpec
+                foreach(add, clause.src_env)
+                foreach(add, clause.tgt_env)
+            else
+                for (l, r) in clause
+                    add(l)
+                    add(r)
+                end
+            end
+        end
+    end
+    foreach_child(c -> _tpl_free_join_names!(out, c, inner, seen), e)
     return
 end
 
@@ -868,6 +971,51 @@ function _tpl_body_reads(tt::_TplTable, name)
     end
 end
 
+# The parameter sentinels the expansion of `name` reads ONLY in index space:
+# inside a subscript of an `index` (its operands after the array), directly or
+# through a nested reference that reads its own parameter only there. Where the
+# expansion substitutes such a binding, every name in it is a loop index of
+# that `index` (the reference check's subscript-position rule,
+# validation/references.jl `_bound_index_symbols`), so the binding binds the
+# caller to no name of its scope.
+function _tpl_index_reads(tt::_TplTable, name)
+    memo = _tpl_memo(tt, nothing, :index_reads, () -> Dict{String, Set{String}}())
+    haskey(memo, String(name)) && return memo[String(name)]
+    memo[String(name)] = Set{String}()      # (the template graph is acyclic)
+    inidx = Set{String}()
+    outside = Set{String}()
+    function walk(e, idx::Bool)
+        if e isa VarExpr
+            _tpl_is_sentinel(e.name) && push!(idx ? inidx : outside, e.name)
+            return
+        end
+        e isa OpExpr || return
+        if _tpl_is_call(e)
+            foreach(a -> walk(a, idx), e.args)
+            b = e.bindings
+            b === nothing && return
+            inner = try
+                _tpl_index_reads(tt, e.name)
+            catch err
+                err isa ExpressionTemplateError || rethrow()
+                Set{String}()
+            end
+            for (k, v) in b
+                _tpl_reads_binding(tt, e, k) || continue
+                walk(v, idx || _tpl_binding_sentinel(k) in inner)
+            end
+            return
+        end
+        for (j, a) in enumerate(e.args)
+            walk(a, idx || (e.op == "index" && j >= 2))
+        end
+        foreach_child(c -> any(x -> x === c, e.args) || walk(c, false), e)
+        return
+    end
+    walk(_tpl_names_body(tt, name), false)
+    return memo[String(name)] = setdiff(inidx, outside)
+end
+
 """
     _tpl_ground(tt, e, fr) -> ASTExpr
 
@@ -958,8 +1106,9 @@ end
 
 `block` (a component's raw template registry) with every match-less body's
 free names made EXPLICIT parameters: a name a body reads from its caller (a
-variable leaf it does not bind and that is not one of its parameters, read
-directly or through a nested reference) is appended, sorted, to its `params`,
+variable leaf, or a `join` key column or overlap envelope factor, that it does
+not bind and that is not one of its parameters, read directly or through a
+nested reference) is appended, sorted, to its `params`,
 and every nested reference in a body binds its callee's added parameters to
 the same names (`_tpl_bind_explicit`). `added` maps each changed template to
 the parameters it gained, for the call sites (`_tpl_bind_explicit`).
@@ -994,7 +1143,7 @@ function _tpl_explicit_free(block)
             _raw_haskey(block, c) && visit(c)
         end
         bound = _tpl_bind_explicit(typed, added)
-        free = sort!(collect(setdiff(_tpl_free_leaves(bound), td.params)))
+        free = sort!(collect(setdiff(union(_tpl_free_leaves(bound), _tpl_free_join_names(bound)), td.params)))
         if bound === typed && isempty(free)
             newdecl[name] = decl
             return
@@ -1282,6 +1431,27 @@ _tpl_array_binding(v::ASTExpr) =
     (v isa VarExpr && !occursin(_TPL_SENTINEL, v.name)) ||
     (v isa OpExpr && v.op == "const" && v.value isa AbstractVector)
 
+# An ARRAY EXPRESSION bound to an array parameter: an elementwise `faq` over
+# its output indices (no reduction, filter or join), whose element is read
+# lazily: where the body reads the parameter at subscripts `s…`, the element
+# with each output index read as `s` is evaluated there, at that cell, and
+# nowhere else (call.jl, "Array expressions compiled into the instance"). No
+# buffer holds it and the body is not inlined. The form alone; with the
+# template table `tt`, also an element the build compiles into the instance
+# (`_tpl_inlinable`).
+function _tpl_array_expr(v::ASTExpr, tt::Union{Nothing, _TplTable} = nothing)
+    (v isa OpExpr && _is_faq_op(v.op)) || return false
+    oi = v.output_idx
+    (oi !== nothing && !isempty(oi) && all(x -> x isa AbstractString, oi)) || return false
+    (
+        v.filter === nothing && v.join_gates === nothing && v.join === nothing &&
+            v.key === nothing && v.expr_body !== nothing && v.values === nothing &&
+            v.lower === nothing && v.upper === nothing && all(a -> a isa VarExpr, v.args)
+    ) || return false
+    v.ranges === nothing || all(k -> String(k) in oi, keys(v.ranges)) || return false
+    return tt === nothing || _tpl_inlinable(v.expr_body, tt)
+end
+
 """
     _tpl_compiles(tt, call::OpExpr) -> Bool
 
@@ -1304,7 +1474,7 @@ function _tpl_compiles(tt::_TplTable, call::OpExpr)
         v === nothing && !(s in info.scalars || s in info.arrays || s in info.fixed) && continue
         v === nothing && return false
         if s in info.arrays
-            _tpl_array_binding(v) || return false
+            _tpl_array_binding(v) || _tpl_array_expr(v, tt) || return false
             continue
         end
         if s in info.fixed
@@ -1329,6 +1499,14 @@ function _tpl_compiles(tt::_TplTable, call::OpExpr)
         # A template call in it stays a call inside the instance, evaluated
         # only where the body reads the parameter (`_tpl_inlinable` with `tt`).
         _tpl_plain_binding(v) || _tpl_inlinable(v, tt) || return false
+    end
+    # An implicit parameter read as an array is bound to the caller's name of
+    # its spelling unless the reference carries it, possibly as an array
+    # expression.
+    for s in info.arrays
+        startswith(s, _TPL_FREE) || continue
+        v = get(b, s, nothing)
+        v === nothing || _tpl_array_binding(v) || _tpl_array_expr(v, tt) || return false
     end
     return true
 end

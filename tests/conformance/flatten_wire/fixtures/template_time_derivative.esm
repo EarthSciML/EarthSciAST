@@ -1,0 +1,69 @@
+{
+ "esm": "1.3.0",
+ "metadata": {
+  "name": "template_time_derivative",
+  "authors": [
+   "EarthSciAST test suite"
+  ],
+  "description": "Structural time derivatives inside template bodies, resolved in flatten step 3a without expanding (esm-spec §9.6.4 rule 3, \"Time derivatives\"; esm-libraries-spec §4.7.5 step 3a). `rate` holds D(p) with wrt absent: bound to the state a it resolves through a parameter p_dt bound to a's tendency, bound to the observed w by the chain rule. `nested` holds D of a reference to `sq`, which resolves to a reference to the derivative entry `sq.ddt` bound with q_dt; `cube_rate` reaches it once more by calling `nested`, so its reference gains s_dt too. `dwrt` holds D(f, wrt v): bound to t in one instance it is a structural D, bound to the axis x in the other the rule `dx_zero` fires there, so rule 3 registers two variants. `r6` writes D of a reference at a call site, which resolves to a reference to `sq.ddt`."
+ },
+ "models": {
+  "M": {
+   "expression_templates": {
+    "dx_zero": {
+     "params": ["f"],
+     "match": {"op": "D", "args": ["f"], "wrt": "x"},
+     "body": {"op": "*", "args": [0.25, "f"]}
+    },
+    "rate": {
+     "params": ["p"],
+     "body": {"op": "*", "args": ["c", {"op": "D", "args": ["p"]}]}
+    },
+    "sq": {
+     "params": ["q"],
+     "body": {"op": "*", "args": ["q", "q"]}
+    },
+    "nested": {
+     "params": ["s"],
+     "body": {"op": "D", "args": [{"op": "apply_expression_template", "args": [], "name": "sq", "bindings": {"q": "s"}}]}
+    },
+    "cube_rate": {
+     "params": ["g"],
+     "body": {"op": "+", "args": ["g", {"op": "apply_expression_template", "args": [], "name": "nested", "bindings": {"s": "g"}}]}
+    },
+    "dwrt": {
+     "params": ["f", "v"],
+     "body": {"op": "D", "args": ["f"], "wrt": "v"}
+    }
+   },
+   "variables": {
+    "a": {"type": "unknown", "default": 1.5},
+    "b": {"type": "unknown", "default": 2.0},
+    "u": {"type": "unknown", "default": 3.0},
+    "k": {"type": "parameter", "default": 0.5},
+    "c": {"type": "parameter", "default": 4.0},
+    "w": {"type": "unknown"},
+    "r1": {"type": "unknown"},
+    "r2": {"type": "unknown"},
+    "r3": {"type": "unknown"},
+    "r4": {"type": "unknown"},
+    "r5": {"type": "unknown"},
+    "r6": {"type": "unknown"},
+    "r7": {"type": "unknown"}
+   },
+   "equations": [
+    {"lhs": {"op": "D", "args": ["a"], "wrt": "t"}, "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "a"]}},
+    {"lhs": {"op": "D", "args": ["b"], "wrt": "t"}, "rhs": {"op": "-", "args": ["a", "b"]}},
+    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": {"op": "-", "args": ["u"]}},
+    {"lhs": "w", "rhs": {"op": "*", "args": ["a", "b"]}},
+    {"lhs": "r1", "rhs": {"op": "apply_expression_template", "args": [], "name": "rate", "bindings": {"p": "a"}}},
+    {"lhs": "r2", "rhs": {"op": "apply_expression_template", "args": [], "name": "rate", "bindings": {"p": "w"}}},
+    {"lhs": "r3", "rhs": {"op": "apply_expression_template", "args": [], "name": "nested", "bindings": {"s": "b"}}},
+    {"lhs": "r4", "rhs": {"op": "apply_expression_template", "args": [], "name": "dwrt", "bindings": {"f": "a", "v": "t"}}},
+    {"lhs": "r5", "rhs": {"op": "apply_expression_template", "args": [], "name": "dwrt", "bindings": {"f": "u", "v": "x"}}},
+    {"lhs": "r6", "rhs": {"op": "D", "args": [{"op": "apply_expression_template", "args": [], "name": "sq", "bindings": {"q": "a"}}], "wrt": "t"}},
+    {"lhs": "r7", "rhs": {"op": "apply_expression_template", "args": [], "name": "cube_rate", "bindings": {"g": "w"}}}
+   ]
+  }
+ }
+}

@@ -1,0 +1,77 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "rewrite_depth_through_bodies",
+    "description": "esm-spec §9.6.4 rule 3 (Rewrite depth): the rule `grow` re-introduces its own pattern in its body. At the call site it writes `ref(grow, {f: u})`; rewriting `grow`'s body for that instance fires `grow` again on the parameter leaf `f`, which names the same instance, so the document is rejected with `rewrite_rule_nonterminating`, naming the rule and the template.",
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.3 constraint 7, §9.6.4 rule 3)"
+    ]
+  },
+  "index_sets": {},
+  "models": {
+    "m": {
+      "expression_templates": {
+        "grow": {
+          "params": [
+            "f"
+          ],
+          "match": {
+            "op": "blowup",
+            "args": [
+              "f"
+            ]
+          },
+          "body": {
+            "op": "+",
+            "args": [
+              {
+                "op": "blowup",
+                "args": [
+                  "f"
+                ]
+              },
+              1
+            ]
+          }
+        }
+      },
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.5
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "u"
+            ]
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "blowup",
+            "args": [
+              "u"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

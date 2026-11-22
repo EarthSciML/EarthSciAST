@@ -26,67 +26,12 @@
             "wrt": "t"
           },
           "rhs": {
-            "args": [
-              "cf"
-            ],
-            "expr": {
-              "args": [
-                {
-                  "args": [
-                    {
-                      "args": [
-                        "cf",
-                        {
-                          "args": [
-                            "i",
-                            1
-                          ],
-                          "op": "+"
-                        }
-                      ],
-                      "op": "index"
-                    },
-                    {
-                      "args": [
-                        "cf",
-                        {
-                          "args": [
-                            "i",
-                            1
-                          ],
-                          "op": "-"
-                        }
-                      ],
-                      "op": "index"
-                    }
-                  ],
-                  "op": "-"
-                },
-                {
-                  "args": [
-                    2,
-                    {
-                      "args": [],
-                      "bindings": {},
-                      "name": "fine.dx",
-                      "op": "apply_expression_template"
-                    }
-                  ],
-                  "op": "*"
-                }
-              ],
-              "op": "/"
+            "args": [],
+            "bindings": {
+              "f": "cf"
             },
-            "op": "faq",
-            "output_idx": [
-              "i"
-            ],
-            "ranges": {
-              "i": [
-                2,
-                15
-              ]
-            }
+            "name": "fine.central_D_x",
+            "op": "apply_expression_template"
           }
         },
         {
@@ -98,8 +43,20 @@
             "wrt": "t"
           },
           "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "cc"
+            },
+            "name": "coarse.central_D_x",
+            "op": "apply_expression_template"
+          }
+        }
+      ],
+      "expression_templates": {
+        "coarse.central_D_x": {
+          "body": {
             "args": [
-              "cc"
+              "f"
             ],
             "expr": {
               "args": [
@@ -107,7 +64,7 @@
                   "args": [
                     {
                       "args": [
-                        "cc",
+                        "f",
                         {
                           "args": [
                             "i",
@@ -120,7 +77,7 @@
                     },
                     {
                       "args": [
-                        "cc",
+                        "f",
                         {
                           "args": [
                             "i",
@@ -159,10 +116,11 @@
                 7
               ]
             }
-          }
-        }
-      ],
-      "expression_templates": {
+          },
+          "params": [
+            "f"
+          ]
+        },
         "coarse.dx": {
           "body": {
             "args": [
@@ -172,6 +130,74 @@
             "op": "/"
           },
           "params": []
+        },
+        "fine.central_D_x": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "f",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "+"
+                        }
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "f",
+                        {
+                          "args": [
+                            "i",
+                            1
+                          ],
+                          "op": "-"
+                        }
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "-"
+                },
+                {
+                  "args": [
+                    2,
+                    {
+                      "args": [],
+                      "bindings": {},
+                      "name": "fine.dx",
+                      "op": "apply_expression_template"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "/"
+            },
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                2,
+                15
+              ]
+            }
+          },
+          "params": [
+            "f"
+          ]
         },
         "fine.dx": {
           "body": {

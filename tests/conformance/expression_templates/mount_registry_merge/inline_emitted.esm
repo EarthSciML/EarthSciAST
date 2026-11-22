@@ -1,0 +1,239 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "description": "The inline twin of fixture.esm: the subsystem Sub is authored in place with its own `expression_templates` block (no `match` rule), which joins Host's registry by the same rule a mounted leaf's does (esm-spec §9.6.4 rule 1): `scale` collides and is renamed in both owners, `rate` follows, `half` is kept once, and Sub's bodies keep Sub's own names (`k`), read in Sub's scope at Sub's references.",
+    "name": "mount_registry_merge_inline"
+  },
+  "models": {
+    "Host": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "y"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              {
+                "args": [],
+                "bindings": {
+                  "x": "y"
+                },
+                "name": "Host.scale",
+                "op": "apply_expression_template"
+              }
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "z"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              {
+                "args": [],
+                "bindings": {
+                  "x": "z"
+                },
+                "name": "half",
+                "op": "apply_expression_template"
+              }
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "expression_templates": {
+        "half": {
+          "body": {
+            "args": [
+              "x",
+              2
+            ],
+            "op": "/"
+          },
+          "params": [
+            "x"
+          ]
+        },
+        "Host.scale": {
+          "body": {
+            "args": [
+              2,
+              "x"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "x"
+          ]
+        },
+        "Sub.rate": {
+          "body": {
+            "args": [
+              "k",
+              {
+                "args": [],
+                "bindings": {
+                  "x": "x"
+                },
+                "name": "Sub.scale",
+                "op": "apply_expression_template"
+              }
+            ],
+            "op": "*"
+          },
+          "params": [
+            "x"
+          ]
+        },
+        "Sub.scale": {
+          "body": {
+            "args": [
+              3,
+              "x"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "x"
+          ]
+        }
+      },
+      "subsystems": {
+        "Inner": {
+          "equations": [
+            {
+              "lhs": {
+                "args": [
+                  "w"
+                ],
+                "op": "D",
+                "wrt": "t"
+              },
+              "rhs": {
+                "args": [
+                  {
+                    "args": [],
+                    "bindings": {
+                      "x": "w"
+                    },
+                    "name": "Host.scale",
+                    "op": "apply_expression_template"
+                  }
+                ],
+                "op": "-"
+              }
+            }
+          ],
+          "variables": {
+            "w": {
+              "default": 3,
+              "type": "unknown",
+              "units": "1"
+            }
+          }
+        },
+        "Sub": {
+          "equations": [
+            {
+              "lhs": {
+                "args": [
+                  "c"
+                ],
+                "op": "D",
+                "wrt": "t"
+              },
+              "rhs": {
+                "args": [
+                  {
+                    "args": [],
+                    "bindings": {
+                      "x": "c"
+                    },
+                    "name": "Sub.rate",
+                    "op": "apply_expression_template"
+                  }
+                ],
+                "op": "-"
+              }
+            },
+            {
+              "lhs": {
+                "args": [
+                  "d"
+                ],
+                "op": "D",
+                "wrt": "t"
+              },
+              "rhs": {
+                "args": [
+                  {
+                    "args": [
+                      {
+                        "args": [],
+                        "bindings": {
+                          "x": "d"
+                        },
+                        "name": "half",
+                        "op": "apply_expression_template"
+                      },
+                      {
+                        "args": [],
+                        "bindings": {
+                          "x": "d"
+                        },
+                        "name": "half",
+                        "op": "apply_expression_template"
+                      }
+                    ],
+                    "op": "+"
+                  }
+                ],
+                "op": "-"
+              }
+            }
+          ],
+          "variables": {
+            "c": {
+              "default": 1,
+              "type": "unknown",
+              "units": "1"
+            },
+            "d": {
+              "default": 0.5,
+              "type": "unknown",
+              "units": "1"
+            },
+            "k": {
+              "default": 0.25,
+              "type": "parameter",
+              "units": "1"
+            }
+          }
+        }
+      },
+      "variables": {
+        "y": {
+          "default": 1,
+          "type": "unknown",
+          "units": "1"
+        },
+        "z": {
+          "default": 2,
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

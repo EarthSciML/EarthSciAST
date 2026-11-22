@@ -1,0 +1,72 @@
+{
+  "expression_templates": {
+    "half": {
+      "body": {
+        "args": [
+          "x",
+          2
+        ],
+        "op": "/"
+      },
+      "params": [
+        "x"
+      ]
+    },
+    "Host.scale": {
+      "body": {
+        "args": [
+          2,
+          "x"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "x"
+      ]
+    },
+    "Sub.rate": {
+      "body": {
+        "args": [
+          "k",
+          {
+            "args": [],
+            "bindings": {
+              "x": "x"
+            },
+            "name": "Sub.scale",
+            "op": "apply_expression_template"
+          }
+        ],
+        "op": "*"
+      },
+      "params": [
+        "x",
+        "k"
+      ]
+    },
+    "Sub.scale": {
+      "body": {
+        "args": [
+          3,
+          "x"
+        ],
+        "op": "*"
+      },
+      "params": [
+        "x"
+      ]
+    },
+    "twice": {
+      "body": {
+        "args": [
+          "a",
+          "a"
+        ],
+        "op": "+"
+      },
+      "params": [
+        "a"
+      ]
+    }
+  }
+}

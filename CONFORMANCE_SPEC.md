@@ -1327,8 +1327,7 @@ neither the call site's `bindings` nor the `faq`'s `args` — cannot be
 re-pointed, and leaving it would index the compact per-support cell gathers with
 full-grid positions. That is a wrong-numbers defect, so it MUST be rejected, with
 diagnostic `template_body_references_pushdown_rewritten_variable`. The remedy is
-the one §9.6.4's sibling guard `template_body_references_coupling_rewritten_variable`
-already prescribes: bind the value through the template's params.
+to bind the value through the template's params.
 
 **Residual diagnostic.** The desugar MUST NOT decline silently on a document it
 can see is join-shaped. When a `faq` is the rank-1 factor of a `+`-semiring
@@ -5365,23 +5364,18 @@ Consequently:
   library whose result object supports name-keyed reads carries the map on that
   object (Python `Solution.merged_renames`, Rust
   `SolutionMetadata::merged_variable_renames`).
-- **The registry body is refused, not rewritten.** It is authored source the
-  substitution never sees, so a body still naming a merged-away variable would
-  expand at the build boundary into a name the flattened system no longer
-  declares. Rewriting it is not the alternative: the flattened form's registry
-  would then disagree with the expand-at-load image the same document produces,
-  which esm-spec §9.6.4 rule 2 requires to be observably identical. That is the
-  guard `template_body_references_coupling_rewritten_variable` already applies
-  to a `variable_map`-substituted name (§9.6.4); the merged-away names join the
-  same set. A template `param` shadows the outer name (§9.6.1), so a body that
-  BINDS the name is unaffected — which is the first of the two fixes the
-  diagnostic names.
-
-  **All five bindings MUST implement this guard.** A MUST that four of five
-  ignore is not a rule, it is a note about one implementation, and the
-  compliance matrix stops meaning anything. The `template_registry` surface
-  below pins it, so a binding that drops it goes red rather than quietly
-  diverging.
+- **A registry body reads the survivor through its reference.** Flatten closes
+  every carried template body (esm-spec §10.7): a name the body read free — a
+  component variable, merged away or replaced by a `variable_map` — is a
+  parameter of the body, bound at each reference to the name of the reference's
+  own site. The merge and the substitution rewrite that binding like any other
+  site of the equation, so the flattened system, its registry and the
+  expand-at-load image agree, and there is nothing to refuse. The
+  `registry_body_names_the_merged_away_state` case pins it: its tendency reads
+  `Chem.ozone` through the reference, never `Sink.O3`. (Before bodies were
+  closed, a body was scoped to its component and such a document was refused
+  with `template_body_references_coupling_rewritten_variable`; that refusal is
+  withdrawn.)
 
 **Shape.** Structure-comparing and golden-free, like §5.33. Each flatten case
 pins BOTH halves — the dead name survives nowhere, AND the later entry landed on
@@ -7821,7 +7815,8 @@ flattening inlines a template body, and eager expansion is retired.
    `priority`, in the order of esm-spec §9.6.4 rule 5.
 2. `expanded.esm` — `Expand(load(fixture))`, structurally, under this
    revision's semantics (esm-spec §9.6.4 rules 3 and 4). For every fixture in
-   which no match spans a template boundary, that is the tree the in-place
+   which no match spans a template boundary or lies inside the bindings of a
+   reference the in-place engine left unexpanded, that is the tree the in-place
    engine produced, so the existing goldens MUST NOT be regenerated: that
    they still hold is the evidence that the reference form denotes what the
    inlined form meant (esm-spec §9.6.4 rule 3, "Equivalence"). A new fixture
@@ -7829,9 +7824,11 @@ flattening inlines a template body, and eager expansion is retired.
    change. The cases that differ are pinned only in
    `opacity_rule_replacement/`: a compound pattern around another rule's
    replacement; a structured or ground pattern node at a template parameter;
-   and a compound pattern across a reference to a template whose body holds a
-   rewrite-target op. Its golden is written by hand under the new semantics,
-   and the in-place engine fails it by design.
+   a compound pattern across a reference to a template whose body holds a
+   rewrite-target op; and a rule on a core-op node inside the bindings of an
+   authored reference that survives load, which now fires there where the
+   in-place engine left the binding unrewritten. Its golden is written by
+   hand under the new semantics, and the in-place engine fails it by design.
 
 A harness MUST assert both. Asserting only the emitted golden would accept a
 binding whose references denote the wrong body; asserting only the expanded
@@ -7841,7 +7838,7 @@ golden would accept a binding that still inlines.
 (`rewrite_in_template_body`), two variants of one template
 (`template_instance_variants`), a nonterminating rewrite detected through a
 body (`rewrite_depth_through_bodies`), a rewrite-target op left in a body and
-refused by the build gate (`unlowered_in_template_body`), and the two pinned
+refused by the build gate (`unlowered_in_template_body`), and the pinned
 opacity cases (`opacity_rule_replacement`).
 
 **The elementwise lift (esm-spec §9.6.11).** The `tests/conformance/flatten_wire/`
@@ -7851,10 +7848,14 @@ the lift of the expansion did. Each case gains a second golden, the flattened
 equations with references kept and the reached registry entries, byte for byte
 across bindings, and the set gains a case whose application binds an array to a
 mixed parameter, pinning the `<name>.cellwise<k>` variant and its `p_cell`
-parameter. A structural time derivative inside a template body is pinned by
+parameter (`mixed_parameter_cellwise`). A structural time derivative inside a template body is pinned by
 a fixture whose flattened golden (after `Expand`) equals the expansion's
-resolution: one `D` with `wrt` absent over a parameter bound to a state, one
-over a parameter bound to an observed (chain rule), one over a nested
+resolution. The rule promises equality in value, not node for node (a zero
+term the expansion drops can stay in the body, esm-spec §9.6.4 rule 3); this
+fixture binds no parameter that sits under a `D` to a time-invariant name, so
+the two agree byte for byte as well: one `D` with `wrt` absent over a
+parameter bound to a state, one over a parameter bound to an observed (chain
+rule), one over a nested
 reference (`<S>.ddt`), one `wrt` parameter bound to `"t"` in one instance and to
 a spatial axis in another, and one that the table cannot answer, refused by
 the build gate as its expansion is.

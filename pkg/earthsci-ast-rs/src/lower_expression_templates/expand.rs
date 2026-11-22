@@ -33,32 +33,48 @@ pub(crate) fn strip_component_template_blocks(value: &mut Value) {
 }
 
 /// Capture every component's `expression_templates` registry BEFORE
-/// [`expand`] strips the blocks from the document.
+/// [`expand`] strips the blocks from the document, each as emit materializes
+/// it ([`materialize_component_block`], esm-spec §9.6.4 rule 5): the entries
+/// authored in-file (`authored`, keyed `"<compkind>.<cname>"`, read off the
+/// source before template resolution) first, in authored order, then the
+/// closure of the component's surviving references, sorted by UTF-8 bytes.
 ///
-/// Keyed `"models.<name>"` / `"reaction_systems.<name>"` in document order,
-/// each value the component's registry object verbatim (post
-/// `expression_template_imports` resolution). The typed `EsmFile` deliberately
-/// never sees an `expression_templates` block — the build path is
-/// Expand-at-build (RFC out-of-line-expression-templates §7.7) — so this is the
-/// only place the per-component registries survive to reach
-/// [`crate::flatten::merged_template_registry`], which needs them to build the
-/// step-4 merged registry. Returns `None` when no component declares one, so a
-/// document without templates costs nothing.
-pub fn capture_component_templates(value: &Value) -> Option<indexmap::IndexMap<String, Value>> {
+/// Keyed `"models.<name>"` / `"reaction_systems.<name>"` in document order.
+/// The typed `EsmFile` deliberately never sees an `expression_templates` block
+/// — the build path is Expand-at-build (RFC out-of-line-expression-templates
+/// §7.7) — so this is the only place the per-component registries survive to
+/// reach [`crate::flatten::merged_template_registry`], which needs them to
+/// build the step-4 merged registry. Components whose materialized block is
+/// empty are omitted; returns `None` when none remains, so a document without
+/// templates costs nothing.
+pub fn capture_component_templates(
+    value: &Value,
+    authored: &std::collections::HashMap<String, Vec<String>>,
+) -> Option<indexmap::IndexMap<String, Value>> {
     let root = value.as_object()?;
     let mut out: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
+    let mut received = super::emit::received_transform_refs(root);
     for compkind in ["models", "reaction_systems"] {
         let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) else {
             continue;
         };
         for (cname, comp) in comps {
-            let Some(tpl) = comp.get("expression_templates") else {
+            let Some(comp) = comp.as_object() else {
                 continue;
             };
-            if !tpl.is_object() {
+            let here_refs = received.remove(cname.as_str()).unwrap_or_default();
+            if !comp
+                .get("expression_templates")
+                .is_some_and(|t| t.as_object().is_some_and(|t| !t.is_empty()))
+            {
                 continue;
             }
-            out.insert(format!("{compkind}.{cname}"), tpl.clone());
+            let key = format!("{compkind}.{cname}");
+            let here = authored.get(&key).map(Vec::as_slice).unwrap_or(&[]);
+            let (block, _, _) = materialize_component_block(comp, here, &here_refs);
+            if !block.is_empty() {
+                out.insert(key, Value::Object(block));
+            }
         }
     }
     (!out.is_empty()).then_some(out)
@@ -194,6 +210,10 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
         }
     }
 
+    // A reference inside a subsystem expands against its component's registry
+    // like any other: a body's free names are read in the scope of the
+    // subsystem that owns the reference (esm-spec §9.6.4 rule 1), which plain
+    // substitution gives.
     for compkind in ["models", "reaction_systems"] {
         let Some(Value::Object(comps)) = root.get_mut(compkind) else {
             continue;

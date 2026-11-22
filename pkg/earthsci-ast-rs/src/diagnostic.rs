@@ -169,15 +169,13 @@ diagnostic_code_registry! {
     /// document's `index_sets` registry.
     TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "template_constraint_unknown_index_set";
 
-    // ---- expression templates: the SURVIVING registry, checked at flatten
-    //      (`flatten.rs::check_registry_coupling_rewrites`) ----
+    // ---- expression templates: the surviving registry at flatten ----
 
-    /// A surviving `expression_templates` registry body names a variable a
-    /// coupling rule rewrote out of the flattened equations (a `variable_map`
-    /// substitution, or an `operator_compose` renaming match). The body is
-    /// authored source no equation walk reaches and it expands at the BUILD
-    /// boundary, so this is the ONE site where such a reference is REFUSED
-    /// rather than resolved (esm-spec §9.6.4, CONFORMANCE_SPEC §5.35).
+    /// Withdrawn refusal, kept as a stable code: a surviving
+    /// `expression_templates` registry body naming a variable a coupling rule
+    /// rewrote out of the flattened equations. Flatten now closes every carried
+    /// body (esm-spec §10.7), so a body reads no component name and nothing
+    /// raises this (CONFORMANCE_SPEC §5.35).
     TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE =
         "template_body_references_coupling_rewritten_variable";
 

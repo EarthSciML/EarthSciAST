@@ -1,0 +1,11 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "flatten_registry_order_lib",
+    "authors": ["out-of-line-expression-templates conformance"]
+  },
+  "expression_templates": {
+    "lib_z": { "params": ["f"], "body": { "op": "*", "args": [3, "f"] } },
+    "lib_a": { "params": ["f"], "body": { "op": "*", "args": [5, "f"] } }
+  }
+}

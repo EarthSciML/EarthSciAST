@@ -237,8 +237,8 @@ CASES: list[tuple[str, str, str]] = [
         "scoping/loop_binder_shadowing_edges.esm",
     ),
     # --- expression templates: the merged template_registry ------------------
-    # A reaction-system registry (carried unscoped by policy — a rate-law
-    # reference is expanded eagerly at collect and never resolved post-flatten).
+    # A reaction-system registry (every carried body is closed, esm-spec
+    # §10.7: its free names become trailing parameters).
     (
         "template_registry",
         "expression_templates_arrhenius",
@@ -259,11 +259,11 @@ CASES: list[tuple[str, str, str]] = [
         "flatten_registry_merge_transitive",
         "conformance/expression_templates/flatten_registry_merge_transitive/fixture.esm",
     ),
-    # The SCOPING PRECONDITION. Two byte-identical models import one library
+    # The CLOSING PRECONDITION. Two byte-identical models import one library
     # whose body has a free `inv_dx` that denotes a different variable in each.
-    # Pre-scoping the bodies are deep-equal and dedup to one entry that is
-    # correct for neither; post-scoping they collide and are kept per owner.
-    # A binding that unions before it scopes records bare names here and fails.
+    # Flatten closes every body first (esm-spec §10.7): `inv_dx` becomes a
+    # parameter each model's references bind to its own variable, so the closed
+    # bodies are identical and the twins share one entry per template.
     (
         "template_registry",
         "flatten_registry_merge_twins",

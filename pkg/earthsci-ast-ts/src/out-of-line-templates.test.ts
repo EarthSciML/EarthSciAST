@@ -5,7 +5,8 @@
  * merge). Mirrors the Julia reference test
  * `pkg/EarthSciAST.jl/test/out_of_line_templates_test.jl`.
  *
- * Drives tests/conformance/expression_templates/{emit_*, eager_*, opacity_*,
+ * Drives tests/conformance/expression_templates/{emit_*, rewrite_*, opacity_*,
+ * rule_writes_reference, template_instance_variants, unlowered_in_template_body,
  * flatten_registry_merge}.
  */
 import * as fs from 'node:fs'
@@ -20,6 +21,8 @@ import {
 } from './lower-expression-templates.js'
 import { resolveTemplateMachinery, emitDocument } from './template-imports.js'
 import { fixturesDir } from './test-helpers.js'
+import { loadString } from './parse.js'
+import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 
 const conf = (...parts: string[]) => fixturesDir('conformance', 'expression_templates', ...parts)
 
@@ -155,7 +158,104 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     // non-destructive: the loaded view still carries surviving references
     const adv = (loaded.models as Record<string, any>).Advection
     const mk = adv.equations[0].rhs.args[1]
-    expect((normj(mk) as any).op).toBe('makearray')
+    expect(isApply(normj(mk))).toBe(true) // the rule's firing wrote a reference
+  })
+
+  // -------------------------------------------------------------------------
+  // Rules write references (CONFORMANCE_SPEC §5.60; esm-spec §9.6.3
+  // constraint 7, §9.6.4 rule 3): both goldens — the emitted form byte for
+  // byte, and Expand(load) against the expanded oracle.
+  // -------------------------------------------------------------------------
+  describe('rules write references: emitted and expanded goldens (§5.60)', () => {
+    const core = (d: Record<string, unknown>): Record<string, unknown> => {
+      const out: Record<string, unknown> = {}
+      for (const k of ['models', 'reaction_systems', 'coupling', 'index_sets']) {
+        if (k in d) out[k] = normj(d[k])
+      }
+      return out
+    }
+    const cases: [string, string, string, string][] = [
+      ['rewrite_in_template_body', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
+      ['rule_writes_reference', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
+      ['template_instance_variants', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
+      ['opacity_rule_replacement', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
+      [
+        'rewrite_depth_through_bodies',
+        'chain_depth_64.esm',
+        'emitted_chain_depth_64.esm',
+        'expanded_chain_depth_64.esm',
+      ],
+      // Coupling transforms keep their references (esm-spec §10.4); the
+      // receiving component's block materializes what they name.
+      ['coupling_transform_expression', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
+      ['coupling_transform_rule_and_import', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
+    ]
+    it.each(cases)('%s / %s: emitted == %s, Expand(load) == %s', (dir, fix, emitted, expanded) => {
+      expect(emit(dir, fix)).toBe(fs.readFileSync(conf(dir, emitted), 'utf-8'))
+      // Emit then load is a fixed point: the emitted form reloads and re-emits
+      // byte for byte. For the depth-64 chain this holds only because the
+      // body-nesting bound equals MAX_REWRITE_PASSES (esm-spec §9.7.3): its
+      // emitted form is a 64-template body-reference chain.
+      expect(emit(dir, emitted)).toBe(fs.readFileSync(conf(dir, emitted), 'utf-8'))
+      expect(core(expandDocument(loadRefPreserving(dir, fix)))).toEqual(
+        core(JSON.parse(fs.readFileSync(conf(dir, expanded), 'utf-8'))),
+      )
+    })
+
+    it('variants are numbered by canonical bytes and each call site re-pointed', () => {
+      const m = (loadRefPreserving('template_instance_variants').models as Record<string, any>).m
+      expect((definingRhs(m, 'du') as any).name).toBe('ddx.variant1')
+      expect((definingRhs(m, 'dv') as any).name).toBe('ddx.variant2')
+      expect((normj(m.expression_templates['ddx.variant1'].body) as any).name).toBe('central_1d')
+    })
+
+    it('a leaf-bodied rule writes its leaf', () => {
+      const m = (loadRefPreserving('rule_writes_reference').models as Record<string, any>).m
+      expect(normj(definingRhs(m, 'e'))).toEqual({ op: '*', args: [0.25, 'b'] })
+    })
+
+    it.each([
+      ['rewrite_depth_through_bodies', 'fixture.esm', 'error.json'],
+      ['rewrite_depth_through_bodies', 'chain_depth_65.esm', 'error_chain_depth_65.json'],
+    ])('%s / %s is rejected as in %s', (dir, fix, errf) => {
+      const want = JSON.parse(fs.readFileSync(conf(dir, errf), 'utf-8')).code
+      let got: unknown
+      try {
+        loadRefPreserving(dir, fix)
+      } catch (e) {
+        got = (e as { code?: unknown }).code
+      }
+      expect(got).toBe(want)
+    })
+
+    it('unlowered_in_template_body: loads, emits its golden, and the evaluation gate refuses it', () => {
+      expect(emit('unlowered_in_template_body')).toBe(
+        fs.readFileSync(conf('unlowered_in_template_body', 'emitted.esm'), 'utf-8'),
+      )
+      const want = JSON.parse(
+        fs.readFileSync(conf('unlowered_in_template_body', 'error.json'), 'utf-8'),
+      ).code
+      expect(want).toBe('unlowered_operator')
+      // The reference survives the load with the body unrewritten; what it
+      // denotes still holds the rewrite-target op `D` the gate refuses.
+      const d = loadRefPreserving('unlowered_in_template_body')
+      const m = (d.models as Record<string, any>).m
+      expect(normj(m.expression_templates.ddy.body)).toMatchObject({ op: 'D', wrt: 'y' })
+      const expanded = JSON.stringify(expandDocument(d))
+      expect(expanded).toContain('"op":"D"')
+      // The evaluation gate (stage "evaluate"): the build reaches the op.
+      const file = loadString(
+        fs.readFileSync(conf('unlowered_in_template_body', 'fixture.esm'), 'utf-8'),
+      ) as any
+      let err: unknown
+      try {
+        evaluateExpression(definingRhs(file.models.m, 'dy') as any, new Map([['u', 1.0]]))
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeInstanceOf(UnloweredOperatorError)
+      expect((err as UnloweredOperatorError).code).toBe(want)
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -176,10 +276,16 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     expect(doc.esm).toBe(source.esm)
     expect('expression_template_imports' in adv).toBe(false) // imports consumed
     const reg = adv.expression_templates
-    expect(new Set(Object.keys(reg))).toEqual(new Set(['central_D_lon_interior', 'dlon_deg']))
-    expect('central_D_lon_zero_grad_bc' in reg).toBe(false) // match rule not materialized
-    // Call site intact: the makearray interior region is a surviving ref.
-    const interior = adv.equations[0].rhs.args[1].values[0]
+    // The firing wrote a reference to its rule, which materializes match-less
+    // (esm-spec §9.6.3 constraint 7, §9.6.4 rule 5).
+    expect(new Set(Object.keys(reg))).toEqual(
+      new Set(['central_D_lon_interior', 'central_D_lon_zero_grad_bc', 'dlon_deg']),
+    )
+    expect('match' in reg.central_D_lon_zero_grad_bc).toBe(false)
+    const site = adv.equations[0].rhs.args[1]
+    expect(isApply(site)).toBe(true)
+    expect(site.name).toBe('central_D_lon_zero_grad_bc')
+    const interior = reg.central_D_lon_zero_grad_bc.body.values[0]
     expect(isApply(interior)).toBe(true)
     expect(interior.name).toBe('central_D_lon_interior')
     // idempotency (§9.6.4 rule 5 / RFC gate 2)
@@ -195,29 +301,33 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     expect(s).toBe(fs.readFileSync(conf('emit_rename_dotted_keys', 'emitted.esm'), 'utf-8'))
     const doc = JSON.parse(s) as Record<string, any>
     const reg = doc.models.TwoGrids.expression_templates
-    expect(new Set(Object.keys(reg))).toEqual(new Set(['fine.dx', 'coarse.dx']))
+    expect(new Set(Object.keys(reg))).toEqual(
+      new Set(['fine.dx', 'coarse.dx', 'fine.central_D_x', 'coarse.central_D_x']),
+    )
     expect(new Set(Object.keys(doc.index_sets))).toEqual(new Set(['fine.x', 'coarse.x']))
   })
 
   // -------------------------------------------------------------------------
-  // eager_target_bearing (§9.6.4 rule 3, §9.6.7): positive + negative.
+  // rewrite_in_template_body (§9.6.4 rule 3, §9.6.7; formerly
+  // eager_target_bearing): both references survive; the `central` rule
+  // rewrites `deriv_c`'s body in place to a reference to itself.
   // -------------------------------------------------------------------------
-  it('eager_target_bearing: eager expands+lowers, target-free survives', () => {
-    const d = loadRefPreserving('eager_target_bearing')
+  it('rewrite_in_template_body: rules rewrite the body, both references survive', () => {
+    const d = loadRefPreserving('rewrite_in_template_body')
     const m = (d.models as Record<string, any>).m
-    // POSITIVE: deriv_c (D-bearing) eagerly expanded, then the D lowered by the
-    // `central` rule → an aggregate. No surviving ref. (esm 1.0.0: d_eager is a
-    // plain unknown; the rewritten call site is its defining equation's RHS.)
     const deager = normj(definingRhs(m, 'd_eager')) as any
-    expect(deager.op).toBe('index')
-    expect(deager.args[0].op).toBe('faq')
-    // NEGATIVE: scale_c (target-free) reference SURVIVES.
+    expect(isApply(deager.args[0])).toBe(true)
+    expect(deager.args[0].name).toBe('deriv_c')
+    const body = normj(m.expression_templates.deriv_c.body) as any
+    expect(isApply(body)).toBe(true)
+    expect(body.name).toBe('central')
+    expect(body.bindings).toEqual({ f: 'f' })
+    expect('match' in m.expression_templates.central).toBe(false)
     const dsurv = normj(definingRhs(m, 'd_survive')) as any
     expect(isApply(dsurv.args[0])).toBe(true)
     expect(dsurv.args[0].name).toBe('scale_c')
-    // Emit golden.
-    expect(emit('eager_target_bearing')).toBe(
-      fs.readFileSync(conf('eager_target_bearing', 'emitted.esm'), 'utf-8'),
+    expect(emit('rewrite_in_template_body')).toBe(
+      fs.readFileSync(conf('rewrite_in_template_body', 'emitted.esm'), 'utf-8'),
     )
   })
 
@@ -243,11 +353,16 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   // -------------------------------------------------------------------------
   it('opacity_priority_shadowing: generic fires, compound silently does not', () => {
     const d = loadRefPreserving('opacity_priority_shadowing')
-    const flux = normj(definingRhs((d.models as Record<string, any>).m, 'flux')) as any
-    expect(flux.op).toBe('*')
-    expect(flux.args[0]).toBe(1) // generic marker (NOT compound 999)
-    expect(isApply(flux.args[1])).toBe(true) // reference bound WHOLE by metavariable f
-    expect(flux.args[1].name).toBe('flux_prod')
+    const m = (d.models as Record<string, any>).m
+    const flux = normj(definingRhs(m, 'flux')) as any
+    // The generic rule fired and wrote a reference to itself (esm-spec §9.6.3
+    // constraint 7), binding the surviving reference WHOLE.
+    expect(isApply(flux)).toBe(true)
+    expect(flux.name).toBe('generic')
+    expect(isApply(flux.bindings.f)).toBe(true)
+    expect(flux.bindings.f.name).toBe('flux_prod')
+    // generic marker (NOT compound 999)
+    expect((normj(m.expression_templates.generic.body) as any).args[0]).toBe(1)
     expect(emit('opacity_priority_shadowing')).toBe(
       fs.readFileSync(conf('opacity_priority_shadowing', 'emitted.esm'), 'utf-8'),
     )
@@ -287,16 +402,27 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     const loaded = loadRefPreserving('flatten_registry_merge_transitive')
     const { root, merged } = flattenTemplateRegistries(loaded)
     expect(new Set(Object.keys(merged))).toEqual(
-      new Set(['A.interior_stencil', 'A.outer_stencil', 'B.interior_stencil', 'B.outer_stencil']),
+      new Set([
+        'A.interior_stencil',
+        'A.outer_stencil',
+        'A.d_x_rule',
+        'B.interior_stencil',
+        'B.outer_stencil',
+        'B.d_x_rule',
+      ]),
     )
-    // Each owner's wrapper reaches its OWN leaf, never the other model's.
     const names = (x: unknown): string[] => collectApplyNames(x, [])
+    // The rule's firing wrote a reference to the rule (esm-spec §9.6.3
+    // constraint 7), whose body references the wrapper: it renames with it.
+    expect(names((merged['A.d_x_rule'] as any).body)).toEqual(['A.outer_stencil'])
+    expect(names((merged['B.d_x_rule'] as any).body)).toEqual(['B.outer_stencil'])
+    // Each owner's wrapper reaches its OWN leaf, never the other model's.
     expect(names((merged['A.outer_stencil'] as any).body)).toEqual(['A.interior_stencil'])
     expect(names((merged['B.outer_stencil'] as any).body)).toEqual(['B.interior_stencil'])
     // Component reference sites follow in lockstep.
     const models = root.models as Record<string, any>
-    expect(names(models.A.equations)).toEqual(['A.outer_stencil'])
-    expect(names(models.B.equations)).toEqual(['B.outer_stencil'])
+    expect(names(models.A.equations)).toEqual(['A.d_x_rule'])
+    expect(names(models.B.equations)).toEqual(['B.d_x_rule'])
     // Nothing dangles: every surviving reference resolves in the merged registry.
     for (const decl of Object.values(merged)) {
       for (const r of names(decl)) expect(Object.keys(merged)).toContain(r)
@@ -328,11 +454,13 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     const { root, merged } = flattenTemplateRegistries(loaded)
     const names = (x: unknown): string[] => collectApplyNames(x, [])
     // Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
-    expect(new Set(Object.keys(merged))).toEqual(new Set(['interior_stencil', 'outer_stencil']))
+    expect(new Set(Object.keys(merged))).toEqual(
+      new Set(['interior_stencil', 'outer_stencil', 'd_x_rule']),
+    )
     expect(names((merged.outer_stencil as any).body)).toEqual(['interior_stencil'])
     const models = root.models as Record<string, any>
-    expect(names(models.A.equations)).toEqual(['outer_stencil'])
-    expect(names(models.B.equations)).toEqual(['outer_stencil'])
+    expect(names(models.A.equations)).toEqual(['d_x_rule'])
+    expect(names(models.B.equations)).toEqual(['d_x_rule'])
     // Nothing dangles at this layer.
     for (const decl of Object.values(merged)) {
       for (const r of names(decl)) expect(Object.keys(merged)).toContain(r)
@@ -351,9 +479,15 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   it.each([
     'emit_materialized_registry',
     'emit_rename_dotted_keys',
-    'eager_target_bearing',
+    'rewrite_in_template_body',
     'opacity_negative',
     'opacity_priority_shadowing',
+    'rule_writes_reference',
+    'template_instance_variants',
+    'opacity_rule_replacement',
+    'unlowered_in_template_body',
+    'coupling_transform_expression',
+    'coupling_transform_rule_and_import',
   ])('emit ∘ loadString byte-wise fixed point: %s', (dir) => {
     const s1 = emit(dir)
     const s2 = emitEsmString(emitDocument(JSON.parse(s1), conf(dir)))

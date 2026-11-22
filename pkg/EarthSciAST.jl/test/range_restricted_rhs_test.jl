@@ -364,6 +364,106 @@ function _rrt_tile_code(prog, p, o, st; ny = nothing)
     return _rrt_generated(t.f!)
 end
 
+# A 1-D periodic three-point stencil on `nx` cells reached as a rule template
+# (`D(q, wrt: x)` fires `Lper`, whose makearray body is read through its
+# view): the boundary cells read across the wrap inside template bodies, under
+# a condition so the reads stay in the body (no lane the caller makes) —
+# `lap_lo` directly, `lap_hi` through a nested reference to `wrap_hi`.
+function _rrt_tpl_seam_doc(nx::Int)
+    pin(f, at) = Dict("op" => "index", "args" => Any[f, at])
+    off(k) = k == 0 ? "i" : Dict("op" => (k > 0 ? "+" : "-"), "args" => Any["i", abs(k)])
+    lap3(a, b, c) = Dict("op" => "+", "args" => Any[a, Dict("op" => "*", "args" => Any[-2, b]), c])
+    ref(name) = Dict(
+        "op" => "apply_expression_template", "args" => Any[], "name" => name,
+        "bindings" => Dict("f" => "f")
+    )
+    elem(r, e) = Dict(
+        "op" => "faq", "output_idx" => Any["i"], "args" => Any["f"],
+        "ranges" => Dict("i" => r), "expr" => e
+    )
+    gt(a) = Dict("op" => ">", "args" => Any[a, 0.9])
+    tpl = Dict(
+        "lap_int" => Dict(
+            "params" => ["f"],
+            "body" => elem(Any[2, nx - 1], lap3(pin("f", off(-1)), pin("f", off(0)), pin("f", off(1))))
+        ),
+        "lap_lo" => Dict(
+            "params" => ["f"],
+            "body" => elem(
+                Any[1, 1], Dict(
+                    "op" => "ifelse", "args" => Any[
+                        gt(pin("f", 1)), lap3(pin("f", nx), pin("f", 1), pin("f", 2)), pin("f", nx),
+                    ]
+                )
+            )
+        ),
+        "wrap_hi" => Dict(
+            "params" => ["f"],
+            "body" => lap3(pin("f", nx - 1), pin("f", nx), pin("f", 1))
+        ),
+        "lap_hi" => Dict(
+            "params" => ["f"],
+            "body" => elem(
+                Any[nx, nx], Dict(
+                    "op" => "ifelse", "args" => Any[gt(pin("f", nx)), ref("wrap_hi"), pin("f", nx)]
+                )
+            )
+        ),
+        "Lper" => Dict(
+            "params" => ["f"],
+            "match" => Dict("op" => "D", "args" => ["f"], "wrt" => "x"),
+            "body" => Dict(
+                "op" => "makearray", "args" => Any[],
+                "regions" => Any[Any[Any[2, nx - 1]], Any[Any[1, 1]], Any[Any[nx, nx]]],
+                "values" => Any[ref("lap_int"), ref("lap_lo"), ref("lap_hi")]
+            )
+        ),
+    )
+    return Dict{String, Any}(
+        "esm" => "2.0.0",
+        "metadata" => Dict("name" => "rrt_tpl_seam"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx)),
+        "models" => Dict(
+            "T" => Dict(
+                "expression_templates" => tpl,
+                "variables" => Dict(
+                    "q" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.5),
+                    "k" => Dict("type" => "parameter", "default" => 0.25)
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["q"], "wrt" => "t"),
+                        "rhs" => Dict(
+                            "op" => "*",
+                            "args" => Any["k", Dict("op" => "D", "args" => ["q"], "wrt" => "x")]
+                        )
+                    ),
+                ]
+            )
+        )
+    )
+end
+
+# `_rrt_tpl_seam_doc` with the stencil applied to the OBSERVED
+# `w[i] = q[i]·q[i] + 1/8` instead of the state: the rule binds the template's
+# array parameter to `w`, so each boundary body reads `w` across the wrap (one
+# directly, one through a nested reference).
+function _rrt_tpl_seam_obs_doc(nx::Int)
+    d = _rrt_tpl_seam_doc(nx)
+    m = d["models"]["T"]
+    q(i) = Dict("op" => "index", "args" => Any["q", i])
+    m["variables"]["w"] = Dict("type" => "unknown", "shape" => ["x"])
+    wdef = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+        "ranges" => Dict("i" => Dict("from" => "x")),
+        "expr" => Dict("op" => "+", "args" => Any[Dict("op" => "*", "args" => Any[q("i"), q("i")]), 0.125])
+    )
+    m["equations"][1]["rhs"]["args"][2]["args"] = Any["w"]
+    pushfirst!(m["equations"], Dict("lhs" => "w", "rhs" => wdef))
+    d["metadata"]["name"] = "rrt_tpl_seam_obs"
+    return d
+end
+
 @testset "range_restricted_rhs" begin
     nx, ny = 10, 6
     prob = esm_problem(_rrt_doc(nx, ny), (0.0, 1.0))
@@ -779,6 +879,104 @@ end
                     _rrt_bits(BG[(c[2] - 1) * bx + c[1]])
             end
             @test ok
+        end
+    end
+
+    @testset "a template body read past the seam is a seam instance" begin
+        tx = 12
+        dir = mktempdir()
+        fix = joinpath(dir, "rrt_tpl_seam.esm")
+        open(io -> RRT.JSON3.write(io, _rrt_tpl_seam_doc(tx)), fix, "w")
+        tprob = esm_problem(fix, (0.0, 1.0))
+        tprog = rhs_program(tprob)
+        # The expanded document: the same right-hand side, every reference
+        # replaced by its expansion.
+        xprob = esm_problem(RRT.Expand(RRT.load_path(fix)), (0.0, 1.0))
+        xprog = rhs_program(xprob)
+        TL = tile_layout(tprog)
+        tdec = Decomposition(axes = ["x" => (period = tx,)])
+        @test halo(tprog, tdec) == Dict(("T.q", "x") => (1, 1))
+        # Two states, so each boundary takes both branches of its condition.
+        for tu in (0.5 .+ sin.(1:TL.n_u), 1.5 .- sin.(1:TL.n_u))
+            whole(prog) = (
+                du = fill(NaN, TL.n_u); rhs!(
+                    du, prog, rhs_workspace(prog), tu, Float64[], tprob.p, 0.0,
+                    default_forcing_set(prog)
+                ); du
+            )
+            TG = whole(tprog)
+            @test all(isfinite, TG)
+            @test _rrt_bits.(TG) == _rrt_bits.(whole(xprog))
+            seen = zeros(Int, tx)
+            for (xo, xs) in ((1:4, 0:5), (5:8, 4:9), (9:tx, 8:(tx + 1)))
+                tile = restrict(tprog, tdec; owned = ("x" => xo,), storage = ("x" => xs,))
+                T = tile_layout(tile)
+                # Only a tile whose storage crosses the seam has a far block.
+                @test length(RRT._layout_blocks(tile.internal)) == (xo == 5:8 ? 1 : 2)
+                uS = fill(NaN, T.n_u)
+                for b in T.u, c in CartesianIndices(Tuple(b.storage))
+                    uS[RRT._tile_slot(b, Tuple(c))] = tu[mod1(c[1], tx)]
+                end
+                duS = fill(NaN, T.n_u)
+                rhs!(
+                    duS, tile, rhs_workspace(tile), uS, Float64[], tprob.p, 0.0,
+                    default_forcing_set(tile)
+                )
+                b = first(T.u)
+                for c in xo
+                    seen[c] += _rrt_bits(duS[RRT._tile_slot(b, (c,))]) == _rrt_bits(TG[c])
+                end
+            end
+            @test all(==(1), seen)
+        end
+    end
+
+    @testset "a template body read of an observed past the seam is evaluated lazily" begin
+        # The body's read of `w` past the seam is the observed's definition on
+        # the far side, bound to the seam instance as an array expression and
+        # evaluated at the cell the body reads (no buffer, no inlined body).
+        tx = 12
+        dir = mktempdir()
+        fix = joinpath(dir, "rrt_tpl_seam_obs.esm")
+        open(io -> RRT.JSON3.write(io, _rrt_tpl_seam_obs_doc(tx)), fix, "w")
+        tprob = esm_problem(fix, (0.0, 1.0))
+        tprog = rhs_program(tprob)
+        xprob = esm_problem(RRT.Expand(RRT.load_path(fix)), (0.0, 1.0))
+        xprog = rhs_program(xprob)
+        TL = tile_layout(tprog)
+        tdec = Decomposition(axes = ["x" => (period = tx,)])
+        @test halo(tprog, tdec) == Dict(("T.q", "x") => (1, 1))
+        for tu in (0.5 .+ sin.(1:TL.n_u), 1.5 .- sin.(1:TL.n_u))
+            whole(prog) = (
+                du = fill(NaN, TL.n_u); rhs!(
+                    du, prog, rhs_workspace(prog), tu, Float64[], tprob.p, 0.0,
+                    default_forcing_set(prog)
+                ); du
+            )
+            TG = whole(tprog)
+            @test all(isfinite, TG)
+            @test _rrt_bits.(TG) == _rrt_bits.(whole(xprog))
+            seen = zeros(Int, tx)
+            for (xo, xs) in ((1:4, 0:5), (5:8, 4:9), (9:tx, 8:(tx + 1)))
+                tile = restrict(tprog, tdec; owned = ("x" => xo,), storage = ("x" => xs,))
+                T = tile_layout(tile)
+                # The far side of `w` reads the far block of `q`.
+                @test length(RRT._layout_blocks(tile.internal)) == (xo == 5:8 ? 1 : 2)
+                uS = fill(NaN, T.n_u)
+                for b in T.u, c in CartesianIndices(Tuple(b.storage))
+                    uS[RRT._tile_slot(b, Tuple(c))] = tu[mod1(c[1], tx)]
+                end
+                duS = fill(NaN, T.n_u)
+                rhs!(
+                    duS, tile, rhs_workspace(tile), uS, Float64[], tprob.p, 0.0,
+                    default_forcing_set(tile)
+                )
+                b = first(T.u)
+                for c in xo
+                    seen[c] += _rrt_bits(duS[RRT._tile_slot(b, (c,))]) == _rrt_bits(TG[c])
+                end
+            end
+            @test all(==(1), seen)
         end
     end
 

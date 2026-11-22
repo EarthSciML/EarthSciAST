@@ -392,13 +392,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         end
     end
 
-    @testset "shadow-registry guard: variable_map vs surviving MODEL template body" begin
-        # The remaining hole behind the eager reaction-rate expansion: a MODEL
-        # template legitimately survives to the flat registry, but its body's
-        # free reference to the model's own param (`T` → scoped `M.T`) is a
-        # SHADOW copy `_apply_variable_map!`'s equation substitution never sees.
-        # Expanding it at the build boundary would surface the stale (deleted)
-        # `M.T`. Flatten must fail loudly, naming the template and the variable.
+    @testset "variable_map reaches a surviving MODEL template body's free name" begin
+        # A MODEL template survives to the flat registry and its body reads the
+        # model's own param `T` free. Flatten closes the body (esm-spec §10.7):
+        # `T` becomes a parameter of `scaleT` and the reference binds it to
+        # `M.T`, where `_apply_variable_map!`'s substitution replaces it with
+        # `Src.Tsrc`, so the body reads the coupled value.
         doc = Dict(
             "esm" => "0.9.0",
             "metadata" => Dict("name" => "shadow_registry_guard"),
@@ -469,20 +468,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             open(fix, "w") do io
                 JSON3.write(io, doc)
             end
-            err = try
-                flatten(load_path(fix))
-                nothing
-            catch e
-                e
-            end
-            @test err isa ExpressionTemplateError
-            @test err.code == "template_body_references_coupling_rewritten_variable"
-            @test occursin("scaleT", err.message)   # offending template named
-            @test occursin("M.T", err.message)      # rewritten variable named
-            # The divergence the guard exists to catch was a body spliced BEFORE
-            # coupling. No load does that any more — references always survive to
-            # the build — so the guard fires on the one image the loader
-            # produces, and there is no second one to compare it against.
+            flat = flatten(load_path(fix))
+            @test flat.template_registry["scaleT"]["params"] == ["kk", "T"]
+            rhs = only(
+                JSON3.write(EarthSciAST.serialize_expression(eq.rhs)) for eq in flat.equations
+                    if occursin("M.a", JSON3.write(EarthSciAST.serialize_expression(eq.lhs)))
+            )
+            @test occursin("\"T\":\"Src.Tsrc\"", rhs)
+            @test !occursin("M.T", rhs)
         end
     end
 end

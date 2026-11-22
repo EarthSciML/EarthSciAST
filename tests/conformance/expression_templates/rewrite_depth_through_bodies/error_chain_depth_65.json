@@ -1,0 +1,5 @@
+{
+  "code": "rewrite_rule_nonterminating",
+  "stage": "load",
+  "description": "chain_depth_65.esm: the deepest rewrite, counted through the bodies of the rules the chain references, has depth 65 > MAX_REWRITE_PASSES = 64 (esm-spec §9.6.3 constraint 2, §9.6.4 rule 3). Its sibling chain_depth_64.esm reaches depth 64 exactly and is accepted (emitted_chain_depth_64.esm, expanded_chain_depth_64.esm)."
+}

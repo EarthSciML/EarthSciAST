@@ -118,14 +118,12 @@ const (
 	// CodeTemplateConstraintUnknownIndexSet: a template's `constraints` entry
 	// names an index set absent from the document `index_sets` registry.
 	CodeTemplateConstraintUnknownIndexSet = "template_constraint_unknown_index_set"
-	// CodeTemplateBodyReferencesCouplingRewrittenVariable: a SURVIVING
-	// registry body names a variable a coupling rule rewrote out of the
-	// flattened equations — a `variable_map`'s substituted target, or a
-	// spelling an `operator_compose` renaming match deleted (esm-spec §9.6.4,
-	// CONFORMANCE_SPEC §5.35). The body is authored source no equation walk
-	// reaches, and it expands at the BUILD boundary, so it is REFUSED rather
-	// than resolved: rewriting it would silently diverge from the
-	// expand-at-load image of the same document.
+	// CodeTemplateBodyReferencesCouplingRewrittenVariable: formerly the
+	// flatten-time refusal of a surviving registry body that named a variable
+	// a coupling rule rewrote. Flatten now closes every carried body (esm-spec
+	// §10.7): a name a body read is a parameter each reference binds, where
+	// the rewrite reaches it, so flatten no longer raises it. The constant
+	// stays because the code vocabulary is uniform across bindings.
 	CodeTemplateBodyReferencesCouplingRewrittenVariable = "template_body_references_coupling_rewritten_variable"
 	// CodeAmbiguousOutputName: an output name that matches no variable exactly
 	// and whose last dotted segment is shared by more than one variable

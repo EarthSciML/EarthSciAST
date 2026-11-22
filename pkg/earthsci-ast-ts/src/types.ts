@@ -160,6 +160,25 @@ export type EsmFile = ESMFormat1 &
     componentTemplates?: Record<string, unknown>
 
     /**
+     * NON-SCHEMA, LOADER-POPULATED. The template names each component authors
+     * in the document (`"models.<name>"` / `"reaction_systems.<name>"` →
+     * names, in authored order). `resolveSubsystemRefsSync` reads it to order a
+     * component's registry once mounted definitions join it (authored entries
+     * first, esm-spec §9.6.4 rule 5). Non-enumerable, like `componentTemplates`.
+     */
+    authoredTemplateNames?: Record<string, string[]>
+
+    /**
+     * NON-SCHEMA, LOADER-POPULATED. Each component's `match` rules as declared
+     * (`"models.<name>"` / `"reaction_systems.<name>"` → name → definition),
+     * including a rule the component's own content referenced, whose
+     * `componentTemplates` entry is materialized without its `match`.
+     * `resolveSubsystemRefsSync` re-runs them over the content the component
+     * mounts (esm-spec §9.6.3). Non-enumerable, like `componentTemplates`.
+     */
+    componentRules?: Record<string, Record<string, unknown>>
+
+    /**
      * NON-SCHEMA, LOADER-POPULATED. The loader-API metaparameter bindings this
      * document was loaded with (esm-spec §9.7.6 binding site 4) — the map a
      * discovered §8.9.4 `extent` arrives as.

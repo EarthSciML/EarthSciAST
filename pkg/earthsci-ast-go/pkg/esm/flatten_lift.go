@@ -3,7 +3,6 @@ package esm
 import (
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 )
 
@@ -970,129 +969,26 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 // The merged expression-template registry (esm-spec §9.6.4 rule 7, §10.7)
 // ============================================================================
 
-// scopeTemplateBody component-scopes one carried template body: it prefixes
-// exactly the references that name one of the OWNING component's locals.
-//
-// This is the "post-step-2 scoping" esm-libraries-spec §4.7.5 step 4 calls an
-// ordering requirement rather than a parenthetical. A body's FREE variables are
-// resolved in its owner's scope, so two components importing one library carry
-// byte-identical bodies whose free `inv_dx` denotes a DIFFERENT variable in each;
-// deduplicating them pre-scoping keeps one body that is correct for neither.
-// Scoping also makes them non-deep-equal, which is what routes them into the
-// collision rename and keeps an entry per component.
-//
-// Unlike namespaceExprTree (which prefixes every bare reference except an
-// explicit leave-alone set) this is a WHITELIST: a body legitimately references
-// its own formal `params`, loop symbols, and document-scoped index sets, none of
-// which are component locals and none of which may be prefixed. The caller
-// removes the template's `params` from `localNames` before calling.
-func scopeTemplateBody(raw any, prefix string, localNames, bound map[string]bool) any {
-	switch v := raw.(type) {
-	case string:
-		if bound[v] {
-			return v
-		}
-		if head, _, found := strings.Cut(v, "."); found {
-			if localNames[head] {
-				return prefix + "." + v
-			}
-			return v
-		}
-		if localNames[v] {
-			return prefix + "." + v
-		}
-		return v
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = scopeTemplateBody(item, prefix, localNames, bound)
-		}
-		return out
-	case map[string]any:
-		if _, isNode := v["op"]; !isNode {
-			// Not an expression node (a `ranges` spec, a `join` clause, ...):
-			// recurse structurally without treating its strings as references.
-			return v
-		}
-		localBound := bound
-		if v["op"] == "faq" {
-			localBound = map[string]bool{}
-			for k, b := range bound {
-				localBound[k] = b
-			}
-			if idx, ok := v["output_idx"].([]any); ok {
-				for _, s := range idx {
-					if name, ok := s.(string); ok {
-						localBound[name] = true
-					}
-				}
-			}
-			if rng, ok := v["ranges"].(map[string]any); ok {
-				for name := range rng {
-					localBound[name] = true
-				}
-			}
-		}
-		out := make(map[string]any, len(v))
-		for k, val := range v {
-			switch k {
-			case "op", "wrt", "dim", "fn", "name", "value",
-				"reduce", "semiring", "attrs", "ranges", "units",
-				"regions", "output_idx", "distinct", "shape", "perm", "axis", "id":
-				// Sidecar / non-reference slots: carried verbatim, exactly the
-				// slots a reference rewrite must not touch (see
-				// mapExprRefChildren).
-				out[k] = val
-			case "join":
-				binders := map[string]bool{}
-				if idx, ok := v["output_idx"].([]any); ok {
-					for _, s := range idx {
-						if name, ok := s.(string); ok {
-							binders[name] = true
-						}
-					}
-				}
-				if rng, ok := v["ranges"].(map[string]any); ok {
-					for name := range rng {
-						binders[name] = true
-					}
-				}
-				if clauses, ok := val.([]any); ok {
-					out[k] = namespaceJoinNames(clauses, binders, prefix, localNames)
-				} else {
-					out[k] = val
-				}
-			default:
-				out[k] = scopeTemplateBody(val, prefix, localNames, localBound)
-			}
-		}
-		return out
-	default:
-		return raw
-	}
-}
-
 // mergedTemplateRegistry is the MERGED expression-template registry of the
 // flattened representation (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec
-// §4.7.5 step 4). Union of the per-component registries, in this order:
+// §4.7.5 steps 2 and 4), over every component's carried block in DOCUMENT
+// order (models as the file declares them, then reaction systems):
 //
-//  1. SCOPE, THEN UNION. Each MODEL block's bodies are component-scoped first
-//     (scopeTemplateBody), because the dedup below compares POST-scoping bodies.
-//     Reaction-system blocks pass through unscoped BY POLICY, mirroring the
-//     reference bindings: a rate-law reference is expanded eagerly at collect, so
-//     a reaction-system entry is never resolved against the post-flatten scope —
-//     it rides along so the reconstituted document round-trips.
-//  2. DEEP-EQUAL DEDUP AT FIRST OCCURRENCE — two components importing one
-//     stencil keep one entry under the bare name.
-//  3. COLLISION RENAME — a same-name entry whose occurrences are not all
-//     deep-equal renames to `<ComponentPath>.<name>` in EVERY owning component,
-//     and the rename PROPAGATES along the reference DAG (registryCollisionNames)
-//     so no surviving body holds a reference the merged registry cannot resolve.
+//  1. CLOSE, THEN MERGE. Every component's bodies (models and reaction
+//     systems alike) are closed first (tplExplicitFree): a body's free names
+//     become explicit trailing parameters, which each reference binds in its
+//     own site's scope. A body is never component-scoped: its free names are
+//     read in the scope of the subsystem that owns the reference, so one
+//     closed definition serves every owner whose body is the same.
+//  2. MERGE (mergeFlatRegistry): deep-equal same-name entries are kept once
+//     under the bare name; a colliding name keeps one entry per distinct
+//     definition, named after its first owner, and the collision propagates
+//     along the reference DAG (registryCollisionNames).
 //
-// `match` rules are excluded: only match-less templates are referenceable
-// (§9.6.2), so only they can be merged. Components are walked in DOCUMENT order
-// (models in file order, then reaction systems), which is what makes "first
-// occurrence" mean the first occurrence in the file.
+// This binding expands every reference at load (Expand-at-build), so no
+// reference site survives into flatten; the registry still carries the closed
+// bodies. `match` rules are excluded: only match-less templates are
+// referenceable (§9.6.2).
 func mergedTemplateRegistry(file *ESMFile) []FlattenedTemplate {
 	if len(file.componentTemplates) == 0 {
 		return nil
@@ -1118,243 +1014,33 @@ func mergedTemplateRegistry(file *ESMFile) []FlattenedTemplate {
 		addKey(k)
 	}
 
-	type occurrence struct {
-		path string
-		decl any
-	}
-	byname := map[string][]occurrence{}
-	var bynameOrder []string
+	var blocks []registryBlock
 	for _, compKey := range orderedKeysList {
 		block, ok := file.componentTemplates[compKey]
 		if !ok || block == nil {
 			continue
 		}
-		section, cname, _ := strings.Cut(compKey, ".")
-		localNames := map[string]bool{}
-		if section == "models" {
-			if model, ok := file.Models[cname]; ok {
-				for k := range model.Variables {
-					localNames[k] = true
-				}
-				for k := range model.Subsystems {
-					localNames[k] = true
-				}
-			}
-		}
+		_, cname, _ := strings.Cut(compKey, ".")
+		matchless := newOrderedMap()
 		for _, tname := range block.keys {
 			decl := block.get(tname)
-			declMap, isMap := decl.(map[string]any)
-			if isMap {
-				if m, has := declMap["match"]; has && m != nil {
-					continue // match rules are not referenceable, so not merged
-				}
+			if dm, ok := decl.(map[string]any); ok && declHasMatch(dm) {
+				continue // match rules are not referenceable, so not merged
 			}
-			scoped := decl
-			if isMap && section == "models" {
-				if body, has := declMap["body"]; has && body != nil {
-					scope := map[string]bool{}
-					for k := range localNames {
-						scope[k] = true
-					}
-					if params, ok := declMap["params"].([]any); ok {
-						for _, p := range params {
-							if ps, ok := p.(string); ok {
-								delete(scope, ps)
-							}
-						}
-					}
-					next := make(map[string]any, len(declMap))
-					for k, v := range declMap {
-						next[k] = v
-					}
-					next["body"] = scopeTemplateBody(body, cname, scope, nil)
-					scoped = next
-				}
-			}
-			if _, seen := byname[tname]; !seen {
-				bynameOrder = append(bynameOrder, tname)
-			}
-			byname[tname] = append(byname[tname], occurrence{path: cname, decl: scoped})
+			matchless.set(tname, decl)
 		}
+		closed, _ := tplExplicitFree(matchless)
+		blocks = append(blocks, registryBlock{path: cname, block: closed})
 	}
-	if len(bynameOrder) == 0 {
+	merged, _ := mergeFlatRegistry(blocks)
+	if merged.len() == 0 {
 		return nil
 	}
-
-	// registryCollisionNames works over the orderedMap shape the Option-B
-	// registry merge uses; hand it the same [path, decl] pairs.
-	grouped := newOrderedMap()
-	for _, name := range bynameOrder {
-		occ := make([]any, 0, len(byname[name]))
-		for _, o := range byname[name] {
-			occ = append(occ, [2]any{o.path, o.decl})
-		}
-		grouped.set(name, occ)
-	}
-	collide := registryCollisionNames(grouped)
-
-	merged := newOrderedMap()
-	rename := map[string]map[string]string{} // path => (old => new)
-	for _, name := range bynameOrder {
-		occ := byname[name]
-		if !collide[name] {
-			merged.set(name, occ[0].decl) // deep-equal dedup at first occurrence
-			continue
-		}
-		for _, o := range occ {
-			newname := o.path + "." + name
-			merged.set(newname, o.decl)
-			if rename[o.path] == nil {
-				rename[o.path] = map[string]string{}
-			}
-			rename[o.path][name] = newname
-		}
-	}
-	// A renamed body's own nested references follow ITS OWNER's map, so a
-	// per-owner wrapper reaches its owner's leaf and never the other owner's.
-	for _, path := range sortedKeys(rename) {
-		for _, oldName := range sortedKeys(rename[path]) {
-			newName := rename[path][oldName]
-			if merged.has(newName) {
-				merged.set(newName, renameApplyRefs(merged.get(newName), rename[path]))
-			}
-		}
-	}
-
 	out := make([]FlattenedTemplate, 0, len(merged.keys))
 	for _, name := range merged.keys {
 		out = append(out, FlattenedTemplate{Name: name, Declaration: merged.get(name)})
 	}
 	return out
-}
-
-// checkRegistryCouplingRewrites refuses a SURVIVING registry body that names a
-// coupling-rewritten variable.
-//
-// A `variable_map` substitution and an `operator_compose` renaming match both
-// DELETE a name from the flattened tables and rewrite the equations off it. A
-// surviving `expression_templates` body is a shadow copy of authored source that
-// no equation walk reaches, and it expands at the BUILD boundary rather than at
-// flatten — so a body still naming a deleted variable would expand, later and
-// elsewhere, into a name the flattened system does not declare (for
-// `param_to_var` / `conversion_factor`, a deleted parameter; for the scaling
-// transforms, a silent semantic divergence from the expand-at-load image).
-//
-// This is the ONE site where such a reference is REFUSED rather than resolved
-// (CONFORMANCE_SPEC §5.35). The body is authored source: rewriting it would
-// silently diverge from the image the same document produces with template
-// expansion done at load. A template `param` shadows the outer name (esm-spec
-// §9.6.1), so a body that BINDS the name through its params is fine — which is
-// exactly the fix the message names.
-//
-// Mirrors Julia `flatten.jl::_check_registry_coupling_rewrites` and Python
-// `flatten.py::_check_registry_coupling_rewrites`.
-func checkRegistryCouplingRewrites(registry []FlattenedTemplate, rewritten map[string]bool) error {
-	if len(registry) == 0 || len(rewritten) == 0 {
-		return nil
-	}
-	// The registry is already in document order, so the FIRST offending template
-	// is deterministic without a sort.
-	for _, entry := range registry {
-		decl, ok := entry.Declaration.(map[string]any)
-		if !ok {
-			continue
-		}
-		body, has := decl["body"]
-		if !has || body == nil {
-			continue
-		}
-		// The template's own formal params are its private scope (esm-spec
-		// §9.6.1), so a body that binds the name through them names nothing
-		// outer.
-		params := map[string]bool{}
-		if list, ok := decl["params"].([]any); ok {
-			for _, p := range list {
-				if name, ok := p.(string); ok {
-					params[name] = true
-				}
-			}
-		}
-		names := map[string]bool{}
-		collectTemplateBodyVarNames(body, params, names)
-		var hits []string
-		for name := range names {
-			if rewritten[name] {
-				hits = append(hits, name)
-			}
-		}
-		if len(hits) == 0 {
-			continue
-		}
-		sort.Strings(hits)
-		return newETErr(CodeTemplateBodyReferencesCouplingRewrittenVariable, fmt.Sprintf(
-			"expression template '%s' body references '%s', which a coupling rule "+
-				"rewrote in the flattened equations; the registry body would expand "+
-				"to a stale name at the build boundary. Bind the value through the "+
-				"template's params, or expand the reference before coupling "+
-				"(esm-spec §9.6.4).",
-			entry.Name, strings.Join(hits, "', '")))
-	}
-	return nil
-}
-
-// collectTemplateBodyVarNames collects into `out` every variable name a RAW
-// (unparsed) template body references, skipping names `bound` shadows.
-//
-// The registry holds bodies as decoded JSON rather than as ExprNode, so this
-// walks the JSON with exactly scopeTemplateBody's structure: a bare string in an
-// OPERAND slot is a reference, a sidecar slot (`op`, `wrt`, `fn`, `ranges`, ...)
-// names an operator, an axis or a binder and is skipped, an aggregate's own loop
-// symbols shadow, and a `join`'s key columns and overlap envelope factors ARE
-// references (§5.5.6) while its `syms` are binders. Sharing that shape is the
-// point: the guard must see the same references the scoping pass rewrote, no
-// more and no fewer.
-func collectTemplateBodyVarNames(raw any, bound, out map[string]bool) {
-	switch v := raw.(type) {
-	case string:
-		if !bound[v] {
-			out[v] = true
-		}
-	case []any:
-		for _, item := range v {
-			collectTemplateBodyVarNames(item, bound, out)
-		}
-	case map[string]any:
-		if _, isNode := v["op"]; !isNode {
-			// Not an expression node (a `ranges` spec, a `join` clause, ...):
-			// its strings are not references.
-			return
-		}
-		localBound := bound
-		if v["op"] == "faq" {
-			localBound = map[string]bool{}
-			for k, b := range bound {
-				localBound[k] = b
-			}
-			for _, name := range exprBinderNames(v) {
-				localBound[name] = true
-			}
-		}
-		for k, val := range v {
-			switch k {
-			case "op", "wrt", "dim", "fn", "name", "value",
-				"reduce", "semiring", "attrs", "ranges", "units",
-				"regions", "output_idx", "distinct", "shape", "perm", "axis", "id":
-				// Sidecar / non-reference slots, exactly the ones
-				// scopeTemplateBody carries verbatim.
-			case "join":
-				if clauses, ok := val.([]any); ok {
-					binders := map[string]bool{}
-					for _, name := range exprBinderNames(v) {
-						binders[name] = true
-					}
-					collectJoinClauseNames(clauses, binders, out)
-				}
-			default:
-				collectTemplateBodyVarNames(val, localBound, out)
-			}
-		}
-	}
 }
 
 // exprBinderNames returns the loop symbols a raw aggregate node binds — its
@@ -1372,38 +1058,4 @@ func exprBinderNames(node map[string]any) []string {
 		names = append(names, sortedKeys(rng)...)
 	}
 	return names
-}
-
-// collectJoinClauseNames collects the plain-string variable references a `join`
-// carries — an `on` key column and an `overlap` clause's `src_env` / `tgt_env`
-// factors. A clause's `syms` are binders of the node, not references, and are
-// skipped, exactly as namespaceJoinNames skips them.
-func collectJoinClauseNames(clauses []any, binders, out map[string]bool) {
-	add := func(v any) {
-		if s, ok := v.(string); ok && !binders[s] {
-			out[s] = true
-		}
-	}
-	addList := func(v any) {
-		if items, ok := v.([]any); ok {
-			for _, it := range items {
-				add(it)
-			}
-		}
-	}
-	for _, raw := range clauses {
-		clause, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if pairs, ok := clause["on"].([]any); ok {
-			for _, pair := range pairs {
-				addList(pair)
-			}
-		}
-		if overlap, ok := clause["overlap"].(map[string]any); ok {
-			addList(overlap["src_env"])
-			addList(overlap["tgt_env"])
-		}
-	}
 }

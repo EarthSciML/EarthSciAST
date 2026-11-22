@@ -1,0 +1,5 @@
+{
+  "code": "unlowered_operator",
+  "stage": "evaluate",
+  "description": "The template `ddy` holds `D(f, wrt y)` and no rule matches it. The file loads and the reference survives with the body unrewritten (emitted.esm); the pre-evaluation gate walks every reachable template body once per instance and rejects the build with `unlowered_operator`, naming the op, the template and the first call site (esm-spec §9.6.3 constraint 6). Parse/validate-only bindings mark it N/A."
+}
