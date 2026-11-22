@@ -12,7 +12,7 @@
 > `table_lookup` op, the `skolem`, `rank`, `argmin` and `argmax` ops, and the
 > geometry leaves `intersect_polygon` / `polygon_intersection_area` (with their
 > `manifold` flag) are removed; a document using one is rejected at load with
-> `removed_op` (§7). Their replacements are the pure-AST templates of the
+> `removed_op` (§7). Their replacements are the pure-AST definitions of the
 > standard library (`lib/*.esm`), whose tiers are listed in §5.45.4. Sections that
 > existed only for a removed op are kept as "(Removed at 2.0.0)" stubs so that
 > section numbers stay stable.
@@ -474,10 +474,10 @@ The categories a divergence can be scored against, and what "agree" means in eac
 | **Expression round-trip (property corpus)** | Byte-identical canonical form | §5.5.3. A divergence here is a different *document*. |
 | **Graph Structure** | Node / edge sets identical (as multisets) | Enforced by `tests/conformance/graph/cases.json`, which every binding drives. Node and edge ORDER is not a conformance property — bindings iterate their own maps — so lists compare as sorted multisets. The DOT / Mermaid BYTES are excluded: §4.8.3 requires both formats and specifies neither, and the bindings do not split in a way any tie-break resolves (see that corpus's README). |
 | **Simulation** | Numeric tolerance (§5.9) | The ONE category where a tolerance is legitimate, because the quantity being compared is a floating-point trajectory, not a serialization. Governed by §5.9's explicit rel/abs tolerances — a stated numeric tolerance on a numeric quantity, which is a different thing from a percentage of fixtures allowed to disagree. |
-| **Relational index sets / dense IDs** | Byte-identical | Outputs of the value-invention primitive `distinct` (over a scalar integer `key`, e.g. a `pair_key` / `edge_key` template), the `rank_of` / `rank_of_set` templates over its members, and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
+| **Relational index sets / dense IDs** | Byte-identical | Outputs of the value-invention primitive `distinct` (over a scalar integer `key`, e.g. a `pair_key` / `edge_key` definition), the `rank_of` / `rank_of_set` definitions over its members, and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
 | **Cumulative (prefix and suffix) reductions** | Bit-identical | A `faq` whose `filter` is a monotone comparison of its one contracted index against an output index (esm-spec §4.3.1). A **forward** scan (`<=` / `<`, and the mirrored `i >= j` / `i > j`) folds its window ascending, lowest `j` first; a **reverse** scan (`>=` / `>`, and the mirrored `i <= j` / `i < j`) folds its window descending, highest `j` first. Either way the value is a fully determined left fold and not an "irreducibly floating-point" quantity, which is exactly what licenses a binding to evaluate it with an `O(N)` running accumulator (swept up for a forward scan, down for a reverse one) instead of the `O(N²)` triangle. Every executing binding computes both directions this way, interpreter and compiled path alike — Rust and Python with a running accumulator inside the array evaluator, Julia by splitting the equation into an elementwise term pass plus a post-pass fold (`tree_walk/scan.jl`) so its per-cell kernel model stays intact. The forward scans are pinned against an independent triangular oracle at catastrophic-cancellation magnitudes (`pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs`, `pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py`, `pkg/EarthSciAST.jl/test/scan_prefix_test.jl`); the reverse scans by the to-top fixtures of `tests/conformance/native_model_shapes/` (`makearray_prefix_scan_*`) and the `makearray_scan` scaling family. |
 | **Causal self-reference (recurrence) along an index axis** | Bit-identical | An equation whose defining `faq` body reads the array being defined at a strictly earlier position on one output axis (esm-spec §4.3.1.1). The sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is — there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact. Governed by the **§5.19 recurrence contract**, which also forbids every reordering implementation strategy and requires fixtures that pin the arithmetic ORDER (a cancellation ladder, a lag > 1, a symbol-valued lag) rather than an exactly-representable answer a wrong order would also reach. |
-| **Conservative-regridding geometry (areas / weights)** | Invariants exact; areas within rel + abs tol | The overlap areas `A_ij` (the `overlap_area_planar` / `overlap_area_spherical` templates of `lib/geometry.esm`) and the weights `W_ij` are **tolerance-based** — a floating-point overlap area depends on the summation order of its edge contributions. Gated primarily on the physical invariants (conservation + partition-of-unity), with a combined rel + abs area tolerance and a sliver floor; the integer **candidate overlap-pair index set** stays byte-identical (§5.5). Governed by the **§5.8 geometry tolerance contract**. |
+| **Conservative-regridding geometry (areas / weights)** | Invariants exact; areas within rel + abs tol | The overlap areas `A_ij` (the `overlap_area_planar` / `overlap_area_spherical` definitions of `lib/geometry.esm`) and the weights `W_ij` are **tolerance-based** — a floating-point overlap area depends on the summation order of its edge contributions. Gated primarily on the physical invariants (conservation + partition-of-unity), with a combined rel + abs area tolerance and a sliver floor; the integer **candidate overlap-pair index set** stays byte-identical (§5.5). Governed by the **§5.8 geometry tolerance contract**. |
 
 > **Note.** The only two places a tolerance is legitimate are the ones where the
 > compared quantity is irreducibly floating-point: the **§5.9** simulation
@@ -584,7 +584,7 @@ The comparison system categorizes divergences as:
 `EarthSciAST` is **parallel native implementations** (Julia, Rust,
 Python, …) verified by this suite — not one core behind FFI. The
 value-invention primitive `distinct`, the `rank_of` / `rank_of_set` and
-`argmin` / `argmax` templates of `lib/relational.esm` (§5.5.1 rules 3 and 6),
+`argmin` / `argmax` definitions of `lib/relational.esm` (§5.5.1 rules 3 and 6),
 together with value-equality and group-by joins, produce **index sets, dense
 IDs, and assignment buffers that other nodes consume**. Two bindings that disagree on the *order* or *numbering*
 of those outputs produce **different models**, not merely different formatting.
@@ -613,14 +613,14 @@ on hash-table iteration order or a language-native hash value.
    Julia `Dict`/`Set` order is unspecified, Python `set` order is
    `PYTHONHASHSEED`-sensitive — see §5.5.2).
 
-3. **Dense IDs** come from the `rank_of` / `rank_of_set` templates of
+3. **Dense IDs** come from the `rank_of` / `rank_of_set` definitions of
    `lib/relational.esm`: the 1-based rank of a key among the ascending members
    of a `distinct` set, an ordinary value of the expanded AST and therefore the
    same number in every binding. (The `rank` op and its per-binding emission
    bases were removed at 2.0.0.)
 
 4. **Composite keys** are scalar integers: the `pair_key` / `edge_key`
-   templates of `lib/relational.esm` (`edge_key` sorts its endpoints, so an
+   definitions of `lib/relational.esm` (`edge_key` sorts its endpoints, so an
    undirected edge is `(min(u,v), max(u,v))`; `pair_key` preserves order, so
    `(1,2)` and `(2,1)` are distinct). They keep equality and the lexicographic
    order of the component tuples, so `distinct` over them is rule 2 over the
@@ -637,16 +637,16 @@ on hash-table iteration order or a language-native hash value.
    drift.
 
 6. **Arg-witness reducers.** The `argmin` / `argmax` (and `argmin_where` /
-   `argmax_where`) templates of `lib/relational.esm` return the **arg** — the
+   `argmax_where`) definitions of `lib/relational.esm` return the **arg** — the
    witnessing index — not the reduced value (`assign[i] = argmin_g
    dist(point_i, gen_g)`, the nearest-generator INDEX). The tie-break is
-   **normative and written into the template body: the smallest index wins** on
+   **normative and written into the definition body: the smallest index wins** on
    an equal reduced value, and a NaN candidate wins at its first occurrence.
-   Because the templates are ordinary `faq` reductions, the emitted index is a
+   Because the definitions are ordinary `faq` reductions, the emitted index is a
    pure function of the candidate ids and the metric, byte-identical across
    bindings. A float value participates only in the comparison, never in a key
    (use a squared metric, not `sqrt`, to keep ties bit-exact). An arg-witness
-   template over state-dependent candidates is an ordinary `faq` and is allowed
+   definition over state-dependent candidates is an ordinary `faq` and is allowed
    in a continuous equation; no cadence rule rejects it. (The `argmin` /
    `argmax` ops were removed at 2.0.0.)
 
@@ -1059,7 +1059,7 @@ loader may declare directly (esm-spec §8.9.2): `"all"`, `{"fixed": i}` (take on
 index, drop the axis), `{"range": {...}}` (a half-open strided window, axis
 kept), `{"gated_by": "<set>"}` (deferred + member-sliced, above). A binding MUST
 accept the same vocabulary wherever a selection is written — a loader's `select`,
-a variable's `select`, and the pushdown record's gate template — so the spelling
+a variable's `select`, and the pushdown record's gate definition — so the spelling
 an author writes and the spelling the rewrite generates are one thing. Only
 `gated_by` defers; the other three are resolvable at read time, and whether they
 are pushed down to the reader or applied after the read MUST NOT change the
@@ -1235,7 +1235,7 @@ therefore **not** the four envelope bounds — it is every array `F` such that
 Both subscript spellings on such an `F` MUST be carried, and by the SAME gather:
 the full subscript `index(F, c, v, d)`, and the PARTIAL subscript `index(F, c)`
 that yields the trailing slice — the spelling a rank-3 `[C, vertex, xy]` ring
-stack takes when it is bound to a `lib/geometry.esm` overlap-area template's
+stack takes when it is bound to a `lib/geometry.esm` overlap-area definition's
 ring parameter. This is why the
 gather MUST be **rank-preserving**: `pd_cell__<C>__<F>` is declared
 `[pd_support__<C>, …F's trailing axes]` and defined by a map (not a reduction)
@@ -1286,15 +1286,15 @@ The mirrored arm is a **rider, not a trigger**: mirrors are collected only after
 the forward pattern has fixed `C` and `R`. A document containing only mirrored
 binning aggregates is not rewritten.
 
-**Surviving template references (esm-spec §9.6.4).** Under Option B an
-`apply_expression_template` reference survives load, so the binning body handed
+**Surviving definition references (esm-spec §9.6.4).** Under Option B an
+`apply_operator` reference survives load, so the binning body handed
 to the desugar MAY be a reference rather than the containment `ifelse` itself.
 esm-spec §9.6.4 rule 4 — "patterns do not see through surviving references" —
 scopes to the §9.6.3 rewrite-rule ENGINE; this desugar is a different consumer
 and **rule 2 governs it**: a reference denotes its expansion. Normatively:
 
 > **Whether the pushdown fires MUST NOT depend on whether the author factored
-> the binning body through an `expression_templates` entry.** A binding
+> the binning body through an `operators` entry.** A binding
 > implementation MUST recognise a factored body exactly as it recognises the
 > body's expansion. How it recognises it is the implementation's choice;
 > agreeing with the expansion is not. Per esm-spec §9.6.4 rule 2 an
@@ -1304,30 +1304,30 @@ and **rule 2 governs it**: a reference denotes its expansion. Normatively:
 Emission is separately constrained, and in the opposite direction. The rewrite
 MUST re-point the rect factors by editing the **call site** — the reference's
 `bindings`, and the `faq`'s own `ranges` / `shape` / `args` / `join` — and
-MUST NOT edit the referenced template `body`. The body is shared across call
+MUST NOT edit the referenced definition `body`. The body is shared across call
 sites and is lowered once at the build boundary, which is what Option B exists
 for. Both binding spellings carry a rect factor and both MUST be re-pointed: the
 bare factor name (`{"xmin": "src_W"}`) and the subscripted expression
 (`{"lo_x": index(src_W, c)}`).
 
 The generated producer `filter` keeps the FULL-GRID rect references. When the
-containment `ifelse` lies inside the body of a template `T`, the filter is NOT
-copied out of the body's expansion: the desugar adds the **derived template**
-`T__pd_filter` to the model's `expression_templates` — `params` the parameters
+containment `ifelse` lies inside the body of a definition `T`, the filter is NOT
+copied out of the body's expansion: the desugar adds the **derived definition**
+`T__pd_filter` to the model's `operators` — `params` the parameters
 of `T` its comparisons read, in `T`'s declared order; `body` those comparisons
 as a `*` (the same form a longhand filter takes) — and the filter is a reference
 to it, each parameter bound exactly as the representative's call site binds it
-before that call site is re-pointed. A containment nested several templates
-deep gets one derived template per template on the way, each body a reference
+before that call site is re-pointed. A containment nested several definitions
+deep gets one derived definition per definition on the way, each body a reference
 to the next. A derived name that would replace a different declaration already
 in the registry is an error.
 
-Consequently a rect factor named **free** in a template body — reachable from
+Consequently a rect factor named **free** in a definition body — reachable from
 neither the call site's `bindings` nor the `faq`'s `args` — cannot be
 re-pointed, and leaving it would index the compact per-support cell gathers with
 full-grid positions. That is a wrong-numbers defect, so it MUST be rejected, with
-diagnostic `template_body_references_pushdown_rewritten_variable`. The remedy is
-to bind the value through the template's params.
+diagnostic `operator_body_references_pushdown_rewritten_variable`. The remedy is
+to bind the value through the definition's params.
 
 **Residual diagnostic.** The desugar MUST NOT decline silently on a document it
 can see is join-shaped. When a `faq` is the rank-1 factor of a `+`-semiring
@@ -1341,7 +1341,7 @@ conformance-pinned by the `pushdown/unreadable_join` corpus fixture: `code`
 `reason` (`predicate_unparsed` when a predicate was found but read as neither
 containment shape; `surviving_template_reference` when the body carries a
 reference that could not be expanded for matching), `template` (the referenced
-template's name, or null) and `consequence`, sorted by
+definition's name, or null) and `consequence`, sorted by
 `(variable, consumer, array)`. Human-readable text is not part of the contract.
 
 This is a diagnostic, **not** a rejection: the desugar's contract is that a
@@ -1765,7 +1765,7 @@ not members, in an ordinary `faq`, and every binding's `validate()` MUST reject 
 `faq` whose ragged range's `values` array its body (`expr` / `filter`) never
 reads, with `ragged_values_not_gathered` at the containing expression field —
 such a body reads positions where members were meant. Two cases are not decided:
-a body still holding an `apply_expression_template` reference, and a set the
+a body still holding an `apply_operator` reference, and a set the
 document does not declare. **The one exception is value invention:** a
 value-invention `faq` (`distinct: true`, a `key`, or a `distinct` body,
 §5.5) binds the member
@@ -1780,10 +1780,10 @@ BARE name in an elementwise position MUST be rejected with
 `faq_bare_array_operand`: by every binding's `validate()` at the containing
 expression field, and by every evaluating binding at build. `validate()` runs on
 the authored equations of every model and inline subsystem, from declared
-shapes; a template application is opaque there (an array bound to one of its
-arguments is not a bare read), and a binding that expands templates at load
-checks the authored form. The build runs on the flattened, template-expanded
-system against declared and inferred shapes, so a bare name a template binding
+shapes; a definition application is opaque there (an array bound to one of its
+arguments is not a bare read), and a binding that expands definitions at load
+checks the authored form. The build runs on the flattened, definition-expanded
+system against declared and inferred shapes, so a bare name a definition binding
 delivers is refused before evaluation. A variable an observed or recurrence
 definition's left-hand side names is exempt (its bare self-read is
 `recurrence_not_wellfounded` / `observed_cycle`); a derivative's left-hand side
@@ -1798,14 +1798,14 @@ output indices is the positive control
 `tests/conformance/faq_pointwise_filter/fixtures/indexed_filter_two_outputs.esm`.
 
 The registry a `from` name resolves against is the **effective** one — the
-document's own `index_sets` merged with those of every template library imported
+document's own `index_sets` merged with those of every operator library imported
 into the component's scope (esm-spec §9.7.5), which is settled only once that
 scope closes (§9.7.4). A document that declares **no** `index_sets` of its own is
 the esm-spec §9.7.10 / §6.6.6 discretization-agnostic PDE leaf: its sets arrive
 from a grid library that a composing document, a subsystem-ref edge or an inline
 test injects, and exist only in that per-run build. **`validate()` therefore MUST
 NOT report `undefined_index_set` for a document that declares no registry** —
-mirroring §9.6.1, where `template_constraint_unknown_index_set` does not run for
+mirroring §9.6.1, where `operator_constraint_unknown_index_set` does not run for
 a library file loaded or validated standalone. A document that DOES declare a
 registry is resolved against it at validation, and an absent `from` name is
 `undefined_index_set` (`tests/invalid/faq/undeclared_from_name.esm`); in
@@ -1886,7 +1886,7 @@ Two points fix the semantics:
    such forcings out of `DISCRETE`, where they would silently go stale.
 2. **There is no "grid" class.** With topology first-class (§5.6.4), the mesh is
    not a primitive input — it is `faq` nodes (`distinct`, `join`, and the
-   `rank_of` templates) over mesh primitive arrays. When those primitives are document literals the
+   `rank_of` definitions) over mesh primitive arrays. When those primitives are document literals the
    topology partition is `CONST` and folds into the artifact; when the mesh is
    reloaded at discrete events (AMR, moving meshes) the same nodes are
    `DISCRETE`. "Grid" is a *consequence* of where its leaves sit, not a category.
@@ -2097,16 +2097,16 @@ partition pass in all three evaluators.
 > byte-identity contracts in §5.5–§5.7: the per-pair overlap areas `A_ij` of
 > conservative regridding and the weights `W_ij` built from them are compared
 > under a **tolerance**. The areas come from the `overlap_area_planar` /
-> `overlap_area_spherical` templates of `lib/geometry.esm` (esm-spec §8.6.1);
+> `overlap_area_spherical` definitions of `lib/geometry.esm` (esm-spec §8.6.1);
 > the rules below are the contract.
 
 **Why geometry is the exception.** The relational engine (§5.5) is made
 byte-identical by sorting integer tuples; that lever does not exist here. An
 overlap area is a **floating-point sum of per-edge contributions**, and the
-spherical template's contributions go through transcendental functions whose
+spherical definition's contributions go through transcendental functions whose
 last-ulp results differ between the bindings' math libraries. The quantities
 are also checked against analytic oracles (rectangle areas, Girard's theorem),
-which the templates meet only to rounding. Cross-binding conformance on areas is
+which the definitions meet only to rounding. Cross-binding conformance on areas is
 therefore tolerance-based (RFC §B.1).
 
 **Governing principle.** Conservation of the *physics* is the contract, not
@@ -2132,7 +2132,7 @@ tolerance defined here.
 | Output | Conformance mode | Governed by |
 |---|---|---|
 | candidate overlap-pair set `{(i, j)}` (bin-key spatial join) | **byte-identical** (integer keys) | §5.5 determinism contract |
-| edge model (which overlap-area template) | **exact** match — compare same-template only | §5.8.4 |
+| edge model (which overlap-area definition) | **exact** match — compare same-definition only | §5.8.4 |
 | global conservation `Σ_j A_j·F_tgt[j] = Σ_i A_i·F_src[i]` | invariant gate (tight tol) | §5.8.3 |
 | partition-of-unity `Σ_i W_ij = 1` | **exact by construction** | §5.8.3 |
 | per-pair overlap area `A_ij`, weight `W_ij` | rel + abs tolerance + sliver floor | §5.8.2 |
@@ -2187,15 +2187,15 @@ everywhere.
 
 #### 5.8.4 Edge model
 
-The edge model is chosen by the template a document applies:
+The edge model is chosen by the definition a document applies:
 `overlap_area_planar` takes straight edges in the coordinate plane (areas in
 squared coordinate units), `overlap_area_spherical` takes great-circle edges on
 the unit sphere (areas in steradians; build its unit-vector stacks with
 `lonlat_to_unit`). **Two bindings' areas may be compared only under the same
-template.** Global lon-lat meshes need the spherical template (a flat lat-lon
+definition.** Global lon-lat meshes need the spherical definition (a flat lat-lon
 plane is wrong at the poles and the antimeridian). A lat-lon edge along a
 parallel is a *small circle*, not a great circle, so coarse polar cells carry a
-real edge-model error under the spherical template (RFC §B.4); where polar
+real edge-model error under the spherical definition (RFC §B.4); where polar
 accuracy matters, the document supplies rings with extra vertices along those
 edges. There is no ellipsoidal-geodesic edge model.
 
@@ -2231,7 +2231,7 @@ Two consequences are load-bearing:
 #### 5.8.6 Conformance requirement
 
 The gate feeds **identical** mesh inputs to every producing binding under the
-same template and asserts, in priority order:
+same definition and asserts, in priority order:
 
 1. **Candidate set** — byte-identical bin-key candidate overlap-pair index set
    across bindings (§5.8.5; the §5.5 harness machinery applies verbatim,
@@ -2245,7 +2245,7 @@ same template and asserts, in priority order:
 
 Adversarial inputs target the geometry failure modes specifically: **near-tangent
 slivers** (must pass via the floor), **antimeridian- and pole-crossing cells**
-(must use the spherical template, not the planar one), and **permuted input
+(must use the spherical definition, not the planar one), and **permuted input
 order** (the candidate set must stay byte-identical). The harness
 `scripts/run-geometry-conformance.py --self-test` guards the candidate-set /
 invariant / area contract against its embedded reference + static golden
@@ -2257,12 +2257,12 @@ gates, the assertion is **tolerance + invariant** on areas / weights and
 The conservative regridder is realized as a **single end-to-end-evaluable
 document**, `tests/valid/geometry/conservative_regrid_overlap_join.esm`: a
 broad-phase bin-key candidate join (the value-invention front-door, §5.5 / RFC
-§6.1) → `A_ij` from an overlap-area template → `A_j` row-sum → apply →
+§6.1) → `A_ij` from an overlap-area definition → `A_j` row-sum → apply →
 normalize, driven through the evaluator. The reference binding (**Julia**)
 evaluates it end-to-end and asserts the conservation + partition-of-unity
 invariants and the analytic oracle values in
 `pkg/EarthSciAST.jl/test/geometry_overlap_join_conformance_test.jl`; the
-per-template cross-binding gate is the `geometry_templates` tier (§5.45.4).
+per-definition cross-binding gate is the `geometry_templates` tier (§5.45.4).
 **Go / TypeScript** schema- and structurally validate the document (no
 evaluator — §5.8 N/A per the table above).
 
@@ -2544,7 +2544,7 @@ deterministic and CI-safe.
 
 The fixture `build_once_spatial_ode` is a 0-D-per-cell array ODE whose model
 `Field` declares three const polygon cells, derives `area[c]` as the
-`overlap_area_planar` template (`lib/geometry.esm`) of cell `c` with itself (a
+`overlap_area_planar` definition (`lib/geometry.esm`) of cell `c` with itself (a
 const-only array arming the build-once setup machinery), differentiates it build-once with a periodic
 `makearray` (`darea = D_c(area)`), and forces `D(u[c]) = darea[c] - u[c]`. It
 exercises: setup-time materialization of a **makearray** (Gap 1), a build-once
@@ -2561,7 +2561,7 @@ committed golden: **Julia** —
 `pkg/earthsci-ast-rs/tests/build_once_spatial_field_conformance.rs`.
 `bindings_required` is `["julia", "python", "rust"]` (Julia is where the two gaps
 were fixed — the setup-materializer + const-array crossing; Python and Rust
-already evaluate the overlap-area template + `makearray` + the array ODE
+already evaluate the overlap-area definition + `makearray` + the array ODE
 end-to-end, resolving the build-once field at the RHS rather than at a separate
 setup pass, so the numeric result matches Julia's setup-materialized path). Rust
 drives the composed path through its `simulate_array` runtime with no source
@@ -3029,7 +3029,7 @@ Three refusals, each naming what it refused:
    (`unsupported_element_type`), never a quiet binary64 evaluation.
 2. A construct whose numeric work is hand-written binary64 is an error under
    `"Float32"` (`float32_unsupported`) naming the construct. No core op is such
-   a construct; the standard-library templates (`lib/*.esm`) are ordinary AST
+   a construct; the standard-library definitions (`lib/*.esm`) are ordinary AST
    and evaluate at the working precision like any other expression.
 3. **Time integration** of a `"Float32"` document is an error naming it. An
    ODE/DAE solver's step-size control, error norms and Newton solve are binary64
@@ -3714,7 +3714,7 @@ a binding loads the document and compares the delivered location against
 `manifest.json`. The fixture carries one entry per row of the §8.2.1 table:
 `./`-relative, bare relative, `../`-climbing, dot-segment-collapsing, absolute
 path, `file://` URL, `https://` URL, a non-file scheme, substitution-led, a
-relative template carrying a `{date:…}` substitution, and a primary with two
+relative definition carrying a `{date:…}` substitution, and a primary with two
 mirrors.
 
 **Refusal.** `fixtures/env_var_catalog.esm` and
@@ -3731,7 +3731,7 @@ a mis-resolution from a missing file.
 Expectations are `{"repo_path": …}` — a path relative to the **repository
 root** — and a binding asserts `resolved == "file://" + abspath(<repo
 root>/<repo_path>)`, dot segments already removed. A `{"verbatim": …}`
-expectation is literal, for a template §8.2.1 leaves unchanged.
+expectation is literal, for a definition §8.2.1 leaves unchanged.
 
 Two properties of this suite are load-bearing:
 
@@ -3746,7 +3746,7 @@ Two properties of this suite are load-bearing:
   the rule under test is about.
 
 Nothing in the suite exists on disk. §8.2.1 resolution is lexical (RFC 3986
-§5.2.4, never `realpath`) precisely so a template naming one file per timestep
+§5.2.4, never `realpath`) precisely so a definition naming one file per timestep
 resolves like any other, and a fixture pointing at a real file would hide a
 binding that had reached for the filesystem.
 
@@ -4095,7 +4095,7 @@ implement §5.24.
 ### 5.25 Inline-Test Build Reuse and Test Selection (normative)
 
 esm-spec §6.6 makes an inline test "exercise one model in isolation": the test
-declares the run configuration — `expression_template_imports` (§9.7.10 form C),
+declares the run configuration — `operator_imports` (§9.7.10 form C),
 `time_span`, `parameter_overrides`, `initial_conditions` — and the assertions
 judged against that run. Nothing in the spec requires a binding to CONSTRUCT the
 model once per test, and constructing it once per test is the entire cost of an
@@ -4121,7 +4121,7 @@ treat differently), and the reused artifact MUST be a pure function of it.
 For the construction contract this specification already pins, those inputs are
 exactly four:
 
-1. **`expression_template_imports`** — decides WHICH document is built (§9.7.10
+1. **`operator_imports`** — decides WHICH document is built (§9.7.10
    form C builds an ephemeral injected copy);
 2. **`time_span`** — the construction interval, and with it the time at which
    build-time constants and CONST providers are sampled (§2.5.2);
@@ -5300,7 +5300,7 @@ with itself, which is worse than one that never renamed at all.
    `parameter_overrides` and `initial_conditions` are keyed by name; so is an
    output request (`output_observed`, `--observed`, `observed_field`), and so is
    a read of the finished run (`sol["SuperFast.O3"]`).
-3. **A surviving expression-template registry body**, which is a shadow copy of
+3. **A surviving operator-definition registry body**, which is a shadow copy of
    authored source that expands at the build boundary rather than at flatten.
    This is the one entry that is REFUSED rather than resolved; see below.
 4. **An EVENT.** An affect's `lhs` is a plain variable NAME string rather than
@@ -5365,7 +5365,7 @@ Consequently:
   object (Python `Solution.merged_renames`, Rust
   `SolutionMetadata::merged_variable_renames`).
 - **A registry body reads the survivor through its reference.** Flatten closes
-  every carried template body (esm-spec §10.7): a name the body read free — a
+  every carried definition body (esm-spec §10.7): a name the body read free — a
   component variable, merged away or replaced by a `variable_map` — is a
   parameter of the body, bound at each reference to the name of the reference's
   own site. The merge and the substitution rewrite that binding like any other
@@ -5374,7 +5374,8 @@ Consequently:
   `registry_body_names_the_merged_away_state` case pins it: its tendency reads
   `Chem.ozone` through the reference, never `Sink.O3`. (Before bodies were
   closed, a body was scoped to its component and such a document was refused
-  with `template_body_references_coupling_rewritten_variable`; that refusal is
+  with `operator_body_references_coupling_rewritten_variable`, formerly
+  `template_body_references_coupling_rewritten_variable`; that refusal is
   withdrawn.)
 
 **Shape.** Structure-comparing and golden-free, like §5.33. Each flatten case
@@ -6671,7 +6672,7 @@ that refusal's code. The corpus is every `.esm` under `tests/` plus every `.esm`
 in EarthSciML/EarthSciModels; a census builds each through `esm_problem` under
 both compilers in Julia (`pkg/EarthSciAST.jl/scripts/compiler_census.jl`) and in
 Rust (`pkg/earthsci-ast-rs/examples/compiler_census.rs`). A document under an
-`invalid/` directory, or a template or coupling library with no model of its
+`invalid/` directory, or a definition or coupling library with no model of its
 own, is never listed. Where a census also calls the built problem's right-hand
 side (Julia's does), a build whose call throws does not count as building.
 
@@ -6858,15 +6859,15 @@ binding that got better is the one way a ratchet can run backwards.
 | `scalar_operator_semantics` | what each scalar operator of esm-spec §4.2's evaluable core COMPUTES |
 | `faq_pointwise_filter` | a `faq` `filter` on a node with no contracted index: each output cell is one combination, and a false predicate makes it the semiring's 0̄ (esm-schema `filter`) |
 | `recurrence` | a causal self-reference along one index axis (esm-spec §4.3.1.1): the ordered sweep's values at zero tolerance, under every compiler each fixture's `required` map names (§5.19) |
-| `value_invention_geometry` | build-time value invention (a `distinct` producer over a ragged set, an `argmin` template assignment, a bin-key candidate set) and polygon overlap areas (the `lib/geometry.esm` overlap-area templates over unequal rings) feeding a right-hand side, every producer input a constant factor held in the document (esm-spec §4.2) |
+| `value_invention_geometry` | build-time value invention (a `distinct` producer over a ragged set, an `argmin` definition assignment, a bin-key candidate set) and polygon overlap areas (the `lib/geometry.esm` overlap-area definitions over unequal rings) feeding a right-hand side, every producer input a constant factor held in the document (esm-spec §4.2) |
 | `array_expression_forms` | esm-spec §4.3.5 `index` over a `reshape` / `transpose` / `concat` (an element of the operand at other subscripts), a positional §4.3.4 `broadcast` of anonymous operands, and a §6.3.1 arrayed definition of an observed whose shape was never declared |
 | `bool_and_or_reductions` | §5.6.1 scalar (rank-0) `bool_and_or` reductions: a crisp OR over the admitted terms, 0 when none is non-zero, under every compiler |
 | `native_model_shapes` | the shapes the downstream models need from `native`: computed and data-dependent subscripts, reversed / offset / clamped / mod-floor subscripts into const arrays, a rank-0 `faq` nested in an array `faq`, an `ifelse` with a scalar condition and branches of different shapes, an out-of-range const subscript no cell takes, an initial condition gathered from a const array, a `join` keyed on a computed observed (§5.5.8), an overlap-gated `faq`, and `polygon_intersection_area` in a `faq`; each as a state-free document and as one a right-hand side reads |
-| `interp_templates` | the pure-AST `searchsorted` / `linear` / `bilinear` templates of `lib/interp.esm` (esm-spec §9.7.1), each applied to the scenarios of `tests/closed_functions/interp/<fn>/expected.json`: the expanded template reproduces the scenario's pinned `binary64` result at tolerance 0, under every compiler |
-| `template_array_args` | a `lib/interp.esm` template applied with an array bound to a scalar-role parameter (esm-spec §9.6.11): elementwise over the array's index sets, a level column replicated over a 3-D field, `bilinear` with one and with both coordinates arrays; every element equals the scalar template's result at tolerance 0, under every compiler |
-| `datetime_templates` | the nine pure-AST calendar templates of `lib/calendar.esm` (esm-spec §9.7.1), each applied to the scenarios of `tests/closed_functions/datetime/<fn>/expected.json` inside the templates' domain `|t| < 2^52` s: the expanded template reproduces the scenario's pinned `binary64` result at tolerance 0, under every compiler |
-| `relational_templates` | the pure-AST `argmin` / `argmax` templates of `lib/relational.esm` (esm-spec §4.2, §9.7.1): on ties, signed zeros, infinities and NaN candidates the expanded template returns the smallest index attaining the extremum, or the first NaN index, at tolerance 0, and the nearest-generator document integrates to its golden, under every compiler; `rewrites/` holds the `pair_key` / `edge_key` / `rank_of` / `rank_of_set` / `argmin_where` documents, which Python, Julia and Rust check against `rewrites/golden/<id>.json` |
-| `geometry_templates` | the pure-AST convex overlap-area templates of `lib/geometry.esm` (esm-spec §8.6.1, §9.7.1): `overlap_area_planar` applied inside a `faq` over cell pairs, and behind the overlap join gate, gives the exact planar areas of identical, adjacent, corner-touching, nested, partially overlapping, clockwise and repeated-vertex-padded cells at tolerance 0; `overlap_area_spherical` over unit-vector stacks built with `lonlat_to_unit` gives Girard's-theorem areas of a meridian fan within the §5.8.2 band, under every compiler |
+| `interp_templates` | the pure-AST `searchsorted` / `linear` / `bilinear` definitions of `lib/interp.esm` (esm-spec §9.7.1), each applied to the scenarios of `tests/closed_functions/interp/<fn>/expected.json`: the expanded definition reproduces the scenario's pinned `binary64` result at tolerance 0, under every compiler |
+| `template_array_args` | a `lib/interp.esm` definition applied with an array bound to a scalar-role parameter (esm-spec §9.6.11): elementwise over the array's index sets, a level column replicated over a 3-D field, `bilinear` with one and with both coordinates arrays; every element equals the scalar definition's result at tolerance 0, under every compiler |
+| `datetime_templates` | the nine pure-AST calendar definitions of `lib/calendar.esm` (esm-spec §9.7.1), each applied to the scenarios of `tests/closed_functions/datetime/<fn>/expected.json` inside the definitions' domain `|t| < 2^52` s: the expanded definition reproduces the scenario's pinned `binary64` result at tolerance 0, under every compiler |
+| `relational_templates` | the pure-AST `argmin` / `argmax` definitions of `lib/relational.esm` (esm-spec §4.2, §9.7.1): on ties, signed zeros, infinities and NaN candidates the expanded definition returns the smallest index attaining the extremum, or the first NaN index, at tolerance 0, and the nearest-generator document integrates to its golden, under every compiler; `rewrites/` holds the `pair_key` / `edge_key` / `rank_of` / `rank_of_set` / `argmin_where` documents, which Python, Julia and Rust check against `rewrites/golden/<id>.json` |
+| `geometry_templates` | the pure-AST convex overlap-area definitions of `lib/geometry.esm` (esm-spec §8.6.1, §9.7.1): `overlap_area_planar` applied inside a `faq` over cell pairs, and behind the overlap join gate, gives the exact planar areas of identical, adjacent, corner-touching, nested, partially overlapping, clockwise and repeated-vertex-padded cells at tolerance 0; `overlap_area_spherical` over unit-vector stacks built with `lonlat_to_unit` gives Girard's-theorem areas of a meridian fan within the §5.8.2 band, under every compiler |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.
 The `interp_templates` and `datetime_templates` documents hold only the
@@ -7114,7 +7115,7 @@ absent tendency, `couple` multiplicative (collapse to the union of origins),
 bare `to ~ …` equation (`couple_multiplicative_tendency_first`: the tendency is
 scaled, the bare equation is untouched),
 `variable_map` substitution and Expression transform, the pointwise lift, a
-template reference inside a contribution, a deposition-sink-shaped term that
+definition reference inside a contribution, a deposition-sink-shaped term that
 reads two components, the `translate` factor over a one- and a two-contribution
 B, and step 3a. Chained composes with the operator as `systems[0]` are the
 existing corpus case `chained_operator_compose`. Each fixture is a case of the
@@ -7710,7 +7711,7 @@ operator removed from the format, in the call or the escape form, and
 `parse_error` for malformed input. The cases cover every operator tier, the name
 shapes and the collisions that force the explicit name form, every accepted
 hand-written variant, the document constructs (front matter, descriptions,
-declarations, equations, reactions, containers, templates, rules, by-reference
+declarations, equations, reactions, containers, definitions, rules, by-reference
 subsystems, path-keyed blocks and the math of their expression-valued fields,
 quoted flow-collection attributes, the plot shorthand beside the analyses block
 it stands for), prose and label independence, and constants with units.
@@ -7730,7 +7731,7 @@ round trip is generated at run time from `tests/` and is never committed.
 `print_document`, `parse_document`, `print_math`, `parse_math`) and run the
 golden set, the `math` field of every expression case through `print_math` and
 back through `parse_math` to the case's equation in canonical form (a case
-whose display depends on a template is skipped, as no template is in scope
+whose display depends on a definition is skipped, as no definition is in scope
 there),
 and the whole-corpus round trip, in one test file each:
 `pkg/EarthSciAST.jl/test/document_format_test.jl` (Julia),
@@ -7802,9 +7803,9 @@ make a required status check.
 
 **Decision pinned.** A firing `match` rule replaces the matched node with a
 reference to the rule (esm-spec §9.6.3 constraint 7), rules apply inside
-template bodies once per template instance (esm-spec §9.6.4 rule 3), and the
+definition bodies once per definition instance (esm-spec §9.6.4 rule 3), and the
 elementwise lift keeps references (esm-spec §9.6.11). No step of loading or
-flattening inlines a template body, and eager expansion is retired.
+flattening inlines a definition body, and eager expansion is retired.
 
 **What is compared.** For every fixture under
 `tests/conformance/expression_templates/` in which a rule fires, two goldens:
@@ -7815,7 +7816,7 @@ flattening inlines a template body, and eager expansion is retired.
    `priority`, in the order of esm-spec §9.6.4 rule 5.
 2. `expanded.esm` — `Expand(load(fixture))`, structurally, under this
    revision's semantics (esm-spec §9.6.4 rules 3 and 4). For every fixture in
-   which no match spans a template boundary or lies inside the bindings of a
+   which no match spans a definition boundary or lies inside the bindings of a
    reference the in-place engine left unexpanded, that is the tree the in-place
    engine produced, so the existing goldens MUST NOT be regenerated: that
    they still hold is the evidence that the reference form denotes what the
@@ -7823,8 +7824,8 @@ flattening inlines a template body, and eager expansion is retired.
    of that kind gains a golden generated by the in-place engine before the
    change. The cases that differ are pinned only in
    `opacity_rule_replacement/`: a compound pattern around another rule's
-   replacement; a structured or ground pattern node at a template parameter;
-   a compound pattern across a reference to a template whose body holds a
+   replacement; a structured or ground pattern node at a definition parameter;
+   a compound pattern across a reference to a definition whose body holds a
    rewrite-target op; and a rule on a core-op node inside the bindings of an
    authored reference that survives load, which now fires there where the
    in-place engine left the binding unrewritten. Its golden is written by
@@ -7834,11 +7835,11 @@ A harness MUST assert both. Asserting only the emitted golden would accept a
 binding whose references denote the wrong body; asserting only the expanded
 golden would accept a binding that still inlines.
 
-**Non-vacuity.** The set MUST include a rule firing inside a template body
-(`rewrite_in_template_body`), two variants of one template
+**Non-vacuity.** The set MUST include a rule firing inside a definition body
+(`rewrite_in_template_body`), two variants of one definition
 (`template_instance_variants`), a single rewritten body registered as
 `<name>.variant1` because an entry no reference reaches still references the
-template (`rewrite_shared_by_unreached_entry`), a nonterminating rewrite
+definition (`rewrite_shared_by_unreached_entry`), a nonterminating rewrite
 detected through a body (`rewrite_depth_through_bodies`), a rewrite-target op
 left in a body and refused by the build gate (`unlowered_in_template_body`),
 and the pinned opacity cases (`opacity_rule_replacement`).
@@ -7850,7 +7851,7 @@ the lift of the expansion did. Each case gains a second golden, the flattened
 equations with references kept and the reached registry entries, byte for byte
 across bindings, and the set gains a case whose application binds an array to a
 mixed parameter, pinning the `<name>.cellwise<k>` variant and its `p_cell`
-parameter (`mixed_parameter_cellwise`). A structural time derivative inside a template body is pinned by
+parameter (`mixed_parameter_cellwise`). A structural time derivative inside a definition body is pinned by
 a fixture whose flattened golden (after `Expand`) equals the expansion's
 resolution. The rule promises equality in value, not node for node (a zero
 term the expansion drops can stay in the body, esm-spec §9.6.4 rule 3); this
@@ -7878,7 +7879,7 @@ unresolved diagnostic at a ref. A source document refused for a removed
 operator keeps `removed_op` everywhere, as a JSON document carrying one does.
 
 **Shape.** `tests/conformance/source_documents/` (contract in its `README.md`)
-holds a Typst and a Markdown root that import a template library and mount a
+holds a Typst and a Markdown root that import an operator library and mount a
 model written in the other source format, a JSON root that imports a `.typ`
 library and mounts a `.md` model, a top-level mount of a `.typ` model and a
 coupling import of a `.typ` coupling library, each with a JSON twin under
@@ -7887,13 +7888,29 @@ coupling import of a `.typ` coupling library, each with a JSON twin under
 are refused, at the root and at each ref site. `removed_op.typ` and
 `removed_op.md` call the removed `fn`; they are refused with `removed_op` at the
 root and at each ref site, and so is the JSON twin `twins/removed_op.esm` when
-a template import reaches it.
+a definition import reaches it.
 
 **Adapters.** `pkg/EarthSciAST.jl/test/source_documents_test.jl` (Julia),
 `pkg/earthsci-ast-py/tests/test_source_documents.py` (Python),
 `pkg/earthsci-ast-rs/tests/source_documents_conformance.rs` (Rust),
 `pkg/earthsci-ast-ts/src/source-documents.test.ts` (TypeScript) and
 `pkg/earthsci-ast-go/pkg/esm/source_documents_test.go` (Go).
+
+### 5.62 Core Names Are Reserved (normative, draft 2.4.0)
+
+**Decision pinned.** The closed §4.2 set is the **core operators**; every other
+operator is a **defined operator**, given by definitions (esm-spec §9.6.12). A
+definition whose `defines`, written or inferred, is a core op's name is rejected
+at load with `operator_defines_core_op`; a rule whose `match` is rooted at a core
+op defines no callable name and is exempt. `partial` and `integral` are defined
+operators, not core ops.
+
+**Fixtures.** `tests/conformance/expression_templates/operator_defines_core_op/`:
+`fixture.esm` (an entry keyed `exp` with no `match`) and `explicit_defines.esm`
+(an entry writing `"defines": "exp"`) are each refused with
+`operator_defines_core_op` (`error.json`, `error_explicit_defines.json`);
+`compound_rule_exempt.esm` (a rule keyed `exp` whose `match` is rooted at
+`sqrt`) loads. Every binding that loads documents MUST assert all three.
 
 ## 6. CI Integration
 
@@ -7961,7 +7978,7 @@ ever emitted it, and the code had zero real coverage.
 | `event_var_undeclared` | Structural | Event affects undeclared variable. NOT emitted for `_var` (esm-spec §6.4, §4.9.1) or for the independent variable. |
 | `equation_count_mismatch` (see above) | Structural | Unknowns vs equations. Algebraic and expression-LHS equations COUNT (esm-spec §4.9.4). |
 | `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
-| `removed_op` | Structural | **Hard error.** A document uses an `op` spelling, or a top-level field, that was REMOVED rather than deprecated: `arrayop` (the pre-0.8.0 spelling of `faq`, removed at esm 0.8.0); and, removed at esm 2.0.0, `aggregate` (the pre-1.1.0 spelling of `faq`, a deprecated alias from 1.1.0, which the codemod renames to `faq`), the ops `fn`, `table_lookup`, `skolem`, `rank`, `argmin`, `argmax`, `intersect_polygon` and `polygon_intersection_area`, and the `function_tables` block. It MUST be rejected BY NAME at the wire boundary, before schema validation, not left to fall through: each removed op is a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op, load it silently, and fail much later (or never) as `unlowered_operator`. The message names the op or field and the offending path, and for a 2.0.0 removal points at the offline codemod (`python -m earthsci_ast.migrate`, module `earthsci_ast.migration`), which rewrites a 1.x document onto the `lib/*.esm` templates. A binding's `migrate()` refuses such a document with this code rather than rewriting it. Julia's removed `call` op (v0.3.0) is the precedent. Fixtures: `tests/invalid/faq/arrayop_op_removed.esm` and `tests/invalid/removed_ops/removed_op_<name>.esm`, one per 2.0.0 removal, each pinned `parse_error` (§7.1.2); `tests/conformance/removed_spellings/` covers the two removed `faq` spellings in a referenced child. |
+| `removed_op` | Structural | **Hard error.** A document uses an `op` spelling, or a top-level field, that was REMOVED rather than deprecated: `arrayop` (the pre-0.8.0 spelling of `faq`, removed at esm 0.8.0); and, removed at esm 2.0.0, `aggregate` (the pre-1.1.0 spelling of `faq`, a deprecated alias from 1.1.0, which the codemod renames to `faq`), the ops `fn`, `table_lookup`, `skolem`, `rank`, `argmin`, `argmax`, `intersect_polygon` and `polygon_intersection_area`, and the `function_tables` block. It MUST be rejected BY NAME at the wire boundary, before schema validation, not left to fall through: each removed op is a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op, load it silently, and fail much later (or never) as `unlowered_operator`. The message names the op or field and the offending path, and for a 2.0.0 removal points at the offline codemod (`python -m earthsci_ast.migrate`, module `earthsci_ast.migration`), which rewrites a 1.x document onto the `lib/*.esm` definitions. A binding's `migrate()` refuses such a document with this code rather than rewriting it. Julia's removed `call` op (v0.3.0) is the precedent. Fixtures: `tests/invalid/faq/arrayop_op_removed.esm` and `tests/invalid/removed_ops/removed_op_<name>.esm`, one per 2.0.0 removal, each pinned `parse_error` (§7.1.2); `tests/conformance/removed_spellings/` covers the two removed `faq` spellings in a referenced child. |
 | `faq_version_too_old` | Structural | **Hard error.** A document spells `"op": "faq"` while declaring `esm` below 1.1.0. `faq` arrives at esm 1.1.0, the same version gate the top-level `solver` block follows (esm-spec §2.2.4). The rule is transitive through lowering: a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not. Fixtures: `tests/conformance/removed_spellings/` (case `faq_requires_v11`). |
 | `deprecated_op` | Structural | **WARNING, not an error.** A document spells a deprecated op (esm-spec §4.2 "Deprecated ops"): `neg`, the word spelling of unary `-`, or `pow`, the word spelling of `^` (or `neg` as a `broadcast` `fn`). At the wire boundary, in the same pass as the `removed_op` check and on every document a load touches, the loader REWRITES each well-formed use to its replacement (`neg(x)` → `-(x)`, `pow(x, n)` → `^(x, n)`, `fn: "neg"` → `fn: "-"`), keeping every other field of the node, and reports this once per DOCUMENT, naming every rewritten node as `<pointer> (<spelling>)`: its RFC 6901 JSON pointer (`~` and `/` in a key escaped) followed by `neg`, `pow` or `broadcast fn neg`. A use with the wrong operand count (a `broadcast` of `neg` with other than one operand included) is left as written, so its arity error is unchanged. The reference-preserving emit path (`emit_document`) applies the same wire boundary as a load. No value changes, and neither spelling survives into the loaded or emitted document or the canonical form. The spellings join `removed_op` in a later major version. Fixtures: `tests/conformance/scalar_operator_semantics/fixtures/pow_alias.esm`, the `negated` observed of `scalar_operator_semantics.esm`, and the `fn: "neg"` broadcast of `tests/fixtures/faq/27_broadcast_unary.esm`. |
 | `deprecated_system_kind` | Structural | **WARNING, not an error.** A model declares `"system_kind": "pde"`, a kind esm 2.4.0 dropped (esm-spec §6.3.1). The loader reports this once per DOCUMENT, naming every such model by the JSON pointer of its `system_kind` field, and keeps the field as written (emit writes it back). The declared value is ignored: the declared kind reads as absent, the model is its derived kind (`sde`, `nonlinear` or `ode`), and `system_kind_mismatch` is never reported for it. Fixture: `tests/conformance/classification/fixtures/system_kind_pde.esm` (`DeclaredPde`). |
@@ -7972,7 +7989,7 @@ ever emitted it, and the code had zero real coverage.
 | `observed_cycle` | Structural | A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6): each observed on the cycle is defined by an equation whose RHS names the next, so no evaluation order satisfies every definition. Decidable from the equations alone — hard error in `validate`, in EVERY binding, executing or not. Pointer: `/models/<M>` (a cycle belongs to no single equation). `details.cycle` is the path in traversal order with the entry node repeated to close it — a PATH, so it is ordered semantically, not by §7.1.0. The self-edge of a §4.3.1.1 recurrence CANDIDATE is dropped (§5.19.5); every other self-reference (`x ~ x + 1`, `s ~ s + 1`) is a cycle of length one and IS reported. Fixture: `tests/invalid/observed_cycle_array_elementwise.esm`. |
 | `circular_dependency` | Structural | A cycle among OBSERVED unknowns (esm-spec §4.9.7) that crosses a scope boundary: two top-level models, or a model and one of its subsystems. The graph is §4.9.6's, built over the whole document: nodes are observeds by full scoped name, and `V → W` when `W` occurs in `V`'s defining RHS. States, parameters, species, algebraic unknowns and undefined unknowns are not nodes, so reading them is never an edge. A cycle inside one model or subsystem is `observed_cycle`. Hard error in `validate` in EVERY binding; Rust and Python also refuse at load. Pointer: `/models`. `details.cycle` is the scoped names on the cycle with the entry node repeated, found by the pinned depth-first search of §4.9.7. Fixtures: `tests/invalid/circular_coupling.esm`, `tests/invalid/circular_coupling_subsystem.esm` (invalid); `tests/valid/cross_model_state_reads.esm`, `tests/valid/cross_model_mixing_observed_state_cycle.esm`, `tests/valid/cross_model_observed_reads_no_loop.esm` (valid). |
 | `ragged_values_not_gathered` | Structural | A `faq` that is not a value-invention node ranges over a `kind: "ragged"` index set, but its body never reads that set's `values` array (esm-spec §4.3.1 "Ragged ranges", §5.6.4). The range binds the POSITION k in 1..offsets[parent], so the body reads positions where members were meant — a plausible wrong number rather than a failure. Hard error in `validate()` in EVERY binding. Pointer: the containing expression field (`…/equations/i/rhs`). Fixture: `tests/invalid/faq/ragged_values_not_gathered.esm`. |
-| `faq_bare_array_operand` | Structural | A `faq`'s `expr` or `filter` reads a variable declared with a non-empty `shape` by bare name in an elementwise position (esm-spec §4.3.1, §5.6.4). The read must say which of the node's symbols the variable's axes are, `index(v, i, …)`. `validate()` in every binding, on the authored equations of every model and inline subsystem, a template application opaque; refused at build by every evaluating binding on the flattened, template-expanded system. A derivative's left-hand side exempts nothing. Fixtures: `tests/invalid/faq/bare_array_operand_*.esm`. |
+| `faq_bare_array_operand` | Structural | A `faq`'s `expr` or `filter` reads a variable declared with a non-empty `shape` by bare name in an elementwise position (esm-spec §4.3.1, §5.6.4). The read must say which of the node's symbols the variable's axes are, `index(v, i, …)`. `validate()` in every binding, on the authored equations of every model and inline subsystem, a definition application opaque; refused at build by every evaluating binding on the flattened, definition-expanded system. A derivative's left-hand side exempts nothing. Fixtures: `tests/invalid/faq/bare_array_operand_*.esm`. |
 | `recurrence_not_wellfounded` | Structural | A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along exactly one axis: a read provably at the same cell or later on its axis, an index argument that is not affine in its frame symbol with coefficient 1, an offset on more than one axis, self-reads disagreeing on the axis, a bare read of the variable in its own RHS, or a recurrence axis that is ragged / derived / strided. Hard error in EVERY binding, executing or not (§5.19.5) — the pre-1.0 behaviour was a plausible wrong number. Pointer: the containing expression field (`…/equations/i/rhs`). |
 | `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not a `faq` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
 | `recurrence_group_axis_mismatch` | Structural | The members of a recurrence group (esm-spec §4.3.1.2) — array observeds that read one another only through `index`, each read strictly earlier along one shared axis or, acyclically, at exactly the cell being written — do not share one cell frame (the same `output_idx` and ranges, compared as resolved bounds) and one recurrence axis. Pointer: the RHS of the first member, in equation order, whose frame differs from that of the first member, in equation order, that has a recurrence axis. |
@@ -8109,7 +8126,7 @@ A binding MUST NOT "fix" a rejection by editing the fixture.
 | c | **Scoped references are ARBITRARY DEPTH** (`A.B.c`, `A.B.C.d`). A resolver walks every segment; it MUST NOT split on `"."` and take `[0]` as the system and `[1]` as the variable. Applies to the `systems`/`from`/`to` of a coupling entry too. | §4.6, §4.9.2 | `tests/valid/scoped_refs_coupling.esm`, `tests/scoping/*.esm` |
 | d | A **reaction `rate` MAY contain scoped references** into other systems. | §4.9.3, §7.3 | `tests/valid/events_cross_system.esm` |
 | e | **`equation_count_mismatch` balances UNKNOWNS vs EQUATIONS.** A non-derivative (algebraic) LHS — bare-variable *or* expression — is a credited equation. For `system_kind: "nonlinear"` there are no derivative equations at all. | §4.9.4 | `tests/valid/nonlinear_isorropia_shape.esm` |
-| f | The canonical subsystem-ref codes are **`unresolved_subsystem_ref`** and **`ambiguous_subsystem_ref`**. The older `ref_not_found` / `ref_ambiguous_system` spellings are RETIRED. `ref_*` was ambiguous across three distinct reference mechanisms (§4.7 subsystem refs, §9.7 template imports, §10 coupling-library role edges); the chosen pair parallels the already-canonical `unresolved_scoped_ref`. | §4.7, §7.1 | `tests/invalid/subsystem_ref_not_found.esm`, `tests/invalid/subsystem_ref_ambiguous.esm` |
+| f | The canonical subsystem-ref codes are **`unresolved_subsystem_ref`** and **`ambiguous_subsystem_ref`**. The older `ref_not_found` / `ref_ambiguous_system` spellings are RETIRED. `ref_*` was ambiguous across three distinct reference mechanisms (§4.7 subsystem refs, §9.7 definition imports, §10 coupling-library role edges); the chosen pair parallels the already-canonical `unresolved_scoped_ref`. | §4.7, §7.1 | `tests/invalid/subsystem_ref_not_found.esm`, `tests/invalid/subsystem_ref_ambiguous.esm` |
 | g | **Reference integrity applies to EVERY expression-bearing field**, not only `equations`. THIRTEEN fields carry an Expression and ELEVEN were unchecked in every binding: an undefined name in a parameter `update`'s `when` / `expression`, in `guesses`, in an `initialization_equations` RHS, in an event condition / trigger / affect RHS, in an assertion `reference`, in an `update.from`'s `unit_conversion`, or in a coupling connector `expression` / `transform` was INVISIBLE to all five. Within an Expression the walk must also descend `expr`/`filter`/`key`/`lower`/`upper`/`values`/`axes`/`bindings`, not just `args`. | §4.9.5 | `tests/invalid/undefined_variable_in_*.esm` (18), `tests/invalid/unresolved_scoped_ref_in_*.esm` (2) |
 | h | **A VALID fixture MUST be asserted `is_valid == true`, not merely round-tripped — and a valid fixture can NEVER, on its own, prove a checker checks anything.** Mutation-testing `tests/valid/units_registry_grammar.esm` (corrupt each observed variable in turn; every corruption still passed) exposed two distinct vacuities. In **Python**, nothing compared a variable's DECLARED units against the dimension its EXPRESSION computes, so the assertion was empty. In **TypeScript**, the valid-corpus conformance test only calls `load`/`emit` — `it.each(validFiles)('should round-trip …')` — and **never calls `validate()`**, so "it validates clean" meant "it was never validated". A valid fixture can only ever prove a checker does not FALSELY REJECT; proving it actually CHECKS requires an INVALID fixture whose sole defect is a violation of the rule. Every discriminator rule therefore needs BOTH halves. This is §9 ("Tests that assert nothing") reappearing inside the conformance harness itself. | §4.8, §9 | `tests/valid/units_registry_grammar.esm` (positive half), `tests/invalid/units_discriminator_*.esm` (9, negative half) |
 | i | **`details.variable` is the ONE spelling** for the offending name in a structural error's `details` object — NOT `variable_name`. Two spellings for one thing is the drift this audit exists to kill. `variable` is the incumbent (34 pins) and is what TS already emits. | §7.1 | `tests/invalid/expected_errors.json` |

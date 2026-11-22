@@ -113,28 +113,28 @@ Before validation or any other processing, `load()` must resolve all subsystem r
 
 After resolution completes, the in-memory representation is indistinguishable from a file with all subsystems defined inline. All subsequent validation, editing, and conversion operates on the resolved representation.
 
-### 2.1c Template Import Resolution (esm-spec §9.7)
+### 2.1c Definition Import Resolution (esm-spec §9.7)
 
-Template imports resolve in the same load phase as subsystem references, with the same reference formats and the same visited-set cycle detection, but target **template-library files** (top-level `expression_templates`; esm-spec §9.7.1) instead of single-component files.
+Definition imports resolve in the same load phase as subsystem references, with the same reference formats and the same visited-set cycle detection, but target **operator-library files** (top-level `operators`; esm-spec §9.7.1) instead of single-component files.
 
 **Resolution algorithm:**
 
-1. Collect `expression_template_imports` arrays: on every `model` / `reaction_system`, and at the top level of a library file being imported.
+1. Collect `operator_imports` arrays: on every `model` / `reaction_system`, and at the top level of a library file being imported.
 2. For each entry, in array order:
-   a. Load `ref` exactly as in §2.1b step 2a-b (URL vs relative path; shared visited set for cycle detection → `template_import_cycle`).
-   b. Verify the target is a pure template-library file — top-level `expression_templates` present; no `models` / `reaction_systems` / `data_sources` / `coupling` / `domain` (`template_import_not_library`).
-   c. Recurse into the target's own `expression_template_imports` (depth-first).
+   a. Load `ref` exactly as in §2.1b step 2a-b (URL vs relative path; shared visited set for cycle detection → `operator_import_cycle`).
+   b. Verify the target is a pure operator-library file — top-level `operators` present; no `models` / `reaction_systems` / `data_sources` / `coupling` / `domain` (`operator_import_not_library`).
+   c. Recurse into the target's own `operator_imports` (depth-first).
    d. Instantiate the target with the edge's metaparameter `bindings` (esm-spec §9.7.6): close the named metaparameters, re-export the rest into the importer's metaparameter scope, fold structural integer sites, substitute expression-position occurrences.
-   e. Apply `only` filtering (`template_import_unknown_name` for unknown names).
-   f. Merge the target's `index_sets` into the importing document's registry (deep-equal idempotent; `template_import_index_set_conflict` otherwise).
-   g. Append the target's effective template sequence to the importer's (esm-spec §9.7.4); dedup deep-equal duplicates; `template_import_name_conflict` for non-equal same-name collisions.
-3. After all imports resolve: close and fold the root document's metaparameters (loader-API bindings, then defaults; `metaparameter_unbound` if still open), inline template-body references in topological order (esm-spec §9.7.3), then run the §9.6.3 rewrite fixpoint.
+   e. Apply `only` filtering (`operator_import_unknown_name` for unknown names).
+   f. Merge the target's `index_sets` into the importing document's registry (deep-equal idempotent; `operator_import_index_set_conflict` otherwise).
+   g. Append the target's effective definition sequence to the importer's (esm-spec §9.7.4); dedup deep-equal duplicates; `operator_import_name_conflict` for non-equal same-name collisions.
+3. After all imports resolve: close and fold the root document's metaparameters (loader-API bindings, then defaults; `metaparameter_unbound` if still open), inline definition-body references in topological order (esm-spec §9.7.3), then run the §9.6.3 rewrite fixpoint.
 
 `load()` implementations MUST accept an optional metaparameter-bindings argument (name → integer) applied to the root document (esm-spec §9.7.6 binding site 4).
 
 **Error handling:** as the §2.1b table, plus the `template_import_*` / `metaparameter_*` diagnostics of esm-spec §9.6.6.
 
-After resolution, neither `expression_template_imports` nor `metaparameters` nor top-level `expression_templates` is visible downstream; round-trip emits the expanded, folded form (esm-spec §9.7.6).
+After resolution, neither `operator_imports` nor `metaparameters` nor top-level `operators` is visible downstream; round-trip emits the expanded, folded form (esm-spec §9.7.6).
 
 ### 2.2 Data Model
 
@@ -897,8 +897,8 @@ text.
 | `coupling_import_unresolved` | A `coupling_import` `ref` failed to load or parse (esm-spec §10.11) |
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`) |
 | `subsystem_ref_is_coupling_library` | A §4.7 subsystem `ref` targets a coupling-library file |
-| `template_import_is_coupling_library` | A §9.7.2 template import targets a coupling-library file |
-| `coupling_library_illegal_payload` | A coupling-library file declares a forbidden payload (`models`/`reaction_systems`/`data_sources`/`domain`/`index_sets`/`metaparameters`/`expression_templates`), contains a `callback` entry or an edge-level `expression_template_imports` map, or carries a transform referencing a template that would introduce a rewrite-target operator (esm-spec §10.9) |
+| `operator_import_is_coupling_library` | A §9.7.2 definition import targets a coupling-library file |
+| `coupling_library_illegal_payload` | A coupling-library file declares a forbidden payload (`models`/`reaction_systems`/`data_sources`/`domain`/`index_sets`/`metaparameters`/`operators`), contains a `callback` entry or an edge-level `operator_imports` map, or carries a transform referencing a definition that would introduce a rewrite-target operator (esm-spec §10.9) |
 | `coupling_library_nested_import` | A coupling-library file contains a `coupling_import` entry |
 | `coupling_edge_unknown_role` | A library edge's top-level system segment, at an occurrence site, is not a declared role |
 | `coupling_role_unused` | A declared role appears at no occurrence site in any library edge |
@@ -1158,7 +1158,7 @@ order; the application sequence and the reporting sequence are separate.
 3. **Match equations.** For each equation in system A, find a matching equation in system B by comparing dependent variables:
    - **Direct match:** Both equations have `D(x, t)` on the LHS with the same variable name `x`.
    - **Translation match:** The translate map maps A's variable to B's variable.
-   - **Placeholder expansion:** If system B's equation uses the `_var` placeholder (e.g., `D(_var, t) = ...`), it matches _every_ state variable in system A. The placeholder equation is cloned once per matched variable, with `_var` substituted for the actual variable name. An initial-condition template `ic(_var) ~ e` in B is a placeholder equation too, and MUST be cloned the same way: one `ic(x) ~ e` per state `x` of A, `_var` in `e` substituted as well. These clones are classified out into `field_ics` at step 4, so `field_ics` holds one entry per state of A, keyed by that state, and never an entry for `_var`. A clone is an initial condition like any authored one, so a state that already has its own `ic(x)`, or that a second `ic(_var)` template also reaches, has two; flatten MUST refuse that with `ConflictingDerivativeError` rather than keep both or let one win (step 4, `field_ics`; pinned by `tests/conformance/pointwise_lift/fixtures/lift_placeholder_ic_conflict.esm`). A clone of a lifted state reaches `field_ics` as written; the pointwise lift does not rewrite it. Pinned by `tests/conformance/pointwise_lift/fixtures/lift_placeholder_ic.esm`.
+   - **Placeholder expansion:** If system B's equation uses the `_var` placeholder (e.g., `D(_var, t) = ...`), it matches _every_ state variable in system A. The placeholder equation is cloned once per matched variable, with `_var` substituted for the actual variable name. An initial-condition definition `ic(_var) ~ e` in B is a placeholder equation too, and MUST be cloned the same way: one `ic(x) ~ e` per state `x` of A, `_var` in `e` substituted as well. These clones are classified out into `field_ics` at step 4, so `field_ics` holds one entry per state of A, keyed by that state, and never an entry for `_var`. A clone is an initial condition like any authored one, so a state that already has its own `ic(x)`, or that a second `ic(_var)` definition also reaches, has two; flatten MUST refuse that with `ConflictingDerivativeError` rather than keep both or let one win (step 4, `field_ics`; pinned by `tests/conformance/pointwise_lift/fixtures/lift_placeholder_ic_conflict.esm`). A clone of a lifted state reaches `field_ics` as written; the pointwise lift does not rewrite it. Pinned by `tests/conformance/pointwise_lift/fixtures/lift_placeholder_ic.esm`.
    - **Bare-name fallback:** B's dependent variable `B.x` matches A's equation for any `A.x` with
      the same LOCAL name. This is a name-based translation, so a hit renames like one (step 4's
      "the merged-away name does not survive").
@@ -1410,12 +1410,12 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - Rewrite all equations so that variable references use the dot-namespaced names.
    - For nested subsystems, the prefix is the full path: `Parent.Child.variable`.
    - **From `esm: 0.9.0` (reference-preserving round-trip, esm-spec §9.6.4):** close the
-     component's carried `expression_templates` bodies (esm-spec §10.7): each body's free
+     component's carried `operators` bodies (esm-spec §10.7): each body's free
      variable references become trailing `params`, sorted by UTF-8 bytes, and every surviving
-     `apply_expression_template` reference binds each added parameter to its own name before
+     `apply_operator` reference binds each added parameter to its own name before
      the reference's site is renamed. Then apply the renaming map of the site — the
      (sub)system that owns the reference — to the references' `bindings`, the added ones
-     included (template `params` shadow, exactly as in esm-spec §9.6.1). A body's free name is
+     included (definition `params` shadow, exactly as in esm-spec §9.6.1). A body's free name is
      thereby read in the scope of each reference's site, as its expansion would read it.
    - Apply it to the plain-string references a relational `join` carries as well — an `on`
      key column, and an `overlap` clause's `src_env` / `tgt_env` envelope factors. These are
@@ -1448,9 +1448,9 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    (`coupling_import_unresolved`, `coupling_import_not_library`, `coupling_import_role_unbound`,
    `coupling_import_unknown_role`, `coupling_import_bind_not_a_component`,
    `coupling_library_illegal_payload`, …). A library edge's transform references
-   (`apply_expression_template`) resolve here against the **bound** `to` owner's template registry
+   (`apply_operator`) resolve here against the **bound** `to` owner's definition registry
    and stay references, owned by that component as an inline edge's are (esm-spec §10.4
-   carve-out); the templates they reference are already lowered. After this sub-step every entry in the
+   carve-out); the definitions they reference are already lowered. After this sub-step every entry in the
    sequence is an ordinary coupling entry; the `coupling_import` source entry is retained only in
    the *source* document (esm-spec §10.10.3), never in the flattened system. The expansion is a
    pure structural rewrite over ordered inputs and does not disturb the commutativity of the
@@ -1491,10 +1491,10 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    differentiated by the chain rule, `0` for a time-invariant name, and the sum, product and
    quotient rules through `+ - neg * /`. A `D` the table cannot answer, and a cyclic chain, is left
    standing for the `unlowered_operator` gate. Left-hand sides are never rewritten. A structural
-   `D` inside a template body, or applied to a reference, is resolved in the body without
+   `D` inside a definition body, or applied to a reference, is resolved in the body without
    expanding, by esm-spec §9.6.4 rule 3 ("Time derivatives"): a parameter's derivative becomes a
    `p_dt` parameter that each reference binds to the resolution of its own operand, and a
-   reference's derivative becomes a reference to the template's `<name>.ddt` entry. The result
+   reference's derivative becomes a reference to the definition's `<name>.ddt` entry. The result
    equals the expansion's resolution in value, not always node for node: the zero terms and unit
    factors this step drops as it combines resolutions are dropped in the body too, but a `p_dt`
    bound to `0` is still a parameter there, so a term the expansion drops (`0*x` in `D(k*x)`) can
@@ -1535,7 +1535,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - **All events** from all component systems, with variable references rewritten to dot-namespaced form.
    - **Domain** from the file's `domain` section (if present).
    - **Metadata** recording which component systems were flattened and which coupling rules were applied.
-   - **The merged template registry** (from `esm: 0.9.0`; esm-spec §9.6.4 rule 7, §10.7) as a
+   - **The merged definition registry** (from `esm: 0.9.0`; esm-spec §9.6.4 rule 7, §10.7) as a
      first-class field of the flattened representation: the union of the component registries
      (each body closed in step 2: its free names made trailing `params`, bound at every
      reference to the names of the reference's own site, esm-spec §10.7) — including the
@@ -1553,12 +1553,12 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      rule 1): mounted twice, it is one definition, whose free names each reference binds in
      its own subsystem's scope. The references of a `variable_map` expression transform belong to
      its receiving component (the owner of `to`, esm-spec §10.4): its registry carries the
-     templates they name, and they are scoped and renamed in lockstep with its entries, so the
+     definitions they name, and they are scoped and renamed in lockstep with its entries, so the
      observed that replaces the `to` parameter keeps them. Downstream
      consumers — graph construction, simulation backends, emit — resolve surviving
-     `apply_expression_template` references against this registry. Builders, evaluators and
-     analyses SHOULD NOT expand them: they SHOULD evaluate each referenced template natively,
-     once per template and binding shape (esm-spec §9.6.4 rule 2). A consumer that does expand
+     `apply_operator` references against this registry. Builders, evaluators and
+     analyses SHOULD NOT expand them: they SHOULD evaluate each referenced definition natively,
+     once per definition and binding shape (esm-spec §9.6.4 rule 2). A consumer that does expand
      still conforms if its observable behavior is identical; explicit expansion utilities (for
      tools and interchange) remain permitted.
    - **`state_variables` is the solved-for vector, not a classification.** esm-spec
@@ -1634,11 +1634,11 @@ TypeScript `camelCase`, others verbatim).
 | `domain` | domain or null | The file's `domain` section, unchanged. |
 | `metadata` | record | Which components were flattened, which coupling rules applied, and `merged_variable_renames` — every state spelling an `operator_compose` renaming match DELETED, mapped onto the survivor it was folded into (step 3, CONFORMANCE_SPEC §5.35). Empty for a document with no renaming merge. |
 | `index_sets` | ordered map | Document-scoped index-set registry; required to interpret arrayed equations. |
-| `template_registry` | ordered map | The merged expression-template registry specified above. |
+| `template_registry` | ordered map | The merged operator-definition registry specified above. |
 | `field_ics` | list of (state, expr) | Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1), at most one per state; two for one state are refused with `ConflictingDerivativeError`. |
 | `loader_fields` | list | Provider-served loaded fields the system consumes, one per data-fed parameter ("Loader fields" below). |
 | `lifted_shapes` | ordered map | Post-lift grid extents of each pointwise-lifted state, keyed by the state. The state's `shape` names the index sets of those extents ("Pointwise lift: index sets" below). |
-| `initialization_equations` | list (optional) | Every component's `initialization_equations` (esm-spec §6.2), in document order, named as `equations` are: namespaced in the component's scope (step 2, template rename included), then rewritten by the `operator_compose` merged-away rename and the `variable_map` substitution (step 3). A binding MAY leave the field out; one that carries it MUST apply all of these, so an initialization equation never names a variable the flattened system does not declare. Not in the flatten corpus. |
+| `initialization_equations` | list (optional) | Every component's `initialization_equations` (esm-spec §6.2), in document order, named as `equations` are: namespaced in the component's scope (step 2, definition rename included), then rewritten by the `operator_compose` merged-away rename and the `variable_map` substitution (step 3). A binding MAY leave the field out; one that carries it MUST apply all of these, so an initialization equation never names a variable the flattened system does not declare. Not in the flatten corpus. |
 
 - **The parameter subsets do not partition the struct; they partition `parameters`.**
   esm-spec §6.3.1 states that `brownian_parameters`, `discrete_parameters`,
@@ -1667,7 +1667,7 @@ TypeScript `camelCase`, others verbatim).
   consumer must be able to build a solver problem from the flattened form alone. The one
   field flatten changes is a pointwise-lifted state's `shape`, which becomes the lift's index
   sets (below): after the lift the state is an array on those index sets. (Flatten also
-  writes each elementwise template application, in an equation or a `field_ics` entry, as
+  writes each elementwise definition application, in an equation or a `field_ics` entry, as
   its per-cell `faq`, esm-spec §9.6.11, so the flattened form keeps its meaning when
   serialized; that rewrites a right-hand side and changes no declaration.)
 
@@ -1731,8 +1731,8 @@ rewrites their equations.
   - an `index` whose subscripts are all scalars is a scalar, and is undecided otherwise;
   - a `faq` with no output indices is a scalar; one whose every output index ranges
     `{"from": X}` has those index sets in `output_idx` order; any other is undecided;
-  - an `apply_expression_template` reference has the axes of its expansion (esm-spec §9.6.4
-    rule 2). A binding decides it on the template's body, once per instance (esm-spec §9.6.4
+  - an `apply_operator` reference has the axes of its expansion (esm-spec §9.6.4
+    rule 2). A binding decides it on the definition's body, once per instance (esm-spec §9.6.4
     rule 3), reading each parameter as the axes of what it binds; it MUST NOT treat a
     reference as undecided because it is a reference, since a firing discretization rule writes
     one (esm-spec §9.6.3 constraint 7);
@@ -1796,7 +1796,7 @@ index set `X_d` each dimension lives on, chosen by the first rule that applies:
 
 1. **Named by an operand.** Inside the equation's operator `makearray`s, at any depth and in
    any child field, and read on the expanded tree (esm-spec §9.6.4 rule 4: a surviving
-   `apply_expression_template` reference counts as its expansion), every
+   `apply_operator` reference counts as its expansion), every
    `index(v, a_1, …, a_m)` whose `v` is a flattened variable declaring a shape
    `[s_1, …, s_m]` names, at each position `p` whose index expression's first bare name is
    the loop symbol `ℓ_d`, the index set `s_p`. A name counts only when the document's
@@ -1843,11 +1843,11 @@ arrays, such as a 0-D component's coefficient `k = v · ρ / Δp` whose inputs a
 feeds from grid fields. The author wrote such a read elementwise and outside any `faq`; the lift
 is what puts it inside one, so a read the lift left bare would be refused at build as
 `faq_bare_array_operand` (esm-spec §4.3.1). Only a declared shape names an index set for the
-grid (rule 1 above). **A template reference is read at the cell without expanding it**, by the
+grid (rule 1 above). **A definition reference is read at the cell without expanding it**, by the
 rule of esm-spec §9.6.11 "Realization": a reference whose value is an array (a stencil a
 discretization rule wrote, esm-spec §9.6.3 constraint 7) is read as `index(<reference>, ℓ…)`;
 inside a reference, a binding for a scalar-role parameter is read at the cell and a binding for
-an array-role parameter stays whole, with a mixed parameter taking the template's cellwise
+an array-role parameter stays whole, with a mixed parameter taking the definition's cellwise
 variant. The lift writes no expansion, and `Expand` of its result is what reading the expansion
 at the cell gives. Fixture: `tests/conformance/flatten_wire/fixtures/lift_inferred_operand.esm`.
 
@@ -1912,10 +1912,10 @@ indivisible, and a consumer must treat it as one term.
 
 **Passes that rewrite flattened equations work per contribution (normative).** Any pass that
 rewrites a flattened equation — canonicalize, `simplify`, CSE that rebuilds trees, discretization
-or template expansion run after flatten — MUST apply inside each contribution and rebuild the
+or definition expansion run after flatten — MUST apply inside each contribution and rebuild the
 right-hand side from the list. It MUST NOT flatten, sort, combine or cancel across a contribution
 boundary. CSE MAY share a node between contributions: provenance is not on nodes, so sharing loses
-nothing. An expression-template reference that survives flatten (esm-spec §9.6.4 Option B) sits
+nothing. An operator-definition reference that survives flatten (esm-spec §9.6.4 Option B) sits
 inside one contribution; expanding it rewrites inside that contribution, and if the expansion is a
 sum every resulting term inherits the contribution's origins. A pass that only READS equations
 (a build, a compiler) is unaffected.
@@ -2546,7 +2546,7 @@ rate(new Map([['k', 1.8e-12], ['T', 298.15]]));   // 1.818e-14
 // Or evaluate in one step.
 evaluateExpression({ op: '+', args: ['a', 2] }, new Map([['a', 1]]));   // 3
 
-// An operator outside the evaluable core is refused before anything runs.
+// A defined operator (outside the evaluable core) is refused before anything runs.
 try {
   evaluateExpression({ op: 'grad', args: ['u'], dim: 'x' }, new Map([['u', 1]]));
 } catch (e) {
@@ -2554,7 +2554,7 @@ try {
 }
 ```
 
-Both entry points walk the whole expression before evaluating any of it (esm-spec §9.6.6). An operator outside the esm-spec §4.2 evaluable core (`grad`, `div`, `laplacian`, `integral`, a user operator, a spatial or right-hand-side `D`) raises `UnloweredOperatorError`. A core operator with no scalar rule (the array and query operators, `Pre`, an unlowered `enum`) raises `UnevaluableOperatorError`. That holds even inside an untaken `ifelse` branch. An unbound variable or a malformed node raises `EvaluatorError`.
+Both entry points walk the whole expression before evaluating any of it (esm-spec §9.6.6). A call of a defined operator — anything outside the esm-spec §4.2 core operators (`grad`, `div`, `laplacian`, `partial`, `integral`, a user-defined operator) — or a right-hand-side `D` left unresolved raises `UnloweredOperatorError`. A core operator with no scalar rule (the array and query operators, `Pre`, an unlowered `enum`) raises `UnevaluableOperatorError`. That holds even inside an untaken `ifelse` branch. An unbound variable or a malformed node raises `EvaluatorError`.
 
 ---
 
@@ -2694,7 +2694,7 @@ faster["Box.T_air"][-1]   # 2097.5
 
 **What is refused.** Every refusal happens at construction, not mid-run:
 
-- A spatial independent variable surviving flatten means a spatial operator was never discretized. It raises `UnsupportedDimensionalityError` (`unlowered_operator`); apply the discretization template that lowers it to a `faq` stencil. Discretized PDEs run natively.
+- A spatial independent variable surviving flatten means a spatial operator was never discretized. It raises `UnsupportedDimensionalityError` (`unlowered_operator`); apply the discretization definition that lowers it to a `faq` stencil. Discretized PDEs run natively.
 - Continuous and discrete events, implicit equations and Wiener-noise parameters raise `unsupported_construct` (esm-spec §9.6.6). Only Julia's `mtk` compiler runs events and implicit equations.
 - `flatten` raises the §4.7.6.10 error taxonomy: `ConflictingDerivativeError`, `DimensionPromotionError`, `UnmappedDomainError`, `UnsupportedMappingError` (Python implements the Core dimension-promotion tier, so `slice`, `project` and `regrid` raise it), `DomainUnitMismatchError`, `DomainExtentMismatchError`, `SliceOutOfDomainError` and `CyclicPromotionError`.
 
@@ -2854,7 +2854,7 @@ esm convert model.esm --to=compact-json
 
 The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed ODE integrator driving ONE evaluator, the array runtime, which builds every document — 0-D or a discretized PDE — and evaluates it on its tape under `native` / `xla` and on its per-cell oracle under `interpreter` (API_SPEC §5.8). v1 is intentionally limited in these ways:
 
-- **Time-integration domain.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]` — which *includes* discretized PDEs, whose spatial axis is folded into `faq` dimensions and integrated natively by the array-op runtime (see §5.9). A system that still carries a spatial independent variable holds an *undiscretized* spatial operator and returns `CompileError::UnsupportedDimensionalityError`; discretize it first (apply the `expression_templates` stencil rewrite).
+- **Time-integration domain.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]` — which *includes* discretized PDEs, whose spatial axis is folded into `faq` dimensions and integrated natively by the array-op runtime (see §5.9). A system that still carries a spatial independent variable holds an *undiscretized* spatial operator and returns `CompileError::UnsupportedDimensionalityError`; discretize it first (apply the `operators` stencil rewrite).
 - **No event handling.** Models with non-empty `continuous_events` or `discrete_events`, on the model itself or on any inline subsystem, return `CompileError::UnsupportedConstruct`, the esm-spec §9.6.6 `unsupported_construct` diagnostic, from the array runtime (single-model and coupled routes alike).
 - **No algebraic solve.** An implicit equation — an LHS that is an expression rather than an unknown, `D(unknown)` or `ic(unknown)` — returns `CompileError::UnsupportedConstruct`. Trivial algebraic equations (`var ~ expr`) are still eliminated.
 - **No SDEs.** A parameter whose `update.kind` is `wiener` returns `CompileError::UnsupportedConstruct` naming the parameter, rather than integrating the noise as a constant; no binding's evaluator integrates an SDE.
@@ -3090,7 +3090,7 @@ The following items are acknowledged gaps in this specification. They do not blo
 | Expression graph edge rules for reactions are ambiguous | Section 4.8.2 | The rule for which nodes get edges (self-loops, rate parameter edges) needs a precise algorithm, not just an example. |
 | Unit string parsing grammar undefined | Section 3.3 | Unit strings are free-form. A formal grammar or recognized-token list (including `molec`, `ppb`, `ppm`) would improve cross-language consistency. |
 | Python simulation with spatial operators | Section 5.3.5 | Coupling resolution with `operator_compose` involving spatial derivatives (grad, laplacian) is not meaningful for 0D simulation. The spec should clarify that Python simulation skips spatial terms or raises an error. |
-| Code generation templates underspecified | Section 5.2.2 | Exact rules for emitting parameter defaults, unit strings (Julia `u"..."`, Python `pint`), and boilerplate structure need more detail. |
+| Code generation definitions underspecified | Section 5.2.2 | Exact rules for emitting parameter defaults, unit strings (Julia `u"..."`, Python `pint`), and boilerplate structure need more detail. |
 | Concurrency / thread safety | All libraries | Not addressed. Relevant for Julia (multi-threaded solvers) and Rust (Send/Sync bounds). |
 
 ---
