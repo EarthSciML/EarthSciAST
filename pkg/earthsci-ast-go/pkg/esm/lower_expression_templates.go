@@ -1,14 +1,14 @@
 package esm
 
-// Load-time rewrite pass for `expression_templates` (esm-spec §9.6,
+// Load-time rewrite pass for `operators` (esm-spec §9.6,
 // docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md).
 //
-// Each `expression_templates` entry is a rewrite rule with `params`
+// Each `operators` entry is a rewrite rule with `params`
 // (metavariables) and a `body` (replacement Expression), applied in one of two
 // ways:
 //
 //   - WITHOUT a `match` field — invoked explicitly by an
-//     `apply_expression_template` node whose `bindings` supply each param's AST
+//     `apply_operator` node whose `bindings` supply each param's AST
 //     (named-template expansion).
 //   - WITH a `match` field — an auto-applied rewrite rule: `match` is a pattern
 //     Expression whose param occurrences are wildcards, fired wherever it
@@ -23,14 +23,14 @@ package esm
 // default 0; ties by declaration order) fires and WRITES A REFERENCE to itself
 // (esm-spec §9.6.3 constraint 7) — a leaf-bodied rule writes its leaf; the walk
 // does NOT descend into what it wrote during the current pass. At an
-// `apply_expression_template` reference no rule is tried, but the walk descends
+// `apply_operator` reference no rule is tried, but the walk descends
 // into the values of its `bindings` (§9.6.4 rule 4). Passes repeat until a pass
 // performs zero rewrites (the fixpoint); a rewrite at depth > MaxRewritePasses
 // rejects the file with `rewrite_rule_nonterminating`. Then the rules apply
 // inside the bodies of the templates the references reach, once per template
 // instance (§9.6.4 rule 3, template_instances.go). Nothing here substitutes a
 // template body: references survive, and each component keeps its
-// `expression_templates` registry (Option B). Any rewrite-target op (e.g. a
+// `operators` registry (Option B). Any rewrite-target op (e.g. a
 // spatial `D`) that survives into an evaluation position is caught later by the
 // `unlowered_operator` gate (see Evaluate), not here.
 //
@@ -50,13 +50,13 @@ import (
 	"strings"
 )
 
-const applyExpressionTemplateOp = "apply_expression_template"
+const applyExpressionTemplateOp = "apply_operator"
 
 // expressionTemplatesSkip is the skip-set the §9.6.4 expanded-form validators
 // pass to walkJSONTreeSkipping so they do NOT descend into pre-substitution
-// `expression_templates` bodies (which may legally carry parameter names in
+// `operators` bodies (which may legally carry parameter names in
 // scalar slots).
-var expressionTemplatesSkip = map[string]struct{}{"expression_templates": {}}
+var expressionTemplatesSkip = map[string]struct{}{"operators": {}}
 
 // MaxRewritePasses is the maximum number of productive rewrite passes before a
 // file is rejected as non-converging (esm-spec §9.6.3, diagnostic
@@ -68,26 +68,26 @@ const MaxRewritePasses = 64
 // ExpressionTemplateError is the error type raised by the expression-template
 // expansion pass. The Code field carries one of the stable diagnostic codes:
 //
-//   - apply_expression_template_unknown_template
-//   - apply_expression_template_bindings_mismatch
-//   - apply_expression_template_recursive_body
-//   - apply_expression_template_invalid_declaration
-//   - apply_expression_template_version_too_old
+//   - operator_unknown_definition
+//   - operator_bindings_mismatch
+//   - operator_recursive_body
+//   - operator_invalid_definition
+//   - operator_version_too_old
 //   - rewrite_rule_nonterminating
 //
 // or one of the esm-spec §9.7 template-library / metaparameter codes
 // (§9.6.6, raised from template_imports.go and subsystem_ref.go):
 //
-//   - template_import_version_too_old
-//   - template_import_unresolved
-//   - template_import_not_library
-//   - template_library_illegal_payload
-//   - subsystem_ref_is_template_library
-//   - template_import_cycle
-//   - template_import_name_conflict
-//   - template_import_unknown_name
-//   - template_import_index_set_conflict
-//   - template_body_expansion_too_deep
+//   - operator_import_version_too_old
+//   - operator_import_unresolved
+//   - operator_import_not_library
+//   - operator_library_illegal_payload
+//   - subsystem_ref_is_operator_library
+//   - operator_import_cycle
+//   - operator_import_name_conflict
+//   - operator_import_unknown_name
+//   - operator_import_index_set_conflict
+//   - operator_body_expansion_too_deep
 //   - metaparameter_unbound
 //   - metaparameter_type_error
 //   - metaparameter_name_conflict
@@ -98,7 +98,7 @@ const MaxRewritePasses = 64
 //   - coupling_import_unresolved
 //   - coupling_import_not_library
 //   - subsystem_ref_is_coupling_library
-//   - template_import_is_coupling_library
+//   - operator_import_is_coupling_library
 //   - coupling_library_illegal_payload
 //   - coupling_library_nested_import
 //   - coupling_edge_unknown_role
@@ -146,7 +146,7 @@ func newETErr(code, msg string) *ExpressionTemplateError {
 	return &ExpressionTemplateError{Code: code, Message: msg}
 }
 
-// assertNoNestedApply rejects `apply_expression_template` nodes inside a
+// assertNoNestedApply rejects `apply_operator` nodes inside a
 // `match` pattern (esm-spec §9.7.3: match patterns MUST NOT reference
 // templates).
 func assertNoNestedApply(body any, templateName, path string) error {
@@ -156,7 +156,7 @@ func assertNoNestedApply(body any, templateName, path string) error {
 		if op, ok := b["op"].(string); ok && op == applyExpressionTemplateOp {
 			return newETErr(
 				CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("expression_templates.%s: `match` contains an 'apply_expression_template' node at %s; match patterns MUST NOT reference templates (esm-spec §9.7.3)", templateName, p),
+				fmt.Sprintf("operators.%s: `match` contains an 'apply_operator' node at %s; match patterns MUST NOT reference templates (esm-spec §9.7.3)", templateName, p),
 			)
 		}
 		return nil
@@ -170,7 +170,7 @@ func validateTemplates(templates map[string]any, scope string) error {
 		if !ok {
 			return newETErr(
 				CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("%s.expression_templates.%s: entry must be an object with params + body", scope, name),
+				fmt.Sprintf("%s.operators.%s: entry must be an object with params + body", scope, name),
 			)
 		}
 		// `params` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
@@ -179,7 +179,7 @@ func validateTemplates(templates map[string]any, scope string) error {
 		if !ok {
 			return newETErr(
 				CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("%s.expression_templates.%s: 'params' must be an array of strings", scope, name),
+				fmt.Sprintf("%s.operators.%s: 'params' must be an array of strings", scope, name),
 			)
 		}
 		seen := make(map[string]struct{})
@@ -188,13 +188,13 @@ func validateTemplates(templates map[string]any, scope string) error {
 			if !ok || ps == "" {
 				return newETErr(
 					CodeApplyExpressionTemplateInvalidDeclaration,
-					fmt.Sprintf("%s.expression_templates.%s: param names must be non-empty strings", scope, name),
+					fmt.Sprintf("%s.operators.%s: param names must be non-empty strings", scope, name),
 				)
 			}
 			if _, exists := seen[ps]; exists {
 				return newETErr(
 					CodeApplyExpressionTemplateInvalidDeclaration,
-					fmt.Sprintf("%s.expression_templates.%s: param '%s' declared twice", scope, name, ps),
+					fmt.Sprintf("%s.operators.%s: param '%s' declared twice", scope, name, ps),
 				)
 			}
 			seen[ps] = struct{}{}
@@ -202,18 +202,18 @@ func validateTemplates(templates map[string]any, scope string) error {
 		if _, ok := declObj["body"]; !ok {
 			return newETErr(
 				CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("%s.expression_templates.%s: 'body' is required", scope, name),
+				fmt.Sprintf("%s.operators.%s: 'body' is required", scope, name),
 			)
 		}
 		// A body MAY reference other match-less in-scope templates via
-		// apply_expression_template nodes (esm-spec §9.7.3); those are checked
+		// apply_operator nodes (esm-spec §9.7.3); those are checked
 		// (acyclic, depth <= MaxTemplateExpansionDepth) and inlined at
 		// registration by composeTemplateBodies — the old any-nesting
-		// rejection is now cycle-only (`apply_expression_template_recursive_body`).
+		// rejection is now cycle-only (`operator_recursive_body`).
 		// esm-spec §9.6: an optional `match` pattern turns the entry into an
 		// auto-applied rewrite rule. The pattern is an Expression whose declared
 		// params are wildcards; it MUST NOT contain nested
-		// apply_expression_template ops. Nontermination is NOT checked statically
+		// apply_operator ops. Nontermination is NOT checked statically
 		// — the bounded fixpoint (MaxRewritePasses, esm-spec §9.6.3) is the
 		// authoritative guard, so a self-reintroducing rule is rejected only when
 		// it actually fails to converge (`rewrite_rule_nonterminating`).
@@ -232,8 +232,8 @@ func validateTemplates(templates map[string]any, scope string) error {
 }
 
 // validateWhereBlock performs the structural validation of a template's optional
-// `where` match-scoping block (esm-spec §9.6.1, 0.8.0): `where` is admissible
-// only alongside `match`; it must be a non-empty object mapping declared params
+// `where` match-scoping block (esm-spec §9.6.1, 0.8.0; admissible on a
+// match-less definition since esm 2.4.0): it must be a non-empty object mapping declared params
 // (present in `seen`) to single-key `{shape: [nonEmptyString...]}` constraint
 // objects. Only the shape/structure is checked here — the unknown-index-set
 // check runs later at rule REGISTRATION in the consuming component, where the
@@ -244,39 +244,37 @@ func validateWhereBlock(declObj map[string]any, seen map[string]struct{}, hasMat
 	if !hasWhere || whrRaw == nil {
 		return nil
 	}
-	if !hasMatch || matchRaw == nil {
-		return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-			fmt.Sprintf("%s.expression_templates.%s: 'where' is only admissible alongside 'match' — constraints scope an auto-applied rewrite rule, not a named fragment (esm-spec §9.6.1)", scope, name))
-	}
+	// esm 2.4.0 (esm-spec §9.6.3 constraint 2, §9.6.8): a `where` scopes a
+	// match-less definition too, at a call of the defined operator it defines.
 	whr, ok := whrRaw.(map[string]any)
 	if !ok || len(whr) == 0 {
 		return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-			fmt.Sprintf("%s.expression_templates.%s: 'where' must be a non-empty object mapping declared params to constraint objects", scope, name))
+			fmt.Sprintf("%s.operators.%s: 'where' must be a non-empty object mapping declared params to constraint objects", scope, name))
 	}
 	for _, p := range sortedKeys(whr) {
 		if _, isParam := seen[p]; !isParam {
 			return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("%s.expression_templates.%s: 'where' constrains '%s', which is not a declared param (esm-spec §9.6.1)", scope, name, p))
+				fmt.Sprintf("%s.operators.%s: 'where' constrains '%s', which is not a declared param (esm-spec §9.6.1)", scope, name, p))
 		}
 		cobj, ok := whr[p].(map[string]any)
 		if !ok {
 			return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("%s.expression_templates.%s: where.%s must be a constraint object (v1 admits exactly the 'shape' kind)", scope, name, p))
+				fmt.Sprintf("%s.operators.%s: where.%s must be a constraint object (v1 admits exactly the 'shape' kind)", scope, name, p))
 		}
 		ckeys := sortedKeys(cobj)
 		if len(ckeys) != 1 || ckeys[0] != "shape" {
 			return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("%s.expression_templates.%s: where.%s carries constraint kind(s) %s; the v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)", scope, name, p, strings.Join(ckeys, ", ")))
+				fmt.Sprintf("%s.operators.%s: where.%s carries constraint kind(s) %s; the v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)", scope, name, p, strings.Join(ckeys, ", ")))
 		}
 		shp, ok := cobj["shape"].([]any)
 		if !ok || len(shp) == 0 {
 			return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("%s.expression_templates.%s: where.%s.shape must be a non-empty array of index-set names", scope, name, p))
+				fmt.Sprintf("%s.operators.%s: where.%s.shape must be a non-empty array of index-set names", scope, name, p))
 		}
 		for _, s := range shp {
 			if ss, ok := s.(string); !ok || ss == "" {
 				return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-					fmt.Sprintf("%s.expression_templates.%s: where.%s.shape entries must be non-empty strings", scope, name, p))
+					fmt.Sprintf("%s.operators.%s: where.%s.shape entries must be non-empty strings", scope, name, p))
 			}
 		}
 	}
@@ -392,14 +390,14 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 	if !ok || nameRaw == "" {
 		return nil, newETErr(
 			CodeApplyExpressionTemplateInvalidDeclaration,
-			fmt.Sprintf("%s: apply_expression_template node missing or empty 'name'", scope),
+			fmt.Sprintf("%s: apply_operator node missing or empty 'name'", scope),
 		)
 	}
 	declRaw, ok := templates[nameRaw]
 	if !ok {
 		return nil, newETErr(
 			CodeApplyExpressionTemplateUnknownTemplate,
-			fmt.Sprintf("%s: apply_expression_template references undeclared template '%s'", scope, nameRaw),
+			fmt.Sprintf("%s: apply_operator references undeclared template '%s'", scope, nameRaw),
 		)
 	}
 	decl, ok := declRaw.(map[string]any)
@@ -413,7 +411,7 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 	if !ok {
 		return nil, newETErr(
 			CodeApplyExpressionTemplateBindingsMismatch,
-			fmt.Sprintf("%s: apply_expression_template '%s' missing 'bindings' object", scope, nameRaw),
+			fmt.Sprintf("%s: apply_operator '%s' missing 'bindings' object", scope, nameRaw),
 		)
 	}
 	paramsArr, _ := decl["params"].([]any)
@@ -429,7 +427,7 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 		if _, ok := bindingsRaw[p]; !ok {
 			return nil, newETErr(
 				CodeApplyExpressionTemplateBindingsMismatch,
-				fmt.Sprintf("%s: apply_expression_template '%s' missing binding for param '%s'", scope, nameRaw, p),
+				fmt.Sprintf("%s: apply_operator '%s' missing binding for param '%s'", scope, nameRaw, p),
 			)
 		}
 	}
@@ -437,7 +435,7 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 		if _, ok := declared[k]; !ok {
 			return nil, newETErr(
 				CodeApplyExpressionTemplateBindingsMismatch,
-				fmt.Sprintf("%s: apply_expression_template '%s' supplies unknown param '%s'", scope, nameRaw, k),
+				fmt.Sprintf("%s: apply_operator '%s' supplies unknown param '%s'", scope, nameRaw, k),
 			)
 		}
 	}
@@ -543,7 +541,7 @@ func matchPattern(pattern, node any, params map[string]struct{}, bindings map[st
 	if ns, ok := node.(string); ok && bv.isParam(ns) {
 		ps, pIsStr := pattern.(string)
 		_, pIsMeta := params[ps]
-		if !(pIsStr && pIsMeta) {
+		if !pIsStr || !pIsMeta {
 			lit, has := bv.lit[ns]
 			if !has {
 				return false
@@ -711,7 +709,7 @@ func whereSatisfied(whereC map[string][]string, bindings map[string]any, shapeEn
 // registeredWhere normalizes a template's `where` block into the registered
 // constraint map (param → required shape), checking every referenced index-set
 // name against the CONSUMING document's merged `index_sets` registry
-// (`isetNames`). An unknown name is `template_constraint_unknown_index_set`
+// (`isetNames`). An unknown name is `operator_constraint_unknown_index_set`
 // (esm-spec §9.6.6) — raised here, at rule registration in the consuming
 // component, not when a library file is loaded standalone: constraints name
 // index sets as spelled in the consuming document's registry (post-§9.7.5
@@ -738,7 +736,7 @@ func registeredWhere(decl map[string]any, isetNames map[string]struct{}, scope, 
 		for _, s := range req {
 			if _, ok := isetNames[s]; !ok {
 				return nil, newETErr(CodeTemplateConstraintUnknownIndexSet,
-					fmt.Sprintf("%s.expression_templates.%s: where.%s.shape names index set '%s', which the consuming document's index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)", scope, tname, p, s))
+					fmt.Sprintf("%s.operators.%s: where.%s.shape names index set '%s', which the consuming document's index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)", scope, tname, p, s))
 			}
 		}
 		out[p] = req
@@ -781,7 +779,7 @@ func asInt64Strict(v any) (int64, bool) {
 func validateMakearrayRegions(tree any, path string) error {
 	// Template bodies/matches are pre-substitution trees; bounds may legally
 	// carry metaparameter names or fold later (esm-spec §9.7.6), so
-	// `expression_templates` is skipped. The expanded form is a shared DAG
+	// `operators` is skipped. The expanded form is a shared DAG
 	// (structural sharing), so each unique node is validated once.
 	return walkJSONTreeUniqueSkipping(tree, path, expressionTemplatesSkip, func(p string, t map[string]any) error {
 		if op, _ := t["op"].(string); op != "makearray" {
@@ -858,6 +856,10 @@ type matchRule struct {
 	// whereC is the registered `where` shape-constraint map (param → required
 	// shape); nil when the rule carries no `where` block (esm-spec §9.6.1).
 	whereC map[string][]string
+	// exact: a call rule of a match-less definition (esm 2.4.0, esm-spec
+	// §9.6.3 constraint 2, §9.6.12) — `pattern` is `{op: defines, args:
+	// params}` and the node may carry no field besides `op` and `args`.
+	exact bool
 }
 
 // depthRec is one entry of lowering.depth: the reference a firing wrote (held
@@ -877,8 +879,14 @@ type depthRec struct {
 // reference the author wrote has depth 0 and no entry), keyed by identity.
 // Mirrors the Julia `_Lowering`.
 type lowering struct {
-	named    map[string]any
-	rules    []matchRule
+	named map[string]any
+	rules []matchRule
+	// callRules: the match-less definitions by the defined operator they
+	// define, each list in selection order (esm 2.4.0 calls by operator name).
+	callRules map[string][]matchRule
+	// arities: the operand counts the definitions of each defined operator
+	// take (esm-spec §9.6.12 "Arity").
+	arities  map[string]map[int]bool
 	shapeEnv map[string][]string
 	enums    map[string]map[string]int
 	scope    string
@@ -1034,19 +1042,14 @@ func rewritePass(node any, L *lowering, pass int, last *string, bv *bodyView, me
 			memo[key] = rewriteMemoEntry{out: nn, changed: true}
 			return nn, true
 		}
-		for i := range L.rules {
-			rule := &L.rules[i]
-			bindings := map[string]any{}
-			if matchPattern(rule.pattern, n, rule.params, bindings, bv) &&
-				whereSatisfied(rule.whereC, bindings, L.shapeEnv, bv) {
-				*last = rule.name
-				r := ruleReference(rule, bindings)
-				if rm, ok := r.(map[string]any); ok && isApplyMap(rm) {
-					L.setDepth(rm, pass)
-				}
-				memo[key] = rewriteMemoEntry{out: r, changed: true}
-				return r, true
+		if rule, bindings := selectDefinition(L, n, op, bv); rule != nil {
+			*last = rule.name
+			r := ruleReference(rule, bindings)
+			if rm, ok := r.(map[string]any); ok && isApplyMap(rm) {
+				L.setDepth(rm, pass)
 			}
+			memo[key] = rewriteMemoEntry{out: r, changed: true}
+			return r, true
 		}
 		// No rule fired here — descend into children.
 		var out map[string]any
@@ -1133,7 +1136,7 @@ type couplingTransformSite struct {
 // then reaction_systems. The expression transform is rewritten with that
 // component's rewrite context (named templates + match rules) exactly like a
 // field of the component. Entries whose receiver is not declared are omitted
-// and stay unrewritten (a leftover apply_expression_template there is caught
+// and stay unrewritten (a leftover apply_operator there is caught
 // by the final gate).
 func collectCouplingTransformSites(view map[string]any) map[[2]string][]couplingTransformSite {
 	sites := map[[2]string][]couplingTransformSite{}
@@ -1176,8 +1179,8 @@ func collectCouplingTransformSites(view map[string]any) map[[2]string][]coupling
 }
 
 // hasTemplateMachinery reports whether `view` declares any non-empty
-// `expression_templates` block under models/reaction_systems, or contains any
-// `apply_expression_template` op anywhere. Files with neither need no rewriting.
+// `operators` block under models/reaction_systems, or contains any
+// `apply_operator` op anywhere. Files with neither need no rewriting.
 func hasTemplateMachinery(view map[string]any) bool {
 	if view == nil {
 		return false
@@ -1192,7 +1195,7 @@ func hasTemplateMachinery(view map[string]any) bool {
 			if !ok {
 				continue
 			}
-			if tpl, ok := compObj["expression_templates"].(map[string]any); ok && len(tpl) > 0 {
+			if tpl, ok := compObj["operators"].(map[string]any); ok && len(tpl) > 0 {
 				return true
 			}
 		}
@@ -1200,7 +1203,7 @@ func hasTemplateMachinery(view map[string]any) bool {
 	return containsApplyOp(view)
 }
 
-// containsApplyOp reports whether tree contains any `apply_expression_template`
+// containsApplyOp reports whether tree contains any `apply_operator`
 // op, stopping at the first occurrence. The walk is pointer-identity-memoized
 // (each unique object node visited once) so probing a post-expansion shared
 // DAG costs O(unique nodes), not O(denoted tree size).
@@ -1235,7 +1238,7 @@ func containsApplyOpDAG(tree any, seen map[uintptr]struct{}) bool {
 }
 
 // findApplyPaths appends the JSON-pointer path of every
-// `apply_expression_template` op in view to hits (used by the leftover gate and
+// `apply_operator` op in view to hits (used by the leftover gate and
 // the pre-v0.4 rejection, which report all offending paths).
 func findApplyPaths(view any, path string, hits *[]string) {
 	_ = walkJSONTree(view, path, func(p string, v map[string]any) error {
@@ -1291,7 +1294,7 @@ func recordKeyOrders(dec *json.Decoder, path string, orders map[string][]string)
 }
 
 // extractTemplateOrders returns, for each object in `jsonStr`, its key order
-// keyed by path (e.g. "/models/m/expression_templates"). Best-effort: on any
+// keyed by path (e.g. "/models/m/operators"). Best-effort: on any
 // decode hiccup it returns an empty map, and callers fall back to sorted-name
 // order.
 func extractTemplateOrders(jsonStr string) map[string][]string {
@@ -1331,8 +1334,8 @@ func esmVersionBelow(view map[string]any, major, minor int) bool {
 	return min < minor
 }
 
-// RejectExpressionTemplatesPreV04 rejects `expression_templates` blocks and
-// `apply_expression_template` ops in files declaring `esm` < 0.4.0. Mirrors
+// RejectExpressionTemplatesPreV04 rejects `operators` blocks and
+// `apply_operator` ops in files declaring `esm` < 0.4.0. Mirrors
 // the equivalent TS / Python / Julia / Rust checks.
 func RejectExpressionTemplatesPreV04(view map[string]any) error {
 	if !esmVersionBelow(view, 0, 4) {
@@ -1350,8 +1353,8 @@ func RejectExpressionTemplatesPreV04(view map[string]any) error {
 			if !ok {
 				continue
 			}
-			if _, has := compObj["expression_templates"]; has {
-				offences = append(offences, fmt.Sprintf("/%s/%s/expression_templates", kind, cname))
+			if _, has := compObj["operators"]; has {
+				offences = append(offences, fmt.Sprintf("/%s/%s/operators", kind, cname))
 			}
 		}
 	}
@@ -1359,48 +1362,88 @@ func RejectExpressionTemplatesPreV04(view map[string]any) error {
 	if len(offences) > 0 {
 		return newETErr(
 			CodeApplyExpressionTemplateVersionTooOld,
-			fmt.Sprintf("expression_templates / apply_expression_template require esm >= 0.4.0; file declares %s (offending paths: %s)", esmRaw, strings.Join(offences, ", ")),
+			fmt.Sprintf("operators / apply_operator require esm >= 0.4.0; file declares %s (offending paths: %s)", esmRaw, strings.Join(offences, ", ")),
 		)
 	}
 	return nil
 }
 
 // buildRewriteContext builds the per-component rewrite context from a validated,
-// body-composed `expression_templates` map (nil ⇒ an empty context):
+// body-composed `operators` map (nil ⇒ an empty context):
 //
 //   - named — every template keyed by name, consulted by
-//     `apply_expression_template` (order-independent);
+//     `apply_operator` (order-independent);
 //   - rules — the auto-applied `match` rules, sorted highest-priority-first,
 //     ties by declaration order (esm-spec §9.6.3).
 //
 // `order` is the recovered declaration order (nil ⇒ sorted-name fallback);
 // `isetNames` is the consuming document's merged index_sets registry, against
 // which each rule's `where` shape constraints are resolved at registration
-// (esm-spec §9.6.1; `template_constraint_unknown_index_set`). scope is the
+// (esm-spec §9.6.1; `operator_constraint_unknown_index_set`). scope is the
 // diagnostic prefix (e.g. "models.M").
-func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[string]struct{}, scope string) (map[string]any, []matchRule, error) {
-	named := map[string]any{}
-	var rules []matchRule
+func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[string]struct{}, scope string) (*lowering, error) {
+	L := &lowering{named: map[string]any{}, callRules: map[string][]matchRule{}, arities: map[string]map[int]bool{}}
 	if tplMap == nil {
-		return named, rules, nil
+		return L, nil
+	}
+	addArity := func(op string, k int) {
+		if L.arities[op] == nil {
+			L.arities[op] = map[int]bool{}
+		}
+		L.arities[op][k] = true
 	}
 	for idx, name := range orderedTemplateNames(tplMap, order) {
-		decl, _ := tplMap[name].(map[string]any)
-		named[name] = decl
-		match, ok := decl["match"]
-		if !ok || match == nil {
-			continue
+		decl0, _ := tplMap[name].(map[string]any)
+		// esm 2.4.0 (esm-spec §9.6.12): every definition records the defined
+		// operator it defines; a core operator's name is reserved.
+		if err := checkDefinesNotCore(name, decl0, scope); err != nil {
+			return nil, err
 		}
+		decl := decl0
+		if _, has := decl0["defines"]; !has {
+			decl = withDefines(name, decl0).(map[string]any)
+			tplMap[name] = decl
+		}
+		L.named[name] = decl
 		pset := map[string]struct{}{}
 		plist := templateParams(decl)
 		for _, ps := range plist {
 			pset[ps] = struct{}{}
 		}
+		defines := definitionDefines(name, decl)
+		match, ok := decl["match"]
+		hasMatch := ok && match != nil
+		if !hasMatch {
+			addArity(defines, len(plist))
+		} else if rop, ok := matchRootOp(decl); ok && !isCoreOp(rop) {
+			margs, _ := match.(map[string]any)["args"].([]any)
+			addArity(rop, len(margs))
+		}
 		whereC, err := registeredWhere(decl, isetNames, scope, name)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		rules = append(rules, matchRule{
+		if !hasMatch && !isCoreOp(defines) && defines != applyExpressionTemplateOp {
+			args := make([]any, len(plist))
+			for i, p := range plist {
+				args[i] = p
+			}
+			L.callRules[defines] = append(L.callRules[defines], matchRule{
+				name:      name,
+				paramList: plist,
+				pattern:   map[string]any{"op": defines, "args": args},
+				params:    pset,
+				body:      decl["body"],
+				priority:  rulePriority(decl),
+				declIdx:   idx,
+				whereC:    whereC,
+				exact:     true,
+			})
+		}
+		if !hasMatch {
+			continue
+		}
+		L.rules = append(L.rules, matchRule{
 			name:      name,
 			paramList: plist,
 			pattern:   match,
@@ -1411,17 +1454,18 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 			whereC:    whereC,
 		})
 	}
-	sort.SliceStable(rules, func(i, j int) bool {
-		if rules[i].priority != rules[j].priority {
-			return rules[i].priority > rules[j].priority
-		}
-		return rules[i].declIdx < rules[j].declIdx
-	})
-	return named, rules, nil
+	// Deterministic selection order (esm-spec §9.6.3): highest `priority`
+	// first, then a definition with a `where` before one without (esm 2.4.0),
+	// then declaration order. selectDefinition takes the FIRST eligible one.
+	sort.SliceStable(L.rules, func(i, j int) bool { return selectionLess(&L.rules[i], &L.rules[j]) })
+	for _, v := range L.callRules {
+		sort.SliceStable(v, func(i, j int) bool { return selectionLess(&v[i], &v[j]) })
+	}
+	return L, nil
 }
 
 // LowerExpressionTemplates runs the outermost-first + priority + bounded-fixpoint
-// rewrite over `view` and strips the `expression_templates` blocks. Mutates
+// rewrite over `view` and strips the `operators` blocks. Mutates
 // `view` in place. Declaration order for `match`-rule tie-breaking is recovered
 // via sorted-name fallback (an already-decoded map has no key order); callers
 // with the raw JSON string should use the load path (`applyExpressionTemplatesToJSON`),
@@ -1430,13 +1474,17 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 // Pre-condition: the input has been schema-validated.
 //
 // esm-spec §9.6.4 (Option B): lowering itself PRESERVES surviving
-// `apply_expression_template` references and per-component registries; this
+// `apply_operator` references and per-component registries; this
 // entry point then Expands them in place (RFC out-of-line-expression-templates
 // §7.7 Expand-at-build), so callers see the Option-A image (references replaced
 // by their expansion, registries stripped) exactly as before. The
 // reference-preserving form is available via ResolveAndLowerReferencePreserving
 // (raw §9.7 pipeline) or EmitReferencePreserving (canonical emitted bytes).
 func LowerExpressionTemplates(view map[string]any) error {
+	// Old spellings (esm-spec §9.6.12) when the caller skipped the wire boundary.
+	if err := readOldSpellingsView(view); err != nil {
+		return err
+	}
 	if err := lowerExpressionTemplatesOrdered(view, nil); err != nil {
 		return err
 	}
@@ -1453,8 +1501,8 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 	if view == nil {
 		return nil
 	}
-	// Fast path: files with neither an `expression_templates` block nor any
-	// `apply_expression_template` op need no rewriting (strip is a no-op).
+	// Fast path: files with neither an `operators` block nor any
+	// `apply_operator` op need no rewriting (strip is a no-op).
 	if !hasTemplateMachinery(view) {
 		stripExpressionTemplates(view)
 		// No expansion to run, but the §9.6.4 expanded-form validator still
@@ -1464,7 +1512,7 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 	}
 	// The consuming document's merged index_sets registry (post-§9.7.5): the
 	// namespace `where` shape constraints resolve against at registration
-	// (esm-spec §9.6.1 — `template_constraint_unknown_index_set` for a name not
+	// (esm-spec §9.6.1 — `operator_constraint_unknown_index_set` for a name not
 	// declared here).
 	isetNames := map[string]struct{}{}
 	if isets, ok := view["index_sets"].(map[string]any); ok {
@@ -1510,7 +1558,7 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			// Static shape environment for `where` constraint evaluation
 			// (esm-spec §9.6.1): declared variable shapes only.
 			shapeEnv := componentShapeEnv(compObj)
-			tplMap, _ := compObj["expression_templates"].(map[string]any)
+			tplMap, _ := compObj["operators"].(map[string]any)
 			if tplMap != nil {
 				if err := validateTemplates(tplMap, cscope); err != nil {
 					return err
@@ -1525,23 +1573,21 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			}
 			var order []string
 			if orders != nil {
-				order = orders["/"+kind+"/"+cname+"/expression_templates"]
+				order = orders["/"+kind+"/"+cname+"/operators"]
 			}
-			named, rules, err := buildRewriteContext(tplMap, order, isetNames, cscope)
+			L, err := buildRewriteContext(tplMap, order, isetNames, cscope)
 			if err != nil {
 				return err
 			}
-			L := &lowering{
-				named: named, rules: rules, shapeEnv: shapeEnv, enums: enums,
-				scope: cscope, depth: map[uintptr]depthRec{},
-			}
+			L.shapeEnv, L.enums, L.scope, L.depth = shapeEnv, enums, cscope, map[uintptr]depthRec{}
+			named, rules := L.named, L.rules
 			// Outermost-first, priority-ordered, bounded-fixpoint rewrite per
 			// non-template field (esm-spec §9.6.3): each firing writes a
 			// reference to its rule (constraint 7); references are leaves for
 			// matching and the walk descends into their bindings (§9.6.4 rule
-			// 4). The `expression_templates` block is RETAINED (§9.6.4 rule 1).
+			// 4). The `operators` block is RETAINED (§9.6.4 rule 1).
 			for _, k := range sortedKeys(compObj) {
-				if k == "expression_templates" || k == "expression_template_imports" {
+				if k == "operators" || k == "operator_imports" {
 					continue
 				}
 				scope := fmt.Sprintf("%s.%s.%s", kind, cname, k)
@@ -1556,7 +1602,7 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			// receiving component is this one rewrite to fixpoint with the
 			// same context, as if they were a field of the component (esm-spec
 			// §10.4). A template-less receiver leaves the transform unrewritten.
-			if len(named) > 0 || len(rules) > 0 {
+			if len(named) > 0 || len(rules) > 0 || len(L.callRules) > 0 {
 				for _, site := range couplingSites[[2]string{kind, cname}] {
 					scope := fmt.Sprintf("coupling[%d].transform", site.idx)
 					rewritten, _, err := rewriteToFixpoint(site.entry["transform"], L, scope, nil)
@@ -1583,7 +1629,7 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			return err
 		}
 		for _, k := range sortedKeys(cl.comp) {
-			if k == "expression_templates" || k == "expression_template_imports" {
+			if k == "operators" || k == "operator_imports" {
 				continue
 			}
 			if err := checkSurvivingRefs(cl.comp[k], cl.L.named, cl.L.scope+"."+k); err != nil {
@@ -1595,8 +1641,13 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 				return err
 			}
 		}
+		// esm-spec §9.6.12 "Arity": surviving calls in the component, in the
+		// transforms it receives, and in the bodies its references reach.
+		if err := checkComponentArity(cl.comp, cl.L, cl.transforms); err != nil {
+			return err
+		}
 	}
-	// esm-spec §9.6.4 rule 1 (Option B): surviving `apply_expression_template`
+	// esm-spec §9.6.4 rule 1 (Option B): surviving `apply_operator`
 	// references are the NEW NORMAL. Only unknown-name / bindings-mismatch
 	// references are errors — already checked per component / per transform by
 	// checkSurvivingRefs. No global "no apply ops remain" gate.
@@ -1618,7 +1669,7 @@ func stripExpressionTemplates(view map[string]any) {
 		}
 		for _, compRaw := range comps {
 			if compObj, ok := compRaw.(map[string]any); ok {
-				delete(compObj, "expression_templates")
+				delete(compObj, "operators")
 			}
 		}
 	}
@@ -1637,7 +1688,7 @@ func applyExpressionTemplatesToJSON(jsonStr string) (string, error) {
 	dec := json.NewDecoder(strings.NewReader(jsonStr))
 	dec.UseNumber()
 	if err := dec.Decode(&view); err != nil {
-		return "", fmt.Errorf("apply_expression_template pass: %w", err)
+		return "", fmt.Errorf("apply_operator pass: %w", err)
 	}
 	orders := extractTemplateOrders(jsonStr)
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
@@ -1648,7 +1699,7 @@ func applyExpressionTemplatesToJSON(jsonStr string) (string, error) {
 	expandDocument(view)
 	out, err := json.Marshal(view)
 	if err != nil {
-		return "", fmt.Errorf("apply_expression_template pass: re-marshal: %w", err)
+		return "", fmt.Errorf("apply_operator pass: re-marshal: %w", err)
 	}
 	return string(out), nil
 }
@@ -1671,7 +1722,7 @@ func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int
 }
 
 // resolveAndLowerJSONCapturing is resolveAndLowerJSON that ALSO returns each
-// component's `expression_templates` block as it stood after import resolution
+// component's `operators` block as it stood after import resolution
 // and before Expand-at-build stripped it, keyed "models.<name>" /
 // "reaction_systems.<name>" with the resolved declaration order preserved.
 //
@@ -1686,23 +1737,39 @@ func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int
 // and the registry merge of a mounting component see declaration order.
 func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[string]int64,
 	authoredMountDeclared map[string]bool, authoredOrders map[string][]string) (string, map[string]*orderedMap, error) {
+	out, ct, _, err := resolveAndLowerJSONCapturingUnits(jsonStr, basePath, metaparameters, authoredMountDeclared, authoredOrders)
+	return out, ct, err
+}
+
+// resolveAndLowerJSONCapturingUnits is resolveAndLowerJSONCapturing that also
+// returns the reference-preserving form of the model equations whose
+// references reach a unit-bearing definition (captureLoweredUnitEquations),
+// taken before Expand-at-build.
+func resolveAndLowerJSONCapturingUnits(jsonStr, basePath string, metaparameters map[string]int64,
+	authoredMountDeclared map[string]bool, authoredOrders map[string][]string) (string, map[string]*orderedMap, map[string]loweredUnitEquation, error) {
+	// Old spellings (esm-spec §9.6.12) when the caller skipped the wire
+	// boundary; text a load already prepared passes through unchanged.
+	jsonStr, err := readOldSpellings(jsonStr)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	var view map[string]any
 	dec := json.NewDecoder(strings.NewReader(jsonStr))
 	dec.UseNumber()
 	if err := dec.Decode(&view); err != nil {
-		return "", nil, fmt.Errorf("template resolution pass: %w", err)
+		return "", nil, nil, fmt.Errorf("template resolution pass: %w", err)
 	}
 	orders := extractTemplateOrders(jsonStr)
 	for p, keys := range authoredOrders {
 		orders[p] = keys
 	}
 	// esm-spec §9.7.10 form B: fold any coupling-entry injection into the target
-	// components' own `expression_template_imports` BEFORE resolution, so the
+	// components' own `operator_imports` BEFORE resolution, so the
 	// ordinary import resolver + §9.6.3 fixpoint lower the target under the
 	// assembler-chosen discretization. No-op when no coupling entry carries an
 	// injection map.
 	if err := applyCouplingInjections(view); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	// The §4.7 mount context of a ROOT document. `LoadString` computed it on the
 	// AUTHORED text and hands it in, because the walk reads unresolved `{ref}`
@@ -1714,30 +1781,31 @@ func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[s
 	if mountDeclared == nil {
 		md, err := rootMountContext(view, basePath, metaparameters)
 		if err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 		mountDeclared = md
 	}
 	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters,
 		resolveOpts{mountDeclared: mountDeclared}); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	componentTemplates := captureComponentTemplates(view, orders, jsonStr)
+	loweredUnits := captureLoweredUnitEquations(view)
 	// Expand-at-build (§9.6.4 rule 2 / RFC §7.7): the raw §9.7 pipeline emits the
 	// Option-A image (references replaced by their expansion, registries
 	// stripped) so external conformance runners reproduce the expanded goldens.
 	expandDocument(view)
 	out, err := json.Marshal(view)
 	if err != nil {
-		return "", nil, fmt.Errorf("template resolution pass: re-marshal: %w", err)
+		return "", nil, nil, fmt.Errorf("template resolution pass: re-marshal: %w", err)
 	}
-	return string(out), componentTemplates, nil
+	return string(out), componentTemplates, loweredUnits, nil
 }
 
-// captureComponentTemplates snapshots every component's `expression_templates`
+// captureComponentTemplates snapshots every component's `operators`
 // block, keyed "<section>.<component>", in the DOCUMENT order the components
 // are declared in, each block as emit materializes it (esm-spec §9.6.4 rule 5,
 // materializeComponentBlock): the entries authored in `source` first, in
@@ -1763,7 +1831,7 @@ func captureComponentTemplates(view map[string]any, orders map[string][]string, 
 			if !ok {
 				continue
 			}
-			if tpl, ok := comp["expression_templates"].(map[string]any); !ok || len(tpl) == 0 {
+			if tpl, ok := comp["operators"].(map[string]any); !ok || len(tpl) == 0 {
 				continue
 			}
 			mat, _, _ := materializeComponentBlock(
@@ -1794,6 +1862,11 @@ func captureComponentTemplates(view map[string]any, orders map[string][]string, 
 // image, and expansion multiplies out a reference-dense document. Use
 // ResolveAndLowerReferencePreserving, of which this is Expand ∘ that.
 func ResolveAndLower(jsonStr, basePath string, metaparameters map[string]int64) (string, error) {
+	// Old spellings (esm-spec §9.6.12) when the caller skipped the wire boundary.
+	jsonStr, err := readOldSpellings(jsonStr)
+	if err != nil {
+		return "", err
+	}
 	return resolveAndLowerJSON(jsonStr, basePath, metaparameters)
 }
 
@@ -1801,8 +1874,8 @@ func ResolveAndLower(jsonStr, basePath string, metaparameters map[string]int64) 
 // Expand-at-build step: load-time template-import/metaparameter resolution
 // against basePath, §9.7.10 form-B coupling injection, then the §9.6.3 rewrite
 // fixpoint — stopping at the Option-B image. Surviving
-// `apply_expression_template` references stay as leaves (§9.6.4 rule 4) and
-// each component keeps its `expression_templates` registry (rule 5). Returns
+// `apply_operator` references stay as leaves (§9.6.4 rule 4) and
+// each component keeps its `operators` registry (rule 5). Returns
 // the post-lowering document as JSON, numeric tokens preserved via json.Number.
 //
 // This is what a conformance runner should drive to produce an artifact

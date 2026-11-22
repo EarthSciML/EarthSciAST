@@ -7,7 +7,9 @@
 //!   `-9223372036854775808` as a float;
 //! * strings with Typst escapes (`\u{XXXX}`);
 //! * arrays `(a, b)`, `()` empty; dictionaries `(key: v, "quoted key": v)`,
-//!   `(:)` empty. A key is bare when it is an identifier and not a Typst keyword.
+//!   `(:)` empty. A key is bare when it is an identifier and not a Typst keyword;
+//! * a math leaf `$…$`, Typst math content: its text up to the next `$`
+//!   (`Json.mathOK`). Only a path block holds one (`Source.mathify`).
 //!
 //! The canonical layout is one element per line, each indented two spaces deeper
 //! than the opening line and followed by `,`. The reader skips whitespace
@@ -18,7 +20,7 @@
 //! Typst math lexer) gives is never exhausted, since every three nested calls
 //! consume a character, so the port recurses without it.
 
-use super::json::{JNum, Json};
+use super::json::{JNum, Json, p_math};
 use super::number;
 use super::strings::{parse_key, parse_quoted, print_key, quote, spaces};
 
@@ -57,6 +59,11 @@ pub fn enc(m: usize, v: &Json, out: &mut Vec<char>) {
         Json::Bool(false) => out.extend("false".chars()),
         Json::Num(n) => out.extend(print_num(n)),
         Json::Str(s) => out.extend(quote(true, s)),
+        Json::Math(s) => {
+            out.push('$');
+            out.extend(s.chars());
+            out.push('$');
+        }
         Json::Arr(xs) if xs.is_empty() => out.extend(['(', ')']),
         Json::Arr(xs) => {
             out.extend(['(', '\n']);
@@ -157,6 +164,7 @@ pub fn p_val(input: &[char]) -> Option<(Json, &[char])> {
             None => p_paren(skip_ws(r)),
         },
         ['"', ..] => parse_quoted(true, input).map(|(s, r)| (Json::Str(s), r)),
+        ['$', r @ ..] => p_math(r),
         ['n', r @ ..] => match r {
             ['o', 'n', 'e', r1 @ ..] => Some((Json::Null, r1)),
             _ => None,
@@ -232,11 +240,11 @@ fn p_entries(mut input: &[char]) -> Option<(Entries, &[char])> {
 }
 
 /// `TypstDict.decode`: whitespace, the value, whitespace, end of input. The
-/// value must be well formed.
+/// value must be well formed, math leaves allowed (`Json.WFm`).
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn decode(s: &[char]) -> Option<Json> {
     let (v, r) = p_val(skip_ws(s))?;
-    if skip_ws(r).is_empty() && v.wfb() {
+    if skip_ws(r).is_empty() && v.wfmb() {
         Some(v)
     } else {
         None
@@ -266,5 +274,8 @@ mod tests {
         assert!(decode(&one).is_none());
         let kw: Vec<char> = "(none: 1)".chars().collect();
         assert!(decode(&kw).is_none());
+        assert_eq!(rt("(a: $x + 1$)"), "(\n  a: $x + 1$,\n)");
+        let empty: Vec<char> = "(a: $$)".chars().collect();
+        assert!(decode(&empty).is_none());
     }
 }

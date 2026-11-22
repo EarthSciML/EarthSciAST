@@ -181,7 +181,7 @@ func shapedExceptSelfDefined(shaped map[string][]string, lhs Expression) map[str
 
 // authoredTemplateApplications records, from the authored document view, the
 // right-hand side of every model equation (inline subsystems included) that
-// holds an `apply_expression_template` node, keyed by its equation pointer.
+// holds an `apply_operator` node, keyed by its equation pointer.
 func authoredTemplateApplications(view map[string]any) map[string]Expression {
 	out := make(map[string]Expression)
 	var visit func(model map[string]any, path string)
@@ -224,7 +224,7 @@ func authoredTemplateApplications(view map[string]any) map[string]Expression {
 func rawHoldsTemplateApplication(v any) bool {
 	switch t := v.(type) {
 	case map[string]any:
-		if t["op"] == "apply_expression_template" {
+		if t["op"] == "apply_operator" {
 			return true
 		}
 		for _, child := range t {
@@ -272,7 +272,7 @@ func (s *structuralScan) checkFAQBareArrayOperands(expr Expression, shaped map[s
 			return
 		}
 		node, ok := asExprNode(e)
-		if !ok || node.Op == "apply_expression_template" {
+		if !ok || node.Op == "apply_operator" {
 			return
 		}
 		inner := bound
@@ -333,7 +333,7 @@ func (s *structuralScan) checkFAQBareArrayOperands(expr Expression, shaped map[s
 // registry exists only in that per-run build and resolving `{from: NAME}`
 // against the empty local registry would reject every conforming leaf. The
 // check is deferred there, mirroring §9.6.1's standalone exemption for
-// template_constraint_unknown_index_set; a name still unresolved once injection
+// operator_constraint_unknown_index_set; a name still unresolved once injection
 // has run is rejected by the evaluating bindings' resolvers (issue #185).
 func (s *structuralScan) checkAggregateUndefinedIndexSet(node ExprNode, fieldPath, modelName string, seen map[string]bool) {
 	if s.file == nil || len(s.file.IndexSets) == 0 {
@@ -384,12 +384,12 @@ func isValueInventionFAQ(node ExprNode) bool {
 }
 
 // containsTemplateReference reports whether expr holds a surviving
-// `apply_expression_template` reference (esm-spec §9.6.4), whose body a static
+// `apply_operator` reference (esm-spec §9.6.4), whose body a static
 // walk of this document cannot see.
 func containsTemplateReference(expr Expression) bool {
 	found := false
 	walkOperatorNodes(expr, func(n ExprNode) {
-		if n.Op == "apply_expression_template" {
+		if n.Op == "apply_operator" {
 			found = true
 		}
 	})

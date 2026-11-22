@@ -103,12 +103,12 @@ func TestFunctionTablesBlockIsRefusedAtLoad(t *testing.T) {
 func TestRemovedOpInTemplateBodyAndRefChild(t *testing.T) {
 	tmpl := `{"esm": "1.3.0", "metadata": {"name": "tmpl"},
 	  "models": {"M": {
-	    "expression_templates": {"k": {"params": ["a"],
+	    "operators": {"k": {"params": ["a"],
 	      "body": {"op": "rank", "args": ["a"]}}},
 	    "variables": {"x": {"type": "unknown", "default": 0.0}},
 	    "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 1.0}]}}}`
 	_, err := LoadString(tmpl)
-	requireRemovedOp(t, err, "rank", "/models/M/expression_templates/k/body")
+	requireRemovedOp(t, err, "rank", "/models/M/operators/k/body")
 
 	dir := t.TempDir()
 	child := removedOpDoc("1.3.0", `{"op": "skolem", "args": ["x", "x"]}`)
@@ -132,11 +132,11 @@ func TestRemovedOpInTemplateBodyAndRefChild(t *testing.T) {
 }
 
 // The names the 2.0.0 break kept are not swept up: `distinct` and `join` stay,
-// and an `apply_expression_template` of the esm:std `argmin` template is a
+// and an `apply_operator` of the esm:std `argmin` template is a
 // template reference, not the removed op.
 func TestRemovedOpsSpareKeptNames(t *testing.T) {
 	for _, node := range []string{
-		`{"op": "apply_expression_template", "name": "argmin", "bindings": {}, "args": []}`,
+		`{"op": "apply_operator", "name": "argmin", "bindings": {}, "args": []}`,
 		`{"op": "floor", "args": ["rank"]}`,
 	} {
 		if err := checkRemovedConstructs(removedOpDoc("2.0.0", node), ""); err != nil {
@@ -197,7 +197,7 @@ func TestRemovedOpsFixturesAreRefusedAtLoad(t *testing.T) {
 			}
 			// removed_op_table_lookup.esm also carries the `function_tables`
 			// block its lookup reads, which is reported first.
-			if re.Name != name && !(name == "table_lookup" && re.Name == removedFunctionTables) {
+			if re.Name != name && (name != "table_lookup" || re.Name != removedFunctionTables) {
 				t.Errorf("removed_op refusal names %q, want %q", re.Name, name)
 			}
 		})

@@ -1,0 +1,43 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "removed_op",
+    "description": "The JSON twin of removed_op.typ: an equation calling fn, an operator removed at esm 2.0.0, which the wire-boundary check refuses (removed_op).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "Leaf": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "args": [
+              "k"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

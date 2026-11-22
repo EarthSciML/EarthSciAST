@@ -23,7 +23,10 @@ function _ivb_ode_doc(dir)
     col["variables"]["t"]["units"] = "1"
     col["equations"] = Any[
         Dict(
-            "lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "s"),
+            # The time derivative is spelled with `wrt` absent (literally "t",
+            # esm-spec §4.2): a `wrt` naming the renamed independent variable is
+            # a spatial axis, read as `partial` (esm 2.4.0).
+            "lhs" => Dict("op" => "D", "args" => Any["y"]),
             "rhs" => Dict(
                 "op" => "+", "args" => Any[
                     Dict(

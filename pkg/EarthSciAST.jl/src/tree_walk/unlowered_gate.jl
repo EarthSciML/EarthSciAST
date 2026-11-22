@@ -64,13 +64,13 @@ function _reject_unlowered_operators(
             # (esm-spec §9.6.3 constraint 6).
             ct = _call_table()
             ops = ct === nothing ? String[] : sort!(
-                collect(
-                    _call_body_ops!(
-                        _tpl_memo(ct.tt, nothing, :body_ops, () -> Dict{String, Set{String}}()),
-                        ct.tt, String(node.name)
+                    collect(
+                        _call_body_ops!(
+                            _tpl_memo(ct.tt, nothing, :body_ops, () -> Dict{String, Set{String}}()),
+                            ct.tt, String(node.name)
+                        )
                     )
                 )
-            )
             i = findfirst(op -> op == "D" || _is_unlowered_op(op), ops)
             what = "'$(i === nothing ? node.op : ops[i])' in the body of template " *
                 "'$(node.name)' (or one it references), reached from a reference"

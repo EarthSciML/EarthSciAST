@@ -29,7 +29,7 @@ import (
 // so an operator node nested in a sidecar field — an aggregate's `expr` /
 // `filter` / `key` / `join`, an integral's `lower` / `upper`, a makearray's
 // `values` / `regions`, an
-// apply_expression_template's `bindings` — arrives as a real ExprNode with its
+// apply_operator's `bindings` — arrives as a real ExprNode with its
 // own children normalized in turn, exactly like a child of `args`. Before this,
 // only `args` was normalized and every other field stayed a raw
 // map[string]interface{}, which made those subtrees invisible to Substitute,

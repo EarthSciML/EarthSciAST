@@ -1,7 +1,9 @@
 package esm
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,7 +16,7 @@ import (
 // re-implement — three parallel copies of the same URL detection + stat/IsDir +
 // ReadFile logic that differ only in which diagnostic code they wrap the
 // failure in. loadRefBytes returns PLAIN wrapped errors; each caller re-wraps
-// the result in its own spec diagnostic (template_import_unresolved /
+// the result in its own spec diagnostic (operator_import_unresolved /
 // coupling_import_unresolved / the subsystem-ref message).
 
 // isRemoteRef reports whether ref is an http(s) URL (as opposed to a local
@@ -39,7 +41,7 @@ var refEnvToken = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 //   - A SET variable is replaced by its value (a variable set to the empty
 //     string expands to the empty string). An UNSET variable is left LITERAL,
 //     so the ref goes on to fail with the ordinary unresolved diagnostic —
-//     `template_import_unresolved`, `coupling_import_unresolved` or the
+//     `operator_import_unresolved`, `coupling_import_unresolved` or the
 //     subsystem-ref error — naming the `${VAR}` text the document actually
 //     carries, rather than misresolving against an empty string.
 //   - Expansion runs BEFORE the remote-vs-local classification and before a
@@ -50,7 +52,7 @@ var refEnvToken = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 //
 // This is an OPTIONAL loader capability on the same footing as URL refs, and it
 // reaches every §4.7 ref mechanism — subsystem and top-level `{ref}` mounts,
-// `expression_template_imports` (§9.7.2) and `coupling_import` (§10.10) — via
+// `operator_imports` (§9.7.2) and `coupling_import` (§10.10) — via
 // the two chokepoints below. A `data_sources` entry's `url_template` is NOT a
 // §4.7 ref and deliberately does not get this: §8.2.1 refuses a `${` there
 // outright (data_source_urls.go).
@@ -61,6 +63,57 @@ func expandRefEnv(ref string) string {
 		}
 		return token
 	})
+}
+
+// decodeDocumentText is the esm-spec §1.2.1 read of a document's bytes by the
+// name of the file they came from: a path, or a URL's path (its query and
+// fragment ignored), ending in `.md` is a Markdown source document, one ending
+// in `.typ` a Typst source document, and every other name JSON. The format is
+// never guessed from the content. It returns JSON text — the bytes themselves
+// for a JSON document, the source document read and rendered as JSON otherwise
+// (documentJSONText) — so a source document goes through exactly the pipeline
+// a `.esm` file does. Every place that reads a document from a path or a URL
+// passes the bytes through here: LoadPath for the root and loadRefBytes for
+// every ref site (§4.7 mounts, §9.7.2 template imports, §10.10 coupling
+// imports).
+//
+// A source document its reader refuses returns a *DocumentFormatError
+// (`parse_error`, or `removed_op`); invalid JSON is left for the JSON path to
+// report as it always has.
+func decodeDocumentText(data []byte, location string) ([]byte, error) {
+	name := location
+	if isRemoteRef(location) {
+		if u, err := url.Parse(location); err == nil {
+			name = u.Path
+		}
+	}
+	var format DocumentFormat
+	switch {
+	case strings.HasSuffix(name, ".md"):
+		format = DocumentMarkdown
+	case strings.HasSuffix(name, ".typ"):
+		format = DocumentTypst
+	default:
+		return data, nil
+	}
+	text, err := documentJSONText(string(data), format)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(text), nil
+}
+
+// keptRefusal returns the error a ref site must surface as it is rather than
+// under its own unresolved code: a removed operator (`removed_op`), whether a
+// source document's reader refused it or the wire-boundary check of a JSON
+// document did (esm-spec §1.2.1 — any other refusal is the ref site's
+// unresolved code).
+func keptRefusal(err error) (error, bool) {
+	var coded DiagnosticError
+	if errors.As(err, &coded) && coded.DiagnosticCode() == codeRemovedOp {
+		return coded, true
+	}
+	return nil, false
 }
 
 // loadRefBytes resolves and reads a library ref (an http(s) URL or a path
@@ -90,6 +143,9 @@ func loadRefBytes(ref, baseDir string) (data []byte, dir string, err error) {
 		if err != nil {
 			return nil, "", err
 		}
+		if data, err = decodeDocumentText(data, identity); err != nil {
+			return nil, "", fmt.Errorf("ref %q: %w", ref, err)
+		}
 		prepared, perr := prepareDocumentOps(string(data))
 		if perr != nil {
 			return nil, "", fmt.Errorf("ref %q: %w", ref, perr)
@@ -101,6 +157,9 @@ func loadRefBytes(ref, baseDir string) (data []byte, dir string, err error) {
 		data, err = fetchRemoteRef(ref)
 		if err != nil {
 			return nil, "", err
+		}
+		if data, err = decodeDocumentText(data, ref); err != nil {
+			return nil, "", fmt.Errorf("remote ref %q: %w", ref, err)
 		}
 		prepared, perr := prepareDocumentOps(string(data))
 		if perr != nil {
@@ -116,6 +175,9 @@ func loadRefBytes(ref, baseDir string) (data []byte, dir string, err error) {
 	data, err = os.ReadFile(path)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read ref %q (%s): %w", ref, path, err)
+	}
+	if data, err = decodeDocumentText(data, path); err != nil {
+		return nil, "", fmt.Errorf("ref %q (%s): %w", ref, path, err)
 	}
 	// A referenced document is a document: same wire boundary as the root
 	// (docs/content/rfcs/faq-node-rename.md §5.2). Without this a removed op

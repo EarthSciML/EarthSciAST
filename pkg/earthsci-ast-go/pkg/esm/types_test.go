@@ -23,7 +23,7 @@ func TestESMFileBasicStructure(t *testing.T) {
 	// Test validation - this should fail because no models, reaction systems, or data loaders
 	err := esmFile.ValidateStruct()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', 'data_sources', 'expression_templates', or 'coupling_roles' must be present")
+	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', 'data_sources', 'operators', or 'coupling_roles' must be present")
 }
 
 // A bare `data_sources` block is a legitimate document: a source CATALOGUE

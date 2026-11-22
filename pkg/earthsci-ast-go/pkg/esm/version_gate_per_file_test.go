@@ -135,10 +135,10 @@ func TestVersionGateReadsTheTemplateLibrarysOwnVersion(t *testing.T) {
   "esm": "1.2.0",
   "metadata": {"name": "root"},
   "models": {"Station": {
-    "expression_template_imports": [{"ref": "./lib.esm"}],
+    "operator_imports": [{"ref": "./lib.esm"}],
     "variables": {"p_gauge": {"type": "parameter", "units": "Pa", "default": 1.0},
                   "p_abs": {"type": "unknown", "units": "Pa"}},
-    "equations": [{"lhs": "p_abs", "rhs": {"op": "apply_expression_template", "args": [],
+    "equations": [{"lhs": "p_abs", "rhs": {"op": "apply_operator", "args": [],
       "name": "absolute_pressure", "bindings": {"p_gauge": "p_gauge"}}}]
   }}
 }`)

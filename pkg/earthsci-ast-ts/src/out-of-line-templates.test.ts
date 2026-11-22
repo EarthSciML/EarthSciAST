@@ -52,9 +52,7 @@ function emit(dir: string, fixture = 'fixture.esm'): string {
 
 function isApply(x: unknown): boolean {
   return (
-    typeof x === 'object' &&
-    x !== null &&
-    (x as Record<string, unknown>).op === 'apply_expression_template'
+    typeof x === 'object' && x !== null && (x as Record<string, unknown>).op === 'apply_operator'
   )
 }
 
@@ -178,6 +176,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
       ['rewrite_in_template_body', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
       ['rule_writes_reference', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
       ['template_instance_variants', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
+      ['rewrite_shared_by_unreached_entry', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
       ['opacity_rule_replacement', 'fixture.esm', 'emitted.esm', 'expanded.esm'],
       [
         'rewrite_depth_through_bodies',
@@ -206,7 +205,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
       const m = (loadRefPreserving('template_instance_variants').models as Record<string, any>).m
       expect((definingRhs(m, 'du') as any).name).toBe('ddx.variant1')
       expect((definingRhs(m, 'dv') as any).name).toBe('ddx.variant2')
-      expect((normj(m.expression_templates['ddx.variant1'].body) as any).name).toBe('central_1d')
+      expect((normj(m.operators['ddx.variant1'].body) as any).name).toBe('central_1d')
     })
 
     it('a leaf-bodied rule writes its leaf', () => {
@@ -237,12 +236,13 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
       ).code
       expect(want).toBe('unlowered_operator')
       // The reference survives the load with the body unrewritten; what it
-      // denotes still holds the rewrite-target op `D` the gate refuses.
+      // denotes still holds the spatial derivative `partial` (the spatial `D`
+      // read at the wire boundary, esm 2.4.0) the gate refuses.
       const d = loadRefPreserving('unlowered_in_template_body')
       const m = (d.models as Record<string, any>).m
-      expect(normj(m.expression_templates.ddy.body)).toMatchObject({ op: 'D', wrt: 'y' })
+      expect(normj(m.operators.ddy.body)).toMatchObject({ op: 'partial', wrt: 'y' })
       const expanded = JSON.stringify(expandDocument(d))
-      expect(expanded).toContain('"op":"D"')
+      expect(expanded).toContain('"op":"partial"')
       // The evaluation gate (stage "evaluate"): the build reaches the op.
       const file = loadString(
         fs.readFileSync(conf('unlowered_in_template_body', 'fixture.esm'), 'utf-8'),
@@ -266,16 +266,12 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     expect(s).toBe(fs.readFileSync(conf('emit_materialized_registry', 'emitted.esm'), 'utf-8'))
     const doc = JSON.parse(s) as Record<string, any>
     const adv = doc.models.Advection
-    // Rule 8 version stamp: emitting a surviving reference requires Option B,
-    // i.e. `esm >= 0.9.0`. It is a FLOOR, not an assignment — a source document
-    // above the floor must not be stamped back down to an unloadable 0.9.0, so
-    // the emitted version is the source's own.
-    const source = JSON.parse(
-      fs.readFileSync(conf('emit_materialized_registry', 'fixture.esm'), 'utf-8'),
-    ) as { esm: string }
-    expect(doc.esm).toBe(source.esm)
-    expect('expression_template_imports' in adv).toBe(false) // imports consumed
-    const reg = adv.expression_templates
+    // Rule 8 version stamp: an emitted document writes the names `operators`
+    // and `apply_operator`, so the floor is 2.4.0 (esm-spec §9.6.5). It is a
+    // FLOOR, not an assignment: a source above it keeps its own version.
+    expect(doc.esm).toBe('2.4.0')
+    expect('operator_imports' in adv).toBe(false) // imports consumed
+    const reg = adv.operators
     // The firing wrote a reference to its rule, which materializes match-less
     // (esm-spec §9.6.3 constraint 7, §9.6.4 rule 5).
     expect(new Set(Object.keys(reg))).toEqual(
@@ -300,7 +296,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     const s = emit('emit_rename_dotted_keys')
     expect(s).toBe(fs.readFileSync(conf('emit_rename_dotted_keys', 'emitted.esm'), 'utf-8'))
     const doc = JSON.parse(s) as Record<string, any>
-    const reg = doc.models.TwoGrids.expression_templates
+    const reg = doc.models.TwoGrids.operators
     expect(new Set(Object.keys(reg))).toEqual(
       new Set(['fine.dx', 'coarse.dx', 'fine.central_D_x', 'coarse.central_D_x']),
     )
@@ -318,11 +314,11 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     const deager = normj(definingRhs(m, 'd_eager')) as any
     expect(isApply(deager.args[0])).toBe(true)
     expect(deager.args[0].name).toBe('deriv_c')
-    const body = normj(m.expression_templates.deriv_c.body) as any
+    const body = normj(m.operators.deriv_c.body) as any
     expect(isApply(body)).toBe(true)
     expect(body.name).toBe('central')
     expect(body.bindings).toEqual({ f: 'f' })
-    expect('match' in m.expression_templates.central).toBe(false)
+    expect('match' in m.operators.central).toBe(false)
     const dsurv = normj(definingRhs(m, 'd_survive')) as any
     expect(isApply(dsurv.args[0])).toBe(true)
     expect(dsurv.args[0].name).toBe('scale_c')
@@ -338,7 +334,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   it('opacity_negative: compound rule does not see through a reference', () => {
     const d = loadRefPreserving('opacity_negative')
     const flux = normj(definingRhs((d.models as Record<string, any>).m, 'flux')) as any
-    expect(flux.op).toBe('D') // compound did NOT fire (no marker 999)
+    expect(flux.op).toBe('partial') // compound did NOT fire (no marker 999)
     expect(isApply(flux.args[0])).toBe(true) // its arg is the surviving reference
     expect(flux.args[0].name).toBe('flux_prod')
     expect(emit('opacity_negative')).toBe(
@@ -362,7 +358,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     expect(isApply(flux.bindings.f)).toBe(true)
     expect(flux.bindings.f.name).toBe('flux_prod')
     // generic marker (NOT compound 999)
-    expect((normj(m.expression_templates.generic.body) as any).args[0]).toBe(1)
+    expect((normj(m.operators.generic.body) as any).args[0]).toBe(1)
     expect(emit('opacity_priority_shadowing')).toBe(
       fs.readFileSync(conf('opacity_priority_shadowing', 'emitted.esm'), 'utf-8'),
     )
@@ -385,8 +381,8 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     expect((definingRhs(models.A, 'ya') as any).name).toBe('sten')
     expect((definingRhs(models.B, 'yb') as any).name).toBe('sten')
     // per-component blocks surrendered to the merged registry
-    expect('expression_templates' in models.A).toBe(false)
-    expect('expression_templates' in models.B).toBe(false)
+    expect('operators' in models.A).toBe(false)
+    expect('operators' in models.B).toBe(false)
   })
 
   // -------------------------------------------------------------------------
@@ -395,7 +391,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   // per model (B rebinds its free `inv_dx`) and collides; the byte-identical
   // `outer_stencil` that REFERENCES it must collide too — a single deduped
   // `outer_stencil` would carry a reference the merged registry no longer holds,
-  // and expansion would fail with `apply_expression_template_unknown_template`
+  // and expansion would fail with `operator_unknown_definition`
   // naming a transitively imported stencil no model ever mentioned.
   // -------------------------------------------------------------------------
   it('flatten_registry_merge_transitive: collisions propagate along the reference DAG', () => {

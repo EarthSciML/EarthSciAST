@@ -11,6 +11,7 @@ from pathlib import Path
 from conftest import CORPUS_UNIT_DEFECTS, FIXTURES_ROOT
 
 from earthsci_ast import load_path, load_string, validate
+from earthsci_ast.parse import rewrite_old_spellings
 from earthsci_ast.serialize import to_json
 from earthsci_ast.validation import validate_path, validate_text, SchemaValidationError
 
@@ -1522,11 +1523,14 @@ class TestTemplateLibraryRoundTrip:
         valid_dir = FIXTURES_ROOT / "valid"
         path = valid_dir / name
         original = json.loads(path.read_text())
+        # The fixture may spell the esm-2.3 names: it round-trips to its esm-2.4.0
+        # reading (esm-spec §9.6.12), which save writes.
+        rewrite_old_spellings(original)
 
         emitted = json.loads(to_json(load_path(str(path))))
 
         # The two declarations survive VERBATIM...
-        assert emitted.get("expression_templates") == original["expression_templates"]
+        assert emitted.get("operators") == original["operators"]
         assert emitted.get("metaparameters") == original["metaparameters"]
         # ...and the library is generic: its metaparameter-sized index set must
         # NOT be folded to the default. Emitting `size: 8` where the author wrote

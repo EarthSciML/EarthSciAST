@@ -820,7 +820,7 @@ pub fn is_block(it: &RItem) -> bool {
 pub fn item_ok(it: &RItem) -> bool {
     match it {
         RItem::Desc(_) | RItem::Comp(..) => true,
-        RItem::Block(_, v) => jwf(v),
+        RItem::Block(_, v) => v.wfmb(),
         RItem::Decl(d) => {
             if d.kind == DKind::Sub {
                 d.attrs.iter().all(arg_ok)

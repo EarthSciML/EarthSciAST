@@ -144,7 +144,7 @@ func TestMetaExpr_HelperDiagnostics(t *testing.T) {
 		{"empty_args", map[string]any{"op": "*", "args": []any{}}, map[string]int64{}, "metaparameter_type_error"},
 		{"float_literal", 1.5, map[string]int64{}, "metaparameter_type_error"},
 		// Unknown free name is caught at fold time.
-		{"unknown_name", map[string]any{"op": "*", "args": []any{"NZ", "NY"}}, map[string]int64{"NX": 18, "NY": 20}, "template_import_unknown_name"},
+		{"unknown_name", map[string]any{"op": "*", "args": []any{"NZ", "NY"}}, map[string]int64{"NX": 18, "NY": 20}, "operator_import_unknown_name"},
 		// Inexact division is rejected.
 		{"inexact_div", map[string]any{"op": "/", "args": []any{"NX", 7}}, map[string]int64{"NX": 18}, "metaparameter_type_error"},
 	}
@@ -179,7 +179,7 @@ func metaExprLibGrid() string {
       "metadata": {"name": "lib_grid"},
       "metaparameters": {"GX": {"type": "integer", "default": 2}},
       "index_sets": {"cells": {"kind": "interval", "size": "GX"}},
-      "expression_templates": {"one": {"params": [], "body": 1}}
+      "operators": {"one": {"params": [], "body": 1}}
     }`
 }
 
@@ -193,7 +193,7 @@ func metaExprModelImporting(binding string) string {
       },
       "models": {
         "M": {
-          "expression_template_imports": [
+          "operator_imports": [
             {"ref": "./lib_grid.esm", "bindings": {"GX": %s}}
           ],
           "variables": {"a": {"type": "parameter", "shape": ["cells"], "default": 0.0}},
@@ -348,7 +348,7 @@ func TestMetaExpr_MountEdgeUnknownParentNameIsLoud(t *testing.T) {
 		`{"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}`))
 
 	_, err := LoadPath(p, WithMetaparameters(map[string]int64{"NX": 18}))
-	if code := tiErrCode(t, err); code != "template_import_unknown_name" {
-		t.Errorf("mount-edge unknown name code = %s; want template_import_unknown_name", code)
+	if code := tiErrCode(t, err); code != "operator_import_unknown_name" {
+		t.Errorf("mount-edge unknown name code = %s; want operator_import_unknown_name", code)
 	}
 }

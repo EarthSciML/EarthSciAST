@@ -234,6 +234,51 @@ func ParseDocument(text string, format DocumentFormat) (any, error) {
 	return checkedRead(d, ok, &lim, format)
 }
 
+// documentJSONText reads a source document written in the given format and
+// returns it as JSON text, the form the JSON load path takes (esm-spec §1.2.1).
+// The reader's entries keep their order (docfmt.Render), so the declaration
+// order a document carries survives as it does for a `.esm` file. Numbers are
+// spelled canonically, with the same reading ParseDocument gives them: an
+// integer stays an integer and a decimal below the smallest subnormal is the
+// integer 0. A text the reader refuses returns ParseDocument's
+// *DocumentFormatError.
+func documentJSONText(text string, format DocumentFormat) (string, error) {
+	var (
+		lim docfmt.Lim
+		d   docfmt.Json
+		ok  bool
+	)
+	if format == DocumentTypst {
+		d, ok = docfmt.ParseTyp(&lim, text)
+	} else {
+		d, ok = docfmt.ParseMd(&lim, text)
+	}
+	if _, err := checkedRead(d, ok, &lim, format); err != nil {
+		return "", err
+	}
+	return docfmt.Render(zeroUnderflow(d)), nil
+}
+
+// zeroUnderflow replaces each decimal that rounds to zero by the integer 0, as
+// docfmt.ToGo reads it, so the rendered text means what ParseDocument returns.
+func zeroUnderflow(j docfmt.Json) docfmt.Json {
+	switch x := j.(type) {
+	case docfmt.JNum:
+		if x.Dec && x.Float() == 0 {
+			return docfmt.IntNum(0)
+		}
+	case []docfmt.Json:
+		for i, e := range x {
+			x[i] = zeroUnderflow(e)
+		}
+	case docfmt.Obj:
+		for i := range x {
+			x[i].V = zeroUnderflow(x[i].V)
+		}
+	}
+	return j
+}
+
 // checkedRead is the result of a read (Rust `checked`): refused past a bound
 // of the reader (nested too deeply, a number beyond binary64), else the
 // reader's value in Go form, else the reader's refusal.

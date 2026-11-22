@@ -1,0 +1,14 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "library",
+    "description": "A template library with one match-less template, the upwind flux c u.",
+    "authors": ["EarthSciML"]
+  },
+  "expression_templates": {
+    "upwind_flux": {
+      "params": ["u", "c"],
+      "body": {"op": "*", "args": ["c", "u"]}
+    }
+  }
+}

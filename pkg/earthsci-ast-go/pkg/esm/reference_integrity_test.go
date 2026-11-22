@@ -581,7 +581,7 @@ func TestCallbackVariablesAreADeclarationSite(t *testing.T) {
 // TestTemplateLibraryRoundTripsToItself pins esm-spec §9.6.4 rule 5: Option A
 // expands CALL SITES; it does not delete DECLARATIONS.
 //
-// A top-level `expression_templates` registry and a `metaparameters` block are
+// A top-level `operators` registry and a `metaparameters` block are
 // DECLARATIONS — peers of `index_sets` — so they survive parse → emit VERBATIM,
 // and a template-library file round-trips to ITSELF.
 //
@@ -601,10 +601,17 @@ func TestTemplateLibraryRoundTripsToItself(t *testing.T) {
 	for _, name := range []string{"template_import_lib.esm", "template_import_rename_lib.esm"} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(repoRoot, "tests", "valid", name)
-			authored, err := os.ReadFile(path)
+			authoredRaw, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("read: %v", err)
 			}
+			// An old field spelling is read as the esm-2.4.0 name (esm-spec
+			// §9.6.12), so the authored document is compared in the new spelling.
+			newSpelling, _, _, err := rewriteOldSpellings(string(authoredRaw))
+			if err != nil {
+				t.Fatalf("read old spellings: %v", err)
+			}
+			authored := []byte(newSpelling)
 
 			file, err := LoadPath(path)
 			if err != nil {
@@ -614,7 +621,7 @@ func TestTemplateLibraryRoundTripsToItself(t *testing.T) {
 			// The registry IS the library's payload: without it the document has no
 			// top-level payload key at all and cannot serialize.
 			if len(file.ExpressionTemplates) == 0 {
-				t.Fatal("`expression_templates` was DROPPED at parse: the registry is a declaration, " +
+				t.Fatal("`operators` was DROPPED at parse: the registry is a declaration, " +
 					"not a call site, and must survive verbatim (§9.6.4 rule 5)")
 			}
 
@@ -637,14 +644,14 @@ func TestTemplateLibraryRoundTripsToItself(t *testing.T) {
 					t.Errorf("emitted document DROPPED the authored top-level key %q", key)
 				}
 			}
-			for _, key := range []string{"expression_templates", "metaparameters"} {
+			for _, key := range []string{"operators", "metaparameters"} {
 				if !reflect.DeepEqual(before[key], after[key]) {
 					t.Errorf("%q did not survive parse → emit verbatim:\n authored: %v\n emitted:  %v",
 						key, before[key], after[key])
 				}
 			}
 
-			// A template BODY may legally contain an `apply_expression_template`: that
+			// A template BODY may legally contain an `apply_operator`: that
 			// is §9.7.3 template COMPOSITION, expanded at the INVOCATION site, not at
 			// the DECLARATION. It must survive in the registry and must NOT be
 			// mistaken for an unexpanded call site by a stray-apply scanner. (Go is
@@ -652,7 +659,7 @@ func TestTemplateLibraryRoundTripsToItself(t *testing.T) {
 			// template_import_lib.esm's `scale_by_n` body is the live case.)
 			if name == "template_import_lib.esm" &&
 				!strings.Contains(string(file.ExpressionTemplates), applyExpressionTemplateOp) {
-				t.Error("the composition `apply_expression_template` in a template BODY did not survive: " +
+				t.Error("the composition `apply_operator` in a template BODY did not survive: " +
 					"a declaration is not a call site (§9.7.3)")
 			}
 

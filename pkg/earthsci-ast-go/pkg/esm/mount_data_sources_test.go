@@ -116,7 +116,7 @@ func TestBindingsForwardThroughURLRefs(t *testing.T) {
 }
 
 // A nested ref the walk cannot read is reported as the unresolved ref it is,
-// not as `template_import_unknown_name` for the binding whose declaration the
+// not as `operator_import_unknown_name` for the binding whose declaration the
 // walk could not see: the real load reaches the nested edge first. Covers a URL
 // that cannot be fetched, and a RELATIVE ref inside a URL-loaded document,
 // which this binding does not yet join onto the document's URL directory

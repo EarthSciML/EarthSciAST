@@ -15,7 +15,7 @@
  *    leaf's own close, so the axis sizes from the data instead of falling
  *    through to the leaf's placeholder default (§4.7 "Two mount forms, one
  *    mechanism");
- *  * whether a leaf resolves does not turn on an `expression_template_imports`
+ *  * whether a leaf resolves does not turn on an `operator_imports`
  *    entry it never calls.
  *
  * SCOPE. This binding mounts at BOTH §4.7 attachment points (the top-level
@@ -92,10 +92,10 @@ describe('§9.7.6 site 4 reaches a name only a MOUNTED document declares', () =>
 
   it('still refuses a loader-API binding NO document declares', () => {
     // Widening the check must not delete it. A name neither the root nor
-    // anything it mounts declares is still `template_import_unknown_name` —
+    // anything it mounts declares is still `operator_import_unknown_name` —
     // §9.7.6: bindings never invent metaparameters, a typo fails loudly.
     expect(codeOf(() => loadMounted('extent_root_subsystem.esm', { N_RECS: 3 }))).toBe(
-      'template_import_unknown_name',
+      'operator_import_unknown_name',
     )
   })
 
@@ -149,7 +149,7 @@ describe('§8.9.4 statically: an extent nobody declares is refused at load', () 
     } catch (e) {
       err = e
     }
-    expect((err as { code?: string } | undefined)?.code).toBe('template_import_unknown_name')
+    expect((err as { code?: string } | undefined)?.code).toBe('operator_import_unknown_name')
     expect(String((err as Error).message)).toContain('N_RECS')
   })
 })
@@ -158,7 +158,7 @@ describe('the site-4 backfill is FILTERED to the names the leaf declares', () =>
   it('does not forward a loader binding the leaf does not declare', () => {
     // Here the assembler declares `N_REC` and the leaf it mounts declares
     // nothing. Forwarding the whole loader-API map into the leaf's close would
-    // raise `template_import_unknown_name` against a leaf that never asked for
+    // raise `operator_import_unknown_name` against a leaf that never asked for
     // the name — and, worse, would let an assembler's unrelated metaparameter
     // silently resize a leaf axis the edge never bound (esm-spec §4.7).
     const file = loadMounted('assembler_root_with_import.esm', { N_REC: 5 })
@@ -260,7 +260,7 @@ describe('where the static §8.9.4 check runs', () => {
     // then skips the check entirely. Measured both ways; this test is what keeps
     // the check on the authored tree.
     expect(codeOf(() => loadMounted('extent_typo_no_mount.esm'))).toBe(
-      'template_import_unknown_name',
+      'operator_import_unknown_name',
     )
   })
 })

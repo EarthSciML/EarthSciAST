@@ -29,7 +29,7 @@ describe('ERROR_CODES', () => {
 
   it('exposes a few contract codes verbatim', () => {
     expect(ERROR_CODES.UNDEFINED_VARIABLE).toBe('undefined_variable')
-    expect(ERROR_CODES.TEMPLATE_IMPORT_CYCLE).toBe('template_import_cycle')
+    expect(ERROR_CODES.OPERATOR_IMPORT_CYCLE).toBe('operator_import_cycle')
     expect(ERROR_CODES.COUPLING_IMPORT_UNRESOLVED).toBe('coupling_import_unresolved')
     expect(ERROR_CODES.REMOVED_OP).toBe('removed_op')
     expect(ERROR_CODES.UNKNOWN_ENUM).toBe('unknown_enum')

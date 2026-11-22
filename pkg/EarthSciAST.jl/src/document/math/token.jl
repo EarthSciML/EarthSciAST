@@ -83,6 +83,8 @@ export Kw, Tok, Sf, SF_LATEX, SF_TYPST,
     KEcases
     KCases
     KEsmnode
+    # the nabla of the grad, div, laplacian and curl forms: LaTeX `\\nabla`, Typst `nabla`
+    KNabla
     # constant arrays
     KBmat
     KEmat

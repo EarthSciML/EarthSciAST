@@ -218,7 +218,7 @@ def test_rewrite_surface_apply_expression_template_binding_values():
         "from": "Fuel.sigma",
         "to": "Spread.sigma",
         "transform": {
-            "op": "apply_expression_template",
+            "op": "apply_operator",
             "name": "scale",
             "args": [],
             "bindings": {"x": "Fuel.sigma", "y": 3},
@@ -467,7 +467,7 @@ def test_template_import_of_coupling_library_is_rejected(tmp_path):
         "models": {"M": _param_model(expression_template_imports=[{"ref": "couplib.esm"}])},
     }
     path = _write(str(tmp_path), "assembly.esm", assembly)
-    assert _err_code(lambda: load_path(path)) == "template_import_is_coupling_library"
+    assert _err_code(lambda: load_path(path)) == "operator_import_is_coupling_library"
 
 
 # ---------------------------------------------------------------------------

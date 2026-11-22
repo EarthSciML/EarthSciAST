@@ -140,6 +140,8 @@ partial def render : Json → String
   | .bool false => "false"
   | .num n => String.ofList (Number.print n)
   | .str s => String.ofList (Strings.quote false s)
+  -- never reached: a document read back holds no math leaf (`Json.WF`)
+  | .math s => String.ofList (Strings.quote false s)
   | .arr xs => "[" ++ ",".intercalate (xs.map render) ++ "]"
   | .obj kvs => "{" ++ ",".intercalate (kvs.map fun (k, v) =>
       String.ofList (Strings.quote false k) ++ ":" ++ render v) ++ "}"

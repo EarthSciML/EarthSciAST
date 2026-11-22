@@ -131,7 +131,7 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
     'Pre',
     'const',
     'enum',
-    'apply_expression_template',
+    'apply_operator',
     'distinct',
     '=',
     'pow',

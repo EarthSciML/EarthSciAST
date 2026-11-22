@@ -379,7 +379,7 @@ _EMISSIBLE_FIELDS: tuple[str, ...] = (
 # the emitter never saw one. They fall through to the derived
 # ``_NON_EMISSIBLE_FIELDS`` below, so no edit is needed here; this note records
 # that the omission is a decision, not an oversight.
-_CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("bindings", "template_origin")
+_CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("bindings", "template_origin", "template_call")
 
 # ExprNode fields WITHOUT a pinned slot in the cross-binding canonical JSON node
 # encoding. If any is set, the node cannot be emitted faithfully and
@@ -561,7 +561,7 @@ def _normalize_exponent(s: str) -> str:
 _DOCUMENT_MAP_KEYS = frozenset(
     {
         "bind", "bindings", "coordinates", "coords", "coupling_roles", "data_sources",
-        "enums", "expression_template_imports", "expression_templates", "guesses",
+        "enums", "operator_imports", "operators", "guesses",
         "index_set_rename", "index_sets", "initial_conditions", "map", "metaparameters",
         "models", "parameter_overrides", "parameters", "pinned_coords", "ranges",
         "reaction_systems", "rebind", "rename", "species", "subsystems", "translate",
@@ -620,10 +620,24 @@ def canonicalize_document(doc: Any) -> Any:
     ``^``, and a ``broadcast`` of ``neg`` with one argument maps ``-``. Every
     number, free-form objects included, takes its canonical form (CONFORMANCE
     §5.5.3.1): an integral value in Int64 is an integer (``2.0`` is ``2``).
+    The spellings an earlier document wrote are read as the esm-2.4.0 ones
+    (esm-spec §9.6.12, §4.2): ``expression_templates`` /
+    ``expression_template_imports`` as ``operators`` / ``operator_imports``,
+    ``apply_expression_template`` as ``apply_operator``, and a ``D`` with a
+    ``wrt`` other than ``t`` (unless it names a parameter of the enclosing
+    definition), ``δ`` and ``∂`` as ``partial``. A definition's ``units`` is a
+    unit EXPRESSION (esm-spec §9.6.1), never respelled as a units string.
     The input is not mutated; nothing else changes. These are the rules of
     Lean ``Adapter.Doc.spellRules`` and ``Adapter.Doc.conv``.
     """
+    import copy
+
+    from .parse import _has_old_spellings, rewrite_old_spellings
     from .units import canonical_unit_spelling
+
+    if _has_old_spellings(doc):
+        doc = copy.deepcopy(doc)
+        rewrite_old_spellings(doc)
 
     def rewrite_deprecated(node: dict) -> dict:
         op, args = node.get("op"), node.get("args")
@@ -637,7 +651,7 @@ def canonicalize_document(doc: Any) -> Any:
             return {k: ("-" if k == "fn" else v) for k, v in node.items()}
         return node
 
-    def walk(value: Any, is_map: bool = False) -> Any:
+    def walk(value: Any, is_map: bool = False, defn: bool = False) -> Any:
         if isinstance(value, list):
             return [walk(v) for v in value]
         if not isinstance(value, dict):
@@ -645,6 +659,17 @@ def canonicalize_document(doc: Any) -> Any:
         if is_map:
             return {k: walk(v) for k, v in value.items()}
         units = value.get("units")
+        if defn:
+            # One definition: its `units` is a unit expression.
+            out = {}
+            for k, v in value.items():
+                if k == "units":
+                    out[k] = v if isinstance(v, str) else walk(v)
+                elif k in _DOCUMENT_FREE_KEYS:
+                    out[k] = v
+                else:
+                    out[k] = walk(v, k in _DOCUMENT_MAP_KEYS)
+            return out
         if value.get("op") == "const" and isinstance(units, str):
             if canonical_unit_spelling(units) == "1":
                 # A dimensionless const drops its units: a scalar becomes the
@@ -659,6 +684,8 @@ def canonicalize_document(doc: Any) -> Any:
                 out[k] = canonical_unit_spelling(v)
             elif k in _DOCUMENT_FREE_KEYS:
                 out[k] = v
+            elif k == "operators" and isinstance(v, dict):
+                out[k] = {n: walk(d, defn=isinstance(d, dict)) for n, d in v.items()}
             else:
                 out[k] = walk(v, k in _DOCUMENT_MAP_KEYS)
         return rewrite_deprecated(out)

@@ -152,3 +152,17 @@ end
         @test err !== nothing && occursin("faq_bare_array_operand", sprint(showerror, err))
     end
 end
+
+# The ring stacks the geometry fixtures bind to `overlap_area_planar` are array
+# observeds; the interpreter's build substitutes them into the binding, so the
+# array parameter is bound to an expression. That reference is expanded for
+# its instance (call.jl `_call_expanded_for_array`) rather than refused.
+@testset "array parameter bound to an expression: the reference is expanded" begin
+    for f in ("polygon_intersection_area_planar", "polygon_intersection_area_padded_ring")
+        file = EarthSciAST.load_path(joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "geometry", "$f.esm"))
+        prob = EarthSciAST.esm_problem(file, (0.0, 1.0); compiler = :interpreter)
+        du = similar(prob.u0)
+        prob.f!(du, prob.u0, prob.p, 0.0)
+        @test du ≈ [1.0] atol = 1.0e-9
+    end
+end

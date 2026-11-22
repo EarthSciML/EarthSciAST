@@ -8,7 +8,9 @@ Port of `formal/Esm/Document/TypstDict.lean` (Rust `document::typst_dict`).
   `-9223372036854775808` as a float;
 * strings with Typst escapes (`\\u{XXXX}`);
 * arrays `(a, b)`, `()` empty; dictionaries `(key: v, "quoted key": v)`,
-  `(:)` empty. A key is bare when it is an identifier and not a Typst keyword.
+  `(:)` empty. A key is bare when it is an identifier and not a Typst keyword;
+* a math leaf `\$…\$`, Typst math content: its text up to the next `\$`
+  (`Json.mathOK`). Only a path block holds one (`Source.mathify`).
 
 The canonical layout is one element per line, each indented two spaces deeper
 than the opening line and followed by `,`. The reader skips whitespace between
@@ -54,6 +56,10 @@ function enc(m::Int, v, out::Vector{Char})
         append!(out, print_num(v))
     elseif v isa String
         append!(out, quote_str(true, v))
+    elseif v isa JMath
+        push!(out, '$')
+        append!(out, v.s)
+        push!(out, '$')
     elseif v isa JArr
         if isempty(v.xs)
             push!(out, '(', ')')
@@ -154,6 +160,8 @@ function _p_val(input::Chars)
         return p_paren(r)
     elseif c == '"'
         return parse_quoted(true, input)
+    elseif c == '$'
+        return p_math(drop(input))
     elseif c == 'n'
         r = strip_prefix(input, "none")
         return r === nothing ? nothing : (JNULL, r)
@@ -232,12 +240,12 @@ function p_entries(input::Chars)
 end
 
 """`TypstDict.decode`: whitespace, the value, whitespace, end of input. The
-value must be well formed."""
+value must be well formed, math leaves allowed (`Json.WFm`)."""
 function decode(s::Chars)
     x = p_val(skip_ws(s))
     x === nothing && return nothing
     v, r = x
-    (isempty(skip_ws(r)) && wfb(v)) || return nothing
+    (isempty(skip_ws(r)) && wfmb(v)) || return nothing
     return v
 end
 

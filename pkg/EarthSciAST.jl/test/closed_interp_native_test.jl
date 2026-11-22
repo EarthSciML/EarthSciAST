@@ -325,6 +325,7 @@ import OrdinaryDiffEqTsit5   # the solver `run_inline_tests` picks
         src = joinpath(TESTUTILS_REPO_ROOT, "tests", "closed_functions", "interp", fname, "template.esm")
         doc = JSON3.read(read(src, String), Dict{String, Any})
         model = first(values(doc["models"]))
+        delete!(model, "expression_template_imports")   # the fixture's esm-2.3 spelling
         model["operator_imports"] = Any[Dict{String, Any}("ref" => lib)]
         vars = model["variables"]
         lits = Dict{String, Any}(k => v["default"] for (k, v) in vars if v["type"] == "parameter")

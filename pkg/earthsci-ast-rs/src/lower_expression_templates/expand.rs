@@ -70,9 +70,9 @@ pub(crate) fn capture_component_templates_stamped(
                 continue;
             };
             let here_refs = received.remove(cname.as_str()).unwrap_or_default();
-            if !comp
+            if comp
                 .get("operators")
-                .is_some_and(|t| t.as_object().is_some_and(|t| !t.is_empty()))
+                .is_none_or(|t| t.as_object().is_none_or(|t| t.is_empty()))
             {
                 continue;
             }

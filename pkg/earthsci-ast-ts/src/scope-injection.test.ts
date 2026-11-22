@@ -2,7 +2,7 @@
  * Tests for esm-spec §9.7.10 — scope-directed template injection
  * (docs/content/rfcs/scoped-template-injection.md): the assembler- or
  * test-chosen discretization for a discretization-agnostic PDE leaf, via
- * `expression_template_imports` on a §4.7 subsystem-ref edge (form A), a §10
+ * `operator_imports` on a §4.7 subsystem-ref edge (form A), a §10
  * coupling entry (form B), or a §6.6/§6.7 test/analysis (form C). Drives the
  * shared conformance fixtures under tests/conformance/expression_templates/,
  * mirroring the Julia reference suite
@@ -52,16 +52,16 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
 
     // The leaf loads standalone with its D intact (agnostic; unlowered).
     const leaf = loadPath(conf('inject_subsystem_ref', 'leaf.esm'))
-    expect(leaf.models.Advection.equations[0].rhs.args[1].op).toBe('D')
+    expect(leaf.models.Advection.equations[0].rhs.args[1].op).toBe('partial')
 
-    // Negative twin: mounting WITHOUT injection loads cleanly (the D survives
+    // Negative twin: mounting WITHOUT injection loads cleanly (the `partial` survives
     // — the op namespace is open); the unlowered_operator gate is an
     // evaluation-time concern, not a loadString error.
     const ni = await loadResolved(conf('inject_subsystem_ref', 'no_inject.esm'))
     const niRunoff = ni.models.Assembly.subsystems.Runoff
     expect(niRunoff.equations).toBeDefined()
     expect(niRunoff.ref).toBeUndefined()
-    expect(niRunoff.equations[0].rhs.args[1].op).toBe('D')
+    expect(niRunoff.equations[0].rhs.args[1].op).toBe('partial')
   })
 
   // esm-spec §4.7 / §9.7.10 form A: the edge's injected import ref is written by
@@ -89,20 +89,20 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     expect(f.models.Emit.equations[0].lhs.op).toBe('D')
     // The injection map is consumed — form B does not survive parse → emit.
     const ser = JSON.parse(toJson(f)) as any
-    expect('expression_template_imports' in ser.coupling[0]).toBe(false)
+    expect('operator_imports' in ser.coupling[0]).toBe(false)
     expect(ser).toEqual(golden(conf('inject_coupling_entry', 'expanded.esm')))
 
     // Diagnostics.
     expect(errCode(() => loadPath(conf('inject_coupling_entry', 'neg_target_unknown.esm')))).toBe(
-      'template_inject_target_unknown',
+      'operator_inject_target_unknown',
     )
     // A key naming a `data_sources` entry: from 1.0.0 a data source is pure
     // ingest configuration, not a component, so it has no template scope and
     // no expression positions to rewrite. The dedicated
-    // `template_inject_target_is_loader` code is retired; such a key now
+    // `operator_inject_target_is_loader` code is retired; such a key now
     // reports as the general "target is not a component" diagnostic.
     expect(errCode(() => loadPath(conf('inject_coupling_entry', 'neg_target_is_loader.esm')))).toBe(
-      'template_inject_target_not_component',
+      'operator_inject_target_not_component',
     )
   })
 
@@ -111,12 +111,11 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     const adv = f.models.Advection
     // The enclosing component round-trips with its D INTACT (form C does not
     // lower it at loadString) and each test keeps its import field (survives emit).
-    expect(adv.equations[0].rhs.args[1].op).toBe('D')
+    expect(adv.equations[0].rhs.args[1].op).toBe('partial')
     expect(adv.tests.length).toBe(2)
     expect(
       adv.tests.every(
-        (t: any) =>
-          Array.isArray(t.expression_template_imports) && t.expression_template_imports.length > 0,
+        (t: any) => Array.isArray(t.operator_imports) && t.operator_imports.length > 0,
       ),
     ).toBe(true)
     expect(JSON.parse(toJson(f))).toEqual(golden(conf('inject_test_block', 'roundtrip.esm')))
@@ -126,25 +125,13 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     // persisted component is never mutated.
     const src = conf('inject_test_block', 'fixture.esm')
     const base = conf('inject_test_block')
-    const e1 = await ephemeralInjectedFile(
-      f,
-      src,
-      'Advection',
-      adv.tests[0].expression_template_imports,
-      base,
-    )
-    const e2 = await ephemeralInjectedFile(
-      f,
-      src,
-      'Advection',
-      adv.tests[1].expression_template_imports,
-      base,
-    )
+    const e1 = await ephemeralInjectedFile(f, src, 'Advection', adv.tests[0].operator_imports, base)
+    const e2 = await ephemeralInjectedFile(f, src, 'Advection', adv.tests[1].operator_imports, base)
     expect((e1 as any).models.Advection.equations[0].rhs.args[1].op).toBe('makearray')
     expect((e2 as any).models.Advection.equations[0].rhs.args[1].op).toBe('makearray')
     expect((e1 as any).index_sets.lon.size).toBe(288)
     expect((e2 as any).index_sets.lon.size).toBe(144)
     // The persisted file is untouched by the ephemeral builds.
-    expect(f.models.Advection.equations[0].rhs.args[1].op).toBe('D')
+    expect(f.models.Advection.equations[0].rhs.args[1].op).toBe('partial')
   })
 })

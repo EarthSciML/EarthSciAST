@@ -72,7 +72,7 @@ function importer(ref: string): unknown {
     metadata: { name: 'envref_importer' },
     models: {
       M: {
-        expression_template_imports: [{ ref }],
+        operator_imports: [{ ref }],
         variables: {
           x: { type: 'unknown', units: '1', default: 1.0 },
           y: { type: 'unknown', units: '1' },
@@ -152,7 +152,7 @@ describe('§4.7 `${VAR}` in a template-library import (§9.7.2)', () => {
     const resolved = resolveTemplateMachinery(doc, dir, { validateSchema })
     // The library's templates and its metaparameter-sized axis both arrived.
     const model = (resolved?.models as Record<string, Record<string, unknown>>).M
-    expect(Object.keys(model.expression_templates ?? {})).toContain('scale_by_n')
+    expect(Object.keys(model.operators ?? {})).toContain('scale_by_n')
     expect((resolved?.index_sets as Record<string, { size?: unknown }>).cells?.size).toBe(8)
   })
 
@@ -165,7 +165,7 @@ describe('§4.7 `${VAR}` in a template-library import (§9.7.2)', () => {
       resolveTemplateMachinery(importer(ref), dir, { validateSchema })
       expect.unreachable('an unset ${VAR} must not resolve')
     } catch (e) {
-      expect((e as { code?: string }).code).toBe('template_import_unresolved')
+      expect((e as { code?: string }).code).toBe('operator_import_unresolved')
     }
   })
 
@@ -195,7 +195,7 @@ describe('§4.7 `${VAR}` in a template-library import (§9.7.2)', () => {
     const doc = importer(`./\${${SUB_DIR_VAR}}/lib.esm`)
     const resolved = resolveTemplateMachinery(doc, dir, { validateSchema })
     const model = (resolved?.models as Record<string, Record<string, unknown>>).M
-    expect(Object.keys(model.expression_templates ?? {})).toContain('scale_by_n')
+    expect(Object.keys(model.operators ?? {})).toContain('scale_by_n')
   })
 })
 
@@ -312,7 +312,7 @@ describe('§4.7 `${VAR}` in the mount-declared-metaparameter walk (§9.7.6 site 
     const doc = host(`\${${LIB_DIR_VAR}}/sized.esm`)
     expect(() =>
       loadString(JSON.stringify(doc), { basePath: dir, metaparameters: { ENVREF_TYPO: 4 } }),
-    ).toThrow(/template_import_unknown_name|ENVREF_TYPO/)
+    ).toThrow(/operator_import_unknown_name|ENVREF_TYPO/)
   })
 })
 

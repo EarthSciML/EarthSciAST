@@ -402,7 +402,7 @@ def test_roundtrip_preserves_analysis_expression_template_imports():
                     {
                         "id": "run_under_discretization",
                         "time_span": {"start": 0.0, "end": 1.0},
-                        "expression_template_imports": imports,
+                        "operator_imports": imports,
                     }
                 ],
             }
@@ -417,7 +417,7 @@ def test_roundtrip_preserves_analysis_expression_template_imports():
 
     # ... and they round-trip verbatim on emit.
     ser = _serialize_esm_file(f)["models"]["M"]["analyses"][0]
-    assert ser["expression_template_imports"] == imports
+    assert ser["operator_imports"] == imports
 
 
 def test_analysis_without_imports_omits_key():
@@ -447,4 +447,4 @@ def test_analysis_without_imports_omits_key():
     f = load_string(json.dumps(doc))
     assert f.models["M"].analyses[0].expression_template_imports == []
     ser = _serialize_esm_file(f)["models"]["M"]["analyses"][0]
-    assert "expression_template_imports" not in ser
+    assert "operator_imports" not in ser

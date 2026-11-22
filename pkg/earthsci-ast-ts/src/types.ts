@@ -131,7 +131,7 @@ export type EsmFile = ESMFormat1 &
     models?: { [k: string]: Model | GeneratedSubsystemRef }
 
     /**
-     * NON-SCHEMA, LOADER-POPULATED. The per-component `expression_templates`
+     * NON-SCHEMA, LOADER-POPULATED. The per-component `operators`
      * registries of the Option-B loaded image, keyed
      * `"models.<name>"` / `"reaction_systems.<name>"` — the Julia / Python
      * `component_templates` key shape.
@@ -145,7 +145,7 @@ export type EsmFile = ESMFormat1 &
      *
      * It is NOT part of `esm-schema.json`, is NEVER serialized (`toJson`
      * excludes it), and is absent on a document that declares no per-component
-     * `expression_templates` block — i.e. on almost every document. Values are
+     * `operators` block — i.e. on almost every document. Values are
      * raw JSON template declarations (`{params, body, match?, …}`), not the
      * typed `Expression` form.
      *

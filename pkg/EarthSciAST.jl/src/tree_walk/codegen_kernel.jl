@@ -258,6 +258,10 @@ mutable struct _CGFunction
     # tables with equal entries, by object and by content.
     tblid::IdDict{Any, Int}
     tblcontent::Dict{Any, Int}
+    # Per emitted call function: the literal tables its body reads (a
+    # `_ConstGatherArray`, its own or a nested call's), in the order of its
+    # trailing parameters; a call site passes each (`_cg_emit_call`).
+    callconsts::IdDict{Any, Vector{Any}}
 end
 _CGFunction(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int = 0) =
     _CGFunction(
@@ -265,7 +269,7 @@ _CGFunction(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst:
     _CGSlotSpace(nst), _CGNest(), _CGKernelTx(_CGMark(0, 0, 0, 0, 0), Dict{String, Symbol}()),
     IdDict{Any, Tuple{Symbol, Int, Expr}}(),
     IdDict{Any, Tuple{Vector{Tuple{Int, Int, Int}}, Vector{Int}}}(), Dict{Symbol, Int}(),
-    IdDict{Any, Int}(), Dict{Any, Int}()
+    IdDict{Any, Int}(), Dict{Any, Int}(), IdDict{Any, Vector{Any}}()
 )
 
 # The emitted size of `ex` as LLVM sees it: a call of an inlined helper counts
@@ -896,11 +900,27 @@ struct _CGCallCtx
     loops::IdDict{Any, Symbol}   # loop counters, and sub-trees computed once ahead ("A repeated sub-tree")
     spans::IdDict{Any, Tuple{Int, Int}}
     share::Any                   # a `_CGShareKeys` (array_contraction.jl, included later)
+    # The literal tables the body reads, each a trailing parameter
+    # (`consts[k]` is parameter `constsyms[k]`): a call function is a helper
+    # outside the generated function's scope under the split transport, so it
+    # reads a table through a parameter, never through the function's tabs.
+    consts::Vector{Any}
+    constsyms::Vector{Symbol}
 end
 _CGCallCtx(args, arrs) = _CGCallCtx(
     args, arrs, Tuple{Int, Int, Int}[], Symbol[], Symbol[], Int[],
-    IdDict{Any, Symbol}(), IdDict{Any, Tuple{Int, Int}}(), _CGShareKeys()
+    IdDict{Any, Symbol}(), IdDict{Any, Tuple{Int, Int}}(), _CGShareKeys(), Any[], Symbol[]
 )
+
+# The parameter that holds the literal table `cg` in the body being emitted
+# (`_cg_const_gather` reads the table through it).
+function _cg_cga(::_CGFunction, kc::_CGCallCtx, cg)
+    k = findfirst(x -> x === cg, kc.consts)
+    k === nothing || return kc.constsyms[k]
+    push!(kc.consts, cg)
+    push!(kc.constsyms, Symbol("_cgK", length(kc.consts)))
+    return kc.constsyms[end]
+end
 
 function _cg_emit(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
     _cg_budget!(ctx)
@@ -912,6 +932,11 @@ function _cg_emit(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
     k === _NK_OP && return _cg_emit_op(ctx, kc, nd)
     k === _NK_CALL && return _cg_emit_call(ctx, kc, nd)
     k === _NK_ARG_GATHER && return _cg_arg_gather(ctx, kc, nd)
+    # A read of a literal table in the body (an inline `const`, or a
+    # reference to a template that is one, frames.jl `_tpl_const_table`): the
+    # build-time array, read through a trailing parameter of the call
+    # function (`_cg_cga`), which each call site passes (`_cg_emit_call`).
+    k === _NK_CONST_GATHER && return _cg_call_const_gather(ctx, kc, nd)
     if k === _NK_CONTRACTION_LOOP
         spec = nd.payload::_ContractLoop
         rng = spec.lo:spec.step:spec.hi
@@ -961,6 +986,11 @@ function _cg_emit_call(ctx::_CGFunction, kc, nd::_Node)
         else
             push!(args, _cg_tab!(ctx, tab), ok)
         end
+    end
+    # The literal tables the body reads: from this function's tabs, or, in a
+    # calling body, through that body's own parameter for it.
+    for cg in get(ctx.callconsts, tg, Any[])
+        push!(args, kc isa _CGCallCtx ? _cg_cga(ctx, kc, cg) : _cg_tab!(ctx, cg))
     end
     # An inlined body is compiled here too: it counts toward this function.
     ctx.nodes += get(ctx.inlsize, f, 0)
@@ -1023,6 +1053,30 @@ function _cg_arg_gather(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
     return Expr(:let, Expr(:block, binds...), Expr(:block, :(@inbounds $A.flat[$off])))
 end
 
+# A literal table read in a body (`_NK_CONST_GATHER`): read through the
+# body's parameter for it (`_cg_cga`), as a const array argument is read
+# (`_cg_arg_gather`): strides from the passed array, each subscript through the
+# walker's `_const_gather_sub` unless it is provably on its axis.
+function _cg_call_const_gather(ctx::_CGFunction, kc::_CGCallCtx, nd::_Node)
+    cg = nd.payload::_ConstGatherArray
+    A = _cg_cga(ctx, kc, cg)
+    ch = nd.children
+    subs = Symbol[_cg_name(ctx, "cks") for _ in ch]
+    binds = Any[]
+    for d in eachindex(ch)
+        se = d == 1 ? _cg_emit(ctx, kc, ch[d]) : _cg_emit_region(ctx, kc, ch[d])
+        span = _cg_int_span(kc, ch[d])
+        inside = span !== nothing && d <= length(cg.dims) && 1 <= span[1] && span[2] <= cg.dims[d]
+        inside && _tally_cascade!(:gather_in_range)
+        push!(
+            binds, inside ? :($(subs[d]) = unsafe_trunc(Int, $se)) :
+                :($(subs[d]) = _const_gather_sub($A, $d, round(Int, $se)))
+        )
+    end
+    off = _cg_foldl(:+, Any[1, (:(($(subs[d]) - 1) * $A.strides[$d]) for d in eachindex(ch))...])
+    return Expr(:let, Expr(:block, binds...), Expr(:block, :(@inbounds $A.flat[$off])))
+end
+
 # The emitted function of target `tg` (minted on first use in `ctx`).
 function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
     got = get(ctx.callfns, tg, nothing)
@@ -1055,13 +1109,14 @@ function _cg_call_fn!(ctx::_CGFunction, tg::_CallTarget)
     small && (ctx.inlsize[name] = sz)
     fdef = Expr(
         :function,
-        Expr(:call, name, :u, :p, :t, argsyms..., arrparams..., Iterators.flatten(zip(kc.ctsyms, kc.ctoks))...),
+        Expr(:call, name, :u, :p, :t, argsyms..., arrparams..., Iterators.flatten(zip(kc.ctsyms, kc.ctoks))..., kc.constsyms...),
         Expr(:block, stmts...)
     )
     def = Expr(:macrocall, Symbol(small ? "@inline" : "@noinline"), ln, fdef)
     push!(ctx.helpers, def)
     ctx.callfns[tg] = (name, length(ctx.helpers), def)
     ctx.callcounts[tg] = (copy(kc.ctabs), copy(kc.ctocc))
+    ctx.callconsts[tg] = copy(kc.consts)
     _tally_cascade!(:cg_call_fn)
     return name
 end
@@ -1432,6 +1487,7 @@ function _cg_shared_reads!(stmts::Vector{Any}, ctx::_CGFunction, kc::_CGKernCtx)
         for c in n.children
             walk(c, r)
         end
+        return
     end
     walk(K.spine, false)
     for r in K.cse.recipes

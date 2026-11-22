@@ -175,7 +175,7 @@ const couplingTransformFixture = `{
     "Sink": {
       "variables": {"offset": {"type": "parameter"}},
       "equations": [],
-      "expression_templates": {
+      "operators": {
         "double_plus": {
           "params": ["x", "off"],
           "body": {"op": "+", "args": [{"op": "*", "args": [2.0, "x"]}, "off"]}
@@ -185,7 +185,7 @@ const couplingTransformFixture = `{
   },
   "coupling": [
     {"type": "variable_map", "from": "Src.F", "to": "Sink.offset",
-     "transform": {"op": "apply_expression_template", "args": [],
+     "transform": {"op": "apply_operator", "args": [],
                    "name": "double_plus",
                    "bindings": {"x": "Src.F", "off": "Sink.offset"}}}
   ]
@@ -223,11 +223,11 @@ func TestExpressionTemplates_CouplingTransformExpansion(t *testing.T) {
 	if got != want {
 		t.Errorf("coupling transform not expanded to the template body:\n got = %s\nwant = %s", got, want)
 	}
-	if strings.Contains(expanded, "apply_expression_template") {
-		t.Errorf("expanded document still contains apply_expression_template:\n%s", expanded)
+	if strings.Contains(expanded, "apply_operator") {
+		t.Errorf("expanded document still contains apply_operator:\n%s", expanded)
 	}
-	if strings.Contains(expanded, "expression_templates") {
-		t.Errorf("expanded document still contains an expression_templates block:\n%s", expanded)
+	if strings.Contains(expanded, "operators") {
+		t.Errorf("expanded document still contains an operators block:\n%s", expanded)
 	}
 }
 
@@ -242,7 +242,7 @@ func TestExpressionTemplates_CouplingTransformMatchRule(t *testing.T) {
 	    "Sink": {
 	      "variables": {"offset": {"type": "parameter"}},
 	      "equations": [],
-	      "expression_templates": {
+	      "operators": {
 	        "double_rule": {
 	          "params": ["x"],
 	          "match": {"op": "double", "args": ["x"]},
@@ -280,7 +280,7 @@ func TestExpressionTemplates_CouplingTransformTemplateLessReceiverUnchanged(t *t
 	    "Other": {
 	      "variables": {"z": {"type": "unknown"}},
 	      "equations": [],
-	      "expression_templates": {
+	      "operators": {
 	        "shrink": {
 	          "params": ["x"],
 	          "match": {"op": "+", "args": ["x", "Sink.offset"]},

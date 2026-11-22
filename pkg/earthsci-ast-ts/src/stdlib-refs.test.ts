@@ -134,8 +134,8 @@ describe('esm:std refs', () => {
     JSON.stringify({
       esm: '1.1.0',
       metadata: { name },
-      ...(importRef ? { expression_template_imports: [{ ref: importRef }] } : {}),
-      expression_templates: {
+      ...(importRef ? { operator_imports: [{ ref: importRef }] } : {}),
+      operators: {
         [`${name}_twice`]: { params: ['x'], body: { op: '*', args: [2, 'x'] } },
       },
     })
@@ -145,7 +145,7 @@ describe('esm:std refs', () => {
     metadata: { name: 'consumer' },
     models: {
       M: {
-        expression_template_imports: [{ ref: 'esm:std/a.esm' }],
+        operator_imports: [{ ref: 'esm:std/a.esm' }],
         variables: {
           x: { type: 'unknown', units: '1', default: 1.0 },
           y: { type: 'unknown', units: '1' },
@@ -155,7 +155,7 @@ describe('esm:std refs', () => {
           {
             lhs: 'y',
             rhs: {
-              op: 'apply_expression_template',
+              op: 'apply_operator',
               args: [],
               name: 'b_twice',
               bindings: { x: 'x' },
@@ -175,12 +175,12 @@ describe('esm:std refs', () => {
 
   it('a relative ref leaving the bundle is unresolved', () => {
     setStdlibFilesForTesting({ 'a.esm': lib('a', '../b.esm'), 'b.esm': lib('b') })
-    expect(code(() => loadString(consumer))).toBe('template_import_unresolved')
+    expect(code(() => loadString(consumer))).toBe('operator_import_unresolved')
   })
 
   it('detects a cycle by esm:std identity', () => {
     setStdlibFilesForTesting({ 'a.esm': lib('a', 'esm:std/b.esm'), 'b.esm': lib('b', './a.esm') })
-    expect(code(() => loadString(consumer))).toBe('template_import_cycle')
+    expect(code(() => loadString(consumer))).toBe('operator_import_cycle')
   })
 
   it('a bundled subsystem file mounts its sibling', () => {

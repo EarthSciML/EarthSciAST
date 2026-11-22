@@ -865,8 +865,10 @@ function _seam_check_lanes(tt, call::OpExpr, sname::String)
     S = _call_fixed!(Dict{String, Any}(), call.name, info, call.bindings)
     a = _call_hoist_plan(tt, _tpl_def(tt, call.name), S, outs).gathers
     b = sinfo === nothing ? nothing : _call_hoist_plan(tt, _tpl_def(tt, sname), S, outs).gathers
-    (b !== nothing && length(a) == length(b) &&
-        all(k -> _tpl_bkey(tt, a[k], nothing) == _tpl_bkey(tt, b[k], nothing), eachindex(a))) || throw(
+    (
+        b !== nothing && length(a) == length(b) &&
+            all(k -> _tpl_bkey(tt, a[k], nothing) == _tpl_bkey(tt, b[k], nothing), eachindex(a))
+    ) || throw(
         TreeWalkError(
             "E_TREEWALK_UNSUPPORTED_OP",
             "template '$(call.name)': its seam instance reads other cells in the caller " *

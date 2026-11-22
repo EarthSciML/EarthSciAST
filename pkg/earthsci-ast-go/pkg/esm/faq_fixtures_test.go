@@ -147,7 +147,7 @@ func TestAggregateInvalidFixtures(t *testing.T) {
 // library a composing document, a subsystem-ref edge or an inline test injects
 // into this component's scope — so a `faq` range naming a set the
 // document does not declare is NOT decidable here and MUST NOT be reported as
-// undefined_index_set. Mirrors §9.6.1, where template_constraint_unknown_index_set
+// undefined_index_set. Mirrors §9.6.1, where operator_constraint_unknown_index_set
 // does not run for a library file validated standalone.
 func TestAggregateAgnosticLeafIndexSetsInjected(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))

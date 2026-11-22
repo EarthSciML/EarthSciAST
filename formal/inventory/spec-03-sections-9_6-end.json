@@ -985,7 +985,7 @@
       "class": "semantic",
       "phase": 5,
       "area": "flatten",
-      "note": "The flattened template registry equals merge(scope(each component's carried registry)), with dedup on post-scoping bodies and DAG-propagated owner-path renames."
+      "note": "Each component's carried registry bodies are closed (free names become added parameters bound at every reference site) in the same pass that namespaces its equations, and the flattened registry is the deep-equal-dedup union of the closed bodies."
     },
     {
       "id": "spec.10.7.merge-surface-composed",
@@ -1034,7 +1034,7 @@
     {
       "id": "spec.10.9.coupling-library-transform-lowered",
       "section": "10.9",
-      "quote": "the definitions a library transform references MUST already be lowered",
+      "quote": "references MUST already be lowered; a transform whose references reach a definition that would",
       "class": "semantic",
       "phase": 5,
       "area": "coupling",

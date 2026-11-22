@@ -87,6 +87,8 @@ BCASES = "Bcases"
 ECASES = "Ecases"
 CASES = "Cases"
 ESMNODE = "Esmnode"
+# the nabla of the grad, div, laplacian and curl forms: LaTeX ``\\nabla``, Typst ``nabla``
+NABLA = "Nabla"
 # constant arrays
 BMAT = "Bmat"
 EMAT = "Emat"

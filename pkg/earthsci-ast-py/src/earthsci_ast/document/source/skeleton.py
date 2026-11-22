@@ -139,7 +139,7 @@ def mx_field(m: tuple) -> str:
         return "reactions"
     if tag == "plot":
         return "analyses"
-    return "expression_templates"
+    return "operators"
 
 
 def mx_head(m: tuple):
@@ -154,8 +154,8 @@ MATH_FIELDS = (
     "analyses",
     "constraint_equations",
     "equations",
-    "expression_templates",
     "initialization_equations",
+    "operators",
     "reactions",
 )
 _MATH_FIELD_SET = frozenset(MATH_FIELDS)
@@ -198,6 +198,68 @@ class Doc:
         self.comps = comps
 
 
+# ## Expressions inside path blocks
+
+
+class _Any:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "ANY"
+
+
+#: A path segment matching every element of an array and every value of an
+#: object (``Notation.Seg.any``).
+ANY: Any = _Any()
+
+
+class _Elem:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "ELEM"
+
+
+#: A path segment matching every element of an array only, the array form of a
+#: field that is one object or an array of them (``Notation.Seg.elem``).
+ELEM: Any = _Elem()
+
+#: ``Notation.compExprPaths``: the expression-valued fields of a component's path
+#: blocks, as paths from the block's key (esm-schema.json; an update is one rule
+#: or an array of them). A value there that is a well-formed expression prints as
+#: math (``Source.mathify``).
+COMP_EXPR_PATHS: tuple = (
+    ("continuous_events", ANY, "affect_neg", ANY, "rhs"),
+    ("continuous_events", ANY, "affects", ANY, "rhs"),
+    ("continuous_events", ANY, "conditions", ANY),
+    ("discrete_events", ANY, "affects", ANY, "rhs"),
+    ("discrete_events", ANY, "trigger", "expression"),
+    ("guesses", ANY),
+    ("parameters", ANY, "update", "expression"),
+    ("parameters", ANY, "update", "from", "unit_conversion"),
+    ("parameters", ANY, "update", "when"),
+    ("parameters", ANY, "update", ELEM, "expression"),
+    ("parameters", ANY, "update", ELEM, "from", "unit_conversion"),
+    ("parameters", ANY, "update", ELEM, "when"),
+    ("tests", ANY, "assertions", ANY, "reference"),
+    ("variables", ANY, "update", "expression"),
+    ("variables", ANY, "update", "from", "unit_conversion"),
+    ("variables", ANY, "update", "when"),
+    ("variables", ANY, "update", ELEM, "expression"),
+    ("variables", ANY, "update", ELEM, "from", "unit_conversion"),
+    ("variables", ANY, "update", ELEM, "when"),
+)
+
+#: ``Notation.topExprPaths``: the same for the document's top-level path blocks.
+TOP_EXPR_PATHS: tuple = (
+    ("coupling", ANY, "affect_neg", ANY, "rhs"),
+    ("coupling", ANY, "affects", ANY, "rhs"),
+    ("coupling", ANY, "conditions", ANY),
+    ("coupling", ANY, "connector", "equations", ANY, "expression"),
+    ("coupling", ANY, "trigger", "expression"),
+)
+
+
 # ## The symbol table of a component
 
 
@@ -220,14 +282,14 @@ def templates_of(v: Any) -> list:
 
 def root_ts(root: list, rm: list) -> list:
     """``Source.rootTs``."""
-    out = templates_of(look("expression_templates", root))
+    out = templates_of(look("operators", root))
     out.extend(h for h in map(mx_head, rm) if h is not None)
     return out
 
 
 def comp_ts(c: Comp) -> list:
     """``Source.compTs``."""
-    out = templates_of(look("expression_templates", c.math_blocks))
+    out = templates_of(look("operators", c.math_blocks))
     out.extend(h for h in map(mx_head, c.math) if h is not None)
     return out
 
@@ -447,7 +509,7 @@ def item_json(m: tuple) -> Obj:
 def field_json(f: str, ms: list) -> Any:
     """``Source.fieldJson``: an object keyed by the entries' names for
     ``expression_templates``, a list otherwise."""
-    if f == "expression_templates":
+    if f == "operators":
         return Obj((m[1].name if m[0] == "tm" else "", item_json(m)) for m in ms)
     return [item_json(m) for m in ms]
 
@@ -474,7 +536,7 @@ def math_of(caps: Caps, s: Sym, f: str, v: Any):
     natively."""
     ms = []
     if type(v) is list and v:
-        if f == "expression_templates":
+        if f == "operators":
             return None
         for x in v:
             m = item_of(f, x)
@@ -482,7 +544,7 @@ def math_of(caps: Caps, s: Sym, f: str, v: Any):
                 return None
             ms.append(m)
     elif type(v) is Obj and v:
-        if f != "expression_templates":
+        if f != "operators":
             return None
         for k, x in v:
             t = tm_of(k, x)
@@ -623,7 +685,7 @@ def comp_base(caps: Caps, k: str, name: str, kvs: list) -> Comp:
 def comp_of(caps: Caps, root: list, rt: list, k: str, name: str, kvs: list) -> Comp:
     """``Source.compOf``: a component, with its math fields decided."""
     c = comp_base(caps, k, name, kvs)
-    s = sym_with(root, rt, c, templates_of(look("expression_templates", kvs)))
+    s = sym_with(root, rt, c, templates_of(look("operators", kvs)))
     for f in MATH_FIELDS:
         v = look(f, kvs)
         if v is MISSING:
@@ -646,11 +708,11 @@ def pick_comp(caps: Caps, n: str, v: Any):
 def top_math(caps: Caps, kvs: list):
     """``Source.topMath``: the top-level templates, when every one prints
     natively."""
-    v = look("expression_templates", kvs)
+    v = look("operators", kvs)
     if v is MISSING:
         return None
     s = Sym(frozenset(keys_of(look("index_sets", kvs))), tuple(templates_of(v)))
-    return math_of(caps, s, "expression_templates", v)
+    return math_of(caps, s, "operators", v)
 
 
 def root_block(caps: Caps, tn: bool, kv: tuple):
@@ -663,7 +725,7 @@ def root_block(caps: Caps, tn: bool, kv: tuple):
     if k == "models" or k == "reaction_systems":
         r = split_opt(lambda n, v: pick_comp(caps, n, v), kv[1])[1]
         return None if r is MISSING else (k, r)
-    if k == "expression_templates" and tn:
+    if k == "operators" and tn:
         return None
     return kv
 
@@ -676,7 +738,7 @@ def to_doc(caps: Caps, d: Any) -> Doc:
     m = meta_of(caps, look("metadata", kvs))
     tm = top_math(caps, kvs)
     blocks = [b for b in (root_block(caps, tm is not None, kv) for kv in kvs) if b is not None]
-    rt = templates_of(look("expression_templates", kvs))
+    rt = templates_of(look("operators", kvs))
     cs = []
     for k, f in ((MODEL, "models"), (RS, "reaction_systems")):
         for n, ckvs in split_opt(lambda n, v: pick_comp(caps, n, v), look(f, kvs))[0]:
@@ -772,7 +834,7 @@ def of_doc(d: Doc):
         if v is not MISSING:
             kvs.append((f, v))
     if d.math:
-        kvs.append(("expression_templates", field_json("expression_templates", d.math)))
+        kvs.append(("operators", field_json("operators", d.math)))
     kvs.extend(kv for kv in d.blocks if kv[0] != "models" and kv[0] != "reaction_systems")
     doc = Obj(sort_keys(kvs))
     return doc if canon_doc(doc) else None

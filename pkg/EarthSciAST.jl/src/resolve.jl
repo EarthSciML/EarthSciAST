@@ -85,8 +85,9 @@ end
 """
     load_path(path::AbstractString; metaparameters=Dict{String,Int}()) -> EsmFile
 
-Read and parse an ESM document from a filesystem path.
-Automatically resolves any subsystem references (local or remote) relative
+Read and parse an ESM document from a filesystem path: `.esm` JSON, or a
+Markdown (`.md`) or Typst (`.typ`) source document, by the path's extension
+(esm-spec §1.2.1). Automatically resolves any subsystem references (local or remote) relative
 to the directory containing the file. `metaparameters` binds the ROOT
 document's open metaparameters at the loader API (esm-spec §9.7.6 binding
 site 4): already-closed edge bindings win, API bindings beat `default`s.
@@ -100,7 +101,8 @@ function load_path(
         metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}()
     )::EsmFile
     base_path = dirname(abspath(String(path)))
-    raw_data = _read_json_document(read(String(path), String))
+    path = String(path)
+    raw_data = _wire_document(_parse_document_text(read(path, String), path))
     return _load_document(raw_data, base_path; metaparameters = metaparameters)
 end
 
@@ -276,6 +278,26 @@ function _parse_json_text(json_string::AbstractString)
         msg = hasfield(typeof(e), :msg) ? e.msg : sprint(showerror, e)
         throw(ParseError("Invalid JSON: $(msg)", e))
     end
+end
+
+"""
+    _parse_document_text(text, location) -> parsed document
+
+Read a document's `text` in the format its `location` names (esm-spec §1.2.1):
+a path, or a URL's path (its query and fragment ignored), ending in `.md` is
+Markdown ([`parse_markdown`](@ref)), one ending in `.typ` Typst
+([`parse_typst`](@ref)), and every other name JSON. The format is never guessed
+from the text. Every read of a document from a path or URL goes through here;
+the result then takes the JSON pipeline ([`_wire_document`](@ref)).
+
+Throws a [`ParseError`](@ref): JSON that does not parse, or a source document
+its reader refuses (`code` `parse_error`, or `removed_op`).
+"""
+function _parse_document_text(text::AbstractString, location::AbstractString)
+    path = _is_url(location) ? _url_split(location)[2] : location
+    endswith(path, ".md") && return parse_markdown(text)
+    endswith(path, ".typ") && return parse_typst(text)
+    return _parse_json_text(text)
 end
 
 """
@@ -795,18 +817,15 @@ esm 2.4.0 dropped the `"pde"` system kind. A model declaring
 `"system_kind": "pde"` is not refused: the field is kept as written, counts as
 absent for classification ([`declared_system_kind`](@ref)), and the document
 gets ONE `@warn` with the code `deprecated_system_kind` naming every such model
-by JSON pointer (`/models/<name>/system_kind`). Returns those pointers.
+by JSON pointer, subsystems included at any depth
+(`/models/<name>/system_kind`, `/models/<name>/subsystems/<sub>/system_kind`),
+in document order with each model before its subsystems. Returns those
+pointers.
 """
 function _warn_deprecated_system_kind(doc)::Vector{String}
     sites = String[]
     _is_object(doc) || return sites
-    models = _raw_get(doc, "models", nothing)
-    _is_object(models) || return sites
-    for (name, model) in pairs(models)
-        _is_object(model) || continue
-        _raw_get(model, "system_kind", nothing) == "pde" &&
-            push!(sites, _pointer("", "models", string(name), "system_kind"))
-    end
+    _pde_system_kind_sites!(sites, _raw_get(doc, "models", nothing), _pointer("", "models"))
     isempty(sites) && return sites
     @warn string(
         "deprecated_system_kind: the system_kind value \"pde\" is deprecated ",
@@ -1008,6 +1027,21 @@ function _old_spellings_walk!(
         end
     end
     return nothing
+end
+
+
+function _pde_system_kind_sites!(sites::Vector{String}, models, at::String)
+    _is_object(models) || return sites
+    for (name, model) in pairs(models)
+        _is_object(model) || continue
+        here = _pointer(at, string(name))
+        _raw_get(model, "system_kind", nothing) == "pde" &&
+            push!(sites, _pointer(here, "system_kind"))
+        _pde_system_kind_sites!(
+            sites, _raw_get(model, "subsystems", nothing), _pointer(here, "subsystems")
+        )
+    end
+    return sites
 end
 
 """

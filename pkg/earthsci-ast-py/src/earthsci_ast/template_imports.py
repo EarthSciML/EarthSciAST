@@ -32,28 +32,28 @@ import re
 from typing import Any
 
 from .error_handling import (
-    APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
-    APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
     METAPARAMETER_NAME_CONFLICT,
     METAPARAMETER_TYPE_ERROR,
     METAPARAMETER_UNBOUND,
+    OPERATOR_BODY_EXPANSION_TOO_DEEP,
+    OPERATOR_IMPORT_CYCLE,
+    OPERATOR_IMPORT_INDEX_SET_CONFLICT,
+    OPERATOR_IMPORT_IS_COUPLING_LIBRARY,
+    OPERATOR_IMPORT_NAME_CONFLICT,
+    OPERATOR_IMPORT_NOT_LIBRARY,
+    OPERATOR_IMPORT_REBIND_UNKNOWN_NAME,
+    OPERATOR_IMPORT_RENAME_COLLISION,
+    OPERATOR_IMPORT_RENAME_INVALID,
+    OPERATOR_IMPORT_RENAME_UNKNOWN_NAME,
+    OPERATOR_IMPORT_UNKNOWN_NAME,
+    OPERATOR_IMPORT_UNRESOLVED,
+    OPERATOR_IMPORT_VERSION_TOO_OLD,
+    OPERATOR_INJECT_TARGET_NOT_COMPONENT,
+    OPERATOR_INJECT_TARGET_UNKNOWN,
+    OPERATOR_LIBRARY_ILLEGAL_PAYLOAD,
+    OPERATOR_RECURSIVE_BODY,
+    OPERATOR_UNKNOWN_DEFINITION,
     SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
-    TEMPLATE_BODY_EXPANSION_TOO_DEEP,
-    TEMPLATE_IMPORT_CYCLE,
-    TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
-    TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
-    TEMPLATE_IMPORT_NAME_CONFLICT,
-    TEMPLATE_IMPORT_NOT_LIBRARY,
-    TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
-    TEMPLATE_IMPORT_RENAME_COLLISION,
-    TEMPLATE_IMPORT_RENAME_INVALID,
-    TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
-    TEMPLATE_IMPORT_UNKNOWN_NAME,
-    TEMPLATE_IMPORT_UNRESOLVED,
-    TEMPLATE_IMPORT_VERSION_TOO_OLD,
-    TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
-    TEMPLATE_INJECT_TARGET_UNKNOWN,
-    TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
 )
 from .esm_types import NODE_ANNOTATION_KEYS
 
@@ -71,6 +71,7 @@ from .json_walk import (
     _is_object,
     _rewrite_json,
     _walk_json,
+    decode_document,
     expand_ref_env,
     load_ref_raw,
 )
@@ -137,23 +138,23 @@ def reject_template_imports_pre_v08(view: Any) -> None:
         return
 
     offences: list[str] = []
-    if "expression_templates" in view:
-        offences.append("/expression_templates")
+    if "operators" in view:
+        offences.append("/operators")
     if "metaparameters" in view:
         offences.append("/metaparameters")
-    if "expression_template_imports" in view:
-        offences.append("/expression_template_imports")
+    if "operator_imports" in view:
+        offences.append("/operator_imports")
     for compkind in _COMPONENT_KINDS:
         comps = view.get(compkind)
         if not _is_object(comps):
             continue
         for cname, comp in comps.items():
-            if _is_object(comp) and "expression_template_imports" in comp:
-                offences.append(f"/{compkind}/{cname}/expression_template_imports")
+            if _is_object(comp) and "operator_imports" in comp:
+                offences.append(f"/{compkind}/{cname}/operator_imports")
     if offences:
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_VERSION_TOO_OLD,
-            "expression_template_imports / top-level expression_templates / "
+            OPERATOR_IMPORT_VERSION_TOO_OLD,
+            "operator_imports / top-level operators / "
             f"metaparameters require esm >= 0.8.0; file declares {esm}. "
             f"Offending paths: {', '.join(offences)}",
         )
@@ -164,7 +165,7 @@ def _is_template_library_doc(raw: Any) -> bool:
     ``expression_templates``, esm-spec §9.7.1). Purity (no models / reaction
     systems / loaders / coupling / domain) is checked separately at import
     edges."""
-    return _is_object(raw) and "expression_templates" in raw
+    return _is_object(raw) and "operators" in raw
 
 
 def reject_impure_template_library(view: Any) -> None:
@@ -185,8 +186,8 @@ def reject_impure_template_library(view: Any) -> None:
     if not present:
         return
     raise ExpressionTemplateError(
-        TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
-        "top-level `expression_templates` makes this document a template-library file, which MUST NOT declare "
+        OPERATOR_LIBRARY_ILLEGAL_PAYLOAD,
+        "top-level `operators` makes this document a template-library file, which MUST NOT declare "
         + ", ".join(f"`{k}`" for k in present)
         + " (esm-spec §9.7.1); templates declared there are visible to no"
         " component. Declare them in the component's own `expression_template"
@@ -261,7 +262,7 @@ _PROTECTED_KEYS = frozenset(
         "kind",
         "description",
         "name",
-        "expression_template_imports",
+        "operator_imports",
         "metaparameters",
         "only",
         # `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
@@ -284,8 +285,10 @@ _AXIS_KEYS = frozenset({"wrt", "dim", "var"})
 #: that happens to share a name with an operator — ``max``, say — must not
 #: rewrite ``{"op": "max", …}`` into ``{"op": 3, …}``, which then dies in the
 #: typed load with a raw "cannot unmarshal number into `op`" instead of a
-#: diagnostic. Opaque to substitution AND copied verbatim by the rename walk.
-_NODE_HEADER_KEYS = frozenset({"op"}) | NODE_ANNOTATION_KEYS
+#: diagnostic. ``defines`` (esm 2.4.0, esm-spec §9.6.1) names the defined
+#: operator a definition defines, the same kind of name as ``op``. Opaque to
+#: substitution AND copied verbatim by the rename walk.
+_NODE_HEADER_KEYS = frozenset({"op", "defines"}) | NODE_ANNOTATION_KEYS
 
 #: Closed-registry ids / literal enums PARAMETERIZING the node's op. Like the
 #: node-header fields these are names rather than values, so they are opaque to
@@ -388,6 +391,9 @@ _NAME_KEYED_MAP_KEYS = frozenset(
         "parameters",
         "guesses",
         "subsystems",
+        "operators",
+        # The old spelling of `operators`, read as it at the wire boundary
+        # (esm-spec §9.6.12); a map of definitions keyed by author-chosen names.
         "expression_templates",
         "ranges",
         "bindings",
@@ -589,7 +595,7 @@ def eval_meta_expr(expr: Any, env: dict[str, int], ctx: str) -> int:
     if folded is None:
         free = sorted({n for n in _collect_names([], expr) if n not in env})
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_UNKNOWN_NAME,
+            OPERATOR_IMPORT_UNKNOWN_NAME,
             f"{ctx}: metaparameter expression references "
             f"{', '.join(free) or 'a name'} not in the importing document's "
             "metaparameter scope (esm-spec §9.7.6)",
@@ -761,14 +767,14 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
             tdecl = templates.get(r)
             if tdecl is None:
                 raise ExpressionTemplateError(
-                    APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-                    f"{scope}.expression_templates.{name}: body references "
+                    OPERATOR_UNKNOWN_DEFINITION,
+                    f"{scope}.operators.{name}: body references "
                     f"undeclared template '{r}' (esm-spec §9.7.3)",
                 )
             if _is_object(tdecl) and tdecl.get("match") is not None:
                 raise ExpressionTemplateError(
-                    APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-                    f"{scope}.expression_templates.{name}: body references "
+                    OPERATOR_UNKNOWN_DEFINITION,
+                    f"{scope}.operators.{name}: body references "
                     f"'{r}', a `match` rewrite rule — only match-less "
                     "templates are invocable by name (esm-spec §9.7.3)",
                 )
@@ -786,7 +792,7 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
         if st == 1:
             cyc = chain[chain.index(name) :] + [name]
             raise ExpressionTemplateError(
-                APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
+                OPERATOR_RECURSIVE_BODY,
                 f"{scope}.expression_templates: template-body reference cycle "
                 f"{' -> '.join(cyc)} (esm-spec §9.7.3)",
             )
@@ -802,8 +808,8 @@ def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
         depth[name] = d
         if d > MAX_TEMPLATE_EXPANSION_DEPTH:
             raise ExpressionTemplateError(
-                TEMPLATE_BODY_EXPANSION_TOO_DEEP,
-                f"{scope}.expression_templates.{name}: body-reference chain "
+                OPERATOR_BODY_EXPANSION_TOO_DEEP,
+                f"{scope}.operators.{name}: body-reference chain "
                 f"of {d} templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH="
                 f"{MAX_TEMPLATE_EXPANSION_DEPTH} (esm-spec §9.7.3)",
             )
@@ -863,11 +869,11 @@ def _merge_named(
 
 def _merge_scope(dst: _TemplateScope, src: _TemplateScope, origin: str) -> None:
     for n, d in src.templates.items():
-        _merge_named(dst.templates, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "template", origin)
+        _merge_named(dst.templates, n, d, OPERATOR_IMPORT_NAME_CONFLICT, "template", origin)
     for n, d in src.index_sets.items():
-        _merge_named(dst.index_sets, n, d, TEMPLATE_IMPORT_INDEX_SET_CONFLICT, "index set", origin)
+        _merge_named(dst.index_sets, n, d, OPERATOR_IMPORT_INDEX_SET_CONFLICT, "index set", origin)
     for n, d in src.metaparams.items():
-        _merge_named(dst.metaparams, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "metaparameter", origin)
+        _merge_named(dst.metaparams, n, d, OPERATOR_IMPORT_NAME_CONFLICT, "metaparameter", origin)
 
 
 def _instantiate_scope(scope: _TemplateScope, values: dict[str, Any], ctx: str) -> None:
@@ -911,19 +917,19 @@ def _name_map(raw: Any, field: str, where: str) -> dict[str, str]:
         return out
     if not _is_object(raw):
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_RENAME_INVALID,
+            OPERATOR_IMPORT_RENAME_INVALID,
             f"{where}: `{field}` must be an object mapping names to names (esm-spec §9.7.7)",
         )
     for k, v in raw.items():
         ks = str(k)
         if ks == "":
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_RENAME_INVALID,
+                OPERATOR_IMPORT_RENAME_INVALID,
                 f"{where}: `{field}` has an empty key (esm-spec §9.7.7)",
             )
         if not (isinstance(v, str) and _is_valid_dotted_name(v)):
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_RENAME_INVALID,
+                OPERATOR_IMPORT_RENAME_INVALID,
                 f"{where}: `{field}`.{ks} target {v!r} is not a valid dotted "
                 "identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single "
                 "dots; esm-spec §9.7.7)",
@@ -1222,7 +1228,7 @@ def apply_mount_index_set_rename(doc: Any, rename_raw: Any, where: str) -> None:
         final = changed.get(name, name)
         if final in finals:
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_RENAME_COLLISION,
+                OPERATOR_IMPORT_RENAME_COLLISION,
                 f"{where}: `index_set_rename` maps two index sets onto {final!r}; "
                 "post-rename names must be distinct within one mount edge "
                 "(esm-spec §4.7 / §9.7.7)",
@@ -1314,7 +1320,7 @@ def _apply_edge_renames(scope: _TemplateScope, entry: Any, origin: str, ref: str
         isinstance(prefix_raw, str) and _is_valid_dotted_name(prefix_raw)
     ):
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_RENAME_INVALID,
+            OPERATOR_IMPORT_RENAME_INVALID,
             f"{where}: `prefix` {prefix_raw!r} is not a valid dotted identifier "
             "(segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; "
             "esm-spec §9.7.7)",
@@ -1331,7 +1337,7 @@ def _apply_edge_renames(scope: _TemplateScope, entry: Any, origin: str, ref: str
     for k in rename:
         if k not in exported:
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
+                OPERATOR_IMPORT_RENAME_UNKNOWN_NAME,
                 f"{where}: `rename` names '{k}', which the target does not "
                 "export at this edge (the surviving exports are templates after "
                 "`only`, index sets, and metaparameters left open by this "
@@ -1353,7 +1359,7 @@ def _apply_edge_renames(scope: _TemplateScope, entry: Any, origin: str, ref: str
         for o, n in m.items():
             if n in seen:
                 raise ExpressionTemplateError(
-                    TEMPLATE_IMPORT_RENAME_COLLISION,
+                    OPERATOR_IMPORT_RENAME_COLLISION,
                     f"{where}: {what} names '{seen[n]}' and '{o}' both map to "
                     f"'{n}' after renaming (esm-spec §9.7.7)",
                 )
@@ -1384,7 +1390,7 @@ def _apply_edge_renames(scope: _TemplateScope, entry: Any, origin: str, ref: str
     for k in rebind:
         if k in exported:
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
+                OPERATOR_IMPORT_REBIND_UNKNOWN_NAME,
                 f"{where}: `rebind` names '{k}', a declared name of the target "
                 "(template / index set / metaparameter) — `rebind` addresses "
                 "only free names; use `rename` for declared names "
@@ -1392,14 +1398,14 @@ def _apply_edge_renames(scope: _TemplateScope, entry: Any, origin: str, ref: str
             )
         if k in bound:
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_RENAME_INVALID,
+                OPERATOR_IMPORT_RENAME_INVALID,
                 f"{where}: `rebind` key '{k}' is a bound index symbol "
                 "(`output_idx` / `ranges`) of an imported template, not a free "
                 "name (esm-spec §9.7.7)",
             )
         if k not in free:
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
+                OPERATOR_IMPORT_REBIND_UNKNOWN_NAME,
                 f"{where}: `rebind` names '{k}', which does not occur free in "
                 "the imported declarations (esm-spec §9.7.7)",
             )
@@ -1416,7 +1422,7 @@ def _apply_edge_renames(scope: _TemplateScope, entry: Any, origin: str, ref: str
     for t in newnames:
         if t in taken:
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_RENAME_COLLISION,
+                OPERATOR_IMPORT_RENAME_COLLISION,
                 f"{where}: renamed/rebound name '{t}' collides with a name "
                 "still in use inside the imported declarations (a remaining "
                 "free name, a bound index symbol, a template param, or another "
@@ -1437,7 +1443,16 @@ def _apply_edge_renames(scope: _TemplateScope, entry: Any, origin: str, ref: str
 
     newt: dict[str, Any] = {}
     for n, d in scope.templates.items():
-        newt[tplmap[n]] = _rename_decl(d, varmap, iset_changed, tpl_changed)
+        nd = _rename_decl(d, varmap, iset_changed, tpl_changed)
+        # esm 2.4.0 (esm-spec §9.6.12 "Provenance"): the defined operator a
+        # definition defines is decided in the library's own scope, so renaming
+        # its key on import does not change it.
+        if tplmap[n] != n and _is_object(nd) and nd.get("defines") is None:
+            from .lower_expression_templates import _definition_defines
+
+            nd = dict(nd)
+            nd["defines"] = _definition_defines(n, d)
+        newt[tplmap[n]] = nd
     scope.templates = newt
 
     newi: dict[str, Any] = {}
@@ -1461,7 +1476,7 @@ def _load_import_raw(ref: str, base_dir: str, origin: str):
     shared §4.7 loader (:func:`json_walk.load_ref_raw`), reporting failures with
     ``template_import_unresolved``."""
     return load_ref_raw(
-        ref, base_dir, code=TEMPLATE_IMPORT_UNRESOLVED, subject="template-library", origin=origin
+        ref, base_dir, code=OPERATOR_IMPORT_UNRESOLVED, subject="template-library", origin=origin
     )
 
 
@@ -1486,7 +1501,7 @@ def _validate_import_target_schema(raw: Any, ref: str, origin: str) -> None:
         jsonschema.validate(raw, _get_schema())
     except jsonschema.ValidationError as e:
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_UNRESOLVED,
+            OPERATOR_IMPORT_UNRESOLVED,
             f"{origin}: import target '{ref}' failed schema validation: {e.message}",
         ) from e
 
@@ -1504,20 +1519,20 @@ def _resolve_import_entry(
 
     if not _is_object(entry):
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_UNRESOLVED,
-            f"{origin}: expression_template_imports entries must be objects with a `ref` field",
+            OPERATOR_IMPORT_UNRESOLVED,
+            f"{origin}: operator_imports entries must be objects with a `ref` field",
         )
     ref = entry.get("ref")
     if not isinstance(ref, str) or not ref:
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_UNRESOLVED,
-            f"{origin}: expression_template_imports entry requires a non-empty string `ref`",
+            OPERATOR_IMPORT_UNRESOLVED,
+            f"{origin}: operator_imports entry requires a non-empty string `ref`",
         )
     canonical = _canonical_ref(ref, base_dir)
     if canonical in stack:
         cyc = stack[stack.index(canonical) :] + [canonical]
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_CYCLE,
+            OPERATOR_IMPORT_CYCLE,
             f"{origin}: import-graph cycle detected: {' -> '.join(cyc)} (esm-spec §9.7.2)",
         )
 
@@ -1537,7 +1552,7 @@ def _resolve_import_entry(
     # specific cause is reported.
     if _is_object(raw) and "coupling_roles" in raw:
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
+            OPERATOR_IMPORT_IS_COUPLING_LIBRARY,
             f"{origin}: import target '{ref}' is a coupling-library file "
             "(has `coupling_roles`), not a template library (esm-spec §10.9)",
         )
@@ -1546,15 +1561,15 @@ def _resolve_import_entry(
     # disjoint — a component/subsystem file is not importable as a library.
     if not _is_template_library_doc(raw):
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_NOT_LIBRARY,
+            OPERATOR_IMPORT_NOT_LIBRARY,
             f"{origin}: import target '{ref}' lacks top-level "
-            "`expression_templates` — not a template-library file "
+            "`operators` — not a template-library file "
             "(esm-spec §9.7.1)",
         )
     for k in _LIBRARY_FORBIDDEN_KEYS:
         if k in raw:
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_NOT_LIBRARY,
+                OPERATOR_IMPORT_NOT_LIBRARY,
                 f"{origin}: import target '{ref}' declares `{k}` — not a "
                 "pure template-library file (esm-spec §9.7.1)",
             )
@@ -1577,7 +1592,7 @@ def _resolve_import_entry(
         for name, v in bindings_raw.items():
             if name not in scope.metaparams:
                 raise ExpressionTemplateError(
-                    TEMPLATE_IMPORT_UNKNOWN_NAME,
+                    OPERATOR_IMPORT_UNKNOWN_NAME,
                     f"{origin}: import of '{ref}' binds metaparameter "
                     f"'{name}', which the target neither declares nor "
                     "re-exports (esm-spec §9.7.6)",
@@ -1596,7 +1611,7 @@ def _resolve_import_entry(
         for n in keep:
             if n not in scope.templates:
                 raise ExpressionTemplateError(
-                    TEMPLATE_IMPORT_UNKNOWN_NAME,
+                    OPERATOR_IMPORT_UNKNOWN_NAME,
                     f"{origin}: `only` names template '{n}', which '{ref}' "
                     "does not declare (esm-spec §9.7.2)",
                 )
@@ -1640,14 +1655,14 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
     interior stencil closes here, before any ``only`` filtering by a
     downstream importer."""
     scope = _TemplateScope()
-    imports = raw.get("expression_template_imports")
+    imports = raw.get("operator_imports")
     if _is_array(imports):
         for entry in imports:
             sub = _resolve_import_entry(entry, base_dir, stack, origin)
             _merge_scope(scope, sub, origin)
 
     own: dict[str, Any] = {}
-    tpl = raw.get("expression_templates")
+    tpl = raw.get("operators")
     if _is_object(tpl):
         for n, d in tpl.items():
             own[str(n)] = copy.deepcopy(d)
@@ -1660,7 +1675,7 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
     for n, d in own.items():
         _lower_library_template_enums(raw, n, d, origin)
     for n, d in own.items():
-        _merge_named(scope.templates, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "template", origin)
+        _merge_named(scope.templates, n, d, OPERATOR_IMPORT_NAME_CONFLICT, "template", origin)
 
     isets = raw.get("index_sets")
     if _is_object(isets):
@@ -1669,13 +1684,13 @@ def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> 
                 scope.index_sets,
                 str(n),
                 copy.deepcopy(d),
-                TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+                OPERATOR_IMPORT_INDEX_SET_CONFLICT,
                 "index set",
                 origin,
             )
 
     for n, d in _collect_metaparam_decls(raw, origin).items():
-        _merge_named(scope.metaparams, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "metaparameter", origin)
+        _merge_named(scope.metaparams, n, d, OPERATOR_IMPORT_NAME_CONFLICT, "metaparameter", origin)
 
     # §9.7.3 body composition in the library's own scope (decl objects are
     # mutated in place, so scope.templates sees the closed bodies).
@@ -1894,18 +1909,14 @@ def _lower_library_template_body(library: Any, name: str, decl: Any, body: Any, 
 def _has_import_machinery(raw: Any) -> bool:
     if not _is_object(raw):
         return False
-    if (
-        "expression_templates" in raw
-        or "metaparameters" in raw
-        or "expression_template_imports" in raw
-    ):
+    if "operators" in raw or "metaparameters" in raw or "operator_imports" in raw:
         return True
     for compkind in _COMPONENT_KINDS:
         comps = raw.get(compkind)
         if not _is_object(comps):
             continue
         for comp in comps.values():
-            if _is_object(comp) and "expression_template_imports" in comp:
+            if _is_object(comp) and "operator_imports" in comp:
                 return True
     return False
 
@@ -1922,17 +1933,17 @@ def _resolve_root_library(
     imported ``index_sets`` and re-exported metaparameters into ``doc_isets`` /
     ``doc_meta`` (both mutated in place). Returns ``(is_library, top_templates)``;
     ``top_templates`` is empty when the root is not a library file."""
-    is_library = "expression_templates" in root
+    is_library = "operators" in root
     top_templates: dict[str, Any] = {}
     if is_library:
         topscope = _TemplateScope()
-        imports = root.get("expression_template_imports")
+        imports = root.get("operator_imports")
         if _is_array(imports):
             for entry in imports:
                 sub = _resolve_import_entry(entry, base_dir, stack, "document")
                 _merge_scope(topscope, sub, "document")
         own: dict[str, Any] = {}
-        tpl = root["expression_templates"]
+        tpl = root["operators"]
         if _is_object(tpl):
             for n, d in tpl.items():
                 own[str(n)] = d
@@ -1941,14 +1952,14 @@ def _resolve_root_library(
         _validate_templates(own, "document")
         for n, d in own.items():
             _merge_named(
-                topscope.templates, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "template", "document"
+                topscope.templates, n, d, OPERATOR_IMPORT_NAME_CONFLICT, "template", "document"
             )
         for n, d in topscope.index_sets.items():
             _merge_named(
-                doc_isets, n, d, TEMPLATE_IMPORT_INDEX_SET_CONFLICT, "index set", "document"
+                doc_isets, n, d, OPERATOR_IMPORT_INDEX_SET_CONFLICT, "index set", "document"
             )
         for n, d in topscope.metaparams.items():
-            _merge_named(doc_meta, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "metaparameter", "document")
+            _merge_named(doc_meta, n, d, OPERATOR_IMPORT_NAME_CONFLICT, "metaparameter", "document")
         top_templates = topscope.templates
     return is_library, top_templates
 
@@ -1984,7 +1995,7 @@ def _resolve_component_imports(
             # resolve_subsystem_refs inject them into the spliced leaf.
             if "ref" in comp:
                 continue
-            imports = comp.get("expression_template_imports")
+            imports = comp.get("operator_imports")
             if imports is None:
                 continue
             cscope = _TemplateScope()
@@ -1993,7 +2004,7 @@ def _resolve_component_imports(
                 for entry in imports:
                     sub = _resolve_import_entry(entry, base_dir, stack, corigin)
                     _merge_scope(cscope, sub, corigin)
-            tpl = comp.get("expression_templates")
+            tpl = comp.get("operators")
             if _is_object(tpl):
                 own = {str(n): d for n, d in tpl.items()}
                 from .lower_expression_templates import _validate_templates
@@ -2001,21 +2012,21 @@ def _resolve_component_imports(
                 _validate_templates(own, corigin)
                 for n, d in own.items():
                     _merge_named(
-                        cscope.templates, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "template", corigin
+                        cscope.templates, n, d, OPERATOR_IMPORT_NAME_CONFLICT, "template", corigin
                     )
             for n, d in cscope.index_sets.items():
                 _merge_named(
-                    doc_isets, n, d, TEMPLATE_IMPORT_INDEX_SET_CONFLICT, "index set", corigin
+                    doc_isets, n, d, OPERATOR_IMPORT_INDEX_SET_CONFLICT, "index set", corigin
                 )
             for n, d in cscope.metaparams.items():
                 _merge_named(
-                    doc_meta, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "metaparameter", corigin
+                    doc_meta, n, d, OPERATOR_IMPORT_NAME_CONFLICT, "metaparameter", corigin
                 )
             # The effective sequence (imports depth-first post-order, then
             # local declarations) becomes the component's template block; the
             # dict insertion order IS the §9.6.3 declaration order.
-            comp["expression_templates"] = cscope.templates
-            del comp["expression_template_imports"]
+            comp["operators"] = cscope.templates
+            del comp["operator_imports"]
 
 
 def _close_document_metaparameters(
@@ -2042,7 +2053,7 @@ def _close_document_metaparameters(
     for k in sorted(api):
         if k not in doc_meta and k not in mount_declared:
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_UNKNOWN_NAME,
+                OPERATOR_IMPORT_UNKNOWN_NAME,
                 f"loader API binds metaparameter '{k}', which neither this "
                 "document nor any document it mounts declares "
                 "(esm-spec §9.7.6)",
@@ -2141,7 +2152,7 @@ def _substitute_closed_metaparameters(
                 if not _is_object(comp):
                     continue
                 for k in list(comp.keys()):
-                    if k == "expression_templates" and _is_object(comp[k]):
+                    if k == "operators" and _is_object(comp[k]):
                         tpl = comp[k]
                         for tn in list(tpl.keys()):
                             tpl[tn] = _substitute_metaparams_decl(tpl[tn], values)
@@ -2219,8 +2230,8 @@ def _finalize_document(
     """
     if is_library:
         _compose_template_bodies(top_templates, "document")
-    root.pop("expression_template_imports", None)
-    for key in ("expression_templates", "metaparameters"):
+    root.pop("operator_imports", None)
+    for key in ("operators", "metaparameters"):
         if key in declarations:
             root[key] = declarations[key]
         else:
@@ -2309,9 +2320,7 @@ def collect_mount_declared_metaparameters(
             if key in seen:
                 return
             seen.add(key)
-            import json as _json
-
-            child = _json.loads(_fetch_ref_content(expanded, str(base_path)))
+            child = decode_document(_fetch_ref_content(expanded, str(base_path)), expanded)
         except Exception as exc:
             if strict:
                 # A nested mount this walk cannot read is an unresolvable ref.
@@ -2334,7 +2343,7 @@ def collect_mount_declared_metaparameters(
         """The §9.7.2 import edges one scope carries, when asked for."""
         if not follow_imports or not _is_object(holder):
             return
-        entries = holder.get("expression_template_imports")
+        entries = holder.get("operator_imports")
         if not isinstance(entries, list):
             return
         for entry in entries:
@@ -2485,7 +2494,7 @@ def check_data_source_extents(
         if name in reachable:
             continue
         raise ExpressionTemplateError(
-            TEMPLATE_IMPORT_UNKNOWN_NAME,
+            OPERATOR_IMPORT_UNKNOWN_NAME,
             f"data_sources.{key}.extent binds metaparameter '{name}', which "
             "neither this document nor any document it mounts declares "
             "(esm-spec §8.9.4, §9.7.6)",
@@ -2524,6 +2533,10 @@ def resolve_template_machinery(
     symbolic for the mounting registry to close (§9.7.6 site 5).
     """
 
+    # Old spellings (esm-spec §9.6.12) when the caller skipped the wire boundary.
+    from .parse import wire_old_spellings
+
+    raw = wire_old_spellings(raw)
     api_raw = dict(metaparameters or {})
     mounted = frozenset() if mount_declared is None else mount_declared
     if not _has_import_machinery(raw):
@@ -2534,7 +2547,7 @@ def resolve_template_machinery(
         unknown = sorted(str(k) for k in api_raw if str(k) not in mounted)
         if unknown:
             raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_UNKNOWN_NAME,
+                OPERATOR_IMPORT_UNKNOWN_NAME,
                 f"loader API binds metaparameter(s) {', '.join(unknown)} which "
                 "neither this document nor any document it mounts declares "
                 "(esm-spec §9.7.6)",
@@ -2557,9 +2570,7 @@ def resolve_template_machinery(
     # below composes a body, folds a metaparameter, or otherwise mutates the
     # working copies. Restored verbatim by ``_finalize_document`` (esm-spec
     # §9.6.4 rule 5 — see the rationale there).
-    declarations = {
-        k: copy.deepcopy(root[k]) for k in ("expression_templates", "metaparameters") if k in root
-    }
+    declarations = {k: copy.deepcopy(root[k]) for k in ("operators", "metaparameters") if k in root}
 
     doc_meta = _collect_metaparam_decls(root, "document")
     doc_isets: dict[str, Any] = {}
@@ -2629,7 +2640,7 @@ def _has_scope_injection(raw: Any, injected: Any) -> bool:
     if not _is_array(coupling):
         return False
     for entry in coupling:
-        if _is_object(entry) and "expression_template_imports" in entry:
+        if _is_object(entry) and "operator_imports" in entry:
             return True
     return False
 
@@ -2638,11 +2649,11 @@ def _append_component_imports(comp: dict[str, Any], imports: Any) -> dict[str, A
     """Append raw §9.7.2 import entries to a component's own
     ``expression_template_imports`` (esm-spec §9.7.10 merge order: the target's
     own imports first, then the injected list). ``comp`` is a mutable dict."""
-    existing = comp.get("expression_template_imports")
+    existing = comp.get("operator_imports")
     base = list(existing) if _is_array(existing) else []
     for e in imports:
         base.append(copy.deepcopy(e))
-    comp["expression_template_imports"] = base
+    comp["operator_imports"] = base
     return comp
 
 
@@ -2734,13 +2745,13 @@ def _apply_coupling_injections(root: dict[str, Any]) -> dict[str, Any]:
     for entry in coupling:
         if not _is_object(entry):
             continue
-        inj = entry.get("expression_template_imports")
+        inj = entry.get("operator_imports")
         if inj is None:
             continue
         if not _is_object(inj):
             raise ExpressionTemplateError(
-                TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
-                "coupling entry `expression_template_imports` must be a map from "
+                OPERATOR_INJECT_TARGET_NOT_COMPONENT,
+                "coupling entry `operator_imports` must be a map from "
                 "a target system name to a list of imports (esm-spec §9.7.10 / "
                 "§10.8)",
             )
@@ -2750,8 +2761,8 @@ def _apply_coupling_injections(root: dict[str, Any]) -> dict[str, Any]:
             if tname not in referenced:
                 ref_list = "(none)" if not referenced else ", ".join(sorted(referenced))
                 raise ExpressionTemplateError(
-                    TEMPLATE_INJECT_TARGET_UNKNOWN,
-                    f"coupling entry `expression_template_imports` key '{tname}' "
+                    OPERATOR_INJECT_TARGET_UNKNOWN,
+                    f"coupling entry `operator_imports` key '{tname}' "
                     "names no system referenced by that entry (esm-spec §9.7.10 "
                     f"/ §10.8). The entry references: {ref_list}.",
                 )
@@ -2764,27 +2775,27 @@ def _apply_coupling_injections(root: dict[str, Any]) -> dict[str, Any]:
                 # source is not a component, so it can no longer be an injection
                 # target at all and needs no diagnostic of its own.
                 raise ExpressionTemplateError(
-                    TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
-                    f"coupling entry `expression_template_imports` key '{tname}' "
+                    OPERATOR_INJECT_TARGET_NOT_COMPONENT,
+                    f"coupling entry `operator_imports` key '{tname}' "
                     "resolves to neither a top-level model nor a reaction system "
                     "(esm-spec §9.7.10). Nested `Parent.Child` targets are out of "
                     "scope.",
                 )
             if not _is_object(comp):
                 raise ExpressionTemplateError(
-                    TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
-                    f"coupling entry `expression_template_imports` key '{tname}' "
+                    OPERATOR_INJECT_TARGET_NOT_COMPONENT,
+                    f"coupling entry `operator_imports` key '{tname}' "
                     "does not name a component object (esm-spec §9.7.10).",
                 )
             if not _is_array(imports):
                 raise ExpressionTemplateError(
-                    TEMPLATE_IMPORT_NOT_LIBRARY,
-                    "coupling entry `expression_template_imports` value for "
+                    OPERATOR_IMPORT_NOT_LIBRARY,
+                    "coupling entry `operator_imports` value for "
                     f"'{tname}' must be a list of §9.7.2 import entries "
                     "(esm-spec §9.7.10 / §10.8).",
                 )
             _append_component_imports(comp, imports)
-        del entry["expression_template_imports"]
+        del entry["operator_imports"]
     return root
 
 

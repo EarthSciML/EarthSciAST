@@ -29,7 +29,7 @@ func (e *EvaluationError) DiagnosticCode() string { return e.Code }
 // expression, including those reachable ONLY through a sidecar (non-`args`)
 // field — an aggregate's `expr`/`filter`/`key`/`join`, an integral's
 // `lower`/`upper`, a makearray's `values`, an
-// apply_expression_template's `bindings`, … The walk is the shared
+// apply_operator's `bindings`, … The walk is the shared
 // field-preserving one (mapExprChildren), so a name can never again hide from
 // it in a field the walker was not taught about (audit G1 — and G2, where a
 // false-negative Contains made the DAE contract delete a still-referenced
@@ -541,7 +541,7 @@ func evalLazyOp(node ExprNode, bindings map[string]float64) (float64, error) {
 var closedNonScalarOps = map[string]struct{}{
 	"faq": {}, "makearray": {}, "index": {}, "broadcast": {}, "reshape": {},
 	"transpose": {}, "concat": {}, "distinct": {},
-	"apply_expression_template": {}, "ic": {},
+	"apply_operator": {}, "ic": {},
 }
 
 // tryConstantFolding evaluates a node whose op is in arithOpTable and whose
@@ -806,9 +806,9 @@ func unevaluableOpError(node ExprNode) error {
 	}
 	return &EvaluationError{
 		Code: CodeUnloweredOperator,
-		Message: fmt.Sprintf("unlowered rewrite-target operator '%s' reached evaluation: it is not in the "+
-			"closed evaluable core, so a rewrite rule must eliminate it before evaluation "+
-			"(esm-spec §4.2 / §9.6.8).", node.Op),
+		Message: fmt.Sprintf("unlowered call of the defined operator '%s' reached evaluation: it is not "+
+			"a core operator, so a definition in scope must resolve it before evaluation "+
+			"(esm-spec §4.2 / §9.6.8 / §9.6.12).", node.Op),
 	}
 }
 

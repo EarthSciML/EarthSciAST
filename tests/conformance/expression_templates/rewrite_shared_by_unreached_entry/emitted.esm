@@ -1,0 +1,260 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "rules-as-references conformance (esm-spec §9.6.4 rule 3)"
+    ],
+    "description": "esm-spec §9.6.4 rule 3, a single rewritten body that another registry entry can still reach. The match-less template `ddx` holds a spatial `D` and is called once, with `u` (declared shape [x]), so `central_1d` (scoped by `where f: shape [x]`) fires in its body and every reached instance rewrites to the same body. But the authored match-less entry `wrap` references `ddx` and nothing in the component references `wrap`: it keeps its authored body, is emitted, and joins the registry of any document that mounts or flattens this component, where a reference to it may bind a variable of another shape. So `ddx` is not rewritten in place: it keeps its authored body, the rewritten body is registered as `ddx.variant1`, and the call site is re-pointed to it. The same holds transitively: `outer` references `inner` (whose body holds the `D`), the equation for `dw` references `outer`, and the unreferenced authored entry `hidden` references `outer`; `inner` and `outer` both keep their authored bodies and gain `inner.variant1` and `outer.variant1`, the second referencing the first. A template that only reached references name is still rewritten in place (see `rewrite_in_template_body/`).",
+    "name": "rewrite_shared_by_unreached_entry"
+  },
+  "models": {
+    "m": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "u"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "w"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "w"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "du",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "f": "u"
+            },
+            "name": "ddx.variant1",
+            "op": "apply_expression_template"
+          }
+        },
+        {
+          "lhs": "dw",
+          "rhs": {
+            "args": [],
+            "bindings": {
+              "g": "w"
+            },
+            "name": "outer.variant1",
+            "op": "apply_expression_template"
+          }
+        }
+      ],
+      "expression_templates": {
+        "ddx": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "op": "D",
+            "wrt": "x"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "wrap": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "g"
+            },
+            "name": "ddx",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "g"
+          ]
+        },
+        "inner": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "op": "D",
+            "wrt": "x"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "outer": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "g"
+            },
+            "name": "inner",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "g"
+          ]
+        },
+        "hidden": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "g": "h"
+            },
+            "name": "outer",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "h"
+          ]
+        },
+        "central_1d": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "+"
+                    }
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "f",
+                    {
+                      "args": [
+                        "i",
+                        1
+                      ],
+                      "op": "-"
+                    }
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "-"
+            },
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            }
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "ddx.variant1": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "central_1d",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "inner.variant1": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "f"
+            },
+            "name": "central_1d",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "f"
+          ]
+        },
+        "outer.variant1": {
+          "body": {
+            "args": [],
+            "bindings": {
+              "f": "g"
+            },
+            "name": "inner.variant1",
+            "op": "apply_expression_template"
+          },
+          "params": [
+            "g"
+          ]
+        }
+      },
+      "variables": {
+        "du": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "dw": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "u": {
+          "default": 0.5,
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "w": {
+          "default": 1.5,
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

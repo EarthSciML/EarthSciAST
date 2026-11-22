@@ -842,6 +842,12 @@ pub(crate) struct BuildProducts {
     /// read by [`EsmProblem::built_variables`] when there is no compiled model
     /// to answer instead. Empty when the pipeline did not run.
     pub built_variables: crate::simulate_array::BuiltVariables,
+    /// The names (keyed like `fields`) whose value the build pipeline took
+    /// from a TIME-VARYING provider's record in effect at the construction
+    /// sample, in a document with nothing to integrate: each data-fed
+    /// parameter such a provider fed and every observed reading one. Their
+    /// build-time values are the answer at that time only.
+    pub time_pinned: std::collections::HashSet<String>,
 }
 
 /// The raw document a Problem carries. A document read from a file and built
@@ -1190,6 +1196,13 @@ impl EsmProblem {
         &self.build.data_fields
     }
 
+    /// [`BuildProducts::time_pinned`]: the build-time values that hold only
+    /// at the construction sample, because a time-varying provider decided
+    /// them there.
+    pub(crate) fn time_pinned(&self) -> &std::collections::HashSet<String> {
+        &self.build.time_pinned
+    }
+
     /// The names of the OBSERVED VARIABLES [`observed_trajectory`] can report a
     /// trajectory for.
     ///
@@ -1321,7 +1334,8 @@ fn strip_and_build(
                     path.display()
                 )))
             })?;
-            let raw: JsonValue = serde_json::from_str(&text).map_err(|e| {
+            // esm-spec §1.2.1: the extension picks the format.
+            let raw: JsonValue = crate::ref_reader::decode_document(&text, path).map_err(|e| {
                 SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
                     "parsing {}: {e}",
                     path.display()
@@ -1405,14 +1419,19 @@ fn build_problem(
                     path.display()
                 )))
             })?;
-            let raw: JsonValue = serde_json::from_str(&text).map_err(|e| {
+            // esm-spec §1.2.1: the extension picks the format.
+            let raw: JsonValue = crate::ref_reader::decode_document(&text, path).map_err(|e| {
                 SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
                     "parsing {}: {e}",
                     path.display()
                 )))
             })?;
             owned_json = Some(raw);
-            source_text = Some(text);
+            // Only JSON text is the document's text; a Markdown or Typst
+            // source document is kept as its parse.
+            source_text = crate::ref_reader::source_format(path)
+                .is_none()
+                .then_some(text);
             json_from_text = true;
             // A relative `{ref}` or template import resolves against the
             // referencing file's directory (esm-spec §4.7), not the process's
@@ -1563,6 +1582,13 @@ fn build_problem(
                 "re-serializing the typed document for the build pipeline: {e}"
             )))
         })?);
+        // The JSON form does not carry where the document was loaded from,
+        // and the re-parse would resolve its relative `coupling_import` refs
+        // against the working directory instead (esm-spec §10.10 -> §4.7: they
+        // resolve against the importing document). Keep that anchor.
+        if opts.base_path.is_none() {
+            opts.base_path = file.coupling_import_base.as_ref().map(PathBuf::from);
+        }
         owned_file = None;
     }
 

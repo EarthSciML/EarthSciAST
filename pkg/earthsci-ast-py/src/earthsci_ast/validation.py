@@ -47,11 +47,12 @@ from typing import Any
 from jsonschema import ValidationError as JsonSchemaValidationError
 
 from .classification import observed_unknowns, ode_states
-from .error_handling import ErrorCode
+from .error_handling import DEFINITION_UNIT_MISMATCH, ErrorCode
 from .esm_types import EsmFile
 from .parse import SchemaValidationError, SubsystemRefError, load_path, load_string
 from .units import (
     UNIT_FINDING_ANALYSIS,
+    UNIT_FINDING_DEFINITION_UNIT_MISMATCH,
     UNIT_FINDING_DIMENSIONAL_MISMATCH,
     UNIT_FINDING_UNPARSEABLE,
 )
@@ -1201,6 +1202,10 @@ def _validate_dimensionless_literals(esm_file: EsmFile, unit_warnings: list[Unit
 _PROMOTED_UNIT_FINDINGS = {
     UNIT_FINDING_DIMENSIONAL_MISMATCH: ErrorCode.UNIT_INCONSISTENCY.value,
     UNIT_FINDING_UNPARSEABLE: ErrorCode.UNIT_PARSE_ERROR.value,
+    # esm-spec §9.6.12 "Units": a definition whose body unit provably disagrees
+    # with its unit expression is its own structural error; the advisory form
+    # (an undeterminable body) stays a warning.
+    UNIT_FINDING_DEFINITION_UNIT_MISMATCH: DEFINITION_UNIT_MISMATCH,
 }
 
 
@@ -1251,17 +1256,24 @@ def _validate_units(
         return
 
     for finding in unit_result.findings:
-        unit_warnings.append(
-            UnitWarning(
-                path=finding.path,
-                message=finding.message,
-                code=finding.code,
-                lhs_units=finding.lhs_units,
-                rhs_units=finding.rhs_units,
-                details={"validation_type": "dimensional_analysis"},
-            )
+        # A definition whose body unit provably disagrees is an error only
+        # (esm-spec §9.6.12): its code names the structural error itself, so a
+        # unit warning under the same code would read as the advisory form.
+        is_definition_error = (
+            finding.code == UNIT_FINDING_DEFINITION_UNIT_MISMATCH and not finding.advisory
         )
-        code = _PROMOTED_UNIT_FINDINGS.get(finding.code)
+        if not is_definition_error:
+            unit_warnings.append(
+                UnitWarning(
+                    path=finding.path,
+                    message=finding.message,
+                    code=finding.code,
+                    lhs_units=finding.lhs_units,
+                    rhs_units=finding.rhs_units,
+                    details={"validation_type": "dimensional_analysis"},
+                )
+            )
+        code = None if finding.advisory else _PROMOTED_UNIT_FINDINGS.get(finding.code)
         if code is not None:
             structural_errors.append(
                 ValidationError(

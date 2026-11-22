@@ -1583,6 +1583,12 @@ func PropagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 // the §4.8.6 warning pass (dimensionlessLiteralFindings) sets the switch.
 type unitTyper struct {
 	dimensionlessLiterals bool
+	// defs: the raw registry entries references resolve against when typing a
+	// reference-preserving expression (esm-spec §9.6.12 "Units"); nil
+	// otherwise, when a reference is undeterminable. defFindings receives the
+	// `definition_unit_mismatch` findings (units_definitions.go).
+	defs        map[string]any
+	defFindings *[]defUnitFinding
 }
 
 // propagateDimension types expr under the current (neutral-literal) rule.
@@ -2140,6 +2146,16 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 	case "min", "max":
 		// The `+` rule: known operands agree, unknown ones are skipped.
 		return ut.agreeingUnit(node.Op, node.Args, env)
+
+	// esm 2.4.0 (esm-spec §4.2): the fixed unit expressions of the defined
+	// operators `partial` ([f]/[wrt]) and `integral` ([f]·[var]), which hold
+	// resolved or not.
+	case opPartial:
+		return ut.partialUnit(node, env)
+	case "integral":
+		return ut.integralUnit(node, env)
+	case applyExpressionTemplateOp:
+		return ut.referenceUnit(node, env)
 	}
 	// Unknown / unmodeled operator (including open-tier rewrite-target user
 	// ops, which have no privileged dimensional rule): propagate
@@ -2471,11 +2487,23 @@ func validateModelUnits(modelName string, model *Model, basePath string, scoped 
 			}
 		}
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
+		// An equation whose references reach a unit-bearing definition is
+		// typed from its reference-preserving form (esm-spec §9.6.12 "Units").
+		if le, ok := scoped.lowered(eqPath); ok {
+			var fs []defUnitFinding
+			ut := unitTyper{defs: le.registry, defFindings: &fs}
+			leq := Equation{LHS: le.LHS, RHS: le.RHS}
+			if w := ut.equationFinding(&leq, env, eqPath); w != nil {
+				result.UnitWarnings = append(result.UnitWarnings, *w)
+			}
+			definitionUnitFindings(fs, eqPath, result)
+			continue
+		}
 		if w := ValidateEquationDimensions(&eq, env, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
 	}
-	validateObservedVariableUnits(model, env, basePath, result)
+	validateObservedVariableUnitsScoped(model, env, basePath, scoped, result)
 	checkConversionFactorConsistency(modelName, model, result)
 	checkPhysicalConstantUnits(modelName, model, result)
 	checkDefaultUnits(modelName, model, result)
@@ -2497,6 +2525,13 @@ func validateModelUnits(modelName string, model *Model, basePath string, scoped 
 // units_invalid_exponent.esm, units_invalid_logarithm.esm and
 // units_mixed_dimensional_operations.esm.
 func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath string, result *StructuralValidationResult) {
+	validateObservedVariableUnitsScoped(model, env, basePath, nil, result)
+}
+
+// validateObservedVariableUnitsScoped is validateObservedVariableUnits typing
+// a definition whose references reach a unit-bearing definition from its
+// reference-preserving form (esm-spec §9.6.12 "Units").
+func validateObservedVariableUnitsScoped(model *Model, env map[string]Unit, basePath string, scoped *scopedUnitIndex, result *StructuralValidationResult) {
 	for _, name := range sortedKeys(model.Variables) {
 		v := model.Variables[name]
 		def, isObserved := ObservedDefinition(model, name)
@@ -2505,7 +2540,20 @@ func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath s
 		}
 		path := fmt.Sprintf("%s/variables/%s", basePath, name)
 
-		got, err := propagateDimension(def, env)
+		ut := unitTyper{}
+		var fs []defUnitFinding
+		for i, eq := range model.Equations {
+			if lhs, ok := eq.LHS.(string); !ok || lhs != name {
+				continue
+			}
+			if le, ok := scoped.lowered(fmt.Sprintf("%s/equations/%d", basePath, i)); ok {
+				def = le.RHS
+				ut = unitTyper{defs: le.registry, defFindings: &fs}
+			}
+			break
+		}
+		got, err := ut.propagate(def, env)
+		definitionUnitFindings(fs, path, result)
 		if err != nil {
 			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 				Path:     path,
@@ -3270,6 +3318,20 @@ type scopedUnitIndex struct {
 	// topLevel maps each top-level-rooted scoped name to its parsed unit; a
 	// target with no units, or with units that do not parse, is absent.
 	topLevel map[string]Unit
+	// loweredEqs: the reference-preserving form of each model equation whose
+	// references reach a unit-bearing definition, by JSON pointer (esm-spec
+	// §9.6.12 "Units"; loweredUnitEquation).
+	loweredEqs map[string]loweredUnitEquation
+}
+
+// lowered returns the reference-preserving form of the equation at path, if
+// the load captured one.
+func (s *scopedUnitIndex) lowered(path string) (loweredUnitEquation, bool) {
+	if s == nil || s.loweredEqs == nil {
+		return loweredUnitEquation{}, false
+	}
+	le, ok := s.loweredEqs[path]
+	return le, ok
 }
 
 // newScopedUnitIndex builds the top-level part of the index for file, which
@@ -3310,7 +3372,11 @@ func newScopedUnitIndex(file *ESMFile) *scopedUnitIndex {
 			top[name] = u
 		}
 	}
-	return &scopedUnitIndex{topLevel: top}
+	idx := &scopedUnitIndex{topLevel: top}
+	if file != nil {
+		idx.loweredEqs = file.loweredUnitEqs
+	}
+	return idx
 }
 
 // extend adds a component's scoped references to its unit environment env.

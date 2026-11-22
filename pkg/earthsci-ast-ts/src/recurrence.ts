@@ -229,7 +229,7 @@ function affineInSym(e: Expr, sym: string, env: ReadonlyMap<string, Bounds>): Af
  * `recurrence_not_wellfounded`, because the read itself may be perfectly causal
  * and it is the CARRIER that cannot be sequenced.
  *
- * `apply_expression_template` is deliberately NOT here. Its operands ride the
+ * `apply_operator` is deliberately NOT here. Its operands ride the
  * `bindings` field, which this walk does not visit (and must not start visiting
  * unilaterally — five bindings mirror this field set and §5.19.5 is exact
  * agreement), so listing it was a rule that barely reached what it named. It is
@@ -280,7 +280,7 @@ interface SelfRead {
  * canonical `EXPRESSION_CHILD_KEYS` set. Rejection parity is EXACT agreement
  * (§5.19.5): seeing a self-read the reference validator does not see would make
  * this binding reject a document the others accept, which §5.19.5 forbids in the
- * same breath as the converse. That gap is real — `apply_expression_template`
+ * same breath as the converse. That gap is real — `apply_operator`
  * is on the blocking list above, yet its operands ride `bindings` rather than
  * `args`, so the blocking rule barely reaches it — and it should be closed in
  * every binding at once rather than unilaterally here.

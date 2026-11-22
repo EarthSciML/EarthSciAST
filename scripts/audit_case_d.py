@@ -23,135 +23,270 @@
 #     surviving reference's body either).
 #
 # usage: audit_case_d.py <root>...
-import json, os, sys, collections
+import json
+import os
+import sys
+import collections
 
 # The evaluable core exactly as the in-place engine (EarthSciAST.jl at the esa-tmpl-a1 wt15 tree) defined it:
 # keys of `_OP_INDEX` minus `_REWRITE_TARGET_OPS` (D, grad, div, laplacian, integral, enum). Every other op
 # (incl. `fn`, `table_lookup`, `aggregate`, user ops) made a reference eager. apply_expression_template is not a target.
-CORE = set(["!=","*","+","-","/","<","<=","==",">",">=","Pre","^","abs","acos","acosh","and","asin","asinh","atan",
-            "atan2","atanh","broadcast","ceil","concat","const","cos","cosh","distinct","e","exp","false","faq",
-            "floor","ic","ifelse","index","log","log10","makearray","max","min","neg","not","or","pi","pow",
-            "reshape","sign","sin","sinh","sqrt","tan","tanh","transpose","true","\u03c0","apply_expression_template"])
+CORE = set(
+    [
+        "!=",
+        "*",
+        "+",
+        "-",
+        "/",
+        "<",
+        "<=",
+        "==",
+        ">",
+        ">=",
+        "Pre",
+        "^",
+        "abs",
+        "acos",
+        "acosh",
+        "and",
+        "asin",
+        "asinh",
+        "atan",
+        "atan2",
+        "atanh",
+        "broadcast",
+        "ceil",
+        "concat",
+        "const",
+        "cos",
+        "cosh",
+        "distinct",
+        "e",
+        "exp",
+        "false",
+        "faq",
+        "floor",
+        "ic",
+        "ifelse",
+        "index",
+        "log",
+        "log10",
+        "makearray",
+        "max",
+        "min",
+        "neg",
+        "not",
+        "or",
+        "pi",
+        "pow",
+        "reshape",
+        "sign",
+        "sin",
+        "sinh",
+        "sqrt",
+        "tan",
+        "tanh",
+        "transpose",
+        "true",
+        "\u03c0",
+        "apply_expression_template",
+    ]
+)
+
 
 def is_target(x):
-    op = x.get('op')
+    op = x.get("op")
     return isinstance(op, str) and op not in CORE
+
 
 def has_target(x):
     if isinstance(x, dict):
-        if is_target(x): return True
+        if is_target(x):
+            return True
         return any(has_target(v) for v in x.values())
-    if isinstance(x, list): return any(has_target(v) for v in x)
+    if isinstance(x, list):
+        return any(has_target(v) for v in x)
     return False
+
 
 def refs_in(x, out):
     if isinstance(x, dict):
-        if x.get('op') == 'apply_expression_template': out.append(x)
-        for v in x.values(): refs_in(v, out)
+        if x.get("op") == "apply_expression_template":
+            out.append(x)
+        for v in x.values():
+            refs_in(v, out)
     elif isinstance(x, list):
-        for v in x: refs_in(v, out)
+        for v in x:
+            refs_in(v, out)
+
 
 def nodes(x):
     if isinstance(x, dict):
-        if 'op' in x: yield x
-        for v in x.values(): yield from nodes(v)
+        if "op" in x:
+            yield x
+        for v in x.values():
+            yield from nodes(v)
     elif isinstance(x, list):
-        for v in x: yield from nodes(v)
+        for v in x:
+            yield from nodes(v)
+
 
 def match(pat, x, params):
     """Structural match ignoring `where` and binding consistency (a superset of the real matcher)."""
-    if isinstance(pat, str) and pat in params: return True
+    if isinstance(pat, str) and pat in params:
+        return True
     if isinstance(pat, dict):
-        if not isinstance(x, dict) or pat.get('op') != x.get('op'): return False
+        if not isinstance(x, dict) or pat.get("op") != x.get("op"):
+            return False
         for k, pv in pat.items():
-            if k == 'op': continue
-            if k not in x: return False
-            if not match(pv, x[k], params): return False
+            if k == "op":
+                continue
+            if k not in x:
+                return False
+            if not match(pv, x[k], params):
+                return False
         return True
     if isinstance(pat, list):
-        return isinstance(x, list) and len(x) == len(pat) and all(match(p, v, params) for p, v in zip(pat, x))
+        return (
+            isinstance(x, list)
+            and len(x) == len(pat)
+            and all(match(p, v, params) for p, v in zip(pat, x))
+        )
     return pat == x
+
 
 def load(p):
     try:
-        with open(p) as f: return json.load(f)
-    except Exception: return None
+        with open(p) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
 
 def walk_files(roots):
     for root in roots:
         for dp, dn, fn in os.walk(root):
-            dn[:] = sorted(d for d in dn if not d.startswith('.') and d not in ('archive', 'node_modules'))
+            dn[:] = sorted(
+                d for d in dn if not d.startswith(".") and d not in ("archive", "node_modules")
+            )
             for f in sorted(fn):
-                if f.endswith('.esm'): yield os.path.join(dp, f)
+                if f.endswith(".esm"):
+                    yield os.path.join(dp, f)
+
 
 def registries(d):
     out = []
+
     def w(x):
         if isinstance(x, dict):
-            et = x.get('expression_templates')
-            if isinstance(et, dict): out.append(et)
-            for v in x.values(): w(v)
+            et = x.get("expression_templates")
+            if isinstance(et, dict):
+                out.append(et)
+            for v in x.values():
+                w(v)
         elif isinstance(x, list):
-            for v in x: w(v)
-    w(d); return out
+            for v in x:
+                w(v)
+
+    w(d)
+    return out
+
 
 def main():
     roots = sys.argv[1:]
-    st = collections.Counter(); roots_ops = collections.Counter(); core_rules = []
+    st = collections.Counter()
+    roots_ops = collections.Counter()
+    core_rules = []
     files = []
     for p in walk_files(roots):
         d = load(p)
-        if d is None: st['unparseable_files'] += 1; continue
-        st['files'] += 1; files.append(p)
+        if d is None:
+            st["unparseable_files"] += 1
+            continue
+        st["files"] += 1
+        files.append(p)
         for et in registries(d):
             for n, t in et.items():
-                if not isinstance(t, dict) or 'match' not in t: continue
-                st['rules'] += 1
-                m = t['match']; params = set(t.get('params', []))
-                r = m.get('op') if isinstance(m, dict) else ('<metavariable>' if m in params else '<literal>')
-                roots_ops['custom op (outside core)' if isinstance(m, dict) and r not in CORE and r not in ('D','grad','div','laplacian','integral','enum') else r] += 1
-                if not has_target(m) and not (isinstance(m, dict) and m.get('op') == 'D'):
+                if not isinstance(t, dict) or "match" not in t:
+                    continue
+                st["rules"] += 1
+                m = t["match"]
+                params = set(t.get("params", []))
+                r = (
+                    m.get("op")
+                    if isinstance(m, dict)
+                    else ("<metavariable>" if m in params else "<literal>")
+                )
+                roots_ops[
+                    "custom op (outside core)"
+                    if isinstance(m, dict)
+                    and r not in CORE
+                    and r not in ("D", "grad", "div", "laplacian", "integral", "enum")
+                    else r
+                ] += 1
+                if not has_target(m) and not (isinstance(m, dict) and m.get("op") == "D"):
                     core_rules.append((p, n, m, params))
-                elif isinstance(m, dict) and any(x.get('op') == 'D' and x.get('wrt') == 't' for x in nodes(m)):
-                    st['rules_with_time_D_in_pattern'] += 1
-    st['core_only_patterns'] = len(core_rules)
-    print('tier 1:', dict(st))
-    print('  pattern root ops:', dict(roots_ops.most_common()))
-    for p, n, m, _ in core_rules: print('  CORE-ONLY PATTERN', p, n, json.dumps(m)[:300])
+                elif isinstance(m, dict) and any(
+                    x.get("op") == "D" and x.get("wrt") == "t" for x in nodes(m)
+                ):
+                    st["rules_with_time_D_in_pattern"] += 1
+    st["core_only_patterns"] = len(core_rules)
+    print("tier 1:", dict(st))
+    print("  pattern root ops:", dict(roots_ops.most_common()))
+    for p, n, m, _ in core_rules:
+        print("  CORE-ONLY PATTERN", p, n, json.dumps(m)[:300])
 
-    hits = []; st2 = collections.Counter()
+    hits = []
+    st2 = collections.Counter()
     for p in files:
-        d = load(p); regs = registries(d)
+        d = load(p)
+        regs = registries(d)
         tmpl = {}
         for et in regs:
             for n, t in et.items():
-                if isinstance(t, dict): tmpl.setdefault(n, t)
+                if isinstance(t, dict):
+                    tmpl.setdefault(n, t)
         memo = {}
+
         def tb(name, stack=()):
             # template body (transitively) holds a target op
-            if name in memo: return memo[name]
+            if name in memo:
+                return memo[name]
             t = tmpl.get(name)
-            if t is None or name in stack: return False
-            body = t.get('body'); rs = []; refs_in(body, rs)
-            v = has_target(body) or any(tb(r.get('name'), stack + (name,)) for r in rs)
-            memo[name] = v; return v
-        allrefs = []; refs_in(d, allrefs)
+            if t is None or name in stack:
+                return False
+            body = t.get("body")
+            rs = []
+            refs_in(body, rs)
+            v = has_target(body) or any(tb(r.get("name"), stack + (name,)) for r in rs)
+            memo[name] = v
+            return v
+
+        allrefs = []
+        refs_in(d, allrefs)
         for r in allrefs:
-            st2['references'] += 1
-            b = r.get('bindings', {})
-            if has_target(b) or tb(r.get('name')): st2['eager_in_old_engine'] += 1; continue
-            st2['surviving_in_old_engine'] += 1
+            st2["references"] += 1
+            b = r.get("bindings", {})
+            if has_target(b) or tb(r.get("name")):
+                st2["eager_in_old_engine"] += 1
+                continue
+            st2["surviving_in_old_engine"] += 1
             for x in nodes(b):
                 for rp, rn, m, params in core_rules:
-                    if match(m, x, params): hits.append(('bindings', p, r.get('name'), rp, rn))
+                    if match(m, x, params):
+                        hits.append(("bindings", p, r.get("name"), rp, rn))
         for n, t in tmpl.items():
-            if 'match' in t or tb(n): continue
-            st2['surviving_template_bodies'] += 1
-            for x in nodes(t.get('body')):
+            if "match" in t or tb(n):
+                continue
+            st2["surviving_template_bodies"] += 1
+            for x in nodes(t.get("body")):
                 for rp, rn, m, params in core_rules:
-                    if match(m, x, params): hits.append(('body', p, n, rp, rn))
-    print('tier 2:', dict(st2), 'candidates:', len(hits))
-    for h in hits: print('  CANDIDATE', *h)
+                    if match(m, x, params):
+                        hits.append(("body", p, n, rp, rn))
+    print("tier 2:", dict(st2), "candidates:", len(hits))
+    for h in hits:
+        print("  CANDIDATE", *h)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

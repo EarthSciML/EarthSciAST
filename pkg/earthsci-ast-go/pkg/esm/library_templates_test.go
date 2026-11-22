@@ -52,7 +52,7 @@ func TestInterpScenariosThroughLibraryTemplates(t *testing.T) {
 	var library struct {
 		Templates map[string]struct {
 			Body any `json:"body"`
-		} `json:"expression_templates"`
+		} `json:"operators"`
 	}
 	if err := json.Unmarshal(libRaw, &library); err != nil {
 		t.Fatalf("parse %s: %v", libraryPath, err)
@@ -86,7 +86,7 @@ func TestInterpScenariosThroughLibraryTemplates(t *testing.T) {
 				equations = append(equations, map[string]any{
 					"lhs": map[string]any{"op": "D", "args": []any{fmt.Sprintf("out_%d", i)}, "wrt": "t"},
 					"rhs": map[string]any{
-						"op": "apply_expression_template", "args": []any{},
+						"op": "apply_operator", "args": []any{},
 						"name": name, "bindings": calls[i],
 					},
 				})
@@ -95,9 +95,9 @@ func TestInterpScenariosThroughLibraryTemplates(t *testing.T) {
 				"esm":      "1.1.0",
 				"metadata": map[string]any{"name": "interp_" + name + "_template"},
 				"models": map[string]any{"Probe": map[string]any{
-					"expression_template_imports": []any{map[string]any{"ref": libraryPath}},
-					"variables":                   variables,
-					"equations":                   equations,
+					"operator_imports": []any{map[string]any{"ref": libraryPath}},
+					"variables":        variables,
+					"equations":        equations,
 				}},
 			}
 			docJSON, err := json.Marshal(doc)
@@ -130,7 +130,7 @@ func TestInterpScenariosThroughLibraryTemplates(t *testing.T) {
 	}
 }
 
-// interpTemplateBindings is the `apply_expression_template` bindings of one
+// interpTemplateBindings is the `apply_operator` bindings of one
 // interp scenario: arrays as `const` nodes, each axis length its integer, and
 // the queries as parameters `qx_<tag>` / `qy_<tag>` (a NaN query cannot be a
 // JSON literal).
@@ -159,7 +159,7 @@ func interpTemplateBindings(t *testing.T, name string, inputs []any, tag int) ma
 
 // substituteTemplateParams is a test-local substitution oracle: every string
 // other than an `op` name that equals a parameter is replaced by its binding.
-// The interp templates carry no nested `apply_expression_template`, whose
+// The interp templates carry no nested `apply_operator`, whose
 // `name` would be exempt.
 func substituteTemplateParams(body any, bindings map[string]any) any {
 	switch v := body.(type) {
@@ -218,7 +218,7 @@ func TestDatetimeScenariosThroughCalendarTemplates(t *testing.T) {
 		t.Fatalf("read %s: %v", libraryPath, err)
 	}
 	var library struct {
-		Templates map[string]calendarTemplate `json:"expression_templates"`
+		Templates map[string]calendarTemplate `json:"operators"`
 	}
 	if err := json.Unmarshal(libRaw, &library); err != nil {
 		t.Fatalf("parse %s: %v", libraryPath, err)
@@ -252,7 +252,7 @@ func TestDatetimeScenariosThroughCalendarTemplates(t *testing.T) {
 			equations = append(equations, map[string]any{
 				"lhs": out,
 				"rhs": map[string]any{
-					"op": "apply_expression_template", "args": []any{},
+					"op": "apply_operator", "args": []any{},
 					"name": name, "bindings": map[string]any{"t": inst},
 				},
 			})
@@ -261,9 +261,9 @@ func TestDatetimeScenariosThroughCalendarTemplates(t *testing.T) {
 			"esm":      "1.2.0",
 			"metadata": map[string]any{"name": "datetime_" + name + "_template"},
 			"models": map[string]any{"Probe": map[string]any{
-				"expression_template_imports": []any{map[string]any{"ref": libraryPath, "only": []any{name}}},
-				"variables":                   variables,
-				"equations":                   equations,
+				"operator_imports": []any{map[string]any{"ref": libraryPath, "only": []any{name}}},
+				"variables":        variables,
+				"equations":        equations,
 			}},
 		}
 		docJSON, err := json.Marshal(doc)
@@ -335,7 +335,7 @@ type calendarTemplate struct {
 
 // expandCalendarTemplate is a test-local expansion oracle: every string other
 // than an `op` name that is a parameter is replaced by its binding, and a
-// nested `apply_expression_template` is replaced by its template's body
+// nested `apply_operator` is replaced by its template's body
 // expanded under its (already substituted) bindings.
 func expandCalendarTemplate(templates map[string]calendarTemplate, body any, bindings map[string]any) any {
 	switch v := body.(type) {
@@ -351,7 +351,7 @@ func expandCalendarTemplate(templates map[string]calendarTemplate, body any, bin
 		}
 		return out
 	case map[string]any:
-		if v["op"] == "apply_expression_template" {
+		if v["op"] == "apply_operator" {
 			inner := map[string]any{}
 			for k, e := range v["bindings"].(map[string]any) {
 				inner[k] = expandCalendarTemplate(templates, e, bindings)

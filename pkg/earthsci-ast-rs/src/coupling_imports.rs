@@ -320,7 +320,7 @@ fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticE
         RefError::Parse { path, err: e } => err(
             codes::COUPLING_IMPORT_UNRESOLVED,
             format!(
-                "coupling-library ref '{}' is not valid JSON: {e}",
+                "coupling-library ref '{}' did not parse: {e}",
                 path.display()
             ),
         ),
@@ -330,6 +330,9 @@ fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticE
     // A coupling library is a document too — same wire-boundary treatment as
     // the root (docs/content/rfcs/faq-node-rename.md §5.2).
     crate::ref_reader::open(&located, crate::version_gates::DocKind::CouplingLibrary).map_err(|e| {
+        if let Some(kept) = e.kept_refusal(&located) {
+            return kept;
+        }
         match e {
             crate::ref_reader::OpenError::Ref(e) => read_error(e),
             crate::ref_reader::OpenError::Wire(e) => err(

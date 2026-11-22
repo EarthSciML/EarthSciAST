@@ -202,10 +202,7 @@ function component(doc: Plain): [Sym, Json] {
     ...keysOf(c.parameters),
     ...keysOf(doc.index_sets),
   ]
-  const templates = [
-    ...templatesOf(doc.expression_templates),
-    ...templatesOf(c.expression_templates),
-  ]
+  const templates = [...templatesOf(doc.operators), ...templatesOf(c.operators)]
   const eq = (c.equations as Plain[])[0]
   const e = jobj([
     ['args', jarr([fromPlain(eq.lhs), fromPlain(eq.rhs)])],
@@ -364,7 +361,7 @@ describe('math: array notation reads only what it prints', () => {
       ['args', jarr([])],
       ['bindings', jobj([])],
       ['name', s('g0')],
-      ['op', s('apply_expression_template')],
+      ['op', s('apply_operator')],
     ])
     const out: Sym = { names: ['x'], templates: [] }
     const zero: Sym = { names: ['x'], templates: [['g0', []]] }

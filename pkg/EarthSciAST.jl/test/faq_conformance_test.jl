@@ -155,7 +155,7 @@ end
 # field of the expanded model is checked, as Python checks every site.
 @testset "invalid: a template-bound undeclared index set at every site (esm-spec §9.6.1)" begin
     path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq", "template_from_param_undeclared.esm")
-    base = JSON3.read(read(path, String), Dict{String, Any})
+    base = EarthSciAST._wire_old_spellings(JSON3.read(read(path, String), Dict{String, Any}))   # esm-2.4.0 spellings
     call(name, b) = Dict{String, Any}(
         "op" => "apply_operator", "args" => Any[], "name" => name, "bindings" => b
     )

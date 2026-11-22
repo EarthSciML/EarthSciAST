@@ -37,7 +37,7 @@ def _golden(case: str, name: str) -> str:
 
 
 def _block(reg: dict) -> str:
-    return emit_esm_string({"expression_templates": reg})
+    return emit_esm_string({"operators": reg})
 
 
 def _flat(path: str) -> str:

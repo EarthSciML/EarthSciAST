@@ -26,7 +26,7 @@ func envRefConsumerJSON(ref string) string {
       "metadata": {"name": "env_ref_consumer"},
       "models": {
         "M": {
-          "expression_template_imports": [{"ref": "` + ref + `"}],
+          "operator_imports": [{"ref": "` + ref + `"}],
           "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0}},
           "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                          "rhs": {"op": "-", "args": ["x"]}}]
@@ -43,7 +43,7 @@ func envRefLibJSON(size int) string {
       "metadata": {"name": "env_ref_lib"},
       "metaparameters": {"NC": {"type": "integer", "default": ` + strconv.Itoa(size) + `}},
       "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
-      "expression_templates": {"nc": {"params": [], "body": "NC"}}
+      "operators": {"nc": {"params": [], "body": "NC"}}
     }`
 }
 
@@ -80,13 +80,13 @@ func TestRefEnvExpansion_UnsetVariableStaysLiteral(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "m.esm")
 	writeFileString(t, p, tiModelJSON(
-		`"expression_template_imports": [{"ref": "${ESM_GO_TEST_UNSET_ROOT}/lib.esm"}],`, ""))
+		`"operator_imports": [{"ref": "${ESM_GO_TEST_UNSET_ROOT}/lib.esm"}],`, ""))
 	_, err := LoadPath(p)
 	if err == nil {
-		t.Fatal("LoadPath(unset ${VAR}) succeeded; want template_import_unresolved")
+		t.Fatal("LoadPath(unset ${VAR}) succeeded; want operator_import_unresolved")
 	}
-	if code := tiErrCode(t, err); code != "template_import_unresolved" {
-		t.Errorf("code = %s; want template_import_unresolved", code)
+	if code := tiErrCode(t, err); code != "operator_import_unresolved" {
+		t.Errorf("code = %s; want operator_import_unresolved", code)
 	}
 	if !strings.Contains(err.Error(), "${ESM_GO_TEST_UNSET_ROOT}/lib.esm") {
 		t.Errorf("message = %q; want it to quote the literal ${VAR} ref", err.Error())
@@ -101,13 +101,13 @@ func TestRefEnvExpansion_BareDollarNotExpanded(t *testing.T) {
 	t.Setenv("ESM_GO_TEST_BARE_ROOT", dir)
 	p := filepath.Join(dir, "m.esm")
 	writeFileString(t, p, tiModelJSON(
-		`"expression_template_imports": [{"ref": "$ESM_GO_TEST_BARE_ROOT/lib.esm"}],`, ""))
+		`"operator_imports": [{"ref": "$ESM_GO_TEST_BARE_ROOT/lib.esm"}],`, ""))
 	_, err := LoadPath(p)
 	if err == nil {
 		t.Fatal("LoadPath($VAR import) succeeded; the bare form must NOT expand")
 	}
-	if code := tiErrCode(t, err); code != "template_import_unresolved" {
-		t.Errorf("code = %s; want template_import_unresolved", code)
+	if code := tiErrCode(t, err); code != "operator_import_unresolved" {
+		t.Errorf("code = %s; want operator_import_unresolved", code)
 	}
 	if !strings.Contains(err.Error(), "$ESM_GO_TEST_BARE_ROOT/lib.esm") {
 		t.Errorf("message = %q; want it to quote the literal $VAR ref", err.Error())

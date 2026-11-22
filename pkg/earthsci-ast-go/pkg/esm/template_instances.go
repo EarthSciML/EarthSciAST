@@ -11,8 +11,10 @@ package esm
 // kind of what is bound (a bare variable with its declared shape, a literal,
 // any other expression). Each instance's body is rewritten once; inside it a
 // parameter is a leaf (bodyView). When every reachable instance of a template
-// rewrites to the same body, that body replaces the template's in place;
-// otherwise each distinct body becomes `<name>.variant<k>`, numbered by
+// rewrites to the same body, that body replaces the template's in place —
+// unless a registry entry rule 3 leaves as authored still references the
+// template, directly or through such entries; otherwise each distinct body
+// becomes `<name>.variant<k>`, numbered by
 // canonical bytes, and every reference is re-pointed to the entry of its
 // instance. Mirrors the Julia reference EarthSciAST.jl/src/templates/instances.jl.
 
@@ -92,7 +94,7 @@ func canonicalCompactWrite(b *strings.Builder, x any) {
 // Small raw-JSON helpers
 // ---------------------------------------------------------------------------
 
-// isApplyMap reports whether m is an `apply_expression_template` node.
+// isApplyMap reports whether m is an `apply_operator` node.
 func isApplyMap(m map[string]any) bool {
 	op, _ := m["op"].(string)
 	return op == applyExpressionTemplateOp
@@ -112,7 +114,7 @@ func templateParams(decl map[string]any) []string {
 
 func mapPtr(m map[string]any) uintptr { return reflect.ValueOf(m).Pointer() }
 
-// visitApplyNodes calls fn on every `apply_expression_template` node of x in
+// visitApplyNodes calls fn on every `apply_operator` node of x in
 // pre-order (object keys in sorted order), each object identity once,
 // descending into every field (a reference's `bindings` included). A non-nil
 // error from fn stops the walk.
@@ -348,11 +350,11 @@ func resolveApplySite(node map[string]any, templates map[string]any, scope strin
 		name, ok := node["name"].(string)
 		if !ok || name == "" {
 			return "", nil, nil, newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
-				fmt.Sprintf("%s: apply_expression_template node missing 'name'", scope))
+				fmt.Sprintf("%s: apply_operator node missing 'name'", scope))
 		}
 		if _, ok := templates[name]; !ok {
 			return "", nil, nil, newETErr(CodeApplyExpressionTemplateUnknownTemplate,
-				fmt.Sprintf("%s: apply_expression_template references undeclared template '%s'", scope, name))
+				fmt.Sprintf("%s: apply_operator references undeclared template '%s'", scope, name))
 		}
 		// The bindings check is validateApplyRef's, on a declaration whose
 		// `match` it does not look at.
@@ -399,7 +401,7 @@ func (st *rule3State) instance(name string, decl map[string]any, params, entries
 	if r, ok := st.done[key]; ok {
 		return r, nil
 	}
-	tscope := st.L.scope + ".expression_templates." + name
+	tscope := st.L.scope + ".operators." + name
 	if st.active[key] {
 		return nil, nonterminating(tscope, fmt.Sprintf(
 			"rewriting template '%s' needs the same template instance again — a `match` rule re-introduces its own pattern through the template's body", name))
@@ -414,6 +416,7 @@ func (st *rule3State) instance(name string, decl map[string]any, params, entries
 	if err != nil {
 		return nil, err
 	}
+	body = instancePartial(body, bv)
 	rewritten, passes, err := rewriteToFixpoint(body, st.L, tscope, bv)
 	if err != nil {
 		return nil, err
@@ -528,6 +531,64 @@ func lowerBodyEnums(body any, bv *bodyView, enums map[string]map[string]int) (an
 	return out, err
 }
 
+// instancePartial is esm-spec §4.2 "Reading earlier documents" for one
+// definition instance: a `D` whose `wrt` is one of the definition's params is
+// decided per instance — where the instance binds that param to an axis name
+// other than "t", the `D` reads as `partial` in this instance (the wire
+// boundary left it as written). Bound to "t", it stays the time derivative.
+// Identity-preserving. Mirrors the Julia `_instance_partial`.
+func instancePartial(body any, bv *bodyView) any {
+	var walk func(x any) (any, bool)
+	walk = func(x any) (any, bool) {
+		switch v := x.(type) {
+		case []any:
+			var out []any
+			for i, c := range v {
+				nc, ch := walk(c)
+				if ch && out == nil {
+					out = make([]any, len(v))
+					copy(out, v[:i])
+				}
+				if out != nil {
+					out[i] = nc
+				}
+			}
+			if out == nil {
+				return v, false
+			}
+			return out, true
+		case map[string]any:
+			var out map[string]any
+			for _, k := range sortedKeys(v) {
+				nv, ch := walk(v[k])
+				if ch {
+					if out == nil {
+						out = cloneMapAny(v)
+					}
+					out[k] = nv
+				}
+			}
+			if op, _ := v["op"].(string); op == OpDerivative {
+				if w, ok := v["wrt"].(string); ok && bv.isParam(w) {
+					if lit, ok := bv.lit[w].(string); ok && lit != DefaultIndepVar {
+						if out == nil {
+							out = cloneMapAny(v)
+						}
+						out["op"] = opPartial
+					}
+				}
+			}
+			if out == nil {
+				return v, false
+			}
+			return out, true
+		}
+		return x, false
+	}
+	out, _ := walk(body)
+	return out
+}
+
 // repointRefs is `x` with every reference re-pointed to the entry its instance
 // was given: `refs` maps a reference node (by identity) to its instance key,
 // `final` an instance key to the registry name its body lives under.
@@ -615,6 +676,108 @@ func declHasMatch(decl map[string]any) bool {
 	return has && m != nil
 }
 
+// rule3Multi is the templates whose reached instances rewrite to more than one
+// distinct body. Naming each single-bodied template in place or as
+// `<name>.variant1` renames every reference to it alike, so which bodies are
+// distinct does not depend on that choice: this provisional pass names every
+// single-bodied template in place. Mirrors the Julia `_rule3_multi`.
+func (st *rule3State) rule3Multi(byTemplate map[string][]string, order []string) map[string]bool {
+	final := map[string]string{}
+	multi := map[string]bool{}
+	for _, t := range order {
+		keysT := byTemplate[t]
+		canon := make([]string, len(keysT))
+		for i, k := range keysT {
+			canon[i] = canonicalCompact(repointRefs(st.done[k].body, st.done[k].refs, final))
+		}
+		set := map[string]bool{}
+		var distinct []string
+		for _, c := range canon {
+			if !set[c] {
+				set[c] = true
+				distinct = append(distinct, c)
+			}
+		}
+		if len(distinct) == 1 {
+			for _, k := range keysT {
+				final[k] = t
+			}
+			continue
+		}
+		sort.Strings(distinct)
+		multi[t] = true
+		for i, k := range keysT {
+			final[k] = fmt.Sprintf("%s\x1f%d", t, sort.SearchStrings(distinct, canon[i])+1)
+		}
+	}
+	return multi
+}
+
+// rule3Exposed is the reached match-less templates whose authored body stays
+// reachable from a registry entry that rule 3 does not rewrite under its own
+// name (esm-spec §9.6.4 rule 3): a match-less entry no reference reaches, one
+// whose instances took variants, and, transitively, any reached template such
+// an entry references. Such a template keeps its authored body; a single
+// rewritten body is registered as `<name>.variant1` instead. Mirrors the Julia
+// `_rule3_exposed`.
+func (st *rule3State) rule3Exposed(byTemplate map[string][]string, order []string) map[string]bool {
+	named := st.L.named
+	matchless := func(n string) bool {
+		d, ok := named[n].(map[string]any)
+		return ok && !declHasMatch(d)
+	}
+	memo := map[string][]string{}
+	refsOf := func(n string) []string {
+		if r, ok := memo[n]; ok {
+			return r
+		}
+		var names []string
+		if d, ok := named[n].(map[string]any); ok {
+			collectApplyNames(&names, d["body"])
+		}
+		var r []string
+		for _, x := range names {
+			if _, reached := byTemplate[x]; reached && matchless(x) {
+				r = append(r, x)
+			}
+		}
+		memo[n] = r
+		return r
+	}
+	var stack []string
+	for n := range named {
+		if _, reached := byTemplate[n]; !reached && matchless(n) {
+			stack = append(stack, n)
+		}
+	}
+	needMulti := false
+	for t := range byTemplate {
+		if matchless(t) && len(refsOf(t)) > 0 {
+			needMulti = true
+			break
+		}
+	}
+	if needMulti {
+		for t := range st.rule3Multi(byTemplate, order) {
+			if matchless(t) {
+				stack = append(stack, t)
+			}
+		}
+	}
+	visible := map[string]bool{}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, r := range refsOf(n) {
+			if !visible[r] {
+				visible[r] = true
+				stack = append(stack, r)
+			}
+		}
+	}
+	return visible
+}
+
 // rule3TemplateOrder is the template-level order in which instances are
 // named: a template after every template its instances' bodies reference. A
 // cycle is a rule that re-introduces itself through a template body. Mirrors
@@ -689,7 +852,7 @@ func applyRule3(comp map[string]any, L *lowering, transforms []map[string]any) e
 	}
 	var sites []site
 	for _, k := range sortedKeys(comp) {
-		if k == "expression_templates" || k == "expression_template_imports" {
+		if k == "operators" || k == "operator_imports" {
 			continue
 		}
 		sites = append(sites, site{comp, k, L.scope + "." + k})
@@ -731,10 +894,10 @@ func applyRule3(comp map[string]any, L *lowering, transforms []map[string]any) e
 		byTemplate[t] = append(byTemplate[t], k)
 	}
 	final := map[string]string{}
-	block, ok := comp["expression_templates"].(map[string]any)
+	block, ok := comp["operators"].(map[string]any)
 	if !ok {
 		block = map[string]any{}
-		comp["expression_templates"] = block
+		comp["operators"] = block
 	}
 	taken := map[string]bool{}
 	for n := range L.named {
@@ -744,6 +907,7 @@ func applyRule3(comp map[string]any, L *lowering, transforms []map[string]any) e
 	if err != nil {
 		return err
 	}
+	exposed := st.rule3Exposed(byTemplate, order)
 	for _, t := range order {
 		keysT := byTemplate[t]
 		bodies := make([]any, len(keysT))
@@ -762,7 +926,7 @@ func applyRule3(comp map[string]any, L *lowering, transforms []map[string]any) e
 		}
 		sort.Strings(distinct)
 		decl, _ := L.named[t].(map[string]any)
-		if len(distinct) == 1 {
+		if len(distinct) == 1 && (!exposed[t] || distinct[0] == canonicalCompact(decl["body"])) {
 			for _, k := range keysT {
 				final[k] = t
 			}

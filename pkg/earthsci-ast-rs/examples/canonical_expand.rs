@@ -1,9 +1,12 @@
-//! canonical_expand — expand one `.esm` document through the raw §9.7
+//! canonical_expand — expand one ESM document through the raw §9.7
 //! pipeline and emit the post-lowering document as canonical golden bytes.
 //!
 //! ```text
 //! cargo run --example canonical_expand -- <input.esm> [--metaparameters N=8[,M=4…]]
 //! ```
+//!
+//! The input is read in the format its file name names (esm-spec §1.2.1):
+//! `.md` is Markdown, `.typ` Typst, and every other name JSON.
 //!
 //! The pipeline is the official one (`resolve_template_machinery` →
 //! `lower_expression_templates`, the same pair the §9.7 conformance tests
@@ -22,7 +25,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use earthsci_ast::extension::lower_expression_templates::lower_expression_templates;
-use earthsci_ast::resolve_template_machinery;
+use earthsci_ast::{DocumentFormat, parse_document, resolve_template_machinery};
 use serde_json::Value;
 
 /// Render a non-integral finite float exactly as Julia's `JSON3.write`
@@ -160,7 +163,7 @@ fn run() -> Result<(), String> {
     let input = input.ok_or("usage: canonical_expand <input.esm> [--metaparameters N=8[,M=4…]]")?;
     let path = Path::new(&input);
     let text = std::fs::read_to_string(path).map_err(|e| format!("{input}: {e}"))?;
-    let raw: Value = serde_json::from_str(&text).map_err(|e| format!("{input}: {e}"))?;
+    let raw: Value = read_document(&text, path).map_err(|e| format!("{input}: {e}"))?;
     let base = path.parent().unwrap_or_else(|| Path::new("."));
     let resolved = resolve_template_machinery(&raw, base, &metaparameters)
         .map_err(|e| format!("resolve_template_machinery: {e}"))?;
@@ -168,6 +171,20 @@ fn run() -> Result<(), String> {
     lower_expression_templates(&mut doc).map_err(|e| format!("lower_expression_templates: {e}"))?;
     print!("{}", canonical_bytes(&doc)?);
     Ok(())
+}
+
+/// Decode `text` in the format `path`'s extension names (esm-spec §1.2.1);
+/// the format is never guessed from the text.
+fn read_document(text: &str, path: &Path) -> Result<Value, String> {
+    let format = match path.extension().and_then(|e| e.to_str()) {
+        Some("md") => Some(DocumentFormat::Markdown),
+        Some("typ") => Some(DocumentFormat::Typst),
+        _ => None,
+    };
+    match format {
+        Some(format) => parse_document(text, format).map_err(|e| e.to_string()),
+        None => serde_json::from_str(text).map_err(|e| e.to_string()),
+    }
 }
 
 fn main() -> ExitCode {

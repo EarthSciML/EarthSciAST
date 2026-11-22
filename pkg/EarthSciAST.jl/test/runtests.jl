@@ -290,6 +290,7 @@ const GROUPS = [
         "expression_templates_test.jl",
         "template_imports_test.jl",
         "stdlib_refs_test.jl",
+        "source_documents_test.jl",
         "scope_injection_test.jl",
         "out_of_line_templates_test.jl",
         "one_operator_type_test.jl",
@@ -299,6 +300,7 @@ const GROUPS = [
         "template_calls_test.jl",
         "template_array_calls_test.jl",
         "template_views_test.jl",
+        "template_refs_compile_cases_test.jl",
         "expanded_model_seam_test.jl",
     ],
     :fixtures => [

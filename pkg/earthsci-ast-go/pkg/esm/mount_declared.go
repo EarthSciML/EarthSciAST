@@ -33,7 +33,7 @@ func collectMountDeclaredMetaparameters(view map[string]any, baseDir string) map
 }
 
 // collectImportReachableMetaparameters is collectMountDeclaredMetaparameters
-// plus the §9.7.2 `expression_template_imports` edges, at the document and the
+// plus the §9.7.2 `operator_imports` edges, at the document and the
 // component level, transitively.
 //
 // A DIFFERENT question from the mount one, and only checkDataSourceExtents asks
@@ -89,7 +89,7 @@ func collectMountDeclaredInto(out, seen map[string]bool, view map[string]any, ba
 		if !followImports {
 			return
 		}
-		entries, ok := holder["expression_template_imports"].([]any)
+		entries, ok := holder["operator_imports"].([]any)
 		if !ok {
 			return
 		}
@@ -116,7 +116,7 @@ func collectMountDeclaredInto(out, seen map[string]bool, view map[string]any, ba
 			visitSubsystems(sub)
 		}
 	}
-	visitImports(view) // a DOCUMENT-level `expression_template_imports`
+	visitImports(view) // a DOCUMENT-level `operator_imports`
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -265,7 +265,7 @@ func rootMountContext(view map[string]any, baseDir string, metaparameters map[st
 // metaparameter nobody declares validated clean and failed only when the file
 // was finally read, with a diagnostic about the loader API rather than about the
 // typo. The condition is decidable from the document alone, so it is decided at
-// load: `template_import_unknown_name`, the code §9.7.6 already gives an unknown
+// load: `operator_import_unknown_name`, the code §9.7.6 already gives an unknown
 // name at a binding site — NOT a new code.
 //
 // This half of §8.9.4 is fully reachable in Go even though extent DISCOVERY is

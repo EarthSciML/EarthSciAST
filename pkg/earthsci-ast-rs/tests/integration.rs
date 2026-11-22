@@ -347,6 +347,8 @@ mod solver_block;
 mod solver_external_conformance;
 #[path = "solver_time_span_conformance.rs"]
 mod solver_time_span_conformance;
+#[path = "source_documents_conformance.rs"]
+mod source_documents_conformance;
 #[path = "static_evaluation_assertions_conformance.rs"]
 mod static_evaluation_assertions_conformance;
 #[path = "stdlib_refs_conformance.rs"]
@@ -383,6 +385,8 @@ mod template_scenarios;
 mod term_provenance;
 #[path = "tests_blocks_execution.rs"]
 mod tests_blocks_execution;
+#[path = "time_varying_data_inline.rs"]
+mod time_varying_data_inline;
 #[path = "toplevel_mount_edge_pipeline.rs"]
 mod toplevel_mount_edge_pipeline;
 #[path = "toplevel_reaction_system_ref.rs"]

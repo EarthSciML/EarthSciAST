@@ -23,7 +23,7 @@ function faqBareDoc(expr: unknown): string {
           w: { type: 'parameter', units: '1', shape: ['a_rows'], default: [10.0, 20.0] },
           out: { type: 'unknown', units: '1', shape: ['a_rows'] },
         },
-        expression_templates: { twice: { params: ['x'], body: { op: '*', args: [2.0, 'x'] } } },
+        operators: { twice: { params: ['x'], body: { op: '*', args: [2.0, 'x'] } } },
         equations: [
           {
             lhs: 'out',
@@ -46,7 +46,7 @@ const findings = (text: string) =>
   validateText(text).structural_errors.filter((e) => e.code === ERROR_CODES.FAQ_BARE_ARRAY_OPERAND)
 
 const apply = {
-  op: 'apply_expression_template',
+  op: 'apply_operator',
   args: [],
   name: 'twice',
   bindings: { x: 'v' },

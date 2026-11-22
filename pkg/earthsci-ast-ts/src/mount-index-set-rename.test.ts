@@ -290,7 +290,7 @@ describe('the raised floor, at the seam the §4.7 inline/merge reorder needs it'
 
 describe('issue #311 in this binding: the rewrite pass re-runs after resolveSubsystemRefs', () => {
   // `loadPath` / `loadString` do not resolve `{ ref }` mounts in this binding, so
-  // a rule a component declares in its own `expression_template_imports` only
+  // a rule a component declares in its own `operator_imports` only
   // reaches a rewrite-target inside a component it mounts once
   // `resolveSubsystemRefs` has spliced the mount in and re-run the §9.6.3 pass
   // over that component. Rust, Go and Julia inline before their fixpoint instead.
@@ -338,14 +338,14 @@ describe('issue #311 in this binding: the rewrite pass re-runs after resolveSubs
     const single = {
       esm: (file as unknown as { esm: string }).esm,
       index_sets: (file as unknown as { index_sets?: unknown }).index_sets,
-      models: { Leaf: { ...leaf, expression_templates: templates } },
+      models: { Leaf: { ...leaf, operators: templates } },
     }
     const again = (
       expandDocument(lowerExpressionTemplates(single)) as {
         models: Record<string, Record<string, unknown>>
       }
     ).models.Leaf
-    delete again.expression_templates
+    delete again.operators
     expect(again).toEqual(leaf)
   })
 })

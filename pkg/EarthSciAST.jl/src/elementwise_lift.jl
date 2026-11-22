@@ -26,7 +26,6 @@
 # marked expansions.
 
 
-
 _is_rank0_faq(e::OpExpr) =
     e.op in _ARRAY_PRODUCER_OPS && e.op != "makearray" &&
     (e.output_idx === nothing || !any(s -> s isa AbstractString, e.output_idx))

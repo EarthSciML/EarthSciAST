@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// expandGeometryRefs replaces every `apply_expression_template` reference to a
+// expandGeometryRefs replaces every `apply_operator` reference to a
 // lib/geometry.esm helper (esm-spec §9.7.3, which a binding may keep unexpanded,
 // §9.6.4) by the helper's body with its bindings substituted, recursively.
 func expandGeometryRefs(node any, bodies map[string]any) any {
@@ -20,7 +20,7 @@ func expandGeometryRefs(node any, bodies map[string]any) any {
 		}
 		return out
 	case map[string]any:
-		if v["op"] == "apply_expression_template" {
+		if v["op"] == "apply_operator" {
 			bindings := map[string]any{}
 			if b, ok := v["bindings"].(map[string]any); ok {
 				for k, e := range b {
@@ -56,7 +56,7 @@ func TestGeometryTemplateFixturesExpand(t *testing.T) {
 	var library struct {
 		Templates map[string]struct {
 			Body any `json:"body"`
-		} `json:"expression_templates"`
+		} `json:"operators"`
 	}
 	if err := json.Unmarshal(libRaw, &library); err != nil {
 		t.Fatal(err)

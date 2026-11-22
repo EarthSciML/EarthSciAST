@@ -102,7 +102,7 @@ describe('Conformance Test Suite', () => {
    * corpus is clean" claim from this binding was vacuous.
    *
    * `validate()` performs no file I/O by contract, so a subsystem `{ref}` stub
-   * reads as unresolved and a relative `expression_template_imports` ref cannot
+   * reads as unresolved and a relative `operator_imports` ref cannot
    * be fetched. A fixture is therefore brought to a validatable state exactly as
    * a real consumer would: LOAD (with `basePath`, which anchors template
    * imports, §9.7.2) → RESOLVE `{ref}` stubs → VALIDATE. That resolution step is
@@ -144,7 +144,7 @@ describe('Conformance Test Suite', () => {
 
     it.each(validFiles)('should round-trip %s', (filePath) => {
       // Load original file. `basePath` anchors relative
-      // expression_template_imports refs (esm-spec §9.7.2).
+      // operator_imports refs (esm-spec §9.7.2).
       const originalContent = readFileSync(filePath, 'utf-8')
       const basePath = dirname(filePath)
       const original = loadString(originalContent, { basePath })
@@ -152,7 +152,7 @@ describe('Conformance Test Suite', () => {
       // NO BAIL-OUT HERE. A template-library file used to be waved through with
       // `expect(original).toBeDefined()` — an assertion that cannot fail, guarding
       // the exact code path that was broken: the emitter DROPPED the top-level
-      // `expression_templates` registry and `metaparameters` block, so a library
+      // `operators` registry and `metaparameters` block, so a library
       // emitted as `{esm, metadata, index_sets}` and could not be re-loaded. Per
       // esm-spec §9.6.4 rule 5 (Option A expands CALL SITES; it does not delete
       // DECLARATIONS) a library file round-trips to ITSELF, so it is round-tripped

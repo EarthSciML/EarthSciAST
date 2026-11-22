@@ -155,7 +155,7 @@ var latexKwTable = map[Kw]string{
 	KwAsin: "\\arcsin", KwAcos: "\\arccos", KwAtan: "\\arctan", KwSinh: "\\sinh",
 	KwCosh: "\\cosh", KwTanh: "\\tanh", KwMin: "\\min", KwMax: "\\max",
 	KwLabs: "\\left|", KwRabs: "\\right|", KwLfloor: "\\lfloor", KwRfloor: "\\rfloor",
-	KwLceil: "\\lceil", KwRceil: "\\rceil", KwPdiff: "\\partial", KwDotacc: "\\dot",
+	KwLceil: "\\lceil", KwRceil: "\\rceil", KwPdiff: "\\partial", KwDotacc: "\\dot", KwNabla: "\\nabla",
 	KwBcases: "\\begin{cases}", KwEcases: "\\end{cases}", KwBmat: "\\begin{bmatrix}",
 	KwEmat: "\\end{bmatrix}", KwSum: "\\sum", KwProd: "\\prod", KwInn: "\\in",
 	KwSubstack: "\\substack", KwLimitsL: "\\limits", KwLbkg: "\\left[", KwRbkg: "\\right]",
@@ -319,7 +319,7 @@ var latexCtrlKw = map[string]Kw{
 	"sin": KwSin, "cos": KwCos, "tan": KwTan, "arcsin": KwAsin, "arccos": KwAcos,
 	"arctan": KwAtan, "sinh": KwSinh, "cosh": KwCosh, "tanh": KwTanh, "min": KwMin,
 	"max": KwMax, "lfloor": KwLfloor, "rfloor": KwRfloor, "lceil": KwLceil,
-	"rceil": KwRceil, "partial": KwPdiff, "dot": KwDotacc, "sum": KwSum,
+	"rceil": KwRceil, "partial": KwPdiff, "nabla": KwNabla, "dot": KwDotacc, "sum": KwSum,
 	"prod": KwProd, "in": KwInn, "substack": KwSubstack, "limits": KwLimitsL,
 }
 

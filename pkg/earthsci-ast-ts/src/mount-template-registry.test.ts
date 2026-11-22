@@ -32,8 +32,8 @@ function load(dir: string, fixture: string): EsmFile {
   return file
 }
 
-/** A registry written as the goldens write it: one `expression_templates` block. */
-const block = (reg: unknown): string => emitEsmString({ expression_templates: reg })
+/** A registry written as the goldens write it: one `operators` block. */
+const block = (reg: unknown): string => emitEsmString({ operators: reg })
 
 const flatRegistry = (dir: string, fixture: string): string =>
   block(flatten(load(dir, fixture)).templateRegistry)
@@ -89,7 +89,7 @@ describe('mounted template registries (esm-spec §9.6.4 rule 1)', () => {
       op: '-',
       args: [{ op: '*', args: ['k', { op: '*', args: [3, 'c'] }] }],
     })
-    expect(JSON.stringify(mounted)).not.toContain('apply_expression_template')
+    expect(JSON.stringify(mounted)).not.toContain('apply_operator')
     // The inline form carries Sub's `k` declaration in the same place, so the
     // two forms expand to the same Host.
     const inline = JSON.parse(host('inline_form.esm')) as Comp

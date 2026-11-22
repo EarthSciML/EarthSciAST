@@ -2089,7 +2089,12 @@ function _tpl_call_unit!(findings, call::OpExpr, var_units)
     args = Dict{String, Tuple{Any, Vector{Any}}}()
     key = Any[objectid(fr.body), on]
     for k in sort!(collect(keys(fr.args)))
-        b = fr.args[k]
+        # The binding as THIS reference writes it, read in this reference's
+        # frame. The frame is shared by every reference with the same binding
+        # keys (`_tpl_frame`), so `fr.args[k]` may be another caller's
+        # binding, written in that caller's frame (its parameter sentinels are
+        # not this frame's).
+        b = _tpl_call_binding(call, k)
         f = Any[]
         u = _expr_dimensions!(f, b, var_units)
         args[k] = (u, f)

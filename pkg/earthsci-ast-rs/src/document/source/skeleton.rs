@@ -209,6 +209,120 @@ impl<A> Comp<A> {
     }
 }
 
+// ## Expressions inside path blocks
+
+/// `Notation.Seg`: one step of a path inside a block value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathSeg {
+    /// The entry of an object with this key.
+    Key(&'static str),
+    /// Every element of an array and every value of an object.
+    Any,
+    /// Every element of an array only: the array form of a field that is one
+    /// object or an array of them.
+    Elem,
+}
+
+use PathSeg::{Any, Elem, Key};
+
+/// `Notation.compExprPaths`: the expression-valued fields of a component's
+/// path blocks, as paths from the block's key (esm-schema.json; an update is
+/// one rule or an array of them). A value there that is a well-formed
+/// expression prints as math (`Source.mathify`).
+pub const COMP_EXPR_PATHS: &[&[PathSeg]] = &[
+    &[
+        Key("continuous_events"),
+        Any,
+        Key("affect_neg"),
+        Any,
+        Key("rhs"),
+    ],
+    &[
+        Key("continuous_events"),
+        Any,
+        Key("affects"),
+        Any,
+        Key("rhs"),
+    ],
+    &[Key("continuous_events"), Any, Key("conditions"), Any],
+    &[Key("discrete_events"), Any, Key("affects"), Any, Key("rhs")],
+    &[
+        Key("discrete_events"),
+        Any,
+        Key("trigger"),
+        Key("expression"),
+    ],
+    &[Key("guesses"), Any],
+    &[Key("parameters"), Any, Key("update"), Key("expression")],
+    &[
+        Key("parameters"),
+        Any,
+        Key("update"),
+        Key("from"),
+        Key("unit_conversion"),
+    ],
+    &[Key("parameters"), Any, Key("update"), Key("when")],
+    &[
+        Key("parameters"),
+        Any,
+        Key("update"),
+        Elem,
+        Key("expression"),
+    ],
+    &[
+        Key("parameters"),
+        Any,
+        Key("update"),
+        Elem,
+        Key("from"),
+        Key("unit_conversion"),
+    ],
+    &[Key("parameters"), Any, Key("update"), Elem, Key("when")],
+    &[Key("tests"), Any, Key("assertions"), Any, Key("reference")],
+    &[Key("variables"), Any, Key("update"), Key("expression")],
+    &[
+        Key("variables"),
+        Any,
+        Key("update"),
+        Key("from"),
+        Key("unit_conversion"),
+    ],
+    &[Key("variables"), Any, Key("update"), Key("when")],
+    &[
+        Key("variables"),
+        Any,
+        Key("update"),
+        Elem,
+        Key("expression"),
+    ],
+    &[
+        Key("variables"),
+        Any,
+        Key("update"),
+        Elem,
+        Key("from"),
+        Key("unit_conversion"),
+    ],
+    &[Key("variables"), Any, Key("update"), Elem, Key("when")],
+];
+
+/// `Notation.topExprPaths`: the same for the document's top-level path blocks
+/// (the coupling entries' events and connector equations).
+pub const TOP_EXPR_PATHS: &[&[PathSeg]] = &[
+    &[Key("coupling"), Any, Key("affect_neg"), Any, Key("rhs")],
+    &[Key("coupling"), Any, Key("affects"), Any, Key("rhs")],
+    &[Key("coupling"), Any, Key("conditions"), Any],
+    &[
+        Key("coupling"),
+        Any,
+        Key("connector"),
+        Key("equations"),
+        Any,
+        Key("expression"),
+    ],
+    &[Key("coupling"), Any, Key("trigger"), Key("expression")],
+];
+
 // ## The symbol table of a component
 
 /// `Source.keysOf`.

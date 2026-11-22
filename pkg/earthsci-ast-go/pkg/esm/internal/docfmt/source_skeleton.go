@@ -120,7 +120,7 @@ type Rxn[R any] struct {
 	Attrs    Obj
 }
 
-// Tm is `Source.Tm`: an entry of `expression_templates`: a template (HasLhs
+// Tm is `Source.Tm`: an entry of `operators`: a template (HasLhs
 // false) or a rewrite rule (HasLhs true, Lhs the match).
 type Tm[R any] struct {
 	Name   string
@@ -166,7 +166,7 @@ func (m *Mx[A, R]) field() string {
 	case MxPlot:
 		return "analyses"
 	case MxTm:
-		return "expression_templates"
+		return "operators"
 	}
 	return m.Role.field()
 }
@@ -189,12 +189,70 @@ func (m *Mx[A, R]) head() (TemplateParams, bool) {
 
 // skMathFields is `Source.mathFields`.
 var skMathFields = []string{
-	"analyses", "constraint_equations", "equations", "expression_templates",
-	"initialization_equations", "reactions",
+	"analyses", "constraint_equations", "equations",
+	"initialization_equations", "operators", "reactions",
 }
 
 // skIsMathField is `k ∈ mathFields`.
 func skIsMathField(k string) bool { return slices.Contains(skMathFields, k) }
+
+// ## Expressions inside path blocks
+
+// PathSeg is `Notation.Seg`: a path segment, a key, (Any) every element of an
+// array and every value of an object, or (Elem) every element of an array
+// only.
+type PathSeg struct {
+	Any  bool
+	Elem bool
+	Key  string
+}
+
+// segKey is `Seg.key`.
+func segKey(k string) PathSeg { return PathSeg{Key: k} }
+
+// segAny is `Seg.any`.
+var segAny = PathSeg{Any: true}
+
+// segElem is `Seg.elem`: the array form of a field that is one object or an
+// array of them.
+var segElem = PathSeg{Elem: true}
+
+// skCompExprPaths is `Notation.compExprPaths`: the expression-valued fields of
+// a component's path blocks, as paths from the block's key (esm-schema.json;
+// an update is one rule or an array of them). A value there that is a
+// well-formed expression prints as math (`Source.mathify`).
+var skCompExprPaths = [][]PathSeg{
+	{segKey("continuous_events"), segAny, segKey("affect_neg"), segAny, segKey("rhs")},
+	{segKey("continuous_events"), segAny, segKey("affects"), segAny, segKey("rhs")},
+	{segKey("continuous_events"), segAny, segKey("conditions"), segAny},
+	{segKey("discrete_events"), segAny, segKey("affects"), segAny, segKey("rhs")},
+	{segKey("discrete_events"), segAny, segKey("trigger"), segKey("expression")},
+	{segKey("guesses"), segAny},
+	{segKey("parameters"), segAny, segKey("update"), segKey("expression")},
+	{segKey("parameters"), segAny, segKey("update"), segKey("from"), segKey("unit_conversion")},
+	{segKey("parameters"), segAny, segKey("update"), segKey("when")},
+	{segKey("parameters"), segAny, segKey("update"), segElem, segKey("expression")},
+	{segKey("parameters"), segAny, segKey("update"), segElem, segKey("from"), segKey("unit_conversion")},
+	{segKey("parameters"), segAny, segKey("update"), segElem, segKey("when")},
+	{segKey("tests"), segAny, segKey("assertions"), segAny, segKey("reference")},
+	{segKey("variables"), segAny, segKey("update"), segKey("expression")},
+	{segKey("variables"), segAny, segKey("update"), segKey("from"), segKey("unit_conversion")},
+	{segKey("variables"), segAny, segKey("update"), segKey("when")},
+	{segKey("variables"), segAny, segKey("update"), segElem, segKey("expression")},
+	{segKey("variables"), segAny, segKey("update"), segElem, segKey("from"), segKey("unit_conversion")},
+	{segKey("variables"), segAny, segKey("update"), segElem, segKey("when")},
+}
+
+// skTopExprPaths is `Notation.topExprPaths`: the same for the document's
+// top-level path blocks (the coupling entries' events and connector
+// equations).
+var skTopExprPaths = [][]PathSeg{
+	{segKey("coupling"), segAny, segKey("affect_neg"), segAny, segKey("rhs")},
+	{segKey("coupling"), segAny, segKey("affects"), segAny, segKey("rhs")},
+	{segKey("coupling"), segAny, segKey("conditions"), segAny},
+	{segKey("coupling"), segAny, segKey("connector"), segKey("equations"), segAny, segKey("expression")},
+	{segKey("coupling"), segAny, segKey("trigger"), segKey("expression")},
+}
 
 // Comp is `Source.Comp`: one component section.
 type Comp[A any] struct {
@@ -309,7 +367,7 @@ func (t *Tm[R]) mscope(s *Sym) *Sym {
 
 // skRootTs is `Source.rootTs`.
 func skRootTs[A, R any](root Obj, rm []Mx[A, R]) []TemplateParams {
-	out := skTemplatesOf(lookV("expression_templates", root))
+	out := skTemplatesOf(lookV("operators", root))
 	for i := range rm {
 		if h, ok := rm[i].head(); ok {
 			out = append(out, h)
@@ -320,7 +378,7 @@ func skRootTs[A, R any](root Obj, rm []Mx[A, R]) []TemplateParams {
 
 // skCompTs is `Source.compTs`.
 func skCompTs[A, R any](c *Comp[Mx[A, R]]) []TemplateParams {
-	out := skTemplatesOf(lookV("expression_templates", c.MathBlocks))
+	out := skTemplatesOf(lookV("operators", c.MathBlocks))
 	for i := range c.Math {
 		if h, ok := c.Math[i].head(); ok {
 			out = append(out, h)
@@ -596,7 +654,7 @@ func skStrList(xs []Json) ([]string, bool) {
 }
 
 // skTmOf is `Source.tmOf`: the template or rule an entry of
-// `expression_templates` is, checked by printing it back.
+// `operators` is, checked by printing it back.
 func skTmOf(n string, v Json) (Tm[Json], bool) {
 	kvs, ok := v.(Obj)
 	if !ok {
@@ -656,9 +714,9 @@ func skItemJson(m *MC) Json {
 }
 
 // skFieldJson is `Source.fieldJson`: an object keyed by the entries' names for
-// `expression_templates`, a list otherwise.
+// `operators`, a list otherwise.
 func skFieldJson(f string, ms []*MC) Json {
-	if f == "expression_templates" {
+	if f == "operators" {
 		out := make(Obj, len(ms))
 		for i, m := range ms {
 			out[i] = KV{m.key(), skItemJson(m)}
@@ -712,7 +770,7 @@ func skMathOf(lim *Lim, caps Caps, s *Sym, f string, v Json) ([]MC, bool) {
 	var ms []MC
 	switch x := v.(type) {
 	case []Json:
-		if len(x) == 0 || f == "expression_templates" {
+		if len(x) == 0 || f == "operators" {
 			return nil, false
 		}
 		ms = make([]MC, len(x))
@@ -724,7 +782,7 @@ func skMathOf(lim *Lim, caps Caps, s *Sym, f string, v Json) ([]MC, bool) {
 			ms[i] = m
 		}
 	case Obj:
-		if len(x) == 0 || f != "expression_templates" {
+		if len(x) == 0 || f != "operators" {
 			return nil, false
 		}
 		ms = make([]MC, len(x))
@@ -998,7 +1056,7 @@ func skMathPart(lim *Lim, caps Caps, s *Sym, kvs Obj, f string) ([]MC, KV, bool)
 // skCompOf is `Source.compOf`: a component, with its math fields decided.
 func skCompOf(lim *Lim, caps Caps, root Obj, rt []TemplateParams, k Kind, name string, kvs Obj) Comp[MC] {
 	c := skCompBase(caps, k, name, kvs)
-	s := skSymWith(root, rt, &c, skTemplatesOf(lookV("expression_templates", kvs)))
+	s := skSymWith(root, rt, &c, skTemplatesOf(lookV("operators", kvs)))
 	for _, f := range skMathFields {
 		ms, b, hasB := skMathPart(lim, caps, s, kvs, f)
 		c.Math = append(c.Math, ms...)
@@ -1028,18 +1086,18 @@ func skPickComp(caps Caps, n string, v Json) (skNamedObj, bool) {
 func skTopSymOf(kvs Obj) *Sym {
 	return &Sym{
 		Names:     skKeysOf(lookV("index_sets", kvs)),
-		Templates: skTemplatesOf(lookV("expression_templates", kvs)),
+		Templates: skTemplatesOf(lookV("operators", kvs)),
 	}
 }
 
 // skTopMath is `Source.topMath`: the top-level templates, when every one
 // prints natively.
 func skTopMath(lim *Lim, caps Caps, kvs Obj) ([]MC, bool) {
-	v, present := exprLook("expression_templates", kvs)
+	v, present := exprLook("operators", kvs)
 	if !present {
 		return nil, false
 	}
-	return skMathOf(lim, caps, skTopSymOf(kvs), "expression_templates", v)
+	return skMathOf(lim, caps, skTopSymOf(kvs), "operators", v)
 }
 
 // skRootBlock is `Source.rootBlock`.
@@ -1058,7 +1116,7 @@ func skRootBlock(caps Caps, tn bool, kv KV) (KV, bool) {
 			return KV{}, false
 		}
 		return KV{kv.K, r}, true
-	case k == "expression_templates" && tn:
+	case k == "operators" && tn:
 		return KV{}, false
 	}
 	return kv, true
@@ -1085,7 +1143,7 @@ func skToDoc(lim *Lim, caps Caps, d Json) Doc[MC] {
 	es, hasD, desc, hasM := skMetaOf(caps, mv, mp)
 	tm, hasTm := skTopMath(lim, caps, kvs)
 	blocks := skRootBlocks(caps, hasTm, kvs)
-	rt := skTemplatesOf(lookV("expression_templates", kvs))
+	rt := skTemplatesOf(lookV("operators", kvs))
 	comps := func(k Kind, f string) []Comp[MC] {
 		v, present := exprLook(f, kvs)
 		ns, _, _ := keysSplitOpt(func(n string, v Json) (skNamedObj, bool) { return skPickComp(caps, n, v) }, v, present)
@@ -1274,7 +1332,7 @@ func skOfDoc(d *Doc[MC]) (Json, bool) {
 		for i := range d.Math {
 			refs[i] = &d.Math[i]
 		}
-		tkv = Obj{{"expression_templates", skFieldJson("expression_templates", refs)}}
+		tkv = Obj{{"operators", skFieldJson("operators", refs)}}
 	}
 	kvs := esmKv
 	kvs = append(kvs, metaKv...)

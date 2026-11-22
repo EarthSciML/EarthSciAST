@@ -18,9 +18,9 @@
 import type { EsmFile, CouplingEntry, CouplingImport, Expression } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
-import { expandRefEnv, isRemoteRef, joinPath } from './path-utils.js'
+import { decodeDocument, expandRefEnv, isRemoteRef, joinPath } from './path-utils.js'
 import { classifyStdRef, readStdRef } from './stdlib.js'
-import { ERROR_CODES } from './errors.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import { prepareDocumentOps } from './parse.js'
 
@@ -39,7 +39,7 @@ const LIBRARY_FORBIDDEN_KEYS = [
   'domain',
   'index_sets',
   'metaparameters',
-  'expression_templates',
+  'operators',
 ] as const
 
 /** Coupling-entry types a library edge MAY carry (esm-spec §10.9). */
@@ -107,9 +107,9 @@ function rewriteExprInPlace(expr: unknown, fn: RefFn): unknown {
   if (Array.isArray(node.args)) {
     node.args = (node.args as unknown[]).map((a) => rewriteExprInPlace(a, fn))
   }
-  // `apply_expression_template` bindings VALUES are free-variable targets
+  // `apply_operator` bindings VALUES are free-variable targets
   // (esm-spec §10.10.2) — Expressions in their own right.
-  if (node.op === 'apply_expression_template' && isObject(node.bindings)) {
+  if (node.op === 'apply_operator' && isObject(node.bindings)) {
     const b = node.bindings
     for (const k of Object.keys(b)) b[k] = rewriteExprInPlace(b[k], fn)
   }
@@ -207,7 +207,7 @@ function forEachExprRef(expr: unknown, visit: RefVisit): void {
   if (Array.isArray(expr.args)) {
     for (const a of expr.args) forEachExprRef(a, visit)
   }
-  if (expr.op === 'apply_expression_template' && isObject(expr.bindings)) {
+  if (expr.op === 'apply_operator' && isObject(expr.bindings)) {
     const b = expr.bindings
     for (const k of Object.keys(b)) forEachExprRef(b[k], visit)
   }
@@ -323,16 +323,26 @@ export function collectRoleSegments(edge: unknown): Set<string> {
 // here — so the shared form is adopted.
 // ---------------------------------------------------------------------------
 
-function parseStdCouplingLibrary(ref: string, content: string): unknown {
+/**
+ * Read a coupling library's text in the format `location`'s extension names
+ * (esm-spec §1.2.1: Markdown, Typst or JSON) and apply the document wire
+ * boundary. A refused read is `coupling_import_unresolved`, except a removed
+ * operator, which keeps its own code.
+ */
+function parseCouplingLibrary(location: string, content: string): unknown {
   let raw: unknown
   try {
-    raw = JSON.parse(content)
+    raw = decodeDocument(content, location)
   } catch (e) {
+    if (e instanceof EsmDiagnosticError && e.code === ERROR_CODES.REMOVED_OP) throw e
     throw new EsmMachineryError(
       ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-      `coupling-library ref '${ref}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+      `coupling-library ref '${location}' did not parse: ${e instanceof Error ? e.message : String(e)}`,
     )
   }
+  // A coupling library is a document too — same wire boundary as the root
+  // (docs/content/rfcs/faq-node-rename.md §5.2). OUTSIDE the try above, so a
+  // `removed_op` / `faq_version_too_old` is not rebranded as a parse error.
   prepareDocumentOps(raw)
   return raw
 }
@@ -365,20 +375,7 @@ function defaultLoadRef(ref: string, basePath: string): unknown {
       `coupling-library file not found or unreadable: ${path} (from ref '${ref}'): ${e instanceof Error ? e.message : String(e)}`,
     )
   }
-  let raw: unknown
-  try {
-    raw = JSON.parse(content)
-  } catch (e) {
-    throw new EsmMachineryError(
-      ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-      `coupling-library ref '${path}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
-    )
-  }
-  // A coupling library is a document too — same wire boundary as the root
-  // (docs/content/rfcs/faq-node-rename.md §5.2). OUTSIDE the try above, so a
-  // `removed_op` / `faq_version_too_old` is not rebranded as a JSON error.
-  prepareDocumentOps(raw)
-  return raw
+  return parseCouplingLibrary(path, content)
 }
 
 // ---------------------------------------------------------------------------
@@ -441,10 +438,10 @@ function expandOne(
         `coupling-library '${ref}' contains a nested coupling_import (v1 forbids layering, esm-spec §10.9)`,
       )
     }
-    if (type === 'callback' || 'expression_template_imports' in edge) {
+    if (type === 'callback' || 'operator_imports' in edge) {
       throw new EsmMachineryError(
         ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
-        `coupling-library '${ref}' edge of type '${String(type)}' is not role-substitutable (no callback entries or edge-level expression_template_imports, esm-spec §10.9)`,
+        `coupling-library '${ref}' edge of type '${String(type)}' is not role-substitutable (no callback entries or edge-level operator_imports, esm-spec §10.9)`,
       )
     }
     if (typeof type !== 'string' || !ROLE_BEARING_TYPES.has(type)) {
@@ -582,11 +579,11 @@ export function expandCouplingImports(
       // `loadRef` hook the caller supplied.
       const std = classifyStdRef(ref, basePath)
       lib =
-        std !== undefined
-          ? parseStdCouplingLibrary(ref, readStdRef(ref, std))
-          : loadRef(ref, basePath)
+        std !== undefined ? parseCouplingLibrary(ref, readStdRef(ref, std)) : loadRef(ref, basePath)
     } catch (e) {
       if (e instanceof EsmMachineryError) throw e
+      // A removed operator keeps its own code (esm-spec §1.2.1, §4.2).
+      if (e instanceof EsmDiagnosticError && e.code === ERROR_CODES.REMOVED_OP) throw e
       throw new EsmMachineryError(
         ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
         `coupling_import ref '${ref}' failed to load: ${e instanceof Error ? e.message : String(e)}`,

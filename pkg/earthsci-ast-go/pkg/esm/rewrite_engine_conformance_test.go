@@ -2,7 +2,7 @@ package esm
 
 // Conformance tests for the 0.8.0 outermost-first + priority + bounded-fixpoint
 // rewrite engine and the `unlowered_operator` evaluation gate. Mirrors the Julia
-// reference testset "expression_templates rewrite engine — 0.8.0 outermost-first
+// reference testset "operators rewrite engine — 0.8.0 outermost-first
 // + fixpoint" (pkg/EarthSciAST.jl/test/expression_templates_test.jl)
 // and drives the shared conformance fixtures under
 // tests/conformance/expression_templates/. See
@@ -209,7 +209,7 @@ func TestRewriteEngine_AttrsBindAsScalarMetavariables(t *testing.T) {
         "equations": [
           {"lhs": "y", "rhs": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
         ],
-        "expression_templates": {
+        "operators": {
           "lower_custom": {
             "params": ["f", "g"],
             "match": {"op": "custom_scheme", "args": ["f"], "attrs": {"gamma": "g"}},

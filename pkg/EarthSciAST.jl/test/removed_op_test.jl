@@ -157,7 +157,8 @@ end
     @testset "an imported template library passes the same op boundary" begin
         valid = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid")
         consumer = read(joinpath(valid, "template_import_minimal.esm"), String)
-        lib = JSON3.read(read(joinpath(valid, "template_import_lib.esm"), String), Dict{String, Any})
+        # Read through the esm-2.4.0 spellings (the fixture writes `expression_templates`).
+        lib = EarthSciAST._wire_old_spellings(JSON3.read(read(joinpath(valid, "template_import_lib.esm"), String), Dict{String, Any}))
         mktempdir() do dir
             write(joinpath(dir, "template_import_minimal.esm"), consumer)
             # `arrayop` in a library body is refused by name.

@@ -1,0 +1,20 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "coupling_library",
+    "description": "A coupling library: the state x of the role Driver sets the rate parameter k of the role Decayer.",
+    "authors": ["EarthSciML"]
+  },
+  "coupling_roles": {
+    "Driver": {"description": "the component whose state x is read"},
+    "Decayer": {"description": "the component whose rate parameter k is set"}
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Driver.x",
+      "to": "Decayer.k",
+      "transform": "param_to_var"
+    }
+  ]
+}

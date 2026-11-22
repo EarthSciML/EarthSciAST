@@ -82,7 +82,7 @@ def test_require_meta_expr_returns_unfolded():
         ({"op": "*", "args": []}, {}, "metaparameter_type_error"),
         (1.5, {}, "metaparameter_type_error"),
         # Unknown free name is caught at fold time.
-        ({"op": "*", "args": ["NZ", "NY"]}, {"NX": 18, "NY": 20}, "template_import_unknown_name"),
+        ({"op": "*", "args": ["NZ", "NY"]}, {"NX": 18, "NY": 20}, "operator_import_unknown_name"),
         # Inexact division is rejected.
         ({"op": "/", "args": ["NX", 7]}, {"NX": 18}, "metaparameter_type_error"),
     ],
@@ -102,9 +102,7 @@ def _lib_grid():
         "metadata": {"name": "lib_grid"},
         "metaparameters": {"GX": {"type": "integer", "default": 2}},
         "index_sets": {"cells": {"kind": "interval", "size": "GX"}},
-        "expression_templates": {
-            "one": {"params": [], "body": {"op": "const", "value": 1, "args": []}}
-        },
+        "operators": {"one": {"params": [], "body": {"op": "const", "value": 1, "args": []}}},
     }
 
 
@@ -118,9 +116,7 @@ def _model_importing(binding):
         },
         "models": {
             "M": {
-                "expression_template_imports": [
-                    {"ref": "./lib_grid.esm", "bindings": {"GX": binding}}
-                ],
+                "operator_imports": [{"ref": "./lib_grid.esm", "bindings": {"GX": binding}}],
                 "variables": {"a": {"type": "parameter", "shape": ["cells"], "default": 0.0}},
                 "equations": [],
             }
@@ -232,5 +228,5 @@ def test_mount_edge_unknown_parent_name_is_loud(tmp_path):
         _parent_mount({"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}),
     )
     assert (
-        _err(lambda: load_path(path, metaparameters={"NX": 18})) == "template_import_unknown_name"
+        _err(lambda: load_path(path, metaparameters={"NX": 18})) == "operator_import_unknown_name"
     )

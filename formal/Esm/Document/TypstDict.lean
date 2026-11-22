@@ -12,7 +12,9 @@ A `Json` value prints as a Typst code-mode value:
 * strings `"…"` with Typst escapes (`\\`, `\"`, `\n`, `\r`, `\t`, `\u{XXXX}`);
 * arrays `(a, b)`, `()` empty; dictionaries `(key: v, "quoted key": v)`, `(:)` empty.
   A key is bare when it matches `[A-Za-z_][A-Za-z0-9_]*` and is not a Typst keyword,
-  otherwise quoted.
+  otherwise quoted;
+* a math leaf `$…$`, Typst math content: its text up to the next `$` (`Json.mathOK`).
+  Only a path block holds one (`Source.mathify`).
 
 The canonical layout is one element per line: `(`, a newline, then each element on
 its own line indented two spaces deeper than the opening line, each followed by `,`
@@ -71,6 +73,7 @@ def enc (m : Nat) : Json → List Char
   | .bool false => ['f', 'a', 'l', 's', 'e']
   | .num n => printNum n
   | .str s => quote true s
+  | .math s => '$' :: s.toList ++ ['$']
   | .arr [] => ['(', ')']
   | .arr (v :: vs) => '(' :: '\n' :: encItems (m + 2) (v :: vs) ++ spaces m ++ [')']
   | .obj [] => ['(', ':', ')']
@@ -150,6 +153,7 @@ def pVal : Nat → List Char → Option (Json × List Char)
       | some r' => some (.num (.int int64Min), r')
       | none => pParen f (skipWs r)
     else if c = '"' then (parseQuoted true (c :: r)).map fun p => (.str p.1, p.2)
+    else if c = '$' then Json.pMath r
     else if c = 'n' then
       match r with
       | 'o' :: 'n' :: 'e' :: r' => some (.null, r')
@@ -210,19 +214,19 @@ def pEntries : Nat → List Char → Option (List (String × Json) × List Char)
 end
 
 /-- Read a value: whitespace, the value, whitespace, end of input. The value must be
-well formed. -/
+well formed, math leaves allowed (`Json.WFm`). -/
 def decode (s : List Char) : Option Json :=
   match pVal (3 * s.length + 3) (skipWs s) with
-  | some (v, r) => if skipWs r = [] then (if v.wfb then some v else none) else none
+  | some (v, r) => if skipWs r = [] then (if v.wfmb then some v else none) else none
   | none => none
 
 /-- **What `decode` reads is well formed.** -/
-theorem decode_wf {s : List Char} {v : Json} (h : decode s = some v) : v.WF := by
+theorem decode_wf {s : List Char} {v : Json} (h : decode s = some v) : v.WFm := by
   unfold decode at h
   split at h
   · split at h
     · split at h
-      · cases h; exact (Json.wfb_iff _).mp ‹_›
+      · cases h; exact (Json.wfmb_iff _).mp ‹_›
       · cases h
     · cases h
   · cases h
@@ -253,13 +257,14 @@ theorem skipWs_ws {c : Char} (r : List Char) (h : isWs c = true) :
     skipWs (c :: r) = skipWs r := by simp [skipWs, h]
 
 /-- What a printed value starts with. -/
-theorem enc_head (m : Nat) (v : Json) (hv : v.WF) :
+theorem enc_head (m : Nat) (v : Json) (hv : v.WFm) :
     ∃ c t, enc m v = c :: t ∧ isWs c = false ∧ c ≠ ')' ∧ c ≠ ':' := by
   match v with
   | .null => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
   | .bool true => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
   | .bool false => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
   | .str s => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
+  | .math s => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
   | .arr [] => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
   | .arr (_ :: _) => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
   | .obj [] => exact ⟨_, _, rfl, by decide, by decide, by decide⟩
@@ -271,7 +276,7 @@ theorem enc_head (m : Nat) (v : Json) (hv : v.WF) :
     exact ⟨c, t, by simp [enc, printNum, hm, h], numHead_ws hc, numHead_ne hc ')',
       numHead_ne hc ':'⟩
 
-theorem skipWs_enc (m : Nat) (v : Json) (r : List Char) (hv : v.WF) :
+theorem skipWs_enc (m : Nat) (v : Json) (r : List Char) (hv : v.WFm) :
     skipWs (enc m v ++ r) = enc m v ++ r := by
   obtain ⟨c, t, h, hc, -⟩ := enc_head m v hv
   rw [h, List.cons_append, skipWs_nonWs _ hc]
@@ -361,13 +366,14 @@ theorem pMin_num (n : JNum) (hn : n.WF) (t : List Char) :
         · rfl
 
 /-- A printed value followed by `,` is not the `-2^63` expression. -/
-theorem pMin_enc (m : Nat) (v : Json) (hv : v.WF) (t : List Char) :
+theorem pMin_enc (m : Nat) (v : Json) (hv : v.WFm) (t : List Char) :
     pMin (enc m v ++ ',' :: t) = none := by
   match v with
   | .null => rfl
   | .bool true => rfl
   | .bool false => rfl
   | .str s => simp [enc, quote, pMin_head]
+  | .math s => simp [enc, pMin_head]
   | .arr [] => rfl
   | .arr (_ :: _) => rfl
   | .obj [] => rfl
@@ -384,8 +390,8 @@ theorem pVal_quote (f : Nat) (r : List Char) :
 
 theorem pVal_num (f : Nat) (c : Char) (r : List Char) (hc : Number.NumHead c) :
     pVal (f + 1) (c :: r) = (Number.parse (c :: r)).map fun p => (.num p.1, p.2) := by
-  simp [pVal, numHead_ne hc '(', numHead_ne hc '"', numHead_ne hc 'n', numHead_ne hc 't',
-    numHead_ne hc 'f']
+  simp [pVal, numHead_ne hc '(', numHead_ne hc '"', numHead_ne hc '$', numHead_ne hc 'n',
+    numHead_ne hc 't', numHead_ne hc 'f']
 
 theorem pParen_items (f : Nat) (c : Char) (r : List Char) (hc : c ≠ ')') (hc' : c ≠ ':')
     (he : isEntry (c :: r) = false) :
@@ -397,7 +403,7 @@ theorem pParen_entries (f : Nat) (c : Char) (r : List Char) (hc : c ≠ ')') (hc
     pParen (f + 1) (c :: r) = (pEntries f (c :: r)).map fun p => (.obj p.1, p.2) := by
   simp [pParen, hc, hc', he]
 
-theorem isEntry_enc (m : Nat) (v : Json) (r : List Char) (hv : v.WF) :
+theorem isEntry_enc (m : Nat) (v : Json) (r : List Char) (hv : v.WFm) :
     isEntry (enc m v ++ ',' :: r) = false := by
   match v with
   | .null => rfl
@@ -407,6 +413,7 @@ theorem isEntry_enc (m : Nat) (v : Json) (r : List Char) (hv : v.WF) :
   | .arr (_ :: _) => rfl
   | .obj [] => rfl
   | .obj (_ :: _) => rfl
+  | .math s => simp [isEntry, enc, parseKey, isIdentStart]
   | .str s =>
     simp only [isEntry, enc, parseKey_quote]
     rw [skipWs_nonWs _ (by decide : isWs ',' = false)]
@@ -446,7 +453,7 @@ theorem sizeObj_pos (l : List (String × Json)) : 1 ≤ Json.sizeObj l := by
   | cons e es => obtain ⟨k, v⟩ := e; simp [Json.sizeObj]
 
 mutual
-theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF →
+theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WFm →
     Number.NumStop rest → 3 * v.size ≤ f → pVal f (enc m v ++ rest) = some (v, rest)
   | v, 0, rest, _, _, hf => absurd hf (by have := size_pos v; omega)
   | .null, f + 1, rest, _, _, _ => rfl
@@ -457,6 +464,11 @@ theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF �
       simp [enc, quote]
     rw [h, pVal_quote, ← h]
     simp only [enc, parseQuoted_quote, Option.map_some]
+  | .math s, f + 1, rest, hv, _, _ => by
+    simp only [enc, List.cons_append, List.append_assoc]
+    simp only [pVal, (by decide : ('$' = '(') = False), (by decide : ('$' = '"') = False),
+      ite_false, ite_true]
+    exact Json.pMath_math s rest hv
   | .num n, f + 1, rest, hv, hr, _ => by
     by_cases hm : n = .int int64Min
     · subst hm
@@ -485,8 +497,8 @@ theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF �
       rw [skipWs_nonWs _ (by decide : isWs ')' = false)]
       rfl
   | .arr (v :: vs), f + 1, rest, hv, hr, hf => by
-    have hv' : Json.WFList (v :: vs) := hv
-    have hvv : v.WF := hv'.1
+    have hv' : Json.WFmList (v :: vs) := hv
+    have hvv : v.WFm := hv'.1
     have h : enc m (.arr (v :: vs)) ++ rest =
         '(' :: '\n' :: (spaces (m + 2) ++ (itemsTail (m + 2) (v :: vs) ++ (spaces m ++ ')' :: rest))) := by
       simp [enc, encItems, itemsTail]
@@ -512,7 +524,7 @@ theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF �
       exact isEntry_enc _ _ _ hvv
   | .obj (e :: es), f + 1, rest, hv, hr, hf => by
     obtain ⟨k, v⟩ := e
-    have hv' : Json.WFObj ((k, v) :: es) := hv.2
+    have hv' : Json.WFmObj ((k, v) :: es) := hv.2
     have h : enc m (.obj ((k, v) :: es)) ++ rest =
         '(' :: '\n' :: (spaces (m + 2) ++
           (entriesTail (m + 2) ((k, v) :: es) ++ (spaces m ++ ')' :: rest))) := by
@@ -544,14 +556,14 @@ theorem pVal_enc (m : Nat) : ∀ (v : Json) (f : Nat) (rest : List Char), v.WF �
       exact isEntry_printKey _ _
 
 theorem pItems_enc (m : Nat) : ∀ (l : List Json) (f : Nat) (first : Bool) (k : Nat)
-    (rest : List Char), Json.WFList l → l ≠ [] → 3 * Json.sizeList l ≤ f →
+    (rest : List Char), Json.WFmList l → l ≠ [] → 3 * Json.sizeList l ≤ f →
       pItems f first (itemsTail m l ++ (spaces k ++ ')' :: rest)) = some (l, rest)
   | [], _, _, _, _, _, hne, _ => absurd rfl hne
   | v :: vs, f, first, k, rest, hw, _, hf => by
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by have := sizeList_pos (v :: vs); omega⟩
     have hs : 3 * (v.size + Json.sizeList vs + 1) ≤ g + 1 := by simpa [Json.sizeList] using hf
     have hvs := sizeList_pos vs
-    have hw' : v.WF ∧ Json.WFList vs := hw
+    have hw' : v.WFm ∧ Json.WFmList vs := hw
     simp only [itemsTail, List.append_assoc, List.cons_append]
     rw [pItems, pVal_enc m v g _ hw'.1 (fun c hc => by cases hc; decide) (by omega)]
     simp only
@@ -572,14 +584,14 @@ theorem pItems_enc (m : Nat) : ∀ (l : List Json) (f : Nat) (first : Bool) (k :
       rfl
 
 theorem pEntries_enc (m : Nat) : ∀ (l : List (String × Json)) (f k : Nat) (rest : List Char),
-    Json.WFObj l → l ≠ [] → 3 * Json.sizeObj l ≤ f →
+    Json.WFmObj l → l ≠ [] → 3 * Json.sizeObj l ≤ f →
       pEntries f (entriesTail m l ++ (spaces k ++ ')' :: rest)) = some (l, rest)
   | [], _, _, _, _, hne, _ => absurd rfl hne
   | (key, v) :: es, f, k, rest, hw, _, hf => by
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by have := sizeObj_pos ((key, v) :: es); omega⟩
     have hs : 3 * (v.size + Json.sizeObj es + 1) ≤ g + 1 := by simpa [Json.sizeObj] using hf
     have hes := sizeObj_pos es
-    have hw' : v.WF ∧ Json.WFObj es := hw
+    have hw' : v.WFm ∧ Json.WFmObj es := hw
     simp only [entriesTail, List.append_assoc, List.cons_append]
     rw [pEntries, parseKey_printKey _ _ _ _ (fun c hc => by cases hc; decide)]
     simp only
@@ -615,6 +627,7 @@ theorem size_le (m : Nat) : ∀ v : Json, v.size ≤ (enc m v).length + 1
   | .bool _ => by simp [Json.size]
   | .num _ => by simp [Json.size]
   | .str _ => by simp [Json.size]
+  | .math _ => by simp [Json.size]
   | .arr [] => by simp [Json.size, Json.sizeList, enc]
   | .obj [] => by simp [Json.size, Json.sizeObj, enc]
   | .arr (v :: vs) => by
@@ -644,8 +657,8 @@ theorem sizeObj_le (m : Nat) : ∀ l : List (String × Json), Json.sizeObj l ≤
 end
 
 /-- **The Typst round trip.** Reading the canonical Typst spelling of a well-formed
-value gives the value back. -/
-theorem decode_encode (v : Json) (hv : v.WF) : decode (encode v) = some v := by
+value (math leaves allowed) gives the value back. -/
+theorem decode_encode (v : Json) (hv : v.WFm) : decode (encode v) = some v := by
   have hp := pVal_enc 0 v (3 * (encode v).length + 3) [] hv (fun c hc => by cases hc)
     (by have := size_le 0 v; simp only [encode]; omega)
   rw [List.append_nil] at hp
@@ -654,7 +667,7 @@ theorem decode_encode (v : Json) (hv : v.WF) : decode (encode v) = some v := by
     simpa [encode] using skipWs_enc 0 v [] hv]
   simp only [encode] at hp ⊢
   rw [hp]
-  simp [skipWs, (Json.wfb_iff v).mpr hv]
+  simp [skipWs, (Json.wfmb_iff v).mpr hv]
 
 /-! ## What the reader rejects or accepts -/
 
@@ -672,5 +685,8 @@ example : (decode "(-9223372036854775807-1)".toList).map encode =
     some "(-9223372036854775807 - 1)".toList := by decide +kernel
 example : (decode "(-9223372036854775807,)".toList).map encode =
     some "(\n  -9223372036854775807,\n)".toList := by decide +kernel
+example : (decode "(a: $x + 1$)".toList).map encode = some "(\n  a: $x + 1$,\n)".toList := by
+  decide +kernel
+example : (decode "(a: $$)".toList).isNone = true := by decide +kernel
 
 end Esm.Document.TypstDict

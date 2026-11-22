@@ -1380,7 +1380,7 @@ func mdItemOk(lim *Lim, it *RItem) bool {
 	case RIDesc:
 		return textNoStop(mdFenceR, withNl(it.S))
 	case RIBlock:
-		return exprJwf(it.V)
+		return jsonWfmb(it.V)
 	case RIComp:
 		return !strings.ContainsAny(it.S, "]\n")
 	case RIDecl:

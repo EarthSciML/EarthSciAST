@@ -121,7 +121,7 @@ def test_two_rename_keys_onto_one_target_is_a_collision(tmp_path):
     p.write_text(json.dumps(host))
     with pytest.raises(ExpressionTemplateError) as exc:
         load_path(str(p))
-    assert exc.value.code == "template_import_rename_collision"
+    assert exc.value.code == "operator_import_rename_collision"
     assert "merged" in str(exc.value)
 
 

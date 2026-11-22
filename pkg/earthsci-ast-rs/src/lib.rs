@@ -247,8 +247,9 @@ pub use document::{
 // Brownian / discrete / sampled / constant.
 pub use classification::{
     Classification, LhsForm, SystemKind, algebraic_unknowns, brownian_parameters,
-    constant_parameters, discrete_parameters, is_ode_state, observed_definition_json,
-    observed_definitions, observed_unknowns, ode_states, sampled_parameters, system_kind,
+    constant_parameters, declared_system_kind, discrete_parameters, is_ode_state,
+    observed_definition_json, observed_definitions, observed_unknowns, ode_states,
+    sampled_parameters, system_kind,
 };
 pub use coupling_imports::{
     CouplingImportOptions, expand_coupling_imports, has_coupling_import, is_coupling_library_doc,
@@ -274,8 +275,8 @@ pub use graph::{
     expression_graph_with_options, get_component_type, to_dot, to_json_graph, to_mermaid,
 };
 pub use parse::{
-    LoadOptions, load_document, load_document_with_options, load_path, load_path_with_options,
-    load_string, load_string_with_options,
+    LoadOptions, document_json_text, load_document, load_document_with_options, load_path,
+    load_path_with_options, load_string, load_string_with_options,
 };
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,

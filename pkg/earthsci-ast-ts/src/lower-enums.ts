@@ -288,7 +288,7 @@ export function lowerMountedDocumentEnums<T>(document: T): T {
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(obj)) {
       out[k] =
-        k === 'expression_templates' && v !== null && typeof v === 'object' && !Array.isArray(v)
+        k === 'operators' && v !== null && typeof v === 'object' && !Array.isArray(v)
           ? lowerTemplates(v as Record<string, unknown>)
           : walk(v)
     }

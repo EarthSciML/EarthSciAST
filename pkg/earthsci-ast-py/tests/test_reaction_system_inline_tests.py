@@ -360,7 +360,7 @@ def test_a_spatial_derivative_is_left_for_the_discretization_rule():
     }
     flat = flatten(load_string(json.dumps(doc)))
     rendered = json.dumps(flat.equations[0].rhs, default=lambda o: o.__dict__)
-    assert '"D"' in rendered and '"x"' in rendered, rendered
+    assert '"partial"' in rendered and '"x"' in rendered, rendered
 
 
 def test_load_path_still_round_trips_the_shipped_fixture():

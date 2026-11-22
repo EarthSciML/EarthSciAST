@@ -164,10 +164,11 @@ its own. -/
 def canonSegs (its : List RItem) : List Seg :=
   its.flatMap (fun it => [.prose ['\n'], .item it] ++ (if isBlock it then [] else [.prose ['\n']]))
 
-/-- **Print a document as Markdown.** -/
+/-- **Print a document as Markdown.** An expression in a path block is math when its text
+is `Yaml.plainMathOK`, so the block stays YAML that any YAML 1.2 parser reads. -/
 def printMd (d : Json) : String :=
   let D := toDoc capsMd d
-  String.ofList (frontMd D.front ++ render (canonSegs (items (rawDoc prMdx D))))
+  String.ofList (frontMd D.front ++ render (canonSegs (items (mathifyDoc (fun S j => printLatex S j) Yaml.plainMathOK (rawDoc prMdx D)))))
 
 /-- Read the front matter and the constructs. -/
 def lexDoc (s : List Char) : Option (List (String × Json) × List RItem) :=
@@ -188,7 +189,8 @@ endings as LF (`decodeText`). -/
 def parseMd (s : String) : Option Json := do
   let p ← lexDoc (decodeText s.toList)
   let R ← unitems p.1 p.2
-  let D ← cookDoc ckMdx R
+  let R' ← cookDocBlocks (fun S raw => parseLatex S raw) R
+  let D ← cookDoc ckMdx R'
   ofDoc D
 
 theorem segItems_append (a b : List Seg) : segItems (a ++ b) = segItems a ++ segItems b := by
@@ -261,7 +263,7 @@ theorem lexDoc_front (front : List (String × Json)) (hf : jwf (.obj front) = tr
   have e : ("---".toList : List Char) = ['-', '-', '-'] := rfl
   simp only [dashes, List.append_assoc, List.nil_append, e, List.cons_append] at hu ⊢
   rw [hu _ (by simp; omega)]
-  simp only [List.all_nil, ↓reduceIte, Yaml.decode_encode _ hw]
+  simp only [List.all_nil, ↓reduceIte, Yaml.decode_encode _ (Json.WF.wfm hw)]
   rw [lex_render segs true hv _ (by simp; omega)]
   rfl
 
@@ -307,7 +309,7 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
   · have := h.desc s hs
     simp only [capsMd, Bool.and_eq_true] at this
     exact this.1.1.1.1
-  · exact h.blocks kv hkv
+  · exact wfmb_of_jwf (h.blocks kv hkv)
   · obtain ⟨hmc, -, t, rfl⟩ := h.rmath m hm
     simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc
     exact hmc.1
@@ -345,8 +347,8 @@ theorem items_ok (D : Doc MC) (h : DocOK capsMd D) :
       | rxn x => exact hmc
       | plot a => simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc; exact hmc.1
       | tm t => simp only [Caps.item, capsMd, Bool.and_eq_true] at hmc; exact hmc.1
-    · exact (h.mathBlocks c hc kv hkv).2
-    · exact (h.cblocks c hc kv hkv).2
+    · exact wfmb_of_jwf (h.mathBlocks c hc kv hkv).2
+    · exact wfmb_of_jwf (h.cblocks c hc kv hkv).2
 
 /-- **The Markdown round trip.** Every ESM document in canonical form reads back from its
 Markdown spelling. -/
@@ -354,9 +356,18 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
   have hok := toDoc_ok capsMd rfl d hd
   unfold parseMd printMd
   simp only [String.toList_ofList]
-  rw [decode_front, lexDoc_front _ hok.frontWF _ (valid_canon _ (items_ok _ hok) true), segItems_canon]
+  have hbW : ∀ kv ∈ (rawDoc prMdx (toDoc capsMd d)).blocks, kv.2.WF :=
+    fun kv hkv => jwf_sound _ (hok.blocks kv hkv)
+  have hcW : ∀ c ∈ (rawDoc prMdx (toDoc capsMd d)).comps, ∀ kv ∈ c.blocks, kv.2.WF := by
+    intro c hc kv hkv
+    simp only [rawDoc, List.mem_map] at hc
+    obtain ⟨c0, hc0, rfl⟩ := hc
+    exact jwf_sound _ (hok.cblocks c0 hc0 kv hkv).2
+  rw [decode_front, lexDoc_front _ hok.frontWF _ (valid_canon _ (items_mathifyDoc_ok itemOK
+    (fun _ _ => rfl) _ _ _ (items_ok _ hok) hbW hcW) true), segItems_canon]
   simp only [Option.bind_eq_bind, Option.bind_some]
-  have hR := unitems_items (rawDoc prMdx (toDoc capsMd d)) (by
+  have hR := unitems_items (mathifyDoc (fun S j => printLatex S j) Yaml.plainMathOK (rawDoc prMdx (toDoc capsMd d)))
+    (itemsOK_mathifyDoc _ _ _ (by
     refine ⟨fun c hc => ?_, ?_⟩
     · simp only [rawDoc, List.mem_map] at hc
       obtain ⟨c0, hc0, rfl⟩ := hc
@@ -365,9 +376,13 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
       simp only [rawDoc, List.mem_map] at hm
       obtain ⟨m0, hm0, rfl⟩ := hm
       obtain ⟨-, -, t, rfl⟩ := hok.rmath m0 hm0
-      exact ⟨_, rfl⟩)
-  rw [show (rawDoc prMdx (toDoc capsMd d)).front = (toDoc capsMd d).front from rfl] at hR
+      exact ⟨_, rfl⟩))
+  rw [show (mathifyDoc (fun S j => printLatex S j) Yaml.plainMathOK (rawDoc prMdx (toDoc capsMd d))).front =
+    (toDoc capsMd d).front from rfl] at hR
   rw [hR]
+  simp only [Option.bind_some]
+  rw [cookDocBlocks_mathifyDoc (fun S j => printLatex S j) Yaml.plainMathOK (fun S raw => parseLatex S raw)
+    (fun S e he => parseLatex_printLatex S e he) _ hbW hcW]
   simp only [Option.bind_some]
   have hck : ∀ S m, capsMd.item S m = true → mathWF m = true → ckMdx S (prMdx S m) = some [m] := by
     intro S m hc hw
@@ -399,7 +414,8 @@ theorem parseMd_printMd (d : Json) (hd : canonDoc d = true) : parseMd (printMd d
 /-- What a document says, given its front matter and its constructs. -/
 def parseItemsMd (front : List (String × Json)) (its : List RItem) : Option Json := do
   let R ← unitems front its
-  let D ← cookDoc ckMdx R
+  let R' ← cookDocBlocks (fun S raw => parseLatex S raw) R
+  let D ← cookDoc ckMdx R'
   ofDoc D
 
 /-- **The parse of a Markdown document depends only on its front matter and its sequence

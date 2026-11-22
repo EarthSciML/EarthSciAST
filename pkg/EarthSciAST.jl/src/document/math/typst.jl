@@ -51,7 +51,8 @@ const KW_CHARS = Dict{Kw, String}(
     KLog => "log", KSin => "sin", KCos => "cos", KTan => "tan", KAsin => "arcsin",
     KAcos => "arccos", KAtan => "arctan", KSinh => "sinh", KCosh => "cosh", KTanh => "tanh",
     KMin => "min", KMax => "max", KAbs => "abs", KFloor => "floor", KCeil => "ceil",
-    KPdiff => "partial", KDif => "dif", KCases => "cases", KEsmnode => "esm.node",
+    KPdiff => "partial", KNabla => "nabla", KDif => "dif", KCases => "cases",
+    KEsmnode => "esm.node",
     KVec => "vec", KMat => "mat", KSum => "sum", KProd => "product", KInn => "in",
     KLimits => "limits", KLr => "lr", KNl => "\\", KLset => "{", KRset => "}",
 )

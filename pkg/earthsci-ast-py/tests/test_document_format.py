@@ -179,7 +179,7 @@ def test_print_math_reproduces_the_display(case):
     models = esm.get("models", {})
     assert len(models) == 1, "a math case has one model"
     (model,) = models.values()
-    if "expression_templates" in model or "expression_templates" in esm:
+    if "operators" in model or "operators" in esm:
         pytest.skip("the display depends on a template")
     (eq,) = model["equations"]
     names = [

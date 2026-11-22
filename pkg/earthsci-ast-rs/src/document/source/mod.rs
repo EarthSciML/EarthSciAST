@@ -62,10 +62,20 @@ pub fn parse_typ(text: &str) -> Option<Json> {
 /// [`parse_md`], with each construct's JSON pointer and byte range
 /// ([`sources::read_sourced`]).
 pub fn parse_md_sourced(text: &str) -> Option<sources::Sourced> {
-    sources::read_sourced(text, markdown_doc::lex_doc_spanned, &markdown_doc::ck_mdx)
+    sources::read_sourced(
+        text,
+        markdown_doc::lex_doc_spanned,
+        &|s, raw| crate::document::math::parse_latex(s, raw),
+        &markdown_doc::ck_mdx,
+    )
 }
 
 /// [`parse_typ`], with each construct's JSON pointer and byte range.
 pub fn parse_typ_sourced(text: &str) -> Option<sources::Sourced> {
-    sources::read_sourced(text, typst_doc::lex_doc_spanned, &typst_doc::ck_tx)
+    sources::read_sourced(
+        text,
+        typst_doc::lex_doc_spanned,
+        &|s, raw| crate::document::math::parse_typst(s, raw),
+        &typst_doc::ck_tx,
+    )
 }
