@@ -2473,7 +2473,7 @@ func validateModelUnits(modelName string, model *Model, basePath string, scoped 
 		})
 	}
 	// An OBSERVED unknown's defining equation is dimension-checked by
-	// validateObservedVariableUnits instead, so that the finding lands on the
+	// validateObservedVariableUnitsScoped instead, so that the finding lands on the
 	// VARIABLE that carries the contradicting declaration
 	// (`/models/M/variables/v`) — the pointer CONFORMANCE_SPEC §7.1.2 pins,
 	// since "a declared unit that contradicts the dimension its own expression
@@ -2529,7 +2529,7 @@ func validateModelUnits(modelName string, model *Model, basePath string, scoped 
 	}
 }
 
-// validateObservedVariableUnits dimension-checks each OBSERVED unknown's
+// validateObservedVariableUnitsScoped dimension-checks each OBSERVED unknown's
 // defining expression against the variable's own declared units.
 //
 // From esm 1.0.0 that expression is the RHS of the bare-variable-LHS EQUATION
@@ -2544,13 +2544,9 @@ func validateModelUnits(modelName string, model *Model, basePath string, scoped 
 // units_inconsistent_addition.esm, units_inconsistent_subtraction.esm,
 // units_invalid_exponent.esm, units_invalid_logarithm.esm and
 // units_mixed_dimensional_operations.esm.
-func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath string, result *StructuralValidationResult) {
-	validateObservedVariableUnitsScoped(model, env, basePath, nil, result)
-}
-
-// validateObservedVariableUnitsScoped is validateObservedVariableUnits typing
-// a definition whose references reach a unit-bearing definition from its
-// reference-preserving form (esm-spec §9.6.12 "Units").
+//
+// A definition whose references reach a unit-bearing definition is typed from
+// its reference-preserving form (esm-spec §9.6.12 "Units"); scoped may be nil.
 func validateObservedVariableUnitsScoped(model *Model, env map[string]Unit, basePath string, scoped *scopedUnitIndex, result *StructuralValidationResult) {
 	for _, name := range sortedKeys(model.Variables) {
 		v := model.Variables[name]

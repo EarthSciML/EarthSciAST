@@ -621,10 +621,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
             params: [],
             body: {
               op: '*',
-              args: [
-                2,
-                { op: 'apply_operator', args: [], name: 't_inner', bindings: {} },
-              ],
+              args: [2, { op: 'apply_operator', args: [], name: 't_inner', bindings: {} }],
             },
           },
           t_drop: { params: [], body: 9 },
@@ -935,9 +932,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
                         "args": [], "name": "rule", "bindings": {"f": 1}}}
         },`),
     )
-    expect(errCode(() => lowerExpressionTemplates(matchRef))).toBe(
-      'operator_unknown_definition',
-    )
+    expect(errCode(() => lowerExpressionTemplates(matchRef))).toBe('operator_unknown_definition')
 
     // A `match` pattern may not contain apply nodes.
     const matchWithApply = JSON.parse(
@@ -1017,9 +1012,6 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
       operator_imports: [{ ref: './own.esm' }],
     }
     appendComponentImports(comp2, [{ ref: './inj.esm' }])
-    expect((comp2.operator_imports as any[]).map((e) => e.ref)).toEqual([
-      './own.esm',
-      './inj.esm',
-    ])
+    expect((comp2.operator_imports as any[]).map((e) => e.ref)).toEqual(['./own.esm', './inj.esm'])
   })
 })

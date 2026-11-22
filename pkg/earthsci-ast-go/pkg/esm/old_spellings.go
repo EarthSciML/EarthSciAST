@@ -370,7 +370,7 @@ func (w *oldSpellingWalker) object(pointer string, namemap bool, entry int, defB
 	case partialSpellings[op]:
 		w.edits = append(w.edits, oldSpellingEdit{start: opStart, end: opEnd,
 			replacement: opPartial, site: fmt.Sprintf("%s (%s)", pointer, op)})
-	case op == OpDerivative && wrtFound && !(wrtStr && wrt == "t"):
+	case op == OpDerivative && wrtFound && (!wrtStr || wrt != "t"):
 		w.pending = append(w.pending, pendingD{
 			edit: oldSpellingEdit{start: opStart, end: opEnd, replacement: opPartial,
 				site: fmt.Sprintf("%s (D)", pointer)},

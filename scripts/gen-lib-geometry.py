@@ -620,10 +620,7 @@ def main():
     INLINE = False
     templates = lib["operators"]
     for name in ("overlap_area_planar", "overlap_area_spherical", "lonlat_to_unit"):
-        if (
-            expand(templates[name]["body"], templates)
-            != inlined["operators"][name]["body"]
-        ):
+        if expand(templates[name]["body"], templates) != inlined["operators"][name]["body"]:
             sys.exit(f"{name}: the expanded body differs from the inlined body")
     text = render(lib)
     if "--check" in args:

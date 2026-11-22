@@ -854,10 +854,12 @@ const _PARTIAL_SPELLINGS = ("δ", "∂")
 # never renamed among them (a variable may be called `expression_templates`).
 const _OLD_SPELLING_NAME_MAPS = union(
     _NAME_KEYED_MAP_KEYS,
-    Set{String}([
-        "models", "reaction_systems", "data_sources", "index_sets", "enums",
-        "metaparameters", "domains", "coupling_roles",
-    ]),
+    Set{String}(
+        [
+            "models", "reaction_systems", "data_sources", "index_sets", "enums",
+            "metaparameters", "domains", "coupling_roles",
+        ]
+    ),
 )
 
 """

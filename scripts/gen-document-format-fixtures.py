@@ -589,7 +589,12 @@ def operators(g):
         op("laplacian", "x"),
         names=("x",),
     )
-    E("nabla_curl", "curl(F) prints \\nabla \\times F / nabla times F.", op("curl", "x"), names=("x",))
+    E(
+        "nabla_curl",
+        "curl(F) prints \\nabla \\times F / nabla times F.",
+        op("curl", "x"),
+        names=("x",),
+    )
     E(
         "nabla_div_grad",
         "div(grad(u)) prints \\nabla \\cdot \\nabla u, a different tree from laplacian(u).",
@@ -631,8 +636,12 @@ def operators(g):
         "old_operator_names",
         "The old names expression_templates and apply_expression_template are read as "
         "operators and apply_operator (esm-spec 9.6.12); only the new names are written.",
-        {"op": "apply_expression_template", "args": [], "name": "arrhenius",
-         "bindings": {"A_pre": "a", "Ea": "x"}},
+        {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "arrhenius",
+            "bindings": {"A_pre": "a", "Ea": "x"},
+        },
         names=("a", "x", "T"),
         extra_model={"expression_templates": ARRHENIUS},
         written=True,
@@ -1782,9 +1791,7 @@ def documents(g):
         document(
             models={
                 "M": box_model(
-                    operators={
-                        "loss": {"params": ["r", "v"], "body": op("-", op("*", "r", "v"))}
-                    }
+                    operators={"loss": {"params": ["r", "v"], "body": op("-", op("*", "r", "v"))}}
                 )
             }
         ),

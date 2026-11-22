@@ -340,10 +340,9 @@ def test_template_library_round_trips_to_itself(lib):
     emitted = emit_document(_read_json(path), os.path.dirname(path))
     assert emitted["operators"] == on_disk["operators"]
     assert emitted["metaparameters"] == on_disk["metaparameters"]
-    assert any(
-        k in emitted
-        for k in ("models", "reaction_systems", "data_sources", "operators")
-    ), f"{lib}: emitted form carries none of the five top-level payload keys"
+    assert any(k in emitted for k in ("models", "reaction_systems", "data_sources", "operators")), (
+        f"{lib}: emitted form carries none of the five top-level payload keys"
+    )
     load_string(emit_esm_string(emitted), base_path=os.path.dirname(path))
 
     # ...and the typed load -> save surface.
@@ -607,9 +606,7 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
     # (t_inner) along and the reference SURVIVES; Expand yields 2 * 7 (the
     # Option-A image, §9.6.4 rule 2).
     p = tmp_path / "m.esm"
-    p.write_text(
-        _model_json('\n"operator_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],')
-    )
+    p.write_text(_model_json('\n"operator_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],'))
     raw = json.loads(p.read_text())
     resolved = resolve_template_machinery(raw, str(tmp_path))
     tpl = resolved["models"]["M"]["operators"]
@@ -689,19 +686,13 @@ def test_edge_bindings_unknown_names_and_non_integers(tmp_path):
         )
     )
     p = tmp_path / "m.esm"
-    p.write_text(
-        _model_json(
-            '\n"operator_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],'
-        )
-    )
+    p.write_text(_model_json('\n"operator_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],'))
     assert _err_code(lambda: load_path(str(p))) == "operator_import_unknown_name"
     # A non-integer binding is schema-invalid (TemplateImport.bindings is
     # integer-typed), so `load` rejects at schema validation; the
     # resolver-level backstop still reports metaparameter_type_error.
     p.write_text(
-        _model_json(
-            '\n"operator_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],'
-        )
+        _model_json('\n"operator_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],')
     )
     with pytest.raises(SchemaValidationError):
         load_path(str(p))
@@ -1039,10 +1030,7 @@ def test_body_may_not_reference_match_rule():
             ' "args": [], "name": "rule", "bindings": {"f": 1}}}},'
         )
     )
-    assert (
-        _err_code(lambda: lower_expression_templates(doc))
-        == "operator_unknown_definition"
-    )
+    assert _err_code(lambda: lower_expression_templates(doc)) == "operator_unknown_definition"
 
 
 def test_match_pattern_may_not_contain_apply_node():
@@ -1058,10 +1046,7 @@ def test_match_pattern_may_not_contain_apply_node():
             ' "body": {"op": "*", "args": [2, "f"]}}},'
         )
     )
-    assert (
-        _err_code(lambda: lower_expression_templates(doc))
-        == "operator_invalid_definition"
-    )
+    assert _err_code(lambda: lower_expression_templates(doc)) == "operator_invalid_definition"
 
 
 def test_version_gate_flags_every_v097_construct():
@@ -1121,8 +1106,7 @@ def test_zero_parameter_templates_are_legal():
     template is a named constant fragment."""
     doc = json.loads(
         _model_json(
-            '\n"operators": {"two": {"params": [], "body": 2}},'
-            '"initialization_equations": [],'
+            '\n"operators": {"two": {"params": [], "body": 2}},"initialization_equations": [],'
         )
     )
     doc["models"]["M"]["variables"]["y"] = {"type": "unknown", "units": "1"}

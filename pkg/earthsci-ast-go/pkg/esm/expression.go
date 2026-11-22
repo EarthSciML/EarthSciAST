@@ -603,15 +603,11 @@ func evaluateIn(expr Expression, bindings map[string]float64, scope *operatorSco
 	return evaluateExpr(expr, bindings)
 }
 
-// checkEvaluable returns the diagnostic for the first operator (pre-order) in
-// expr that this scalar evaluator cannot evaluate, or nil. An op outside the
-// §4.2 evaluable core reports `unlowered_operator`; a core op with no rule here
+// checkEvaluableIn returns the diagnostic for the first operator (pre-order)
+// in expr that this scalar evaluator cannot evaluate, or nil; scope holds the
+// definitions in scope of expr (nil for none). An op outside the §4.2
+// evaluable core reports `unlowered_operator`; a core op with no rule here
 // reports `unevaluable_operator`. It evaluates nothing.
-func checkEvaluable(expr Expression) error {
-	return checkEvaluableIn(expr, nil)
-}
-
-// checkEvaluableIn is checkEvaluable with the definitions in scope of expr.
 func checkEvaluableIn(expr Expression, scope *operatorScope) error {
 	node, ok := asExprNode(expr)
 	if !ok {
@@ -691,7 +687,7 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 	case "D":
 		// esm-spec §4.2 / §9.6.8: `D` is evaluable-core only in its STRUCTURAL
 		// equation-LHS role. One reaching the evaluator is an unlowered
-		// rewrite target (checkEvaluable refuses it before evaluation).
+		// rewrite target (checkEvaluableIn refuses it before evaluation).
 		return 0, unloweredDerivativeError(node)
 	}
 
