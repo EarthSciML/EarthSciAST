@@ -304,14 +304,27 @@ func mergeMountedBlocks(own map[string]any, ownOrder []string, cname string, mou
 // subsystem blocks are deleted. `ptr` is comp's JSON pointer; `orders` (may be
 // nil) supplies declaration order and receives the merged block's. Mirrors the
 // Julia `_hoist_mounted_templates!`.
-func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[string][]string) {
+//
+// Returns the names of the merged entries only mounted blocks contributed.
+// Definitions are component-local (esm-spec §9.6.3 constraint 4), so such an
+// entry is reached by the mounted subtree's references but is no definition of
+// its operator in comp: a call in comp does not resolve to it, and it counts
+// for no arity there (§9.6.12).
+func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[string][]string) map[string]bool {
 	mounts := collectMountedBlocks(nil, comp, "", ptr, orders)
 	if len(mounts) == 0 {
-		return
+		return nil
 	}
 	own, _ := comp["operators"].(map[string]any)
 	ownOrder := orders[ptr+"/operators"]
 	newblock, rn := mergeMountedBlocks(own, ownOrder, cname, mounts, orders)
+	ownNames := make(map[string]bool, len(own))
+	for n := range own {
+		if nn, ok := rn[n]; ok {
+			n = nn
+		}
+		ownNames[n] = true
+	}
 	if rn != nil {
 		for _, k := range sortedKeys(comp) {
 			if k == "operators" || k == "subsystems" {
@@ -332,6 +345,13 @@ func hoistMountedTemplates(comp map[string]any, cname, ptr string, orders map[st
 	if orders != nil {
 		orders[ptr+"/operators"] = append([]string(nil), newblock.keys...)
 	}
+	mountedOnly := map[string]bool{}
+	for _, n := range newblock.keys {
+		if !ownNames[n] {
+			mountedOnly[n] = true
+		}
+	}
+	return mountedOnly
 }
 
 // ---------------------------------------------------------------------------

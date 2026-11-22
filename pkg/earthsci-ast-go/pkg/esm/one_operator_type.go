@@ -260,6 +260,9 @@ func checkComponentArity(comp map[string]any, L *lowering, transforms []map[stri
 	}
 	sort.Strings(names)
 	for _, r := range names {
+		if L.mountedOnly[r] {
+			continue // a mounted definition's body was checked in its own component
+		}
 		d, _ := L.named[r].(map[string]any)
 		if err := checkCallArity(d["body"], L.arities, L.scope+".operators."+r); err != nil {
 			return err

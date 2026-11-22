@@ -886,11 +886,15 @@ type lowering struct {
 	callRules map[string][]matchRule
 	// arities: the operand counts the definitions of each defined operator
 	// take (esm-spec §9.6.12 "Arity").
-	arities  map[string]map[int]bool
-	shapeEnv map[string][]string
-	enums    map[string]map[string]int
-	scope    string
-	depth    map[uintptr]depthRec
+	arities map[string]map[int]bool
+	// mountedOnly: the registry entries only mounted subsystems contributed
+	// (hoistMountedTemplates), reached by the mounted subtree's references and
+	// never by a call in this component.
+	mountedOnly map[string]bool
+	shapeEnv    map[string][]string
+	enums       map[string]map[string]int
+	scope       string
+	depth       map[uintptr]depthRec
 }
 
 func (L *lowering) depthOf(n map[string]any) (int, bool) {
@@ -1381,8 +1385,9 @@ func RejectExpressionTemplatesPreV04(view map[string]any) error {
 // which each rule's `where` shape constraints are resolved at registration
 // (esm-spec §9.6.1; `operator_constraint_unknown_index_set`). scope is the
 // diagnostic prefix (e.g. "models.M").
-func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[string]struct{}, scope string) (*lowering, error) {
-	L := &lowering{named: map[string]any{}, callRules: map[string][]matchRule{}, arities: map[string]map[int]bool{}}
+func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[string]struct{}, scope string, mountedOnly map[string]bool) (*lowering, error) {
+	L := &lowering{named: map[string]any{}, callRules: map[string][]matchRule{}, arities: map[string]map[int]bool{},
+		mountedOnly: mountedOnly}
 	if tplMap == nil {
 		return L, nil
 	}
@@ -1413,7 +1418,10 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 		defines := definitionDefines(name, decl)
 		match, ok := decl["match"]
 		hasMatch := ok && match != nil
-		if !hasMatch {
+		if !hasMatch && mountedOnly[name] {
+			// A mounted component's definition: reached by its subtree's
+			// references, never by a call here (component-local scope).
+		} else if !hasMatch {
 			addArity(defines, len(plist))
 		} else if rop, ok := matchRootOp(decl); ok && !isCoreOp(rop) {
 			margs, _ := match.(map[string]any)["args"].([]any)
@@ -1423,7 +1431,7 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 		if err != nil {
 			return nil, err
 		}
-		if !hasMatch && !isCoreOp(defines) && defines != applyExpressionTemplateOp {
+		if !hasMatch && !mountedOnly[name] && !isCoreOp(defines) && defines != applyExpressionTemplateOp {
 			args := make([]any, len(plist))
 			for i, p := range plist {
 				args[i] = p
@@ -1554,7 +1562,7 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			// authored subsystem with its own block) keeps its references and
 			// brings its template definitions; they join this component's
 			// registry here, before its fixpoint (hoistMountedTemplates).
-			hoistMountedTemplates(compObj, cname, "/"+kind+"/"+cname, orders)
+			mountedOnly := hoistMountedTemplates(compObj, cname, "/"+kind+"/"+cname, orders)
 			// Static shape environment for `where` constraint evaluation
 			// (esm-spec §9.6.1): declared variable shapes only.
 			shapeEnv := componentShapeEnv(compObj)
@@ -1575,7 +1583,7 @@ func lowerExpressionTemplatesOrdered(view map[string]any, orders map[string][]st
 			if orders != nil {
 				order = orders["/"+kind+"/"+cname+"/operators"]
 			}
-			L, err := buildRewriteContext(tplMap, order, isetNames, cscope)
+			L, err := buildRewriteContext(tplMap, order, isetNames, cscope, mountedOnly)
 			if err != nil {
 				return err
 			}

@@ -251,3 +251,73 @@ func TestFlattenClosesJoinNames(t *testing.T) {
 	d := "flatten_closes_join_names"
 	mtrCompare(t, "flattened registry", mtrFlat(t, mtrPath(d, "fixture.esm")), mtrGolden(t, d, "flattened_registry.esm"))
 }
+
+// mtrLoadWithLeaf loads host from a directory that also holds leaf.esm.
+func mtrLoadWithLeaf(t *testing.T, host, leaf string) (*ESMFile, error) {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "leaf.esm"), []byte(leaf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "host.esm"), []byte(host), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return LoadPath(filepath.Join(d, "host.esm"))
+}
+
+// A leaf declaring `scale(q) = 3q`, whose own equation calls it.
+const mtrScaleLeaf = `{"esm": "2.4.0", "metadata": {"name": "leaf"}, "models": {"L": {
+  "variables": {"a": {"type": "parameter", "default": 1.0}, "b": {"type": "unknown"}},
+  "equations": [{"lhs": "b", "rhs": {"op": "scale", "args": ["a"]}}],
+  "operators": {"scale": {"params": ["q"], "body": {"op": "*", "args": [3, "q"]}}}}}}`
+
+// esm-spec §4.7, §9.6.3 constraint 4, §9.6.12: a mounted leaf's definitions
+// are local to the leaf. A call in the mounting component of an operator only
+// the leaf defines stays a placeholder there, whatever its arity, and a call
+// the mounting component's own definitions take resolves to them alone; the
+// leaf's own call still resolves to the leaf's definition.
+func TestMountedLeafDefinitionsAreLeafLocal(t *testing.T) {
+	host := `{"esm": "2.4.0", "metadata": {"name": "host"}, "models": {"H": {
+  "variables": {"x": {"type": "parameter", "default": 1.0}, "y": {"type": "unknown"}, "z": {"type": "unknown"}},
+  "equations": [{"lhs": "y", "rhs": {"op": "scale", "args": ["x"]}},
+                {"lhs": "z", "rhs": {"op": "scale", "args": ["x", "x"]}}],
+  "subsystems": {"leaf": {"ref": "leaf.esm"}}}}}`
+	f, err := mtrLoadWithLeaf(t, host, mtrScaleLeaf)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	eqs := f.Models["H"].Equations
+	for i, want := range []int{1, 2} {
+		n, ok := asExprNode(eqs[i].RHS)
+		if !ok || n.Op != "scale" || len(n.Args) != want {
+			t.Errorf("host equation %d rhs = %#v; want the placeholder scale call with %d operand(s)", i, eqs[i].RHS, want)
+		}
+	}
+	leaf, _ := subsystemAsMap(f.Models["H"].Subsystems["leaf"])
+	leafEqs, _ := leaf["equations"].([]any)
+	if len(leafEqs) != 1 || !strings.Contains(emitCanonicalString(leafEqs[0]), `"*"`) {
+		t.Errorf("leaf equation = %v; want its call resolved to the leaf's definition", leafEqs)
+	}
+
+	// The host defines its own two-operand `scale`: its call resolves to that
+	// definition, never to the leaf's one-operand one.
+	host = `{"esm": "2.4.0", "metadata": {"name": "host"}, "models": {"H": {
+  "variables": {"x": {"type": "parameter", "default": 1.0}, "z": {"type": "unknown"}},
+  "equations": [{"lhs": "z", "rhs": {"op": "scale", "args": ["x", "x"]}}],
+  "operators": {"scale": {"params": ["q", "r"], "body": {"op": "+", "args": ["q", "r"]}}},
+  "subsystems": {"leaf": {"ref": "leaf.esm"}}}}}`
+	f, err = mtrLoadWithLeaf(t, host, mtrScaleLeaf)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got, err := Evaluate(f.Models["H"].Equations[0].RHS, map[string]float64{"x": 1}); err != nil || got != 2 {
+		t.Errorf("host rhs = %v, %v; want 2 (x + x at x = 1, the host's definition)", got, err)
+	}
+	// A host call the host's definitions do not take is an arity mismatch
+	// counted against the host's definitions only.
+	host = strings.Replace(host, `"args": ["x", "x"]`, `"args": ["x"]`, 1)
+	_, err = mtrLoadWithLeaf(t, host, mtrScaleLeaf)
+	if got := tiErrCode(t, err); got != codeOperatorArityMismatch {
+		t.Errorf("code = %q; want %q (%v)", got, codeOperatorArityMismatch, err)
+	}
+}
