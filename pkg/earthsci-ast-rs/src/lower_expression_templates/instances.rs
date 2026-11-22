@@ -406,7 +406,11 @@ fn instance(
         &mut PtrMemo::default(),
     )?;
     let body = instance_partial(&body, &view, &mut PtrMemo::default());
-    let (rewritten, passes) = rewrite_to_fixpoint(&body, l, &tscope, Some(&view))?;
+    // A body's calls resolve in the scope of the definition's owners
+    // (esm-spec §4.7, §9.6.12).
+    let (rewritten, passes) = l.with_call_scope(l.owner_scope(name), || {
+        rewrite_to_fixpoint(&body, l, &tscope, Some(&view))
+    })?;
     let mut refs = PtrMemo::default();
     let mut ref_keys = Vec::new();
     let mut height = passes;
@@ -949,6 +953,7 @@ pub(super) fn apply_rule3(
                 set_body(&mut nd, bodies[first].clone());
                 let nd = Rc::new(SNode::Obj(nd));
                 l.named.insert(vn.clone(), nd.clone());
+                l.inherit_owners(&vn, &t);
                 updates.push((vn.clone(), nd));
                 names.insert(c.as_str(), vn);
             }

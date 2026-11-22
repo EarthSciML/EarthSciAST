@@ -305,3 +305,158 @@ fn flatten_closes_join_names() {
         read(c, "flattened_registry.esm")
     );
 }
+
+/// A leaf model declaring `def` (one defined operator, raw JSON), with one
+/// state `c` whose equation is `D(c) = rhs`.
+fn leaf_model(def_name: &str, def: Value, rhs: Value) -> Value {
+    json!({
+        "operators": {def_name: def},
+        "variables": {"c": {"type": "unknown", "units": "1", "default": 1.0}},
+        "equations": [{"lhs": {"op": "D", "args": ["c"], "wrt": "t"}, "rhs": rhs}]
+    })
+}
+
+/// A host document whose model `Host` has one state `y` with
+/// `D(y) = rhs`, the definitions `ops`, and the subsystem `Sub` = `sub`.
+fn host_doc(ops: Value, rhs: Value, sub: Value) -> Value {
+    let mut host = json!({
+        "variables": {"y": {"type": "unknown", "units": "1", "default": 1.0}},
+        "equations": [{"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": rhs}],
+        "subsystems": {"Sub": sub}
+    });
+    if ops.is_object() {
+        host["operators"] = ops;
+    }
+    json!({"esm": "2.4.0", "metadata": {"name": "host"}, "models": {"Host": host}})
+}
+
+/// `host` loaded from a directory that also holds `leaf` as `leaf.esm`.
+fn load_with_leaf(host: &Value, leaf: &Value) -> Result<EsmFile, String> {
+    let d = tempfile::tempdir().expect("tempdir");
+    std::fs::write(d.path().join("leaf.esm"), leaf.to_string()).expect("write leaf");
+    std::fs::write(d.path().join("host.esm"), host.to_string()).expect("write host");
+    load_path(d.path().join("host.esm")).map_err(|e| format!("{} {e}", e.code().unwrap_or("")))
+}
+
+fn saved(file: &EsmFile) -> Value {
+    serde_json::from_str(&earthsci_ast::to_json(file).expect("save")).expect("json")
+}
+
+/// The leaf `leaf.esm` defining `scale(x) = 3*x`, with `D(c) = -scale(c)`.
+fn scale_leaf() -> Value {
+    json!({
+        "esm": "2.4.0",
+        "metadata": {"name": "leaf"},
+        "models": {"Leaf": leaf_model(
+            "scale",
+            json!({"params": ["x"], "body": {"op": "*", "args": [3, "x"]}}),
+            json!({"op": "-", "args": [{"op": "scale", "args": ["c"]}]}),
+        )}
+    })
+}
+
+/// esm-spec §4.7, §9.6.12: a mounted leaf's definitions are local to the leaf.
+/// A call in the mounting component of an operator only the leaf defines is a
+/// placeholder there, not a call of the leaf's definition; the leaf's own call
+/// keeps resolving to it.
+#[test]
+fn a_mounted_leafs_definition_does_not_resolve_the_mounting_components_call() {
+    let host = host_doc(
+        Value::Null,
+        json!({"op": "-", "args": [{"op": "scale", "args": ["y"]}]}),
+        json!({"ref": "./leaf.esm"}),
+    );
+    let v = saved(&load_with_leaf(&host, &scale_leaf()).expect("load"));
+    assert_eq!(
+        v["models"]["Host"]["equations"][0]["rhs"],
+        json!({"op": "-", "args": [{"op": "scale", "args": ["y"]}]}),
+        "the host's call must stay a placeholder"
+    );
+    assert_eq!(
+        v["models"]["Host"]["subsystems"]["Sub"]["equations"][0]["rhs"],
+        json!({"op": "-", "args": [{"op": "*", "args": [3, "c"]}]}),
+    );
+}
+
+/// The same with the subsystem written inline: its definitions resolve its own
+/// calls, and only its own.
+#[test]
+fn an_inline_subsystems_definition_resolves_only_its_own_calls() {
+    let sub = leaf_model(
+        "scale",
+        json!({"params": ["x"], "body": {"op": "*", "args": [3, "x"]}}),
+        json!({"op": "-", "args": [{"op": "scale", "args": ["c"]}]}),
+    );
+    let host = host_doc(
+        Value::Null,
+        json!({"op": "-", "args": [{"op": "scale", "args": ["y"]}]}),
+        sub,
+    );
+    let v = saved(&load_string(&host.to_string()).expect("load"));
+    assert_eq!(
+        v["models"]["Host"]["equations"][0]["rhs"],
+        json!({"op": "-", "args": [{"op": "scale", "args": ["y"]}]}),
+    );
+    assert_eq!(
+        v["models"]["Host"]["subsystems"]["Sub"]["equations"][0]["rhs"],
+        json!({"op": "-", "args": [{"op": "*", "args": [3, "c"]}]}),
+    );
+}
+
+/// esm-spec §9.6.12 "Arity": a mounted leaf's definitions do not count toward
+/// the arity of a call in the mounting component. With no definition of its
+/// own, the host's two-operand call is a placeholder; with one, it resolves to
+/// it.
+#[test]
+fn a_mounted_leafs_definition_does_not_count_for_the_mounting_components_arity() {
+    let leaf = json!({
+        "esm": "2.4.0",
+        "metadata": {"name": "leaf"},
+        "models": {"Leaf": leaf_model(
+            "pair",
+            json!({"params": ["x"], "body": {"op": "*", "args": [3, "x"]}}),
+            json!({"op": "-", "args": [{"op": "pair", "args": ["c"]}]}),
+        )}
+    });
+    let call = json!({"op": "-", "args": [{"op": "pair", "args": ["y", "y"]}]});
+    let placeholder = host_doc(Value::Null, call.clone(), json!({"ref": "./leaf.esm"}));
+    let v = saved(&load_with_leaf(&placeholder, &leaf).expect("a placeholder loads"));
+    assert_eq!(v["models"]["Host"]["equations"][0]["rhs"], call);
+
+    let defined = host_doc(
+        json!({"pair": {"params": ["a", "b"], "body": {"op": "+", "args": ["a", "b"]}}}),
+        call,
+        json!({"ref": "./leaf.esm"}),
+    );
+    let file = load_with_leaf(&defined, &leaf).expect("load");
+    let n = du(&file);
+    assert_eq!(n["Host.y"], -2.0);
+    assert_eq!(n["Host.Sub.c"], -3.0);
+}
+
+/// The emitted form of a host whose call is a placeholder next to a
+/// subsystem's definition of the same operator emits again unchanged. The
+/// subsystem's definition joins the host's registry at emit, so this needs it
+/// written `reference_only` there (esm-spec §9.6.1).
+#[test]
+fn a_subsystems_definition_stays_uncallable_after_emit() {
+    let sub = leaf_model(
+        "scale",
+        json!({"params": ["x"], "body": {"op": "*", "args": [3, "x"]}}),
+        json!({"op": "-", "args": [{"op": "scale", "args": ["c"]}]}),
+    );
+    let host = host_doc(
+        Value::Null,
+        json!({"op": "-", "args": [{"op": "scale", "args": ["y"]}]}),
+        sub,
+    );
+    let d = tempfile::tempdir().expect("tempdir");
+    let doc = emit_document(&host, d.path()).expect("emit");
+    assert_eq!(
+        doc["models"]["Host"]["equations"][0]["rhs"],
+        json!({"op": "-", "args": [{"op": "scale", "args": ["y"]}]}),
+    );
+    let emitted = emit_esm_string(&doc);
+    let again = emit_document(&serde_json::from_str(&emitted).unwrap(), d.path()).expect("emit");
+    assert_eq!(emit_esm_string(&again), emitted);
+}

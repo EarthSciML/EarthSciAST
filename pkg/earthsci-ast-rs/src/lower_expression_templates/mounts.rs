@@ -138,6 +138,12 @@ pub(crate) fn with_defines(name: &str, decl: &Value) -> Value {
     }
 }
 
+/// Per merged registry entry, the owner paths that carry it: `""` for the
+/// mounting component itself, `Sub` or `Sub.Inner` for a subsystem below it.
+/// An entry with no record (no subsystem block was merged) is the
+/// component's own.
+pub(crate) type Owners = HashMap<String, Vec<String>>;
+
 /// Merge into the component `comp`'s `operators` block the template
 /// definitions that models mounted as its subsystems (esm-spec §4.7) brought
 /// with them (esm-spec §9.6.4 rule 1). Each mounted block joins `comp`'s by
@@ -155,11 +161,16 @@ pub(crate) fn with_defines(name: &str, decl: &Value) -> Value {
 /// entries (under its renames); only `comp`'s other sites follow `comp`'s
 /// renames. `comp`'s `match` rules stay, ahead of the merged entries. Mirrors
 /// the Julia reference `_hoist_mounted_templates!`.
-pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str) {
+///
+/// Returns the owners of each merged match-less entry ([`Owners`]). A
+/// definition a subsystem brought is local to that subsystem (esm-spec §4.7,
+/// §9.6.12): it resolves a call, and counts for an arity, only at a position
+/// inside that subsystem; references reach it from anywhere.
+pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str) -> Owners {
     let mut mounts: Vec<Vec<String>> = Vec::new();
     collect_mounted_blocks(comp, &[], &mut mounts);
     if mounts.is_empty() {
-        return;
+        return Owners::new();
     }
     let own: Map<String, Value> = comp
         .get("operators")
@@ -192,6 +203,20 @@ pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str
         blocks.push((p, block));
     }
     let (merged, rename) = merge_flat_registry(&blocks);
+    // The owners of each merged entry, under its merged name: `""` for
+    // `comp` itself, the subsystem path below `comp` for a mounted block.
+    let mut owners = Owners::new();
+    for (path, block) in &blocks {
+        let rm = rename.get(path);
+        let owner = if path == cname { "" } else { path.as_str() };
+        for n in block.keys() {
+            let key = rm.and_then(|m| m.get(n)).unwrap_or(n);
+            let os = owners.entry(key.clone()).or_default();
+            if !os.iter().any(|o| o == owner) {
+                os.push(owner.to_string());
+            }
+        }
+    }
     // Each mounted model's own references follow its renames; its block has
     // joined `comp`'s.
     for path in &mounts {
@@ -229,4 +254,5 @@ pub(crate) fn hoist_mounted_templates(comp: &mut Map<String, Value>, cname: &str
         rename_outside_mounts(comp, rn);
     }
     comp.insert("operators".to_string(), Value::Object(newblock));
+    owners
 }
