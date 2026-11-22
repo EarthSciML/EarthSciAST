@@ -307,14 +307,24 @@ pub(super) struct Lowering {
     /// in §9.6.3 selection order (esm 2.4.0: a call of a defined operator by
     /// name resolves to one of its definitions).
     call_rules: std::collections::HashMap<String, Vec<MatchRule>>,
-    /// The operand counts the definitions of each defined operator take
-    /// (esm-spec §9.6.12 "Arity").
-    arities: std::collections::HashMap<String, std::collections::BTreeSet<usize>>,
+    /// The operand count each definition of each defined operator takes,
+    /// with the definition's name (esm-spec §9.6.12 "Arity").
+    arities: Arities,
+    /// The owners of the entries subsystems brought ([`Owners`]).
+    owners: Owners,
+    /// The subsystem paths (`""`: the component itself) whose positions the
+    /// rewrite is at: a definition resolves a call, and counts for its
+    /// arity, only when one of its owners encloses one of them.
+    call_scope: std::cell::RefCell<Vec<String>>,
     shape_env: std::collections::BTreeMap<String, Vec<String>>,
     pub(super) enums: Option<Value>,
     pub(super) scope: String,
     depth: std::cell::RefCell<PtrMemo<usize>>,
 }
+
+/// Per defined operator, the operand count each of its definitions takes and
+/// the definition's name.
+type Arities = std::collections::HashMap<String, Vec<(usize, String)>>;
 
 impl Lowering {
     /// The rewrite depth recorded for the reference `n` (the pass that wrote
@@ -336,6 +346,54 @@ impl Lowering {
     /// match-less definition callable by its operator's name.
     pub(super) fn has_rules(&self) -> bool {
         !self.rules.is_empty() || !self.call_rules.is_empty()
+    }
+
+    /// Whether the definition `name` is in scope for a call at the current
+    /// call scope (esm-spec §4.7, §9.6.12): it is the component's own, or a
+    /// subsystem that owns it encloses the call.
+    fn callable_here(&self, name: &str) -> bool {
+        let Some(owners) = self.owners.get(name) else {
+            return true;
+        };
+        let scope = self.call_scope.borrow();
+        owners.iter().any(|o| {
+            o.is_empty()
+                || scope.iter().any(|s| {
+                    s.strip_prefix(o.as_str())
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+                })
+        })
+    }
+
+    /// Whether a subsystem owns a definition the component does not, so the
+    /// call scope varies across the component's positions.
+    fn has_local_definitions(&self) -> bool {
+        self.owners
+            .values()
+            .any(|os| os.iter().all(|o| !o.is_empty()))
+    }
+
+    /// The call scope of the body of the registry entry `name`: its owners.
+    pub(super) fn owner_scope(&self, name: &str) -> Vec<String> {
+        self.owners
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| vec![String::new()])
+    }
+
+    /// The entry `variant` (a rewritten instance of `of`) has `of`'s owners.
+    pub(super) fn inherit_owners(&mut self, variant: &str, of: &str) {
+        if let Some(os) = self.owners.get(of).cloned() {
+            self.owners.insert(variant.to_string(), os);
+        }
+    }
+
+    /// `f` run with the call scope `scope`, the previous one restored after.
+    pub(super) fn with_call_scope<T>(&self, scope: Vec<String>, f: impl FnOnce() -> T) -> T {
+        let prev = self.call_scope.replace(scope);
+        let out = f();
+        self.call_scope.replace(prev);
+        out
     }
 }
 
@@ -482,8 +540,8 @@ struct Rules {
     /// The match-less definitions callable by their operator's name, grouped
     /// by it, each group in selection order.
     call_rules: std::collections::HashMap<String, Vec<MatchRule>>,
-    /// The operand counts each defined operator's definitions take.
-    arities: std::collections::HashMap<String, std::collections::BTreeSet<usize>>,
+    /// The operand count each defined operator's definitions take.
+    arities: Arities,
 }
 
 /// Register a component's definitions in declaration order (serde_json's
@@ -510,8 +568,7 @@ fn collect_rules(
     let mut rules = Vec::new();
     let mut call_rules: std::collections::HashMap<String, Vec<MatchRule>> =
         std::collections::HashMap::new();
-    let mut arities: std::collections::HashMap<String, std::collections::BTreeSet<usize>> =
-        std::collections::HashMap::new();
+    let mut arities = Arities::new();
     for (decl_index, (name, decl)) in templates.iter().enumerate() {
         let decl_index = decl_index + 1;
         let Some(obj) = decl.as_object() else {
@@ -539,7 +596,7 @@ fn collect_rules(
                 arities
                     .entry(defines.clone())
                     .or_default()
-                    .insert(param_list.len());
+                    .push((param_list.len(), name.clone()));
                 if !is_core_operator(&defines) && defines != APPLY_OP {
                     let pattern = serde_json::json!({
                         "op": defines,
@@ -566,7 +623,10 @@ fn collect_rules(
                         .get("args")
                         .and_then(Value::as_array)
                         .map_or(0, Vec::len);
-                    arities.entry(rop.to_string()).or_default().insert(n);
+                    arities
+                        .entry(rop.to_string())
+                        .or_default()
+                        .push((n, name.clone()));
                 }
                 let where_c = registered_where(obj, iset_names, scope, name)?;
                 rules.push(MatchRule {
@@ -627,6 +687,9 @@ fn select_definition<'l>(
                 && b.selection_key() < rule.selection_key()
             {
                 break;
+            }
+            if !l.callable_here(&rule.name) {
+                continue;
             }
             let mut binds = Binds::new();
             if try_match(&rule.pattern, node, &rule.param_set, &mut binds, bv)
@@ -1419,9 +1482,9 @@ pub fn expand_against_registry(
 }
 
 /// True if `value` declares any non-empty `expression_templates` block
-/// (component-level or top-level). With [`scan_without_templates`] finding no
-/// `apply_expression_template` op anywhere, this is the Julia reference's
-/// `_has_template_machinery`.
+/// (top-level, a component's, or a subsystem's at any depth). With
+/// [`scan_without_templates`] finding no `apply_expression_template` op
+/// anywhere, this is the Julia reference's `_has_template_machinery`.
 fn declares_templates(value: &Value) -> bool {
     let Some(obj) = value.as_object() else {
         return false;
@@ -1434,19 +1497,25 @@ fn declares_templates(value: &Value) -> bool {
         return true;
     }
     for compkind in ["models", "reaction_systems"] {
-        if let Some(comps) = obj.get(compkind).and_then(|v| v.as_object()) {
-            for (_, comp) in comps {
-                if comp
-                    .get("operators")
-                    .and_then(|v| v.as_object())
-                    .is_some_and(|t| !t.is_empty())
-                {
-                    return true;
-                }
-            }
+        if let Some(comps) = obj.get(compkind).and_then(|v| v.as_object())
+            && comps.values().any(component_declares_templates)
+        {
+            return true;
         }
     }
     false
+}
+
+/// Whether the component `comp`, or a subsystem of it at any depth, declares
+/// a non-empty `operators` block.
+fn component_declares_templates(comp: &Value) -> bool {
+    comp.get("operators")
+        .and_then(|v| v.as_object())
+        .is_some_and(|t| !t.is_empty())
+        || comp
+            .get("subsystems")
+            .and_then(|v| v.as_object())
+            .is_some_and(|subs| subs.values().any(component_declares_templates))
 }
 
 /// The fast path's one walk over a document that declares no templates: does
@@ -1512,6 +1581,15 @@ fn scan_without_templates(
 ///
 /// Pre-condition: the input has been schema-validated.
 pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTemplateError> {
+    lower_expression_templates_found(value)?;
+    strip_fixed_units(value);
+    Ok(())
+}
+
+/// [`lower_expression_templates`] for a mounted leaf: its registries keep the
+/// fixed unit expressions of its materialized `partial` / `integral` rules
+/// ([`FIXED_UNITS_KEY`]) for the mounting document's expansion.
+pub(crate) fn lower_mounted_leaf(value: &mut Value) -> Result<(), ExpressionTemplateError> {
     lower_expression_templates_found(value).map(|_| ())
 }
 
@@ -1600,6 +1678,14 @@ enum SiteField {
         cname: String,
         key: String,
     },
+    /// A field `key` of the subsystem at the key path `path` below the
+    /// component `compkind.cname`.
+    Sub {
+        compkind: &'static str,
+        cname: String,
+        path: Vec<String>,
+        key: String,
+    },
     /// The `transform` of the `coupling` entry at this index.
     Transform(usize),
 }
@@ -1615,26 +1701,77 @@ struct Site {
     tree: Sv,
     parked: Vec<(usize, Value)>,
     scope: String,
+    /// The subsystem path below the component the position is in (`""`: the
+    /// component's own field, or a coupling transform).
+    call_scope: String,
 }
 
 fn site_slot<'a>(root: &'a mut Map<String, Value>, field: &SiteField) -> Option<&'a mut Value> {
     match field {
         SiteField::Comp {
-            compkind,
-            cname,
-            key,
-        } => root
-            .get_mut(*compkind)?
-            .as_object_mut()?
-            .get_mut(cname)?
-            .as_object_mut()?
-            .get_mut(key),
+            compkind, cname, ..
+        }
+        | SiteField::Sub {
+            compkind, cname, ..
+        } => comp_slot(
+            root.get_mut(*compkind)?
+                .as_object_mut()?
+                .get_mut(cname)?
+                .as_object_mut()?,
+            field,
+        ),
         SiteField::Transform(i) => root
             .get_mut("coupling")?
             .as_array_mut()?
             .get_mut(*i)?
             .as_object_mut()?
             .get_mut("transform"),
+    }
+}
+
+/// The slot of the component field or subsystem field `field` in its
+/// component `comp`.
+fn comp_slot<'a>(comp: &'a mut Map<String, Value>, field: &SiteField) -> Option<&'a mut Value> {
+    match field {
+        SiteField::Comp { key, .. } => comp.get_mut(key),
+        SiteField::Sub { path, key, .. } => {
+            let mut node = comp;
+            for k in path {
+                node = node
+                    .get_mut("subsystems")?
+                    .as_object_mut()?
+                    .get_mut(k)?
+                    .as_object_mut()?;
+            }
+            node.get_mut(key)
+        }
+        SiteField::Transform(_) => None,
+    }
+}
+
+/// Every field below `node`'s subsystems, at any depth, other than a
+/// `subsystems` map itself, as `(subsystem key path, field key)` in document
+/// order.
+fn subsystem_fields(
+    node: &Map<String, Value>,
+    prefix: &[String],
+    out: &mut Vec<(Vec<String>, String)>,
+) {
+    let Some(Value::Object(subs)) = node.get("subsystems") else {
+        return;
+    };
+    for (k, sub) in subs {
+        let Value::Object(sub) = sub else {
+            continue;
+        };
+        let mut path = prefix.to_vec();
+        path.push(k.clone());
+        for f in sub.keys() {
+            if f != "subsystems" {
+                out.push((path.clone(), f.clone()));
+            }
+        }
+        subsystem_fields(sub, &path, out);
     }
 }
 
@@ -1679,7 +1816,7 @@ fn lower_components(
             // A model mounted as a subsystem keeps its references and brings
             // its template definitions; they join this component's registry
             // here (esm-spec §9.6.4 rule 1).
-            hoist_mounted_templates(comp, cname);
+            let owners = hoist_mounted_templates(comp, cname);
             // Static shape environment for `where` constraint evaluation
             // (esm-spec §9.6.1): declared variable shapes only.
             let shape_env = component_shape_env(comp);
@@ -1725,6 +1862,8 @@ fn lower_components(
                 rules,
                 call_rules,
                 arities,
+                owners,
+                call_scope: std::cell::RefCell::new(vec![String::new()]),
                 shape_env,
                 enums: enums.clone(),
                 scope: scope_base.clone(),
@@ -1735,30 +1874,63 @@ fn lower_components(
             // non-template field (esm-spec §9.6.3): each firing writes a
             // reference to its rule; references are leaves for matching and
             // the walk descends into their bindings (§9.6.4 rule 4).
-            let keys: Vec<String> = comp.keys().cloned().collect();
-            for k in keys {
+            // When a subsystem owns a definition the component does not, each
+            // subsystem's fields are positions of their own, rewritten in that
+            // subsystem's call scope (esm-spec §4.7, §9.6.12).
+            let mut fields: Vec<(Vec<String>, String)> = Vec::new();
+            for k in comp.keys() {
                 if k == "operators" {
                     continue;
                 }
-                let Some(child) = comp.get_mut(&k) else {
+                if k == "subsystems" && l.has_local_definitions() {
+                    subsystem_fields(comp, &[], &mut fields);
+                } else {
+                    fields.push((Vec::new(), k.clone()));
+                }
+            }
+            for (path, k) in fields {
+                let field = if path.is_empty() {
+                    SiteField::Comp {
+                        compkind,
+                        cname: cname.clone(),
+                        key: k,
+                    }
+                } else {
+                    SiteField::Sub {
+                        compkind,
+                        cname: cname.clone(),
+                        path,
+                        key: k,
+                    }
+                };
+                let Some(child) = comp_slot(comp, &field) else {
                     continue;
                 };
                 let parked = park_plain(child, l.has_rules());
                 let orig = to_shared(child);
-                let scope = format!("{scope_base}.{k}");
+                let (scope, call_scope) = match &field {
+                    SiteField::Sub { path, key, .. } => (
+                        format!(
+                            "{scope_base}.subsystems.{}.{key}",
+                            path.join(".subsystems.")
+                        ),
+                        path.join("."),
+                    ),
+                    SiteField::Comp { key, .. } => (format!("{scope_base}.{key}"), String::new()),
+                    SiteField::Transform(_) => unreachable!("a component field"),
+                };
                 sites.push(Site {
                     comp: idx,
-                    field: SiteField::Comp {
-                        compkind,
-                        cname: cname.clone(),
-                        key: k,
-                    },
+                    field,
                     orig: orig.clone(),
                     tree: orig.clone(),
                     parked,
                     scope: scope.clone(),
+                    call_scope: call_scope.clone(),
                 });
-                let (tree, _) = rewrite_to_fixpoint(&orig, &l, &scope, None)?;
+                let (tree, _) = l.with_call_scope(vec![call_scope], || {
+                    rewrite_to_fixpoint(&orig, &l, &scope, None)
+                })?;
                 sites.last_mut().expect("just pushed").tree = tree;
             }
             by_name.entry(cname.clone()).or_insert(idx);
@@ -1802,6 +1974,7 @@ fn lower_components(
                 tree,
                 parked: Vec::new(),
                 scope,
+                call_scope: String::new(),
             });
         }
     }
@@ -1817,7 +1990,7 @@ fn lower_components(
             .filter(|s| s.comp == li)
             .map(|s| {
                 let scope = match &s.field {
-                    SiteField::Comp { .. } => s.scope.clone(),
+                    SiteField::Comp { .. } | SiteField::Sub { .. } => s.scope.clone(),
                     SiteField::Transform(_) => format!("{} coupling transform", l.scope),
                 };
                 (scope, s.tree.clone())
@@ -1846,7 +2019,7 @@ fn lower_components(
         // bindings mismatch, against the registry as rule 3 left it.
         for s in sites.iter().filter(|s| s.comp == li) {
             let scope = match &s.field {
-                SiteField::Comp { .. } => s.scope.clone(),
+                SiteField::Comp { .. } | SiteField::Sub { .. } => s.scope.clone(),
                 SiteField::Transform(_) => format!("{} coupling transform", l.scope),
             };
             check_surviving_refs(&s.tree, &l.named, &scope, &mut PtrSet::default())?;
@@ -1857,16 +2030,20 @@ fn lower_components(
             let mut reached = std::collections::BTreeSet::new();
             for s in sites.iter().filter(|s| s.comp == li) {
                 let scope = match &s.field {
-                    SiteField::Comp { .. } => s.scope.clone(),
+                    SiteField::Comp { .. } | SiteField::Sub { .. } => s.scope.clone(),
                     SiteField::Transform(_) => format!("{} coupling transform", l.scope),
                 };
-                check_call_arity(&s.tree, l, &scope, &mut PtrSet::default())?;
+                l.with_call_scope(vec![s.call_scope.clone()], || {
+                    check_call_arity(&s.tree, l, &scope, &mut PtrSet::default())
+                })?;
                 reached_definitions(&mut reached, &s.tree, &l.named);
             }
             for r in &reached {
                 let body = decl_body(&l.named[r]);
                 let scope = format!("{}.operators.{r}", l.scope);
-                check_call_arity(&body, l, &scope, &mut PtrSet::default())?;
+                l.with_call_scope(l.owner_scope(r), || {
+                    check_call_arity(&body, l, &scope, &mut PtrSet::default())
+                })?;
             }
         }
     }
@@ -1897,9 +2074,18 @@ fn check_call_arity(
             if !seen.insert(node) {
                 return Ok(());
             }
+            let counts: Option<std::collections::BTreeSet<usize>> = obj_op(fields)
+                .filter(|op| !is_core_operator(op))
+                .and_then(|op| l.arities.get(op))
+                .map(|defs| {
+                    defs.iter()
+                        .filter(|(_, n)| l.callable_here(n))
+                        .map(|(k, _)| *k)
+                        .collect()
+                })
+                .filter(|c: &std::collections::BTreeSet<usize>| !c.is_empty());
             if let Some(op) = obj_op(fields)
-                && let Some(counts) = l.arities.get(op)
-                && !is_core_operator(op)
+                && let Some(counts) = counts
             {
                 let k = match obj_get(fields, "args").map(|a| &**a) {
                     Some(SNode::Arr(a)) => a.len(),

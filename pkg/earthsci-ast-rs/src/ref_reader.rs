@@ -233,9 +233,11 @@ pub(crate) enum OpenError {
 
 impl OpenError {
     /// The refusal a ref site surfaces with its own code rather than under the
-    /// site's unresolved code: a removed operator (`removed_op`, esm-spec
-    /// §4.2), whether a source document's reader refused it (§1.2.1) or the
-    /// wire-boundary check of a JSON document did. The message names the file.
+    /// site's unresolved code, exactly as the same document would be refused
+    /// at the root: every refusal of the wire-boundary checks (a removed
+    /// operator, the `faq` version gate, an object spelling both a field and
+    /// its esm-2.4.0 name), and a removed operator a source document's reader
+    /// refused (§1.2.1). The message names the file.
     pub(crate) fn kept_refusal(
         &self,
         located: &Located,
@@ -244,13 +246,13 @@ impl OpenError {
             OpenError::Ref(RefError::Parse {
                 err: DecodeError::Source(d),
                 ..
-            }) => (d.code, &d.message),
+            }) if d.code == crate::diagnostic::codes::REMOVED_OP => (d.code, &d.message),
             OpenError::Wire(crate::EsmError::SchemaDiagnostic { code, message, .. }) => {
                 (*code, message)
             }
             _ => return None,
         };
-        (code == crate::diagnostic::codes::REMOVED_OP).then(|| crate::diagnostic::DiagnosticError {
+        Some(crate::diagnostic::DiagnosticError {
             code,
             message: format!("{}: {message}", located.identity.display()),
         })
