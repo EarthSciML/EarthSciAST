@@ -22,6 +22,7 @@ import { validateText } from './validate.js'
 import { canonicalErrorCode } from './errors.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 import { fixturesDir } from './test-helpers.js'
+import { checkDimensions } from './units.js'
 
 const conf = (...parts: string[]) => fixturesDir('conformance', 'expression_templates', ...parts)
 
@@ -192,6 +193,24 @@ describe('one operator type (esm 2.4.0, esm-spec §9.6.12)', () => {
       ].sort()
       expect(ws, f).toEqual([...want.warnings].sort())
     }
+  })
+
+  it('a parameter bound to an axis name is not walked as a variable', () => {
+    const fp = conf('partial_wrt_param_instance', 'fixture.esm')
+    const r = validateText(fs.readFileSync(fp, 'utf-8'), { basePath: path.dirname(fp) })
+    expect(r.unit_warnings.filter((w) => w.message.startsWith('Unknown variable'))).toEqual([])
+  })
+
+  it('a parameter spelled t shadows the implicit time variable in its body', () => {
+    // `t` bound to a bare literal has no determinable unit, so the body `t`
+    // is unknown — not the seconds of the implicit independent variable.
+    const registry = { idt: { params: ['t'], body: 't' } }
+    const r = checkDimensions(
+      { op: 'apply_operator', args: [], name: 'idt', bindings: { t: 2 } } as any,
+      new Map(),
+      { registry },
+    )
+    expect(r.dimensions).toBeNull()
   })
 
   it('old codes are aliases of the new ones (esm-spec §9.6.6)', () => {
