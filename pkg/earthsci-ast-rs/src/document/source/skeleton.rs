@@ -162,8 +162,8 @@ pub const MATH_FIELDS: &[&str] = &[
     "analyses",
     "constraint_equations",
     "equations",
-    "operators",
     "initialization_equations",
+    "operators",
     "reactions",
 ];
 

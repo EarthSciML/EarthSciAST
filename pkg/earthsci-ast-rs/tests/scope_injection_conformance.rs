@@ -120,8 +120,8 @@ fn form_a_subsystem_ref_injection() {
     let ni = loaded_as_value(&conf(&["inject_subsystem_ref", "no_inject.esm"]));
     assert_eq!(
         ni["models"]["Assembly"]["subsystems"]["Runoff"]["equations"][0]["rhs"]["args"][1]["op"],
-        "D",
-        "without injection the mounted leaf's spatial D is not lowered"
+        "partial",
+        "without injection the mounted leaf's spatial derivative is not lowered"
     );
 }
 

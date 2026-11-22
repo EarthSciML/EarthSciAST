@@ -114,6 +114,8 @@ pub fn atom_start(t: &Tok) -> bool {
                 | Kw::Floor
                 | Kw::Ceil
                 | Kw::Dotacc
+                | Kw::Nabla
+                | Kw::Pdiff
                 | Kw::Bcases
                 | Kw::Cases
                 | Kw::Esmnode
@@ -434,7 +436,7 @@ pub fn qty(n: &JNum, l: &[Factor]) -> Json {
     ])
 }
 
-/// `Math.dNode`: a derivative node.
+/// `Math.dNode`: a time-derivative node (`d_node(x, "t")`).
 pub fn d_node(x: Json, w: &str) -> Json {
     Json::Obj(vec![
         ("args".into(), Json::Arr(vec![x])),
@@ -443,7 +445,27 @@ pub fn d_node(x: Json, w: &str) -> Json {
     ])
 }
 
-/// `Math.tNode`: a template application node.
+/// `Math.pNode`: a `partial` node, the spatial derivative (esm-spec §4.2).
+pub fn p_node(x: Json, w: &str) -> Json {
+    Json::Obj(vec![
+        ("args".into(), Json::Arr(vec![x])),
+        ("op".into(), Json::str("partial")),
+        ("wrt".into(), Json::str(w)),
+    ])
+}
+
+/// `Math.derivNode`: the derivative a fraction of differentials reads as — the
+/// time derivative `D` along `t`, `partial` along any other axis (esm-spec
+/// §4.2).
+pub fn deriv_node(x: Json, w: &str) -> Json {
+    if w == "t" {
+        d_node(x, "t")
+    } else {
+        p_node(x, w)
+    }
+}
+
+/// `Math.tNode`: a reference node (`apply_operator`, esm-spec §9.6.2).
 pub fn t_node(n: &str, bs: Vec<(String, Json)>) -> Json {
     Json::Obj(vec![
         ("args".into(), Json::Arr(vec![])),
@@ -588,11 +610,32 @@ pub fn key_of<'a>(c: Ctx, ts: &'a [Tok]) -> P<'a, String> {
     }
 }
 
-/// `Math.dCallNode`: a spatial derivative with trailing operands.
+/// `Math.nabTail`: after `\nabla`, which form it is (`\cdot` div, `\times`
+/// curl, `^{2}` laplacian, nothing grad), and the tokens of its operand.
+pub fn nab_tail(sf: Sf, r: &[Tok]) -> (&'static str, &[Tok]) {
+    match (sf, r) {
+        (_, [Tok::Kw(Kw::Cdot), r2 @ ..]) => ("div", r2),
+        (_, [Tok::Kw(Kw::Times), r2 @ ..]) => ("curl", r2),
+        (
+            Sf::Latex,
+            [
+                Tok::Kw(Kw::Caret),
+                Tok::Kw(Kw::Lb),
+                Tok::Num(JNum::Int(2)),
+                Tok::Kw(Kw::Rb),
+                r2 @ ..,
+            ],
+        ) => ("laplacian", r2),
+        (Sf::Typst, [Tok::Kw(Kw::Caret), Tok::Num(JNum::Int(2)), r2 @ ..]) => ("laplacian", r2),
+        (_, r2) => ("grad", r2),
+    }
+}
+
+/// `Math.dCallNode`: `partial` with trailing operands.
 pub fn d_call_node(w: &str, xs: Vec<Json>) -> Json {
     Json::Obj(vec![
         ("args".into(), Json::Arr(xs)),
-        ("op".into(), Json::str("D")),
+        ("op".into(), Json::str("partial")),
         ("wrt".into(), Json::str(w)),
     ])
 }
@@ -675,13 +718,13 @@ pub fn p_italic_d<'a>(c: Ctx, r: &'a [Tok]) -> P<'a, Json> {
     match c.sf {
         Sf::Latex => match d_name(c, Kw::Rb, r) {
             Some((n, [Tok::Kw(Kw::Lb), r1 @ ..])) => {
-                d_name(c, Kw::Rb, r1).map(|(w, r2)| (d_node(Json::Str(n), &w), r2))
+                d_name(c, Kw::Rb, r1).map(|(w, r2)| (deriv_node(Json::Str(n), &w), r2))
             }
             _ => None,
         },
         Sf::Typst => match d_name(c, Kw::Rp, r) {
             Some((n, [Tok::Kw(Kw::Slash), Tok::Kw(Kw::Lpg), r1 @ ..])) => {
-                d_name(c, Kw::Rp, r1).map(|(w, r2)| (d_node(Json::Str(n), &w), r2))
+                d_name(c, Kw::Rp, r1).map(|(w, r2)| (deriv_node(Json::Str(n), &w), r2))
             }
             _ => None,
         },
@@ -1038,7 +1081,8 @@ pub fn mul_loop<'a>(c: Ctx, f: usize, acc: Vec<Json>, ts: &'a [Tok]) -> P<'a, Js
     }
 }
 
-/// `Math.pNot`: level 6, `not`.
+/// `Math.pNot`: level 6, `not`, and the `\nabla` forms, whose operand is read
+/// at level 9.
 pub fn p_not<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     let f = f.checked_sub(1)?;
     let _nest = Nest::enter()?;
@@ -1047,7 +1091,22 @@ pub fn p_not<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
             let (x, r2) = p_not(c, f, r)?;
             Some((node("not", vec![x]), r2))
         }
+        [Tok::Kw(Kw::Nabla), r @ ..] => {
+            let (name, r1) = nab_tail(c.sf, r);
+            let (x, r2) = p_nab_arg(c, f, r1)?;
+            Some((node(name, vec![x]), r2))
+        }
         _ => p_frac(c, f, ts),
+    }
+}
+
+/// `Math.pNabArg`: the operand of a `\nabla` form — another `\nabla` form, or
+/// a postfix-level operand.
+pub fn p_nab_arg<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
+    let f = f.checked_sub(1)?;
+    match ts {
+        [Tok::Kw(Kw::Nabla), ..] => p_not(c, f, ts),
+        _ => p_post(c, f, ts),
     }
 }
 
@@ -1403,7 +1462,9 @@ pub fn p_opn<'a>(c: Ctx, f: usize, n: &str, ts: &'a [Tok]) -> P<'a, Json> {
     }
 }
 
-/// `Math.pDCall`: `\operatorname{D}_{x}(u, a, b)` after the `_`.
+/// `Math.pDCall`: `\partial_{x}(u, a, b)`, and the earlier
+/// `\operatorname{D}_{x}(u, a, b)` (read, never printed), after the `_`:
+/// `partial` with trailing operands.
 pub fn p_d_call<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     let f = f.checked_sub(1)?;
     let w = match (c.sf, ts) {
@@ -1553,6 +1614,10 @@ fn prim<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
         [Tok::Txt(s), r @ ..] if s == "false" => Some((node("false", vec![]), r)),
         [Tok::Kw(Kw::Lpg | Kw::Lp), r @ ..] => match (c.sf, r) {
             (Sf::Typst, [Tok::Kw(Kw::Dif), r1 @ ..]) => p_dt(c, f, Kw::Dif, r1),
+            (Sf::Typst, [Tok::Kw(Kw::Pdiff), Tok::Kw(Kw::Us), ..]) => match p_or(c, f, r) {
+                Some((x, [t, r2 @ ..])) if is_rp(t) => Some((x, r2)),
+                _ => None,
+            },
             (Sf::Typst, [Tok::Kw(Kw::Pdiff), r1 @ ..]) => p_dt(c, f, Kw::Pdiff, r1),
             (Sf::Typst, [Tok::Letter('d'), ..]) => match p_italic_d(c, r) {
                 Some(p) => Some(p),
@@ -1565,6 +1630,7 @@ fn prim<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
             _ => None,
         },
         [Tok::Kw(Kw::Frac), Tok::Kw(Kw::Lb), r @ ..] => p_frac_l(c, f, r),
+        [Tok::Kw(Kw::Pdiff), Tok::Kw(Kw::Us), r @ ..] => p_d_call(c, f, r),
         [Tok::Kw(Kw::Sqrt), r @ ..] => match (c.sf, r) {
             (Sf::Latex, [Tok::Kw(Kw::Lb), r1 @ ..]) => closed(r1, Kw::Rb, "sqrt"),
             (Sf::Typst, [t, r1 @ ..]) => {
@@ -1974,6 +2040,13 @@ pub fn p_frac_l<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
             Some((w, [Tok::Kw(Kw::Rb), r2 @ ..])) => p_d_apply(c, f, &w, r2),
             _ => None,
         },
+        [Tok::Kw(Kw::Pdiff), Tok::Kw(Kw::Us), ..] => match p_or(c, f, ts) {
+            Some((x, [Tok::Kw(Kw::Rb), Tok::Kw(Kw::Lb), r1 @ ..])) => match p_or(c, f, r1) {
+                Some((y, [Tok::Kw(Kw::Rb), r2 @ ..])) => Some((node("/", vec![x, y]), r2)),
+                _ => None,
+            },
+            _ => None,
+        },
         [Tok::Kw(Kw::Pdiff), r @ ..] => match p_or(c, f, r) {
             Some((
                 x,
@@ -1984,7 +2057,7 @@ pub fn p_frac_l<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
                     r1 @ ..,
                 ],
             )) => match p_name(c.sf, r1) {
-                Some((w, [Tok::Kw(Kw::Rb), r2 @ ..])) => Some((d_node(x, &w), r2)),
+                Some((w, [Tok::Kw(Kw::Rb), r2 @ ..])) => Some((deriv_node(x, &w), r2)),
                 _ => None,
             },
             _ => None,
@@ -2046,7 +2119,7 @@ pub fn p_dt<'a>(c: Ctx, f: usize, k: Kw, ts: &'a [Tok]) -> P<'a, Json> {
                             if k == Kw::Dif && w != "t" {
                                 None
                             } else {
-                                Some((d_node(x, &w), r2))
+                                Some((deriv_node(x, &w), r2))
                             }
                         }
                         _ => None,
@@ -2067,7 +2140,7 @@ pub fn p_d_apply<'a>(c: Ctx, f: usize, w: &str, ts: &'a [Tok]) -> P<'a, Json> {
         [Tok::Kw(Kw::Lpg), r @ ..] => match p_or(c, f, r) {
             Some((x, [t, r2 @ ..])) => {
                 if is_rp(t) {
-                    Some((d_node(x, w), r2))
+                    Some((deriv_node(x, w), r2))
                 } else {
                     None
                 }
