@@ -4035,6 +4035,19 @@ def _rename_field_inplace(node: dict, old: str, new: str) -> bool:
     return True
 
 
+def _document_iv_rename(doc: object) -> str | None:
+    """The document's own renamed independent variable
+    (``domain.independent_variable`` when declared and not ``"t"``), or ``None``
+    (esm-spec §4.2 "The derivative axis")."""
+    if not isinstance(doc, dict):
+        return None
+    dom = doc.get("domain")
+    if not isinstance(dom, dict):
+        return None
+    iv = dom.get("independent_variable")
+    return iv if isinstance(iv, str) and iv != "t" else None
+
+
 def _old_spellings_walk(
     node: object,
     at: str,
@@ -4043,6 +4056,7 @@ def _old_spellings_walk(
     name_maps: frozenset[str],
     fsites: list[str],
     osites: list[str],
+    iv: str | None = None,
 ) -> None:
     if isinstance(node, dict):
         if not namemap:
@@ -4059,7 +4073,13 @@ def _old_spellings_walk(
                     osites.append(f"{at} ({op})")
                 elif op == "D":
                     w = node.get("wrt")
-                    if (
+                    is_param = isinstance(w, str) and params is not None and w in params
+                    if w is not None and iv is not None and w == iv and not is_param:
+                        # esm-spec §4.2 "The derivative axis": a `wrt` naming the
+                        # document's renamed independent variable is the time
+                        # derivative, read with the literal axis (no warning).
+                        node["wrt"] = "t"
+                    elif (
                         w is not None
                         and w != "t"
                         and not (isinstance(w, str) and params is not None and w in params)
@@ -4091,15 +4111,16 @@ def _old_spellings_walk(
                         name_maps,
                         fsites,
                         osites,
+                        iv,
                     )
                 continue
             _old_spellings_walk(
-                v, here, (not namemap) and ks in name_maps, params, name_maps, fsites, osites
+                v, here, (not namemap) and ks in name_maps, params, name_maps, fsites, osites, iv
             )
     elif isinstance(node, list):
         for i, v in enumerate(node):
             if isinstance(v, (dict, list)):
-                _old_spellings_walk(v, f"{at}/{i}", False, params, name_maps, fsites, osites)
+                _old_spellings_walk(v, f"{at}/{i}", False, params, name_maps, fsites, osites, iv)
 
 
 def rewrite_old_spellings(data: object) -> tuple[list[str], list[str]]:
@@ -4117,12 +4138,18 @@ def rewrite_old_spellings(data: object) -> tuple[list[str], list[str]]:
       every other field kept. A ``D`` whose ``wrt`` is one of the enclosing
       definition's ``params`` is left as written: it is decided per definition
       instance (§9.6.4 rule 3, ``template_instances._instance_partial``).
+    - a ``D`` whose ``wrt`` names the document's own renamed independent
+      variable (``domain.independent_variable``, a string other than ``"t"``)
+      as the time derivative ``wrt: "t"`` (esm-spec §4.2 "The derivative
+      axis"), with no warning and no site.
 
     Returns ``(field sites, op sites)``, each ``<pointer> (<old spelling>)``.
     Idempotent: a second pass finds nothing."""
     fsites: list[str] = []
     osites: list[str] = []
-    _old_spellings_walk(data, "", False, None, _old_spelling_name_maps(), fsites, osites)
+    _old_spellings_walk(
+        data, "", False, None, _old_spelling_name_maps(), fsites, osites, _document_iv_rename(data)
+    )
     return fsites, osites
 
 

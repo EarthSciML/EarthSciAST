@@ -501,12 +501,20 @@ def _with_defines(name: str, decl: Any) -> Any:
     return nd
 
 
+def _is_reference_only(decl: Any) -> bool:
+    """A definition reached by explicit references only (esm-spec §9.6.1
+    ``reference_only``): never a call rule, no arity, no core-name check."""
+    return _is_object(decl) and decl.get("reference_only") is True
+
+
 def _check_defines_not_core(name: str, decl: Any, scope: str) -> None:
     """esm-spec §9.6.12 "Core names are reserved": a definition whose
     ``defines``, written or inferred, is a core operator's name is
     ``operator_defines_core_op``. A rule whose ``match`` is rooted at a core op
     defines no callable name, so its ``defines`` is provenance only and is not
-    checked."""
+    checked. A ``reference_only`` definition is reached by no call."""
+    if _is_reference_only(decl):
+        return
     r = _match_root_op(decl)
     if r is not None and _is_core_op(r):
         return
@@ -637,6 +645,9 @@ def _build_match_rules(
         params = list(decl["params"])
         defines = _definition_defines(name, decl)
         if "match" not in decl:
+            if _is_reference_only(decl):
+                # reached only through an explicit reference (§9.6.1)
+                continue
             arities.setdefault(defines, set()).add(len(params))
             if not _is_core_op(defines) and defines != APPLY_OP:
                 call_rules.setdefault(defines, []).append(
@@ -870,6 +881,7 @@ def _template_call_mark(name: str, decl: Any, bindings: Any) -> dict | None:
         "units": units,
         "fixed": fixed,
     }
+
 
 _MARK_TEMPLATE_ORIGINS: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_MARK_TEMPLATE_ORIGINS", default=False
@@ -1253,7 +1265,10 @@ def explain_unresolved_call(call: Any, registry: Any, shape_env: dict | None = N
     op = call.get("op")
     if not isinstance(op, str):
         return ""
-    placeholder = f"no definition of '{op}' is in scope (a placeholder)"
+    # esm-spec §9.6.12: emit and flatten keep only the definitions a reference
+    # reaches, so an unreferenced definition is no longer here to list.
+    note = "; definitions no reference reached were removed by emit and flatten and are not listed"
+    placeholder = f"no definition of '{op}' is in scope (a placeholder){note}"
     if not _is_object(registry):
         return placeholder
     shape_env = shape_env or {}
@@ -1278,7 +1293,11 @@ def explain_unresolved_call(call: Any, registry: Any, shape_env: dict | None = N
         else:
             if _definition_defines(name, decl) != op:
                 continue
-            if len(params) != k:
+            if _is_reference_only(decl):
+                lines.append(
+                    f"'{name}': reference-only, reached by explicit references, never by a call"
+                )
+            elif len(params) != k:
                 lines.append(f"'{name}': takes {len(params)} operand(s), the call carries {k}")
             elif not _only_op_args(call):
                 extra = sorted(str(x) for x in call if str(x) not in ("op", "args"))
@@ -1292,7 +1311,7 @@ def explain_unresolved_call(call: Any, registry: Any, shape_env: dict | None = N
                 lines.append(f"'{name}': its where constraint {reason}")
     if not lines:
         return placeholder
-    return f"definitions of '{op}' in scope: " + "; ".join(lines)
+    return f"definitions of '{op}' in scope: " + "; ".join(lines) + note
 
 
 def _rewrite_to_fixpoint(
@@ -2191,6 +2210,7 @@ def _merge_mounted_blocks(
     ``match`` rules first, renamed by ``cname``'s renames, then the merged
     entries) and ``cname``'s renames (or ``None``). Mirrors the Julia
     ``_merge_mounted_blocks``."""
+
     # Each entry records the defined operator it defines under the key it was
     # declared with, before a collision rename (esm-spec §9.6.12 "Provenance").
     def _defined(block: dict[str, Any]) -> dict[str, Any]:
@@ -2272,9 +2292,7 @@ def mounted_registries(doc: Any) -> Any:
             if not _is_object(blk):
                 continue
             keep = _matchless(blk)
-            used = any(
-                bool(_find_apply_paths(v)) for k, v in comp.items() if k != "operators"
-            )
+            used = any(bool(_find_apply_paths(v)) for k, v in comp.items() if k != "operators")
             if not keep or not used:
                 comp.pop("operators", None)
             else:
