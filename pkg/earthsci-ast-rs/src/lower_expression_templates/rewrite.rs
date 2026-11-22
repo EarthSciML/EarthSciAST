@@ -2069,6 +2069,32 @@ fn lower_components(
                 })?;
             }
         }
+        // An entry only subsystems own is no callable definition of the
+        // component (esm-spec §9.6.3 constraint 4): it is written
+        // `reference_only` (§9.6.1), so the loaded, emitted and flattened
+        // registries say so and emit → load is a fixed point. Mirrors the
+        // Julia reference `_mark_subsystem_owned!`.
+        let sub_owned: Vec<&String> = l
+            .owners
+            .iter()
+            .filter(|(_, os)| !os.iter().any(String::is_empty))
+            .map(|(n, _)| n)
+            .collect();
+        if !sub_owned.is_empty()
+            && let Some(Value::Object(block)) = root
+                .get_mut(*compkind)
+                .and_then(|c| c.as_object_mut())
+                .and_then(|c| c.get_mut(cname.as_str()))
+                .and_then(|c| c.get_mut("operators"))
+        {
+            for n in sub_owned {
+                if let Some(Value::Object(d)) = block.get_mut(n.as_str())
+                    && d.get("reference_only") != Some(&Value::Bool(true))
+                {
+                    d.insert("reference_only".to_string(), Value::Bool(true));
+                }
+            }
+        }
     }
     Ok(())
 }
