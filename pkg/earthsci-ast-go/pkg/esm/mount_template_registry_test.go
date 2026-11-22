@@ -348,3 +348,26 @@ func TestInlineSubsystemDefinitionsResolveOnItsPath(t *testing.T) {
 		t.Errorf("subsystem equations = %s; want both calls resolved", got)
 	}
 }
+
+// A document whose only `operators` block sits on an inline subsystem, at any
+// depth, is lowered: the subsystem's calls resolve to its definitions.
+func TestSubsystemOnlyOperatorsAreLowered(t *testing.T) {
+	leaf := `{"variables": {"a": {"type": "parameter", "default": 1.0}, "b": {"type": "unknown"}},
+    "equations": [{"lhs": "b", "rhs": {"op": "twice", "args": ["a"]}}],
+    "operators": {"twice": {"params": ["q"], "body": {"op": "*", "args": [2, "q"]}}}}`
+	for name, subs := range map[string]string{
+		"depth 1": `{"S": ` + leaf + `}`,
+		"depth 2": `{"S": {"variables": {}, "equations": [], "subsystems": {"T": ` + leaf + `}}}`,
+	} {
+		f, err := LoadString(`{"esm": "2.4.0", "metadata": {"name": "h"}, "models": {"H": {
+  "variables": {"y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": 1}],
+  "subsystems": ` + subs + `}}}`)
+		if err != nil {
+			t.Fatalf("%s: load: %v", name, err)
+		}
+		got := emitCanonicalString(f.Models["H"].Subsystems)
+		if strings.Contains(got, `"twice"`) || !strings.Contains(got, `"*"`) {
+			t.Errorf("%s: subsystems = %s; want the call resolved", name, got)
+		}
+	}
+}

@@ -1204,12 +1204,29 @@ func hasTemplateMachinery(view map[string]any) bool {
 			if !ok {
 				continue
 			}
-			if tpl, ok := compObj["operators"].(map[string]any); ok && len(tpl) > 0 {
+			if componentHasOperators(compObj) {
 				return true
 			}
 		}
 	}
 	return containsApplyOp(view)
+}
+
+// componentHasOperators reports whether comp, or an inline subsystem of it at
+// any depth, carries a non-empty `operators` block: a subsystem's definitions
+// join its top-level component's registry (hoistMountedTemplates), so they
+// alone are operator machinery.
+func componentHasOperators(comp map[string]any) bool {
+	if tpl, ok := comp["operators"].(map[string]any); ok && len(tpl) > 0 {
+		return true
+	}
+	subs, _ := comp["subsystems"].(map[string]any)
+	for _, raw := range subs {
+		if sub, ok := raw.(map[string]any); ok && componentHasOperators(sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // containsApplyOp reports whether tree contains any `apply_operator`
