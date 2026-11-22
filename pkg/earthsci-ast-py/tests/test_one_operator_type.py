@@ -79,6 +79,9 @@ EMITTED = [
     ("placeholder_call", "fixture.esm", "emitted.esm"),
     ("partial_wrt_param_instance", "fixture.esm", "emitted.esm"),
     ("old_names", "fixture.esm", "emitted.esm"),
+    ("reference_only_round_trip", "fixture.esm", "emitted.esm"),
+    ("independent_variable_wrt", "fixture.esm", "emitted.esm"),
+    ("vector_calculus_import", "fixture.esm", "emitted.esm"),
 ]
 
 
@@ -218,8 +221,17 @@ def test_unresolved_call_explanation_lists_definitions_and_reasons():
     assert "has no match, so it binds operands only, and the call carries wrt" in fields
     where = explain_unresolved_call({"op": "g", "args": ["u"]}, {"two": registry["two"]})
     assert 'its where constraint a.shape = ["x"] fails' in where
+    note = "; definitions no reference reached were removed by emit and flatten and are not listed"
     assert explain_unresolved_call({"op": "h", "args": []}, registry) == (
-        "no definition of 'h' is in scope (a placeholder)"
+        "no definition of 'h' is in scope (a placeholder)" + note
+    )
+    assert two_args.endswith(note)
+    refonly = explain_unresolved_call(
+        {"op": "g", "args": ["u"]},
+        {"g.variant1": {"params": ["a"], "body": "a", "defines": "g", "reference_only": True}},
+    )
+    assert "'g.variant1': reference-only, reached by explicit references, never by a call" in (
+        refonly
     )
 
 
@@ -290,3 +302,74 @@ def test_partial_and_integral_have_fixed_unit_expressions(rhs, declared, valid):
     r = validate(load_document(doc))
     codes = {e.code for e in r.structural_errors}
     assert ("unit_inconsistency" not in codes) == valid, codes
+
+
+def test_emitted_rules_are_reference_only_and_reemit_exactly(tmp_path):
+    """esm-spec §9.6.1, §9.6.4 rule 5: a materialized rule (and every variant)
+    is ``reference_only``, so reloading the emitted document makes it no
+    callable definition of its operator, and emit → load → emit is exact."""
+    with open(_p("reference_only_round_trip", "emitted.esm"), encoding="utf-8") as f:
+        out = f.read()
+    reg = json.loads(out)["models"]["m"]["operators"]
+    assert reg["fv_div_edges"]["reference_only"] is True
+    assert reg["exp"]["reference_only"] is True
+    assert "where" not in reg["fv_div_edges"]
+    assert '"op": "div"' in out  # div(G) stayed a call
+    for case in ("reference_only_round_trip", "constrained_match_scope"):
+        once = _emit(_p(case, "fixture.esm"))
+        p = tmp_path / f"{case}.esm"
+        p.write_text(once, encoding="utf-8")
+        twice = _emit(str(p))
+        assert twice == once
+        p.write_text(twice, encoding="utf-8")
+        assert _emit(str(p)) == once
+
+
+def test_reference_only_definitions_are_not_called_and_not_checked():
+    """A ``reference_only`` match-less entry is never a call rule, adds no arity
+    and is exempt from the core-name reservation (esm-spec §9.6.1)."""
+    doc = {
+        "esm": "2.4.0",
+        "metadata": {"name": "refonly"},
+        "models": {
+            "m": {
+                "variables": {
+                    "x": {"type": "parameter", "default": 1.0},
+                    "y": {"type": "unknown"},
+                },
+                "equations": [{"lhs": "y", "rhs": {"op": "g", "args": ["x", "x"]}}],
+                "operators": {
+                    "g": {"params": ["a"], "body": "a", "reference_only": True},
+                    "exp": {"params": ["a"], "body": "a", "reference_only": True},
+                },
+            }
+        },
+    }
+    out = lower_expression_templates(doc)
+    assert out["models"]["m"]["equations"][0]["rhs"]["op"] == "g"
+
+
+def test_wrt_naming_the_independent_variable_is_time():
+    """esm-spec §4.2 "The derivative axis": a ``D`` whose ``wrt`` names the
+    document's renamed independent variable reads as ``wrt: "t"``, silently;
+    any other axis is ``partial``."""
+    doc = {
+        "domain": {"independent_variable": "tau"},
+        "models": {
+            "m": {
+                "equations": [
+                    {"lhs": {"op": "D", "args": ["u"], "wrt": "tau"}, "rhs": 1},
+                    {"lhs": "y", "rhs": {"op": "D", "args": ["u"], "wrt": "x"}},
+                ]
+            }
+        },
+    }
+    fsites, osites = rewrite_old_spellings(doc)
+    eqs = doc["models"]["m"]["equations"]
+    assert eqs[0]["lhs"] == {"op": "D", "args": ["u"], "wrt": "t"}
+    assert eqs[1]["rhs"]["op"] == "partial"
+    assert osites == ["/models/m/equations/1/rhs (D)"]
+
+
+def test_empty_operator_library_imports_as_a_no_op():
+    load_path(_p("vector_calculus_import", "fixture.esm"))

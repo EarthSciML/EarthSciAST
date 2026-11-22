@@ -456,7 +456,13 @@ def _rule3_exposed(
 
 
 def _match_stripped(decl: dict) -> dict:
-    return {k: v for k, v in decl.items() if k not in ("match", "where", "priority")}
+    """A materialized entry: the rule (or variant) without its ``match``,
+    ``where`` and ``priority``, marked ``reference_only`` (esm-spec §9.6.1,
+    §9.6.4 rule 5) so that reloading the emitted document makes it no callable
+    definition of its operator: emit → load → emit is exact."""
+    nd = {k: v for k, v in decl.items() if k not in ("match", "where", "priority")}
+    nd["reference_only"] = True
+    return nd
 
 
 def apply_rule3(comp: dict, L: _Lowering, transforms: list[dict]) -> dict:
