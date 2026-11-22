@@ -7866,6 +7866,22 @@ whether its build compiles a referenced body once or once per call site:
 esm-spec §9.6.4 rule 2 governs that. The observables are the two goldens and
 the diagnostics.
 
+### 5.61 Core Names Are Reserved (normative, draft 2.4.0)
+
+**Decision pinned.** The closed §4.2 set is the **core operators**; every other
+operator is a **defined operator**, given by definitions (esm-spec §9.6.12). A
+definition whose `defines`, written or inferred, is a core op's name is rejected
+at load with `operator_defines_core_op`; a rule whose `match` is rooted at a core
+op defines no callable name and is exempt. `partial` and `integral` are defined
+operators, not core ops.
+
+**Fixtures.** `tests/conformance/expression_templates/operator_defines_core_op/`:
+`fixture.esm` (an entry keyed `exp` with no `match`) and `explicit_defines.esm`
+(an entry writing `"defines": "exp"`) are each refused with
+`operator_defines_core_op` (`error.json`, `error_explicit_defines.json`);
+`compound_rule_exempt.esm` (a rule keyed `exp` whose `match` is rooted at
+`sqrt`) loads. Every binding that loads documents MUST assert all three.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

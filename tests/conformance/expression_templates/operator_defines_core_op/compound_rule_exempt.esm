@@ -1,0 +1,84 @@
+{
+  "esm": "2.4.0",
+  "metadata": {
+    "name": "operator_defines_core_op_exempt",
+    "description": "VALID (esm 2.4.0, esm-spec §9.6.12): a rule keyed `exp` whose `match` is rooted at the core op `sqrt` defines no callable name; its inferred `defines` is provenance only, so it is not checked against the core names and the document loads. The rule fires on sqrt(x^2) and writes a reference to itself.",
+    "authors": [
+      "one-operator-type conformance"
+    ]
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.5,
+          "description": "State"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Observed"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "sqrt",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  "x",
+                  2
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "operators": {
+        "exp": {
+          "params": [
+            "a"
+          ],
+          "match": {
+            "op": "sqrt",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  "a",
+                  2
+                ]
+              }
+            ]
+          },
+          "body": {
+            "op": "abs",
+            "args": [
+              "a"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

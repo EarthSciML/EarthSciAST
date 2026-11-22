@@ -2451,7 +2451,7 @@
         "defines": {
           "type": "string",
           "minLength": 1,
-          "description": "DRAFT esm 2.4.0 (esm-spec §9.6.12): the operator this entry is a definition of. Absent: the `op` of the `match` root when that is not a core op, else the entry's key. Several definitions may share it; a call of the operator resolves to one of them. Emit writes it on every materialized definition (provenance)."
+          "description": "DRAFT esm 2.4.0 (esm-spec §9.6.12): the operator this entry is a definition of. Absent: the `op` of the `match` root when that is not a core op, else the entry's key. Several definitions may share it; a call of the operator resolves to one of them. Emit writes it on every materialized definition (provenance). Reserved names: a `defines` (written or inferred) naming a core op (esm-spec §4.2) is rejected at load with 'operator_defines_core_op', except on a rule whose `match` is rooted at a core op, where it is provenance only (esm-spec §9.6.12)."
         },
         "units": {
           "$ref": "#/$defs/Expression",

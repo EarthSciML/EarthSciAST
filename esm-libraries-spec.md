@@ -2546,7 +2546,7 @@ rate(new Map([['k', 1.8e-12], ['T', 298.15]]));   // 1.818e-14
 // Or evaluate in one step.
 evaluateExpression({ op: '+', args: ['a', 2] }, new Map([['a', 1]]));   // 3
 
-// An operator outside the evaluable core is refused before anything runs.
+// A defined operator (outside the evaluable core) is refused before anything runs.
 try {
   evaluateExpression({ op: 'grad', args: ['u'], dim: 'x' }, new Map([['u', 1]]));
 } catch (e) {
@@ -2554,7 +2554,7 @@ try {
 }
 ```
 
-Both entry points walk the whole expression before evaluating any of it (esm-spec §9.6.6). An operator outside the esm-spec §4.2 evaluable core (`grad`, `div`, `laplacian`, `integral`, a user operator, a spatial or right-hand-side `D`) raises `UnloweredOperatorError`. A core operator with no scalar rule (the array and query operators, `Pre`, an unlowered `enum`) raises `UnevaluableOperatorError`. That holds even inside an untaken `ifelse` branch. An unbound variable or a malformed node raises `EvaluatorError`.
+Both entry points walk the whole expression before evaluating any of it (esm-spec §9.6.6). A call of a defined operator — anything outside the esm-spec §4.2 core operators (`grad`, `div`, `laplacian`, `partial`, `integral`, a user-defined operator) — or a right-hand-side `D` left unresolved raises `UnloweredOperatorError`. A core operator with no scalar rule (the array and query operators, `Pre`, an unlowered `enum`) raises `UnevaluableOperatorError`. That holds even inside an untaken `ifelse` branch. An unbound variable or a malformed node raises `EvaluatorError`.
 
 ---
 
