@@ -22,6 +22,7 @@ import {
   type NumericLiteral,
 } from './numeric-literal.js'
 import { canonicalUnitSpelling } from './unit-conversion.js'
+import { wireOldSpellings } from './old-spellings.js'
 
 // `CanonicalizeError` is DEFINED in numeric-literal.ts (the lowest module in
 // the canonical-form stack) so its nonfinite specialization
@@ -614,9 +615,17 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
  * document (an `EsmFile` is one; plain numbers, or the tagged literals and
  * bigints of `losslessJsonParse`); the input is not mutated and nothing else
  * changes.
+ * The esm-2.3 spellings are read as the esm-2.4.0 ones first: the fields
+ * `expression_templates` / `expression_template_imports` as `operators` /
+ * `operator_imports`, `apply_expression_template` as `apply_operator`, and a
+ * spatial `D` (one whose `wrt` is not `t` and names no parameter of its
+ * definition), `δ` and `∂` as `partial` (esm-spec §9.6.12, §4.2).
  * These are the rules of Lean `Adapter.Doc.spellRules` and `Adapter.Doc.conv`.
  */
-export function canonicalizeDocument<T>(doc: T): T {
+export function canonicalizeDocument<T>(input: T): T {
+  // The spellings an earlier document wrote read as the esm-2.4.0 ones
+  // (esm-spec §9.6.12, §4.2; Lean `Adapter.Doc.spellRules`), on a copy.
+  const doc = wireOldSpellings(input)
   const walk = (value: unknown, isMap: boolean): unknown => {
     if (Array.isArray(value)) return value.map((v) => walk(v, false))
     if (!isPlainObject(value)) return value

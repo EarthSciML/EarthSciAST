@@ -430,7 +430,7 @@ export const CORE_OPS: readonly string[] = [
   'reshape',
   'transpose',
   'concat',
-  'apply_expression_template',
+  'apply_operator',
 ]
 const CORE_OP_SET: ReadonlySet<string> = new Set(CORE_OPS)
 
@@ -606,6 +606,13 @@ export type OpK =
   | { readonly k: 'Minus' | 'Div' | 'Pow' | 'Lnot' | 'Tru' | 'Fls' | 'Ite' | 'Ic' | 'Index' }
   | { readonly k: 'Plus' | 'Times' | 'Land' | 'Lor' | 'Call' | 'Other' }
   | { readonly k: 'Cmp' | 'Un' | 'Mm'; readonly kw: Kw }
+  | { readonly k: 'Nab'; readonly n: NabK }
+
+/**
+ * `Math.NabK`: the four defined operators with a `\nabla` form (spec §1.2):
+ * `grad`, `div`, `laplacian`, `curl`.
+ */
+export type NabK = 'grad' | 'div' | 'lap' | 'curl'
 
 const UN_KW: readonly (readonly [string, Kw])[] = [
   ...FN_KW,
@@ -639,6 +646,10 @@ export const KIND_TABLE: readonly (readonly [string, OpK])[] = [
   ['or', { k: 'Lor' }],
   ['min', { k: 'Mm', kw: 'Min' }],
   ['max', { k: 'Mm', kw: 'Max' }],
+  ['grad', { k: 'Nab', n: 'grad' }],
+  ['div', { k: 'Nab', n: 'div' }],
+  ['laplacian', { k: 'Nab', n: 'lap' }],
+  ['curl', { k: 'Nab', n: 'curl' }],
 ]
 
 /** `Math.kindOf`. */
@@ -934,11 +945,43 @@ export function dSpace(sf: Sf, w: readonly Tok[], a: Out): Out {
       )
 }
 
-/** `Math.dCall`: a spatial derivative with trailing operands: `\operatorname{D}_{x}(u, a, b)`. */
+/** `Math.dCall`: `partial` with trailing operands: `\partial_{x}(u, a, b)` / `partial_(x)(u, a, b)`. */
 export function dCall(sf: Sf, w: readonly Tok[], args: readonly (readonly Tok[])[]): Tok[] {
   const open = kw(sf === 'latex' ? 'Lb' : 'Lpg')
   const close = kw(sf === 'latex' ? 'Rb' : 'Rp')
-  return cat([tOpn('D'), kw('Us'), open], w, [close], callToks(sf, [], args))
+  return cat([kw('Pdiff'), kw('Us'), open], w, [close], callToks(sf, [], args))
+}
+
+/**
+ * `Math.nabHead`: what a `\nabla` form writes before its operand: `\nabla`,
+ * `\nabla \cdot`, `\nabla^{2}`, `\nabla \times` (Typst `nabla`, `nabla dot`,
+ * `nabla^2`, `nabla times`).
+ */
+export function nabHead(sf: Sf, n: NabK): Tok[] {
+  switch (n) {
+    case 'grad':
+      return [kw('Nabla')]
+    case 'div':
+      return [kw('Nabla'), kw('Cdot')]
+    case 'lap':
+      return sf === 'latex'
+        ? [kw('Nabla'), kw('Caret'), kw('Lb'), tNum({ k: 'int', v: 2n }), kw('Rb')]
+        : [kw('Nabla'), kw('Caret'), tNum({ k: 'int', v: 2n })]
+    case 'curl':
+      return [kw('Nabla'), kw('Times')]
+  }
+}
+
+/**
+ * `Math.nabArg`: the operand of a `\nabla` form: another `\nabla` form as it is
+ * (`\nabla \cdot \nabla u` is `div(grad(u))`), anything else at the level of a
+ * power base; after the `\times` of a curl, an operand that starts with a
+ * number is parenthesized (the lexers read a number's scientific tail there).
+ */
+export function nabArg(sf: Sf, n: NabK, o: Out): Tok[] {
+  if (o.toks[0]?.t === 'kw' && o.toks[0].k === 'Nabla' && 6 <= o.lvl) return o.toks
+  const t = outAt(o, sf, 9)
+  return n === 'curl' && startsNum(t) ? grp(sf, t) : t
 }
 
 /** `Math.qtyToks`: the quantity: the number, then the unit as one token. */
@@ -1683,26 +1726,24 @@ export function pr(c: Ctx, e: Json): Out {
       const args = field(0, 'args')
       const w = field(2, 'wrt')
       if (args?.t === 'arr' && strAt(1, 'op', 'D') && w?.t === 'str') {
+        // `D` is the time derivative only; any other `wrt` is the escape form.
         const xs = args.xs
-        if (xs.length === 1) {
-          if (w.s === 't') return dTime(sf, pr(c, xs[0]))
-          if (nameOk(w.s)) return dSpace(sf, nameToks(c, w.s), pr(c, xs[0]))
-          return esc()
-        }
-        if (xs.length >= 2) {
-          if (w.s !== 't' && nameOk(w.s)) {
-            return mkOut(
-              10,
-              dCall(
-                sf,
-                nameToks(c, w.s),
-                xs.map((x) => pa(c, 4, x)),
-              ),
-            )
-          }
-          return esc()
-        }
-        return esc()
+        return xs.length === 1 && w.s === 't' ? dTime(sf, pr(c, xs[0])) : esc()
+      }
+      if (args?.t === 'arr' && strAt(1, 'op', 'partial') && w?.t === 'str') {
+        // `partial` (spec §4.2): one operand, or trailing operands, along an axis
+        // other than `t`; any other `partial` is the call form.
+        const xs = args.xs
+        if (!(w.s !== 't' && nameOk(w.s)) || xs.length === 0) return opn()
+        if (xs.length === 1) return dSpace(sf, nameToks(c, w.s), pr(c, xs[0]))
+        return mkOut(
+          10,
+          dCall(
+            sf,
+            nameToks(c, w.s),
+            xs.map((x) => pa(c, 4, x)),
+          ),
+        )
       }
       const cn = constNative(sf, kvs)
       if (cn !== undefined) return cn
@@ -1714,7 +1755,7 @@ export function pr(c: Ctx, e: Json): Out {
       if (emptyArgs()) {
         const bs = field(1, 'bindings')
         const n = field(2, 'name')
-        if (bs?.t === 'obj' && n?.t === 'str' && strAt(3, 'op', 'apply_expression_template')) {
+        if (bs?.t === 'obj' && n?.t === 'str' && strAt(3, 'op', 'apply_operator')) {
           return prTemplate(c, n.s, bs.kvs, esc)
         }
       }
@@ -1819,6 +1860,8 @@ function prPlain(c: Ctx, o: string, args: readonly Json[], opn: () => Out, esc: 
             ),
           )
         : opn()
+    case 'Nab':
+      return n === 1 ? mkOut(6, cat(nabHead(sf, k.n), nabArg(sf, k.n, pr(c, args[0])))) : opn()
     case 'Call':
       return mkOut(
         10,
@@ -1833,7 +1876,7 @@ function prPlain(c: Ctx, o: string, args: readonly Json[], opn: () => Out, esc: 
   }
 }
 
-/** The `apply_expression_template` case of `Math.pr`. */
+/** The `apply_operator` case of `Math.pr`. */
 function prTemplate(c: Ctx, n: string, bs: Kvs, esc: () => Out): Out {
   const sf = c.sf
   if (!(tnameOk(n) && keysSorted(bs) && bs.every((kv) => isE(kv[1])))) return esc()

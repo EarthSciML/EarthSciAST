@@ -74,6 +74,8 @@ export type Kw =
   | 'Floor'
   | 'Ceil'
   | 'Pdiff'
+  // the nabla of the grad, div, laplacian and curl forms: LaTeX `\nabla`, Typst `nabla`
+  | 'Nabla'
   | 'Dif'
   | 'Dotacc'
   | 'Bcases'

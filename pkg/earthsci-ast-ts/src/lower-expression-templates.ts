@@ -77,7 +77,7 @@ import { isNumericLiteral, numericValue } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { lowerEnumOpsForFile } from './lower-enums.js'
-import { wireOldSpellings } from './parse.js'
+import { wireOldSpellings } from './old-spellings.js'
 import { isCoreOp } from './op-registry.js'
 import {
   type BodyView,

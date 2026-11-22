@@ -59,7 +59,8 @@ import { deepClone, isObject } from './object-utils.js'
 import { expandRefEnv, isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
 import { STDLIB_BASE, classifyStdRef, readStdRef } from './stdlib.js'
 import { ERROR_CODES } from './errors.js'
-import { prepareDocumentOps, wireOldSpellings } from './parse.js'
+import { prepareDocumentOps } from './parse.js'
+import { NAME_KEYED_MAP_KEYS, wireOldSpellings } from './old-spellings.js'
 import { rejectConstUnitsPreV12 } from './solver.js'
 
 type Json = unknown
@@ -414,34 +415,9 @@ export const META_SUBST_SKIP_KEYS: ReadonlySet<string> = new Set<string>([
   ...OPAQUE_KEYS,
 ])
 
-// Keys whose value is a map keyed by AUTHOR-CHOSEN names (variables, species,
-// loop symbols, template params, …). A map key is a declared name, not a field,
-// so it is never looked up in `META_SUBST_SKIP_KEYS`: a variable named `source`
-// or a template param named `label` still has its value substituted. A key in
-// both sets (`where`, `rename`, …) is skipped whole.
-export const NAME_KEYED_MAP_KEYS: ReadonlySet<string> = new Set<string>([
-  'variables',
-  'species',
-  'parameters',
-  'guesses',
-  'subsystems',
-  'operators',
-  'ranges',
-  'bindings',
-  'config',
-  'coords',
-  'initial_conditions',
-  'parameter_overrides',
-  'pinned_coords',
-  'map',
-  'rename',
-  'rebind',
-  'index_set_rename',
-  'url_substitutions',
-  'where',
-  // The old spelling of `operators` (read as it at the wire boundary).
-  'expression_templates',
-])
+// `NAME_KEYED_MAP_KEYS` (keys whose value is a map keyed by author-chosen names)
+// lives in `old-spellings.ts`, which the wire boundary shares.
+export { NAME_KEYED_MAP_KEYS }
 
 /**
  * Substitute closed metaparameter names — appearing as bare strings, the
