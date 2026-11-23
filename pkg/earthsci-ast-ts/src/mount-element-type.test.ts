@@ -27,6 +27,8 @@ const expected = JSON.parse(readFileSync(path.join(dir, 'expected.json'), 'utf8'
     { domain_element_type: string | null; element_types: Record<string, string | null> }
   >
   load_errors: Record<string, Record<string, string[]>>
+  load_error_contains: Record<string, string[]>
+  precision_sources: Record<string, Record<string, string>>
 }
 
 type System = {
@@ -89,16 +91,32 @@ describe('mount_element_type (esm-spec §4.7 "Working precision crosses a mount"
   }
 })
 
-it('distinguishes mounted declarations, inherited omissions and legacy roots', async () => {
-  const file = loadString(JSON.stringify(await emitted('root_unspecified.esm')))
-  for (const doc of [file, loadString(toJson(file))]) {
-    const wide = doc.models?.Wide
-    const plain = doc.models?.Plain
-    if (!wide || !('variables' in wide) || !plain || !('variables' in plain)) {
-      throw new Error('expected resolved models')
-    }
-    expect(precisionSource(doc, wide.variables.x)).toBe('Float64')
-    expect(precisionSource(doc, plain.variables.x)).toBe('unspecified')
+describe('precision sources (esm-spec §11.3.3)', () => {
+  for (const [fixture, want] of Object.entries(expected.precision_sources)) {
+    it(`${fixture}: the accessor follows the version gate, through emit and reload`, async () => {
+      const file = loadString(JSON.stringify(await emitted(fixture)))
+      for (const doc of [file, loadString(toJson(file))]) {
+        for (const [key, source] of Object.entries(want)) {
+          if (!key) {
+            expect(precisionSource(doc), key).toBe(source)
+            continue
+          }
+          const [model, name] = key.split('.') as [string, string]
+          const component = doc.models?.[model]
+          if (!component || !('variables' in component)) throw new Error(`expected ${model}`)
+          expect(precisionSource(doc, component.variables[name]), key).toBe(source)
+        }
+      }
+    })
   }
-  expect(precisionSource(loadPath(path.join(dir, 'leaf_none.esm')))).toBe('Float64')
+  for (const [fixture, wants] of Object.entries(expected.load_error_contains)) {
+    it(`${fixture}: the refusal names the fix`, async () => {
+      const message = await emitted(fixture).then(
+        () => '',
+        (e: unknown) => String(e instanceof Error ? e.message : e),
+      )
+      for (const want of wants) expect(message).toContain(want)
+      expect(message).not.toContain('evaluates in unspecified')
+    })
+  }
 })

@@ -3192,18 +3192,28 @@ cannot see this class of corruption at all. A key set must be compared exactly.
 
 The binding's precision-source accessor MUST distinguish omitted precision at
 the root from a declaration, including per-variable overrides written by a
-mount. Omission below esm 1.3.0 remains a binary64 declaration. From 1.3.0
+mount. Omission below esm 2.4.0 remains a binary64 declaration. From 2.4.0
 onward, an omitted root and variable precision stays unspecified without
 changing the built-in binary64 evaluation path. A mounted leaf that declares
 binary64 below an unspecified root MUST retain its declaration through load,
-emit and reload.
+emit and reload. A reaction-system leaf that declares binary64 below an
+unspecified root is `element_type_uncarried`, and the refusal names the
+unspecified mounting document and the declaration that resolves it; below
+esm 2.4.0 the same mount loads. Fixtures: `root_unspecified.esm`,
+`root_legacy.esm`, `reaction_f64_unspecified.esm` and
+`reaction_f64_legacy.esm` in `tests/conformance/mount_element_type/`, whose
+`expected.json` pins each binding's precision-source accessor
+(`precision_sources`) and the refusal's text (`load_error_contains`).
 
 Any external binary32 build option exercises the same precision inference and
 per-operation rounding as a declared binary32 document. Check the rounding
 witness at zero tolerance. A request introducing a mix or reaching only
 declared variables fails with `precision_choice_conflict`. An unspecified
 variable used as an equality or join key fails with
-`key_precision_unspecified`. With both keys declared binary64, their exact
+`key_precision_unspecified`, and every binding's `validate` reports it as a
+`warnings` entry (never on `unit_warnings`) for any run: the shared fixture is
+`tests/conformance/precision_source/key_comparison.esm`, its expectations in
+`expected.json` beside it. With both keys declared binary64, their exact
 comparison may feed the binary32 group. Consumer-level tolerance, conversions
 and result metadata follow esm-spec §11.3.3 P5–P9.
 

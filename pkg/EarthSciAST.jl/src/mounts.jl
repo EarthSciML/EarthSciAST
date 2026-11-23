@@ -574,9 +574,13 @@ end
 # esm-spec §4.7 "Working precision crosses a mount". A ROOT that declares no
 # `domain.element_type` uses the version gate in §11.3.3. A mounted document
 # that declares none adopts its mounter's precision.
+# The first esm version at which a root that declares no `domain.element_type`
+# leaves its precision unspecified; an older root that omits it declares binary64.
+const _UNSPECIFIED_PRECISION_SINCE = (2, 4, 0)
+
 function _omitted_precision(version)
     parsed = version isa AbstractString ? _parse_esm_version(version) : nothing
-    return parsed !== nothing && parsed >= (1, 3, 0) ? "unspecified" : "Float64"
+    return parsed !== nothing && parsed >= _UNSPECIFIED_PRECISION_SINCE ? "unspecified" : "Float64"
 end
 
 """
@@ -627,13 +631,17 @@ end
 
 function _element_type_uncarried(leaf, enclosing, where, path)
     at = isempty(path) ? "" : " (subsystem '$(path)')"
+    # `enclosing` is a precision name or "unspecified".
+    mounter = enclosing == "unspecified" ?
+        "The document mounting it has unspecified precision (neither it nor any " *
+        "document mounting it declares `domain.element_type`; esm-spec §11.3.3)" :
+        "The document mounting it evaluates in $(enclosing)"
     return SubsystemRefError(
-        "$(where): the mounted document declares `domain.element_type: \"$(leaf)\"` " *
-            "but the document mounting it evaluates in $(enclosing), and the component " *
-            "carries a reaction system$(at) whose species and parameters cannot declare a " *
-            "per-variable `element_type`; the mount cannot keep the leaf's precision " *
-            "(esm-spec §4.7 \"Working precision crosses a mount\"). Declare the same " *
-            "`domain.element_type` on the mounting document, or remove it from the leaf";
+        "$(where): the mounted document declares `domain.element_type: \"$(leaf)\"`, but the " *
+            "component is, or carries, a reaction system$(at) whose species and parameters " *
+            "cannot declare a precision of their own. $(mounter), so the mount cannot keep the " *
+            "leaf's precision (esm-spec §4.7 \"Working precision crosses a mount\"). Declare " *
+            "`domain.element_type: \"$(leaf)\"` on the mounting document, or remove it from the leaf";
         code = ERROR_CODES.ELEMENT_TYPE_UNCARRIED
     )
 end

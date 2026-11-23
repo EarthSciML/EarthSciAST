@@ -143,9 +143,14 @@ pub enum PrecisionSource {
     Unspecified,
 }
 
+/// The first esm version at which a root that declares no
+/// `domain.element_type` leaves its precision unspecified (esm-spec §11.3.3).
+/// An older root that omits it declares binary64.
+pub(crate) const UNSPECIFIED_PRECISION_SINCE: (u32, u32, u32) = (2, 4, 0);
+
 pub(crate) fn omitted_element_type(version: Option<&str>) -> &'static str {
     let parts = version.and_then(crate::diagnostic::parse_semver);
-    if parts.is_some_and(|v| v >= (1, 3, 0)) {
+    if parts.is_some_and(|v| v >= UNSPECIFIED_PRECISION_SINCE) {
         "unspecified"
     } else {
         "Float64"

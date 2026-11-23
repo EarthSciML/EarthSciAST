@@ -1495,12 +1495,6 @@ value resolves against the directory of the file the document was read from
 a `url_template` (§8.2.1) but without substitutions. A leaf's `external` does
 not cross a mount edge: only the root document's counts.
 
-## esm 1.3.0: declared and unspecified precision
-
-| Change | Migration |
-| --- | --- |
-| Omitted `element_type` can mean unspecified (esm-spec §11.3.3) | When raising an older document to esm 1.3.0 or later, declare `"element_type": "Float64"` on the domain or the variables that require binary64 semantics. Older roots retain their implicit binary64 declaration. Built-in evaluation of an unspecified variable uses binary64. |
-
 ## esm 1.3.0: `solver.time_span`
 
 | Kind | What |
@@ -1640,6 +1634,12 @@ Listed because knowing the boundary is what stops you over-migrating.
 Everything above describes one coordinated release. This part records the
 breaking changes that landed **after** it, newest last. The row kinds are the
 same ones [How to read a row](#how-to-read-a-row) defines.
+
+## esm 2.4.0: declared and unspecified precision
+
+| Change | Migration |
+| --- | --- |
+| Omitted `element_type` can mean unspecified (esm-spec §11.3.3) | When raising an older document to esm 2.4.0 or later, declare `"element_type": "Float64"` on the domain or the variables that require binary64 semantics. Older roots retain their implicit binary64 declaration. Built-in evaluation of an unspecified variable uses binary64. |
 
 ## The inline-test runner is no longer named for PDEs
 

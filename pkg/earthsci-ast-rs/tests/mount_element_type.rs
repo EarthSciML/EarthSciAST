@@ -215,26 +215,49 @@ fn the_written_fields_round_trip() {
     }
 }
 
+/// `precision_sources`: the precision-source accessor (esm-spec §11.3.3) on
+/// the loaded document and on its emit-then-reload, per fixture: `""` is the
+/// document default, `Model.var` a variable.
 #[test]
-fn mounted_declarations_and_legacy_defaults_have_distinct_sources() {
-    use earthsci_ast::{PrecisionSource, load_string, precision::Precision, precision_source};
+fn precision_sources_match_the_version_gate() {
+    use earthsci_ast::{PrecisionSource, load_string, precision_source};
+    let spelled = |s: PrecisionSource| match s {
+        PrecisionSource::Declared(p) => format!("{p:?}"),
+        PrecisionSource::Unspecified => "unspecified".to_string(),
+    };
+    let exp = expected();
     let dir = common::category_dir("mount_element_type");
-    let file = load_path(dir.join("root_unspecified.esm")).unwrap();
-    let reloaded = load_string(&to_json(&file).unwrap()).unwrap();
-    for doc in [file, reloaded] {
-        let models = doc.models.as_ref().unwrap();
-        assert_eq!(
-            precision_source(&doc, Some(&models["Wide"].variables["x"])).unwrap(),
-            PrecisionSource::Declared(Precision::Float64),
-        );
-        assert_eq!(
-            precision_source(&doc, Some(&models["Plain"].variables["x"])).unwrap(),
-            PrecisionSource::Unspecified,
-        );
+    for (fixture, want) in exp["precision_sources"]
+        .as_object()
+        .expect("precision_sources")
+    {
+        let file = load_path(dir.join(fixture)).unwrap_or_else(|e| panic!("{fixture}: {e}"));
+        let reloaded = load_string(&to_json(&file).unwrap()).unwrap();
+        for doc in [&file, &reloaded] {
+            for (key, want) in want.as_object().unwrap() {
+                let variable = key
+                    .split_once('.')
+                    .map(|(model, var)| &doc.models.as_ref().unwrap()[model].variables[var]);
+                let got = spelled(precision_source(doc, variable).unwrap());
+                assert_eq!(got, want.as_str().unwrap(), "{fixture}: {key:?}");
+            }
+        }
     }
-    let legacy = load_path(dir.join("leaf_none.esm")).unwrap();
-    assert_eq!(
-        precision_source(&legacy, None).unwrap(),
-        PrecisionSource::Declared(Precision::Float64)
-    );
+}
+
+/// `load_error_contains`: the refusal says what is wrong and how to fix it.
+#[test]
+fn an_uncarried_refusal_names_the_fix() {
+    let exp = expected();
+    let dir = common::category_dir("mount_element_type");
+    for (fixture, wants) in exp["load_error_contains"].as_object().unwrap() {
+        let e = load_path(dir.join(fixture)).expect_err(fixture).to_string();
+        for want in wants.as_array().unwrap() {
+            assert!(
+                e.contains(want.as_str().unwrap()),
+                "{fixture}: {want} not in {e}"
+            );
+        }
+        assert!(!e.contains("evaluates in unspecified"), "{fixture}: {e}");
+    }
 }

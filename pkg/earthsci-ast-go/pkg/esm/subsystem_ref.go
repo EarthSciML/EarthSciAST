@@ -1527,6 +1527,25 @@ func carryMountedElementType(component any, leaf, enclosing, where string) error
 	return stampElementType(component, leaf, enclosing, where, "")
 }
 
+// elementTypeUncarriedMessage is the `element_type_uncarried` refusal: what the
+// leaf declares, why the component cannot carry it, what the mounting
+// document's precision is, and how to fix it. enclosing is a precision name or
+// "unspecified".
+func elementTypeUncarriedMessage(where, leaf, enclosing, at string) string {
+	mounter := "The document mounting it evaluates in " + enclosing
+	if enclosing == "unspecified" {
+		mounter = "The document mounting it has unspecified precision (neither it nor any " +
+			"document mounting it declares `domain.element_type`; esm-spec §11.3.3)"
+	}
+	return fmt.Sprintf(
+		"%s: the mounted document declares `domain.element_type: %q`, but the component is, "+
+			"or carries, a reaction system%s whose species and parameters cannot declare a "+
+			"precision of their own. %s, so the mount cannot keep the leaf's precision "+
+			"(esm-spec §4.7 \"Working precision crosses a mount\"). Declare "+
+			"`domain.element_type: %q` on the mounting document, or remove it from the leaf",
+		where, leaf, at, mounter, leaf)
+}
+
 func stampElementType(system any, leaf, enclosing, where, path string) error {
 	sys, ok := system.(map[string]any)
 	if !ok {
@@ -1539,13 +1558,7 @@ func stampElementType(system any, leaf, enclosing, where, path string) error {
 		if path != "" {
 			at = fmt.Sprintf(" (subsystem '%s')", path)
 		}
-		return newETErr(CodeElementTypeUncarried, fmt.Sprintf(
-			"%s: the mounted document declares `domain.element_type: %q` but the document "+
-				"mounting it evaluates in %s, and the component carries a reaction system%s whose "+
-				"species and parameters cannot declare a per-variable `element_type`; the mount "+
-				"cannot keep the leaf's precision (esm-spec §4.7 \"Working precision crosses a "+
-				"mount\"). Declare the same `domain.element_type` on the mounting document, or "+
-				"remove it from the leaf", where, leaf, enclosing, at))
+		return newETErr(CodeElementTypeUncarried, elementTypeUncarriedMessage(where, leaf, enclosing, at))
 	}
 	if vars, ok := sys["variables"].(map[string]any); ok {
 		for _, raw := range vars {

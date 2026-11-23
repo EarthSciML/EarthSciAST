@@ -1708,6 +1708,31 @@ fn carry_mounted_element_type(
     stamp_element_type(component, leaf, enclosing, mount_noun, "")
 }
 
+/// The `element_type_uncarried` refusal: what the leaf declares, why the
+/// component cannot carry it, what the mounting document's precision is, and
+/// how to fix it. `enclosing` is a precision name or `"unspecified"`.
+fn element_type_uncarried_message(
+    mount_noun: &str,
+    leaf: &str,
+    enclosing: &str,
+    at: &str,
+) -> String {
+    let mounter = if enclosing == "unspecified" {
+        "The document mounting it has unspecified precision (neither it nor any document \
+         mounting it declares `domain.element_type`; esm-spec §11.3.3)"
+            .to_string()
+    } else {
+        format!("The document mounting it evaluates in {enclosing}")
+    };
+    format!(
+        "{mount_noun}: the mounted document declares `domain.element_type: \"{leaf}\"`, but \
+         the component is, or carries, a reaction system{at} whose species and parameters \
+         cannot declare a precision of their own. {mounter}, so the mount cannot keep the \
+         leaf's precision (esm-spec §4.7 \"Working precision crosses a mount\"). Declare \
+         `domain.element_type: \"{leaf}\"` on the mounting document, or remove it from the leaf"
+    )
+}
+
 fn stamp_element_type(
     system: &mut Value,
     leaf: &str,
@@ -1729,14 +1754,7 @@ fn stamp_element_type(
         };
         return Err(err(
             codes::ELEMENT_TYPE_UNCARRIED,
-            format!(
-                "{mount_noun}: the mounted document declares `domain.element_type: \"{leaf}\"` \
-                 but the document mounting it evaluates in {enclosing}, and the component \
-                 carries a reaction system{at} whose species and parameters cannot declare a \
-                 per-variable `element_type`; the mount cannot keep the leaf's precision \
-                 (esm-spec §4.7 \"Working precision crosses a mount\"). Declare the same \
-                 `domain.element_type` on the mounting document, or remove it from the leaf"
-            ),
+            element_type_uncarried_message(mount_noun, leaf, enclosing, &at),
         ));
     }
     if let Some(vars) = obj.get_mut("variables").and_then(Value::as_object_mut) {

@@ -19,6 +19,14 @@
 > declares `system_kind: "pde"` still loads, with the warning
 > `deprecated_system_kind`; the value is ignored. See `MIGRATION.md`,
 > "esm 2.4.0". Every 2.3.0 document is a valid 2.4.0 document.
+>
+> 2.4.0 also changes what an omitted `domain.element_type` means at a root
+> (§11.3.3). From 2.4.0 a root that declares no precision, and every variable
+> that declares none below it, has **unspecified** precision: built-in
+> evaluators still use binary64, and an external consumer may choose another
+> precision explicitly. Below 2.4.0 the omission declares `"Float64"`, as
+> before. A document that needs binary64 semantics declares
+> `"element_type": "Float64"` when it is raised to 2.4.0.
 
 > **Proposed for 2.4.0 (not additive: the behaviour differences are listed below).** The
 > version line above, and `esm-schema.json`, stay at 2.3.0 until the release that adopts
@@ -2182,7 +2190,7 @@ uniqueness requirement invalidates nothing that exists.
 
 The effective precision is computed top-down, and it is the mounting document's that each edge compares against: an assembly that declares nothing, mounted into a `"Float32"` root, is itself `"Float32"`, so the `"Float32"` leaf it mounts needs nothing written, while the same assembly loaded as a root has either unspecified or legacy `"Float64"` precision, and the leaf's variables carry `"Float32"`. Both spellings evaluate identically. The written fields are exactly the overrides an author writing the resolved assembly inline would have had to write, so the resolution-timing rule below ("identical to a file with all subsystems defined inline") holds, `emit ∘ load` stays a fixed point, and an evaluator needs no mount-specific path: everything §11.3.1 says about per-variable precision — propagation, the comparison rule, `mixed_element_type` — applies to a mounted leaf unchanged. In particular an equation or a coupling that combines a mounted binary32 variable with a binary64 variable of the mounting document is `mixed_element_type`, never a silent widening; the author states the intended precision with a variable that declares it.
 
-A component that cannot carry the field MUST be refused at load, not evaluated in the mounting document's precision. A reaction system's species and parameters have no `element_type`, so a mounted document whose *P* must be written onto a component that is, or carries, a reaction system is `element_type_uncarried` (§9.6.6), naming the edge and the reaction system. The same code is how a binding that cannot carry a written `element_type` to evaluation at some construct refuses it (§11.3.1: an error naming the construct, never another precision). Current bindings: all five write the field at every mount form they implement (both model forms, in all five) and refuse the reaction-system case at load, at whichever reaction-system mount form they implement. **Rust** evaluates the written precision at both mount forms, a `subsystems.<k>` component's variables included at any depth: a mounted variable carries its declared `element_type` under its model-local path (`Sub.var`) and its full path (`Model.Sub.var`) alike. **Julia** and **Python** do not evaluate binary32 (CONFORMANCE_SPEC §5.18) and refuse a binary32 variable at build (`float32_unsupported`; Python keeps the recurrence carry it implements); **TypeScript** and **Go** have no evaluator. In all four the written field survives `load → emit`, so the declaration reaches an evaluator that does honour it.
+A component that cannot carry the field MUST be refused at load, not evaluated in the mounting document's precision. A reaction system's species and parameters have no `element_type`, so a mounted document whose *P* must be written onto a component that is, or carries, a reaction system is `element_type_uncarried` (§9.6.6), naming the edge and the reaction system. This includes a leaf that declares `"Float64"` mounted below a root whose precision is unspecified (§11.3.3): unspecified differs from a declaration, and a reaction system has nowhere to keep the leaf's. The refusal says that the mounting document's precision is unspecified and that declaring `domain.element_type` on it resolves the conflict. Below esm 2.4.0 an undeclared root declares `"Float64"`, so the same mount writes nothing and loads. The same code is how a binding that cannot carry a written `element_type` to evaluation at some construct refuses it (§11.3.1: an error naming the construct, never another precision). Current bindings: all five write the field at every mount form they implement (both model forms, in all five) and refuse the reaction-system case at load, at whichever reaction-system mount form they implement. **Rust** evaluates the written precision at both mount forms, a `subsystems.<k>` component's variables included at any depth: a mounted variable carries its declared `element_type` under its model-local path (`Sub.var`) and its full path (`Model.Sub.var`) alike. **Julia** and **Python** do not evaluate binary32 (CONFORMANCE_SPEC §5.18) and refuse a binary32 variable at build (`float32_unsupported`; Python keeps the recurrence carry it implements); **TypeScript** and **Go** have no evaluator. In all four the written field survives `load → emit`, so the declaration reaches an evaluator that does honour it.
 
 **Scoped references** work identically for referenced subsystems as for inline subsystems. After resolution, `"Parent.RefSubsystem.variable"` works the same regardless of whether `RefSubsystem` was defined inline or loaded from a reference. That includes its **units**: a mounted variable's declared `units` cross the mount edge with it, at both mount forms, and the mounting document's expressions are dimension-checked against them (§4.8.4 "A scoped reference carries its target's units").
 
@@ -7023,7 +7031,7 @@ The `domain` supports the following fields:
 |---|---|---|
 | `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1) — and it is correspondingly **reserved**: no `variables` key, species, or reaction parameter may be spelled with it (`reserved_variable_name`), and no `faq` binder may bind it (`reserved_index_symbol`). Both rules read their reserved set from §4.9.1.1, so renaming the independent variable moves both onto the new name and frees `t`. |
 | `temporal` | | Temporal extent: `start`, `end`, `reference_time` (ISO 8601) |
-| `element_type` | | Declared working precision, `"Float64"` or `"Float32"` (§11.3.1). Omission leaves precision unspecified from esm 1.3.0 onward (§11.3.3). Built-in evaluation uses binary64 for unspecified precision. |
+| `element_type` | | Declared working precision, `"Float64"` or `"Float32"` (§11.3.1). Omission leaves precision unspecified from esm 2.4.0 onward (§11.3.3); below 2.4.0 it declares `"Float64"`. Built-in evaluation uses binary64 for unspecified precision. |
 | `array_type` | | Array implementation type (e.g., `"Array"`) |
 
 #### 11.3.1 `element_type` is the working precision
@@ -7103,7 +7111,7 @@ to its category — is `2260007000` in binary64 and `2260006912` in binary32.
 
 A variable's precision source is its own `element_type` (including a field
 written by a §4.7 mount), then the root's `domain.element_type`. If both are
-omitted, it is unspecified for a root declaring esm 1.3.0 or later. An
+omitted, it is unspecified for a root declaring esm 2.4.0 or later. An
 older root with both fields omitted has declared `"Float64"` semantics.
 Reaction species and parameters inherit document precision. Omission is the
 wire spelling for unspecified precision and survives load and emit.
@@ -7144,7 +7152,8 @@ wire spelling for unspecified precision and survives load and emit.
    key, with `key_precision_unspecified` naming the variable and expression.
    An indexed variable read is a variable for this rule. Loop indices,
    literals and arithmetic results are outside this rule. Validators SHOULD
-   warn about unspecified variables in these positions in any run. A
+   warn about unspecified variables in these positions in any run, on the
+   validation result's non-unit `warnings` list. A
    comparison between declared binary64 keys can supply its exact flag to
    binary32 arithmetic under §11.3.1.
 9. **P9.** Every result produced by a consumer acting on a run configuration,

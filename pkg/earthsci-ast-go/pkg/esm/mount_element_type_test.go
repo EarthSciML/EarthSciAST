@@ -24,7 +24,9 @@ type mountElementTypeExpected struct {
 		DomainElementType *string            `json:"domain_element_type"`
 		ElementTypes      map[string]*string `json:"element_types"`
 	} `json:"loads"`
-	LoadErrors map[string]map[string][]string `json:"load_errors"`
+	LoadErrors        map[string]map[string][]string `json:"load_errors"`
+	LoadErrorContains map[string][]string            `json:"load_error_contains"`
+	PrecisionSources  map[string]map[string]string   `json:"precision_sources"`
 }
 
 func readMountElementTypeExpected(t *testing.T) mountElementTypeExpected {
@@ -157,26 +159,52 @@ func TestMountElementType_AReactionSystemCannotCarryIt(t *testing.T) {
 	}
 }
 
+// TestPrecisionSource asserts `precision_sources`: the accessor (esm-spec
+// §11.3.3) on the loaded document and on its emit-then-reload; "" is the
+// document default.
 func TestPrecisionSource(t *testing.T) {
-	file, err := LoadPath(filepath.Join(mountElementTypeDir, "root_unspecified.esm"))
-	if err != nil {
-		t.Fatal(err)
+	exp := readMountElementTypeExpected(t)
+	for fixture, want := range exp.PrecisionSources {
+		t.Run(fixture, func(t *testing.T) {
+			file, err := LoadPath(filepath.Join(mountElementTypeDir, fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, doc := range []*ESMFile{file, reloadPrecisionSource(t, file)} {
+				for key, source := range want {
+					var variable *ModelVariable
+					if model, name, ok := strings.Cut(key, "."); ok {
+						v := doc.Models[model].Variables[name]
+						variable = &v
+					}
+					if got := PrecisionSource(doc, variable); got != source {
+						t.Errorf("%q: got %s, want %s", key, got, source)
+					}
+				}
+			}
+		})
 	}
-	for _, doc := range []*ESMFile{file, reloadPrecisionSource(t, file)} {
-		wide, plain := doc.Models["Wide"].Variables["x"], doc.Models["Plain"].Variables["x"]
-		if got := PrecisionSource(doc, &wide); got != "Float64" {
-			t.Errorf("mounted binary64 variable: %s", got)
-		}
-		if got := PrecisionSource(doc, &plain); got != "unspecified" {
-			t.Errorf("mounted variable inheriting omission: %s", got)
-		}
-	}
-	legacy, err := LoadPath(filepath.Join(mountElementTypeDir, "leaf_none.esm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := PrecisionSource(legacy, nil); got != "Float64" {
-		t.Errorf("legacy omission: %s", got)
+}
+
+// TestMountElementType_AnUncarriedRefusalNamesTheFix asserts
+// `load_error_contains`: the refusal says what is wrong and how to fix it.
+func TestMountElementType_AnUncarriedRefusalNamesTheFix(t *testing.T) {
+	exp := readMountElementTypeExpected(t)
+	for fixture, wants := range exp.LoadErrorContains {
+		t.Run(fixture, func(t *testing.T) {
+			_, err := LoadPath(filepath.Join(mountElementTypeDir, fixture))
+			if err == nil {
+				t.Fatal("loaded; want a refusal")
+			}
+			for _, want := range wants {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%q not in %v", want, err)
+				}
+			}
+			if strings.Contains(err.Error(), "evaluates in unspecified") {
+				t.Errorf("message names no precision: %v", err)
+			}
+		})
 	}
 }
 

@@ -2453,16 +2453,31 @@ def _carry_mounted_element_type(
     _stamp_element_type(component, leaf, enclosing, where, "")
 
 
+def _element_type_uncarried_message(where: str, leaf: str, enclosing: str, at: str) -> str:
+    """The ``element_type_uncarried`` refusal: what the leaf declares, why the
+    component cannot carry it, what the mounting document's precision is, and
+    how to fix it. ``enclosing`` is a precision name or ``"unspecified"``."""
+    if enclosing == "unspecified":
+        mounter = (
+            "The document mounting it has unspecified precision (neither it nor any "
+            "document mounting it declares `domain.element_type`; esm-spec §11.3.3)"
+        )
+    else:
+        mounter = f"The document mounting it evaluates in {enclosing}"
+    return (
+        f'{where}: the mounted document declares `domain.element_type: "{leaf}"`, but the '
+        f"component is, or carries, a reaction system{at} whose species and parameters "
+        f"cannot declare a precision of their own. {mounter}, so the mount cannot keep the "
+        f'leaf\'s precision (esm-spec §4.7 "Working precision crosses a mount"). Declare '
+        f'`domain.element_type: "{leaf}"` on the mounting document, or remove it from the leaf'
+    )
+
+
 def _stamp_element_type(system: Any, leaf: str, enclosing: str, where: str, path: str) -> None:
     if isinstance(system, ReactionSystem):
         at = f" (subsystem '{path}')" if path else ""
         raise SubsystemRefError(
-            f'{where}: the mounted document declares `domain.element_type: "{leaf}"` '
-            f"but the document mounting it evaluates in {enclosing}, and the component "
-            f"carries a reaction system{at} whose species and parameters cannot declare a "
-            f"per-variable `element_type`; the mount cannot keep the leaf's precision "
-            f'(esm-spec §4.7 "Working precision crosses a mount"). Declare the same '
-            f"`domain.element_type` on the mounting document, or remove it from the leaf",
+            _element_type_uncarried_message(where, leaf, enclosing, at),
             code=ELEMENT_TYPE_UNCARRIED,
         )
     if not isinstance(system, Model):

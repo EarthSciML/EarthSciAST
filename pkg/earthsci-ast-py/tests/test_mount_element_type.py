@@ -75,9 +75,26 @@ def test_a_reaction_system_cannot_carry_a_mounted_precision(fixture):
         assert getattr(info.value, "code", None) == code, info.value
 
 
-def test_declared_and_unspecified_precision_sources():
-    file = load_path(str(FIXTURES / "root_unspecified.esm"))
+@pytest.mark.parametrize("fixture", sorted(EXPECTED["precision_sources"]))
+def test_precision_sources_match_the_version_gate(fixture):
+    """``precision_sources``: the accessor (esm-spec §11.3.3) on the loaded
+    document and on its emit-then-reload; ``""`` is the document default."""
+    file = load_path(str(FIXTURES / fixture))
     for doc in (file, load_string(to_json(file))):
-        assert precision_source(doc, doc.models["Wide"].variables["x"]) == "Float64"
-        assert precision_source(doc, doc.models["Plain"].variables["x"]) == "unspecified"
-    assert precision_source(load_path(str(FIXTURES / "leaf_none.esm"))) == "Float64"
+        for key, want in EXPECTED["precision_sources"][fixture].items():
+            if key:
+                model, var = key.split(".", 1)
+                got = precision_source(doc, doc.models[model].variables[var])
+            else:
+                got = precision_source(doc)
+            assert got == want, (fixture, key)
+
+
+@pytest.mark.parametrize("fixture", sorted(EXPECTED["load_error_contains"]))
+def test_an_uncarried_refusal_names_the_fix(fixture):
+    with pytest.raises(Exception) as info:
+        load_path(str(FIXTURES / fixture))
+    message = str(info.value)
+    for want in EXPECTED["load_error_contains"][fixture]:
+        assert want in message, message
+    assert "evaluates in unspecified" not in message

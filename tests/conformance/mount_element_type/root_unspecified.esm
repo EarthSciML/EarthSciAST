@@ -1,5 +1,5 @@
 {
-  "esm": "1.3.0",
+  "esm": "2.4.0",
   "metadata": {
     "name": "mount_element_type_root_unspecified",
     "description": "An unspecified root carries a binary64 leaf's declaration. An undeclared legacy leaf inherits the root's unspecified precision."

@@ -1,5 +1,5 @@
 {
-  "description": "What each fixture loads to, and evaluates to (esm-spec §4.7 'Working precision crosses a mount'; CONFORMANCE_SPEC §5.18.2b). `loads` gives, for every variable of every model (subsystems as Model.Sub.var), the `element_type` it carries after load — a string, or null for a variable that carries none — and the document's own `domain.element_type` (null when absent). ALL FIVE bindings assert `loads`. `load_errors` maps a fixture to {code: [bindings]}: each listed binding MUST refuse the fixture at load with that code, and a binding listed under none MUST still refuse it (with any error). `values` (zero tolerance, compared bit for bit) and `build_errors` are asserted by the bindings listed in `evaluated_by`: they evaluate per-variable precision; the others carry it.",
+  "description": "What each fixture loads to, and evaluates to (esm-spec §4.7 'Working precision crosses a mount'; CONFORMANCE_SPEC §5.18.2b). `loads` gives, for every variable of every model (subsystems as Model.Sub.var), the `element_type` it carries after load — a string, or null for a variable that carries none — and the document's own `domain.element_type` (null when absent). ALL FIVE bindings assert `loads`. `load_errors` maps a fixture to {code: [bindings]}: each listed binding MUST refuse the fixture at load with that code, and a binding listed under none MUST still refuse it (with any error). `load_error_contains` lists text every binding's refusal message MUST contain. `precision_sources` gives, per fixture, what each binding's precision-source accessor (esm-spec §11.3.3) returns for the document default (key \"\") and for listed variables (Model.var): \"Float32\", \"Float64\" or \"unspecified\". ALL FIVE bindings assert both. `values` (zero tolerance, compared bit for bit) and `build_errors` are asserted by the bindings listed in `evaluated_by`: they evaluate per-variable precision; the others carry it.",
   "loads": {
     "root_unspecified.esm": {
       "domain_element_type": null,
@@ -9,6 +9,19 @@
         "Plain.a": null,
         "Plain.x": null
       }
+    },
+    "root_legacy.esm": {
+      "domain_element_type": null,
+      "element_types": {
+        "Wide.a": null,
+        "Wide.x": null,
+        "Plain.a": null,
+        "Plain.x": null
+      }
+    },
+    "reaction_f64_legacy.esm": {
+      "domain_element_type": null,
+      "element_types": {}
     },
     "leaf_f32.esm": {
       "domain_element_type": "Float32",
@@ -145,6 +158,33 @@
         "rust",
         "typescript"
       ]
+    },
+    "reaction_f64_unspecified.esm": {
+      "element_type_uncarried": [
+        "go",
+        "julia",
+        "python",
+        "rust",
+        "typescript"
+      ]
+    }
+  },
+  "load_error_contains": {
+    "reaction_f64_unspecified.esm": [
+      "unspecified precision",
+      "Declare `domain.element_type: \"Float64\"` on the mounting document"
+    ]
+  },
+  "precision_sources": {
+    "root_unspecified.esm": {
+      "": "unspecified",
+      "Wide.x": "Float64",
+      "Plain.x": "unspecified"
+    },
+    "root_legacy.esm": {
+      "": "Float64",
+      "Wide.x": "Float64",
+      "Plain.x": "Float64"
     }
   },
   "evaluated_by": [
@@ -199,6 +239,7 @@
     "subsystems.esm": "A precision written into a subsystems.<k> component is evaluated at that precision, not refused or widened to the document's: Host.Leaf.x is the binary32 witness inside a binary64 document.",
     "values": "key_next = key + 5 with key = 2265007010 declared Float64 inside the Float32 leaf: 2265007015 exactly, where binary32 would give 2265007104.",
     "load_errors": "The reaction-system refusal is reached through whichever reaction-system mount form a binding implements. All five mount the top-level reaction_systems.<k> {ref} form (esm-spec §4.7), so all five reach element_type_uncarried at reaction_toplevel.esm. Python, TypeScript, Go and Rust also mount a reaction system at a reaction system's subsystems.<k> {ref}; Julia refuses that form at parse.",
-    "deep.esm": "Host evaluates in binary64 beside the Float32 leaf; building Leaf evaluates its subsystem Inner in the Float32 the mount wrote onto it."
+    "deep.esm": "Host evaluates in binary64 beside the Float32 leaf; building Leaf evaluates its subsystem Inner in the Float32 the mount wrote onto it.",
+    "reaction_f64_unspecified.esm": "An esm 2.4.0 root that declares no domain has unspecified precision, which differs from a leaf's explicit Float64, so the mount must write Float64 onto the reaction system. Species and reaction parameters have no element_type, so the mount is refused; the message says the mounting document's precision is unspecified and to declare domain.element_type on it. reaction_f64_legacy.esm is the same mount under an esm 2.3.0 root, where omission declares Float64, and loads."
   }
 }

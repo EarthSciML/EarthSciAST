@@ -1430,7 +1430,7 @@ equal) and `f32_mixed_element_types.esm`, which must not build.
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
-| PREC-11-B-001 | Variable, domain and mounted declarations bind arithmetic. Omission is distinguishable from declaration at esm 1.3.0 onward. | P1 | Yes | parsing |
+| PREC-11-B-001 | Variable, domain and mounted declarations bind arithmetic. Omission is distinguishable from declaration at esm 2.4.0 onward. | P1 | Yes | parsing |
 | PREC-11-B-002 | Built-ins evaluate unspecified precision in binary64. | P2 | Yes | simulation |
 | PREC-11-B-003 | An external consumer accepts a precision choice explicitly per evaluation group and storage choice per unspecified variable. | P3 | Yes | simulation |
 | PREC-11-B-004 | A choice that introduces a mixed expression or affects no eligible variable is refused. | P4 | Yes | validation |
