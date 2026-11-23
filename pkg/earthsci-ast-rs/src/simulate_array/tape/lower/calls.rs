@@ -269,6 +269,11 @@ impl<'m> TapeBuilder<'m> {
                     if params.iter().any(|(q, _)| *q == pos) {
                         continue;
                     }
+                    if let Some(kind) = self.known_name_arg(n) {
+                        params.push((pos.clone(), kind));
+                        rename.insert(n.clone(), pos);
+                        continue;
+                    }
                     let v = Expr::Variable(n.clone());
                     let lv = if wholesale {
                         self.lower_wholesale(&v)?
@@ -296,6 +301,12 @@ impl<'m> TapeBuilder<'m> {
                 params.push((p.clone(), ArgKind::Inline(text)));
                 continue;
             }
+            if let Expr::Variable(n) = b
+                && let Some(kind) = self.known_name_arg(n)
+            {
+                params.push((p.clone(), kind));
+                continue;
+            }
             let lv = if wholesale {
                 self.lower_wholesale(b)
             } else {
@@ -318,6 +329,49 @@ impl<'m> TapeBuilder<'m> {
                 );
             }
             params.push((p.clone(), kind));
+        }
+        // An instance parameter's value is spelled into the instance body
+        // (esm-spec §9.6.4 rule 3); a name of the caller that it spells and
+        // the body also reads as a variable is an argument under that name.
+        {
+            let mut free: Vec<String> =
+                crate::binders::free_names(&inst.body, crate::binders::Binders::SCOPE)
+                    .into_iter()
+                    .filter(|n| {
+                        n != "t"
+                            && !n.starts_with('\0')
+                            && !inst.definition.params.iter().any(|p| p == n)
+                            && !params.iter().any(|(q, _)| q == n)
+                    })
+                    .collect();
+            free.sort();
+            for n in free {
+                if let Some(kind) = self.known_name_arg(&n) {
+                    params.push((n, kind));
+                    continue;
+                }
+                let v = Expr::Variable(n.clone());
+                let lv = if wholesale {
+                    self.lower_wholesale(&v)?
+                } else {
+                    self.lower_expr(&v, bx)?
+                };
+                cadence = cadence.max(self.lv_cadence(&lv));
+                let kind = self.arg_kind(lv, &mut arrays, &mut scalars, &mut arr_lvs, &mut sc_lvs);
+                if kind == ArgKind::Unsupported {
+                    bail_tape!(
+                        "operator reference `{name}`: `{n}` is an array over a box that does not \
+                         start at 1, which a called function does not take yet"
+                    );
+                }
+                params.push((n, kind));
+            }
+        }
+        if std::env::var_os("ESM_DEBUG_CALLS").is_some() {
+            eprintln!(
+                "call {name} fn={} wholesale={wholesale} syms={:?} params={:?}",
+                self.is_function, bx.syms, params
+            );
         }
         let key = FuncKey {
             instance: Arc::as_ptr(&inst) as usize,
@@ -375,6 +429,19 @@ impl<'m> TapeBuilder<'m> {
         let out = self.new_slot(&res.shape, &res.origin, res.scalar, sec);
         self.emit(Instr::Call { call, out }, sec);
         Ok(if res.scalar { LV::Scalar(out) } else { LV::Arr(out) })
+    }
+
+    /// A caller name whose value the build knows (a constant observed it can
+    /// fold, a known payload): the instance takes it as build-time data.
+    fn known_name_arg(&mut self, n: &str) -> Option<ArgKind> {
+        let (shape, vals) = self.known_named(n)?;
+        if shape.is_empty() {
+            return None;
+        }
+        let id = Arc::as_ptr(&vals) as usize;
+        self.funcs.borrow_mut().known_vals.insert(id, vals);
+        let origin: DimI = shape.iter().map(|_| 1).collect();
+        Some(ArgKind::Known(shape, origin, id))
     }
 
     /// What the function sees of an argument the caller lowered to `lv`,
@@ -450,7 +517,19 @@ impl<'m> TapeBuilder<'m> {
         // parameter is an argument of the call.
         let mut fixed: FxHashMap<String, Expr> = FxHashMap::default();
         let mut known: Vec<(String, DimU, DimI, Arc<Vec<f64>>)> = Vec::new();
-        for (p, kind) in &key.params {
+        for (p0, kind) in &key.params {
+            // A runtime argument named like the time would read as the time
+            // (the lowering resolves `t` first): it is renamed in the body.
+            let renamed;
+            let p = if p0 == "t"
+                && matches!(kind, ArgKind::Array(..) | ArgKind::Scalar | ArgKind::Known(..))
+            {
+                renamed = "\0param_t".to_string();
+                fixed.insert(p0.clone(), Expr::Variable(renamed.clone()));
+                &renamed
+            } else {
+                p0
+            };
             match kind {
                 ArgKind::Lit(bits) => {
                     fixed.insert(p.clone(), Expr::Number(f64::from_bits(*bits)));
