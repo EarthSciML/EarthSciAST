@@ -1122,8 +1122,14 @@ function _arr_arg_marker(v::ASTExpr, rc)
         src = _array_source(n, rc.array_var_info, rc.pgather, rc.const_arrays)
         if src === :state
             lo, hi = rc.array_var_info[n]
-            sg = _state_gather_payload(n, lo, hi, rc.var_map)
-            _ArrArg(sg.run_base != 0 ? :block : :state, sg, n)
+            vm = _range_vmap(rc.var_map)
+            if vm !== nothing
+                # A tile that shares its code (`_range_state_arg`).
+                _ArrArg(:state, _range_state_arg(vm, n, lo, hi), n)
+            else
+                sg = _state_gather_payload(n, lo, hi, rc.var_map)
+                _ArrArg(sg.run_base != 0 ? :block : :state, sg, n)
+            end
         elseif src === :forcing
             pg = rc.pgather[n]::_PGatherArray
             _arrarg_interned(:live, pg) do

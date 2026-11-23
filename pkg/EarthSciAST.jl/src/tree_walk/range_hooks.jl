@@ -143,9 +143,12 @@ _range_fixed_ident(::_AnySpec, acc, i) = nothing
 # A layout answering every name the way its `L` does, which records, for each
 # slot it hands out by name, the variable that slot belongs to: the virtual
 # layout's blocks overlap past the tile's cells, so a slot alone does not say.
+# `real` is the tile's own layout, which a state array passed to a template
+# call is addressed through (`_range_state_arg`).
 struct _RangeVMap <: AbstractDict{String, Int}
     L::StateLayout
     names::Dict{Int, String}
+    real::StateLayout
 end
 
 function Base.get(m::_RangeVMap, key::AbstractString, default)
@@ -230,6 +233,52 @@ function _range_real_slot(view::_RangeAffineView, name, v::Int)
     b = _vm_block(view.real, name)
     b === nothing && return clamp(r, 1, view.real.n)
     return clamp(r, b.base, b.base + b.len - 1)
+end
+
+# The tile view under the name → slot map `m`, or `nothing` outside one.
+_range_vmap(m::_RangeVMap) = m
+_range_vmap(o::_VarMapOverlay) = _range_vmap(o.base)
+_range_vmap(::Any) = nothing
+
+# The state array `name` (whole-domain extents `lo`, `hi`) bound to an array
+# parameter of a template call in a tile that shares its code. A `:block`
+# argument would carry its base as a literal slot of the virtual layout, which
+# is code, and no slot of the tile's; so the array is passed as a `:state`
+# argument instead, run-time data addressed through the tile's own layout. A
+# variable laid out as one block is that block: its base, strides and the
+# cells the tile stores, every other cell a ghost. A read of a cell the tile
+# does not store comes only from a box the tile runs no cell of (its halo
+# covers every cell an owned cell reads), whose prologue still evaluates the
+# box's invariants. A variable laid out cell by cell is a slot table over the
+# whole-domain extents, a cell the tile does not store at a slot of the
+# tile's layout that the same reasoning leaves unread.
+function _range_state_arg(vm::_RangeVMap, name::String, lo::Vector{Int}, hi::Vector{Int})
+    real = vm.real
+    b = _vm_block(real, name)
+    if b !== nothing
+        return _StateGather(
+            Int[], b.base, copy(b.strides), copy(b.lo), copy(b.hi), prod(b.hi .- b.lo .+ 1)
+        )
+    end
+    nd = length(lo)
+    dims = Int[hi[d] - lo[d] + 1 for d in 1:nd]
+    strides = Vector{Int}(undef, nd)
+    nd == 0 || (strides[1] = 1)
+    for d in 2:nd
+        strides[d] = strides[d - 1] * dims[d - 1]
+    end
+    total = prod(dims)
+    tbl = Vector{Int}(undef, total)
+    cur = Vector{Int}(undef, nd)
+    for lin in 0:(total - 1)
+        rem = lin
+        for d in 1:nd
+            cur[d] = lo[d] + (rem % dims[d]); rem ÷= dims[d]
+        end
+        s = get(real, _cell_key(name, cur), 0)
+        tbl[lin + 1] = s == 0 ? 1 : s
+    end
+    return _StateGather(tbl, 0, strides, copy(lo), copy(hi), total)
 end
 
 # Move a box's state-lane lowerings onto the tile's layout (see the section
