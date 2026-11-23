@@ -168,6 +168,9 @@ struct ModelCtx<'a> {
     /// subsystem (flatten lowers these to observeds `<model>.<sub>.<var>`).
     local_scoped: HashSet<String>,
     is_coupled: bool,
+    /// The model's operator registry (esm-spec §9.6.4 rule 5): its references
+    /// are read through it, never expanded.
+    operators: crate::operator_refs::OperatorRegistry,
 }
 
 impl<'a> ModelCtx<'a> {
@@ -222,6 +225,16 @@ impl<'a> ModelCtx<'a> {
             faq_equations: std::cell::RefCell::new(None),
             local_scoped,
             is_coupled,
+            operators: esm_file.component_operators(&format!("models.{model_name}")),
+        }
+    }
+
+    /// A reference walk's record, reading this model's references through
+    /// its registry.
+    fn ref_walk(&self) -> RefWalkSeen<'_> {
+        RefWalkSeen {
+            operators: Some(&self.operators),
+            ..RefWalkSeen::default()
         }
     }
 
@@ -278,7 +291,7 @@ impl<'a> ModelCtx<'a> {
         binders: &HashSet<String>,
         errs: &mut Vec<StructuralError>,
     ) {
-        self.check_refs_seen(expr, path, idx, binders, errs, &mut RefWalkSeen::default());
+        self.check_refs_seen(expr, path, idx, binders, errs, &mut self.ref_walk());
     }
 
     /// [`Self::check_refs_with`], noting what the walk met in `seen`.
@@ -289,7 +302,7 @@ impl<'a> ModelCtx<'a> {
         idx: usize,
         binders: &HashSet<String>,
         errs: &mut Vec<StructuralError>,
-        seen: &mut RefWalkSeen,
+        seen: &mut RefWalkSeen<'_>,
     ) {
         let is_declared = |name: &str| self.defined_vars.declares(name);
         let declared = NameScope::Set(&is_declared);
@@ -378,7 +391,12 @@ impl<'a> ModelCtx<'a> {
     /// switch off every dimensional check that depends on it.
     fn check_unit_declarations(&self, errors: &mut Vec<StructuralError>) -> ComponentUnitEnv<'a> {
         let (own, unit_parse_failures) = build_unit_env(&self.model.variables);
-        let unit_env = ComponentUnitEnv::new(own, self.model, self.document_units);
+        let unit_env = ComponentUnitEnv::new(own, self.model, self.document_units).with_operators(
+            crate::units::OperatorUnits::of_component(
+                self.esm_file,
+                &format!("models.{}", self.model_name),
+            ),
+        );
         for failure in unit_parse_failures {
             errors.push(StructuralError {
                 path: format!("{}/variables/{}", self.model_path, failure.name),
@@ -485,8 +503,22 @@ impl<'a> ModelCtx<'a> {
             faq.push(self.check_one_equation_refs(eq_idx, equation, &eq_path, errors));
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
                 // A declared `const` unit string that does not resolve is a
-                // defect at the containing expression field (esm-spec §4.8.5).
-                for units in crate::units::unresolvable_const_units(expr) {
+                // defect at the containing expression field (esm-spec §4.8.5),
+                // and so is one in a definition body the field's references
+                // reach, where the expansion would put it (each body read
+                // once per field, esm-spec §9.6.9).
+                let in_bodies = self.operators.reachable([expr]).into_iter().flat_map(|n| {
+                    self.operators
+                        .get(&n)
+                        .and_then(|d| d.body.as_ref())
+                        .map(crate::units::unresolvable_const_units)
+                        .unwrap_or_default()
+                });
+                let found: Vec<String> = crate::units::unresolvable_const_units(expr)
+                    .into_iter()
+                    .chain(in_bodies)
+                    .collect();
+                for units in found {
                     errors.push(StructuralError {
                         path: format!("{eq_path}/{field}"),
                         code: StructuralErrorCode::UnitParseError,
@@ -543,7 +575,7 @@ impl<'a> ModelCtx<'a> {
         // node, whose subtree it does not enter).
         let no_binders = HashSet::new();
         let mut found = Vec::new();
-        let mut seen = RefWalkSeen::default();
+        let mut seen = self.ref_walk();
         for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
             let path = format!("{eq_path}/{field}");
             self.check_refs_seen(expr, &path, eq_idx, &no_binders, &mut found, &mut seen);
@@ -598,6 +630,7 @@ impl<'a> ModelCtx<'a> {
         };
         validate_aggregate_constraints(
             self.esm_file,
+            &self.operators,
             &format!("/models/{}", self.model_name),
             self.model,
             &is_state,
@@ -2135,8 +2168,10 @@ fn collect_coordinate_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
 ///   whose `key`/`expr` reads a model STATE variable, so the cadence partition
 ///   classes it CONTINUOUS and guard 2 forbids relational work on the per-step
 ///   hot path (CONFORMANCE_SPEC.md §5.7.6).
+#[allow(clippy::too_many_arguments)]
 fn validate_aggregate_constraints(
     esm_file: &EsmFile,
+    operators: &crate::operator_refs::OperatorRegistry,
     model_path: &str,
     model: &crate::Model,
     is_state: &dyn Fn(&str) -> bool,
@@ -2159,6 +2194,12 @@ fn validate_aggregate_constraints(
     // are compared once every member has one.
     let groups = recurrence_groups_of_parts(&model.variables, &model.equations);
     let mut frames: Vec<(usize, &str, RecurrenceFrame)> = Vec::new();
+    // The aggregate findings of each definition instance the equations reach,
+    // found once (esm-spec §9.6.9) and reported at every field reaching it.
+    let mut instance_aggregate_errors: HashMap<
+        *const crate::operator_refs::Instance,
+        Vec<StructuralError>,
+    > = HashMap::new();
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         // An equation the reference check saw no `faq` node in has none to check.
         if faq_equations.is_none_or(|faq| faq.get(eq_idx).copied().unwrap_or(true)) {
@@ -2182,6 +2223,30 @@ fn validate_aggregate_constraints(
                     &var_shapes,
                     errors,
                 );
+                // The `faq` nodes of the definition bodies the field's
+                // references reach, read in each instance (esm-spec §9.6.4
+                // rule 3) and reported at the field, where the expansion
+                // would put them.
+                for inst in operators.instances([expr]) {
+                    let found = instance_aggregate_errors
+                        .entry(std::sync::Arc::as_ptr(&inst))
+                        .or_insert_with(|| {
+                            let mut found = Vec::new();
+                            check_aggregates_in_expr(
+                                &inst.body,
+                                &String::new,
+                                esm_file,
+                                is_state,
+                                &var_shapes,
+                                &mut found,
+                            );
+                            found
+                        });
+                    errors.extend(found.iter().map(|e| StructuralError {
+                        path: field_path(),
+                        ..e.clone()
+                    }));
+                }
             }
         }
         if let Some((var, _)) = recurrence_lhs_target(&equation.lhs)
@@ -2217,6 +2282,7 @@ fn validate_aggregate_constraints(
             .collect();
         validate_aggregate_constraints(
             esm_file,
+            operators,
             &format!("{model_path}/subsystems/{name}"),
             sub,
             &|n: &str| states.contains(n),
@@ -3104,13 +3170,12 @@ fn collect_bare_array_operands<'a>(
 /// symbol by this node or an enclosing one shadows the declaration and is not
 /// a variable read. Nested `faq` nodes are checked in their own right.
 ///
-/// With `opaque_applications`, a template application is opaque: an array
-/// bound to one of its arguments is not a bare read here. That is how
-/// `validate` decides the rule, on the equations as authored: a reference, or
-/// an expansion the load marked as one
-/// ([`crate::types::ExpressionNode::template_origin`]), is not entered. The
-/// build passes `false` and checks what the applications expanded into, after
-/// the elementwise lift (esm-spec §9.6.11).
+/// An operator reference is opaque to this walk: an array bound to one of
+/// its parameters is not a bare read here (a definition's parameter may be
+/// read whole, esm-spec §9.6.11). That is how `validate` decides the rule, on
+/// the equations as authored. `opaque_applications` (`true` from `validate`,
+/// `false` from the build) no longer changes the walk: the load expands no
+/// reference, so there is no expansion to see through.
 ///
 /// `expr` is an equation's right-hand side and `lhs` its left-hand side. A
 /// variable an observed or recurrence definition's left-hand side names is
@@ -3150,10 +3215,10 @@ pub(crate) fn faq_bare_array_operand_errors(
     };
     let mut bound: Vec<String> = Vec::new();
     let mut visited = HashMap::new();
+    let _ = opaque_applications;
     let walk = BareWalk {
         path,
         declared_axes: &declared_axes,
-        opaque_applications,
     };
     walk.faq_operands(expr, &mut bound, &mut visited, errors);
 }
@@ -3181,14 +3246,13 @@ impl<'a> DeclaredAxes<'a> {
 struct BareWalk<'a> {
     path: &'a str,
     declared_axes: &'a DeclaredAxes<'a>,
-    opaque_applications: bool,
 }
 
 impl BareWalk<'_> {
-    /// Whether the walk does not enter `node`: a template application, which
+    /// Whether the walk does not enter `node`: an operator reference, which
     /// is opaque to it (see [`faq_bare_array_operand_errors`]).
     fn is_opaque(&self, node: &crate::types::ExpressionNode) -> bool {
-        node.op == "apply_operator" || (self.opaque_applications && node.template_origin.is_some())
+        node.op == crate::operator_refs::APPLY_OP
     }
 }
 
@@ -4344,7 +4408,7 @@ pub(crate) fn validate_reaction_system(
     }
 
     // Stoichiometric rate-dimension check (spec §7.4).
-    validate_reaction_rate_units(rs_name, rs, document_units, errors);
+    validate_reaction_rate_units(esm_file, rs_name, rs, document_units, errors);
 }
 
 /// Enforce the mass-action dimensional constraint from spec §7.4: rate
@@ -4360,6 +4424,7 @@ pub(crate) fn validate_reaction_system(
 /// system's own species and parameters, then paths relative to its own
 /// subsystems, then the document's top-level systems.
 fn validate_reaction_rate_units(
+    esm_file: &EsmFile,
     rs_name: &str,
     rs: &crate::ReactionSystem,
     document_units: &HashMap<String, Unit>,
@@ -4410,7 +4475,9 @@ fn validate_reaction_rate_units(
         });
     }
 
-    let env = ComponentUnitEnv::new(env, rs, document_units);
+    let env = ComponentUnitEnv::new(env, rs, document_units).with_operators(
+        crate::units::OperatorUnits::of_component(esm_file, &format!("reaction_systems.{rs_name}")),
+    );
     let time = Unit::base(crate::units::Dimension::Time, 1, 1.0);
 
     for (rxn_idx, reaction) in rs.reactions.iter().enumerate() {
@@ -4918,12 +4985,15 @@ impl NameScope<'_> {
 
 /// [`validate_expression_references_with_systems`] over a [`NameScope`].
 /// What a [`references_in_scope`] walk met besides references: a node that
-/// binds index symbols, a `faq` node, an `enum` node (whose subtree it skips).
+/// binds index symbols, a `faq` node (or an operator reference, whose
+/// definition's body may hold one), an `enum` node (whose subtree it skips).
+/// `operators` is the registry the walk reads references through.
 #[derive(Default)]
-struct RefWalkSeen {
+struct RefWalkSeen<'r> {
     binder: bool,
     faq: bool,
     enum_node: bool,
+    operators: Option<&'r crate::operator_refs::OperatorRegistry>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4935,7 +5005,7 @@ fn references_in_scope(
     base_path: &str,
     equation_index: usize,
     errors: &mut Vec<StructuralError>,
-    seen: &mut RefWalkSeen,
+    seen: &mut RefWalkSeen<'_>,
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {
@@ -5005,6 +5075,52 @@ fn references_in_scope(
             }
         }
         crate::Expr::Operator(op_node) => {
+            // An operator reference reads, at its site, what its expansion
+            // would (esm-spec §9.6.4 rule 2): the bindings the expansion reads
+            // as values, with the body's own loop symbols in scope (they
+            // capture a name a binding substitutes), and the names its
+            // bodies read free, in the scope of the site. A binding read only
+            // as a literal (a `from`, a `wrt`) is no variable read.
+            if let Some(r) = crate::operator_refs::reference_node(op_node)
+                && let Some(reg) = seen.operators
+                && let Some(def) = reg.resolve(&r)
+            {
+                seen.faq = true;
+                let reads = def.reads(reg);
+                let captured: Vec<&str> = def.body_binders().iter().map(String::as_str).collect();
+                let scope = if captured.is_empty() {
+                    *defined_vars
+                } else {
+                    NameScope::With(defined_vars, &captured)
+                };
+                let mut keys: Vec<&String> = r.bindings.keys().collect();
+                keys.sort();
+                for k in keys.into_iter().filter(|k| reads.params.contains(*k)) {
+                    references_in_scope(
+                        &r.bindings[k],
+                        &scope,
+                        system_refs,
+                        local_scoped,
+                        base_path,
+                        equation_index,
+                        errors,
+                        seen,
+                    );
+                }
+                for n in &reads.free {
+                    references_in_scope(
+                        &crate::Expr::Variable(n.clone()),
+                        defined_vars,
+                        system_refs,
+                        local_scoped,
+                        base_path,
+                        equation_index,
+                        errors,
+                        seen,
+                    );
+                }
+                return;
+            }
             // esm-spec §4.3.4: a `broadcast` node's `fn` MUST name a scalar
             // operator, and the operand count must be one that operator accepts.
             //

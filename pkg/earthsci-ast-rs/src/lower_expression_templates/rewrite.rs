@@ -1047,14 +1047,7 @@ pub(super) fn expand_all(
                 let body = expand_apply(&newfields, named, scope)?;
                 let expanded = expand_all(&body, named, scope, memo)?;
                 match obj_get(&newfields, "name").map(|v| &**v) {
-                    Some(SNode::Str(name)) => {
-                        let units = definition_units_mark(
-                            name,
-                            named.get(name),
-                            obj_get(&newfields, "bindings"),
-                        );
-                        mark_template_origin(expanded, name, units)
-                    }
+                    Some(SNode::Str(name)) => mark_template_origin(expanded, name),
                     _ => expanded,
                 }
             } else {

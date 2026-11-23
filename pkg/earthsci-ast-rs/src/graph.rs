@@ -566,6 +566,9 @@ struct ExprGraphBuilder {
     nodes: Vec<VariableNode>,
     edges: Vec<DependencyEdge>,
     seen: std::collections::HashSet<String>,
+    /// The registry the component being added resolves its operator
+    /// references against (empty for a component handed in alone).
+    operators: crate::operator_refs::OperatorRegistry,
 }
 
 impl ExprGraphBuilder {
@@ -574,6 +577,7 @@ impl ExprGraphBuilder {
             nodes: Vec::new(),
             edges: Vec::new(),
             seen: std::collections::HashSet::new(),
+            operators: Default::default(),
         }
     }
 
@@ -645,15 +649,18 @@ impl ExpressionGraphInput for crate::EsmFile {
         // must not depend on HashMap ordering.
         if let Some(ref models) = self.models {
             for model_id in sorted_keys(models) {
+                b.operators = self.component_operators(&format!("models.{model_id}"));
                 process_model_tree(&mut b, &models[model_id], model_id);
             }
         }
 
         if let Some(ref reaction_systems) = self.reaction_systems {
             for rs_id in sorted_keys(reaction_systems) {
+                b.operators = self.component_operators(&format!("reaction_systems.{rs_id}"));
                 process_reaction_system_tree(&mut b, &reaction_systems[rs_id], rs_id);
             }
         }
+        b.operators = Default::default();
 
         if options.merge_coupled
             && let Some(ref coupling) = self.coupling
@@ -858,7 +865,7 @@ fn process_equation(
     };
     let lhs_var = b.add_node(&target_name, VariableKind::State, None, system_id);
 
-    for rhs_var in extract_variables_from_expr(&equation.rhs) {
+    for rhs_var in extract_variables_from_expr(&equation.rhs, &b.operators) {
         let source = b.add_node(&rhs_var, VariableKind::Parameter, None, system_id);
         b.add_dependency(
             source,
@@ -879,7 +886,7 @@ fn process_reaction(
     rxn_idx: i64,
     system_id: &str,
 ) {
-    let rate_vars = extract_variables_from_expr(&reaction.rate);
+    let rate_vars = extract_variables_from_expr(&reaction.rate, &b.operators);
 
     // Substrates are consumed.
     for substrate in reaction.substrates.iter().flatten() {
@@ -932,7 +939,7 @@ fn process_expression(
     system_id: &str,
 ) {
     let target = b.add_node(target_var, VariableKind::Observed, None, system_id);
-    for free_var in extract_variables_from_expr(expr) {
+    for free_var in extract_variables_from_expr(expr, &b.operators) {
         let source = b.add_node(&free_var, VariableKind::Parameter, None, system_id);
         b.add_dependency(
             source,
@@ -990,12 +997,18 @@ fn process_coupling(b: &mut ExprGraphBuilder, coupling: &[CouplingEntry]) {
 /// positions are exactly where an aggregate's binders appear, and subtracting
 /// them there would hide a real reference to a declared variable used as an
 /// index.
-fn extract_variables_from_expr(expr: &crate::Expr) -> Vec<String> {
-    let mut vars: Vec<String> = crate::binders::free_names(expr, crate::binders::Binders::SCOPE)
+///
+/// An operator reference contributes what its expansion reads at its site
+/// ([`crate::operator_refs::site_reads`]): the bindings its definition reads,
+/// and the names its body reads free; a binding read only as a literal (a
+/// `wrt`, an index-set name) is no node.
+fn extract_variables_from_expr(
+    expr: &crate::Expr,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> Vec<String> {
+    crate::operator_refs::site_reads(expr, operators)
         .into_iter()
-        .collect();
-    vars.sort();
-    vars
+        .collect()
 }
 
 /// Escape a string for use inside a DOT double-quoted id/label.

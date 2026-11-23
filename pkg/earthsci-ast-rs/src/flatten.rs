@@ -1679,7 +1679,14 @@ pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::
             continue;
         };
         let cname = compkey.split_once('.').map_or(compkey.as_str(), |(_, c)| c);
-        let (closed, _added) = close_template_bodies(block);
+        // The load's private fixed-unit records stay in the typed document's
+        // registries (the unit checker reads them); the flattened registry is
+        // a wire field and carries none.
+        let mut block = block.clone();
+        block
+            .values_mut()
+            .for_each(crate::lower_expression_templates::strip_fixed_units);
+        let (closed, _added) = close_template_bodies(&block);
         let closed = closed
             .into_iter()
             // match rules are not referenceable, so not merged

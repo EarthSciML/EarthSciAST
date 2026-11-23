@@ -394,7 +394,6 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
         expect_cadence,
         attrs,
         template_origin,
-        definition_units,
     } = a;
     // `internable` refused these; assert the contract rather than compare.
     debug_assert!(join.is_none());
@@ -442,7 +441,6 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
         // Load provenance the elementwise lift reads (esm-spec §9.6.11): an
         // expansion root and an identical hand-written node are not one node.
         && template_origin == &b.template_origin
-        && definition_units == &b.definition_units
 }
 
 /// Structural hash consistent with [`node_eq`].
@@ -478,7 +476,6 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
         expect_cadence,
         attrs,
         template_origin: _,
-        definition_units: _,
     } = n;
     op.hash(h);
     match value {
