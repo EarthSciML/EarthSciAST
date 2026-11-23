@@ -40,7 +40,8 @@ pub use tile::TileProgram;
 use super::tape::{CallInputs, ForcingView, TapeCtx, TapeProgram, run_tape_inputs};
 use super::{ArrayCompiled, RhsCall, RhsScratch, RhsStats, evaluate_rhs_with_scratch};
 use crate::flatten::{FlattenedSystem, TermOrigin};
-use crate::problem::{Compiler, EsmProblem, ProgramSource};
+use crate::precision::{Precision, PrecisionSource, precision_source};
+use crate::problem::{Compiler, EsmProblem, ProblemOptions, ProgramSource};
 use crate::simulate::SimulateError;
 use crate::simulate_array::ShapeTable;
 use ndarray::{ArrayD, IxDyn, ShapeBuilder};
@@ -48,9 +49,16 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use walk::{AxisSpec, VarInfo};
+
+/// External evaluation options for one RHS evaluation group.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RhsOptions {
+    /// Working precision for unspecified variables. Defaults to binary64.
+    pub unspecified_evaluation: Precision,
+}
 
 /// Which terms and which variables an operator keeps (API_SPEC §5.8,
 /// `select`). `None` keeps every term, or writes every state.
@@ -389,8 +397,62 @@ pub struct RhsWorkspace {
     owner: u64,
     state: Vec<f64>,
     dy: Vec<f64>,
+    boundary: BoundaryBuffers,
     exec: WsExec,
     _not_sync: PhantomData<Cell<()>>,
+}
+
+#[derive(Default)]
+struct BoundaryBuffers {
+    u: Vec<f64>,
+    aux: Vec<f64>,
+    p: Vec<f64>,
+    du: Vec<f64>,
+    forcing: Option<(u64, ForcingSet)>,
+}
+
+mod rhs_scalar_sealed {
+    pub trait Sealed {}
+    impl Sealed for f32 {}
+    impl Sealed for f64 {}
+}
+
+/// Storage types accepted by [`RhsProgram::eval_into`].
+pub trait RhsScalar: rhs_scalar_sealed::Sealed + Copy + Into<f64> {
+    #[doc(hidden)]
+    const IS_F32: bool;
+    #[doc(hidden)]
+    fn f64_inputs(values: &[Self]) -> Option<&[f64]>;
+    #[doc(hidden)]
+    fn f64_output(values: &mut [Self]) -> Option<&mut [f64]>;
+    #[doc(hidden)]
+    fn from_f64(value: f64) -> Self;
+}
+
+impl RhsScalar for f64 {
+    const IS_F32: bool = false;
+    fn f64_inputs(values: &[Self]) -> Option<&[f64]> {
+        Some(values)
+    }
+    fn f64_output(values: &mut [Self]) -> Option<&mut [f64]> {
+        Some(values)
+    }
+    fn from_f64(value: f64) -> Self {
+        value
+    }
+}
+
+impl RhsScalar for f32 {
+    const IS_F32: bool = true;
+    fn f64_inputs(_: &[Self]) -> Option<&[f64]> {
+        None
+    }
+    fn f64_output(_: &mut [Self]) -> Option<&mut [f64]> {
+        None
+    }
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
 }
 
 enum WsExec {
@@ -473,6 +535,9 @@ struct ProgramInner {
     blocks: Blocks,
     layout: TileLayout,
     state_layout: Vec<StateBlock>,
+    precisions: OnceLock<(Vec<PrecisionSource>, Vec<Precision>)>,
+    document_precision_source: PrecisionSource,
+    rounds_inputs: bool,
     params: Vec<ParamSlot>,
     slots: Arc<[ForcingSlot]>,
     /// The Problem's forcing when the program was built.
@@ -520,6 +585,84 @@ impl std::fmt::Debug for RhsProgram {
 /// `compiler_unavailable`. Under `native` a rule the tape cannot express is
 /// `compiler_refused_rule`.
 pub fn rhs_program(prob: &EsmProblem) -> Result<RhsProgram, SimulateError> {
+    let document_source = match prob.program_source.as_deref() {
+        Some(ProgramSource::File(file)) => precision_source(file, None)?,
+        // A caller-supplied flattened system carries no source version.
+        _ => PrecisionSource::Declared(prob.precision.document),
+    };
+    rhs_program_at_precision(prob, document_source)
+}
+
+/// Build an external RHS with a working precision for unspecified variables.
+///
+/// The choice applies before the ordinary Problem build so compiler passes,
+/// constant folding and provider ingress run at the same working precision
+/// as the resulting program. The input file remains unchanged.
+pub fn rhs_program_with_options(
+    file: &crate::EsmFile,
+    tspan: (f64, f64),
+    problem_options: ProblemOptions,
+    options: RhsOptions,
+) -> Result<RhsProgram, SimulateError> {
+    if !options.unspecified_evaluation.is_f32() {
+        return rhs_program(&crate::esm_problem(file, tspan, problem_options)?);
+    }
+    let document_source = precision_source(file, None)?;
+    if let PrecisionSource::Declared(p) = document_source {
+        return Err(choice_error(format!(
+            "the root declares {} working precision",
+            p.element_type()
+        )));
+    }
+    if let Some(site) = crate::precision_infer::unspecified_keys(file)
+        .into_iter()
+        .next()
+    {
+        return Err(range_error(
+            crate::diagnostic::codes::KEY_PRECISION_UNSPECIFIED,
+            site.message,
+        ));
+    }
+    let mut chosen = file.clone();
+    chosen
+        .domain
+        .get_or_insert_with(Default::default)
+        .element_type = Some(options.unspecified_evaluation.element_type().to_string());
+    let prob = crate::esm_problem(&chosen, tspan, problem_options).map_err(map_choice_error)?;
+    let rhs = rhs_program_at_precision(&prob, document_source).map_err(map_choice_error)?;
+    let flat = rhs.flattened();
+    let mut used = HashSet::new();
+    for eq in &flat.equations {
+        crate::expression::collect_variables(&eq.lhs, &mut used);
+        crate::expression::collect_variables(&eq.rhs, &mut used);
+    }
+    let declared = flat
+        .state_variables
+        .iter()
+        .chain(&flat.observed_variables)
+        .chain(&flat.parameters)
+        .filter(|(name, _)| used.contains(*name));
+    if !declared.clone().any(|(_, var)| var.element_type.is_none()) {
+        let witnesses: Vec<_> = declared
+            .map(|(name, var)| {
+                format!(
+                    "{name} ({})",
+                    var.element_type.as_deref().unwrap_or_default()
+                )
+            })
+            .collect();
+        return Err(choice_error(format!(
+            "no variable read or written has unspecified precision; declarations: {}",
+            witnesses.join(", ")
+        )));
+    }
+    Ok(rhs)
+}
+
+fn rhs_program_at_precision(
+    prob: &EsmProblem,
+    document_source: PrecisionSource,
+) -> Result<RhsProgram, SimulateError> {
     let compiler = prob.compiler;
     if !matches!(compiler, Compiler::Native | Compiler::Interpreter) {
         return Err(SimulateError::CompilerUnavailable {
@@ -555,6 +698,7 @@ pub fn rhs_program(prob: &EsmProblem) -> Result<RhsProgram, SimulateError> {
                 None,
                 ForcingSource::Problem(&forcing),
                 prob.runtime_array_parameters,
+                document_source,
             )
         }
         crate::problem::Backend::Static(_) => RhsProgram::compile(
@@ -563,7 +707,23 @@ pub fn rhs_program(prob: &EsmProblem) -> Result<RhsProgram, SimulateError> {
             None,
             ForcingSource::Problem(&HashMap::new()),
             prob.runtime_array_parameters,
+            document_source,
         ),
+    }
+}
+
+fn choice_error(details: String) -> SimulateError {
+    range_error(
+        crate::diagnostic::codes::PRECISION_CHOICE_CONFLICT,
+        format!("RhsOptions::unspecified_evaluation = Float32: {details}"),
+    )
+}
+
+fn map_choice_error(error: SimulateError) -> SimulateError {
+    if error.code() == Some("mixed_element_type") {
+        choice_error(error.to_string())
+    } else {
+        error
     }
 }
 
@@ -684,6 +844,7 @@ impl RhsProgram {
         writes: Option<&[String]>,
         forcing: ForcingSource,
         runtime_array_parameters: bool,
+        document_precision_source: PrecisionSource,
     ) -> Result<RhsProgram, SimulateError> {
         // A selection is built at the shapes its parent was (esm-spec §4.3.4).
         let inherited = match &forcing {
@@ -703,6 +864,7 @@ impl RhsProgram {
             writes,
             forcing,
             runtime_array_parameters,
+            document_precision_source,
         )
     }
 
@@ -715,6 +877,7 @@ impl RhsProgram {
         writes: Option<&[String]>,
         forcing: ForcingSource,
         runtime_array_parameters: bool,
+        document_precision_source: PrecisionSource,
     ) -> Result<RhsProgram, SimulateError> {
         let shape_table = Arc::clone(&compiled.built_variables().shapes);
         // Every forcing read compiles against the shape the data has.
@@ -812,7 +975,7 @@ impl RhsProgram {
         let identity = scatter
             .iter()
             .all(|&(input, base, off, _)| input == TileInput::U && base == off);
-        let state_layout = layout
+        let state_layout: Vec<_> = layout
             .u
             .iter()
             .map(|b| StateBlock {
@@ -835,6 +998,14 @@ impl RhsProgram {
             })
             .collect();
         let declared = Arc::new(model.declared_names.clone());
+        let rounds_inputs = model.precision.is_f32()
+            || model.precision.variables.names().any(|name| {
+                model
+                    .precision
+                    .variables
+                    .get(name)
+                    .is_some_and(Precision::is_f32)
+            });
         Ok(RhsProgram {
             inner: Arc::new(ProgramInner {
                 id: next_program_id(),
@@ -849,6 +1020,9 @@ impl RhsProgram {
                 blocks,
                 layout,
                 state_layout,
+                precisions: OnceLock::new(),
+                document_precision_source,
+                rounds_inputs,
                 params,
                 slots,
                 default_set,
@@ -972,6 +1146,46 @@ impl RhsProgram {
         (u, aux)
     }
 
+    /// The precision source of each flat state slot in the `u` buffer.
+    pub fn precision_sources(&self) -> &[PrecisionSource] {
+        &self.state_precision_layout().0
+    }
+
+    /// The resolved working precision of each flat state slot in the `u` buffer.
+    pub fn state_precisions(&self) -> &[Precision] {
+        &self.state_precision_layout().1
+    }
+
+    fn state_precision_layout(&self) -> &(Vec<PrecisionSource>, Vec<Precision>) {
+        let inner = &self.inner;
+        inner.precisions.get_or_init(|| {
+            let mut sources = vec![inner.document_precision_source; inner.blocks.u_len];
+            let mut resolved = vec![inner.model.precision.document; inner.blocks.u_len];
+            for block in &inner.state_layout {
+                let source = inner
+                    .flat()
+                    .state_variables
+                    .get(&block.name)
+                    .and_then(|v| v.element_type.as_deref())
+                    .map_or(inner.document_precision_source, |p| {
+                        PrecisionSource::Declared(
+                            Precision::from_element_type(Some(p))
+                                .expect("the build checked variable precision"),
+                        )
+                    });
+                let precision = match source {
+                    PrecisionSource::Declared(p) => p,
+                    PrecisionSource::Unspecified => inner.model.precision.document,
+                };
+                let slots =
+                    block.flat_offset..block.flat_offset + block.shape.iter().product::<usize>();
+                sources[slots.clone()].fill(source);
+                resolved[slots].fill(precision);
+            }
+            (sources, resolved)
+        })
+    }
+
     /// The flattened system this program was compiled from.
     pub fn flattened(&self) -> &FlattenedSystem {
         self.inner.flat()
@@ -990,6 +1204,7 @@ impl RhsProgram {
             Some(&writes),
             ForcingSource::Parent(&self.inner),
             self.inner.runtime_array_parameters,
+            self.inner.document_precision_source,
         )
     }
 
@@ -1048,6 +1263,7 @@ impl RhsProgram {
             state: vec![0.0; n],
             dy: vec![0.0; n],
             exec,
+            boundary: BoundaryBuffers::default(),
             _not_sync: PhantomData,
         }
     }
@@ -1057,10 +1273,97 @@ impl RhsProgram {
     /// (zero for a state with no `D` equation). This is the reference every
     /// tile and lane of the program is bitwise against.
     ///
+    /// State buffers may hold `f64`, or `f32` when all state and auxiliary
+    /// variables work in binary32. Parameters and time cross as binary64.
+    ///
     /// The result depends only on the program and the arguments' values:
     /// not on the thread, the workspace's history, or any other call.
     #[allow(clippy::too_many_arguments)]
-    pub fn eval_into(
+    pub fn eval_into<T: RhsScalar>(
+        &self,
+        u: &[T],
+        aux: &[T],
+        p: &[f64],
+        t: f64,
+        forcing: &ForcingSet,
+        du: &mut [T],
+        ws: &mut RhsWorkspace,
+    ) -> Result<(), RhsError> {
+        let inner = &*self.inner;
+        check_vector_lengths(
+            &inner.blocks,
+            u.len(),
+            aux.len(),
+            du.len(),
+            p.len(),
+            inner.params.len(),
+        )?;
+        check_owner(ws, inner.id)?;
+        check_forcing(forcing, &inner.slots)?;
+        let _precision = inner.model.precision.enter();
+        let working = crate::precision::of_variable;
+        if T::IS_F32
+            && inner
+                .layout
+                .u
+                .iter()
+                .chain(&inner.layout.aux)
+                .any(|block| !working(&block.name).is_f32())
+        {
+            return Err(RhsError::Fault {
+                code: crate::diagnostic::codes::PRECISION_CHOICE_CONFLICT,
+                message: "binary32 state buffers require all state and auxiliary slots to evaluate in binary32".into(),
+            });
+        }
+        if !inner.rounds_inputs
+            && let (Some(u), Some(aux), Some(du)) =
+                (T::f64_inputs(u), T::f64_inputs(aux), T::f64_output(du))
+        {
+            return self.eval_working(u, aux, p, t, forcing, du, ws);
+        }
+        let mut boundary = std::mem::take(&mut ws.boundary);
+        let stage = |out: &mut Vec<f64>, values: &[T], blocks: &[TileBlock]| {
+            out.clear();
+            out.extend(values.iter().copied().map(Into::into));
+            for block in blocks {
+                if working(&block.name).is_f32() {
+                    let len = block.len();
+                    for value in &mut out[block.base..block.base + len] {
+                        *value = Precision::Float32.round(*value);
+                    }
+                }
+            }
+        };
+        stage(&mut boundary.u, u, &inner.layout.u);
+        stage(&mut boundary.aux, aux, &inner.layout.aux);
+        boundary.p.clear();
+        boundary.p.extend(
+            p.iter()
+                .zip(&inner.params)
+                .map(|(&value, slot)| working(&slot.name).round(value)),
+        );
+        let forcing = rounded_forcing(&mut boundary.forcing, forcing, working);
+        boundary.du.resize(du.len(), 0.0);
+        let result = self.eval_working(
+            &boundary.u,
+            &boundary.aux,
+            &boundary.p,
+            t,
+            forcing,
+            &mut boundary.du,
+            ws,
+        );
+        if result.is_ok() {
+            for (slot, &value) in du.iter_mut().zip(&boundary.du) {
+                *slot = T::from_f64(value);
+            }
+        }
+        ws.boundary = boundary;
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn eval_working(
         &self,
         u: &[f64],
         aux: &[f64],
@@ -1070,11 +1373,6 @@ impl RhsProgram {
         du: &mut [f64],
         ws: &mut RhsWorkspace,
     ) -> Result<(), RhsError> {
-        let inner = &*self.inner;
-        check_lengths(&inner.blocks, u, aux, du, p, inner.params.len())?;
-        check_owner(ws, inner.id)?;
-        check_forcing(forcing, &inner.slots)?;
-        let _precision = inner.model.precision.enter();
         let scope = super::FaultScope::enter();
         self.run(u, aux, p, t, Forcing::Set(forcing), du, ws);
         match scope.finish() {
@@ -1129,6 +1427,9 @@ impl RhsProgram {
                 writes: c.var_shapes.keys().cloned().collect(),
                 aux: Vec::new(),
                 state_layout: Vec::new(),
+                precisions: OnceLock::new(),
+                document_precision_source: PrecisionSource::Declared(c.precision.document),
+                rounds_inputs: c.precision.is_f32(),
                 params: Vec::new(),
                 slots: Arc::from(Vec::new()),
                 default_set: ForcingSet::for_slots(Arc::from(Vec::new()), Vec::new())
@@ -1158,6 +1459,7 @@ impl RhsProgram {
             state: Vec::new(),
             dy: Vec::new(),
             exec: WsExec::Tape(Box::new(TapeCtx::new(Arc::clone(tape)))),
+            boundary: BoundaryBuffers::default(),
             _not_sync: PhantomData,
         }
     }
@@ -1306,6 +1608,56 @@ fn fill_forcing_map(map: &mut HashMap<String, ArrayD<f64>>, set: &ForcingSet) {
     }
 }
 
+fn rounded_forcing<'a>(
+    cached: &'a mut Option<(u64, ForcingSet)>,
+    input: &ForcingSet,
+    precision: impl Fn(&str) -> Precision,
+) -> &'a ForcingSet {
+    if cached
+        .as_ref()
+        .is_none_or(|(epoch, _)| *epoch != input.epoch())
+    {
+        let buffers = input
+            .slots()
+            .iter()
+            .zip(input.bufs())
+            .map(|(slot, buf)| {
+                let p = precision(&slot.name);
+                if p.is_f32() {
+                    buf.iter().map(|&x| p.round(x)).collect()
+                } else {
+                    Arc::clone(buf)
+                }
+            })
+            .collect();
+        let rounded = ForcingSet::for_slots(input.slots_arc(), buffers)
+            .expect("rounding preserves forcing slot lengths");
+        *cached = Some((input.epoch(), rounded));
+    }
+    &cached.as_ref().expect("forcing was staged").1
+}
+
+fn round_binary32(values: &mut [f64]) {
+    for x in values {
+        *x = Precision::Float32.round(*x);
+    }
+}
+
+fn restricted_inputs<'a>(
+    precision: Precision,
+    boundary: &'a mut BoundaryBuffers,
+    p: &'a [f64],
+    forcing: &'a ForcingSet,
+) -> (&'a [f64], &'a ForcingSet) {
+    if !precision.is_f32() {
+        return (p, forcing);
+    }
+    boundary.p.clear();
+    boundary.p.extend(p.iter().map(|&x| precision.round(x)));
+    let forcing = rounded_forcing(&mut boundary.forcing, forcing, |_| precision);
+    (&boundary.p, forcing)
+}
+
 fn check_forcing(set: &ForcingSet, slots: &Arc<[ForcingSlot]>) -> Result<(), RhsError> {
     if !set.fits(slots) {
         return Err(set.mismatch(slots));
@@ -1340,17 +1692,26 @@ fn check_lengths(
     p: &[f64],
     n_params: usize,
 ) -> Result<(), RhsError> {
-    if u.len() != layout.u_len {
-        return Err(forcing::shape("u", layout.u_len, u.len()));
-    }
-    if du.len() != layout.u_len {
-        return Err(forcing::shape("du", layout.u_len, du.len()));
-    }
-    if aux.len() != layout.aux_len {
-        return Err(forcing::shape("aux", layout.aux_len, aux.len()));
-    }
-    if p.len() != n_params {
-        return Err(forcing::shape("p", n_params, p.len()));
+    check_vector_lengths(layout, u.len(), aux.len(), du.len(), p.len(), n_params)
+}
+
+fn check_vector_lengths(
+    layout: &Blocks,
+    u: usize,
+    aux: usize,
+    du: usize,
+    p: usize,
+    n_params: usize,
+) -> Result<(), RhsError> {
+    for (what, expected, got) in [
+        ("u", layout.u_len, u),
+        ("du", layout.u_len, du),
+        ("aux", layout.aux_len, aux),
+        ("p", n_params, p),
+    ] {
+        if expected != got {
+            return Err(forcing::shape(what, expected, got));
+        }
     }
     Ok(())
 }

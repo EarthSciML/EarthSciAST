@@ -22,9 +22,10 @@ use super::forcing::{ForcingSet, ForcingSlot, RhsError, shape};
 use super::tile::{declined_error, plain_precision, refused, shell};
 use super::walk::AxisSpec;
 use super::{
-    Blocks, Decomposition, LaneKind, LaneLayout, ProgramModel, RhsProgram, RhsWorkspace, TileInput,
-    WsExec, build_error, check_forcing, check_lengths, check_owner, index_set_sizes,
-    next_program_id, slot_map, tape_fault, var_infos,
+    Blocks, BoundaryBuffers, Decomposition, LaneKind, LaneLayout, ProgramModel, RhsProgram,
+    RhsWorkspace, TileInput, WsExec, build_error, check_forcing, check_lengths, check_owner,
+    index_set_sizes, next_program_id, restricted_inputs, round_binary32, slot_map, tape_fault,
+    var_infos,
 };
 use crate::simulate::SimulateError;
 use crate::simulate_array::tape::{
@@ -94,6 +95,7 @@ impl std::fmt::Debug for LaneProgram {
 pub struct LaneInputs {
     owner: u64,
     forcing: Option<ForcingSet>,
+    boundary: BoundaryBuffers,
     values: Vec<f64>,
     state: Vec<f64>,
     ctx: Box<TapeCtx>,
@@ -153,6 +155,7 @@ impl LaneProgram {
             Box::new(ctx)
         };
         RhsWorkspace {
+            boundary: Default::default(),
             owner: inner.id,
             state: vec![0.0; n],
             dy: Vec::new(),
@@ -238,6 +241,7 @@ impl LaneProgram {
         LaneInputs {
             owner: inner.id,
             forcing: None,
+            boundary: BoundaryBuffers::default(),
             values: vec![0.0; inner.capacity * inner.n_inputs],
             state: vec![0.0; inner.capacity * (inner.n_inputs + inner.sets.len())],
             ctx: Box::new(ctx),
@@ -269,16 +273,18 @@ impl LaneProgram {
         }
         check_forcing(forcing, &inner.slots)?;
         self.write_cells(&mut inputs.state, inner.capacity * inner.n_inputs, cells, n)?;
+        let (p, rounded_forcing) =
+            restricted_inputs(inner.precision, &mut inputs.boundary, p, forcing);
         let _precision = crate::precision::enter(inner.precision);
         let scope = crate::simulate_array::FaultScope::enter();
         let call = CallInputs {
             state: &inputs.state,
             params: p,
             forcing: ForcingView::Slots {
-                bufs: forcing.bufs(),
+                bufs: rounded_forcing.bufs(),
                 slot_of: &inner.slot_of[GATHER],
             },
-            forcing_epoch: Some(forcing.epoch()),
+            forcing_epoch: Some(rounded_forcing.epoch()),
             t,
             declared: &inner.declared,
         };
@@ -348,6 +354,9 @@ impl LaneProgram {
         let (nu, na) = (inner.blocks.u_len, inner.blocks.aux_len);
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..nu + na].copy_from_slice(aux);
+        if inner.precision.is_f32() {
+            round_binary32(&mut ws.state[..nu + na]);
+        }
         let mut state = std::mem::take(&mut ws.state);
         let res = self.write_cells(&mut state, nu + na, cells, n);
         let at = nu + na + inner.capacity * inner.sets.len();
@@ -356,6 +365,7 @@ impl LaneProgram {
         }
         ws.state = state;
         res?;
+        let (p, forcing) = restricted_inputs(inner.precision, &mut ws.boundary, p, forcing);
         let WsExec::Lanes { main, pre } = &mut ws.exec else {
             unreachable!("a lane workspace runs lane tapes");
         };

@@ -156,3 +156,39 @@ func TestMountElementType_AReactionSystemCannotCarryIt(t *testing.T) {
 		})
 	}
 }
+
+func TestPrecisionSource(t *testing.T) {
+	file, err := LoadPath(filepath.Join(mountElementTypeDir, "root_unspecified.esm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, doc := range []*ESMFile{file, reloadPrecisionSource(t, file)} {
+		wide, plain := doc.Models["Wide"].Variables["x"], doc.Models["Plain"].Variables["x"]
+		if got := PrecisionSource(doc, &wide); got != "Float64" {
+			t.Errorf("mounted binary64 variable: %s", got)
+		}
+		if got := PrecisionSource(doc, &plain); got != "unspecified" {
+			t.Errorf("mounted variable inheriting omission: %s", got)
+		}
+	}
+	legacy, err := LoadPath(filepath.Join(mountElementTypeDir, "leaf_none.esm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := PrecisionSource(legacy, nil); got != "Float64" {
+		t.Errorf("legacy omission: %s", got)
+	}
+}
+
+func reloadPrecisionSource(t *testing.T, file *ESMFile) *ESMFile {
+	t.Helper()
+	text, err := ToJSON(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := LoadString(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}

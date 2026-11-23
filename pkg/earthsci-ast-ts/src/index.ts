@@ -410,5 +410,6 @@ export {
 // derived from the embedded schema's `$id` in parse.ts. `LIBRARY_VERSION` is
 // this npm package's own version. `VERSION` (which aliased the schema
 // version here and the package version in Rust) is gone.
+export { precisionSource } from './precision.js'
 export { SCHEMA_VERSION } from './parse.js'
 export { LIBRARY_VERSION } from './version.js'

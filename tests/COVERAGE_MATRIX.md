@@ -149,6 +149,13 @@ Based on libraries spec Section 3.4:
    tests/invalid/scoped_ref_errors.esm     # Invalid reference patterns
    ```
 
+### Declared and unspecified precision
+
+| Fixture | Coverage |
+| --- | --- |
+| `conformance/mount_element_type/root_unspecified.esm` | All bindings preserve a mounted binary64 declaration and inherited omission through load and emit. |
+| `conformance/precision_source/rounding.esm` | Rust checks exact per-operation rounding, flat precision slots, typed state buffers, and declared, legacy, mixed and key variants on the official RHS paths. |
+
 ### Progress Tracking
 
 **Current Status**: 13/39 test fixture categories completed (33%)

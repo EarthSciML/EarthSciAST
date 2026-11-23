@@ -15,7 +15,7 @@ use super::walk::{AxisSpec, Read, Refusal, Scope, VarInfo, Walker};
 use super::{
     Blocks, Decomposition, ProgramModel, RhsProgram, RhsWorkspace, TileBox, TileInput, TileLayout,
     WsExec, check_forcing, check_lengths, check_owner, index_set_sizes, next_program_id,
-    range_error, slot_map, tape_fault, var_infos,
+    range_error, restricted_inputs, round_binary32, slot_map, tape_fault, var_infos,
 };
 use crate::diagnostic::codes;
 use crate::simulate::SimulateError;
@@ -80,6 +80,7 @@ impl TileProgram {
         let mut ctx = TapeCtx::new(Arc::clone(&self.inner.prog));
         ctx.set_serial();
         RhsWorkspace {
+            boundary: Default::default(),
             owner: self.inner.id,
             state: vec![0.0; n],
             dy: Vec::new(),
@@ -110,6 +111,10 @@ impl TileProgram {
         let nu = inner.blocks.u_len;
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..].copy_from_slice(aux);
+        if inner.precision.is_f32() {
+            round_binary32(&mut ws.state);
+        }
+        let (p, forcing) = restricted_inputs(inner.precision, &mut ws.boundary, p, forcing);
         let WsExec::Tape(ctx) = &mut ws.exec else {
             unreachable!("a tile workspace runs a tape");
         };

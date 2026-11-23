@@ -1,6 +1,15 @@
 {
   "description": "What each fixture loads to, and evaluates to (esm-spec §4.7 'Working precision crosses a mount'; CONFORMANCE_SPEC §5.18.2b). `loads` gives, for every variable of every model (subsystems as Model.Sub.var), the `element_type` it carries after load — a string, or null for a variable that carries none — and the document's own `domain.element_type` (null when absent). ALL FIVE bindings assert `loads`. `load_errors` maps a fixture to {code: [bindings]}: each listed binding MUST refuse the fixture at load with that code, and a binding listed under none MUST still refuse it (with any error). `values` (zero tolerance, compared bit for bit) and `build_errors` are asserted by the bindings listed in `evaluated_by`: they evaluate per-variable precision; the others carry it.",
   "loads": {
+    "root_unspecified.esm": {
+      "domain_element_type": null,
+      "element_types": {
+        "Wide.a": "Float64",
+        "Wide.x": "Float64",
+        "Plain.a": null,
+        "Plain.x": null
+      }
+    },
     "leaf_f32.esm": {
       "domain_element_type": "Float32",
       "element_types": {

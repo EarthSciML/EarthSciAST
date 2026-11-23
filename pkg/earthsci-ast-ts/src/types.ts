@@ -482,6 +482,8 @@ export interface ModelVariable {
   lb?: number | string
   /** Upper bound, in the same two forms as {@link ModelVariable.lb}. */
   ub?: number | string
+  /** Declared working precision of this variable, overriding the document. */
+  element_type?: 'Float32' | 'Float64'
 }
 
 /**

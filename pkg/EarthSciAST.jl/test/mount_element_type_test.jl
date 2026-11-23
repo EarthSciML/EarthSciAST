@@ -62,3 +62,30 @@ using EarthSciAST
         end
     end
 end
+
+
+@testset "Declared and unspecified precision sources (§11.3.3)" begin
+    dir = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "mount_element_type")
+    file = load_path(joinpath(dir, "root_unspecified.esm"))
+    reloaded = load_string(JSON3.write(EarthSciAST.serialize_esm_file(file)))
+    for doc in (file, reloaded)
+        @test precision_source(doc, doc.models["Wide"].variables["x"]) == "Float64"
+        @test precision_source(doc, doc.models["Plain"].variables["x"]) == "unspecified"
+    end
+    @test precision_source(load_path(joinpath(dir, "leaf_none.esm"))) == "Float64"
+end
+
+
+@testset "External native binary32 is refused (§11.3.3)" begin
+    dir = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "precision_source")
+    file = load_path(joinpath(dir, "rounding.esm"))
+    prob = esm_problem(file, (0.0, 1.0))
+    @test rhs_program(prob; unspecified_eltype = Float64) isa EarthSciAST.RhsProgram
+    err = try
+        rhs_program(prob; unspecified_eltype = Float32)
+        nothing
+    catch e
+        e
+    end
+    @test err !== nothing && err.code == "float32_unsupported"
+end

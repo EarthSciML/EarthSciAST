@@ -60,6 +60,7 @@ import { applyMountUrlSubstitutions, resolveDataSourceUrls } from './data-source
 import { loadString, validateSchema, ROOT_PATH } from './parse.js'
 import { toJson } from './serialize.js'
 import { prepareDocumentOps, raiseFaqVersionFloor, rejectVersionGatedConstructs } from './parse.js'
+import { omittedPrecision } from './precision.js'
 import { raiseConstUnitsVersionFloor } from './solver.js'
 import { raiseVariableBoundsVersionFloor } from './variable-bounds.js'
 
@@ -227,7 +228,7 @@ export function resolveSubsystemRefsSync(
 
   // esm-spec §4.7 "Working precision crosses a mount": the root's effective
   // precision, which every edge it carries compares its leaf against.
-  const precision = declaredElementType(file) ?? DEFAULT_ELEMENT_TYPE
+  const precision = declaredElementType(file) ?? omittedPrecision(file.esm)
 
   // Process all models. A top-level `models.<k>` that is a bare `{ ref }` is a
   // MOUNT EDGE in its own right (esm-spec §4.7 "Two mount forms, one

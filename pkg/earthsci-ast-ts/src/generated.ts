@@ -30,7 +30,7 @@ export type ModelVariable = ModelVariable1 & {
    */
   default_units?: string;
   /**
-   * Floating-point precision of THIS variable and of the arithmetic over it, overriding the document-wide `domain.element_type` (esm-spec §11.3.1). It exists for the key/quantity split one document-wide precision cannot express: a relational model whose floating-point QUANTITIES are binary32 still has join keys and integer identifiers binary32 cannot represent (a ten-digit category code is ~2.26e9, 135x binary32's exact-integer limit of 2^24), so the keys declare `Float64` while the quantities follow the document. Precision propagates from the leaves: an operator evaluates at its operands' precision, a numeric literal adopts its context's, and an operator whose operands carry DIFFERENT precisions is an error naming both variables — never a silent widening. Omitted means the document's `domain.element_type`.
+   * Floating-point precision of THIS variable and of the arithmetic over it, overriding the document-wide `domain.element_type` (esm-spec §11.3.1). It exists for the key/quantity split one document-wide precision cannot express: a relational model whose floating-point QUANTITIES are binary32 still has join keys and integer identifiers binary32 cannot represent (a ten-digit category code is ~2.26e9, 135x binary32's exact-integer limit of 2^24), so the keys declare `Float64` while the quantities follow the document. Precision propagates from the leaves: an operator evaluates at its operands' precision, a numeric literal adopts its context's, and an operator whose operands carry DIFFERENT precisions is an error naming both variables — never a silent widening. Omitted means the document's precision, which may be unspecified (esm-spec §11.3.3).
    */
   element_type?: "Float32" | "Float64";
   description?: string;
@@ -1732,7 +1732,7 @@ export interface Domain {
     reference_time?: string;
   };
   /**
-   * Floating point precision.
+   * Declared working precision (esm-spec §11.3.1). Omission may leave precision unspecified (§11.3.3). Built-in evaluators use binary64 for unspecified precision.
    */
   element_type?: "Float32" | "Float64";
   /**

@@ -261,6 +261,20 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
         }
     }
 
+    if scope == ValidationScope::Full {
+        unit_warnings.extend(
+            crate::precision_infer::unspecified_keys(esm_file)
+                .into_iter()
+                .map(|site| UnitWarning {
+                    path: site.path,
+                    code: crate::diagnostic::codes::KEY_PRECISION_UNSPECIFIED.to_string(),
+                    message: site.message,
+                    lhs_units: String::new(),
+                    rhs_units: String::new(),
+                }),
+        );
+    }
+
     // An inline test's assertion targets, override keys and assertion ranks
     // (esm-spec §6.6.2, §6.6.3, §6.6.5).
     crate::inline_test_checks::validate_inline_tests(esm_file, &mut structural_errors);

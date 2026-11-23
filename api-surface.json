@@ -94,18 +94,18 @@
     }
   },
   "counts": {
-    "symbols": 985,
+    "symbols": 993,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 358,
-      "typescript": 239,
-      "python": 270,
-      "rust": 394,
-      "go": 457
+      "julia": 359,
+      "typescript": 240,
+      "python": 271,
+      "rust": 402,
+      "go": 458
     },
     "by_tier": {
-      "extension": 676,
-      "stable": 309
+      "extension": 683,
+      "stable": 310
     }
   },
   "planned": [
@@ -4536,6 +4536,14 @@
       }
     },
     {
+      "name": "group_precision_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "GroupPrecisionRecord"
+      }
+    },
+    {
       "name": "group_subexpressions_by_type",
       "kind": "function",
       "tier": "extension",
@@ -6040,6 +6048,34 @@
       }
     },
     {
+      "name": "precision_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrecisionRecord"
+      }
+    },
+    {
+      "name": "precision_source",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "PrecisionSource",
+        "julia": "precision_source",
+        "python": "precision_source",
+        "rust": "precision_source",
+        "typescript": "precisionSource"
+      }
+    },
+    {
+      "name": "precision_source",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrecisionSource"
+      }
+    },
+    {
       "name": "predecessors",
       "kind": "function",
       "tier": "extension",
@@ -6874,6 +6910,14 @@
       }
     },
     {
+      "name": "rhs_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RhsOptions"
+      }
+    },
+    {
       "name": "rhs_program",
       "kind": "function",
       "tier": "stable",
@@ -6889,6 +6933,22 @@
       "tier": "extension",
       "bindings": {
         "rust": "RhsProgram"
+      }
+    },
+    {
+      "name": "rhs_program_with_options",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "rhs_program_with_options"
+      }
+    },
+    {
+      "name": "rhs_scalar",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RhsScalar"
       }
     },
     {
@@ -8776,6 +8836,14 @@
         "python": "VariableNode",
         "rust": "VariableNode",
         "typescript": "VariableNode"
+      }
+    },
+    {
+      "name": "variable_precision_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "VariablePrecisionRecord"
       }
     },
     {

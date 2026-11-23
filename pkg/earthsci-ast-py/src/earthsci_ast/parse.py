@@ -112,6 +112,7 @@ from .esm_types import (
     _sum_entries,
 )
 from .json_walk import ExpressionTemplateError, decode_document, expand_ref_env, read_ref_text
+from .precision import _omitted_precision
 
 
 class SchemaValidationError(EarthSciAstError):
@@ -2851,7 +2852,7 @@ def resolve_subsystem_refs(
 
     # esm-spec §4.7 "Working precision crosses a mount": this document's own
     # declaration, else the root default.
-    precision = _declared_element_type(esm_file) or _DEFAULT_ELEMENT_TYPE
+    precision = _declared_element_type(esm_file) or _omitted_precision(esm_file.esm)
     for model in esm_file.models.values():
         _resolve_model_subsystems(
             model,
@@ -2881,7 +2882,7 @@ def resolve_model_refs(
     loader_metaparameters: dict[str, int] | None = None,
     parent_metaparameters: dict[str, int] | None = None,
     _mount_chain: tuple[str, ...] = (),
-    _enclosing_precision: str = _DEFAULT_ELEMENT_TYPE,
+    _enclosing_precision: str | None = None,
     _forwarded: dict[str, int] | None = None,
 ) -> None:
     """Resolve all top-level model and reaction-system references in an ESM file.
@@ -2946,7 +2947,9 @@ def resolve_model_refs(
     # esm-spec §4.7 "Working precision crosses a mount": THIS document's
     # effective precision — its own declaration, else its mounter's (the root
     # default at depth zero). Every edge below compares its leaf against it.
-    precision = _declared_element_type(esm_file) or _enclosing_precision
+    precision = (
+        _declared_element_type(esm_file) or _enclosing_precision or _omitted_precision(esm_file.esm)
+    )
     mounted = False
     for form in (_MODEL_MOUNT, _REACTION_SYSTEM_MOUNT):
         resolved: dict[str, Any] = {}

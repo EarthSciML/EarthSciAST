@@ -60,7 +60,7 @@ func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta, ap
 	// `parentMeta` narrows to each nested scope.
 	// esm-spec §4.7 "Working precision crosses a mount": the root's effective
 	// precision is its own declaration, else the default.
-	precision := defaultElementType
+	precision := omittedPrecision(file.ESM)
 	if file.Domain != nil && file.Domain.ElementType != nil {
 		precision = *file.Domain.ElementType
 	}
@@ -1430,7 +1430,8 @@ func inlineRootRefsRaw(view map[string]any, authored string, basePath string, ap
 	parentMeta := metaEnvFromDecls(view["metaparameters"], apiMeta)
 	// esm-spec §4.7 "Working precision crosses a mount": the root's effective
 	// precision, which every edge it carries compares its leaf against.
-	precision := defaultElementType
+	version, _ := view["esm"].(string)
+	precision := omittedPrecision(version)
 	if p, ok := declaredElementTypeRaw(view); ok {
 		precision = p
 	}
@@ -1497,12 +1498,6 @@ func applyStagedIndexSets(file *ESMFile, staged map[string]IndexSet, rootEnv map
 	}
 	return nil
 }
-
-// defaultElementType is the working precision a ROOT that declares no
-// `domain.element_type` evaluates in (esm-spec §11.3). A MOUNTED document that
-// declares none adopts its mounter's instead (esm-spec §4.7 "Working precision
-// crosses a mount").
-const defaultElementType = "Float64"
 
 // declaredElementTypeRaw is the `domain.element_type` a raw document view
 // declares, and whether it declares one.

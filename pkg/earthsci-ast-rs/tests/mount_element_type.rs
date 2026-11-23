@@ -214,3 +214,27 @@ fn the_written_fields_round_trip() {
         );
     }
 }
+
+#[test]
+fn mounted_declarations_and_legacy_defaults_have_distinct_sources() {
+    use earthsci_ast::{PrecisionSource, load_string, precision::Precision, precision_source};
+    let dir = common::category_dir("mount_element_type");
+    let file = load_path(dir.join("root_unspecified.esm")).unwrap();
+    let reloaded = load_string(&to_json(&file).unwrap()).unwrap();
+    for doc in [file, reloaded] {
+        let models = doc.models.as_ref().unwrap();
+        assert_eq!(
+            precision_source(&doc, Some(&models["Wide"].variables["x"])).unwrap(),
+            PrecisionSource::Declared(Precision::Float64),
+        );
+        assert_eq!(
+            precision_source(&doc, Some(&models["Plain"].variables["x"])).unwrap(),
+            PrecisionSource::Unspecified,
+        );
+    }
+    let legacy = load_path(dir.join("leaf_none.esm")).unwrap();
+    assert_eq!(
+        precision_source(&legacy, None).unwrap(),
+        PrecisionSource::Declared(Precision::Float64)
+    );
+}

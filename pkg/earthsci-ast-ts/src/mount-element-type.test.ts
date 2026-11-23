@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { precisionSource } from './precision.js'
 import { loadPath, loadString } from './parse.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import { toJson } from './serialize.js'
@@ -86,4 +87,18 @@ describe('mount_element_type (esm-spec §4.7 "Working precision crosses a mount"
       if (code !== undefined) expect((err as { code?: string }).code).toBe(code)
     })
   }
+})
+
+it('distinguishes mounted declarations, inherited omissions and legacy roots', async () => {
+  const file = loadString(JSON.stringify(await emitted('root_unspecified.esm')))
+  for (const doc of [file, loadString(toJson(file))]) {
+    const wide = doc.models?.Wide
+    const plain = doc.models?.Plain
+    if (!wide || !('variables' in wide) || !plain || !('variables' in plain)) {
+      throw new Error('expected resolved models')
+    }
+    expect(precisionSource(doc, wide.variables.x)).toBe('Float64')
+    expect(precisionSource(doc, plain.variables.x)).toBe('unspecified')
+  }
+  expect(precisionSource(loadPath(path.join(dir, 'leaf_none.esm')))).toBe('Float64')
 })

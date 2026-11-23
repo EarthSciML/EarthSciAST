@@ -911,3 +911,208 @@ fn an_interpreter_call_reads_the_forcing_without_copying_it() {
         "a warm interpreter call copied the forcing buffer"
     );
 }
+
+mod precision_source {
+    use earthsci_ast::{
+        Compiler, EsmProblem, PrecisionSource, ProblemOptions, RhsOptions, RhsProgram, esm_problem,
+        load_string, precision::Precision, rhs_program, rhs_program_with_options,
+    };
+    use serde_json::{Value, json};
+
+    fn witness() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../tests/conformance/precision_source/rounding.esm"
+        ))
+        .unwrap()
+    }
+
+    fn problem(doc: &Value, compiler: Compiler) -> EsmProblem {
+        let typed = load_string(&doc.to_string()).unwrap();
+        esm_problem(
+            &typed,
+            (0., 1.),
+            ProblemOptions {
+                compiler: Some(compiler),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    }
+
+    fn narrow(doc: &Value, compiler: Compiler) -> Result<RhsProgram, earthsci_ast::SimulateError> {
+        let typed = load_string(&doc.to_string()).unwrap();
+        rhs_program_with_options(
+            &typed,
+            (0., 1.),
+            ProblemOptions {
+                compiler: Some(compiler),
+                ..Default::default()
+            },
+            RhsOptions {
+                unspecified_evaluation: Precision::Float32,
+            },
+        )
+    }
+
+    fn rhs(prog: &RhsProgram) -> Vec<f64> {
+        let (u, aux) = prog.default_state();
+        let p = prog
+            .parameters()
+            .iter()
+            .map(|p| p.default.unwrap())
+            .collect::<Vec<_>>();
+        let mut out = vec![0.0; u.len()];
+        prog.eval_into(
+            &u,
+            &aux,
+            &p,
+            0.,
+            &prog.default_forcing(),
+            &mut out,
+            &mut prog.new_workspace(),
+        )
+        .unwrap();
+        out
+    }
+
+    #[test]
+    fn choice_uses_per_operation_rounding_only_on_external_rhs() {
+        for compiler in [Compiler::Interpreter, Compiler::Native] {
+            let prob = problem(&witness(), compiler);
+            let standard = rhs_program(&prob).unwrap();
+            assert_eq!(
+                standard.precision_sources(),
+                &[PrecisionSource::Unspecified; 2]
+            );
+            assert_eq!(standard.state_precisions(), &[Precision::Float64; 2]);
+            assert_eq!(rhs(&standard), [1.0; 2]);
+
+            let chosen = narrow(&witness(), compiler).unwrap();
+            assert_eq!(
+                chosen.precision_sources(),
+                &[PrecisionSource::Unspecified; 2]
+            );
+            assert_eq!(chosen.state_precisions(), &[Precision::Float32; 2]);
+            let expected = f32::from_bits(1.0_f32.to_bits() - 1);
+            assert_eq!(rhs(&chosen), [f64::from(expected); 2]);
+            let p = chosen
+                .parameters()
+                .iter()
+                .map(|p| p.default.unwrap())
+                .collect::<Vec<_>>();
+            let mut out = [0.0_f32; 2];
+            chosen
+                .eval_into::<f32>(
+                    &[0.0; 2],
+                    &[],
+                    &p,
+                    0.,
+                    &chosen.default_forcing(),
+                    &mut out,
+                    &mut chosen.new_workspace(),
+                )
+                .unwrap();
+            assert_eq!(out, [expected; 2]);
+            assert_eq!(rhs(&rhs_program(&prob).unwrap()), [1.0; 2]);
+        }
+    }
+
+    #[test]
+    fn a_declared_root_and_a_legacy_omission_are_both_binding() {
+        let mut doc = witness();
+        doc["esm"] = json!("1.2.0");
+        let prob = problem(&doc, Compiler::Interpreter);
+        assert_eq!(
+            rhs_program(&prob).unwrap().precision_sources(),
+            &[PrecisionSource::Declared(Precision::Float64); 2]
+        );
+        assert_eq!(
+            narrow(&doc, Compiler::Interpreter).unwrap_err().code(),
+            Some("precision_choice_conflict")
+        );
+
+        doc["esm"] = json!("1.3.0");
+        doc["domain"] = json!({"element_type": "Float64"});
+        assert_eq!(
+            narrow(&doc, Compiler::Interpreter).unwrap_err().code(),
+            Some("precision_choice_conflict")
+        );
+
+        doc.as_object_mut().unwrap().remove("domain");
+        doc["models"]["M"]["variables"]["a"]["element_type"] = json!("Float64");
+        doc["models"]["M"]["variables"]["x"]["element_type"] = json!("Float64");
+        let err = narrow(&doc, Compiler::Interpreter).unwrap_err();
+        assert_eq!(err.code(), Some("precision_choice_conflict"));
+        assert!(err.to_string().contains("M.x"), "{err}");
+    }
+
+    #[test]
+    fn a_mixed_working_expression_names_the_conflicting_variables() {
+        let mut doc = witness();
+        doc["models"]["M"]["variables"]["a"]["element_type"] = json!("Float64");
+        let err = narrow(&doc, Compiler::Interpreter).unwrap_err();
+        assert_eq!(err.code(), Some("precision_choice_conflict"));
+        for name in ["a", "x", "unspecified_evaluation", "Float64"] {
+            assert!(err.to_string().contains(name), "{err}");
+        }
+    }
+
+    #[test]
+    fn chosen_precision_can_agree_with_a_declared_operand() {
+        let mut doc = witness();
+        doc["models"]["M"]["variables"]["a"]["element_type"] = json!("Float32");
+        let typed = load_string(&doc.to_string()).unwrap();
+        assert_eq!(
+            esm_problem(&typed, (0., 1.), Default::default())
+                .unwrap_err()
+                .code(),
+            Some("mixed_element_type"),
+        );
+        for compiler in [Compiler::Interpreter, Compiler::Native] {
+            let chosen = narrow(&doc, compiler).unwrap();
+            assert_eq!(rhs(&chosen), [0.9999999403953552; 2]);
+        }
+    }
+
+    #[test]
+    fn an_unspecified_join_key_is_refused_before_compilation() {
+        let mut doc = witness();
+        doc["models"]["M"]["equations"][0]["rhs"]["join"] = json!([{"on": [["a", "a"]]}]);
+        let err = narrow(&doc, Compiler::Native).unwrap_err();
+        assert_eq!(err.code(), Some("key_precision_unspecified"));
+        assert!(err.to_string().contains("join.on"), "{err}");
+    }
+
+    #[test]
+    fn a_declared_key_comparison_stays_exact_in_a_binary32_group() {
+        let mut doc = witness();
+        doc["models"]["M"]["variables"]["a"]["default"] = json!(2260007005.0);
+        doc["models"]["M"]["variables"]["b"] = json!({
+            "type": "parameter", "default": 2260007015.0, "units": "1"
+        });
+        doc["models"]["M"]["equations"][0]["rhs"]["expr"] = json!({
+            "op": "ifelse",
+            "args": [{"op": "==", "args": ["a", "b"]}, 1.0, 0.0],
+        });
+        let typed = load_string(&doc.to_string()).unwrap();
+        let result = earthsci_ast::validate(&typed);
+        assert!(
+            result
+                .unit_warnings
+                .iter()
+                .any(|w| w.code == "key_precision_unspecified")
+        );
+        for compiler in [Compiler::Interpreter, Compiler::Native] {
+            assert_eq!(
+                narrow(&doc, compiler).unwrap_err().code(),
+                Some("key_precision_unspecified")
+            );
+        }
+        for key in ["a", "b"] {
+            doc["models"]["M"]["variables"][key]["element_type"] = json!("Float64");
+        }
+        for compiler in [Compiler::Interpreter, Compiler::Native] {
+            assert_eq!(rhs(&narrow(&doc, compiler).unwrap()), [0.; 2]);
+        }
+    }
+}

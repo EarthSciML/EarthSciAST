@@ -166,6 +166,8 @@ pub fn resolve_subsystem_refs_with_metaparameters(
 ) -> Result<Map<String, Value>, DiagnosticError> {
     let root_meta = root_metaparameter_env(value, api_meta);
     let mut visited = HashSet::new();
+    let root_precision =
+        crate::precision::omitted_element_type(value.get("esm").and_then(Value::as_str));
     walk_top_level(
         value,
         &DocScope {
@@ -174,7 +176,7 @@ pub fn resolve_subsystem_refs_with_metaparameters(
             api_meta,
             forwarded: &BTreeMap::new(),
             caller_env: &root_meta,
-            enclosing_precision: DEFAULT_ELEMENT_TYPE,
+            enclosing_precision: root_precision,
         },
         &mut visited,
         true,
@@ -1664,10 +1666,6 @@ pub(crate) fn mount_edge_skeleton(document: &Value) -> Value {
     Value::Object(out)
 }
 
-/// The working precision a document that declares none evaluates in
-/// (esm-spec §11.3: `domain.element_type` defaults to `"Float64"`).
-const DEFAULT_ELEMENT_TYPE: &str = "Float64";
-
 /// The `domain.element_type` a document declares, if it declares one.
 fn declared_element_type(doc: &Value) -> Option<String> {
     doc.get("domain")
@@ -1678,7 +1676,7 @@ fn declared_element_type(doc: &Value) -> Option<String> {
 
 /// A document's EFFECTIVE working precision (esm-spec §4.7 "Working precision
 /// crosses a mount"): its own declaration, else the one it inherits from the
-/// document that mounts it. A root inherits [`DEFAULT_ELEMENT_TYPE`].
+/// document that mounts it. A root uses the version-dependent default.
 fn effective_element_type(doc: &Value, enclosing: &str) -> String {
     declared_element_type(doc).unwrap_or_else(|| enclosing.to_string())
 }

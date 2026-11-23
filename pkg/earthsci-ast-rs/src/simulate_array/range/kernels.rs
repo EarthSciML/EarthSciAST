@@ -510,6 +510,7 @@ pub fn compile_kernels(
         Some(&u_names),
         ForcingSource::Problem(&forcing),
         prob.runtime_array_parameters,
+        super::PrecisionSource::Declared(prob.precision.document),
     )?;
     let u_layout = layout_of(&rhs.layout().u);
     let z_layout = layout_of(&rhs.layout().aux);
@@ -883,6 +884,7 @@ fn value_or_map_kernel(
         Some(&writes),
         ForcingSource::Parent(&rhs.inner),
         rhs.inner.runtime_array_parameters,
+        rhs.inner.document_precision_source,
     )?;
 
     // ---- the copy plans ---------------------------------------------------

@@ -17,6 +17,7 @@ import json
 import pytest
 from conftest import FIXTURES_ROOT
 
+from earthsci_ast import precision_source
 from earthsci_ast.parse import load_path, load_string
 from earthsci_ast.serialize import to_json
 
@@ -72,3 +73,11 @@ def test_a_reaction_system_cannot_carry_a_mounted_precision(fixture):
         load_path(str(FIXTURES / fixture))
     if code is not None:
         assert getattr(info.value, "code", None) == code, info.value
+
+
+def test_declared_and_unspecified_precision_sources():
+    file = load_path(str(FIXTURES / "root_unspecified.esm"))
+    for doc in (file, load_string(to_json(file))):
+        assert precision_source(doc, doc.models["Wide"].variables["x"]) == "Float64"
+        assert precision_source(doc, doc.models["Plain"].variables["x"]) == "unspecified"
+    assert precision_source(load_path(str(FIXTURES / "leaf_none.esm"))) == "Float64"

@@ -572,9 +572,24 @@ function _root_metaparameter_env(
 end
 
 # esm-spec §4.7 "Working precision crosses a mount". A ROOT that declares no
-# `domain.element_type` evaluates in binary64 (§11.3); a MOUNTED document that
-# declares none adopts its mounter's.
-const _DEFAULT_ELEMENT_TYPE = "Float64"
+# `domain.element_type` uses the version gate in §11.3.3. A mounted document
+# that declares none adopts its mounter's precision.
+function _omitted_precision(version)
+    parsed = version isa AbstractString ? _parse_esm_version(version) : nothing
+    return parsed !== nothing && parsed >= (1, 3, 0) ? "unspecified" : "Float64"
+end
+
+"""
+    precision_source(document::EsmFile, [variable])
+
+Return the declared element type or `"unspecified"` (esm-spec §11.3.3).
+Omit the variable to query the document default, including for reaction
+species and parameters.
+"""
+function precision_source(document::EsmFile, variable::Union{ModelVariable, Nothing} = nothing)
+    variable !== nothing && variable.element_type !== nothing && return variable.element_type
+    return something(_declared_element_type(document), _omitted_precision(document.esm))
+end
 
 # The `domain.element_type` a document declares — a raw dict or a typed file —
 # or `nothing`.
@@ -879,7 +894,7 @@ function _root_mount_context(raw, api_meta::AbstractDict{String, <:Integer}, sou
     return _MountContext(
         source, String[], Dict{String, Int}(String(k) => Int(v) for (k, v) in api_meta),
         Dict{String, Int}(), _root_metaparameter_env(raw, api_meta),
-        something(_declared_element_type(raw), _DEFAULT_ELEMENT_TYPE), _StagedIndexSets()
+        something(_declared_element_type(raw), _omitted_precision(get(raw, "esm", nothing))), _StagedIndexSets()
     )
 end
 
@@ -1527,7 +1542,7 @@ function resolve_subsystem_refs!(file::EsmFile, base_path::AbstractString)
     file.models === nothing && return file
     ctx = _MountContext(
         _DocumentSource(), String[], Dict{String, Int}(), Dict{String, Int}(),
-        Dict{String, Int}(), something(_declared_element_type(file), _DEFAULT_ELEMENT_TYPE),
+        Dict{String, Int}(), precision_source(file),
         _StagedIndexSets()
     )
     base = _ref_base(String(base_path))
