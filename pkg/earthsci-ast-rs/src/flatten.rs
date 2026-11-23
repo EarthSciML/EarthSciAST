@@ -1427,6 +1427,26 @@ pub(crate) fn conditional_shape_promotions<'a>(
     equations: impl Iterator<Item = &'a Equation> + Clone,
     index_sets: &HashMap<String, IndexSet>,
 ) -> ConditionalShapes {
+    conditional_shape_promotions_with(
+        variable,
+        equations,
+        index_sets,
+        &crate::operator_refs::OperatorRegistry::default(),
+    )
+}
+
+/// [`conditional_shape_promotions`] reading the references of `equations`
+/// through `registry` (a flattened system's, or a component's): a reference
+/// spans what its definition's body spans with each parameter standing for
+/// what its binding spans, analysed once per definition and binding spans
+/// ([`crate::operator_refs::InstanceMemo`]), never by substituting. A
+/// reference to a definition `registry` does not hold is undecided.
+pub(crate) fn conditional_shape_promotions_with<'a>(
+    variable: &dyn Fn(&str) -> Option<&'a ModelVariable>,
+    equations: impl Iterator<Item = &'a Equation> + Clone,
+    index_sets: &HashMap<String, IndexSet>,
+    registry: &crate::operator_refs::OperatorRegistry,
+) -> ConditionalShapes {
     let mut defs: HashMap<&'a str, &'a Expr> = HashMap::new();
     let mut ode_states: HashSet<&'a str> = HashSet::new();
     for eq in equations.clone() {
@@ -1448,6 +1468,9 @@ pub(crate) fn conditional_shape_promotions<'a>(
         ode_states: &ode_states,
         memo: HashMap::new(),
         depth: 0,
+        registry,
+        params: Vec::new(),
+        instances: Default::default(),
     };
     let mut out = ConditionalShapes::default();
     for eq in equations {
@@ -1524,6 +1547,14 @@ struct ShapeInference<'a, 'd> {
     /// still being inferred — a cycle).
     memo: HashMap<String, Option<Spans>>,
     depth: usize,
+    /// The registry references resolve against.
+    registry: &'d crate::operator_refs::OperatorRegistry,
+    /// While a definition's body is read: what each of its parameters'
+    /// bindings spans (innermost body last).
+    params: Vec<HashMap<String, (Spans, bool)>>,
+    /// What a definition's body spans, per definition and the spans of its
+    /// bindings.
+    instances: std::rc::Rc<crate::operator_refs::InstanceMemo<String, Option<(Spans, bool)>>>,
 }
 
 /// How deep [`ShapeInference::var_spans`] follows definitions before it
@@ -1587,7 +1618,15 @@ impl ShapeInference<'_, '_> {
     fn body_spans(&mut self, e: &Expr) -> Option<(Spans, bool)> {
         match e {
             Expr::Number(_) | Expr::Integer(_) => Some((Spans::default(), false)),
-            Expr::Variable(v) => self.var_spans(v).map(|spans| (spans, false)),
+            Expr::Variable(v) => {
+                if let Some(bound) = self.params.last().and_then(|p| p.get(v)) {
+                    return Some(bound.clone());
+                }
+                self.var_spans(v).map(|spans| (spans, false))
+            }
+            Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+                self.reference_spans(node)
+            }
             Expr::Operator(node) if node.op == "index" => {
                 for sub in node.args.iter().skip(1) {
                     if !self.body_spans(sub)?.0.is_scalar() {
@@ -1633,6 +1672,45 @@ impl ShapeInference<'_, '_> {
                 Some((out, saw_ifelse))
             }
         }
+    }
+
+    /// What a reference spans: its definition's body with each parameter
+    /// standing for what its binding spans (read in the reference's scope),
+    /// once per definition and binding spans.
+    fn reference_spans(&mut self, node: &ExpressionNode) -> Option<(Spans, bool)> {
+        let r = crate::operator_refs::reference_node(node)?;
+        let def = std::sync::Arc::clone(self.registry.resolve(&r)?);
+        let body = def.body.as_ref()?;
+        let mut bound: HashMap<String, (Spans, bool)> = HashMap::new();
+        for p in &def.params {
+            if let Some(b) = r.binding(p) {
+                // A parameter whose binding is not elementwise (a table, an
+                // axis, a literal of the instance) is read where its role
+                // puts it; the body decides whether that matters.
+                if let Some(s) = self.body_spans(b) {
+                    bound.insert(p.clone(), s);
+                }
+            }
+        }
+        let mut keyed: Vec<String> = bound
+            .iter()
+            .map(|(p, (s, i))| format!("{p}\0{:?}\0{:?}\0{i}", s.axes, s.fed))
+            .collect();
+        keyed.sort();
+        let key = keyed.join("\x01");
+        if self.depth >= CONDITIONAL_SHAPE_MAX_DEPTH {
+            return None;
+        }
+        let memo = std::rc::Rc::clone(&self.instances);
+        let out = memo.get_or_compute(&def.name, &key, || {
+            self.params.push(bound);
+            self.depth += 1;
+            let out = self.body_spans(body);
+            self.depth -= 1;
+            self.params.pop();
+            out
+        });
+        (*out).clone()
     }
 }
 
@@ -3670,6 +3748,24 @@ impl<'a> Namespacer<'a> {
             let binders: HashSet<&str> = node.binders(Binders::LOOP).into_iter().collect();
             if let Some(ns) = namespace_join_names(join, &binders, system_name, locals) {
                 out.join = Some(ns);
+            }
+        }
+        // A bare name bound to a parameter the body spells only in a scalar
+        // field is scoped as that field scopes it: only a local of this site
+        // takes the prefix (an axis name, `t`, stays as written).
+        if out.op == crate::operator_refs::APPLY_OP
+            && let Some(lit) = refs
+                .zip(node.name.as_ref())
+                .and_then(|(r, n)| r.literal.get(n))
+            && let (Some(ob), Some(b)) = (node.bindings.as_ref(), out.bindings.as_mut())
+        {
+            for p in lit {
+                if let Some(Expr::Variable(v)) = ob.get(p)
+                    && !v.contains('.')
+                    && !locals.contains(v)
+                {
+                    b.insert(p.clone(), Expr::Variable(v.clone()));
+                }
             }
         }
         // The reference follows its component's registry rename.

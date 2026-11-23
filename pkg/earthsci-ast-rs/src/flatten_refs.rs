@@ -42,12 +42,20 @@ pub(crate) struct ComponentRefs {
     /// binds that the body binds as a loop symbol is that loop symbol where
     /// the body reads it, not a variable of the site's component.
     pub(crate) captures: HashMap<String, HashSet<String>>,
+    /// Per definition, the parameters its body spells only in a scalar field
+    /// (`wrt`, `dim`, a `ranges` bound, …): a bare name bound to one is
+    /// scoped as that field scopes it (only when it names a local of the
+    /// site), as the expansion would have it.
+    pub(crate) literal: HashMap<String, HashSet<String>>,
 }
 
 impl ComponentRefs {
     /// Whether this component's sites need nothing rewritten.
     pub(crate) fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.rename.is_empty() && self.captures.is_empty()
+        self.added.is_empty()
+            && self.rename.is_empty()
+            && self.captures.is_empty()
+            && self.literal.is_empty()
     }
 
     /// `node`, a reference, binding each parameter its definition gained to
@@ -128,10 +136,23 @@ pub(crate) fn prepare(file: &EsmFile) -> FlatRegistry {
         };
         let (closed, added) = crate::flatten::close_template_bodies(&without_private_keys(obj));
         blocks.push((cname.to_string(), closed));
-        let captures = crate::operator_refs::OperatorRegistry::from_json(obj)
+        let typed = crate::operator_refs::OperatorRegistry::from_json(obj);
+        let captures = typed
             .iter()
             .filter(|(_, d)| d.body.is_some() && !d.body_binders().is_empty())
             .map(|(n, d)| (n.clone(), d.body_binders().clone()))
+            .collect();
+        let literal = typed
+            .iter()
+            .filter_map(|(n, d)| {
+                let ps: HashSet<String> = d
+                    .param_roles()
+                    .iter()
+                    .filter(|(_, r)| r.literal && !r.operand)
+                    .map(|(p, _)| p.clone())
+                    .collect();
+                (!ps.is_empty()).then(|| (n.clone(), ps))
+            })
             .collect();
         components.insert(
             compkey.clone(),
@@ -139,6 +160,7 @@ pub(crate) fn prepare(file: &EsmFile) -> FlatRegistry {
                 added,
                 rename: HashMap::new(),
                 captures,
+                literal,
             },
         );
         paths.push((compkey.clone(), cname.to_string()));
