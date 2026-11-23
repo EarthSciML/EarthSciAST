@@ -510,7 +510,7 @@ pub fn compile_kernels(
         Some(&u_names),
         ForcingSource::Problem(&forcing),
         prob.runtime_array_parameters,
-        super::PrecisionSource::Declared(prob.precision.document),
+        super::problem_precision_source(prob)?,
     )?;
     let u_layout = layout_of(&rhs.layout().u);
     let z_layout = layout_of(&rhs.layout().aux);
@@ -1031,4 +1031,55 @@ fn push_equation(flat: &mut FlattenedSystem, lhs: Expr, rhs: Expr) {
         rhs,
         comment: None,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every program of a kernel set reports the document's precision source,
+    /// as [`rhs_program`] does (esm-spec §11.3.3).
+    #[test]
+    fn kernel_programs_report_the_document_precision_source() {
+        let text = include_str!("../../../../../tests/conformance/precision_source/rounding.esm");
+        for (esm, want) in [
+            ("2.4.0", PrecisionSource::Unspecified),
+            ("2.3.0", PrecisionSource::Declared(Precision::Float64)),
+        ] {
+            let mut doc: Json = serde_json::from_str(text).unwrap();
+            doc["esm"] = Json::from(esm);
+            let file = crate::load_string(&doc.to_string()).unwrap();
+            for compiler in [Compiler::Interpreter, Compiler::Native] {
+                let prob = crate::esm_problem(
+                    &file,
+                    (0., 1.),
+                    crate::ProblemOptions {
+                        compiler: Some(compiler),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(rhs_program(&prob).unwrap().precision_sources(), &[want; 2]);
+                let specs = KernelSpec::list_from_json(&serde_json::json!([
+                    {"name": "rhs"},
+                    {"name": "value", "outputs": [{"expr": {"op": "*", "args": [2, "M.a"]}}]},
+                ]))
+                .unwrap();
+                let set = compile_kernels(&prob, &specs).unwrap();
+                assert_eq!(
+                    set.rhs.precision_sources(),
+                    &[want; 2],
+                    "{esm} {compiler:?}"
+                );
+                for kernel in set.kernels.iter() {
+                    assert_eq!(
+                        kernel.inner.prog.inner.document_precision_source,
+                        want,
+                        "{esm} {compiler:?} {}",
+                        kernel.name()
+                    );
+                }
+            }
+        }
+    }
 }

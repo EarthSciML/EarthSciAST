@@ -585,12 +585,19 @@ impl std::fmt::Debug for RhsProgram {
 /// `compiler_unavailable`. Under `native` a rule the tape cannot express is
 /// `compiler_refused_rule`.
 pub fn rhs_program(prob: &EsmProblem) -> Result<RhsProgram, SimulateError> {
-    let document_source = match prob.program_source.as_deref() {
+    rhs_program_at_precision(prob, problem_precision_source(prob)?)
+}
+
+/// The precision source (esm-spec §11.3.3) of the document `prob` was built
+/// from, which every program compiled against it reports.
+pub(super) fn problem_precision_source(
+    prob: &EsmProblem,
+) -> Result<PrecisionSource, SimulateError> {
+    Ok(match prob.program_source.as_deref() {
         Some(ProgramSource::File(file)) => precision_source(file, None)?,
         // A caller-supplied flattened system carries no source version.
         _ => PrecisionSource::Declared(prob.precision.document),
-    };
-    rhs_program_at_precision(prob, document_source)
+    })
 }
 
 /// Build an external RHS with a working precision for unspecified variables.
