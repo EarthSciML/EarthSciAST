@@ -355,6 +355,25 @@ fn scale_leaf() -> Value {
     })
 }
 
+/// The subsystem's call resolved to its own `scale(x) = 3*x`: the saved
+/// document keeps the reference (esm-spec §9.6.4 rule 1), bound to `c`, and
+/// the host's `operators` block carries the definition it names (rule 5),
+/// which denotes `-(3*c)` (rule 2).
+fn assert_sub_calls_its_scale(v: &Value) {
+    let rhs = &v["models"]["Host"]["subsystems"]["Sub"]["equations"][0]["rhs"];
+    assert_eq!(rhs["op"], "-", "{rhs}");
+    let r = &rhs["args"][0];
+    assert_eq!(r["op"], "apply_operator", "{rhs}");
+    assert_eq!(r["bindings"], json!({"x": "c"}), "{rhs}");
+    let name = r["name"].as_str().expect("reference name");
+    assert_eq!(
+        v["models"]["Host"]["operators"][name]["body"],
+        json!({"op": "*", "args": [3, "x"]}),
+        "{}",
+        v["models"]["Host"]
+    );
+}
+
 /// esm-spec §4.7, §9.6.12: a mounted leaf's definitions are local to the leaf.
 /// A call in the mounting component of an operator only the leaf defines is a
 /// placeholder there, not a call of the leaf's definition; the leaf's own call
@@ -372,10 +391,7 @@ fn a_mounted_leafs_definition_does_not_resolve_the_mounting_components_call() {
         json!({"op": "-", "args": [{"op": "scale", "args": ["y"]}]}),
         "the host's call must stay a placeholder"
     );
-    assert_eq!(
-        v["models"]["Host"]["subsystems"]["Sub"]["equations"][0]["rhs"],
-        json!({"op": "-", "args": [{"op": "*", "args": [3, "c"]}]}),
-    );
+    assert_sub_calls_its_scale(&v);
 }
 
 /// The same with the subsystem written inline: its definitions resolve its own
@@ -397,10 +413,7 @@ fn an_inline_subsystems_definition_resolves_only_its_own_calls() {
         v["models"]["Host"]["equations"][0]["rhs"],
         json!({"op": "-", "args": [{"op": "scale", "args": ["y"]}]}),
     );
-    assert_eq!(
-        v["models"]["Host"]["subsystems"]["Sub"]["equations"][0]["rhs"],
-        json!({"op": "-", "args": [{"op": "*", "args": [3, "c"]}]}),
-    );
+    assert_sub_calls_its_scale(&v);
 }
 
 /// esm-spec §9.6.12 "Arity": a mounted leaf's definitions do not count toward
