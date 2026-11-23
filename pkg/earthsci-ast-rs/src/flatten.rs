@@ -2934,6 +2934,7 @@ fn maybe_apply_pointwise_lift(
             &defs,
             &lifted.axes,
             None,
+            &refs,
         );
         for name in defs.keys() {
             if read_shapes.contains_key(*name) {
@@ -6310,6 +6311,13 @@ struct LiftShapes<'a, 'd> {
     lifted: &'d HashMap<String, Vec<String>>,
     masked: Option<&'d HashSet<String>>,
     memo: HashMap<String, Option<Vec<String>>>,
+    /// The registry a reference resolves against.
+    refs: &'d crate::operator_refs::OperatorRegistry,
+    /// While a definition body is walked: each of its parameters' axes (the
+    /// axes of what the reference binds to it), innermost body last.
+    params: Vec<HashMap<String, Option<Vec<String>>>>,
+    /// A definition's axes per binding axes, computed once.
+    instances: HashMap<(String, Vec<(String, Option<Vec<String>>)>), Option<Vec<String>>>,
 }
 
 impl<'a, 'd> LiftShapes<'a, 'd> {
@@ -6320,6 +6328,7 @@ impl<'a, 'd> LiftShapes<'a, 'd> {
         defs: &'d HashMap<&'a str, &'a Expr>,
         lifted: &'d HashMap<String, Vec<String>>,
         masked: Option<&'d HashSet<String>>,
+        refs: &'d crate::operator_refs::OperatorRegistry,
     ) -> Self {
         Self {
             parameters,
@@ -6329,6 +6338,9 @@ impl<'a, 'd> LiftShapes<'a, 'd> {
             lifted,
             masked,
             memo: HashMap::new(),
+            refs,
+            params: Vec::new(),
+            instances: HashMap::new(),
         }
     }
 
@@ -6365,10 +6377,43 @@ impl<'a, 'd> LiftShapes<'a, 'd> {
     fn expr_axes(&mut self, expr: &Expr) -> Option<Vec<String>> {
         let node = match expr {
             Expr::Number(_) | Expr::Integer(_) => return Some(Vec::new()),
-            Expr::Variable(name) => return self.name_axes(name),
+            Expr::Variable(name) => {
+                if let Some(a) = self.params.last().and_then(|env| env.get(name)) {
+                    return a.clone();
+                }
+                return self.name_axes(name);
+            }
             Expr::Operator(node) => node,
         };
         match node.op.as_str() {
+            // A reference has the axes its expansion has: its definition's
+            // body walked once per binding axes, each parameter standing for
+            // the axes of what the reference binds to it.
+            crate::operator_refs::APPLY_OP => {
+                let r = crate::operator_refs::reference_node(node)?;
+                let def = std::sync::Arc::clone(self.refs.resolve(&r)?);
+                let body = def.body.as_ref()?;
+                let mut env: Vec<(String, Option<Vec<String>>)> = Vec::new();
+                for p in &def.params {
+                    if let Some(b) = r.binding(p) {
+                        let a = if def.is_literal_param(p) {
+                            Some(Vec::new())
+                        } else {
+                            self.expr_axes(b)
+                        };
+                        env.push((p.clone(), a));
+                    }
+                }
+                let key = (def.name.clone(), env.clone());
+                if let Some(a) = self.instances.get(&key) {
+                    return a.clone();
+                }
+                self.params.push(env.into_iter().collect());
+                let out = self.expr_axes(body);
+                self.params.pop();
+                self.instances.insert(key, out.clone());
+                out
+            }
             "index" => {
                 for sub in node.args.iter().skip(1) {
                     if !self.expr_axes(sub)?.is_empty() {
@@ -6581,6 +6626,7 @@ fn plan_pointwise_lift(
                         &defs,
                         &others[comp],
                         masks.get(comp),
+                        refs,
                     )
                 });
                 if let Some(axes) = shapes.expr_axes(rhs).filter(|a| !a.is_empty()) {
