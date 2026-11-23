@@ -1569,7 +1569,7 @@ canonical spelling and no `units` on a dimensionless `const`.
 |---|---|
 | `format` | **No on-disk change.** Every 2.3.0 document is a valid 2.4.0 document. Two changes: `grad`, `div` and `laplacian` become ordinary operator names, and the `"pde"` system kind is dropped. The format no longer names `grad`, `div` and `laplacian` as rewrite-target sugar for sums of `D` (esm-spec §4.2): they are ordinary open-tier operator names, exactly like any operator you invent. |
 | `semantics` | A document using one still loads; a rewrite rule may still match one; one that reaches evaluation unlowered is still refused with `unlowered_operator`. What changes is that no binding treats the three names specially: |
-| `semantics` | **The `"pde"` system kind is dropped** (esm-spec §6.3.1). `system_kind` derives `"sde"`, `"nonlinear"` or `"ode"`, in that order; a spatial derivative (spatial `D`, or any of the three names) no longer makes a model `"pde"`. A transient model with spatial derivatives is now `"ode"`, a steady-state one (no time derivative) `"nonlinear"`. The `PDESystem` constructor choice is gone from the bindings. |
+| `semantics` | **The `"pde"` system kind is dropped** (esm-spec §6.3.1). `system_kind` derives `"sde"`, `"nonlinear"` or `"ode"`, in that order; a spatial derivative (`partial`, a spatial `D` read as `partial`, or any of the three names) no longer makes a model `"pde"`. A transient model with spatial derivatives is now `"ode"`, a steady-state one (no time derivative) `"nonlinear"`. The `PDESystem` constructor choice is gone from the bindings. |
 | `semantics` | **Go's `ApplyDAEContract` now runs on models with spatial derivatives.** It applies to `"ode"` models, and it used to skip a model that was `"pde"`. Such a model is now `"ode"` when it has a time derivative, so it is factored like any other. A spatial `D` on the right-hand side changes nothing. A spatial `D` on a **left-hand** side is not a time derivative, so that equation is algebraic and survives factoring as a residual: a boundary condition written as an equation, such as `D(u, wrt: x) ~ 0`, now raises `E_NONTRIVIAL_DAE` where Go used to return no error. Rust's `apply_dae_contract`, which never filtered by kind, already refused it. The format has no boundary-condition equation (esm-spec §9.6.8: the condition lives inside the discretization rule), and every binding's `validate` already reports `equation_count_mismatch` for such a document. |
 | `semantics` | **A declared `system_kind: "pde"` is deprecated and ignored.** The document still loads, with one warning per document, `deprecated_system_kind`, naming each such model; the declared kind reads as absent, the model is its derived kind, and `system_kind_mismatch` is never reported for it. The schema keeps `"pde"` in the enum. |
 | `semantics` | **Julia ModelingToolkit.** `grad` is no longer lowered to an MTK `Differential`; like any user op it must be rewritten first. |
@@ -1579,9 +1579,9 @@ canonical spelling and no `units` on a dimensionless `const`.
 **What to do.** Remove `system_kind: "pde"` declarations (or leave them; they
 are ignored with a warning) and stop branching on a `"pde"` kind in code that
 calls `system_kind`. Where a spatial derivative was written with one of the
-three names expecting it to mean something, write the derivative with spatial `D`
-(`grad(f, dim: x)` as `D(f, wrt: x)`, a divergence as a sum of `D` per axis, a
-Laplacian as a sum of `D(D(u, wrt: x_i), wrt: x_i)`), or keep the name as an
+three names expecting it to mean something, write the derivative with `partial`
+(`grad(f, dim: x)` as `partial(f, wrt: x)`, a divergence as a sum of `partial` per axis, a
+Laplacian as a sum of `partial(partial(u, wrt: x_i), wrt: x_i)`), or keep the name as an
 operator lowered by your own rewrite rule.
 
 ---
