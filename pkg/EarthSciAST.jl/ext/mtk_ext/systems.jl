@@ -201,6 +201,23 @@ function ModelingToolkit.System(
         name::Union{Symbol, AbstractString} = :anonymous,
         kwargs...
     )
+    # ModelingToolkit evaluates in binary64, so a variable whose working
+    # precision is binary32 is refused rather than evaluated in another
+    # precision: the tree-walk evaluator's rule (`_refuse_float32`,
+    # CONFORMANCE_SPEC §5.18.2), which reads every variable, not only states.
+    # A mounted binary32 leaf reaches here stamped onto its variables (§4.7).
+    document = flat.domain === nothing ? "Float64" : something(flat.domain.element_type, "Float64")
+    for variables in (flat.state_variables, flat.observed_variables, flat.parameters)
+        for (variable, declaration) in variables
+            something(declaration.element_type, document) == "Float32" || continue
+            throw(
+                SimulateError(
+                    "ModelingToolkit cannot evaluate binary32 variable '$variable' at its declared precision",
+                    ERROR_CODES.FLOAT32_UNSUPPORTED
+                )
+            )
+        end
+    end
     # "Expand at your boundary" (RFC out-of-line-expression-templates §7.7):
     # `flatten` carries surviving `apply_expression_template` references; MTK
     # lowering has no template handling, so expand against the merged registry
@@ -276,6 +293,11 @@ end
     ModelingToolkit.System(model::Model; name=:anonymous, kwargs...)
 
 Convenience: flatten the model first, then build the `System`.
+
+A `Model` carries no `domain`, so the document's `domain.element_type` is not
+seen here: only a variable's own `element_type` is refused when binary32. Build
+from the flattened document (`flatten(file)`, or `esm_problem`) to have the
+document's precision checked.
 """
 function ModelingToolkit.System(
         model::Model;

@@ -134,6 +134,13 @@ to their symbols. A system carrying `constraint_equations`, events or
 `subsystems`, which this constructor has no lowering for, is refused with a
 `SimulateError` naming the field (code `unsupported_construct`), as is a
 reaction with neither substrates nor products (code `null_reaction`).
+
+A reaction system carries no working precision: its species and parameters
+have no `element_type`, and the document's `domain.element_type` is not part
+of it. So this constructor cannot refuse a binary32 document. A Float32
+document's reaction system is refused with `float32_unsupported` where the
+precision is known: `esm_problem` and `ModelingToolkit.System` of the
+flattened document.
 """
 function Catalyst.ReactionSystem(
         rsys::EarthSciAST.ReactionSystem;

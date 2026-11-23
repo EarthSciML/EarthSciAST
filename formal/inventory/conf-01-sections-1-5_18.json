@@ -880,6 +880,15 @@
       "note": "Every element_type construct is either evaluated at the declared precision or refused with a named error (unsupported_element_type, float32_unsupported, Float32 time integration)."
     },
     {
+      "id": "conf.5.18.2.refuse-unsupported-integration",
+      "section": "5.18.2",
+      "quote": "integrate a state at its declared precision MUST refuse with `float32_unsupported`.",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "A conformance gate for the time-integration refusal defined in esm-spec §11.3.2."
+    },
+    {
       "id": "conf.5.18.2a.no-override-matches-document",
       "section": "5.18.2a",
       "quote": "and a document in which no variable declares one MUST behave exactly as §5.18.1 describes — bit for bit, on the same code path",

@@ -327,7 +327,30 @@ fn native_runs_per_variable_element_types_bit_for_bit() {
     let report = native.compiler_report();
     assert_eq!(report.n_oracle(), 0, "{report}");
     assert_eq!(report.n_taped(), report.rules().len(), "{report}");
-    assert_native_agrees(rel, &[]);
+    let interpreter = build_rhs(&fixture(rel), Compiler::Interpreter, Rhs::Always).unwrap();
+    let eval = |problem| {
+        let rhs = earthsci_ast::rhs_program(problem).unwrap();
+        let (u, aux) = rhs.default_state();
+        let p = rhs.parameter_vector(&Default::default()).unwrap();
+        let mut du = vec![0.0; u.len()];
+        rhs.eval_into(
+            &u,
+            &aux,
+            &p,
+            0.0,
+            &rhs.default_forcing(),
+            &mut du,
+            &mut rhs.new_workspace(),
+        )
+        .unwrap();
+        du.into_iter().map(f64::to_bits).collect::<Vec<_>>()
+    };
+    assert_eq!(eval(&native), eval(&interpreter));
+    for problem in [&native, &interpreter] {
+        let error = solve(problem, &SolveOptions::default()).unwrap_err();
+        assert_eq!(error.code(), Some("float32_unsupported"));
+        assert!(error.to_string().contains("mixing Float32 and Float64"));
+    }
 }
 
 /// The probe fixtures for constructs the tape used to refuse and the corpus

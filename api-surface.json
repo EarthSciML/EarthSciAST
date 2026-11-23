@@ -94,17 +94,17 @@
     }
   },
   "counts": {
-    "symbols": 985,
+    "symbols": 988,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 358,
       "typescript": 239,
       "python": 270,
-      "rust": 394,
+      "rust": 397,
       "go": 457
     },
     "by_tier": {
-      "extension": 676,
+      "extension": 679,
       "stable": 309
     }
   },
@@ -1783,6 +1783,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeTimestampNoCalendarDay"
+      }
+    },
+    {
+      "name": "code_tolerance_below_working_precision",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeToleranceBelowWorkingPrecision"
       }
     },
     {
@@ -4684,6 +4692,14 @@
       }
     },
     {
+      "name": "integrator_precision",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "IntegratorPrecision"
+      }
+    },
+    {
       "name": "invalid_derivative_order_error",
       "kind": "error",
       "tier": "extension",
@@ -7480,6 +7496,14 @@
       }
     },
     {
+      "name": "state_scalar",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StateScalar"
+      }
+    },
+    {
       "name": "state_snapshot",
       "kind": "function",
       "tier": "extension",
@@ -8637,6 +8661,14 @@
         "python": "ValidationResult",
         "rust": "ValidationResult",
         "typescript": "ValidationResult"
+      }
+    },
+    {
+      "name": "validation_warning",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ValidationWarning"
       }
     },
     {

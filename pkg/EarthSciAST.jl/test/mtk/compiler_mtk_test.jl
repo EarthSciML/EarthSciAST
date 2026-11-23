@@ -844,3 +844,45 @@ end
     @test err !== nothing && occursin("ic(H.s)", err.detail)
     @test err !== nothing && occursin("data-fed parameter 'H.q'", err.detail)
 end
+
+@testset "ModelingToolkit refuses Float32 dynamics" begin
+    fixture = _mtkc_fixture("conformance", "precision_integration", "vanishing_increment.esm")
+    for input in (fixture, _MTKC.flatten(_MTKC.load_path(fixture)))
+        err = try
+            esm_problem(input, (0.0, 100.0); compiler = :mtk)
+            nothing
+        catch err
+            err
+        end
+        @test err isa _MTKC.SimulateError && err.code == _MTKC.ERROR_CODES.FLOAT32_UNSUPPORTED
+    end
+
+    function _refusal(f)
+        try
+            f()
+        catch err
+            return err
+        end
+        return nothing
+    end
+    _is_float32_refusal(err) =
+        err isa _MTKC.SimulateError && err.code == _MTKC.ERROR_CODES.FLOAT32_UNSUPPORTED
+
+    # A bare `Model` carries no `domain`: a variable's own `element_type` is
+    # refused, the document's is not visible (see `ModelingToolkit.System(::Model)`).
+    model = _MTKC.load_path(fixture).models["M"]
+    @test ModelingToolkit.System(model; name = :M) isa ModelingToolkit.AbstractSystem
+    doc = copy(JSON3.read(read(fixture, String)))
+    doc[:models][:M][:variables][:x][:element_type] = "Float32"
+    model = _MTKC.load_string(JSON3.write(doc)).models["M"]
+    @test _is_float32_refusal(_refusal(() -> ModelingToolkit.System(model; name = :M)))
+
+    # A reaction system carries no precision; a Float32 document's is refused
+    # where the document is seen, in the flattened system.
+    rdoc = copy(JSON3.read(read(_mtkc_fixture("valid", "reaction_system_only.esm"), String)))
+    rdoc[:domain] = Dict{Symbol, Any}(:element_type => "Float32")
+    rfile = _MTKC.load_string(JSON3.write(rdoc))
+    @test _is_float32_refusal(
+        _refusal(() -> ModelingToolkit.System(_MTKC.flatten(rfile); name = :R))
+    )
+end

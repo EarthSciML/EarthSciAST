@@ -742,6 +742,7 @@ pub(super) fn bind_providers(
     let declared = provider_declared_shapes(compiled, providers.keys());
     let mut exec =
         crate::provider::RefreshExecutor::from_providers_with_shapes(providers, &declared, &given);
+    exec.set_precision(&precision::Env::capture());
     let forcing = compiled.forcing_handle();
     exec.materialize_const_named(&forcing)
         .map_err(|e| loader_error(&given, e))?;
