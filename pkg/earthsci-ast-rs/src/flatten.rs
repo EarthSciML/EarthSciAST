@@ -6344,8 +6344,11 @@ struct LiftShapes<'a, 'd> {
     /// axes of what the reference binds to it), innermost body last.
     params: Vec<HashMap<String, Option<Vec<String>>>>,
     /// A definition's axes per binding axes, computed once.
-    instances: HashMap<(String, Vec<(String, Option<Vec<String>>)>), Option<Vec<String>>>,
+    instances: HashMap<AxesKey, Option<Vec<String>>>,
 }
+
+/// A definition and the axes of what a reference binds to each parameter.
+type AxesKey = (String, Vec<(String, Option<Vec<String>>)>);
 
 impl<'a, 'd> LiftShapes<'a, 'd> {
     fn new(

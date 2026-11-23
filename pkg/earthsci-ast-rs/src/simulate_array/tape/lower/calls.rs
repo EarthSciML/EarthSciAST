@@ -412,7 +412,7 @@ impl<'m> TapeBuilder<'m> {
                 match built {
                     Ok(Built::Function(prog, res)) => {
                         let id = tape_index(t.progs.len(), "functions")?;
-                        t.progs.push(prog);
+                        t.progs.push(*prog);
                         t.held.push(Arc::clone(&inst));
                         t.by_key.insert(key, Some((id, res.clone())));
                         (id, res)
@@ -677,7 +677,7 @@ impl<'m> TapeBuilder<'m> {
         f.emit(export, Cadence::Continuous);
         let mut prog = f.assemble(vec![("result".to_string(), result)]);
         prog.is_function = true;
-        Ok(Built::Function(prog, res))
+        Ok(Built::Function(Box::new(prog), res))
     }
 }
 
@@ -718,7 +718,7 @@ fn specialize(body: &Expr, fixed: &FxHashMap<String, Expr>) -> Expr {
 
 /// What lowering a body gave.
 enum Built {
-    Function(TapeProgram, FuncResult),
+    Function(Box<TapeProgram>, FuncResult),
     Value(Passthrough),
 }
 

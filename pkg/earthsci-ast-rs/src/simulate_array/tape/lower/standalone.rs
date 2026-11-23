@@ -51,6 +51,7 @@ pub(crate) enum StandaloneError {
 ///
 /// The result is the rule's value at origin 1 on every axis, as the observed
 /// passes publish it (a scalar is a 0-d array).
+#[allow(clippy::too_many_arguments)]
 pub(in crate::simulate_array) fn eval_standalone_rule(
     rule: &AlgebraicRule,
     inputs: &[(&str, &ndarray::ArrayD<f64>)],
