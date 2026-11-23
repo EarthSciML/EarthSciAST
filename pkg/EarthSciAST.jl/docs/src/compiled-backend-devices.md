@@ -13,15 +13,10 @@ once, and hand back a Problem whose `f!` is the compiled program — and it pick
 the client off `EARTHSCI_JULIA_XLA_DEVICE` (`cpu` / `gpu`). This page is for the
 caller who needs the emitted callable ITSELF: to shard the state across several
 devices, or to compose it into a larger traced program of their own.
-`EarthSciAST.Internal.build(doc; form = :oop)` is how you get the
-intermediate representation for that — the internal build entry, which builds
-what `esm_problem` builds and is not public API (`API_SPEC.md` §8 item 23) — and it
-returns the build product a backend consumes, not a host evaluator: host
-evaluation is the default in-place `f!`. Nothing in the emitted program names a
-device: the same module compiles on a host CPU or on
-an attached GPU, and **which one is fixed by the client of the arrays you feed
-it**. This page is about that choice and about cutting the state across several
-devices of one client.
+Use [`operator_ir`](@ref) and [`emit_fragment`](@ref) when your application owns
+the Reactant trace. For the legacy `direct_rhs` device-placement helpers shown
+below, obtain their input with `EarthSciAST.Internal.build(doc; form = :oop)`.
+The client of the arrays you pass selects the device.
 
 The emitter lives in the Reactant package extension; its entry points are
 declared (unexported) in EarthSciAST itself, so they are reached as
@@ -31,6 +26,53 @@ declared (unexported) in EarthSciAST itself, so they are reached as
 using EarthSciAST, Reactant
 const ESA = EarthSciAST
 ```
+
+## Compose fragments in an integrator trace
+
+Build a fragment from an `esm_problem` created with the native compiler. A
+fragment emits into the active Reactant block. It can be called at multiple
+stage sites and inside `Reactant.@trace while`. The integrator builds the
+device inputs, compiles the surrounding program and controls device placement.
+
+```julia
+prob = esm_problem(doc, (0.0, 1.0))
+ir = operator_ir(prob)
+frag = emit_fragment(ir)
+
+# This example uses a whole model with no read-only states or forcing slots.
+u = ConcreteRArray(prob.u0)
+aux = ConcreteRArray(Float64[])
+p = ConcreteRArray(parameter_vector(rhs_program(prob)))
+t = ConcreteRNumber(0.0)
+program = Reactant.@compile frag(u, aux, p, t, ())
+```
+
+- `select = RhsSelection(writes = ..., terms = ...)` selects the states and
+  equation contributions for one operator. Use `ir_layout(ir)` for state
+  and read-only state packing.
+- Pass a flat Float64 parameter tensor in `parameter_names(ir)` order, a
+  Float64 scalar time, and a tuple of flat device tensors in
+  `forcing_slots(ir)` order. Array lengths are part of the compiled signature.
+  New parameter values and forcing data of the same shape can be passed to the
+  compiled program.
+- `emit_fragment(ir; eltype = Float32)` evaluates in single precision and
+  takes Float32 state and auxiliary tensors. Time, scalar parameters and
+  floating-point forcing are converted on read. The default `fold = :tree`
+  emits balanced binary folds. Choose `fold = :reduce` for the legacy
+  emitter's reduction policy.
+- `Tile(dec; owned, storage)` uses the native tile boxes. The output uses the
+  tile storage layout, with zeros outside owned rows. Each fixed tile has its
+  own fragment and accepts whole forcing buffers.
+- `Lanes(:cells, sets, capacity)` or `Lanes(:columns, sets, capacity)`
+  accepts a sixth argument, a traced Int32 matrix of 1-based coordinates with
+  rows in `sets` order. Duplicate cells can pad evaluations; use distinct
+  cells when writing them back with `scatter_lanes`. The fragment accepts
+  affine lane-dependent forcing and constant-array subscripts.
+- `outputs = KernelSpec(spec)` takes one `compile_kernels` specification
+  and emits a whole-domain output kernel. Pass a traced Float64 `dt` as the
+  sixth argument if the spec reads it. The result is a tuple of flat tensors
+  matching `ir_layout(ir).out`. `KernelSpec(spec; out_eltype = Float32)`
+  converts the outputs at the end of emission.
 
 ## One device
 

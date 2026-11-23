@@ -76,7 +76,7 @@ function _de_bhostval(ctx::_DECtx, b::_E._OopBatchNode, l::Int)::Float64
     if k === _E._NK_LITERAL
         return isempty(b.lanes_f) ? b.literal : b.lanes_f[l]
     elseif k === _E._NK_LOOPVAR
-        return Float64(b.refs[l][])
+        return Float64(_de_counter(ctx, b.refs[l]))
     elseif k === _E._NK_PARAM
         return Float64(getfield(ctx.p, b.sym)::Real)
     elseif k === _E._NK_CONST_GATHER
@@ -94,7 +94,7 @@ function _de_bhostval(ctx::_DECtx, b::_E._OopBatchNode, l::Int)::Float64
         body = b.children[1]
         r = b.refs[l]
         for kk in b.lo:b.step:b.hi
-            r[] = kk
+            _de_set_counter!(ctx, r, kk)
             s = g(s, _de_bhostval(ctx, body, l))
         end
         return s
@@ -105,6 +105,10 @@ end
 
 function _de_btry_fold(ctx::_DECtx, b::_E._OopBatchNode, L::Int)::Union{Nothing, _DEVal}
     b.kind === _E._NK_LITERAL && return nothing     # already one constant
+    if (ctx.precision !== Float64 || ctx.tree_fold) &&
+            b.kind in (_E._NK_OP, _E._NK_CONTRACTION, _E._NK_CONTRACTION_LOOP)
+        return nothing
+    end
     _de_bstatic(ctx, b) || return nothing
     _de_tally!(ctx, :const_folded)
     vals = Float64[_de_bhostval(ctx, b, l) for l in 1:L]
@@ -156,9 +160,9 @@ function _de_batch(
         # Per lane: congruent trees may bind DIFFERENT enclosing loops at this
         # position, so read each lane's own counter.
         refs = b.refs
-        v1 = refs[1][]
-        all(r -> r[] == v1, refs) && return _de_const(ctx, Float64(v1))
-        return _de_arrconst(ctx, Float64[Float64(r[]) for r in refs])
+        v1 = _de_counter(ctx, refs[1])
+        all(r -> _de_counter(ctx, r) == v1, refs) && return _de_const(ctx, Float64(v1))
+        return _de_arrconst(ctx, Float64[Float64(_de_counter(ctx, r)) for r in refs])
     elseif k === _E._NK_CONST_GATHER
         # `_de_btry_fold` above already took every case where the subscripts are
         # host data, which is every case `_NK_CONST_GATHER` can be in.
@@ -178,7 +182,7 @@ function _de_batch(
             nd = nds[l]
             slot = _E._state_gather_slot(
                 nd.payload::_E._StateGather, length(nd.children),
-                d -> _de_index_int(nd.children[d])
+                d -> _de_index_int(ctx, nd.children[d])
             )
             srcs[l] = slot == 0 ? nothing : _de_src(ctx, ctx.ue, slot)
         end
@@ -193,7 +197,7 @@ function _de_batch(
         terms = _DEVal[]
         for kk in b.lo:b.step:b.hi
             @inbounds for r in refs
-                r[] = kk
+                _de_set_counter!(ctx, r, kk)
             end
             push!(terms, _de_batch(ctx, body, L, cache))
         end

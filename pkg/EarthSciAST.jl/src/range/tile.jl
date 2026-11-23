@@ -1095,7 +1095,10 @@ periodic image in it raises `range_halo_insufficient`; a 0-d state write or a
 contraction, scan or data-dependent gather along a cut axis raises
 `range_global_locality`; a box that does not fit raises `range_box_invalid`.
 """
-function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
+restrict(op::RhsProgram, dec::Decomposition; owned, storage) =
+    _restrict(op, dec; owned, storage)
+
+function _restrict(op::RhsProgram, dec::Decomposition; owned, storage, form = :inplace)
     _require_native(op, "restrict")
     m = _axis_model(op, dec)
     ow = _axis_boxes(m, owned, "owned")
@@ -1127,7 +1130,7 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
     end
     shapes = _array_shapes(op)
     spec = _TileSpec(:tile, m, ow, st, shapes, Set(op.writes), nothing, op.memo)
-    f!, internal, cap, pa = _relower(op, spec)
+    f!, internal, cap, pa = _relower(op, spec; form)
     # ---- the tile's layout and copy maps ----
     gb = Dict{String, Vector{UnitRange{Int}}}(
         b.name => UnitRange{Int}[b.lo[d]:b.hi[d] for d in eachindex(b.lo)]
@@ -1167,6 +1170,7 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
     end
     foreach(sort!, values(extra))
     maps = _copy_maps(layout, internal, to_internal, extra)
+    form === :oop && return (; f!, internal, layout, maps, pa)
     return TileProgram(
         op, f!, internal, layout, maps,
         _derived_shared(op.shared, f!, length(internal), cap, pa)

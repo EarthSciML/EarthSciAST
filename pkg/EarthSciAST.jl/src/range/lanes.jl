@@ -471,7 +471,10 @@ A read that leaves the cell (or the column) raises `compiler_refused_rule`
 naming the rule; lane sets that do not fit the program raise
 `range_box_invalid`.
 """
-function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
+lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK) =
+    _lanes(op, kind, sets, chunk)
+
+function _lanes(op::RhsProgram, kind::Symbol, sets, chunk::Int; form = :inplace)
     _require_native(op, "lanes")
     kind in (:cells, :columns) || throw(
         _box_invalid(
@@ -513,7 +516,7 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
             )
         )
     end
-    inst = _lane_instance(op, kind, S, chunk)
+    inst = _lane_instance(op, kind, S, chunk; form)
     internal = inst.internal
     # ---- the lane layout and its copy plans ----
     function blocks(names)
@@ -558,6 +561,7 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
                 "but no forcing slot"
         )
     end
+    form === :oop && return (; inst..., layout, uplan, aplan, gslots)
     return LaneProgram(
         op, S, chunk, inst.f!, internal, layout, inst.index_bufs,
         inst.gathers, gslots, uplan, aplan, inst.params,
@@ -570,7 +574,7 @@ end
 
 # One compiled lane program: its right-hand side, the live lane buffers it
 # reads, its gathers and its build's forcing epoch.
-function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::Int)
+function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::Int; form = :inplace)
     index_bufs = Dict{String, Vector{Float64}}(s => zeros(chunk) for s in S)
     spec = _LaneSpec(
         kind, S, chunk, _array_shapes(op), index_bufs, _LaneGather[],
@@ -580,6 +584,7 @@ function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::
     # The lane-index buffers are live forcing buffers of the build.
     file, model_name, recorded = op.front
     opts = _relower_options(recorded)
+    opts.form = form
     pa = Dict{String, Any}(
         String(k) => v for (k, v) in something(opts.param_arrays, Dict{String, Any}())
     )

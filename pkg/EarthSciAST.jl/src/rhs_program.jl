@@ -1032,9 +1032,10 @@ _derived_shared(
 )
 
 # Re-lower a program's recorded front-door product under `spec`.
-function _relower(prog::RhsProgram, spec::_RangeSpec)
+function _relower(prog::RhsProgram, spec::_RangeSpec; form = :inplace)
     file, model_name, recorded = prog.front
     opts = _relower_options(recorded)
+    opts.form = form
     cap = _WsCapture()
     f!, _u0, _p, _ts, var_map = _with_ws_capture(cap) do
         _with_compiler_plan(_plan(prog.compiler)) do

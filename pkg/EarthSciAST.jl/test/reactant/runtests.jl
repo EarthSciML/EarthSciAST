@@ -27,6 +27,7 @@ const FILES = [
     "reactant_direct_closed_test.jl",
     "reactant_direct_sharding_test.jl",
     "compiler_xla_test.jl",
+    "operator_fragment_test.jl",
 ]
 
 function _run_file(path::String)

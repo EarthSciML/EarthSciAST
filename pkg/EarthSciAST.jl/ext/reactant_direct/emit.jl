@@ -9,6 +9,7 @@ _de_param(ctx::_DECtx, nd::_E._Node)::_DEVal = _de_param(ctx, nd.sym)
 
 function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
     p = ctx.p
+    p isa _DEParamVector && return _de_vector_param(ctx, p, sym)
     p isa NamedTuple ||
         _de_refuse(
         ctx,
@@ -127,7 +128,7 @@ _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal =
 
 # The frame's views for the count recognisers and the computed-subscript read.
 _de_keyval(ctx::_DECtx, ::_DEScalarFrame, x::_E._Node) = _de_scalar_keyval(ctx, x)
-_de_keyval(::_DECtx, fr::_DEKernelFrame, x::_E._Node) = _de_acck_keyval(x, fr.K, fr.plan)
+_de_keyval(ctx::_DECtx, fr::_DEKernelFrame, x::_E._Node) = _de_acck_keyval(ctx, x, fr.K, fr.plan)
 _de_same(::_DEScalarFrame, a::_E._Node, b::_E._Node) = _de_same_node(a, b)
 _de_same(fr::_DEKernelFrame, a::_E._Node, b::_E._Node) = _de_acck_same(a, b, fr.K, fr.plan)
 _de_resolve(::_DEScalarFrame, x::_E._Node) = x
@@ -208,14 +209,14 @@ function _de_leaf(ctx::_DECtx, fr::_DEScalarFrame, nd::_E._Node)::_DEVal
     elseif k === _E._NK_CONTRACTION_LOOP
         return _de_contraction_loop(ctx, fr, nd)
     elseif k === _E._NK_LOOPVAR
-        return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
+        return _de_const(ctx, Float64(_de_counter(ctx, nd.payload::Base.RefValue{Int})))
     elseif k === _E._NK_CONST_GATHER
         # `_de_try_fold` has already taken every host-static read.
         return _de_cgather(ctx, nd, ch -> _de_walk(ctx, fr, ch), _ -> nothing)
     elseif k === _E._NK_STATE_GATHER
         sg = nd.payload::_E._StateGather
         slot = _E._state_gather_slot(
-            sg, length(nd.children), d -> _de_index_int(nd.children[d])
+            sg, length(nd.children), d -> _de_index_int(ctx, nd.children[d])
         )
         slot == 0 && return _de_const(ctx, 0.0)                     # ghost cell
         return _de_read(ctx, ctx.ue, slot, :stategather)
@@ -230,7 +231,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEScalarFrame, nd::_E._Node)::_DEVal
         # at emission), so the offset is resolved on host as the walker does.
         cg = nd.payload::_E._ConstGatherArray
         off = _E._const_gather_offset(
-            cg, length(nd.children), d -> _de_index_int(nd.children[d])
+            cg, length(nd.children), d -> _de_index_int(ctx, nd.children[d])
         )
         buf = _de_buffer(ctx, cg.flat)
         return _de_slice(ctx, buf, off, off; why = :pgather)
@@ -256,7 +257,7 @@ function _de_contraction_loop(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
     terms = _DEVal[]
     bodyfr = _de_unmemoized(fr)              # the counter changes per iteration
     for kk in spec.lo:spec.step:spec.hi
-        spec.ref[] = kk
+        _de_set_counter!(ctx, spec.ref, kk)
         push!(terms, _de_walk(ctx, bodyfr, body))
     end
     return _de_fold_terms(ctx, nd.op, nd.literal, terms)
@@ -374,7 +375,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
         # host-static read has folded above.
         return _de_cgather(ctx, nd, ch -> _de_walk(ctx, fr, ch), _ -> nothing)
     elseif k === _E._NK_LOOPVAR
-        return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
+        return _de_const(ctx, Float64(_de_counter(ctx, nd.payload::Base.RefValue{Int})))
     end
     return _de_refuse(
         ctx, "the access-kernel node kind $(_de_kindname(k))",
@@ -491,7 +492,7 @@ function _de_plan_writes!(ctx::_DECtx, rhs, du::_DEMap)
     return nothing
 end
 
-function _de_emit!(ctx::_DECtx, rhs)::_DEVal
+function _de_emit!(ctx::_DECtx, rhs)::_DEMap
     n_states = ctx.n_states
     # Whole-array einsums are a SECTION of the in-place
     # RHS that this walk has no arm for. Left alone their output slots would
@@ -578,5 +579,5 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
         end
     end
     _de_at!(ctx, :assemble)
-    return _de_assemble(ctx, du, n_states)
+    return du
 end
