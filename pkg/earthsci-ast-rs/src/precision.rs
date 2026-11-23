@@ -604,6 +604,18 @@ pub fn enter(p: Precision) -> PrecisionGuard {
     PrecisionGuard { prev }
 }
 
+/// Evaluate at `name`'s effective precision until the returned guard is
+/// dropped: the working precision of an equation that stores into `name`
+/// (esm-spec §11.3.1).
+///
+/// `None` — no guard at all — unless the document declares a per-variable
+/// `element_type`; without one every equation runs at the document's
+/// precision, which is already in force.
+#[must_use]
+pub fn enter_variable(name: &str) -> Option<PrecisionGuard> {
+    has_variable_overrides().then(|| enter(of_variable(name)))
+}
+
 /// Largest integer every binary32 value below it represents exactly.
 ///
 /// Index arithmetic shares the value kernels (there is no integer type in the

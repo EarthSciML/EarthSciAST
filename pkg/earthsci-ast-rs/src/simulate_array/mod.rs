@@ -376,6 +376,29 @@ enum RhsRule {
     },
 }
 
+impl RhsRule {
+    /// The state variable the rule writes the derivative of.
+    fn state<'a>(&'a self, var_shapes: &'a IndexMap<String, VarShape>) -> Option<&'a str> {
+        match self {
+            RhsRule::Scalar { slot, .. } | RhsRule::IndexedScalar { slot, .. } => {
+                slot_owner(var_shapes, *slot)
+            }
+            RhsRule::ArrayLoop { var_name, .. } => Some(var_name),
+        }
+    }
+
+    /// Evaluate at the precision of the state the rule writes until the
+    /// returned guard is dropped (esm-spec §11.3.1), as
+    /// [`crate::precision::enter_variable`].
+    fn enter_precision(
+        &self,
+        var_shapes: &IndexMap<String, VarShape>,
+    ) -> Option<crate::precision::PrecisionGuard> {
+        self.state(var_shapes)
+            .and_then(crate::precision::enter_variable)
+    }
+}
+
 /// Instrumentation for one right-hand-side evaluation: which evaluator ran
 /// the rules.
 #[derive(Debug, Clone, Default)]

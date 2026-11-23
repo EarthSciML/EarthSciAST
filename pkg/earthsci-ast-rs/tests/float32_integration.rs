@@ -357,3 +357,61 @@ fn float32_pde_trajectories_agree_with_the_binary64_goldens() {
         }
     }
 }
+
+/// A document whose one state `x` reads `t - 1e8`, with the document's and
+/// `x`'s declared precisions given.
+fn time_reading_document(document: &str, state: &str) -> Value {
+    json!({
+        "esm": "2.0.0",
+        "metadata": {"name": "TimeRead"},
+        "domain": {"element_type": document},
+        "models": {"M": {
+            "variables": {
+                "x": {"type": "unknown", "units": "s", "default": 0.0, "element_type": state}
+            },
+            "equations": [
+                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                 "rhs": {"op": "*", "args": [
+                     {"op": "const", "args": [], "value": 1.0, "units": "1/s"},
+                     {"op": "-", "args": ["t", 100_000_000]}]}}
+            ]
+        }}
+    })
+}
+
+#[test]
+fn the_right_hand_side_reads_time_at_its_state_s_precision() {
+    // 100000001 is not a binary32 number; it reads as 1e8 there.
+    for (document, state, expected) in [("Float64", "Float32", 0.0), ("Float32", "Float64", 1.0)] {
+        let doc = time_reading_document(document, state);
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let prob = esm_problem(
+                ProblemInput::Json(&doc),
+                (0.0, 1.0),
+                ProblemOptions {
+                    compiler: Some(compiler),
+                    ..ProblemOptions::default()
+                },
+            )
+            .unwrap();
+            let rhs = rhs_program(&prob).unwrap();
+            let (u, aux) = rhs.default_state();
+            let mut du = [f64::NAN];
+            rhs.eval_into(
+                &u,
+                &aux,
+                &[],
+                100_000_001.0,
+                &rhs.default_forcing(),
+                &mut du,
+                &mut rhs.new_workspace(),
+            )
+            .unwrap();
+            assert_eq!(
+                du,
+                [expected],
+                "{document} document, {state} state, {compiler:?}"
+            );
+        }
+    }
+}
