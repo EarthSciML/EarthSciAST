@@ -72,6 +72,122 @@ pub(super) fn eval_call(node: &std::sync::Arc<ExpressionNode>, ctx: &mut EvalCtx
     v
 }
 
+/// The cell `raw` (1-based) of the array the reference `rn` denotes, read
+/// through its body without assembling the array, when its instance body is a
+/// `makearray` whose region holding the cell has a pointwise `faq` value over
+/// exactly that region (written in place or as a reference to one): the value
+/// is that `faq`'s body evaluated with its output symbols bound to the cell,
+/// as the build reads a stencil region it gathers per cell (the region value
+/// inlined onto the cell's loop symbols, `inline_region_aggregates`). A cell in
+/// no region is the fill, `0.0`. `None` where this does not apply; the caller
+/// then gathers from the whole value.
+fn eval_reference_cell(
+    rn: &std::sync::Arc<ExpressionNode>,
+    raw: &[i64],
+    ctx: &mut EvalCtx,
+) -> Option<Value> {
+    let inst = ctx.ops.instance_of_node(rn).ok()?;
+    let Expr::Operator(body) = &inst.body else {
+        return None;
+    };
+    if body.op != "makearray" || crate::op_registry::check_makearray_regions(body).is_err() {
+        return None;
+    }
+    let regions = body.regions.as_deref()?;
+    let values = body.values.as_deref()?;
+    if regions.is_empty() || values.len() != regions.len() || regions[0].len() != raw.len() {
+        return None;
+    }
+    let ndim = raw.len();
+    let mut lo = vec![i64::MAX; ndim];
+    let mut hi = vec![i64::MIN; ndim];
+    let mut bounds: Vec<Vec<[i64; 2]>> = Vec::with_capacity(regions.len());
+    for region in regions {
+        let mut b = Vec::with_capacity(ndim);
+        for (d, r) in region.iter().enumerate() {
+            let [r_lo, r_hi] = crate::types::region_bounds(r)?;
+            lo[d] = lo[d].min(r_lo);
+            hi[d] = hi[d].max(r_hi);
+            b.push([r_lo, r_hi]);
+        }
+        bounds.push(b);
+    }
+    // The array's element `raw - 1` sits at coordinate `lo + raw - 1`.
+    let at: Vec<i64> = (0..ndim).map(|d| lo[d] + raw[d] - 1).collect();
+    if (0..ndim).any(|d| at[d] < lo[d] || at[d] > hi[d]) {
+        return Some(Value::Scalar(0.0));
+    }
+    let Some(r) = (0..regions.len())
+        .rev()
+        .find(|&r| (0..ndim).all(|d| bounds[r][d][0] <= at[d] && at[d] <= bounds[r][d][1]))
+    else {
+        return Some(Value::Scalar(0.0));
+    };
+    // The region value: a pointwise `faq` over exactly the region, in the
+    // body or as the body of the instance a reference names.
+    let value = &values[r];
+    let inner = match value {
+        Expr::Operator(v) if v.op == crate::operator_refs::APPLY_OP => {
+            let vi = ctx.ops.instance_of_node(v).ok()?;
+            Some((std::sync::Arc::clone(v), vi))
+        }
+        _ => None,
+    };
+    let faq: &Expr = match &inner {
+        Some((_, vi)) => &vi.body,
+        None => value,
+    };
+    let Expr::Operator(f) = faq else {
+        return None;
+    };
+    let (Some(idx), Some(ranges), Some(fbody)) = (&f.output_idx, &f.ranges, &f.expr) else {
+        return None;
+    };
+    if !crate::faq::is_faq_op(&f.op)
+        || f.filter.is_some()
+        || idx.len() != ndim
+        || ranges.len() != ndim
+        || (0..ndim).any(|d| ranges.get(&idx[d]).and_then(|s| s.bounds()) != Some(bounds[r][d]))
+    {
+        return None;
+    }
+    let fbody = fbody.clone();
+    ctx.frames.push(CallFrame {
+        node: std::sync::Arc::clone(rn),
+        instance: std::sync::Arc::clone(&inst),
+    });
+    if let Some((vn, vi)) = &inner {
+        ctx.frames.push(CallFrame {
+            node: std::sync::Arc::clone(vn),
+            instance: std::sync::Arc::clone(vi),
+        });
+    }
+    // The output symbols take the cell's subscripts, as the region value
+    // inlined onto the gather's loop symbols reads them.
+    let saved: Vec<Option<i64>> = idx.iter().map(|n| ctx.loop_binds.get(n).copied()).collect();
+    for (n, &v) in idx.iter().zip(raw) {
+        set_bind(&mut ctx.loop_binds, n, v);
+    }
+    let v = eval(&fbody, ctx);
+    for (n, old) in idx.iter().zip(saved) {
+        match old {
+            Some(o) => set_bind(&mut ctx.loop_binds, n, o),
+            None => {
+                ctx.loop_binds.remove(n);
+            }
+        }
+    }
+    if inner.is_some() {
+        ctx.frames.pop();
+    }
+    ctx.frames.pop();
+    match v {
+        Value::Scalar(x) => Some(Value::Scalar(x)),
+        Value::Array(a) if a.ndim() == 0 => Some(Value::Scalar(a[IxDyn(&[])])),
+        Value::Array(_) => None,
+    }
+}
+
 impl EvalCtx<'_> {
     /// The binding of `name` when it is a parameter of the innermost call in
     /// progress ([`eval_call`]).
@@ -2171,6 +2287,26 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             ..Default::default()
         };
         return ctx.up_frames(up, |ctx| eval_index(&gather, ctx));
+    }
+    // A gather of the array an operator reference denotes: the subscripts are
+    // evaluated, then the cell is read through the reference's body
+    // ([`eval_reference_cell`]), or, where that does not apply, from the
+    // whole value.
+    if let Expr::Operator(rn) = &node.args[0]
+        && rn.op == crate::operator_refs::APPLY_OP
+    {
+        let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
+        if in_bounds && let Some(v) = eval_reference_cell(rn, &raw, ctx) {
+            return v;
+        }
+        return match eval(&node.args[0], ctx) {
+            Value::Array(arr) => index_into(&arr, &raw, in_bounds, GatherKind::ZeroGhost),
+            Value::Scalar(s) if node.args.len() == 1 => Value::Scalar(s),
+            Value::Scalar(_) => {
+                latch_index_on_scalar(&node.args[0], node.args.len() - 1);
+                Value::Scalar(f64::NAN)
+            }
+        };
     }
     // CAUSAL SELF-READ (esm-spec §4.3.1.1). Checked before every other channel:
     // during the sweep the array being defined exists nowhere else, and unlike

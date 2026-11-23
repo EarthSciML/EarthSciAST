@@ -1034,7 +1034,7 @@ impl ArrayCompiled {
 
         // (7)+(7b)+(8) Build the RHS rules, cover held-at-ic slots, and
         // validate that every state slot has a defining equation.
-        let rhs_rules = build_rhs_rules(model, &slots, &held_at_ic)?;
+        let rhs_rules = build_rhs_rules(model, &slots, &held_at_ic, &ops)?;
         let held_at_ic_names = held_at_ic.clone();
 
         let SlotTables {
@@ -3342,7 +3342,8 @@ fn lower_algebraic_body(
         .map(|d| format!("_lp{d}_{name}"))
         .collect();
     let output_ranges: Vec<(i64, i64)> = extents.iter().map(|n| (1i64, *n as i64)).collect();
-    let looped = index_array_leaves_by_loops(&body, array_axes, Some(&plan), &loops);
+    let looped =
+        index_array_leaves_by_loops(&body, array_axes, Some(&plan), &loops, Instances::empty());
     Ok(AlgebraicRule::ArrayLoop {
         var: name.to_string(),
         output_idx_names: loops,
@@ -3392,6 +3393,7 @@ fn build_rhs_rules(
     model: &Model,
     slots: &SlotTables,
     held_at_ic: &HashSet<String>,
+    ops: &Instances,
 ) -> Result<Vec<RhsRule>, CompileError> {
     let var_shapes = &slots.var_shapes;
     let mut rhs_rules: Vec<RhsRule> = Vec::new();
@@ -3426,6 +3428,7 @@ fn build_rhs_rules(
                     var_shapes,
                     &mut covered_slots,
                     &mut rhs_rules,
+                    ops,
                 )?,
             }
             continue;
@@ -3516,6 +3519,7 @@ fn lower_indexed_derivative(
 /// Lower a bare-variable derivative `D(var, t) = rhs`: a plain scalar slot
 /// write when the state is 0-D, otherwise one of the two whole-array lifts
 /// ([`lower_wholearray_producer_lift`] / [`lower_wholearray_percell`]).
+#[allow(clippy::too_many_arguments)]
 fn lower_bare_derivative(
     var: String,
     rhs: &Expr,
@@ -3524,6 +3528,7 @@ fn lower_bare_derivative(
     var_shapes: &IndexMap<String, VarShape>,
     covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
+    ops: &Instances,
 ) -> Result<(), CompileError> {
     let shape = var_shapes
         .get(&var)
@@ -3552,7 +3557,7 @@ fn lower_bare_derivative(
             slot,
             body: Box::new(rhs.clone()),
         });
-    } else if rhs_has_array_producer(rhs) {
+    } else if rhs_has_array_producer(rhs, ops) {
         lower_wholearray_producer_lift(
             var,
             rhs,
@@ -3561,6 +3566,7 @@ fn lower_bare_derivative(
             array_axes,
             covered_slots,
             rhs_rules,
+            ops,
         )?;
     } else {
         lower_wholearray_percell(
@@ -3587,6 +3593,7 @@ fn lower_bare_derivative(
 /// analog of the Julia `_lift_wholearray_deriv_equations`
 /// (shape_promotion.jl) and keeps the rule eligible for the
 /// vectorized whole-array fast path (ess-bdm).
+#[allow(clippy::too_many_arguments)]
 fn lower_wholearray_producer_lift(
     var: String,
     rhs: &Expr,
@@ -3595,6 +3602,7 @@ fn lower_wholearray_producer_lift(
     array_axes: &HashMap<String, Vec<String>>,
     covered_slots: &mut SlotCoverage,
     rhs_rules: &mut Vec<RhsRule>,
+    ops: &Instances,
 ) -> Result<(), CompileError> {
     let ndim = shape.shape.len();
     let loops: Vec<String> = (0..ndim).map(|d| format!("_lp{d}_{var}")).collect();
@@ -3606,7 +3614,7 @@ fn lower_wholearray_producer_lift(
         .collect();
     let lhs_idx_exprs: Vec<Expr> = loops.iter().map(|l| Expr::Variable(l.clone())).collect();
     let plan = build_gather_plan(rhs, array_axes, &var, target_axes, false)?;
-    let body = index_array_leaves_by_loops(rhs, array_axes, Some(&plan), &loops);
+    let body = index_array_leaves_by_loops(rhs, array_axes, Some(&plan), &loops, ops);
     let total = shape.shape.iter().copied().product::<usize>().max(1);
     covered_slots.insert_range(shape.flat_offset, total);
     rhs_rules.push(RhsRule::ArrayLoop {
@@ -4965,19 +4973,29 @@ pub(super) fn is_array_producer(node: &ExpressionNode) -> bool {
 /// discretization rule's lowered stencil (`alpha * makearray(…)`). Follows the
 /// same descent rules as the Julia `_index_array_leaves`: `index` gathers and
 /// aggregate-family nodes are already scalar/self-indexed and are not entered.
-pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
+pub(super) fn rhs_has_array_producer(expr: &Expr, ops: &Instances) -> bool {
     match expr {
         Expr::Operator(node) => {
-            if is_array_producer(node) {
+            if is_array_producer(node) || reference_is_array_producer(node, ops) {
                 return true;
             }
             if node.op == "index" || is_faq_op(&node.op) {
                 return false;
             }
-            node.args.iter().any(rhs_has_array_producer)
+            node.args.iter().any(|a| rhs_has_array_producer(a, ops))
         }
         _ => false,
     }
+}
+
+/// Whether `node` is an operator reference whose instance body is an array
+/// producer ([`is_array_producer`]): it denotes that producer (esm-spec
+/// §9.6.4 rule 2), so it is gathered per cell as one, and the evaluator reads
+/// the cell through the body ([`super::eval::eval_call`]).
+pub(super) fn reference_is_array_producer(node: &ExpressionNode, ops: &Instances) -> bool {
+    crate::operator_refs::reference_node(node)
+        .and_then(|r| ops.instance(&r).ok())
+        .is_some_and(|i| matches!(&i.body, Expr::Operator(b) if is_array_producer(b)))
 }
 
 /// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
@@ -5203,6 +5221,7 @@ pub(super) fn index_array_leaves_by_loops(
     array_axes: &HashMap<String, Vec<String>>,
     plan: Option<&GatherPlan>,
     loops: &[String],
+    ops: &Instances,
 ) -> Expr {
     let wrap = |target: Expr, ix: Vec<&String>| {
         let mut args = vec![target];
@@ -5229,6 +5248,11 @@ pub(super) fn index_array_leaves_by_loops(
             wrap(expr.clone(), ix)
         }
         Expr::Operator(node) => {
+            // A reference to an array producer is gathered whole; the
+            // evaluator reads the cell through its body.
+            if reference_is_array_producer(node, ops) {
+                return wrap(expr.clone(), loops.iter().collect());
+            }
             if is_array_producer(node) {
                 let target = if node.op == "makearray" {
                     Expr::operator(inline_region_aggregates(node, loops))
@@ -5248,7 +5272,7 @@ pub(super) fn index_array_leaves_by_loops(
             out.args = node
                 .args
                 .iter()
-                .map(|a| index_array_leaves_by_loops(a, array_axes, child_plan, loops))
+                .map(|a| index_array_leaves_by_loops(a, array_axes, child_plan, loops, ops))
                 .collect();
             Expr::operator(out)
         }
