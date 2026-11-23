@@ -65,7 +65,7 @@ struct LaneInner {
     slot_of: [Vec<u32>; 3],
     blocks: Blocks,
     layout: LaneLayout,
-    slots: Arc<[ForcingSlot]>,
+    default_set: ForcingSet,
     capacity: usize,
     sets: Vec<String>,
     /// The global extent of each lane set, for validating `cells`.
@@ -138,7 +138,7 @@ impl LaneProgram {
 
     /// The forcing slots a set for this program holds: the whole program's.
     pub fn forcing_slots(&self) -> &[ForcingSlot] {
-        &self.inner.slots
+        self.inner.default_set.slots()
     }
 
     /// Buffers for [`Self::eval_into`] and [`Self::eval_gathered_into`].
@@ -156,6 +156,7 @@ impl LaneProgram {
             owner: inner.id,
             state: vec![0.0; n],
             dy: Vec::new(),
+            ingress: Default::default(),
             exec: WsExec::Lanes {
                 main: serial(&inner.main),
                 pre: serial(&inner.pre),
@@ -267,7 +268,7 @@ impl LaneProgram {
         if p.len() != inner.n_params {
             return Err(shape("p", inner.n_params, p.len()));
         }
-        check_forcing(forcing, &inner.slots)?;
+        check_forcing(forcing, &inner.default_set)?;
         self.write_cells(&mut inputs.state, inner.capacity * inner.n_inputs, cells, n)?;
         let _precision = crate::precision::enter(inner.precision);
         let scope = crate::simulate_array::FaultScope::enter();
@@ -344,7 +345,7 @@ impl LaneProgram {
         let inner = &*self.inner;
         check_lengths(&inner.blocks, u, aux, du, p, inner.n_params)?;
         check_owner(ws, inner.id)?;
-        check_forcing(forcing, &inner.slots)?;
+        check_forcing(forcing, &inner.default_set)?;
         let (nu, na) = (inner.blocks.u_len, inner.blocks.aux_len);
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..nu + na].copy_from_slice(aux);
@@ -1067,7 +1068,7 @@ pub(super) fn build(
             slot_of,
             layout: layout.lane_public(&sets, capacity),
             blocks: layout,
-            slots: Arc::clone(&prog.inner.slots),
+            default_set: prog.default_forcing(),
             capacity,
             extents: sets.iter().map(|s| sizes[s]).collect(),
             sets,

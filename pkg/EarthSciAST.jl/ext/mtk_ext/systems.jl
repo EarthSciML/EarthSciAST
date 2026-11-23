@@ -201,6 +201,18 @@ function ModelingToolkit.System(
         name::Union{Symbol, AbstractString} = :anonymous,
         kwargs...
     )
+    document = flat.domain === nothing ? "Float64" : something(flat.domain.element_type, "Float64")
+    for variables in (flat.state_variables, flat.observed_variables, flat.parameters)
+        for (variable, declaration) in variables
+            something(declaration.element_type, document) == "Float32" || continue
+            throw(
+                SimulateError(
+                    "ModelingToolkit cannot evaluate binary32 variable '$variable' at its declared precision",
+                    ERROR_CODES.FLOAT32_UNSUPPORTED
+                )
+            )
+        end
+    end
     # "Expand at your boundary" (RFC out-of-line-expression-templates §7.7):
     # `flatten` carries surviving `apply_expression_template` references; MTK
     # lowering has no template handling, so expand against the merged registry

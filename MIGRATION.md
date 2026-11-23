@@ -25,6 +25,13 @@ what breaks and what to write instead. If you have five minutes, read Part I.
 
 ---
 
+Rust now integrates Float32 state in binary32 through `solve` and `init`.
+Previously accepted per-variable Float32 states now have binary32 trajectories
+as well. Rust reports the arithmetic in `SolutionMetadata.integrator_precision`
+and refuses mixed state precision, relative tolerances below 2⁻²², and
+indistinguishable binary32 clock times. Python and Julia refuse Float32 dynamics
+with `float32_unsupported`, including Julia's ModelingToolkit compiler.
+
 ## How to read a row
 
 Every row in this guide carries a kind:

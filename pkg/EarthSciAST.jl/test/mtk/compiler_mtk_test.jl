@@ -844,3 +844,16 @@ end
     @test err !== nothing && occursin("ic(H.s)", err.detail)
     @test err !== nothing && occursin("data-fed parameter 'H.q'", err.detail)
 end
+
+@testset "ModelingToolkit refuses Float32 dynamics" begin
+    fixture = _mtkc_fixture("conformance", "precision_integration", "vanishing_increment.esm")
+    for input in (fixture, _MTKC.flatten(_MTKC.load_path(fixture)))
+        err = try
+            esm_problem(input, (0.0, 100.0); compiler = :mtk)
+            nothing
+        catch err
+            err
+        end
+        @test err isa _MTKC.SimulateError && err.code == _MTKC.ERROR_CODES.FLOAT32_UNSUPPORTED
+    end
+end

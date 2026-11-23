@@ -72,6 +72,9 @@ use std::sync::Arc;
 
 use crate::compile_error::CompileError;
 
+/// The minimum relative tolerance supported for a Float32 state (esm-spec §11.3.2).
+pub(crate) const FLOAT32_RELTOL_FLOOR: f64 = 2.0 * f32::EPSILON as f64;
+
 /// The evaluator's working floating-point precision.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum Precision {
@@ -129,6 +132,61 @@ impl Precision {
             Precision::Float64 => "Float64",
             Precision::Float32 => "Float32",
         }
+    }
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for f32 {}
+    impl Sealed for f64 {}
+}
+
+/// A scalar exchanged with an external integrator by the compiled RHS.
+pub trait StateScalar: sealed::Sealed + Copy + Send + Sync + 'static {
+    const PRECISION: Precision;
+    fn widen(self) -> f64;
+    fn narrow(value: f64) -> Self;
+
+    #[doc(hidden)]
+    fn widen_slice(values: &[Self]) -> std::borrow::Cow<'_, [f64]>;
+    #[doc(hidden)]
+    fn as_f64_mut(values: &mut [Self]) -> Option<&mut [f64]>;
+}
+
+impl StateScalar for f32 {
+    const PRECISION: Precision = Precision::Float32;
+    fn widen(self) -> f64 {
+        f64::from(self)
+    }
+    fn narrow(value: f64) -> Self {
+        value as f32
+    }
+    fn widen_slice(values: &[Self]) -> std::borrow::Cow<'_, [f64]> {
+        values
+            .iter()
+            .copied()
+            .map(Self::widen)
+            .collect::<Vec<_>>()
+            .into()
+    }
+    fn as_f64_mut(_: &mut [Self]) -> Option<&mut [f64]> {
+        None
+    }
+}
+
+impl StateScalar for f64 {
+    const PRECISION: Precision = Precision::Float64;
+    fn widen(self) -> f64 {
+        self
+    }
+    fn narrow(value: f64) -> Self {
+        value
+    }
+    fn widen_slice(values: &[Self]) -> std::borrow::Cow<'_, [f64]> {
+        values.into()
+    }
+    fn as_f64_mut(values: &mut [Self]) -> Option<&mut [f64]> {
+        Some(values)
     }
 }
 
@@ -482,6 +540,11 @@ impl Env {
     /// Arm this environment until the returned guard is dropped.
     pub fn enter(&self) -> EnvGuard {
         enter_env(self.document, Arc::clone(&self.variables))
+    }
+
+    /// The effective precision of a variable in this document.
+    pub fn variable(&self, name: &str) -> Precision {
+        self.variables.get(name).unwrap_or(self.document)
     }
 
     /// Is the DOCUMENT's declared precision binary32?

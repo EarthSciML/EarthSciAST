@@ -40,6 +40,7 @@ pub use tile::TileProgram;
 use super::tape::{CallInputs, ForcingView, TapeCtx, TapeProgram, run_tape_inputs};
 use super::{ArrayCompiled, RhsCall, RhsScratch, RhsStats, evaluate_rhs_with_scratch};
 use crate::flatten::{FlattenedSystem, TermOrigin};
+use crate::precision::{Precision, StateScalar};
 use crate::problem::{Compiler, EsmProblem, ProgramSource};
 use crate::simulate::SimulateError;
 use crate::simulate_array::ShapeTable;
@@ -389,8 +390,17 @@ pub struct RhsWorkspace {
     owner: u64,
     state: Vec<f64>,
     dy: Vec<f64>,
+    ingress: Ingress,
     exec: WsExec,
     _not_sync: PhantomData<Cell<()>>,
+}
+
+#[derive(Default)]
+struct Ingress {
+    u: Vec<f64>,
+    aux: Vec<f64>,
+    params: Vec<f64>,
+    du: Vec<f64>,
 }
 
 enum WsExec {
@@ -473,6 +483,10 @@ struct ProgramInner {
     blocks: Blocks,
     layout: TileLayout,
     state_layout: Vec<StateBlock>,
+    state_precisions: Vec<Precision>,
+    aux_precisions: Vec<Precision>,
+    param_precisions: Vec<Precision>,
+    has_float32: bool,
     params: Vec<ParamSlot>,
     slots: Arc<[ForcingSlot]>,
     /// The Problem's forcing when the program was built.
@@ -763,7 +777,12 @@ impl RhsProgram {
         let default_set = match forcing {
             ForcingSource::Problem(m) => {
                 let (s, d) = forcing_slots(&model, m, &array_params);
-                ForcingSet::for_slots(s.into(), d).expect("each default holds its slot's shape")
+                let precisions = s
+                    .iter()
+                    .map(|slot| model.precision.variable(&slot.name))
+                    .collect();
+                ForcingSet::for_slots(s.into(), precisions, d)
+                    .expect("each default holds its slot's shape")
             }
             ForcingSource::Parent(p) => p.default_set.clone(),
         };
@@ -825,6 +844,26 @@ impl RhsProgram {
                     .collect(),
             })
             .collect();
+        let precisions = |blocks: &[TileBlock]| {
+            blocks
+                .iter()
+                .flat_map(|block| {
+                    std::iter::repeat_n(model.precision.variable(&block.name), block.len())
+                })
+                .collect::<Vec<_>>()
+        };
+        let state_precisions = precisions(&layout.u);
+        let aux_precisions = precisions(&layout.aux);
+        let param_precisions = model
+            .param_names
+            .iter()
+            .map(|name| model.precision.variable(name))
+            .collect::<Vec<_>>();
+        let has_float32 = state_precisions
+            .iter()
+            .chain(&aux_precisions)
+            .chain(&param_precisions)
+            .any(|p| p.is_f32());
         let params = model
             .param_names
             .iter()
@@ -849,6 +888,10 @@ impl RhsProgram {
                 blocks,
                 layout,
                 state_layout,
+                state_precisions,
+                aux_precisions,
+                param_precisions,
+                has_float32,
                 params,
                 slots,
                 default_set,
@@ -858,10 +901,6 @@ impl RhsProgram {
                 shapes: shape_table,
             }),
         })
-    }
-
-    pub(super) fn slots_arc(&self) -> Arc<[ForcingSlot]> {
-        Arc::clone(&self.inner.slots)
     }
 
     /// The compiler this program was built with.
@@ -894,6 +933,27 @@ impl RhsProgram {
     /// the `u` half of [`Self::layout`].
     pub fn state_layout(&self) -> &[StateBlock] {
         &self.inner.state_layout
+    }
+
+    /// The document's arithmetic precision (Float64 when unspecified).
+    pub fn precision(&self) -> Precision {
+        self.inner.model.precision.document
+    }
+
+    /// The effective precision of each slot in `u` and `du`.
+    pub fn state_precisions(&self) -> &[Precision] {
+        &self.inner.state_precisions
+    }
+
+    /// Round each state slot in place to its effective precision.
+    pub fn round_state(&self, u: &mut [f64]) -> Result<(), RhsError> {
+        if u.len() != self.n_states() {
+            return Err(forcing::shape("u", self.n_states(), u.len()));
+        }
+        for (value, precision) in u.iter_mut().zip(self.state_precisions()) {
+            *value = precision.round(*value);
+        }
+        Ok(())
     }
 
     /// The parameters `p` holds, in its order: the order the program's tape
@@ -1047,6 +1107,7 @@ impl RhsProgram {
             owner: inner.id,
             state: vec![0.0; n],
             dy: vec![0.0; n],
+            ingress: Ingress::default(),
             exec,
             _not_sync: PhantomData,
         }
@@ -1060,23 +1121,57 @@ impl RhsProgram {
     /// The result depends only on the program and the arguments' values:
     /// not on the thread, the workspace's history, or any other call.
     #[allow(clippy::too_many_arguments)]
-    pub fn eval_into(
+    pub fn eval_into<T: StateScalar>(
         &self,
-        u: &[f64],
+        u: &[T],
         aux: &[f64],
         p: &[f64],
         t: f64,
         forcing: &ForcingSet,
-        du: &mut [f64],
+        du: &mut [T],
         ws: &mut RhsWorkspace,
     ) -> Result<(), RhsError> {
         let inner = &*self.inner;
         check_lengths(&inner.blocks, u, aux, du, p, inner.params.len())?;
         check_owner(ws, inner.id)?;
-        check_forcing(forcing, &inner.slots)?;
+        check_forcing(forcing, &inner.default_set)?;
         let _precision = inner.model.precision.enter();
+        if T::PRECISION.is_f32() {
+            if let Some(block) = inner.state_layout.iter().find(|b| {
+                b.shape.iter().product::<usize>() != 0
+                    && !inner.model.precision.variable(&b.name).is_f32()
+            }) {
+                return Err(RhsError::StatePrecision {
+                    variable: block.name.clone(),
+                    declared: Precision::Float64,
+                });
+            }
+        }
         let scope = super::FaultScope::enter();
-        self.run(u, aux, p, t, Forcing::Set(forcing), du, ws);
+        if let Some(du) = T::as_f64_mut(du).filter(|_| !inner.has_float32) {
+            self.run(&T::widen_slice(u), aux, p, t, Forcing::Set(forcing), du, ws);
+        } else {
+            let mut ingress = std::mem::take(&mut ws.ingress);
+            round_inputs(&mut ingress.u, u, &inner.state_precisions);
+            round_inputs(&mut ingress.aux, aux, &inner.aux_precisions);
+            round_inputs(&mut ingress.params, p, &inner.param_precisions);
+            ingress.du.resize(du.len(), 0.0);
+            self.run(
+                &ingress.u,
+                &ingress.aux,
+                &ingress.params,
+                t,
+                Forcing::Set(forcing),
+                &mut ingress.du,
+                ws,
+            );
+            for ((target, &value), prec) in
+                du.iter_mut().zip(&ingress.du).zip(&inner.state_precisions)
+            {
+                *target = T::narrow(prec.round(value));
+            }
+            ws.ingress = ingress;
+        }
         match scope.finish() {
             Some(msg) => {
                 if let WsExec::Tape(ctx) = &mut ws.exec {
@@ -1129,9 +1224,13 @@ impl RhsProgram {
                 writes: c.var_shapes.keys().cloned().collect(),
                 aux: Vec::new(),
                 state_layout: Vec::new(),
+                state_precisions: Vec::new(),
+                aux_precisions: Vec::new(),
+                param_precisions: Vec::new(),
+                has_float32: false,
                 params: Vec::new(),
                 slots: Arc::from(Vec::new()),
-                default_set: ForcingSet::for_slots(Arc::from(Vec::new()), Vec::new())
+                default_set: ForcingSet::for_slots(Arc::from([]), Arc::from([]), Vec::new())
                     .expect("an empty set"),
                 scatter: Vec::new(),
                 identity: true,
@@ -1157,6 +1256,7 @@ impl RhsProgram {
             owner: self.inner.id,
             state: Vec::new(),
             dy: Vec::new(),
+            ingress: Ingress::default(),
             exec: WsExec::Tape(Box::new(TapeCtx::new(Arc::clone(tape)))),
             _not_sync: PhantomData,
         }
@@ -1306,9 +1406,9 @@ fn fill_forcing_map(map: &mut HashMap<String, ArrayD<f64>>, set: &ForcingSet) {
     }
 }
 
-fn check_forcing(set: &ForcingSet, slots: &Arc<[ForcingSlot]>) -> Result<(), RhsError> {
-    if !set.fits(slots) {
-        return Err(set.mismatch(slots));
+fn check_forcing(set: &ForcingSet, defaults: &ForcingSet) -> Result<(), RhsError> {
+    if !set.fits(defaults) {
+        return Err(set.mismatch(defaults));
     }
     Ok(())
 }
@@ -1332,11 +1432,21 @@ fn tape_fault(scope: super::FaultScope, ctx: &mut TapeCtx) -> Result<(), RhsErro
     }
 }
 
-fn check_lengths(
+fn round_inputs<T: StateScalar>(buf: &mut Vec<f64>, input: &[T], precisions: &[Precision]) {
+    buf.clear();
+    buf.extend(
+        input
+            .iter()
+            .zip(precisions)
+            .map(|(&value, precision)| precision.round(value.widen())),
+    );
+}
+
+fn check_lengths<T>(
     layout: &Blocks,
-    u: &[f64],
+    u: &[T],
     aux: &[f64],
-    du: &[f64],
+    du: &[T],
     p: &[f64],
     n_params: usize,
 ) -> Result<(), RhsError> {

@@ -30,8 +30,22 @@ pub struct ValidationResult {
     /// Dimensional-analysis findings that did not invalidate the document
     /// (see [`UnitWarning`]).
     pub unit_warnings: Vec<UnitWarning>,
+    /// Non-unit diagnostics that do not invalidate the document.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ValidationWarning>,
     /// Whether validation passed (no schema or structural errors)
     pub is_valid: bool,
+}
+
+/// An advisory validation finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationWarning {
+    /// Stable diagnostic code.
+    pub code: String,
+    /// JSON pointer to the declaration.
+    pub path: String,
+    /// Human-readable diagnostic.
+    pub message: String,
 }
 
 impl ValidationResult {
@@ -288,12 +302,30 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
     // coupled-system reference check MUST see the expanded edges.
     crate::coupling::validate_imported_coupling(esm_file, &system_refs, &mut structural_errors);
 
+    let mut warnings = Vec::new();
+    let floor = crate::precision::FLOAT32_RELTOL_FLOOR;
+    if scope == ValidationScope::Full
+        && esm_file
+            .domain
+            .as_ref()
+            .and_then(|d| d.element_type.as_deref())
+            == Some("Float32")
+        && let Some(reltol) = esm_file.solver.as_ref().and_then(|s| s.reltol)
+        && reltol < floor
+    {
+        warnings.push(ValidationWarning {
+            code: crate::diagnostic::codes::TOLERANCE_BELOW_WORKING_PRECISION.to_owned(),
+            path: "/solver/reltol".to_owned(),
+            message: format!("solver.reltol sets {reltol}, below the Float32 state floor {floor}"),
+        });
+    }
     let is_valid = schema_errors.is_empty() && structural_errors.is_empty();
 
     ValidationResult {
         schema_errors,
         structural_errors,
         unit_warnings,
+        warnings,
         is_valid,
     }
 }
@@ -328,6 +360,7 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
                 }],
                 structural_errors: vec![],
                 unit_warnings: vec![],
+                warnings: vec![],
                 is_valid: false,
             };
         }
@@ -362,6 +395,7 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
                 schema_errors,
                 structural_errors: e.findings().to_vec(),
                 unit_warnings: vec![],
+                warnings: vec![],
                 is_valid: false,
             }
         }
@@ -393,6 +427,7 @@ fn validate_with_schema(json_value: &Value, esm_file: &EsmFile) -> ValidationRes
         schema_errors,
         structural_errors: result.structural_errors,
         unit_warnings: result.unit_warnings,
+        warnings: result.warnings,
         is_valid,
     }
 }

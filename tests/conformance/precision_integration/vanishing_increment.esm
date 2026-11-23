@@ -1,0 +1,39 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "Float32Integration",
+    "description": "An increment of 1e-8 per second vanishes at x = 1 with binary32 state and steps shorter than one second. Binary64 state retains the increments and reaches about 1.000001 at 100 seconds."
+  },
+  "domain": { "element_type": "Float32" },
+  "models": {
+    "M": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.0 },
+        "y": { "type": "unknown", "units": "1", "default": 0.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 1e-8 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": "k" },
+        {
+          "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+          "rhs": {
+            "op": "*",
+            "args": [
+              { "op": "const", "args": [], "value": 1.0, "units": "1/s" },
+              {
+                "op": "cos",
+                "args": [{
+                  "op": "*",
+                  "args": [
+                    { "op": "const", "args": [], "value": 6.283185307179586, "units": "1/s" },
+                    "t"
+                  ]
+                }]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

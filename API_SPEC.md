@@ -804,10 +804,10 @@ Problem's `p` (else the parameter defaults) bound in every initial condition's
 scope (§6.6.5). So it depends on neither `tspan` nor any solver option, and a
 field `ic` reads the forcing as construction bound it, without the
 discrete-cadence fields a solve refreshes, so it gives the same state before and
-after a solve. A Problem with no solve has no initial state: nothing to
-integrate is `NotDynamic` and a Float32 document that integrates is
-`Float32Unsupported`, as for `solve`; an element no source values is
-`InvalidInitialCondition`, as in a solve. A Rust
+after a solve. A Problem with no dynamic backend has no initial state. Nothing to
+integrate is `NotDynamic`. An element with no initial value produces
+`InvalidInitialCondition`. Float32 state values are returned rounded to their
+declared precision. A Rust
 `RhsProgram`'s `default_state()` is the declared defaults alone.
 
 The SciML name `u0` already means the CALLER's override bindings in Python
@@ -1242,6 +1242,7 @@ pub enum RhsError {
     ForcingSignature { detail: String },
     SlotIndex { slot: usize, slots: usize },
     NotGathered,
+    StatePrecision { variable: String, declared: Precision },
 }
 ```
 
@@ -1253,6 +1254,16 @@ program is `ForeignProgram`, a forcing set for other slots is
 out-of-range slot index to `replace` is `SlotIndex`, and lane inputs whose last
 gather failed, or that were never gathered, are `NotGathered`. Build-time calls (`rhs_program`, `select`,
 `halo`, `tile`, `lanes`, `parameter_vector`) keep `SimulateError`.
+
+**Rust RHS precision.** `RhsProgram::precision()` reports the document
+precision. `RhsProgram::state_precisions()` reports each slot's precision in
+`u` order. `round_state(&mut [f64])` rounds a caller's accepted state in this
+order. `eval_into<T: StateScalar>` accepts both `f32` and `f64` state and
+derivative slices. With `f32`, it returns `StatePrecision` if any written state
+slot requires binary64. Auxiliary state, parameters and time use the existing
+`f64` interface and are read at model precision. A call sets the program's
+precision on the calling thread for the duration of the evaluation.
+`ForcingSet::new` and `replace` round each stored buffer to its slot's precision.
 
 **Julia types.** `ForcingSet`, `ForcingSlot` (`name::String`,
 `shape::Vector{Int}`, `kind::Symbol`, `:forcing` or `:array_parameter`),

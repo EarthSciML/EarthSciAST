@@ -48,7 +48,7 @@ struct TileInner {
     prog: Arc<TapeProgram>,
     blocks: Blocks,
     layout: TileLayout,
-    slots: Arc<[ForcingSlot]>,
+    default_set: ForcingSet,
     slot_of: Vec<u32>,
     n_params: usize,
     declared: Arc<HashSet<String>>,
@@ -71,7 +71,7 @@ impl TileProgram {
 
     /// The forcing slots a set for this tile holds: the whole program's.
     pub fn forcing_slots(&self) -> &[ForcingSlot] {
-        &self.inner.slots
+        self.inner.default_set.slots()
     }
 
     /// Buffers for [`Self::eval_into`].
@@ -83,6 +83,7 @@ impl TileProgram {
             owner: self.inner.id,
             state: vec![0.0; n],
             dy: Vec::new(),
+            ingress: Default::default(),
             exec: WsExec::Tape(Box::new(ctx)),
             _not_sync: std::marker::PhantomData,
         }
@@ -106,7 +107,7 @@ impl TileProgram {
         let inner = &*self.inner;
         check_lengths(&inner.blocks, u, aux, du, p, inner.n_params)?;
         check_owner(ws, inner.id)?;
-        check_forcing(forcing, &inner.slots)?;
+        check_forcing(forcing, &inner.default_set)?;
         let nu = inner.blocks.u_len;
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..].copy_from_slice(aux);
@@ -783,7 +784,7 @@ pub(super) fn build(
             prog: Arc::new(tape),
             layout: layout.public(),
             blocks: layout,
-            slots: Arc::clone(&prog.inner.slots),
+            default_set: prog.default_forcing(),
             slot_of,
             n_params: compiled.param_names.len(),
             declared: Arc::clone(&prog.inner.declared),

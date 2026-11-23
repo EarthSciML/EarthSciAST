@@ -215,6 +215,7 @@ fn run_xla_rhs(
 /// every call.
 #[cfg(feature = "solve")]
 pub(super) struct FdJvp {
+    precision: crate::precision::Precision,
     base_y: Vec<f64>,
     base_p: Vec<f64>,
     base_t: f64,
@@ -227,8 +228,14 @@ pub(super) struct FdJvp {
 
 #[cfg(feature = "solve")]
 impl FdJvp {
+    #[cfg(test)]
     pub(super) fn new(n_states: usize) -> Self {
+        Self::with_precision(n_states, crate::precision::Precision::Float64)
+    }
+
+    pub(super) fn with_precision(n_states: usize, precision: crate::precision::Precision) -> Self {
         FdJvp {
+            precision,
             base_y: vec![0.0; n_states],
             base_p: Vec::new(),
             base_t: 0.0,
@@ -252,12 +259,15 @@ impl FdJvp {
         mut eval: impl FnMut(&[f64], &[f64], f64, &mut [f64]) -> bool,
     ) {
         let n = y.len();
-        let mut y_norm = 0.0f64;
-        for &yi in y {
-            y_norm += yi * yi;
-        }
-        let y_norm = y_norm.sqrt().max(1.0);
-        let eps = f64::EPSILON.sqrt() * y_norm;
+        let eps = if self.precision.is_f32() {
+            let scale = y
+                .iter()
+                .fold(1.0_f32, |scale, &v| scale.max((v as f32).abs()));
+            f64::from(f32::EPSILON.sqrt() * scale)
+        } else {
+            let norm_sq: f64 = y.iter().map(|v| v * v).sum();
+            f64::EPSILON.sqrt() * norm_sq.sqrt().max(1.0)
+        };
 
         let same_point = self.base_valid
             && self.base_t.to_bits() == t.to_bits()
@@ -274,12 +284,21 @@ impl FdJvp {
         }
 
         self.y_perturbed.clear();
-        self.y_perturbed
-            .extend(y.iter().zip(v).map(|(&yi, &vi)| yi + eps * vi));
+        self.y_perturbed.extend(y.iter().zip(v).map(|(&yi, &vi)| {
+            if self.precision.is_f32() {
+                f64::from(yi as f32 + eps as f32 * vi as f32)
+            } else {
+                yi + eps * vi
+            }
+        }));
         self.f_yp.resize(n, 0.0);
         eval(&self.y_perturbed, p, t, &mut self.f_yp);
         for ((out, &fp), &f0) in jv.iter_mut().zip(&self.f_yp).zip(&self.f_y) {
-            *out = (fp - f0) / eps;
+            *out = if self.precision.is_f32() {
+                f64::from((fp as f32 - f0 as f32) / eps as f32)
+            } else {
+                (fp - f0) / eps
+            };
         }
     }
 }
@@ -696,9 +715,7 @@ impl ArrayCompiled {
     ///
     /// An array model whose every equation is ALGEBRAIC compiles to observed
     /// rules and no `RhsRule`, so it evaluates without the integrator ever
-    /// touching a value. That distinction is what
-    /// `problem::reject_f32_integration` needs: a Float32 declaration is
-    /// honourable for such a model and not for one with real dynamics.
+    /// touching a value.
     pub fn has_differential_equations(&self) -> bool {
         !self.rhs_rules.is_empty()
     }
@@ -1902,6 +1919,7 @@ impl ArrayCompiled {
             } else {
                 return Err(SimulateError::InvalidParameter { name: name.clone() });
             }
+            param_vec[i] = self.precision.variable(name).round(param_vec[i]);
         }
         Ok(param_vec)
     }
@@ -2019,6 +2037,7 @@ impl ArrayCompiled {
                 u[slot] = false;
             }
         }
+        self.round_initial_state(&mut ic_vec);
         // After the overrides, so a body reading a state reads the caller's
         // value, and around them, so the caller's value stands.
         for slot in
@@ -2032,7 +2051,21 @@ impl ArrayCompiled {
             let name = super::layout::slot_name(&self.var_shapes, slot).unwrap_or_default();
             return Err(SimulateError::InvalidInitialCondition { name });
         }
+        self.round_initial_state(&mut ic_vec);
         Ok(ic_vec)
+    }
+
+    #[cfg(feature = "solve")]
+    fn round_initial_state(&self, state: &mut [f64]) {
+        for (name, block) in &self.var_shapes {
+            let precision = self.precision.variable(name);
+            if precision.is_f32() {
+                let end = block.flat_offset + block.shape.iter().product::<usize>();
+                for value in &mut state[block.flat_offset..end] {
+                    *value = precision.round(*value);
+                }
+            }
+        }
     }
 
     #[cfg(feature = "solve")]
@@ -2074,6 +2107,11 @@ impl ArrayCompiled {
                     initial_conditions,
                     discrete_forcing: &none,
                     boundaries: &[],
+                    reltol_source: if opts.reltol.is_some() {
+                        "call site"
+                    } else {
+                        "binding default"
+                    },
                 },
                 opts,
                 inspect.as_deref_mut(),
@@ -2759,9 +2797,11 @@ pub(super) fn solution_metadata(
     solver_name: &str,
     stats: &super::session::SolveStats,
     merged_variable_renames: HashMap<String, String>,
+    integrator_precision: Option<crate::IntegratorPrecision>,
 ) -> SolutionMetadata {
     SolutionMetadata {
         alg: solver_name.to_string(),
+        integrator_precision,
         n_rhs_calls: stats.n_rhs_calls,
         n_jacobian_calls: stats.n_jacobian_calls,
         n_accepted_steps: stats.n_accepted_steps,

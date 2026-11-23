@@ -1338,7 +1338,7 @@ retired with the renderers they described. Math display is now `print_math` /
 | PREC-11-A-006 | `element_type: "Float64"` (and an absent field) MUST be bit-unchanged from a runtime with no precision support at all | CONFORMANCE_SPEC §5.18.1 | Yes | simulation |
 | PREC-11-A-007 | An `element_type` that is neither `"Float64"` nor `"Float32"` MUST error (`unsupported_element_type`), never evaluate in binary64 | CONFORMANCE_SPEC §5.18.2 | Yes | validation |
 | PREC-11-A-008 | Under Float32, a construct whose numerics are binary64-only MUST error naming it (`float32_unsupported`). No core op is such a construct at esm 2.0.0; the standard-library templates evaluate at the working precision | CONFORMANCE_SPEC §5.18.2 | Yes | validation |
-| PREC-11-A-009 | Under Float32, TIME INTEGRATION MUST error naming it (the solver is binary64); algebraic / observed / relational evaluation is unaffected | CONFORMANCE_SPEC §5.18.2 | Yes | validation |
+| PREC-11-A-009 | Integration MUST respect declared state precision or refuse with `float32_unsupported` | esm-spec §11.3.2, CONFORMANCE_SPEC §5.18.5 | Yes | simulation |
 | PREC-11-A-010 | Conformance assertions on precision MUST be exact (bit) comparisons, not tolerances — a tolerance cannot see the one-ulp difference the contract is about | CONFORMANCE_SPEC §5.18.4 | Yes | simulation |
 | PREC-11-A-011 | `ModelVariable.element_type` MUST override `domain.element_type` for that variable AND for the arithmetic over it; absent, it is the document's | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
 | PREC-11-A-012 | Precision MUST propagate statically from an expression's leaves: a numeric literal adopts its context, a variable carries its declaration, an operator evaluates at its operands' | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
@@ -1350,6 +1350,10 @@ retired with the renderers they described. Math display is now `print_math` /
 | PREC-11-A-018 | A mount MUST carry a mounted document's declared `domain.element_type` onto every variable of the spliced component that declares none, whenever it differs from the mounting document's effective precision (its own declaration, else inherited, else `"Float64"` at a root); a leaf declaring none adopts its mounter's; exactly those fields are written, at both mount forms and through nested mounts, and they survive load → emit | esm-spec §4.7 "Working precision crosses a mount"; CONFORMANCE_SPEC §5.18.2b | Yes | parsing |
 | PREC-11-A-019 | A component that would need the field but is, or carries, a reaction system MUST be refused at load (`element_type_uncarried`) | esm-spec §4.7; CONFORMANCE_SPEC §5.18.2b | Yes | validation |
 | PREC-11-A-020 | Mixing a mounted binary32 variable with a binary64 one of the mounting document, by an equation or by a coupling, MUST be `mixed_element_type` | CONFORMANCE_SPEC §5.18.2, §5.18.2b | Yes | validation |
+| PREC-11-A-021 | Accepted states MUST be stored at their declared precision | esm-spec §11.3.2 | Yes | simulation |
+| PREC-11-A-022 | Time crosses the public RHS in binary64 and adopts the reading expression's precision | esm-spec §11.3.2 | Yes | simulation |
+| PREC-11-A-023 | A resolved relative tolerance below 2⁻²² for Float32 state MUST be refused, identifying its source | esm-spec §11.3.2 | Yes | simulation |
+| PREC-11-A-024 | The solution MUST report state, time, norm, and linear algebra precision | esm-spec §11.3.2 | Yes | simulation |
 
 **Mounts (PREC-11-A-018…020).** All five bindings implement -018 and -019 at
 every mount form they implement, gated by the shared fixtures in
