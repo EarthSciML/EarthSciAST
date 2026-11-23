@@ -5860,6 +5860,7 @@ mod unbound_name_fault_tests {
             forcing: &forcing,
             const_arrays: ConstArrayScope::empty(),
             declared: &declared,
+            ops: crate::operator_refs::Instances::empty(),
         };
         let ctx = env.ctx(&empty_arrays);
         take_const_array_oob(); // discard anything an earlier test left

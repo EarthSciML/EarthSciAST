@@ -1647,7 +1647,7 @@ pub fn ephemeral_injected_file(
             // esm-spec §1.2.1: the extension picks the format.
             crate::ref_reader::decode_document(&s, p)?
         }
-        None => serde_json::to_value(file).map_err(crate::EsmError::JsonParse)?,
+        None => crate::serialize::document_value(file).map_err(crate::EsmError::JsonParse)?,
     };
     let mut injected = false;
     if let Some(root) = raw.as_object_mut() {

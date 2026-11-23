@@ -1577,7 +1577,7 @@ fn build_problem(
     if owned_json.is_none()
         && let Some(file) = owned_file.as_ref().filter(|_| wants_build_pipeline(&opts))
     {
-        owned_json = Some(serde_json::to_value(file).map_err(|e| {
+        owned_json = Some(crate::serialize::document_value(file).map_err(|e| {
             SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
                 "re-serializing the typed document for the build pipeline: {e}"
             )))
