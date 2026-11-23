@@ -51,23 +51,24 @@ end
 """
     KernelOutputs(spec; out_eltype = nothing)
 
-A single [`compile_kernels`](@ref) specification for a whole-domain output
-fragment. Optionally cast the returned output blocks to `out_eltype`, one of
-`Float16`, `Float32` or `Float64`.
+A single [`compile_kernels`](@ref) specification for an output fragment.
+Optionally cast the returned blocks to `Float16`, `Float32` or `Float64`.
+With Reactant loaded, `BFloat16` is also supported.
 """
 struct KernelOutputs{S}
     spec::S
     out_eltype::Union{Nothing, DataType}
     function KernelOutputs(spec::S, out_eltype) where {S}
-        out_eltype === nothing || out_eltype in (Float16, Float32, Float64) ||
-            throw(ArgumentError("kernel output type must be Float16, Float32 or Float64, got $out_eltype"))
+        out_eltype === nothing || _kernel_output_eltype(out_eltype) ||
+            throw(ArgumentError("unsupported kernel output element type $out_eltype"))
         return new{S}(spec, out_eltype)
     end
 end
 KernelOutputs(spec; out_eltype = nothing) = KernelOutputs(spec, out_eltype)
+_kernel_output_eltype(T) = T in (Float16, Float32, Float64)
 
 """Host-side tree-walk IR and input layouts for [`emit_fragment`](@ref)."""
-struct OperatorIR{F, L, M, T, E}
+struct OperatorIR{F, L, M, T, E, K}
     f::F
     layout::L
     maps::M
@@ -75,7 +76,10 @@ struct OperatorIR{F, L, M, T, E}
     extra::E
     params::Vector{String}
     forcing::Vector{ForcingSlot}
+    kernel::K
 end
+OperatorIR(f, layout, maps, target, extra, params, forcing) =
+    OperatorIR(f, layout, maps, target, extra, params, forcing, nothing)
 
 """
     operator_ir(prob; select = RhsSelection(), target = Whole(), outputs = :du)
@@ -91,11 +95,8 @@ function operator_ir(
         target = Whole(), outputs = :du
     )
     if outputs isa KernelOutputs
-        target isa Whole || throw(ArgumentError("kernel specifications require a Whole target"))
         (select.writes === :all && select.terms === :all) || throw(ArgumentError("kernel specifications define their own selection"))
-        ks = compile_kernels(prob, [outputs.spec])
-        k = only(values(ks.kernels))
-        return _kernel_operator_ir(k, ks, outputs.out_eltype)
+        return _kernel_operator_ir(prob, outputs, target)
     end
     outputs === :du || throw(ArgumentError("outputs must be :du or a KernelOutputs"))
     op = rhs_program(prob)
@@ -115,7 +116,9 @@ function _operator_build(prog::RhsProgram)
     return f
 end
 
-function operator_ir(prog::RhsProgram; target = Whole())
+operator_ir(prog::RhsProgram; target = Whole()) = _rhs_operator_ir(prog, target)
+
+function _rhs_operator_ir(prog::RhsProgram, target; shared_aux = Set{String}())
     params = parameter_names(prog)
     slots = copy(forcing_slots(prog))
     if target isa Whole
@@ -133,7 +136,7 @@ function operator_ir(prog::RhsProgram; target = Whole())
         info = (; tile.reach, windows, tile.coordinates)
         return OperatorIR(tile.f!, tile.layout, tile.maps, target, info, params, slots)
     elseif target isa Lanes
-        lane = _lanes(prog, target.kind, target.sets, target.capacity; form = :oop)
+        lane = _lanes(prog, target.kind, target.sets, target.capacity; form = :oop, shared_aux)
         maps = _lane_operator_maps(lane, target.capacity)
         return OperatorIR(
             lane.f!, lane.layout, maps, target, (lane.gathers, _lane_state_index(prog, lane.layout)),
@@ -146,7 +149,7 @@ end
 function _lane_operator_maps(lane, capacity)
     function pairs(plans)
         src, dst = Int[], Int[]
-        for p in plans, e in eachindex(p.slot1), c in 1:capacity
+        for p in plans, e in eachindex(p.slot1), c in 1:(p.lstride == 0 ? 1 : capacity)
             push!(src, (p.offset + e - 1) * capacity + c)
             push!(dst, p.slot1[e] + (c - 1) * p.lstride)
         end
@@ -160,7 +163,7 @@ end
 # Project a whole-domain writable state onto the same species-major layout as
 # the lane lowerer. Each block is a sum of a per-cell offset and the fixed
 # offsets of the non-lane elements.
-function _lane_state_index(prog::RhsProgram, layout::LaneLayout)
+function _lane_state_index(prog::RhsProgram, layout)
     blocks = Dict(b.name => b for b in prog.layout.u)
     axes = layout.sets
     plans = map(layout.u) do lane
@@ -176,15 +179,6 @@ function _lane_state_index(prog::RhsProgram, layout::LaneLayout)
         return (strides, extents, vec(offsets))
     end
     return (prog.layout.n_u, plans)
-end
-
-function _kernel_operator_ir(k::Kernel, ks::KernelSet, out_eltype)
-    prog = k.prog
-    return OperatorIR(
-        _operator_build(prog), (u = state_layout(ks), aux = z_layout(ks), out = kernel_layout(k)),
-        prog.maps, Whole(), (k, prog.layout, out_eltype),
-        parameter_names(ks.rhs), copy(forcing_slots(ks))
-    )
 end
 
 """The state, auxiliary and output layout of an [`operator_ir`](@ref) build."""
@@ -236,8 +230,8 @@ end
 
 With Reactant loaded, create a host callable that emits a StableHLO fragment
 into the caller's trace. Call it on traced arguments `(u, aux, p, t, forcing)`;
-lane targets also take `cells` and output kernels with time-step inputs take
-`dt`. See the compiled backend guide for layouts and precision.
+tile classes also take `origin` and lane targets take `cells`. If an output
+kernel reads a time step, append `dt`. See the compiled backend guide for layouts and precision.
 """
 function emit_fragment end
 
@@ -262,3 +256,4 @@ nothing, so it cannot overwrite another variable's block.
 function scatter_lanes end
 
 include("range/tile_classes.jl")
+include("operator_kernels.jl")

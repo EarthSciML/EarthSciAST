@@ -30,7 +30,7 @@ function _tile_class_key(slots, windows, tile, dec)
         length(keys)
     end
 
-    function walker(access, inv)
+    function walker(access, inv, argument = nothing)
         seen = _NodeMap{Int}()
         function key(n::_Node)
             return get!(seen, n) do
@@ -41,6 +41,15 @@ function _tile_class_key(slots, windows, tile, dec)
                     return value((:forcing, readkey(n.payload, n.idx)))
                 elseif k === _NK_CACHED
                     return value((:cache, n.payload === inv, n.idx))
+                elseif k === _NK_ARG && argument !== nothing
+                    return argument(n.idx)
+                elseif k === _NK_CALL
+                    # The direct emitter inlines the body. Compare it with
+                    # only the scalar arguments the body actually reads.
+                    site = n.payload::_CallSite
+                    isempty(site.target.arrslots) || throw(_UnsharedTile())
+                    body = walker(access, inv, i -> key(n.children[i]))
+                    return body(site.target.body)
                 elseif k === _NK_LITERAL || k === _NK_STATE || k === _NK_PARAM || k === _NK_TIME ||
                         k === _NK_OP || k === _NK_CONTRACTION
                     n.payload === nothing || throw(_UnsharedTile())
@@ -102,7 +111,7 @@ function _tile_class_key(slots, windows, tile, dec)
         return (
             rhs.n_states, rhs.n_total, tile.layout.n_u, tile.layout.n_aux,
             layout(tile.layout.u), layout(tile.layout.aux),
-            tile.maps.u, tile.maps.aux, tile.maps.du, tile.coordinates,
+            tile.maps.u, tile.maps.aux, tile.maps.du, tile.coordinates, tile.reach,
             sizes, levels, prelude, output, keys,
         )
     catch err
@@ -111,10 +120,11 @@ function _tile_class_key(slots, windows, tile, dec)
     end
 end
 
-struct _TileClass{R, W}
+struct _TileClass{R, W, K}
     owner::_ProgramMemo
     representative::R
     windows::W
+    kernel::K
 end
 
 """
@@ -130,7 +140,9 @@ in decomposition axis order. Its input layouts are the representative tile's
 layouts, translated to that origin. Use [`forcing_reach`](@ref) with the
 actual origin to obtain its forcing windows.
 """
-function tile_classes(op::RhsProgram, dec::Decomposition, tiles)
+tile_classes(op::RhsProgram, dec::Decomposition, tiles) = _tile_classes(op, dec, tiles, nothing)
+
+function _tile_classes(op::RhsProgram, dec::Decomposition, tiles, kernel)
     slots = forcing_slots(op)
     classes = Dict{Any, Int}()
     targets = Tile[]
@@ -145,7 +157,7 @@ function tile_classes(op::RhsProgram, dec::Decomposition, tiles)
         key = _tile_class_key(slots, windows, tile, dec)
         group = key === nothing ? 0 : get(classes, key, 0)
         if group == 0
-            cls = _TileClass(op.memo, tile, Dict(Tuple(tile.origin) => windows))
+            cls = _TileClass(op.memo, tile, Dict(Tuple(tile.origin) => windows), kernel)
             push!(targets, Tile(dec, box.owned, box.storage, cls))
             key === nothing || (classes[key] = length(targets))
         else

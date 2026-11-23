@@ -163,23 +163,27 @@ mutable struct _TileSpec <: _RangeSpec
     memo::Union{Nothing, _ProgramMemo}          # the program's (`_ProgramMemo`)
     coordinate_axes::Vector{String}
     coordinate_boxes::Vector{UnitRange{Int}}
+    share_native_code::Bool
 end
 
-_TileSpec(mode, axes, owned, storage, shapes, writes, ctx, memo = nothing; coordinate_axes = String[]) =
+_TileSpec(
+    mode, axes, owned, storage, shapes, writes, ctx, memo = nothing;
+    coordinate_axes = String[], share_native_code = true
+) =
     _TileSpec(
     mode, axes, owned, storage, shapes, writes, ctx,
     Dict{String, Tuple{String, Vector{Bool}}}(),
     Dict{Tuple{String, Vector{Tuple{Int, Int}}}, Vector{UnitRange{Int}}}(),
     Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), IdDict{Any, Any}(),
     IdDict{Any, Any}(), IdDict{Any, Dict{Int, Any}}(), memo,
-    coordinate_axes, Vector{UnitRange{Int}}(undef, length(coordinate_axes))
+    coordinate_axes, Vector{UnitRange{Int}}(undef, length(coordinate_axes)), share_native_code
 )
 
-# Whether a tile shares its code with the operator's other tiles: always, but
-# for one whose storage crosses a periodic seam (its far-side blocks have no
-# counterpart in another tile's layout).
+# Native code shares whole-domain box kernels when their layout can be rebased.
+# The out-of-place fragment instead batches the tile's clipped kernels, so
+# emitting an entire column never requires a separate kernel per level.
 _tile_shares_code(spec::_TileSpec) =
-    spec.mode === :tile && spec.ctx !== nothing && isempty(spec.ctx.seams) && isempty(spec.coordinate_axes)
+    spec.share_native_code && spec.mode === :tile && spec.ctx !== nothing && isempty(spec.ctx.seams)
 _range_shared_code(spec::_TileSpec) = _tile_shares_code(spec)
 _range_memo(spec::_TileSpec) = spec.memo
 
@@ -1137,7 +1141,10 @@ function _restrict(op::RhsProgram, dec::Decomposition; owned, storage, form = :i
     end
     shapes = _array_shapes(op)
     axes = relocate ? first.(dec.axes) : String[]
-    spec = _TileSpec(:tile, m, ow, st, shapes, Set(op.writes), nothing, op.memo; coordinate_axes = axes)
+    spec = _TileSpec(
+        :tile, m, ow, st, shapes, Set(op.writes), nothing, op.memo;
+        coordinate_axes = axes, share_native_code = form === :inplace
+    )
     f!, internal, cap, pa = _relower(op, spec; form)
     # ---- the tile's layout and copy maps ----
     gb = Dict{String, Vector{UnitRange{Int}}}(

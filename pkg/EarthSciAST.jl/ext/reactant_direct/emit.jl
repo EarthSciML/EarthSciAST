@@ -272,7 +272,7 @@ end
 # argument of this one passes the array itself. The interpreter evaluates the
 # body as a pure function of the arguments, so the inlined body denotes the
 # same values; a body is a DAG and stays one.
-function _de_inline_call(ctx::_DECtx, nd::_E._Node)::_E._Node
+function _de_inline_call(ctx::Union{_DECtx, Nothing}, nd::_E._Node)::_E._Node
     site = nd.payload::_E._CallSite
     tg = site.target
     memo = _E._NodeMap{_E._Node}()

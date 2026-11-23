@@ -175,6 +175,7 @@ _de_refuse_at(rule::AbstractString, construct::AbstractString, detail::AbstractS
     throw(_E.DirectEmitError(construct, rule, detail))
 _de_refuse(ctx::_DECtx, construct::AbstractString, detail::AbstractString) =
     _de_refuse_at(ctx.rule, construct, detail)
+_de_refuse(::Nothing, construct, detail) = _de_refuse_at("lane subscript", construct, detail)
 
 # Run `f` with the breadcrumb set to `s`, restoring the previous one after.
 function _de_rule!(f::F, ctx::_DECtx, s::AbstractString) where {F}

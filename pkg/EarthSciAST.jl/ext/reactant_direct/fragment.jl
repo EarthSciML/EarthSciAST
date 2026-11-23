@@ -1,5 +1,7 @@
 import EarthSciAST: emit_fragment, gather_lanes, scatter_lanes
 
+_E._kernel_output_eltype(::Type{Reactant.BFloat16}) = true
+
 struct _DEParamVector
     values::_DEVal
     slots::Dict{Symbol, Int}
@@ -52,9 +54,11 @@ function emit_fragment(ir::_E.OperatorIR; eltype::Type = Float64, fold::Symbol =
         return _fragment_lane_buffer(ir, String(name))
     end
     names = Dict(Symbol(n) => i for (i, n) in enumerate(ir.params))
+    # Use one gather for fragmented reads so the graph does not acquire
+    # slices as the tile or lane capacity grows.
     return _StableHLOFragment{eltype, typeof(ir), typeof(buffers)}(
         ir, buffers, Vector{Float64}[values(host)...], names,
-        DirectEmitOptions(), fold === :tree
+        DirectEmitOptions(; read = :always), fold === :tree
     )
 end
 
@@ -91,13 +95,14 @@ function _fragment_buffer(::Type{T}, plan::_TileCoordinateBuffer, forcing, origi
     return _de_traced(_de_cast(_DEVal(base, n), Int32, T), T)
 end
 
-# Use the range lowerer's pre-gather descriptions. Affine integer index math
-# stays in Int32 even when the model evaluates in Float32.
+# The range lowerer gives each distinct read a compact buffer. Its index
+# program runs in Int32, independent of the model's arithmetic precision.
 struct _LaneBuffer
     source::Int
-    data::Any
-    forms::Vector{_E._AffineForm}
+    data::AbstractArray
+    subs::Vector{_E._Node}
     rows::Vector{Int}
+    columns::Vector{UnitRange{Int}}
     dims::Vector{Int}
     boundary::Vector{Symbol}
 end
@@ -109,53 +114,105 @@ function _fragment_lane_buffer(ir, name)
     row !== nothing && return (:row, row)
     startswith(name, "__lane_in_") || throw(ArgumentError("unexpected lane buffer '$name'"))
     g = ir.extra[1][parse(Int, name[(length("__lane_in_") + 1):end])]
-    vars = first.(g.vars)
-    forms = _E._AffineForm[]
-    for sub in g.subs
-        form = _E._affine_form(sub, vars)
-        form === nothing && _de_refuse_at(
-            "lane fragment", "a nonaffine subscript of '$(g.name)'",
-            "dynamic lane gathers currently require affine subscripts."
-        )
-        push!(forms, form)
-    end
     slot = something(findfirst(s -> s.name == g.name, ir.forcing), 0)
     boundary = Symbol[_E._const_dim_boundary(g.src, d) for d in eachindex(g.dims)]
-    return _LaneBuffer(slot, g.src, forms, last.(g.vars), g.dims, boundary)
+    return _LaneBuffer(slot, g.src, _E._compile_lane_subscripts(g), last.(g.vars), last.(g.columns), g.dims, boundary)
 end
 
-# An out-of-range subscript on an `:error` dimension reads 0.0, as the native
-# lane program's pre-gather does (`_lane_gather_value`): pre-gathers are eager,
-# so a read an `ifelse` guards at the domain edge must not fail its lane. A
-# whole-domain build raises E_TREEWALK_CONSTARRAY_OOB for the same read instead.
+function _fragment_iota(n)
+    ty = _de_ty(n, Int32)
+    op = _hlo.iota(; output = ty, iota_dimension = 0, location = _de_loc())
+    return _de_traced(_DEVal(_de_res(op), n), Int32)
+end
+
+function _fragment_lane_coordinates(cells, rows, columns, flat)
+    cap = size(cells, 2)
+    isempty(columns) && return [cells[row, :] for row in rows]
+    # Flatten column-major over [lane, column variables...]. Generate the
+    # column bindings arithmetically from one iota for the whole buffer.
+    copy_lanes = mod.(flat, Int32(cap)) .+ Int32(1)
+    coords = [cells[row, :][copy_lanes] for row in rows]
+    stride = cap
+    for r in columns
+        idx = mod.(div.(flat, Int32(stride)), Int32(length(r))) .+ Int32(first(r))
+        push!(coords, idx)
+        stride *= length(r)
+    end
+    return coords
+end
+
+const _LANE_INDEX_BINOP = Dict{Symbol, Function}(
+    :+ => +, :- => -, :* => *, :/ => div, :mod => mod, :min => min, :max => max,
+    :< => <, :<= => <=, :> => >, :>= => >=, :(==) => ==, :!= => !=
+)
+
+# Pre-gathers are eager. Mask out-of-range reads on error-policy axes so
+# a guard in the rule can discard them, as in the native lane program.
 _fragment_lane_masked(plan::_LaneBuffer) = any(==(:error), plan.boundary)
 
-function _fragment_lane_offsets(cells, plan::_LaneBuffer)
-    # Derive every vector from `cells` so it is traced even when no dimension
-    # needs a mask and every affine coefficient is zero.
-    zero = cells[1, :] .* Int32(0)
-    offsets = zero
-    valid = zero .== Int32(0)
+function _fragment_gather_offsets(subs, dims, boundary, inputs, L)
+    offsets = first(inputs) .* Int32(0)
+    valid = offsets .== Int32(0)
     stride = 1
-    for d in eachindex(plan.dims)
-        form = plan.forms[d]
-        idx = zero .+ Int32(form.c0 - 1)
-        for (c, row) in zip(form.c, plan.rows)
-            iszero(c) || (idx = idx .+ Int32(c) .* cells[row, :])
-        end
-        n = Int32(plan.dims[d])
-        if plan.boundary[d] === :periodic
+    for d in eachindex(dims)
+        idx = _fragment_index_node(subs[d], inputs, L) .- Int32(1)
+        n = Int32(dims[d])
+        if boundary[d] === :periodic
             idx = mod.(idx, n)
-        elseif plan.boundary[d] === :clamp
-            idx = clamp.(idx, Int32(0), n - Int32(1))
         else
-            valid = valid .& (idx .>= Int32(0)) .& (idx .< n)
+            if boundary[d] !== :clamp
+                valid = valid .& (idx .>= Int32(0)) .& (idx .< n)
+            end
             idx = clamp.(idx, Int32(0), n - Int32(1))
         end
         offsets = offsets .+ Int32(stride) .* idx
         stride *= n
     end
     return offsets, valid
+end
+
+function _fragment_index_node(nd::_E._Node, inputs, L)
+    kind = nd.kind
+    kind === _E._NK_STATE && return inputs[nd.idx]
+    kind === _E._NK_LITERAL && return fill(Int32(nd.literal), L)
+    if kind === _E._NK_CONST_GATHER
+        a = nd.payload::_E._ConstGatherArray
+        off, _ = _fragment_gather_offsets(nd.children, a.dims, a.boundary, inputs, L)
+        table = Reactant.promote_to(TracedRArray{Float64, 1}, a.flat)
+        return round.(Int32, table[off .+ Int32(1)])
+    end
+    kind === _E._NK_CALL && return _fragment_index_node(_de_inline_call(nothing, nd), inputs, L)
+    kind === _E._NK_OP || return _de_refuse_at(
+        "lane fragment", "an integer index node of kind $(_de_kindname(kind))", "it cannot be evaluated from the lane coordinates."
+    )
+    ev(n) = _fragment_index_node(n, inputs, L)
+    op, args = nd.op, nd.children
+    if op === :ifelse
+        return ifelse.(ev(args[1]) .!= Int32(0), ev(args[2]), ev(args[3]))
+    elseif op === :floor || op === :ceil
+        a = only(args)
+        if a.kind === _E._NK_OP && a.op === :/ && length(a.children) == 2
+            x, y = ev(a.children[1]), ev(a.children[2])
+            q, r = div.(x, y), rem.(x, y)
+            same_sign = (r .< Int32(0)) .== (y .< Int32(0))
+            round_up = op === :ceil
+            needs_adjustment = (r .!= Int32(0)) .& (same_sign .== round_up)
+            return q .+ ifelse.(needs_adjustment, round_up ? Int32(1) : Int32(-1), Int32(0))
+        end
+        return ev(a)
+    elseif op === :neg || (op === :- && length(args) == 1)
+        return .-ev(only(args))
+    end
+    binop = get(_LANE_INDEX_BINOP, op, nothing)
+    binop === nothing && return _de_refuse_at("lane fragment", "the integer index operator $op", "it is not supported by the integer gather path.")
+    return foldl(args[2:end]; init = ev(args[1])) do x, y
+        Int32.(binop.(x, ev(y)))
+    end
+end
+
+function _fragment_lane_offsets(cells, plan::_LaneBuffer, flat)
+    inputs = _fragment_lane_coordinates(cells, plan.rows, plan.columns, flat)
+    return _fragment_gather_offsets(plan.subs, plan.dims, plan.boundary, inputs, length(first(inputs)))
 end
 
 _fragment_cell_row(cells, row) = cells[row, :]
@@ -170,7 +227,9 @@ function _fragment_buffer(::Type{T}, spec::Tuple{Symbol, Int}, forcing, cells) w
 end
 
 function _fragment_buffer(::Type{T}, spec::_LaneBuffer, forcing, cells) where {T}
-    off, valid = Reactant.call_with_reactant(_fragment_lane_offsets, cells, spec)
+    flat = isempty(spec.columns) ? nothing :
+        _fragment_iota(size(cells, 2) * prod(length, spec.columns; init = 1))
+    off, valid = Reactant.call_with_reactant(_fragment_lane_offsets, cells, spec, flat)
     src = spec.source == 0 ? Reactant.promote_to(TracedRArray{T, 1}, T.(vec(spec.data))) : forcing[spec.source]
     dn = _MLIR.API.stablehloGatherDimensionNumbersGet(
         _MLIR.IR.current_context(), 0, Int64[], 1, Int64[0], 0, Int64[],
@@ -259,56 +318,63 @@ function (f::_StableHLOFragment{T})(
     f.ir.target isa _E.Lanes && throw(ArgumentError("lane fragments require a cells tensor"))
     f.ir.target isa _E.Tile && f.ir.target.class !== nothing &&
         throw(ArgumentError("tile class fragments require an origin tensor"))
-    if f.ir.target isa _E.Whole && f.ir.extra !== nothing
-        return _fragment_kernel(f, u, aux, p, t, forcing, nothing)
-    end
-    return _fragment_rhs(f, u, aux, p, t, forcing, nothing)
+    return _fragment_call(f, u, aux, p, t, forcing, nothing, nothing)
 end
 
 function (f::_StableHLOFragment{T})(
         u::TracedRArray{T, 1}, aux::TracedRArray{T, 1}, p::TracedRArray{Float64, 1},
-        t::TracedRNumber{Float64}, forcing::Tuple, cells::TracedRArray{Int32, 2}
+        t::TracedRNumber{Float64}, forcing::Tuple, cells::TracedRArray{Int32, 2},
+        dt::Union{Nothing, TracedRNumber{Float64}} = nothing
     ) where {T}
     target = f.ir.target
     target isa _E.Lanes || throw(ArgumentError("only lane fragments take a cells tensor"))
     size(cells) == (length(target.sets), target.capacity) ||
         throw(DimensionMismatch("cells must have one row per lane set and one column per lane"))
-    return _fragment_rhs(f, u, aux, p, t, forcing, cells)
+    return _fragment_call(f, u, aux, p, t, forcing, cells, dt)
 end
 
 function (f::_StableHLOFragment{T})(
         u::TracedRArray{T, 1}, aux::TracedRArray{T, 1}, p::TracedRArray{Float64, 1},
-        t::TracedRNumber{Float64}, forcing::Tuple, origin::TracedRArray{Int32, 1}
+        t::TracedRNumber{Float64}, forcing::Tuple, origin::TracedRArray{Int32, 1},
+        dt::Union{Nothing, TracedRNumber{Float64}} = nothing
     ) where {T}
     target = f.ir.target
     target isa _E.Tile && target.class !== nothing ||
         throw(ArgumentError("only tile class fragments take an origin tensor"))
     length(origin) == length(target.decomposition.axes) ||
         throw(DimensionMismatch("origin must have one coordinate per decomposition axis"))
-    return _fragment_rhs(f, u, aux, p, t, forcing, origin)
+    return _fragment_call(f, u, aux, p, t, forcing, origin, dt)
 end
 
 function (f::_StableHLOFragment{T})(
         u::TracedRArray{T, 1}, aux::TracedRArray{T, 1}, p::TracedRArray{Float64, 1},
         t::TracedRNumber{Float64}, forcing::Tuple, dt::TracedRNumber{Float64}
     ) where {T}
-    f.ir.target isa _E.Whole && f.ir.extra !== nothing ||
-        throw(ArgumentError("only output kernels take a dt argument"))
-    return _fragment_kernel(f, u, aux, p, t, forcing, dt)
+    target = f.ir.target
+    (target isa _E.Lanes || (target isa _E.Tile && target.class !== nothing)) &&
+        throw(ArgumentError("pass the cells or origin tensor before dt"))
+    return _fragment_call(f, u, aux, p, t, forcing, nothing, dt)
 end
 
-function _fragment_kernel(f::_StableHLOFragment{T}, u, aux, p, t, forcing, dt) where {T}
+function _fragment_call(f, u, aux, p, t, forcing, indices, dt)
+    if f.ir.kernel === nothing
+        dt === nothing || throw(ArgumentError("only output kernels take a dt argument"))
+        return _fragment_rhs(f, u, aux, p, t, forcing, indices)
+    end
+    return _fragment_kernel(f, u, aux, p, t, forcing, indices, dt)
+end
+
+function _fragment_kernel(f::_StableHLOFragment{T}, u, aux, p, t, forcing, indices, dt) where {T}
     ir = f.ir
-    k, layout, output_type = ir.extra
+    k = ir.kernel
     length(u) == k.n_u || throw(DimensionMismatch("u has the wrong length for the kernel"))
-    length(aux) == k.n_z || throw(DimensionMismatch("aux has the wrong length for the kernel"))
-    length(p) == k.n_p || throw(DimensionMismatch("p must follow parameter_names(ir)"))
-    params = Dict(Symbol(s.name) => i for (s, i) in zip(_E.parameters(k.prog), k.p_map))
-    ctx = _fragment_context(f, p, t, forcing, nothing, params)
+    length(aux) == k.n_aux || throw(DimensionMismatch("aux has the wrong length for the kernel"))
+    length(p) == length(ir.params) || throw(DimensionMismatch("p must follow parameter_names(ir)"))
+    ctx = _fragment_context(f, p, t, forcing, indices, f.parameter_slots)
     umap = _de_untraced(u)
     zmap = _de_untraced(aux)
-    amap = _DEMap(layout.n_aux)
-    for (source, s, d, n) in k.aux_plan
+    amap = _DEMap(k.held_width)
+    for (source, s, d, n) in k.inputs
         if source == 3
             dt === nothing && throw(ArgumentError("the kernel requires a traced dt argument"))
             val = _de_cast(_de_untraced(dt), Float64, T)
@@ -322,14 +388,13 @@ function _fragment_kernel(f::_StableHLOFragment{T}, u, aux, p, t, forcing, dt) w
         ctx.ue.m[r.dst + i] = amap.m[r.src + i]
     end
     du = _de_emit!(ctx, ir.f.rhs)
-    state = _fragment_output(ctx, du, ir.maps.du, layout.n_u)
-    out = _DEMap(k.out_len)
-    k.map && _fragment_copy!(out, umap, (_E._CopyRun(1, 1, k.n_u),))
-    runs = k.direct ? (_E._CopyRun(1, 1, k.n_u),) :
-        (_E._CopyRun(s, d, n) for (s, d, n) in k.out_plan)
-    _fragment_copy!(out, state, runs)
-    S = something(output_type, T)
-    return map(Tuple(k.layout)) do block
+    state = _fragment_output(ctx, du, ir.maps.du, k.width)
+    blocks = ir.layout.out
+    out = _DEMap(sum(b -> prod(b.shape; init = 1), blocks; init = 0))
+    k.passthrough && _fragment_copy!(out, umap, (_E._CopyRun(1, 1, k.n_u),))
+    _fragment_copy!(out, state, k.outputs)
+    S = something(k.out_eltype, T)
+    return map(Tuple(blocks)) do block
         n = prod(block.shape; init = 1)
         val = _de_emit_runs(ctx, out.m[block.offset:(block.offset + n - 1)])
         _de_traced(_de_cast(val, T, S), S)
@@ -356,6 +421,7 @@ function _fragment_lane_positions(cells, plans, width = nothing)
         end
         return vec(pos)
     end
+    isempty(positions) && return Reactant.promote_to(TracedRArray{Int32, 1}, Int32[])
     return reduce(vcat, positions)
 end
 

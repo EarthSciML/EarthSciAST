@@ -44,7 +44,7 @@ u = ConcreteRArray(prob.u0)
 aux = ConcreteRArray(Float64[])
 p = ConcreteRArray(parameter_vector(rhs_program(prob)))
 t = ConcreteRNumber(0.0)
-program = Reactant.@compile frag(u, aux, p, t, ())
+program = Reactant.@compile donated_args = :none frag(u, aux, p, t, ())
 ```
 
 - `select = RhsSelection(writes = ..., terms = ...)` selects the states and
@@ -76,17 +76,50 @@ program = Reactant.@compile frag(u, aux, p, t, ())
 - `Lanes(:cells, sets, capacity)` or `Lanes(:columns, sets, capacity)`
   accepts a sixth argument, a traced Int32 matrix of 1-based coordinates with
   rows in `sets` order. Duplicate cells can pad evaluations; use distinct
-  cells when writing them back with `scatter_lanes`. The fragment
-  supports pre-gathered forcing and constant-array subscripts affine in the
-  lane coordinates. As in the native lane program, such a read outside an
-  array dimension without a `periodic` or `clamp` boundary gives 0.0.
-  Coordinates outside the domain are not checked: `gather_lanes` reads an
-  unspecified element for them and `scatter_lanes` drops their updates.
-- `outputs = KernelOutputs(spec)` takes one `compile_kernels` specification
-  and emits a whole-domain output kernel. Pass a traced Float64 `dt` as the
-  sixth argument if the spec reads it. The result is a tuple of flat tensors
-  matching `ir_layout(ir).out`. `KernelOutputs(spec; out_eltype = Float32)`
-  converts the outputs at the end of emission.
+  cells when writing them back with `scatter_lanes`. The fragment gathers
+  forcing and constant arrays by traced integer subscripts. A column gather
+  computes its lane and level addresses in the same batched program. A read
+  outside an array dimension without a `periodic` or `clamp` policy gives 0.0,
+  as in the native lane program. For cells outside the domain, `gather_lanes`
+  reads an unspecified element and `scatter_lanes` drops the update.
+- `outputs = KernelOutputs(spec)` takes one `compile_kernels` specification and
+  emits its outputs for the selected target. Use
+  `tile_classes(prob, dec, tiles; outputs)` for classes of an output kernel.
+  Pack its input state and its algebraic state from `ir_layout(ir).u` and
+  `ir_layout(ir).aux`. The result is a tuple of flat tensors in
+  `ir_layout(ir).out` order. When the spec reads a time step, append a traced
+  Float64 `dt` after all the other arguments, including any origin or cells.
+  `KernelOutputs(spec; out_eltype = Float16)` casts the outputs at the end of
+  emission. With Reactant loaded, the output type can also be `BFloat16`.
+
+Use the fragment in a caller-owned loop by passing each tensor at the call
+site. For example, a whole-domain Euler program can take the time step and
+stop time as traced Float64 scalars.
+
+```julia
+function euler_steps(frag, u, aux, p, t, forcing, dt, stop)
+    Reactant.@trace while t < stop
+        u = u .+ dt .* frag(u, aux, p, t, forcing)
+        t += dt
+    end
+    return u
+end
+```
+
+The host fragment can also be captured without adding it to the loop carry.
+For lane targets, pass the current cell table at each call. Compile with
+`donated_args = :none` to preserve the input buffers. Reactant can still write
+the final loop carries back to its input wrappers, so initialize state and
+time for each execution. Place the same tile class on each device
+that owns a member of the class. Exchange or refill halos between stages in the
+caller.
+
+For reproducibility checks on XLA:CPU, set
+`XLA_FLAGS=--xla_cpu_prefer_vector_width=128` before loading Reactant.
+The opt-in Reactant suite exercises fresh processes with
+`ESM_TEST_REACTANT_REPRO=1`. Run per-device tile tests on four mock host
+devices with `ESM_TEST_REACTANT_GPU=1`, `EARTHSCI_JULIA_XLA_DEVICE=cpu` and
+`XLA_FLAGS="--xla_cpu_prefer_vector_width=128 --xla_force_host_platform_device_count=4"`.
 
 ## One device
 
