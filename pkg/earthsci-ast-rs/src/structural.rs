@@ -5540,13 +5540,30 @@ pub(crate) struct ObservedScope {
     /// ([`crate::classification::lhs_form_ref`]: `D(a + b)` credits no
     /// variable). A bare one is this node's own state, which `class` counts.
     differentiated_refs: Vec<String>,
+    /// The registry the node's operator references resolve against: its
+    /// top-level component's (esm-spec §9.6.4 rule 5).
+    pub(crate) operators: crate::operator_refs::OperatorRegistry,
 }
 
 impl ObservedScope {
-    pub(crate) fn new(
+    /// The node at `path` of `esm_file`, its references read through its
+    /// top-level component's registry.
+    pub(crate) fn in_file(
+        esm_file: &EsmFile,
         path: String,
         variables: &indexmap::IndexMap<String, crate::ModelVariable>,
         equations: &[crate::Equation],
+    ) -> Self {
+        let top = path.split('.').next().unwrap_or(&path);
+        let operators = esm_file.component_operators(&format!("models.{top}"));
+        Self::with_operators(path, variables, equations, operators)
+    }
+
+    fn with_operators(
+        path: String,
+        variables: &indexmap::IndexMap<String, crate::ModelVariable>,
+        equations: &[crate::Equation],
+        operators: crate::operator_refs::OperatorRegistry,
     ) -> Self {
         let differentiated_refs = equations
             .iter()
@@ -5561,9 +5578,10 @@ impl ObservedScope {
             path,
             class: crate::classification::Classification::from_parts(variables, equations),
             candidates: recurrence_candidate_vars_of_parts(variables, equations),
-            groups: recurrence_groups_of_parts(variables, equations),
+            groups: recurrence_groups_in(variables, equations, &operators),
             declared: variables.keys().cloned().collect(),
             differentiated_refs,
+            operators,
         }
     }
 }
@@ -5605,11 +5623,12 @@ pub(crate) fn for_each_model_node(
 /// Every model node of `models` as the `circular_dependency` graph reads it
 /// ([`for_each_model_node`]'s order).
 pub(crate) fn observed_scopes(
+    esm_file: &EsmFile,
     models: &indexmap::IndexMap<String, crate::Model>,
 ) -> Vec<ObservedScope> {
     let mut out = Vec::new();
     for_each_model_node(models, &mut |path, _, variables, equations| {
-        out.push(ObservedScope::new(path.to_string(), variables, equations));
+        out.push(ObservedScope::in_file(esm_file, path.to_string(), variables, equations));
     });
     out
 }
@@ -5645,7 +5664,14 @@ pub(crate) fn resolve_observed_ref(
 /// symbols ([`collect_bare_symbols`], the §4.9.6 walk, minus the binders
 /// [`collect_bound_symbols`] finds) and every dotted reference, descending
 /// every Expression child.
-pub(crate) fn referenced_names(expr: &crate::Expr) -> HashSet<String> {
+///
+/// An operator reference also reads, at its site, the names its definition's
+/// body reads free (esm-spec §9.6.4 rule 2), read through `operators`
+/// ([`crate::operator_refs::DefinitionReads::free`]).
+pub(crate) fn referenced_names(
+    expr: &crate::Expr,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> HashSet<String> {
     fn dotted(expr: &crate::Expr, out: &mut HashSet<String>) {
         match expr {
             crate::Expr::Variable(name) if name.contains('.') => {
@@ -5661,6 +5687,11 @@ pub(crate) fn referenced_names(expr: &crate::Expr) -> HashSet<String> {
     collect_bound_symbols(expr, &mut bound);
     names.retain(|n| !bound.contains(n));
     dotted(expr, &mut names);
+    crate::operator_refs::for_each_reference(expr, &mut |r| {
+        if let Some(d) = operators.resolve(&r) {
+            names.extend(d.reads(operators).free.iter().cloned());
+        }
+    });
     names
 }
 
@@ -5712,7 +5743,7 @@ fn document_observed_graph(
             if !observed.contains(&node) {
                 continue;
             }
-            let mut successors: std::collections::BTreeSet<String> = referenced_names(rhs)
+            let mut successors: std::collections::BTreeSet<String> = referenced_names(rhs, &scope.operators)
                 .iter()
                 .filter_map(|r| resolve_observed_ref(&by_path, &scope.path, r))
                 .filter(|full| observed.contains(full))
@@ -5839,10 +5870,11 @@ fn first_cross_scope_cycle(
 /// reported per document, at `/models`, with `details.cycle` the scoped names
 /// on it and the entry node repeated.
 pub(crate) fn check_circular_dependencies_in_models(
+    esm_file: &EsmFile,
     models: &indexmap::IndexMap<String, crate::Model>,
     errors: &mut Vec<StructuralError>,
 ) {
-    let scopes = observed_scopes(models);
+    let scopes = observed_scopes(esm_file, models);
     let graph = document_observed_graph(&scopes);
     if let Some(cycle) = first_cross_scope_cycle(&graph) {
         errors.push(StructuralError {
@@ -5885,7 +5917,7 @@ pub(crate) fn load_reference_errors(esm_file: &EsmFile) -> Vec<StructuralError> 
     // A cross-scope cycle needs two top-level models, or a model and one of
     // its subsystems.
     if models.len() >= 2 || models.values().any(|m| m.subsystems.is_some()) {
-        check_circular_dependencies_in_models(models, &mut errors);
+        check_circular_dependencies_in_models(esm_file, models, &mut errors);
     }
     let (no_refs, no_units) = (HashMap::new(), HashMap::new());
     for (model_name, model) in models {
