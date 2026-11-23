@@ -1238,6 +1238,10 @@ fn key_column(
                  keys must be dense interval / categorical columns (RFC semiring-faq-unified-ir §5.3)"
             ),
         }),
+        Some(RangeSpec::Symbolic(_)) => Err(CompileError::build_err(format!(
+            "join key '{sym}' ranges over bounds named by operator parameters, which only a \
+             definition body spells"
+        ))),
         None => Err(CompileError::build_err(format!(
             "join key '{sym}' has no declared range on this aggregate"
         ))),

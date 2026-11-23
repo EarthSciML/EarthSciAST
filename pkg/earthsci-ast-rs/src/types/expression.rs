@@ -359,6 +359,25 @@ pub enum RangeSpec {
         /// contraction at eval time.
         from_faq: String,
     },
+    /// A dense interval `[lo, hi]` a bound of which names an operator
+    /// parameter: the form a definition's body spells a range whose bounds
+    /// its references bind (esm-spec §9.6.4 rule 3: the literal bound at a
+    /// reference is part of the instance). Read in a definition body only;
+    /// no document position outside one parses to it, and an evaluator never
+    /// meets it. Last in this untagged enum, so every other range parses as
+    /// before.
+    Symbolic([RangeBound; 2]),
+}
+
+/// One bound of a [`RangeSpec::Symbolic`] range: an integer, or the name of
+/// a parameter of the enclosing definition.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RangeBound {
+    /// An integer bound.
+    Int(i64),
+    /// A parameter name.
+    Name(String),
 }
 
 impl RangeSpec {
@@ -372,7 +391,8 @@ impl RangeSpec {
             RangeSpec::Strided(iv) => Some([iv[0], iv[1]]),
             RangeSpec::IndexSetRef { .. }
             | RangeSpec::RaggedDyn { .. }
-            | RangeSpec::DerivedDyn { .. } => None,
+            | RangeSpec::DerivedDyn { .. }
+            | RangeSpec::Symbolic(_) => None,
         }
     }
 
