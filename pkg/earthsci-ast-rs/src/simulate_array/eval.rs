@@ -2963,6 +2963,7 @@ pub(crate) fn eval_observed_taped(
         scope.t,
         scope.const_arrays,
         true,
+        Some(scope.ops),
     ))
 }
 

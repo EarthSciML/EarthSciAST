@@ -195,10 +195,10 @@ impl<'m> TapeBuilder<'m> {
         let inst = ops
             .instance_of_node(node)
             .map_err(|e| Bail::new(e.to_string()))?;
-        if bx.tuple != 0 || !bx.cnames.is_empty() || self.rule.sweep.is_some() {
+        if bx.tuple != 0 || !bx.cnames.is_empty() {
             bail_tape!(
-                "operator reference `{name}`: a call inside a contraction, tuple list or \
-                 recurrence body is not compiled yet"
+                "operator reference `{name}`: a call inside an unrolled contraction or a tuple \
+                 list is not compiled yet"
             );
         }
         let Some(r) = crate::operator_refs::reference_node(node) else {
@@ -484,6 +484,20 @@ impl<'m> TapeBuilder<'m> {
         // Rebuilt under the interner, so a subtree the body repeats is one
         // node and value numbering shares its lowering, as it shares the
         // repeated subtrees of a loaded expression.
+        // A binding compiled into the instance may read an argument that is
+        // itself a literal or the time: those are substituted into it first.
+        let plain: FxHashMap<String, Expr> = fixed
+            .iter()
+            .filter(|(p, _)| key.params.iter().any(|(q, k)| q == *p && matches!(k, ArgKind::Lit(_) | ArgKind::Time)))
+            .map(|(p, e)| (p.clone(), e.clone()))
+            .collect();
+        if !plain.is_empty() {
+            for (p, e) in fixed.iter_mut() {
+                if !plain.contains_key(p) {
+                    *e = specialize(e, &plain);
+                }
+            }
+        }
         let body = {
             let _intern = crate::intern::InternScope::new();
             specialize(&inst.body, &fixed)

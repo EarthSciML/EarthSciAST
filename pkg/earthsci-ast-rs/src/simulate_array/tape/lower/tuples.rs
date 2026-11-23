@@ -921,6 +921,7 @@ impl TapeBuilder<'_> {
             self.const_arrays,
             self.array_bool_reductions,
             Cadence::Const,
+            self.ops,
             |mut b| {
                 b.defer_consts = true;
                 for FoldInput { name, shape, vals } in inputs {

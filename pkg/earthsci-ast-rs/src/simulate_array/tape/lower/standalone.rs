@@ -59,8 +59,9 @@ pub(in crate::simulate_array) fn eval_standalone_rule(
     t: f64,
     const_arrays: &ConstArrayScope,
     pipeline: bool,
+    ops: Option<&crate::operator_refs::Instances>,
 ) -> Result<ndarray::ArrayD<f64>, StandaloneError> {
-    let prog = build_standalone_program(rule, inputs, param_names, const_arrays, pipeline)
+    let prog = build_standalone_program(rule, inputs, param_names, const_arrays, pipeline, ops)
         .map_err(|b| StandaloneError::Declined(b.reason))?;
     run_standalone_program(prog, rule, param_names, params, t)
 }
@@ -71,6 +72,7 @@ fn build_standalone_program(
     param_names: &[String],
     const_arrays: &ConstArrayScope,
     pipeline: bool,
+    ops: Option<&crate::operator_refs::Instances>,
 ) -> LResult<TapeProgram> {
     let name = observed_rule_var(rule);
     // A rule that reads the time is homed where a time read lands; the
@@ -82,7 +84,7 @@ fn build_standalone_program(
     } else {
         Cadence::Const
     };
-    with_standalone_builder(name, param_names, const_arrays, pipeline, home, |mut b| {
+    with_standalone_builder(name, param_names, const_arrays, pipeline, home, ops, |mut b| {
         let _rule_precision = crate::precision::has_variable_overrides()
             .then(|| crate::precision::enter(crate::precision::of_variable(name)));
         for (input, value) in inputs {
@@ -113,6 +115,7 @@ pub(super) fn with_standalone_builder<R>(
     const_arrays: &ConstArrayScope,
     pipeline: bool,
     home: Cadence,
+    ops: Option<&crate::operator_refs::Instances>,
     f: impl for<'b> FnOnce(TapeBuilder<'b>) -> R,
 ) -> R {
     let var_shapes: IndexMap<String, VarShape> = IndexMap::new();
@@ -126,6 +129,7 @@ pub(super) fn with_standalone_builder<R>(
     obs_tier.insert(name.to_string(), home);
     let mut b = TapeBuilder::new(&var_shapes, param_names, obs_tier, const_arrays, &forcing);
     b.array_bool_reductions = pipeline;
+    b.ops = ops;
     b.begin_rule(RuleInfo {
         name: name.to_string(),
         kind: RuleKind::Observed(0),
@@ -350,7 +354,8 @@ impl TapeBuilder<'_> {
             values.iter().map(|(n, a)| (n.as_str(), a)).collect();
         // No parameters beyond the baked ones.
         let a =
-            eval_standalone_rule(rule, &inputs, &[], &[], 0.0, self.const_arrays, false).ok()?;
+            eval_standalone_rule(rule, &inputs, &[], &[], 0.0, self.const_arrays, false, self.ops)
+                .ok()?;
         let shape: DimU = a.shape().iter().copied().collect();
         Some((shape, Arc::new(a.iter().copied().collect())))
     }
