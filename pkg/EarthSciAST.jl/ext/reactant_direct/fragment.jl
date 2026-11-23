@@ -141,54 +141,85 @@ function _fragment_lane_coordinates(cells, rows, columns, flat)
     return coords
 end
 
+# The integer subscript operators, as the host's `_subscript_binop`. A bare
+# `/` is absent: the host accepts only an exact quotient and raises on any
+# other, which a traced fragment cannot do, so it is refused when traced.
 const _LANE_INDEX_BINOP = Dict{Symbol, Function}(
-    :+ => +, :- => -, :* => *, :/ => div, :mod => mod, :min => min, :max => max,
+    :+ => +, :- => -, :* => *, :mod => mod, :min => min, :max => max,
     :< => <, :<= => <=, :> => >, :>= => >=, :(==) => ==, :!= => !=
 )
 
-# Pre-gathers are eager. Mask out-of-range reads on error-policy axes so
-# a guard in the rule can discard them, as in the native lane program.
-_fragment_lane_masked(plan::_LaneBuffer) = any(==(:error), plan.boundary)
+# Whether a read of `boundary` past an axis leaves the array. Such a read is
+# masked rather than raised: pre-gathers are eager, so a guard in the rule
+# must be able to discard it, as in the native lane program.
+_fragment_axis_masked(boundary::Symbol) = !(boundary === :periodic || boundary === :clamp)
 
+# Whether a pre-gather is masked: one of its axes, or of a table read inside
+# its subscripts, leaves the array on an out-of-range read.
+_fragment_lane_masked(plan::_LaneBuffer) =
+    any(_fragment_axis_masked, plan.boundary) || any(_fragment_index_masked, plan.subs)
+
+function _fragment_index_masked(nd::_E._Node)
+    if nd.kind === _E._NK_CONST_GATHER
+        any(_fragment_axis_masked, (nd.payload::_E._ConstGatherArray).boundary) && return true
+    elseif nd.kind === _E._NK_CALL
+        return _fragment_index_masked(_de_inline_call(nothing, nd))
+    end
+    return any(_fragment_index_masked, nd.children)
+end
+
+# The flat offsets of a gather at the subscripts `subs`, and the lanes whose
+# read stays inside the array: every masked axis in range, and every table
+# read inside the subscripts too. A table read that leaves its array is
+# clamped to keep the gather in bounds, and its lane is marked invalid.
 function _fragment_gather_offsets(subs, dims, boundary, inputs, L)
     offsets = first(inputs) .* Int32(0)
-    valid = offsets .== Int32(0)
+    valid = Ref(offsets .== Int32(0))
     stride = 1
     for d in eachindex(dims)
-        idx = _fragment_index_node(subs[d], inputs, L) .- Int32(1)
+        idx = _fragment_index_node(subs[d], inputs, L, valid) .- Int32(1)
         n = Int32(dims[d])
         if boundary[d] === :periodic
             idx = mod.(idx, n)
         else
-            if boundary[d] !== :clamp
-                valid = valid .& (idx .>= Int32(0)) .& (idx .< n)
+            if _fragment_axis_masked(boundary[d])
+                valid[] = valid[] .& (idx .>= Int32(0)) .& (idx .< n)
             end
             idx = clamp.(idx, Int32(0), n - Int32(1))
         end
         offsets = offsets .+ Int32(stride) .* idx
         stride *= n
     end
-    return offsets, valid
+    return offsets, valid[]
 end
 
-function _fragment_index_node(nd::_E._Node, inputs, L)
+# The integer value of a subscript node at each lane, as the host's
+# `_index_int`. `valid` collects the lanes whose table reads stay in range;
+# `ifelse` keeps only the taken branch's, as the host evaluates only it.
+function _fragment_index_node(nd::_E._Node, inputs, L, valid::Ref)
     kind = nd.kind
     kind === _E._NK_STATE && return inputs[nd.idx]
     kind === _E._NK_LITERAL && return fill(Int32(nd.literal), L)
     if kind === _E._NK_CONST_GATHER
         a = nd.payload::_E._ConstGatherArray
-        off, _ = _fragment_gather_offsets(nd.children, a.dims, a.boundary, inputs, L)
+        off, ok = _fragment_gather_offsets(nd.children, a.dims, a.boundary, inputs, L)
+        valid[] = valid[] .& ok
         table = Reactant.promote_to(TracedRArray{Float64, 1}, a.flat)
         return round.(Int32, table[off .+ Int32(1)])
     end
-    kind === _E._NK_CALL && return _fragment_index_node(_de_inline_call(nothing, nd), inputs, L)
+    kind === _E._NK_CALL && return _fragment_index_node(_de_inline_call(nothing, nd), inputs, L, valid)
     kind === _E._NK_OP || return _de_refuse_at(
         "lane fragment", "an integer index node of kind $(_de_kindname(kind))", "it cannot be evaluated from the lane coordinates."
     )
-    ev(n) = _fragment_index_node(n, inputs, L)
+    ev(n) = _fragment_index_node(n, inputs, L, valid)
     op, args = nd.op, nd.children
     if op === :ifelse
-        return ifelse.(ev(args[1]) .!= Int32(0), ev(args[2]), ev(args[3]))
+        c = ev(args[1]) .!= Int32(0)
+        yes, no = Ref(c .| true), Ref(c .| true)
+        a = _fragment_index_node(args[2], inputs, L, yes)
+        b = _fragment_index_node(args[3], inputs, L, no)
+        valid[] = valid[] .& ifelse.(c, yes[], no[])
+        return ifelse.(c, a, b)
     elseif op === :floor || op === :ceil
         a = only(args)
         if a.kind === _E._NK_OP && a.op === :/ && length(a.children) == 2
@@ -202,6 +233,13 @@ function _fragment_index_node(nd::_E._Node, inputs, L)
         return ev(a)
     elseif op === :neg || (op === :- && length(args) == 1)
         return .-ev(only(args))
+    elseif op === :/
+        return _de_refuse_at(
+            "lane fragment", "a bare quotient in an integer subscript",
+            "the host accepts only an exact quotient and raises on any other " *
+                "(E_TREEWALK_INEXACT_SUBSCRIPT), which a traced fragment cannot do. " *
+                "Round it explicitly with `floor(a / b)` or `ceil(a / b)`."
+        )
     end
     binop = get(_LANE_INDEX_BINOP, op, nothing)
     binop === nothing && return _de_refuse_at("lane fragment", "the integer index operator $op", "it is not supported by the integer gather path.")

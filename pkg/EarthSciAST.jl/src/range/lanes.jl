@@ -206,18 +206,34 @@ function _lane_rewrite(spec::_LaneSpec, ctx, e::ASTExpr, sc::_LaneScope, rule::S
             )
         end
         if spec.fragment
+            # The node's bound indices become columns of a lane gather in the
+            # fields that see them. `args` and the range bounds keep the
+            # outer scope; every other expression field (`expr`, `filter`,
+            # `key`, …) is rewritten in the node's scope, so no field is
+            # skipped that the in-place program rewrites through `map_children`.
             columns = copy(sc.columns)
             _lane_column_ranges!(columns, spec, o.ranges)
             body = _LaneScope(sc.lanevars, sc.first, columns)
-            outer(x) = _lane_rewrite(spec, ctx, x, sc, rule)
-            return reconstruct(
-                o; args = map(outer, o.args), ranges = _map_child_ranges(outer, o.ranges),
-                expr_body = _lane_rewrite(spec, ctx, o.expr_body, body, rule),
-                filter = o.filter === nothing ? nothing : _lane_rewrite(spec, ctx, o.filter, body, rule)
+            return _map_children_scoped(
+                x -> _lane_rewrite(spec, ctx, x, sc, rule),
+                x -> _lane_rewrite(spec, ctx, x, body, rule), o, (:args, :ranges)
             )
         end
     end
     return map_children(x -> _lane_rewrite(spec, ctx, x, sc, rule), o)
+end
+
+# `map_children` with two rewrites: `outer` for the fields named in
+# `outer_fields`, `inner` for every other expression field of the node. The
+# field walk is the one `map_children` runs, so a new expression field of
+# `OpExpr` is never dropped.
+function _map_children_scoped(outer::F, inner::G, o::OpExpr, outer_fields) where {F, G}
+    kw = map(_MAPPED_FIELDS) do fld
+        f = fld in outer_fields ? outer : inner
+        mapper = getfield(@__MODULE__, getfield(_MAP_CHILD_FN, OPEXPR_FIELD_TABLE[fld].kind))
+        fld => mapper(f, getfield(o, fld))
+    end
+    return reconstruct(o; kw...)
 end
 
 function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, rule::String)

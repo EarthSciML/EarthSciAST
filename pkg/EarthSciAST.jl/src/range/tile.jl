@@ -176,7 +176,7 @@ _TileSpec(
     Dict{Tuple{String, Vector{Tuple{Int, Int}}}, Vector{UnitRange{Int}}}(),
     Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), IdDict{Any, Any}(),
     IdDict{Any, Any}(), IdDict{Any, Dict{Int, Any}}(), memo,
-    coordinate_axes, Vector{UnitRange{Int}}(undef, length(coordinate_axes)), share_native_code
+    coordinate_axes, fill(1:0, length(coordinate_axes)), share_native_code
 )
 
 # Native code shares whole-domain box kernels when their layout can be rebased.

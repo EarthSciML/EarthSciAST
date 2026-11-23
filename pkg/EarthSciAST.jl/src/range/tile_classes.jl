@@ -122,6 +122,7 @@ end
 
 struct _TileClass{R, W, K}
     owner::_ProgramMemo
+    slots::Vector{ForcingSlot}   # the forcing signature `windows` follow
     representative::R
     windows::W
     kernel::K
@@ -140,10 +141,10 @@ in decomposition axis order. Its input layouts are the representative tile's
 layouts, translated to that origin. Use [`forcing_reach`](@ref) with the
 actual origin to obtain its forcing windows.
 """
-tile_classes(op::RhsProgram, dec::Decomposition, tiles) = _tile_classes(op, dec, tiles, nothing)
+tile_classes(op::RhsProgram, dec::Decomposition, tiles) =
+    _tile_classes(op, dec, tiles, nothing, forcing_slots(op))
 
-function _tile_classes(op::RhsProgram, dec::Decomposition, tiles, kernel)
-    slots = forcing_slots(op)
+function _tile_classes(op::RhsProgram, dec::Decomposition, tiles, kernel, slots)
     classes = Dict{Any, Int}()
     targets = Tile[]
     for box in tiles
@@ -157,7 +158,7 @@ function _tile_classes(op::RhsProgram, dec::Decomposition, tiles, kernel)
         key = _tile_class_key(slots, windows, tile, dec)
         group = key === nothing ? 0 : get(classes, key, 0)
         if group == 0
-            cls = _TileClass(op.memo, tile, Dict(Tuple(tile.origin) => windows), kernel)
+            cls = _TileClass(op.memo, copy(slots), tile, Dict(Tuple(tile.origin) => windows), kernel)
             push!(targets, Tile(dec, box.owned, box.storage, cls))
             key === nothing || (classes[key] = length(targets))
         else

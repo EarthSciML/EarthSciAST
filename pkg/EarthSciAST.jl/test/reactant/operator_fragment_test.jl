@@ -405,6 +405,18 @@ end
         dec = Decomposition(axes = ["cell" => nothing])
         input_boxes = [(owned = ["cell" => r], storage = ["cell" => r]) for r in (1:2, 3:4)]
         target = only(tile_classes(prog, dec, input_boxes))
+        # A selection builds a new program per call, which no class belongs to.
+        err = try
+            operator_ir(prob; select = RhsSelection(writes = ["M.u"]), target)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("select", err.msg)
+        selected = EarthSciAST.select(prog; writes = ["M.u"])
+        selected_target = only(tile_classes(selected, dec, input_boxes))
+        @test operator_ir(selected; target = selected_target) isa EarthSciAST.OperatorIR
         ir = operator_ir(prog; target)
         @test forcing_reach(ir, [1]) == [[1:2]]
         @test forcing_reach(ir, [3]) == [[3:4]]
@@ -656,6 +668,68 @@ end
         # Lane 1 writes cell 2 of u and v; cell 5 would land on v's first cell
         # and cell 0 on u's last, and both are dropped.
         @test Array(scattered(lane, full, updates, cells)) == [1.0, -1.0, 3.0, 4.0, 5.0, -4.0, 7.0, 8.0]
+    end
+
+    @testset "faq fields inside a lane rule see the lane index" begin
+        # The fragment lowerer gives a nested faq's bound indices their own
+        # scope. Every field of the node must still be lane-rewritten, as the
+        # in-place lane program does through `map_children`.
+        ESA = EarthSciAST
+        V, I = ESA.VarExpr, ESA.IntExpr
+        node = ESA.OpExpr(
+            "faq", ESA.ASTExpr[];
+            output_idx = Any[], ranges = Dict{String, Any}("j" => Any[1, 2]),
+            expr_body = ESA.OpExpr("*", ESA.ASTExpr[V("j"), V("i")]),
+            filter = ESA.OpExpr("<=", ESA.ASTExpr[V("j"), V("i")]),
+            key = ESA.OpExpr("+", ESA.ASTExpr[V("i"), V("j")])
+        )
+        function rewrite(fragment)
+            spec = ESA._LaneSpec(
+                :cells, ["cell"], 3, Dict("u" => ["cell"]), Dict("cell" => zeros(3)),
+                ESA._LaneGather[], Set{String}(), Dict{String, Vector{String}}(),
+                Dict{String, Int}(), Dict("cell" => 4), fragment
+            )
+            scope = ESA._LaneScope(Dict("i" => "cell"), "i", Dict{String, UnitRange{Int}}())
+            return ESA._lane_rewrite(spec, nothing, node, scope, "rule")
+        end
+        native, fragment = rewrite(false), rewrite(true)
+        lane = ESA.OpExpr("index", ESA.ASTExpr[V("__lane_cell"), V("i")])
+        @test repr(fragment.key) == repr(ESA.OpExpr("+", ESA.ASTExpr[lane, V("j")]))
+        for f in (:expr_body, :filter, :key, :ranges, :args)
+            @test repr(getfield(fragment, f)) == repr(getfield(native, f))
+        end
+    end
+
+    @testset "lane subscripts follow the host integer evaluator" begin
+        data = [10.0, 20.0, 30.0, 40.0]
+        nbr = [2.0, 3.0, 4.0, 1.0]
+        # A lane outside the domain reads the neighbour table past its axis.
+        # That read leaves the array, so the lane reads 0.0, as an outer
+        # read past an axis does, rather than a clamped neighbour.
+        rhs = _op("+", _op("*", "rate", _ix("u", "i")), _ix("data", _ix("nbr", "i")))
+        prob = cell_problem(["u" => rhs]; arrays = Dict("data" => (data, "cell"), "nbr" => (nbr, "cell")))
+        prog = rhs_program(prob)
+        cells = Int32[5 1 3]
+        u = [1.0, 2.0, 3.0]
+        fl = emit_fragment(operator_ir(prog; target = Lanes(:cells, ["cell"], 3)))
+        p, t = ConcreteRArray(parameter_vector(prog)), ConcreteRNumber(0.5)
+        args = (ConcreteRArray(u), ConcreteRArray(Float64[]), p, t, (), ConcreteRArray(cells))
+        run = Reactant.@compile fl(args...)
+        @test Array(run(args...)) ≈ [2.0, 4.0 + 20.0, 6.0 + 40.0]
+        # Inside the domain the lane values are the native lane program's.
+        inside = Int32[2 1 3]
+        args = (ConcreteRArray(u), ConcreteRArray(Float64[]), p, t, (), ConcreteRArray(inside))
+        @test Array(run(args...)) ≈ native_lanes(prog, inside, u)
+
+        # A bare quotient must be exact on the host, which raises on any
+        # other; a traced fragment cannot raise, so it refuses the quotient.
+        half = _ix("data", _op("/", _op("*", 2, "i"), 2))
+        prob = cell_problem(["u" => half]; arrays = Dict("data" => (data, "cell")))
+        prog = rhs_program(prob)
+        fl = emit_fragment(operator_ir(prog; target = Lanes(:cells, ["cell"], 3)))
+        p = ConcreteRArray(parameter_vector(prog))
+        args = (ConcreteRArray(u), ConcreteRArray(Float64[]), p, t, (), ConcreteRArray(cells))
+        @test_throws EarthSciAST.DirectEmitError Reactant.@compile fl(args...)
     end
 
 end

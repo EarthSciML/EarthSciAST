@@ -101,6 +101,15 @@ function operator_ir(
     outputs === :du || throw(ArgumentError("outputs must be :du or a KernelOutputs"))
     op = rhs_program(prob)
     if select.writes !== :all || select.terms !== :all
+        # Each call selects a fresh program, which a tile class built from
+        # an earlier selection never belongs to.
+        target isa Tile && target.class !== nothing && throw(
+            ArgumentError(
+                "a tile class cannot be combined with `select`: select the " *
+                    "program once, `prog = select(rhs_program(prob); ...)`, build the " *
+                    "classes from `prog` and call `operator_ir(prog; target)`"
+            )
+        )
         op = EarthSciAST.select(op; select.writes, select.terms)
     end
     return operator_ir(op; target)
@@ -118,9 +127,15 @@ end
 
 operator_ir(prog::RhsProgram; target = Whole()) = _rhs_operator_ir(prog, target)
 
-function _rhs_operator_ir(prog::RhsProgram, target; shared_aux = Set{String}())
+# `slots` is the forcing signature of the IR. Tile forcing windows are
+# computed against it by name, so `ir.extra.windows[i]` is the window of
+# `ir.forcing[i]`: a kernel's IR passes its kernel set's signature, which the
+# kernel program reads by name.
+function _rhs_operator_ir(
+        prog::RhsProgram, target; shared_aux = Set{String}(), slots = forcing_slots(prog)
+    )
     params = parameter_names(prog)
-    slots = copy(forcing_slots(prog))
+    slots = copy(slots)
     if target isa Whole
         return OperatorIR(_operator_build(prog), prog.layout, prog.maps, target, nothing, params, slots)
     elseif target isa Tile
@@ -130,6 +145,8 @@ function _rhs_operator_ir(prog::RhsProgram, target; shared_aux = Set{String}())
         else
             target.class.owner === prog.memo ||
                 throw(ArgumentError("tile classes must be used with the operator that built them"))
+            target.class.slots == slots ||
+                throw(ArgumentError("tile classes must be used with the forcing signature that built them"))
             tile = target.class.representative
             windows = target.class.windows[Tuple(tile.origin)]
         end
