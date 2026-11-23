@@ -139,11 +139,7 @@ pub(crate) fn prepare(file: &EsmFile) -> FlatRegistry {
         let (closed, added) = crate::flatten::close_template_bodies(&without_private_keys(obj));
         blocks.push((cname.to_string(), closed));
         let typed = crate::operator_refs::OperatorRegistry::from_json(obj);
-        let captures = typed
-            .iter()
-            .filter(|(_, d)| d.body.is_some() && !d.body_binders().is_empty())
-            .map(|(n, d)| (n.clone(), d.body_binders().clone()))
-            .collect();
+        let captures = transitive_captures(&typed);
         let literal = field_params(&typed);
         components.insert(
             compkey.clone(),
@@ -166,6 +162,48 @@ pub(crate) fn prepare(file: &EsmFile) -> FlatRegistry {
         registry: merged.into_iter().collect(),
         components,
     }
+}
+
+/// Per definition of `reg`, the loop symbols its expansion binds: those its
+/// body binds and, through the references the body makes, those the bodies
+/// it reaches bind. A name a reference binds that one of them binds is that
+/// loop symbol where the expansion reads it (a closed body's free name the
+/// body passes into a callee's loop is one), not a variable of the site.
+fn transitive_captures(
+    reg: &crate::operator_refs::OperatorRegistry,
+) -> HashMap<String, HashSet<String>> {
+    fn of(
+        reg: &crate::operator_refs::OperatorRegistry,
+        name: &str,
+        memo: &mut HashMap<String, HashSet<String>>,
+        busy: &mut HashSet<String>,
+    ) -> HashSet<String> {
+        if let Some(m) = memo.get(name) {
+            return m.clone();
+        }
+        let Some(def) = reg.get(name) else {
+            return HashSet::new();
+        };
+        if def.body.is_none() || !busy.insert(name.to_string()) {
+            return HashSet::new();
+        }
+        let mut out = def.body_binders().clone();
+        for c in def.callees() {
+            out.extend(of(reg, c, memo, busy));
+        }
+        memo.insert(name.to_string(), out.clone());
+        out
+    }
+    let mut memo = HashMap::new();
+    let mut busy = HashSet::new();
+    let names: Vec<String> = reg.iter().map(|(n, _)| n.clone()).collect();
+    names
+        .into_iter()
+        .filter_map(|n| {
+            let c = of(reg, &n, &mut memo, &mut busy);
+            (!c.is_empty()).then_some((n, c))
+        })
+        .collect()
 }
 
 /// Per definition of `reg`, its parameters that its expansion never reads as

@@ -204,7 +204,11 @@ impl<'m> TapeBuilder<'m> {
         let Some(r) = crate::operator_refs::reference_node(node) else {
             bail_tape!("operator reference without a name");
         };
-        let binders = inst.binders();
+        // The loop symbols the expansion would bind around a binding: those
+        // the instance body binds and those of the bodies it reaches.
+        let mut binders: HashSet<String> = inst.binders().clone();
+        binders.extend(ops.registry().captured_symbols(&inst.definition.name).iter().cloned());
+        let binders = &binders;
         let mut params: Vec<(String, ArgKind)> = Vec::new();
         let mut arrays: Vec<SrcRef> = Vec::new();
         let mut scalars: Vec<Operand> = Vec::new();
