@@ -43,6 +43,12 @@ function emit_fragment(ir::_E.OperatorIR; eltype::Type = Float64, fold::Symbol =
     buffers = map(keys(host)) do name
         slot = findfirst(s -> s.name == String(name), ir.forcing)
         slot !== nothing && return slot
+        if ir.target isa _E.Tile
+            row = findfirst(
+                i -> name === Symbol(_E._tile_coordinate_name(i)), eachindex(ir.extra.coordinates)
+            )
+            row !== nothing && return _TileCoordinateBuffer(row, ir.extra.coordinates[row])
+        end
         return _fragment_lane_buffer(ir, String(name))
     end
     names = Dict(Symbol(n) => i for (i, n) in enumerate(ir.params))
@@ -50,6 +56,39 @@ function emit_fragment(ir::_E.OperatorIR; eltype::Type = Float64, fold::Symbol =
         ir, buffers, Vector{Float64}[values(host)...], names,
         DirectEmitOptions(), fold === :tree
     )
+end
+
+struct _TileCoordinateBuffer
+    row::Int
+    offsets::UnitRange{Int}
+end
+
+function _fragment_buffer(::Type{T}, plan::_TileCoordinateBuffer, forcing, origin) where {T}
+    row = plan.row
+    n = length(plan.offsets)
+    attr(v) = _MLIR.IR.DenseArrayAttribute(Int64[v])
+    start = _hlo.slice(
+        origin.mlir_data; result_0 = _de_ty(1, Int32),
+        start_indices = attr(row - 1), limit_indices = attr(row), strides = attr(1),
+        location = _de_loc()
+    )
+    base = _de_res(start)
+    if first(plan.offsets) != 0
+        shift = _hlo.constant(;
+            output = _de_ty(1, Int32),
+            value = _MLIR.IR.DenseElementsAttribute(Int32[first(plan.offsets)]), location = _de_loc()
+        )
+        base = _de_res(_hlo.add(base, _de_res(shift); result = _de_ty(1, Int32), location = _de_loc()))
+    end
+    if n != 1
+        ty = _de_ty(n, Int32)
+        repeated = _hlo.broadcast_in_dim(
+            base; result_0 = ty, broadcast_dimensions = attr(0), location = _de_loc()
+        )
+        offsets = _hlo.iota(; output = ty, iota_dimension = 0, location = _de_loc())
+        base = _de_res(_hlo.add(_de_res(repeated), _de_res(offsets); result = ty, location = _de_loc()))
+    end
+    return _de_traced(_de_cast(_DEVal(base, n), Int32, T), T)
 end
 
 # Use the range lowerer's pre-gather descriptions. Affine integer index math
@@ -147,10 +186,13 @@ end
 function _fragment_check(forcing, ir)
     length(forcing) == length(ir.forcing) ||
         throw(DimensionMismatch("forcing must follow forcing_slots(ir)"))
-    for (buf, slot) in zip(forcing, ir.forcing)
+    for (i, (buf, slot)) in enumerate(zip(forcing, ir.forcing))
         buf isa Union{TracedRArray{Float32, 1}, TracedRArray{Float64, 1}} ||
             throw(ArgumentError("forcing slot '$(slot.name)' requires a traced flat floating-point tensor"))
-        length(buf) == prod(slot.shape; init = 1) ||
+        window_length = ir.target isa _E.Tile ? _E._tile_window_length(ir.extra.windows[i]) : -1
+        whole_length = ir.target isa _E.Tile && ir.target.class !== nothing ?
+            window_length : prod(slot.shape; init = 1)
+        length(buf) in (whole_length, window_length) ||
             throw(DimensionMismatch("forcing slot '$(slot.name)' has the wrong length"))
     end
     return nothing
@@ -160,11 +202,13 @@ function _fragment_context(f::_StableHLOFragment{T}, p, t, forcing, cells, param
     rhs = f.ir.f.rhs
     _fragment_check(forcing, f.ir)
     inputs = map(spec -> _fragment_buffer(T, spec, forcing, cells), f.buffers)
+    windows = f.ir.target isa _E.Tile ?
+        Union{Nothing, _E._TileForcingWindow}[i isa Int ? f.ir.extra.windows[i] : nothing for i in f.buffers] : nothing
     params = _DEParamVector(_de_cast(_de_untraced(p), Float64, T), param_slots)
     return _DECtx(
         rhs.n_states, rhs.n_total, params, _de_cast(_de_time(t), Float64, T),
         nothing, inputs, f.hostkeys, Dict{Int, String}(), f.options;
-        precision = T, tree_fold = f.tree_fold
+        precision = T, tree_fold = f.tree_fold, windows
     )
 end
 
@@ -203,6 +247,8 @@ function (f::_StableHLOFragment{T})(
         t::TracedRNumber{Float64}, forcing::Tuple
     ) where {T}
     f.ir.target isa _E.Lanes && throw(ArgumentError("lane fragments require a cells tensor"))
+    f.ir.target isa _E.Tile && f.ir.target.class !== nothing &&
+        throw(ArgumentError("tile class fragments require an origin tensor"))
     if f.ir.target isa _E.Whole && f.ir.extra !== nothing
         return _fragment_kernel(f, u, aux, p, t, forcing, nothing)
     end
@@ -218,6 +264,18 @@ function (f::_StableHLOFragment{T})(
     size(cells) == (length(target.sets), target.capacity) ||
         throw(DimensionMismatch("cells must have one row per lane set and one column per lane"))
     return _fragment_rhs(f, u, aux, p, t, forcing, cells)
+end
+
+function (f::_StableHLOFragment{T})(
+        u::TracedRArray{T, 1}, aux::TracedRArray{T, 1}, p::TracedRArray{Float64, 1},
+        t::TracedRNumber{Float64}, forcing::Tuple, origin::TracedRArray{Int32, 1}
+    ) where {T}
+    target = f.ir.target
+    target isa _E.Tile && target.class !== nothing ||
+        throw(ArgumentError("only tile class fragments take an origin tensor"))
+    length(origin) == length(target.decomposition.axes) ||
+        throw(DimensionMismatch("origin must have one coordinate per decomposition axis"))
+    return _fragment_rhs(f, u, aux, p, t, forcing, origin)
 end
 
 function (f::_StableHLOFragment{T})(

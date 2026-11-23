@@ -1,3 +1,5 @@
+include("range/tile_forcing.jl")
+
 # Traceable backends consume the same out-of-place tree-walk build as the
 # standalone XLA compiler. Range selection happens before that build.
 
@@ -19,12 +21,14 @@ struct Whole end
 
 A tile target for [`operator_ir`](@ref), with the same boxes as [`restrict`](@ref).
 """
-struct Tile{O, S}
+struct Tile{O, S, C}
     decomposition::Decomposition
     owned::O
     storage::S
+    class::C
 end
 Tile(dec::Decomposition; owned, storage) = Tile(dec, owned, storage)
+Tile(dec::Decomposition, owned, storage) = Tile(dec, owned, storage, nothing)
 
 """
     Lanes(kind, sets, capacity)
@@ -115,8 +119,17 @@ function operator_ir(prog::RhsProgram; target = Whole())
     if target isa Whole
         return OperatorIR(_operator_build(prog), prog.layout, prog.maps, target, nothing, params, slots)
     elseif target isa Tile
-        tile = _restrict(prog, target.decomposition; target.owned, target.storage, form = :oop)
-        return OperatorIR(tile.f!, tile.layout, tile.maps, target, tile.reach, params, slots)
+        if target.class === nothing
+            tile = _restrict(prog, target.decomposition; target.owned, target.storage, form = :oop)
+            windows = _tile_forcing_windows(tile.f!, slots)
+        else
+            target.class.owner === prog.memo ||
+                throw(ArgumentError("tile classes must be used with the operator that built them"))
+            tile = target.class.representative
+            windows = target.class.windows[Tuple(tile.origin)]
+        end
+        info = (; tile.reach, windows, tile.coordinates)
+        return OperatorIR(tile.f!, tile.layout, tile.maps, target, info, params, slots)
     elseif target isa Lanes
         lane = _lanes(prog, target.kind, target.sets, target.capacity; form = :oop)
         maps = _lane_operator_maps(lane, target.capacity)
@@ -181,7 +194,7 @@ State halo reach of the tile used to build `ir`. Keys and offsets follow
 """
 function halo(ir::OperatorIR)
     ir.target isa Tile || throw(ArgumentError("halo requires tile operator IR"))
-    return copy(ir.extra)
+    return copy(ir.extra.reach)
 end
 
 """Scalar parameter names in dense input-vector order."""
@@ -189,6 +202,30 @@ parameter_names(p::RhsProgram) = String[s.name for s in parameters(p)]
 parameter_names(ir::OperatorIR) = copy(ir.params)
 
 forcing_slots(ir::OperatorIR) = copy(ir.forcing)
+
+"""
+    forcing_reach(ir::OperatorIR[, origin])
+
+The rectangular global-coordinate forcing windows of a tile, in
+[`forcing_slots`](@ref) order. Each entry is a vector of inclusive ranges, one
+per source dimension, or `nothing` for an unused source. A source read at
+addresses that cannot be bounded statically may require its whole extent.
+Flatten each window column-major before passing it to a StableHLO fragment,
+using an empty tensor for an unused source. For a tile class,
+pass the actual owned-box origin to get that member's windows.
+"""
+function forcing_reach(ir::OperatorIR, origin = nothing)
+    ir.target isa Tile || throw(ArgumentError("forcing_reach requires tile operator IR"))
+    windows = if origin === nothing
+        ir.extra.windows
+    else
+        ir.target.class === nothing && throw(ArgumentError("only tile classes accept an origin"))
+        get(ir.target.class.windows, Tuple(origin)) do
+            throw(ArgumentError("origin is not a member of this tile class"))
+        end
+    end
+    return [w === nothing ? nothing : copy(w.box) for w in windows]
+end
 
 """
     emit_fragment(ir; eltype = Float64, fold = :tree)
@@ -216,3 +253,5 @@ lane blocks in `updates` replacing the cells selected by `cells`. The caller
 supplies distinct, in-range cells.
 """
 function scatter_lanes end
+
+include("range/tile_classes.jl")

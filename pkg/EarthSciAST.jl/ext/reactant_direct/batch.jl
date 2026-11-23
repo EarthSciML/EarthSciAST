@@ -153,9 +153,7 @@ function _de_batch(
         )
         return cache[b.idx]
     elseif k === _E._NK_PARAM_GATHER
-        buf = _de_buffer(ctx, b.payload::Vector{Float64})
-        return isempty(b.slots) ? _de_slice(ctx, buf, b.idx, b.idx; why = :pgather) :
-            _de_take(ctx, buf, b.slots)
+        return _de_buffer_read(ctx, b.payload::Vector{Float64}, isempty(b.slots) ? b.idx : b.slots)
     elseif k === _E._NK_LOOPVAR
         # Per lane: congruent trees may bind DIFFERENT enclosing loops at this
         # position, so read each lane's own counter.

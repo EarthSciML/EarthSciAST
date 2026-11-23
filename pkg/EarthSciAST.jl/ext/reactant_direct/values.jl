@@ -89,6 +89,7 @@ mutable struct _DECtx
     bufs::Any
     hostkeys::Vector{Vector{Float64}}
     bufvals::Vector{Union{Nothing, _DEVal}}
+    windows::Union{Nothing, Vector{Union{Nothing, _E._TileForcingWindow}}}
     static::_E._NodeMap{Bool}                # memoized "this subtree is host-computable"
     bstatic::IdDict{Any, Bool}               # the same, for a lane-batched subtree
     opts::DirectEmitOptions
@@ -133,7 +134,7 @@ end
 function _DECtx(
         n_states::Int, n_total::Int, p, t::_DEVal, uval::Union{Nothing, _DEVal},
         bufs, hostkeys::Vector{Vector{Float64}}, names::Dict{Int, String},
-        opts::DirectEmitOptions; precision = Float64, tree_fold = false
+        opts::DirectEmitOptions; precision = Float64, tree_fold = false, windows = nothing
     )
     ue = _DEMap(n_total)
     if uval !== nothing
@@ -144,7 +145,7 @@ function _DECtx(
     return _DECtx(
         n_states, precision, tree_fold, IdDict{Base.RefValue{Int}, Int}(), p, t, ue, Dict{UInt64, _DEVal}(),
         Dict{Vector{Float64}, _DEVal}(), bufs, hostkeys,
-        Union{Nothing, _DEVal}[nothing for _ in hostkeys],
+        Union{Nothing, _DEVal}[nothing for _ in hostkeys], windows,
         _E._NodeMap{Bool}(), IdDict{Any, Bool}(),
         opts, names, "the right-hand side", String[],
         Dict{
@@ -872,29 +873,9 @@ end
 # So the emitter reads buffers through the ARGUMENT LIST: an identity (`===`)
 # scan over the build's host arrays, in the container's own order, swapping in
 # this call's argument entry. O(#forcing VARIABLES) per read, never O(#cells).
-function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
-    ks = ctx.hostkeys
-    for j in eachindex(ks)
-        if ks[j] === arr
-            hit = ctx.bufvals[j]
-            hit === nothing || return hit
-            x = ctx.bufs[j]
-            x isa Union{TracedRArray{Float32, 1}, TracedRArray{Float64, 1}} ||
-                _de_refuse(
-                ctx,
-                "a forcing buffer argument of type $(typeof(x))",
-                "buffer $j of the `buffers` argument is not a traced " *
-                    "rank-1 floating-point array. Pass `map(ConcreteRArray, " *
-                    "forcing_buffers(f))`, the container the explicit-buffers form " *
-                    "expects."
-            )
-            length(x) == length(arr) || throw(DimensionMismatch("forcing buffer $j has the wrong length"))
-            v = _de_cast(_de_untraced(x), _de_eltype(x), ctx.precision)
-            ctx.bufvals[j] = v
-            _de_tally!(ctx, :forcing_input)
-            return v
-        end
-    end
+function _de_buffer_index(ctx::_DECtx, arr)
+    j = findfirst(x -> x === arr, ctx.hostkeys)
+    j !== nothing && return j
     return _de_refuse(
         ctx,
         "a live forcing buffer of length $(length(arr))",
@@ -904,4 +885,27 @@ function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
             "find in it would otherwise be baked in as a compile-time constant and " *
             "never see a refresh."
     )
+end
+
+
+function _de_buffer_read(ctx::_DECtx, arr, positions; why = :pgather)
+    j = _de_buffer_index(ctx, arr)
+    val = ctx.bufvals[j]
+    if val === nothing
+        x = ctx.bufs[j]
+        x isa Union{TracedRArray{Float32, 1}, TracedRArray{Float64, 1}} ||
+            _de_refuse(ctx, "forcing buffer $j of type $(typeof(x))", "expected a traced flat floating-point tensor.")
+        val = _de_cast(_de_untraced(x), _de_eltype(x), ctx.precision)
+        ctx.bufvals[j] = val
+        _de_tally!(ctx, :forcing_input)
+    end
+    if val.len != length(arr)
+        window = ctx.windows === nothing ? nothing : ctx.windows[j]
+        window !== nothing && val.len == _E._tile_window_length(window) ||
+            throw(DimensionMismatch("forcing buffer $j has the wrong length"))
+        positions = positions isa Int ? _E._tile_window_position(window, positions) :
+            Int[_E._tile_window_position(window, p) for p in positions]
+    end
+    return positions isa Int ? _de_slice(ctx, val, positions, positions; why) :
+        _de_take(ctx, val, positions)
 end

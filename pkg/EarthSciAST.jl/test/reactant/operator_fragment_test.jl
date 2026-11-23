@@ -2,12 +2,12 @@ using EarthSciAST
 using Reactant
 using Test
 
-function fragment_problem(; array = false)
+function fragment_problem(; array = false, n = 4, stencil = false)
     variable(kind, default; shape = nothing) = isnothing(shape) ?
         Dict{String, Any}("type" => kind, "default" => default) :
         Dict{String, Any}("type" => kind, "default" => default, "shape" => shape)
     op(name, args...) = Dict("op" => name, "args" => Any[args...])
-    ix(name) = op("index", name, "i")
+    ix(name, i = "i") = op("index", name, i)
     D(name) = merge(op("D", name), Dict("wrt" => "t"))
     faq(expr) = merge(
         op("faq"), Dict(
@@ -19,16 +19,20 @@ function fragment_problem(; array = false)
     lhs, rhs = D("u"), op("+", op("*", "rate", "u"), "t")
     if array
         vars["u"]["shape"] = ["cell"]
-        vars["data"] = variable("parameter", [1.0, 2.0, 3.0, 4.0]; shape = ["cell"])
+        vars["data"] = variable("parameter", collect(1.0:n); shape = ["cell"])
         lhs = faq(D(ix("u")))
-        rhs = faq(op("+", op("*", "rate", ix("u")), ix("data"), "i", "t"))
+        expr = op("+", op("*", "rate", ix("u")), ix("data"), "i", "t")
+        if stencil
+            expr = op("+", expr, ix("u", op("-", "i", 1)), ix("u", op("+", "i", 1)))
+        end
+        rhs = faq(expr)
     end
     doc = Dict(
         "esm" => "2.0.0", "metadata" => Dict("name" => "Fragment test"),
         "models" => Dict("M" => Dict("variables" => vars, "equations" => [Dict("lhs" => lhs, "rhs" => rhs)]))
     )
     if array
-        doc["index_sets"] = Dict("cell" => Dict("kind" => "interval", "size" => 4))
+        doc["index_sets"] = Dict("cell" => Dict("kind" => "interval", "size" => n))
     end
     return esm_problem(doc, (0.0, 1.0); runtime_array_parameters = array)
 end
@@ -78,6 +82,10 @@ end
         u = ConcreteRArray(ones(4))
         tile_run = Reactant.@compile ft(u, aux, p, t, forcing)
         @test Array(tile_run(u, aux, p, t, forcing)) ≈ [0.0, 24.5, 35.5, 0.0]
+        @test forcing_reach(tile_ir) == [[2:3]]
+        window = (ConcreteRArray([20.0, 30.0]),)
+        compact_run = Reactant.@compile ft(u, aux, p, t, window)
+        @test Array(compact_run(u, aux, p, t, window)) ≈ [0.0, 24.5, 35.5, 0.0]
 
         lane = operator_ir(prog; target = Lanes(:cells, ["cell"], 3))
         fl = emit_fragment(lane)
@@ -95,6 +103,51 @@ end
         distinct = ConcreteRArray(reshape(Int32[4, 1, 2], 1, 3))
         scattered = Reactant.@compile scatter_lanes(lane, full, lanes_u, distinct)
         @test Array(scattered(lane, full, lanes_u, distinct)) == [1.0, 3.0, 30.0, 3.0]
+    end
+
+    @testset "reusable tile with traced origin and compact forcing" begin
+        prob = fragment_problem(; array = true)
+        prog = rhs_program(prob)
+        dec = Decomposition(axes = ["cell" => nothing])
+        input_boxes = [(owned = ["cell" => r], storage = ["cell" => r]) for r in (1:2, 3:4)]
+        target = only(tile_classes(prog, dec, input_boxes))
+        ir = operator_ir(prog; target)
+        @test forcing_reach(ir, [1]) == [[1:2]]
+        @test forcing_reach(ir, [3]) == [[3:4]]
+        @test_throws ArgumentError forcing_reach(ir, [2])
+        f = emit_fragment(ir)
+        u, aux = ConcreteRArray([1.0, 2.0]), ConcreteRArray(Float64[])
+        p, t = ConcreteRArray(parameter_vector(prog)), ConcreteRNumber(0.5)
+        first_forcing = (ConcreteRArray([10.0, 20.0]),)
+        first_origin = ConcreteRArray(Int32[1])
+        run = Reactant.@compile f(u, aux, p, t, first_forcing, first_origin)
+        @test Array(run(u, aux, p, t, first_forcing, first_origin)) ≈ [13.5, 26.5]
+        second_forcing = (ConcreteRArray([30.0, 40.0]),)
+        second_origin = ConcreteRArray(Int32[3])
+        @test Array(run(u, aux, p, t, second_forcing, second_origin)) ≈ [35.5, 48.5]
+    end
+
+    @testset "boundary classes preserve stencil reach" begin
+        prob = fragment_problem(; array = true, n = 8, stencil = true)
+        prog = rhs_program(prob)
+        dec = Decomposition(axes = ["cell" => nothing])
+        owned = [1:2, 3:4, 5:6, 7:8]
+        stored = [1:3, 2:5, 4:7, 6:8]
+        classes = tile_classes(
+            prog, dec, [(owned = ["cell" => b], storage = ["cell" => s]) for (b, s) in zip(owned, stored)]
+        )
+        @test length(classes) == 3
+        inner = operator_ir(prog; target = classes[2])
+        @test halo(inner) == Dict(("M.u", "cell") => (1, 1))
+        @test forcing_reach(inner, [5]) == [[5:6]]
+        frag = emit_fragment(inner)
+        aux = ConcreteRArray(Float64[])
+        p, t = ConcreteRArray(parameter_vector(prog)), ConcreteRNumber(0.5)
+        u, forcing, origin = ConcreteRArray(collect(2.0:5.0)), (ConcreteRArray([8.0, 9.0]),), ConcreteRArray(Int32[3])
+        step = Reactant.@compile frag(u, aux, p, t, forcing, origin)
+        @test Array(step(u, aux, p, t, forcing, origin)) ≈ [0.0, 23.5, 29.5, 0.0]
+        moved_u, moved_forcing, moved_origin = ConcreteRArray(collect(4.0:7.0)), (ConcreteRArray([10.0, 11.0]),), ConcreteRArray(Int32[5])
+        @test Array(step(moved_u, aux, p, t, moved_forcing, moved_origin)) ≈ [0.0, 35.5, 41.5, 0.0]
     end
 
     @testset "standalone observed outputs" begin

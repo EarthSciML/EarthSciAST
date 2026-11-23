@@ -62,8 +62,16 @@ program = Reactant.@compile frag(u, aux, p, t, ())
   emitter's reduction policy.
 - `Tile(dec; owned, storage)` uses the native tile boxes. The output uses the
   tile storage layout, with zeros outside owned rows. `halo(ir)` reports the
-  state reach of that tile. Each fixed tile has its
-  own fragment and accepts whole forcing buffers.
+  state reach of that tile. Pass compact column-major windows in
+  `forcing_reach(ir)` order, or pass whole forcing buffers for a fixed tile.
+- `tile_classes(prog, dec, tiles)` groups tiles whose local instructions and
+  buffer layouts agree. Build and compile one fragment per returned target.
+  Its sixth argument is a traced Int32 vector of the owned box's lower
+  corners in decomposition axis order. Pack forcing from
+  `forcing_reach(ir, origin)` for each member's origin and reuse the compiled
+  fragment as that origin changes. The supplied origin must belong to that
+  class. Unsupported structural comparisons retain a separate program for
+  each affected tile.
 - `Lanes(:cells, sets, capacity)` or `Lanes(:columns, sets, capacity)`
   accepts a sixth argument, a traced Int32 matrix of 1-based coordinates with
   rows in `sets` order. Duplicate cells can pad evaluations; use distinct

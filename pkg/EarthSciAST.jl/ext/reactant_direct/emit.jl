@@ -224,8 +224,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEScalarFrame, nd::_E._Node)::_DEVal
     elseif k === _E._NK_PARAM_GATHER
         # Live forcing, read from the `buffers` ARGUMENT (never from the build's
         # captured host array — see `_de_buffer`).
-        buf = _de_buffer(ctx, nd.payload::Vector{Float64})
-        return _de_slice(ctx, buf, nd.idx, nd.idx; why = :pgather)
+        return _de_buffer_read(ctx, nd.payload::Vector{Float64}, nd.idx)
     elseif k === _E._NK_LIVE_GATHER
         # The same live read at an offset the subscripts give: they are loop
         # counters and literals, concrete here (a contraction loop is unrolled
@@ -234,8 +233,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEScalarFrame, nd::_E._Node)::_DEVal
         off = _E._const_gather_offset(
             cg, length(nd.children), d -> _de_index_int(ctx, nd.children[d])
         )
-        buf = _de_buffer(ctx, cg.flat)
-        return _de_slice(ctx, buf, off, off; why = :pgather)
+        return _de_buffer_read(ctx, cg.flat, off)
     end
     return _de_refuse(
         ctx, "the scalar-spine node kind $(_de_kindname(k))",
@@ -357,13 +355,11 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
             return _de_read(ctx, ctx.ue, a.idx, :akfixed)
         elseif ak === _E._AK_ARR_FIXED
             # LIVE forcing, invariant slot: one element of a program input.
-            buf = _de_buffer(ctx, a.arr)
-            return _de_slice(ctx, buf, a.idx, a.idx; why = :akarrfixed)
+            return _de_buffer_read(ctx, a.arr, a.idx; why = :akarrfixed)
         elseif ak === _E._AK_FORCING_BOX || ak === _E._AK_ARR_TBL_BOX
             # LIVE forcing lanes: one read of a program input at host-frozen
             # indices — slices plus a concatenate, or one gather.
-            buf = _de_buffer(ctx, a.arr)
-            return _de_take(ctx, buf, plan.forc[nd.idx])
+            return _de_buffer_read(ctx, a.arr, plan.forc[nd.idx])
         else
             # CONST_BOX / LOOP_IDX: frozen lane data, one interned array constant.
             return _de_arrconst(ctx, plan.consts[nd.idx])

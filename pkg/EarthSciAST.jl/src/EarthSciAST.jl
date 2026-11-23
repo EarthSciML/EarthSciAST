@@ -273,7 +273,7 @@ export
     StrippedConstructs, stripped, is_stripped, compile_kernels, Kernel, KernelSet,
     KernelBlock, KernelWorkspace, kernel!, kernel_layout, kernel_workspace, z_layout,
     operator_ir, OperatorIR, RhsSelection, Whole, Tile, Lanes, KernelSpec,
-    ir_layout, parameter_names, emit_fragment, gather_lanes, scatter_lanes,
+    ir_layout, parameter_names, emit_fragment, gather_lanes, scatter_lanes, forcing_reach, tile_classes,
     # Flatten errors, named as in the other bindings
     FlattenError, CoupleMultiplicativeNoTendencyError,
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
