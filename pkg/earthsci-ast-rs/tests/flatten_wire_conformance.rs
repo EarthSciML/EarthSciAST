@@ -6,12 +6,19 @@
 //! written-out system is also read back and built under both compilers, and
 //! must give the initial state and right-hand side the original gives, bit
 //! for bit, or be refused where the original is.
+//!
+//! `flatten` keeps operator references (esm-spec §9.6.4). Each case's
+//! `refs_golden` is the flattened system with its references kept and the
+//! registry entries they reach; `golden` is its expansion, made here by
+//! [`expanded`], an expansion local to this test (the crate's flatten and
+//! build never expand a reference).
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
     Compiler, EsmFile, FlattenedSystem, ProblemOptions, esm_problem, flatten,
     format_canonical_float, initial_state, load_path, load_string, rhs_program,
 };
+use indexmap::IndexMap;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -93,12 +100,128 @@ fn wire_form(flat: &FlattenedSystem) -> String {
     out
 }
 
+/// The flattened system with its references kept: the equations and field
+/// initial conditions as they serialize, and every registry entry they
+/// reach, through the bodies of the entries they reach (the Julia test's
+/// `_fw_refs_form`).
+fn refs_form(flat: &FlattenedSystem) -> String {
+    let wire = |e: &earthsci_ast::Expr| serde_json::to_value(e).unwrap();
+    let equations: Vec<Value> = flat
+        .equations
+        .iter()
+        .map(|e| json!({"lhs": wire(&e.lhs), "rhs": wire(&e.rhs)}))
+        .collect();
+    let field_ics: Vec<Value> = flat
+        .field_ics
+        .iter()
+        .map(|(target, rhs)| json!({"target": target, "rhs": wire(rhs)}))
+        .collect();
+    let roots = flat
+        .equations
+        .iter()
+        .flat_map(|e| [&e.lhs, &e.rhs])
+        .chain(flat.field_ics.iter().map(|(_, r)| r));
+    let templates: serde_json::Map<String, Value> = flat
+        .operators()
+        .reachable(roots)
+        .into_iter()
+        .map(|n| {
+            let decl = flat.template_registry[&n].clone();
+            (n, decl)
+        })
+        .collect();
+    let mut out = String::new();
+    canonical(
+        &json!({"equations": equations, "field_ics": field_ics, "templates": templates}),
+        &mut out,
+    );
+    out.push('\n');
+    out
+}
+
+/// `v` (an expression on the wire) with every reference replaced by its
+/// expansion against `reg` (esm-spec §9.6.4 rule 2): the definition's body
+/// with each parameter, wherever the body spells it (never a reference's
+/// `name`), replaced by the binding's expansion. For this test's comparison
+/// with the expanded golden only.
+fn expand_value(v: &Value, reg: &IndexMap<String, Value>) -> Value {
+    fn substitute(body: &Value, b: &serde_json::Map<String, Value>) -> Value {
+        match body {
+            Value::String(s) => b.get(s).cloned().unwrap_or_else(|| body.clone()),
+            Value::Array(a) => Value::Array(a.iter().map(|x| substitute(x, b)).collect()),
+            Value::Object(o) => {
+                let is_ref = o.get("op").and_then(Value::as_str) == Some("apply_operator");
+                Value::Object(
+                    o.iter()
+                        .map(|(k, x)| {
+                            let x = if is_ref && k == "name" {
+                                x.clone()
+                            } else {
+                                substitute(x, b)
+                            };
+                            (k.clone(), x)
+                        })
+                        .collect(),
+                )
+            }
+            _ => body.clone(),
+        }
+    }
+    match v {
+        Value::Object(o) if o.get("op").and_then(Value::as_str) == Some("apply_operator") => {
+            let name = o["name"].as_str().unwrap();
+            let decl = reg
+                .get(name)
+                .unwrap_or_else(|| panic!("no registry entry {name}"));
+            let bindings: serde_json::Map<String, Value> = o
+                .get("bindings")
+                .and_then(Value::as_object)
+                .map(|b| {
+                    b.iter()
+                        .map(|(k, x)| (k.clone(), expand_value(x, reg)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            expand_value(&substitute(&decl["body"], &bindings), reg)
+        }
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, x)| (k.clone(), expand_value(x, reg)))
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(|x| expand_value(x, reg)).collect()),
+        _ => v.clone(),
+    }
+}
+
+/// `flat` with every reference in its equations and field initial conditions
+/// expanded ([`expand_value`]), as the Julia test's `expand_flattened_refs`
+/// gives the golden form.
+pub(crate) fn expanded(flat: &FlattenedSystem) -> FlattenedSystem {
+    let reg = &flat.template_registry;
+    let ex = |e: &earthsci_ast::Expr| -> earthsci_ast::Expr {
+        serde_json::from_value(expand_value(&serde_json::to_value(e).unwrap(), reg)).unwrap()
+    };
+    let mut out = flat.clone();
+    for eq in &mut out.equations {
+        eq.lhs = ex(&eq.lhs);
+        eq.rhs = ex(&eq.rhs);
+    }
+    for (_, rhs) in &mut out.field_ics {
+        *rhs = ex(rhs);
+    }
+    out
+}
+
 /// The flattened system written as a document, as a consumer that splits it
 /// into derived documents does: one model per component, each variable with
 /// its declared type, `shape` and `default`, each equation and each field
 /// initial condition (as `ic(x) = rhs`) in the model that owns its subject,
 /// every reference fully qualified.
 pub(crate) fn flattened_document(flat: &FlattenedSystem) -> Value {
+    // The planner writes the expanded system (references expanded at its
+    // own boundary, esm-spec §9.6.4 rule 2).
+    let flat = &expanded(flat);
     fn owner(name: &str) -> &str {
         name.rsplit_once('.').expect("dotted").0
     }
@@ -197,15 +320,22 @@ fn the_flattened_system_on_the_wire_matches_the_shared_golden() {
     let cases = cases["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 8);
     for case in cases {
-        // A case may also carry a `refs_golden`: the flattened system with its
-        // template references kept (esm-spec §9.6.11). This binding expands
-        // every reference at load before it flattens (the typed IR carries no
-        // reference), so it writes only the expanded form, `golden`; the
-        // reference-keeping golden is Julia's alone for now.
         let name = case["name"].as_str().unwrap();
         let file = load_path(dir.join(case["fixture"].as_str().unwrap()))
             .unwrap_or_else(|e| panic!("{name}: {e}"));
-        let flat = flatten(&file).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let kept = flatten(&file).unwrap_or_else(|e| panic!("{name}: {e}"));
+        // The flattened system with its references kept (esm-spec §9.6.4,
+        // §9.6.11), byte for byte.
+        let refs_golden = case["refs_golden"].as_str().expect("a refs_golden");
+        let got = refs_form(&kept);
+        let want = std::fs::read_to_string(dir.join(refs_golden)).unwrap();
+        assert!(
+            got == want,
+            "{name}: the flattened form with references kept differs from the golden\n got: {got}\nwant: {want}"
+        );
+        // Its expansion, the form a consumer that expands at its boundary
+        // writes out.
+        let flat = expanded(&kept);
         let got = wire_form(&flat);
         let want = std::fs::read_to_string(dir.join(case["golden"].as_str().unwrap())).unwrap();
         assert!(
