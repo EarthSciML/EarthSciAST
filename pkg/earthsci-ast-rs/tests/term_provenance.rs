@@ -13,7 +13,8 @@
 //! * the serde form of [`TermOrigin`] is the untagged corpus form.
 
 use earthsci_ast::{
-    Contribution, Expr, FlattenedSystem, TermOrigin, evaluate, flatten, free_variables, load_path,
+    Contribution, Expr, FlattenedSystem, TermOrigin, evaluate_with_operators, flatten,
+    free_variables, load_path,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -146,10 +147,11 @@ fn check_invariant(
             .map(|n| (n.clone(), sample(n, salt)))
             .collect();
         bindings.insert("t".to_string(), 0.75);
-        let got = evaluate(&body, &bindings).ok()?;
+        let ops = flat.operators();
+        let got = evaluate_with_operators(&body, &bindings, &ops).ok()?;
         let values: Vec<f64> = parts
             .iter()
-            .map(|p| evaluate(p, &bindings).ok())
+            .map(|p| evaluate_with_operators(p, &bindings, &ops).ok())
             .collect::<Option<_>>()?;
         let fold = values[1..].iter().fold(values[0], |acc, v| acc + v);
         assert_eq!(

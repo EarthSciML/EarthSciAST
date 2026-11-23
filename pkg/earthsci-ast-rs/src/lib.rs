@@ -262,7 +262,7 @@ pub use data_output::{
     parse_cell_key, plan_dimension_coordinates,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use expression::evaluate;
+pub use expression::{evaluate, evaluate_with_operators};
 pub use expression::{contains, free_parameters, free_variables, simplify};
 pub use flatten::{
     Contribution, DimensionPromotionRecord, FlattenError, FlattenMetadata, FlattenedSystem,

@@ -164,6 +164,19 @@ fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
 /// assert!((result - 3.14).abs() < 1e-10);
 /// ```
 pub fn evaluate(expr: &Expr, bindings: &HashMap<String, f64>) -> Result<f64, Vec<String>> {
+    evaluate_with_operators(expr, bindings, &crate::operator_refs::OperatorRegistry::default())
+}
+
+/// [`evaluate`] of an expression that may hold operator references
+/// (esm-spec §9.6.4), each resolved against `operators` (a flattened
+/// system's [`crate::FlattenedSystem::operators`], or a component's
+/// [`crate::EsmFile::component_operators`]) and evaluated as a call of the
+/// instance it names, never expanded.
+pub fn evaluate_with_operators(
+    expr: &Expr,
+    bindings: &HashMap<String, f64>,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> Result<f64, Vec<String>> {
     let mut unbound: Vec<String> = Vec::new();
     collect_unbound(expr, bindings, &mut unbound);
     if !unbound.is_empty() {
@@ -173,7 +186,8 @@ pub fn evaluate(expr: &Expr, bindings: &HashMap<String, f64>) -> Result<f64, Vec
     names.sort();
     let values: Vec<f64> = names.iter().map(|n| bindings[n]).collect();
     let t = bindings.get("t").copied().unwrap_or(0.0);
-    crate::simulate_array::eval_scalar_expression(expr, &values, &names, t)
+    let ops = crate::operator_refs::Instances::new(operators.clone());
+    crate::simulate_array::eval_scalar_expression_in(expr, &values, &names, t, &ops)
         .map_err(|e| vec![e.to_string()])
 }
 

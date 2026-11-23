@@ -1341,7 +1341,7 @@ fn classify_model(
     // (2)+(2b) Infer state shapes from every equation usage, seeding
     // declared array shapes where the index-usage inference left an
     // array state scalar.
-    let shape_map = infer_state_shapes(model, &state_vars, index_sets, any_index)?;
+    let shape_map = infer_state_shapes(model, &state_vars, index_sets, any_index, ops)?;
 
     // (3) Partition state variables into integrated / eliminated /
     // held-at-ic.
@@ -2512,9 +2512,11 @@ fn infer_state_shapes(
     state_vars: &[&String],
     index_sets: &HashMap<String, IndexSet>,
     any_index: bool,
+    ops: &Instances,
 ) -> Result<HashMap<String, Vec<usize>>, CompileError> {
-    let mut shape_map = if any_index {
-        infer_shapes(state_vars, &model.equations)?
+    // An `index` may sit in an operator reference's body.
+    let mut shape_map = if any_index || !ops.registry().is_empty() {
+        infer_shapes(state_vars, &model.equations, ops)?
     } else {
         state_vars
             .iter()
@@ -5615,7 +5617,9 @@ pub(super) fn extract_algebraic_faq(lhs: &Expr, rhs: &Expr) -> Option<AlgebraicA
 pub(super) fn infer_shapes(
     state_vars: &[&String],
     equations: &[crate::types::Equation],
+    ops: &Instances,
 ) -> Result<HashMap<String, Vec<usize>>, CompileError> {
+    let mut memo = IndexBoundsMemo::new();
     let state_set: HashSet<&str> = state_vars.iter().map(|s| s.as_str()).collect();
 
     // Pass 1: LHS only — these are the authoritative (pinned) shapes.
@@ -5631,6 +5635,8 @@ pub(super) fn infer_shapes(
             per_var_max: &mut per_var_max,
             seen_indexed: &mut seen_indexed,
             skip_shape_update: &skip_none,
+            ops,
+            memo: &mut memo,
         };
         for eq in equations {
             walk.walk(&eq.lhs, &no_loops);
@@ -5647,6 +5653,8 @@ pub(super) fn infer_shapes(
             per_var_max: &mut per_var_max,
             seen_indexed: &mut seen_indexed,
             skip_shape_update: &lhs_pinned,
+            ops,
+            memo: &mut memo,
         };
         for eq in equations {
             walk.walk(&eq.rhs, &no_loops);
@@ -5707,12 +5715,15 @@ fn infer_unsized_forcing_shapes(
     let no_loops: HashMap<String, (i64, i64)> = HashMap::new();
     let mut ranks: HashMap<String, HashSet<usize>> = HashMap::new();
     {
+        let mut memo = IndexBoundsMemo::new();
         let mut walk = ShapeWalk {
             states: &unsized_,
             per_var_min: &mut per_var_min,
             per_var_max: &mut per_var_max,
             seen_indexed: &mut seen_indexed,
             skip_shape_update: &skip_none,
+            ops: Instances::empty(),
+            memo: &mut memo,
         };
         for eq in equations {
             walk.walk(&eq.lhs, &no_loops);
@@ -5764,9 +5775,106 @@ pub(super) struct ShapeWalk<'a> {
     per_var_max: &'a mut HashMap<String, Vec<i64>>,
     seen_indexed: &'a mut HashSet<String>,
     skip_shape_update: &'a HashSet<String>,
+    /// The operator instances the references walked name.
+    ops: &'a Instances,
+    /// Each instance body's index bounds per parameter, by instance and the
+    /// bounds its parameters take as subscripts ([`IndexBoundsMemo`]).
+    memo: &'a mut IndexBoundsMemo,
 }
 
+/// What [`ShapeWalk`] learns from one instance body, analysed once per
+/// instance and per the bounds its parameters take as subscripts: for each
+/// parameter indexed in the body, the lowest and highest subscript of each
+/// axis, and the parameters indexed at all.
+type ParamIndexBounds = (
+    HashMap<String, Vec<i64>>,
+    HashMap<String, Vec<i64>>,
+    HashSet<String>,
+);
+
+/// [`ParamIndexBounds`] per (instance address, parameter subscript bounds).
+pub(super) type IndexBoundsMemo = HashMap<(usize, Vec<(i64, i64)>), Rc<ParamIndexBounds>>;
+
 impl ShapeWalk<'_> {
+    /// The index bounds an operator reference's body gives the variables its
+    /// bindings name (esm-spec §9.6.4): the body is analysed once per
+    /// instance and per the bounds its parameters take as subscripts, with
+    /// each parameter standing for its binding, and a parameter's bounds
+    /// are merged into the state its binding names.
+    fn reference(&mut self, node: &ExpressionNode, loop_ranges: &HashMap<String, (i64, i64)>) {
+        let Some(r) = crate::operator_refs::reference_node(node) else {
+            return;
+        };
+        let Ok(inst) = self.ops.instance(&r) else {
+            return;
+        };
+        let mut key = Vec::with_capacity(inst.definition.params.len());
+        let mut param_ranges: HashMap<String, (i64, i64)> = HashMap::new();
+        for p in &inst.definition.params {
+            let rg = r
+                .binding(p)
+                .map(|b| evaluate_index_range(b, loop_ranges))
+                .unwrap_or((0, 0));
+            key.push(rg);
+            param_ranges.insert(p.clone(), rg);
+        }
+        let key = (std::sync::Arc::as_ptr(&inst) as usize, key);
+        let summary = match self.memo.get(&key) {
+            Some(s) => Rc::clone(s),
+            None => {
+                let params: HashSet<&str> =
+                    inst.definition.params.iter().map(String::as_str).collect();
+                let (mut mn, mut mx, mut seen) = Default::default();
+                let none = HashSet::new();
+                {
+                    let mut w = ShapeWalk {
+                        states: &params,
+                        per_var_min: &mut mn,
+                        per_var_max: &mut mx,
+                        seen_indexed: &mut seen,
+                        skip_shape_update: &none,
+                        ops: self.ops,
+                        memo: &mut *self.memo,
+                    };
+                    w.walk(&inst.body, &param_ranges);
+                }
+                let s = Rc::new((mn, mx, seen));
+                self.memo.insert(key, Rc::clone(&s));
+                s
+            }
+        };
+        let (mn, mx, seen) = &*summary;
+        for p in seen {
+            let Some(Expr::Variable(var)) = r.binding(p) else {
+                continue;
+            };
+            if !self.states.contains(var.as_str()) {
+                continue;
+            }
+            self.seen_indexed.insert(var.clone());
+            if self.skip_shape_update.contains(var) {
+                continue;
+            }
+            let (Some(lo), Some(hi)) = (mn.get(p), mx.get(p)) else {
+                continue;
+            };
+            let cur_min = self.per_var_min.entry(var.clone()).or_default();
+            if cur_min.len() < lo.len() {
+                cur_min.resize(lo.len(), i64::MAX);
+            }
+            for (d, v) in lo.iter().enumerate() {
+                cur_min[d] = cur_min[d].min(*v);
+            }
+            let cur_max = self.per_var_max.entry(var.clone()).or_default();
+            if cur_max.len() < hi.len() {
+                cur_max.resize(hi.len(), i64::MIN);
+            }
+            for (d, v) in hi.iter().enumerate() {
+                cur_max[d] = cur_max[d].max(*v);
+            }
+        }
+    }
+
     /// Walk an expression tree collecting per-variable index bounds for shape
     /// inference. `loop_ranges` carries the concrete bounds of the enclosing
     /// aggregate loop symbols.
@@ -5774,6 +5882,9 @@ impl ShapeWalk<'_> {
         let Expr::Operator(node) = expr else {
             return;
         };
+        if node.op == crate::operator_refs::APPLY_OP {
+            self.reference(node, loop_ranges);
+        }
         if node.op == "index"
             && let Some(Expr::Variable(var)) = node.args.first()
             && self.states.contains(var.as_str())

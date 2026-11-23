@@ -459,8 +459,30 @@ pub(crate) fn eval_scalar_expression(
     param_names: &[String],
     t: f64,
 ) -> Result<f64, CompileError> {
-    check_scalar_evaluable(expr)?;
-    let value = eval_expression(expr, &HashMap::new(), params, param_names, t)?;
+    eval_scalar_expression_in(expr, params, param_names, t, Instances::empty())
+}
+
+/// [`eval_scalar_expression`] with the operator instances the references in
+/// `expr` name.
+pub(crate) fn eval_scalar_expression_in(
+    expr: &Expr,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+    ops: &Instances,
+) -> Result<f64, CompileError> {
+    check_scalar_evaluable_in(expr, ops)?;
+    let inputs = ArrMap::default();
+    let value = StandaloneScope {
+        inputs: &inputs,
+        params,
+        param_names,
+        t,
+        derived_extents: crate::faq::empty_derived_extents(),
+        const_arrays: ConstArrayScope::empty(),
+        ops,
+    }
+    .eval_fast(expr)?;
     value
         .as_scalar()
         .ok_or_else(|| CompileError::InterpreterBuildError {
@@ -2823,21 +2845,9 @@ fn expr_reads_self(expr: &Expr, name: &str) -> bool {
     if node.op == "index" && matches!(node.args.first(), Some(Expr::Variable(v)) if v == name) {
         return true;
     }
-    node.args.iter().any(|a| expr_reads_self(a, name))
-        || [
-            node.expr.as_deref(),
-            node.filter.as_deref(),
-            node.key.as_deref(),
-            node.lower.as_deref(),
-            node.upper.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|c| expr_reads_self(c, name))
-        || node
-            .values
-            .as_ref()
-            .is_some_and(|vs| vs.iter().any(|v| expr_reads_self(v, name)))
+    // Every expression child, an operator reference's bindings included: a
+    // binding is read where the definition's body reads its parameter.
+    node.any_child(&mut |c| expr_reads_self(c, name))
 }
 
 /// The output-index box of the aggregate currently being evaluated: the index
