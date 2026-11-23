@@ -263,24 +263,33 @@ mod tests {
         )
     }
 
-    /// Every model's equations (subsystems included) with the surviving
-    /// template references expanded (the loaded form keeps them, esm-spec
-    /// §9.6.4 Option B).
-    fn expanded_equations(file: &crate::EsmFile) -> String {
-        let mut doc: serde_json::Value =
-            serde_json::from_str(&crate::to_json(file).unwrap()).unwrap();
-        crate::lower_expression_templates::expand(&mut doc).expect("expand");
-        fn eqs(m: &serde_json::Value, out: &mut String) {
-            out.push_str(&m["equations"].to_string());
-            if let Some(subs) = m.get("subsystems").and_then(|v| v.as_object()) {
-                subs.values().for_each(|s| eqs(s, out));
+    /// Every model's equations (subsystems included), as written, and every
+    /// operator reference in them that its top-level component's registry
+    /// does not resolve, transitively through the bodies (the loaded form
+    /// keeps references, esm-spec §9.6.4 rule 1; an import resolved means
+    /// each one resolves).
+    fn equations_and_unresolved(file: &crate::EsmFile) -> (String, Vec<String>) {
+        use crate::types::HasSubsystems;
+        fn eqs(m: &crate::Model, out: &mut Vec<crate::Expr>) {
+            out.extend(m.equations.iter().flat_map(|e| [e.lhs.clone(), e.rhs.clone()]));
+            for (_, sub) in m.inline_subsystems() {
+                eqs(sub, out);
             }
         }
-        let mut out = String::new();
-        if let Some(models) = doc["models"].as_object() {
-            models.values().for_each(|m| eqs(m, &mut out));
+        let mut json = String::new();
+        let mut unresolved = Vec::new();
+        for (name, model) in file.models.iter().flatten() {
+            let registry = file.component_operators(&format!("models.{name}"));
+            let mut exprs = Vec::new();
+            eqs(model, &mut exprs);
+            json.push_str(&serde_json::to_string(&exprs).unwrap());
+            for n in registry.reachable(exprs.iter()) {
+                if registry.get(&n).is_none() {
+                    unresolved.push(n);
+                }
+            }
         }
-        out
+        (json, unresolved)
     }
 
     fn load_elsewhere(text: &str) -> Result<crate::EsmFile, String> {
@@ -308,8 +317,8 @@ mod tests {
         for lib in ["a", "a_dot", "a_std"] {
             let file = load_elsewhere(&consumer(&format!("esm:std/{lib}.esm"), "quad"))
                 .unwrap_or_else(|e| panic!("{lib}: {e}"));
-            let json = expanded_equations(&file);
-            assert!(!json.contains("apply_operator"), "{lib}: {json}");
+            let (json, unresolved) = equations_and_unresolved(&file);
+            assert!(json.contains("apply_operator") && unresolved.is_empty(), "{lib}: {json} {unresolved:?}");
         }
         let e = load_elsewhere(&consumer("esm:std/up.esm", "quad")).unwrap_err();
         assert!(e.contains("operator_import_unresolved"), "{e}");
@@ -346,8 +355,8 @@ mod tests {
         ] {
             let text = format!(r#"{{"esm": "2.0.0", "metadata": {{"name": "mount"}}, {mount}}}"#);
             let file = load_elsewhere(&text).unwrap_or_else(|e| panic!("{mount}: {e}"));
-            let json = expanded_equations(&file);
-            assert!(!json.contains("apply_operator"), "{json}");
+            let (json, unresolved) = equations_and_unresolved(&file);
+            assert!(unresolved.is_empty(), "{json} {unresolved:?}");
             assert!(json.contains("\"u\""), "{json}");
         }
     }

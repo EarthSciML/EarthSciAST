@@ -136,29 +136,28 @@ fn assert_lossless_round_trip(name: &str, fixture: &str) -> EsmFile {
 }
 
 /// [`assert_lossless_round_trip`] for a fixture that imports standard-library
-/// templates. `expression_template_imports` is consumed at load and every
-/// call site expands into the imported body (esm-spec §9.7.6), in all five
-/// bindings, so the saved document differs from the original exactly there:
-/// the imports block is gone and each `apply_expression_template` node is its
-/// expansion. Everything else must round-trip exactly.
+/// operators. `operator_imports` is consumed at load (esm-spec §9.7.6), and
+/// every reference survives as written (§9.6.4 rule 1), so the saved document
+/// differs from the original exactly there: each importing component's
+/// imports block is gone and its `operators` block (the definitions its
+/// references name, rule 5) is written in its place. Everything else must
+/// round-trip exactly.
 fn assert_round_trip_consuming_imports(name: &str, fixture: &str) {
-    fn call_sites(v: &Value, path: &str, out: &mut Vec<String>) {
+    fn call_names(v: &Value, out: &mut Vec<String>) {
         match v {
             Value::Object(m) => {
-                if m.get("op").and_then(Value::as_str) == Some("apply_operator") {
-                    out.push(path.to_string());
-                    return;
+                if m.get("op").and_then(Value::as_str) == Some("apply_operator")
+                    && let Some(n) = m.get("name").and_then(Value::as_str)
+                {
+                    out.push(n.to_string());
                 }
                 for (k, x) in m {
-                    let k = k.replace('~', "~0").replace('/', "~1");
-                    call_sites(x, &format!("{path}/{k}"), out);
+                    if k != "operators" {
+                        call_names(x, out);
+                    }
                 }
             }
-            Value::Array(xs) => {
-                for (i, x) in xs.iter().enumerate() {
-                    call_sites(x, &format!("{path}/{i}"), out);
-                }
-            }
+            Value::Array(xs) => xs.iter().for_each(|x| call_names(x, out)),
             _ => {}
         }
     }
@@ -173,36 +172,39 @@ fn assert_round_trip_consuming_imports(name: &str, fixture: &str) {
     let round_tripped: Value = serde_json::from_str(&serialized)
         .unwrap_or_else(|e| panic!("{name}: serialized output is not JSON: {e}"));
 
-    let mut sites = Vec::new();
-    call_sites(&original, "", &mut sites);
-    assert!(!sites.is_empty(), "{name}: no template call site");
     let mut expected = original.clone();
-    for site in &sites {
-        let expansion = round_tripped
-            .pointer(site)
-            .unwrap_or_else(|| panic!("{name}: call site {site} missing after save"));
-        let mut inner = Vec::new();
-        call_sites(expansion, "", &mut inner);
-        assert!(inner.is_empty(), "{name}: {site} saved an unexpanded call");
-        *expected.pointer_mut(site).unwrap() = expansion.clone();
-    }
     // The §9.6.4 rule-8 stamp is a floor of esm 2.4.0 on a document carrying
-    // template machinery (esm-spec §9.6.5).
+    // operator machinery (esm-spec §9.6.5).
     if round_tripped["esm"] == "2.4.0" {
         expected["esm"] = round_tripped["esm"].clone();
     }
+    let mut any_call = false;
     let models = expected["models"].as_object_mut().expect("models");
-    for m in models.values_mut() {
-        if let Some(m) = m.as_object_mut() {
-            m.remove("operator_imports");
+    for (mname, m) in models.iter_mut() {
+        let Some(m) = m.as_object_mut() else { continue };
+        m.remove("operator_imports");
+        let mut calls = Vec::new();
+        call_names(&Value::Object(m.clone()), &mut calls);
+        if calls.is_empty() {
+            continue;
         }
+        any_call = true;
+        let block = round_tripped["models"][mname]["operators"].clone();
+        for c in &calls {
+            assert!(
+                block.get(c).is_some(),
+                "{name}: models.{mname} references '{c}', which its saved operators block lacks"
+            );
+        }
+        m.insert("operators".to_string(), block);
     }
+    assert!(any_call, "{name}: no operator reference");
 
     let mut diffs = Vec::new();
     value_diff("", &expected, &round_tripped, &mut diffs);
     assert!(
         diffs.is_empty(),
-        "{name}: load -> save lost or altered information outside the template call sites:\n  {}",
+        "{name}: load -> save lost or altered information outside the operators blocks:\n  {}",
         diffs.join("\n  ")
     );
 }
