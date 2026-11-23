@@ -37,6 +37,57 @@ function fragment_problem(; array = false, n = 4, stencil = false)
     return esm_problem(doc, (0.0, 1.0); runtime_array_parameters = array)
 end
 
+# A model over `cell` (size `N`) whose states each get one equation
+# `D(name[i]) = rhs`, with constant arrays `arrays` (name => (values, set)).
+function cell_problem(eqs::Vector; N = 4, sets = Dict{String, Int}(), arrays = Dict())
+    op(name, args...) = Dict("op" => name, "args" => Any[args...])
+    faq(expr) = merge(
+        op("faq"), Dict(
+            "output_idx" => ["i"], "ranges" => Dict("i" => Dict("from" => "cell")),
+            "expr" => expr
+        )
+    )
+    vars = Dict{String, Any}("rate" => Dict{String, Any}("type" => "parameter", "default" => 2.0))
+    equations = Any[]
+    for (name, rhs) in eqs
+        vars[name] = Dict{String, Any}("type" => "unknown", "default" => 1.0, "shape" => ["cell"])
+        lhs = faq(merge(op("D", op("index", name, "i")), Dict("wrt" => "t")))
+        push!(equations, Dict("lhs" => lhs, "rhs" => faq(rhs)))
+    end
+    for (name, (values, set)) in arrays
+        vars[name] = Dict{String, Any}("type" => "parameter", "default" => values, "shape" => [set])
+    end
+    index_sets = Dict{String, Any}("cell" => Dict("kind" => "interval", "size" => N))
+    for (name, n) in sets
+        index_sets[name] = Dict("kind" => "interval", "size" => n)
+    end
+    doc = Dict(
+        "esm" => "2.0.0", "metadata" => Dict("name" => "Fragment test"),
+        "index_sets" => index_sets,
+        "models" => Dict("M" => Dict("variables" => vars, "equations" => equations))
+    )
+    return esm_problem(doc, (0.0, 1.0))
+end
+
+_op(name, args...) = Dict("op" => name, "args" => Any[args...])
+_ix(name, sub) = _op("index", name, sub)
+_count_ops(mod) = count("stablehlo.", repr(mod))
+balanced_sum(xs, lo = 1, hi = length(xs)) = lo == hi ? xs[lo] :
+    balanced_sum(xs, lo, (lo + hi) ÷ 2) + balanced_sum(xs, (lo + hi) ÷ 2 + 1, hi)
+
+# The native lane program's derivative at `cells`, the reference for a lane
+# fragment.
+function native_lanes(prog, cells::Matrix{Int32}, u)
+    lp = lanes(prog, :cells, ["cell"])
+    L = size(cells, 2)
+    du = zeros(L)
+    rhs!(
+        du, lp, rhs_workspace(lp), u, Float64[], parameter_vector(prog), 0.5,
+        default_forcing_set(lp), cells, L
+    )
+    return du
+end
+
 function fragment_steps(fragment, u, aux, p, t, maxiter)
     i = maxiter - maxiter
     Reactant.@trace while i < maxiter
@@ -176,6 +227,148 @@ end
         t, dt = ConcreteRNumber(0.0), ConcreteRNumber(0.5)
         run = Reactant.@compile f(u, z, p, t, (), dt)
         @test Array(only(run(u, z, p, t, (), dt))) ≈ Float32[100.125, 200.125, 300.125]
+    end
+
+
+    @testset "lane gathers on bounded constant arrays" begin
+        # A document cannot declare a constant array's boundary policy, so the
+        # lane gather's source is replaced with a bounded copy that reads
+        # `data[i + 1]`. The fragment must trace with no `:error` dimension.
+        data = [10.0, 20.0, 30.0, 40.0]
+        prob = cell_problem(
+            ["u" => _op("+", _op("*", "rate", _ix("u", "i")), _ix("data", "i"))];
+            arrays = Dict("data" => (data, "cell"))
+        )
+        prog = rhs_program(prob)
+        p, t = ConcreteRArray(parameter_vector(prog)), ConcreteRNumber(0.5)
+        aux = ConcreteRArray(Float64[])
+        cells = Int32[4 1 2]
+        u = [1.0, 2.0, 3.0]
+        ESA = EarthSciAST
+        for (policy, expected) in ((:periodic, [10.0, 20.0, 30.0]), (:clamp, [40.0, 20.0, 30.0]))
+            ir = operator_ir(prog; target = Lanes(:cells, ["cell"], 3))
+            g = only(ir.extra[1])
+            sub = ESA.OpExpr("+", ESA.ASTExpr[ESA.VarExpr(first(only(g.vars))), ESA.IntExpr(1)])
+            ir.extra[1][1] = ESA._LaneGather(
+                g.buf, ESA.BoundedConstArray(copy(data), (policy,)), g.dims, g.name, [sub],
+                g.vars, g.consts
+            )
+            # The host evaluator of the same read under the same policy.
+            f!, u0, hp, _, vmap = ESA.Internal.build(
+                Dict(
+                    "esm" => "2.0.0", "metadata" => Dict("name" => "bounded"),
+                    "index_sets" => Dict("cell" => Dict("kind" => "interval", "size" => 4)),
+                    "models" => Dict(
+                        "M" => Dict(
+                            "variables" => Dict(
+                                "y" => Dict("type" => "unknown", "default" => 0.0, "shape" => ["cell"]),
+                                "data" => Dict("type" => "parameter", "default" => data, "shape" => ["cell"])
+                            ),
+                            "equations" => [
+                                Dict(
+                                    "lhs" => merge(
+                                        _op("faq"), Dict(
+                                            "output_idx" => ["i"], "ranges" => Dict("i" => Dict("from" => "cell")),
+                                            "expr" => merge(_op("D", _ix("y", "i")), Dict("wrt" => "t"))
+                                        )
+                                    ),
+                                    "rhs" => merge(
+                                        _op("faq"), Dict(
+                                            "output_idx" => ["i"], "ranges" => Dict("i" => Dict("from" => "cell")),
+                                            "expr" => _ix("data", _op("+", "i", 1))
+                                        )
+                                    ),
+                                ),
+                            ]
+                        )
+                    )
+                );
+                const_array_boundaries = Dict("M.data" => [policy])
+            )
+            du = similar(u0)
+            f!(du, u0, hp, 0.0)
+            host = [du[vmap["M.y[$c]"]] for c in vec(cells)]
+            @test host == expected
+            fl = emit_fragment(ir)
+            run = Reactant.@compile fl(ConcreteRArray(u), aux, p, t, (), ConcreteRArray(cells))
+            out = Array(run(ConcreteRArray(u), aux, p, t, (), ConcreteRArray(cells)))
+            @test out ≈ 2.0 .* u .+ host
+        end
+    end
+
+    @testset "lane gathers on unbounded constant arrays" begin
+        # The whole-domain build refuses an unguarded read past the edge, so a
+        # lane gather that leaves the range is always one a guard discards. It
+        # reads 0.0 there, as the native lane program does, and the value of
+        # the array inside the range.
+        data = [10.0, 20.0, 30.0, 40.0]
+        rhs = _op(
+            "+", _op("*", "rate", _ix("u", "i")),
+            _op("ifelse", _op("<", "i", 4), _ix("data", _op("+", "i", 1)), 0.0)
+        )
+        prob = cell_problem(["u" => rhs]; arrays = Dict("data" => (data, "cell")))
+        prog = rhs_program(prob)
+        cells = Int32[4 1 3]
+        u = [1.0, 2.0, 3.0]
+        ref = native_lanes(prog, cells, u)
+        @test ref ≈ [2.0, 24.0, 46.0]
+        fl = emit_fragment(operator_ir(prog; target = Lanes(:cells, ["cell"], 3)))
+        p, t = ConcreteRArray(parameter_vector(prog)), ConcreteRNumber(0.5)
+        args = (ConcreteRArray(u), ConcreteRArray(Float64[]), p, t, (), ConcreteRArray(cells))
+        run = Reactant.@compile fl(args...)
+        @test Array(run(args...)) ≈ ref
+
+        @test_throws EarthSciAST.TreeWalkError cell_problem(
+            ["u" => _ix("data", _op("+", "i", 1))]; arrays = Dict("data" => (data, "cell"))
+        )
+    end
+
+    @testset "constant folds stay on the host" begin
+        # Σ_k w[k] * k over a long constant table reads the loop counter, so
+        # the build keeps the loop and the emitter unrolls it. It folds to one
+        # constant under both fold policies instead of one op per entry.
+        K = 200
+        w = collect(range(0.1, 2.0; length = K))
+        sum_k = merge(
+            _op("faq"), Dict(
+                "output_idx" => [], "ranges" => Dict("k" => Dict("from" => "k")),
+                "expr" => _op("*", _ix("w", "k"), "k")
+            )
+        )
+        prob = cell_problem(
+            ["u" => _op("*", _ix("u", "i"), sum_k)];
+            sets = Dict("k" => K), arrays = Dict("w" => (w, "k"))
+        )
+        prog = rhs_program(prob)
+        u0 = [1.0, 2.0, 3.0, 4.0]
+        du = zeros(4)
+        rhs!(du, prog, rhs_workspace(prog), u0, Float64[], parameter_vector(prog), 0.0, default_forcing_set(prog))
+        ir = operator_ir(prog)
+        u, aux = ConcreteRArray(u0), ConcreteRArray(Float64[])
+        p, t = ConcreteRArray(parameter_vector(prog)), ConcreteRNumber(0.0)
+        for fold in (:tree, :reduce)
+            frag = emit_fragment(ir; fold)
+            @test _count_ops(Reactant.@code_hlo optimize = false frag(u, aux, p, t, ())) < 60
+            run = Reactant.@compile frag(u, aux, p, t, ())
+            out = Array(run(u, aux, p, t, ()))
+            @test out ≈ du rtol = 1.0e-13
+            # A tree fold groups the host fold as it groups emitted terms: the
+            # seed, then the terms, split in halves.
+            fold === :tree && @test out == u0 .* balanced_sum([0.0; w .* (1:K)])
+        end
+    end
+
+    @testset "lane scatter drops cells outside the domain" begin
+        prob = cell_problem(["u" => _ix("u", "i"), "v" => _ix("v", "i")])
+        prog = rhs_program(prob)
+        lane = operator_ir(prog; target = Lanes(:cells, ["cell"], 3))
+        full = ConcreteRArray(collect(1.0:8.0))
+        updates = ConcreteRArray([-1.0, -2.0, -3.0, -4.0, -5.0, -6.0])
+        cells = ConcreteRArray(reshape(Int32[2, 5, 0], 1, 3))
+        scattered = Reactant.@compile scatter_lanes(lane, full, updates, cells)
+        # Lane 1 writes cell 2 of u and v; cell 5 would land on v's first cell
+        # and cell 0 on u's last, and both are dropped.
+        @test Array(scattered(lane, full, updates, cells)) == [1.0, -1.0, 3.0, 4.0, 5.0, -4.0, 7.0, 8.0]
     end
 
 end

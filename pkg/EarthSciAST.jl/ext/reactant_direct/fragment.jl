@@ -124,13 +124,22 @@ function _fragment_lane_buffer(ir, name)
     return _LaneBuffer(slot, g.src, forms, last.(g.vars), g.dims, boundary)
 end
 
+# An out-of-range subscript on an `:error` dimension reads 0.0, as the native
+# lane program's pre-gather does (`_lane_gather_value`): pre-gathers are eager,
+# so a read an `ifelse` guards at the domain edge must not fail its lane. A
+# whole-domain build raises E_TREEWALK_CONSTARRAY_OOB for the same read instead.
+_fragment_lane_masked(plan::_LaneBuffer) = any(==(:error), plan.boundary)
+
 function _fragment_lane_offsets(cells, plan::_LaneBuffer)
-    offsets = zeros(Int32, size(cells, 2))
-    valid = trues(size(cells, 2))
+    # Derive every vector from `cells` so it is traced even when no dimension
+    # needs a mask and every affine coefficient is zero.
+    zero = cells[1, :] .* Int32(0)
+    offsets = zero
+    valid = zero .== Int32(0)
     stride = 1
     for d in eachindex(plan.dims)
         form = plan.forms[d]
-        idx = fill(Int32(form.c0 - 1), size(cells, 2))
+        idx = zero .+ Int32(form.c0 - 1)
         for (c, row) in zip(form.c, plan.rows)
             iszero(c) || (idx = idx .+ Int32(c) .* cells[row, :])
         end
@@ -175,6 +184,7 @@ function _fragment_buffer(::Type{T}, spec::_LaneBuffer, forcing, cells) where {T
         location = _de_loc()
     )
     out = _de_cast(_DEVal(_de_res(op), L), S, T)
+    _fragment_lane_masked(spec) || return _de_traced(out, T)
     zero_val = _hlo.constant(;
         output = _de_ty(L, T), value = _MLIR.IR.DenseElementsAttribute(zeros(T, L)),
         location = _de_loc()
@@ -327,26 +337,38 @@ function _fragment_kernel(f::_StableHLOFragment{T}, u, aux, p, t, forcing, dt) w
 end
 
 
-function _fragment_lane_positions(cells, plans)
+# Positions of every lane element in the whole-domain `u`, lane-major within
+# each block. With `width`, a lane whose cell lies outside the domain gets the
+# out-of-range position `width + 1`, which a scatter drops.
+function _fragment_lane_positions(cells, plans, width = nothing)
     capacity = size(cells, 2)
-    positions = map(plans) do (strides, offsets)
-        base = zeros(Int32, capacity)
+    positions = map(plans) do (strides, extents, offsets)
+        base = cells[1, :] .* Int32(0)
+        valid = base .== Int32(0)
         for (row, stride) in enumerate(strides)
-            base = base .+ (cells[row, :] .- Int32(1)) .* stride
+            c = cells[row, :]
+            base = base .+ (c .- Int32(1)) .* stride
+            valid = valid .& (c .>= Int32(1)) .& (c .<= extents[row])
         end
-        return vec(reshape(base, capacity, 1) .+ reshape(offsets, 1, length(offsets)))
+        pos = reshape(base, capacity, 1) .+ reshape(offsets, 1, length(offsets))
+        if width !== nothing
+            pos = ifelse.(reshape(valid, capacity, 1), pos, Int32(width + 1))
+        end
+        return vec(pos)
     end
     return reduce(vcat, positions)
 end
 
-function _fragment_lane_indices(ir, u, cells)
+function _fragment_lane_indices(ir, u, cells; drop_outside = false)
     target = ir.target
     target isa _E.Lanes || throw(ArgumentError("lane assembly requires Lanes operator IR"))
     size(cells) == (length(target.sets), target.capacity) ||
         throw(DimensionMismatch("cells must follow the lane layout"))
     width, plans = ir.extra[2]
     length(u) == width || throw(DimensionMismatch("u must follow the whole-domain writable layout"))
-    return Reactant.call_with_reactant(_fragment_lane_positions, cells, plans)
+    return Reactant.call_with_reactant(
+        _fragment_lane_positions, cells, plans, drop_outside ? width : nothing
+    )
 end
 
 _fragment_gather_state(u, indices) = u[indices]
@@ -365,7 +387,7 @@ function scatter_lanes(
         ir::_E.OperatorIR, u::TracedRArray{T, 1}, updates::TracedRArray{T, 1},
         cells::TracedRArray{Int32, 2}
     ) where {T}
-    indices = _fragment_lane_indices(ir, u, cells)
+    indices = _fragment_lane_indices(ir, u, cells; drop_outside = true)
     length(indices) == length(updates) || throw(DimensionMismatch("updates must follow the lane layout"))
     return Reactant.call_with_reactant(_fragment_scatter_state, u, updates, indices)
 end

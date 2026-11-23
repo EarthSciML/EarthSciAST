@@ -165,13 +165,15 @@ function _lane_state_index(prog::RhsProgram, layout::LaneLayout)
     axes = layout.sets
     plans = map(layout.u) do lane
         b = blocks[lane.name]
-        strides = Int32[b.strides[findfirst(==(s), b.sets)] for s in axes]
+        axis = [findfirst(==(s), b.sets) for s in axes]
+        strides = Int32[b.strides[d] for d in axis]
+        extents = Int32[length(b.storage[d]) for d in axis]
         dims = [findfirst(==(s), b.sets) for s in lane.sets]
         offsets = Int32[
             b.base + sum(((i[j] - 1) * b.strides[d] for (j, d) in enumerate(dims)); init = 0)
                 for i in CartesianIndices(Tuple(lane.extents))
         ]
-        return (strides, vec(offsets))
+        return (strides, extents, vec(offsets))
     end
     return (prog.layout.n_u, plans)
 end
@@ -244,6 +246,8 @@ function emit_fragment end
 
 Within a Reactant trace, gather the writable blocks of the whole-domain state
 `u` into the lane layout of `ir`. Cell coordinates are 1-based and may repeat.
+`cells` is a traced input, so its range cannot be checked: a lane whose cell
+lies outside the domain reads an unspecified element of `u`.
 """
 function gather_lanes end
 
@@ -252,7 +256,8 @@ function gather_lanes end
 
 Within a Reactant trace, return a fresh whole-domain state with the writable
 lane blocks in `updates` replacing the cells selected by `cells`. The caller
-supplies distinct, in-range cells.
+supplies distinct cells. A lane whose cell lies outside the domain writes
+nothing, so it cannot overwrite another variable's block.
 """
 function scatter_lanes end
 

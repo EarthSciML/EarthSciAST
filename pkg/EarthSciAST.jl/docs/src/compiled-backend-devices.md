@@ -58,8 +58,9 @@ program = Reactant.@compile frag(u, aux, p, t, ())
 - `emit_fragment(ir; eltype = Float32)` evaluates in single precision and
   takes Float32 state and auxiliary tensors. Time, scalar parameters and
   floating-point forcing are converted on read. The default `fold = :tree`
-  emits balanced binary folds. Choose `fold = :reduce` for the legacy
-  emitter's reduction policy.
+  emits balanced binary folds, and a Float64 fragment still evaluates
+  subtrees of constants on the host, grouped the same way. Choose
+  `fold = :reduce` for the legacy emitter's reduction policy.
 - `Tile(dec; owned, storage)` uses the native tile boxes. The output uses the
   tile storage layout, with zeros outside owned rows. `halo(ir)` reports the
   state reach of that tile. Pass compact column-major windows in
@@ -77,7 +78,10 @@ program = Reactant.@compile frag(u, aux, p, t, ())
   rows in `sets` order. Duplicate cells can pad evaluations; use distinct
   cells when writing them back with `scatter_lanes`. The fragment
   supports pre-gathered forcing and constant-array subscripts affine in the
-  lane coordinates.
+  lane coordinates. As in the native lane program, such a read outside an
+  array dimension without a `periodic` or `clamp` boundary gives 0.0.
+  Coordinates outside the domain are not checked: `gather_lanes` reads an
+  unspecified element for them and `scatter_lanes` drops their updates.
 - `outputs = KernelOutputs(spec)` takes one `compile_kernels` specification
   and emits a whole-domain output kernel. Pass a traced Float64 `dt` as the
   sixth argument if the spec reads it. The result is a tuple of flat tensors
