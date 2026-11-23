@@ -73,11 +73,14 @@ impl EwRoles {
 
 type CellwiseMap = Rc<HashMap<String, String>>;
 
+/// A definition's parameters and typed body.
+type ParamsBody = Rc<(Vec<String>, Expr)>;
+
 /// The definitions the lift reads references through, each analysed once,
 /// and the registry the cellwise variants it makes are added to.
 pub(crate) struct EwContext<'r> {
     registry: &'r mut IndexMap<String, Value>,
-    bodies: HashMap<String, Option<Rc<(Vec<String>, Expr)>>>,
+    bodies: HashMap<String, Option<ParamsBody>>,
     roles: HashMap<String, Rc<EwRoles>>,
     names: HashMap<String, Rc<HashSet<String>>>,
     cellwise: HashMap<(String, Vec<String>), (String, CellwiseMap)>,
@@ -126,7 +129,7 @@ impl<'r> EwContext<'r> {
     }
 
     /// The parameters and typed body of `name`.
-    fn template(&mut self, name: &str) -> Option<Rc<(Vec<String>, Expr)>> {
+    fn template(&mut self, name: &str) -> Option<ParamsBody> {
         if let Some(t) = self.bodies.get(name) {
             return t.clone();
         }
@@ -589,29 +592,25 @@ fn walk<'a>(
         return;
     }
     match node.op.as_str() {
-        "index" => {
-            if inside {
-                for a in node.args.iter().skip(1) {
-                    walk(ctx, a, bound, true, seen, f);
-                }
+        "index" if inside => {
+            for a in node.args.iter().skip(1) {
+                walk(ctx, a, bound, true, seen, f);
             }
         }
-        "const" | "reshape" => {
-            if inside && is_anonymous_array(node) {
-                f(Seen::Anonymous { node });
+        "const" | "reshape" if inside && is_anonymous_array(node) => {
+            f(Seen::Anonymous { node });
+        }
+        "index" | "const" | "reshape" => {}
+        _ if is_array_producer_op(node) && inside && is_reduction(node) => {
+            let inner = reduction_bound(node, bound);
+            if let Some(b) = &node.expr {
+                walk(ctx, b, &inner, true, seen, f);
+            }
+            if let Some(b) = &node.filter {
+                walk(ctx, b, &inner, true, seen, f);
             }
         }
-        _ if is_array_producer_op(node) => {
-            if inside && is_reduction(node) {
-                let inner = reduction_bound(node, bound);
-                if let Some(b) = &node.expr {
-                    walk(ctx, b, &inner, true, seen, f);
-                }
-                if let Some(b) = &node.filter {
-                    walk(ctx, b, &inner, true, seen, f);
-                }
-            }
-        }
+        _ if is_array_producer_op(node) => {}
         _ if crate::op_registry::is_elementwise_node(node) => {
             for a in &node.args {
                 walk(ctx, a, bound, inside, seen, f);
