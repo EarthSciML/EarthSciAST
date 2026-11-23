@@ -171,9 +171,7 @@ pub(crate) fn prepare(file: &EsmFile) -> FlatRegistry {
 /// Per definition of `reg`, its parameters that its expansion never reads as
 /// an operand: not an operand of its body, and passed on to nested
 /// references only as their such parameters.
-fn field_params(
-    reg: &crate::operator_refs::OperatorRegistry,
-) -> HashMap<String, HashSet<String>> {
+fn field_params(reg: &crate::operator_refs::OperatorRegistry) -> HashMap<String, HashSet<String>> {
     fn of(
         reg: &crate::operator_refs::OperatorRegistry,
         name: &str,

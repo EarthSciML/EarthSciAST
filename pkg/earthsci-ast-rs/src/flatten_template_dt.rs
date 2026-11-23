@@ -366,7 +366,13 @@ impl<'a> DtState<'a> {
     /// when `None`), and every reference re-pointed at the entry its instance
     /// resolves to, with the `p_dt` bindings that entry reads. `acc` collects
     /// the parameters of the body whose derivatives the result reads.
-    fn rewrite(&mut self, e: &Expr, ctx: Option<&DtBody>, acc: &mut DtAcc, active: &mut Vec<String>) -> Expr {
+    fn rewrite(
+        &mut self,
+        e: &Expr,
+        ctx: Option<&DtBody>,
+        acc: &mut DtAcc,
+        active: &mut Vec<String>,
+    ) -> Expr {
         let Expr::Operator(node) = e else {
             return e.clone();
         };
@@ -389,7 +395,11 @@ impl<'a> DtState<'a> {
             changed |= r != *c;
             r
         });
-        if changed { Expr::operator(out) } else { e.clone() }
+        if changed {
+            Expr::operator(out)
+        } else {
+            e.clone()
+        }
     }
 
     /// A reference's bindings, each through `f`; `None` when none changed.
@@ -493,7 +503,11 @@ impl<'a> DtState<'a> {
     /// The body of `tpl` with its structural `D`s resolved in the instance
     /// `key`, once per definition and `wrt` literal; `None` while it is being
     /// resolved.
-    fn resolve(&mut self, tpl: &Rc<DtTemplate>, key: &BTreeMap<String, bool>) -> Option<Rc<DtResult>> {
+    fn resolve(
+        &mut self,
+        tpl: &Rc<DtTemplate>,
+        key: &BTreeMap<String, bool>,
+    ) -> Option<Rc<DtResult>> {
         let k = (tpl.name.clone(), tpl.keystr(key));
         if let Some(r) = self.res.get(&k) {
             return r.clone();
@@ -556,7 +570,13 @@ impl<'a> DtState<'a> {
     /// define it: a parameter of the body is its `p_dt`, a reference is a
     /// reference to its definition's derivative entry, and every other name
     /// or literal resolves as at a call site.
-    fn deriv(&mut self, e: &Expr, ctx: Option<&DtBody>, acc: &mut DtAcc, active: &mut Vec<String>) -> Option<Expr> {
+    fn deriv(
+        &mut self,
+        e: &Expr,
+        ctx: Option<&DtBody>,
+        acc: &mut DtAcc,
+        active: &mut Vec<String>,
+    ) -> Option<Expr> {
         let node = match e {
             Expr::Integer(_) | Expr::Number(_) => return Some(zero()),
             Expr::Variable(name) => {
@@ -709,7 +729,11 @@ impl<'a> DtState<'a> {
             changed |= r != *c;
             r
         });
-        if changed { Expr::operator(out) } else { e.clone() }
+        if changed {
+            Expr::operator(out)
+        } else {
+            e.clone()
+        }
     }
 
     /// The unresolved body of `tpl`: as registered, its references to
@@ -732,7 +756,11 @@ impl<'a> DtState<'a> {
         if node.op == "D" {
             return true;
         }
-        if node.op == APPLY_OP && self.template(node.name.as_deref()).is_some_and(|t| t.dbearing) {
+        if node.op == APPLY_OP
+            && self
+                .template(node.name.as_deref())
+                .is_some_and(|t| t.dbearing)
+        {
             return true;
         }
         let mut found = false;
@@ -779,7 +807,9 @@ impl<'a> DtState<'a> {
     /// unrenamed: two instances that resolve alike name the same marks).
     fn canonical(&self, m: &str) -> String {
         let (_, t, k) = &self.marks[m];
-        let r = self.res[&(t.clone(), k.clone())].as_ref().expect("resolved");
+        let r = self.res[&(t.clone(), k.clone())]
+            .as_ref()
+            .expect("resolved");
         let tpl = self.tpl[t].as_ref().expect("a definition");
         let names: Vec<Value> = r
             .needs
@@ -828,7 +858,10 @@ impl<'a> DtState<'a> {
         }
         let mut bytpl: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for m in &reached {
-            bytpl.entry(self.marks[m].1.clone()).or_default().push(m.clone());
+            bytpl
+                .entry(self.marks[m].1.clone())
+                .or_default()
+                .push(m.clone());
         }
         let mut taken: HashSet<String> = self.reg.keys().cloned().collect();
         let fresh = |taken: &mut HashSet<String>, mut n: String| {
@@ -843,7 +876,10 @@ impl<'a> DtState<'a> {
         let mut replaced: HashMap<String, String> = HashMap::new();
         for (t, ms) in &bytpl {
             let of = |k: Kind| -> Vec<String> {
-                ms.iter().filter(|m| self.marks[*m].0 == k).cloned().collect()
+                ms.iter()
+                    .filter(|m| self.marks[*m].0 == k)
+                    .cloned()
+                    .collect()
             };
             let mut res = of(Kind::Res);
             res.sort();
@@ -869,7 +905,10 @@ impl<'a> DtState<'a> {
                 } else {
                     let mut vn: HashMap<String, String> = HashMap::new();
                     for (i, c) in distinct.iter().enumerate() {
-                        vn.insert(c.clone(), fresh(&mut taken, format!("{t}.variant{}", i + 1)));
+                        vn.insert(
+                            c.clone(),
+                            fresh(&mut taken, format!("{t}.variant{}", i + 1)),
+                        );
                     }
                     for c in &distinct {
                         let m = res.iter().find(|x| canon[*x] == *c).expect("a mark");
@@ -922,7 +961,11 @@ impl<'a> DtState<'a> {
             Value::Object(nd)
         };
         let mut out: IndexMap<String, Value> = IndexMap::new();
-        let old: Vec<(String, Value)> = self.reg.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let old: Vec<(String, Value)> = self
+            .reg
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         for (n, decl) in old {
             let v = match replaced.get(&n).cloned() {
                 Some(m) => entry(self, &n, &m),
