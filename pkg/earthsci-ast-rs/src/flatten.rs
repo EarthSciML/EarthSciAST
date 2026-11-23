@@ -662,7 +662,9 @@ pub struct FlattenedSystem {
     /// deduplicated at first occurrence, and a non-deep-equal same-name
     /// collision renamed to `<ComponentPath>.<name>`, one entry per distinct
     /// definition named after its first owner, with the rename propagated
-    /// along the reference DAG. See [`merged_template_registry`].
+    /// along the reference DAG (see `crate::flatten_refs`). Every reference in
+    /// the flattened system resolves against it, and step 3a and the lifts
+    /// add the entries they make (`<name>.ddt`, `<name>.cellwise<k>`, …).
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub template_registry: IndexMap<String, serde_json::Value>,
     /// The provider-served loaded fields this system consumes (esm-spec §8.5):
@@ -961,8 +963,24 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     let record_counts = crate::structural::check_record_axes_at_flatten(file)
         .map_err(FlattenError::RecordsPerSample)?;
 
+    // The merged operator registry (esm-spec §9.6.4 rule 7, §10.7;
+    // esm-libraries-spec §4.7.5 step 4): every component's registry closed
+    // over its bodies' free names, then merged. Computed before collection,
+    // because each component's reference sites take its rewrites as they are
+    // namespaced (see [`crate::flatten_refs`]). A `variable_map` expression
+    // transform's references are owned by the receiving component.
+    let mut flat_reg = crate::flatten_refs::prepare(file);
+    let owned_file;
+    let file = match crate::flatten_refs::own_transform_refs(file, &flat_reg) {
+        Some(f) => {
+            owned_file = f;
+            &owned_file
+        }
+        None => file,
+    };
+
     // Phase 1: collect per-system lowered equations and namespaced variables.
-    let (source_systems, mut per_system) = collect_component_systems(file)?;
+    let (source_systems, mut per_system) = collect_component_systems(file, &flat_reg)?;
 
     // Phase 2 preflight (esm-spec §4.6 / §10.4): every `variable_map` endpoint
     // must name something the collected system carries. Run against the
@@ -1080,10 +1098,10 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         lifted_shapes,
     } = parts;
 
-    // Phase 5f: the MERGED expression-template registry (esm-spec §9.6.4 rule
-    // 7, §10.7). Its bodies are closed, so they read no component name a
-    // coupling rule rewrote. See [`merged_template_registry`].
-    let template_registry = merged_template_registry(file);
+    // Phase 5f: the MERGED operator registry (esm-spec §9.6.4 rule 7,
+    // §10.7), as the phases above left it. Its bodies are closed, so they
+    // read no component name a coupling rule rewrote.
+    let template_registry = std::mem::take(&mut flat_reg.registry);
 
     let equation_lifted: Vec<bool> = if equations.iter().any(|fe| fe.lifted) {
         equations.iter().map(|fe| fe.lifted).collect()
@@ -1618,80 +1636,6 @@ impl ShapeInference<'_, '_> {
     }
 }
 
-/// The MERGED expression-template registry of the flattened representation
-/// (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 steps 2 and 4).
-///
-/// Union of the per-component registries [captured at load]
-/// (`EsmFile::component_templates`), in this order:
-///
-/// 1. **Close, THEN union.** Every component's carried bodies (models and
-///    reaction systems alike) are closed first ([`close_template_bodies`]):
-///    a name a body reads free becomes an explicit trailing parameter, which
-///    each reference binds to the same name in its own site's scope. A body's
-///    free names are read in the scope of the reference's site (a subsystem's
-///    reference reads the subsystem's names), so one definition can serve
-///    several subsystems and several components.
-/// 2. **Deep-equal dedup at first occurrence.**
-/// 3. **Collision rename** to `<ComponentPath>.<name>`, one entry per distinct
-///    definition, named after its first owner, propagated along the reference
-///    DAG ([`crate::lower_expression_templates::merge_flat_registry`]) so no
-///    surviving body holds a reference the merged registry cannot resolve.
-///
-/// `match` rules are excluded: only match-less templates are referenceable
-/// (§9.6.2), so only they can be merged.
-///
-/// Components are walked in DOCUMENT order (models in file order, then reaction
-/// systems), which is what step 4's ordering rule requires and what makes
-/// "first occurrence" mean the first occurrence in the file.
-///
-/// Rust's typed build path expands every surviving reference at load (RFC
-/// out-of-line-expression-templates §7.7), so no equation reaching here carries
-/// an `apply_expression_template` node and neither the rename nor the added
-/// bindings have a COMPONENT reference site left to rewrite — step 4's
-/// "Applicability" paragraph says exactly this. The registry is still carried,
-/// closed, because the field is normative and a consumer must be able to
-/// reconstitute the reference-preserving document from the flattened form
-/// alone.
-pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::Value> {
-    let Some(component_templates) = &file.component_templates else {
-        return IndexMap::new();
-    };
-
-    // Document order: models as the file declares them, then reaction systems,
-    // then any captured component the typed file no longer holds.
-    let mut ordered: Vec<String> = Vec::new();
-    if let Some(models) = &file.models {
-        ordered.extend(models.keys().map(|n| format!("models.{n}")));
-    }
-    if let Some(rs) = &file.reaction_systems {
-        ordered.extend(rs.keys().map(|n| format!("reaction_systems.{n}")));
-    }
-    for key in component_templates.keys() {
-        if !ordered.contains(key) {
-            ordered.push(key.clone());
-        }
-    }
-
-    // (component path, its closed match-less block), in document order.
-    let mut blocks: Vec<(String, serde_json::Map<String, serde_json::Value>)> = Vec::new();
-    for compkey in &ordered {
-        let Some(block) = component_templates.get(compkey).and_then(|v| v.as_object()) else {
-            continue;
-        };
-        let cname = compkey.split_once('.').map_or(compkey.as_str(), |(_, c)| c);
-        let (closed, _added) = close_template_bodies(block);
-        let closed = closed
-            .into_iter()
-            // match rules are not referenceable, so not merged
-            .filter(|(_, decl)| decl.get("match").is_none_or(|m| m.is_null()))
-            .collect();
-        blocks.push((cname.to_string(), closed));
-    }
-
-    let (merged, _rename) = crate::lower_expression_templates::merge_flat_registry(&blocks);
-    merged.into_iter().collect()
-}
-
 /// `block` (a component's carried template registry) with every match-less
 /// body's free names made EXPLICIT parameters (esm-spec §10.7;
 /// esm-libraries-spec §4.7.5 step 2), and the parameters each changed template
@@ -2177,6 +2121,7 @@ fn collect_loader_fields(
 /// system names (provenance) alongside the blocks.
 fn collect_component_systems(
     file: &EsmFile,
+    flat_reg: &crate::flatten_refs::FlatRegistry,
 ) -> Result<(Vec<String>, Vec<SystemBlock>), FlattenError> {
     let mut source_systems = Vec::new();
     let mut per_system: Vec<SystemBlock> = Vec::new();
@@ -2186,7 +2131,8 @@ fn collect_component_systems(
     // observable in the flattened parameter vector, so it is never sorted.
     if let Some(models) = &file.models {
         for (name, model) in models {
-            let block = build_model_block(name, model)?;
+            let block =
+                build_model_block(name, model, flat_reg.component(&format!("models.{name}")))?;
             source_systems.push(name.clone());
             per_system.push(block);
         }
@@ -2195,7 +2141,11 @@ fn collect_component_systems(
     // Reaction systems next — lowered to ODE equations then namespaced.
     if let Some(rsystems) = &file.reaction_systems {
         for (name, rs) in rsystems {
-            let block = build_reaction_block(name, rs)?;
+            let block = build_reaction_block(
+                name,
+                rs,
+                flat_reg.component(&format!("reaction_systems.{name}")),
+            )?;
             source_systems.push(name.clone());
             per_system.push(block);
         }
@@ -3307,7 +3257,11 @@ pub(crate) fn initialization_faq(eq: &Equation) -> Option<(&str, &Expr)> {
     }
 }
 
-fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
+fn build_model_block(
+    system_name: &str,
+    model: &Model,
+    refs: Option<&crate::flatten_refs::ComponentRefs>,
+) -> Result<SystemBlock, FlattenError> {
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
     let mut observed_vars = IndexMap::new();
@@ -3343,7 +3297,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // Which unknowns are ODE states and which are observed is DERIVED from
     // this model's equations (esm-spec §6.3.1), once, before namespacing.
     let class = crate::classification::Classification::of(model);
-    let mut ns = Namespacer::new(system_name, &sub_keys, &locals);
+    let mut ns = Namespacer::new(system_name, &sub_keys, &locals).with_refs(refs);
 
     // DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, "Ordering"): the
     // component's variables in the order the component declares them. A
@@ -3421,14 +3375,14 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_continuous_event(e, system_name, &sub_keys, &locals))
+        .map(|e| namespace_continuous_event(e, system_name, &sub_keys, &locals, refs))
         .collect();
     let discrete_events = model
         .discrete_events
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_discrete_event(e, system_name, &sub_keys, &locals))
+        .map(|e| namespace_discrete_event(e, system_name, &sub_keys, &locals, refs))
         .collect();
 
     // The `faq`-valued initialization equations, namespaced in the same
@@ -3476,7 +3430,8 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // A `{ "ref": … }` entry is not a subsystem to lower: reference resolution
     // runs before flattening, so one still unresolved contributes nothing.
     for (sub_name, sub_model) in model.inline_subsystems() {
-        let sub_block = build_model_block(&format!("{system_name}.{sub_name}"), sub_model)?;
+        let sub_block =
+            build_model_block(&format!("{system_name}.{sub_name}"), sub_model, refs)?;
         block.state_vars.extend(sub_block.state_vars);
         block.parameters.extend(sub_block.parameters);
         block.observed_vars.extend(sub_block.observed_vars);
@@ -3492,6 +3447,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
 fn build_reaction_block(
     system_name: &str,
     rs: &ReactionSystem,
+    refs: Option<&crate::flatten_refs::ComponentRefs>,
 ) -> Result<SystemBlock, FlattenError> {
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
@@ -3556,13 +3512,17 @@ fn build_reaction_block(
         .collect();
 
     let lowered = crate::reactions::lower_reactions_to_equations(&rs.reactions, &rs.species)?;
+    // A rate's references bind their definitions' added parameters in this
+    // system's scope, as a model's do (esm-spec §9.6.4 rule 7).
+    let no_subsys = HashSet::new();
+    let mut rate_ns = Namespacer::new(system_name, &no_subsys, &locals).with_refs(refs);
     let equations = lowered
         .into_iter()
         .map(|eq| {
             FlatEq::authored(
                 Equation {
                     lhs: namespace_expr(&eq.lhs, system_name, &HashSet::new(), &locals),
-                    rhs: namespace_expr(&eq.rhs, system_name, &HashSet::new(), &locals),
+                    rhs: rate_ns.expr(&eq.rhs),
                     comment: eq.comment,
                 },
                 TermOrigin::Component {
@@ -3583,14 +3543,14 @@ fn build_reaction_block(
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_continuous_event(e, system_name, &HashSet::new(), &locals))
+        .map(|e| namespace_continuous_event(e, system_name, &HashSet::new(), &locals, refs))
         .collect();
     let discrete_events = rs
         .discrete_events
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_discrete_event(e, system_name, &HashSet::new(), &locals))
+        .map(|e| namespace_discrete_event(e, system_name, &HashSet::new(), &locals, refs))
         .collect();
 
     Ok(SystemBlock {
@@ -3653,6 +3613,12 @@ struct Namespacer<'a> {
     system_name: &'a str,
     subsys: &'a HashSet<String>,
     locals: &'a HashSet<String>,
+    /// The reference rewrites of the component this scope belongs to
+    /// ([`crate::flatten_refs::ComponentRefs`]): every reference binds its
+    /// definition's added parameters to the same names, which this
+    /// namespacing then scopes; a name its body binds as a loop symbol is
+    /// not scoped in its bindings; and its name follows the registry rename.
+    refs: Option<&'a crate::flatten_refs::ComponentRefs>,
     /// Each distinct set of enclosing loop symbols, by id; id 0 is the empty
     /// set.
     scopes: Vec<HashSet<String>>,
@@ -3668,10 +3634,17 @@ impl<'a> Namespacer<'a> {
             system_name,
             subsys,
             locals,
+            refs: None,
             scopes: vec![HashSet::new()],
             scope_ids: HashMap::from([(Vec::new(), 0)]),
             memo: HashMap::new(),
         }
+    }
+
+    /// This namespacer with the reference rewrites `refs`.
+    fn with_refs(mut self, refs: Option<&'a crate::flatten_refs::ComponentRefs>) -> Self {
+        self.refs = refs;
+        self
     }
 
     fn expr(&mut self, expr: &Expr) -> Expr {
@@ -3691,12 +3664,17 @@ impl<'a> Namespacer<'a> {
 
     /// The scope `parent` extended by the loop symbols `node` binds.
     fn child_scope(&mut self, parent: usize, node: &ExpressionNode) -> usize {
-        let mut added: Vec<String> = Vec::new();
-        node.for_each_binder(Binders::SCOPE, |n| {
-            if !self.scopes[parent].contains(n) {
-                added.push(n.to_string());
-            }
-        });
+        let mut names: Vec<String> = Vec::new();
+        node.for_each_binder(Binders::SCOPE, |n| names.push(n.to_string()));
+        self.extend_scope(parent, names)
+    }
+
+    /// The scope `parent` extended by `names`.
+    fn extend_scope(&mut self, parent: usize, names: Vec<String>) -> usize {
+        let added: Vec<String> = names
+            .into_iter()
+            .filter(|n| !self.scopes[parent].contains(n))
+            .collect();
         if added.is_empty() {
             return parent;
         }
@@ -3729,11 +3707,32 @@ impl<'a> Namespacer<'a> {
     fn node(&mut self, node: &ExpressionNode, scope: usize) -> Expr {
         let system_name = self.system_name;
         let locals = self.locals;
+        // A reference binds its definition's added parameters to the same
+        // names here, so the namespacing below scopes them to this site
+        // (esm-spec §9.6.4 rule 7).
+        let refs = self.refs;
+        let bound_owned;
+        let node = match refs.and_then(|r| r.bind_added(node)) {
+            Some(n) => {
+                bound_owned = n;
+                &bound_owned
+            }
+            None => node,
+        };
         // The loop symbols this node introduces are bound in its body,
         // filter and bound expressions: `ranges` keys cover both the output
         // and contracted indices of an `faq`, and an `integral` binds its
         // `int_var`.
-        let child = self.child_scope(scope, node);
+        let mut child = self.child_scope(scope, node);
+        // A name a reference binds that its body binds as a loop symbol is
+        // that loop symbol where the body reads it, not a variable here.
+        if node.op == crate::operator_refs::APPLY_OP
+            && let Some(cap) = refs
+                .zip(node.name.as_ref())
+                .and_then(|(r, n)| r.captures.get(n))
+        {
+            child = self.extend_scope(child, cap.iter().cloned().collect());
+        }
 
         // Every expression-bearing child, through the crate's one child
         // walker (`ExpressionNode::map_children`), which clones the node first
@@ -3771,6 +3770,14 @@ impl<'a> Namespacer<'a> {
             if let Some(ns) = namespace_join_names(join, &binders, system_name, locals) {
                 out.join = Some(ns);
             }
+        }
+        // The reference follows its component's registry rename.
+        if out.op == crate::operator_refs::APPLY_OP
+            && let Some(n) = refs
+                .zip(out.name.as_ref())
+                .and_then(|(r, n)| r.rename.get(n))
+        {
+            out.name = Some(n.clone());
         }
         Expr::operator(out)
     }
@@ -3859,18 +3866,16 @@ fn namespace_continuous_event(
     system_name: &str,
     subsys: &HashSet<String>,
     locals: &HashSet<String>,
+    refs: Option<&crate::flatten_refs::ComponentRefs>,
 ) -> ContinuousEvent {
-    event.conditions = event
-        .conditions
-        .into_iter()
-        .map(|c| namespace_expr(&c, system_name, subsys, locals))
-        .collect();
+    let mut ns = Namespacer::new(system_name, subsys, locals).with_refs(refs);
+    event.conditions = event.conditions.into_iter().map(|c| ns.expr(&c)).collect();
     event.affects = event
         .affects
         .into_iter()
         .map(|mut a| {
             a.lhs = namespace_affect_target(&a.lhs, system_name, subsys);
-            a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
+            a.rhs = ns.expr(&a.rhs);
             a
         })
         .collect();
@@ -3879,7 +3884,7 @@ fn namespace_continuous_event(
             neg.into_iter()
                 .map(|mut a| {
                     a.lhs = namespace_affect_target(&a.lhs, system_name, subsys);
-                    a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
+                    a.rhs = ns.expr(&a.rhs);
                     a
                 })
                 .collect(),
@@ -3893,11 +3898,13 @@ fn namespace_discrete_event(
     system_name: &str,
     subsys: &HashSet<String>,
     locals: &HashSet<String>,
+    refs: Option<&crate::flatten_refs::ComponentRefs>,
 ) -> DiscreteEvent {
     use crate::types::DiscreteEventTrigger;
+    let mut ns = Namespacer::new(system_name, subsys, locals).with_refs(refs);
     event.trigger = match event.trigger {
         DiscreteEventTrigger::Condition { expression } => DiscreteEventTrigger::Condition {
-            expression: namespace_expr(&expression, system_name, subsys, locals),
+            expression: ns.expr(&expression),
         },
         other => other,
     };
@@ -3907,7 +3914,7 @@ fn namespace_discrete_event(
                 .into_iter()
                 .map(|mut a| {
                     a.lhs = namespace_affect_target(&a.lhs, system_name, subsys);
-                    a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
+                    a.rhs = ns.expr(&a.rhs);
                     a
                 })
                 .collect(),
@@ -3955,6 +3962,7 @@ pub(crate) fn namespaced_model_events(
                 path,
                 &sub_keys,
                 &locals,
+                None,
             )),
         ));
     }
@@ -3966,6 +3974,7 @@ pub(crate) fn namespaced_model_events(
                 path,
                 &sub_keys,
                 &locals,
+                None,
             )),
         ));
     }
@@ -4003,6 +4012,7 @@ pub(crate) fn namespaced_reaction_events(
                 path,
                 &sub_keys,
                 &locals,
+                None,
             )),
         ));
     }
@@ -4014,6 +4024,7 @@ pub(crate) fn namespaced_reaction_events(
                 path,
                 &sub_keys,
                 &locals,
+                None,
             )),
         ));
     }
