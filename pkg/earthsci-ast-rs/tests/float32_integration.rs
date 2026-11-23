@@ -415,3 +415,27 @@ fn the_right_hand_side_reads_time_at_its_state_s_precision() {
         }
     }
 }
+
+#[test]
+fn init_checks_only_the_output_times_the_caller_requested() {
+    // Without `saveat`, `init` steps over a grid of its own whose points near
+    // 1e8 share binary32 values; that is not a request for them, so `init`
+    // accepts what `solve` accepts. This span is still shorter than diffsol's
+    // binary32 stop-time resolution, so both refuse it once they step, for
+    // that reason and the same one.
+    let prob = esm_problem(
+        ProblemInput::Json(&document()),
+        (1e8, 1e8 + 500.0),
+        ProblemOptions::default(),
+    )
+    .unwrap();
+    let opts = SolveOptions {
+        reltol: Some(1e-4),
+        ..SolveOptions::default()
+    };
+    let solved = solve(&prob, &opts).unwrap_err().to_string();
+    assert!(solved.contains("clock resolution"), "{solved}");
+    let mut integrator = init(&prob, &opts).unwrap();
+    let stepped = integrator.solve_to_completion().unwrap_err().to_string();
+    assert_eq!(stepped, solved);
+}

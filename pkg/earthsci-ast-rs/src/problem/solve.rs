@@ -467,6 +467,12 @@ pub fn init<'a>(
         Backend::Array(compiled) => compiled,
     };
     let (t0, t_end) = prob.tspan;
+    // The session checks only the output times the caller asked for, as
+    // `solve` does: the default stepping grid below is not a request.
+    let requested: &[f64] = match &opts.saveat {
+        Some(g) if g.len() >= 2 => g,
+        _ => &[],
+    };
     let grid = match &opts.saveat {
         Some(g) if g.len() >= 2 => g.clone(),
         _ => {
@@ -479,7 +485,7 @@ pub fn init<'a>(
     let mut forcing = ProviderRefresh::new(prob, compiled);
     let run = forcing.run_spec(opts);
     let effective = effective_options(prob, opts);
-    let session = compiled.open_session(&run, effective, &grid, &mut |t| forcing.at(t))?;
+    let session = compiled.open_session(&run, effective, requested, &mut |t| forcing.at(t))?;
     let names = prob.state_variable_names();
     let u = names
         .iter()
