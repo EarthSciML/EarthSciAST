@@ -49,6 +49,8 @@ enum ArgKind {
     /// the lowering reads it as build-time data exactly as the caller would
     /// (a sorted axis, an in-range gather). Box and the payload's identity.
     Known(DimU, DimI, usize),
+    /// An argument the function cannot take yet: the call declines.
+    Unsupported,
     /// A binding that reads a loop symbol the body binds, compiled into the
     /// instance (its wire text): the body reads it where it reads the
     /// parameter, inside its own loops, as Julia's build does. The names it
@@ -226,7 +228,9 @@ impl<'m> TapeBuilder<'m> {
                 params.push((p.clone(), ArgKind::Inline(text)));
                 continue;
             }
-            let reads = crate::expression::free_variables(b);
+            // The names the binding reads free: a loop symbol a node of the
+            // binding binds is its own.
+            let reads = crate::binders::free_names(b, crate::binders::Binders::SCOPE);
             let reads_box = reads.iter().any(|n| bx.syms.contains(n));
             if reads_box || (!binders.is_empty() && reads.iter().any(|n| binders.contains(n))) {
                 // A binding that reads a loop symbol, of the call's box or of
@@ -254,10 +258,21 @@ impl<'m> TapeBuilder<'m> {
                     cadence = cadence.max(self.lv_cadence(&lv));
                     let kind =
                         self.arg_kind(lv, &mut arrays, &mut scalars, &mut arr_lvs, &mut sc_lvs);
+                    if kind == ArgKind::Unsupported {
+                        bail_tape!(
+                            "operator reference `{name}`: `{n}` is an array over a box that does \
+                             not start at 1, which a called function does not take yet"
+                        );
+                    }
                     params.push((pos.clone(), kind));
                     rename.insert(n.clone(), pos);
                 }
-                let text = serde_json::to_string(&rename_free(b, &rename)).unwrap_or_default();
+                let renamed = crate::binders::rename_free_names(
+                    b,
+                    crate::binders::Binders::SCOPE,
+                    &|n| rename.get(n).cloned(),
+                );
+                let text = serde_json::to_string(&renamed).unwrap_or_default();
                 params.push((p.clone(), ArgKind::Inline(text)));
                 continue;
             }
@@ -276,6 +291,12 @@ impl<'m> TapeBuilder<'m> {
             })?;
             cadence = cadence.max(self.lv_cadence(&lv));
             let kind = self.arg_kind(lv, &mut arrays, &mut scalars, &mut arr_lvs, &mut sc_lvs);
+            if kind == ArgKind::Unsupported {
+                bail_tape!(
+                    "operator reference `{name}`: the binding of `{p}` is an array over a box \
+                     that does not start at 1, which a called function does not take yet"
+                );
+            }
             params.push((p.clone(), kind));
         }
         let key = FuncKey {
@@ -366,6 +387,12 @@ impl<'m> TapeBuilder<'m> {
                     Some(Known::Vals(v)) | Some(Known::Deferred { vals: v, .. }) => Some(Arc::clone(v)),
                     None => None,
                 };
+                if origin.iter().any(|&o| o != 1) {
+                    // A function's state variable is a whole array from 1;
+                    // a value over a box that starts elsewhere has no
+                    // argument form yet.
+                    return ArgKind::Unsupported;
+                }
                 if let Some(vals) = known {
                     let id = Arc::as_ptr(&vals) as usize;
                     self.funcs.borrow_mut().known_vals.insert(id, vals);
@@ -376,6 +403,7 @@ impl<'m> TapeBuilder<'m> {
                 ArgKind::Array(shape, origin)
             }
             LV::State(ix) => match self.lv_box(&lv) {
+                Some((_, origin)) if origin.iter().any(|&o| o != 1) => ArgKind::Unsupported,
                 Some((shape, origin)) => {
                     arrays.push(SrcRef::State(ix));
                     arr_lvs.push(lv);
@@ -421,6 +449,7 @@ impl<'m> TapeBuilder<'m> {
                     );
                 }
                 ArgKind::Scalar => param_names.push(p.clone()),
+                ArgKind::Unsupported => unreachable!("declined at the call"),
                 ArgKind::Known(shape, origin, id) => {
                     let vals = Arc::clone(&self.funcs.borrow().known_vals[id]);
                     known.push((p.clone(), shape.clone(), origin.clone(), vals));
@@ -508,30 +537,6 @@ impl<'m> TapeBuilder<'m> {
         let mut prog = f.assemble(vec![("result".to_string(), result)]);
         prog.is_function = true;
         Ok(Built::Function(prog, res))
-    }
-}
-
-/// `e` with each free variable named in `rename` renamed: a name a node of
-/// `e` binds is not free below it.
-fn rename_free(e: &Expr, rename: &FxHashMap<String, String>) -> Expr {
-    match e {
-        Expr::Variable(n) => match rename.get(n) {
-            Some(r) => Expr::Variable(r.clone()),
-            None => e.clone(),
-        },
-        Expr::Operator(node) => {
-            let bound = node.binders(crate::binders::Binders::SCOPE);
-            if bound.iter().any(|b| rename.contains_key(*b)) {
-                let mut inner = rename.clone();
-                for b in bound {
-                    inner.remove(b);
-                }
-                Expr::operator(node.map_children(&mut |c| rename_free(c, &inner)))
-            } else {
-                Expr::operator(node.map_children(&mut |c| rename_free(c, rename)))
-            }
-        }
-        _ => e.clone(),
     }
 }
 

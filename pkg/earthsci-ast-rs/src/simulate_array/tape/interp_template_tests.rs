@@ -125,7 +125,11 @@ fn scalar_lookup_loop_matches_the_oracle() {
         ],
     );
     let prog = ab(&compile(scalar_lookup_doc(7, literal)), &no_params());
-    assert_eq!(counts(&prog), vec![(CountRel::Le, true); 3]);
+    // The three references bind the same table and axis: they call ONE
+    // function, which counts its bracket once (esm-spec §9.6.4 rule 2).
+    assert_eq!(counts(&prog), vec![(CountRel::Le, true)]);
+    assert_eq!(prog.funcs.len(), 1, "one function for the three references");
+    assert_eq!(prog.tables.calls.len(), 3, "three calls");
     assert!(opcount(&prog, "JmpIfZero") >= 2, "the clamps short-circuit");
     let state_axis = apply(
         "linear",
@@ -163,17 +167,11 @@ fn scalar_lookup_gather_past_the_end_matches_the_oracle() {
             ],
         );
         let prog = ab(&compile(scalar_lookup_doc(6, body)), &no_params());
-        assert_eq!(counts(&prog), vec![(CountRel::Ge, true); 2], "{base}");
+        // The two brackets are one definition instance: one function, one
+        // count, called twice.
+        assert_eq!(counts(&prog), vec![(CountRel::Ge, true)], "{base}");
+        assert_eq!(prog.tables.calls.len(), 2, "{base}: two calls");
         assert_eq!(opcount(&prog, "DataGather"), 2, "{base}");
     }
 }
 
-#[test]
-fn zz_debug_linear_functions() {
-    let (prog, _) = oracle_ab(lookup_model(Lookup::Linear, None, false));
-    eprintln!("top: {} instrs, {} calls, {} funcs", prog.instrs.len(), prog.tables.calls.len(), prog.funcs.len());
-    for (i, f) in prog.funcs.iter().enumerate() {
-        let ops: Vec<&str> = f.instrs.iter().map(|x| x.opcode()).collect();
-        eprintln!("func {i}: rule {:?} calls {} ops {:?}", f.rules.first().map(|r| &r.name), f.tables.calls.len(), ops);
-    }
-}
