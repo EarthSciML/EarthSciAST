@@ -439,3 +439,22 @@ fn init_checks_only_the_output_times_the_caller_requested() {
     let stepped = integrator.solve_to_completion().unwrap_err().to_string();
     assert_eq!(stepped, solved);
 }
+
+#[test]
+fn a_repeated_output_time_is_one_clock_tick() {
+    let prob = esm_problem(
+        ProblemInput::Json(&document()),
+        (0.0, 1.0),
+        ProblemOptions::default(),
+    )
+    .unwrap();
+    let opts = SolveOptions {
+        reltol: Some(1e-4),
+        saveat: Some(vec![0.0, 0.5, 0.5, 1.0]),
+        ..SolveOptions::default()
+    };
+    let sol = solve(&prob, &opts).unwrap();
+    assert!(sol.retcode.is_success());
+    assert_eq!(sol.time, [0.0, 0.5, 0.5, 1.0]);
+    init(&prob, &opts).unwrap();
+}

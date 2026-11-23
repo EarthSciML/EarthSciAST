@@ -696,12 +696,14 @@ fn check_float32_clock(
     boundaries: &[f64],
 ) -> Result<(), SimulateError> {
     // Provider refreshes and requested samples must stay ordered on the
-    // solver clock. An exact shared boundary needs just one clock tick.
+    // solver clock. An exact shared boundary needs just one clock tick, and
+    // so does an output time requested twice.
     let mut times: Vec<_> = grid
         .iter()
         .copied()
         .filter(|t| *t >= start && *t <= end)
         .collect();
+    times.dedup();
     if times.windows(2).any(|w| w[0] as f32 == w[1] as f32) {
         return Err(float32_unsupported(
             "binary32 clock over tspan",
