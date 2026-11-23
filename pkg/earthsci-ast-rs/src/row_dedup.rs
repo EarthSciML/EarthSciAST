@@ -23,9 +23,18 @@
 //! than `index(V, b)` of a materialized 1-D array of `b`'s length or a join key
 //! column on `b`'s side; `b` rebound by a nested node; a range whose extent
 //! depends on `b` (a ragged range `of` it); any read of the observed being
-//! defined, whose `b` axis the rewrite shrinks; a template application left
-//! unexpanded; a constant join key; or too few duplicate signatures for the
+//! defined, whose `b` axis the rewrite shrinks; an operator reference whose
+//! definition the rule cannot read (no registry, or an unresolved name) or
+//! whose body reads `b` or the observed itself free, or binds a loop symbol
+//! named `b`; a constant join key; or too few duplicate signatures for the
 //! rewrite to pay.
+//!
+//! An operator reference otherwise reads `b` only through its bindings
+//! (esm-spec §9.6.4 rule 2: the expansion substitutes them into the body,
+//! where no name of the body captures `b`), so the bindings are scanned and
+//! rewritten like any other subexpression and the reference is kept; the
+//! decision about its body is made once per definition
+//! ([`crate::operator_refs::DefinitionReads`]).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -97,6 +106,18 @@ pub(crate) struct DedupPlan {
 /// against the same representatives, so the tree combines them cell for cell
 /// exactly as it combined the originals.
 pub(crate) fn plan(name: &str, expr: &Expr, arrays: &ArrMap) -> Option<DedupPlan> {
+    plan_in(name, expr, arrays, &Default::default())
+}
+
+/// [`plan`], the rule's operator references read through `operators` (the
+/// registry they resolve against; a flattened system's, whose bodies are
+/// closed, or a component's).
+pub(crate) fn plan_in(
+    name: &str,
+    expr: &Expr,
+    arrays: &ArrMap,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> Option<DedupPlan> {
     let mut leaves: Vec<&ExpressionNode> = Vec::new();
     if !faq_leaves(expr, &mut leaves) || leaves.is_empty() {
         return None;
@@ -125,7 +146,11 @@ pub(crate) fn plan(name: &str, expr: &Expr, arrays: &ArrMap) -> Option<DedupPlan
             .get(v)
             .is_some_and(|a| a.ndim() > axis && a.shape()[axis] == rows)
     };
-    let scope = Scope { name, sym };
+    let scope = Scope {
+        name,
+        sym,
+        operators,
+    };
     for leaf in &leaves {
         if leaf.output_idx.as_ref() != Some(output_idx)
             || leaf.ranges.as_ref().and_then(|r| r.get(sym))
@@ -227,6 +252,7 @@ fn faq_leaves<'e>(e: &'e Expr, out: &mut Vec<&'e ExpressionNode>) -> bool {
 struct Scope<'a> {
     name: &'a str,
     sym: &'a str,
+    operators: &'a crate::operator_refs::OperatorRegistry,
 }
 
 /// Whether a range's extent is a function of `sym`: a ragged range `of` it
@@ -352,8 +378,18 @@ fn scan(
     match e {
         Expr::Variable(v) => v != sym && v != scope.name,
         Expr::Operator(n) => {
-            if n.op == "apply_operator" {
-                return false;
+            if let Some(r) = crate::operator_refs::reference_node(n) {
+                let Some(def) = scope.operators.resolve(&r) else {
+                    return false;
+                };
+                let reads = def.reads(scope.operators);
+                if reads.free.contains(sym)
+                    || reads.free.contains(scope.name)
+                    || reads.binders.contains(sym)
+                {
+                    return false;
+                }
+                return r.bindings.values().all(|b| scan(b, scope, ok_col, cols));
             }
             if n.op == "index"
                 && let Some(ax) = sym_axis(n, sym)
@@ -635,6 +671,42 @@ mod tests {
         let plan = super::plan("tree", &rule("tree"), &arrays).expect("tree is rewritten");
         assert_eq!((plan.rows, plan.reps), (N, 15));
         assert!(super::plan("reads_row", &rule("reads_row"), &arrays).is_none());
+
+        // The same rule with its body handed to an operator reference: the
+        // reference reads the driving row only through its binding, which is
+        // scanned and rewritten like any other subexpression; the reference
+        // stays. Without the registry it is declined.
+        let mut wrapped = rule("one_d");
+        let crate::Expr::Operator(node) = &mut wrapped else {
+            panic!("one_d is a faq")
+        };
+        let node = std::sync::Arc::make_mut(node);
+        let body = node.expr.take().expect("faq body");
+        node.expr = Some(Box::new(crate::Expr::operator(crate::types::ExpressionNode {
+            op: crate::operator_refs::APPLY_OP.into(),
+            name: Some("id".into()),
+            bindings: Some(HashMap::from([("x".to_string(), *body)])),
+            ..Default::default()
+        })));
+        let ids = crate::operator_refs::OperatorRegistry::from_json(
+            serde_json::json!({"id": {"params": ["x"], "body": "x"},
+                               "reads_free": {"params": ["x"], "body": {"op": "+", "args": ["x", "one_d"]}}})
+                .as_object()
+                .unwrap(),
+        );
+        assert!(super::plan("one_d", &wrapped, &arrays).is_none());
+        let plan = super::plan_in("one_d", &wrapped, &arrays, &ids).expect("rewritten through id");
+        assert_eq!((plan.rows, plan.reps), (N, 15));
+        assert!(crate::operator_refs::has_reference(&plan.expr));
+        // A body that reads the observed being defined is declined.
+        let crate::Expr::Operator(node) = &mut wrapped else {
+            unreachable!()
+        };
+        let node = std::sync::Arc::make_mut(node);
+        if let Some(crate::Expr::Operator(r)) = node.expr.as_deref_mut() {
+            std::sync::Arc::make_mut(r).name = Some("reads_free".into());
+        }
+        assert!(super::plan_in("one_d", &wrapped, &arrays, &ids).is_none());
     }
 
     /// A ragged inner range `of` the driving row reads that row's member
