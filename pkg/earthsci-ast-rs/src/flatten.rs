@@ -1084,7 +1084,16 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 
     // Phase 5h: write each elementwise template application (esm-spec
     // §9.6.11) as its per-cell `faq`. See [`lift_elementwise_applications`].
-    lift_elementwise_applications(&mut parts);
+    lift_elementwise_applications(&mut parts, &mut flat_reg.registry);
+
+    // Every lift is done: the cellwise variants they made take their final
+    // names (esm-spec §9.6.11), at every site that references them.
+    let renames = crate::elementwise_lift::name_cellwise_variants(&mut flat_reg.registry);
+    if !renames.is_empty() {
+        parts.map_sites(true, &mut |e| {
+            crate::flatten_refs::rename_refs(e, &renames).unwrap_or_else(|| e.clone())
+        });
+    }
 
     let AssembledParts {
         state_variables,
@@ -1166,40 +1175,31 @@ fn reserved_liftings(file: &EsmFile) -> Vec<(String, String, String)> {
         .collect()
 }
 
-/// Write every elementwise template application of the flattened equations
-/// and field initial conditions (esm-spec §9.6.11) as the per-cell `faq` the
-/// build would lift it to.
-///
-/// This binding expands every template reference at load, and an expansion
-/// is elementwise only because it came from an application: the build reads
-/// that from the mark the load leaves on the expansion
-/// ([`ExpressionNode::template_origin`]), which is load provenance and never
-/// goes on the wire. Whether an argument is an array is decided on the
+/// Write every elementwise application of the flattened equations and field
+/// initial conditions (esm-spec §9.6.11) as the per-cell `faq` the build
+/// would lift it to, its references kept, each binding read at the cell by
+/// its parameter's role ([`crate::elementwise_lift`]); a cellwise variant the
+/// lift needs is added to `registry` under a placeholder name, named once
+/// every lift is done. Whether an argument is an array is decided on the
 /// flattened system, after coupling: the lookup of a 0-D component that a
 /// `variable_map` feeds a grid field is elementwise only once flattened. Left
-/// as the bare expansion, a flattened system written out and read back is a
-/// different document: the expansion reads the array by bare name inside
-/// the template's bracket count, which no longer marks an application, and
-/// the build refuses it (`faq_bare_array_operand`, esm-spec §4.3.1). Writing
-/// the lift here gives the flattened equations the meaning the build gives
-/// them, in a form that survives serialization; the build's own lift then
-/// finds nothing left to lift. A field initial condition `ic(x) = rhs` is
-/// lifted over `x`'s shape.
+/// as an application whose expansion reads an array by bare name inside the
+/// definition's bracket count, a flattened system written out (expanded) and
+/// read back is refused (`faq_bare_array_operand`, esm-spec §4.3.1). A field
+/// initial condition `ic(x) = rhs` is lifted over `x`'s shape.
 ///
-/// No declared `shape` changes (esm-libraries-spec §4.7.5): a variable
-/// declared without one keeps none, and its shape is the one its `faq`
-/// definition ranges over. A lifted equation's contributions collapse into
-/// the one `faq`, their origins united, since the per-cell form is computed
-/// whole. When the lift refuses a right-hand side (`array_shape_mismatch`),
-/// every equation and initial condition is left as it was, for the build to
-/// refuse.
-fn lift_elementwise_applications(flat: &mut AssembledParts) {
-    fn marked(e: &Expr) -> bool {
-        let Expr::Operator(n) = e else { return false };
-        n.template_origin.is_some() || n.any_child(&mut marked)
-    }
-    if !flat.equations.iter().any(|fe| marked(&fe.eq.rhs))
-        && !flat.field_ics.iter().any(|(_, rhs)| marked(rhs))
+/// No declared `shape` changes (esm-libraries-spec §4.7.5). A lifted
+/// equation's contributions collapse into the one `faq`, their origins united.
+/// When the lift refuses a right-hand side (`array_shape_mismatch`), every
+/// equation and initial condition is left as it was, for the build to refuse.
+/// Mirrors the Julia reference `_lift_elementwise_applications_flat!`.
+fn lift_elementwise_applications(
+    flat: &mut AssembledParts,
+    registry: &mut IndexMap<String, serde_json::Value>,
+) {
+    let holds = crate::operator_refs::has_reference;
+    if !flat.equations.iter().any(|fe| holds(&fe.eq.rhs))
+        && !flat.field_ics.iter().any(|(_, rhs)| holds(rhs))
     {
         return;
     }
@@ -1216,7 +1216,7 @@ fn lift_elementwise_applications(flat: &mut AssembledParts) {
             rhs: rhs.clone(),
             ..Default::default()
         }));
-    if crate::elementwise_lift::lift_elementwise_applications(&mut model).is_err() {
+    if crate::elementwise_lift::lift_elementwise_applications_with(&mut model, registry).is_err() {
         return;
     }
     let unchanged = |a: &Expr, b: &Expr| match (a, b) {
