@@ -351,6 +351,11 @@ const (
 	// a reaction system, whose species and parameters have no per-variable
 	// `element_type`.
 	CodeElementTypeUncarried = "element_type_uncarried"
+	// CodeToleranceBelowWorkingPrecision: a relative tolerance below 2⁻²² for
+	// a Float32 state (esm-spec §11.3.2). Go does not integrate, so it never
+	// raises it; the constant exists because the code table is cross-language
+	// uniform.
+	CodeToleranceBelowWorkingPrecision = "tolerance_below_working_precision"
 )
 
 // --- Diagnostic codes: running an arrayed definition (esm-spec §6.3.1). ---
