@@ -1147,4 +1147,35 @@ mod tests {
         assert_eq!(calls, 1);
         assert_eq!(m.len(), 1);
     }
+
+    #[test]
+    fn instances_specialize_literal_params_once() {
+        let r = reg(json!({
+            "sum_to": {"params": ["v", "n"], "body": {"op": "faq", "args": [], "output_idx": [],
+                "ranges": {"k": [1, "n"]}, "expr": {"op": "index", "args": ["v", "k"]}}},
+            "outer": {"params": ["w", "m"], "body": {"op": "apply_operator", "args": [],
+                "name": "sum_to", "bindings": {"v": "w", "n": "m"}}}
+        }));
+        // `n` sits in a range bound; `m` is forwarded into it.
+        assert_eq!(r.instance_params("sum_to"), ["n"]);
+        assert_eq!(r.instance_params("outer"), ["m"]);
+        assert!(r.captured_symbols("outer").contains("k"));
+        let inst = Instances::new(r);
+        let call = |n: i64| -> Expr {
+            serde_json::from_value(json!({"op": "apply_operator", "args": [], "name": "outer",
+                "bindings": {"w": "x", "m": n}})).unwrap()
+        };
+        let (a, b, c) = (call(3), call(3), call(4));
+        let ia = inst.instance(&reference(&a).unwrap()).unwrap();
+        let ib = inst.instance(&reference(&b).unwrap()).unwrap();
+        let ic = inst.instance(&reference(&c).unwrap()).unwrap();
+        assert!(Arc::ptr_eq(&ia, &ib));
+        assert!(!Arc::ptr_eq(&ia, &ic));
+        // The forwarded literal reached the nested reference; `w` stays a name.
+        let nested = reference(&ia.body).unwrap();
+        assert_eq!(nested.binding("n"), Some(&Expr::Integer(3)));
+        assert_eq!(nested.binding("v"), Some(&Expr::Variable("w".into())));
+        let reached = inst.reachable([&a]).unwrap();
+        assert_eq!(reached.len(), 2);
+    }
 }
