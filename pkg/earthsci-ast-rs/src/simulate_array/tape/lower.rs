@@ -2673,6 +2673,13 @@ impl<'m> TapeBuilder<'m> {
                 }
                 self.lower_op_code(vec_op_code(fn_name), node, bx)
             }
+            VecOp::Unsupported if node.op == crate::operator_refs::APPLY_OP => {
+                bail_tape!(
+                    "operator reference `{}`: the native compiler does not yet compile a \
+                     definition as a called function",
+                    node.name.as_deref().unwrap_or("")
+                )
+            }
             VecOp::Unsupported => {
                 bail_tape!("op: unsupported operator `{}`/{}", node.op, node.args.len())
             }

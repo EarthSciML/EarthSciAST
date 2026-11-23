@@ -421,7 +421,11 @@ fn check_evaluable_ops(expr: &Expr) -> Result<(), CompileError> {
     let Expr::Operator(node) = expr else {
         return Ok(());
     };
-    if !is_evaluable_op(&node.op) {
+    // A reference is evaluable when it names a definition; which one, and
+    // its body, the instance walk checks ([`check_evaluable_all`]).
+    let nameless_reference = node.op == crate::operator_refs::APPLY_OP
+        && crate::operator_refs::reference_node(node).is_none();
+    if !is_evaluable_op(&node.op) || nameless_reference {
         return Err(CompileError::UnevaluableOperatorError {
             op: node.op.clone(),
         });
@@ -5657,14 +5661,15 @@ mod evaluability_gate_tests {
     }
 
     /// The §4.2 core set minus this evaluator's rules, pinned member by member.
-    /// Four ops, each eliminated by an earlier stage — and NOTHING else, which
+    /// Three ops, each eliminated by an earlier stage — and NOTHING else, which
     /// is what makes the build-time gate in `compile.rs` a complete answer to
     /// the `unreachable!` backstop rather than a patch for the op that was
-    /// reported. A fifth entry appearing here means a new op reached the
+    /// reported. (An operator reference is evaluated as a call, esm-spec
+    /// §9.6.4.) A fourth entry appearing here means a new op reached the
     /// registry without an evaluation rule and can panic; it must be given a
     /// rule or added to this list deliberately.
     #[test]
-    fn the_core_minus_evaluable_gap_is_exactly_four_ops() {
+    fn the_core_minus_evaluable_gap_is_exactly_three_ops() {
         const CORE: &[&str] = &[
             "+",
             "-",
@@ -5733,7 +5738,7 @@ mod evaluability_gate_tests {
             .filter(|op| !is_evaluable_op(op))
             .collect();
         gap.sort_unstable();
-        assert_eq!(gap, vec!["apply_operator", "distinct", "enum", "ic"]);
+        assert_eq!(gap, vec!["distinct", "enum", "ic"]);
     }
 
     /// Small helper: `Result::unwrap_err` with the op name in the panic message.

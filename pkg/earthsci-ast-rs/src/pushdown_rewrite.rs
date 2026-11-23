@@ -708,6 +708,10 @@ const APPLY_OP: &str = "apply_operator";
 struct PdFrame {
     call: Value,
     params: Vec<String>,
+    /// The names the body reads free (in a component's registry): read in
+    /// the scope of the reference's site, as implicit parameters bound to
+    /// themselves.
+    free: std::collections::BTreeSet<String>,
     body: Value,
     parent: PdFr,
 }
@@ -747,6 +751,12 @@ fn pd_open(tt: PdTt<'_>, e: &Value, fr: &PdFr) -> (Value, PdFr) {
             fr = parent;
             continue;
         }
+        if let (Some(f), Value::String(s)) = (&fr, &e)
+            && f.free.contains(s.as_str())
+        {
+            fr = f.parent.clone();
+            continue;
+        }
         if let Some(reg) = tt
             && op_of(&e) == Some(APPLY_OP)
         {
@@ -784,6 +794,7 @@ fn pd_frame(reg: &OperatorRegistry, call: &Value, fr: &PdFr) -> Option<Rc<PdFram
     Some(Rc::new(PdFrame {
         call: call.clone(),
         params: d.params.clone(),
+        free: d.free_names().clone(),
         body,
         parent: fr.clone(),
     }))
