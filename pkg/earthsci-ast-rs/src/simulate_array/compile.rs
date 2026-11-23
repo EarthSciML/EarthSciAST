@@ -302,10 +302,22 @@ pub(super) fn apply_ragged_factor_scope(
 /// 4. the bare-array-operand check on the lifted equations
 ///    ([`refuse_faq_bare_array_operands`]), whose declared-or-inferred axes
 ///    of every variable the table records.
+#[cfg(test)]
 pub(crate) fn apply_shape_rewrites(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
     inherited: Option<&ShapeTable>,
+) -> Result<ShapeTable, CompileError> {
+    apply_shape_rewrites_with(model, index_sets, inherited, Instances::empty())
+}
+
+/// [`apply_shape_rewrites`] with the operator instances the model's
+/// references name.
+pub(crate) fn apply_shape_rewrites_with(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+    inherited: Option<&ShapeTable>,
+    ops: &Instances,
 ) -> Result<ShapeTable, CompileError> {
     if let Some(parent) = inherited {
         set_declared_shapes(model, parent.built());
@@ -321,7 +333,7 @@ pub(crate) fn apply_shape_rewrites(
         model,
         conditional.built.iter().map(|(n, a)| (n, a.as_slice())),
     );
-    let axes = refuse_faq_bare_array_operands(model)?;
+    let axes = refuse_faq_bare_array_operands(model, ops)?;
     Ok(ShapeTable::assemble(
         model,
         axes,
@@ -347,10 +359,26 @@ pub(crate) fn apply_shape_rewrites(
 /// (esm-libraries-spec §4.7.5). A scalar is absent.
 pub(crate) fn refuse_faq_bare_array_operands(
     model: &Model,
+    ops: &Instances,
 ) -> Result<HashMap<String, Vec<String>>, CompileError> {
     let shapes = crate::structural::promoted_var_shapes(model);
     if shapes.values().all(Vec::is_empty) {
         return Ok(shapes);
+    }
+    let mut through_refs = BareThroughRefs {
+        ops,
+        shapes: &shapes,
+        memo: HashMap::new(),
+    };
+    for eq in &model.equations {
+        if crate::operator_refs::has_reference(&eq.rhs)
+            && let Some(message) = through_refs.check(&eq.rhs)?
+        {
+            return Err(CompileError::build_err(format!(
+                "[faq_bare_array_operand] the equation defining `{}`: {message}",
+                eq.lhs
+            )));
+        }
     }
     for (k, eq) in model.equations.iter().enumerate() {
         let mut errors = Vec::new();
@@ -370,6 +398,195 @@ pub(crate) fn refuse_faq_bare_array_operands(
         }
     }
     Ok(shapes)
+}
+
+/// What one operator instance's body reads bare (whole-array, in an
+/// elementwise position) of its parameters, computed once per instance:
+/// `elem`, from the body's root down through elementwise operators only (what
+/// a `faq` around the reference would read per tuple), and `in_faq`, what a
+/// `faq` inside the body reads so in its `expr` or `filter`.
+#[derive(Default)]
+struct BareParams {
+    elem: HashSet<String>,
+    in_faq: HashSet<String>,
+}
+
+/// The `faq_bare_array_operand` check (esm-spec §4.3.1) through operator
+/// references: each instance body is analysed once ([`BareParams`]), and at
+/// each reference the bindings of the parameters it reads bare are checked
+/// for a bare shaped variable. Never expands a reference.
+struct BareThroughRefs<'a> {
+    ops: &'a Instances,
+    shapes: &'a HashMap<String, Vec<String>>,
+    memo: HashMap<usize, Rc<BareParams>>,
+}
+
+impl BareThroughRefs<'_> {
+    fn instance(
+        &self,
+        node: &ExpressionNode,
+    ) -> Result<std::sync::Arc<crate::operator_refs::Instance>, CompileError> {
+        let r = crate::operator_refs::reference_node(node)
+            .ok_or_else(|| CompileError::build_err("an operator reference with no name"))?;
+        self.ops
+            .instance(&r)
+            .map_err(|e| CompileError::build_err(e.to_string()))
+    }
+
+    fn summary(&mut self, node: &ExpressionNode) -> Result<Rc<BareParams>, CompileError> {
+        let inst = self.instance(node)?;
+        let key = std::sync::Arc::as_ptr(&inst) as usize;
+        if let Some(s) = self.memo.get(&key) {
+            return Ok(Rc::clone(s));
+        }
+        let params: HashSet<&str> = inst.definition.params.iter().map(String::as_str).collect();
+        let mut out = BareParams::default();
+        self.elem_params(&inst.body, &params, &mut out.elem)?;
+        self.faq_params(&inst.body, &params, &mut out.in_faq)?;
+        let out = Rc::new(out);
+        self.memo.insert(key, Rc::clone(&out));
+        Ok(out)
+    }
+
+    /// The parameters `e` reads bare in elementwise position.
+    fn elem_params(
+        &mut self,
+        e: &Expr,
+        params: &HashSet<&str>,
+        out: &mut HashSet<String>,
+    ) -> Result<(), CompileError> {
+        match e {
+            Expr::Variable(n) if params.contains(n.as_str()) => {
+                out.insert(n.clone());
+            }
+            Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+                let s = self.summary(node)?;
+                if let Some(b) = &node.bindings {
+                    for q in &s.elem {
+                        if let Some(be) = b.get(q) {
+                            self.elem_params(be, params, out)?;
+                        }
+                    }
+                }
+            }
+            Expr::Operator(node) if crate::op_registry::is_elementwise_node(node) => {
+                node.try_for_each_child(&mut |c| self.elem_params(c, params, out))?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The parameters a `faq` anywhere in `e` reads bare in its `expr` or
+    /// `filter`, through the references in it.
+    fn faq_params(
+        &mut self,
+        e: &Expr,
+        params: &HashSet<&str>,
+        out: &mut HashSet<String>,
+    ) -> Result<(), CompileError> {
+        let Expr::Operator(node) = e else {
+            return Ok(());
+        };
+        if crate::faq::is_faq_op(&node.op) {
+            for part in [node.expr.as_deref(), node.filter.as_deref()].into_iter().flatten() {
+                self.elem_params(part, params, out)?;
+            }
+        }
+        if node.op == crate::operator_refs::APPLY_OP {
+            let s = self.summary(node)?;
+            if let Some(b) = &node.bindings {
+                for q in &s.in_faq {
+                    if let Some(be) = b.get(q) {
+                        self.elem_params(be, params, out)?;
+                    }
+                }
+            }
+        }
+        node.try_for_each_child(&mut |c| self.faq_params(c, params, out))
+    }
+
+    /// The shaped variables `e` (in the equation's scope) reads bare in
+    /// elementwise position, through the references in it.
+    fn bare_shaped(&mut self, e: &Expr, out: &mut Vec<String>) -> Result<(), CompileError> {
+        match e {
+            Expr::Variable(n) if self.shapes.get(n).is_some_and(|s| !s.is_empty()) => {
+                out.push(n.clone());
+            }
+            Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+                let s = self.summary(node)?;
+                if let Some(b) = &node.bindings {
+                    for q in &s.elem {
+                        if let Some(be) = b.get(q) {
+                            self.bare_shaped(be, out)?;
+                        }
+                    }
+                }
+            }
+            Expr::Operator(node) if crate::op_registry::is_elementwise_node(node) => {
+                node.try_for_each_child(&mut |c| self.bare_shaped(c, out))?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The first bare shaped read a `faq` makes through a reference in `e`,
+    /// as a message.
+    fn check(&mut self, e: &Expr) -> Result<Option<String>, CompileError> {
+        let Expr::Operator(node) = e else {
+            return Ok(None);
+        };
+        let mut found: Vec<String> = Vec::new();
+        if crate::faq::is_faq_op(&node.op) {
+            for part in [node.expr.as_deref(), node.filter.as_deref()].into_iter().flatten() {
+                // Only what a reference delivers: a bare read written in place
+                // is the structural check's.
+                self.refs_in_elem(part, &mut found)?;
+            }
+        }
+        if node.op == crate::operator_refs::APPLY_OP {
+            let s = self.summary(node)?;
+            if let Some(b) = &node.bindings {
+                for q in &s.in_faq {
+                    if let Some(be) = b.get(q) {
+                        self.bare_shaped(be, &mut found)?;
+                    }
+                }
+            }
+        }
+        if let Some(name) = found.first() {
+            return Ok(Some(format!(
+                "a faq reads '{name}', declared over [{}], by bare name through an operator \
+                 reference. A faq names its axes by its range symbols, and its body is \
+                 evaluated once per index tuple, so a whole array there does not say which \
+                 symbol each of its axes is. Read it through `index` (esm-spec §4.3.1)",
+                self.shapes[name].join(", ")
+            )));
+        }
+        let mut first = None;
+        node.try_for_each_child(&mut |c| {
+            if first.is_none() {
+                first = self.check(c)?;
+            }
+            Ok::<(), CompileError>(())
+        })?;
+        Ok(first)
+    }
+
+    /// The bare shaped reads the references in elementwise position of a
+    /// `faq` part deliver.
+    fn refs_in_elem(&mut self, e: &Expr, out: &mut Vec<String>) -> Result<(), CompileError> {
+        match e {
+            Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+                self.bare_shaped(e, out)
+            }
+            Expr::Operator(node) if crate::op_registry::is_elementwise_node(node) => {
+                node.try_for_each_child(&mut |c| self.refs_in_elem(c, out))
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Write `shapes` into `model`'s declarations, by name.

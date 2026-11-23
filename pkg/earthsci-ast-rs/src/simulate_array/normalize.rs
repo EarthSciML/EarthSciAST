@@ -9,7 +9,7 @@
 //! so neither assembles these stages by hand and they run in one order. Their
 //! product, [`NormalizedModel`], is the only input the later stages accept.
 
-use super::compile::{apply_shape_rewrites, model_from_flattened};
+use super::compile::{apply_shape_rewrites_with, model_from_flattened};
 use super::recurrence_group::lower_recurrence_groups;
 use super::shape_table::ShapeTable;
 use super::{HashMap, IndexSet};
@@ -88,7 +88,8 @@ pub(crate) fn normalize(
         }
         BuildInput::Flattened { flat, inherited } => (model_from_flattened(flat), inherited),
     };
-    let mut shapes = apply_shape_rewrites(&mut model, &index_sets, inherited)?;
+    let ops = crate::operator_refs::Instances::new(operators.clone());
+    let mut shapes = apply_shape_rewrites_with(&mut model, &index_sets, inherited, &ops)?;
     shapes.record_stacked(lower_recurrence_groups(&mut model, &mut index_sets)?);
     Ok(NormalizedModel {
         model,
