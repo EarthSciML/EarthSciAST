@@ -79,6 +79,7 @@ pub(crate) mod scalar_ops;
 mod session;
 mod shape_table;
 mod solve_rhs;
+pub(crate) use range::derivative_target;
 #[cfg(feature = "solve")]
 pub(crate) use session::{RunSpec, SolveSession};
 pub mod tape;

@@ -556,3 +556,22 @@ fn tile_and_lane_programs_round_their_inputs_as_the_whole_domain_does() {
         .unwrap();
     assert_eq!(du, whole, "gathered lanes");
 }
+
+#[test]
+fn the_tolerance_warning_follows_the_states_effective_precision() {
+    let warned = |doc: &Value| {
+        let mut doc = doc.clone();
+        doc["solver"] = json!({"reltol": 1e-9});
+        let validation = earthsci_ast::validate_text(&doc.to_string(), None);
+        assert!(validation.is_valid, "{validation:?}");
+        validation
+            .warnings
+            .iter()
+            .any(|w| w.code == "tolerance_below_working_precision")
+    };
+    // A Float32 state in a Float64 document.
+    assert!(warned(&time_reading_document("Float64", "Float32")));
+    // A Float32 document whose every state is Float64.
+    assert!(!warned(&time_reading_document("Float32", "Float64")));
+    assert!(warned(&document()));
+}

@@ -23,6 +23,7 @@ mod kernels;
 mod lanes;
 mod model;
 mod select;
+pub(crate) use select::derivative_target;
 mod tile;
 mod walk;
 
