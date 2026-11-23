@@ -475,6 +475,163 @@ impl crate::FlattenedSystem {
     }
 }
 
+/// Where a walk that reads through references is: inside the body of a
+/// definition a reference names, each parameter standing for the
+/// reference's binding, read in the frame the reference sits in (the root
+/// frame is a call site). A walk enters a body in a new frame
+/// ([`Frame::enter`]) and resolves a parameter leaf through it
+/// ([`Frame::leaf`]): the walk reads exactly what the expansion holds at that
+/// position, and nothing is substituted. Frames are cheap to clone.
+#[derive(Debug, Clone, Default)]
+pub struct Frame(Option<Rc<FrameInner>>);
+
+#[derive(Debug)]
+struct FrameInner {
+    bindings: HashMap<String, (Expr, Frame)>,
+}
+
+impl Frame {
+    /// The frame of a call site.
+    pub fn root() -> Frame {
+        Frame(None)
+    }
+
+    /// The frame of the body of `def`, entered through the reference `r`
+    /// read in `self`: each parameter stands for its binding, read in `self`.
+    pub fn enter(&self, r: &Reference<'_>, def: &Definition) -> Frame {
+        let bindings = def
+            .params
+            .iter()
+            .filter_map(|p| r.binding(p).map(|b| (p.clone(), (b.clone(), self.clone()))))
+            .collect();
+        Frame(Some(Rc::new(FrameInner { bindings })))
+    }
+
+    /// The variable leaf `name` read in this frame: a parameter reads as its
+    /// binding in the binding's own frame, followed through parameters bound
+    /// to bare names; any other name is itself, in this frame.
+    pub fn leaf(&self, name: &str) -> (Expr, Frame) {
+        let mut frame = self.clone();
+        let mut name = name.to_string();
+        loop {
+            let got = frame
+                .0
+                .as_ref()
+                .and_then(|f| f.bindings.get(&name))
+                .cloned();
+            let Some((x, f)) = got else {
+                return (Expr::Variable(name), frame);
+            };
+            match x {
+                Expr::Variable(v) => {
+                    name = v;
+                    frame = f;
+                }
+                other => return (other, f),
+            }
+        }
+    }
+
+    /// An identity for this frame, for memo keys (`0` for the root).
+    pub fn id(&self) -> usize {
+        self.0.as_ref().map_or(0, |f| Rc::as_ptr(f) as usize)
+    }
+}
+
+impl OperatorRegistry {
+    /// Visit every operator node `e` holds, read in `frame`, walking
+    /// through references into the bodies of the definitions they name
+    /// (each in its own [`Frame`]) and through parameter leaves into the
+    /// bindings they stand for. A reference node itself is visited before its
+    /// body; `f` returning `false` stops the walk below that node. Each node
+    /// is visited once per frame. A reference to a definition the registry
+    /// does not hold is visited but not entered.
+    pub fn walk_through(
+        &self,
+        e: &Expr,
+        frame: &Frame,
+        f: &mut impl FnMut(&Arc<ExpressionNode>, &Frame) -> bool,
+    ) {
+        let mut seen = HashSet::new();
+        self.walk_rec(e, frame, f, &mut seen);
+    }
+
+    fn walk_rec(
+        &self,
+        e: &Expr,
+        frame: &Frame,
+        f: &mut impl FnMut(&Arc<ExpressionNode>, &Frame) -> bool,
+        seen: &mut HashSet<(usize, usize)>,
+    ) {
+        match e {
+            Expr::Variable(v) => {
+                let (x, fr) = frame.leaf(v);
+                if !matches!(x, Expr::Variable(_)) {
+                    self.walk_rec(&x, &fr, f, seen);
+                }
+            }
+            Expr::Operator(node) => {
+                if !seen.insert((Arc::as_ptr(node) as usize, frame.id())) {
+                    return;
+                }
+                if !f(node, frame) {
+                    return;
+                }
+                if let Some(r) = reference_node(node) {
+                    if let Some(def) = self.resolve(&r)
+                        && let Some(body) = &def.body
+                    {
+                        let inner = frame.enter(&r, def);
+                        self.walk_rec(body, &inner, f, seen);
+                    }
+                    return;
+                }
+                node.for_each_child(&mut |c| self.walk_rec(c, frame, f, seen));
+            }
+            _ => {}
+        }
+    }
+
+    /// The expression a reference read in `frame` denotes at its root, when
+    /// that is an operator node: its definition's body, through references
+    /// the body is and parameters bound to references, with the frame it is
+    /// read in. `None` for a definition the registry does not hold.
+    pub fn denoted_root(&self, node: &ExpressionNode, frame: &Frame) -> Option<(Expr, Frame)> {
+        self.denoted_root_at(node, frame, 0)
+    }
+
+    fn denoted_root_at(
+        &self,
+        node: &ExpressionNode,
+        frame: &Frame,
+        depth: usize,
+    ) -> Option<(Expr, Frame)> {
+        if depth > 64 {
+            return None;
+        }
+        let r = reference_node(node)?;
+        let def = self.resolve(&r)?;
+        let mut fr = frame.enter(&r, def);
+        let mut x = def.body.clone()?;
+        loop {
+            match &x {
+                Expr::Variable(v) => {
+                    let (y, f2) = fr.leaf(v);
+                    if matches!(y, Expr::Variable(_)) {
+                        return Some((y, f2));
+                    }
+                    x = y;
+                    fr = f2;
+                }
+                Expr::Operator(n) if n.op == APPLY_OP => {
+                    return self.denoted_root_at(n, &fr, depth + 1);
+                }
+                _ => return Some((x, fr)),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

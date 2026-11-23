@@ -1034,7 +1034,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         .unwrap_or_default();
 
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
-    maybe_apply_pointwise_lift(file, &mut parts, &mut index_sets)?;
+    maybe_apply_pointwise_lift(file, &mut parts, &mut index_sets, &mut flat_reg.registry)?;
 
     // Phase 5b′ (esm-libraries-spec §4.7.5 step 3a): resolve a right-hand-side
     // STRUCTURAL time derivative to the tendency this system defines for it
@@ -2861,7 +2861,12 @@ fn maybe_apply_pointwise_lift(
     file: &EsmFile,
     parts: &mut AssembledParts,
     index_sets: &mut IndexMap<String, IndexSet>,
+    registry: &mut IndexMap<String, serde_json::Value>,
 ) -> Result<(), FlattenError> {
+    // The references the lift meets are read through the flattened registry
+    // (an operator written as a reference keeps its `makearray` in the
+    // definition's body), never expanded.
+    let refs = crate::operator_refs::OperatorRegistry::from_json(registry.iter());
     let mut no_operator_route: HashSet<String> = HashSet::new();
     let mut masks: HashMap<String, HashSet<String>> = HashMap::new();
     let non_pointwise = |l: &Option<String>| l.as_deref().is_some_and(|l| l != "pointwise");
@@ -2911,6 +2916,7 @@ fn maybe_apply_pointwise_lift(
         index_sets,
         no_operator_route: &no_operator_route,
         masks: &masks,
+        refs: &refs,
     };
     let Some(lifted) = plan_pointwise_lift(&parts.equations, lift)? else {
         return Ok(());
@@ -2950,7 +2956,7 @@ fn maybe_apply_pointwise_lift(
     for (name, axes) in &lifted.axes {
         read_shapes.insert(name.clone(), axes.clone());
     }
-    rewrite_lifted_equations(&mut parts.equations, &lifted, &read_shapes)
+    rewrite_lifted_equations(&mut parts.equations, &lifted, &read_shapes, &refs, registry)
 }
 
 /// Is `node` the STRUCTURAL time derivative — `D` with `wrt: "t"` or no `wrt`
@@ -5683,92 +5689,149 @@ pub(crate) fn extract_ic_target(lhs: &Expr) -> Option<String> {
 /// Collect every `makearray` node reachable from `expr`, recursing through
 /// [`ExpressionNode::for_each_child`] so no expression-bearing sidecar field
 /// is missed; nodes land in its contractual pre-order.
-fn collect_makearrays<'a>(acc: &mut Vec<&'a ExpressionNode>, expr: &'a Expr) {
-    let Expr::Operator(node) = expr else {
-        return;
-    };
-    if node.op == "makearray" {
-        acc.push(node);
-    }
-    node.for_each_child(&mut |c| collect_makearrays(acc, c));
+/// Every `makearray` `expr` holds, with the frame it is read in, through the
+/// references it makes (an operator written as a reference keeps its
+/// `makearray` in the definition's body), in depth-first order.
+fn collect_makearrays(
+    refs: &crate::operator_refs::OperatorRegistry,
+    expr: &Expr,
+) -> Vec<(std::sync::Arc<ExpressionNode>, crate::operator_refs::Frame)> {
+    let mut acc = Vec::new();
+    refs.walk_through(expr, &crate::operator_refs::Frame::root(), &mut |n, fr| {
+        if n.op == "makearray" {
+            acc.push((std::sync::Arc::clone(n), fr.clone()));
+        }
+        true
+    });
+    acc
 }
 
 /// First `Variable` leaf name in an index-argument expression (the loop variable
-/// of that index position), or `None` for a constant position.
-fn index_arg_loop(expr: &Expr) -> Option<String> {
+/// of that index position), or `None` for a constant position. Read in
+/// `frame`: a parameter leaf reads its binding, and a reference its body.
+fn index_arg_loop(
+    expr: &Expr,
+    refs: &crate::operator_refs::OperatorRegistry,
+    frame: &crate::operator_refs::Frame,
+) -> Option<String> {
     match expr {
-        Expr::Variable(v) => Some(v.clone()),
-        Expr::Operator(node) => {
-            for a in &node.args {
-                if let Some(v) = index_arg_loop(a) {
-                    return Some(v);
-                }
+        Expr::Variable(v) => {
+            let (x, fr) = frame.leaf(v);
+            match x {
+                Expr::Variable(n) => Some(n),
+                other => index_arg_loop(&other, refs, &fr),
             }
-            None
         }
+        Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+            let (x, fr) = refs.denoted_root(node, frame)?;
+            index_arg_loop(&x, refs, &fr)
+        }
+        Expr::Operator(node) => node.args.iter().find_map(|a| index_arg_loop(a, refs, frame)),
         _ => None,
     }
 }
 
 /// Determine the ordered spatial loop variables of a lowered spatial operator by
-/// reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` whose
-/// every position carries a loop variable (the interior stencil). Returns the
-/// loop names in index-position (dim) order, or `None`.
+/// reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` (read
+/// in `frame`, through references) whose every position carries a loop
+/// variable (the interior stencil). Returns the loop names in index-position
+/// (dim) order, or `None`. The walk covers `args`, `expr` and `values` only.
 fn detect_lift_loops(
     ma: &ExpressionNode,
+    frame: &crate::operator_refs::Frame,
     lifted: &HashSet<String>,
     rank: usize,
+    refs: &crate::operator_refs::OperatorRegistry,
 ) -> Option<Vec<String>> {
-    fn walk(expr: &Expr, lifted: &HashSet<String>, rank: usize, out: &mut Option<Vec<String>>) {
-        if out.is_some() {
-            return;
-        }
-        let Expr::Operator(node) = expr else {
-            return;
-        };
-        if node.op == "index"
-            && node.args.len() == rank + 1
-            && let Some(Expr::Variable(name)) = node.args.first()
-            && lifted.contains(name)
-        {
-            let mut loops = Vec::with_capacity(rank);
-            let mut ok = true;
-            for a in node.args.iter().skip(1) {
-                match index_arg_loop(a) {
-                    Some(lv) => loops.push(lv),
-                    None => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                *out = Some(loops);
+    use crate::operator_refs::Frame;
+    struct W<'r> {
+        lifted: &'r HashSet<String>,
+        rank: usize,
+        refs: &'r crate::operator_refs::OperatorRegistry,
+        seen: HashSet<(usize, usize)>,
+        out: Option<Vec<String>>,
+    }
+    impl W<'_> {
+        fn expr(&mut self, e: &Expr, fr: &Frame) {
+            if self.out.is_some() {
                 return;
             }
+            match e {
+                Expr::Variable(v) => {
+                    let (x, f2) = fr.leaf(v);
+                    if !matches!(x, Expr::Variable(_)) {
+                        self.expr(&x, &f2);
+                    }
+                }
+                Expr::Operator(node) => {
+                    if !self
+                        .seen
+                        .insert((std::sync::Arc::as_ptr(node) as usize, fr.id()))
+                    {
+                        return;
+                    }
+                    if node.op == crate::operator_refs::APPLY_OP {
+                        if let Some(r) = crate::operator_refs::reference_node(node)
+                            && let Some(def) = self.refs.resolve(&r)
+                            && let Some(body) = &def.body
+                        {
+                            let inner = fr.enter(&r, def);
+                            self.expr(body, &inner);
+                        }
+                        return;
+                    }
+                    self.node(node, fr);
+                }
+                _ => {}
+            }
         }
-        for a in &node.args {
-            walk(a, lifted, rank, out);
-        }
-        if let Some(e) = &node.expr {
-            walk(e, lifted, rank, out);
-        }
-        if let Some(vs) = &node.values {
-            for v in vs {
-                walk(v, lifted, rank, out);
+        fn node(&mut self, node: &ExpressionNode, fr: &Frame) {
+            if node.op == "index"
+                && node.args.len() == self.rank + 1
+                && let Some(Expr::Variable(a)) = node.args.first()
+                && let (Expr::Variable(name), _) = fr.leaf(a)
+                && self.lifted.contains(&name)
+            {
+                let loops: Option<Vec<String>> = node
+                    .args
+                    .iter()
+                    .skip(1)
+                    .map(|a| index_arg_loop(a, self.refs, fr))
+                    .collect();
+                if let Some(loops) = loops {
+                    self.out = Some(loops);
+                    return;
+                }
+            }
+            for a in &node.args {
+                self.expr(a, fr);
+            }
+            if let Some(e) = &node.expr {
+                self.expr(e, fr);
+            }
+            if let Some(vs) = &node.values {
+                for v in vs {
+                    self.expr(v, fr);
+                }
             }
         }
     }
-    let mut out = None;
+    let mut w = W {
+        lifted,
+        rank,
+        refs,
+        seen: HashSet::new(),
+        out: None,
+    };
     for a in &ma.args {
-        walk(a, lifted, rank, &mut out);
+        w.expr(a, frame);
     }
     if let Some(vs) = &ma.values {
         for v in vs {
-            walk(v, lifted, rank, &mut out);
+            w.expr(v, frame);
         }
     }
-    out
+    w.out
 }
 
 /// Per-dimension grid extent of a lowered spatial operator: the largest cell
@@ -5808,54 +5871,44 @@ fn makearray_extents(ma: &ExpressionNode) -> Vec<i64> {
 /// `None`. A loop symbol repeated across dimensions (a diagonal gather) names
 /// nothing. esm-libraries-spec §4.7.5, "Pointwise lift: index sets".
 fn lift_axis_names(
-    mas: &[&ExpressionNode],
+    mas: &[(std::sync::Arc<ExpressionNode>, crate::operator_refs::Frame)],
     loops: &[String],
     extents: &[i64],
     var_shapes: &HashMap<String, Vec<String>>,
     index_sets: &IndexMap<String, IndexSet>,
+    refs: &crate::operator_refs::OperatorRegistry,
 ) -> Vec<Option<String>> {
-    // Visits `node` and every expression-bearing child below it through
-    // [`ExpressionNode::for_each_child`], so a gather under `filter`,
-    // `lower`, `upper`, … names its dimension too.
-    fn walk(
-        node: &ExpressionNode,
-        dim_of: &HashMap<&str, Option<usize>>,
-        extents: &[i64],
-        var_shapes: &HashMap<String, Vec<String>>,
-        index_sets: &IndexMap<String, IndexSet>,
-        evidence: &mut [BTreeSet<String>],
-    ) {
-        if node.op == "index"
-            && let Some(Expr::Variable(name)) = node.args.first()
-            && let Some(shape) = var_shapes.get(name)
-            && shape.len() + 1 == node.args.len()
-        {
-            for (p, axis) in shape.iter().enumerate() {
-                let Some(loop_name) = index_arg_loop(&node.args[p + 1]) else {
-                    continue;
-                };
-                let Some(Some(d)) = dim_of.get(loop_name.as_str()) else {
-                    continue;
-                };
-                if index_sets.get(axis).and_then(|s| s.size) == Some(extents[*d]) {
-                    evidence[*d].insert(axis.clone());
-                }
-            }
-        }
-        node.for_each_child(&mut |c| {
-            if let Expr::Operator(child) = c {
-                walk(child, dim_of, extents, var_shapes, index_sets, evidence);
-            }
-        });
-    }
     let mut dim_of: HashMap<&str, Option<usize>> = HashMap::new();
     for (d, l) in loops.iter().enumerate() {
         let repeated = dim_of.contains_key(l.as_str());
         dim_of.insert(l.as_str(), if repeated { None } else { Some(d) });
     }
     let mut evidence: Vec<BTreeSet<String>> = vec![BTreeSet::new(); loops.len()];
-    for ma in mas {
-        walk(ma, &dim_of, extents, var_shapes, index_sets, &mut evidence);
+    // Visits every expression-bearing child through the references the
+    // makearray makes, so a gather under `filter`, `lower`, `upper`, … names
+    // its dimension too.
+    for (ma, frame) in mas {
+        refs.walk_through(&Expr::Operator(std::sync::Arc::clone(ma)), frame, &mut |node, fr| {
+            if node.op == "index"
+                && let Some(Expr::Variable(a)) = node.args.first()
+                && let (Expr::Variable(name), _) = fr.leaf(a)
+                && let Some(shape) = var_shapes.get(&name)
+                && shape.len() + 1 == node.args.len()
+            {
+                for (p, axis) in shape.iter().enumerate() {
+                    let Some(loop_name) = index_arg_loop(&node.args[p + 1], refs, fr) else {
+                        continue;
+                    };
+                    let Some(Some(d)) = dim_of.get(loop_name.as_str()) else {
+                        continue;
+                    };
+                    if index_sets.get(axis).and_then(|s| s.size) == Some(extents[*d]) {
+                        evidence[*d].insert(axis.clone());
+                    }
+                }
+            }
+            true
+        });
     }
     evidence
         .into_iter()
@@ -5897,16 +5950,18 @@ impl DeclaredIndexSets {
 /// declares (`declared`, grouped by size) whose `size` is the extent; else
 /// `_liftdim<d>_<extent>`, added to `index_sets` as an interval of that size if
 /// it is not there yet.
+#[allow(clippy::too_many_arguments)]
 fn lift_index_sets(
-    mas: &[&ExpressionNode],
+    mas: &[(std::sync::Arc<ExpressionNode>, crate::operator_refs::Frame)],
     loops: &[String],
     extents: &[i64],
     var_shapes: &HashMap<String, Vec<String>>,
     declared: &DeclaredIndexSets,
     index_sets: &mut IndexMap<String, IndexSet>,
     species: &str,
+    refs: &crate::operator_refs::OperatorRegistry,
 ) -> Result<Vec<String>, FlattenError> {
-    let named = lift_axis_names(mas, loops, extents, var_shapes, &declared.sets);
+    let named = lift_axis_names(mas, loops, extents, var_shapes, &declared.sets, refs);
     let mut axes = Vec::with_capacity(extents.len());
     for (d, &extent) in extents.iter().enumerate() {
         if let Some(Some(name)) = named.get(d) {
@@ -5966,6 +6021,13 @@ struct LiftGrid<'a> {
     species: &'a str,
 }
 
+/// How the pointwise lift reads the references a right-hand side makes.
+struct CellRefs<'a, 'c, 'r> {
+    refs: &'a crate::operator_refs::OperatorRegistry,
+    ctx: &'c mut crate::elementwise_lift::EwContext<'r>,
+    shapes: &'a HashMap<String, Vec<String>>,
+}
+
 /// Rewrite a scalar (merged reaction + operator) RHS into its per-cell form over
 /// the lift grid. Each spatial-operator `makearray` becomes
 /// `index(makearray, loops…)` (its region values already index per cell);
@@ -5990,6 +6052,7 @@ fn lift_rhs_to_cell(
     var_shapes: &HashMap<String, Vec<String>>,
     grid: &LiftGrid<'_>,
     elementwise: bool,
+    cell: &mut CellRefs<'_, '_, '_>,
 ) -> Result<Expr, FlattenError> {
     match expr {
         Expr::Variable(name) if arrayvars.contains(name) => match var_shapes.get(name) {
@@ -5998,6 +6061,31 @@ fn lift_rhs_to_cell(
         },
         Expr::Variable(_) | Expr::Number(_) | Expr::Integer(_) => Ok(expr.clone()),
         Expr::Operator(node) => {
+            if node.op == crate::operator_refs::APPLY_OP {
+                // An operator written as a reference denotes its
+                // `makearray`: read per cell like one, and it stays a
+                // reference. Any other reference is read at the cell as the
+                // elementwise lift reads one (esm-spec §9.6.11): its
+                // bindings by their parameters' roles.
+                let root = cell
+                    .refs
+                    .denoted_root(node, &crate::operator_refs::Frame::root());
+                if matches!(&root, Some((Expr::Operator(n), _)) if n.op == "makearray") {
+                    return Ok(index_expr(expr, grid.loops));
+                }
+                let mut l = crate::elementwise_lift::Lift::new(
+                    &mut *cell.ctx,
+                    grid.axes,
+                    grid.loops,
+                    cell.shapes,
+                    grid.species,
+                );
+                return l
+                    .at_cell(expr, &Default::default(), false)
+                    .map_err(|message| FlattenError::DimensionPromotion {
+                        message: format!("pointwise lift: {message}"),
+                    });
+            }
             if node.op == "makearray" {
                 return Ok(index_makearray(node, grid.loops));
             }
@@ -6022,7 +6110,7 @@ fn lift_rhs_to_cell(
             out.args = node
                 .args
                 .iter()
-                .map(|a| lift_rhs_to_cell(a, arrayvars, var_shapes, grid, inner))
+                .map(|a| lift_rhs_to_cell(a, arrayvars, var_shapes, grid, inner, cell))
                 .collect::<Result<_, _>>()?;
             Ok(Expr::operator(out))
         }
@@ -6123,6 +6211,18 @@ fn index_node(name: &str, loops: &[String]) -> Expr {
 /// Build `index(<makearray>, loops…)`, the makearray tagged with the grid's
 /// loop symbols as its `output_idx`, in grid order, as every binding's lift
 /// writes it (the flatten corpus pins the tag).
+/// `index(e, loops…)`: `e`'s element at the current cell, positionally.
+fn index_expr(e: &Expr, loops: &[String]) -> Expr {
+    let mut args = Vec::with_capacity(loops.len() + 1);
+    args.push(e.clone());
+    args.extend(loops.iter().map(|l| Expr::Variable(l.clone())));
+    Expr::operator(ExpressionNode {
+        op: "index".to_string(),
+        args,
+        ..Default::default()
+    })
+}
+
 fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
     let mut tagged = ma.clone();
     tagged.output_idx = Some(loops.to_vec());
@@ -6156,6 +6256,8 @@ struct PointwiseLift<'a> {
     /// Per component, the sources of the non-pointwise `variable_map`s into
     /// it, read as scalars when deciding its candidates.
     masks: &'a HashMap<String, HashSet<String>>,
+    /// The flattened registry, typed: references are read through it.
+    refs: &'a crate::operator_refs::OperatorRegistry,
 }
 
 /// How one lifted state's equation is rewritten: the index set of each grid
@@ -6335,6 +6437,7 @@ fn plan_pointwise_lift(
         index_sets,
         no_operator_route,
         masks,
+        refs,
     } = lift;
     let is_scalar = |v: &ModelVariable| v.shape.as_ref().is_none_or(|s| s.is_empty());
     let defs = bare_definitions(equations);
@@ -6369,9 +6472,7 @@ fn plan_pointwise_lift(
             if no_operator_route.contains(top_component(target)) {
                 return false;
             }
-            let mut mas: Vec<&ExpressionNode> = Vec::new();
-            collect_makearrays(&mut mas, rhs);
-            !mas.is_empty()
+            !collect_makearrays(refs, rhs).is_empty()
         })
         .map(|(target, _)| target.clone())
         .collect();
@@ -6381,9 +6482,8 @@ fn plan_pointwise_lift(
         if !operator_route.contains(species) || plans.contains_key(species) {
             continue;
         }
-        let mut mas: Vec<&ExpressionNode> = Vec::new();
-        collect_makearrays(&mut mas, rhs);
-        let first_ma = mas[0];
+        let mas = collect_makearrays(refs, rhs);
+        let first_ma = &*mas[0].0;
         let regions = match &first_ma.regions {
             Some(r) if !r.is_empty() => r,
             _ => continue,
@@ -6391,8 +6491,8 @@ fn plan_pointwise_lift(
         let rank = regions[0].len();
         // Loop variables of the grid iteration, read from an interior stencil.
         let mut loops: Option<Vec<String>> = None;
-        for ma in &mas {
-            loops = detect_lift_loops(ma, &operator_route, rank);
+        for (ma, frame) in &mas {
+            loops = detect_lift_loops(ma, frame, &operator_route, rank, refs);
             if loops.is_some() {
                 break;
             }
@@ -6409,7 +6509,7 @@ fn plan_pointwise_lift(
         })?;
         let extents = makearray_extents(first_ma);
         let axes = lift_index_sets(
-            &mas, &loops, &extents, var_shapes, &declared, index_sets, species,
+            &mas, &loops, &extents, var_shapes, &declared, index_sets, species, refs,
         )?;
         extents_of.insert(species.clone(), extents);
         plans.insert(
@@ -6619,7 +6719,10 @@ fn rewrite_lifted_equations(
     equations: &mut [FlatEq],
     lifted: &LiftedStates,
     read_shapes: &HashMap<String, Vec<String>>,
+    refs: &crate::operator_refs::OperatorRegistry,
+    registry: &mut IndexMap<String, serde_json::Value>,
 ) -> Result<(), FlattenError> {
+    let mut ctx = crate::elementwise_lift::EwContext::new(registry);
     let arrayvars: HashSet<String> = read_shapes.keys().cloned().collect();
     for fe in equations.iter_mut() {
         let Some(species) = extract_ddt_dependent(&fe.eq.lhs) else {
@@ -6672,7 +6775,14 @@ fn rewrite_lifted_equations(
             axes,
             species: &species,
         };
-        fe.try_map_contributions(|e| lift_rhs_to_cell(e, &arrayvars, read_shapes, &grid, true))?;
+        let mut cell = CellRefs {
+            refs,
+            ctx: &mut ctx,
+            shapes: read_shapes,
+        };
+        fe.try_map_contributions(|e| {
+            lift_rhs_to_cell(e, &arrayvars, read_shapes, &grid, true, &mut cell)
+        })?;
     }
     Ok(())
 }
@@ -7087,7 +7197,18 @@ mod tests {
         index_sets.insert("x".to_string(), interval(3));
         // A second size-3 set, so the size fallback could not pick `x` alone.
         index_sets.insert("y".to_string(), interval(3));
-        let named = lift_axis_names(&[&ma], &["i".to_string()], &[3], &var_shapes, &index_sets);
+        let mas = [(
+            std::sync::Arc::new(ma),
+            crate::operator_refs::Frame::root(),
+        )];
+        let named = lift_axis_names(
+            &mas,
+            &["i".to_string()],
+            &[3],
+            &var_shapes,
+            &index_sets,
+            &crate::operator_refs::OperatorRegistry::default(),
+        );
         assert_eq!(named, vec![Some("x".to_string())]);
     }
 

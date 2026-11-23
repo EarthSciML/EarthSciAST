@@ -314,18 +314,12 @@ fn built(file: &EsmFile, compiler: Compiler) -> Result<Vec<(String, u64, u64)>, 
 
 #[test]
 fn the_flattened_system_on_the_wire_matches_the_shared_golden() {
-    let dir = common::category_dir("flatten_wire");
-    let cases: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("cases.json")).unwrap()).unwrap();
-    let cases = cases["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 8);
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
-        let file = load_path(dir.join(case["fixture"].as_str().unwrap()))
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
+    for (name, _, file) in cases() {
         let kept = flatten(&file).unwrap_or_else(|e| panic!("{name}: {e}"));
         // The flattened system with its references kept (esm-spec §9.6.4,
         // §9.6.11), byte for byte.
+        let case = &case_entries()[&name];
+        let dir = common::category_dir("flatten_wire");
         let refs_golden = case["refs_golden"].as_str().expect("a refs_golden");
         let got = refs_form(&kept);
         let want = std::fs::read_to_string(dir.join(refs_golden)).unwrap();
@@ -335,16 +329,51 @@ fn the_flattened_system_on_the_wire_matches_the_shared_golden() {
         );
         // Its expansion, the form a consumer that expands at its boundary
         // writes out.
-        let flat = expanded(&kept);
-        let got = wire_form(&flat);
+        let got = wire_form(&expanded(&kept));
         let want = std::fs::read_to_string(dir.join(case["golden"].as_str().unwrap())).unwrap();
         assert!(
             got == want,
             "{name}: the flattened wire form differs from the golden\n got: {got}\nwant: {want}"
         );
+    }
+}
+
+/// Every case of `cases.json`, by name.
+fn case_entries() -> serde_json::Map<String, Value> {
+    let dir = common::category_dir("flatten_wire");
+    let cases: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("cases.json")).unwrap()).unwrap();
+    let cases = cases["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 8);
+    cases
+        .iter()
+        .map(|c| (c["name"].as_str().unwrap().to_string(), c.clone()))
+        .collect()
+}
+
+/// Every case: its name, whether the reference evaluator builds it, and its
+/// fixture loaded.
+fn cases() -> Vec<(String, bool, EsmFile)> {
+    let dir = common::category_dir("flatten_wire");
+    case_entries()
+        .into_iter()
+        .map(|(name, case)| {
+            let file = load_path(dir.join(case["fixture"].as_str().unwrap()))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            (name, case["builds"].as_bool().unwrap(), file)
+        })
+        .collect()
+}
+
+/// The flattened system written out (expanded, as the planner writes it) and
+/// read back builds under both compilers to the original's initial state and
+/// right-hand side, bit for bit, or is refused where the original is.
+#[test]
+fn the_written_out_system_builds_as_the_original() {
+    for (name, builds, file) in cases() {
+        let flat = expanded(&flatten(&file).unwrap_or_else(|e| panic!("{name}: {e}")));
         let text = flattened_document(&flat).to_string();
         let back = load_string(&text).unwrap_or_else(|e| panic!("{name}: read back: {e}\n{text}"));
-        let builds = case["builds"].as_bool().unwrap();
         for compiler in [Compiler::Interpreter, Compiler::Native] {
             let original = built(&file, compiler);
             let written = built(&back, compiler);
