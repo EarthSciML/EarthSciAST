@@ -1998,7 +1998,22 @@ pub fn first_unlowered_operator(flat: &FlattenedSystem) -> Option<String> {
             }
         }
     }
+    // A reference denotes its expansion (esm-spec §9.6.3 constraint 6): each
+    // instance the equations reach is walked once, its literal parameters in
+    // place.
+    for inst in reached_instances(flat) {
+        if let Err(FlattenError::UnloweredOperator { op }) = reject_spatial_operators(&inst.body) {
+            return Some(op);
+        }
+    }
     None
+}
+
+/// Every definition instance the flattened equations reach, each once.
+fn reached_instances(flat: &FlattenedSystem) -> Vec<std::sync::Arc<crate::operator_refs::Instance>> {
+    let reg = flat.operators();
+    let roots: Vec<&Expr> = flat.equations.iter().flat_map(|e| [&e.lhs, &e.rhs]).collect();
+    reg.instances(roots)
 }
 
 /// [`first_unlowered_operator`] with, for an unresolved call of a defined
@@ -2025,8 +2040,14 @@ pub fn first_unlowered_call(flat: &FlattenedSystem) -> Option<(String, String)> 
         });
         hit
     }
-    for eq in &flat.equations {
-        for side in [&eq.lhs, &eq.rhs] {
+    let instances = reached_instances(flat);
+    let sides = flat
+        .equations
+        .iter()
+        .flat_map(|eq| [&eq.lhs, &eq.rhs])
+        .chain(instances.iter().map(|i| &i.body));
+    for side in sides {
+        {
             if let Some(node) = find(side) {
                 let why = if node.op == "D" {
                     String::new()

@@ -632,12 +632,9 @@ impl<'m> TapeBuilder<'m> {
             f.pop_scope();
             lv?
         };
-        if f.fault.first.is_some() || !f.fault.lazy.is_empty() || f.fault.notes > 0 {
-            bail_tape!(
-                "operator reference `{name}`: its body can latch a fail-closed fault, which a \
-                 called function does not order yet"
-            );
-        }
+        // A fail-closed fault the body can latch is emitted in the function
+        // (its `Fault` / `FaultScan`), and latches when a call runs it.
+        f.flush_rule_fault()?;
         f.end_rule();
         let state_count = var_shapes.len();
         let result = match lv {
