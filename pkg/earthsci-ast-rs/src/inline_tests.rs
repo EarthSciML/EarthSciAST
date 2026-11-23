@@ -1860,14 +1860,20 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
 ///
 /// Only `y ~ f(…)` definitions are walked ([`crate::classification::LhsForm`]
 /// calls that shape `Bare`): an ODE state is not read from a build field at
-/// all, and an implicit constraint defines no single name.
-fn time_dependent_observeds(model: &Model) -> std::collections::BTreeSet<String> {
+/// all, and an implicit constraint defines no single name. The model's
+/// operator references are read through `operators`, its top-level
+/// component's registry: a definition body that reads `t` free makes the
+/// reference time-dependent.
+fn time_dependent_observeds(
+    model: &Model,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> std::collections::BTreeSet<String> {
     use crate::dependency::{DependencySummaries, Leaf, Reads};
     let mut defs: HashMap<String, Reads> = HashMap::new();
     for eq in &model.equations {
         if let crate::classification::LhsForm::Bare(name) = crate::classification::lhs_form(&eq.lhs)
         {
-            let reads = Reads::of(&eq.rhs);
+            let reads = Reads::of_in(&eq.rhs, operators);
             let entry = defs.entry(name).or_default();
             entry.names.extend(reads.names);
             entry.join_names.extend(reads.join_names);
@@ -1916,8 +1922,10 @@ fn unevaluable_time_dependent_assertion(
         }
         let (owner, variable) = resolve_asserted_name(file, model_name, &a.variable);
         let dependent = per_owner.entry(owner.clone()).or_insert_with(|| {
+            let top = owner.split('.').next().unwrap_or(&owner);
+            let operators = file.component_operators(&format!("models.{top}"));
             model_at(file, &owner)
-                .map(time_dependent_observeds)
+                .map(|m| time_dependent_observeds(m, &operators))
                 .unwrap_or_default()
         });
         if dependent.contains(variable) {

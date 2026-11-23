@@ -67,7 +67,51 @@ pub struct Definition {
     pub is_rule: bool,
     /// The entry exactly as the registry holds it on the wire.
     pub raw: Value,
+    /// The fixed unit expression of `partial` (`[f]/[wrt]`) or `integral`
+    /// (`[f]·[var]`) over the params, when the entry defines one of them by a
+    /// `match` rule (esm-spec §4.2, §9.6.12 "Units"): read off its `match`, or,
+    /// for a rule a firing materialized without its `match`, the expression
+    /// the load kept for it. `None` for every other entry.
+    pub fixed_units: Option<Expr>,
     facts: OnceLock<BodyFacts>,
+    reads: OnceLock<DefinitionReads>,
+    literals: OnceLock<HashSet<String>>,
+}
+
+/// What the expansion of a reference to a definition reads from the
+/// reference's site (esm-spec §9.6.4 rule 2), computed once per definition
+/// through the bodies it references ([`Definition::reads`]).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DefinitionReads {
+    /// The params whose binding the expansion reads as a value: a param the
+    /// body reads as a variable leaf, directly or in a binding a nested
+    /// reference reads. A param spelled only in a scalar field, a `ranges`
+    /// bound or a region bound (a literal of the instance) is not read, nor
+    /// is one the body never mentions.
+    pub params: BTreeSet<String>,
+    /// The names the expansion reads free: the body's own free names, and
+    /// those of the definitions it references, less any a loop symbol of an
+    /// enclosing body captures. Read in the scope of the reference's site
+    /// (empty in a flattened registry, whose bodies are closed).
+    pub free: BTreeSet<String>,
+    /// Every loop symbol the body binds anywhere: a name in a binding the
+    /// expansion reads is captured by it there (read wide, as Julia's
+    /// `_tpl_scope_binders`).
+    pub binders: BTreeSet<String>,
+    /// The names the body, or a body it references, spells as a bare `index`
+    /// subscript (`index(f, i, j)`): a check that takes every bare subscript
+    /// of an expression for a binder in scope throughout it (as the
+    /// undeclared-name check does) reads these as bound at the site.
+    pub index_subscripts: BTreeSet<String>,
+    /// The names the expansion reads as the base of an `index` (`index(a,
+    /// …)`): free names, and params whose binding is substituted there (the
+    /// reference's binding, when it is a bare name, is then read as one).
+    /// Through the bodies it references, a param forwarded as a bare name to
+    /// a callee's index base counts.
+    pub index_bases: BTreeSet<String>,
+    /// [`Self::index_bases`] restricted to the reads with a subscript that is
+    /// not a bare name: a read that may be offset along an axis.
+    pub offset_index_bases: BTreeSet<String>,
 }
 
 /// What a body says about its parameters and the names it binds, computed
@@ -106,7 +150,8 @@ impl Definition {
                     .collect()
             })
             .unwrap_or_default();
-        let parse = |v: Option<&Value>| v.and_then(|b| serde_json::from_value::<Expr>(b.clone()).ok());
+        let parse =
+            |v: Option<&Value>| v.and_then(|b| serde_json::from_value::<Expr>(b.clone()).ok());
         Definition {
             name: name.to_string(),
             params,
@@ -115,9 +160,102 @@ impl Definition {
             units: parse(get("units")),
             reference_only: get("reference_only").and_then(Value::as_bool) == Some(true),
             is_rule: get("match").is_some(),
+            fixed_units: fixed_units_json(raw).and_then(|v| serde_json::from_value(v).ok()),
             raw: raw.clone(),
             facts: OnceLock::new(),
+            reads: OnceLock::new(),
+            literals: OnceLock::new(),
         }
+    }
+
+    /// The literal params ([`Self::is_literal_param`]), and with them every
+    /// param the body passes, as a bare name, to a literal param of a
+    /// definition it references: its value lands in that literal position,
+    /// so it is part of the instance too.
+    fn literal_params(&self, registry: &OperatorRegistry) -> &HashSet<String> {
+        self.literals.get_or_init(|| {
+            let mut out: HashSet<String> = self
+                .params
+                .iter()
+                .filter(|p| self.is_literal_param(p))
+                .cloned()
+                .collect();
+            if let Some(body) = &self.body {
+                for_each_reference(body, &mut |r| {
+                    let Some(callee) = registry.resolve(&r) else {
+                        return;
+                    };
+                    for (q, b) in r.bindings {
+                        if let Expr::Variable(p) = b
+                            && self.params.contains(p)
+                            && callee.literal_params(registry).contains(q)
+                        {
+                            out.insert(p.clone());
+                        }
+                    }
+                });
+            }
+            out
+        })
+    }
+
+    /// What a reference to this definition reads from its site
+    /// ([`DefinitionReads`]); `registry` is the one this definition is in,
+    /// where its callees resolve. Computed once.
+    pub fn reads(&self, registry: &OperatorRegistry) -> &DefinitionReads {
+        self.reads.get_or_init(|| {
+            let mut out = DefinitionReads {
+                binders: self.body_binders().iter().cloned().collect(),
+                ..Default::default()
+            };
+            if let Some(body) = &self.body {
+                let params: HashSet<&str> = self.params.iter().map(String::as_str).collect();
+                body_reads(body, &params, registry, &mut Vec::new(), &mut out);
+            }
+            out
+        })
+    }
+
+    /// The literals a reference binds to this definition's literal params
+    /// (§9.6.4 rule 3: they are part of the instance), each a name or a
+    /// number spelled as a string. A binding that is a name the enclosing
+    /// instance `outer` binds as a literal reads through it. A literal param
+    /// bound to anything else is left out.
+    pub fn instance_literals(
+        &self,
+        r: &Reference<'_>,
+        outer: &InstanceLiterals,
+        registry: &OperatorRegistry,
+    ) -> InstanceLiterals {
+        let mut out = InstanceLiterals::new();
+        for p in &self.params {
+            if !self.is_literal_param(p) && !self.literal_params(registry).contains(p) {
+                continue;
+            }
+            let lit = match r.binding(p) {
+                Some(Expr::Variable(s)) => outer.get(s).cloned().unwrap_or_else(|| s.clone()),
+                Some(Expr::Integer(i)) => i.to_string(),
+                Some(Expr::Number(n)) => n.to_string(),
+                _ => continue,
+            };
+            out.insert(p.clone(), lit);
+        }
+        out
+    }
+
+    /// The body of the instance whose literal params are bound to `literals`:
+    /// each literal param, where it sits in a scalar field (`wrt`, `dim`,
+    /// `var`, `reduce`, `semiring`, `fn`), a `ranges` `from` / `of`, or an
+    /// `enum` argument, replaced by its literal; every other position (operand
+    /// reads above all) untouched. This is the per-instance specialization of
+    /// esm-spec §9.6.4 rule 3, made once per instance; no binding of an
+    /// operand is substituted. `None` when the definition has no body.
+    pub fn instance_body(&self, literals: &InstanceLiterals) -> Option<Expr> {
+        let body = self.body.as_ref()?;
+        if literals.is_empty() {
+            return Some(body.clone());
+        }
+        Some(specialize(body, literals, &mut Vec::new()))
     }
 
     fn facts(&self) -> &BodyFacts {
@@ -188,9 +326,16 @@ fn body_facts(e: &Expr, params: &HashSet<&str>, bound: &HashSet<String>, f: &mut
             f.roles.entry(s.to_string()).or_default().literal = true;
         }
     };
-    for s in [&node.wrt, &node.dim, &node.int_var, &node.reduce, &node.semiring, &node.broadcast_fn]
-        .into_iter()
-        .flatten()
+    for s in [
+        &node.wrt,
+        &node.dim,
+        &node.int_var,
+        &node.reduce,
+        &node.semiring,
+        &node.broadcast_fn,
+    ]
+    .into_iter()
+    .flatten()
     {
         literal(s);
     }
@@ -254,6 +399,199 @@ fn json_strings(v: &Value, f: &mut impl FnMut(&str)) {
     }
 }
 
+/// The literal value of each literal param of a definition instance
+/// ([`Definition::instance_literals`]).
+pub type InstanceLiterals = std::collections::BTreeMap<String, String>;
+
+/// The fixed unit expression of a registry entry, wire form
+/// ([`Definition::fixed_units`]).
+fn fixed_units_json(raw: &Value) -> Option<Value> {
+    if let Some(kept) = crate::lower_expression_templates::kept_fixed_units_json(raw) {
+        return Some(kept.clone());
+    }
+    let m = raw.get("match")?.as_object()?;
+    let (axis, op) = match m.get("op")?.as_str()? {
+        "partial" => ("wrt", "/"),
+        "integral" => ("var", "*"),
+        _ => return None,
+    };
+    let first = m.get("args")?.as_array()?.first()?.clone();
+    let ax = m.get(axis)?.clone();
+    Some(serde_json::json!({"op": op, "args": [first, ax]}))
+}
+
+/// Walk a body for [`DefinitionReads`]. `bound` holds the loop symbols in
+/// scope (the body's own, and those of the bodies a binding is read in).
+fn body_reads(
+    e: &Expr,
+    params: &HashSet<&str>,
+    registry: &OperatorRegistry,
+    bound: &mut Vec<String>,
+    out: &mut DefinitionReads,
+) {
+    let node = match e {
+        Expr::Variable(n) => {
+            if !bound.iter().any(|b| b == n) {
+                if params.contains(n.as_str()) {
+                    out.params.insert(n.clone());
+                } else if !n.starts_with('\0') {
+                    out.free.insert(n.clone());
+                }
+            }
+            return;
+        }
+        Expr::Operator(node) => node,
+        _ => return,
+    };
+    if node.op == "index" {
+        out.index_subscripts
+            .extend(node.args.iter().skip(1).filter_map(|a| match a {
+                Expr::Variable(s) => Some(s.clone()),
+                _ => None,
+            }));
+        if let Some(Expr::Variable(base)) = node.args.first()
+            && !bound.iter().any(|b| b == base)
+        {
+            out.index_bases.insert(base.clone());
+            if node.args[1..]
+                .iter()
+                .any(|a| !matches!(a, Expr::Variable(_)))
+            {
+                out.offset_index_bases.insert(base.clone());
+            }
+        }
+    }
+    if let Some(r) = reference_node(node) {
+        match registry.resolve(&r) {
+            Some(callee) => {
+                let cr = callee.reads(registry);
+                for n in &cr.free {
+                    if !bound.iter().any(|b| b == n) {
+                        out.free.insert(n.clone());
+                    }
+                }
+                out.index_subscripts
+                    .extend(cr.index_subscripts.iter().cloned());
+                // The callee's index bases, read here: its free ones as they
+                // are, its params through the bare names bound to them.
+                for (set, mine) in [
+                    (&cr.index_bases, &mut out.index_bases),
+                    (&cr.offset_index_bases, &mut out.offset_index_bases),
+                ] {
+                    for n in set {
+                        let here = if callee.params.contains(n) {
+                            match r.binding(n) {
+                                Some(Expr::Variable(b)) => b,
+                                _ => continue,
+                            }
+                        } else {
+                            n
+                        };
+                        if !bound.iter().any(|b| b == here) {
+                            mine.insert(here.clone());
+                        }
+                    }
+                }
+                let depth = bound.len();
+                bound.extend(cr.binders.iter().cloned());
+                let mut keys: Vec<&String> = r.bindings.keys().collect();
+                keys.sort();
+                for k in keys.into_iter().filter(|k| cr.params.contains(*k)) {
+                    body_reads(&r.bindings[k], params, registry, bound, out);
+                }
+                bound.truncate(depth);
+            }
+            // An unresolved reference (the load's checks report it): every
+            // binding counts as read.
+            None => r
+                .bindings
+                .values()
+                .for_each(|b| body_reads(b, params, registry, bound, out)),
+        }
+        return;
+    }
+    let depth = bound.len();
+    node.for_each_binder(Binders::SCOPE, |n| bound.push(n.to_string()));
+    node.for_each_child(&mut |c| body_reads(c, params, registry, bound, out));
+    bound.truncate(depth);
+}
+
+/// [`Definition::instance_body`]'s walk. `bound` holds the loop symbols in
+/// scope, which shadow a param of the same name. A `ranges` bound naming a
+/// literal param takes its literal; a range whose two bounds are then
+/// integers is the interval they give.
+fn specialize(e: &Expr, lits: &InstanceLiterals, bound: &mut Vec<String>) -> Expr {
+    let Expr::Operator(node) = e else {
+        return e.clone();
+    };
+    let lit = |s: &String, bound: &Vec<String>| -> Option<String> {
+        if bound.contains(s) {
+            None
+        } else {
+            lits.get(s).cloned()
+        }
+    };
+    let depth = bound.len();
+    node.for_each_binder(Binders::SCOPE, |n| bound.push(n.to_string()));
+    let mut out = node.map_children(&mut |c| specialize(c, lits, bound));
+    for f in [
+        &mut out.wrt,
+        &mut out.dim,
+        &mut out.int_var,
+        &mut out.reduce,
+        &mut out.semiring,
+        &mut out.broadcast_fn,
+    ] {
+        if let Some(v) = f.as_ref().and_then(|s| lit(s, bound)) {
+            *f = Some(v);
+        }
+    }
+    if let Some(ranges) = out.ranges.as_mut() {
+        use crate::types::{RangeBound, RangeSpec};
+        for spec in ranges.values_mut() {
+            match spec {
+                RangeSpec::IndexSetRef { from, of } => {
+                    if let Some(v) = lit(from, bound) {
+                        *from = v;
+                    }
+                    for o in of.iter_mut().flatten() {
+                        if let Some(v) = lit(o, bound) {
+                            *o = v;
+                        }
+                    }
+                }
+                RangeSpec::Symbolic(ends) => {
+                    for end in ends.iter_mut() {
+                        if let RangeBound::Name(n) = end
+                            && let Some(v) = lit(n, bound)
+                        {
+                            *end = match v.parse::<i64>() {
+                                Ok(i) => RangeBound::Int(i),
+                                Err(_) => RangeBound::Name(v),
+                            };
+                        }
+                    }
+                    if let [RangeBound::Int(lo), RangeBound::Int(hi)] = ends {
+                        *spec = RangeSpec::Interval([*lo, *hi]);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if out.op == "enum" {
+        for a in out.args.iter_mut() {
+            if let Expr::Variable(s) = a
+                && let Some(v) = lit(s, bound)
+            {
+                *a = Expr::Variable(v);
+            }
+        }
+    }
+    bound.truncate(depth);
+    Expr::operator(out)
+}
+
 /// A registry of operator definitions: a component's (§9.6.4 rule 5) or a
 /// flattened system's merged one (rule 7), in registry order. Cheap to clone.
 #[derive(Debug, Clone, Default)]
@@ -261,6 +599,25 @@ pub struct OperatorRegistry {
     entries: Arc<IndexMap<String, Arc<Definition>>>,
     instance: Arc<OnceLock<InstanceParams>>,
     captured: Arc<OnceLock<HashMap<String, HashSet<String>>>>,
+    instances: Arc<std::sync::Mutex<InstanceCache>>,
+}
+
+/// The instances of a registry made so far, by definition name and literals.
+type InstanceCache = HashMap<(String, InstanceLiterals), Arc<Instance>>;
+
+/// One definition instance (esm-spec §9.6.4 rule 3): a definition with the
+/// literals its literal params are bound to, and the body of that instance
+/// ([`Definition::instance_body`]). Made once per registry and instance
+/// ([`OperatorRegistry::instances`]).
+#[derive(Debug)]
+pub struct Instance {
+    /// The definition.
+    pub definition: Arc<Definition>,
+    /// What its literal params are bound to.
+    pub literals: InstanceLiterals,
+    /// Its body with those literals in their literal positions (the literal
+    /// `0` when the definition has no body).
+    pub body: Expr,
 }
 
 impl OperatorRegistry {
@@ -276,7 +633,70 @@ impl OperatorRegistry {
             ),
             instance: Arc::default(),
             captured: Arc::default(),
+            instances: Default::default(),
         }
+    }
+
+    /// Every definition instance `roots` reach (esm-spec §9.6.4 rule 3): the
+    /// references in them, and those in the instance bodies they name,
+    /// transitively, each instance once, in first-reach order. A reference
+    /// the registry does not resolve is skipped (the load reports it). An
+    /// analysis that reads a definition's literal positions (an index set a
+    /// `ranges` entry names, a `wrt`) walks these bodies, once per instance,
+    /// and reports what it finds at the reference's site.
+    pub fn instances<'a>(&self, roots: impl IntoIterator<Item = &'a Expr>) -> Vec<Arc<Instance>> {
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for e in roots {
+            self.collect_instances(e, &InstanceLiterals::new(), &mut seen, &mut out);
+        }
+        out
+    }
+
+    fn collect_instances(
+        &self,
+        e: &Expr,
+        outer: &InstanceLiterals,
+        seen: &mut HashSet<(String, InstanceLiterals)>,
+        out: &mut Vec<Arc<Instance>>,
+    ) {
+        let mut found = Vec::new();
+        for_each_reference(e, &mut |r| {
+            if let Some(d) = self.resolve(&r) {
+                found.push((Arc::clone(d), d.instance_literals(&r, outer, self)));
+            }
+        });
+        for (d, lits) in found {
+            let key = (d.name.clone(), lits);
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            let inst = self.instance(d, key);
+            out.push(Arc::clone(&inst));
+            self.collect_instances(&inst.body, &inst.literals, seen, out);
+        }
+    }
+
+    /// The instance `key` of `d`, made once.
+    fn instance(&self, d: Arc<Definition>, key: (String, InstanceLiterals)) -> Arc<Instance> {
+        if let Some(i) = self
+            .instances
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&key).cloned())
+        {
+            return i;
+        }
+        let body = d.instance_body(&key.1).unwrap_or(Expr::Integer(0));
+        let inst = Arc::new(Instance {
+            definition: d,
+            literals: key.1.clone(),
+            body,
+        });
+        if let Ok(mut m) = self.instances.lock() {
+            return Arc::clone(m.entry(key).or_insert(inst));
+        }
+        inst
     }
 
     /// The definition `name`, if the registry holds it.
@@ -401,6 +821,72 @@ pub fn for_each_reference<'a>(e: &'a Expr, f: &mut impl FnMut(Reference<'a>)) {
         }
         node.for_each_child(&mut |c| for_each_reference(c, f));
     }
+}
+
+/// Call `f` on every name `e` reads as a value in its own scope (a variable
+/// leaf that no enclosing node of `e` binds as a loop symbol), seeing each
+/// reference as its expansion reads it (esm-spec §9.6.4 rule 2): a reference
+/// `registry` resolves reads the bindings its definition reads
+/// ([`DefinitionReads::params`]; a name in one that the body binds as a loop
+/// symbol is captured there, as substitution would), and the names its
+/// bodies read free ([`DefinitionReads::free`]), in the scope of its site. A
+/// reference `registry` does not resolve reads every binding: in a flattened
+/// system, whose bodies are closed, that is exactly what it reads. A name is
+/// visited once per occurrence, in walk order.
+pub fn for_each_site_read(e: &Expr, registry: &OperatorRegistry, f: &mut impl FnMut(&str)) {
+    site_reads_walk(e, registry, &mut Vec::new(), f);
+}
+
+/// The names `e` reads at its site ([`for_each_site_read`]), sorted.
+pub fn site_reads(e: &Expr, registry: &OperatorRegistry) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for_each_site_read(e, registry, &mut |n| {
+        if !out.contains(n) {
+            out.insert(n.to_string());
+        }
+    });
+    out
+}
+
+fn site_reads_walk(
+    e: &Expr,
+    registry: &OperatorRegistry,
+    bound: &mut Vec<String>,
+    f: &mut impl FnMut(&str),
+) {
+    let node = match e {
+        Expr::Variable(n) => {
+            if !bound.iter().any(|b| b == n) {
+                f(n);
+            }
+            return;
+        }
+        Expr::Operator(node) => node,
+        _ => return,
+    };
+    if let Some(r) = reference_node(node)
+        && let Some(def) = registry.resolve(&r)
+    {
+        let reads = def.reads(registry);
+        for n in &reads.free {
+            if !bound.iter().any(|b| b == n) {
+                f(n);
+            }
+        }
+        let depth = bound.len();
+        bound.extend(reads.binders.iter().cloned());
+        let mut keys: Vec<&String> = r.bindings.keys().collect();
+        keys.sort();
+        for k in keys.into_iter().filter(|k| reads.params.contains(*k)) {
+            site_reads_walk(&r.bindings[k], registry, bound, f);
+        }
+        bound.truncate(depth);
+        return;
+    }
+    let depth = bound.len();
+    node.for_each_binder(Binders::SCOPE, |n| bound.push(n.to_string()));
+    node.for_each_child(&mut |c| site_reads_walk(c, registry, bound, f));
+    bound.truncate(depth);
 }
 
 /// A memo of an analysis that is a function of a definition and a key
@@ -686,7 +1172,7 @@ pub fn specialize_body(body: &Value, literals: &HashMap<String, Value>) -> Value
 /// the values a reference binds to its instance parameters
 /// ([`OperatorRegistry::instance_params`]).
 #[derive(Debug)]
-pub struct Instance {
+pub struct CallInstance {
     /// The definition.
     pub definition: Arc<Definition>,
     /// The specialized body, typed, with every build pass of the
@@ -697,7 +1183,7 @@ pub struct Instance {
     binders: OnceLock<HashSet<String>>,
 }
 
-impl Instance {
+impl CallInstance {
     /// Whether `name` is a parameter of the definition this instantiates.
     pub fn is_param(&self, name: &str) -> bool {
         self.definition.params.iter().any(|p| p == name)
@@ -758,10 +1244,10 @@ pub type BodyRewrite = Arc<dyn Fn(&mut Expr) -> Result<(), String> + Send + Sync
 #[derive(Default)]
 pub struct Instances {
     registry: OperatorRegistry,
-    by_key: std::sync::Mutex<HashMap<(String, Vec<String>), Arc<Instance>>>,
+    by_key: std::sync::Mutex<HashMap<(String, Vec<String>), Arc<CallInstance>>>,
     /// Per reference node: the node (held so its address is never reused) and
     /// its instance.
-    by_node: std::sync::Mutex<HashMap<usize, (Arc<ExpressionNode>, Arc<Instance>)>>,
+    by_node: std::sync::Mutex<HashMap<usize, (Arc<ExpressionNode>, Arc<CallInstance>)>>,
     /// Body rewrites the build applies to every instance body (see
     /// [`Instances::with_rewrite`]).
     rewrites: Vec<BodyRewrite>,
@@ -812,7 +1298,7 @@ impl Instances {
     }
 
     /// The instance reference `r` names.
-    pub fn instance(&self, r: &Reference<'_>) -> Result<Arc<Instance>, InstanceError> {
+    pub fn instance(&self, r: &Reference<'_>) -> Result<Arc<CallInstance>, InstanceError> {
         let d = self
             .registry
             .get(r.name)
@@ -851,7 +1337,7 @@ impl Instances {
                 why,
             })?;
         }
-        let inst = Arc::new(Instance {
+        let inst = Arc::new(CallInstance {
             definition: Arc::clone(d),
             body,
             instance_params: ips.to_vec(),
@@ -867,7 +1353,7 @@ impl Instances {
     pub fn instance_of_node(
         &self,
         node: &Arc<ExpressionNode>,
-    ) -> Result<Arc<Instance>, InstanceError> {
+    ) -> Result<Arc<CallInstance>, InstanceError> {
         let addr = Arc::as_ptr(node) as usize;
         if let Some((_, i)) = self.by_node.lock().ok().and_then(|m| m.get(&addr).cloned()) {
             return Ok(i);
@@ -886,13 +1372,13 @@ impl Instances {
     pub fn reachable<'a>(
         &self,
         roots: impl IntoIterator<Item = &'a Expr>,
-    ) -> Result<Vec<Arc<Instance>>, InstanceError> {
+    ) -> Result<Vec<Arc<CallInstance>>, InstanceError> {
         let mut seen: HashSet<usize> = HashSet::new();
         let mut out = Vec::new();
         let mut stack: Vec<Expr> = roots.into_iter().cloned().collect();
         stack.reverse();
         while let Some(e) = stack.pop() {
-            let mut found: Vec<Arc<Instance>> = Vec::new();
+            let mut found: Vec<Arc<CallInstance>> = Vec::new();
             let mut err = None;
             for_each_reference(&e, &mut |r| {
                 if err.is_none() {
@@ -1128,10 +1614,87 @@ mod tests {
         assert!(sum.body_binders().contains("k"));
         assert_eq!(sum.free_names().iter().collect::<Vec<_>>(), ["v"]);
         let e: Expr = serde_json::from_value(json!({"op": "+", "args": [
-            {"op": "apply_operator", "args": [], "name": "twice", "bindings": {"x": "y"}}, 1]})).unwrap();
+            {"op": "apply_operator", "args": [], "name": "twice", "bindings": {"x": "y"}}, 1]}))
+        .unwrap();
         let reached: Vec<_> = r.reachable([&e]).into_iter().collect();
         assert_eq!(reached, ["twice", "lap"]);
         assert!(has_reference(&e));
+    }
+
+    #[test]
+    fn a_parameter_named_range_bound_parses() {
+        let r = reg(json!({
+            "argmin": {"params": ["v", "n"], "body": {"op": "faq", "args": [], "output_idx": [],
+                "ranges": {"k": [1, "n"]}, "reduce": "min", "expr": {"op": "index", "args": ["v", "k"]}}}
+        }));
+        let d = r.get("argmin").unwrap();
+        assert!(d.body.is_some());
+        assert!(d.is_literal_param("n"));
+        assert!(d.param_roles()["v"].operand);
+        let back = serde_json::to_value(d.body.as_ref().unwrap()).unwrap();
+        assert_eq!(back["ranges"]["k"], json!([1, "n"]));
+    }
+
+    #[test]
+    fn reads_instances_and_site_reads() {
+        let r = reg(json!({
+            "total": {"params": ["v", "S"], "body": {"op": "faq", "args": ["v"], "output_idx": [],
+                "reduce": "+", "ranges": {"k": {"from": "S"}},
+                "expr": {"op": "*", "args": [{"op": "index", "args": ["v", "k"]}, "w"]}}},
+            "first": {"params": ["v", "n"], "body": {"op": "faq", "args": ["v"], "output_idx": [],
+                "reduce": "+", "ranges": {"k": [1, "n"]}, "expr": {"op": "index", "args": ["v", "k"]}}},
+            "outer": {"params": ["a", "T"], "body": {"op": "apply_operator", "args": [], "name": "total",
+                "bindings": {"v": "a", "S": "T"}}},
+            "pd": {"params": ["f", "x"], "match": {"op": "partial", "args": ["f"], "wrt": "x"},
+                "body": {"op": "*", "args": [2, "f"]}}
+        }));
+        let total = r.get("total").unwrap();
+        let reads = total.reads(&r);
+        // `S` is a literal (an index-set name), `w` a free name, `k` a loop symbol.
+        assert_eq!(reads.params.iter().collect::<Vec<_>>(), ["v"]);
+        assert_eq!(reads.free.iter().collect::<Vec<_>>(), ["w"]);
+        assert!(reads.binders.contains("k") && reads.index_subscripts.contains("k"));
+        let outer = r.get("outer").unwrap().reads(&r);
+        assert_eq!(outer.params.iter().collect::<Vec<_>>(), ["a"]);
+        assert_eq!(outer.free.iter().collect::<Vec<_>>(), ["w"]);
+        // A ranges bound naming a param is read off the wire.
+        assert_eq!(
+            r.get("first")
+                .unwrap()
+                .reads(&r)
+                .params
+                .iter()
+                .collect::<Vec<_>>(),
+            ["v"]
+        );
+
+        let e: Expr = serde_json::from_value(json!({"op": "+", "args": [
+            {"op": "apply_operator", "args": [], "name": "outer", "bindings": {"a": "y", "T": "cells"}},
+            {"op": "apply_operator", "args": [], "name": "first", "bindings": {"v": "y", "n": 3}}]}))
+        .unwrap();
+        assert_eq!(
+            site_reads(&e, &r).into_iter().collect::<Vec<_>>(),
+            ["w", "y"]
+        );
+        let insts = r.instances([&e]);
+        let names: Vec<_> = insts.iter().map(|i| i.definition.name.as_str()).collect();
+        assert_eq!(names, ["outer", "total", "first"]);
+        // The literal `cells` reached `total` through `outer`'s forwarded `T`.
+        assert_eq!(
+            insts[1].literals.get("S").map(String::as_str),
+            Some("cells")
+        );
+        let body = serde_json::to_value(&insts[1].body).unwrap();
+        assert_eq!(body["ranges"]["k"]["from"], "cells");
+        assert_eq!(body["expr"]["args"][0]["args"][0], "v");
+        let body = serde_json::to_value(&insts[2].body).unwrap();
+        assert_eq!(body["ranges"]["k"], json!([1, 3]));
+        // Made once per instance.
+        assert!(Arc::ptr_eq(&insts[1], &r.instances([&e])[1]));
+        // The fixed unit of a `partial` rule, read off its `match`.
+        let fixed =
+            serde_json::to_value(r.get("pd").unwrap().fixed_units.as_ref().unwrap()).unwrap();
+        assert_eq!(fixed, json!({"op": "/", "args": ["f", "x"]}));
     }
 
     #[test]

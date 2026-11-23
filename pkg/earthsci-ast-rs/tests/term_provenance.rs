@@ -113,7 +113,10 @@ fn body<'a>(flat: &FlattenedSystem, lhs: &Expr, rhs: &'a Expr) -> &'a Expr {
 /// check is about — how the contributions are summed — is untouched.
 fn scalarize(expr: &Expr) -> Expr {
     match expr {
-        Expr::Operator(node) if node.op == "index" => {
+        // An element read, or an operator reference (esm-spec §9.6.4: kept
+        // through flatten), is one opaque value: the invariant is about how
+        // the contributions are summed, not about what each one is.
+        Expr::Operator(node) if node.op == "index" || node.op == "apply_operator" => {
             Expr::Variable(format!("<{}>", crate::common::canon(expr)))
         }
         Expr::Operator(node) => Expr::operator(node.map_children(&mut |c| scalarize(c))),

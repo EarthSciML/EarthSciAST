@@ -39,48 +39,30 @@ fn load_at(n: i64) -> earthsci_ast::EsmFile {
         .unwrap_or_else(|e| panic!("loading the PPM problem at N={n} must succeed, got: {e}"))
 }
 
-/// Walk an expression, asserting no rewrite-target or template-reference op
-/// survived the load, and count the nodes so the test can assert the chain
-/// really did expand into something large.
+/// Walk an expression, asserting no spatial `D` survived the load (the rule
+/// `ppm_D_periodic` fired), and count its nodes.
 fn assert_lowered(expr: &Expr, count: &mut usize) {
     let Expr::Operator(node) = expr else {
         *count += 1;
         return;
     };
     *count += 1;
-    assert_ne!(
-        node.op, "apply_operator",
-        "load must leave no surviving template reference in the built IR"
-    );
     assert!(
         !(node.op == "D" && node.wrt.as_deref() != Some("t")),
         "load must rewrite the spatial D away (rule ppm_D_periodic)"
     );
-    for a in &node.args {
-        assert_lowered(a, count);
-    }
-    for sub in [
-        &node.expr,
-        &node.lower,
-        &node.upper,
-        &node.filter,
-        &node.key,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        assert_lowered(sub, count);
-    }
-    if let Some(values) = &node.values {
-        for v in values {
-            assert_lowered(v, count);
-        }
-    }
+    node.for_each_child(&mut |c| assert_lowered(c, count));
 }
 
 /// The regression proper: the PPM chain LOADS. Before the memo keep-alive fix
 /// this failed in ~0.1 s with `data did not match any variant of untagged enum
 /// Expr`.
+///
+/// The load keeps the references (esm-spec §9.6.4 rule 1): every one the
+/// equations reach, through the bodies, resolves in the model's registry, no
+/// spatial `D` is left in the equations or in any reachable body, and the
+/// chain is deep. The explicit expansion utility (rule 2) still expands the
+/// saved document into the large tree the expansion-memo regression needs.
 #[test]
 fn ppm_template_chain_loads_and_lowers() {
     let file = load_at(16);
@@ -89,6 +71,7 @@ fn ppm_template_chain_loads_and_lowers() {
         .as_ref()
         .and_then(|m| m.get("AdvectionPPM"))
         .expect("fixture declares model AdvectionPPM");
+    let registry = file.component_operators("models.AdvectionPPM");
 
     let mut nodes = 0usize;
     let mut saw_time_derivative = false;
@@ -102,9 +85,36 @@ fn ppm_template_chain_loads_and_lowers() {
         assert_lowered(&eq.rhs, &mut nodes);
     }
     assert!(saw_time_derivative, "fixture has a u_t equation");
+    let reached = registry.reachable(model.equations.iter().map(|e| &e.rhs));
     assert!(
-        nodes > 5_000,
-        "the PPM chain should expand into a large tree; got only {nodes} nodes \
+        reached.len() >= 5,
+        "the PPM chain reaches its definitions; got {reached:?}"
+    );
+    for name in &reached {
+        let def = registry
+            .get(name)
+            .unwrap_or_else(|| panic!("reference to '{name}' does not resolve"));
+        let body = def
+            .body
+            .as_ref()
+            .unwrap_or_else(|| panic!("definition '{name}' has no typed body"));
+        assert_lowered(body, &mut nodes);
+    }
+
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&earthsci_ast::to_json(&file).expect("save")).expect("json");
+    earthsci_ast::extension::lower_expression_templates::expand(&mut doc).expect("expand");
+    let expanded: Vec<Expr> =
+        serde_json::from_value(doc["models"]["AdvectionPPM"]["equations"].clone())
+            .map(|eqs: Vec<earthsci_ast::Equation>| eqs.into_iter().map(|e| e.rhs).collect())
+            .expect("expanded equations type");
+    let mut expanded_nodes = 0usize;
+    for rhs in &expanded {
+        assert_lowered(rhs, &mut expanded_nodes);
+    }
+    assert!(
+        expanded_nodes > 5_000,
+        "the PPM chain should expand into a large tree; got only {expanded_nodes} nodes \
          (a suspiciously small expansion means the chain did not resolve)"
     );
 }

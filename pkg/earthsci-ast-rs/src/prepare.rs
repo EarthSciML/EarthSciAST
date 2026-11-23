@@ -2880,7 +2880,7 @@ impl<'o> BuildState<'o> {
         if !self.opts.refuse_per_cell || !crate::row_dedup::row_dedup_enabled() {
             return Ok(None);
         }
-        let Some(mut plan) = crate::row_dedup::plan(name, expr, &self.arrays) else {
+        let Some(mut plan) = crate::row_dedup::plan_in(name, expr, &self.arrays, &self.operators) else {
             return Ok(None);
         };
         let fill = self.fill_shape(name).map(|mut s| {

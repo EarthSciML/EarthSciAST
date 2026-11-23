@@ -1061,7 +1061,7 @@ struct EvalCtx<'a> {
 #[derive(Clone)]
 struct CallFrame {
     node: std::sync::Arc<crate::types::ExpressionNode>,
-    instance: std::sync::Arc<crate::operator_refs::Instance>,
+    instance: std::sync::Arc<crate::operator_refs::CallInstance>,
 }
 
 use crate::operator_refs::Instances;

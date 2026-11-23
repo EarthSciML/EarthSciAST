@@ -35,7 +35,8 @@ use std::path::Path;
 /// assert!(json.contains("\"esm\": \"1.0.0\""));
 /// ```
 pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
-    let mut value = document_value(esm_file).map_err(EsmError::JsonParse)?;
+    let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
+    write_component_operators(esm_file, &mut value);
     crate::version_gates::raise_emit_floors(&mut value);
     serde_json::to_string_pretty(&value).map_err(EsmError::JsonParse)
 }
@@ -57,38 +58,47 @@ pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
 /// * `Ok(String)` - Successfully serialized compact JSON string
 /// * `Err(EsmError)` - Serialization error
 pub fn to_json_compact(esm_file: &EsmFile) -> Result<String, EsmError> {
-    let mut value = document_value(esm_file).map_err(EsmError::JsonParse)?;
+    let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
+    write_component_operators(esm_file, &mut value);
     crate::version_gates::raise_emit_floors(&mut value);
     serde_json::to_string(&value).map_err(EsmError::JsonParse)
 }
 
-/// `esm_file` as the JSON document it denotes: its typed fields, and each
-/// component's operator registry as load materialized it
-/// ([`EsmFile::component_operators`], esm-spec §9.6.4 rule 5) as that
-/// component's `operators` block, so every operator reference the document
-/// keeps resolves when it is read back.
+/// `esm_file` as the JSON document it denotes, each component's operator
+/// registry written back as its `operators` block
+/// ([`write_component_operators`]), so every operator reference it keeps
+/// resolves when it is read back.
 pub(crate) fn document_value(esm_file: &EsmFile) -> Result<serde_json::Value, serde_json::Error> {
     let mut value = serde_json::to_value(esm_file)?;
-    if let Some(ct) = &esm_file.component_templates
-        && let Some(root) = value.as_object_mut()
-    {
-        for (key, block) in ct {
-            let Some((kind, name)) = key.split_once('.') else {
-                continue;
-            };
-            if let Some(comp) = root
-                .get_mut(kind)
-                .and_then(|c| c.get_mut(name))
-                .and_then(serde_json::Value::as_object_mut)
-                && !comp.contains_key("operators")
-            {
-                let mut block = block.clone();
-                crate::lower_expression_templates::strip_fixed_units(&mut block);
-                comp.insert("operators".to_string(), block);
-            }
-        }
-    }
+    write_component_operators(esm_file, &mut value);
     Ok(value)
+}
+
+/// Write each component's operator registry back as its `operators` block
+/// (esm-spec §9.6.4 rule 5): the references a loaded document keeps are
+/// written as they are, and the definitions they name travel with them, as
+/// the load materialized them ([`crate::EsmFile::component_operators`]),
+/// without the load's private records. Mirrors the Julia reference
+/// `serialize_esm_file`.
+fn write_component_operators(esm_file: &EsmFile, value: &mut serde_json::Value) {
+    let Some(blocks) = &esm_file.component_templates else {
+        return;
+    };
+    for (key, block) in blocks {
+        let Some((compkind, cname)) = key.split_once('.') else {
+            continue;
+        };
+        let Some(comp) = value
+            .get_mut(compkind)
+            .and_then(|c| c.get_mut(cname))
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        let mut block = block.clone();
+        crate::lower_expression_templates::strip_fixed_units(&mut block);
+        comp.insert("operators".to_string(), block);
+    }
 }
 
 /// Write an ESM file to `path` as pretty-printed JSON.

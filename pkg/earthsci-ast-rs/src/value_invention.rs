@@ -384,7 +384,7 @@ struct ViCtx<'a> {
     /// The operator instances the producers' and columns' references name.
     ops: &'a crate::operator_refs::Instances,
     /// Every instance they reach, held for as long as the compiled bodies.
-    held: Vec<Arc<crate::operator_refs::Instance>>,
+    held: Vec<Arc<crate::operator_refs::CallInstance>>,
 }
 
 impl ViCtx<'_> {

@@ -431,7 +431,7 @@ impl BareThroughRefs<'_> {
     fn instance(
         &self,
         node: &ExpressionNode,
-    ) -> Result<std::sync::Arc<crate::operator_refs::Instance>, CompileError> {
+    ) -> Result<std::sync::Arc<crate::operator_refs::CallInstance>, CompileError> {
         let r = crate::operator_refs::reference_node(node)
             .ok_or_else(|| CompileError::build_err("an operator reference with no name"))?;
         self.ops

@@ -406,7 +406,7 @@ pub(crate) fn check_evaluable_all<'a>(
 pub(crate) fn reachable_instances<'a>(
     roots: impl IntoIterator<Item = &'a Expr>,
     ops: &Instances,
-) -> Result<Vec<std::sync::Arc<crate::operator_refs::Instance>>, CompileError> {
+) -> Result<Vec<std::sync::Arc<crate::operator_refs::CallInstance>>, CompileError> {
     ops.reachable(roots).map_err(|e| match e {
         crate::operator_refs::InstanceError::Unknown(_) => CompileError::UnevaluableOperatorError {
             op: crate::operator_refs::APPLY_OP.to_string(),
