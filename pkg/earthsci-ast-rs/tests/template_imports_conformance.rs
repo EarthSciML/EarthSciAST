@@ -471,7 +471,7 @@ fn import_library_enum_resolves_in_the_library_scope() {
     // An importer declaring no enums still loads the library's own call.
     let f = load_path(conf(&["import_library_enum", "fixture.esm"]))
         .expect("importer with no enums loads the library's own call");
-    let doc = serde_json::to_value(&f).expect("serialize");
+    let doc = saved_expanded(&f);
     assert_eq!(
         obs_def(&doc["models"]["Consumer"], "gallonCode")["value"],
         json!(2)
