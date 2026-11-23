@@ -187,16 +187,34 @@ fn public_rhs_rounds_time_and_parameters_even_on_a_fresh_thread() {
     doc["models"]["M"]["variables"]["k"]["default"] = json!(100_000_000);
     doc["models"]["M"]["equations"][0]["rhs"] = json!({"op": "-", "args": ["t", "k"]});
     doc["models"]["M"]["equations"][1]["rhs"] = json!({"op": "-", "args": ["k", 100_000_000]});
+    for observed in ["time_read", "time_delta"] {
+        doc["models"]["M"]["variables"][observed] = json!({"type": "unknown", "units": "s"});
+    }
+    doc["models"]["M"]["equations"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"lhs": "time_read", "rhs": "t"}),
+            json!({"lhs": "time_delta", "rhs": {"op": "-", "args": ["t", 100_000_000]}}),
+        ]);
     for compiler in [Compiler::Native, Compiler::Interpreter] {
         let prob = esm_problem(
             ProblemInput::Json(&doc),
-            (0.0, 1.0),
+            (100_000_001.0, 100_000_001.0),
             ProblemOptions {
                 compiler: Some(compiler),
                 ..ProblemOptions::default()
             },
         )
         .unwrap();
+        let observed = SolveOptions {
+            output_observed: vec!["time_read".into(), "time_delta".into()],
+            ..SolveOptions::default()
+        };
+        let sol = solve(&prob, &observed).unwrap();
+        assert_eq!(sol["time_read"], [100_000_000.0], "{compiler:?}");
+        assert_eq!(sol["time_delta"], [0.0]);
+
         let rhs = rhs_program(&prob).unwrap();
         assert_eq!(rhs.state_precisions(), [Precision::Float32; 2]);
         std::thread::spawn(move || {

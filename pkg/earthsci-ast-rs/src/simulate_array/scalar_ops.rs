@@ -297,6 +297,7 @@ macro_rules! with_un_kernel {
             UnCode::Acosh => $apply!(|x: f64| k::w(k::acosh::<$ty>(k::n(x)))),
             UnCode::Atanh => $apply!(|x: f64| k::w(k::atanh::<$ty>(k::n(x)))),
             UnCode::Not => $apply!(|x: f64| k::w(k::not::<$ty>(k::n(x)))),
+            UnCode::RoundF32 => $apply!(|x: f64| f64::from(x as f32)),
             UnCode::Unknown => $apply!(|_: f64| f64::NAN),
         }
     }};

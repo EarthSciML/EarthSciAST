@@ -2516,12 +2516,22 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
+    /// Time crosses the RHS as binary64. Narrow it at a binary32 read even
+    /// when the expression copies it directly to an observed or a branch.
+    fn lower_time(&mut self) -> LV {
+        if crate::precision::is_f32() {
+            self.emit_un(UnCode::RoundF32, LV::Time)
+        } else {
+            LV::Time
+        }
+    }
+
     /// Resolve a variable over the box, in this order: `t`, bound
     /// contraction index, output box symbol (ramp), state, observed, param,
     /// bail (forcing / unknown loop bind).
     fn resolve_var(&mut self, name: &str, bx: &LBox) -> LResult<LV> {
         if name == "t" {
-            return Ok(LV::Time);
+            return Ok(self.lower_time());
         }
         if let Some(v) = bx.cbind(name) {
             return Ok(LV::Lit(v as f64));
