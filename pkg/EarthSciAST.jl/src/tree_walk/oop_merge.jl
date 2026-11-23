@@ -60,78 +60,91 @@ _oop_merge_disabled() = !_compiler_plan_now().oop_merge
 # forcing), not exact kind: the clone tables every member of a family
 # identically, so an interior AFFINE cell and a boundary TBL_BOX cell of the
 # same equation share a class.
-function _oop_merge_sig!(
-        io::IOBuffer, n::_Node, K::_AccKernel,
-        why::Base.RefValue{Symbol}
-    )
+#
+# WRITTEN OVER NODE CLASSES. A kernel's trees are DAGs (a subexpression is
+# referenced from several places, and the references nest), so a signature that
+# writes each node where it stands grows with the unfolded tree, exponentially
+# in the nesting. Each node instead gets a CLASS: the id `intern` (one per merge
+# round, so classes compare across the round's kernels) assigns to its own
+# token and its children's classes, computed once per distinct node
+# (`_node_fold`). Two nodes share a class iff their trees agree token by token
+# and child by child; a kernel's signature is the classes of its roots, tier by
+# tier.
+
+# What a node says about itself, in kernel `K`.
+function _oop_merge_token(n::_Node, K::_AccKernel)
     k = n.kind
     if k === _NK_ACCESS
         a = K.acc[n.idx]
-        if _oop_x_statefam(a.kind)
-            print(io, "AS")
-        elseif _oop_x_forcfam(a.kind)
-            print(io, "AF", "b", objectid(a.arr))
-        else
-            print(io, "AC")
-        end
+        _oop_x_statefam(a.kind) && return :AS
+        _oop_x_forcfam(a.kind) && return (:AF, objectid(a.arr))
+        return :AC
     elseif k === _NK_LITERAL
-        print(io, "L")                     # value free (tabled if varying)
+        return :L                          # value free (tabled if varying)
     elseif k === _NK_PARAM
-        print(io, "P", n.sym)
+        return (:P, n.sym)
     elseif k === _NK_TIME
-        print(io, "T")
+        return :T
     elseif k === _NK_CACHED
-        print(io, "C", n.payload === K.cse.scratch ? "c" : "i", n.idx)
+        return (:C, n.payload === K.cse.scratch, n.idx)
     elseif k === _NK_CONTRACTION
-        # The clone takes a node's payload from the class representative, so a
-        # payload the signature cannot compare keeps the kernel out of the merge.
-        n.payload === nothing || (why[] = :op_payload)
-        print(io, "K", n.op, "s", n.literal, "(")
-        for c in n.children
-            _oop_merge_sig!(io, c, K, why)
-        end
-        print(io, ")")
+        # The seed by value, every NaN one seed.
+        return (:K, n.op, isnan(n.literal) ? NaN : n.literal)
     elseif k === _NK_OP
-        n.payload === nothing || (why[] = :op_payload)
-        print(io, "O", n.op)
-        print(io, "(")
-        for c in n.children
-            _oop_merge_sig!(io, c, K, why)
-        end
-        print(io, ")")
+        return (:O, n.op)
     elseif k === _NK_CALL
         # A template call: the target by identity, its arguments structurally.
-        print(io, "F", objectid(n.payload), "(")
-        for c in n.children
-            _oop_merge_sig!(io, c, K, why)
+        return (:F, objectid(n.payload))
+    end
+    return (:node_kind, k)
+end
+
+# Why a node keeps its kernel out of the merge, or `:ok`. The clone takes a
+# node's payload from the class representative, so a payload the signature
+# cannot compare keeps the kernel out.
+function _oop_merge_why(n::_Node)
+    k = n.kind
+    (k === _NK_CONTRACTION || k === _NK_OP) && n.payload !== nothing && return :op_payload
+    (
+        k === _NK_ACCESS || k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ||
+            k === _NK_CACHED || k === _NK_CONTRACTION || k === _NK_OP || k === _NK_CALL
+    ) && return :ok
+    return :node_kind
+end
+
+# A root's class, and the decline reason of the LAST node that has one in the
+# root's preorder (a node before its children, children in order), so a kernel
+# with several reasons reports the same one whatever the sharing. A node of a
+# kind the merge does not know is a class of its own kind, whatever is under it.
+function _oop_merge_class(root::_Node, K::_AccKernel, intern::_SigIntern)
+    return _node_fold(root, Tuple{Int, Symbol}) do n, kids
+        ids = Int[]
+        why = _oop_merge_why(n)
+        if why !== :node_kind
+            for (id, w) in kids
+                push!(ids, id)
+                w === :ok || (why = w)
+            end
         end
-        print(io, ")")
-    else
-        why[] = :node_kind; print(io, "?", Int(k))
+        (get!(intern, (_oop_merge_token(n, K), ids), length(intern) + 1), why)
     end
-    return io
 end
 
-function _oop_merge_trees_sig!(io::IOBuffer, K::_AccKernel, why)
-    _oop_merge_sig!(io, K.spine, K, why); print(io, "|I")
-    for r in K.cse.inv_recipes
-        _oop_merge_sig!(io, r, K, why); print(io, ";")
+# `(signature, why)`: the classes of the spine, then of the invariant recipes,
+# then of the cell recipes (a negative entry opens each recipe tier), or
+# `nothing` when the kernel stays out of the merge, and why.
+function _oop_merge_kernel_sig(K::_AccKernel, vectorizable::Bool, intern::_SigIntern)
+    why = vectorizable ? :ok : :unvectorizable
+    sig = Int[]
+    for (tier, roots) in enumerate(((K.spine,), K.cse.inv_recipes, K.cse.recipes))
+        tier > 1 && push!(sig, -tier)
+        for r in roots
+            id, w = _oop_merge_class(r, K, intern)
+            push!(sig, id)
+            w === :ok || (why = w)
+        end
     end
-    print(io, "|R")
-    for r in K.cse.recipes
-        _oop_merge_sig!(io, r, K, why); print(io, ";")
-    end
-    return io
-end
-
-_oop_merge_kernel_sig(K::_AccKernel, plan::_OopAccPlan) =
-    _oop_merge_kernel_sig(K, plan.vectorizable)
-function _oop_merge_kernel_sig(K::_AccKernel, vectorizable::Bool)
-    why = Ref(:ok)
-    vectorizable || (why[] = :unvectorizable)
-    io = IOBuffer()
-    _oop_merge_trees_sig!(io, K, why)
-    return why[] === :ok ? String(take!(io)) : nothing, why[]
+    return why === :ok ? sig : nothing, why
 end
 
 # Are the members' aligned inv-recipe trees VALUE-identical, so the merged
@@ -258,7 +271,23 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
         )
         newscr = _AccScratch(keep ? n_cell : n_inv + n_cell)
         invscr = _AccScratch(keep ? n_inv : 0)
+        # The members' trees are DAGs, and a clone that descends into every
+        # reference unfolds them. `cloned` maps an aligned member tuple, by
+        # identity, to the node already built for it, so a subexpression the
+        # members share at the same places is cloned once and stays shared. A
+        # repeated tuple names the same descriptors and literals in every
+        # member, so the node built for it, a lane table read included, holds
+        # the same values.
+        cloned = _MergeMemo()
         function clone(nodes::Vector{_Node})::_Node
+            key = _NodeKey[_NodeKey(n) for n in nodes]
+            hit = get(cloned, key, nothing)
+            hit === nothing || return hit
+            out = clone_new(nodes)
+            cloned[key] = out
+            return out
+        end
+        function clone_new(nodes::Vector{_Node})::_Node
             r = nodes[1]; k = r.kind
             if k === _NK_LITERAL
                 if _allof(i -> isequal(nodes[i].literal, r.literal), 1:m)
@@ -491,11 +520,16 @@ function _merge_classes(
     return (out_kernels, out_plans, diag)
 end
 
-# Round 1: classes by POST-CSE structure (`_oop_merge_kernel_sig`).
-_merge_oop_acc_kernels(
-    kernels::AbstractVector{_AccKernel}, plans::AbstractVector{_OopAccPlan},
-    tally::Symbol = :classmerge_round1_merge
-) = _merge_classes(kernels, plans, _oop_merge_kernel_sig, _oop_merge_group, tally)
+# Round 1: classes by POST-CSE structure (`_oop_merge_kernel_sig`), over one
+# class table for the round.
+function _merge_oop_acc_kernels(
+        kernels::AbstractVector{_AccKernel}, plans::AbstractVector{_OopAccPlan},
+        tally::Symbol = :classmerge_round1_merge
+    )
+    intern = _SigIntern()
+    sig(K, vectorizable) = _oop_merge_kernel_sig(K, vectorizable, intern)
+    return _merge_classes(kernels, plans, sig, _oop_merge_group, tally)
+end
 
 # ============================================================================
 # ROUND 2: expansion-normalized (CSE-slicing-insensitive) kernel-class merge.
