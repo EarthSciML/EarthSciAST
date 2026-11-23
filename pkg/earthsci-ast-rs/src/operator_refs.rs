@@ -444,15 +444,19 @@ fn body_reads(
         _ => return,
     };
     if node.op == "index" {
-        out.index_subscripts.extend(node.args.iter().skip(1).filter_map(|a| match a {
-            Expr::Variable(s) => Some(s.clone()),
-            _ => None,
-        }));
+        out.index_subscripts
+            .extend(node.args.iter().skip(1).filter_map(|a| match a {
+                Expr::Variable(s) => Some(s.clone()),
+                _ => None,
+            }));
         if let Some(Expr::Variable(base)) = node.args.first()
             && !bound.iter().any(|b| b == base)
         {
             out.index_bases.insert(base.clone());
-            if node.args[1..].iter().any(|a| !matches!(a, Expr::Variable(_))) {
+            if node.args[1..]
+                .iter()
+                .any(|a| !matches!(a, Expr::Variable(_)))
+            {
                 out.offset_index_bases.insert(base.clone());
             }
         }
@@ -466,7 +470,8 @@ fn body_reads(
                         out.free.insert(n.clone());
                     }
                 }
-                out.index_subscripts.extend(cr.index_subscripts.iter().cloned());
+                out.index_subscripts
+                    .extend(cr.index_subscripts.iter().cloned());
                 // The callee's index bases, read here: its free ones as they
                 // are, its params through the bare names bound to them.
                 for (set, mine) in [

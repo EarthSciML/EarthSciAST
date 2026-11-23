@@ -682,12 +682,14 @@ mod tests {
         };
         let node = std::sync::Arc::make_mut(node);
         let body = node.expr.take().expect("faq body");
-        node.expr = Some(Box::new(crate::Expr::operator(crate::types::ExpressionNode {
-            op: crate::operator_refs::APPLY_OP.into(),
-            name: Some("id".into()),
-            bindings: Some(HashMap::from([("x".to_string(), *body)])),
-            ..Default::default()
-        })));
+        node.expr = Some(Box::new(crate::Expr::operator(
+            crate::types::ExpressionNode {
+                op: crate::operator_refs::APPLY_OP.into(),
+                name: Some("id".into()),
+                bindings: Some(HashMap::from([("x".to_string(), *body)])),
+                ..Default::default()
+            },
+        )));
         let ids = crate::operator_refs::OperatorRegistry::from_json(
             serde_json::json!({"id": {"params": ["x"], "body": "x"},
                                "reads_free": {"params": ["x"], "body": {"op": "+", "args": ["x", "one_d"]}}})

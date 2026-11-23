@@ -129,7 +129,12 @@ pub(crate) fn validate_variable_bounds(
             .map(|(name, v)| (name.clone(), v.shape.clone(), (v.lb.clone(), v.ub.clone())))
             .collect();
         any_bound |= !bounds.is_empty();
-        scopes.push(ObservedScope::in_file(esm_file, path.to_string(), variables, equations));
+        scopes.push(ObservedScope::in_file(
+            esm_file,
+            path.to_string(),
+            variables,
+            equations,
+        ));
         nodes.push((
             path.to_string(),
             Node {
@@ -331,8 +336,9 @@ impl Ctx<'_> {
             let Some(rhs) = scope.class.observed_definitions.get(local) else {
                 return Vec::new();
             };
-            let mut names: Vec<String> =
-                referenced_names(rhs, &scope.operators).into_iter().collect();
+            let mut names: Vec<String> = referenced_names(rhs, &scope.operators)
+                .into_iter()
+                .collect();
             names.sort();
             names
                 .iter()

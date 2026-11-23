@@ -5672,7 +5672,12 @@ pub(crate) fn observed_scopes(
 ) -> Vec<ObservedScope> {
     let mut out = Vec::new();
     for_each_model_node(models, &mut |path, _, variables, equations| {
-        out.push(ObservedScope::in_file(esm_file, path.to_string(), variables, equations));
+        out.push(ObservedScope::in_file(
+            esm_file,
+            path.to_string(),
+            variables,
+            equations,
+        ));
     });
     out
 }
@@ -5787,11 +5792,12 @@ fn document_observed_graph(
             if !observed.contains(&node) {
                 continue;
             }
-            let mut successors: std::collections::BTreeSet<String> = referenced_names(rhs, &scope.operators)
-                .iter()
-                .filter_map(|r| resolve_observed_ref(&by_path, &scope.path, r))
-                .filter(|full| observed.contains(full))
-                .collect();
+            let mut successors: std::collections::BTreeSet<String> =
+                referenced_names(rhs, &scope.operators)
+                    .iter()
+                    .filter_map(|r| resolve_observed_ref(&by_path, &scope.path, r))
+                    .filter(|full| observed.contains(full))
+                    .collect();
             if scope.candidates.contains(name) {
                 successors.remove(&node);
             }
@@ -6029,7 +6035,10 @@ mod dependency_order_tests {
         };
         let offset = serde_json::json!({"op": "*", "args": [
             {"op": "index", "args": ["v", {"op": "-", "args": ["j", 1]}]}, 2.0]});
-        assert!(!cycle(offset), "a self-read inside the body is a recurrence");
+        assert!(
+            !cycle(offset),
+            "a self-read inside the body is a recurrence"
+        );
         let whole = serde_json::json!({"op": "*", "args": ["v", 2.0]});
         assert!(cycle(whole), "a bare self-read through the body is a cycle");
     }
