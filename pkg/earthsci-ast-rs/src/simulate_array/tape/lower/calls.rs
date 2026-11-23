@@ -236,7 +236,14 @@ impl<'m> TapeBuilder<'m> {
             // binding binds is its own.
             let reads = crate::binders::free_names(b, crate::binders::Binders::SCOPE);
             let reads_box = reads.iter().any(|n| bx.syms.contains(n));
-            if reads_box || (!binders.is_empty() && reads.iter().any(|n| binders.contains(n))) {
+            // A constant array is build-time data the lowering reads by its
+            // name (its values, its boundary policy): a binding that reads
+            // one is compiled into the instance under that name.
+            let reads_const = reads.iter().any(|n| self.const_arrays.is_const(n));
+            if reads_box
+                || reads_const
+                || (!binders.is_empty() && reads.iter().any(|n| binders.contains(n)))
+            {
                 // A binding that reads a loop symbol, of the call's box or of
                 // the body, has no value before the call: it is compiled into
                 // the instance (its structure is part of the key) and read
@@ -251,8 +258,17 @@ impl<'m> TapeBuilder<'m> {
                 caller_names.sort();
                 let mut rename: FxHashMap<String, String> = FxHashMap::default();
                 for n in caller_names {
-                    let pos = format!("\0arg{}", n_free);
-                    n_free += 1;
+                    // A constant array keeps its name (the function reads it
+                    // as the caller does); any other name is positional.
+                    let pos = if self.const_arrays.is_const(n) {
+                        n.clone()
+                    } else {
+                        n_free += 1;
+                        format!("\0arg{}", n_free - 1)
+                    };
+                    if params.iter().any(|(q, _)| *q == pos) {
+                        continue;
+                    }
                     let v = Expr::Variable(n.clone());
                     let lv = if wholesale {
                         self.lower_wholesale(&v)?
