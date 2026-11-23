@@ -293,7 +293,7 @@ pub(super) fn apply_ragged_factor_scope(
 ///    that the lift defines takes the lift's index sets;
 /// 3. a variable with no declared `shape` whose value is an array on one arm
 ///    of an `ifelse` and a scalar on the other takes the array arm's shape
-///    (esm-spec §4.3.4, [`crate::flatten::conditional_shape_promotions`]),
+///    (esm-spec §4.3.4, [`crate::flatten::conditional_shape_promotions_with`]),
 ///    written into its declaration. `flatten` does not record this shape in
 ///    its output (esm-libraries-spec §4.7.5), so every build gets it here. A
 ///    variable whose shape only data can decide (its only arrays are
@@ -308,32 +308,38 @@ pub(crate) fn apply_shape_rewrites(
     index_sets: &HashMap<String, IndexSet>,
     inherited: Option<&ShapeTable>,
 ) -> Result<ShapeTable, CompileError> {
-    apply_shape_rewrites_with(model, index_sets, inherited, Instances::empty())
+    apply_shape_rewrites_with(model, index_sets, inherited, &mut IndexMap::new())
 }
 
-/// [`apply_shape_rewrites`] with the operator instances the model's
-/// references name.
+/// [`apply_shape_rewrites`] over a model whose operator references resolve
+/// against `registry` (a flattened system's merged registry, on the wire):
+/// the elementwise lift reads each reference's parameter roles from it and
+/// may add to it, and the conditional shapes and the bare-array-operand
+/// check read each reference through it.
 pub(crate) fn apply_shape_rewrites_with(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
     inherited: Option<&ShapeTable>,
-    ops: &Instances,
+    registry: &mut IndexMap<String, serde_json::Value>,
 ) -> Result<ShapeTable, CompileError> {
     if let Some(parent) = inherited {
         set_declared_shapes(model, parent.built());
     }
-    let lifted = crate::elementwise_lift::lift_elementwise_applications(model)
+    let lifted = crate::elementwise_lift::lift_elementwise_applications_with(model, registry)
         .map_err(CompileError::build_err)?;
-    let conditional = crate::flatten::conditional_shape_promotions(
+    let operators = crate::operator_refs::OperatorRegistry::from_json(registry.iter());
+    let ops = Instances::new(operators.clone());
+    let conditional = crate::flatten::conditional_shape_promotions_with(
         &|n: &str| model.variables.get(n),
         model.equations.iter(),
         index_sets,
+        &operators,
     );
     set_declared_shapes(
         model,
         conditional.built.iter().map(|(n, a)| (n, a.as_slice())),
     );
-    let axes = refuse_faq_bare_array_operands(model, ops)?;
+    let axes = refuse_faq_bare_array_operands(model, &ops)?;
     Ok(ShapeTable::assemble(
         model,
         axes,

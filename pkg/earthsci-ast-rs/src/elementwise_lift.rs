@@ -748,14 +748,6 @@ pub(crate) fn lift_elementwise_applications_with(
     Ok(lifted)
 }
 
-/// [`lift_elementwise_applications_with`] against no registry: a reference
-/// whose definition the lift cannot read is not lifted.
-pub(crate) fn lift_elementwise_applications(
-    model: &mut Model,
-) -> Result<HashMap<String, Vec<String>>, String> {
-    lift_elementwise_applications_with(model, &mut IndexMap::new())
-}
-
 /// What [`plan_elementwise_lift`] decides about a model, before anything is
 /// rewritten.
 #[derive(Debug, Clone, Default, PartialEq)]

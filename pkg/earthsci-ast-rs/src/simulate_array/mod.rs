@@ -118,7 +118,7 @@ pub(crate) use eval::eval_observed_taped;
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
     BuildEval, BuildRoute, CellWalks, ONE_CELL_NOTE, Routed, eval_buildtime_field_routed,
-    eval_scalar_expression, eval_scalar_expression_in,
+    eval_scalar_expression_in,
 };
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,

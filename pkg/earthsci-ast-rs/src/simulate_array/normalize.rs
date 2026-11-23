@@ -69,8 +69,10 @@ pub(crate) fn normalize(
     input: BuildInput<'_>,
     mut index_sets: HashMap<String, IndexSet>,
 ) -> Result<NormalizedModel, CompileError> {
-    let operators = match &input {
-        BuildInput::Local { flat, .. } | BuildInput::Flattened { flat, .. } => flat.operators(),
+    let mut registry = match &input {
+        BuildInput::Local { flat, .. } | BuildInput::Flattened { flat, .. } => {
+            flat.template_registry.clone()
+        }
     };
     let (mut model, inherited) = match input {
         BuildInput::Local { flat, model: local } => {
@@ -88,8 +90,9 @@ pub(crate) fn normalize(
         }
         BuildInput::Flattened { flat, inherited } => (model_from_flattened(flat), inherited),
     };
-    let ops = crate::operator_refs::Instances::new(operators.clone());
-    let mut shapes = apply_shape_rewrites_with(&mut model, &index_sets, inherited, &ops)?;
+    // The lift may add definitions; the build resolves against the result.
+    let mut shapes = apply_shape_rewrites_with(&mut model, &index_sets, inherited, &mut registry)?;
+    let operators = crate::operator_refs::OperatorRegistry::from_json(registry.iter());
     shapes.record_stacked(lower_recurrence_groups(&mut model, &mut index_sets)?);
     Ok(NormalizedModel {
         model,

@@ -453,17 +453,8 @@ fn check_evaluable_ops(expr: &Expr) -> Result<(), CompileError> {
 /// Everything [`check_scalar_evaluable`] reports, and the evaluator's own
 /// fail-closed faults (an unbound name, an out-of-range const-array gather) as
 /// [`CompileError::InterpreterBuildError`].
-pub(crate) fn eval_scalar_expression(
-    expr: &Expr,
-    params: &[f64],
-    param_names: &[String],
-    t: f64,
-) -> Result<f64, CompileError> {
-    eval_scalar_expression_in(expr, params, param_names, t, Instances::empty())
-}
-
-/// [`eval_scalar_expression`] with the operator instances the references in
-/// `expr` name.
+///
+/// `ops` holds the operator instances the references in `expr` name.
 pub(crate) fn eval_scalar_expression_in(
     expr: &Expr,
     params: &[f64],
@@ -493,13 +484,14 @@ pub(crate) fn eval_scalar_expression_in(
 }
 
 /// [`check_evaluable_all`] for an entry point whose answer is ONE NUMBER computed
-/// from scalar bindings ([`eval_scalar_expression`]).
+/// from scalar bindings ([`eval_scalar_expression_in`]).
 ///
 /// On top of the runtime gate it refuses, naming the operator, what has no
 /// scalar value over scalar operands: the array / tensor ops, an array-valued
 /// `const`, and a structural `D`, which [`eval_op_named`] answers with the
 /// `NaN` sentinel because a right-hand-side `D` never legitimately reaches
 /// evaluation (esm-spec §4.2).
+#[cfg(test)]
 pub(crate) fn check_scalar_evaluable(expr: &Expr) -> Result<(), CompileError> {
     check_scalar_evaluable_in(expr, Instances::empty())
 }

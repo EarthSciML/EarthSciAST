@@ -1055,7 +1055,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // No phase writes a shape inferred for an unshaped mixed-rank `ifelse`
     // (esm-spec §4.3.4) here: flatten changes no declared `shape` other than a
     // pointwise-lifted state's (esm-libraries-spec §4.7.5). The compilers infer
-    // it where they build — see [`conditional_shape_promotions`].
+    // it where they build — see [`conditional_shape_promotions_with`].
 
     // Phase 5c: the §6.3.1 SUBSET maps, re-derived over the FINISHED system so
     // they see the equations coupling and the pointwise lift actually produced
@@ -1364,7 +1364,7 @@ fn normalize_angle_arguments(flat: &mut AssembledParts) {
     }
 }
 
-/// What [`conditional_shape_promotions`] decides.
+/// What [`conditional_shape_promotions_with`] decides.
 #[derive(Debug, Default)]
 pub(crate) struct ConditionalShapes {
     /// The variables whose shape the declarations decide: the index sets
@@ -1422,21 +1422,8 @@ pub(crate) struct ConditionalShapes {
 /// array is decided by that array (data of another shape could not meet it
 /// elementwise); one whose only arrays are such parameters is returned in
 /// [`ConditionalShapes::data_shaped`], to be decided where the data is bound.
-pub(crate) fn conditional_shape_promotions<'a>(
-    variable: &dyn Fn(&str) -> Option<&'a ModelVariable>,
-    equations: impl Iterator<Item = &'a Equation> + Clone,
-    index_sets: &HashMap<String, IndexSet>,
-) -> ConditionalShapes {
-    conditional_shape_promotions_with(
-        variable,
-        equations,
-        index_sets,
-        &crate::operator_refs::OperatorRegistry::default(),
-    )
-}
-
-/// [`conditional_shape_promotions`] reading the references of `equations`
-/// through `registry` (a flattened system's, or a component's): a reference
+///
+/// The references of `equations` are read through `registry` (a flattened system's, or a component's): a reference
 /// spans what its definition's body spans with each parameter standing for
 /// what its binding spans, analysed once per definition and binding spans
 /// ([`crate::operator_refs::InstanceMemo`]), never by substituting. A
@@ -1536,7 +1523,7 @@ impl Spans {
     }
 }
 
-/// The shape inference behind [`conditional_shape_promotions`].
+/// The shape inference behind [`conditional_shape_promotions_with`].
 struct ShapeInference<'a, 'd> {
     variable: &'d dyn Fn(&str) -> Option<&'a ModelVariable>,
     /// Each bare-LHS (`x = …`) definition's right-hand side.
