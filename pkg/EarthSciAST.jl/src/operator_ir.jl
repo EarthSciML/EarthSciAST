@@ -49,20 +49,22 @@ struct Lanes
 end
 
 """
-    KernelSpec(spec; out_eltype = nothing)
+    KernelOutputs(spec; out_eltype = nothing)
 
 A single [`compile_kernels`](@ref) specification for a whole-domain output
-fragment. Optionally cast the returned output blocks to `out_eltype`.
+fragment. Optionally cast the returned output blocks to `out_eltype`, one of
+`Float16`, `Float32` or `Float64`.
 """
-struct KernelSpec{S}
+struct KernelOutputs{S}
     spec::S
     out_eltype::Union{Nothing, DataType}
+    function KernelOutputs(spec::S, out_eltype) where {S}
+        out_eltype === nothing || out_eltype in (Float16, Float32, Float64) ||
+            throw(ArgumentError("kernel output type must be Float16, Float32 or Float64, got $out_eltype"))
+        return new{S}(spec, out_eltype)
+    end
 end
-function KernelSpec(spec; out_eltype = nothing)
-    out_eltype === nothing || (out_eltype isa DataType && out_eltype <: AbstractFloat) ||
-        throw(ArgumentError("kernel output type must be a floating-point type"))
-    return KernelSpec(spec, out_eltype)
-end
+KernelOutputs(spec; out_eltype = nothing) = KernelOutputs(spec, out_eltype)
 
 """Host-side tree-walk IR and input layouts for [`emit_fragment`](@ref)."""
 struct OperatorIR{F, L, M, T, E}
@@ -81,21 +83,21 @@ end
 
 Build the out-of-place tree-walk IR for a selected operator. Its state and
 forcing tensors are described by [`ir_layout`](@ref), [`parameter_names`](@ref)
-and [`forcing_slots`](@ref). With `outputs = KernelSpec(spec)`, compile the
+and [`forcing_slots`](@ref). With `outputs = KernelOutputs(spec)`, compile the
 named kernel against the Problem, using its `u` and `z` inputs.
 """
 function operator_ir(
         prob::EsmProblem; select::RhsSelection = RhsSelection(),
         target = Whole(), outputs = :du
     )
-    if outputs isa KernelSpec
+    if outputs isa KernelOutputs
         target isa Whole || throw(ArgumentError("kernel specifications require a Whole target"))
         (select.writes === :all && select.terms === :all) || throw(ArgumentError("kernel specifications define their own selection"))
         ks = compile_kernels(prob, [outputs.spec])
         k = only(values(ks.kernels))
         return _kernel_operator_ir(k, ks, outputs.out_eltype)
     end
-    outputs === :du || throw(ArgumentError("outputs must be :du or a KernelSpec"))
+    outputs === :du || throw(ArgumentError("outputs must be :du or a KernelOutputs"))
     op = rhs_program(prob)
     if select.writes !== :all || select.terms !== :all
         op = EarthSciAST.select(op; select.writes, select.terms)

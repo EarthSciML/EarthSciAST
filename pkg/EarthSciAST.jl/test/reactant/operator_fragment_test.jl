@@ -47,6 +47,17 @@ function fragment_steps(fragment, u, aux, p, t, maxiter)
 end
 
 @testset "StableHLO operator fragments" begin
+    @testset "kernel output element types" begin
+        spec = Dict("name" => "k", "outputs" => [])
+        for T in (Float16, Float32, Float64)
+            @test KernelOutputs(spec; out_eltype = T).out_eltype === T
+        end
+        @test KernelOutputs(spec).out_eltype === nothing
+        @test_throws ArgumentError KernelOutputs(spec; out_eltype = BigFloat)
+        @test_throws ArgumentError KernelOutputs(spec; out_eltype = Int32)
+        @test_throws ArgumentError KernelOutputs(spec, BigFloat)
+    end
+
     @testset "vector parameters and caller-owned loop" begin
         prob = fragment_problem()
         ir = operator_ir(prob)
@@ -157,7 +168,7 @@ end
             "name" => "geometry_source_value", "dt_params" => ["Geometry.dt"],
             "outputs" => [Dict("observed" => "Geometry.H_out_source")]
         )
-        ir = operator_ir(prob; outputs = KernelSpec(spec; out_eltype = Float32))
+        ir = operator_ir(prob; outputs = KernelOutputs(spec; out_eltype = Float32))
         @test only(ir_layout(ir).out).shape == [3]
         f = emit_fragment(ir)
         u, z = ConcreteRArray([100.0, 200.0, 300.0]), ConcreteRArray(Float64[])

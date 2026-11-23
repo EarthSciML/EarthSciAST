@@ -2382,7 +2382,6 @@ reading that as a gap.
 | `kernel` | type | `Kernel` | – | – | `Kernel` | – |
 | `kernel_block` | type | `KernelBlock` | – | – | `KernelBlock` | – |
 | `kernel_set` | type | `KernelSet` | – | – | `KernelSet` | – |
-| `kernel_spec` | type | `KernelSpec` | – | – | `KernelSpec` | – |
 | `kernel_workspace` | type | `KernelWorkspace` | – | – | `KernelWorkspace` | – |
 | `lanes` | function | `lanes` | – | `lanes` | – | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |

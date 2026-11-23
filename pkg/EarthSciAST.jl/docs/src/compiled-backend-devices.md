@@ -78,10 +78,10 @@ program = Reactant.@compile frag(u, aux, p, t, ())
   cells when writing them back with `scatter_lanes`. The fragment
   supports pre-gathered forcing and constant-array subscripts affine in the
   lane coordinates.
-- `outputs = KernelSpec(spec)` takes one `compile_kernels` specification
+- `outputs = KernelOutputs(spec)` takes one `compile_kernels` specification
   and emits a whole-domain output kernel. Pass a traced Float64 `dt` as the
   sixth argument if the spec reads it. The result is a tuple of flat tensors
-  matching `ir_layout(ir).out`. `KernelSpec(spec; out_eltype = Float32)`
+  matching `ir_layout(ir).out`. `KernelOutputs(spec; out_eltype = Float32)`
   converts the outputs at the end of emission.
 
 ## One device

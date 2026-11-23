@@ -94,7 +94,7 @@
     }
   },
   "counts": {
-    "symbols": 996,
+    "symbols": 997,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 371,
@@ -104,8 +104,8 @@
       "go": 457
     },
     "by_tier": {
-      "extension": 685,
-      "stable": 311
+      "extension": 687,
+      "stable": 310
     }
   },
   "planned": [
@@ -4854,6 +4854,14 @@
       }
     },
     {
+      "name": "kernel_outputs",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "KernelOutputs"
+      }
+    },
+    {
       "name": "kernel_set",
       "kind": "type",
       "tier": "stable",
@@ -4865,9 +4873,8 @@
     {
       "name": "kernel_spec",
       "kind": "type",
-      "tier": "stable",
+      "tier": "extension",
       "bindings": {
-        "julia": "KernelSpec",
         "rust": "KernelSpec"
       }
     },
