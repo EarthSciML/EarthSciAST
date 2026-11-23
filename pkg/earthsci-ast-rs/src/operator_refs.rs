@@ -75,7 +75,7 @@ pub struct Definition {
     pub fixed_units: Option<Expr>,
     facts: OnceLock<BodyFacts>,
     reads: OnceLock<DefinitionReads>,
-    wire_literals: OnceLock<HashSet<String>>,
+    literals: OnceLock<HashSet<String>>,
 }
 
 /// What the expansion of a reference to a definition reads from the
@@ -155,62 +155,34 @@ impl Definition {
             raw: raw.clone(),
             facts: OnceLock::new(),
             reads: OnceLock::new(),
-            wire_literals: OnceLock::new(),
+            literals: OnceLock::new(),
         }
     }
 
-    /// Every loop symbol the wire body binds anywhere
-    /// ([`Self::body_binders`], read off the wire so a body that is no typed
-    /// Expression has them too).
-    fn body_binders_wire(&self) -> Vec<String> {
-        fn walk(v: &Value, out: &mut Vec<String>) {
-            match v {
-                Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
-                Value::Object(m) => {
-                    if m.get("op").is_some() {
-                        out.extend(wire_binders(m));
-                    }
-                    m.values().for_each(|x| walk(x, out));
-                }
-                _ => {}
-            }
-        }
-        let mut out = Vec::new();
-        if let Some(b) = self.wire_body() {
-            walk(b, &mut out);
-        }
-        out
-    }
-
-    /// The body on the wire, if the entry has one.
-    fn wire_body(&self) -> Option<&Value> {
-        self.raw.get("body").filter(|b| !b.is_null())
-    }
-
-    /// The params spelled in a literal position of the body on the wire (any
-    /// string that is not an Expression leaf: a scalar field, a `ranges` bound
-    /// or `from`, a region bound, an `enum` argument). Read from the wire
-    /// because a body whose `ranges` bound names a param (`[1, "n"]`) is no
-    /// typed Expression until that bound is a literal. A param the body
-    /// passes, as a bare name, to a literal param of a definition it
-    /// references is a literal param too: its value lands in that literal
-    /// position.
+    /// The literal params ([`Self::is_literal_param`]), and with them every
+    /// param the body passes, as a bare name, to a literal param of a
+    /// definition it references: its value lands in that literal position,
+    /// so it is part of the instance too.
     fn literal_params(&self, registry: &OperatorRegistry) -> &HashSet<String> {
-        self.wire_literals.get_or_init(|| {
-            let params: HashSet<&str> = self.params.iter().map(String::as_str).collect();
-            let mut out = HashSet::new();
-            if let Some(b) = self.wire_body() {
-                wire_walk(b, true, &mut |s, expr_pos| {
-                    if !expr_pos && params.contains(s) {
-                        out.insert(s.to_string());
-                    }
-                });
-                wire_forwards(b, &mut |callee, q, p| {
-                    if params.contains(p)
-                        && let Some(c) = registry.get(callee)
-                        && c.literal_params(registry).contains(q)
-                    {
-                        out.insert(p.to_string());
+        self.literals.get_or_init(|| {
+            let mut out: HashSet<String> = self
+                .params
+                .iter()
+                .filter(|p| self.is_literal_param(p))
+                .cloned()
+                .collect();
+            if let Some(body) = &self.body {
+                for_each_reference(body, &mut |r| {
+                    let Some(callee) = registry.resolve(&r) else {
+                        return;
+                    };
+                    for (q, b) in r.bindings {
+                        if let Expr::Variable(p) = b
+                            && self.params.contains(p)
+                            && callee.literal_params(registry).contains(q)
+                        {
+                            out.insert(p.clone());
+                        }
                     }
                 });
             }
@@ -224,13 +196,10 @@ impl Definition {
     pub fn reads(&self, registry: &OperatorRegistry) -> &DefinitionReads {
         self.reads.get_or_init(|| {
             let mut out = DefinitionReads {
-                binders: self.body_binders_wire().into_iter().collect(),
+                binders: self.body_binders().iter().cloned().collect(),
                 ..Default::default()
             };
-            if let Some(body) = self.wire_body() {
-                wire_index_subscripts(body, registry, &mut out.index_subscripts);
-            }
-            if let Some(body) = self.wire_body() {
+            if let Some(body) = &self.body {
                 let params: HashSet<&str> = self.params.iter().map(String::as_str).collect();
                 body_reads(body, &params, registry, &mut Vec::new(), &mut out);
             }
@@ -273,12 +242,11 @@ impl Definition {
     /// esm-spec §9.6.4 rule 3, made once per instance; no binding of an
     /// operand is substituted. `None` when the definition has no body.
     pub fn instance_body(&self, literals: &InstanceLiterals) -> Option<Expr> {
+        let body = self.body.as_ref()?;
         if literals.is_empty() {
-            return self.body.clone();
+            return Some(body.clone());
         }
-        let mut wire = self.wire_body()?.clone();
-        specialize(&mut wire, literals, true);
-        serde_json::from_value(wire).ok()
+        Some(specialize(body, literals, &mut Vec::new()))
     }
 
     fn facts(&self) -> &BodyFacts {
@@ -443,231 +411,143 @@ fn fixed_units_json(raw: &Value) -> Option<Value> {
     Some(serde_json::json!({"op": op, "args": [first, ax]}))
 }
 
-/// The loop symbols a wire node binds (`ranges` keys, `output_idx` entries,
-/// an `integral`'s `var`).
-fn wire_binders(m: &serde_json::Map<String, Value>) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Some(Value::Object(r)) = m.get("ranges") {
-        out.extend(r.keys().cloned());
-    }
-    if let Some(Value::Array(o)) = m.get("output_idx") {
-        out.extend(o.iter().filter_map(Value::as_str).map(str::to_string));
-    }
-    if let Some(Value::String(v)) = m.get("var") {
-        out.push(v.clone());
-    }
-    out
-}
-
-/// Whether the field `k` of a node with op `op` holds Expressions.
-fn wire_expr_field(op: &str, k: &str) -> bool {
-    match k {
-        "args" => op != "enum",
-        "values" | "lower" | "upper" | "expr" | "filter" | "key" => true,
-        "bindings" => op == APPLY_OP,
-        _ => false,
-    }
-}
-
-/// Call `f` on every string of a wire body with whether it sits in an
-/// Expression position (a variable leaf) or a literal one.
-fn wire_walk(v: &Value, expr_pos: bool, f: &mut impl FnMut(&str, bool)) {
-    match v {
-        Value::String(s) => f(s, expr_pos),
-        Value::Array(a) => a.iter().for_each(|x| wire_walk(x, expr_pos, f)),
-        Value::Object(m) => {
-            let Some(op) = m.get("op").and_then(Value::as_str) else {
-                m.values().for_each(|x| wire_walk(x, false, f));
-                return;
-            };
-            for (k, x) in m {
-                match k.as_str() {
-                    "op" | "value" | "units" | "description" => {}
-                    "name" if op == APPLY_OP => {}
-                    "bindings" if op == APPLY_OP => {
-                        if let Value::Object(b) = x {
-                            b.values().for_each(|y| wire_walk(y, true, f));
-                        }
-                    }
-                    _ => wire_walk(x, wire_expr_field(op, k), f),
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-/// The bare `index` subscripts of a wire body and of the bodies it
-/// references ([`DefinitionReads::index_subscripts`]).
-fn wire_index_subscripts(v: &Value, registry: &OperatorRegistry, out: &mut BTreeSet<String>) {
-    match v {
-        Value::Array(a) => a
-            .iter()
-            .for_each(|x| wire_index_subscripts(x, registry, out)),
-        Value::Object(m) => {
-            let op = m.get("op").and_then(Value::as_str);
-            if op == Some("index")
-                && let Some(Value::Array(args)) = m.get("args")
-            {
-                out.extend(
-                    args.iter()
-                        .skip(1)
-                        .filter_map(Value::as_str)
-                        .map(str::to_string),
-                );
-            }
-            if op == Some(APPLY_OP)
-                && let Some(d) = m
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .and_then(|n| registry.get(n))
-            {
-                out.extend(d.reads(registry).index_subscripts.iter().cloned());
-            }
-            m.values()
-                .for_each(|x| wire_index_subscripts(x, registry, out));
-        }
-        _ => {}
-    }
-}
-
-/// Call `f(callee, param, name)` for every binding of a reference in a wire
-/// body that is a bare name.
-fn wire_forwards(v: &Value, f: &mut impl FnMut(&str, &str, &str)) {
-    match v {
-        Value::Array(a) => a.iter().for_each(|x| wire_forwards(x, f)),
-        Value::Object(m) => {
-            if m.get("op").and_then(Value::as_str) == Some(APPLY_OP)
-                && let Some(callee) = m.get("name").and_then(Value::as_str)
-                && let Some(Value::Object(b)) = m.get("bindings")
-            {
-                for (q, x) in b {
-                    if let Value::String(p) = x {
-                        f(callee, q, p);
-                    }
-                }
-            }
-            m.values().for_each(|x| wire_forwards(x, f));
-        }
-        _ => {}
-    }
-}
-
-/// Walk a wire body for [`DefinitionReads`]. `bound` holds the loop symbols
-/// in scope (the body's own, and those of the bodies a binding is read in).
+/// Walk a body for [`DefinitionReads`]. `bound` holds the loop symbols in
+/// scope (the body's own, and those of the bodies a binding is read in).
 fn body_reads(
-    v: &Value,
+    e: &Expr,
     params: &HashSet<&str>,
     registry: &OperatorRegistry,
     bound: &mut Vec<String>,
     out: &mut DefinitionReads,
 ) {
-    let leaf = |n: &str, bound: &Vec<String>, out: &mut DefinitionReads| {
-        if bound.iter().any(|b| b == n) {
+    let node = match e {
+        Expr::Variable(n) => {
+            if !bound.iter().any(|b| b == n) {
+                if params.contains(n.as_str()) {
+                    out.params.insert(n.clone());
+                } else if !n.starts_with('\0') {
+                    out.free.insert(n.clone());
+                }
+            }
             return;
         }
-        if params.contains(n) {
-            out.params.insert(n.to_string());
-        } else if !n.starts_with('\0') {
-            out.free.insert(n.to_string());
-        }
+        Expr::Operator(node) => node,
+        _ => return,
     };
-    match v {
-        Value::String(n) => leaf(n, bound, out),
-        Value::Array(a) => a
-            .iter()
-            .for_each(|x| body_reads(x, params, registry, bound, out)),
-        Value::Object(m) => {
-            let Some(op) = m.get("op").and_then(Value::as_str) else {
-                return;
-            };
-            let bindings = m.get("bindings").and_then(Value::as_object);
-            if op == APPLY_OP {
-                let callee = m
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .and_then(|n| registry.get(n));
-                let Some(bindings) = bindings else { return };
-                match callee {
-                    Some(callee) => {
-                        let cr = callee.reads(registry);
-                        for n in &cr.free {
-                            if !bound.iter().any(|b| b == n) {
-                                out.free.insert(n.clone());
-                            }
-                        }
-                        let depth = bound.len();
-                        bound.extend(cr.binders.iter().cloned());
-                        let mut keys: Vec<&String> = bindings.keys().collect();
-                        keys.sort();
-                        for k in keys.into_iter().filter(|k| cr.params.contains(*k)) {
-                            body_reads(&bindings[k], params, registry, bound, out);
-                        }
-                        bound.truncate(depth);
-                    }
-                    // An unresolved reference (the load's checks report it):
-                    // every binding counts as read.
-                    None => bindings
-                        .values()
-                        .for_each(|b| body_reads(b, params, registry, bound, out)),
-                }
-                return;
-            }
-            let depth = bound.len();
-            bound.extend(wire_binders(m));
-            for (k, x) in m {
-                if wire_expr_field(op, k) {
-                    body_reads(x, params, registry, bound, out);
-                }
-            }
-            bound.truncate(depth);
-        }
-        _ => {}
+    if node.op == "index" {
+        out.index_subscripts.extend(node.args.iter().skip(1).filter_map(|a| match a {
+            Expr::Variable(s) => Some(s.clone()),
+            _ => None,
+        }));
     }
+    if let Some(r) = reference_node(node) {
+        match registry.resolve(&r) {
+            Some(callee) => {
+                let cr = callee.reads(registry);
+                for n in &cr.free {
+                    if !bound.iter().any(|b| b == n) {
+                        out.free.insert(n.clone());
+                    }
+                }
+                out.index_subscripts.extend(cr.index_subscripts.iter().cloned());
+                let depth = bound.len();
+                bound.extend(cr.binders.iter().cloned());
+                let mut keys: Vec<&String> = r.bindings.keys().collect();
+                keys.sort();
+                for k in keys.into_iter().filter(|k| cr.params.contains(*k)) {
+                    body_reads(&r.bindings[k], params, registry, bound, out);
+                }
+                bound.truncate(depth);
+            }
+            // An unresolved reference (the load's checks report it): every
+            // binding counts as read.
+            None => r
+                .bindings
+                .values()
+                .for_each(|b| body_reads(b, params, registry, bound, out)),
+        }
+        return;
+    }
+    let depth = bound.len();
+    node.for_each_binder(Binders::SCOPE, |n| bound.push(n.to_string()));
+    node.for_each_child(&mut |c| body_reads(c, params, registry, bound, out));
+    bound.truncate(depth);
 }
 
-/// [`Definition::instance_body`]'s walk over the wire body: every string in a
-/// literal position that names a literal param becomes its literal (a number
-/// where it is numeric, so a `ranges` bound `[1, "n"]` becomes `[1, 4]`).
-fn specialize(v: &mut Value, lits: &InstanceLiterals, expr_pos: bool) {
-    match v {
-        Value::String(s) => {
-            if !expr_pos && let Some(l) = lits.get(s.as_str()) {
-                *v = match l.parse::<i64>() {
-                    Ok(i) => Value::from(i),
-                    Err(_) => Value::String(l.clone()),
-                };
-            }
+/// [`Definition::instance_body`]'s walk. `bound` holds the loop symbols in
+/// scope, which shadow a param of the same name. A `ranges` bound naming a
+/// literal param takes its literal; a range whose two bounds are then
+/// integers is the interval they give.
+fn specialize(e: &Expr, lits: &InstanceLiterals, bound: &mut Vec<String>) -> Expr {
+    let Expr::Operator(node) = e else {
+        return e.clone();
+    };
+    let lit = |s: &String, bound: &Vec<String>| -> Option<String> {
+        if bound.contains(s) {
+            None
+        } else {
+            lits.get(s).cloned()
         }
-        Value::Array(a) => a.iter_mut().for_each(|x| specialize(x, lits, expr_pos)),
-        Value::Object(m) => {
-            let Some(op) = m.get("op").and_then(Value::as_str).map(str::to_string) else {
-                m.values_mut().for_each(|x| specialize(x, lits, false));
-                return;
-            };
-            for (k, x) in m.iter_mut() {
-                match k.as_str() {
-                    "op" | "value" | "units" | "description" => {}
-                    "name" if op == APPLY_OP => {}
-                    "bindings" if op == APPLY_OP => {
-                        if let Value::Object(b) = x {
-                            b.values_mut().for_each(|y| specialize(y, lits, true));
-                        }
-                    }
-                    // A scalar field holds a name, never a number.
-                    "wrt" | "dim" | "var" | "reduce" | "semiring" | "fn" => {
-                        if let Value::String(s) = x
-                            && let Some(l) = lits.get(s.as_str())
-                        {
-                            *s = l.clone();
-                        }
-                    }
-                    _ => specialize(x, lits, wire_expr_field(&op, k)),
-                }
-            }
+    };
+    let depth = bound.len();
+    node.for_each_binder(Binders::SCOPE, |n| bound.push(n.to_string()));
+    let mut out = node.map_children(&mut |c| specialize(c, lits, bound));
+    for f in [
+        &mut out.wrt,
+        &mut out.dim,
+        &mut out.int_var,
+        &mut out.reduce,
+        &mut out.semiring,
+        &mut out.broadcast_fn,
+    ] {
+        if let Some(v) = f.as_ref().and_then(|s| lit(s, bound)) {
+            *f = Some(v);
         }
-        _ => {}
     }
+    if let Some(ranges) = out.ranges.as_mut() {
+        use crate::types::{RangeBound, RangeSpec};
+        for spec in ranges.values_mut() {
+            match spec {
+                RangeSpec::IndexSetRef { from, of } => {
+                    if let Some(v) = lit(from, bound) {
+                        *from = v;
+                    }
+                    for o in of.iter_mut().flatten() {
+                        if let Some(v) = lit(o, bound) {
+                            *o = v;
+                        }
+                    }
+                }
+                RangeSpec::Symbolic(ends) => {
+                    for end in ends.iter_mut() {
+                        if let RangeBound::Name(n) = end
+                            && let Some(v) = lit(n, bound)
+                        {
+                            *end = match v.parse::<i64>() {
+                                Ok(i) => RangeBound::Int(i),
+                                Err(_) => RangeBound::Name(v),
+                            };
+                        }
+                    }
+                    if let [RangeBound::Int(lo), RangeBound::Int(hi)] = ends {
+                        *spec = RangeSpec::Interval([*lo, *hi]);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if out.op == "enum" {
+        for a in out.args.iter_mut() {
+            if let Expr::Variable(s) = a
+                && let Some(v) = lit(s, bound)
+            {
+                *a = Expr::Variable(v);
+            }
+        }
+    }
+    bound.truncate(depth);
+    Expr::operator(out)
 }
 
 /// A registry of operator definitions: a component's (§9.6.4 rule 5) or a
