@@ -6025,7 +6025,7 @@ mod dependency_order_tests {
             crate::validate(&file)
                 .structural_errors
                 .iter()
-                .any(|e| e.code == StructuralErrorCode::ObservedCycle)
+                .any(|e| matches!(e.code, StructuralErrorCode::ObservedCycle))
         };
         let offset = serde_json::json!({"op": "*", "args": [
             {"op": "index", "args": ["v", {"op": "-", "args": ["j", 1]}]}, 2.0]});
