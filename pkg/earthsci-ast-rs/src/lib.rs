@@ -112,6 +112,7 @@ pub(crate) mod expression;
 pub mod extension;
 pub(crate) mod flatten;
 pub(crate) mod flatten_refs;
+pub(crate) mod flatten_template_dt;
 pub(crate) mod graph;
 pub(crate) mod inline_test_checks;
 pub mod intern;

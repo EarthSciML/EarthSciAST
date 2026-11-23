@@ -1044,7 +1044,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // after coupling (phase 4) so a state merged by `operator_compose` yields
     // its WHOLE tendency rather than the first contributing term.
     let time_invariant: HashSet<String> = parts.parameters.keys().cloned().collect();
-    resolve_rhs_time_derivatives_per_contribution(&mut parts.equations, &time_invariant);
+    resolve_rhs_time_derivatives(&mut parts, &mut flat_reg.registry, &time_invariant);
 
     // Phase 5b″: classify the `ic` equations OUT of `equations` into
     // `field_ics` (esm-libraries-spec §4.7.5 step 4). After 5b′, so an
@@ -2413,6 +2413,56 @@ struct AssembledParts {
     lifted_shapes: IndexMap<String, Vec<i64>>,
 }
 
+impl AssembledParts {
+    /// Rewrite every expression site of the system under construction through
+    /// `f`: the initialization equations, the field initial conditions, every
+    /// event's conditions, trigger and affect right-hand sides, and every
+    /// variable's update rules and bounds. With `equations`, the equation
+    /// pool too, inside each contribution. Mirrors the Julia reference
+    /// `_map_flat_sites!`.
+    fn map_sites(&mut self, equations: bool, f: &mut dyn FnMut(&Expr) -> Expr) {
+        if equations {
+            for fe in &mut self.equations {
+                fe.map_contributions(&mut *f);
+            }
+        }
+        for (_, e) in self.initialization_faqs.iter_mut().chain(self.field_ics.iter_mut()) {
+            *e = f(e);
+        }
+        fn affects(a: &mut [AffectEquation], f: &mut dyn FnMut(&Expr) -> Expr) {
+            for x in a {
+                x.rhs = f(&x.rhs);
+            }
+        }
+        for ev in &mut self.continuous_events {
+            for c in ev.conditions.iter_mut() {
+                *c = f(c);
+            }
+            affects(&mut ev.affects, f);
+            if let Some(neg) = ev.affect_neg.as_mut() {
+                affects(neg, f);
+            }
+        }
+        for ev in &mut self.discrete_events {
+            if let DiscreteEventTrigger::Condition { expression } = &mut ev.trigger {
+                *expression = f(expression);
+            }
+            if let Some(a) = ev.affects.as_mut() {
+                affects(a, f);
+            }
+        }
+        for var in self
+            .state_variables
+            .values_mut()
+            .chain(self.parameters.values_mut())
+            .chain(self.observed_variables.values_mut())
+        {
+            var.for_each_expression_mut(&mut |e| *e = f(e));
+            var.map_bound_references(&mut |e| f(e));
+        }
+    }
+}
+
 /// Phase 5 of [`flatten`]: merge the per-system blocks (in block order) into
 /// the final variable maps, equation list, and event lists.
 ///
@@ -2832,52 +2882,80 @@ fn maybe_apply_pointwise_lift(
 /// The complement of [`crate::op_registry::is_rewrite_target_derivative`],
 /// which is the SPATIAL tier: a `D` whose `wrt` names an axis, lowered to a
 /// stencil by a discretization rule and never evaluated.
-fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
+pub(crate) fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
     node.op == "D"
         && node.args.len() == 1
         && !crate::op_registry::is_rewrite_target_derivative(node)
 }
 
-/// Which right-hand sides carry a structural time derivative, and the tables
-/// to resolve them against (`None` when the equations define nothing to
-/// resolve against). `None` overall when no right-hand side carries one: a
-/// document with none keeps its equations untouched rather than being rebuilt
-/// through `substitute`.
-fn plan_time_derivative_resolution<'e, 'a>(
-    equations: impl Iterator<Item = (&'e Equation, bool)> + Clone,
-    time_invariant: &'a HashSet<String>,
-) -> Option<(Vec<bool>, Option<DerivTables<'a>>)> {
-    let carriers: Vec<bool> = equations
-        .clone()
-        .map(|(eq, _)| contains_time_derivative(&eq.rhs))
-        .collect();
-    if !carriers.contains(&true) {
-        return None;
-    }
-    Some((carriers, DerivTables::build(equations, time_invariant)))
-}
-
-/// Resolve each right-hand-side `D` over flatten's own equations (esm-spec
-/// §4.2): the resolved expression replaces the `D` node INSIDE the referencing
-/// contribution, which
-/// keeps its origins (esm-libraries-spec §4.7.5); the resolved quantity's own
-/// contributions are not spliced in.
-fn resolve_rhs_time_derivatives_per_contribution(
-    equations: &mut [FlatEq],
+/// Step 3a of [`flatten`]: rewrite every right-hand-side STRUCTURAL time
+/// derivative into what this system defines for it (esm-spec §4.2;
+/// esm-libraries-spec §4.7.5 step 3a), including those in the bodies of the
+/// definitions references name, without expanding anything (esm-spec §9.6.4
+/// rule 3, "Time derivatives"; see [`crate::flatten_template_dt`]). The
+/// resolved expression replaces the `D` node INSIDE the referencing
+/// contribution, which keeps its origins (esm-libraries-spec §4.7.5); the
+/// resolved quantity's own contributions are not spliced in. With a registry,
+/// every other expression site (events, initialization equations, variable
+/// fields), which step 3a does not resolve, keeps pointing at the unresolved
+/// bodies, and `registry` is rewritten with the entries the step places.
+/// Mirrors the Julia reference `_resolve_rhs_time_derivatives!`.
+fn resolve_rhs_time_derivatives(
+    parts: &mut AssembledParts,
+    registry: &mut IndexMap<String, serde_json::Value>,
     time_invariant: &HashSet<String>,
 ) {
-    let Some((carriers, Some(tables))) = plan_time_derivative_resolution(
-        equations.iter().map(|fe| (&fe.eq, fe.lifted)),
-        time_invariant,
-    ) else {
+    use crate::flatten_template_dt::DtState;
+    let with_registry = !registry.is_empty();
+    let placed = {
+        let Some(mut st) = DtState::build(
+            parts
+                .equations
+                .iter()
+                .map(|fe| (&fe.eq.lhs, &fe.eq.rhs, lifted_lhs_target(&fe.eq.lhs, fe.lifted))),
+            time_invariant,
+            registry,
+        ) else {
+            return;
+        };
+        let mut roots: Vec<String> = Vec::new();
+        for fe in &mut parts.equations {
+            let carries = if with_registry {
+                st.touches(&fe.eq.rhs)
+            } else {
+                contains_time_derivative(&fe.eq.rhs)
+            };
+            if !carries {
+                continue;
+            }
+            let mut active = self_defined(&fe.eq.lhs, fe.lifted);
+            fe.map_contributions(|e| st.resolve_site(e, &mut active));
+            DtState::marks_in(&fe.eq.rhs, &mut roots);
+        }
+        if with_registry {
+            parts.map_sites(false, &mut |e| {
+                if !st.touches(e) {
+                    return e.clone();
+                }
+                let r = st.unresolve(e);
+                DtState::marks_in(&r, &mut roots);
+                r
+            });
+        }
+        let mut seen = HashSet::new();
+        roots.retain(|m| seen.insert(m.clone()));
+        if roots.is_empty() {
+            return;
+        }
+        st.place(roots)
+    };
+    let Some((names, new_registry)) = placed else {
         return;
     };
-    for (fe, carries) in equations.iter_mut().zip(carriers) {
-        if carries {
-            let mut active = self_defined(&fe.eq.lhs, fe.lifted);
-            fe.map_contributions(|e| tables.substitute(e, &mut active));
-        }
-    }
+    *registry = new_registry;
+    parts.map_sites(true, &mut |e| {
+        crate::flatten_refs::rename_refs(e, &names).unwrap_or_else(|| e.clone())
+    });
 }
 
 /// The quantity an equation DEFINES, which is not available to substitute into
@@ -2925,183 +3003,6 @@ fn lifted_lhs_target(lhs: &Expr, lifted: bool) -> Option<&str> {
     }
 }
 
-/// Whether a tendency is a lifted right-hand side: a `faq` with output
-/// indices.
-fn is_lifted_tendency(expr: &Expr) -> bool {
-    matches!(expr, Expr::Operator(node)
-        if node.op == "faq" && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()))
-}
-
-/// The tendency and defining equations the right-hand-side `D` resolution reads,
-/// plus the names whose time derivative is `0`.
-struct DerivTables<'a> {
-    /// `x` -> the right-hand side of its `D(x)/dt ~ …` equation.
-    tendency: HashMap<String, Expr>,
-    /// `y` -> the right-hand side of its `y ~ …` defining equation.
-    definition: HashMap<String, Expr>,
-    /// Names that do not vary with `t` — the flattened system's parameters.
-    /// A name in NONE of the three is unresolvable rather than zero: answering
-    /// `0` for a name this pass simply does not recognise is the very defect
-    /// §4.2 forbids.
-    time_invariant: &'a HashSet<String>,
-}
-
-impl<'a> DerivTables<'a> {
-    /// The tables `equations` define, or `None` when they define nothing to
-    /// resolve against.
-    fn build<'e>(
-        equations: impl IntoIterator<Item = (&'e Equation, bool)>,
-        time_invariant: &'a HashSet<String>,
-    ) -> Option<Self> {
-        let mut tables = DerivTables {
-            tendency: HashMap::new(),
-            definition: HashMap::new(),
-            time_invariant,
-        };
-        for (eq, lifted) in equations {
-            match &eq.lhs {
-                Expr::Operator(node) if is_structural_time_derivative(node) => {
-                    if let Some(Expr::Variable(name)) = node.args.first() {
-                        tables.tendency.insert(name.clone(), eq.rhs.clone());
-                    }
-                }
-                // A lifted state's tendency is its lifted right-hand side, the
-                // `faq` over its index sets (esm-libraries-spec §4.7.5 step 3a).
-                lhs @ Expr::Operator(_) if lifted_lhs_target(lhs, lifted).is_some() => {
-                    if let Some(name) = lifted_lhs_target(lhs, lifted) {
-                        tables.tendency.insert(name.to_string(), eq.rhs.clone());
-                    }
-                }
-                // A bare-variable LHS is a DEFINING equation — esm-spec §6.3.1's
-                // observed / algebraic form. Its right-hand side is what the
-                // chain rule differentiates.
-                Expr::Variable(name) => {
-                    tables.definition.insert(name.clone(), eq.rhs.clone());
-                }
-                _ => {}
-            }
-        }
-        (!tables.tendency.is_empty() || !tables.definition.is_empty()).then_some(tables)
-    }
-
-    /// Rewrite every structural `D` inside `expr`, leaving the ones `deriv`
-    /// cannot answer exactly as authored for the gate to report.
-    fn substitute(&self, expr: &Expr, active: &mut Vec<String>) -> Expr {
-        let Expr::Operator(node) = expr else {
-            return expr.clone();
-        };
-        if is_structural_time_derivative(node) {
-            return match node.args.first().and_then(|a| self.deriv(a, active)) {
-                Some(out) => out,
-                None => expr.clone(),
-            };
-        }
-        Expr::operator(node.map_children(&mut |child| self.substitute(child, active)))
-    }
-
-    /// d/dt of `expr`, or `None` when this format does not define it.
-    fn deriv(&self, expr: &Expr, active: &mut Vec<String>) -> Option<Expr> {
-        match expr {
-            Expr::Integer(_) | Expr::Number(_) => Some(zero()),
-            Expr::Variable(name) => {
-                if active.iter().any(|n| n == name) {
-                    // A cycle. Stop, and let the gate name it.
-                    return None;
-                }
-                if let Some(f) = self.tendency.get(name) {
-                    let f = f.clone();
-                    active.push(name.clone());
-                    let out = self.substitute(&f, active);
-                    active.pop();
-                    Some(out)
-                } else if let Some(g) = self.definition.get(name) {
-                    let g = g.clone();
-                    active.push(name.clone());
-                    let out = self.deriv(&g, active);
-                    active.pop();
-                    out
-                } else if self.time_invariant.contains(name) {
-                    Some(zero())
-                } else {
-                    None
-                }
-            }
-            Expr::Operator(node) => self.deriv_op(node, active),
-        }
-    }
-
-    /// [`Self::deriv`] over an operator node: the closed arithmetic set.
-    fn deriv_op(&self, node: &ExpressionNode, active: &mut Vec<String>) -> Option<Expr> {
-        let d = |a: &Expr, active: &mut Vec<String>| self.deriv(a, active);
-        if node.op == "index"
-            && let Some(base @ Expr::Variable(name)) = node.args.first()
-            && self.tendency.get(name).is_some_and(is_lifted_tendency)
-        {
-            // One cell of a lifted state: that cell of its lifted tendency.
-            let whole = d(base, active)?;
-            let mut args = Vec::with_capacity(node.args.len());
-            args.push(whole);
-            args.extend(node.args.iter().skip(1).cloned());
-            return Some(Expr::operator(ExpressionNode {
-                op: "index".to_string(),
-                args,
-                ..Default::default()
-            }));
-        }
-        match node.op.as_str() {
-            "+" => {
-                let mut terms = Vec::with_capacity(node.args.len());
-                for a in &node.args {
-                    terms.push(d(a, active)?);
-                }
-                Some(sum(terms))
-            }
-            "-" => match node.args.len() {
-                1 => Some(negate(d(&node.args[0], active)?)),
-                2 => {
-                    let a = d(&node.args[0], active)?;
-                    let b = d(&node.args[1], active)?;
-                    Some(difference(a, b))
-                }
-                _ => None,
-            },
-            "neg" if node.args.len() == 1 => Some(negate(d(&node.args[0], active)?)),
-            // Product rule over an n-ary `*`: one term per factor, that
-            // factor differentiated and the others left alone.
-            "*" => {
-                let mut terms = Vec::with_capacity(node.args.len());
-                for (i, a) in node.args.iter().enumerate() {
-                    let da = d(a, active)?;
-                    if is_zero(&da) {
-                        continue;
-                    }
-                    let mut factors = vec![da];
-                    for (j, b) in node.args.iter().enumerate() {
-                        if i != j {
-                            factors.push(b.clone());
-                        }
-                    }
-                    terms.push(product(factors));
-                }
-                Some(sum(terms))
-            }
-            "/" if node.args.len() == 2 => {
-                let (u, v) = (&node.args[0], &node.args[1]);
-                let du = d(u, active)?;
-                let dv = d(v, active)?;
-                if is_zero(&dv) {
-                    // v is constant in t: (u/v)' = u'/v, which keeps the
-                    // expression small in the common `D(x, t)/c` shape.
-                    return Some(quotient(du, v.clone()));
-                }
-                let num = difference(product(vec![du, v.clone()]), product(vec![u.clone(), dv]));
-                Some(quotient(num, product(vec![v.clone(), v.clone()])))
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Does `expr` carry a structural `D` anywhere?
 fn contains_time_derivative(expr: &Expr) -> bool {
     let Expr::Operator(node) = expr else {
@@ -3119,11 +3020,11 @@ fn contains_time_derivative(expr: &Expr) -> bool {
 // downstream classifier can recognise as constant.
 // ---------------------------------------------------------------------------
 
-fn zero() -> Expr {
+pub(crate) fn zero() -> Expr {
     Expr::Number(0.0)
 }
 
-fn is_zero(e: &Expr) -> bool {
+pub(crate) fn is_zero(e: &Expr) -> bool {
     matches!(e, Expr::Number(v) if *v == 0.0) || matches!(e, Expr::Integer(0))
 }
 
@@ -3139,7 +3040,7 @@ fn node(op: &str, args: Vec<Expr>) -> Expr {
     })
 }
 
-fn sum(terms: Vec<Expr>) -> Expr {
+pub(crate) fn sum(terms: Vec<Expr>) -> Expr {
     let mut kept: Vec<Expr> = terms.into_iter().filter(|t| !is_zero(t)).collect();
     match kept.len() {
         0 => zero(),
@@ -3148,7 +3049,7 @@ fn sum(terms: Vec<Expr>) -> Expr {
     }
 }
 
-fn difference(a: Expr, b: Expr) -> Expr {
+pub(crate) fn difference(a: Expr, b: Expr) -> Expr {
     if is_zero(&b) {
         return a;
     }
@@ -3158,7 +3059,7 @@ fn difference(a: Expr, b: Expr) -> Expr {
     node("-", vec![a, b])
 }
 
-fn negate(a: Expr) -> Expr {
+pub(crate) fn negate(a: Expr) -> Expr {
     match &a {
         _ if is_zero(&a) => zero(),
         Expr::Number(v) => Expr::Number(-v),
@@ -3170,7 +3071,7 @@ fn negate(a: Expr) -> Expr {
     }
 }
 
-fn product(factors: Vec<Expr>) -> Expr {
+pub(crate) fn product(factors: Vec<Expr>) -> Expr {
     if factors.iter().any(is_zero) {
         return zero();
     }
@@ -3182,7 +3083,7 @@ fn product(factors: Vec<Expr>) -> Expr {
     }
 }
 
-fn quotient(a: Expr, b: Expr) -> Expr {
+pub(crate) fn quotient(a: Expr, b: Expr) -> Expr {
     if is_zero(&a) {
         return zero();
     }
