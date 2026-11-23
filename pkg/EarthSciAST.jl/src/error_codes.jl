@@ -361,6 +361,9 @@ const ERROR_CODES = (
     # leaf's `domain.element_type` that must be written onto a reaction system,
     # whose species and parameters have no per-variable `element_type`.
     ELEMENT_TYPE_UNCARRIED = "element_type_uncarried",
+    PRECISION_CHOICE_CONFLICT = "precision_choice_conflict",
+    KEY_PRECISION_UNSPECIFIED = "key_precision_unspecified",
+    TOLERANCE_BELOW_WORKING_PRECISION = "tolerance_below_working_precision",
     # A construct an evaluator cannot run at the precision it is declared in
     # (CONFORMANCE_SPEC §5.18.2): refused rather than evaluated in binary64. The
     # tree-walk evaluator computes in binary64 only, so it refuses every binary32

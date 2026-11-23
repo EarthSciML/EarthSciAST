@@ -521,6 +521,12 @@ export const ERROR_CODES = {
    * whose species and parameters have no per-variable `element_type`.
    */
   ELEMENT_TYPE_UNCARRIED: 'element_type_uncarried',
+  /** An external precision choice conflicts with declarations (§11.3.3 P4). */
+  PRECISION_CHOICE_CONFLICT: 'precision_choice_conflict',
+  /** An unspecified variable is used as a key (§11.3.3 P8). */
+  KEY_PRECISION_UNSPECIFIED: 'key_precision_unspecified',
+  /** The tolerance is below the binary32 state storage floor (§11.3.3 P7). */
+  TOLERANCE_BELOW_WORKING_PRECISION: 'tolerance_below_working_precision',
   SUBSYSTEM_REF_IS_COUPLING_LIBRARY: 'subsystem_ref_is_coupling_library',
   SUBSYSTEM_REF_IS_OPERATOR_LIBRARY: 'subsystem_ref_is_operator_library',
 

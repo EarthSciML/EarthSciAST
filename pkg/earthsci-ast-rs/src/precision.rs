@@ -198,10 +198,9 @@ pub struct GroupPrecisionRecord {
 }
 
 /// Precision metadata an external integrator attaches to its results (§11.3.3).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PrecisionRecord {
-    #[serde(serialize_with = "serialize_record_version")]
-    esm_precision_record: (),
+    esm_precision_record: &'static str,
     /// Every variable read or written, keyed by flattened name.
     pub variables: BTreeMap<String, VariablePrecisionRecord>,
     /// Every evaluation group, keyed by group name.
@@ -211,11 +210,15 @@ pub struct PrecisionRecord {
     pub integrator: BTreeMap<String, serde_json::Value>,
 }
 
-fn serialize_record_version<S: serde::Serializer>(
-    _: &(),
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str("1.0")
+impl Default for PrecisionRecord {
+    fn default() -> Self {
+        Self {
+            esm_precision_record: "1.0",
+            variables: BTreeMap::new(),
+            groups: BTreeMap::new(),
+            integrator: BTreeMap::new(),
+        }
+    }
 }
 
 impl PrecisionRecord {
