@@ -7122,6 +7122,7 @@ mod tests {
         lift: TestLift<'_>,
     ) -> Result<(), FlattenError> {
         let empty: IndexMap<String, ModelVariable> = IndexMap::new();
+        let refs = crate::operator_refs::OperatorRegistry::default();
         let plan = plan_pointwise_lift(
             equations,
             PointwiseLift {
@@ -7133,6 +7134,7 @@ mod tests {
                 index_sets: lift.index_sets,
                 no_operator_route: &HashSet::new(),
                 masks: &HashMap::new(),
+                refs: &refs,
             },
         )?;
         let Some(lifted) = plan else {
@@ -7140,7 +7142,7 @@ mod tests {
         };
         let mut read_shapes = lift.read_shapes.clone();
         read_shapes.extend(lifted.axes.iter().map(|(k, v)| (k.clone(), v.clone())));
-        rewrite_lifted_equations(equations, &lifted, &read_shapes)
+        rewrite_lifted_equations(equations, &lifted, &read_shapes, &refs, &mut IndexMap::new())
     }
 
     fn interval(size: i64) -> IndexSet {

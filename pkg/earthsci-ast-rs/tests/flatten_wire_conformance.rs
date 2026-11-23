@@ -194,9 +194,9 @@ fn expand_value(v: &Value, reg: &IndexMap<String, Value>) -> Value {
     }
 }
 
-/// `flat` with every reference in its equations and field initial conditions
-/// expanded ([`expand_value`]), as the Julia test's `expand_flattened_refs`
-/// gives the golden form.
+/// `flat` with every reference in its equations, their contributions and its
+/// field initial conditions expanded ([`expand_value`]), as the Julia tests'
+/// `expand_flattened_refs` gives the expanded form.
 pub(crate) fn expanded(flat: &FlattenedSystem) -> FlattenedSystem {
     let reg = &flat.template_registry;
     let ex = |e: &earthsci_ast::Expr| -> earthsci_ast::Expr {
@@ -209,6 +209,11 @@ pub(crate) fn expanded(flat: &FlattenedSystem) -> FlattenedSystem {
     }
     for (_, rhs) in &mut out.field_ics {
         *rhs = ex(rhs);
+    }
+    for cs in &mut out.equation_contributions {
+        for c in cs {
+            c.expr = ex(&c.expr);
+        }
     }
     out
 }
