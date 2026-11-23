@@ -345,6 +345,20 @@ impl<'m> TapeBuilder<'m> {
                     })
                     .collect();
             free.sort();
+            // The key columns and envelope factors of a `join` in the body
+            // name build-time data as strings: each is passed as data.
+            let mut join_names: Vec<String> = Vec::new();
+            collect_join_names(&inst.body, &mut join_names);
+            join_names.sort();
+            join_names.dedup();
+            for n in join_names {
+                if free.contains(&n) || params.iter().any(|(q, _)| *q == n) {
+                    continue;
+                }
+                if let Some(kind) = self.known_name_arg(&n) {
+                    params.push((n, kind));
+                }
+            }
             for n in free {
                 if let Some(kind) = self.known_name_arg(&n) {
                     params.push((n, kind));
@@ -650,6 +664,20 @@ impl<'m> TapeBuilder<'m> {
         let mut prog = f.assemble(vec![("result".to_string(), result)]);
         prog.is_function = true;
         Ok(Built::Function(prog, res))
+    }
+}
+
+/// Every name a `join` clause in `e` spells (key columns, overlap envelope
+/// factors).
+fn collect_join_names(e: &Expr, out: &mut Vec<String>) {
+    if let Expr::Operator(node) = e {
+        for clause in node.join.iter().flatten() {
+            out.extend(clause.on.iter().flatten().cloned());
+            if let Some(ov) = &clause.overlap {
+                out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
+            }
+        }
+        node.for_each_child(&mut |c| collect_join_names(c, out));
     }
 }
 
