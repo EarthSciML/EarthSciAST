@@ -5128,7 +5128,10 @@ fn references_in_scope(
                         seen,
                     );
                 }
-                for n in &reads.free {
+                // A bare `index` subscript anywhere in an expression counts
+                // as a binder in scope throughout it ([`collect_bound_symbols`]),
+                // and so it does when the expansion would put it there.
+                for n in reads.free.iter().filter(|n| !reads.index_subscripts.contains(*n)) {
                     references_in_scope(
                         &crate::Expr::Variable(n.clone()),
                         defined_vars,

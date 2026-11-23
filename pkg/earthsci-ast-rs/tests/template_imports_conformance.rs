@@ -34,6 +34,16 @@ fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Valu
         .unwrap_or_else(|| panic!("{name} has no defining equation"))
 }
 
+/// `file` saved and its operator references expanded by the explicit
+/// expansion utility (esm-spec §9.6.4 rule 2): what a reference denotes. The
+/// loaded document itself keeps them (rule 1).
+fn saved_expanded(file: &earthsci_ast::EsmFile) -> serde_json::Value {
+    let mut v: serde_json::Value =
+        serde_json::from_str(&earthsci_ast::to_json(file).expect("save")).expect("json");
+    expand(&mut v).expect("expand");
+    v
+}
+
 fn conf(parts: &[&str]) -> PathBuf {
     let mut p = common::repo_root().join("tests/conformance/expression_templates");
     for part in parts {
@@ -82,7 +92,8 @@ fn import_smoke_matches_golden() {
     let isets = f.index_sets.as_ref().expect("index_sets");
     assert_eq!(isets["lon"].size, Some(288));
     assert_eq!(isets["lat"].size, Some(181));
-    // D(c, wrt: lon) lowered to the makearray rule body; D(c, wrt: t) not.
+    // D(c, wrt: lon) rewritten to a reference to the makearray rule (which
+    // denotes its body); D(c, wrt: t) not.
     let eq = &f.models.as_ref().expect("models")["Advection"].equations[0];
     let Expr::Operator(lhs) = &eq.lhs else {
         panic!("lhs must be an operator node");
@@ -94,7 +105,11 @@ fn import_smoke_matches_golden() {
     let Expr::Operator(stencil) = &rhs.args[1] else {
         panic!("rhs.args[1] must be an operator node");
     };
-    assert_eq!(stencil.op, "makearray");
+    assert_eq!(stencil.op, "apply_operator");
+    assert_eq!(
+        saved_expanded(&f)["models"]["Advection"]["equations"][0]["rhs"]["args"][1]["op"],
+        "makearray"
+    );
 }
 
 /// faq_int_ratio_golden: CONFORMANCE_SPEC §5.5.3.1 rule 1 on the
@@ -438,7 +453,7 @@ fn import_library_enum_resolves_in_the_library_scope() {
         "fixture_importer_redeclares.esm",
     ]))
     .expect("importer redeclaring the library's enum loads");
-    let doc = serde_json::to_value(&f).expect("serialize");
+    let doc = saved_expanded(&f);
     let model = &doc["models"]["Consumer"];
     let library_body = obs_def(model, "isPerHorsepowerHour");
     assert_eq!(library_body["op"], json!("=="));
@@ -800,12 +815,10 @@ fn valid_suite_library_and_minimal_consumer() {
     );
     // scale_by_n(x) lowered by the imported match rule to x * 8 (the
     // zero-parameter n_cells body composed and N folded at registration).
-    let y = earthsci_ast::observed_definitions(&m.models.as_ref().expect("models")["M"])
-        .remove("y")
-        .expect("y defining equation");
+    let doc = saved_expanded(&m);
     assert_eq!(
-        serde_json::to_value(&y).expect("serialize y"),
-        json!({"op": "*", "args": ["x", 8]})
+        obs_def(&doc["models"]["M"], "y"),
+        &json!({"op": "*", "args": ["x", 8]})
     );
 }
 
@@ -823,7 +836,11 @@ fn consumer_round_trip_emits_expanded_folded_form() {
     let f = load_path(conf(&["import_smoke", "fixture.esm"])).expect("load");
     let text = earthsci_ast::to_json(&f).expect("save");
     assert!(!text.contains("operator_imports"));
-    assert!(!text.contains("apply_operator"));
+    // The references survive, with the definitions they name written in the
+    // component's `operators` block (esm-spec §9.6.4 rules 1 and 5).
+    let saved: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert!(text.contains("apply_operator"));
+    assert!(saved["models"]["Advection"]["operators"].is_object());
     let reloaded = earthsci_ast::load_string(&text).expect("reload");
     assert_eq!(
         reloaded.index_sets.as_ref().expect("index_sets")["lon"].size,

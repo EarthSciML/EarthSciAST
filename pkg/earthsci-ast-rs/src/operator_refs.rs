@@ -98,6 +98,11 @@ pub struct DefinitionReads {
     /// expansion reads is captured by it there (read wide, as Julia's
     /// `_tpl_scope_binders`).
     pub binders: BTreeSet<String>,
+    /// The names the body, or a body it references, spells as a bare `index`
+    /// subscript (`index(f, i, j)`): a check that takes every bare subscript
+    /// of an expression for a binder in scope throughout it (as the
+    /// undeclared-name check does) reads these as bound at the site.
+    pub index_subscripts: BTreeSet<String>,
 }
 
 /// What a body says about its parameters and the names it binds, computed
@@ -210,6 +215,9 @@ impl Definition {
                 binders: self.body_binders_wire().into_iter().collect(),
                 ..Default::default()
             };
+            if let Some(body) = self.wire_body() {
+                wire_index_subscripts(body, registry, &mut out.index_subscripts);
+            }
             if let Some(body) = self.wire_body() {
                 let params: HashSet<&str> = self.params.iter().map(String::as_str).collect();
                 body_reads(body, &params, registry, &mut Vec::new(), &mut out);
@@ -460,6 +468,29 @@ fn wire_walk(v: &Value, expr_pos: bool, f: &mut impl FnMut(&str, bool)) {
                     _ => wire_walk(x, wire_expr_field(op, k), f),
                 }
             }
+        }
+        _ => {}
+    }
+}
+
+/// The bare `index` subscripts of a wire body and of the bodies it
+/// references ([`DefinitionReads::index_subscripts`]).
+fn wire_index_subscripts(v: &Value, registry: &OperatorRegistry, out: &mut BTreeSet<String>) {
+    match v {
+        Value::Array(a) => a.iter().for_each(|x| wire_index_subscripts(x, registry, out)),
+        Value::Object(m) => {
+            let op = m.get("op").and_then(Value::as_str);
+            if op == Some("index")
+                && let Some(Value::Array(args)) = m.get("args")
+            {
+                out.extend(args.iter().skip(1).filter_map(Value::as_str).map(str::to_string));
+            }
+            if op == Some(APPLY_OP)
+                && let Some(d) = m.get("name").and_then(Value::as_str).and_then(|n| registry.get(n))
+            {
+                out.extend(d.reads(registry).index_subscripts.iter().cloned());
+            }
+            m.values().for_each(|x| wire_index_subscripts(x, registry, out));
         }
         _ => {}
     }

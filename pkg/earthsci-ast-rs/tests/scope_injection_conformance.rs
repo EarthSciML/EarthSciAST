@@ -30,10 +30,20 @@ fn golden(path: &Path) -> Value {
 
 /// Full typed load then re-serialize as a JSON `Value` — the exact contract the
 /// Julia golden generator drives (`serialize_esm_file(load_string(fixture))`).
+///
+/// The loaded document keeps its operator references (esm-spec §9.6.4 rule
+/// 1); the goldens are their expansion, so the saved document is compared
+/// after the explicit expansion utility (rule 2: tools and interchange).
 fn loaded_as_value(fixture: &Path) -> Value {
-    let f = load_path(fixture).expect("typed load");
-    let text = to_json(&f).expect("save");
-    serde_json::from_str(&text).expect("parse serialized")
+    expanded(&load_path(fixture).expect("typed load"))
+}
+
+/// `file` saved, its references expanded by the explicit utility.
+fn expanded(file: &earthsci_ast::EsmFile) -> Value {
+    let text = to_json(file).expect("save");
+    let mut v: Value = serde_json::from_str(&text).expect("parse serialized");
+    earthsci_ast::extension::lower_expression_templates::expand(&mut v).expect("expand");
+    v
 }
 
 /// Number-tolerant structural equality. JSON numbers compare by `f64` value, so
@@ -82,11 +92,8 @@ fn form_a_subsystem_ref_injection() {
     // rule at the mount; the subsystem resolves to an inline component whose
     // rhs is `(-u) * makearray{...}`.
     let models = f.models.as_ref().expect("models");
-    let runoff = &models["Assembly"]
-        .subsystems
-        .as_ref()
-        .expect("Assembly subsystems")["Runoff"];
-    let runoff = serde_json::to_value(runoff).expect("subsystem serializes");
+    assert!(models["Assembly"].subsystems.is_some(), "Assembly subsystems");
+    let runoff = &expanded(&f)["models"]["Assembly"]["subsystems"]["Runoff"];
     assert_eq!(
         runoff["equations"][0]["rhs"]["args"][1]["op"], "makearray",
         "the injected central-difference rule must lower the leaf's lon-derivative"
@@ -136,7 +143,7 @@ fn form_b_coupling_entry_injection() {
 
     // Advection is discretized by name; its lon-derivative is lowered.
     let models = f.models.as_ref().expect("models");
-    let adv_rhs = serde_json::to_value(&models["Advection"].equations[0].rhs).unwrap();
+    let adv_rhs = expanded(&f)["models"]["Advection"]["equations"][0]["rhs"].clone();
     assert_eq!(
         adv_rhs["args"][1]["op"], "makearray",
         "the coupling-entry injection must lower Advection's lon-derivative"
@@ -213,8 +220,10 @@ fn form_c_test_block_injection() {
     );
 
     // Round-trip golden: the D-intact component + both tests' import fields.
+    let saved: Value =
+        serde_json::from_str(&to_json(&f).expect("save")).expect("parse serialized");
     assert_json_eq(
-        &loaded_as_value(&fixture),
+        &saved,
         &golden(&conf(&["inject_test_block", "roundtrip.esm"])),
         "form C roundtrip.esm",
     );
@@ -240,8 +249,8 @@ fn form_c_test_block_injection() {
     )
     .expect("ephemeral build for test 2");
 
-    let e1v = serde_json::to_value(&e1).unwrap();
-    let e2v = serde_json::to_value(&e2).unwrap();
+    let e1v = expanded(&e1);
+    let e2v = expanded(&e2);
     assert_eq!(
         e1v["models"]["Advection"]["equations"][0]["rhs"]["args"][1]["op"],
         "makearray"
