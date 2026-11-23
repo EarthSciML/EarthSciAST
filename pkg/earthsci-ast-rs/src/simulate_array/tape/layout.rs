@@ -139,7 +139,7 @@ fn src_shape<'a>(prog: &'a TapeProgram, src: &SrcRef) -> &'a [usize] {
 
 /// Whether every instruction means the same thing in reversed coordinates
 /// (see the module docs for what declines).
-fn reversible(prog: &TapeProgram) -> bool {
+pub(super) fn reversible(prog: &TapeProgram) -> bool {
     let slot_free = |s: SlotId| order_free(&prog.tables.slots[s as usize].shape);
     prog.instrs.iter().all(|i| match i {
         Instr::Bin { .. }

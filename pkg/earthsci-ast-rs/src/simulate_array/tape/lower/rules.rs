@@ -774,6 +774,9 @@ impl<'m> TapeBuilder<'m> {
         align_layout: bool,
     ) -> Result<TapeProgram, String> {
         let funcs = std::rc::Rc::clone(&self.funcs);
+        // A function is laid out like its caller: a caller with a function
+        // that has no axis-reversed form stays row-major.
+        let align_layout = align_layout && funcs.borrow().all_reversible();
         let mut prog = self.assemble(exports);
         super::calls::finish_program(&mut prog, super::calls::Layout::Chosen(align_layout), fuse)?;
         prog.funcs = funcs.borrow_mut().finish(prog.col_major, fuse)?;

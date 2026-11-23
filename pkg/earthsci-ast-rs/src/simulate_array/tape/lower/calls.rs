@@ -99,6 +99,12 @@ pub(super) struct FuncTable {
 pub(super) type SharedFuncs = Rc<RefCell<FuncTable>>;
 
 impl FuncTable {
+    /// Whether every function compiled so far can be laid out axis-reversed,
+    /// which a column-major caller needs of each of them.
+    pub(super) fn all_reversible(&self) -> bool {
+        self.progs.iter().all(super::super::layout::reversible)
+    }
+
     /// Every function program, finished in the layout of the program that
     /// calls them (`col_major`), in id order: a function calls only
     /// functions with smaller ids, which it holds.

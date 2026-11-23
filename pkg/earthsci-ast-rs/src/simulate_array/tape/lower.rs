@@ -4118,11 +4118,21 @@ fn baked_join_key_params(compiled: &ArrayCompiled) -> FxHashMap<String, f64> {
             | RhsRule::ArrayLoop { body, .. } => body,
         }
     }
-    let roots = compiled
+    let rule_roots: Vec<&Expr> = compiled
         .observed_rules
         .iter()
         .map(observed_rule_body)
-        .chain(compiled.rhs_rules.iter().map(rhs_body));
+        .chain(compiled.rhs_rules.iter().map(rhs_body))
+        .collect();
+    // A join inside a definition the rules reach names its key columns in
+    // the instance body: each reached instance body is a root too.
+    let instances = compiled
+        .operators
+        .reachable(rule_roots.iter().copied())
+        .unwrap_or_default();
+    let roots = rule_roots
+        .into_iter()
+        .chain(instances.iter().map(|i| &i.body));
     let cone = crate::join::join_key_cone(roots, |n| bodies.get(n).copied());
     compiled
         .param_names
