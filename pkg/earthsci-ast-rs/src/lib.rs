@@ -114,7 +114,6 @@ pub(crate) mod flatten;
 pub(crate) mod graph;
 pub(crate) mod inline_test_checks;
 pub mod intern;
-pub mod operator_refs;
 pub(crate) mod join;
 pub(crate) mod json_visit;
 pub(crate) mod lower_enums;
@@ -122,6 +121,7 @@ pub(crate) mod lower_expression_templates;
 pub(crate) mod migration;
 pub(crate) mod observed_cone;
 pub(crate) mod op_registry;
+pub mod operator_refs;
 pub(crate) mod parse;
 /// The evaluator's working precision — `domain.element_type` (esm-spec
 /// §11.3). Public because the contract it implements (`"Float32"` means

@@ -271,7 +271,11 @@ mod tests {
     fn equations_and_unresolved(file: &crate::EsmFile) -> (String, Vec<String>) {
         use crate::types::HasSubsystems;
         fn eqs(m: &crate::Model, out: &mut Vec<crate::Expr>) {
-            out.extend(m.equations.iter().flat_map(|e| [e.lhs.clone(), e.rhs.clone()]));
+            out.extend(
+                m.equations
+                    .iter()
+                    .flat_map(|e| [e.lhs.clone(), e.rhs.clone()]),
+            );
             for (_, sub) in m.inline_subsystems() {
                 eqs(sub, out);
             }
@@ -318,7 +322,10 @@ mod tests {
             let file = load_elsewhere(&consumer(&format!("esm:std/{lib}.esm"), "quad"))
                 .unwrap_or_else(|e| panic!("{lib}: {e}"));
             let (json, unresolved) = equations_and_unresolved(&file);
-            assert!(json.contains("apply_operator") && unresolved.is_empty(), "{lib}: {json} {unresolved:?}");
+            assert!(
+                json.contains("apply_operator") && unresolved.is_empty(),
+                "{lib}: {json} {unresolved:?}"
+            );
         }
         let e = load_elsewhere(&consumer("esm:std/up.esm", "quad")).unwrap_err();
         assert!(e.contains("operator_import_unresolved"), "{e}");

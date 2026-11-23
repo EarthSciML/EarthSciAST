@@ -141,7 +141,8 @@ impl Definition {
                     .collect()
             })
             .unwrap_or_default();
-        let parse = |v: Option<&Value>| v.and_then(|b| serde_json::from_value::<Expr>(b.clone()).ok());
+        let parse =
+            |v: Option<&Value>| v.and_then(|b| serde_json::from_value::<Expr>(b.clone()).ok());
         Definition {
             name: name.to_string(),
             params,
@@ -231,7 +232,11 @@ impl Definition {
     /// number spelled as a string. A binding that is a name the enclosing
     /// instance `outer` binds as a literal reads through it. A literal param
     /// bound to anything else is left out.
-    pub fn instance_literals(&self, r: &Reference<'_>, outer: &InstanceLiterals) -> InstanceLiterals {
+    pub fn instance_literals(
+        &self,
+        r: &Reference<'_>,
+        outer: &InstanceLiterals,
+    ) -> InstanceLiterals {
         let mut out = InstanceLiterals::new();
         for p in &self.params {
             if !self.is_literal_param(p) && !self.literal_params().contains(p) {
@@ -332,9 +337,16 @@ fn body_facts(e: &Expr, params: &HashSet<&str>, bound: &HashSet<String>, f: &mut
             f.roles.entry(s.to_string()).or_default().literal = true;
         }
     };
-    for s in [&node.wrt, &node.dim, &node.int_var, &node.reduce, &node.semiring, &node.broadcast_fn]
-        .into_iter()
-        .flatten()
+    for s in [
+        &node.wrt,
+        &node.dim,
+        &node.int_var,
+        &node.reduce,
+        &node.semiring,
+        &node.broadcast_fn,
+    ]
+    .into_iter()
+    .flatten()
     {
         literal(s);
     }
@@ -477,20 +489,31 @@ fn wire_walk(v: &Value, expr_pos: bool, f: &mut impl FnMut(&str, bool)) {
 /// references ([`DefinitionReads::index_subscripts`]).
 fn wire_index_subscripts(v: &Value, registry: &OperatorRegistry, out: &mut BTreeSet<String>) {
     match v {
-        Value::Array(a) => a.iter().for_each(|x| wire_index_subscripts(x, registry, out)),
+        Value::Array(a) => a
+            .iter()
+            .for_each(|x| wire_index_subscripts(x, registry, out)),
         Value::Object(m) => {
             let op = m.get("op").and_then(Value::as_str);
             if op == Some("index")
                 && let Some(Value::Array(args)) = m.get("args")
             {
-                out.extend(args.iter().skip(1).filter_map(Value::as_str).map(str::to_string));
+                out.extend(
+                    args.iter()
+                        .skip(1)
+                        .filter_map(Value::as_str)
+                        .map(str::to_string),
+                );
             }
             if op == Some(APPLY_OP)
-                && let Some(d) = m.get("name").and_then(Value::as_str).and_then(|n| registry.get(n))
+                && let Some(d) = m
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .and_then(|n| registry.get(n))
             {
                 out.extend(d.reads(registry).index_subscripts.iter().cloned());
             }
-            m.values().for_each(|x| wire_index_subscripts(x, registry, out));
+            m.values()
+                .for_each(|x| wire_index_subscripts(x, registry, out));
         }
         _ => {}
     }
@@ -517,7 +540,9 @@ fn body_reads(
     };
     match v {
         Value::String(n) => leaf(n, bound, out),
-        Value::Array(a) => a.iter().for_each(|x| body_reads(x, params, registry, bound, out)),
+        Value::Array(a) => a
+            .iter()
+            .for_each(|x| body_reads(x, params, registry, bound, out)),
         Value::Object(m) => {
             let Some(op) = m.get("op").and_then(Value::as_str) else {
                 return;
@@ -691,7 +716,12 @@ impl OperatorRegistry {
 
     /// The instance `key` of `d`, made once.
     fn instance(&self, d: Arc<Definition>, key: (String, InstanceLiterals)) -> Arc<Instance> {
-        if let Some(i) = self.instances.lock().ok().and_then(|m| m.get(&key).cloned()) {
+        if let Some(i) = self
+            .instances
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&key).cloned())
+        {
             return i;
         }
         let body = d.instance_body(&key.1).unwrap_or(Expr::Integer(0));
@@ -1001,7 +1031,8 @@ mod tests {
         assert!(sum.body_binders().contains("k"));
         assert_eq!(sum.free_names().iter().collect::<Vec<_>>(), ["v"]);
         let e: Expr = serde_json::from_value(json!({"op": "+", "args": [
-            {"op": "apply_operator", "args": [], "name": "twice", "bindings": {"x": "y"}}, 1]})).unwrap();
+            {"op": "apply_operator", "args": [], "name": "twice", "bindings": {"x": "y"}}, 1]}))
+        .unwrap();
         let reached: Vec<_> = r.reachable([&e]).into_iter().collect();
         assert_eq!(reached, ["twice", "lap"]);
         assert!(has_reference(&e));

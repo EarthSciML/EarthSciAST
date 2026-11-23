@@ -92,7 +92,10 @@ fn form_a_subsystem_ref_injection() {
     // rule at the mount; the subsystem resolves to an inline component whose
     // rhs is `(-u) * makearray{...}`.
     let models = f.models.as_ref().expect("models");
-    assert!(models["Assembly"].subsystems.is_some(), "Assembly subsystems");
+    assert!(
+        models["Assembly"].subsystems.is_some(),
+        "Assembly subsystems"
+    );
     let runoff = &expanded(&f)["models"]["Assembly"]["subsystems"]["Runoff"];
     assert_eq!(
         runoff["equations"][0]["rhs"]["args"][1]["op"], "makearray",
@@ -220,8 +223,7 @@ fn form_c_test_block_injection() {
     );
 
     // Round-trip golden: the D-intact component + both tests' import fields.
-    let saved: Value =
-        serde_json::from_str(&to_json(&f).expect("save")).expect("parse serialized");
+    let saved: Value = serde_json::from_str(&to_json(&f).expect("save")).expect("parse serialized");
     assert_json_eq(
         &saved,
         &golden(&conf(&["inject_test_block", "roundtrip.esm"])),
