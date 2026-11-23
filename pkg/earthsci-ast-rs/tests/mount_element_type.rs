@@ -261,3 +261,54 @@ fn an_uncarried_refusal_names_the_fix() {
         assert!(!e.contains("evaluates in unspecified"), "{fixture}: {e}");
     }
 }
+
+/// esm-spec §11.3.3 P8, shared with the other four bindings
+/// (`tests/conformance/precision_source/expected.json`): validation reports an
+/// unspecified key on the non-unit `warnings` list, and a root below the
+/// version gate reports nothing.
+#[test]
+fn an_unspecified_key_warns_on_the_non_unit_channel() {
+    use earthsci_ast::{load_string, validate};
+    let dir = common::category_dir("precision_source");
+    let exp: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("expected.json")).unwrap()).unwrap();
+    for (fixture, want) in exp["warnings"].as_object().unwrap() {
+        let text = std::fs::read_to_string(dir.join(fixture)).unwrap();
+        let result = validate(&load_string(&text).unwrap());
+        assert!(result.is_valid, "{fixture}: {result:?}");
+        let mut got: Vec<(String, String)> = result
+            .warnings
+            .iter()
+            .map(|w| (w.code.clone(), w.path.clone()))
+            .collect();
+        let mut want: Vec<(String, String)> = want
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                (
+                    w["code"].as_str().unwrap().to_string(),
+                    w["path"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want, "{fixture}");
+        assert!(
+            !result
+                .unit_warnings
+                .iter()
+                .any(|w| w.code == "key_precision_unspecified"),
+            "{fixture}"
+        );
+        let mut doc: Value = serde_json::from_str(&text).unwrap();
+        doc["esm"] = exp["legacy_version"].clone();
+        let legacy = validate(&load_string(&doc.to_string()).unwrap());
+        assert!(
+            legacy.warnings.is_empty(),
+            "{fixture}: {:?}",
+            legacy.warnings
+        );
+    }
+}

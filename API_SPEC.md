@@ -476,12 +476,16 @@ Per-binding decorations, sanctioned under §2.2:
 #### `validate`
 
 **Canonical.** `validate(file) -> ValidationResult`, where `ValidationResult`
-carries `schema_errors`, `structural_errors`, `unit_warnings`, and `is_valid`.
-Total: it reports, it does not raise.
+carries `schema_errors`, `structural_errors`, `unit_warnings`, `warnings`, and
+`is_valid`. `warnings` holds advisory `ValidationWarning` records (`code`,
+`path`, `message`) that are not about units, such as
+`key_precision_unspecified` (esm-spec §11.3.3 P8); like `unit_warnings` they
+never change `is_valid`. Total: it reports, it does not raise.
 
 **Today:** all five export it, all five take only a **typed (loaded)
-document**, all five return the four-field result, and none raises on an
-invalid document. JSON text goes through the separate `validate_text`, which
+document**, all five return the five-field result, and none raises on an
+invalid document. Go and Rust omit an empty `warnings` list when the result is
+serialized to JSON. JSON text goes through the separate `validate_text`, which
 also reports a load failure (malformed JSON, a schema violation, an
 unresolvable mount) as a `ValidationResult` instead of raising. Julia and
 Python also have `validate_path` for a file (§8 item 13).
@@ -2221,6 +2225,7 @@ reading that as a gap.
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
 | `validate_text` | function | `validate_text` | `validateText` | `validate_text` | `validate_complete` / `validate_text` | `ValidateText` |
 | `validation_result` | type | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` |
+| `validation_warning` | type | `ValidationWarning` | `ValidationWarning` | `ValidationWarning` | `ValidationWarning` | `ValidationWarning` |
 | `variable_node` | type | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` |
 | `write_path` | function | `write_path` | `writePath` | `write_path` | `write_path` | `WritePath` |
 

@@ -289,7 +289,7 @@ export
     resolve_subsystem_refs!, SubsystemRefError,
     serialize_coupling_entry, coerce_coupling_entry,
     # Validation
-    StructuralError, ValidationResult, UnitWarning, validate_structural, validate,
+    StructuralError, ValidationResult, ValidationWarning, UnitWarning, validate_structural, validate,
     validate_path, validate_text,
     validate_reaction_rate_units,
     # Expression operations. `contains` extends `Base.contains` and is not

@@ -1020,7 +1020,7 @@ mod precision_source {
     #[test]
     fn a_declared_root_and_a_legacy_omission_are_both_binding() {
         let mut doc = witness();
-        doc["esm"] = json!("1.2.0");
+        doc["esm"] = json!("2.3.0");
         let prob = problem(&doc, Compiler::Interpreter);
         assert_eq!(
             rhs_program(&prob).unwrap().precision_sources(),
@@ -1031,7 +1031,7 @@ mod precision_source {
             Some("precision_choice_conflict")
         );
 
-        doc["esm"] = json!("1.3.0");
+        doc["esm"] = json!("2.4.0");
         doc["domain"] = json!({"element_type": "Float64"});
         assert_eq!(
             narrow(&doc, Compiler::Interpreter).unwrap_err().code(),
@@ -1098,7 +1098,7 @@ mod precision_source {
         let result = earthsci_ast::validate(&typed);
         assert!(
             result
-                .unit_warnings
+                .warnings
                 .iter()
                 .any(|w| w.code == "key_precision_unspecified")
         );

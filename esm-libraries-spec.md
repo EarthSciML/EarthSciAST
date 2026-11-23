@@ -839,6 +839,7 @@ Where `ValidationResult` contains:
 - `schema_errors: List<SchemaError>` — JSON Schema violations.
 - `structural_errors: List<StructuralError>` — equation/unknown balance, reference integrity.
 - `unit_warnings: List<UnitWarning>` — dimensional inconsistencies (warnings, not hard errors, because unit strings may be ambiguous).
+- `warnings: List<ValidationWarning>` — advisory findings that are not about units, each a `code`, a JSON Pointer `path` and a `message` (for example `key_precision_unspecified`, esm-spec §11.3.3 P8). They never change `is_valid`.
 - `is_valid: bool` — true if no schema or structural errors.
 
 #### Error Type Structures

@@ -342,8 +342,8 @@ pub use types::{
     Tolerance, UnitConversion, UpdateValue, VariableBound, VariableMapTransform, VariableType,
 };
 pub use validate::{
-    SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
-    validate_text,
+    SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult,
+    ValidationWarning, validate, validate_text,
 };
 // Deprecated alias of `validate_text`, kept for one minor per API_SPEC.md §10
 // (§8 item 13 named the text convenience `validate_text`).

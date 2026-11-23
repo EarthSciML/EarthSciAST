@@ -153,6 +153,7 @@ from .validation import (
     validate_text,
     ValidationResult,
     ValidationError,
+    ValidationWarning,
     UnitWarning,
 )
 
@@ -571,6 +572,7 @@ __all__ = [
     "EnumLoweringError",
     "ValidationResult",
     "ValidationError",
+    "ValidationWarning",
     "SchemaValidationError",
     "UnsupportedVersionError",
     "CircularReferenceError",

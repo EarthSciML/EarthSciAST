@@ -30,8 +30,22 @@ pub struct ValidationResult {
     /// Dimensional-analysis findings that did not invalidate the document
     /// (see [`UnitWarning`]).
     pub unit_warnings: Vec<UnitWarning>,
+    /// Non-unit diagnostics that do not invalidate the document.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ValidationWarning>,
     /// Whether validation passed (no schema or structural errors)
     pub is_valid: bool,
+}
+
+/// An advisory validation finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationWarning {
+    /// Stable diagnostic code.
+    pub code: String,
+    /// JSON pointer to the declaration.
+    pub path: String,
+    /// Human-readable diagnostic.
+    pub message: String,
 }
 
 impl ValidationResult {
@@ -261,16 +275,17 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
         }
     }
 
+    // esm-spec §11.3.3 P8: an unspecified variable used directly as an
+    // equality or join key cannot be evaluated in binary32.
+    let mut warnings = Vec::new();
     if scope == ValidationScope::Full {
-        unit_warnings.extend(
+        warnings.extend(
             crate::precision_infer::unspecified_keys(esm_file)
                 .into_iter()
-                .map(|site| UnitWarning {
-                    path: site.path,
+                .map(|site| ValidationWarning {
                     code: crate::diagnostic::codes::KEY_PRECISION_UNSPECIFIED.to_string(),
+                    path: site.path,
                     message: site.message,
-                    lhs_units: String::new(),
-                    rhs_units: String::new(),
                 }),
         );
     }
@@ -308,6 +323,7 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
         schema_errors,
         structural_errors,
         unit_warnings,
+        warnings,
         is_valid,
     }
 }
@@ -342,6 +358,7 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
                 }],
                 structural_errors: vec![],
                 unit_warnings: vec![],
+                warnings: vec![],
                 is_valid: false,
             };
         }
@@ -376,6 +393,7 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
                 schema_errors,
                 structural_errors: e.findings().to_vec(),
                 unit_warnings: vec![],
+                warnings: vec![],
                 is_valid: false,
             }
         }
@@ -407,6 +425,7 @@ fn validate_with_schema(json_value: &Value, esm_file: &EsmFile) -> ValidationRes
         schema_errors,
         structural_errors: result.structural_errors,
         unit_warnings: result.unit_warnings,
+        warnings: result.warnings,
         is_valid,
     }
 }
