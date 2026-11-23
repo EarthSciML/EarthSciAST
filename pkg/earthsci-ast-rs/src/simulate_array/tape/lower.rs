@@ -2606,6 +2606,13 @@ impl<'m> TapeBuilder<'m> {
         if let Some(lv) = self.forcing_read(name)? {
             return Ok(lv);
         }
+        if self.is_function {
+            bail_tape!(
+                "variable: unresolved symbol (forcing/loop-bind?): {name} (in an operator \
+                 definition's body, box {:?})",
+                bx.syms
+            )
+        }
         bail_tape!("variable: unresolved symbol (forcing/loop-bind?): {name}")
     }
 
@@ -4337,6 +4344,9 @@ fn mentions_unshadowed(e: &Expr, name: &str) -> bool {
                 || n.values
                     .as_ref()
                     .is_some_and(|vs| vs.iter().any(|x| mentions_unshadowed(x, name)))
+                || n.bindings
+                    .as_ref()
+                    .is_some_and(|bs| bs.values().any(|x| mentions_unshadowed(x, name)))
         }
     }
 }

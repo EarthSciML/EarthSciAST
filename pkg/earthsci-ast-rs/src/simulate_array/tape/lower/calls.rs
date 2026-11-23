@@ -44,6 +44,11 @@ enum ArgKind {
     /// A scalar argument: the function's parameter of the next scalar
     /// position.
     Scalar,
+    /// An array whose values the build knows (a constant payload): part of
+    /// the instance, materialized once in the function's CONST section, so
+    /// the lowering reads it as build-time data exactly as the caller would
+    /// (a sorted axis, an in-range gather). Box and the payload's identity.
+    Known(DimU, DimI, usize),
     /// A binding that reads a loop symbol the body binds, compiled into the
     /// instance (its wire text): the body reads it where it reads the
     /// parameter, inside its own loops, as Julia's build does. The names it
@@ -84,6 +89,9 @@ pub(super) struct FuncTable {
     progs: Vec<TapeProgram>,
     /// The instances lowered, held so the address keying them is not reused.
     held: Vec<Arc<CallInstance>>,
+    /// Build-time payloads passed as [`ArgKind::Known`], by address (held, so
+    /// the address is not reused).
+    known_vals: FxHashMap<usize, Arc<Vec<f64>>>,
 }
 
 pub(super) type SharedFuncs = Rc<RefCell<FuncTable>>;
@@ -208,6 +216,16 @@ impl<'m> TapeBuilder<'m> {
                 continue;
             }
             let Some(b) = r.binding(p) else { continue };
+            // An inline `const` is build-time data the lowering reads (a
+            // sorted axis, a lookup table): it is compiled into the instance,
+            // as a literal is.
+            if let Expr::Operator(c) = b
+                && c.op == "const"
+            {
+                let text = serde_json::to_string(b).unwrap_or_default();
+                params.push((p.clone(), ArgKind::Inline(text)));
+                continue;
+            }
             let reads = crate::expression::free_variables(b);
             let reads_box = reads.iter().any(|n| bx.syms.contains(n));
             if reads_box || (!binders.is_empty() && reads.iter().any(|n| binders.contains(n))) {
@@ -244,10 +262,18 @@ impl<'m> TapeBuilder<'m> {
                 continue;
             }
             let lv = if wholesale {
-                self.lower_wholesale(b)?
+                self.lower_wholesale(b)
             } else {
-                self.lower_expr(b, bx)?
-            };
+                self.lower_expr(b, bx)
+            }
+            .map_err(|e| {
+                Bail::new(format!(
+                    "operator reference `{name}`, binding of `{p}` (box {:?}{}): {}",
+                    bx.syms,
+                    if wholesale { ", whole-array" } else { "" },
+                    e.reason
+                ))
+            })?;
             cadence = cadence.max(self.lv_cadence(&lv));
             let kind = self.arg_kind(lv, &mut arrays, &mut scalars, &mut arr_lvs, &mut sc_lvs);
             params.push((p.clone(), kind));
@@ -313,7 +339,7 @@ impl<'m> TapeBuilder<'m> {
     /// What the function sees of an argument the caller lowered to `lv`,
     /// recording it as an array or scalar argument where it is one.
     fn arg_kind(
-        &self,
+        &mut self,
         lv: LV,
         arrays: &mut Vec<SrcRef>,
         scalars: &mut Vec<Operand>,
@@ -335,6 +361,16 @@ impl<'m> TapeBuilder<'m> {
             }
             LV::Arr(s) => {
                 let (shape, origin) = self.lv_box(&lv).expect("an array slot has a box");
+                let known = match self.known.get(&s) {
+                    Some(Known::Data(d)) => Some(Arc::clone(&self.tables.const_data[*d as usize].values)),
+                    Some(Known::Vals(v)) | Some(Known::Deferred { vals: v, .. }) => Some(Arc::clone(v)),
+                    None => None,
+                };
+                if let Some(vals) = known {
+                    let id = Arc::as_ptr(&vals) as usize;
+                    self.funcs.borrow_mut().known_vals.insert(id, vals);
+                    return ArgKind::Known(shape, origin, id);
+                }
                 arrays.push(SrcRef::Slot(s));
                 arr_lvs.push(lv);
                 ArgKind::Array(shape, origin)
@@ -365,6 +401,7 @@ impl<'m> TapeBuilder<'m> {
         // instance body is specialized with them once, here; every other
         // parameter is an argument of the call.
         let mut fixed: FxHashMap<String, Expr> = FxHashMap::default();
+        let mut known: Vec<(String, DimU, DimI, Arc<Vec<f64>>)> = Vec::new();
         for (p, kind) in &key.params {
             match kind {
                 ArgKind::Lit(bits) => {
@@ -384,6 +421,10 @@ impl<'m> TapeBuilder<'m> {
                     );
                 }
                 ArgKind::Scalar => param_names.push(p.clone()),
+                ArgKind::Known(shape, origin, id) => {
+                    let vals = Arc::clone(&self.funcs.borrow().known_vals[id]);
+                    known.push((p.clone(), shape.clone(), origin.clone(), vals));
+                }
                 ArgKind::Inline(text) => {
                     let e: Expr = serde_json::from_str(text)
                         .map_err(|e| Bail::new(format!("operator reference `{name}`: {e}")))?;
@@ -407,9 +448,11 @@ impl<'m> TapeBuilder<'m> {
         f.funcs = Rc::clone(&self.funcs);
         f.count_fold = self.count_fold;
         f.is_function = true;
-        let body = if fixed.is_empty() {
-            inst.body.clone()
-        } else {
+        // Rebuilt under the interner, so a subtree the body repeats is one
+        // node and value numbering shares its lowering, as it shares the
+        // repeated subtrees of a loaded expression.
+        let body = {
+            let _intern = crate::intern::InternScope::new();
             specialize(&inst.body, &fixed)
         };
         // Held so the address value numbering keys its nodes by stays its.
@@ -419,6 +462,11 @@ impl<'m> TapeBuilder<'m> {
             kind: RuleKind::Observed(0),
             cadence: Cadence::Continuous,
         });
+        for (p, shape, origin, vals) in known {
+            let slot = f.emit_const_data(&shape, &origin, vals, false)?;
+            f.obs_defined.insert(p, ObsVal::Taped(LV::Arr(slot)));
+        }
+
         let lv = if key.wholesale {
             f.lower_wholesale_rule(|f| f.lower_wholesale(&body))?
         } else {

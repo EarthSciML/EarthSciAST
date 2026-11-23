@@ -167,3 +167,13 @@ fn scalar_lookup_gather_past_the_end_matches_the_oracle() {
         assert_eq!(opcount(&prog, "DataGather"), 2, "{base}");
     }
 }
+
+#[test]
+fn zz_debug_linear_functions() {
+    let (prog, _) = oracle_ab(lookup_model(Lookup::Linear, None, false));
+    eprintln!("top: {} instrs, {} calls, {} funcs", prog.instrs.len(), prog.tables.calls.len(), prog.funcs.len());
+    for (i, f) in prog.funcs.iter().enumerate() {
+        let ops: Vec<&str> = f.instrs.iter().map(|x| x.opcode()).collect();
+        eprintln!("func {i}: rule {:?} calls {} ops {:?}", f.rules.first().map(|r| &r.name), f.tables.calls.len(), ops);
+    }
+}

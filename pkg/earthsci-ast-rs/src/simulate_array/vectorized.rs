@@ -211,6 +211,11 @@ pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
                 || n.values
                     .as_ref()
                     .is_some_and(|vs| vs.iter().any(|e| expr_mentions(e, name)))
+                // An operator reference reads what its bindings read (a
+                // flattened body is closed over everything else).
+                || n.bindings
+                    .as_ref()
+                    .is_some_and(|bs| bs.values().any(|e| expr_mentions(e, name)))
         }
     }
 }
