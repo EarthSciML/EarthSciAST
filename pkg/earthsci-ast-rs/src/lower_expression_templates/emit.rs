@@ -467,7 +467,7 @@ pub(crate) type RegistryRenames =
 ///
 /// Returns the merged registry and each owner's renames, which the caller MUST
 /// apply to that owner's reference sites. Shared by the flattened registry
-/// ([`crate::flatten::merged_template_registry`]), [`flatten_template_registries`]
+/// (`crate::flatten_refs::prepare`), [`flatten_template_registries`]
 /// and the mount hoist ([`hoist_mounted_templates`]). Mirrors the Julia
 /// reference `_merge_flat_registry`.
 pub(crate) fn merge_flat_registry(

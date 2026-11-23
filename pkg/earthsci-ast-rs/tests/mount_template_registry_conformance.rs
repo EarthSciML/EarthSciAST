@@ -139,8 +139,13 @@ fn the_inline_form_emits_the_merged_registry() {
 #[test]
 fn the_mounted_and_inline_forms_flatten_to_the_same_equations() {
     let c = "mount_registry_merge";
+    // `flatten` keeps references: the two forms reference their definitions
+    // differently (the inline form names one template its mount wraps) and
+    // denote the same equations, so they are compared expanded, here in the
+    // test only.
     let eqs = |name: &str| {
         let flat = flatten(&load_path(dir(c).join(name)).expect("load")).expect("flatten");
+        let flat = crate::flatten_wire_conformance::expanded(&flat);
         flat.equations
             .iter()
             .map(|e| serde_json::to_string(e).expect("serialize"))

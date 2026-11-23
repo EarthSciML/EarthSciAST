@@ -192,7 +192,18 @@ fn kind_str(k: SystemKind) -> &'static str {
 /// as the corpus records them: each expression in canonical JSON
 /// (CONFORMANCE §5.4) and each contribution's origins in serde's untagged `{"component": …}` /
 /// `{"coupling": …}` form, which is the corpus form.
+///
+/// `flatten` keeps operator references; the corpus records the expanded
+/// image, so a system whose registry is not empty is compared after a
+/// test-local expansion (the Julia test's `expand_flattened_refs`).
 fn equations(flat: &FlattenedSystem) -> Vec<Value> {
+    let expanded;
+    let flat = if flat.template_registry.is_empty() {
+        flat
+    } else {
+        expanded = crate::flatten_wire_conformance::expanded(flat);
+        &expanded
+    };
     assert_eq!(
         flat.equation_contributions.len(),
         flat.equations.len(),
