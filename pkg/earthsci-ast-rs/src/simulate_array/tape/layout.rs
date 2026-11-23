@@ -151,6 +151,9 @@ fn reversible(prog: &TapeProgram) -> bool {
         | Instr::FaultScan { .. }
         | Instr::JmpIfZero { .. }
         | Instr::Export { .. } => true,
+        // The function is laid out in the caller's coordinates when it is
+        // finished, and refused there if it cannot be.
+        Instr::Call { .. } => true,
         Instr::Reduce { axes, .. } => axes.len() <= 1,
         // Elementwise in the query; the axis is rank 1, the same either way.
         Instr::Count { .. } => true,
@@ -203,6 +206,8 @@ fn reverse(prog: &mut TapeProgram) {
                 // tuple means the same element either way.
                 scalar_reads: _,
                 dy_writes,
+                // Sources and operands only; the out slot is a slot.
+                calls: _,
             },
         state_vars,
         // The forcing load transposes at the boundary (module docs).
@@ -219,6 +224,10 @@ fn reverse(prog: &mut TapeProgram) {
         col_major: _,
         // Built from the finished program, after every pass.
         prepared: _,
+        // Each function is laid out like its caller when it is finished
+        // (`TapeBuilder::finish_functions`).
+        funcs: _,
+        is_function: _,
     } = prog;
 
     // Instructions: the axis fields that live inline.
@@ -268,6 +277,8 @@ fn reverse(prog: &mut TapeProgram) {
             | Instr::FaultScan { .. }
             | Instr::JmpIfZero { .. }
             | Instr::Export { .. } => {}
+            // Sources, operands and a slot.
+            Instr::Call { .. } => {}
             Instr::Sweep { .. } | Instr::Fused { .. } | Instr::Lanes { .. } => {
                 unreachable!("`reversible` declines a program holding one")
             }

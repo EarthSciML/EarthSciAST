@@ -817,6 +817,9 @@ pub(super) fn run_reference(
                     slots[slot as usize] = Some(RefVal::Arr(arr));
                 }
             }
+            Instr::Call { .. } => {
+                panic!("the reference executor does not run function calls")
+            }
             Instr::Lanes { spec } => {
                 // Lane by lane through the shared micro-op semantics, each
                 // input read through the reference resolver.

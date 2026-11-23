@@ -824,6 +824,8 @@ impl<'m> TapeBuilder<'m> {
             fuse_stats: FuseStats::default(),
             col_major: false,
             prepared: Default::default(),
+            funcs: Vec::new(),
+            is_function: false,
         };
         super::super::dedup::dedup_const(&mut prog);
         super::super::scan_shift::rewrite_scan_makearray_reads(&mut prog);

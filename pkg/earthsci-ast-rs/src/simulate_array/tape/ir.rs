@@ -584,6 +584,16 @@ pub(crate) enum Instr {
     /// applied, in their order, to the same operand values, so every value
     /// is the one the scalar program computed.
     Lanes { spec: u32 },
+    /// Call a compiled operator definition (esm-spec §9.6.4 rule 2): run the
+    /// function program `TapeProgram::funcs[calls[call].func]` with the
+    /// call's arguments and write its result into `out`. The arguments are
+    /// passed BY REFERENCE: each array argument is the source the caller
+    /// would read (a slot of the caller's slab, or a state block), which the
+    /// function reads in place as its state variable of the same position;
+    /// each scalar argument is the value of a caller operand, which the
+    /// function reads as its parameter of the same position. A definition
+    /// instance is compiled once and every reference to it calls it.
+    Call { call: u32, out: SlotId },
 }
 
 impl Instr {
@@ -611,7 +621,8 @@ impl Instr {
             | Instr::DataGather { out, .. }
             | Instr::SegReduce { out, .. }
             | Instr::Reshape { out, .. }
-            | Instr::ScalarRead { out, .. } => Some(*out),
+            | Instr::ScalarRead { out, .. }
+            | Instr::Call { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
             | Instr::Sweep { .. }
             | Instr::Fault { .. }
@@ -708,6 +719,17 @@ impl Instr {
                 }
             }
             Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
+            Instr::Call { call, .. } => {
+                let c = &t.calls[*call as usize];
+                for src in &c.arrays {
+                    if let SrcRef::Slot(s) = src {
+                        op(&Operand::Slot(*s));
+                    }
+                }
+                for sc in &c.scalars {
+                    op(sc);
+                }
+            }
             Instr::Lanes { spec } => {
                 let ls = &t.lanes[*spec as usize];
                 for inp in &ls.inputs {
@@ -853,6 +875,15 @@ impl Instr {
                 }
             }
             Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
+            Instr::Call { call, .. } => {
+                let c = &mut t.calls[*call as usize];
+                for a in &mut c.arrays {
+                    src(a, f);
+                }
+                for sc in &mut c.scalars {
+                    op(sc, f);
+                }
+            }
             Instr::Lanes { spec } => {
                 let ls = &mut t.lanes[*spec as usize];
                 let lanes = ls.lanes as usize;
@@ -990,6 +1021,7 @@ impl Instr {
             Instr::DyWrite { .. } => "DyWrite",
             Instr::Fused { .. } => "Fused",
             Instr::Lanes { .. } => "Lanes",
+            Instr::Call { .. } => "Call",
         }
     }
 
@@ -1016,7 +1048,8 @@ impl Instr {
             | Instr::DataGather { faults: false, .. }
             | Instr::SegReduce { .. }
             | Instr::Reshape { .. }
-            | Instr::Fused { .. } => Effect::Pure,
+            | Instr::Fused { .. }
+            | Instr::Call { .. } => Effect::Pure,
             Instr::LoadForcing { .. }
             | Instr::Fault { .. }
             | Instr::FaultScan { .. }
@@ -1066,7 +1099,8 @@ impl Instr {
             | Instr::Export { .. }
             | Instr::DyWrite { .. }
             | Instr::Fused { .. }
-            | Instr::Lanes { .. } => 0,
+            | Instr::Lanes { .. }
+            | Instr::Call { .. } => 0,
         }
     }
 
@@ -1107,7 +1141,8 @@ impl Instr {
             | Instr::Sweep { .. }
             | Instr::ScalarRead { .. }
             | Instr::Fused { .. }
-            | Instr::Lanes { .. } => false,
+            | Instr::Lanes { .. }
+            | Instr::Call { .. } => false,
         }
     }
 
@@ -1152,6 +1187,8 @@ impl Instr {
             Instr::Export { .. } => false,
             // Runs through the lane executor, which owns its register file.
             Instr::Lanes { .. } => false,
+            // Runs a function program in the calling thread's call context.
+            Instr::Call { .. } => false,
         }
     }
 }
@@ -2484,6 +2521,7 @@ pub(crate) struct SlotTables<'a> {
     pub data_gathers: &'a [DataGatherSpec],
     pub lanes: &'a [LaneSpec],
     pub fault_scans: &'a [FaultScanSpec],
+    pub calls: &'a [CallSpec],
 }
 
 /// [`SlotTables`], mutably ([`Instr::for_each_read_mut`]).
@@ -2496,6 +2534,7 @@ pub(crate) struct SlotTablesMut<'a> {
     pub data_gathers: &'a mut [DataGatherSpec],
     pub lanes: &'a mut [LaneSpec],
     pub fault_scans: &'a mut [FaultScanSpec],
+    pub calls: &'a mut [CallSpec],
 }
 
 /// Where every slot of a program is defined and read: the one def/use index
@@ -3200,11 +3239,27 @@ pub(crate) struct ProgramTables {
     /// Computed-subscript gathers (`Instr::DataGather` indexes here).
     pub data_gathers: Vec<DataGatherSpec>,
     pub dy_writes: Vec<DyWrite>,
+    /// Calls of compiled operator definitions (`Instr::Call` indexes here).
+    pub calls: Vec<CallSpec>,
+}
+
+/// One [`Instr::Call`]: the function it runs and its arguments, in the
+/// function's state-variable and parameter order.
+#[derive(Clone, Debug)]
+pub(crate) struct CallSpec {
+    /// Index into [`TapeProgram::funcs`].
+    pub func: u32,
+    /// The array arguments, read in place by the function as its state
+    /// variables (`state_vars[k]` reads `arrays[k]`).
+    pub arrays: Vec<SrcRef>,
+    /// The scalar arguments, read by the function as its parameters
+    /// (`Operand::Param(k)` reads `scalars[k]`).
+    pub scalars: Vec<Operand>,
 }
 
 /// How long each of a [`ProgramTables`]'s tables was ([`ProgramTables::mark`]).
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct TablesMark([usize; 14]);
+pub(crate) struct TablesMark([usize; 15]);
 
 impl ProgramTables {
     /// The tables' lengths now.
@@ -3226,6 +3281,7 @@ impl ProgramTables {
             scalar_reads,
             data_gathers,
             dy_writes,
+            calls,
         } = self;
         TablesMark([
             slots.len(),
@@ -3242,6 +3298,7 @@ impl ProgramTables {
             scalar_reads.len(),
             data_gathers.len(),
             dy_writes.len(),
+            calls.len(),
         ])
     }
 
@@ -3263,6 +3320,7 @@ impl ProgramTables {
             scalar_reads,
             data_gathers,
             dy_writes,
+            calls,
         } = self;
         let [
             n_slots,
@@ -3279,6 +3337,7 @@ impl ProgramTables {
             n_scalar_reads,
             n_data_gathers,
             n_dy_writes,
+            n_calls,
         ] = mark.0;
         slots.truncate(n_slots);
         plans.truncate(n_plans);
@@ -3295,6 +3354,7 @@ impl ProgramTables {
         scalar_reads.truncate(n_scalar_reads);
         data_gathers.truncate(n_data_gathers);
         dy_writes.truncate(n_dy_writes);
+        calls.truncate(n_calls);
     }
 }
 
@@ -3353,6 +3413,14 @@ pub(crate) struct TapeProgram {
     /// execution context and shared by every later one ([`Self::prepared`]).
     /// Empty while the lowering passes still rewrite the program.
     pub(in crate::simulate_array::tape) prepared: std::sync::OnceLock<super::prepared::Prepared>,
+    /// The compiled operator definitions this program calls
+    /// (`CallSpec::func` indexes here), each a program of its own whose state
+    /// variables and parameters are its arguments.
+    pub funcs: Vec<std::sync::Arc<TapeProgram>>,
+    /// This program is a compiled operator definition: its state variables
+    /// and parameters are the arguments of the running call, not the
+    /// model's, so the executor reads them through the call's frame.
+    pub is_function: bool,
 }
 
 impl TapeProgram {
@@ -3375,6 +3443,7 @@ impl TapeProgram {
             data_gathers: &self.tables.data_gathers,
             lanes: &self.lanes,
             fault_scans: &self.tables.fault_scans,
+            calls: &self.tables.calls,
         }
     }
 
@@ -3392,6 +3461,7 @@ impl TapeProgram {
                 data_gathers: &mut self.tables.data_gathers,
                 lanes: &mut self.lanes,
                 fault_scans: &mut self.tables.fault_scans,
+                calls: &mut self.tables.calls,
             },
         )
     }

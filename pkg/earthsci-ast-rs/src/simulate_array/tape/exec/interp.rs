@@ -59,6 +59,7 @@ pub(super) fn run_range(
         simd,
         #[cfg(not(target_arch = "wasm32"))]
         chain_scratch,
+        funcs,
         ..
     } = exec;
     let exports_active = *exports_active;
@@ -309,6 +310,39 @@ pub(super) fn run_range(
                 } else {
                     pc += *n_true as usize; // skip straight to the false region
                 }
+            }
+            Instr::Call { call, out } => {
+                let spec = &prog.tables.calls[*call as usize];
+                let arrays: SmallVec<[*const f64; 8]> = spec
+                    .arrays
+                    .iter()
+                    .map(|s| src_base(s, env, slab).0)
+                    .collect();
+                let scalars: SmallVec<[f64; 8]> = spec
+                    .scalars
+                    .iter()
+                    .map(|o| resolve_scalar(o, env, slab))
+                    .collect();
+                let fctx = funcs[spec.func as usize].get_or_insert_with(|| {
+                    let mut c = super::TapeCtx::new(std::sync::Arc::clone(
+                        &prog.funcs[spec.func as usize],
+                    ));
+                    c.set_serial();
+                    Box::new(c)
+                });
+                let res = super::run_function(
+                    fctx,
+                    &arrays,
+                    &scalars,
+                    env.t,
+                    env.forcing,
+                    env.declared,
+                );
+                let n = prog.tables.slots[*out as usize].elems().max(1);
+                // SAFETY: the result is the function's slot of the same box,
+                // in its own slab; `out` is this program's slot, written by
+                // this instruction alone.
+                unsafe { std::ptr::copy_nonoverlapping(res, slab.slot(*out), n) };
             }
             Instr::Export { slot, export } => {
                 // Step 4 export demotion: no explicit request ⇒ nothing can

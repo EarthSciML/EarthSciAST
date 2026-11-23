@@ -1661,6 +1661,7 @@ impl<'m> TapeBuilder<'m> {
             data_gathers: &self.tables.data_gathers,
             lanes: &[],
             fault_scans: &self.tables.fault_scans,
+            calls: &self.tables.calls,
         }
     }
 

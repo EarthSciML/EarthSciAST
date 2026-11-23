@@ -117,6 +117,11 @@ impl<'a> Slab<'a> {
 /// two layouts are the same walk). Either way it is row-major over the
 /// program's `state_vars[ix].shape`.
 pub(super) fn state_ptr(env: &Env, ix: u32) -> *const f64 {
+    // A function's state variable is the running call's array argument,
+    // already the caller's row-major view.
+    if env.prog.is_function {
+        return env.arrays[ix as usize];
+    }
     let sv = &env.prog.state_vars[ix as usize];
     let v = if env.mirror[ix as usize] {
         env.state_rm
