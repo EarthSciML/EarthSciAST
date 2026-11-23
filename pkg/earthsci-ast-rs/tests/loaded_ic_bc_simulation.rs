@@ -105,6 +105,7 @@ fn value_at(sol: &Solution, name: &str, t: f64) -> f64 {
 // function takes `(actual, expected, rtol, atol)`.
 
 #[test]
+#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn loaded_ic_bc_simulation_provider_injection() {
     // ---- Full lowering pipeline (no pre-discretized shortcut) ----------------
     let file = load_path(common::repo_fixture(

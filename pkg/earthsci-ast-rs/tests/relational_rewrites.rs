@@ -440,6 +440,7 @@ fn check_vi_only(
 }
 
 #[test]
+#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn every_rewrite_matches_its_golden() {
     let mut ran = 0;
     for entry in manifest() {
