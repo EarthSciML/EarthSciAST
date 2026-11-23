@@ -82,33 +82,25 @@ function _de_bhostval(ctx::_DECtx, b::_E._OopBatchNode, l::Int)::Float64
     elseif k === _E._NK_CONST_GATHER
         return _de_hostval(ctx, b.nodes[l])
     elseif k === _E._NK_CONTRACTION
-        s = b.literal
-        g = _de_semiring_jl(ctx, b.op)
-        for c in b.children
-            s = g(s, _de_bhostval(ctx, c, l))
-        end
-        return s
+        terms = Float64[_de_bhostval(ctx, c, l) for c in b.children]
+        return _de_host_fold(ctx, b.op, b.literal, terms)
     elseif k === _E._NK_CONTRACTION_LOOP
-        g = _de_semiring_jl(ctx, b.op)
-        s = b.literal
         body = b.children[1]
         r = b.refs[l]
+        terms = Float64[]
         for kk in b.lo:b.step:b.hi
             _de_set_counter!(ctx, r, kk)
-            s = g(s, _de_bhostval(ctx, body, l))
+            push!(terms, _de_bhostval(ctx, body, l))
         end
-        return s
+        return _de_host_fold(ctx, b.op, b.literal, terms)
     end
     c = Any[_de_bhostval(ctx, ch, l) for ch in b.children]
-    return _E._scalar_op(b.op, c)
+    return _de_host_op(ctx, b.op, c)
 end
 
 function _de_btry_fold(ctx::_DECtx, b::_E._OopBatchNode, L::Int)::Union{Nothing, _DEVal}
     b.kind === _E._NK_LITERAL && return nothing     # already one constant
-    if (ctx.precision !== Float64 || ctx.tree_fold) &&
-            b.kind in (_E._NK_OP, _E._NK_CONTRACTION, _E._NK_CONTRACTION_LOOP)
-        return nothing
-    end
+    (ctx.precision !== Float64 && b.kind in _DE_FOLD_KINDS) && return nothing
     _de_bstatic(ctx, b) || return nothing
     _de_tally!(ctx, :const_folded)
     vals = Float64[_de_bhostval(ctx, b, l) for l in 1:L]

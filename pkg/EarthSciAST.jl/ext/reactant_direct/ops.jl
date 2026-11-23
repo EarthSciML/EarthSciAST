@@ -350,36 +350,53 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
         )
         return Float64(cg.flat[off])
     elseif k === _E._NK_CONTRACTION
-        s = nd.literal
-        f = _de_semiring_jl(ctx, nd.op)
-        for ch in nd.children
-            s = f(s, _de_hostval(ctx, ch))
-        end
-        return s
+        terms = Float64[_de_hostval(ctx, ch) for ch in nd.children]
+        return _de_host_fold(ctx, nd.op, nd.literal, terms)
     elseif k === _E._NK_CONTRACTION_LOOP
         spec = nd.payload::_E._ContractLoop
-        s = nd.literal
-        f = _de_semiring_jl(ctx, nd.op)
         body = nd.children[1]
+        terms = Float64[]
         for kk in spec.lo:spec.step:spec.hi
             _de_set_counter!(ctx, spec.ref, kk)
-            s = f(s, _de_hostval(ctx, body))
+            push!(terms, _de_hostval(ctx, body))
         end
-        return s
+        return _de_host_fold(ctx, nd.op, nd.literal, terms)
     end
     # `_NK_OP`: the host ladder, generated as the interpreter's (`_op_ladder`),
     # so a folded subtree is bit-identical to what `f!` computes for it.
     c = Any[_de_hostval(ctx, ch) for ch in nd.children]
-    return _E._scalar_op(nd.op, c)
+    return _de_host_op(ctx, nd.op, c)
 end
+
+# The host twins of `_de_fold_terms` and `_de_chain`. Under `tree_fold` they
+# group as `_de_balanced_fold` does, so a subtree folded on the host and the
+# same subtree emitted (where another target cannot fold it) round alike.
+function _de_host_fold(ctx::_DECtx, op::Symbol, zbar::Float64, terms::Vector{Float64})::Float64
+    f = _de_semiring_jl(ctx, op)
+    ctx.tree_fold && return _de_host_balanced(f, [zbar; terms], 1, length(terms) + 1)
+    return foldl(f, terms; init = zbar)
+end
+
+function _de_host_op(ctx::_DECtx, op::Symbol, c::Vector{Any})::Float64
+    if ctx.tree_fold && length(c) > 2 && op in (:+, :*, :max, :min)
+        return _de_host_balanced((a, b) -> _E._scalar_op(op, Any[a, b]), c, 1, length(c))
+    end
+    return _E._scalar_op(op, c)
+end
+
+function _de_host_balanced(f::F, xs, lo, hi) where {F}
+    lo == hi && return xs[lo]
+    mid = (lo + hi) ÷ 2
+    return f(_de_host_balanced(f, xs, lo, mid), _de_host_balanced(f, xs, mid + 1, hi))
+end
+
+const _DE_FOLD_KINDS = (_E._NK_OP, _E._NK_CONTRACTION, _E._NK_CONTRACTION_LOOP)
 
 # Fold if we can; `nothing` if the subtree is not host data.
 function _de_try_fold(ctx::_DECtx, nd::_E._Node)::Union{Nothing, _DEVal}
     nd.kind === _E._NK_LITERAL && return nothing   # already one constant
-    if (ctx.precision !== Float64 || ctx.tree_fold) &&
-            nd.kind in (_E._NK_OP, _E._NK_CONTRACTION, _E._NK_CONTRACTION_LOOP)
-        return nothing
-    end
+    # A Float32 fragment evaluates in Float32, which a Float64 host fold does not.
+    (ctx.precision !== Float64 && nd.kind in _DE_FOLD_KINDS) && return nothing
     _de_static(ctx, nd) || return nothing
     _de_tally!(ctx, :const_folded)
     return _de_const(ctx, _de_hostval(ctx, nd))
