@@ -1586,6 +1586,23 @@ operator lowered by your own rewrite rule.
 
 ---
 
+## esm 2.4.0: one operator type, and the spatial derivative is `partial`
+
+| Kind | What |
+|---|---|
+| `format` | **Old spellings are read, never refused.** A loader reads `expression_templates` as `operators` and `expression_template_imports` as `operator_imports` (warning `deprecated_field`), and `apply_expression_template` as `apply_operator` (warning `deprecated_op`). Emit writes only the new names, so an emitted document declares `esm: 2.4.0`. |
+| `format` | **The spatial derivative is `partial`; `D` is only the time derivative** (esm-spec §4.2). A `D` whose `wrt` is neither `"t"` nor the document's own `domain.independent_variable`, and the spellings `δ` and `∂`, are read as `partial` with `deprecated_op`. A `D` whose `wrt` names the independent variable is read as `wrt: "t"`, with no warning. |
+| `semantics` | **Every `operators` entry is a definition of one operator** (esm-spec §9.6.12), with the new optional fields `defines`, `units` (a unit expression) and `reference_only`. A plain call `{"op": N, "args": [...]}` now resolves to a match-less definition of `N` in scope. Before 2.4.0 only `match` rules fired on calls. Definitions are chosen by `priority`, then one with a `where` before one without, then declaration order. A name with no definition in scope is a placeholder. |
+| `semantics` | **Rules write references.** A firing rule leaves a reference to itself, rules rewrite definition bodies once per instance, and nothing is inlined (esm-spec §9.6.3, §9.6.4). The four edge cases where this changes which rules fire are listed at the top of esm-spec.md. None of them occurs in the 2026-11 corpus of real models. |
+| `new` | Load errors `operator_arity_mismatch` and `operator_defines_core_op`, and `definition_unit_mismatch` (an error when a definition's body unit is determinable and disagrees with its unit expression, a warning when it cannot be determined). |
+| `semantics` | **Error codes named after templates are renamed** (`apply_expression_template_unknown_template` becomes `operator_unknown_definition`, `template_import_*` becomes `operator_import_*`, and so on: esm-spec §9.6.6, "Renamed codes"). A binding reports the new code. Code that matches the old spelling must accept the new one. |
+
+**What to do.** Nothing, to keep loading your documents. To silence the
+warnings, rename the three blocks and the node, and write a spatial derivative
+as `{"op": "partial", "args": [f], "wrt": "x"}`. Any `esm convert` or binding
+emit does this for you. Update any code that matches error codes by their
+template-era names.
+
 # Part V — What did NOT change
 
 Listed because knowing the boundary is what stops you over-migrating.
@@ -1687,7 +1704,7 @@ remove. Your code stops compiling (Rust), or raises `UndefVarError` /
 | Julia, Python, Rust | the inline-test runner | Now runs **`reaction_systems`** as well as `models`. Both carry `tests` (esm-spec §6.6); only `models` were run before. | More result rows, from components that previously reported none. A gate counting rows sees the count rise — that is the bug being fixed, not a regression. |
 | Julia, Python, Rust | the inline-test runner | A **batch** input (an iterable or a directory) records an unreadable document as one ERROR row instead of raising. A single-document call still raises. | A corpus run no longer aborts on one bad file. |
 
-## Unreleased
+## 0.15.0: Rust modules, CLI subcommands and error variants removed
 
 ### Rust — `earthsci-ast`
 
@@ -1775,7 +1792,7 @@ time derivative. A flattened name with a dot prints as a quoted name joined by
 
 ---
 
-## Unreleased
+## 0.15.0: Rust build route, providers and error types
 
 ### Rust — `earthsci-ast`
 
