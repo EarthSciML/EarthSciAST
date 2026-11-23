@@ -43,6 +43,19 @@ pub(super) fn run_reference(
             *a = a.view().reversed_axes().as_standard_layout().into_owned();
         }
     }
+    run_program(prog, compiled, &state_arrays, params, t, dy)
+}
+
+/// Execute all three sections of `prog` with its state read from
+/// `state_arrays` (by state-variable name, in the program's layout).
+fn run_program(
+    prog: &TapeProgram,
+    compiled: &ArrayCompiled,
+    state_arrays: &ArrMap,
+    params: &[f64],
+    t: f64,
+    dy: &mut [f64],
+) -> RefRun {
     let mut obs: ArrMap = ArrMap::default();
     let mut slots: Vec<Option<RefVal>> = vec![None; prog.tables.slots.len()];
 
@@ -817,8 +830,26 @@ pub(super) fn run_reference(
                     slots[slot as usize] = Some(RefVal::Arr(arr));
                 }
             }
-            Instr::Call { .. } => {
-                panic!("the reference executor does not run function calls")
+            Instr::Call { call, out } => {
+                // The function's state variables are the array arguments, its
+                // parameters the scalar ones, in order.
+                let spec = &prog.tables.calls[*call as usize];
+                let f = &prog.funcs[spec.func as usize];
+                let mut args: ArrMap = ArrMap::default();
+                for (sv, src) in f.state_vars.iter().zip(&spec.arrays) {
+                    args.insert(sv.name.clone(), resolve_src(prog, &slots, state_arrays, src));
+                }
+                let fparams: Vec<f64> = spec
+                    .scalars
+                    .iter()
+                    .map(|o| match resolve(prog, &slots, state_arrays, params, t, o) {
+                        RefVal::Scalar(v) => v,
+                        other => panic!("a scalar argument is {other:?}"),
+                    })
+                    .collect();
+                let run = run_program(f, compiled, &args, &fparams, t, &mut []);
+                let result = f.exports[0].1;
+                slots[*out as usize] = run.slots[result as usize].clone();
             }
             Instr::Lanes { spec } => {
                 // Lane by lane through the shared micro-op semantics, each

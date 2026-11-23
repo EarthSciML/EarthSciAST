@@ -1151,6 +1151,9 @@ pub(crate) struct TapeBuilder<'m> {
     fn_lits: FxHashMap<String, f64>,
     /// In a function builder: the parameters bound to the time.
     fn_times: HashSet<String>,
+    /// In a function builder: the parameters whose binding is compiled into
+    /// the instance, read where the body reads them.
+    fn_inline: FxHashMap<String, Expr>,
 
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
@@ -1458,6 +1461,7 @@ impl<'m> TapeBuilder<'m> {
             is_function: false,
             fn_lits: FxHashMap::default(),
             fn_times: HashSet::new(),
+            fn_inline: FxHashMap::default(),
             vn_scope_hits: 0,
             vn_hoist_hits: 0,
         }
@@ -2550,6 +2554,9 @@ impl<'m> TapeBuilder<'m> {
             }
             if self.fn_times.contains(name) {
                 return Ok(LV::Time);
+            }
+            if let Some(e) = self.fn_inline.get(name).cloned() {
+                return self.lower_expr(&e, bx);
             }
         }
         if name == "t" {

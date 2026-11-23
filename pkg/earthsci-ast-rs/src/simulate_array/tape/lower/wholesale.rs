@@ -53,6 +53,17 @@ impl<'m> TapeBuilder<'m> {
     /// `t`, state, observed, parameter, else bail (production would read
     /// forcing or the NaN sentinel — the interpreter handles both).
     pub(super) fn resolve_wholesale_var(&mut self, name: &str) -> LResult<LV> {
+        if self.is_function {
+            if let Some(&v) = self.fn_lits.get(name) {
+                return Ok(LV::Lit(v));
+            }
+            if self.fn_times.contains(name) {
+                return Ok(LV::Time);
+            }
+            if let Some(e) = self.fn_inline.get(name).cloned() {
+                return self.lower_wholesale(&e);
+            }
+        }
         if name == "t" {
             return Ok(LV::Time);
         }
@@ -174,7 +185,8 @@ impl<'m> TapeBuilder<'m> {
             CoreOp::Other(O::Index) => self.lower_wholesale_index(node),
             CoreOp::Other(O::Faq) => self.lower_wholesale_aggregate(node),
             CoreOp::Other(O::Makearray) => self.lower_wholesale_makearray(node),
-            CoreOp::Other(O::Ic | O::Enum | O::ApplyExpressionTemplate | O::Distinct) => {
+            CoreOp::Other(O::ApplyExpressionTemplate) => self.lower_call_wholesale(node),
+            CoreOp::Other(O::Ic | O::Enum | O::Distinct) => {
                 bail_tape!("wholesale: unsupported op `{op}`")
             }
         }

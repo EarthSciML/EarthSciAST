@@ -38,14 +38,17 @@ enum ArgKind {
     Lit(u64),
     /// The time `t`.
     Time,
-    /// Axis `a` of the call's box.
-    Axis(usize),
     /// An array argument over a box (shape, origin): the function's state
     /// variable of the next array position.
     Array(DimU, DimI),
     /// A scalar argument: the function's parameter of the next scalar
     /// position.
     Scalar,
+    /// A binding that reads a loop symbol the body binds, compiled into the
+    /// instance (its wire text): the body reads it where it reads the
+    /// parameter, inside its own loops, as Julia's build does. The names it
+    /// reads from the caller are arguments of their own.
+    Inline(String),
 }
 
 /// The key of one function: the instance, what each parameter is, and the
@@ -53,7 +56,13 @@ enum ArgKind {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct FuncKey {
     instance: usize,
+    /// Lowered whole-array, as the per-cell `eval` reads a scalar rule's
+    /// body ([`TapeBuilder::lower_wholesale`]), rather than over a box.
+    wholesale: bool,
     params: Vec<(String, ArgKind)>,
+    /// The call's box: its loop symbols (an inlined binding reads them by
+    /// name), origin and extent.
+    syms: Vec<String>,
     lo: DimI,
     shape: DimU,
 }
@@ -154,6 +163,21 @@ impl<'m> TapeBuilder<'m> {
     /// Lower the reference `node` over `bx` as a call of its instance's
     /// function.
     pub(super) fn lower_call(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
+        self.lower_call_in(node, Some(bx))
+    }
+
+    /// Lower the reference `node` in a whole-array body
+    /// ([`Self::lower_wholesale`]) as a call of its instance's function,
+    /// whose body is lowered whole-array too.
+    pub(super) fn lower_call_wholesale(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
+        self.lower_call_in(node, None)
+    }
+
+    fn lower_call_in(&mut self, node: &Arc<ExpressionNode>, bx: Option<&LBox>) -> LResult<LV> {
+        let empty_syms: [String; 0] = [];
+        let plain = LBox::new(&empty_syms, DimI::new(), DimU::new());
+        let wholesale = bx.is_none();
+        let bx = bx.unwrap_or(&plain);
         let name = node.name.as_deref().unwrap_or("");
         let Some(ops) = self.ops else {
             bail_tape!("operator reference `{name}`: this build has no operator registry");
@@ -178,62 +202,61 @@ impl<'m> TapeBuilder<'m> {
         let mut arr_lvs: Vec<LV> = Vec::new();
         let mut sc_lvs: Vec<LV> = Vec::new();
         let mut cadence = Cadence::Const;
+        let mut n_free = 0usize;
         for p in &inst.definition.params {
             if inst.instance_params.iter().any(|ip| ip == p) {
                 continue;
             }
             let Some(b) = r.binding(p) else { continue };
-            if !binders.is_empty() && crate::expression::free_variables(b).iter().any(|n| binders.contains(n)) {
-                bail_tape!(
-                    "operator reference `{name}`: the binding of `{p}` reads a loop symbol the \
-                     body binds; such a binding is not compiled yet"
-                );
-            }
-            if let Expr::Variable(v) = b
-                && let Some(a) = bx.syms.iter().position(|s| s == v)
-            {
-                params.push((p.clone(), ArgKind::Axis(a)));
+            let reads = crate::expression::free_variables(b);
+            let reads_box = reads.iter().any(|n| bx.syms.contains(n));
+            if reads_box || (!binders.is_empty() && reads.iter().any(|n| binders.contains(n))) {
+                // A binding that reads a loop symbol, of the call's box or of
+                // the body, has no value before the call: it is compiled into
+                // the instance (its structure is part of the key) and read
+                // where the body reads the parameter. Every other name it
+                // reads is an argument of its own, named by position, so two
+                // sites that read different arrays the same way share one
+                // function.
+                let mut caller_names: Vec<&String> = reads
+                    .iter()
+                    .filter(|n| !binders.contains(*n) && !bx.syms.contains(n))
+                    .collect();
+                caller_names.sort();
+                let mut rename: FxHashMap<String, String> = FxHashMap::default();
+                for n in caller_names {
+                    let pos = format!("\0arg{}", n_free);
+                    n_free += 1;
+                    let v = Expr::Variable(n.clone());
+                    let lv = if wholesale {
+                        self.lower_wholesale(&v)?
+                    } else {
+                        self.lower_expr(&v, bx)?
+                    };
+                    cadence = cadence.max(self.lv_cadence(&lv));
+                    let kind =
+                        self.arg_kind(lv, &mut arrays, &mut scalars, &mut arr_lvs, &mut sc_lvs);
+                    params.push((pos.clone(), kind));
+                    rename.insert(n.clone(), pos);
+                }
+                let text = serde_json::to_string(&rename_free(b, &rename)).unwrap_or_default();
+                params.push((p.clone(), ArgKind::Inline(text)));
                 continue;
             }
-            let lv = self.lower_expr(b, bx)?;
-            cadence = cadence.max(self.lv_cadence(&lv));
-            let kind = match &lv {
-                LV::Lit(x) => ArgKind::Lit(x.to_bits()),
-                LV::Time => ArgKind::Time,
-                LV::Param(i) => {
-                    scalars.push(Operand::Param(*i));
-                    sc_lvs.push(lv.clone());
-                    ArgKind::Scalar
-                }
-                LV::Scalar(s) => {
-                    scalars.push(Operand::Slot(*s));
-                    sc_lvs.push(lv.clone());
-                    ArgKind::Scalar
-                }
-                LV::Arr(s) => {
-                    let (shape, origin) = self.lv_box(&lv).expect("an array slot has a box");
-                    arrays.push(SrcRef::Slot(*s));
-                    arr_lvs.push(lv.clone());
-                    ArgKind::Array(shape, origin)
-                }
-                LV::State(ix) => match self.lv_box(&lv) {
-                    Some((shape, origin)) => {
-                        arrays.push(SrcRef::State(*ix));
-                        arr_lvs.push(lv.clone());
-                        ArgKind::Array(shape, origin)
-                    }
-                    None => {
-                        scalars.push(Operand::State(*ix));
-                        sc_lvs.push(lv.clone());
-                        ArgKind::Scalar
-                    }
-                },
+            let lv = if wholesale {
+                self.lower_wholesale(b)?
+            } else {
+                self.lower_expr(b, bx)?
             };
+            cadence = cadence.max(self.lv_cadence(&lv));
+            let kind = self.arg_kind(lv, &mut arrays, &mut scalars, &mut arr_lvs, &mut sc_lvs);
             params.push((p.clone(), kind));
         }
         let key = FuncKey {
             instance: Arc::as_ptr(&inst) as usize,
+            wholesale,
             params,
+            syms: bx.syms.to_vec(),
             lo: bx.lo.clone(),
             shape: bx.shape.clone(),
         };
@@ -287,6 +310,50 @@ impl<'m> TapeBuilder<'m> {
         Ok(if res.scalar { LV::Scalar(out) } else { LV::Arr(out) })
     }
 
+    /// What the function sees of an argument the caller lowered to `lv`,
+    /// recording it as an array or scalar argument where it is one.
+    fn arg_kind(
+        &self,
+        lv: LV,
+        arrays: &mut Vec<SrcRef>,
+        scalars: &mut Vec<Operand>,
+        arr_lvs: &mut Vec<LV>,
+        sc_lvs: &mut Vec<LV>,
+    ) -> ArgKind {
+        match lv {
+            LV::Lit(x) => ArgKind::Lit(x.to_bits()),
+            LV::Time => ArgKind::Time,
+            LV::Param(i) => {
+                scalars.push(Operand::Param(i));
+                sc_lvs.push(lv);
+                ArgKind::Scalar
+            }
+            LV::Scalar(s) => {
+                scalars.push(Operand::Slot(s));
+                sc_lvs.push(lv);
+                ArgKind::Scalar
+            }
+            LV::Arr(s) => {
+                let (shape, origin) = self.lv_box(&lv).expect("an array slot has a box");
+                arrays.push(SrcRef::Slot(s));
+                arr_lvs.push(lv);
+                ArgKind::Array(shape, origin)
+            }
+            LV::State(ix) => match self.lv_box(&lv) {
+                Some((shape, origin)) => {
+                    arrays.push(SrcRef::State(ix));
+                    arr_lvs.push(lv);
+                    ArgKind::Array(shape, origin)
+                }
+                None => {
+                    scalars.push(Operand::State(ix));
+                    sc_lvs.push(lv);
+                    ArgKind::Scalar
+                }
+            },
+        }
+    }
+
     /// Lower `inst`'s body once, for the arguments `key` describes, into a
     /// function program.
     fn build_function(&self, inst: &Arc<CallInstance>, key: &FuncKey, bx: &LBox) -> LResult<Built> {
@@ -295,7 +362,7 @@ impl<'m> TapeBuilder<'m> {
         let mut param_names: Vec<String> = Vec::new();
         let mut lits: FxHashMap<String, f64> = FxHashMap::default();
         let mut times: HashSet<String> = HashSet::new();
-        let mut syms: Vec<String> = (0..bx.syms.len()).map(|a| format!("\0axis{a}")).collect();
+        let mut inline: FxHashMap<String, Expr> = FxHashMap::default();
         for (p, kind) in &key.params {
             match kind {
                 ArgKind::Lit(bits) => {
@@ -303,15 +370,6 @@ impl<'m> TapeBuilder<'m> {
                 }
                 ArgKind::Time => {
                     times.insert(p.clone());
-                }
-                ArgKind::Axis(a) => {
-                    if !syms[*a].starts_with('\0') {
-                        bail_tape!(
-                            "operator reference `{name}`: two parameters bound to the same loop \
-                             symbol are not compiled yet"
-                        );
-                    }
-                    syms[*a] = p.clone();
                 }
                 ArgKind::Array(shape, origin) => {
                     var_shapes.insert(
@@ -324,6 +382,11 @@ impl<'m> TapeBuilder<'m> {
                     );
                 }
                 ArgKind::Scalar => param_names.push(p.clone()),
+                ArgKind::Inline(text) => {
+                    let e: Expr = serde_json::from_str(text)
+                        .map_err(|e| Bail::new(format!("operator reference `{name}`: {e}")))?;
+                    inline.insert(p.clone(), e);
+                }
             }
         }
         let no_forcing = ForcingInputs {
@@ -344,16 +407,21 @@ impl<'m> TapeBuilder<'m> {
         f.is_function = true;
         f.fn_lits = lits;
         f.fn_times = times;
+        f.fn_inline = inline;
         f.begin_rule(RuleInfo {
             name: format!("operator {name}"),
             kind: RuleKind::Observed(0),
             cadence: Cadence::Continuous,
         });
-        let fbox = LBox::new(&syms, bx.lo.clone(), bx.shape.clone());
-        f.push_scope();
-        let lv = f.lower_expr(&inst.body, &fbox);
-        f.pop_scope();
-        let lv = lv?;
+        let lv = if key.wholesale {
+            f.lower_wholesale_rule(|f| f.lower_wholesale(&inst.body))?
+        } else {
+            let fbox = LBox::new(&key.syms, bx.lo.clone(), bx.shape.clone());
+            f.push_scope();
+            let lv = f.lower_expr(&inst.body, &fbox);
+            f.pop_scope();
+            lv?
+        };
         if f.fault.first.is_some() || !f.fault.lazy.is_empty() || f.fault.notes > 0 {
             bail_tape!(
                 "operator reference `{name}`: its body can latch a fail-closed fault, which a \
@@ -386,6 +454,30 @@ impl<'m> TapeBuilder<'m> {
         let mut prog = f.assemble(vec![("result".to_string(), result)]);
         prog.is_function = true;
         Ok(Built::Function(prog, res))
+    }
+}
+
+/// `e` with each free variable named in `rename` renamed: a name a node of
+/// `e` binds is not free below it.
+fn rename_free(e: &Expr, rename: &FxHashMap<String, String>) -> Expr {
+    match e {
+        Expr::Variable(n) => match rename.get(n) {
+            Some(r) => Expr::Variable(r.clone()),
+            None => e.clone(),
+        },
+        Expr::Operator(node) => {
+            let bound = node.binders(crate::binders::Binders::SCOPE);
+            if bound.iter().any(|b| rename.contains_key(*b)) {
+                let mut inner = rename.clone();
+                for b in bound {
+                    inner.remove(b);
+                }
+                Expr::operator(node.map_children(&mut |c| rename_free(c, &inner)))
+            } else {
+                Expr::operator(node.map_children(&mut |c| rename_free(c, rename)))
+            }
+        }
+        _ => e.clone(),
     }
 }
 
