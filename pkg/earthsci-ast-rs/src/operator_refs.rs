@@ -191,8 +191,11 @@ impl Definition {
     /// string that is not an Expression leaf: a scalar field, a `ranges` bound
     /// or `from`, a region bound, an `enum` argument). Read from the wire
     /// because a body whose `ranges` bound names a param (`[1, "n"]`) is no
-    /// typed Expression until that bound is a literal.
-    fn literal_params(&self) -> &HashSet<String> {
+    /// typed Expression until that bound is a literal. A param the body
+    /// passes, as a bare name, to a literal param of a definition it
+    /// references is a literal param too: its value lands in that literal
+    /// position.
+    fn literal_params(&self, registry: &OperatorRegistry) -> &HashSet<String> {
         self.wire_literals.get_or_init(|| {
             let params: HashSet<&str> = self.params.iter().map(String::as_str).collect();
             let mut out = HashSet::new();
@@ -200,6 +203,14 @@ impl Definition {
                 wire_walk(b, true, &mut |s, expr_pos| {
                     if !expr_pos && params.contains(s) {
                         out.insert(s.to_string());
+                    }
+                });
+                wire_forwards(b, &mut |callee, q, p| {
+                    if params.contains(p)
+                        && let Some(c) = registry.get(callee)
+                        && c.literal_params(registry).contains(q)
+                    {
+                        out.insert(p.to_string());
                     }
                 });
             }
@@ -236,10 +247,11 @@ impl Definition {
         &self,
         r: &Reference<'_>,
         outer: &InstanceLiterals,
+        registry: &OperatorRegistry,
     ) -> InstanceLiterals {
         let mut out = InstanceLiterals::new();
         for p in &self.params {
-            if !self.is_literal_param(p) && !self.literal_params().contains(p) {
+            if !self.is_literal_param(p) && !self.literal_params(registry).contains(p) {
                 continue;
             }
             let lit = match r.binding(p) {
@@ -519,6 +531,28 @@ fn wire_index_subscripts(v: &Value, registry: &OperatorRegistry, out: &mut BTree
     }
 }
 
+/// Call `f(callee, param, name)` for every binding of a reference in a wire
+/// body that is a bare name.
+fn wire_forwards(v: &Value, f: &mut impl FnMut(&str, &str, &str)) {
+    match v {
+        Value::Array(a) => a.iter().for_each(|x| wire_forwards(x, f)),
+        Value::Object(m) => {
+            if m.get("op").and_then(Value::as_str) == Some(APPLY_OP)
+                && let Some(callee) = m.get("name").and_then(Value::as_str)
+                && let Some(Value::Object(b)) = m.get("bindings")
+            {
+                for (q, x) in b {
+                    if let Value::String(p) = x {
+                        f(callee, q, p);
+                    }
+                }
+            }
+            m.values().for_each(|x| wire_forwards(x, f));
+        }
+        _ => {}
+    }
+}
+
 /// Walk a wire body for [`DefinitionReads`]. `bound` holds the loop symbols
 /// in scope (the body's own, and those of the bodies a binding is read in).
 fn body_reads(
@@ -703,7 +737,7 @@ impl OperatorRegistry {
         let mut found = Vec::new();
         for_each_reference(e, &mut |r| {
             if let Some(d) = self.resolve(&r) {
-                found.push((Arc::clone(d), d.instance_literals(&r, outer)));
+                found.push((Arc::clone(d), d.instance_literals(&r, outer, self)));
             }
         });
         for (d, lits) in found {
