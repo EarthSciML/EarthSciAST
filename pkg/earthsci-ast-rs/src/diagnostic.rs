@@ -959,6 +959,7 @@ mod error_code_tests {
             "time_origin_invalid",
             "timestamp_malformed",
             "timestamp_no_calendar_day",
+            "tolerance_below_working_precision",
             "toplevel_model_ref_unresolved",
             "unbound_index_symbol",
             "undefined_index_set",

@@ -1786,6 +1786,14 @@
       }
     },
     {
+      "name": "code_tolerance_below_working_precision",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeToleranceBelowWorkingPrecision"
+      }
+    },
+    {
       "name": "code_undefined_index_set",
       "kind": "constant",
       "tier": "extension",
