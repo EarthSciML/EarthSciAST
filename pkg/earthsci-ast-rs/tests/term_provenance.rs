@@ -174,6 +174,14 @@ fn check_invariant(
 fn body_is_the_left_fold_of_the_contributions() {
     for fixture in fixture_names() {
         let flat = flatten_path(&fixtures_dir().join(&fixture));
+        // `flatten` keeps references; the scalar evaluator reads the
+        // expansion, made here in the test only (the Julia test's
+        // `expand_flattened_refs`).
+        let flat = if flat.template_registry.is_empty() {
+            flat
+        } else {
+            crate::flatten_wire_conformance::expanded(&flat)
+        };
         for (eq, contributions) in flat.equations.iter().zip(&flat.equation_contributions) {
             let result = check_invariant(&fixture, &flat, &eq.lhs, &eq.rhs, contributions);
             // Only `grad` without a discretization is out of the evaluator's

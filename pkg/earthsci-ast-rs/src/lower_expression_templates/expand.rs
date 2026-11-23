@@ -43,7 +43,7 @@ pub(crate) fn strip_component_template_blocks(value: &mut Value) {
 /// The typed `EsmFile` deliberately never sees an `expression_templates` block
 /// — the build path is Expand-at-build (RFC out-of-line-expression-templates
 /// §7.7) — so this is the only place the per-component registries survive to
-/// reach [`crate::flatten::merged_template_registry`], which needs them to
+/// reach `crate::flatten_refs::prepare`, which needs them to
 /// build the step-4 merged registry. Components whose materialized block is
 /// empty are omitted; returns `None` when none remains, so a document without
 /// templates costs nothing.

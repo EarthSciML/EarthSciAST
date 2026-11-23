@@ -130,7 +130,7 @@ pub struct EsmFile {
     /// NOT a wire field: `#[serde(skip)]` keeps it out of both directions, so a
     /// `parse -> emit` round trip is byte-identical and a document is never
     /// asked to carry it. It exists because
-    /// [`crate::flatten::merged_template_registry`] must reconstruct the
+    /// `crate::flatten_refs::prepare` must reconstruct the
     /// step-4 merged registry, and the typed structs — by design — never see an
     /// `expression_templates` block. Mirrors the Python oracle's
     /// `EsmFile.component_templates`.

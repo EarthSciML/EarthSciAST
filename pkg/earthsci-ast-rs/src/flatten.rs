@@ -662,7 +662,9 @@ pub struct FlattenedSystem {
     /// deduplicated at first occurrence, and a non-deep-equal same-name
     /// collision renamed to `<ComponentPath>.<name>`, one entry per distinct
     /// definition named after its first owner, with the rename propagated
-    /// along the reference DAG. See [`merged_template_registry`].
+    /// along the reference DAG (see `crate::flatten_refs`). Every reference in
+    /// the flattened system resolves against it, and step 3a and the lifts
+    /// add the entries they make (`<name>.ddt`, `<name>.cellwise<k>`, …).
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub template_registry: IndexMap<String, serde_json::Value>,
     /// The provider-served loaded fields this system consumes (esm-spec §8.5):
@@ -961,8 +963,24 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     let record_counts = crate::structural::check_record_axes_at_flatten(file)
         .map_err(FlattenError::RecordsPerSample)?;
 
+    // The merged operator registry (esm-spec §9.6.4 rule 7, §10.7;
+    // esm-libraries-spec §4.7.5 step 4): every component's registry closed
+    // over its bodies' free names, then merged. Computed before collection,
+    // because each component's reference sites take its rewrites as they are
+    // namespaced (see [`crate::flatten_refs`]). A `variable_map` expression
+    // transform's references are owned by the receiving component.
+    let mut flat_reg = crate::flatten_refs::prepare(file);
+    let owned_file;
+    let file = match crate::flatten_refs::own_transform_refs(file, &flat_reg) {
+        Some(f) => {
+            owned_file = f;
+            &owned_file
+        }
+        None => file,
+    };
+
     // Phase 1: collect per-system lowered equations and namespaced variables.
-    let (source_systems, mut per_system) = collect_component_systems(file)?;
+    let (source_systems, mut per_system) = collect_component_systems(file, &flat_reg)?;
 
     // Phase 2 preflight (esm-spec §4.6 / §10.4): every `variable_map` endpoint
     // must name something the collected system carries. Run against the
@@ -1016,7 +1034,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         .unwrap_or_default();
 
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
-    maybe_apply_pointwise_lift(file, &mut parts, &mut index_sets)?;
+    maybe_apply_pointwise_lift(file, &mut parts, &mut index_sets, &mut flat_reg.registry)?;
 
     // Phase 5b′ (esm-libraries-spec §4.7.5 step 3a): resolve a right-hand-side
     // STRUCTURAL time derivative to the tendency this system defines for it
@@ -1026,7 +1044,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // after coupling (phase 4) so a state merged by `operator_compose` yields
     // its WHOLE tendency rather than the first contributing term.
     let time_invariant: HashSet<String> = parts.parameters.keys().cloned().collect();
-    resolve_rhs_time_derivatives_per_contribution(&mut parts.equations, &time_invariant);
+    resolve_rhs_time_derivatives(&mut parts, &mut flat_reg.registry, &time_invariant);
 
     // Phase 5b″: classify the `ic` equations OUT of `equations` into
     // `field_ics` (esm-libraries-spec §4.7.5 step 4). After 5b′, so an
@@ -1066,7 +1084,16 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 
     // Phase 5h: write each elementwise template application (esm-spec
     // §9.6.11) as its per-cell `faq`. See [`lift_elementwise_applications`].
-    lift_elementwise_applications(&mut parts);
+    lift_elementwise_applications(&mut parts, &mut flat_reg.registry);
+
+    // Every lift is done: the cellwise variants they made take their final
+    // names (esm-spec §9.6.11), at every site that references them.
+    let renames = crate::elementwise_lift::name_cellwise_variants(&mut flat_reg.registry);
+    if !renames.is_empty() {
+        parts.map_sites(true, &mut |e| {
+            crate::flatten_refs::rename_refs(e, &renames).unwrap_or_else(|| e.clone())
+        });
+    }
 
     let AssembledParts {
         state_variables,
@@ -1080,10 +1107,10 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         lifted_shapes,
     } = parts;
 
-    // Phase 5f: the MERGED expression-template registry (esm-spec §9.6.4 rule
-    // 7, §10.7). Its bodies are closed, so they read no component name a
-    // coupling rule rewrote. See [`merged_template_registry`].
-    let template_registry = merged_template_registry(file);
+    // Phase 5f: the MERGED operator registry (esm-spec §9.6.4 rule 7,
+    // §10.7), as the phases above left it. Its bodies are closed, so they
+    // read no component name a coupling rule rewrote.
+    let template_registry = std::mem::take(&mut flat_reg.registry);
 
     let equation_lifted: Vec<bool> = if equations.iter().any(|fe| fe.lifted) {
         equations.iter().map(|fe| fe.lifted).collect()
@@ -1148,40 +1175,31 @@ fn reserved_liftings(file: &EsmFile) -> Vec<(String, String, String)> {
         .collect()
 }
 
-/// Write every elementwise template application of the flattened equations
-/// and field initial conditions (esm-spec §9.6.11) as the per-cell `faq` the
-/// build would lift it to.
-///
-/// This binding expands every template reference at load, and an expansion
-/// is elementwise only because it came from an application: the build reads
-/// that from the mark the load leaves on the expansion
-/// ([`ExpressionNode::template_origin`]), which is load provenance and never
-/// goes on the wire. Whether an argument is an array is decided on the
+/// Write every elementwise application of the flattened equations and field
+/// initial conditions (esm-spec §9.6.11) as the per-cell `faq` the build
+/// would lift it to, its references kept, each binding read at the cell by
+/// its parameter's role ([`crate::elementwise_lift`]); a cellwise variant the
+/// lift needs is added to `registry` under a placeholder name, named once
+/// every lift is done. Whether an argument is an array is decided on the
 /// flattened system, after coupling: the lookup of a 0-D component that a
 /// `variable_map` feeds a grid field is elementwise only once flattened. Left
-/// as the bare expansion, a flattened system written out and read back is a
-/// different document: the expansion reads the array by bare name inside
-/// the template's bracket count, which no longer marks an application, and
-/// the build refuses it (`faq_bare_array_operand`, esm-spec §4.3.1). Writing
-/// the lift here gives the flattened equations the meaning the build gives
-/// them, in a form that survives serialization; the build's own lift then
-/// finds nothing left to lift. A field initial condition `ic(x) = rhs` is
-/// lifted over `x`'s shape.
+/// as an application whose expansion reads an array by bare name inside the
+/// definition's bracket count, a flattened system written out (expanded) and
+/// read back is refused (`faq_bare_array_operand`, esm-spec §4.3.1). A field
+/// initial condition `ic(x) = rhs` is lifted over `x`'s shape.
 ///
-/// No declared `shape` changes (esm-libraries-spec §4.7.5): a variable
-/// declared without one keeps none, and its shape is the one its `faq`
-/// definition ranges over. A lifted equation's contributions collapse into
-/// the one `faq`, their origins united, since the per-cell form is computed
-/// whole. When the lift refuses a right-hand side (`array_shape_mismatch`),
-/// every equation and initial condition is left as it was, for the build to
-/// refuse.
-fn lift_elementwise_applications(flat: &mut AssembledParts) {
-    fn marked(e: &Expr) -> bool {
-        let Expr::Operator(n) = e else { return false };
-        n.template_origin.is_some() || n.any_child(&mut marked)
-    }
-    if !flat.equations.iter().any(|fe| marked(&fe.eq.rhs))
-        && !flat.field_ics.iter().any(|(_, rhs)| marked(rhs))
+/// No declared `shape` changes (esm-libraries-spec §4.7.5). A lifted
+/// equation's contributions collapse into the one `faq`, their origins united.
+/// When the lift refuses a right-hand side (`array_shape_mismatch`), every
+/// equation and initial condition is left as it was, for the build to refuse.
+/// Mirrors the Julia reference `_lift_elementwise_applications_flat!`.
+fn lift_elementwise_applications(
+    flat: &mut AssembledParts,
+    registry: &mut IndexMap<String, serde_json::Value>,
+) {
+    let holds = crate::operator_refs::has_reference;
+    if !flat.equations.iter().any(|fe| holds(&fe.eq.rhs))
+        && !flat.field_ics.iter().any(|(_, rhs)| holds(rhs))
     {
         return;
     }
@@ -1198,7 +1216,7 @@ fn lift_elementwise_applications(flat: &mut AssembledParts) {
             rhs: rhs.clone(),
             ..Default::default()
         }));
-    if crate::elementwise_lift::lift_elementwise_applications(&mut model).is_err() {
+    if crate::elementwise_lift::lift_elementwise_applications_with(&mut model, registry).is_err() {
         return;
     }
     let unchanged = |a: &Expr, b: &Expr| match (a, b) {
@@ -1409,6 +1427,26 @@ pub(crate) fn conditional_shape_promotions<'a>(
     equations: impl Iterator<Item = &'a Equation> + Clone,
     index_sets: &HashMap<String, IndexSet>,
 ) -> ConditionalShapes {
+    conditional_shape_promotions_with(
+        variable,
+        equations,
+        index_sets,
+        &crate::operator_refs::OperatorRegistry::default(),
+    )
+}
+
+/// [`conditional_shape_promotions`] reading the references of `equations`
+/// through `registry` (a flattened system's, or a component's): a reference
+/// spans what its definition's body spans with each parameter standing for
+/// what its binding spans, analysed once per definition and binding spans
+/// ([`crate::operator_refs::InstanceMemo`]), never by substituting. A
+/// reference to a definition `registry` does not hold is undecided.
+pub(crate) fn conditional_shape_promotions_with<'a>(
+    variable: &dyn Fn(&str) -> Option<&'a ModelVariable>,
+    equations: impl Iterator<Item = &'a Equation> + Clone,
+    index_sets: &HashMap<String, IndexSet>,
+    registry: &crate::operator_refs::OperatorRegistry,
+) -> ConditionalShapes {
     let mut defs: HashMap<&'a str, &'a Expr> = HashMap::new();
     let mut ode_states: HashSet<&'a str> = HashSet::new();
     for eq in equations.clone() {
@@ -1430,6 +1468,9 @@ pub(crate) fn conditional_shape_promotions<'a>(
         ode_states: &ode_states,
         memo: HashMap::new(),
         depth: 0,
+        registry,
+        params: Vec::new(),
+        instances: Default::default(),
     };
     let mut out = ConditionalShapes::default();
     for eq in equations {
@@ -1506,6 +1547,14 @@ struct ShapeInference<'a, 'd> {
     /// still being inferred — a cycle).
     memo: HashMap<String, Option<Spans>>,
     depth: usize,
+    /// The registry references resolve against.
+    registry: &'d crate::operator_refs::OperatorRegistry,
+    /// While a definition's body is read: what each of its parameters'
+    /// bindings spans (innermost body last).
+    params: Vec<HashMap<String, (Spans, bool)>>,
+    /// What a definition's body spans, per definition and the spans of its
+    /// bindings.
+    instances: std::rc::Rc<crate::operator_refs::InstanceMemo<String, Option<(Spans, bool)>>>,
 }
 
 /// How deep [`ShapeInference::var_spans`] follows definitions before it
@@ -1569,7 +1618,15 @@ impl ShapeInference<'_, '_> {
     fn body_spans(&mut self, e: &Expr) -> Option<(Spans, bool)> {
         match e {
             Expr::Number(_) | Expr::Integer(_) => Some((Spans::default(), false)),
-            Expr::Variable(v) => self.var_spans(v).map(|spans| (spans, false)),
+            Expr::Variable(v) => {
+                if let Some(bound) = self.params.last().and_then(|p| p.get(v)) {
+                    return Some(bound.clone());
+                }
+                self.var_spans(v).map(|spans| (spans, false))
+            }
+            Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+                self.reference_spans(node)
+            }
             Expr::Operator(node) if node.op == "index" => {
                 for sub in node.args.iter().skip(1) {
                     if !self.body_spans(sub)?.0.is_scalar() {
@@ -1616,87 +1673,45 @@ impl ShapeInference<'_, '_> {
             }
         }
     }
-}
 
-/// The MERGED expression-template registry of the flattened representation
-/// (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 steps 2 and 4).
-///
-/// Union of the per-component registries [captured at load]
-/// (`EsmFile::component_templates`), in this order:
-///
-/// 1. **Close, THEN union.** Every component's carried bodies (models and
-///    reaction systems alike) are closed first ([`close_template_bodies`]):
-///    a name a body reads free becomes an explicit trailing parameter, which
-///    each reference binds to the same name in its own site's scope. A body's
-///    free names are read in the scope of the reference's site (a subsystem's
-///    reference reads the subsystem's names), so one definition can serve
-///    several subsystems and several components.
-/// 2. **Deep-equal dedup at first occurrence.**
-/// 3. **Collision rename** to `<ComponentPath>.<name>`, one entry per distinct
-///    definition, named after its first owner, propagated along the reference
-///    DAG ([`crate::lower_expression_templates::merge_flat_registry`]) so no
-///    surviving body holds a reference the merged registry cannot resolve.
-///
-/// `match` rules are excluded: only match-less templates are referenceable
-/// (§9.6.2), so only they can be merged.
-///
-/// Components are walked in DOCUMENT order (models in file order, then reaction
-/// systems), which is what step 4's ordering rule requires and what makes
-/// "first occurrence" mean the first occurrence in the file.
-///
-/// Rust's typed build path expands every surviving reference at load (RFC
-/// out-of-line-expression-templates §7.7), so no equation reaching here carries
-/// an `apply_expression_template` node and neither the rename nor the added
-/// bindings have a COMPONENT reference site left to rewrite — step 4's
-/// "Applicability" paragraph says exactly this. The registry is still carried,
-/// closed, because the field is normative and a consumer must be able to
-/// reconstitute the reference-preserving document from the flattened form
-/// alone.
-pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::Value> {
-    let Some(component_templates) = &file.component_templates else {
-        return IndexMap::new();
-    };
-
-    // Document order: models as the file declares them, then reaction systems,
-    // then any captured component the typed file no longer holds.
-    let mut ordered: Vec<String> = Vec::new();
-    if let Some(models) = &file.models {
-        ordered.extend(models.keys().map(|n| format!("models.{n}")));
-    }
-    if let Some(rs) = &file.reaction_systems {
-        ordered.extend(rs.keys().map(|n| format!("reaction_systems.{n}")));
-    }
-    for key in component_templates.keys() {
-        if !ordered.contains(key) {
-            ordered.push(key.clone());
+    /// What a reference spans: its definition's body with each parameter
+    /// standing for what its binding spans (read in the reference's scope),
+    /// once per definition and binding spans.
+    fn reference_spans(&mut self, node: &ExpressionNode) -> Option<(Spans, bool)> {
+        let r = crate::operator_refs::reference_node(node)?;
+        let def = std::sync::Arc::clone(self.registry.resolve(&r)?);
+        let body = def.body.as_ref()?;
+        let mut bound: HashMap<String, (Spans, bool)> = HashMap::new();
+        for p in &def.params {
+            if let Some(b) = r.binding(p) {
+                // A parameter whose binding is not elementwise (a table, an
+                // axis, a literal of the instance) is read where its role
+                // puts it; the body decides whether that matters.
+                if let Some(s) = self.body_spans(b) {
+                    bound.insert(p.clone(), s);
+                }
+            }
         }
-    }
-
-    // (component path, its closed match-less block), in document order.
-    let mut blocks: Vec<(String, serde_json::Map<String, serde_json::Value>)> = Vec::new();
-    for compkey in &ordered {
-        let Some(block) = component_templates.get(compkey).and_then(|v| v.as_object()) else {
-            continue;
-        };
-        let cname = compkey.split_once('.').map_or(compkey.as_str(), |(_, c)| c);
-        // The load's private fixed-unit records stay in the typed document's
-        // registries (the unit checker reads them); the flattened registry is
-        // a wire field and carries none.
-        let mut block = block.clone();
-        block
-            .values_mut()
-            .for_each(crate::lower_expression_templates::strip_fixed_units);
-        let (closed, _added) = close_template_bodies(&block);
-        let closed = closed
-            .into_iter()
-            // match rules are not referenceable, so not merged
-            .filter(|(_, decl)| decl.get("match").is_none_or(|m| m.is_null()))
+        let mut keyed: Vec<String> = bound
+            .iter()
+            .map(|(p, (s, i))| format!("{p}\0{:?}\0{:?}\0{i}", s.axes, s.fed))
             .collect();
-        blocks.push((cname.to_string(), closed));
+        keyed.sort();
+        let key = keyed.join("\x01");
+        if self.depth >= CONDITIONAL_SHAPE_MAX_DEPTH {
+            return None;
+        }
+        let memo = std::rc::Rc::clone(&self.instances);
+        let out = memo.get_or_compute(&def.name, &key, || {
+            self.params.push(bound);
+            self.depth += 1;
+            let out = self.body_spans(body);
+            self.depth -= 1;
+            self.params.pop();
+            out
+        });
+        (*out).clone()
     }
-
-    let (merged, _rename) = crate::lower_expression_templates::merge_flat_registry(&blocks);
-    merged.into_iter().collect()
 }
 
 /// `block` (a component's carried template registry) with every match-less
@@ -2184,6 +2199,7 @@ fn collect_loader_fields(
 /// system names (provenance) alongside the blocks.
 fn collect_component_systems(
     file: &EsmFile,
+    flat_reg: &crate::flatten_refs::FlatRegistry,
 ) -> Result<(Vec<String>, Vec<SystemBlock>), FlattenError> {
     let mut source_systems = Vec::new();
     let mut per_system: Vec<SystemBlock> = Vec::new();
@@ -2193,7 +2209,8 @@ fn collect_component_systems(
     // observable in the flattened parameter vector, so it is never sorted.
     if let Some(models) = &file.models {
         for (name, model) in models {
-            let block = build_model_block(name, model)?;
+            let block =
+                build_model_block(name, model, flat_reg.component(&format!("models.{name}")))?;
             source_systems.push(name.clone());
             per_system.push(block);
         }
@@ -2202,7 +2219,11 @@ fn collect_component_systems(
     // Reaction systems next — lowered to ODE equations then namespaced.
     if let Some(rsystems) = &file.reaction_systems {
         for (name, rs) in rsystems {
-            let block = build_reaction_block(name, rs)?;
+            let block = build_reaction_block(
+                name,
+                rs,
+                flat_reg.component(&format!("reaction_systems.{name}")),
+            )?;
             source_systems.push(name.clone());
             per_system.push(block);
         }
@@ -2468,6 +2489,60 @@ struct AssembledParts {
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
     lifted_shapes: IndexMap<String, Vec<i64>>,
+}
+
+impl AssembledParts {
+    /// Rewrite every expression site of the system under construction through
+    /// `f`: the initialization equations, the field initial conditions, every
+    /// event's conditions, trigger and affect right-hand sides, and every
+    /// variable's update rules and bounds. With `equations`, the equation
+    /// pool too, inside each contribution. Mirrors the Julia reference
+    /// `_map_flat_sites!`.
+    fn map_sites(&mut self, equations: bool, f: &mut dyn FnMut(&Expr) -> Expr) {
+        if equations {
+            for fe in &mut self.equations {
+                fe.map_contributions(&mut *f);
+            }
+        }
+        for (_, e) in self
+            .initialization_faqs
+            .iter_mut()
+            .chain(self.field_ics.iter_mut())
+        {
+            *e = f(e);
+        }
+        fn affects(a: &mut [AffectEquation], f: &mut dyn FnMut(&Expr) -> Expr) {
+            for x in a {
+                x.rhs = f(&x.rhs);
+            }
+        }
+        for ev in &mut self.continuous_events {
+            for c in ev.conditions.iter_mut() {
+                *c = f(c);
+            }
+            affects(&mut ev.affects, f);
+            if let Some(neg) = ev.affect_neg.as_mut() {
+                affects(neg, f);
+            }
+        }
+        for ev in &mut self.discrete_events {
+            if let DiscreteEventTrigger::Condition { expression } = &mut ev.trigger {
+                *expression = f(expression);
+            }
+            if let Some(a) = ev.affects.as_mut() {
+                affects(a, f);
+            }
+        }
+        for var in self
+            .state_variables
+            .values_mut()
+            .chain(self.parameters.values_mut())
+            .chain(self.observed_variables.values_mut())
+        {
+            var.for_each_expression_mut(&mut |e| *e = f(e));
+            var.map_bound_references(&mut |e| f(e));
+        }
+    }
 }
 
 /// Phase 5 of [`flatten`]: merge the per-system blocks (in block order) into
@@ -2790,7 +2865,12 @@ fn maybe_apply_pointwise_lift(
     file: &EsmFile,
     parts: &mut AssembledParts,
     index_sets: &mut IndexMap<String, IndexSet>,
+    registry: &mut IndexMap<String, serde_json::Value>,
 ) -> Result<(), FlattenError> {
+    // The references the lift meets are read through the flattened registry
+    // (an operator written as a reference keeps its `makearray` in the
+    // definition's body), never expanded.
+    let refs = crate::operator_refs::OperatorRegistry::from_json(registry.iter());
     let mut no_operator_route: HashSet<String> = HashSet::new();
     let mut masks: HashMap<String, HashSet<String>> = HashMap::new();
     let non_pointwise = |l: &Option<String>| l.as_deref().is_some_and(|l| l != "pointwise");
@@ -2840,6 +2920,7 @@ fn maybe_apply_pointwise_lift(
         index_sets,
         no_operator_route: &no_operator_route,
         masks: &masks,
+        refs: &refs,
     };
     let Some(lifted) = plan_pointwise_lift(&parts.equations, lift)? else {
         return Ok(());
@@ -2879,7 +2960,7 @@ fn maybe_apply_pointwise_lift(
     for (name, axes) in &lifted.axes {
         read_shapes.insert(name.clone(), axes.clone());
     }
-    rewrite_lifted_equations(&mut parts.equations, &lifted, &read_shapes)
+    rewrite_lifted_equations(&mut parts.equations, &lifted, &read_shapes, &refs, registry)
 }
 
 /// Is `node` the STRUCTURAL time derivative — `D` with `wrt: "t"` or no `wrt`
@@ -2889,52 +2970,83 @@ fn maybe_apply_pointwise_lift(
 /// The complement of [`crate::op_registry::is_rewrite_target_derivative`],
 /// which is the SPATIAL tier: a `D` whose `wrt` names an axis, lowered to a
 /// stencil by a discretization rule and never evaluated.
-fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
+pub(crate) fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
     node.op == "D"
         && node.args.len() == 1
         && !crate::op_registry::is_rewrite_target_derivative(node)
 }
 
-/// Which right-hand sides carry a structural time derivative, and the tables
-/// to resolve them against (`None` when the equations define nothing to
-/// resolve against). `None` overall when no right-hand side carries one: a
-/// document with none keeps its equations untouched rather than being rebuilt
-/// through `substitute`.
-fn plan_time_derivative_resolution<'e, 'a>(
-    equations: impl Iterator<Item = (&'e Equation, bool)> + Clone,
-    time_invariant: &'a HashSet<String>,
-) -> Option<(Vec<bool>, Option<DerivTables<'a>>)> {
-    let carriers: Vec<bool> = equations
-        .clone()
-        .map(|(eq, _)| contains_time_derivative(&eq.rhs))
-        .collect();
-    if !carriers.contains(&true) {
-        return None;
-    }
-    Some((carriers, DerivTables::build(equations, time_invariant)))
-}
-
-/// Resolve each right-hand-side `D` over flatten's own equations (esm-spec
-/// §4.2): the resolved expression replaces the `D` node INSIDE the referencing
-/// contribution, which
-/// keeps its origins (esm-libraries-spec §4.7.5); the resolved quantity's own
-/// contributions are not spliced in.
-fn resolve_rhs_time_derivatives_per_contribution(
-    equations: &mut [FlatEq],
+/// Step 3a of [`flatten`]: rewrite every right-hand-side STRUCTURAL time
+/// derivative into what this system defines for it (esm-spec §4.2;
+/// esm-libraries-spec §4.7.5 step 3a), including those in the bodies of the
+/// definitions references name, without expanding anything (esm-spec §9.6.4
+/// rule 3, "Time derivatives"; see [`crate::flatten_template_dt`]). The
+/// resolved expression replaces the `D` node INSIDE the referencing
+/// contribution, which keeps its origins (esm-libraries-spec §4.7.5); the
+/// resolved quantity's own contributions are not spliced in. With a registry,
+/// every other expression site (events, initialization equations, variable
+/// fields), which step 3a does not resolve, keeps pointing at the unresolved
+/// bodies, and `registry` is rewritten with the entries the step places.
+/// Mirrors the Julia reference `_resolve_rhs_time_derivatives!`.
+fn resolve_rhs_time_derivatives(
+    parts: &mut AssembledParts,
+    registry: &mut IndexMap<String, serde_json::Value>,
     time_invariant: &HashSet<String>,
 ) {
-    let Some((carriers, Some(tables))) = plan_time_derivative_resolution(
-        equations.iter().map(|fe| (&fe.eq, fe.lifted)),
-        time_invariant,
-    ) else {
+    use crate::flatten_template_dt::DtState;
+    let with_registry = !registry.is_empty();
+    let placed = {
+        let Some(mut st) = DtState::build(
+            parts.equations.iter().map(|fe| {
+                (
+                    &fe.eq.lhs,
+                    &fe.eq.rhs,
+                    lifted_lhs_target(&fe.eq.lhs, fe.lifted),
+                )
+            }),
+            time_invariant,
+            registry,
+        ) else {
+            return;
+        };
+        let mut roots: Vec<String> = Vec::new();
+        for fe in &mut parts.equations {
+            let carries = if with_registry {
+                st.touches(&fe.eq.rhs)
+            } else {
+                contains_time_derivative(&fe.eq.rhs)
+            };
+            if !carries {
+                continue;
+            }
+            let mut active = self_defined(&fe.eq.lhs, fe.lifted);
+            fe.map_contributions(|e| st.resolve_site(e, &mut active));
+            DtState::marks_in(&fe.eq.rhs, &mut roots);
+        }
+        if with_registry {
+            parts.map_sites(false, &mut |e| {
+                if !st.touches(e) {
+                    return e.clone();
+                }
+                let r = st.unresolve(e);
+                DtState::marks_in(&r, &mut roots);
+                r
+            });
+        }
+        let mut seen = HashSet::new();
+        roots.retain(|m| seen.insert(m.clone()));
+        if roots.is_empty() {
+            return;
+        }
+        st.place(roots)
+    };
+    let Some((names, new_registry)) = placed else {
         return;
     };
-    for (fe, carries) in equations.iter_mut().zip(carriers) {
-        if carries {
-            let mut active = self_defined(&fe.eq.lhs, fe.lifted);
-            fe.map_contributions(|e| tables.substitute(e, &mut active));
-        }
-    }
+    *registry = new_registry;
+    parts.map_sites(true, &mut |e| {
+        crate::flatten_refs::rename_refs(e, &names).unwrap_or_else(|| e.clone())
+    });
 }
 
 /// The quantity an equation DEFINES, which is not available to substitute into
@@ -2982,183 +3094,6 @@ fn lifted_lhs_target(lhs: &Expr, lifted: bool) -> Option<&str> {
     }
 }
 
-/// Whether a tendency is a lifted right-hand side: a `faq` with output
-/// indices.
-fn is_lifted_tendency(expr: &Expr) -> bool {
-    matches!(expr, Expr::Operator(node)
-        if node.op == "faq" && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()))
-}
-
-/// The tendency and defining equations the right-hand-side `D` resolution reads,
-/// plus the names whose time derivative is `0`.
-struct DerivTables<'a> {
-    /// `x` -> the right-hand side of its `D(x)/dt ~ …` equation.
-    tendency: HashMap<String, Expr>,
-    /// `y` -> the right-hand side of its `y ~ …` defining equation.
-    definition: HashMap<String, Expr>,
-    /// Names that do not vary with `t` — the flattened system's parameters.
-    /// A name in NONE of the three is unresolvable rather than zero: answering
-    /// `0` for a name this pass simply does not recognise is the very defect
-    /// §4.2 forbids.
-    time_invariant: &'a HashSet<String>,
-}
-
-impl<'a> DerivTables<'a> {
-    /// The tables `equations` define, or `None` when they define nothing to
-    /// resolve against.
-    fn build<'e>(
-        equations: impl IntoIterator<Item = (&'e Equation, bool)>,
-        time_invariant: &'a HashSet<String>,
-    ) -> Option<Self> {
-        let mut tables = DerivTables {
-            tendency: HashMap::new(),
-            definition: HashMap::new(),
-            time_invariant,
-        };
-        for (eq, lifted) in equations {
-            match &eq.lhs {
-                Expr::Operator(node) if is_structural_time_derivative(node) => {
-                    if let Some(Expr::Variable(name)) = node.args.first() {
-                        tables.tendency.insert(name.clone(), eq.rhs.clone());
-                    }
-                }
-                // A lifted state's tendency is its lifted right-hand side, the
-                // `faq` over its index sets (esm-libraries-spec §4.7.5 step 3a).
-                lhs @ Expr::Operator(_) if lifted_lhs_target(lhs, lifted).is_some() => {
-                    if let Some(name) = lifted_lhs_target(lhs, lifted) {
-                        tables.tendency.insert(name.to_string(), eq.rhs.clone());
-                    }
-                }
-                // A bare-variable LHS is a DEFINING equation — esm-spec §6.3.1's
-                // observed / algebraic form. Its right-hand side is what the
-                // chain rule differentiates.
-                Expr::Variable(name) => {
-                    tables.definition.insert(name.clone(), eq.rhs.clone());
-                }
-                _ => {}
-            }
-        }
-        (!tables.tendency.is_empty() || !tables.definition.is_empty()).then_some(tables)
-    }
-
-    /// Rewrite every structural `D` inside `expr`, leaving the ones `deriv`
-    /// cannot answer exactly as authored for the gate to report.
-    fn substitute(&self, expr: &Expr, active: &mut Vec<String>) -> Expr {
-        let Expr::Operator(node) = expr else {
-            return expr.clone();
-        };
-        if is_structural_time_derivative(node) {
-            return match node.args.first().and_then(|a| self.deriv(a, active)) {
-                Some(out) => out,
-                None => expr.clone(),
-            };
-        }
-        Expr::operator(node.map_children(&mut |child| self.substitute(child, active)))
-    }
-
-    /// d/dt of `expr`, or `None` when this format does not define it.
-    fn deriv(&self, expr: &Expr, active: &mut Vec<String>) -> Option<Expr> {
-        match expr {
-            Expr::Integer(_) | Expr::Number(_) => Some(zero()),
-            Expr::Variable(name) => {
-                if active.iter().any(|n| n == name) {
-                    // A cycle. Stop, and let the gate name it.
-                    return None;
-                }
-                if let Some(f) = self.tendency.get(name) {
-                    let f = f.clone();
-                    active.push(name.clone());
-                    let out = self.substitute(&f, active);
-                    active.pop();
-                    Some(out)
-                } else if let Some(g) = self.definition.get(name) {
-                    let g = g.clone();
-                    active.push(name.clone());
-                    let out = self.deriv(&g, active);
-                    active.pop();
-                    out
-                } else if self.time_invariant.contains(name) {
-                    Some(zero())
-                } else {
-                    None
-                }
-            }
-            Expr::Operator(node) => self.deriv_op(node, active),
-        }
-    }
-
-    /// [`Self::deriv`] over an operator node: the closed arithmetic set.
-    fn deriv_op(&self, node: &ExpressionNode, active: &mut Vec<String>) -> Option<Expr> {
-        let d = |a: &Expr, active: &mut Vec<String>| self.deriv(a, active);
-        if node.op == "index"
-            && let Some(base @ Expr::Variable(name)) = node.args.first()
-            && self.tendency.get(name).is_some_and(is_lifted_tendency)
-        {
-            // One cell of a lifted state: that cell of its lifted tendency.
-            let whole = d(base, active)?;
-            let mut args = Vec::with_capacity(node.args.len());
-            args.push(whole);
-            args.extend(node.args.iter().skip(1).cloned());
-            return Some(Expr::operator(ExpressionNode {
-                op: "index".to_string(),
-                args,
-                ..Default::default()
-            }));
-        }
-        match node.op.as_str() {
-            "+" => {
-                let mut terms = Vec::with_capacity(node.args.len());
-                for a in &node.args {
-                    terms.push(d(a, active)?);
-                }
-                Some(sum(terms))
-            }
-            "-" => match node.args.len() {
-                1 => Some(negate(d(&node.args[0], active)?)),
-                2 => {
-                    let a = d(&node.args[0], active)?;
-                    let b = d(&node.args[1], active)?;
-                    Some(difference(a, b))
-                }
-                _ => None,
-            },
-            "neg" if node.args.len() == 1 => Some(negate(d(&node.args[0], active)?)),
-            // Product rule over an n-ary `*`: one term per factor, that
-            // factor differentiated and the others left alone.
-            "*" => {
-                let mut terms = Vec::with_capacity(node.args.len());
-                for (i, a) in node.args.iter().enumerate() {
-                    let da = d(a, active)?;
-                    if is_zero(&da) {
-                        continue;
-                    }
-                    let mut factors = vec![da];
-                    for (j, b) in node.args.iter().enumerate() {
-                        if i != j {
-                            factors.push(b.clone());
-                        }
-                    }
-                    terms.push(product(factors));
-                }
-                Some(sum(terms))
-            }
-            "/" if node.args.len() == 2 => {
-                let (u, v) = (&node.args[0], &node.args[1]);
-                let du = d(u, active)?;
-                let dv = d(v, active)?;
-                if is_zero(&dv) {
-                    // v is constant in t: (u/v)' = u'/v, which keeps the
-                    // expression small in the common `D(x, t)/c` shape.
-                    return Some(quotient(du, v.clone()));
-                }
-                let num = difference(product(vec![du, v.clone()]), product(vec![u.clone(), dv]));
-                Some(quotient(num, product(vec![v.clone(), v.clone()])))
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Does `expr` carry a structural `D` anywhere?
 fn contains_time_derivative(expr: &Expr) -> bool {
     let Expr::Operator(node) = expr else {
@@ -3176,11 +3111,11 @@ fn contains_time_derivative(expr: &Expr) -> bool {
 // downstream classifier can recognise as constant.
 // ---------------------------------------------------------------------------
 
-fn zero() -> Expr {
+pub(crate) fn zero() -> Expr {
     Expr::Number(0.0)
 }
 
-fn is_zero(e: &Expr) -> bool {
+pub(crate) fn is_zero(e: &Expr) -> bool {
     matches!(e, Expr::Number(v) if *v == 0.0) || matches!(e, Expr::Integer(0))
 }
 
@@ -3196,7 +3131,7 @@ fn node(op: &str, args: Vec<Expr>) -> Expr {
     })
 }
 
-fn sum(terms: Vec<Expr>) -> Expr {
+pub(crate) fn sum(terms: Vec<Expr>) -> Expr {
     let mut kept: Vec<Expr> = terms.into_iter().filter(|t| !is_zero(t)).collect();
     match kept.len() {
         0 => zero(),
@@ -3205,7 +3140,7 @@ fn sum(terms: Vec<Expr>) -> Expr {
     }
 }
 
-fn difference(a: Expr, b: Expr) -> Expr {
+pub(crate) fn difference(a: Expr, b: Expr) -> Expr {
     if is_zero(&b) {
         return a;
     }
@@ -3215,7 +3150,7 @@ fn difference(a: Expr, b: Expr) -> Expr {
     node("-", vec![a, b])
 }
 
-fn negate(a: Expr) -> Expr {
+pub(crate) fn negate(a: Expr) -> Expr {
     match &a {
         _ if is_zero(&a) => zero(),
         Expr::Number(v) => Expr::Number(-v),
@@ -3227,7 +3162,7 @@ fn negate(a: Expr) -> Expr {
     }
 }
 
-fn product(factors: Vec<Expr>) -> Expr {
+pub(crate) fn product(factors: Vec<Expr>) -> Expr {
     if factors.iter().any(is_zero) {
         return zero();
     }
@@ -3239,7 +3174,7 @@ fn product(factors: Vec<Expr>) -> Expr {
     }
 }
 
-fn quotient(a: Expr, b: Expr) -> Expr {
+pub(crate) fn quotient(a: Expr, b: Expr) -> Expr {
     if is_zero(&a) {
         return zero();
     }
@@ -3314,7 +3249,11 @@ pub(crate) fn initialization_faq(eq: &Equation) -> Option<(&str, &Expr)> {
     }
 }
 
-fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
+fn build_model_block(
+    system_name: &str,
+    model: &Model,
+    refs: Option<&crate::flatten_refs::ComponentRefs>,
+) -> Result<SystemBlock, FlattenError> {
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
     let mut observed_vars = IndexMap::new();
@@ -3350,7 +3289,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // Which unknowns are ODE states and which are observed is DERIVED from
     // this model's equations (esm-spec §6.3.1), once, before namespacing.
     let class = crate::classification::Classification::of(model);
-    let mut ns = Namespacer::new(system_name, &sub_keys, &locals);
+    let mut ns = Namespacer::new(system_name, &sub_keys, &locals).with_refs(refs);
 
     // DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, "Ordering"): the
     // component's variables in the order the component declares them. A
@@ -3428,14 +3367,14 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_continuous_event(e, system_name, &sub_keys, &locals))
+        .map(|e| namespace_continuous_event(e, system_name, &sub_keys, &locals, refs))
         .collect();
     let discrete_events = model
         .discrete_events
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_discrete_event(e, system_name, &sub_keys, &locals))
+        .map(|e| namespace_discrete_event(e, system_name, &sub_keys, &locals, refs))
         .collect();
 
     // The `faq`-valued initialization equations, namespaced in the same
@@ -3483,7 +3422,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // A `{ "ref": … }` entry is not a subsystem to lower: reference resolution
     // runs before flattening, so one still unresolved contributes nothing.
     for (sub_name, sub_model) in model.inline_subsystems() {
-        let sub_block = build_model_block(&format!("{system_name}.{sub_name}"), sub_model)?;
+        let sub_block = build_model_block(&format!("{system_name}.{sub_name}"), sub_model, refs)?;
         block.state_vars.extend(sub_block.state_vars);
         block.parameters.extend(sub_block.parameters);
         block.observed_vars.extend(sub_block.observed_vars);
@@ -3499,6 +3438,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
 fn build_reaction_block(
     system_name: &str,
     rs: &ReactionSystem,
+    refs: Option<&crate::flatten_refs::ComponentRefs>,
 ) -> Result<SystemBlock, FlattenError> {
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
@@ -3563,13 +3503,17 @@ fn build_reaction_block(
         .collect();
 
     let lowered = crate::reactions::lower_reactions_to_equations(&rs.reactions, &rs.species)?;
+    // A rate's references bind their definitions' added parameters in this
+    // system's scope, as a model's do (esm-spec §9.6.4 rule 7).
+    let no_subsys = HashSet::new();
+    let mut rate_ns = Namespacer::new(system_name, &no_subsys, &locals).with_refs(refs);
     let equations = lowered
         .into_iter()
         .map(|eq| {
             FlatEq::authored(
                 Equation {
                     lhs: namespace_expr(&eq.lhs, system_name, &HashSet::new(), &locals),
-                    rhs: namespace_expr(&eq.rhs, system_name, &HashSet::new(), &locals),
+                    rhs: rate_ns.expr(&eq.rhs),
                     comment: eq.comment,
                 },
                 TermOrigin::Component {
@@ -3590,14 +3534,14 @@ fn build_reaction_block(
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_continuous_event(e, system_name, &HashSet::new(), &locals))
+        .map(|e| namespace_continuous_event(e, system_name, &HashSet::new(), &locals, refs))
         .collect();
     let discrete_events = rs
         .discrete_events
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_discrete_event(e, system_name, &HashSet::new(), &locals))
+        .map(|e| namespace_discrete_event(e, system_name, &HashSet::new(), &locals, refs))
         .collect();
 
     Ok(SystemBlock {
@@ -3660,6 +3604,12 @@ struct Namespacer<'a> {
     system_name: &'a str,
     subsys: &'a HashSet<String>,
     locals: &'a HashSet<String>,
+    /// The reference rewrites of the component this scope belongs to
+    /// ([`crate::flatten_refs::ComponentRefs`]): every reference binds its
+    /// definition's added parameters to the same names, which this
+    /// namespacing then scopes; a name its body binds as a loop symbol is
+    /// not scoped in its bindings; and its name follows the registry rename.
+    refs: Option<&'a crate::flatten_refs::ComponentRefs>,
     /// Each distinct set of enclosing loop symbols, by id; id 0 is the empty
     /// set.
     scopes: Vec<HashSet<String>>,
@@ -3675,10 +3625,17 @@ impl<'a> Namespacer<'a> {
             system_name,
             subsys,
             locals,
+            refs: None,
             scopes: vec![HashSet::new()],
             scope_ids: HashMap::from([(Vec::new(), 0)]),
             memo: HashMap::new(),
         }
+    }
+
+    /// This namespacer with the reference rewrites `refs`.
+    fn with_refs(mut self, refs: Option<&'a crate::flatten_refs::ComponentRefs>) -> Self {
+        self.refs = refs;
+        self
     }
 
     fn expr(&mut self, expr: &Expr) -> Expr {
@@ -3698,12 +3655,17 @@ impl<'a> Namespacer<'a> {
 
     /// The scope `parent` extended by the loop symbols `node` binds.
     fn child_scope(&mut self, parent: usize, node: &ExpressionNode) -> usize {
-        let mut added: Vec<String> = Vec::new();
-        node.for_each_binder(Binders::SCOPE, |n| {
-            if !self.scopes[parent].contains(n) {
-                added.push(n.to_string());
-            }
-        });
+        let mut names: Vec<String> = Vec::new();
+        node.for_each_binder(Binders::SCOPE, |n| names.push(n.to_string()));
+        self.extend_scope(parent, names)
+    }
+
+    /// The scope `parent` extended by `names`.
+    fn extend_scope(&mut self, parent: usize, names: Vec<String>) -> usize {
+        let added: Vec<String> = names
+            .into_iter()
+            .filter(|n| !self.scopes[parent].contains(n))
+            .collect();
         if added.is_empty() {
             return parent;
         }
@@ -3736,11 +3698,32 @@ impl<'a> Namespacer<'a> {
     fn node(&mut self, node: &ExpressionNode, scope: usize) -> Expr {
         let system_name = self.system_name;
         let locals = self.locals;
+        // A reference binds its definition's added parameters to the same
+        // names here, so the namespacing below scopes them to this site
+        // (esm-spec §9.6.4 rule 7).
+        let refs = self.refs;
+        let bound_owned;
+        let node = match refs.and_then(|r| r.bind_added(node)) {
+            Some(n) => {
+                bound_owned = n;
+                &bound_owned
+            }
+            None => node,
+        };
         // The loop symbols this node introduces are bound in its body,
         // filter and bound expressions: `ranges` keys cover both the output
         // and contracted indices of an `faq`, and an `integral` binds its
         // `int_var`.
-        let child = self.child_scope(scope, node);
+        let mut child = self.child_scope(scope, node);
+        // A name a reference binds that its body binds as a loop symbol is
+        // that loop symbol where the body reads it, not a variable here.
+        if node.op == crate::operator_refs::APPLY_OP
+            && let Some(cap) = refs
+                .zip(node.name.as_ref())
+                .and_then(|(r, n)| r.captures.get(n))
+        {
+            child = self.extend_scope(child, cap.iter().cloned().collect());
+        }
 
         // Every expression-bearing child, through the crate's one child
         // walker (`ExpressionNode::map_children`), which clones the node first
@@ -3778,6 +3761,32 @@ impl<'a> Namespacer<'a> {
             if let Some(ns) = namespace_join_names(join, &binders, system_name, locals) {
                 out.join = Some(ns);
             }
+        }
+        // A bare name bound to a parameter the body spells only in a scalar
+        // field is scoped as that field scopes it: only a local of this site
+        // takes the prefix (an axis name, `t`, stays as written).
+        if out.op == crate::operator_refs::APPLY_OP
+            && let Some(lit) = refs
+                .zip(node.name.as_ref())
+                .and_then(|(r, n)| r.literal.get(n))
+            && let (Some(ob), Some(b)) = (node.bindings.as_ref(), out.bindings.as_mut())
+        {
+            for p in lit {
+                if let Some(Expr::Variable(v)) = ob.get(p)
+                    && !v.contains('.')
+                    && !locals.contains(v)
+                {
+                    b.insert(p.clone(), Expr::Variable(v.clone()));
+                }
+            }
+        }
+        // The reference follows its component's registry rename.
+        if out.op == crate::operator_refs::APPLY_OP
+            && let Some(n) = refs
+                .zip(out.name.as_ref())
+                .and_then(|(r, n)| r.rename.get(n))
+        {
+            out.name = Some(n.clone());
         }
         Expr::operator(out)
     }
@@ -3866,18 +3875,16 @@ fn namespace_continuous_event(
     system_name: &str,
     subsys: &HashSet<String>,
     locals: &HashSet<String>,
+    refs: Option<&crate::flatten_refs::ComponentRefs>,
 ) -> ContinuousEvent {
-    event.conditions = event
-        .conditions
-        .into_iter()
-        .map(|c| namespace_expr(&c, system_name, subsys, locals))
-        .collect();
+    let mut ns = Namespacer::new(system_name, subsys, locals).with_refs(refs);
+    event.conditions = event.conditions.into_iter().map(|c| ns.expr(&c)).collect();
     event.affects = event
         .affects
         .into_iter()
         .map(|mut a| {
             a.lhs = namespace_affect_target(&a.lhs, system_name, subsys);
-            a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
+            a.rhs = ns.expr(&a.rhs);
             a
         })
         .collect();
@@ -3886,7 +3893,7 @@ fn namespace_continuous_event(
             neg.into_iter()
                 .map(|mut a| {
                     a.lhs = namespace_affect_target(&a.lhs, system_name, subsys);
-                    a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
+                    a.rhs = ns.expr(&a.rhs);
                     a
                 })
                 .collect(),
@@ -3900,11 +3907,13 @@ fn namespace_discrete_event(
     system_name: &str,
     subsys: &HashSet<String>,
     locals: &HashSet<String>,
+    refs: Option<&crate::flatten_refs::ComponentRefs>,
 ) -> DiscreteEvent {
     use crate::types::DiscreteEventTrigger;
+    let mut ns = Namespacer::new(system_name, subsys, locals).with_refs(refs);
     event.trigger = match event.trigger {
         DiscreteEventTrigger::Condition { expression } => DiscreteEventTrigger::Condition {
-            expression: namespace_expr(&expression, system_name, subsys, locals),
+            expression: ns.expr(&expression),
         },
         other => other,
     };
@@ -3914,7 +3923,7 @@ fn namespace_discrete_event(
                 .into_iter()
                 .map(|mut a| {
                     a.lhs = namespace_affect_target(&a.lhs, system_name, subsys);
-                    a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
+                    a.rhs = ns.expr(&a.rhs);
                     a
                 })
                 .collect(),
@@ -3962,6 +3971,7 @@ pub(crate) fn namespaced_model_events(
                 path,
                 &sub_keys,
                 &locals,
+                None,
             )),
         ));
     }
@@ -3973,6 +3983,7 @@ pub(crate) fn namespaced_model_events(
                 path,
                 &sub_keys,
                 &locals,
+                None,
             )),
         ));
     }
@@ -4010,6 +4021,7 @@ pub(crate) fn namespaced_reaction_events(
                 path,
                 &sub_keys,
                 &locals,
+                None,
             )),
         ));
     }
@@ -4021,6 +4033,7 @@ pub(crate) fn namespaced_reaction_events(
                 path,
                 &sub_keys,
                 &locals,
+                None,
             )),
         ));
     }
@@ -5682,92 +5695,152 @@ pub(crate) fn extract_ic_target(lhs: &Expr) -> Option<String> {
 /// Collect every `makearray` node reachable from `expr`, recursing through
 /// [`ExpressionNode::for_each_child`] so no expression-bearing sidecar field
 /// is missed; nodes land in its contractual pre-order.
-fn collect_makearrays<'a>(acc: &mut Vec<&'a ExpressionNode>, expr: &'a Expr) {
-    let Expr::Operator(node) = expr else {
-        return;
-    };
-    if node.op == "makearray" {
-        acc.push(node);
-    }
-    node.for_each_child(&mut |c| collect_makearrays(acc, c));
+/// Every `makearray` `expr` holds, with the frame it is read in, through the
+/// references it makes (an operator written as a reference keeps its
+/// `makearray` in the definition's body), in depth-first order.
+fn collect_makearrays(
+    refs: &crate::operator_refs::OperatorRegistry,
+    expr: &Expr,
+) -> Vec<(std::sync::Arc<ExpressionNode>, crate::operator_refs::Frame)> {
+    let mut acc = Vec::new();
+    refs.walk_through(expr, &crate::operator_refs::Frame::root(), &mut |n, fr| {
+        if n.op == "makearray" {
+            acc.push((std::sync::Arc::clone(n), fr.clone()));
+        }
+        true
+    });
+    acc
 }
 
 /// First `Variable` leaf name in an index-argument expression (the loop variable
-/// of that index position), or `None` for a constant position.
-fn index_arg_loop(expr: &Expr) -> Option<String> {
+/// of that index position), or `None` for a constant position. Read in
+/// `frame`: a parameter leaf reads its binding, and a reference its body.
+fn index_arg_loop(
+    expr: &Expr,
+    refs: &crate::operator_refs::OperatorRegistry,
+    frame: &crate::operator_refs::Frame,
+) -> Option<String> {
     match expr {
-        Expr::Variable(v) => Some(v.clone()),
-        Expr::Operator(node) => {
-            for a in &node.args {
-                if let Some(v) = index_arg_loop(a) {
-                    return Some(v);
-                }
+        Expr::Variable(v) => {
+            let (x, fr) = frame.leaf(v);
+            match x {
+                Expr::Variable(n) => Some(n),
+                other => index_arg_loop(&other, refs, &fr),
             }
-            None
         }
+        Expr::Operator(node) if node.op == crate::operator_refs::APPLY_OP => {
+            let (x, fr) = refs.denoted_root(node, frame)?;
+            index_arg_loop(&x, refs, &fr)
+        }
+        Expr::Operator(node) => node
+            .args
+            .iter()
+            .find_map(|a| index_arg_loop(a, refs, frame)),
         _ => None,
     }
 }
 
 /// Determine the ordered spatial loop variables of a lowered spatial operator by
-/// reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` whose
-/// every position carries a loop variable (the interior stencil). Returns the
-/// loop names in index-position (dim) order, or `None`.
+/// reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` (read
+/// in `frame`, through references) whose every position carries a loop
+/// variable (the interior stencil). Returns the loop names in index-position
+/// (dim) order, or `None`. The walk covers `args`, `expr` and `values` only.
 fn detect_lift_loops(
     ma: &ExpressionNode,
+    frame: &crate::operator_refs::Frame,
     lifted: &HashSet<String>,
     rank: usize,
+    refs: &crate::operator_refs::OperatorRegistry,
 ) -> Option<Vec<String>> {
-    fn walk(expr: &Expr, lifted: &HashSet<String>, rank: usize, out: &mut Option<Vec<String>>) {
-        if out.is_some() {
-            return;
-        }
-        let Expr::Operator(node) = expr else {
-            return;
-        };
-        if node.op == "index"
-            && node.args.len() == rank + 1
-            && let Some(Expr::Variable(name)) = node.args.first()
-            && lifted.contains(name)
-        {
-            let mut loops = Vec::with_capacity(rank);
-            let mut ok = true;
-            for a in node.args.iter().skip(1) {
-                match index_arg_loop(a) {
-                    Some(lv) => loops.push(lv),
-                    None => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                *out = Some(loops);
+    use crate::operator_refs::Frame;
+    struct W<'r> {
+        lifted: &'r HashSet<String>,
+        rank: usize,
+        refs: &'r crate::operator_refs::OperatorRegistry,
+        seen: HashSet<(usize, usize)>,
+        out: Option<Vec<String>>,
+    }
+    impl W<'_> {
+        fn expr(&mut self, e: &Expr, fr: &Frame) {
+            if self.out.is_some() {
                 return;
             }
+            match e {
+                Expr::Variable(v) => {
+                    let (x, f2) = fr.leaf(v);
+                    if !matches!(x, Expr::Variable(_)) {
+                        self.expr(&x, &f2);
+                    }
+                }
+                Expr::Operator(node) => {
+                    if !self
+                        .seen
+                        .insert((std::sync::Arc::as_ptr(node) as usize, fr.id()))
+                    {
+                        return;
+                    }
+                    if node.op == crate::operator_refs::APPLY_OP {
+                        if let Some(r) = crate::operator_refs::reference_node(node)
+                            && let Some(def) = self.refs.resolve(&r)
+                            && let Some(body) = &def.body
+                        {
+                            let inner = fr.enter(&r, def);
+                            self.expr(body, &inner);
+                        }
+                        return;
+                    }
+                    self.node(node, fr);
+                }
+                _ => {}
+            }
         }
-        for a in &node.args {
-            walk(a, lifted, rank, out);
-        }
-        if let Some(e) = &node.expr {
-            walk(e, lifted, rank, out);
-        }
-        if let Some(vs) = &node.values {
-            for v in vs {
-                walk(v, lifted, rank, out);
+        fn node(&mut self, node: &ExpressionNode, fr: &Frame) {
+            if node.op == "index"
+                && node.args.len() == self.rank + 1
+                && let Some(Expr::Variable(a)) = node.args.first()
+                && let (Expr::Variable(name), _) = fr.leaf(a)
+                && self.lifted.contains(&name)
+            {
+                let loops: Option<Vec<String>> = node
+                    .args
+                    .iter()
+                    .skip(1)
+                    .map(|a| index_arg_loop(a, self.refs, fr))
+                    .collect();
+                if let Some(loops) = loops {
+                    self.out = Some(loops);
+                    return;
+                }
+            }
+            for a in &node.args {
+                self.expr(a, fr);
+            }
+            if let Some(e) = &node.expr {
+                self.expr(e, fr);
+            }
+            if let Some(vs) = &node.values {
+                for v in vs {
+                    self.expr(v, fr);
+                }
             }
         }
     }
-    let mut out = None;
+    let mut w = W {
+        lifted,
+        rank,
+        refs,
+        seen: HashSet::new(),
+        out: None,
+    };
     for a in &ma.args {
-        walk(a, lifted, rank, &mut out);
+        w.expr(a, frame);
     }
     if let Some(vs) = &ma.values {
         for v in vs {
-            walk(v, lifted, rank, &mut out);
+            w.expr(v, frame);
         }
     }
-    out
+    w.out
 }
 
 /// Per-dimension grid extent of a lowered spatial operator: the largest cell
@@ -5807,54 +5880,48 @@ fn makearray_extents(ma: &ExpressionNode) -> Vec<i64> {
 /// `None`. A loop symbol repeated across dimensions (a diagonal gather) names
 /// nothing. esm-libraries-spec §4.7.5, "Pointwise lift: index sets".
 fn lift_axis_names(
-    mas: &[&ExpressionNode],
+    mas: &[(std::sync::Arc<ExpressionNode>, crate::operator_refs::Frame)],
     loops: &[String],
     extents: &[i64],
     var_shapes: &HashMap<String, Vec<String>>,
     index_sets: &IndexMap<String, IndexSet>,
+    refs: &crate::operator_refs::OperatorRegistry,
 ) -> Vec<Option<String>> {
-    // Visits `node` and every expression-bearing child below it through
-    // [`ExpressionNode::for_each_child`], so a gather under `filter`,
-    // `lower`, `upper`, … names its dimension too.
-    fn walk(
-        node: &ExpressionNode,
-        dim_of: &HashMap<&str, Option<usize>>,
-        extents: &[i64],
-        var_shapes: &HashMap<String, Vec<String>>,
-        index_sets: &IndexMap<String, IndexSet>,
-        evidence: &mut [BTreeSet<String>],
-    ) {
-        if node.op == "index"
-            && let Some(Expr::Variable(name)) = node.args.first()
-            && let Some(shape) = var_shapes.get(name)
-            && shape.len() + 1 == node.args.len()
-        {
-            for (p, axis) in shape.iter().enumerate() {
-                let Some(loop_name) = index_arg_loop(&node.args[p + 1]) else {
-                    continue;
-                };
-                let Some(Some(d)) = dim_of.get(loop_name.as_str()) else {
-                    continue;
-                };
-                if index_sets.get(axis).and_then(|s| s.size) == Some(extents[*d]) {
-                    evidence[*d].insert(axis.clone());
-                }
-            }
-        }
-        node.for_each_child(&mut |c| {
-            if let Expr::Operator(child) = c {
-                walk(child, dim_of, extents, var_shapes, index_sets, evidence);
-            }
-        });
-    }
     let mut dim_of: HashMap<&str, Option<usize>> = HashMap::new();
     for (d, l) in loops.iter().enumerate() {
         let repeated = dim_of.contains_key(l.as_str());
         dim_of.insert(l.as_str(), if repeated { None } else { Some(d) });
     }
     let mut evidence: Vec<BTreeSet<String>> = vec![BTreeSet::new(); loops.len()];
-    for ma in mas {
-        walk(ma, &dim_of, extents, var_shapes, index_sets, &mut evidence);
+    // Visits every expression-bearing child through the references the
+    // makearray makes, so a gather under `filter`, `lower`, `upper`, … names
+    // its dimension too.
+    for (ma, frame) in mas {
+        refs.walk_through(
+            &Expr::Operator(std::sync::Arc::clone(ma)),
+            frame,
+            &mut |node, fr| {
+                if node.op == "index"
+                    && let Some(Expr::Variable(a)) = node.args.first()
+                    && let (Expr::Variable(name), _) = fr.leaf(a)
+                    && let Some(shape) = var_shapes.get(&name)
+                    && shape.len() + 1 == node.args.len()
+                {
+                    for (p, axis) in shape.iter().enumerate() {
+                        let Some(loop_name) = index_arg_loop(&node.args[p + 1], refs, fr) else {
+                            continue;
+                        };
+                        let Some(Some(d)) = dim_of.get(loop_name.as_str()) else {
+                            continue;
+                        };
+                        if index_sets.get(axis).and_then(|s| s.size) == Some(extents[*d]) {
+                            evidence[*d].insert(axis.clone());
+                        }
+                    }
+                }
+                true
+            },
+        );
     }
     evidence
         .into_iter()
@@ -5896,16 +5963,18 @@ impl DeclaredIndexSets {
 /// declares (`declared`, grouped by size) whose `size` is the extent; else
 /// `_liftdim<d>_<extent>`, added to `index_sets` as an interval of that size if
 /// it is not there yet.
+#[allow(clippy::too_many_arguments)]
 fn lift_index_sets(
-    mas: &[&ExpressionNode],
+    mas: &[(std::sync::Arc<ExpressionNode>, crate::operator_refs::Frame)],
     loops: &[String],
     extents: &[i64],
     var_shapes: &HashMap<String, Vec<String>>,
     declared: &DeclaredIndexSets,
     index_sets: &mut IndexMap<String, IndexSet>,
     species: &str,
+    refs: &crate::operator_refs::OperatorRegistry,
 ) -> Result<Vec<String>, FlattenError> {
-    let named = lift_axis_names(mas, loops, extents, var_shapes, &declared.sets);
+    let named = lift_axis_names(mas, loops, extents, var_shapes, &declared.sets, refs);
     let mut axes = Vec::with_capacity(extents.len());
     for (d, &extent) in extents.iter().enumerate() {
         if let Some(Some(name)) = named.get(d) {
@@ -5965,6 +6034,13 @@ struct LiftGrid<'a> {
     species: &'a str,
 }
 
+/// How the pointwise lift reads the references a right-hand side makes.
+struct CellRefs<'a, 'c, 'r> {
+    refs: &'a crate::operator_refs::OperatorRegistry,
+    ctx: &'c mut crate::elementwise_lift::EwContext<'r>,
+    shapes: &'a HashMap<String, Vec<String>>,
+}
+
 /// Rewrite a scalar (merged reaction + operator) RHS into its per-cell form over
 /// the lift grid. Each spatial-operator `makearray` becomes
 /// `index(makearray, loops…)` (its region values already index per cell);
@@ -5989,6 +6065,7 @@ fn lift_rhs_to_cell(
     var_shapes: &HashMap<String, Vec<String>>,
     grid: &LiftGrid<'_>,
     elementwise: bool,
+    cell: &mut CellRefs<'_, '_, '_>,
 ) -> Result<Expr, FlattenError> {
     match expr {
         Expr::Variable(name) if arrayvars.contains(name) => match var_shapes.get(name) {
@@ -5997,6 +6074,31 @@ fn lift_rhs_to_cell(
         },
         Expr::Variable(_) | Expr::Number(_) | Expr::Integer(_) => Ok(expr.clone()),
         Expr::Operator(node) => {
+            if node.op == crate::operator_refs::APPLY_OP {
+                // An operator written as a reference denotes its
+                // `makearray`: read per cell like one, and it stays a
+                // reference. Any other reference is read at the cell as the
+                // elementwise lift reads one (esm-spec §9.6.11): its
+                // bindings by their parameters' roles.
+                let root = cell
+                    .refs
+                    .denoted_root(node, &crate::operator_refs::Frame::root());
+                if matches!(&root, Some((Expr::Operator(n), _)) if n.op == "makearray") {
+                    return Ok(index_expr(expr, grid.loops));
+                }
+                let mut l = crate::elementwise_lift::Lift::new(
+                    &mut *cell.ctx,
+                    grid.axes,
+                    grid.loops,
+                    cell.shapes,
+                    grid.species,
+                );
+                return l
+                    .at_cell(expr, &Default::default(), false)
+                    .map_err(|message| FlattenError::DimensionPromotion {
+                        message: format!("pointwise lift: {message}"),
+                    });
+            }
             if node.op == "makearray" {
                 return Ok(index_makearray(node, grid.loops));
             }
@@ -6021,7 +6123,7 @@ fn lift_rhs_to_cell(
             out.args = node
                 .args
                 .iter()
-                .map(|a| lift_rhs_to_cell(a, arrayvars, var_shapes, grid, inner))
+                .map(|a| lift_rhs_to_cell(a, arrayvars, var_shapes, grid, inner, cell))
                 .collect::<Result<_, _>>()?;
             Ok(Expr::operator(out))
         }
@@ -6122,6 +6224,18 @@ fn index_node(name: &str, loops: &[String]) -> Expr {
 /// Build `index(<makearray>, loops…)`, the makearray tagged with the grid's
 /// loop symbols as its `output_idx`, in grid order, as every binding's lift
 /// writes it (the flatten corpus pins the tag).
+/// `index(e, loops…)`: `e`'s element at the current cell, positionally.
+fn index_expr(e: &Expr, loops: &[String]) -> Expr {
+    let mut args = Vec::with_capacity(loops.len() + 1);
+    args.push(e.clone());
+    args.extend(loops.iter().map(|l| Expr::Variable(l.clone())));
+    Expr::operator(ExpressionNode {
+        op: "index".to_string(),
+        args,
+        ..Default::default()
+    })
+}
+
 fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
     let mut tagged = ma.clone();
     tagged.output_idx = Some(loops.to_vec());
@@ -6155,6 +6269,8 @@ struct PointwiseLift<'a> {
     /// Per component, the sources of the non-pointwise `variable_map`s into
     /// it, read as scalars when deciding its candidates.
     masks: &'a HashMap<String, HashSet<String>>,
+    /// The flattened registry, typed: references are read through it.
+    refs: &'a crate::operator_refs::OperatorRegistry,
 }
 
 /// How one lifted state's equation is rewritten: the index set of each grid
@@ -6334,6 +6450,7 @@ fn plan_pointwise_lift(
         index_sets,
         no_operator_route,
         masks,
+        refs,
     } = lift;
     let is_scalar = |v: &ModelVariable| v.shape.as_ref().is_none_or(|s| s.is_empty());
     let defs = bare_definitions(equations);
@@ -6368,9 +6485,7 @@ fn plan_pointwise_lift(
             if no_operator_route.contains(top_component(target)) {
                 return false;
             }
-            let mut mas: Vec<&ExpressionNode> = Vec::new();
-            collect_makearrays(&mut mas, rhs);
-            !mas.is_empty()
+            !collect_makearrays(refs, rhs).is_empty()
         })
         .map(|(target, _)| target.clone())
         .collect();
@@ -6380,9 +6495,8 @@ fn plan_pointwise_lift(
         if !operator_route.contains(species) || plans.contains_key(species) {
             continue;
         }
-        let mut mas: Vec<&ExpressionNode> = Vec::new();
-        collect_makearrays(&mut mas, rhs);
-        let first_ma = mas[0];
+        let mas = collect_makearrays(refs, rhs);
+        let first_ma = &*mas[0].0;
         let regions = match &first_ma.regions {
             Some(r) if !r.is_empty() => r,
             _ => continue,
@@ -6390,8 +6504,8 @@ fn plan_pointwise_lift(
         let rank = regions[0].len();
         // Loop variables of the grid iteration, read from an interior stencil.
         let mut loops: Option<Vec<String>> = None;
-        for ma in &mas {
-            loops = detect_lift_loops(ma, &operator_route, rank);
+        for (ma, frame) in &mas {
+            loops = detect_lift_loops(ma, frame, &operator_route, rank, refs);
             if loops.is_some() {
                 break;
             }
@@ -6408,7 +6522,7 @@ fn plan_pointwise_lift(
         })?;
         let extents = makearray_extents(first_ma);
         let axes = lift_index_sets(
-            &mas, &loops, &extents, var_shapes, &declared, index_sets, species,
+            &mas, &loops, &extents, var_shapes, &declared, index_sets, species, refs,
         )?;
         extents_of.insert(species.clone(), extents);
         plans.insert(
@@ -6618,7 +6732,10 @@ fn rewrite_lifted_equations(
     equations: &mut [FlatEq],
     lifted: &LiftedStates,
     read_shapes: &HashMap<String, Vec<String>>,
+    refs: &crate::operator_refs::OperatorRegistry,
+    registry: &mut IndexMap<String, serde_json::Value>,
 ) -> Result<(), FlattenError> {
+    let mut ctx = crate::elementwise_lift::EwContext::new(registry);
     let arrayvars: HashSet<String> = read_shapes.keys().cloned().collect();
     for fe in equations.iter_mut() {
         let Some(species) = extract_ddt_dependent(&fe.eq.lhs) else {
@@ -6671,7 +6788,14 @@ fn rewrite_lifted_equations(
             axes,
             species: &species,
         };
-        fe.try_map_contributions(|e| lift_rhs_to_cell(e, &arrayvars, read_shapes, &grid, true))?;
+        let mut cell = CellRefs {
+            refs,
+            ctx: &mut ctx,
+            shapes: read_shapes,
+        };
+        fe.try_map_contributions(|e| {
+            lift_rhs_to_cell(e, &arrayvars, read_shapes, &grid, true, &mut cell)
+        })?;
     }
     Ok(())
 }
@@ -7011,6 +7135,7 @@ mod tests {
         lift: TestLift<'_>,
     ) -> Result<(), FlattenError> {
         let empty: IndexMap<String, ModelVariable> = IndexMap::new();
+        let refs = crate::operator_refs::OperatorRegistry::default();
         let plan = plan_pointwise_lift(
             equations,
             PointwiseLift {
@@ -7022,6 +7147,7 @@ mod tests {
                 index_sets: lift.index_sets,
                 no_operator_route: &HashSet::new(),
                 masks: &HashMap::new(),
+                refs: &refs,
             },
         )?;
         let Some(lifted) = plan else {
@@ -7029,7 +7155,13 @@ mod tests {
         };
         let mut read_shapes = lift.read_shapes.clone();
         read_shapes.extend(lifted.axes.iter().map(|(k, v)| (k.clone(), v.clone())));
-        rewrite_lifted_equations(equations, &lifted, &read_shapes)
+        rewrite_lifted_equations(
+            equations,
+            &lifted,
+            &read_shapes,
+            &refs,
+            &mut IndexMap::new(),
+        )
     }
 
     fn interval(size: i64) -> IndexSet {
@@ -7086,7 +7218,15 @@ mod tests {
         index_sets.insert("x".to_string(), interval(3));
         // A second size-3 set, so the size fallback could not pick `x` alone.
         index_sets.insert("y".to_string(), interval(3));
-        let named = lift_axis_names(&[&ma], &["i".to_string()], &[3], &var_shapes, &index_sets);
+        let mas = [(std::sync::Arc::new(ma), crate::operator_refs::Frame::root())];
+        let named = lift_axis_names(
+            &mas,
+            &["i".to_string()],
+            &[3],
+            &var_shapes,
+            &index_sets,
+            &crate::operator_refs::OperatorRegistry::default(),
+        );
         assert_eq!(named, vec![Some("x".to_string())]);
     }
 
