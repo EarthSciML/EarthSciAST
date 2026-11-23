@@ -33,6 +33,8 @@
 //! emitted in §5.5.1 sorted total order.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 use ndarray::{ArrayD, IxDyn};
@@ -379,6 +381,10 @@ struct ViCtx<'a> {
     const_array_boundaries: &'a HashMap<String, Vec<BoundaryKind>>,
     /// materialised map var → {output-index value → key value}
     maps: HashMap<String, ViBuf>,
+    /// The operator instances the producers' and columns' references name.
+    ops: &'a crate::operator_refs::Instances,
+    /// Every instance they reach, held for as long as the compiled bodies.
+    held: Vec<Arc<crate::operator_refs::Instance>>,
 }
 
 impl ViCtx<'_> {
@@ -1041,7 +1047,36 @@ enum Node<'a> {
     Shared(usize),
     /// What evaluation cannot do, and the diagnostic it raises when reached.
     Fail(String),
+    /// An operator reference (esm-spec §9.6.4): the body of the instance it
+    /// names, compiled once per instance, called with the reference's
+    /// bindings, compiled in the caller's scope, in the order of the
+    /// definition's parameters.
+    Call {
+        body: Rc<Node<'a>>,
+        args: Vec<Node<'a>>,
+    },
+    /// Parameter `i` of the body being compiled: the call's argument `i`.
+    Arg(usize),
+    /// `index(base, i, …)` whose base is a body parameter: the factor or
+    /// buffer the argument names, looked up when the gather is evaluated.
+    IndexDyn {
+        base: Box<Node<'a>>,
+        subs: Vec<Node<'a>>,
+    },
 }
+
+/// The call in progress while a [`Node::Call`] body is evaluated: its
+/// arguments (the reference's bindings, compiled in the caller's scope) and
+/// the caller's own frame. A body parameter ([`Node::Arg`]) is its argument,
+/// evaluated in the caller's frame when the body reads it (call by name,
+/// esm-spec §9.6.4).
+struct Frame<'f, 'a> {
+    args: &'f [Node<'a>],
+    parent: Fr<'f, 'a>,
+}
+
+/// The innermost call in progress, `None` outside every call.
+type Fr<'f, 'a> = Option<&'f Frame<'f, 'a>>;
 
 /// A comparison [`Node`] evaluates.
 #[derive(Clone, Copy)]
@@ -1079,6 +1114,8 @@ impl<'a> Compiled<'a> {
             repeated: count,
             slot: HashMap::new(),
             shared: Vec::new(),
+            params: None,
+            bodies: Rc::default(),
         };
         let root = Node::compile(e, ctx, ranges, &mut cse);
         let n = cse.shared.len();
@@ -1091,7 +1128,7 @@ impl<'a> Compiled<'a> {
 
     fn eval(&self, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, ValueInventionError> {
         self.memo.borrow_mut().fill(None);
-        self.root.eval(self, ctx, bindings)
+        self.root.eval(self, ctx, bindings, None)
     }
 }
 
@@ -1103,6 +1140,10 @@ struct Cse<'a> {
     repeated: HashMap<usize, usize>,
     slot: HashMap<usize, usize>,
     shared: Vec<Node<'a>>,
+    /// The parameters of the definition whose body is being compiled.
+    params: Option<&'a [String]>,
+    /// Each instance body compiled so far, by instance address.
+    bodies: Rc<std::cell::RefCell<HashMap<usize, Rc<Node<'a>>>>>,
 }
 
 /// One part of a [`TreeIds`] key: an operand that is an operator sub-tree, by
@@ -1144,12 +1185,20 @@ impl TreeIds {
             return TreePart::Tree(id);
         }
         self.marked |= node.op == crate::precision_infer::MARKER_OP;
-        let parts: Vec<TreePart> = node.args.iter().map(|a| self.id(a)).collect();
-        let value = node
+        let mut parts: Vec<TreePart> = node.args.iter().map(|a| self.id(a)).collect();
+        let mut value = node
             .value
             .as_ref()
             .map(|v| v.to_json().to_string())
             .unwrap_or_default();
+        // A reference is identified by the definition it names and what it
+        // binds, which are not `args`.
+        if let Some(r) = crate::operator_refs::reference_node(node) {
+            let mut keys: Vec<&String> = r.bindings.keys().collect();
+            keys.sort();
+            value = format!("{}{:?}", r.name, keys);
+            parts.extend(keys.into_iter().map(|k| self.id(&r.bindings[k])));
+        }
         let n = self.by_key.len();
         let id = *self
             .by_key
@@ -1178,7 +1227,12 @@ impl<'a> Node<'a> {
                     None => Node::Float(*x),
                 };
             }
-            Expr::Variable(s) => return Self::name(s, ctx, ranges),
+            Expr::Variable(s) => {
+                if let Some(i) = cse.params.and_then(|ps| ps.iter().position(|p| p == s)) {
+                    return Node::Arg(i);
+                }
+                return Self::name(s, ctx, ranges);
+            }
             Expr::Operator(node) => node,
         };
         if !cse.repeated.is_empty()
@@ -1235,6 +1289,7 @@ impl<'a> Node<'a> {
                 .collect()
         };
         match op {
+            crate::operator_refs::APPLY_OP => Self::call(node, ctx, ranges, cse),
             crate::precision_infer::MARKER_OP => {
                 let p = crate::precision_infer::marker_precision(node);
                 Node::AtPrecision(p, Box::new(arg(0, cse)))
@@ -1298,6 +1353,54 @@ impl<'a> Node<'a> {
         }
     }
 
+    /// An operator reference: a call of its instance's body, compiled once
+    /// per instance, with the reference's bindings compiled here.
+    fn call(node: &'a ExpressionNode, ctx: &'a ViCtx<'_>, ranges: &Ranges, cse: &mut Cse<'a>) -> Self {
+        let Some(r) = crate::operator_refs::reference_node(node) else {
+            return Node::Fail("an operator reference names no definition".into());
+        };
+        let inst = match ctx.ops.instance(&r) {
+            Ok(i) => i,
+            Err(e) => return Node::Fail(e.to_string()),
+        };
+        // The instance as the context holds it, so the body outlives the
+        // compiled node.
+        let Some(inst) = ctx.held.iter().find(|h| Arc::ptr_eq(h, &inst)) else {
+            return Node::Fail(format!("operator reference `{}` was not reached", r.name));
+        };
+        let key = Arc::as_ptr(inst) as usize;
+        let cached = cse.bodies.borrow().get(&key).cloned();
+        let body = match cached {
+            Some(b) => b,
+            None => {
+                let mut inner = Cse {
+                    of: HashMap::new(),
+                    repeated: HashMap::new(),
+                    slot: HashMap::new(),
+                    shared: Vec::new(),
+                    params: Some(&inst.definition.params),
+                    bodies: Rc::clone(&cse.bodies),
+                };
+                let b = Rc::new(Self::compile(&inst.body, ctx, ranges, &mut inner));
+                cse.bodies.borrow_mut().insert(key, Rc::clone(&b));
+                b
+            }
+        };
+        let args = inst
+            .definition
+            .params
+            .iter()
+            .map(|p| match r.bindings.get(p) {
+                Some(b) => Self::compile(b, ctx, ranges, cse),
+                None => Node::Fail(format!(
+                    "operator reference `{}` binds nothing to parameter `{p}`",
+                    r.name
+                )),
+            })
+            .collect();
+        Node::Call { body, args }
+    }
+
     /// `index(factor, i, …)`: gather from a const-array factor (1-based) — the
     /// build-time data supplied as const arrays — or read a materialised
     /// value-invention buffer, which is what lets `centroid[g] = num[g]/den[g]`
@@ -1309,6 +1412,17 @@ impl<'a> Node<'a> {
         cse: &mut Cse<'a>,
     ) -> Self {
         let args = &node.args;
+        if let Some(Expr::Variable(p)) = args.first()
+            && cse.params.is_some_and(|ps| ps.contains(p))
+        {
+            return Node::IndexDyn {
+                base: Box::new(Self::compile(&args[0], ctx, ranges, cse)),
+                subs: args[1..]
+                    .iter()
+                    .map(|a| Self::compile(a, ctx, ranges, cse))
+                    .collect(),
+            };
+        }
         let Some(Expr::Variable(name)) = args.first() else {
             return Node::Fail(
                 "value-invention index target must be a const-array factor name".into(),
@@ -1349,24 +1463,25 @@ impl<'a> Node<'a> {
         env: &Compiled<'a>,
         ctx: &ViCtx,
         bindings: &Bindings,
+        fr: Fr<'_, 'a>,
     ) -> Result<Val, ValueInventionError> {
         Ok(match self {
             Node::Bool(b) => Val::Bool(*b),
             Node::Int(i) => Val::Int(*i),
             Node::Bound(s) => Val::Int(Self::bound(s, bindings)?),
             Node::Name(s) => Val::Str((*s).to_string()),
-            Node::Floor(e) => rounded_int(e.num(env, ctx, bindings)?.floor()),
-            Node::Ceil(e) => rounded_int(e.num(env, ctx, bindings)?.ceil()),
+            Node::Floor(e) => rounded_int(e.num(env, ctx, bindings, fr)?.floor()),
+            Node::Ceil(e) => rounded_int(e.num(env, ctx, bindings, fr)?.ceil()),
             Node::Ifelse(cte) => {
                 let [c, t, e] = &**cte;
-                if c.truth(env, ctx, bindings)? {
-                    t.eval(env, ctx, bindings)?
+                if c.truth(env, ctx, bindings, fr)? {
+                    t.eval(env, ctx, bindings, fr)?
                 } else {
-                    e.eval(env, ctx, bindings)?
+                    e.eval(env, ctx, bindings, fr)?
                 }
             }
             Node::Buffer { name, buf, sub } => {
-                let idx = sub.key_int(env, ctx, bindings)?;
+                let idx = sub.key_int(env, ctx, bindings, fr)?;
                 buf.get(&idx).cloned().ok_or_else(|| {
                     ValueInventionError::new(format!(
                         "materialised value-invention buffer {name:?} has no entry at index {idx}"
@@ -1375,19 +1490,58 @@ impl<'a> Node<'a> {
             }
             Node::AtPrecision(p, e) => {
                 let _guard = p.map(crate::precision::enter);
-                e.eval(env, ctx, bindings)?
+                e.eval(env, ctx, bindings, fr)?
             }
             Node::Shared(i) => {
                 if let Some(v) = &env.memo.borrow()[*i] {
                     return Ok(v.clone());
                 }
-                let v = env.shared[*i].eval(env, ctx, bindings)?;
+                let v = env.shared[*i].eval(env, ctx, bindings, fr)?;
                 env.memo.borrow_mut()[*i] = Some(v.clone());
                 v
             }
             Node::Fail(msg) => return err(msg.clone()),
+            Node::Call { body, args } => body.eval(
+                env,
+                ctx,
+                bindings,
+                Some(&Frame { args, parent: fr }),
+            )?,
+            Node::Arg(i) => {
+                let Some(f) = fr else {
+                    return err("a body parameter read outside its call");
+                };
+                f.args[*i].eval(env, ctx, bindings, f.parent)?
+            }
+            Node::IndexDyn { base, subs } => {
+                let Val::Str(name) = base.eval(env, ctx, bindings, fr)? else {
+                    return err("value-invention index target must be a const-array factor name");
+                };
+                if let Some(buf) = ctx.maps.get(&name) {
+                    let [sub] = subs.as_slice() else {
+                        return err(format!(
+                            "materialised value-invention buffer {name:?} is a 1-D buffer; \
+                             expected one index, got {}",
+                            subs.len()
+                        ));
+                    };
+                    let idx = sub.key_int(env, ctx, bindings, fr)?;
+                    return buf.get(&idx).cloned().ok_or_else(|| {
+                        ValueInventionError::new(format!(
+                            "materialised value-invention buffer {name:?} has no entry at index {idx}"
+                        ))
+                    });
+                }
+                let Some(arr) = ctx.const_arrays.get(&name) else {
+                    return err(format!(
+                        "value-invention index target {name:?} must be a const-array factor \
+                         or an already-materialised value-invention buffer"
+                    ));
+                };
+                Val::Float(gather(&name, arr, subs, env, ctx, bindings, fr)?)
+            }
             Node::AndOr(..) | Node::Not(_) | Node::Cmp(..) => {
-                Val::Bool(self.truth(env, ctx, bindings)?)
+                Val::Bool(self.truth(env, ctx, bindings, fr)?)
             }
             Node::Float(_)
             | Node::Param(_)
@@ -1397,7 +1551,7 @@ impl<'a> Node<'a> {
             | Node::Add(_)
             | Node::Neg(_)
             | Node::Sub(..)
-            | Node::MinMax(..) => Val::Float(self.num(env, ctx, bindings)?),
+            | Node::MinMax(..) => Val::Float(self.num(env, ctx, bindings, fr)?),
         })
     }
 
@@ -1414,10 +1568,11 @@ impl<'a> Node<'a> {
         env: &Compiled<'a>,
         ctx: &ViCtx,
         bindings: &Bindings,
+        fr: Fr<'_, 'a>,
     ) -> Result<i64, ValueInventionError> {
         match self {
             Node::Bound(s) => Self::bound(s, bindings),
-            _ => self.eval(env, ctx, bindings)?.key_int(),
+            _ => self.eval(env, ctx, bindings, fr)?.key_int(),
         }
     }
 
@@ -1438,36 +1593,16 @@ impl<'a> Node<'a> {
         env: &Compiled<'a>,
         ctx: &ViCtx,
         bindings: &Bindings,
+        fr: Fr<'_, 'a>,
     ) -> Result<f64, ValueInventionError> {
-        let f = |e: &Self| e.num(env, ctx, bindings);
+        let f = |e: &Self| e.num(env, ctx, bindings, fr);
         let prec = || crate::precision::active();
         Ok(match self {
             Node::Bool(b) => f64::from(u8::from(*b)),
             Node::Int(i) => *i as f64,
             Node::Float(x) | Node::Param(x) => crate::precision::round(*x),
             Node::Bound(s) => Self::bound(s, bindings)? as f64,
-            Node::Index { name, arr, subs } => {
-                let shape = arr.shape();
-                let mut idx: smallvec::SmallVec<[usize; 4]> = smallvec::SmallVec::new();
-                for (d, e) in subs.iter().enumerate() {
-                    let one_based = e.key_int(env, ctx, bindings)?;
-                    let n = shape.get(d).copied().unwrap_or(0) as i64;
-                    idx.push((resolve_const_index(ctx, name, d, one_based, n)? - 1) as usize);
-                }
-                // Too FEW indices would reach ndarray and panic; too many
-                // fail above, on an extent of 0.
-                if idx.len() != arr.ndim() {
-                    return err(format!(
-                        "value-invention index target {name:?} has rank {}, but {} index(es) \
-                         were supplied",
-                        arr.ndim(),
-                        idx.len()
-                    ));
-                }
-                // A const-array factor is build-time data the evaluator did
-                // not produce, so it rounds on read.
-                crate::precision::round(arr[IxDyn(&idx)])
-            }
+            Node::Index { name, arr, subs } => gather(name, arr, subs, env, ctx, bindings, fr)?,
             Node::Div(a, b) => {
                 let a = f(a)?;
                 let b = f(b)?;
@@ -1508,14 +1643,14 @@ impl<'a> Node<'a> {
             }
             Node::Ifelse(cte) => {
                 let [c, t, e] = &**cte;
-                if c.truth(env, ctx, bindings)? {
+                if c.truth(env, ctx, bindings, fr)? {
                     f(t)?
                 } else {
                     f(e)?
                 }
             }
             Node::AndOr(..) | Node::Not(_) | Node::Cmp(..) => {
-                f64::from(u8::from(self.truth(env, ctx, bindings)?))
+                f64::from(u8::from(self.truth(env, ctx, bindings, fr)?))
             }
             Node::Name(_)
             | Node::Buffer { .. }
@@ -1523,7 +1658,10 @@ impl<'a> Node<'a> {
             | Node::Ceil(_)
             | Node::AtPrecision(..)
             | Node::Shared(_)
-            | Node::Fail(_) => self.eval(env, ctx, bindings)?.as_f64()?,
+            | Node::Call { .. }
+            | Node::Arg(_)
+            | Node::IndexDyn { .. }
+            | Node::Fail(_) => self.eval(env, ctx, bindings, fr)?.as_f64()?,
         })
     }
 
@@ -1533,26 +1671,27 @@ impl<'a> Node<'a> {
         env: &Compiled<'a>,
         ctx: &ViCtx,
         bindings: &Bindings,
+        fr: Fr<'_, 'a>,
     ) -> Result<bool, ValueInventionError> {
         Ok(match self {
             Node::Bool(b) => *b,
             // Short-circuit, as the value evaluator's boolean reductions do.
             Node::AndOr(want, args) => {
                 for e in args {
-                    if e.truth(env, ctx, bindings)? == *want {
+                    if e.truth(env, ctx, bindings, fr)? == *want {
                         return Ok(*want);
                     }
                 }
                 !*want
             }
-            Node::Not(e) => !e.truth(env, ctx, bindings)?,
+            Node::Not(e) => !e.truth(env, ctx, bindings, fr)?,
             Node::Cmp(c, a, b) => {
                 // Compare at the WORKING precision: two values that round to
                 // the same binary32 number must compare equal, exactly as the
                 // value evaluator's comparison kernels do.
                 let prec = crate::precision::active();
-                let a = prec.round(a.num(env, ctx, bindings)?);
-                let b = prec.round(b.num(env, ctx, bindings)?);
+                let a = prec.round(a.num(env, ctx, bindings, fr)?);
+                let b = prec.round(b.num(env, ctx, bindings, fr)?);
                 match c {
                     CmpOp::Lt => a < b,
                     CmpOp::Gt => a > b,
@@ -1564,15 +1703,47 @@ impl<'a> Node<'a> {
             }
             Node::Ifelse(cte) => {
                 let [c, t, e] = &**cte;
-                if c.truth(env, ctx, bindings)? {
-                    t.truth(env, ctx, bindings)?
+                if c.truth(env, ctx, bindings, fr)? {
+                    t.truth(env, ctx, bindings, fr)?
                 } else {
-                    e.truth(env, ctx, bindings)?
+                    e.truth(env, ctx, bindings, fr)?
                 }
             }
-            _ => truthy(&self.eval(env, ctx, bindings)?)?,
+            _ => truthy(&self.eval(env, ctx, bindings, fr)?)?,
         })
     }
+}
+
+/// A 1-based gather of `arr` (the const-array factor `name`) at `subs`.
+fn gather<'a>(
+    name: &str,
+    arr: &ArrayD<f64>,
+    subs: &[Node<'a>],
+    env: &Compiled<'a>,
+    ctx: &ViCtx,
+    bindings: &Bindings,
+    fr: Fr<'_, 'a>,
+) -> Result<f64, ValueInventionError> {
+    let shape = arr.shape();
+    let mut idx: smallvec::SmallVec<[usize; 4]> = smallvec::SmallVec::new();
+    for (d, e) in subs.iter().enumerate() {
+        let one_based = e.key_int(env, ctx, bindings, fr)?;
+        let n = shape.get(d).copied().unwrap_or(0) as i64;
+        idx.push((resolve_const_index(ctx, name, d, one_based, n)? - 1) as usize);
+    }
+    // Too FEW indices would reach ndarray and panic; too many
+    // fail above, on an extent of 0.
+    if idx.len() != arr.ndim() {
+        return err(format!(
+            "value-invention index target {name:?} has rank {}, but {} index(es) \
+             were supplied",
+            arr.ndim(),
+            idx.len()
+        ));
+    }
+    // A const-array factor is build-time data the evaluator did
+    // not produce, so it rounds on read.
+    Ok(crate::precision::round(arr[IxDyn(&idx)]))
 }
 
 /// Materialise an index-set-producing aggregate → the distinct member set (§5.5
@@ -1658,6 +1829,7 @@ pub(crate) fn invent_values(
     const_arrays: &Factors<'_>,
     params: &HashMap<String, f64>,
     const_array_boundaries: &HashMap<String, Vec<BoundaryKind>>,
+    ops: &crate::operator_refs::Instances,
 ) -> Result<ValueInventionResult, ValueInventionError> {
     let det = vi_detect(model);
     let mut result = ValueInventionResult {
@@ -1667,6 +1839,18 @@ pub(crate) fn invent_values(
     if det.producers.is_empty() {
         return Ok(result);
     }
+    // Every operator instance a producer or a join column reaches, each body
+    // compiled once per enumeration (esm-spec §9.6.4).
+    let mut roots: Vec<Expr> = Vec::new();
+    for (_, node) in &det.columns {
+        roots.push(Expr::Operator(Arc::new((*node).clone())));
+    }
+    for &(_, node) in &det.producers {
+        roots.push(Expr::Operator(Arc::new(node.clone())));
+    }
+    let held = ops
+        .reachable(roots.iter())
+        .map_err(|e| ValueInventionError::new(e.to_string()))?;
     let mut ctx = ViCtx {
         const_arrays,
         params,
@@ -1674,6 +1858,8 @@ pub(crate) fn invent_values(
         variables: &model.variables,
         const_array_boundaries,
         maps: HashMap::new(),
+        ops,
+        held,
     };
 
     // Join columns (a producer's join may reference them). Each is
@@ -1799,6 +1985,7 @@ pub fn materialize_value_invention(
         &Factors::of(const_arrays),
         params,
         const_array_boundaries,
+        crate::operator_refs::Instances::empty(),
     )
 }
 
@@ -1920,6 +2107,8 @@ mod tests {
             variables,
             const_array_boundaries: bnds,
             maps: HashMap::new(),
+            ops: crate::operator_refs::Instances::empty(),
+            held: Vec::new(),
         };
         let ranges: Ranges = Ranges::new();
         Compiled::new(e, &ctx, &ranges).eval(&ctx, bindings)

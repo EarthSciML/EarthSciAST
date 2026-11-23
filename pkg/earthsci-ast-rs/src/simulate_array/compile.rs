@@ -934,7 +934,10 @@ fn resolve_for_compile(
     // producer, unless the build already ran it over this system. A producer
     // that cannot run is recorded rather than raised, and is refused below
     // only if a surviving expression ranges over its set.
-    let derived = materialize_derived_extents(&model, &index_sets, supplied);
+    // Value invention reads a producer's references through the system's
+    // registry, each instance body compiled once.
+    let vi_ops = crate::operator_refs::Instances::new(operators.clone());
+    let derived = materialize_derived_extents(&model, &index_sets, supplied, &vi_ops);
     bind_member_factors(&mut model, &derived.member_factors);
     // Drop value-invention (relational) scaffolding — `distinct` producers
     // and membership sets over `kind: "derived"` index sets — plus the
@@ -1112,7 +1115,7 @@ fn classify_model(
     // it a typo'd/undeclared bare name reaches `lookup_variable`'s final
     // arm, which now fails closed but only names the fault at the drain;
     // catching it HERE names the variable before anything is built.
-    check_free_variables(model, index_sets, &[])?;
+    check_free_variables(model, index_sets, &[], ops.registry())?;
 
     // (1) Collect state / parameter / observed variables.
     let (state_vars, param_vars, observed_vars, data_fed) =
@@ -1347,6 +1350,7 @@ pub(crate) fn check_free_variables(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
     extra_bound: &[String],
+    operators: &crate::operator_refs::OperatorRegistry,
 ) -> Result<(), CompileError> {
     // ---- Build the bound set. ------------------------------------------------
     // The names the model and its caller declare, borrowed; `bound` holds what
@@ -1433,8 +1437,8 @@ pub(crate) fn check_free_variables(
                     || scope.contains(name)
                     || is_loop_symbol(name)
             };
-            check_expr_free_vars(&eq.lhs, &is_bound)?;
-            check_expr_free_vars(&eq.rhs, &is_bound)
+            check_expr_free_vars(&eq.lhs, &is_bound, operators)?;
+            check_expr_free_vars(&eq.rhs, &is_bound, operators)
         })?;
     }
     for var in model.variables.values() {
@@ -1445,12 +1449,16 @@ pub(crate) fn check_free_variables(
             }
             crate::binders::collect_binders(expr, Binders::ALL, &mut binders);
             if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
-                check_expr_free_vars(expr, &|name: &str| {
-                    !checked(name)
-                        || declared.contains(name)
-                        || scope.contains(name)
-                        || is_loop_symbol(name)
-                })
+                check_expr_free_vars(
+                    expr,
+                    &|name: &str| {
+                        !checked(name)
+                            || declared.contains(name)
+                            || scope.contains(name)
+                            || is_loop_symbol(name)
+                    },
+                    operators,
+                )
             }) {
                 failure = Some(e);
             }
@@ -1579,7 +1587,11 @@ fn collect_dims_heads_and_binders(
 /// bound, table axis, aggregate key, or template binding is not missed. A `fn`
 /// op's callee lives in `node.name` (not a child), so it is never mistaken for a
 /// variable.
-fn check_expr_free_vars(expr: &Expr, scope: &dyn Fn(&str) -> bool) -> Result<(), CompileError> {
+fn check_expr_free_vars(
+    expr: &Expr,
+    scope: &dyn Fn(&str) -> bool,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> Result<(), CompileError> {
     match expr {
         Expr::Variable(name) => {
             // Builtins and derivative markers are always valid; `scope`
@@ -1595,10 +1607,17 @@ fn check_expr_free_vars(expr: &Expr, scope: &dyn Fn(&str) -> bool) -> Result<(),
             )))
         }
         Expr::Operator(node) => {
+            // A reference's binding is read where the body reads its
+            // parameter: a loop symbol the body binds there is in scope.
+            let captured = crate::operator_refs::reference_node(node)
+                .map(|r| operators.captured_symbols(r.name))
+                .filter(|c| !c.is_empty());
+            let widened = |name: &str| scope(name) || captured.is_some_and(|c| c.contains(name));
+            let scope: &dyn Fn(&str) -> bool = if captured.is_some() { &widened } else { scope };
             let mut first_err: Option<CompileError> = None;
             node.for_each_child(&mut |child| {
                 if first_err.is_none()
-                    && let Err(e) = check_expr_free_vars(child, scope)
+                    && let Err(e) = check_expr_free_vars(child, scope, operators)
                 {
                     first_err = Some(e);
                 }
@@ -4184,7 +4203,13 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     overrides: &HashMap<String, f64>,
 ) -> Result<ValueInventionResult, CompileError> {
     let params = collect_scalar_params(model, overrides);
-    run_value_invention_in_scope(model, index_sets, caller_arrays, &params)
+    run_value_invention_in_scope(
+        model,
+        index_sets,
+        caller_arrays,
+        &params,
+        crate::operator_refs::Instances::empty(),
+    )
 }
 
 /// [`run_value_invention`] with the scalar `params` already decided: the
@@ -4195,13 +4220,14 @@ pub(crate) fn run_value_invention_in_scope<S: std::hash::BuildHasher>(
     index_sets: &HashMap<String, IndexSet>,
     caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
     params: &HashMap<String, f64>,
+    ops: &crate::operator_refs::Instances,
 ) -> Result<ValueInventionResult, CompileError> {
     let own = collect_const_factor_arrays(model);
     let factors = match caller_arrays {
         Some(caller) => Factors::overlaid(&own, caller),
         None => Factors::of(&own),
     };
-    invent_values(model, index_sets, &factors, params, &HashMap::new()).map_err(|e| {
+    invent_values(model, index_sets, &factors, params, &HashMap::new(), ops).map_err(|e| {
         // A NaN key or join column already names its column (esm-spec §9.6.6).
         match e.code {
             Some(code) => CompileError::ValueInventionRefused {
@@ -4258,6 +4284,7 @@ fn materialize_derived_extents(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
     supplied: BuildTimeData<'_>,
+    ops: &crate::operator_refs::Instances,
 ) -> DerivedMaterialization {
     let mut out = DerivedMaterialization {
         extents: HashMap::new(),
@@ -4278,7 +4305,8 @@ fn materialize_derived_extents(
         }
         None => {
             let factors = value_invention_factors(model, index_sets, caller_arrays);
-            match run_value_invention(model, index_sets, Some(&factors)) {
+            let params = collect_scalar_params(model, &HashMap::new());
+            match run_value_invention_in_scope(model, index_sets, Some(&factors), &params, ops) {
                 Ok(result) => {
                     out.member_factors =
                         member_factor_columns(index_sets, &result.member_ids(), caller_arrays);

@@ -260,6 +260,7 @@ fn json_strings(v: &Value, f: &mut impl FnMut(&str)) {
 pub struct OperatorRegistry {
     entries: Arc<IndexMap<String, Arc<Definition>>>,
     instance: Arc<OnceLock<InstanceParams>>,
+    captured: Arc<OnceLock<HashMap<String, HashSet<String>>>>,
 }
 
 impl OperatorRegistry {
@@ -274,6 +275,7 @@ impl OperatorRegistry {
                     .collect(),
             ),
             instance: Arc::default(),
+            captured: Arc::default(),
         }
     }
 
@@ -592,6 +594,62 @@ impl OperatorRegistry {
         }
         let ordered = d.params.iter().filter(|p| lit.contains(*p)).cloned().collect();
         out.insert(name.to_string(), ordered);
+    }
+}
+
+/// Every loop symbol bound anywhere in a body on the wire: `ranges` keys,
+/// `output_idx` entries and `integral` variables (`var`).
+fn wire_binders(v: &Value, out: &mut HashSet<String>) {
+    match v {
+        Value::Array(a) => a.iter().for_each(|x| wire_binders(x, out)),
+        Value::Object(m) => {
+            if m.get("op").is_some() {
+                if let Some(Value::Object(r)) = m.get("ranges") {
+                    out.extend(r.keys().cloned());
+                }
+                if let Some(Value::Array(o)) = m.get("output_idx") {
+                    out.extend(o.iter().filter_map(Value::as_str).map(str::to_string));
+                }
+                if let Some(Value::String(iv)) = m.get("var") {
+                    out.insert(iv.clone());
+                }
+            }
+            m.values().for_each(|x| wire_binders(x, out));
+        }
+        _ => {}
+    }
+}
+
+impl OperatorRegistry {
+    /// The loop symbols a binding of a reference to `name` may read as the
+    /// body's own (esm-spec §9.6.4: a binding is read where the body reads its
+    /// parameter, so a name it reads that the body binds there is that loop
+    /// symbol, as in the expansion): every loop symbol bound anywhere in the
+    /// body of `name` or of a definition it references, transitively. Empty
+    /// for an unknown name.
+    pub fn captured_symbols(&self, name: &str) -> &HashSet<String> {
+        static EMPTY: OnceLock<HashSet<String>> = OnceLock::new();
+        let all = self.captured.get_or_init(|| {
+            let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+            for n in self.entries.keys() {
+                let mut set = HashSet::new();
+                for r in self.reach_from(n) {
+                    if let Some(b) = self.get(&r).and_then(|d| d.raw_body()) {
+                        wire_binders(b, &mut set);
+                    }
+                }
+                out.insert(n.clone(), set);
+            }
+            out
+        });
+        all.get(name).unwrap_or_else(|| EMPTY.get_or_init(HashSet::new))
+    }
+
+    /// `name` and every definition its body reaches, each once.
+    fn reach_from(&self, name: &str) -> IndexSet<String> {
+        let mut out = IndexSet::new();
+        self.reach(name.to_string(), &mut out);
+        out
     }
 }
 

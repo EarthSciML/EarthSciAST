@@ -2319,7 +2319,12 @@ impl<'o> BuildState<'o> {
                 .values()
                 .filter_map(|is| is.member_factor.clone()),
         );
-        crate::simulate_array::check_free_variables(&self.model, &self.index_sets, &extra)
+        crate::simulate_array::check_free_variables(
+            &self.model,
+            &self.index_sets,
+            &extra,
+            &self.operators,
+        )
             // The compile path's own refusal, unchanged.
             .map_err(SimulateError::Compile)
     }
@@ -2483,6 +2488,7 @@ impl<'o> BuildState<'o> {
             &self.index_sets,
             Some(&self.arrays),
             &params,
+            &self.ops,
         )
         .map_err(|e| stage_err("value invention", e))?;
         // A member id is needed where a set feeds one back (a `member_factor`,
