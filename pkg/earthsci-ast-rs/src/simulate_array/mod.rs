@@ -99,6 +99,8 @@ pub(crate) use compile::inline_parameter_arrays;
 pub(crate) use compile::model_tree_any;
 pub(crate) use compile::resolve_declared_shape;
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) use compile::build_instances;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{MemberFactorColumn, member_factor_columns, run_value_invention_in_scope};
 pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
 pub(crate) use shape_table::{BuiltVariables, ShapeTable};
@@ -903,6 +905,10 @@ pub struct ArrayCompiled {
     /// The tape programs this model has built ([`tape::TapeCache`], which says
     /// what a kept program depends on).
     tape_cache: tape::TapeCache,
+    /// The operator instances the rules' references name (esm-spec §9.6.4),
+    /// over the flattened system's registry: the interpreter evaluates a
+    /// reference as a call of one ([`eval::eval_call`]).
+    operators: std::sync::Arc<Instances>,
 }
 
 /// The rule-invariant slice of an evaluation environment: everything an
@@ -929,6 +935,8 @@ struct EvalEnv<'a> {
     const_arrays: &'a ConstArrayScope,
     /// See [`EvalCtx::declared`].
     declared: &'a HashSet<String>,
+    /// See [`EvalCtx::ops`].
+    ops: &'a Instances,
 }
 
 impl<'a> EvalEnv<'a> {
@@ -948,6 +956,8 @@ impl<'a> EvalEnv<'a> {
             recur: None,
             declared: self.declared,
             walks: CellWalks::default(),
+            ops: self.ops,
+            frames: Vec::new(),
         }
     }
 }
@@ -1035,7 +1045,26 @@ struct EvalCtx<'a> {
     /// path but the build-time ones that read it
     /// ([`StandaloneScope::eval_routed`], the build pipeline).
     walks: CellWalks,
+    /// The operator instances the references evaluated here name (esm-spec
+    /// §9.6.4): a reference is evaluated as a call of its instance body
+    /// ([`eval::eval_call`]). [`Instances::empty`] where nothing can hold a
+    /// reference.
+    ops: &'a Instances,
+    /// The calls in progress, innermost last ([`CallFrame`]).
+    frames: Vec<CallFrame>,
 }
+
+/// One call in progress: the reference node and the instance it names. A
+/// parameter the instance body reads is the reference's binding, evaluated in
+/// the caller's frame (call by name) with the loop symbols in scope where it
+/// is read.
+#[derive(Clone)]
+struct CallFrame {
+    node: std::sync::Arc<crate::types::ExpressionNode>,
+    instance: std::sync::Arc<crate::operator_refs::Instance>,
+}
+
+use crate::operator_refs::Instances;
 
 /// The shared empty declared-name set (see [`EvalCtx::declared`]).
 ///

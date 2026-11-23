@@ -259,6 +259,7 @@ fn json_strings(v: &Value, f: &mut impl FnMut(&str)) {
 #[derive(Debug, Clone, Default)]
 pub struct OperatorRegistry {
     entries: Arc<IndexMap<String, Arc<Definition>>>,
+    instance: Arc<OnceLock<InstanceParams>>,
 }
 
 impl OperatorRegistry {
@@ -272,6 +273,7 @@ impl OperatorRegistry {
                     .map(|(k, v)| (k.clone(), Arc::new(Definition::from_json(k, v))))
                     .collect(),
             ),
+            instance: Arc::default(),
         }
     }
 
@@ -446,6 +448,413 @@ impl<K: Hash + Eq + Clone, T> InstanceMemo<K, T> {
     /// Whether nothing has been analysed yet.
     pub fn is_empty(&self) -> bool {
         self.map.borrow().is_empty()
+    }
+}
+
+/// The parameters whose bound value is part of an instance of each
+/// definition (esm-spec §9.6.4 rule 3), computed once per registry
+/// ([`OperatorRegistry::instance_params`]).
+type InstanceParams = HashMap<String, Vec<String>>;
+
+/// Where the parameters of one definition sit in its body ON THE WIRE: a
+/// literal position is any string that is not an Expression leaf (a scalar
+/// field, a `ranges` bound or `from`, an `output_idx` entry, a region bound, a
+/// `join` column, an `enum` argument). Read from the wire form because a body
+/// whose `ranges` bound names a parameter (`[1, "n"]`) is not a typed
+/// Expression until that bound is a literal.
+#[derive(Default)]
+struct WireRoles {
+    literal: HashSet<String>,
+    /// `(callee, callee parameter, the parameters its binding reads)`.
+    forwards: Vec<(String, String, HashSet<String>)>,
+}
+
+fn wire_roles(body: &Value, params: &HashSet<&str>) -> WireRoles {
+    fn names(v: &Value, params: &HashSet<&str>, out: &mut HashSet<String>) {
+        match v {
+            Value::String(s) if params.contains(s.as_str()) => {
+                out.insert(s.clone());
+            }
+            Value::Array(a) => a.iter().for_each(|x| names(x, params, out)),
+            Value::Object(m) => {
+                let apply = m.get("op").and_then(Value::as_str) == Some(APPLY_OP);
+                for (k, x) in m {
+                    if !(apply && k == "name") && k != "op" {
+                        names(x, params, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    fn walk(v: &Value, expr_pos: bool, params: &HashSet<&str>, r: &mut WireRoles) {
+        match v {
+            Value::String(s) => {
+                if !expr_pos && params.contains(s.as_str()) {
+                    r.literal.insert(s.clone());
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(x, expr_pos, params, r)),
+            Value::Object(m) => {
+                let op = m.get("op").and_then(Value::as_str);
+                if op.is_none() {
+                    m.values().for_each(|x| walk(x, false, params, r));
+                    return;
+                }
+                for (k, x) in m {
+                    match k.as_str() {
+                        "op" | "value" => {}
+                        "name" if op == Some(APPLY_OP) => {}
+                        "args" => walk(x, op != Some("enum"), params, r),
+                        "values" | "lower" | "upper" | "expr" | "filter" | "key" => {
+                            walk(x, true, params, r)
+                        }
+                        "bindings" => {
+                            let callee = m.get("name").and_then(Value::as_str);
+                            if let Value::Object(b) = x {
+                                for (bp, bv) in b {
+                                    walk(bv, true, params, r);
+                                    if let Some(c) = callee {
+                                        let mut read = HashSet::new();
+                                        names(bv, params, &mut read);
+                                        if !read.is_empty() {
+                                            r.forwards.push((c.to_string(), bp.clone(), read));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => walk(x, false, params, r),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut r = WireRoles::default();
+    walk(body, true, params, &mut r);
+    r
+}
+
+impl Definition {
+    /// The body on the wire (`None` when the entry has none).
+    pub fn raw_body(&self) -> Option<&Value> {
+        self.raw.get("body").filter(|b| !b.is_null())
+    }
+}
+
+impl OperatorRegistry {
+    /// The parameters of `name` whose bound value is part of the instance a
+    /// reference names (esm-spec §9.6.4 rule 3), in declared order: those
+    /// spelled in a literal position of the body on the wire (a scalar field,
+    /// a `ranges` bound or `from`, an `output_idx` entry, a region bound, a
+    /// `join` column, an `enum` argument), and those read by a binding the
+    /// body gives such a parameter of a definition it references
+    /// (transitively). Empty for an unknown name.
+    ///
+    /// An instance is a definition plus the values bound to these
+    /// parameters; [`Instances`] specializes the body once per instance.
+    pub fn instance_params(&self, name: &str) -> &[String] {
+        let all = self.instance.get_or_init(|| {
+            let mut out: InstanceParams = HashMap::new();
+            let mut visiting = HashSet::new();
+            for n in self.entries.keys() {
+                self.instance_params_of(n, &mut out, &mut visiting);
+            }
+            out
+        });
+        all.get(name).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    fn instance_params_of(
+        &self,
+        name: &str,
+        out: &mut InstanceParams,
+        visiting: &mut HashSet<String>,
+    ) {
+        if out.contains_key(name) || !visiting.insert(name.to_string()) {
+            return;
+        }
+        let Some(d) = self.get(name) else {
+            return;
+        };
+        let params: HashSet<&str> = d.params.iter().map(String::as_str).collect();
+        let roles = d
+            .raw_body()
+            .map(|b| wire_roles(b, &params))
+            .unwrap_or_default();
+        let mut lit = roles.literal;
+        for (callee, cp, read) in &roles.forwards {
+            self.instance_params_of(callee, out, visiting);
+            if out.get(callee).is_some_and(|ps| ps.contains(cp)) {
+                lit.extend(read.iter().cloned());
+            }
+        }
+        let ordered = d.params.iter().filter(|p| lit.contains(*p)).cloned().collect();
+        out.insert(name.to_string(), ordered);
+    }
+}
+
+/// `body` (a definition's body on the wire) with every string spelling one of
+/// `literals`' parameters replaced by its bound value, exactly where
+/// expansion would substitute it (everywhere but a nested reference's `name`
+/// and object keys): the body of one instance (esm-spec §9.6.4 rule 3). Only
+/// the instance parameters are replaced; every other parameter stays a name
+/// the evaluator reads through the reference's bindings.
+pub fn specialize_body(body: &Value, literals: &HashMap<String, Value>) -> Value {
+    match body {
+        Value::String(s) => literals.get(s).cloned().unwrap_or_else(|| body.clone()),
+        Value::Array(a) => Value::Array(a.iter().map(|x| specialize_body(x, literals)).collect()),
+        Value::Object(m) => {
+            let apply = m.get("op").and_then(Value::as_str) == Some(APPLY_OP);
+            Value::Object(
+                m.iter()
+                    .map(|(k, x)| {
+                        let v = if (apply && k == "name") || k == "op" {
+                            x.clone()
+                        } else {
+                            specialize_body(x, literals)
+                        };
+                        (k.clone(), v)
+                    })
+                    .collect(),
+            )
+        }
+        _ => body.clone(),
+    }
+}
+
+/// One instance of a definition: the definition and its body specialized to
+/// the values a reference binds to its instance parameters
+/// ([`OperatorRegistry::instance_params`]).
+#[derive(Debug)]
+pub struct Instance {
+    /// The definition.
+    pub definition: Arc<Definition>,
+    /// The specialized body, typed, with every build pass of the
+    /// [`Instances`] applied.
+    pub body: Expr,
+    /// The instance parameters, in declared order.
+    pub instance_params: Vec<String>,
+    binders: OnceLock<HashSet<String>>,
+}
+
+impl Instance {
+    /// Whether `name` is a parameter of the definition this instantiates.
+    pub fn is_param(&self, name: &str) -> bool {
+        self.definition.params.iter().any(|p| p == name)
+    }
+
+    /// Every loop symbol the instance body binds anywhere (`ranges` keys,
+    /// `output_idx` entries, `integral` variables). A binding is read where
+    /// the body reads its parameter, so a name a binding reads that the body
+    /// binds is that loop symbol (the capture expansion has).
+    pub fn binders(&self) -> &HashSet<String> {
+        self.binders.get_or_init(|| {
+            let mut out = HashSet::new();
+            crate::binders::collect_binders(&self.body, Binders::SCOPE, &mut out);
+            out
+        })
+    }
+}
+
+/// Why a reference names no instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstanceError {
+    /// The registry holds no definition of that name.
+    Unknown(String),
+    /// The definition has no body.
+    NoBody(String),
+    /// The reference binds no value to an instance parameter.
+    Unbound { name: String, param: String },
+    /// The specialized body is not an Expression.
+    Malformed { name: String, why: String },
+    /// A build pass refused the instance body.
+    Rewrite { name: String, why: String },
+}
+
+impl std::fmt::Display for InstanceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstanceError::Unknown(n) => write!(f, "operator reference `{n}` names no definition"),
+            InstanceError::NoBody(n) => write!(f, "operator `{n}` has no body"),
+            InstanceError::Unbound { name, param } => write!(
+                f,
+                "operator reference `{name}` binds nothing to parameter `{param}`"
+            ),
+            InstanceError::Rewrite { name, why } => write!(f, "operator `{name}`: {why}"),
+            InstanceError::Malformed { name, why } => {
+                write!(f, "operator `{name}`: the instance body is not an Expression: {why}")
+            }
+        }
+    }
+}
+
+/// A build pass over one expression, applied to each instance body
+/// ([`Instances::with_rewrite`]).
+pub type BodyRewrite = Arc<dyn Fn(&mut Expr) -> Result<(), String> + Send + Sync>;
+
+/// The instances a set of references name, each specialized once
+/// (esm-spec §9.6.4 rule 3), over one registry. Shared by every evaluation of
+/// a build; thread-safe.
+#[derive(Default)]
+pub struct Instances {
+    registry: OperatorRegistry,
+    by_key: std::sync::Mutex<HashMap<(String, Vec<String>), Arc<Instance>>>,
+    /// Per reference node: the node (held so its address is never reused) and
+    /// its instance.
+    by_node: std::sync::Mutex<HashMap<usize, (Arc<ExpressionNode>, Arc<Instance>)>>,
+    /// Body rewrites the build applies to every instance body (see
+    /// [`Instances::with_rewrite`]).
+    rewrites: Vec<BodyRewrite>,
+}
+
+impl std::fmt::Debug for Instances {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Instances")
+            .field("registry", &self.registry)
+            .field("rewrites", &self.rewrites.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Instances {
+    /// The instances of `registry`'s definitions, none specialized yet.
+    pub fn new(registry: OperatorRegistry) -> Self {
+        Instances {
+            registry,
+            ..Default::default()
+        }
+    }
+
+    /// The shared empty set: an evaluation where no reference can occur.
+    pub fn empty() -> &'static Instances {
+        static EMPTY: OnceLock<Instances> = OnceLock::new();
+        EMPTY.get_or_init(Instances::default)
+    }
+
+    /// The registry the references resolve against.
+    pub fn registry(&self) -> &OperatorRegistry {
+        &self.registry
+    }
+
+    /// These instances with `rewrite` applied to every instance body after
+    /// the ones before it: a build pass that rewrites each expression of the
+    /// system on its own (resolving an index-set range, lowering a `join`)
+    /// rewrites each instance body once the same way. Clears what was
+    /// specialized.
+    pub fn with_rewrite(
+        mut self,
+        rewrite: impl Fn(&mut Expr) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.rewrites.push(Arc::new(rewrite));
+        self.by_key = Default::default();
+        self.by_node = Default::default();
+        self
+    }
+
+    /// The instance reference `r` names.
+    pub fn instance(&self, r: &Reference<'_>) -> Result<Arc<Instance>, InstanceError> {
+        let d = self
+            .registry
+            .get(r.name)
+            .ok_or_else(|| InstanceError::Unknown(r.name.to_string()))?;
+        let ips = self.registry.instance_params(r.name);
+        let mut key = Vec::with_capacity(ips.len());
+        let mut lits = HashMap::with_capacity(ips.len());
+        for p in ips {
+            let b = r.binding(p).ok_or_else(|| InstanceError::Unbound {
+                name: r.name.to_string(),
+                param: p.clone(),
+            })?;
+            let v = serde_json::to_value(b).unwrap_or(Value::Null);
+            key.push(v.to_string());
+            lits.insert(p.clone(), v);
+        }
+        let k = (r.name.to_string(), key);
+        if let Some(i) = self.by_key.lock().ok().and_then(|m| m.get(&k).cloned()) {
+            return Ok(i);
+        }
+        let raw = d
+            .raw_body()
+            .ok_or_else(|| InstanceError::NoBody(r.name.to_string()))?;
+        let mut body: Expr = match (lits.is_empty(), &d.body) {
+            (true, Some(b)) => b.clone(),
+            _ => serde_json::from_value(specialize_body(raw, &lits)).map_err(|e| {
+                InstanceError::Malformed {
+                    name: r.name.to_string(),
+                    why: e.to_string(),
+                }
+            })?,
+        };
+        for rw in &self.rewrites {
+            rw(&mut body).map_err(|why| InstanceError::Rewrite {
+                name: r.name.to_string(),
+                why,
+            })?;
+        }
+        let inst = Arc::new(Instance {
+            definition: Arc::clone(d),
+            body,
+            instance_params: ips.to_vec(),
+            binders: OnceLock::new(),
+        });
+        if let Ok(mut m) = self.by_key.lock() {
+            m.insert(k, Arc::clone(&inst));
+        }
+        Ok(inst)
+    }
+
+    /// [`Self::instance`] of the reference node `node`, remembered per node.
+    pub fn instance_of_node(
+        &self,
+        node: &Arc<ExpressionNode>,
+    ) -> Result<Arc<Instance>, InstanceError> {
+        let addr = Arc::as_ptr(node) as usize;
+        if let Some((_, i)) = self.by_node.lock().ok().and_then(|m| m.get(&addr).cloned()) {
+            return Ok(i);
+        }
+        let r = reference_node(node).ok_or_else(|| InstanceError::Unknown(node.op.clone()))?;
+        let i = self.instance(&r)?;
+        if let Ok(mut m) = self.by_node.lock() {
+            m.insert(addr, (Arc::clone(node), Arc::clone(&i)));
+        }
+        Ok(i)
+    }
+
+    /// Every instance `roots` reach, each once: the references in `roots`
+    /// and, through each instance body, the references it holds. Stops at the
+    /// first reference that names no instance.
+    pub fn reachable<'a>(
+        &self,
+        roots: impl IntoIterator<Item = &'a Expr>,
+    ) -> Result<Vec<Arc<Instance>>, InstanceError> {
+        let mut seen: HashSet<usize> = HashSet::new();
+        let mut out = Vec::new();
+        let mut stack: Vec<Expr> = roots.into_iter().cloned().collect();
+        stack.reverse();
+        while let Some(e) = stack.pop() {
+            let mut found: Vec<Arc<Instance>> = Vec::new();
+            let mut err = None;
+            for_each_reference(&e, &mut |r| {
+                if err.is_none() {
+                    match self.instance(&r) {
+                        Ok(i) => found.push(i),
+                        Err(x) => err = Some(x),
+                    }
+                }
+            });
+            if let Some(x) = err {
+                return Err(x);
+            }
+            for i in found.into_iter().rev() {
+                if seen.insert(Arc::as_ptr(&i) as usize) {
+                    stack.push(i.body.clone());
+                    out.push(i);
+                }
+            }
+        }
+        Ok(out)
     }
 }
 

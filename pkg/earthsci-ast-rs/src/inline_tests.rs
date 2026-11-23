@@ -256,6 +256,7 @@ pub fn evaluate_cellwise(
         params,
         &HashMap::new(),
         BuildEval::PerCell,
+        crate::operator_refs::Instances::empty(),
     )
     .map_err(|e| e.to_string())?
     .into_value();

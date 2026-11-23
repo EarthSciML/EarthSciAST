@@ -49,6 +49,9 @@ pub(crate) struct NormalizedModel {
     /// Every variable's index-set axes, declared or decided by the build
     /// (esm-spec §4.3.4, §9.6.11), and the variables only data can shape.
     pub(crate) shapes: ShapeTable,
+    /// The flattened system's operator registry, which the references of
+    /// [`Self::model`] resolve against (esm-spec §9.6.4 rule 7).
+    pub(crate) operators: crate::operator_refs::OperatorRegistry,
 }
 
 /// Normalize `input` against the document's `index_sets` registry. The stages
@@ -66,6 +69,9 @@ pub(crate) fn normalize(
     input: BuildInput<'_>,
     mut index_sets: HashMap<String, IndexSet>,
 ) -> Result<NormalizedModel, CompileError> {
+    let operators = match &input {
+        BuildInput::Local { flat, .. } | BuildInput::Flattened { flat, .. } => flat.operators(),
+    };
     let (mut model, inherited) = match input {
         BuildInput::Local { flat, model: local } => {
             // esm-spec §4.2: a right-hand-side `D` flatten could not resolve is
@@ -88,6 +94,7 @@ pub(crate) fn normalize(
         model,
         index_sets,
         shapes,
+        operators,
     })
 }
 

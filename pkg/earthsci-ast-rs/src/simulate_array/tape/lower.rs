@@ -4105,6 +4105,25 @@ fn baked_join_key_params(compiled: &ArrayCompiled) -> FxHashMap<String, f64> {
         .collect()
 }
 
+/// Decline a rule whose expression holds an operator reference (esm-spec
+/// §9.6.4): the tape has no call mechanism yet, and it never expands a
+/// reference, so such a rule does not lower and a `native` build refuses the
+/// model by name. A rule reading an observed that holds one declines with it
+/// (the observed's own rule declines first).
+fn reference_decline(body: &Expr) -> Result<(), Bail> {
+    let mut first: Option<String> = None;
+    crate::operator_refs::for_each_reference(body, &mut |r| {
+        first.get_or_insert_with(|| r.name.to_string());
+    });
+    match first {
+        None => Ok(()),
+        Some(n) => Err(Bail::new(format!(
+            "operator reference `{n}`: the native compiler does not yet compile a definition \
+             as a called function"
+        ))),
+    }
+}
+
 pub(super) fn build_tape_program(
     compiled: &ArrayCompiled,
     const_names: &HashSet<String>,
@@ -4159,8 +4178,8 @@ pub(super) fn build_tape_program(
         // arms it: every instruction it emits is tagged with it.
         let _rule_precision = crate::precision::has_variable_overrides()
             .then(|| crate::precision::enter(crate::precision::of_variable(&name)));
-        let lowered = b
-            .lower_observed_rule(rule)
+        let lowered = reference_decline(observed_rule_body(rule))
+            .and_then(|()| b.lower_observed_rule(rule))
             .and_then(|v| b.flush_rule_fault().map(|()| v))
             .and_then(|v| b.take_tile_violation().map(|()| v));
         let pending = b.tile_pending.take();
@@ -4203,8 +4222,13 @@ pub(super) fn build_tape_program(
             cadence: Cadence::Continuous,
         });
         let txn = b.txn();
-        match b
-            .lower_rhs_rule(rule)
+        let body = match rule {
+            RhsRule::Scalar { body, .. }
+            | RhsRule::IndexedScalar { body, .. }
+            | RhsRule::ArrayLoop { body, .. } => body,
+        };
+        match reference_decline(body)
+            .and_then(|()| b.lower_rhs_rule(rule))
             .and_then(|()| b.flush_rule_fault())
             .and_then(|()| b.take_tile_violation())
         {

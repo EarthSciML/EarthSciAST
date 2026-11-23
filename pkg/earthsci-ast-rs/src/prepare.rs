@@ -1585,6 +1585,11 @@ struct BuildState<'o> {
     arrays: ArrMap,
     /// The CONST-ARRAY registry (see [`BuildState::seal_const_registry`]).
     const_scope: ConstArrayScope,
+    /// The operator registry the model's references resolve against.
+    operators: crate::operator_refs::OperatorRegistry,
+    /// Its instances, each body resolved as an observed definition is
+    /// ([`BuildState::collect_observed_defs`]).
+    ops: std::sync::Arc<crate::operator_refs::Instances>,
     /// Observed definitions, their dependency summaries, their join-free
     /// partition, and dependency order.
     defs: HashMap<String, Expr>,
@@ -1727,6 +1732,7 @@ impl<'o> BuildState<'o> {
             t: self.opts.t0,
             derived_extents: extents,
             const_arrays: &self.const_scope,
+            ops: &self.ops,
         }
     }
 
@@ -1819,6 +1825,7 @@ impl<'o> BuildState<'o> {
             model,
             index_sets,
             shapes,
+            operators,
         } = normalized;
         let built_variables = BuiltVariables {
             shapes: std::sync::Arc::new(shapes),
@@ -1843,6 +1850,8 @@ impl<'o> BuildState<'o> {
             param_names,
             arrays: ArrMap::default(),
             const_scope: ConstArrayScope::default(),
+            operators,
+            ops: Default::default(),
             defs: HashMap::new(),
             deps: Default::default(),
             join_free: HashSet::new(),
@@ -2341,6 +2350,12 @@ impl<'o> BuildState<'o> {
                 .built_variables
                 .shapes
                 .declared_map(|n| self.model.variables.contains_key(n));
+            self.ops = std::sync::Arc::new(crate::simulate_array::build_instances(
+                self.operators.clone(),
+                &self.index_sets,
+                var_shapes.clone(),
+                &self.extents,
+            ));
             for e in defs.values_mut() {
                 crate::join::resolve_overlap_syms_expr(e, &var_shapes);
                 crate::join::check_overlap_factor_ranks(e, &var_shapes)
@@ -2484,6 +2499,18 @@ impl<'o> BuildState<'o> {
         }
         self.members = members;
         self.extents = vi.extents;
+        // The instance bodies' ranges are resolved against the extents value
+        // invention just counted, as the observed definitions are.
+        let var_shapes = self
+            .built_variables
+            .shapes
+            .declared_map(|n| self.model.variables.contains_key(n));
+        self.ops = std::sync::Arc::new(crate::simulate_array::build_instances(
+            self.operators.clone(),
+            &self.index_sets,
+            var_shapes,
+            &self.extents,
+        ));
         Ok(())
     }
 

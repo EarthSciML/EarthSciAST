@@ -279,6 +279,7 @@ pub(super) fn run_standalone_export(
             forcing: &forcing,
             t,
             declared: empty_declared_names(),
+            ops: crate::operator_refs::Instances::empty(),
         },
         &mut [],
         &mut RhsStats::default(),

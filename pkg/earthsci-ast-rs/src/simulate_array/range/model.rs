@@ -30,6 +30,8 @@ pub(in crate::simulate_array) struct ProgramModel {
     pub(in crate::simulate_array) data_fed: Vec<(String, String)>,
     pub(in crate::simulate_array) index_sets: HashMap<String, IndexSet>,
     pub(in crate::simulate_array) const_scope: Arc<ConstArrayScope>,
+    /// The operator instances the rules' references name.
+    pub(in crate::simulate_array) operators: Arc<crate::operator_refs::Instances>,
     pub(in crate::simulate_array) precision: crate::precision::Env,
     pub(in crate::simulate_array) declared_names: HashSet<String>,
     pub(in crate::simulate_array) forcing_decls: IndexMap<String, Option<Vec<usize>>>,
@@ -70,6 +72,7 @@ impl ArrayCompiled {
             index_sets: self.index_sets.clone(),
             namespace: None,
             const_scope: Arc::clone(&self.const_scope),
+            operators: Arc::clone(&self.operators),
             precision: self.precision.clone(),
             merged_renames: self.merged_renames.clone(),
             #[cfg(feature = "solve")]
@@ -102,6 +105,7 @@ impl ProgramModel {
             data_fed: c.data_fed,
             index_sets: c.index_sets,
             const_scope: c.const_scope,
+            operators: c.operators,
             precision: c.precision,
             declared_names: c.declared_names,
             forcing_decls: c.forcing_decls,
@@ -149,6 +153,7 @@ impl ProgramModel {
             ic_scope: Default::default(),
             index_sets: self.index_sets.clone(),
             const_scope: Arc::clone(&self.const_scope),
+            operators: Arc::clone(&self.operators),
             namespace: None,
             precision: self.precision.clone(),
             declared_names: self.declared_names.clone(),

@@ -639,9 +639,7 @@ impl ArrayCompiled {
         // right-hand side. Walk them here, before anything evaluates one
         // (esm-spec §9.6.3 constraint 6), so an unlowered op in an initial
         // condition is refused at build exactly as it is in an equation.
-        for (_, rhs) in &flat.field_ics {
-            check_evaluable(rhs)?;
-        }
+        check_evaluable_all(flat.field_ics.iter().map(|(_, rhs)| rhs), &compiled.operators)?;
         // Carry the classified scoped-reference `ic` equations through so `u0` is
         // folded from the provider-served loaded initial fields at build time.
         compiled.field_ics = flat.field_ics.clone();
@@ -737,6 +735,7 @@ impl ArrayCompiled {
             model,
             index_sets,
             shapes,
+            operators,
         } = normalized;
         let ResolvedModel {
             model: mut model_owned,
@@ -744,12 +743,14 @@ impl ArrayCompiled {
             runtime_params,
             const_scope,
             any_index,
+            ops,
         } = resolve_for_compile(
             model,
             index_sets,
             &shapes,
             supplied,
             runtime_array_parameters,
+            operators,
         )?;
         let index_sets = &index_sets;
 
@@ -769,7 +770,7 @@ impl ArrayCompiled {
             unvalued_shaped_params,
             forcing_defaults,
             data_fed,
-        } = classify_model(&model_owned, index_sets, &runtime_params, any_index)?;
+        } = classify_model(&model_owned, index_sets, &runtime_params, any_index, &ops)?;
 
         // (5c) The build-time array scope a field `ic` may read (esm-spec
         // §6.6.5) — captured before stage (6) moves the bodies out.
@@ -859,6 +860,7 @@ impl ArrayCompiled {
             unvalued_shaped_params,
             held_at_ic: held_at_ic_names,
             tape_cache: tape::TapeCache::new(),
+            operators: ops,
         })
     }
 }
@@ -877,6 +879,9 @@ struct ResolvedModel {
     /// Whether any `index` node survives, which is all shape inference needs
     /// to know before it walks the equations.
     any_index: bool,
+    /// The operator instances the model's references name, each body
+    /// resolved by the same passes as the model's expressions.
+    ops: std::sync::Arc<crate::operator_refs::Instances>,
 }
 
 /// Resolve a [`NormalizedModel`]'s data-dependent structure for the compile:
@@ -893,6 +898,7 @@ fn resolve_for_compile(
     shapes: &ShapeTable,
     supplied: BuildTimeData<'_>,
     runtime_array_parameters: bool,
+    operators: crate::operator_refs::OperatorRegistry,
 ) -> Result<ResolvedModel, CompileError> {
     // Lower every SHAPED parameter whose value the document supplies —
     // inline array data, or one scalar broadcast over the grid (esm-spec
@@ -965,9 +971,11 @@ fn resolve_for_compile(
     // loop symbols is the data-derived value-equality case and is lowered
     // into a member-equality `filter` over the contraction; a join over a
     // genuine (non-loop) data column is rejected rather than mis-combined.
-    crate::join::resolve_aggregate_joins(&mut model, &index_sets, |model| {
-        shapes.declared_map(|n| model.variables.contains_key(n))
-    })?;
+    let declared_shapes = shapes.declared_map(|n| model.variables.contains_key(n));
+    crate::join::resolve_aggregate_joins(&mut model, &index_sets, |_| declared_shapes.clone())?;
+    // Each instance body an operator reference names is resolved by the same
+    // passes, once per instance: its joins, then its ranges.
+    let ops = build_instances(operators, &index_sets, declared_shapes, &derived.extents);
     // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
     // into a concrete `[lo, hi]` interval before shape inference / rule
     // building, so every downstream consumer sees only dense intervals.
@@ -1002,7 +1010,35 @@ fn resolve_for_compile(
         runtime_params,
         const_scope,
         any_index: census.index,
+        ops: std::sync::Arc::new(ops),
     })
+}
+
+/// The operator instances of `registry` (esm-spec §9.6.4 rule 3), each body
+/// resolved, once per instance, by the passes the build runs over every
+/// expression of the model before it evaluates one: its `join` clauses
+/// ([`crate::join::resolve_expr_joins`], against `declared_shapes`), then its
+/// ranges ([`crate::faq::resolve_expr_ranges_with_extents`]).
+pub(crate) fn build_instances(
+    registry: crate::operator_refs::OperatorRegistry,
+    index_sets: &HashMap<String, IndexSet>,
+    declared_shapes: HashMap<String, Vec<String>>,
+    extents: &HashMap<String, i64>,
+) -> crate::operator_refs::Instances {
+    let sets = index_sets.clone();
+    let sets2 = index_sets.clone();
+    let extents = extents.clone();
+    crate::operator_refs::Instances::new(registry)
+        .with_rewrite(move |e| {
+            crate::join::resolve_overlap_syms_expr(e, &declared_shapes);
+            crate::join::check_overlap_factor_ranks(e, &declared_shapes)
+                .and_then(|()| crate::join::resolve_expr_joins(e, &sets, &declared_shapes))
+                .map_err(|err| err.to_string())
+        })
+        .with_rewrite(move |e| {
+            crate::faq::resolve_expr_ranges_with_extents(e, &sets2, &extents)
+                .map_err(|err| err.to_string())
+        })
 }
 
 /// What stages (0)-(5) of the staged build decide about a resolved model,
@@ -1036,10 +1072,11 @@ fn classify_model(
     index_sets: &HashMap<String, IndexSet>,
     runtime_params: &HashSet<String>,
     any_index: bool,
+    ops: &Instances,
 ) -> Result<Classified, CompileError> {
     // (0) Reject spatial differential operators anywhere in the model's
     // equations or observed-variable expressions (esm-i7b).
-    reject_unlowered_spatial_ops(model)?;
+    reject_unlowered_spatial_ops(model, ops)?;
 
     // (0a) Reject an implicit equation: this runtime has no algebraic
     // solve, and every stage below would skip the equation, leaving the
@@ -1186,7 +1223,7 @@ fn classify_model(
 /// that have no rule in this evaluator because an earlier stage was supposed to
 /// eliminate them (`distinct`, `ic`, `enum`, `apply_expression_template`).
 ///
-/// The second half is [`check_evaluable`]'s `is_evaluable_op` gate, and it is
+/// The second half is [`check_evaluable_all`]'s `is_evaluable_op` gate, and it is
 /// here because [`eval_op`]'s backstop for an ungated op is `unreachable!` — a
 /// PANIC, which is what an author got (exit 101, no diagnostic) from a document
 /// that `esm validate` had just passed. The public `eval_expression` gated;
@@ -1200,49 +1237,42 @@ fn classify_model(
 /// `strip_value_invention` run BEFORE the staged build, so by the time this
 /// sees the model a derived-set producer has been dropped — what remains is
 /// genuinely unevaluable.
-fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
+fn reject_unlowered_spatial_ops(model: &Model, ops: &Instances) -> Result<(), CompileError> {
+    let mut roots: Vec<&Expr> = Vec::new();
     for eq in &model.equations {
         // The `ic` exemption is for the LHS and only the LHS (esm-spec
         // §11.4.1 puts `ic` there). Applying it to the RHS as well let an
         // `ic`-headed RHS — the one shape that is NOT an initial-condition
         // statement — walk past the gate and reach the evaluator, where it is
         // an ordinary unevaluable-core op with no rule.
-        check_evaluable_side(&eq.lhs)?;
-        check_evaluable(&eq.rhs)?;
+        evaluable_side(&eq.lhs, &mut roots);
+        roots.push(&eq.rhs);
     }
+    let mut carried: Vec<Expr> = Vec::new();
     for var in model.variables.values() {
-        let mut failure = None;
-        var.for_each_expression(&mut |expr| {
-            if failure.is_none()
-                && let Err(e) = check_evaluable(expr)
-            {
-                failure = Some(e);
-            }
-        });
-        if let Some(e) = failure {
-            return Err(e);
-        }
+        var.for_each_expression(&mut |expr| carried.push(expr.clone()));
     }
-    Ok(())
+    roots.extend(carried.iter());
+    // Every expression, then the body of every operator instance they reach,
+    // each once (esm-spec §9.6.3 constraint 6).
+    check_evaluable_all(roots, ops)
 }
 
-/// [`check_evaluable`] over the LEFT side of an equation, with the ONE
+/// The expressions [`check_evaluable_all`] reads on the LEFT side of an equation, with the ONE
 /// structural wrapper the array path consumes rather than evaluates unwrapped
 /// first: an `ic` LHS (esm-spec §11.4). `ic` is evaluable-core and has no `eval_op` arm —
 /// correctly, since initial-condition assembly reads the equation and the
 /// evaluator never sees the node — so gating it as an ordinary expression would
 /// reject every document that states an initial condition. Its OPERAND is
 /// checked, so nothing inside it escapes the gate.
-fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
+fn evaluable_side<'e>(expr: &'e Expr, out: &mut Vec<&'e Expr>) {
     if let Expr::Operator(node) = expr
         && node.op == "ic"
     {
-        for arg in &node.args {
-            check_evaluable(arg)?;
-        }
-        return Ok(());
+        out.extend(node.args.iter());
+        return;
     }
-    check_evaluable(expr)
+    out.push(expr);
 }
 
 /// A set of names, hashed with Fx, as the free-variable check credits them
@@ -3448,7 +3478,13 @@ pub(crate) fn eval_buildtime_field(
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
 ) -> Result<Value, CompileError> {
-    eval_buildtime_field_in_scope(expr, index_sets, params, &HashMap::new())
+    eval_buildtime_field_in_scope(
+        expr,
+        index_sets,
+        params,
+        &HashMap::new(),
+        crate::operator_refs::Instances::empty(),
+    )
 }
 
 /// [`eval_buildtime_field`] with a build-time ARRAY scope bound by name — a
@@ -3461,6 +3497,7 @@ pub(crate) fn eval_buildtime_field_in_scope(
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
     scope: &HashMap<String, ArrayD<f64>>,
+    ops: &crate::operator_refs::Instances,
 ) -> Result<Value, CompileError> {
     super::eval::eval_buildtime_field_routed(
         None,
@@ -3469,6 +3506,7 @@ pub(crate) fn eval_buildtime_field_in_scope(
         params,
         scope,
         super::eval::BuildEval::Fast { strict: false },
+        ops,
     )
     .map(super::eval::Routed::into_value)
 }
@@ -3517,6 +3555,7 @@ pub(super) fn resolve_field_ic_cell(
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
     memo: &mut IcTargetMemo,
+    ops: &crate::operator_refs::Instances,
 ) -> Result<f64, SimulateError> {
     let IcTargetMemo {
         mode,
@@ -3573,7 +3612,7 @@ pub(super) fn resolve_field_ic_cell(
             // the case-(4) hard error below (byte-identical to the old
             // `match … { _ => {} }` arm, which likewise dropped the error).
             match super::eval::eval_buildtime_field_routed(
-                None, rhs, index_sets, params, forcing, mode,
+                None, rhs, index_sets, params, forcing, mode, ops,
             ) {
                 Ok(super::eval::Routed::Value(v, r)) => {
                     *cached_field = Some(v);
@@ -4372,7 +4411,13 @@ fn value_invention_factors(
                 return false;
             }
         }
-        match eval_buildtime_field_in_scope(&body, cx.index_sets, &HashMap::new(), &cx.scope) {
+        match eval_buildtime_field_in_scope(
+            &body,
+            cx.index_sets,
+            &HashMap::new(),
+            &cx.scope,
+            crate::operator_refs::Instances::empty(),
+        ) {
             Ok(Value::Array(a)) => {
                 cx.scope.insert(name.to_string(), *a);
                 true
