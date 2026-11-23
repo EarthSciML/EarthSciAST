@@ -54,7 +54,7 @@ end
         maxiter = ConcreteRNumber(2)
         run = Reactant.@compile fragment_steps(frag, u, aux, p, t, maxiter)
         @test Array(run(frag, u, aux, p, t, maxiter)) ≈ [11.0]
-        @test Array(run(frag, u, aux, ConcreteRArray([1.0]), t, maxiter)) ≈ [5.5]
+        @test Array(run(frag, ConcreteRArray([1.0]), aux, ConcreteRArray([1.0]), t, maxiter)) ≈ [5.5]
 
         frag32 = emit_fragment(ir; eltype = Float32)
         u32, aux32 = ConcreteRArray(Float32[1]), ConcreteRArray(Float32[])

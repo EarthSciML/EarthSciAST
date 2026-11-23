@@ -129,7 +129,7 @@ function _fragment_buffer(::Type{T}, spec::_LaneBuffer, forcing, cells) where {T
         0, Int64[], 1, Int64[0], 1
     )
     L = length(off)
-    S = eltype(src)
+    S = _de_eltype(src)
     op = _hlo.gather(
         src.mlir_data, off.mlir_data; result = _de_ty(L, S), dimension_numbers = dn,
         slice_sizes = _MLIR.IR.DenseArrayAttribute(Int64[1]), indices_are_sorted = false,

@@ -400,6 +400,7 @@ function _de_run_kernel!(
             "(an unsupported descriptor kind or an unbounded reduce) and lower " *
             "that instead."
     )
+    isempty(plan.out_slots) && return nothing
     cse = K.cse
     invvals = Vector{_DEVal}(undef, length(cse.inv_recipes))
     cellvals = Vector{_DEVal}(undef, length(cse.recipes))

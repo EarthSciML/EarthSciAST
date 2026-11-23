@@ -239,6 +239,7 @@ _de_res(op) = _MLIR.IR.result(op)
 # (closed.jl) and the long-fold `stablehlo.reduce` (`_de_fold_terms`). Both are
 # O(1) in the grid, so the program stays IR-shaped either way.
 _de_traced(a::_DEVal, ::Type{T} = Float64) where {T} = TracedRArray{T, 1}((), a.v, (a.len,))
+_de_eltype(::TracedRArray{T}) where {T} = T
 _de_untraced(x::TracedRArray{T, 1}) where {T} = _DEVal(x.mlir_data, length(x))
 _de_untraced(x::TracedRNumber{T}) where {T} =
     _DEVal(_de_res(_hlo.reshape(x.mlir_data; result_0 = _de_ty(1, T), location = _de_loc())), 1)
@@ -888,7 +889,7 @@ function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
                     "expects."
             )
             length(x) == length(arr) || throw(DimensionMismatch("forcing buffer $j has the wrong length"))
-            v = _de_cast(_de_untraced(x), eltype(x), ctx.precision)
+            v = _de_cast(_de_untraced(x), _de_eltype(x), ctx.precision)
             ctx.bufvals[j] = v
             _de_tally!(ctx, :forcing_input)
             return v
