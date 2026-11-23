@@ -1098,18 +1098,32 @@ mod tests {
         assert_eq!(outer.params.iter().collect::<Vec<_>>(), ["a"]);
         assert_eq!(outer.free.iter().collect::<Vec<_>>(), ["w"]);
         // A ranges bound naming a param is read off the wire.
-        assert_eq!(r.get("first").unwrap().reads(&r).params.iter().collect::<Vec<_>>(), ["v"]);
+        assert_eq!(
+            r.get("first")
+                .unwrap()
+                .reads(&r)
+                .params
+                .iter()
+                .collect::<Vec<_>>(),
+            ["v"]
+        );
 
         let e: Expr = serde_json::from_value(json!({"op": "+", "args": [
             {"op": "apply_operator", "args": [], "name": "outer", "bindings": {"a": "y", "T": "cells"}},
             {"op": "apply_operator", "args": [], "name": "first", "bindings": {"v": "y", "n": 3}}]}))
         .unwrap();
-        assert_eq!(site_reads(&e, &r).into_iter().collect::<Vec<_>>(), ["w", "y"]);
+        assert_eq!(
+            site_reads(&e, &r).into_iter().collect::<Vec<_>>(),
+            ["w", "y"]
+        );
         let insts = r.instances([&e]);
         let names: Vec<_> = insts.iter().map(|i| i.definition.name.as_str()).collect();
         assert_eq!(names, ["outer", "total", "first"]);
         // The literal `cells` reached `total` through `outer`'s forwarded `T`.
-        assert_eq!(insts[1].literals.get("S").map(String::as_str), Some("cells"));
+        assert_eq!(
+            insts[1].literals.get("S").map(String::as_str),
+            Some("cells")
+        );
         let body = serde_json::to_value(&insts[1].body).unwrap();
         assert_eq!(body["ranges"]["k"]["from"], "cells");
         assert_eq!(body["expr"]["args"][0]["args"][0], "v");
@@ -1118,7 +1132,8 @@ mod tests {
         // Made once per instance.
         assert!(Arc::ptr_eq(&insts[1], &r.instances([&e])[1]));
         // The fixed unit of a `partial` rule, read off its `match`.
-        let fixed = serde_json::to_value(r.get("pd").unwrap().fixed_units.as_ref().unwrap()).unwrap();
+        let fixed =
+            serde_json::to_value(r.get("pd").unwrap().fixed_units.as_ref().unwrap()).unwrap();
         assert_eq!(fixed, json!({"op": "/", "args": ["f", "x"]}));
     }
 
