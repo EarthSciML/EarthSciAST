@@ -1042,6 +1042,53 @@ mod tests {
     }
 
     #[test]
+    fn reads_instances_and_site_reads() {
+        let r = reg(json!({
+            "total": {"params": ["v", "S"], "body": {"op": "faq", "args": ["v"], "output_idx": [],
+                "reduce": "+", "ranges": {"k": {"from": "S"}},
+                "expr": {"op": "*", "args": [{"op": "index", "args": ["v", "k"]}, "w"]}}},
+            "first": {"params": ["v", "n"], "body": {"op": "faq", "args": ["v"], "output_idx": [],
+                "reduce": "+", "ranges": {"k": [1, "n"]}, "expr": {"op": "index", "args": ["v", "k"]}}},
+            "outer": {"params": ["a", "T"], "body": {"op": "apply_operator", "args": [], "name": "total",
+                "bindings": {"v": "a", "S": "T"}}},
+            "pd": {"params": ["f", "x"], "match": {"op": "partial", "args": ["f"], "wrt": "x"},
+                "body": {"op": "*", "args": [2, "f"]}}
+        }));
+        let total = r.get("total").unwrap();
+        let reads = total.reads(&r);
+        // `S` is a literal (an index-set name), `w` a free name, `k` a loop symbol.
+        assert_eq!(reads.params.iter().collect::<Vec<_>>(), ["v"]);
+        assert_eq!(reads.free.iter().collect::<Vec<_>>(), ["w"]);
+        assert!(reads.binders.contains("k") && reads.index_subscripts.contains("k"));
+        let outer = r.get("outer").unwrap().reads(&r);
+        assert_eq!(outer.params.iter().collect::<Vec<_>>(), ["a"]);
+        assert_eq!(outer.free.iter().collect::<Vec<_>>(), ["w"]);
+        // A ranges bound naming a param is read off the wire.
+        assert_eq!(r.get("first").unwrap().reads(&r).params.iter().collect::<Vec<_>>(), ["v"]);
+
+        let e: Expr = serde_json::from_value(json!({"op": "+", "args": [
+            {"op": "apply_operator", "args": [], "name": "outer", "bindings": {"a": "y", "T": "cells"}},
+            {"op": "apply_operator", "args": [], "name": "first", "bindings": {"v": "y", "n": 3}}]}))
+        .unwrap();
+        assert_eq!(site_reads(&e, &r).into_iter().collect::<Vec<_>>(), ["w", "y"]);
+        let insts = r.instances([&e]);
+        let names: Vec<_> = insts.iter().map(|i| i.definition.name.as_str()).collect();
+        assert_eq!(names, ["outer", "total", "first"]);
+        // The literal `cells` reached `total` through `outer`'s forwarded `T`.
+        assert_eq!(insts[1].literals.get("S").map(String::as_str), Some("cells"));
+        let body = serde_json::to_value(&insts[1].body).unwrap();
+        assert_eq!(body["ranges"]["k"]["from"], "cells");
+        assert_eq!(body["expr"]["args"][0]["args"][0], "v");
+        let body = serde_json::to_value(&insts[2].body).unwrap();
+        assert_eq!(body["ranges"]["k"], json!([1, 3]));
+        // Made once per instance.
+        assert!(Arc::ptr_eq(&insts[1], &r.instances([&e])[1]));
+        // The fixed unit of a `partial` rule, read off its `match`.
+        let fixed = serde_json::to_value(r.get("pd").unwrap().fixed_units.as_ref().unwrap()).unwrap();
+        assert_eq!(fixed, json!({"op": "/", "args": ["f", "x"]}));
+    }
+
+    #[test]
     fn memo_analyses_once() {
         let m: InstanceMemo<u8, usize> = InstanceMemo::new();
         let mut calls = 0;
