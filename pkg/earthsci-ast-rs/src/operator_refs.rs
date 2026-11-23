@@ -641,8 +641,11 @@ fn specialize(v: &mut Value, lits: &InstanceLiterals, expr_pos: bool) {
 #[derive(Debug, Clone, Default)]
 pub struct OperatorRegistry {
     entries: Arc<IndexMap<String, Arc<Definition>>>,
-    instances: Arc<std::sync::Mutex<HashMap<(String, InstanceLiterals), Arc<Instance>>>>,
+    instances: Arc<std::sync::Mutex<InstanceCache>>,
 }
+
+/// The instances of a registry made so far, by definition name and literals.
+type InstanceCache = HashMap<(String, InstanceLiterals), Arc<Instance>>;
 
 /// One definition instance (esm-spec §9.6.4 rule 3): a definition with the
 /// literals its literal params are bound to, and the body of that instance
