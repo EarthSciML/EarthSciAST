@@ -88,7 +88,7 @@ pub(crate) fn validate_model(
     // order, and the equations alone decide it — esm-spec §4.9.6. Checked here,
     // beside the other whole-model structural checks, so `esm validate` names
     // the cycle instead of the build naming an innocent bystander (issue #181).
-    check_observed_dependency_cycle(model_name, model, ctx.class(), errors);
+    check_observed_dependency_cycle(model_name, model, ctx.class(), &ctx.operators, errors);
 
     ctx.check_default_units_identity(errors);
     ctx.check_observed_definitions(&unit_env, errors, warnings);
@@ -2192,7 +2192,7 @@ fn validate_aggregate_constraints(
     // esm-spec §4.3.1.2: each member of a recurrence group is checked with its
     // peers' `index` reads counted as causal reads, and the members' frames
     // are compared once every member has one.
-    let groups = recurrence_groups_of_parts(&model.variables, &model.equations);
+    let groups = recurrence_groups_in(&model.variables, &model.equations, operators);
     let mut frames: Vec<(usize, &str, RecurrenceFrame)> = Vec::new();
     // The aggregate findings of each definition instance the equations reach,
     // found once (esm-spec §9.6.9) and reported at every field reaching it.
@@ -2831,10 +2831,15 @@ fn has_index_self_read(expr: &crate::Expr, var: &str) -> bool {
 /// hand a different member of the same cycle to two runs of the same binary.
 /// Binder symbols are subtracted first, so a `faq` range key that
 /// happens to share a name with an observed does not manufacture an edge.
+///
+/// An operator reference in a definition also reads, at its site, the names
+/// its definition's body reads free (esm-spec §9.6.4 rule 2), read through
+/// `operators` ([`crate::operator_refs::DefinitionReads::free`]).
 fn observed_dependency_graph(
     class: &crate::classification::Classification,
     candidates: &HashSet<String>,
     groups: &[std::collections::BTreeSet<String>],
+    operators: &crate::operator_refs::OperatorRegistry,
 ) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
     let observed: HashSet<&str> = class.observed_unknowns.iter().map(String::as_str).collect();
     class
@@ -2846,6 +2851,11 @@ fn observed_dependency_graph(
             // leaves out a scoped reference to another component.
             let mut free = HashSet::new();
             crate::binders::collect_symbols(rhs, &mut free);
+            crate::operator_refs::for_each_reference(rhs, &mut |r| {
+                if let Some(d) = operators.resolve(&r) {
+                    free.extend(d.reads(operators).free.iter().cloned());
+                }
+            });
             let mut bound = HashSet::new();
             collect_bound_symbols(rhs, &mut bound);
             let mut deps: std::collections::BTreeSet<String> = free
@@ -2903,12 +2913,22 @@ pub(crate) fn recurrence_groups_of_parts(
     variables: &indexmap::IndexMap<String, crate::ModelVariable>,
     equations: &[crate::Equation],
 ) -> Vec<std::collections::BTreeSet<String>> {
+    recurrence_groups_in(variables, equations, &Default::default())
+}
+
+/// [`recurrence_groups_of_parts`], the equations' operator references read
+/// through `operators` (their top-level component's registry).
+fn recurrence_groups_in(
+    variables: &indexmap::IndexMap<String, crate::ModelVariable>,
+    equations: &[crate::Equation],
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> Vec<std::collections::BTreeSet<String>> {
     let class = crate::classification::Classification::from_parts(variables, equations);
     if class.observed_definitions.len() < 2 {
         return Vec::new();
     }
     let candidates = recurrence_candidate_vars_of_parts(variables, equations);
-    let deps = observed_dependency_graph(&class, &candidates, &[]);
+    let deps = observed_dependency_graph(&class, &candidates, &[], operators);
     let array_shaped = |n: &str| {
         variables
             .get(n)
@@ -2961,14 +2981,15 @@ fn check_observed_dependency_cycle(
     model_name: &str,
     model: &crate::Model,
     class: &crate::classification::Classification,
+    operators: &crate::operator_refs::OperatorRegistry,
     errors: &mut Vec<StructuralError>,
 ) {
     if class.observed_definitions.is_empty() {
         return;
     }
     let candidates = recurrence_candidate_vars(model);
-    let groups = recurrence_groups_of_parts(&model.variables, &model.equations);
-    let deps = observed_dependency_graph(class, &candidates, &groups);
+    let groups = recurrence_groups_in(&model.variables, &model.equations, operators);
+    let deps = observed_dependency_graph(class, &candidates, &groups, operators);
 
     if let Some(cycle) = crate::classification::first_observed_cycle(&deps) {
         errors.push(StructuralError {

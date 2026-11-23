@@ -43,11 +43,26 @@ impl Reads {
     /// template's body) is walked once where no enclosing binder can change
     /// what it reads.
     pub(crate) fn of(expr: &Expr) -> Reads {
+        Self::walk(expr, None)
+    }
+
+    /// What `expr` names, its operator references read through `registry`
+    /// as their expansion reads them (esm-spec §9.6.4 rule 2): the bindings
+    /// the definition reads as values, and the names its body reads free at
+    /// the site ([`crate::operator_refs::DefinitionReads`]). [`Self::of`]
+    /// reads every binding of a reference, which is what a reference into a
+    /// flattened system's closed registry reads.
+    pub(crate) fn of_in(expr: &Expr, registry: &crate::operator_refs::OperatorRegistry) -> Reads {
+        Self::walk(expr, Some(registry))
+    }
+
+    fn walk(expr: &Expr, registry: Option<&crate::operator_refs::OperatorRegistry>) -> Reads {
         let mut out = Reads::default();
         let mut walk = Walk {
             bound: Vec::new(),
             seen_unbound: HashSet::new(),
             seen_join: HashSet::new(),
+            registry,
         };
         walk.names(expr, &mut out.names);
         walk.joins(expr, &mut out.join_names);
@@ -75,6 +90,8 @@ struct Walk<'a> {
     seen_unbound: HashSet<*const ExpressionNode>,
     /// Nodes whose join clauses were already collected.
     seen_join: HashSet<*const ExpressionNode>,
+    /// The registry operator references are read through, if any.
+    registry: Option<&'a crate::operator_refs::OperatorRegistry>,
 }
 
 impl<'a> Walk<'a> {
@@ -91,6 +108,30 @@ impl<'a> Walk<'a> {
                     return;
                 }
                 let depth = self.bound.len();
+                if let Some(r) = crate::operator_refs::reference_node(node) {
+                    // A reference's binding keys are its definition's
+                    // params, never names bound at the site.
+                    if let Some(reg) = self.registry
+                        && let Some(def) = reg.resolve(&r)
+                    {
+                        let reads = def.reads(reg);
+                        for n in &reads.free {
+                            if !self.bound.contains(&n.as_str()) && !out.contains(n) {
+                                out.insert(n.clone());
+                            }
+                        }
+                        self.bound.extend(def.body_binders().iter().map(String::as_str));
+                        for (k, b) in r.bindings {
+                            if reads.params.contains(k) {
+                                self.names(b, out);
+                            }
+                        }
+                    } else {
+                        r.bindings.values().for_each(|b| self.names(b, out));
+                    }
+                    self.bound.truncate(depth);
+                    return;
+                }
                 node.for_each_binder(Binders::BODY, |n| self.bound.push(n));
                 node.for_each_child(&mut |c| self.names(c, out));
                 self.bound.truncate(depth);
