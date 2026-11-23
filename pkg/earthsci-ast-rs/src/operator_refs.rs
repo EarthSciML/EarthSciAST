@@ -103,6 +103,15 @@ pub struct DefinitionReads {
     /// of an expression for a binder in scope throughout it (as the
     /// undeclared-name check does) reads these as bound at the site.
     pub index_subscripts: BTreeSet<String>,
+    /// The names the expansion reads as the base of an `index` (`index(a,
+    /// …)`): free names, and params whose binding is substituted there (the
+    /// reference's binding, when it is a bare name, is then read as one).
+    /// Through the bodies it references, a param forwarded as a bare name to
+    /// a callee's index base counts.
+    pub index_bases: BTreeSet<String>,
+    /// [`Self::index_bases`] restricted to the reads with a subscript that is
+    /// not a bare name: a read that may be offset along an axis.
+    pub offset_index_bases: BTreeSet<String>,
 }
 
 /// What a body says about its parameters and the names it binds, computed
@@ -439,6 +448,14 @@ fn body_reads(
             Expr::Variable(s) => Some(s.clone()),
             _ => None,
         }));
+        if let Some(Expr::Variable(base)) = node.args.first()
+            && !bound.iter().any(|b| b == base)
+        {
+            out.index_bases.insert(base.clone());
+            if node.args[1..].iter().any(|a| !matches!(a, Expr::Variable(_))) {
+                out.offset_index_bases.insert(base.clone());
+            }
+        }
     }
     if let Some(r) = reference_node(node) {
         match registry.resolve(&r) {
@@ -450,6 +467,26 @@ fn body_reads(
                     }
                 }
                 out.index_subscripts.extend(cr.index_subscripts.iter().cloned());
+                // The callee's index bases, read here: its free ones as they
+                // are, its params through the bare names bound to them.
+                for (set, mine) in [
+                    (&cr.index_bases, &mut out.index_bases),
+                    (&cr.offset_index_bases, &mut out.offset_index_bases),
+                ] {
+                    for n in set {
+                        let here = if callee.params.contains(n) {
+                            match r.binding(n) {
+                                Some(Expr::Variable(b)) => b,
+                                _ => continue,
+                            }
+                        } else {
+                            n
+                        };
+                        if !bound.iter().any(|b| b == here) {
+                            mine.insert(here.clone());
+                        }
+                    }
+                }
                 let depth = bound.len();
                 bound.extend(cr.binders.iter().cloned());
                 let mut keys: Vec<&String> = r.bindings.keys().collect();

@@ -2756,8 +2756,11 @@ impl RecurrenceFrame {
 /// mirror-image mistake and is just as wrong: it would swallow a scalar
 /// `x ~ x + 1` and a bare `s ~ s + 1`, which have no axis to fold along and can
 /// never be recurrences, and drop the cycle error they must keep getting.
-fn recurrence_candidate_vars(model: &crate::Model) -> HashSet<String> {
-    recurrence_candidate_vars_of_parts(&model.variables, &model.equations)
+fn recurrence_candidate_vars(
+    model: &crate::Model,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> HashSet<String> {
+    recurrence_candidate_vars_of_parts(&model.variables, &model.equations, operators)
 }
 
 /// [`recurrence_candidate_vars`] over a model node's raw parts, for the
@@ -2766,6 +2769,7 @@ fn recurrence_candidate_vars(model: &crate::Model) -> HashSet<String> {
 fn recurrence_candidate_vars_of_parts(
     variables: &indexmap::IndexMap<String, crate::ModelVariable>,
     equations: &[crate::Equation],
+    operators: &crate::operator_refs::OperatorRegistry,
 ) -> HashSet<String> {
     let array_shaped: HashSet<&str> = variables
         .iter()
@@ -2777,7 +2781,7 @@ fn recurrence_candidate_vars_of_parts(
         let Some((var, _)) = recurrence_lhs_target(&equation.lhs) else {
             continue;
         };
-        if array_shaped.contains(var) && has_index_self_read(&equation.rhs, var) {
+        if array_shaped.contains(var) && has_index_self_read(&equation.rhs, var, operators) {
             out.insert(var.to_string());
         }
     }
@@ -2813,15 +2817,62 @@ fn recurrence_candidate_vars_of_parts(
 /// Narrowing the EDGE walk instead would be wrong: a template binding naming a
 /// DIFFERENT observed is a real dependency once the application expands.
 /// Python resolves this the same way, for the same reason.
-fn has_index_self_read(expr: &crate::Expr, var: &str) -> bool {
+///
+/// The walk sees through operator references as the expansion would put the
+/// bodies there (esm-spec §4.9.6, "the two walks must see the same tree"):
+/// a body that reads `var` as an `index` base, free or through a parameter
+/// bound to `var`, is such a read, each body analysed once
+/// ([`crate::operator_refs::DefinitionReads::index_bases`]).
+fn has_index_self_read(
+    expr: &crate::Expr,
+    var: &str,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> bool {
+    index_read_through(expr, var, operators, false)
+}
+
+/// [`has_index_self_read`] and [`has_offset_index_read`]: an `index` read of
+/// `var` in `expr` or in a body its references reach; `offset` asks for one
+/// with a subscript that is not a bare name.
+fn index_read_through(
+    expr: &crate::Expr,
+    var: &str,
+    operators: &crate::operator_refs::OperatorRegistry,
+    offset: bool,
+) -> bool {
     let crate::Expr::Operator(node) = expr else {
         return false;
     };
-    if node.op == "index" && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var)
+    if node.op == "index"
+        && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var)
+        && (!offset
+            || node.args[1..]
+                .iter()
+                .any(|a| !matches!(a, crate::Expr::Variable(_))))
     {
         return true;
     }
-    node.any_child(&mut |child| has_index_self_read(child, var))
+    if let Some(r) = crate::operator_refs::reference_node(node)
+        && let Some(d) = operators.resolve(&r)
+    {
+        let reads = d.reads(operators);
+        let bases = if offset {
+            &reads.offset_index_bases
+        } else {
+            &reads.index_bases
+        };
+        let through_body = bases.iter().any(|b| {
+            if d.params.contains(b) {
+                matches!(r.binding(b), Some(crate::Expr::Variable(v)) if v == var)
+            } else {
+                b == var
+            }
+        });
+        if through_body {
+            return true;
+        }
+    }
+    node.any_child(&mut |child| index_read_through(child, var, operators, offset))
 }
 
 /// The observeds each observed's defining RHS names, as a sorted adjacency map.
@@ -2882,19 +2933,12 @@ fn observed_dependency_graph(
 
 /// Does `expr` gather `var` through an `index` with at least one argument that
 /// is not a bare name — a read that could be offset along an axis?
-fn has_offset_index_read(expr: &crate::Expr, var: &str) -> bool {
-    let crate::Expr::Operator(node) = expr else {
-        return false;
-    };
-    if node.op == "index"
-        && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var)
-        && node.args[1..]
-            .iter()
-            .any(|a| !matches!(a, crate::Expr::Variable(_)))
-    {
-        return true;
-    }
-    node.any_child(&mut |child| has_offset_index_read(child, var))
+fn has_offset_index_read(
+    expr: &crate::Expr,
+    var: &str,
+    operators: &crate::operator_refs::OperatorRegistry,
+) -> bool {
+    index_read_through(expr, var, operators, true)
 }
 
 /// The recurrence GROUP candidates of one model node (esm-spec §4.3.1.2): each
@@ -2927,7 +2971,7 @@ fn recurrence_groups_in(
     if class.observed_definitions.len() < 2 {
         return Vec::new();
     }
-    let candidates = recurrence_candidate_vars_of_parts(variables, equations);
+    let candidates = recurrence_candidate_vars_of_parts(variables, equations, operators);
     let deps = observed_dependency_graph(&class, &candidates, &[], operators);
     let array_shaped = |n: &str| {
         variables
@@ -2945,7 +2989,7 @@ fn recurrence_groups_in(
                 class
                     .observed_definitions
                     .get(u)
-                    .is_some_and(|rhs| scc.iter().any(|v| has_offset_index_read(rhs, v)))
+                    .is_some_and(|rhs| scc.iter().any(|v| has_offset_index_read(rhs, v, operators)))
             }) && scc.iter().all(|m| array_shaped(m))
                 && scc.iter().all(|u| {
                     let Some(rhs) = class.observed_definitions.get(u) else {
@@ -2954,7 +2998,7 @@ fn recurrence_groups_in(
                     deps.get(u).is_none_or(|succ| {
                         succ.iter()
                             .filter(|v| *v != u && scc.contains(*v))
-                            .all(|v| has_index_self_read(rhs, v))
+                            .all(|v| has_index_self_read(rhs, v, operators))
                     })
                 })
         })
@@ -2987,7 +3031,7 @@ fn check_observed_dependency_cycle(
     if class.observed_definitions.is_empty() {
         return;
     }
-    let candidates = recurrence_candidate_vars(model);
+    let candidates = recurrence_candidate_vars(model, operators);
     let groups = recurrence_groups_in(&model.variables, &model.equations, operators);
     let deps = observed_dependency_graph(class, &candidates, &groups, operators);
 
@@ -5577,7 +5621,7 @@ impl ObservedScope {
         ObservedScope {
             path,
             class: crate::classification::Classification::from_parts(variables, equations),
-            candidates: recurrence_candidate_vars_of_parts(variables, equations),
+            candidates: recurrence_candidate_vars_of_parts(variables, equations, &operators),
             groups: recurrence_groups_in(variables, equations, &operators),
             declared: variables.keys().cloned().collect(),
             differentiated_refs,
@@ -5953,6 +5997,41 @@ mod dependency_order_tests {
         assert!(at(2) < at(1) && at(1) < at(0), "{order:?}");
         // On the cycle, the one entered first is placed last.
         assert!(at(5) < at(4), "{order:?}");
+    }
+
+    /// esm-spec §4.9.6 "the two walks must see the same tree": a causal
+    /// self-read the definition's body makes (`index(v, j - 1)` with `v`
+    /// bound to `s`) makes `s` a recurrence candidate, so its self-edge is
+    /// no `observed_cycle`; a body that reads `s` whole does not.
+    #[test]
+    fn a_self_read_inside_a_body_makes_a_recurrence_candidate() {
+        let doc = |body: serde_json::Value| {
+            serde_json::json!({
+                "esm": "2.4.0", "metadata": {"name": "self_read_in_body"},
+                "index_sets": {"steps": {"kind": "interval", "size": 4}},
+                "models": {"M": {
+                    "operators": {"prev2": {"params": ["v", "j"], "body": body}},
+                    "variables": {"s": {"type": "unknown", "shape": ["steps"], "units": "1"}},
+                    "equations": [{"lhs": "s", "rhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                        "ranges": {"k": {"from": "steps"}},
+                        "expr": {"op": "ifelse", "args": [{"op": "<=", "args": ["k", 1]}, 1.0,
+                            {"op": "apply_operator", "args": [], "name": "prev2",
+                             "bindings": {"v": "s", "j": "k"}}]}}}]
+                }}
+            })
+        };
+        let cycle = |body| {
+            let file = crate::parse::load_string(&doc(body).to_string()).expect("loads");
+            crate::validate(&file)
+                .structural_errors
+                .iter()
+                .any(|e| e.code == StructuralErrorCode::ObservedCycle)
+        };
+        let offset = serde_json::json!({"op": "*", "args": [
+            {"op": "index", "args": ["v", {"op": "-", "args": ["j", 1]}]}, 2.0]});
+        assert!(!cycle(offset), "a self-read inside the body is a recurrence");
+        let whole = serde_json::json!({"op": "*", "args": ["v", 2.0]});
+        assert!(cycle(whole), "a bare self-read through the body is a cycle");
     }
 
     #[test]
