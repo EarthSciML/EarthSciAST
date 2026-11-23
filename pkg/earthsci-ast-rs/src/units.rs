@@ -857,6 +857,13 @@ fn propagate_dim(expr: &Expr, env: &dyn UnitEnv, findings: &mut Vec<UnitFinding>
         // a NONZERO literal is a pure number instead; zero stays neutral.
         Expr::Number(_) | Expr::Integer(_) => literal_dim(literal_f64(expr), env),
         Expr::Variable(name) => {
+            // A parameter of the definition body being typed: what the
+            // reference binds to it, with the binding's own findings, which
+            // the expansion would report here (esm-spec §9.6.4 rule 2).
+            if let Some(p) = env.parameter(name) {
+                findings.extend(p.findings.iter().cloned());
+                return p.dim.clone();
+            }
             if let Some(unit) = env.unit_of(name) {
                 Dim::Known(unit.clone())
             } else if name == "t" {
@@ -873,14 +880,174 @@ fn propagate_dim(expr: &Expr, env: &dyn UnitEnv, findings: &mut Vec<UnitFinding>
                 Dim::Unknown
             }
         }
-        Expr::Operator(op) => {
-            let body = propagate_operator_dim(op, env, findings);
-            match op.definition_units.as_deref() {
-                Some(def) => definition_call_dim(def, body, env, findings),
-                None => body,
-            }
+        Expr::Operator(op) => match crate::operator_refs::reference_node(op) {
+            Some(r) => reference_dim(&r, env, findings),
+            None => propagate_operator_dim(op, env, findings),
+        },
+    }
+}
+
+/// The operator references a component's expressions hold, as the
+/// dimensional checker reads them (esm-spec §9.6.9 "Units and shape checks",
+/// §9.6.12 "Units"): the component's registry, and the dimension of each
+/// definition's body, computed once per definition and per what its
+/// references bind, never on an expansion.
+pub(crate) struct OperatorUnits {
+    registry: crate::operator_refs::OperatorRegistry,
+    memo: crate::operator_refs::InstanceMemo<String, (Dim, Vec<UnitFinding>)>,
+}
+
+impl OperatorUnits {
+    /// The references of the component whose registry is `registry`.
+    pub(crate) fn new(registry: crate::operator_refs::OperatorRegistry) -> Self {
+        OperatorUnits {
+            registry,
+            memo: crate::operator_refs::InstanceMemo::new(),
         }
     }
+
+    /// The references of component `component` (`"models.<name>"` /
+    /// `"reaction_systems.<name>"`) of `esm_file`; `None` when it has no
+    /// registry.
+    pub(crate) fn of_component(esm_file: &crate::EsmFile, component: &str) -> Option<Self> {
+        let registry = esm_file.component_operators(component);
+        (!registry.is_empty()).then(|| Self::new(registry))
+    }
+}
+
+/// What a definition parameter stands for while its body is typed: what the
+/// reference binds to it, typed at the reference's site.
+#[derive(Debug)]
+pub(crate) struct BoundParam {
+    /// The binding's dimension.
+    dim: Dim,
+    /// The binding's own findings, reported wherever the body reads it.
+    findings: Vec<UnitFinding>,
+    /// The unit of the name the binding is, for a parameter in a scalar field
+    /// (`wrt`, an `integral`'s `var`): that coordinate's declared unit.
+    name_unit: Option<Unit>,
+    /// The binding's exact value when it is a constant expression (a power's
+    /// exponent reads it by value, esm-spec §4.8.3 `^`).
+    exponent: Option<Rational>,
+    /// The binding's value when it is a bare numeric literal.
+    literal: Option<f64>,
+}
+
+/// A unit's spelling for a memo key: dimensions in a fixed order and the
+/// exact scale.
+fn unit_key(u: &Unit) -> String {
+    let mut dims: Vec<String> = u
+        .dimensions
+        .iter()
+        .filter(|(_, p)| !p.is_zero())
+        .map(|(d, p)| format!("{d:?}^{p}"))
+        .collect();
+    dims.sort();
+    format!("{}|{:?}", dims.join("*"), u.exact)
+}
+
+/// The environment a definition's body is typed in: its parameters stand for
+/// what the reference binds ([`BoundParam`]); every other name the body reads
+/// is read in the scope of the reference's site, which is the component's
+/// (esm-spec §9.6.4 rule 1), however deeply the reference is nested in other
+/// bodies.
+struct BodyEnv<'a> {
+    site: &'a dyn UnitEnv,
+    params: &'a HashMap<String, BoundParam>,
+}
+
+impl UnitEnv for BodyEnv<'_> {
+    fn unit_of(&self, name: &str) -> Option<&Unit> {
+        match self.params.get(name) {
+            Some(p) => p.name_unit.as_ref(),
+            None => self.site.unit_of(name),
+        }
+    }
+
+    fn dimensionless_literals(&self) -> bool {
+        self.site.dimensionless_literals()
+    }
+
+    fn operators(&self) -> Option<&OperatorUnits> {
+        self.site.operators()
+    }
+
+    fn parameter(&self, name: &str) -> Option<&BoundParam> {
+        self.params.get(name)
+    }
+
+    fn site(&self) -> Option<&dyn UnitEnv> {
+        Some(self.site)
+    }
+}
+
+/// The dimension of a reference (esm-spec §9.6.12 "Units"): its definition's
+/// unit expression evaluated from the units of what it binds, or the fixed
+/// unit of `partial` / `integral`, else the dimension of the definition's
+/// body. The body is typed once per definition and per what the reference
+/// binds (each binding's dimension and findings, the coordinate unit of a
+/// name, the value of a constant), with its parameters standing for the
+/// bindings ([`BodyEnv`]); a binding is never substituted into the body. With
+/// no registry, or a reference its registry does not resolve (the load
+/// reports that), the dimension is undeterminable.
+fn reference_dim(
+    r: &crate::operator_refs::Reference<'_>,
+    env: &dyn UnitEnv,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    let Some(ops) = env.operators() else {
+        return Dim::Unknown;
+    };
+    let Some(def) = ops.registry.resolve(r).cloned() else {
+        return Dim::Unknown;
+    };
+    let mut params: HashMap<String, BoundParam> = HashMap::new();
+    let mut key = format!("{}", env.dimensionless_literals());
+    for p in &def.params {
+        let Some(b) = r.binding(p) else {
+            continue;
+        };
+        let mut own = Vec::new();
+        let dim = propagate_dim(b, env, &mut own);
+        let name_unit = match b {
+            Expr::Variable(n) => env.unit_of(n).cloned(),
+            _ => dim.known().cloned(),
+        };
+        let bound = BoundParam {
+            exponent: constant_exponent_in(b, env),
+            literal: literal_in(b, env),
+            name_unit,
+            findings: own,
+            dim,
+        };
+        use std::fmt::Write as _;
+        let _ = write!(
+            key,
+            ";{p}={}|{}|{:?}|{:?}|{:?}",
+            bound.dim.known().map(unit_key).unwrap_or_default(),
+            bound.name_unit.as_ref().map(unit_key).unwrap_or_default(),
+            bound.exponent,
+            bound.literal.map(f64::to_bits),
+            bound.findings,
+        );
+        params.insert(p.clone(), bound);
+    }
+    let site = env.site().unwrap_or(env);
+    let typed = ops.memo.get_or_compute(&def.name, &key, || {
+        let benv = BodyEnv {
+            site,
+            params: &params,
+        };
+        let mut own = Vec::new();
+        let dim = match &def.body {
+            Some(body) => propagate_dim(body, &benv, &mut own),
+            None => Dim::Unknown,
+        };
+        (dim, own)
+    });
+    let (body, body_findings) = &*typed;
+    findings.extend(body_findings.iter().cloned());
+    definition_call_dim(&def, &params, body.clone(), env, findings)
 }
 
 /// A call's unit (esm-spec §4.8.3, §9.6.12 "Units"): the unit expression of
@@ -891,30 +1058,28 @@ fn propagate_dim(expr: &Expr, env: &dyn UnitEnv, findings: &mut Vec<UnitFinding>
 /// is determinable, a warning when it is not. Mirrors the Julia reference
 /// `_definition_call_unit!`.
 fn definition_call_dim(
-    def: &crate::types::DefinitionUnits,
+    def: &crate::operator_refs::Definition,
+    params: &HashMap<String, BoundParam>,
     body: Dim,
     env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
-    if def.units.is_none() && def.fixed.is_none() {
+    if def.units.is_none() && def.fixed_units.is_none() {
         return body;
     }
     // What a parameter stands for at this call: the unit of what the call
     // binds to it (an operand's unit; for a parameter in a structural
     // position bound to an axis name, that coordinate's). Its own findings
-    // were reported where the operand sits in the expansion.
-    let param_unit = |p: &str| -> Option<Unit> {
-        let b = def.bindings.get(p)?;
-        propagate_dim(b, env, &mut Vec::new()).known().cloned()
-    };
+    // were reported where the body reads it.
+    let param_unit = |p: &str| -> Option<Unit> { params.get(p)?.dim.known().cloned() };
     let declared = def
         .units
         .as_ref()
-        .and_then(|u| eval_unit_expression(u, def, &param_unit, env));
+        .and_then(|u| eval_unit_expression(u, params, &param_unit, env));
     let fixed = def
-        .fixed
+        .fixed_units
         .as_ref()
-        .and_then(|u| eval_unit_expression(u, def, &param_unit, env));
+        .and_then(|u| eval_unit_expression(u, params, &param_unit, env));
     let name = &def.name;
     let defines = def.defines.as_deref().unwrap_or(name);
     let fixed_what = format!("the fixed unit expression of '{defines}'");
@@ -978,13 +1143,13 @@ fn definition_call_dim(
 /// undeterminable.
 fn eval_unit_expression(
     x: &Expr,
-    def: &crate::types::DefinitionUnits,
+    params: &HashMap<String, BoundParam>,
     param_unit: &dyn Fn(&str) -> Option<Unit>,
     env: &dyn UnitEnv,
 ) -> Option<Unit> {
     match x {
         Expr::Variable(s) => {
-            if def.bindings.contains_key(s) {
+            if params.contains_key(s) {
                 param_unit(s)
             } else {
                 env.unit_of(s).cloned()
@@ -999,7 +1164,7 @@ fn eval_unit_expression(
             "*" => {
                 let mut acc: Option<Unit> = None;
                 for a in &op.args {
-                    let u = eval_unit_expression(a, def, param_unit, env)?;
+                    let u = eval_unit_expression(a, params, param_unit, env)?;
                     acc = Some(match acc {
                         None => u,
                         Some(p) => p.multiply(&u),
@@ -1008,12 +1173,12 @@ fn eval_unit_expression(
                 acc
             }
             "/" if op.args.len() == 2 => {
-                let a = eval_unit_expression(&op.args[0], def, param_unit, env)?;
-                let b = eval_unit_expression(&op.args[1], def, param_unit, env)?;
+                let a = eval_unit_expression(&op.args[0], params, param_unit, env)?;
+                let b = eval_unit_expression(&op.args[1], params, param_unit, env)?;
                 Some(a.divide(&b))
             }
             "^" if op.args.len() == 2 => {
-                let b = eval_unit_expression(&op.args[0], def, param_unit, env)?;
+                let b = eval_unit_expression(&op.args[0], params, param_unit, env)?;
                 let e = match &op.args[1] {
                     Expr::Integer(i) => Rational::int(i32::try_from(*i).ok()?),
                     Expr::Number(f) => Rational::from_f64(*f)?,
@@ -1479,12 +1644,11 @@ fn propagate_power_dim(
     // expression over literals (`3/2`, `-(1)`) has an exact value too, and is
     // folded to it (esm-spec §4.8.3 `^`). Exponents are RATIONAL, so a
     // fractional power of a dimensional quantity (`x^0.5`) propagates exactly.
-    if let Some(r) = constant_exponent(&op.args[1]) {
+    if let Some(r) = constant_exponent_in(&op.args[1], env) {
         return Dim::Known(base_unit.power_rational(r));
     }
-    match &op.args[1] {
-        Expr::Integer(_) | Expr::Number(_) => {
-            let n = literal_f64(&op.args[1]).unwrap_or(f64::NAN);
+    match literal_in(&op.args[1], env) {
+        Some(n) => {
             findings.push(UnitFinding::analysis(format!(
                 "Exponent {n} is not a representable rational, so the dimension of a \
                  dimensional base is unknown"
@@ -1493,7 +1657,7 @@ fn propagate_power_dim(
         // Symbolic exponent (`x^n` for a parameter `n`): the resulting
         // dimension depends on a value we do not have. Undeterminable, NOT a
         // mismatch (§4.8.4).
-        _ => {
+        None => {
             findings.push(UnitFinding::analysis(format!(
                 "Exponent of '{}' is not a constant expression, so the dimension of a \
                  dimensional base is unknown",
@@ -1539,12 +1703,35 @@ fn literal_f64(expr: &Expr) -> Option<f64> {
 /// and the quantity it denotes disagree), any other operator, an overflow of
 /// the rational representation — is symbolic, which leaves the power of a
 /// dimensional base undeterminable (§4.8.4).
+#[cfg(test)]
 pub fn constant_exponent(expr: &Expr) -> Option<Rational> {
+    constant_exponent_with(expr, &|_| None)
+}
+
+/// [`constant_exponent`] read in `env`: a parameter of a definition body being
+/// typed is the constant the reference binds to it, if it binds one.
+fn constant_exponent_in(expr: &Expr, env: &dyn UnitEnv) -> Option<Rational> {
+    constant_exponent_with(expr, &|n| env.parameter(n).and_then(|p| p.exponent))
+}
+
+/// [`literal_f64`] read in `env`: a parameter of a definition body being
+/// typed is the literal the reference binds to it, if it binds one.
+fn literal_in(expr: &Expr, env: &dyn UnitEnv) -> Option<f64> {
+    match expr {
+        Expr::Variable(n) => env.parameter(n).and_then(|p| p.literal),
+        _ => literal_f64(expr),
+    }
+}
+
+/// [`constant_exponent`], a variable's value given by `var`.
+fn constant_exponent_with(expr: &Expr, var: &dyn Fn(&str) -> Option<Rational>) -> Option<Rational> {
     if let Some(n) = literal_f64(expr) {
         return Rational::from_f64(n);
     }
-    let Expr::Operator(node) = expr else {
-        return None;
+    let node = match expr {
+        Expr::Variable(n) => return var(n),
+        Expr::Operator(node) => node,
+        _ => return None,
     };
     if node.op == "const" {
         if let Some(units) = &node.units {
@@ -1562,7 +1749,7 @@ pub fn constant_exponent(expr: &Expr) -> Option<Rational> {
     let values = node
         .args
         .iter()
-        .map(constant_exponent)
+        .map(|a| constant_exponent_with(a, var))
         .collect::<Option<Vec<Rational>>>()?;
     let (first, rest) = values.split_first()?;
     match node.op.as_str() {
@@ -2204,6 +2391,26 @@ pub(crate) trait UnitEnv {
     fn dimensionless_literals(&self) -> bool {
         false
     }
+
+    /// The operator references of the component being checked, when the
+    /// checker can type them ([`OperatorUnits`]). Without them a reference is
+    /// undeterminable.
+    fn operators(&self) -> Option<&OperatorUnits> {
+        None
+    }
+
+    /// What `name` stands for when it is a parameter of the definition body
+    /// being typed ([`BodyEnv`]).
+    fn parameter(&self, _name: &str) -> Option<&BoundParam> {
+        None
+    }
+
+    /// The environment of the site a definition body is typed for, when this
+    /// is a body's ([`BodyEnv`]): the body's free names, and the references
+    /// nested in it, are read there.
+    fn site(&self) -> Option<&dyn UnitEnv> {
+        None
+    }
 }
 
 /// `env` under the esm-spec §4.8.6 dimensionless-literal rule: the same names
@@ -2218,6 +2425,14 @@ impl UnitEnv for DimensionlessLiterals<'_> {
 
     fn dimensionless_literals(&self) -> bool {
         true
+    }
+
+    fn operators(&self) -> Option<&OperatorUnits> {
+        self.0.operators()
+    }
+
+    fn parameter(&self, name: &str) -> Option<&BoundParam> {
+        self.0.parameter(name)
     }
 }
 
@@ -2264,6 +2479,7 @@ pub(crate) struct ComponentUnitEnv<'d> {
     own: HashMap<String, Unit>,
     relative: HashMap<String, Option<Unit>>,
     document: &'d HashMap<String, Unit>,
+    operators: Option<OperatorUnits>,
 }
 
 impl<'d> ComponentUnitEnv<'d> {
@@ -2292,7 +2508,15 @@ impl<'d> ComponentUnitEnv<'d> {
             own,
             relative,
             document,
+            operators: None,
         }
+    }
+
+    /// This environment typing the references of the component whose
+    /// registry `operators` holds (esm-spec §9.6.12 "Units").
+    pub(crate) fn with_operators(mut self, operators: Option<OperatorUnits>) -> Self {
+        self.operators = operators;
+        self
     }
 
     /// Every name with a known unit, own declarations winning, as one map.
@@ -2321,6 +2545,10 @@ impl UnitEnv for ComponentUnitEnv<'_> {
             Some(unit) => unit.as_ref(),
             None => self.document.get(name),
         }
+    }
+
+    fn operators(&self) -> Option<&OperatorUnits> {
+        self.operators.as_ref()
     }
 }
 
@@ -2530,21 +2758,55 @@ fn bare_literal(expr: &Expr) -> Option<BareLiteral> {
 /// dimensionless-literal warning names. The walk reaches every
 /// expression-bearing child, so an empty result means the two literal rules
 /// type `exprs` identically.
-fn nonzero_bare_literals(exprs: &[&Expr]) -> Vec<String> {
-    fn walk(expr: &Expr, out: &mut Vec<String>) {
+///
+/// A reference's literals are those of the bindings its expansion reads,
+/// then those of the bodies it reaches, each body walked once
+/// ([`crate::operator_refs::OperatorRegistry::reachable`]): the expansion's
+/// literals, listed without building it.
+fn nonzero_bare_literals(
+    exprs: &[&Expr],
+    registry: &crate::operator_refs::OperatorRegistry,
+) -> Vec<String> {
+    fn walk(expr: &Expr, registry: &crate::operator_refs::OperatorRegistry, out: &mut Vec<String>) {
         if let Some(literal) = bare_literal(expr) {
             if literal.value != 0.0 && !out.contains(&literal.text) {
                 out.push(literal.text);
             }
             return;
         }
-        if let Expr::Operator(node) = expr {
-            node.for_each_child(&mut |child| walk(child, out));
+        let Expr::Operator(node) = expr else {
+            return;
+        };
+        if let Some(r) = crate::operator_refs::reference_node(node)
+            && let Some(def) = registry.resolve(&r)
+        {
+            let reads = def.reads(registry);
+            let mut keys: Vec<&String> = r.bindings.keys().collect();
+            keys.sort();
+            for k in keys {
+                if reads.params.contains(k) {
+                    walk(&r.bindings[k], registry, out);
+                }
+            }
+            return;
         }
+        node.for_each_child(&mut |child| walk(child, registry, out));
     }
     let mut out = Vec::new();
     for expr in exprs {
-        walk(expr, &mut out);
+        walk(expr, registry, &mut out);
+    }
+    // The bodies the sites reach, each once.
+    for name in registry.reachable(exprs.iter().copied()) {
+        if let Some(body) = registry.get(&name).and_then(|d| d.body.as_ref()) {
+            let mut inner = Vec::new();
+            walk(body, registry, &mut inner);
+            for t in inner {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
     }
     out
 }
@@ -2601,13 +2863,17 @@ pub(crate) fn dimensionless_literal_findings(
     document_units: &HashMap<String, Unit>,
 ) -> Vec<(String, String)> {
     let mut walk = LiteralWalk {
+        esm_file,
         document_units,
+        registry: Default::default(),
         out: Vec::new(),
     };
     for (name, model) in esm_file.models.iter().flatten() {
+        walk.component(&format!("models.{name}"));
         walk.model(&format!("/models/{}", pointer_token(name)), model);
     }
     for (name, rs) in esm_file.reaction_systems.iter().flatten() {
+        walk.component(&format!("reaction_systems.{name}"));
         walk.reaction_system(&format!("/reaction_systems/{}", pointer_token(name)), rs);
     }
     walk.out
@@ -2615,14 +2881,27 @@ pub(crate) fn dimensionless_literal_findings(
 
 /// The walk behind [`dimensionless_literal_findings`].
 struct LiteralWalk<'d> {
+    esm_file: &'d crate::EsmFile,
     document_units: &'d HashMap<String, Unit>,
+    /// The registry of the top-level component being walked: the references
+    /// in it and in its subsystems resolve against it.
+    registry: crate::operator_refs::OperatorRegistry,
     out: Vec<(String, String)>,
 }
 
 impl LiteralWalk<'_> {
+    fn component(&mut self, component: &str) {
+        self.registry = self.esm_file.component_operators(component);
+    }
+
+    fn operators(&self) -> Option<OperatorUnits> {
+        (!self.registry.is_empty()).then(|| OperatorUnits::new(self.registry.clone()))
+    }
+
     fn model(&mut self, pointer: &str, model: &crate::Model) {
         let (own, _) = build_unit_env(&model.variables);
-        let env = ComponentUnitEnv::new(own, model, self.document_units);
+        let env =
+            ComponentUnitEnv::new(own, model, self.document_units).with_operators(self.operators());
         for (i, eq) in model.equations.iter().enumerate() {
             self.site(
                 format!("{pointer}/equations/{i}"),
@@ -2654,7 +2933,8 @@ impl LiteralWalk<'_> {
         let own: HashMap<String, Unit> = declared
             .filter_map(|(n, units)| Some((n.clone(), parse_unit(units?).ok()?)))
             .collect();
-        let env = ComponentUnitEnv::new(own, rs, self.document_units);
+        let env =
+            ComponentUnitEnv::new(own, rs, self.document_units).with_operators(self.operators());
         for (i, eq) in rs.constraint_equations.iter().flatten().enumerate() {
             self.site(
                 format!("{pointer}/constraint_equations/{i}"),
@@ -2680,7 +2960,7 @@ impl LiteralWalk<'_> {
     /// Judge one site under both literal rules and record the warning when only
     /// the dimensionless-literal rule fails it.
     fn site(&mut self, pointer: String, site: LiteralSite<'_>, env: &dyn UnitEnv) {
-        let literals = nonzero_bare_literals(&site.exprs());
+        let literals = nonzero_bare_literals(&site.exprs(), &self.registry);
         // With no nonzero literal the two rules type the site identically.
         if literals.is_empty() {
             return;

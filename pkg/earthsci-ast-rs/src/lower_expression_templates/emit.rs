@@ -114,6 +114,11 @@ pub(crate) fn received_transform_refs(
 /// registry capture, as the Julia reference `_materialize_components!` is.
 /// `received` names the references of the coupling transforms the component
 /// receives ([`received_transform_refs`]), which count as its own.
+///
+/// A materialized `partial` / `integral` rule keeps the fixed unit expression
+/// its `match` gave ([`FIXED_UNITS_KEY`]): the typed load's registry keeps it
+/// for the unit checker ([`crate::operator_refs::Definition::fixed_units`]),
+/// and every writer strips it ([`strip_fixed_units`]).
 pub(crate) fn materialize_component_block(
     comp: &Map<String, Value>,
     authored_here: &[String],
@@ -153,11 +158,6 @@ pub(crate) fn materialize_component_block(
             carried = true;
         }
     }
-    let mut emit_block = Value::Object(emit_block);
-    strip_fixed_units(&mut emit_block);
-    let Value::Object(emit_block) = emit_block else {
-        unreachable!("an object stays an object")
-    };
     (emit_block, !refnames.is_empty(), carried)
 }
 
@@ -220,8 +220,9 @@ pub fn emit_document(
             let key = format!("{compkind}.{cname}");
             let authored_here = authored.get(&key).cloned().unwrap_or_default();
             let here = received.remove(cname.as_str()).unwrap_or_default();
-            let (emit_block, refs, carried) =
+            let (mut emit_block, refs, carried) =
                 materialize_component_block(comp, &authored_here, &here);
+            emit_block.values_mut().for_each(strip_fixed_units);
             bump |= refs || carried;
 
             if emit_block.is_empty() {
