@@ -42,10 +42,12 @@ pub(crate) struct ComponentRefs {
     /// binds that the body binds as a loop symbol is that loop symbol where
     /// the body reads it, not a variable of the site's component.
     pub(crate) captures: HashMap<String, HashSet<String>>,
-    /// Per definition, the parameters its body spells only in a scalar field
-    /// (`wrt`, `dim`, a `ranges` bound, …): a bare name bound to one is
-    /// scoped as that field scopes it (only when it names a local of the
-    /// site), as the expansion would have it.
+    /// Per definition, the parameters its expansion never reads as an
+    /// operand (spelled only in a scalar field such as `wrt`, `dim` or a
+    /// `ranges` bound, or not read at all), through the references its body
+    /// makes ([`field_params`]): a bare name bound to one is scoped as such a
+    /// field scopes it (only when it names a local of the site), as the
+    /// expansion would have it.
     pub(crate) literal: HashMap<String, HashSet<String>>,
 }
 
@@ -142,18 +144,7 @@ pub(crate) fn prepare(file: &EsmFile) -> FlatRegistry {
             .filter(|(_, d)| d.body.is_some() && !d.body_binders().is_empty())
             .map(|(n, d)| (n.clone(), d.body_binders().clone()))
             .collect();
-        let literal = typed
-            .iter()
-            .filter_map(|(n, d)| {
-                let ps: HashSet<String> = d
-                    .param_roles()
-                    .iter()
-                    .filter(|(_, r)| r.literal && !r.operand)
-                    .map(|(p, _)| p.clone())
-                    .collect();
-                (!ps.is_empty()).then(|| (n.clone(), ps))
-            })
-            .collect();
+        let literal = field_params(&typed);
         components.insert(
             compkey.clone(),
             ComponentRefs {
@@ -175,6 +166,67 @@ pub(crate) fn prepare(file: &EsmFile) -> FlatRegistry {
         registry: merged.into_iter().collect(),
         components,
     }
+}
+
+/// Per definition of `reg`, its parameters that its expansion never reads as
+/// an operand: not an operand of its body, and passed on to nested
+/// references only as their such parameters.
+fn field_params(
+    reg: &crate::operator_refs::OperatorRegistry,
+) -> HashMap<String, HashSet<String>> {
+    fn of(
+        reg: &crate::operator_refs::OperatorRegistry,
+        name: &str,
+        memo: &mut HashMap<String, HashSet<String>>,
+        busy: &mut HashSet<String>,
+    ) -> HashSet<String> {
+        if let Some(m) = memo.get(name) {
+            return m.clone();
+        }
+        let Some(def) = reg.get(name) else {
+            return HashSet::new();
+        };
+        let Some(body) = &def.body else {
+            return HashSet::new();
+        };
+        if !busy.insert(name.to_string()) {
+            return HashSet::new();
+        }
+        let roles = def.param_roles();
+        let mut out: HashSet<String> = def
+            .params
+            .iter()
+            .filter(|p| roles.get(*p).is_none_or(|r| !r.operand))
+            .cloned()
+            .collect();
+        // A parameter passed on as a binding must be a field parameter of
+        // every callee it is passed to.
+        let mut refs = Vec::new();
+        crate::operator_refs::for_each_reference(body, &mut |r| {
+            refs.push((r.name.to_string(), r.bindings.clone()))
+        });
+        for (callee, bindings) in refs {
+            let inner = of(reg, &callee, memo, busy);
+            for (q, b) in &bindings {
+                if let Expr::Variable(v) = b
+                    && !inner.contains(q)
+                {
+                    out.remove(v);
+                }
+            }
+        }
+        busy.remove(name);
+        memo.insert(name.to_string(), out.clone());
+        out
+    }
+    let mut memo = HashMap::new();
+    let mut busy = HashSet::new();
+    reg.iter()
+        .filter_map(|(n, _)| {
+            let ps = of(reg, n, &mut memo, &mut busy);
+            (!ps.is_empty()).then(|| (n.clone(), ps))
+        })
+        .collect()
 }
 
 /// `e` with every reference renamed through `rename` (old name to new),
