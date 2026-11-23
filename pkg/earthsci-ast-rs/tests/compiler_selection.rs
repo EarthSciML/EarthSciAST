@@ -340,7 +340,6 @@ fn native_runs_per_variable_element_types_bit_for_bit() {
 /// `native` with every rule on the tape, with the routing decided
 /// (`Rhs::Auto`) and forced, and lands where the interpreter does.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn native_runs_the_lowering_limit_probes_bit_for_bit() {
     for f in [
         "five_contracted_indices.esm",
@@ -762,7 +761,6 @@ fn xla_reports_observeds_from_the_tape_the_emitter_was_built_from() {
 /// the general fold with it off, and the two right-hand sides agree bit for
 /// bit.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn the_count_rewrite_is_a_problem_option() {
     let path = fixture("bench/interp_bracket/interp_bracket_const_compose_N59.esm");
     let build = |count_fold: bool| {

@@ -198,7 +198,6 @@ fn nested_doc() -> Value {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn a_degree_argument_inside_makearray_and_a_template_binding_takes_radians() {
     let d = nested_doc();
     let (s, c) = (30f64.to_radians().sin(), 30f64.to_radians().cos());

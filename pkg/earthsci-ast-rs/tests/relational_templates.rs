@@ -131,7 +131,6 @@ fn field_both(doc: &Value, arrays: &[(&str, Vec<f64>)], name: &str, label: &str)
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn relational_template_scenarios_give_the_expected_index() {
     let path = common::repo_root().join("tests/conformance/relational_templates/scenarios.json");
     let spec: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -157,7 +156,6 @@ fn relational_template_scenarios_give_the_expected_index() {
 type Arrays = Vec<(&'static str, Vec<f64>)>;
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn nearest_generator_fixtures_give_the_assignment_buffer() {
     let generators = [("gx", vec![0., 1., 2.]), ("gy", vec![0., 0., 0.])];
     let cases: Vec<(&str, &str, Arrays, Vec<f64>)> = vec![

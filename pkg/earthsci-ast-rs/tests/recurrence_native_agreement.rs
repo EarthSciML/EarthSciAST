@@ -99,12 +99,6 @@ const DOCS: &[(&str, &str, &str, usize)] = &[
     ),
 ];
 
-/// The documents of [`DOCS`] that hold an operator reference: the native
-/// compiler declines a rule holding one until it compiles a definition as a
-/// called function (QUESTIONS.md Q1), so the native comparisons skip them.
-const NATIVE_REFUSES_REFERENCES: &[&str] =
-    &["fixtures/recurrence/09_recurrence_through_expression_template.esm"];
-
 fn tests_dir() -> PathBuf {
     common::repo_tests_dir()
 }
@@ -147,9 +141,6 @@ fn assert_all_taped(label: &str, prob: &EsmProblem) {
 #[test]
 fn every_recurrence_document_builds_on_the_tape_and_agrees_bit_for_bit() {
     for &(rel, model, var, _) in DOCS {
-        if NATIVE_REFUSES_REFERENCES.contains(&rel) {
-            continue;
-        }
         let path = tests_dir().join(rel);
         let native = esm_problem(
             path.as_path(),
@@ -199,9 +190,6 @@ fn every_recurrence_document_builds_on_the_tape_and_agrees_bit_for_bit() {
 #[test]
 fn every_recurrence_fixture_passes_its_own_assertions_under_native() {
     for &(rel, _, _, _) in DOCS {
-        if NATIVE_REFUSES_REFERENCES.contains(&rel) {
-            continue;
-        }
         let file = load_path(tests_dir().join(rel)).expect("the fixture parses");
         let options = InlineTestOptions {
             compiler: Some(Compiler::Native),
@@ -323,9 +311,6 @@ fn assert_trajectory_agrees(label: &str, native: &EsmProblem, interp: &EsmProble
 #[test]
 fn with_the_right_hand_side_forced_on_native_agrees_bit_for_bit() {
     for &(rel, _, var, rank) in DOCS {
-        if NATIVE_REFUSES_REFERENCES.contains(&rel) {
-            continue;
-        }
         let doc = with_a_state(&read_doc(rel), var, rank);
         let native = esm_problem(&doc, (0.0, 0.5), opts(Compiler::Native, Rhs::Always))
             .unwrap_or_else(|e| panic!("{rel}: native must build it: {e}"));

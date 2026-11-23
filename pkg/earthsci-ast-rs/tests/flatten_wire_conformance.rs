@@ -382,18 +382,6 @@ fn the_written_out_system_builds_as_the_original() {
         for compiler in [Compiler::Interpreter, Compiler::Native] {
             let original = built(&file, compiler);
             let written = built(&back, compiler);
-            // `native` declines a rule holding an operator reference until it
-            // compiles a definition as a called function (QUESTIONS.md Q1);
-            // the read-back system is expanded, so the two cannot agree yet.
-            if compiler == Compiler::Native
-                && original.as_ref().is_err_and(|e| {
-                    format!("{e:?}")
-                        .contains("the native compiler does not yet compile a definition")
-                })
-            {
-                eprintln!("skip  {name} under native: QUESTIONS.md Q1");
-                continue;
-            }
             match (&original, &written) {
                 (Ok(o), Ok(w)) => assert_eq!(o, w, "{name} under {compiler:?}"),
                 (Err(_), Err(_)) => {}

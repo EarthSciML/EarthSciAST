@@ -178,6 +178,7 @@ fn detect_indicator_count<'e>(spec: &ArrayOpSpec<'e>) -> Option<IndicatorCount<'
     })
 }
 
+mod calls;
 mod contraction;
 mod index;
 mod rules;
@@ -1137,6 +1138,20 @@ pub(crate) struct TapeBuilder<'m> {
     /// not classify its positions: the rule declines with it.
     tile_violation: Option<String>,
 
+    // Operator references (`calls`) -----------------------------------------
+    /// The instances the build's references name; `None` where no reference
+    /// can occur (a standalone tape).
+    ops: Option<&'m crate::operator_refs::Instances>,
+    /// The functions this build compiles, shared with every function builder.
+    funcs: calls::SharedFuncs,
+    /// This builder lowers an operator definition's body: its state
+    /// variables and parameters are the call's arguments.
+    is_function: bool,
+    /// In a function builder: the parameters bound to a literal.
+    fn_lits: FxHashMap<String, f64>,
+    /// In a function builder: the parameters bound to the time.
+    fn_times: HashSet<String>,
+
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
     vn_hoist_hits: usize,
@@ -1438,6 +1453,11 @@ impl<'m> TapeBuilder<'m> {
             tile_pending: None,
             tile_read_ok: false,
             tile_violation: None,
+            ops: None,
+            funcs: Default::default(),
+            is_function: false,
+            fn_lits: FxHashMap::default(),
+            fn_times: HashSet::new(),
             vn_scope_hits: 0,
             vn_hoist_hits: 0,
         }
@@ -1718,8 +1738,9 @@ impl<'m> TapeBuilder<'m> {
                 let sv = &self.state_vars[*ix as usize];
                 if sv.shape.is_empty() {
                     None
-                } else if self.tile.is_some() {
-                    // A tile's state is its storage box, at its global origin.
+                } else if self.tile.is_some() || self.is_function {
+                    // A tile's state is its storage box, at its global origin;
+                    // a function's is its argument's box.
                     Some((sv.shape.clone(), sv.origin.clone()))
                 } else {
                     Some((sv.shape.clone(), DimI::from_elem(1, sv.shape.len())))
@@ -1730,6 +1751,8 @@ impl<'m> TapeBuilder<'m> {
 
     fn lv_cadence(&self, lv: &LV) -> Cadence {
         match lv {
+            // A function's parameter is the running call's scalar argument.
+            LV::Param(_) if self.is_function => Cadence::Continuous,
             LV::Lit(_) | LV::Param(_) => Cadence::Const,
             LV::Time | LV::State(_) => Cadence::Continuous,
             LV::Scalar(s) | LV::Arr(s) => self.tables.slots[*s as usize].cadence,
@@ -2521,6 +2544,14 @@ impl<'m> TapeBuilder<'m> {
     /// contraction index, output box symbol (ramp), state, observed, param,
     /// bail (forcing / unknown loop bind).
     fn resolve_var(&mut self, name: &str, bx: &LBox) -> LResult<LV> {
+        if self.is_function {
+            if let Some(&v) = self.fn_lits.get(name) {
+                return Ok(LV::Lit(v));
+            }
+            if self.fn_times.contains(name) {
+                return Ok(LV::Time);
+            }
+        }
         if name == "t" {
             return Ok(LV::Time);
         }
@@ -2675,11 +2706,7 @@ impl<'m> TapeBuilder<'m> {
                 self.lower_op_code(vec_op_code(fn_name), node, bx)
             }
             VecOp::Unsupported if node.op == crate::operator_refs::APPLY_OP => {
-                bail_tape!(
-                    "operator reference `{}`: the native compiler does not yet compile a \
-                     definition as a called function",
-                    node.name.as_deref().unwrap_or("")
-                )
+                self.lower_call(node, bx)
             }
             VecOp::Unsupported => {
                 bail_tape!("op: unsupported operator `{}`/{}", node.op, node.args.len())
@@ -4113,25 +4140,6 @@ fn baked_join_key_params(compiled: &ArrayCompiled) -> FxHashMap<String, f64> {
         .collect()
 }
 
-/// Decline a rule whose expression holds an operator reference (esm-spec
-/// §9.6.4): the tape has no call mechanism yet, and it never expands a
-/// reference, so such a rule does not lower and a `native` build refuses the
-/// model by name. A rule reading an observed that holds one declines with it
-/// (the observed's own rule declines first).
-fn reference_decline(body: &Expr) -> Result<(), Bail> {
-    let mut first: Option<String> = None;
-    crate::operator_refs::for_each_reference(body, &mut |r| {
-        first.get_or_insert_with(|| r.name.to_string());
-    });
-    match first {
-        None => Ok(()),
-        Some(n) => Err(Bail::new(format!(
-            "operator reference `{n}`: the native compiler does not yet compile a definition \
-             as a called function"
-        ))),
-    }
-}
-
 pub(super) fn build_tape_program(
     compiled: &ArrayCompiled,
     const_names: &HashSet<String>,
@@ -4171,6 +4179,7 @@ pub(super) fn build_tape_program(
     b.tile = tile;
     b.baked_params = baked_join_key_params(compiled);
     b.count_fold = compiled.rewrites.count_fold;
+    b.ops = Some(&*compiled.operators);
 
     // ---- observed rules, in dependency order -------------------------------
     for (i, rule) in observed_rules.iter().enumerate() {
@@ -4186,8 +4195,8 @@ pub(super) fn build_tape_program(
         // arms it: every instruction it emits is tagged with it.
         let _rule_precision = crate::precision::has_variable_overrides()
             .then(|| crate::precision::enter(crate::precision::of_variable(&name)));
-        let lowered = reference_decline(observed_rule_body(rule))
-            .and_then(|()| b.lower_observed_rule(rule))
+        let lowered = b
+            .lower_observed_rule(rule)
             .and_then(|v| b.flush_rule_fault().map(|()| v))
             .and_then(|v| b.take_tile_violation().map(|()| v));
         let pending = b.tile_pending.take();
@@ -4230,13 +4239,8 @@ pub(super) fn build_tape_program(
             cadence: Cadence::Continuous,
         });
         let txn = b.txn();
-        let body = match rule {
-            RhsRule::Scalar { body, .. }
-            | RhsRule::IndexedScalar { body, .. }
-            | RhsRule::ArrayLoop { body, .. } => body,
-        };
-        match reference_decline(body)
-            .and_then(|()| b.lower_rhs_rule(rule))
+        match b
+            .lower_rhs_rule(rule)
             .and_then(|()| b.flush_rule_fault())
             .and_then(|()| b.take_tile_violation())
         {
@@ -4263,7 +4267,26 @@ pub(super) fn build_tape_program(
     let exports = b.compute_exports(observed_rules, compiled.tape_serves_passes());
 
     // ---- flatten + fusion + liveness + coloring ----------------------------
-    (Ok(b.finish(exports, fuse, align_layout)), vn_hits)
+    let rules_for_refusal: Vec<RuleInfo> = b.rules.clone();
+    match b.finish(exports, fuse, align_layout) {
+        Ok(prog) => (Ok(prog), vn_hits),
+        Err(why) => {
+            // A function the program calls cannot be laid out like it: the
+            // program is refused, naming every rule (no rule ran per cell).
+            let n = rules_for_refusal.len();
+            let mut reasons: Vec<Option<Bail>> = (0..n).map(|_| None).collect();
+            if let Some(r) = reasons.first_mut() {
+                *r = Some(Bail::new(why));
+            }
+            (
+                Err(DeclinedTape {
+                    rules: rules_for_refusal,
+                    reasons,
+                }),
+                vn_hits,
+            )
+        }
+    }
 }
 
 /// How a subscript of a makearray read in a box reads it

@@ -764,14 +764,25 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
-    /// Flatten the chunk streams, run the fusion post-pass (Step 4), then
-    /// liveness + slab coloring, and assemble the final program.
+    /// Flatten the chunk streams, run the passes ([`calls::finish_program`]:
+    /// fusion, liveness and slab coloring), then finish every function the
+    /// program calls in its layout.
     pub(super) fn finish(
-        mut self,
+        self,
         exports: Vec<(String, SlotId)>,
         fuse: Option<super::super::fuse::SuperopCfg>,
         align_layout: bool,
-    ) -> TapeProgram {
+    ) -> Result<TapeProgram, String> {
+        let funcs = std::rc::Rc::clone(&self.funcs);
+        let mut prog = self.assemble(exports);
+        super::calls::finish_program(&mut prog, super::calls::Layout::Chosen(align_layout), fuse)?;
+        prog.funcs = funcs.borrow_mut().finish(prog.col_major, fuse)?;
+        Ok(prog)
+    }
+
+    /// The lowered program, its chunk streams flattened into sections, before
+    /// any pass rewrites it.
+    pub(super) fn assemble(mut self, exports: Vec<(String, SlotId)>) -> TapeProgram {
         let mut instrs: Vec<Instr> = Vec::new();
         let mut precision: Vec<Precision> = Vec::new();
         let mut provenance: Vec<u32> = Vec::new();
@@ -805,7 +816,7 @@ impl<'m> TapeBuilder<'m> {
             self.tables.fault_order.len(),
             "`fault_order` is parallel to `faults`"
         );
-        let mut prog = TapeProgram {
+        TapeProgram {
             instrs,
             precision,
             n_const,
@@ -825,26 +836,8 @@ impl<'m> TapeBuilder<'m> {
             col_major: false,
             prepared: Default::default(),
             funcs: Vec::new(),
-            is_function: false,
-        };
-        super::super::dedup::dedup_const(&mut prog);
-        super::super::scan_shift::rewrite_scan_makearray_reads(&mut prog);
-        if align_layout {
-            super::super::layout::align_state_layout(&mut prog);
+            is_function: self.is_function,
         }
-        if let Some(cfg) = fuse {
-            super::super::reroll::reroll_program(&mut prog);
-            // Output-only work first moves out of the way, so it does not
-            // split the groups of the work a derivative needs.
-            super::super::prune::split_output_only(&mut prog);
-            super::super::sink::sink_const_broadcasts(&mut prog);
-            super::super::fuse::fuse_program(&mut prog, cfg);
-            super::super::prune::split_output_only(&mut prog);
-        } else {
-            prog.n_rhs = prog.section_range(Cadence::Continuous).len() as u32;
-        }
-        super::super::slab::color_slab(&mut prog);
-        prog
     }
 
     pub(crate) fn vn_hits(&self) -> (usize, usize) {

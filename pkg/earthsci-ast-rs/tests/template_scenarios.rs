@@ -212,7 +212,6 @@ fn interp_call(name: &str, inputs: &[Value], k: usize) -> (Value, Vec<(String, f
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn interp_scenarios_through_the_stdlib_templates() {
     let dirs = scenario_dirs("interp");
     assert_eq!(dirs.len(), 3, "searchsorted, linear, bilinear");
@@ -331,7 +330,6 @@ fn in_domain(t: f64) -> bool {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn datetime_scenarios_through_the_stdlib_templates() {
     let dirs = scenario_dirs("datetime");
     assert_eq!(dirs.len(), 9, "the nine calendar fields");

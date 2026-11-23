@@ -223,6 +223,7 @@ impl TapeBuilder<'_> {
         let exports = self.compute_exports(std::slice::from_ref(rule), true);
         self.materialize_deferred();
         self.finish(exports, None, false)
+            .expect("a standalone tape calls no function")
     }
 
     /// The build-time value of each observed of `names` as an array (a

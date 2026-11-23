@@ -159,6 +159,15 @@ pub struct TapeBuildReport {
     pub vn_hoist_hits: usize,
     /// Step 4: kernel-fusion diagnostics (all-zero when fusion is disabled).
     pub fuse: FuseStats,
+    /// Compiled operator definitions (esm-spec §9.6.4): the functions the
+    /// program calls, each compiled once.
+    pub n_functions: usize,
+    /// `Call` instructions: one per reference the program evaluates.
+    pub n_calls: usize,
+    /// Instructions inside the function programs, after their fusion.
+    pub n_function_instrs: usize,
+    /// Instructions inside the function programs before fusion.
+    pub n_function_instrs_unfused: usize,
 }
 
 impl fmt::Display for TapeBuildReport {
@@ -208,6 +217,16 @@ impl fmt::Display for TapeBuildReport {
             "  value numbering: {} scope hits, {} hoist hits",
             self.vn_scope_hits, self.vn_hoist_hits
         )?;
+        if self.n_functions > 0 {
+            writeln!(
+                f,
+                "  functions: {} compiled ({} instructions, {} before fusion), {} call instructions",
+                self.n_functions,
+                self.n_function_instrs,
+                self.n_function_instrs_unfused,
+                self.n_calls
+            )?;
+        }
         if self.fuse.n_groups > 0 {
             writeln!(
                 f,
@@ -286,6 +305,20 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
         vn_scope_hits: vn_hits.0,
         vn_hoist_hits: vn_hits.1,
         fuse: prog.fuse_stats.clone(),
+        n_functions: prog.funcs.len(),
+        n_calls: prog.tables.calls.len(),
+        n_function_instrs: prog.funcs.iter().map(|f| f.instrs.len()).sum(),
+        n_function_instrs_unfused: prog
+            .funcs
+            .iter()
+            .map(|f| {
+                if f.fuse_stats.n_groups > 0 {
+                    f.fuse_stats.instrs_before
+                } else {
+                    f.instrs.len()
+                }
+            })
+            .sum(),
     }
 }
 

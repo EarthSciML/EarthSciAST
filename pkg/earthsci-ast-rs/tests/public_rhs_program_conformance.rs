@@ -579,21 +579,6 @@ fn public_rhs_program_manifest() {
         );
     }
     for c in m["cases"].as_array().unwrap() {
-        // The manifest's compiler is `native`, which declines a rule holding
-        // an operator reference until it compiles a definition as a called
-        // function (QUESTIONS.md Q1): such a document is skipped, by name.
-        let text = c["document"]
-            .as_str()
-            .map(|d| common::category_dir("public_rhs_program").join(d))
-            .and_then(|d| std::fs::read_to_string(d).ok())
-            .unwrap_or_default();
-        if text.contains("\"apply_operator\"") || text.contains("\"apply_expression_template\"") {
-            eprintln!(
-                "skip  {}: native compiles references once: QUESTIONS.md Q1",
-                c["id"]
-            );
-            continue;
-        }
         match c["kind"].as_str().unwrap() {
             "forcing" | "array_parameters" => forcing_case(&m, c),
             "fault" => fault_case(&m, c),

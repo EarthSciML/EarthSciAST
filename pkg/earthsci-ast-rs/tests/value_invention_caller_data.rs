@@ -180,7 +180,6 @@ fn a_p_override_reaches_the_bin_width() {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn nearest_generator_assignment_reads_the_selected_models_arrays() {
     // Generators at x = 0, 1, 2; point 3 is equidistant from 2 and 3 and takes
     // the smaller id. A bare key names the selected model's parameter.
@@ -199,7 +198,6 @@ fn nearest_generator_assignment_reads_the_selected_models_arrays() {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn nearest_generator_centroid_reads_the_assignment() {
     let arrays = [
         ("gx", arr(&[3], &[0., 1., 2.])),

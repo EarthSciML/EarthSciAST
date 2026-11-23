@@ -172,7 +172,6 @@ fn column_document() -> serde_json::Value {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn a_lifted_rate_defined_after_its_reader_is_gathered() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = write_documents(dir.path());
@@ -191,7 +190,6 @@ fn a_lifted_rate_defined_after_its_reader_is_gathered() {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn both_compilers_build_the_composed_column() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = load_path(write_documents(dir.path())).expect("the document loads");

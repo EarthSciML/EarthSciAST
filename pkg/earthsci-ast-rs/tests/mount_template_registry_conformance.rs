@@ -169,7 +169,6 @@ fn the_mounted_and_inline_forms_flatten_to_the_same_equations() {
 
 /// The run of each form equals the run of its expanded document.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn mount_registry_merge_runs_as_its_expansion() {
     let c = "mount_registry_merge";
     for f in ["fixture.esm", "inline_form.esm"] {
@@ -208,7 +207,6 @@ fn mount_shared_definition_registries_match_the_goldens() {
 /// Expand substitutes the body into the subsystem, and the run agrees with the
 /// run of the expanded document.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn mount_shared_definition_reads_each_sites_own_names() {
     let c = "mount_shared_definition";
     let n = du(&load_path(dir(c).join("fixture.esm")).expect("load"));
@@ -262,7 +260,6 @@ fn json_eq(a: &Value, b: &Value) -> bool {
 /// models Host mounts, at any depth (Sub, Sub's own mount Deep, and Bare,
 /// which declares no templates), as on an authored subsystem's.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn mount_host_rule_fires_in_the_mounted_content() {
     let c = "mount_host_rule";
     assert_eq!(
@@ -429,7 +426,6 @@ fn an_inline_subsystems_definition_resolves_only_its_own_calls() {
 /// own, the host's two-operand call is a placeholder; with one, it resolves to
 /// it.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn a_mounted_leafs_definition_does_not_count_for_the_mounting_components_arity() {
     let leaf = json!({
         "esm": "2.4.0",

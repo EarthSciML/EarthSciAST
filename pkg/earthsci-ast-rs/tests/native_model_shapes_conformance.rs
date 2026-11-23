@@ -105,13 +105,6 @@ fn tier_shapes_agree_on_the_build_pipeline() {
         ));
         let model = fx["model"].as_str().expect("model");
         let base = path.parent().expect("parent");
-        // `native` declines a rule holding an operator reference until it
-        // compiles a definition as a called function (QUESTIONS.md Q1).
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        if text.contains("\"apply_operator\"") || text.contains("\"apply_expression_template\"") {
-            eprintln!("skip  {id}: native compiles references once: QUESTIONS.md Q1");
-            continue;
-        }
         let interp = run(&file, model, base, Compiler::Interpreter, &none);
         let native = run(&file, model, base, Compiler::Native, &none);
         bad.extend(check(id, &interp, &native));

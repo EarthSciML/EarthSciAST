@@ -49,7 +49,6 @@ fn rhs_of(file: &earthsci_ast::EsmFile, compiler: Compiler) -> Vec<(String, f64)
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn coupled_scalar_parameters_fed_grid_arrays_agree_across_compilers() {
     let reference = rhs_at_u0(&fixture("template.esm"), Compiler::Interpreter);
     let native = rhs_at_u0(&fixture("template.esm"), Compiler::Native);
@@ -71,7 +70,6 @@ fn coupled_scalar_parameters_fed_grid_arrays_agree_across_compilers() {
 /// document is refused with `faq_bare_array_operand`. Flatten writes the lift,
 /// so the read-back document builds, bit for bit the `fn` form.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn the_flattened_coupled_case_written_out_and_read_back_matches_the_template_form() {
     let file = load_path(fixture("template.esm")).expect("load");
     let flat = earthsci_ast::flatten(&file).expect("flatten");
@@ -101,7 +99,6 @@ fn the_flattened_coupled_case_written_out_and_read_back_matches_the_template_for
 /// outer product over their union (esm-spec §4.3.4, §9.6.11), under both
 /// compilers.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn arrays_over_unrelated_index_sets_span_their_union() {
     let doc = r#"{"esm": "2.0.0", "metadata": {"name": "taa_mismatch"},
       "index_sets": {"a": {"kind": "interval", "size": 2}, "b": {"kind": "interval", "size": 3}},

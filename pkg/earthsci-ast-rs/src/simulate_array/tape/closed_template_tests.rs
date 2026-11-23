@@ -42,7 +42,6 @@ fn taped_dy(doc: &Value) -> Vec<Vec<u64>> {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn calendar_templates_match_the_oracle() {
     for t0 in [1.6e9, -2.2e9, 951_782_400.0] {
         oracle_ab(calendar_doc(t0));
@@ -50,7 +49,6 @@ fn calendar_templates_match_the_oracle() {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn overlap_area_templates_lower_and_match_the_oracle() {
     for spherical in [false, true] {
         oracle_ab(overlap_doc(spherical));
@@ -58,7 +56,6 @@ fn overlap_area_templates_lower_and_match_the_oracle() {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn argmin_template_lowers_and_matches_the_oracle() {
     oracle_ab(argmin_doc());
 }
@@ -192,7 +189,6 @@ fn widest(prog: &super::ir::TapeProgram) -> usize {
 /// the gate keeps most cells (one bin holds every cell) the body runs over
 /// the whole box, as before, with the same agreement.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
     let n = 100;
     let sparse = super::test_support::ab_check(template_regrid(n, 2.0), 0.5, 2.0);
@@ -209,7 +205,6 @@ fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
 }
 
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn keyed_and_gated_relational_templates_lower_and_match_the_oracle() {
     oracle_ab(relational_doc());
 }
@@ -415,7 +410,6 @@ fn per_call(prog: &super::ir::TapeProgram) -> Vec<&Instr> {
 /// the arm of a condition on `t`): nothing of the template is left in the
 /// per-call section. The oracle's bits.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn build_time_branch_block_runs_once() {
     let scale = op("+", vec![json!(1), json!("u")]);
     let sum = op(
@@ -587,7 +581,6 @@ fn large_or_faulting_scalar_branches_keep_the_jump() {
 /// pure CONST instructions of the program are the same computation, fused or
 /// not. The oracle's bits.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn repeated_build_time_instructions_are_computed_once() {
     let (prog, _) = oracle_ab(overlap_doc(false));
     let canon: Vec<u32> = (0..prog.tables.slots.len() as u32).collect();
@@ -645,7 +638,6 @@ fn different_build_time_instructions_stay_apart() {
 /// some states) run their straight scalar runs as one block each, inside the
 /// arms of the templates' branches too: the oracle's bits in every arm.
 #[test]
-#[ignore = "native compiles references once: QUESTIONS.md Q1"]
 fn scalar_lookup_blocks_match_the_oracle() {
     let ax = json!([0.5, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0, 7.5]);
     let ay = json!([-1.0, 0.0, 2.0, 3.0]);

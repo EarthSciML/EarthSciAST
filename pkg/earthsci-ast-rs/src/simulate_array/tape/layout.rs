@@ -41,6 +41,18 @@ pub(super) fn align_state_layout(prog: &mut TapeProgram) {
     prog.col_major = true;
 }
 
+/// Lay `prog` out axis-reversed whatever its state needs (a function
+/// program, laid out like the column-major program that calls it). `false`
+/// when some instruction has no reversed meaning.
+pub(super) fn reverse_forced(prog: &mut TapeProgram) -> bool {
+    if !reversible(prog) {
+        return false;
+    }
+    reverse(prog);
+    prog.col_major = true;
+    true
+}
+
 /// Whether a box's row-major order is the same walk as its reversed box's:
 /// true when at most one axis has more than one element.
 pub(crate) fn order_free(shape: &[usize]) -> bool {
