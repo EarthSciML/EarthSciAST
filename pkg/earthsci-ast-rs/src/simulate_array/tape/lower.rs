@@ -1147,13 +1147,6 @@ pub(crate) struct TapeBuilder<'m> {
     /// This builder lowers an operator definition's body: its state
     /// variables and parameters are the call's arguments.
     is_function: bool,
-    /// In a function builder: the parameters bound to a literal.
-    fn_lits: FxHashMap<String, f64>,
-    /// In a function builder: the parameters bound to the time.
-    fn_times: HashSet<String>,
-    /// In a function builder: the parameters whose binding is compiled into
-    /// the instance, read where the body reads them.
-    fn_inline: FxHashMap<String, Expr>,
 
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
@@ -1459,9 +1452,6 @@ impl<'m> TapeBuilder<'m> {
             ops: None,
             funcs: Default::default(),
             is_function: false,
-            fn_lits: FxHashMap::default(),
-            fn_times: HashSet::new(),
-            fn_inline: FxHashMap::default(),
             vn_scope_hits: 0,
             vn_hoist_hits: 0,
         }
@@ -2548,17 +2538,6 @@ impl<'m> TapeBuilder<'m> {
     /// contraction index, output box symbol (ramp), state, observed, param,
     /// bail (forcing / unknown loop bind).
     fn resolve_var(&mut self, name: &str, bx: &LBox) -> LResult<LV> {
-        if self.is_function {
-            if let Some(&v) = self.fn_lits.get(name) {
-                return Ok(LV::Lit(v));
-            }
-            if self.fn_times.contains(name) {
-                return Ok(LV::Time);
-            }
-            if let Some(e) = self.fn_inline.get(name).cloned() {
-                return self.lower_expr(&e, bx);
-            }
-        }
         if name == "t" {
             return Ok(LV::Time);
         }

@@ -360,16 +360,18 @@ impl<'m> TapeBuilder<'m> {
         let name = &inst.definition.name;
         let mut var_shapes: IndexMap<String, VarShape> = IndexMap::new();
         let mut param_names: Vec<String> = Vec::new();
-        let mut lits: FxHashMap<String, f64> = FxHashMap::default();
-        let mut times: HashSet<String> = HashSet::new();
-        let mut inline: FxHashMap<String, Expr> = FxHashMap::default();
+        // What the instance is compiled with in place of a parameter: a
+        // literal, the time, or a binding that reads a loop symbol. The
+        // instance body is specialized with them once, here; every other
+        // parameter is an argument of the call.
+        let mut fixed: FxHashMap<String, Expr> = FxHashMap::default();
         for (p, kind) in &key.params {
             match kind {
                 ArgKind::Lit(bits) => {
-                    lits.insert(p.clone(), f64::from_bits(*bits));
+                    fixed.insert(p.clone(), Expr::Number(f64::from_bits(*bits)));
                 }
                 ArgKind::Time => {
-                    times.insert(p.clone());
+                    fixed.insert(p.clone(), Expr::Variable("t".to_string()));
                 }
                 ArgKind::Array(shape, origin) => {
                     var_shapes.insert(
@@ -385,7 +387,7 @@ impl<'m> TapeBuilder<'m> {
                 ArgKind::Inline(text) => {
                     let e: Expr = serde_json::from_str(text)
                         .map_err(|e| Bail::new(format!("operator reference `{name}`: {e}")))?;
-                    inline.insert(p.clone(), e);
+                    fixed.insert(p.clone(), e);
                 }
             }
         }
@@ -405,20 +407,24 @@ impl<'m> TapeBuilder<'m> {
         f.funcs = Rc::clone(&self.funcs);
         f.count_fold = self.count_fold;
         f.is_function = true;
-        f.fn_lits = lits;
-        f.fn_times = times;
-        f.fn_inline = inline;
+        let body = if fixed.is_empty() {
+            inst.body.clone()
+        } else {
+            specialize(&inst.body, &fixed)
+        };
+        // Held so the address value numbering keys its nodes by stays its.
+        f.held_exprs.push(body.clone());
         f.begin_rule(RuleInfo {
             name: format!("operator {name}"),
             kind: RuleKind::Observed(0),
             cadence: Cadence::Continuous,
         });
         let lv = if key.wholesale {
-            f.lower_wholesale_rule(|f| f.lower_wholesale(&inst.body))?
+            f.lower_wholesale_rule(|f| f.lower_wholesale(&body))?
         } else {
             let fbox = LBox::new(&key.syms, bx.lo.clone(), bx.shape.clone());
             f.push_scope();
-            let lv = f.lower_expr(&inst.body, &fbox);
+            let lv = f.lower_expr(&body, &fbox);
             f.pop_scope();
             lv?
         };
@@ -478,6 +484,27 @@ fn rename_free(e: &Expr, rename: &FxHashMap<String, String>) -> Expr {
             }
         }
         _ => e.clone(),
+    }
+}
+
+/// `body` with each parameter of `fixed` that it reads replaced by what the
+/// instance fixes it to, where a node of `body` does not rebind the name.
+fn specialize(body: &Expr, fixed: &FxHashMap<String, Expr>) -> Expr {
+    match body {
+        Expr::Variable(n) => fixed.get(n).cloned().unwrap_or_else(|| body.clone()),
+        Expr::Operator(node) => {
+            let bound = node.binders(crate::binders::Binders::SCOPE);
+            if bound.iter().any(|b| fixed.contains_key(*b)) {
+                let mut inner = fixed.clone();
+                for b in bound {
+                    inner.remove(b);
+                }
+                Expr::operator(node.map_children(&mut |c| specialize(c, &inner)))
+            } else {
+                Expr::operator(node.map_children(&mut |c| specialize(c, fixed)))
+            }
+        }
+        _ => body.clone(),
     }
 }
 
