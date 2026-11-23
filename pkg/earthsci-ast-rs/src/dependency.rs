@@ -120,7 +120,7 @@ impl<'a> Walk<'a> {
                                 out.insert(n.clone());
                             }
                         }
-                        self.bound.extend(def.body_binders().iter().map(String::as_str));
+                        self.bound.extend(reads.binders.iter().map(String::as_str));
                         for (k, b) in r.bindings {
                             if reads.params.contains(k) {
                                 self.names(b, out);

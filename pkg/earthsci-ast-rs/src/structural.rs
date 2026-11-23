@@ -5108,7 +5108,7 @@ fn references_in_scope(
             {
                 seen.faq = true;
                 let reads = def.reads(reg);
-                let captured: Vec<&str> = def.body_binders().iter().map(String::as_str).collect();
+                let captured: Vec<&str> = reads.binders.iter().map(String::as_str).collect();
                 let scope = if captured.is_empty() {
                     *defined_vars
                 } else {
