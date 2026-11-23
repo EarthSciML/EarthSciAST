@@ -464,6 +464,25 @@ function _rrt_tpl_seam_obs_doc(nx::Int)
     return d
 end
 
+# `_rrt_tpl_seam_doc` with no wrap: each boundary body reads only cells at its
+# own end of the axis (`lap_lo` cells 1-3 directly, `lap_hi` cells
+# `nx - 2:nx` through the nested `wrap_hi`), so a tile that owns an end
+# cell reads its state array through the template's array parameter without
+# crossing a seam, and shares its code with the other tiles.
+function _rrt_tpl_edge_doc(nx::Int)
+    d = _rrt_tpl_seam_doc(nx)
+    tpl = d["models"]["T"]["operators"]
+    pin(at) = Dict("op" => "index", "args" => Any["f", at])
+    lap3(a, b, c) = Dict("op" => "+", "args" => Any[a, Dict("op" => "*", "args" => Any[-2, b]), c])
+    lo_if = tpl["lap_lo"]["body"]["expr"]
+    lo_if["args"][2] = lap3(pin(3), pin(1), pin(2))
+    lo_if["args"][3] = pin(2)
+    tpl["wrap_hi"]["body"] = lap3(pin(nx - 1), pin(nx), pin(nx - 2))
+    tpl["lap_hi"]["body"]["expr"]["args"][3] = pin(nx - 1)
+    d["metadata"]["name"] = "rrt_tpl_edge"
+    return d
+end
+
 @testset "range_restricted_rhs" begin
     nx, ny = 10, 6
     prob = esm_problem(_rrt_doc(nx, ny), (0.0, 1.0))
@@ -972,6 +991,49 @@ end
                     default_forcing_set(tile)
                 )
                 b = first(T.u)
+                for c in xo
+                    seen[c] += _rrt_bits(duS[RRT._tile_slot(b, (c,))]) == _rrt_bits(TG[c])
+                end
+            end
+            @test all(==(1), seen)
+        end
+    end
+
+    @testset "a template body read of an end cell in a tile that shares its code" begin
+        # The state array is passed to the boundary bodies addressed through
+        # the tile's own layout: the tile that owns cell `tx` reads the cells
+        # it stores, and the boxes a tile owns no cell of (still evaluated
+        # ahead of their empty loops) read nothing outside its storage.
+        tx = 12
+        dir = mktempdir()
+        fix = joinpath(dir, "rrt_tpl_edge.esm")
+        open(io -> RRT.JSON3.write(io, _rrt_tpl_edge_doc(tx)), fix, "w")
+        tprob = esm_problem(fix, (0.0, 1.0))
+        tprog = rhs_program(tprob)
+        TL = tile_layout(tprog)
+        tdec = Decomposition(axes = ["x" => (;)])
+        @test halo(tprog, tdec) == Dict(("T.q", "x") => (2, 2))
+        for tu in (0.5 .+ sin.(1:TL.n_u), 1.5 .- sin.(1:TL.n_u))
+            TG = fill(NaN, TL.n_u)
+            rhs!(
+                TG, tprog, rhs_workspace(tprog), tu, Float64[], tprob.p, 0.0,
+                default_forcing_set(tprog)
+            )
+            @test all(isfinite, TG)
+            seen = zeros(Int, tx)
+            for (xo, xs) in ((1:4, 1:6), (5:8, 3:10), (9:tx, 7:tx))
+                tile = restrict(tprog, tdec; owned = ("x" => xo,), storage = ("x" => xs,))
+                T = tile_layout(tile)
+                b = only(T.u)
+                uS = fill(NaN, T.n_u)
+                for c in xs
+                    uS[RRT._tile_slot(b, (c,))] = tu[c]
+                end
+                duS = fill(NaN, T.n_u)
+                rhs!(
+                    duS, tile, rhs_workspace(tile), uS, Float64[], tprob.p, 0.0,
+                    default_forcing_set(tile)
+                )
                 for c in xo
                     seen[c] += _rrt_bits(duS[RRT._tile_slot(b, (c,))]) == _rrt_bits(TG[c])
                 end

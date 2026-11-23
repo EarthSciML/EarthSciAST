@@ -192,7 +192,7 @@ function _range_affine_view(spec::_TileSpec, var, clipped, var_map, avi, xeq)
     sr === nothing && return nothing
     vm, shift, done = get!(spec.views, var_map) do
         V, sh = _range_virtual_layout(var_map, spec.whole)
-        (_RangeVMap(V, Dict{Int, String}()), sh, IdDict{Any, Nothing}())
+        (_RangeVMap(V, Dict{Int, String}(), var_map), sh, IdDict{Any, Nothing}())
     end
     # Every array variable's bounds, the whole-domain extents of those the
     # tile cuts: made once per layout and bounds table, which a build fixes
