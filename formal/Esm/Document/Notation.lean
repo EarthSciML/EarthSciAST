@@ -45,7 +45,7 @@ Decisions of record (2026-11-15), array notation:
   without a native shape use the call form with named fields; the escape form is left for
   annotated nodes, non-identifier field keys and shapes no notation covers.
 
-Operators in the source formats (esm-spec §1.2, draft 2.4.0; "one operator type", §9.6.12):
+Operators in the source formats (esm-spec §1.2, esm 2.4.0; "one operator type", §9.6.12):
 
 * `D` is only the time derivative. The spatial derivative is the defined operator `partial`
   (spec §4.2): `\frac{\partial u}{\partial x}` / `(partial u)/(partial x)`, and with trailing
