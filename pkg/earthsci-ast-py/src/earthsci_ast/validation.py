@@ -501,8 +501,10 @@ def _validate_content_presence(esm_file: EsmFile, structural_errors: list[Valida
     has_models = bool(esm_file.models)
     has_reaction_systems = bool(esm_file.reaction_systems)
     has_data_sources = bool(esm_file.data_sources)
-    is_library = bool(getattr(esm_file, "expression_templates", None)) or bool(
-        getattr(esm_file, "coupling_roles", None)
+    is_library = (
+        bool(getattr(esm_file, "expression_templates", None))
+        or getattr(esm_file, "operators_declared", False)
+        or bool(getattr(esm_file, "coupling_roles", None))
     )
 
     if not has_models and not has_reaction_systems and not has_data_sources and not is_library:
