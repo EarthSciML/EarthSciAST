@@ -45,7 +45,12 @@ fn a_mounted_files_enum_ops_resolve_against_its_own_block() {
     for (fixture, values) in exp["loads"].as_object().expect("loads") {
         let path = common::category_dir("mount_enums").join(fixture);
         let file = load_path(&path).unwrap_or_else(|e| panic!("{fixture} does not load: {e}"));
-        let doc: Value = serde_json::from_str(&to_json(&file).expect("serializes")).unwrap();
+        // A mounted leaf's references survive (esm-spec §9.6.4 rule 1); the
+        // constant each one denotes is read off the saved document through
+        // the explicit expansion utility (rule 2).
+        let mut doc: Value = serde_json::from_str(&to_json(&file).expect("serializes")).unwrap();
+        earthsci_ast::extension::lower_expression_templates::expand(&mut doc)
+            .unwrap_or_else(|e| panic!("{fixture}: expand: {e}"));
         for (var, want) in values.as_object().expect("values") {
             let rhs = lowered_value(&doc, var);
             let got = if rhs["op"] == "const" {
