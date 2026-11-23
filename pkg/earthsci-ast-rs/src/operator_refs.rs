@@ -511,6 +511,20 @@ mod tests {
     }
 
     #[test]
+    fn a_parameter_named_range_bound_parses() {
+        let r = reg(json!({
+            "argmin": {"params": ["v", "n"], "body": {"op": "faq", "args": [], "output_idx": [],
+                "ranges": {"k": [1, "n"]}, "reduce": "min", "expr": {"op": "index", "args": ["v", "k"]}}}
+        }));
+        let d = r.get("argmin").unwrap();
+        assert!(d.body.is_some());
+        assert!(d.is_literal_param("n"));
+        assert!(d.param_roles()["v"].operand);
+        let back = serde_json::to_value(d.body.as_ref().unwrap()).unwrap();
+        assert_eq!(back["ranges"]["k"], json!([1, "n"]));
+    }
+
+    #[test]
     fn memo_analyses_once() {
         let m: InstanceMemo<u8, usize> = InstanceMemo::new();
         let mut calls = 0;
