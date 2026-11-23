@@ -577,7 +577,9 @@ pub fn resolve_expr_ranges_with_extents(
                 RangeSpec::Interval(_)
                 | RangeSpec::Strided(_)
                 | RangeSpec::RaggedDyn { .. }
-                | RangeSpec::DerivedDyn { .. } => continue,
+                | RangeSpec::DerivedDyn { .. }
+                // A definition body's range: not resolved here.
+                | RangeSpec::Symbolic(_) => continue,
                 RangeSpec::IndexSetRef { from, of } => resolve_index_set_ref(
                     from,
                     of.as_deref(),
