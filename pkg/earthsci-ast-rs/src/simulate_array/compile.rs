@@ -495,7 +495,10 @@ impl BareThroughRefs<'_> {
             return Ok(());
         };
         if crate::faq::is_faq_op(&node.op) {
-            for part in [node.expr.as_deref(), node.filter.as_deref()].into_iter().flatten() {
+            for part in [node.expr.as_deref(), node.filter.as_deref()]
+                .into_iter()
+                .flatten()
+            {
                 self.elem_params(part, params, out)?;
             }
         }
@@ -545,7 +548,10 @@ impl BareThroughRefs<'_> {
         };
         let mut found: Vec<String> = Vec::new();
         if crate::faq::is_faq_op(&node.op) {
-            for part in [node.expr.as_deref(), node.filter.as_deref()].into_iter().flatten() {
+            for part in [node.expr.as_deref(), node.filter.as_deref()]
+                .into_iter()
+                .flatten()
+            {
                 // Only what a reference delivers: a bare read written in place
                 // is the structural check's.
                 self.refs_in_elem(part, &mut found)?;
@@ -862,7 +868,10 @@ impl ArrayCompiled {
         // right-hand side. Walk them here, before anything evaluates one
         // (esm-spec §9.6.3 constraint 6), so an unlowered op in an initial
         // condition is refused at build exactly as it is in an equation.
-        check_evaluable_all(flat.field_ics.iter().map(|(_, rhs)| rhs), &compiled.operators)?;
+        check_evaluable_all(
+            flat.field_ics.iter().map(|(_, rhs)| rhs),
+            &compiled.operators,
+        )?;
         // Carry the classified scoped-reference `ic` equations through so `u0` is
         // folded from the provider-served loaded initial fields at build time.
         compiled.field_ics = flat.field_ics.clone();
@@ -1837,6 +1846,27 @@ fn check_expr_free_vars(
                 .filter(|c| !c.is_empty());
             let widened = |name: &str| scope(name) || captured.is_some_and(|c| c.contains(name));
             let scope: &dyn Fn(&str) -> bool = if captured.is_some() { &widened } else { scope };
+            // A binding of a parameter the body spells only in a literal
+            // position (an axis, an index set) names that thing; it reads no
+            // variable.
+            if let Some(r) = crate::operator_refs::reference_node(node) {
+                let literal_only = |p: &str| {
+                    operators.instance_params(r.name).iter().any(|q| q == p)
+                        && !operators
+                            .get(r.name)
+                            .and_then(|d| d.param_roles().get(p).copied())
+                            .is_some_and(|role| role.operand || role.forwarded)
+                };
+                let mut keys: Vec<&String> = r.bindings.keys().collect();
+                keys.sort();
+                for k in keys {
+                    if literal_only(k) && matches!(r.bindings[k], Expr::Variable(_)) {
+                        continue;
+                    }
+                    check_expr_free_vars(&r.bindings[k], scope, operators)?;
+                }
+                return Ok(());
+            }
             let mut first_err: Option<CompileError> = None;
             node.for_each_child(&mut |child| {
                 if first_err.is_none()
@@ -3791,6 +3821,7 @@ pub(super) struct IcTargetMemo {
 /// Anything else is a hard error, so a scoped-reference ic that cannot be resolved
 /// is never silently dropped. Mirrors tree_walk.jl `_resolve_field_ic` and the
 /// Python `_resolve_field_ic`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_field_ic_cell(
     target: &str,
     rhs: &Expr,

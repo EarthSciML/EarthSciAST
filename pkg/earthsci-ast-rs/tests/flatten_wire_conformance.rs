@@ -387,7 +387,8 @@ fn the_written_out_system_builds_as_the_original() {
             // the read-back system is expanded, so the two cannot agree yet.
             if compiler == Compiler::Native
                 && original.as_ref().is_err_and(|e| {
-                    format!("{e:?}").contains("the native compiler does not yet compile a definition")
+                    format!("{e:?}")
+                        .contains("the native compiler does not yet compile a definition")
                 })
             {
                 eprintln!("skip  {name} under native: QUESTIONS.md Q1");

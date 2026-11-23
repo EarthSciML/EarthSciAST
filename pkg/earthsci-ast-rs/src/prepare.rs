@@ -2325,8 +2325,8 @@ impl<'o> BuildState<'o> {
             &extra,
             &self.operators,
         )
-            // The compile path's own refusal, unchanged.
-            .map_err(SimulateError::Compile)
+        // The compile path's own refusal, unchanged.
+        .map_err(SimulateError::Compile)
     }
 
     /// Observed definitions + the join-free partition.
@@ -2880,7 +2880,8 @@ impl<'o> BuildState<'o> {
         if !self.opts.refuse_per_cell || !crate::row_dedup::row_dedup_enabled() {
             return Ok(None);
         }
-        let Some(mut plan) = crate::row_dedup::plan_in(name, expr, &self.arrays, &self.operators) else {
+        let Some(mut plan) = crate::row_dedup::plan_in(name, expr, &self.arrays, &self.operators)
+        else {
             return Ok(None);
         };
         let fill = self.fill_shape(name).map(|mut s| {

@@ -588,7 +588,10 @@ fn public_rhs_program_manifest() {
             .and_then(|d| std::fs::read_to_string(d).ok())
             .unwrap_or_default();
         if text.contains("\"apply_operator\"") || text.contains("\"apply_expression_template\"") {
-            eprintln!("skip  {}: native compiles references once: QUESTIONS.md Q1", c["id"]);
+            eprintln!(
+                "skip  {}: native compiles references once: QUESTIONS.md Q1",
+                c["id"]
+            );
             continue;
         }
         match c["kind"].as_str().unwrap() {

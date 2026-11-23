@@ -977,10 +977,8 @@ fn wire_roles(body: &Value, params: &HashSet<&str>) -> WireRoles {
     }
     fn walk(v: &Value, expr_pos: bool, params: &HashSet<&str>, r: &mut WireRoles) {
         match v {
-            Value::String(s) => {
-                if !expr_pos && params.contains(s.as_str()) {
-                    r.literal.insert(s.clone());
-                }
+            Value::String(s) if !expr_pos && params.contains(s.as_str()) => {
+                r.literal.insert(s.clone());
             }
             Value::Array(a) => a.iter().for_each(|x| walk(x, expr_pos, params, r)),
             Value::Object(m) => {
@@ -1078,7 +1076,12 @@ impl OperatorRegistry {
                 lit.extend(read.iter().cloned());
             }
         }
-        let ordered = d.params.iter().filter(|p| lit.contains(*p)).cloned().collect();
+        let ordered = d
+            .params
+            .iter()
+            .filter(|p| lit.contains(*p))
+            .cloned()
+            .collect();
         out.insert(name.to_string(), ordered);
     }
 }
@@ -1128,7 +1131,8 @@ impl OperatorRegistry {
             }
             out
         });
-        all.get(name).unwrap_or_else(|| EMPTY.get_or_init(HashSet::new))
+        all.get(name)
+            .unwrap_or_else(|| EMPTY.get_or_init(HashSet::new))
     }
 
     /// `name` and every definition its body reaches, each once.
@@ -1228,11 +1232,21 @@ impl std::fmt::Display for InstanceError {
             ),
             InstanceError::Rewrite { name, why } => write!(f, "operator `{name}`: {why}"),
             InstanceError::Malformed { name, why } => {
-                write!(f, "operator `{name}`: the instance body is not an Expression: {why}")
+                write!(
+                    f,
+                    "operator `{name}`: the instance body is not an Expression: {why}"
+                )
             }
         }
     }
 }
+
+/// A definition name and the wire text of the values bound to its instance
+/// parameters: the key of one [`CallInstance`].
+type CallKey = (String, Vec<String>);
+
+/// A reference node (held so its address is never reused) and its instance.
+type NodeInstance = (Arc<ExpressionNode>, Arc<CallInstance>);
 
 /// A build pass over one expression, applied to each instance body
 /// ([`Instances::with_rewrite`]).
@@ -1244,10 +1258,10 @@ pub type BodyRewrite = Arc<dyn Fn(&mut Expr) -> Result<(), String> + Send + Sync
 #[derive(Default)]
 pub struct Instances {
     registry: OperatorRegistry,
-    by_key: std::sync::Mutex<HashMap<(String, Vec<String>), Arc<CallInstance>>>,
+    by_key: std::sync::Mutex<HashMap<CallKey, Arc<CallInstance>>>,
     /// Per reference node: the node (held so its address is never reused) and
     /// its instance.
-    by_node: std::sync::Mutex<HashMap<usize, (Arc<ExpressionNode>, Arc<CallInstance>)>>,
+    by_node: std::sync::Mutex<HashMap<usize, NodeInstance>>,
     /// Body rewrites the build applies to every instance body (see
     /// [`Instances::with_rewrite`]).
     rewrites: Vec<BodyRewrite>,
@@ -1726,7 +1740,8 @@ mod tests {
         let inst = Instances::new(r);
         let call = |n: i64| -> Expr {
             serde_json::from_value(json!({"op": "apply_operator", "args": [], "name": "outer",
-                "bindings": {"w": "x", "m": n}})).unwrap()
+                "bindings": {"w": "x", "m": n}}))
+            .unwrap()
         };
         let (a, b, c) = (call(3), call(3), call(4));
         let ia = inst.instance(&reference(&a).unwrap()).unwrap();

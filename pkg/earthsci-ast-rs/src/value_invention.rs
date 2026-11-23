@@ -1355,7 +1355,12 @@ impl<'a> Node<'a> {
 
     /// An operator reference: a call of its instance's body, compiled once
     /// per instance, with the reference's bindings compiled here.
-    fn call(node: &'a ExpressionNode, ctx: &'a ViCtx<'_>, ranges: &Ranges, cse: &mut Cse<'a>) -> Self {
+    fn call(
+        node: &'a ExpressionNode,
+        ctx: &'a ViCtx<'_>,
+        ranges: &Ranges,
+        cse: &mut Cse<'a>,
+    ) -> Self {
         let Some(r) = crate::operator_refs::reference_node(node) else {
             return Node::Fail("an operator reference names no definition".into());
         };
@@ -1501,12 +1506,9 @@ impl<'a> Node<'a> {
                 v
             }
             Node::Fail(msg) => return err(msg.clone()),
-            Node::Call { body, args } => body.eval(
-                env,
-                ctx,
-                bindings,
-                Some(&Frame { args, parent: fr }),
-            )?,
+            Node::Call { body, args } => {
+                body.eval(env, ctx, bindings, Some(&Frame { args, parent: fr }))?
+            }
             Node::Arg(i) => {
                 let Some(f) = fr else {
                     return err("a body parameter read outside its call");

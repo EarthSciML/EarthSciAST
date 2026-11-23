@@ -29,11 +29,20 @@ scaling_family!(stencil_1d);
 scaling_family!(stencil_2d);
 scaling_family!(stencil_3d);
 scaling_family!(stencil_4d);
-scaling_family!(#[ignore = "native compiles references once: QUESTIONS.md Q1"] transport_3d);
-scaling_family!(#[ignore = "native compiles references once: QUESTIONS.md Q1"] chemistry_grid);
+scaling_family!(
+    #[ignore = "native compiles references once: QUESTIONS.md Q1"]
+    transport_3d
+);
+scaling_family!(
+    #[ignore = "native compiles references once: QUESTIONS.md Q1"]
+    chemistry_grid
+);
 scaling_family!(prefix_scan);
 scaling_family!(source_receptor);
-scaling_family!(#[ignore = "native compiles references once: QUESTIONS.md Q1"] regrid);
+scaling_family!(
+    #[ignore = "native compiles references once: QUESTIONS.md Q1"]
+    regrid
+);
 scaling_family!(unstructured_gather);
 scaling_family!(scalar_chemistry);
 scaling_family!(gather_index);

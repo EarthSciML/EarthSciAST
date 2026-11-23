@@ -263,9 +263,9 @@ pub use data_output::{
     derive_output_gridding, derive_output_meta, derive_output_plan, group_gridding_by_grid,
     parse_cell_key, plan_dimension_coordinates,
 };
+pub use expression::{contains, free_parameters, free_variables, simplify};
 #[cfg(not(target_arch = "wasm32"))]
 pub use expression::{evaluate, evaluate_with_operators};
-pub use expression::{contains, free_parameters, free_variables, simplify};
 pub use flatten::{
     Contribution, DimensionPromotionRecord, FlattenError, FlattenMetadata, FlattenedSystem,
     LoaderField, TermOrigin, capture_coupling_diagnostics, flatten, flatten_model,

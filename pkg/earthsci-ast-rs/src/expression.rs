@@ -164,7 +164,11 @@ fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
 /// assert!((result - 3.14).abs() < 1e-10);
 /// ```
 pub fn evaluate(expr: &Expr, bindings: &HashMap<String, f64>) -> Result<f64, Vec<String>> {
-    evaluate_with_operators(expr, bindings, &crate::operator_refs::OperatorRegistry::default())
+    evaluate_with_operators(
+        expr,
+        bindings,
+        &crate::operator_refs::OperatorRegistry::default(),
+    )
 }
 
 /// [`evaluate`] of an expression that may hold operator references

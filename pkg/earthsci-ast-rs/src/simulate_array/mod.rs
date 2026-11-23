@@ -93,13 +93,13 @@ pub use compile::{
 // two routes cannot disagree about which names a document declares.
 pub(crate) use compile::InventedSets;
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) use compile::build_instances;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::inline_parameter_arrays;
 pub(crate) use compile::model_tree_any;
 pub(crate) use compile::resolve_declared_shape;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use compile::build_instances;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{MemberFactorColumn, member_factor_columns, run_value_invention_in_scope};
 pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};

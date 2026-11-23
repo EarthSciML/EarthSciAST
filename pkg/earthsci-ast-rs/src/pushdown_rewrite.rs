@@ -92,9 +92,6 @@ fn op_of(e: &Value) -> Option<&str> {
     e.get("op")?.as_str()
 }
 
-
-
-
 /// The `reduce` spelling of a registry ⊕ — how the guard's string comparison
 /// names each [`ReduceKind`].
 fn reduce_spelling(rk: ReduceKind) -> &'static str {
@@ -372,7 +369,6 @@ fn pd_register_derived(
     }
     Ok(())
 }
-
 
 /// The §5.5.6 overlap-gate envelopes of a containment predicate. `tgt_env` is
 /// always the four cell bounds; `src_env` is two point coordinates or four
@@ -971,11 +967,6 @@ fn pd_templates(model: &Value) -> Option<Cow<'_, Map<String, Value>>> {
         _ => own.map(Cow::Borrowed),
     }
 }
-
-
-
-
-
 
 // --------------------------------------------------------------------------- //
 // Residual diagnostics.
@@ -1679,7 +1670,6 @@ fn pd_overlap_clause(src_env: &[String], tgt_env: &[String]) -> Value {
     })
 }
 
-
 /// POST-CONDITION of the forward arm's rect re-pointing, discharged on the
 /// rewritten aggregate read through its references (esm-spec §9.6.4 rule 2: what the
 /// evaluator sees is `Expand(tree)`).
@@ -1713,7 +1703,10 @@ fn pd_assert_rects_rebound(
     pd_foreach_node(tt, expr, &None, &mut |v, fr| {
         if let Some(m) = v.as_object()
             && m.get("op").and_then(Value::as_str) == Some("index")
-            && let Some(first) = m.get("args").and_then(Value::as_array).and_then(|a| a.first())
+            && let Some(first) = m
+                .get("args")
+                .and_then(Value::as_array)
+                .and_then(|a| a.first())
             && let (Value::String(f), _) = pd_open(tt, first, fr)
             && rectmap.contains_key(&f)
         {
