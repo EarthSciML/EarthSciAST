@@ -22,9 +22,9 @@ use super::forcing::{ForcingSet, ForcingSlot, RhsError, shape};
 use super::tile::{declined_error, plain_precision, refused, shell};
 use super::walk::AxisSpec;
 use super::{
-    Blocks, Decomposition, LaneKind, LaneLayout, ProgramModel, RhsProgram, RhsWorkspace, TileInput,
-    WsExec, build_error, check_forcing, check_lengths, check_owner, index_set_sizes,
-    next_program_id, slot_map, tape_fault, var_infos,
+    Blocks, Decomposition, Ingress, InputPrecisions, LaneKind, LaneLayout, ProgramModel,
+    RhsProgram, RhsWorkspace, TileInput, WsExec, build_error, check_forcing, check_lengths,
+    check_owner, index_set_sizes, next_program_id, slot_map, tape_fault, var_infos,
 };
 use crate::simulate::SimulateError;
 use crate::simulate_array::tape::{
@@ -72,6 +72,7 @@ struct LaneInner {
     extents: Vec<i64>,
     n_inputs: usize,
     n_params: usize,
+    inputs: InputPrecisions,
     declared: Arc<HashSet<String>>,
     precision: crate::precision::Precision,
 }
@@ -96,6 +97,8 @@ pub struct LaneInputs {
     forcing: Option<ForcingSet>,
     values: Vec<f64>,
     state: Vec<f64>,
+    /// The gather's parameters, rounded to their precisions.
+    ingress: Ingress,
     ctx: Box<TapeCtx>,
 }
 
@@ -241,6 +244,7 @@ impl LaneProgram {
             forcing: None,
             values: vec![0.0; inner.capacity * inner.n_inputs],
             state: vec![0.0; inner.capacity * (inner.n_inputs + inner.sets.len())],
+            ingress: Ingress::default(),
             ctx: Box::new(ctx),
         }
     }
@@ -270,6 +274,7 @@ impl LaneProgram {
         }
         check_forcing(forcing, &inner.default_set)?;
         self.write_cells(&mut inputs.state, inner.capacity * inner.n_inputs, cells, n)?;
+        let (_, _, p) = inner.inputs.rounded(&mut inputs.ingress, &[], &[], p);
         let _precision = crate::precision::enter(inner.precision);
         let scope = crate::simulate_array::FaultScope::enter();
         let call = CallInputs {
@@ -347,6 +352,8 @@ impl LaneProgram {
         check_owner(ws, inner.id)?;
         check_forcing(forcing, &inner.default_set)?;
         let (nu, na) = (inner.blocks.u_len, inner.blocks.aux_len);
+        let mut ingress = std::mem::take(&mut ws.ingress);
+        let (u, aux, p) = inner.inputs.rounded(&mut ingress, u, aux, p);
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..nu + na].copy_from_slice(aux);
         let mut state = std::mem::take(&mut ws.state);
@@ -379,6 +386,7 @@ impl LaneProgram {
             declared: &inner.declared,
         };
         run_tape_inputs(ctx, &call, du, false);
+        ws.ingress = ingress;
         tape_fault(scope, ctx)
     }
 }
@@ -1054,6 +1062,7 @@ pub(super) fn build(
     } else {
         build_tape(&shell(compiled, gshapes, grules, gobserved, gheld))?
     };
+    let inputs = InputPrecisions::new(&layout, &compiled.param_names, &compiled.precision);
     let slot_of = [
         slot_map(&main_tape, &prog.inner.slots)?,
         slot_map(&pre_tape, &prog.inner.slots)?,
@@ -1074,6 +1083,7 @@ pub(super) fn build(
             sets,
             n_inputs,
             n_params: compiled.param_names.len(),
+            inputs,
             declared: Arc::clone(&prog.inner.declared),
             precision,
         }),

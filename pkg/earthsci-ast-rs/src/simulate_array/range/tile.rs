@@ -13,9 +13,9 @@
 use super::forcing::{ForcingSet, ForcingSlot, RhsError};
 use super::walk::{AxisSpec, Read, Refusal, Scope, VarInfo, Walker};
 use super::{
-    Blocks, Decomposition, ProgramModel, RhsProgram, RhsWorkspace, TileBox, TileInput, TileLayout,
-    WsExec, check_forcing, check_lengths, check_owner, index_set_sizes, next_program_id,
-    range_error, slot_map, tape_fault, var_infos,
+    Blocks, Decomposition, InputPrecisions, ProgramModel, RhsProgram, RhsWorkspace, TileBox,
+    TileInput, TileLayout, WsExec, check_forcing, check_lengths, check_owner, index_set_sizes,
+    next_program_id, range_error, slot_map, tape_fault, var_infos,
 };
 use crate::diagnostic::codes;
 use crate::simulate::SimulateError;
@@ -51,6 +51,7 @@ struct TileInner {
     default_set: ForcingSet,
     slot_of: Vec<u32>,
     n_params: usize,
+    inputs: InputPrecisions,
     declared: Arc<HashSet<String>>,
     precision: crate::precision::Precision,
 }
@@ -109,6 +110,8 @@ impl TileProgram {
         check_owner(ws, inner.id)?;
         check_forcing(forcing, &inner.default_set)?;
         let nu = inner.blocks.u_len;
+        let mut ingress = std::mem::take(&mut ws.ingress);
+        let (u, aux, p) = inner.inputs.rounded(&mut ingress, u, aux, p);
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..].copy_from_slice(aux);
         let WsExec::Tape(ctx) = &mut ws.exec else {
@@ -128,6 +131,7 @@ impl TileProgram {
             declared: &inner.declared,
         };
         run_tape_inputs(ctx, &inputs, du, false);
+        ws.ingress = ingress;
         tape_fault(scope, ctx)
     }
 }
@@ -778,6 +782,7 @@ pub(super) fn build(
             .map_err(|d| declined_error(&d, "tile restriction"))?
     };
     let slot_of = slot_map(&tape, &prog.inner.slots)?;
+    let inputs = InputPrecisions::new(&layout, &compiled.param_names, &compiled.precision);
     Ok(TileProgram {
         inner: Arc::new(TileInner {
             id: next_program_id(),
@@ -787,6 +792,7 @@ pub(super) fn build(
             default_set: prog.default_forcing(),
             slot_of,
             n_params: compiled.param_names.len(),
+            inputs,
             declared: Arc::clone(&prog.inner.declared),
             precision,
         }),

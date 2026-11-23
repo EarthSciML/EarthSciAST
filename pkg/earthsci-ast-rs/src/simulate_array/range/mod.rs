@@ -395,12 +395,75 @@ pub struct RhsWorkspace {
     _not_sync: PhantomData<Cell<()>>,
 }
 
+/// A call's inputs rounded to their slots' precisions, reused across calls.
 #[derive(Default)]
 struct Ingress {
     u: Vec<f64>,
     aux: Vec<f64>,
     params: Vec<f64>,
     du: Vec<f64>,
+}
+
+/// The effective precision of every element of a program's `u`, `aux` and
+/// `p` (esm-spec §11.3.2: values supplied during a run round on ingress).
+#[derive(Debug, Clone, Default)]
+struct InputPrecisions {
+    u: Vec<Precision>,
+    aux: Vec<Precision>,
+    params: Vec<Precision>,
+    /// Whether any element is binary32; without one a call rounds nothing.
+    any_f32: bool,
+}
+
+impl InputPrecisions {
+    fn new(blocks: &Blocks, param_names: &[String], env: &crate::precision::Env) -> Self {
+        let mut u = vec![env.document; blocks.u_len];
+        let mut aux = vec![env.document; blocks.aux_len];
+        for block in &blocks.vars {
+            let len: usize = block
+                .storage
+                .iter()
+                .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                .product();
+            let input = match block.input {
+                TileInput::U => &mut u,
+                TileInput::Aux => &mut aux,
+            };
+            input[block.base..block.base + len].fill(env.variable(&block.name));
+        }
+        let params: Vec<_> = param_names.iter().map(|n| env.variable(n)).collect();
+        let any_f32 = u.iter().chain(&aux).chain(&params).any(|p| p.is_f32());
+        InputPrecisions {
+            u,
+            aux,
+            params,
+            any_f32,
+        }
+    }
+
+    /// Fill `ingress` with `u`, `aux` and `p` rounded to their slots'
+    /// precisions.
+    fn round_into<T: StateScalar>(&self, ingress: &mut Ingress, u: &[T], aux: &[f64], p: &[f64]) {
+        round_inputs(&mut ingress.u, u, &self.u);
+        round_inputs(&mut ingress.aux, aux, &self.aux);
+        round_inputs(&mut ingress.params, p, &self.params);
+    }
+
+    /// `u`, `aux` and `p` as the program reads them: rounded into `ingress`
+    /// when any slot is binary32, else the caller's own slices.
+    fn rounded<'a>(
+        &self,
+        ingress: &'a mut Ingress,
+        u: &'a [f64],
+        aux: &'a [f64],
+        p: &'a [f64],
+    ) -> (&'a [f64], &'a [f64], &'a [f64]) {
+        if !self.any_f32 {
+            return (u, aux, p);
+        }
+        self.round_into(ingress, u, aux, p);
+        (&ingress.u, &ingress.aux, &ingress.params)
+    }
 }
 
 enum WsExec {
@@ -483,10 +546,7 @@ struct ProgramInner {
     blocks: Blocks,
     layout: TileLayout,
     state_layout: Vec<StateBlock>,
-    state_precisions: Vec<Precision>,
-    aux_precisions: Vec<Precision>,
-    param_precisions: Vec<Precision>,
-    has_float32: bool,
+    inputs: InputPrecisions,
     params: Vec<ParamSlot>,
     slots: Arc<[ForcingSlot]>,
     /// The Problem's forcing when the program was built.
@@ -844,26 +904,7 @@ impl RhsProgram {
                     .collect(),
             })
             .collect();
-        let precisions = |blocks: &[TileBlock]| {
-            blocks
-                .iter()
-                .flat_map(|block| {
-                    std::iter::repeat_n(model.precision.variable(&block.name), block.len())
-                })
-                .collect::<Vec<_>>()
-        };
-        let state_precisions = precisions(&layout.u);
-        let aux_precisions = precisions(&layout.aux);
-        let param_precisions = model
-            .param_names
-            .iter()
-            .map(|name| model.precision.variable(name))
-            .collect::<Vec<_>>();
-        let has_float32 = state_precisions
-            .iter()
-            .chain(&aux_precisions)
-            .chain(&param_precisions)
-            .any(|p| p.is_f32());
+        let inputs = InputPrecisions::new(&blocks, &model.param_names, &model.precision);
         let params = model
             .param_names
             .iter()
@@ -888,10 +929,7 @@ impl RhsProgram {
                 blocks,
                 layout,
                 state_layout,
-                state_precisions,
-                aux_precisions,
-                param_precisions,
-                has_float32,
+                inputs,
                 params,
                 slots,
                 default_set,
@@ -942,7 +980,7 @@ impl RhsProgram {
 
     /// The effective precision of each slot in `u` and `du`.
     pub fn state_precisions(&self) -> &[Precision] {
-        &self.inner.state_precisions
+        &self.inner.inputs.u
     }
 
     /// Round each state slot in place to its effective precision.
@@ -1148,13 +1186,11 @@ impl RhsProgram {
             }
         }
         let scope = super::FaultScope::enter();
-        if let Some(du) = T::as_f64_mut(du).filter(|_| !inner.has_float32) {
+        if let Some(du) = T::as_f64_mut(du).filter(|_| !inner.inputs.any_f32) {
             self.run(&T::widen_slice(u), aux, p, t, Forcing::Set(forcing), du, ws);
         } else {
             let mut ingress = std::mem::take(&mut ws.ingress);
-            round_inputs(&mut ingress.u, u, &inner.state_precisions);
-            round_inputs(&mut ingress.aux, aux, &inner.aux_precisions);
-            round_inputs(&mut ingress.params, p, &inner.param_precisions);
+            inner.inputs.round_into(&mut ingress, u, aux, p);
             ingress.du.resize(du.len(), 0.0);
             self.run(
                 &ingress.u,
@@ -1165,9 +1201,7 @@ impl RhsProgram {
                 &mut ingress.du,
                 ws,
             );
-            for ((target, &value), prec) in
-                du.iter_mut().zip(&ingress.du).zip(&inner.state_precisions)
-            {
+            for ((target, &value), prec) in du.iter_mut().zip(&ingress.du).zip(&inner.inputs.u) {
                 *target = T::narrow(prec.round(value));
             }
             ws.ingress = ingress;
@@ -1224,10 +1258,7 @@ impl RhsProgram {
                 writes: c.var_shapes.keys().cloned().collect(),
                 aux: Vec::new(),
                 state_layout: Vec::new(),
-                state_precisions: Vec::new(),
-                aux_precisions: Vec::new(),
-                param_precisions: Vec::new(),
-                has_float32: false,
+                inputs: InputPrecisions::default(),
                 params: Vec::new(),
                 slots: Arc::from(Vec::new()),
                 default_set: ForcingSet::for_slots(Arc::from([]), Arc::from([]), Vec::new())

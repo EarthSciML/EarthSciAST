@@ -458,3 +458,101 @@ fn a_repeated_output_time_is_one_clock_tick() {
     assert_eq!(sol.time, [0.0, 0.5, 0.5, 1.0]);
     init(&prob, &opts).unwrap();
 }
+
+#[test]
+fn tile_and_lane_programs_round_their_inputs_as_the_whole_domain_does() {
+    use earthsci_ast::{AxisCut, Decomposition, LaneKind, TileBox};
+    let ix = json!({"op": "index", "args": ["x", "i"]});
+    let doc = json!({
+        "esm": "2.0.0",
+        "metadata": {"name": "ArrayFloat32"},
+        "domain": {"element_type": "Float32"},
+        "index_sets": {"i": {"kind": "interval", "size": 2}},
+        "models": {"M": {
+            "variables": {
+                "x": {"type": "unknown", "units": "1", "shape": ["i"], "default": [1.0, 2.0]},
+                "c": {"type": "parameter", "units": "1/s", "default": 1.0}
+            },
+            "equations": [{
+                "lhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "i"}},
+                        "expr": {"op": "D", "args": [ix.clone()], "wrt": "t"}},
+                "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "i"}},
+                        "expr": {"op": "ifelse", "args": [
+                            {"op": ">", "args": [ix.clone(), 1.5]}, ix, "c"]}}
+            }]
+        }}
+    });
+    let prob = esm_problem(
+        ProblemInput::Json(&doc),
+        (0.0, 1.0),
+        ProblemOptions::default(),
+    )
+    .unwrap();
+    let rhs = rhs_program(&prob).unwrap();
+    let u = [1.00000001, 2.00000001];
+    let p = [1.00000001];
+    let forcing = rhs.default_forcing();
+    let mut whole = [f64::NAN; 2];
+    rhs.eval_into(
+        &u,
+        &[],
+        &p,
+        0.0,
+        &forcing,
+        &mut whole,
+        &mut rhs.new_workspace(),
+    )
+    .unwrap();
+    // The selected values pass through no arithmetic.
+    assert_eq!(whole, [1.0, 2.0]);
+
+    let dec = Decomposition {
+        axes: vec![AxisCut {
+            index_set: "i".to_string(),
+            period: None,
+        }],
+        faces: Vec::new(),
+    };
+    let tile_box = TileBox {
+        owned: vec![("i".to_string(), 1..=2)],
+        storage: vec![("i".to_string(), 1..=2)],
+    };
+    let tile = rhs.tile(&dec, &tile_box).unwrap();
+    let mut du = [f64::NAN; 2];
+    tile.eval_into(
+        &u,
+        &[],
+        &p,
+        0.0,
+        &forcing,
+        &mut du,
+        &mut tile.new_workspace(),
+    )
+    .unwrap();
+    assert_eq!(du, whole, "tile");
+
+    let lanes = rhs
+        .lanes(
+            LaneKind::Cells {
+                sets: vec!["i".to_string()],
+            },
+            2,
+        )
+        .unwrap();
+    let cells = [1, 2];
+    let mut ws = lanes.new_workspace();
+    let mut du = [f64::NAN; 2];
+    lanes
+        .eval_into(&u, &[], &p, 0.0, &forcing, &cells, 2, &mut du, &mut ws)
+        .unwrap();
+    assert_eq!(du, whole, "lanes");
+    let mut inputs = lanes.lane_inputs();
+    lanes
+        .gather_lane_inputs(&mut inputs, &p, 0.0, &forcing, &cells, 2)
+        .unwrap();
+    let mut du = [f64::NAN; 2];
+    lanes
+        .eval_gathered_into(&u, &[], &inputs, &p, 0.0, &cells, 2, &mut du, &mut ws)
+        .unwrap();
+    assert_eq!(du, whole, "gathered lanes");
+}
