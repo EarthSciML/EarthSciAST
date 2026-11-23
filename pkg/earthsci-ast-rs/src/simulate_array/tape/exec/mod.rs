@@ -689,7 +689,9 @@ pub(super) fn run_function(
     }
     interp::run_range(&env, prime_end..prog.instrs.len(), exec, &mut no_dy);
     let (_, result) = prog.exports[0];
-    exec.slab.as_ptr().wrapping_add(exec.slot_off[result as usize])
+    exec.slab
+        .as_ptr()
+        .wrapping_add(exec.slot_off[result as usize])
 }
 
 fn same_params(last: &[f64], params: &[f64]) -> bool {

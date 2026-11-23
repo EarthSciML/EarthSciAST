@@ -837,15 +837,20 @@ fn run_program(
                 let f = &prog.funcs[spec.func as usize];
                 let mut args: ArrMap = ArrMap::default();
                 for (sv, src) in f.state_vars.iter().zip(&spec.arrays) {
-                    args.insert(sv.name.clone(), resolve_src(prog, &slots, state_arrays, src));
+                    args.insert(
+                        sv.name.clone(),
+                        resolve_src(prog, &slots, state_arrays, src),
+                    );
                 }
                 let fparams: Vec<f64> = spec
                     .scalars
                     .iter()
-                    .map(|o| match resolve(prog, &slots, state_arrays, params, t, o) {
-                        RefVal::Scalar(v) => v,
-                        other => panic!("a scalar argument is {other:?}"),
-                    })
+                    .map(
+                        |o| match resolve(prog, &slots, state_arrays, params, t, o) {
+                            RefVal::Scalar(v) => v,
+                            other => panic!("a scalar argument is {other:?}"),
+                        },
+                    )
                     .collect();
                 let run = run_program(f, compiled, &args, &fparams, t, &mut []);
                 let result = f.exports[0].1;

@@ -174,4 +174,3 @@ fn scalar_lookup_gather_past_the_end_matches_the_oracle() {
         assert_eq!(opcount(&prog, "DataGather"), 2, "{base}");
     }
 }
-

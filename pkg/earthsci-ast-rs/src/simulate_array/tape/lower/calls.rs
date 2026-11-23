@@ -121,7 +121,6 @@ impl FuncTable {
         }
         Ok(done)
     }
-
 }
 
 /// How a program is laid out: chosen for its own state, or the layout of the
@@ -213,7 +212,12 @@ impl<'m> TapeBuilder<'m> {
         // The loop symbols the expansion would bind around a binding: those
         // the instance body binds and those of the bodies it reaches.
         let mut binders: HashSet<String> = inst.binders().clone();
-        binders.extend(ops.registry().captured_symbols(&inst.definition.name).iter().cloned());
+        binders.extend(
+            ops.registry()
+                .captured_symbols(&inst.definition.name)
+                .iter()
+                .cloned(),
+        );
         let binders = &binders;
         let mut params: Vec<(String, ArgKind)> = Vec::new();
         let mut arrays: Vec<SrcRef> = Vec::new();
@@ -298,11 +302,10 @@ impl<'m> TapeBuilder<'m> {
                     params.push((pos.clone(), kind));
                     rename.insert(n.clone(), pos);
                 }
-                let renamed = crate::binders::rename_free_names(
-                    b,
-                    crate::binders::Binders::SCOPE,
-                    &|n| rename.get(n).cloned(),
-                );
+                let renamed =
+                    crate::binders::rename_free_names(b, crate::binders::Binders::SCOPE, &|n| {
+                        rename.get(n).cloned()
+                    });
                 let text = serde_json::to_string(&renamed).unwrap_or_default();
                 params.push((p.clone(), ArgKind::Inline(text)));
                 continue;
@@ -387,12 +390,6 @@ impl<'m> TapeBuilder<'m> {
                 params.push((n, kind));
             }
         }
-        if std::env::var_os("ESM_DEBUG_CALLS").is_some() {
-            eprintln!(
-                "call {name} fn={} wholesale={wholesale} syms={:?} params={:?}",
-                self.is_function, bx.syms, params
-            );
-        }
         let key = FuncKey {
             instance: Arc::as_ptr(&inst) as usize,
             wholesale,
@@ -448,7 +445,11 @@ impl<'m> TapeBuilder<'m> {
         let sec = self.placement(cadence);
         let out = self.new_slot(&res.shape, &res.origin, res.scalar, sec);
         self.emit(Instr::Call { call, out }, sec);
-        Ok(if res.scalar { LV::Scalar(out) } else { LV::Arr(out) })
+        Ok(if res.scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        })
     }
 
     /// A caller name whose value the build knows (a constant observed it can
@@ -490,8 +491,12 @@ impl<'m> TapeBuilder<'m> {
             LV::Arr(s) => {
                 let (shape, origin) = self.lv_box(&lv).expect("an array slot has a box");
                 let known = match self.known.get(&s) {
-                    Some(Known::Data(d)) => Some(Arc::clone(&self.tables.const_data[*d as usize].values)),
-                    Some(Known::Vals(v)) | Some(Known::Deferred { vals: v, .. }) => Some(Arc::clone(v)),
+                    Some(Known::Data(d)) => {
+                        Some(Arc::clone(&self.tables.const_data[*d as usize].values))
+                    }
+                    Some(Known::Vals(v)) | Some(Known::Deferred { vals: v, .. }) => {
+                        Some(Arc::clone(v))
+                    }
                     None => None,
                 };
                 if origin.iter().any(|&o| o != 1) {
@@ -542,8 +547,10 @@ impl<'m> TapeBuilder<'m> {
             // (the lowering resolves `t` first): it is renamed in the body.
             let renamed;
             let p = if p0 == "t"
-                && matches!(kind, ArgKind::Array(..) | ArgKind::Scalar | ArgKind::Known(..))
-            {
+                && matches!(
+                    kind,
+                    ArgKind::Array(..) | ArgKind::Scalar | ArgKind::Known(..)
+                ) {
                 renamed = "\0param_t".to_string();
                 fixed.insert(p0.clone(), Expr::Variable(renamed.clone()));
                 &renamed
@@ -603,7 +610,11 @@ impl<'m> TapeBuilder<'m> {
         // itself a literal or the time: those are substituted into it first.
         let plain: FxHashMap<String, Expr> = fixed
             .iter()
-            .filter(|(p, _)| key.params.iter().any(|(q, k)| q == *p && matches!(k, ArgKind::Lit(_) | ArgKind::Time)))
+            .filter(|(p, _)| {
+                key.params
+                    .iter()
+                    .any(|(q, k)| q == *p && matches!(k, ArgKind::Lit(_) | ArgKind::Time))
+            })
             .map(|(p, e)| (p.clone(), e.clone()))
             .collect();
         if !plain.is_empty() {

@@ -324,20 +324,13 @@ pub(super) fn run_range(
                     .map(|o| resolve_scalar(o, env, slab))
                     .collect();
                 let fctx = funcs[spec.func as usize].get_or_insert_with(|| {
-                    let mut c = super::TapeCtx::new(std::sync::Arc::clone(
-                        &prog.funcs[spec.func as usize],
-                    ));
+                    let mut c =
+                        super::TapeCtx::new(std::sync::Arc::clone(&prog.funcs[spec.func as usize]));
                     c.set_serial();
                     Box::new(c)
                 });
-                let res = super::run_function(
-                    fctx,
-                    &arrays,
-                    &scalars,
-                    env.t,
-                    env.forcing,
-                    env.declared,
-                );
+                let res =
+                    super::run_function(fctx, &arrays, &scalars, env.t, env.forcing, env.declared);
                 let n = prog.tables.slots[*out as usize].elems().max(1);
                 // SAFETY: the result is the function's slot of the same box,
                 // in its own slab; `out` is this program's slot, written by

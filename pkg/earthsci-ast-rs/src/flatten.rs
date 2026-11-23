@@ -2010,9 +2010,15 @@ pub fn first_unlowered_operator(flat: &FlattenedSystem) -> Option<String> {
 }
 
 /// Every definition instance the flattened equations reach, each once.
-fn reached_instances(flat: &FlattenedSystem) -> Vec<std::sync::Arc<crate::operator_refs::Instance>> {
+fn reached_instances(
+    flat: &FlattenedSystem,
+) -> Vec<std::sync::Arc<crate::operator_refs::Instance>> {
     let reg = flat.operators();
-    let roots: Vec<&Expr> = flat.equations.iter().flat_map(|e| [&e.lhs, &e.rhs]).collect();
+    let roots: Vec<&Expr> = flat
+        .equations
+        .iter()
+        .flat_map(|e| [&e.lhs, &e.rhs])
+        .collect();
     reg.instances(roots)
 }
 
