@@ -203,8 +203,10 @@ function (f::_StableHLOFragment{T})(
         t::TracedRNumber{Float64}, forcing::Tuple
     ) where {T}
     f.ir.target isa _E.Lanes && throw(ArgumentError("lane fragments require a cells tensor"))
-    f.ir.extra === nothing && return _fragment_rhs(f, u, aux, p, t, forcing, nothing)
-    return _fragment_kernel(f, u, aux, p, t, forcing, nothing)
+    if f.ir.target isa _E.Whole && f.ir.extra !== nothing
+        return _fragment_kernel(f, u, aux, p, t, forcing, nothing)
+    end
+    return _fragment_rhs(f, u, aux, p, t, forcing, nothing)
 end
 
 function (f::_StableHLOFragment{T})(
@@ -291,7 +293,7 @@ end
 
 _fragment_gather_state(u, indices) = u[indices]
 _fragment_scatter_state(u, updates, indices) = Reactant.Ops.scatter_setindex(
-    u, reshape(indices, length(indices), 1), updates
+    u, Reactant.Ops.reshape(indices, length(indices), 1), updates
 )
 
 function gather_lanes(

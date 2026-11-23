@@ -142,6 +142,7 @@ _de_cached(::_DECtx, fr::_DEKernelFrame, nd::_E._Node) =
     nd.payload === fr.K.cse.scratch ? fr.cell[nd.idx] : fr.inv[nd.idx]
 
 function _de_count(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)
+    ctx.precision === Float64 || return nothing
     return _de_count_unrolled(
         nd, x -> _de_keyval(ctx, fr, x), (a, b) -> _de_same(fr, a, b),
         x -> _de_resolve(fr, x)
@@ -245,7 +246,7 @@ end
 _de_kindname(k::UInt8) = _E._node_kind_name(k)
 
 function _de_contraction_loop(ctx::_DECtx, fr::_DEFrame, nd::_E._Node)::_DEVal
-    cnt = _de_count_loop(ctx, nd)
+    cnt = ctx.precision === Float64 ? _de_count_loop(ctx, nd) : nothing
     cnt === nothing ||
         return _de_emit_count(ctx, cnt, _de_walk(ctx, fr, cnt.query))
     # Emission-time unroll of the static range, in the interpreter's

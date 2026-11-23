@@ -72,7 +72,9 @@ end
         forcing = (ConcreteRArray([10.0, 20.0, 30.0, 40.0]),)
         dec = Decomposition(axes = ["cell" => nothing])
         tile = Tile(dec; owned = ["cell" => 2:3], storage = ["cell" => 1:4])
-        ft = emit_fragment(operator_ir(prog; target = tile))
+        tile_ir = operator_ir(prog; target = tile)
+        @test halo(tile_ir) == halo(prog, dec)
+        ft = emit_fragment(tile_ir)
         u = ConcreteRArray(ones(4))
         tile_run = Reactant.@compile ft(u, aux, p, t, forcing)
         @test Array(tile_run(u, aux, p, t, forcing)) ≈ [0.0, 24.5, 35.5, 0.0]

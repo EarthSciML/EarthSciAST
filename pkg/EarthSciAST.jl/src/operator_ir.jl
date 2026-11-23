@@ -116,7 +116,7 @@ function operator_ir(prog::RhsProgram; target = Whole())
         return OperatorIR(_operator_build(prog), prog.layout, prog.maps, target, nothing, params, slots)
     elseif target isa Tile
         tile = _restrict(prog, target.decomposition; target.owned, target.storage, form = :oop)
-        return OperatorIR(tile.f!, tile.layout, tile.maps, target, nothing, params, slots)
+        return OperatorIR(tile.f!, tile.layout, tile.maps, target, tile.reach, params, slots)
     elseif target isa Lanes
         lane = _lanes(prog, target.kind, target.sets, target.capacity; form = :oop)
         maps = _lane_operator_maps(lane, target.capacity)
@@ -172,6 +172,17 @@ end
 
 """The state, auxiliary and output layout of an [`operator_ir`](@ref) build."""
 ir_layout(ir::OperatorIR) = ir.layout
+
+"""
+    halo(ir::OperatorIR)
+
+State halo reach of the tile used to build `ir`. Keys and offsets follow
+[`halo`](@ref).
+"""
+function halo(ir::OperatorIR)
+    ir.target isa Tile || throw(ArgumentError("halo requires tile operator IR"))
+    return copy(ir.extra)
+end
 
 """Scalar parameter names in dense input-vector order."""
 parameter_names(p::RhsProgram) = String[s.name for s in parameters(p)]

@@ -61,13 +61,15 @@ program = Reactant.@compile frag(u, aux, p, t, ())
   emits balanced binary folds. Choose `fold = :reduce` for the legacy
   emitter's reduction policy.
 - `Tile(dec; owned, storage)` uses the native tile boxes. The output uses the
-  tile storage layout, with zeros outside owned rows. Each fixed tile has its
+  tile storage layout, with zeros outside owned rows. `halo(ir)` reports the
+  state reach of that tile. Each fixed tile has its
   own fragment and accepts whole forcing buffers.
 - `Lanes(:cells, sets, capacity)` or `Lanes(:columns, sets, capacity)`
   accepts a sixth argument, a traced Int32 matrix of 1-based coordinates with
   rows in `sets` order. Duplicate cells can pad evaluations; use distinct
-  cells when writing them back with `scatter_lanes`. The fragment accepts
-  affine lane-dependent forcing and constant-array subscripts.
+  cells when writing them back with `scatter_lanes`. The fragment
+  supports pre-gathered forcing and constant-array subscripts affine in the
+  lane coordinates.
 - `outputs = KernelSpec(spec)` takes one `compile_kernels` specification
   and emits a whole-domain output kernel. Pass a traced Float64 `dt` as the
   sixth argument if the spec reads it. The result is a tuple of flat tensors

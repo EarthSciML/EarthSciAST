@@ -1069,11 +1069,15 @@ function halo(op::RhsProgram, dec::Decomposition)
         err isa _HaloDone || rethrow()
         err.ctx
     end
+    return _halo_reach(ctx)
+end
+
+function _halo_reach(ctx::_NeedCtx)
     out = Dict{Tuple{String, String}, Tuple{Int, Int}}()
     for n in ctx.reads
         n in ctx.states || continue
         for s in ctx.shapes[n]
-            haskey(m.cut, s) || continue
+            haskey(ctx.axes.cut, s) || continue
             lo, hi = get(ctx.reach, (n, s), (0, 0))
             out[(n, s)] = (max(0, -lo), max(0, hi))
         end
@@ -1170,7 +1174,7 @@ function _restrict(op::RhsProgram, dec::Decomposition; owned, storage, form = :i
     end
     foreach(sort!, values(extra))
     maps = _copy_maps(layout, internal, to_internal, extra)
-    form === :oop && return (; f!, internal, layout, maps, pa)
+    form === :oop && return (; f!, layout, maps, reach = _halo_reach(spec.ctx))
     return TileProgram(
         op, f!, internal, layout, maps,
         _derived_shared(op.shared, f!, length(internal), cap, pa)
