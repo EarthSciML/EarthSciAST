@@ -194,6 +194,120 @@ end
     end
 end
 
+# A per-cell node and a kernel tree are DAGs: a subexpression object is
+# referenced from several places, and the references nest, so a walk that
+# descends into every reference does work, and builds output, in proportion to
+# the UNFOLDED tree, exponential in the nesting. The per-cell merge, round 1's
+# signature and round 1's clone each handle a repeated node once. The chains
+# below double a node 20 to 60 times: a few dozen nodes as a DAG, 2^20 to 2^60
+# as a tree.
+@testset "the kernel merges handle a shared subexpression once" begin
+    st(i) = ESM._mknode(kind = ESM._NK_STATE, idx = i)
+    lit(x) = ESM._mknode(kind = ESM._NK_LITERAL, literal = x)
+    op(o, ch...) = ESM._mknode(kind = ESM._NK_OP, op = o, children = collect(ESM._Node, ch))
+    function doubled(leaf, levels)
+        d = op(:sin, leaf)
+        for _ in 1:levels
+            d = op(:+, d, d)
+        end
+        return d
+    end
+    # distinct node objects reachable from a root
+    function nnodes(root)
+        seen = ESM._NodeMap{Bool}()
+        stack = ESM._Node[root]
+        while !isempty(stack)
+            n = pop!(stack)
+            haskey(seen, n) && continue
+            seen[n] = true
+            append!(stack, n.children)
+        end
+        return length(seen)
+    end
+
+    @testset "the per-cell merge" begin
+        cell(i) = (sh = op(:*, st(i), lit(2.0)); op(:+, sh, op(:sin, sh)))
+        acc = ESM._AccDesc[]
+        spine = ESM._acc_merge_nodes(ESM._Node[cell(1), cell(2), cell(3)], 3, acc)
+        @test spine.children[1] === spine.children[2].children[1]   # built once, still shared
+        @test length(acc) == 1                            # one slot table, not one per reference
+        K = ESM._AccKernel(ESM._outs_cells([1, 2, 3]), spine, acc)
+        du = zeros(3)
+        u = [0.3, 0.7, 1.1]
+        ESM._run_acc_kernel!(du, u, NamedTuple(), 0.0, K)
+        @test du == [2x + sin(2x) for x in u]
+
+        intern = ESM._SigIntern()
+        @test ESM._struct_sig_id(doubled(st(1), 60), intern) ==
+            ESM._struct_sig_id(doubled(st(2), 60), intern)
+        acc40 = ESM._AccDesc[]
+        spine40 = ESM._acc_merge_nodes(
+            ESM._Node[doubled(st(1), 40), doubled(st(2), 40)], 2, acc40
+        )
+        @test length(acc40) == 1
+        @test nnodes(spine40) == nnodes(doubled(st(1), 40))
+    end
+
+    @testset "round 1's clone" begin
+        # two one-lane kernels over the same DAG, reading different state slots
+        kernel(slot) = ESM._AccKernel(
+            ESM._outs_cells([slot]), doubled(ESM._acc(1), 20),
+            ESM._AccDesc[ESM._AccStateFixed(slot)]
+        )
+        kernels = ESM._AccKernel[kernel(1), kernel(2)]
+        plans = ESM._OopAccPlan[ESM._build_oop_acc_plan(K) for K in kernels]
+        @test all(pl -> pl.vectorizable, plans)
+        merged, _, diag = ESM._merge_oop_acc_kernels(kernels, plans)
+        @test diag.n_out == 1 && diag.n_failed == 0
+        @test nnodes(only(merged).spine) == nnodes(kernels[1].spine)
+        # the merged kernel still evaluates to each member's value
+        small = ESM._AccKernel[
+            ESM._AccKernel(
+                ESM._outs_cells([s]), doubled(ESM._acc(1), 3),
+                ESM._AccDesc[ESM._AccStateFixed(s)]
+            ) for s in (1, 2)
+        ]
+        msmall, _, _ = ESM._merge_oop_acc_kernels(
+            small, ESM._OopAccPlan[ESM._build_oop_acc_plan(K) for K in small]
+        )
+        u = [0.3, 0.7]
+        want = zeros(2)
+        foreach(K -> ESM._run_acc_kernel!(want, u, NamedTuple(), 0.0, K), small)
+        got = zeros(2)
+        ESM._run_acc_kernel!(got, u, NamedTuple(), 0.0, only(msmall))
+        @test got == want
+    end
+
+    # Round 1's signature names each node by its CLASS, its own token plus the
+    # classes of its children, instead of writing the unfolded tree as text.
+    @testset "round 1's signature" begin
+        intern = ESM._SigIntern()
+        ksig(K) = ESM._oop_merge_kernel_sig(K, true, intern)
+        kernel(spine, acc = ESM._AccDesc[]) = ESM._AccKernel(ESM._outs_cells([1]), spine, acc)
+        over(slot, f) = kernel(
+            op(:+, doubled(ESM._acc(1), 60), op(f, ESM._acc(1))),
+            ESM._AccDesc[ESM._AccStateFixed(slot)]
+        )
+        s1, s2, s3 = ksig(over(1, :exp)), ksig(over(2, :exp)), ksig(over(3, :cos))
+        @test s1[2] === :ok
+        @test s1[1] == s2[1]                  # which state slot a lane reads is free
+        @test s1[1] != s3[1]                  # another operator is another class
+        @test length(s1[1]) == 3              # 2^60 nodes as a tree: one class per root, two tier marks
+        # a key delimits its children, which concatenated text could not:
+        # f(aT) and f(a, t)
+        par(name) = ESM._mknode(kind = ESM._NK_PARAM, sym = name)
+        tnode = ESM._mknode(kind = ESM._NK_TIME)
+        @test ksig(kernel(op(:f, par(:aT))))[1] != ksig(kernel(op(:f, par(:a), tnode)))[1]
+        # the decline reason is the last one in preorder, whatever the sharing
+        pay = ESM._mknode(kind = ESM._NK_OP, op = :g, payload = Ref(1), children = ESM._Node[lit(1.0)])
+        odd = ESM._mknode(kind = ESM._NK_STATE, idx = 1)
+        @test ksig(kernel(op(:+, pay, odd)))[2] === :node_kind
+        @test ksig(kernel(op(:+, odd, pay)))[2] === :op_payload
+        @test ksig(kernel(op(:+, pay, odd, pay)))[2] === :op_payload
+        @test ESM._oop_merge_kernel_sig(kernel(lit(1.0)), false, intern) == (nothing, :unvectorizable)
+    end
+end
+
 # A ragged loop (`_NK_RAGGED_LOOP`, children `[body, lo, hi]`) is keyed by
 # identity in the merge signature, like the other runtime loops: under the
 # generic op arm it read as an n-ary `+` over three children, so two distinct
