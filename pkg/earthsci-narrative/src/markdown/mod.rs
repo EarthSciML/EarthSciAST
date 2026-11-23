@@ -771,7 +771,7 @@ assertions:
         let paths = paths_of(&page);
         assert_eq!(
             paths_at(&paths, "$$\n\\operatorname{loss}(r").to_vec(),
-            ["/models/Box/expression_templates/loss"]
+            ["/models/Box/operators/loss"]
         );
         assert_eq!(
             paths_at(&paths, "$$\nc =").to_vec(),
